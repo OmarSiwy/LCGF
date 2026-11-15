@@ -66,6 +66,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     if (t.len == 0) return;
+    if (flexed) @memset(fx.c.shrink_sum[a][0..simd.padded(t.len)], 0);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -97,6 +98,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         const mx = @max(fit_[p], contrib);
         fit_[p] = mx + main[p] * (sum - mx);
         grow_sum[p] += grow[i] * flow[i];
+        if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
     }
     // The root has no parent to fold into.
     const content = fit_[0] + main[0] * gap_total[0];
@@ -169,7 +171,9 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         var s = floating + fl * (in_flow - floating);
         // Shrinkable nodes give way when the parent has no room for them.
         const room = @max(inner - main * (taken - nat), 0);
-        s -= shrink[i] * fl * @max(s - room, 0);
+        var cut = shrink[i] * fl * @max(s - room, 0);
+        if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
+        s -= cut;
         if (flexed) s = fx.aspectSize(t, a, i, s);
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;

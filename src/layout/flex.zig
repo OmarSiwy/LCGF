@@ -18,10 +18,17 @@ const b01 = simd.b2f;
 pub const Flex = struct {
     c: Columns,
 
-    /// One row per tree node, `simd.rows(cap)` rows each. A zeroed row is `Style{}`.
+    /// One row per tree node, `simd.rows(cap)` rows each.
     pub const Columns = struct {
+        // ---- inputs, written by `set`
         /// Width over height; 0 for none.
         aspect: []f32,
+        /// Shrink weight (CSS `flex-shrink`) of a node whose `Style.shrink` is set.
+        shrink: []f32,
+
+        // ---- scratch, rewritten by the passes every frame
+        /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
+        shrink_sum: [2][]f32,
     };
 
     /// What `set` writes for one node. The defaults change nothing.
@@ -30,16 +37,37 @@ pub const Flex = struct {
         /// width, replacing content, grow, stretch and percent on y; a fit-sized width follows a
         /// px height. min and max still clamp the result.
         aspect: f32 = 0,
+        /// When the children of a parent overflow its main axis, each shrinkable child gives up
+        /// a part of the overflow in proportion to weight * natural size, as CSS does. Only
+        /// nodes with `Style.shrink` shrink; across the main axis the prototype's rule stays (a
+        /// shrinkable node narrows to the parent's inner size). One round: a node stopped by its
+        /// min leaves the rest of its part overflowing.
+        shrink: f32 = 1,
     };
 
-    /// Carves the columns from `carver` for a tree of `cap` nodes.
+    /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
     pub fn init(carver: *mem.Carver, cap: u32) Flex {
-        return .{ .c = carver.columns(Columns, simd.rows(cap)) };
+        var fx: Flex = .{ .c = carver.columns(Columns, simd.rows(cap)) };
+        for (0..fx.c.aspect.len) |i| fx.set(@intCast(i), &.{});
+        return fx;
     }
 
     /// Writes node `i`'s row.
     pub fn set(fx: *Flex, i: u32, s: *const Style) void {
         fx.c.aspect[i] = s.aspect;
+        fx.c.shrink[i] = s.shrink;
+    }
+
+    /// fit: what node `i` adds to its parent's `shrink_sum`.
+    pub inline fn scaledShrink(fx: *const Flex, t: *const Tree, i: usize, nat: f32) f32 {
+        return t.c.shrink[i] * fx.c.shrink[i] * nat * t.c.flow[i];
+    }
+
+    /// resolve, along the parent's main axis: node `i`'s part of the parent's overflow
+    /// (`over` = natural content minus inner size).
+    pub inline fn mainShrinkCut(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, over: f32) f32 {
+        const part = fx.scaledShrink(t, i, t.c.nat[a][i]) / @max(fx.c.shrink_sum[a][p], 1e-6);
+        return @max(over, 0) * part;
     }
 
     /// fit: on y the height the resolved width gives; on x the width a px height gives (min and
@@ -261,4 +289,84 @@ test "aspect: rows without a ratio give runFlex the same rects as run" {
     plain.run(300, 200);
     flexed.runFlex(300, 200);
     inline for (0..4) |k| try testing.expectEqualSlices(f32, plain.t.c.rect[k][0..plain.t.len], flexed.t.c.rect[k][0..flexed.t.len]);
+}
+
+test "shrink: the overflow is shared by weight times natural size" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) } });
+    // Contents of 60, 60 and 40 in 100: 60 px over.
+    var k: [3]u32 = undefined;
+    for (&k, [3]f32{ 60, 60, 40 }) |*row, w| {
+        row.* = t.push(root, .none, &.{ .shrink = true });
+        _ = t.push(row.*, .none, &.{ .size = .{ .px(w), .px(1) } });
+        t.seal(row.*);
+    }
+    // Weights 1, 2, 1.5 scale to 60, 120, 60: parts of 15, 30 and 15.
+    s.fx.set(k[1], &.{ .shrink = 2 });
+    s.fx.set(k[2], &.{ .shrink = 1.5 });
+    s.runFlex(100, 50);
+    try testing.expectEqual(45, s.size(k[0])[0]);
+    try testing.expectEqual(30, s.size(k[1])[0]);
+    try testing.expectEqual(25, s.size(k[2])[0]);
+    try testing.expectEqual(100, t.c.used[0][root]);
+}
+
+test "shrink: weight 0 and nodes without Style.shrink keep their size; gaps count as overflow" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) }, .gap = 10 });
+    const a = t.push(root, .none, &.{ .size = .{ .px(30), .fill } });
+    const b = t.push(root, .none, &.{ .shrink = true });
+    _ = t.push(b, .none, &.{ .size = .{ .px(50), .px(1) } });
+    t.seal(b);
+    const c = t.push(root, .none, &.{ .shrink = true });
+    _ = t.push(c, .none, &.{ .size = .{ .px(50), .px(1) } });
+    t.seal(c);
+    s.fx.set(c, &.{ .shrink = 0 });
+    s.runFlex(100, 50);
+    // 30 + 50 + 50 + 2 * 10 = 150 in 100: b, the only weighted shrinker, gives up all 50.
+    try testing.expectEqual(30, s.size(a)[0]);
+    try testing.expectEqual(0, s.size(b)[0]);
+    try testing.expectEqual(50, s.size(c)[0]);
+}
+
+test "shrink: a single shrinker gives the prototype's result; across the main axis it is unchanged" {
+    var plain: Scene = .{};
+    var flexed: Scene = .{};
+    inline for (.{ &plain, &flexed }) |s| {
+        const t = s.init();
+        const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) }, .gap = 4 });
+        _ = t.push(root, .none, &.{ .size = .{ .px(40), .fill } });
+        const w = t.push(root, .none, &.{ .shrink = true });
+        _ = t.push(w, .none, &.{ .size = .{ .px(90), .px(80) } });
+        t.seal(w);
+        // Across: a y-stack whose shrinkable child is wider than it.
+        const col = t.push(root, .none, &.{ .float = true, .size = .{ .px(30), .fit } });
+        const n = t.push(col, .none, &.{ .shrink = true });
+        _ = t.push(n, .none, &.{ .size = .{ .px(70), .px(5) } });
+        t.seal(n);
+        t.seal(col);
+    }
+    plain.run(100, 50);
+    flexed.runFlex(100, 50);
+    inline for (0..4) |k| try testing.expectEqualSlices(f32, plain.t.c.rect[k][0..plain.t.len], flexed.t.c.rect[k][0..flexed.t.len]);
+    try testing.expectEqual(56, flexed.size(2)[0]); // 100 - 40 - 4
+    try testing.expectEqual(30, flexed.size(5)[0]); // narrowed to col across its main axis
+}
+
+test "shrink: a node stopped by its min leaves the rest of its part overflowing (one round)" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) } });
+    const a = t.push(root, .none, &.{ .shrink = true });
+    _ = t.push(a, .none, &.{ .size = .{ .px(100), .px(1) } });
+    t.seal(a);
+    const b = t.push(root, .none, &.{ .shrink = true, .min = .{ 90, 0 } });
+    _ = t.push(b, .none, &.{ .size = .{ .px(100), .px(1) } });
+    t.seal(b);
+    s.runFlex(100, 50);
+    // 100 over, 50 each: a is 50, b stops at its min 90; 40 px overflow remain.
+    try testing.expectEqual(50, s.size(a)[0]);
+    try testing.expectEqual(90, s.size(b)[0]);
 }
