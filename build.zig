@@ -34,13 +34,25 @@ pub fn build(b: *std.Build) void {
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
 
-    // tools/bench measures the prototype core until the ported core exports the same names.
+    // The package root built ReleaseFast, for the branch census and the benchmark.
+    const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
+    lcgr_fast.addOptions("build_options", options);
+    const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/layout/census_probe.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) });
+    b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+
+    // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
+    // the rest moves to src/ as it is ported.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "ui", .module = bench_core }},
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -58,12 +70,14 @@ pub fn build(b: *std.Build) void {
     }) });
     const size_run = b.addRunArtifact(size_tool);
     const small_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseSmall });
+    const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
+    lcgr_small.addOptions("build_options", options);
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{.{ .name = "ui", .module = small_core }},
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small } },
         }) });
         size_run.addArtifactArg(exe);
     }
