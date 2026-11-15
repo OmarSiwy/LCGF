@@ -339,3 +339,92 @@ test "mirror: under RTL, alignment lands where the mirrored factor puts it left 
     s.run(.{ 200, 50 });
     try testing.expectEqual(rect(153, 40, 193, 50), t.rect(1));
 }
+
+test "rtl: a right-to-left window with a toolbar, a grid form and a horizontal scroller" {
+    const grid = @import("grid.zig");
+    const scroll = @import("scroll.zig");
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 32);
+    var tx = Texts.init(&carver, 1);
+    var r = Rtl.init(&carver, 32);
+    var gs = grid.Grids.init(&carver, .{ .grids = 1, .tracks = 4, .items = 4, .cells = 2 });
+    const ext: [2][]f32 = .{ carver.slice(f32, simd.rows(32)), carver.slice(f32, simd.rows(32)) };
+
+    // window 300 x 200, gap 4 {
+    //   bar (row, start padding 8, gap 6) { back 40, title fill, menu 30 }
+    //   form (grid [px 60, fr 1] x [fit]) { label, field }
+    //   strip (row, 100 wide, clips) { three 100 px pages }
+    // }
+    const window = t.push(0, .none, &.{ .size = .{ .px(300), .px(200) }, .gap = 4 });
+    const bar = t.push(window, .none, &.{ .dir = .x, .size = .{ .fill, .px(20) }, .gap = 6 });
+    const back = t.push(bar, .none, &.{ .size = .{ .px(40), .fill } });
+    t.seal(back);
+    const title = t.push(bar, .none, &.{ .size = .{ .fill, .fill } });
+    t.seal(title);
+    const menu = t.push(bar, .none, &.{ .size = .{ .px(30), .fill } });
+    t.seal(menu);
+    t.seal(bar);
+    const form = t.push(window, .none, &.{ .size = .{ .fill, .fit } });
+    const k = gs.grid(form, &.{ .px(60), .fr(1) }, &.{.px(16)});
+    const label = t.push(form, .none, &.{ .float = true });
+    t.seal(label);
+    _ = gs.autoItem(k, label);
+    const field = t.push(form, .none, &.{ .float = true });
+    t.seal(field);
+    _ = gs.autoItem(k, field);
+    t.seal(form);
+    const strip = t.push(window, .none, &.{ .dir = .x, .size = .{ .px(100), .px(30) }, .clip = true });
+    var pages: [3]u32 = undefined;
+    for (&pages) |*p| {
+        p.* = t.push(strip, .none, &.{ .size = .{ .px(100), .fill } });
+        t.seal(p.*);
+    }
+    t.seal(strip);
+    t.seal(window);
+    r.reset();
+    r.set(window, .rtl);
+    r.pad(bar, 8, 0);
+
+    const frame = struct {
+        fn f(tt: *Tree, ttx: *Texts, rr: *Rtl, g: *grid.Grids, e: [2][]f32) void {
+            direction(tt, rr);
+            startEnd(tt, rr);
+            grid.autoPlace(g);
+            layout.prepare(tt);
+            layout.applyText(tt, ttx, .x);
+            grid.fit(tt, g, .x);
+            grid.resolve(tt, g, .x, 300);
+            layout.applyText(tt, ttx, .y);
+            grid.fit(tt, g, .y);
+            grid.resolve(tt, g, .y, 200);
+            scroll.extent(tt, e);
+            scroll.clamp(tt, e);
+            layout.place(tt);
+            mirror(tt, rr);
+            layout.finalize(tt);
+        }
+    }.f;
+    frame(&t, &tx, &r, &gs, ext);
+
+    // The toolbar reads from the right, after its 8 px start padding: back, title, menu.
+    try testing.expectEqual(rect(252, 0, 292, 20), t.rect(back));
+    try testing.expectEqual(rect(36, 0, 246, 20), t.rect(title));
+    try testing.expectEqual(rect(0, 0, 30, 20), t.rect(menu));
+    // The grid's first column is on the right.
+    try testing.expectEqual(rect(240, 24, 300, 40), t.rect(label));
+    try testing.expectEqual(rect(0, 24, 240, 40), t.rect(field));
+    // The strip is at the start (right) of the window; its first page fills it and the rest
+    // overflow to the left, out of view.
+    try testing.expectEqual(rect(200, 44, 300, 74), t.rect(strip));
+    try testing.expectEqual(rect(200, 44, 300, 74), t.rect(pages[0]));
+    try testing.expectEqual(rect(100, 44, 200, 74), t.rect(pages[1]));
+    try testing.expectEqual(0, t.c.visible[pages[1]]);
+    // A positive scroll brings the next page in from the left; past the end it is clamped.
+    t.c.scroll[0][strip] = 1000;
+    frame(&t, &tx, &r, &gs, ext);
+    try testing.expectEqual(200, t.c.scroll[0][strip]);
+    try testing.expectEqual(rect(200, 44, 300, 74), t.rect(pages[2]));
+    try testing.expectEqual(1, t.c.visible[pages[2]]);
+    try testing.expectEqual(0, t.c.visible[pages[0]]);
+}

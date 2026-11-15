@@ -68,5 +68,20 @@
     "jcc": 16,
     "back": 7,
     "short_fwd": 0
+  },
+  "p_mirror": {
+    "jcc": 3,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_start_end": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_direction": {
+    "jcc": 6,
+    "back": 2,
+    "short_fwd": 1
   }
 }

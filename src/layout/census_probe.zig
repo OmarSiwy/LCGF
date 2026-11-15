@@ -48,3 +48,12 @@ export fn p_grid_fit(t: *Tree, gs: *lcgr.grid.Grids) void {
 export fn p_grid_resolve(t: *Tree, gs: *lcgr.grid.Grids) void {
     lcgr.grid.resolve(t, gs, .x, 800);
 }
+export fn p_direction(t: *const Tree, r: *lcgr.rtl.Rtl) void {
+    lcgr.rtl.direction(t, r);
+}
+export fn p_start_end(t: *Tree, r: *const lcgr.rtl.Rtl) void {
+    lcgr.rtl.startEnd(t, r);
+}
+export fn p_mirror(t: *Tree, r: *lcgr.rtl.Rtl) void {
+    lcgr.rtl.mirror(t, r);
+}
