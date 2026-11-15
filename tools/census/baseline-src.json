@@ -53,5 +53,15 @@
     "jcc": 2,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_damage_frame": {
+    "jcc": 15,
+    "back": 7,
+    "short_fwd": 1
+  },
+  "p_damage_cull": {
+    "jcc": 4,
+    "back": 2,
+    "short_fwd": 0
   }
 }

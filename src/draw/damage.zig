@@ -23,6 +23,9 @@ const inf = types.inf;
 /// Rects a `Region` holds. Four keeps a region one vector wide per edge.
 pub const max_rects = 4;
 const R = @Vector(max_rects, f32);
+const V4 = @Vector(4, f32);
+/// The empty box (x0, y0, x1, y1): the identity of a union.
+const no_box: V4 = .{ inf, inf, -inf, -inf };
 
 /// The part of the window to repaint: up to `max_rects` rects, stored as one vector per edge.
 /// An empty slot has x0 = y0 = inf and x1 = y1 = -inf, so a union with it is the other rect and
@@ -46,11 +49,8 @@ pub const Region = struct {
     /// on a tie: a box inside or overlapping a slot joins it, a distant one takes an empty slot
     /// while there is one. An empty box (x0 >= x1 or y0 >= y1) changes nothing. No branch.
     pub fn add(g: *Region, box: [4]f32) void {
-        const has = (box[0] < box[2]) & (box[1] < box[3]);
-        const b: [4]f32 = .{
-            simd.selF(has, box[0], inf),  simd.selF(has, box[1], inf),
-            simd.selF(has, box[2], -inf), simd.selF(has, box[3], -inf),
-        };
+        const has: @Vector(4, bool) = @splat((box[0] < box[2]) & (box[1] < box[3]));
+        const b: [4]f32 = @select(f32, has, @as(V4, box), no_box);
         // Union is min of the low edges and max of the high ones (Rect.intersect with the signs
         // the other way round).
         const ux0 = @min(g.x0, @as(R, @splat(b[0])));
@@ -222,11 +222,12 @@ pub const Damage = struct {
         dm.region = .empty;
         for (dm.list[0..w]) |r| {
             inline for (.{ last, now }) |g| {
-                const in = r < g.len;
-                dm.region.add(.{
-                    simd.selF(in, g.vis[0][r], inf),  simd.selF(in, g.vis[1][r], inf),
-                    simd.selF(in, g.vis[2][r], -inf), simd.selF(in, g.vis[3][r], -inf),
-                });
+                // Loaded whether or not the row exists (the columns have `cap` rows), so the
+                // select is a blend: a select whose operand is loaded only for it compiles to
+                // branches (docs/CHECKS.md section 2).
+                const box: V4 = .{ g.vis[0][r], g.vis[1][r], g.vis[2][r], g.vis[3][r] };
+                const in: @Vector(4, bool) = @splat(r < g.len);
+                dm.region.add(@select(f32, in, box, no_box));
             }
         }
         dm.cur ^= 1;
@@ -302,7 +303,14 @@ const Scene = struct {
         };
     }
 
-    const Edit = struct { ok_fill: Color = .rgb(40, 40, 40), label: []const u8 = "hello", view_data: u64 = 7 };
+    const Edit = struct {
+        ok_fill: Color = .rgb(40, 40, 40),
+        ok_width: f32 = 40,
+        open_fill: Color = .rgb(40, 40, 40),
+        label: []const u8 = "hello",
+        view_data: u64 = 7,
+        panel_fill: Color = .rgb(20, 20, 20),
+    };
     const ok = 4;
 
     fn build(buf: *align(mem.column_align) [bytes]u8, e: Edit) Scene {
@@ -312,10 +320,13 @@ const Scene = struct {
         const button: types.Style = .{ .size = .{ .px(40), .px(20) }, .fill = .rgb(40, 40, 40), .radius = 3 };
         _ = t.push(0, Id.from("root"), &.{ .size = .{ .px(400), .px(300) }, .clip = true, .fill = .rgb(10, 10, 10) });
         const bar = t.push(0, Id.from("bar"), &.{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(4), .gap = 4, .fill = .rgb(30, 30, 30) });
-        _ = t.push(bar, Id.from("open"), &button);
+        var open_style = button;
+        open_style.fill = e.open_fill;
+        _ = t.push(bar, Id.from("open"), &open_style);
         _ = t.push(bar, Id.from("save"), &button);
         var ok_style = button;
         ok_style.fill = e.ok_fill;
+        ok_style.size[0] = .px(e.ok_width);
         _ = t.push(bar, Id.from("ok"), &ok_style);
         t.seal(bar);
         const label = t.push(0, Id.from("label"), &.{ .pad = @splat(2) });
@@ -324,7 +335,7 @@ const Scene = struct {
         sc.tx.c.h[0] = 10;
         const view = t.push(0, Id.from("view"), &.{ .size = .{ .px(100), .px(100) } });
         t.c.custom[view] = sc.cu.push(view, Id.from("view"), e.view_data);
-        _ = t.push(0, Id.from("panel"), &.{ .size = .{ .fill, .fill }, .fill = .rgb(20, 20, 20) });
+        _ = t.push(0, Id.from("panel"), &.{ .size = .{ .fill, .fill }, .fill = e.panel_fill });
         t.seal(0);
         layout.run(t, &sc.tx, .{ 400, 300 });
         hashNodes(t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], sc.hash);
@@ -566,4 +577,119 @@ test "Region.scissor: rounds outwards, clamps to the target, empty stays empty" 
     try testing.expectEqual([4]u32{ 0, 0, 10, 10 }, Region.scissor(.{ -5, -5, 50, 50 }, .{ 10, 10 }, 1));
     try testing.expectEqual(0, Region.scissor(Region.empty.bounds(), .{ 10, 10 }, 1)[2]);
     try testing.expectEqual(0, Region.scissor(.{ 20, 20, 30, 30 }, .{ 10, 10 }, 1)[3]);
+}
+
+/// A damage state for `Scene`, in its own buffer so it outlives every frame's scene.
+const Tracker = struct {
+    buf: [bytes]u8 align(mem.column_align) = undefined,
+    dm: Damage = undefined,
+
+    const bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Damage.init(&counter, Scene.cap);
+        break :blk counter.off;
+    };
+    fn init(tr: *Tracker) void {
+        var carver: mem.Carver = .{ .buf = &tr.buf };
+        tr.dm = Damage.init(&carver, Scene.cap);
+    }
+    /// One frame: build, record, paint, cull.
+    fn frame(tr: *Tracker, buf: *align(mem.column_align) [Scene.bytes]u8, e: Scene.Edit) Scene {
+        var sc: Scene = .build(buf, e);
+        _ = tr.dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+        paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+        cull(&sc.d, &tr.dm.region);
+        return sc;
+    }
+};
+
+/// True when some slot of `g` holds all of `box`, or `box` is empty.
+fn covered(g: *const Region, box: [4]f32) bool {
+    if (!(box[0] < box[2] and box[1] < box[3])) return true;
+    for (0..max_rects) |k| {
+        const r = g.rect(@intCast(k));
+        if (r[0] <= box[0] and r[1] <= box[1] and r[2] >= box[2] and r[3] >= box[3]) return true;
+    }
+    return false;
+}
+
+test "damage: an idle frame repaints nothing" {
+    var tr: Tracker = .{};
+    tr.init();
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    _ = tr.frame(&buf, .{});
+    const sc = tr.frame(&buf, .{});
+    try testing.expectEqual(0, tr.dm.dirty_len);
+    try testing.expectEqual(0, tr.dm.region.count());
+    try testing.expectEqual(0, sc.d.quad_len);
+    try testing.expectEqual(0, Region.scissor(sc.d.damage.bounds(), .{ 400, 300 }, 1)[2]);
+}
+
+test "damage: a resized node repaints the union of its old and new rect, one rect" {
+    var tr: Tracker = .{};
+    tr.init();
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    const before = tr.frame(&buf, .{});
+    const old = before.t.rect(Scene.ok);
+    const sc = tr.frame(&buf, .{ .ok_width = 60 });
+    const new = sc.t.rect(Scene.ok);
+    try testing.expectEqual(1, tr.dm.dirty_len);
+    try testing.expectEqual(1, tr.dm.region.count());
+    try testing.expectEqual([4]f32{ old.x0, old.y0, @max(old.x1, new.x1), old.y1 }, tr.dm.region.rect(0));
+    try testing.expectEqual(60 * 20, tr.dm.region.pixels());
+}
+
+test "damage: scattered changes stay within four rects that cover every changed node" {
+    var tr: Tracker = .{};
+    tr.init();
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    _ = tr.frame(&buf, .{});
+    const sc = tr.frame(&buf, .{ .open_fill = .white, .ok_fill = .white, .label = "bye", .view_data = 1, .panel_fill = .white });
+    try testing.expectEqual(5, tr.dm.dirty_len);
+    try testing.expect(tr.dm.region.count() <= max_rects);
+    for (tr.dm.list[0..tr.dm.dirty_len]) |r| try testing.expect(covered(&tr.dm.region, sc.t.rect(r).array()));
+    // Still less than the window.
+    try testing.expect(tr.dm.region.pixels() < 400 * 300);
+}
+
+test "damage: random edits over many frames, every changed node's old and new rect is covered" {
+    var tr: Tracker = .{};
+    tr.init();
+    var bufs: [2][Scene.bytes]u8 align(mem.column_align) = undefined;
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const rand = prng.random();
+    const fills = [_]Color{ .rgb(40, 40, 40), .white, .rgb(200, 0, 0) };
+    const labels = [_][]const u8{ "hello", "hi", "a longer label" };
+    var last = tr.frame(&bufs[0], .{});
+    for (1..200) |f| {
+        const e: Scene.Edit = .{
+            .ok_fill = fills[rand.uintLessThan(usize, fills.len)],
+            .ok_width = @floatFromInt(20 + 20 * rand.uintLessThan(u32, 3)),
+            .open_fill = fills[rand.uintLessThan(usize, fills.len)],
+            .label = labels[rand.uintLessThan(usize, labels.len)],
+            .view_data = rand.uintLessThan(u64, 3),
+            .panel_fill = fills[rand.uintLessThan(usize, fills.len)],
+        };
+        const sc = tr.frame(&bufs[f % 2], e);
+        // Reference: a node needs repainting when anything paint reads from it differs.
+        for (0..sc.t.len) |i| {
+            const same = std.meta.eql(sc.t.rect(@intCast(i)), last.t.rect(@intCast(i))) and
+                std.meta.eql(sc.t.c.look[i], last.t.c.look[i]) and
+                sc.hash[i] == last.hash[i];
+            if (!same) {
+                try testing.expectEqual(1, tr.dm.dirty[i]);
+                try testing.expect(covered(&tr.dm.region, sc.t.rect(@intCast(i)).array()));
+                try testing.expect(covered(&tr.dm.region, last.t.rect(@intCast(i)).array()));
+            }
+        }
+        // Every quad that reaches the region is drawn: count the reference set by brute force.
+        var want: u32 = 0;
+        for (0..sc.t.len) |i| {
+            const r = sc.t.rect(@intCast(i)).array();
+            const v = sc.t.c.look[i];
+            want += @intFromBool(sc.t.c.visible[i] != 0 and ((v.fill | v.border_color) >> 24) != 0 and tr.dm.region.touches(r));
+        }
+        try testing.expectEqual(want, sc.d.quad_len);
+        last = sc;
+    }
 }

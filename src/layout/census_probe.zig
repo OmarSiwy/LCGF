@@ -35,6 +35,12 @@ export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
 export fn p_paint(t: *const Tree, tx: *const Texts, cu: *const Customs, d: *DrawList) void {
     lcgr.paint.emit(t, tx, cu, "", d);
 }
+export fn p_damage_frame(dm: *lcgr.damage.Damage, t: *const Tree, tx: *const Texts, cu: *const Customs) u32 {
+    return dm.frame(t, tx, cu, "");
+}
+export fn p_damage_cull(d: *DrawList, g: *const lcgr.damage.Region) void {
+    lcgr.damage.cull(d, g);
+}
 export fn p_hit(t: *const Tree, x: f32, y: f32) u32 {
     return lcgr.hit.at(t, x, y, .any);
 }
