@@ -292,14 +292,92 @@ pub const Face = struct {
     }
 
     /// Appends the outline of `g` to `out`, in font units. A glyph without an outline appends
-    /// nothing. Fails with `error.NoSpace`, leaving `out` as it was, when the columns are full.
+    /// nothing. Composite glyphs append their components, transformed and offset. Fails with
+    /// `error.NoSpace`, leaving `out` as it was, when the columns are full.
     pub fn outline(face: Face, g: Glyph, out: *Outline) Error!void {
         std.debug.assert(out.y.len == out.x.len and out.on.len == out.x.len);
+        const points = out.points;
+        const contours = out.contours;
+        errdefer {
+            out.points = points;
+            out.contours = contours;
+        }
+        var budget: u32 = max_components;
+        return face.outlineAt(g, out, 0, &budget);
+    }
+
+    fn outlineAt(face: Face, g: Glyph, out: *Outline, depth: u32, budget: *u32) Error!void {
         const rec = try face.glyphRecord(g);
         if (rec.len == 0) return;
         const contours = try read(i16, rec, 0);
-        if (contours < 0) return error.Unsupported;
-        return simpleOutline(rec, @intCast(contours), out);
+        if (contours >= 0) return simpleOutline(rec, @intCast(contours), out);
+        // Bounded recursion: a deeper (or cyclic) composite is malformed.
+        if (depth == max_component_depth) return error.Malformed;
+        const base = out.points;
+        var at: usize = 10;
+        while (true) {
+            // Bounded work: components of empty glyphs add no points, so NoSpace alone would
+            // not stop a wide, deep composite.
+            if (budget.* == 0) return error.Malformed;
+            budget.* -= 1;
+            const flags = try read(u16, rec, at);
+            const child = try read(u16, rec, at + 2);
+            at += 4;
+            var arg1: i32 = undefined;
+            var arg2: i32 = undefined;
+            const xy = flags & args_are_xy != 0;
+            if (flags & args_are_words != 0) {
+                arg1 = if (xy) try read(i16, rec, at) else try read(u16, rec, at);
+                arg2 = if (xy) try read(i16, rec, at + 2) else try read(u16, rec, at + 2);
+                at += 4;
+            } else {
+                arg1 = if (xy) try read(i8, rec, at) else try read(u8, rec, at);
+                arg2 = if (xy) try read(i8, rec, at + 1) else try read(u8, rec, at + 1);
+                at += 2;
+            }
+            // x' = m[0] x + m[2] y, y' = m[1] x + m[3] y; F2Dot14 entries.
+            var m: [4]f32 = .{ 1, 0, 0, 1 };
+            if (flags & have_scale != 0) {
+                const s = try f2dot14(rec, at);
+                m = .{ s, 0, 0, s };
+                at += 2;
+            } else if (flags & have_xy_scale != 0) {
+                m = .{ try f2dot14(rec, at), 0, 0, try f2dot14(rec, at + 2) };
+                at += 4;
+            } else if (flags & have_2x2 != 0) {
+                m = .{ try f2dot14(rec, at), try f2dot14(rec, at + 2), try f2dot14(rec, at + 4), try f2dot14(rec, at + 6) };
+                at += 8;
+            }
+
+            const start = out.points;
+            try face.outlineAt(child, out, depth + 1, budget);
+            for (start..out.points) |i| {
+                const x = out.x[i];
+                const y = out.y[i];
+                out.x[i] = m[0] * x + m[2] * y;
+                out.y[i] = m[1] * x + m[3] * y;
+            }
+            var dx: f32 = @floatFromInt(arg1);
+            var dy: f32 = @floatFromInt(arg2);
+            if (!xy) {
+                // Point matching: the component moves so its point arg2 lands on point arg1 of
+                // the components before it.
+                const parent = base + @as(usize, @intCast(arg1));
+                const own = start + @as(usize, @intCast(arg2));
+                if (parent >= start or own >= out.points) return error.Malformed;
+                dx = out.x[parent] - out.x[own];
+                dy = out.y[parent] - out.y[own];
+            } else if (flags & scaled_offset != 0 and flags & unscaled_offset == 0) {
+                const tx = m[0] * dx + m[2] * dy;
+                dy = m[1] * dx + m[3] * dy;
+                dx = tx;
+            }
+            for (start..out.points) |i| {
+                out.x[i] += dx;
+                out.y[i] += dy;
+            }
+            if (flags & more_components == 0) return;
+        }
     }
 };
 
@@ -315,6 +393,26 @@ pub const Outline = struct {
     points: u32 = 0,
     contours: u32 = 0,
 };
+
+// Composite glyph component flag bits.
+const args_are_words = 0x0001;
+const args_are_xy = 0x0002;
+const have_scale = 0x0008;
+const more_components = 0x0020;
+const have_xy_scale = 0x0040;
+const have_2x2 = 0x0080;
+const scaled_offset = 0x0800;
+const unscaled_offset = 0x1000;
+
+/// Composites nest at most this deep; real fonts use 1 or 2, so deeper means a cycle.
+const max_component_depth = 8;
+/// Components visited per outline, at all depths.
+const max_components = 1024;
+
+/// An F2Dot14 (2.14 fixed point) at `at`.
+fn f2dot14(rec: []const u8, at: usize) Error!f32 {
+    return @as(f32, @floatFromInt(try read(i16, rec, at))) / 16384;
+}
 
 // Simple glyph flag bits.
 const on_curve = 0x01;
@@ -760,4 +858,52 @@ test "kerning of the test font" {
     // Damaged data reads as no kerning.
     face.kern = face.kern[0..20];
     try std.testing.expectEqual(0, face.kerning(g(face, 'V'), g(face, 'o')));
+}
+
+test "a composite glyph of the test font" {
+    const face = try Face.parse(test_ttf, 0);
+    var x: [64]f32 = undefined;
+    var y: [64]f32 = undefined;
+    var on: [64]bool = undefined;
+    var ends: [8]u32 = undefined;
+    var out: Outline = .{ .x = &x, .y = &y, .on = &on, .ends = &ends };
+    // eacute = e + acute moved right by 368. Expected: fontTools glyf['eacute'].getCoordinates.
+    try face.outline(face.cmap.glyph(0xe9), &out);
+    try expectOutline(out, &.{
+        .{ 276, 503 },  .{ 276, 317 },  .{ 430, 115 },  .{ 578, 115 },  .{ 695, 115 },   .{ 836, 209 },
+        .{ 861, 281 },  .{ 1019, 236 }, .{ 922, -20 },  .{ 578, -20 },  .{ 338, -20 },   .{ 87, 266 },
+        .{ 87, 548 },   .{ 87, 816 },   .{ 338, 1102 }, .{ 571, 1102 }, .{ 1048, 1102 }, .{ 1048, 527 },
+        .{ 1048, 503 }, .{ 862, 641 },  .{ 847, 812 },  .{ 703, 969 },  .{ 568, 969 },   .{ 437, 969 },
+        .{ 284, 794 },  .{ 278, 641 },  .{ 440, 1201 }, .{ 440, 1221 }, .{ 657, 1508 },  .{ 864, 1508 },
+        .{ 864, 1479 }, .{ 534, 1201 },
+    }, &.{ 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1 }, &.{ 18, 25, 31 });
+}
+
+test "composite scale, point matching and cycles" {
+    var face = try Face.parse(test_ttf, 0);
+    // Glyph 0: simple, (100, 0) (200, 100). Glyph 1: glyph 0 scaled by 0.5 and moved by
+    // (10, 20), then glyph 0 again with its point 0 matched to point 1 of the first copy.
+    // Glyph 2: a composite that contains itself.
+    const simple = "\x00\x01" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x00\x01\x00\x00\x01\x01\x00\x64\x00\x64\x00\x00\x00\x64";
+    const composite = "\xff\xff" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x00\x2b\x00\x00\x00\x0a\x00\x14\x20\x00" ++
+        "\x00\x00\x00\x00\x01\x00";
+    const cyclic = "\xff\xff" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x00\x02\x00\x02\x00\x00";
+    face.glyf = simple ++ composite ++ cyclic;
+    face.loca = "\x00\x00\x00\x0c\x00\x19\x00\x21";
+    face.loca_long = false;
+    face.glyph_count = 3;
+    var x: [8]f32 = undefined;
+    var y: [8]f32 = undefined;
+    var on: [8]bool = undefined;
+    var ends: [4]u32 = undefined;
+    var out: Outline = .{ .x = &x, .y = &y, .on = &on, .ends = &ends };
+    try face.outline(1, &out);
+    try expectOutline(out, &.{ .{ 60, 20 }, .{ 110, 70 }, .{ 110, 70 }, .{ 210, 170 } }, &.{ 1, 1, 1, 1 }, &.{ 1, 3 });
+    try std.testing.expectError(error.Malformed, face.outline(2, &out));
+    try std.testing.expectEqual(4, out.points);
+    // The second copy does not fit: nothing of glyph 1 is kept.
+    out.points = 5;
+    out.contours = 0;
+    try std.testing.expectError(error.NoSpace, face.outline(1, &out));
+    try std.testing.expectEqual(5, out.points);
 }
