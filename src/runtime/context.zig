@@ -59,6 +59,13 @@ pub const Context = struct {
         _ = build(&counter, limits);
         return counter.off;
     }
+
+    /// The buffer is the only memory the library will ever use.
+    pub fn init(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context {
+        if (buffer.len < requiredBytes(limits)) return error.BufferTooSmall;
+        var carver: mem.Carver = .{ .buf = buffer };
+        return build(&carver, limits);
+    }
 };
 
 const testing = std.testing;
@@ -86,4 +93,27 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     more = example_limits;
     more.depth += 16;
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
+}
+
+test "init: carves every table from the caller's buffer, or refuses a short one" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    const ctx = try Context.init(&S.buffer, example_limits);
+    const lo = @intFromPtr(&S.buffer);
+    const hi = lo + n;
+    // Both generations, sized by the limits, inside the buffer.
+    for (ctx.trees) |t| {
+        try testing.expectEqual(example_limits.nodes, t.cap);
+        try testing.expect(@intFromPtr(t.c.id.ptr) >= lo and @intFromPtr(t.c.id.ptr) < hi);
+    }
+    for (ctx.texts) |tx| try testing.expectEqual(example_limits.texts, tx.cap);
+    for (ctx.customs) |cu| try testing.expectEqual(example_limits.customs, cu.cap);
+    for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
+    try testing.expectEqual(example_limits.depth, ctx.stack.len);
+    // The last column carved ends inside the buffer.
+    try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
+
+    try testing.expectError(error.BufferTooSmall, Context.init(S.buffer[0 .. n - mem.column_align], example_limits));
 }
