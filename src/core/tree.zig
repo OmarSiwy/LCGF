@@ -27,206 +27,238 @@ pub const Look = extern struct {
     material: u16,
 };
 
-pub const Tree = struct {
-    len: u32 = 0,
-    cap: u32,
-    /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
-    /// The front end reports it as `Status.nodes`.
-    overflow: bool = false,
-    c: Columns,
-
-    /// One slice per property, grouped by the pass that reads them, so a pass touches only the
-    /// cache lines it needs. Every column has `simd.rows(cap)` rows (the padding contract).
-    pub const Columns = struct {
-        // ---- identity and structure: indices, never pointers
-        id: []u32,
-        parent: []u32,
-        /// One past the last descendant. The subtree of i is rows [i, end[i]).
-        end: []u32,
-
-        // ---- layout inputs. Sizing modes are coefficients, not tags.
-        min: [2][]f32,
-        max: [2][]f32,
-        grow: [2][]f32,
-        pct: [2][]f32,
-        pad_lo: [2][]f32,
-        pad_hi: [2][]f32,
-        offset: [2][]f32,
-        scroll: [2][]f32,
-        gap: []f32,
-        /// Number of in-flow children, kept as f32 because it only feeds arithmetic.
-        nkids: []f32,
-        /// 1.0 in flow, 0.0 floating.
-        flow: []f32,
-        shrink: []f32,
-        align_main: []f32,
-        align_cross: []f32,
-        /// main[a] is 1.0 when children are stacked along axis a, else 0.0.
-        /// The stacking direction is a coefficient, so no pass compares it.
-        main: [2][]f32,
-
-        // ---- layout scratch, rewritten every frame
-        fit: [2][]f32,
-        nat: [2][]f32,
-        grow_sum: [2][]f32,
-        /// 1 / grow_sum, filled by `fit` so `resolve` multiplies instead of dividing.
-        grow_inv: [2][]f32,
-        used: [2][]f32,
-        gap_total: []f32,
-        cursor: []f32,
-
-        // ---- layout outputs
-        size: [2][]f32,
-        pos: [2][]f32,
-        /// x0, y0, x1, y1 snapped to whole pixels.
-        rect: [4][]f32,
-        /// `rect` cut down to the inherited clip. What hit testing reads.
-        vis: [4][]f32,
-        /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular:
-        /// children of a rounded node are not clipped to its corners.
-        child_clip: [][4]f32,
-        visible: []u8,
-        clips: []u8,
-        sense: []u8,
-
-        // ---- paint inputs. Cold during layout and always read together, so
-        //      they are one row per node rather than seven columns.
-        look: []Look,
-
-        // ---- semantics, read by the host to build an accessibility tree
-        role: []u8,
-        value: []f32,
-
-        // ---- links into the side lists, or `none`
-        text: []u32,
-        custom: []u32,
-    };
-
-    /// Rows allocated for `cap` nodes: whole vectors plus one spare, so batch
-    /// passes may read and write one vector past `len`.
-    pub fn rows(cap: u32) usize {
-        return simd.rows(cap);
-    }
-    /// Carves every column from `carver`. With a counting carver this sizes the buffer instead.
-    pub fn init(carver: *mem.Carver, cap: u32) Tree {
-        return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
-    }
-    /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
-    /// row is rewritten before it is read again.
-    pub fn reset(t: *Tree) void {
-        t.len = 0;
-        t.overflow = false;
-    }
-
-    /// Appends a node as the last child of `parent` and returns its row.
-    /// One row write per column; no searching, no allocation, no branch.
-    pub fn push(t: *Tree, parent: u32, id: Id, s: *const Style) u32 {
-        const c = &t.c;
-        const i = @min(t.len, t.cap - 1);
-        t.overflow = simd.orB(t.overflow, t.len >= t.cap);
-        t.len = i + 1;
-
-        c.id[i] = @backingInt(id);
-        c.parent[i] = parent;
-        c.end[i] = i + 1;
-        inline for (0..2) |a| {
-            const k = @backingInt(s.size[a].kind);
-            const v = s.size[a].v;
-            c.min[a][i] = @max(v * Size.k_min[k], s.min[a]);
-            c.max[a][i] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
-            c.grow[a][i] = v * Size.k_grow[k];
-            c.pct[a][i] = v * Size.k_pct[k];
-            c.pad_lo[a][i] = s.pad[a];
-            c.pad_hi[a][i] = s.pad[a + 2];
-            c.offset[a][i] = s.offset[a];
-            c.scroll[a][i] = s.scroll[a];
-        }
-        const fl = b01(!s.float);
-        c.gap[i] = s.gap;
-        c.nkids[i] = 0;
-        c.flow[i] = fl;
-        c.shrink[i] = b01(s.shrink);
-        c.align_main[i] = Align.factor[@backingInt(s.main)];
-        c.align_cross[i] = Align.factor[@backingInt(s.cross)];
-        const along_y: f32 = @floatFromInt(@backingInt(s.dir));
-        c.main[0][i] = 1 - along_y;
-        c.main[1][i] = along_y;
-        c.clips[i] = @intFromBool(s.clip);
-        c.sense[i] = 0;
-        c.look[i] = .{
-            .fill = s.fill.bitsOf(),
-            .border_color = s.border_color.bitsOf(),
-            .border = s.border,
-            .radius = s.radius,
-            .params = s.params,
-            .texture = @backingInt(s.texture),
-            .material = @backingInt(s.material),
-        };
-        c.role[i] = @backingInt(s.role);
-        c.value[i] = s.value;
-        c.text[i] = none;
-        c.custom[i] = none;
-        // The root is its own parent and must not count itself.
-        c.nkids[parent] += fl * b01(i != 0);
-        return i;
-    }
-
-    /// Closes node `i`: everything pushed since belongs to its subtree.
-    pub fn seal(t: *Tree, i: u32) void {
-        t.c.end[i] = t.len;
-    }
-
-    pub fn rect(t: *const Tree, i: u32) Rect {
-        return .{ .x0 = t.c.rect[0][i], .y0 = t.c.rect[1][i], .x1 = t.c.rect[2][i], .y1 = t.c.rect[3][i] };
-    }
-
-    /// Row of the node with `id`, or `none`. SIMD scan of the id column.
-    pub fn find(t: *const Tree, id: Id) u32 {
-        return simd.find(t.c.id, t.len, @backingInt(id));
-    }
-
-    pub const Invalid = error{
-        /// len > cap.
-        LenOverCap,
-        /// Row 0 is not its own parent.
-        RootParent,
-        /// A row's parent is not an earlier row.
-        ParentNotBefore,
-        /// end[i] is not in (i, len].
-        EndOutOfRange,
-        /// A row is not inside its parent's range, or a range before it still contains it:
-        /// the parent is not the innermost open range, so the ranges do not nest.
-        RangesCross,
-    };
-
-    /// Checks the structural invariants every pass relies on: rows in depth-first order,
-    /// parent before child, and subtree ranges [i, end[i]) that nest exactly as the parent
-    /// links say. O(len * depth), no memory. Callable in any build; `validate` is the
-    /// debug-only form.
-    pub fn check(t: *const Tree) Invalid!void {
-        if (t.len > t.cap) return error.LenOverCap;
-        if (t.len == 0) return;
-        const c = &t.c;
-        if (c.parent[0] != 0) return error.RootParent;
-        for (0..t.len) |j| {
-            if (c.end[j] <= j or c.end[j] > t.len) return error.EndOutOfRange;
-            if (j == 0) continue;
-            const p = c.parent[j];
-            if (p >= j) return error.ParentNotBefore;
-            // The innermost range still open at j must be j's parent: climb from the row
-            // before j past every range that closed at or before j.
-            var a: u32 = @intCast(j - 1);
-            while (c.end[a] <= j and a != 0) a = c.parent[a];
-            if (a != p or c.end[j] > c.end[p]) return error.RangesCross;
-        }
-    }
-
-    /// `check`, asserted in Debug and ReleaseSafe; compiled out in ReleaseFast and ReleaseSmall.
-    pub fn validate(t: *const Tree) void {
-        if (!std.debug.runtime_safety) return;
-        t.check() catch |e| std.debug.panic("tree: {s}", .{@errorName(e)});
-    }
+/// Where the columns live: slices carved from a caller's buffer (`init`), or arrays inside the
+/// tree value itself for a capacity known at compile time (`empty`), as the comptime front end
+/// keeps its tables.
+pub const Storage = union(enum) {
+    slice,
+    array: u32,
 };
+
+/// The runtime front end's tree: u32 indices, columns carved from the caller's buffer.
+pub const Tree = TreeOf(u32, .slice);
+
+/// A tree whose node links (`parent`, `end`, `push`'s rows) are `Index`, the smallest integer
+/// that fits the capacity, as `Ui().Index` is in prototype/comptime_ui_probe.zig. Ids and the
+/// side-list links stay u32: ids are hashes and side lists have their own capacity.
+pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
+    comptime std.debug.assert(@typeInfo(Index).int.signedness == .unsigned);
+    if (storage == .array) comptime std.debug.assert(storage.array > 0 and storage.array < std.math.maxInt(Index));
+    return struct {
+        const Self = @This();
+        /// A column of `T`: one row per node, `simd.rows(cap)` rows.
+        fn Col(comptime T: type) type {
+            return switch (storage) {
+                .slice => []T,
+                .array => |n| [simd.rows(n)]T,
+            };
+        }
+
+        len: u32 = 0,
+        cap: u32,
+        /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+        /// The front end reports it as `Status.nodes`.
+        overflow: bool = false,
+        c: Columns,
+
+        /// One column per property, grouped by the pass that reads them, so a pass touches only the
+        /// cache lines it needs. Every column has `simd.rows(cap)` rows (the padding contract).
+        pub const Columns = struct {
+            // ---- identity and structure: indices, never pointers
+            id: Col(u32),
+            parent: Col(Index),
+            /// One past the last descendant. The subtree of i is rows [i, end[i]).
+            end: Col(Index),
+
+            // ---- layout inputs. Sizing modes are coefficients, not tags.
+            min: [2]Col(f32),
+            max: [2]Col(f32),
+            grow: [2]Col(f32),
+            pct: [2]Col(f32),
+            pad_lo: [2]Col(f32),
+            pad_hi: [2]Col(f32),
+            offset: [2]Col(f32),
+            scroll: [2]Col(f32),
+            gap: Col(f32),
+            /// Number of in-flow children, kept as f32 because it only feeds arithmetic.
+            nkids: Col(f32),
+            /// 1.0 in flow, 0.0 floating.
+            flow: Col(f32),
+            shrink: Col(f32),
+            align_main: Col(f32),
+            align_cross: Col(f32),
+            /// main[a] is 1.0 when children are stacked along axis a, else 0.0.
+            /// The stacking direction is a coefficient, so no pass compares it.
+            main: [2]Col(f32),
+
+            // ---- layout scratch, rewritten every frame
+            fit: [2]Col(f32),
+            nat: [2]Col(f32),
+            grow_sum: [2]Col(f32),
+            /// 1 / grow_sum, filled by `fit` so `resolve` multiplies instead of dividing.
+            grow_inv: [2]Col(f32),
+            used: [2]Col(f32),
+            gap_total: Col(f32),
+            cursor: Col(f32),
+
+            // ---- layout outputs
+            size: [2]Col(f32),
+            pos: [2]Col(f32),
+            /// x0, y0, x1, y1 snapped to whole pixels.
+            rect: [4]Col(f32),
+            /// `rect` cut down to the inherited clip. What hit testing reads.
+            vis: [4]Col(f32),
+            /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular:
+            /// children of a rounded node are not clipped to its corners.
+            child_clip: Col([4]f32),
+            visible: Col(u8),
+            clips: Col(u8),
+            sense: Col(u8),
+
+            // ---- paint inputs. Cold during layout and always read together, so
+            //      they are one row per node rather than seven columns.
+            look: Col(Look),
+
+            // ---- semantics, read by the host to build an accessibility tree
+            role: Col(u8),
+            value: Col(f32),
+
+            // ---- links into the side lists, or `none`
+            text: Col(u32),
+            custom: Col(u32),
+        };
+
+        /// Rows allocated for `cap` nodes: whole vectors plus one spare, so batch
+        /// passes may read and write one vector past `len`.
+        pub fn rows(cap: u32) usize {
+            return simd.rows(cap);
+        }
+        /// Carves every column from `carver`. With a counting carver this sizes the buffer instead.
+        /// Slice storage only.
+        pub fn init(carver: *mem.Carver, cap: u32) Self {
+            comptime std.debug.assert(storage == .slice);
+            std.debug.assert(cap > 0 and cap < std.math.maxInt(Index));
+            return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
+        }
+        /// An empty tree with zeroed columns. Array storage only: the value holds every row.
+        pub const empty = if (storage == .array) Self{ .cap = storage.array, .c = std.mem.zeroes(Columns) } else {};
+        /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
+        /// row is rewritten before it is read again.
+        pub fn reset(t: *Self) void {
+            t.len = 0;
+            t.overflow = false;
+        }
+
+        /// Appends a node as the last child of `parent` and returns its row.
+        /// One row write per column; no searching, no allocation, no branch.
+        pub fn push(t: *Self, parent: Index, id: Id, s: *const Style) Index {
+            const c = &t.c;
+            const i: Index = @intCast(@min(t.len, t.cap - 1));
+            t.overflow = simd.orB(t.overflow, t.len >= t.cap);
+            t.len = i + 1;
+
+            c.id[i] = @backingInt(id);
+            c.parent[i] = parent;
+            c.end[i] = i + 1;
+            inline for (0..2) |a| {
+                const k = @backingInt(s.size[a].kind);
+                const v = s.size[a].v;
+                c.min[a][i] = @max(v * Size.k_min[k], s.min[a]);
+                c.max[a][i] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
+                c.grow[a][i] = v * Size.k_grow[k];
+                c.pct[a][i] = v * Size.k_pct[k];
+                c.pad_lo[a][i] = s.pad[a];
+                c.pad_hi[a][i] = s.pad[a + 2];
+                c.offset[a][i] = s.offset[a];
+                c.scroll[a][i] = s.scroll[a];
+            }
+            const fl = b01(!s.float);
+            c.gap[i] = s.gap;
+            c.nkids[i] = 0;
+            c.flow[i] = fl;
+            c.shrink[i] = b01(s.shrink);
+            c.align_main[i] = Align.factor[@backingInt(s.main)];
+            c.align_cross[i] = Align.factor[@backingInt(s.cross)];
+            const along_y: f32 = @floatFromInt(@backingInt(s.dir));
+            c.main[0][i] = 1 - along_y;
+            c.main[1][i] = along_y;
+            c.clips[i] = @intFromBool(s.clip);
+            c.sense[i] = 0;
+            c.look[i] = .{
+                .fill = s.fill.bitsOf(),
+                .border_color = s.border_color.bitsOf(),
+                .border = s.border,
+                .radius = s.radius,
+                .params = s.params,
+                .texture = @backingInt(s.texture),
+                .material = @backingInt(s.material),
+            };
+            c.role[i] = @backingInt(s.role);
+            c.value[i] = s.value;
+            c.text[i] = none;
+            c.custom[i] = none;
+            // The root is its own parent and must not count itself.
+            c.nkids[parent] += fl * b01(i != 0);
+            return i;
+        }
+
+        /// Closes node `i`: everything pushed since belongs to its subtree.
+        pub fn seal(t: *Self, i: Index) void {
+            t.c.end[i] = @intCast(t.len);
+        }
+
+        pub fn rect(t: *const Self, i: u32) Rect {
+            return .{ .x0 = t.c.rect[0][i], .y0 = t.c.rect[1][i], .x1 = t.c.rect[2][i], .y1 = t.c.rect[3][i] };
+        }
+
+        /// Row of the node with `id`, or `none`. SIMD scan of the id column.
+        pub fn find(t: *const Self, id: Id) u32 {
+            return simd.find(t.c.id[0..], t.len, @backingInt(id));
+        }
+
+        pub const Invalid = error{
+            /// len > cap.
+            LenOverCap,
+            /// Row 0 is not its own parent.
+            RootParent,
+            /// A row's parent is not an earlier row.
+            ParentNotBefore,
+            /// end[i] is not in (i, len].
+            EndOutOfRange,
+            /// A row is not inside its parent's range, or a range before it still contains it:
+            /// the parent is not the innermost open range, so the ranges do not nest.
+            RangesCross,
+        };
+
+        /// Checks the structural invariants every pass relies on: rows in depth-first order,
+        /// parent before child, and subtree ranges [i, end[i]) that nest exactly as the parent
+        /// links say. O(len * depth), no memory. Callable in any build; `validate` is the
+        /// debug-only form.
+        pub fn check(t: *const Self) Invalid!void {
+            if (t.len > t.cap) return error.LenOverCap;
+            if (t.len == 0) return;
+            const c = &t.c;
+            if (c.parent[0] != 0) return error.RootParent;
+            for (0..t.len) |j| {
+                if (c.end[j] <= j or c.end[j] > t.len) return error.EndOutOfRange;
+                if (j == 0) continue;
+                const p = c.parent[j];
+                if (p >= j) return error.ParentNotBefore;
+                // The innermost range still open at j must be j's parent: climb from the row
+                // before j past every range that closed at or before j.
+                var a: u32 = @intCast(j - 1);
+                while (c.end[a] <= j and a != 0) a = c.parent[a];
+                if (a != p or c.end[j] > c.end[p]) return error.RangesCross;
+            }
+        }
+
+        /// `check`, asserted in Debug and ReleaseSafe; compiled out in ReleaseFast and ReleaseSmall.
+        pub fn validate(t: *const Self) void {
+            if (!std.debug.runtime_safety) return;
+            t.check() catch |e| std.debug.panic("tree: {s}", .{@errorName(e)});
+        }
+    };
+}
 
 const testing = std.testing;
 
@@ -491,4 +523,58 @@ test "check: parent < child and end ranges nest, and each break is named" {
     try t.check();
     t.len = 9;
     try testing.expectError(error.LenOverCap, t.check());
+}
+
+test "TreeOf: u32 slices are the runtime tree; a small index type with array storage is the same tree" {
+    try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
+    // The comptime probe's 8-node UI indexes with u4.
+    const Small = TreeOf(u4, .{ .array = 8 });
+    const rows = comptime simd.rows(8);
+    try testing.expectEqual([rows]u4, @FieldType(Small.Columns, "parent"));
+    try testing.expectEqual([2][rows]f32, @FieldType(Small.Columns, "min"));
+    try testing.expectEqual([rows]u32, @FieldType(Small.Columns, "id"));
+    try testing.expectEqual(u4, @typeInfo(@TypeOf(Small.push)).@"fn".return_type.?);
+
+    // Build the probe's tree, col { label, row { checkbox, slider }, row { label, slider } },
+    // in both forms; every column agrees row for row.
+    var small: Small = .empty;
+    var fx: Fixture(8) = .{};
+    var big = fx.tree();
+    const shape = [_]struct { parent: u4, close: u4 }{
+        .{ .parent = 0, .close = 0 }, .{ .parent = 0, .close = 1 }, .{ .parent = 0, .close = 0 },
+        .{ .parent = 2, .close = 1 }, .{ .parent = 2, .close = 2 }, .{ .parent = 0, .close = 0 },
+        .{ .parent = 5, .close = 1 }, .{ .parent = 5, .close = 3 },
+    };
+    var open: [3]u4 = undefined;
+    var depth: usize = 0;
+    for (shape, 0..) |n, k| {
+        const id = Id.from("n").with(@intCast(k));
+        const s: Style = .{ .gap = @floatFromInt(k), .pad = @splat(8) };
+        const i = small.push(n.parent, id, &s);
+        try testing.expectEqual(@as(u32, i), big.push(n.parent, id, &s));
+        open[depth] = i;
+        depth += 1;
+        for (0..n.close) |_| {
+            depth -= 1;
+            small.seal(open[depth]);
+            big.seal(open[depth]);
+        }
+    }
+    try testing.expectEqual(0, depth);
+    try small.check();
+    try big.check();
+    try testing.expectEqualSlices(u4, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, small.c.parent[0..8]);
+    try testing.expectEqualSlices(u4, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, small.c.end[0..8]);
+    for (0..8) |k| {
+        try testing.expectEqual(big.c.parent[k], small.c.parent[k]);
+        try testing.expectEqual(big.c.end[k], small.c.end[k]);
+        try testing.expectEqual(big.c.gap[k], small.c.gap[k]);
+        try testing.expectEqual(big.c.nkids[k], small.c.nkids[k]);
+    }
+    try testing.expectEqual(4, small.find(Id.from("n").with(4)));
+    try testing.expectEqual(none, small.find(Id.from("absent")));
+    // Overflow is reported the same way.
+    for (0..3) |_| _ = small.push(0, .none, &.{});
+    try testing.expect(small.overflow);
+    try testing.expectEqual(8, small.len);
 }
