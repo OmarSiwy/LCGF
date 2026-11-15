@@ -1,4 +1,9 @@
 {
+  "p_gamma_apply": {
+    "jcc": 5,
+    "back": 2,
+    "short_fwd": 1
+  },
   "p_raster_coverage": {
     "jcc": 4,
     "back": 1,

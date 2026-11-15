@@ -279,12 +279,14 @@ const Grid = struct {
 
 // ---------------------------------------------------------------------------------------------
 // Tests: every reference image of testdata/ref.bin (FreeType), rasterised here and compared.
+// The helpers are pub for the tests of the other files of src/text/raster/.
 
-const font = @embedFile("../font/testdata/test.ttf");
+pub const test_font = @embedFile("../font/testdata/test.ttf");
+const font = test_font;
 const refs = @embedFile("testdata/ref.bin");
 
 /// One reference image of testdata/ref.bin.
-const Ref = struct {
+pub const Ref = struct {
     cp: u32,
     px: u16,
     /// x shift in 1/64 px.
@@ -293,11 +295,11 @@ const Ref = struct {
     pixels: []const u8,
 };
 
-const RefIter = struct {
+pub const RefIter = struct {
     at: usize = 4,
     left: u32 = std.mem.readInt(u32, refs[0..4], .little),
 
-    fn next(it: *RefIter) ?Ref {
+    pub fn next(it: *RefIter) ?Ref {
         if (it.left == 0) return null;
         it.left -= 1;
         const h = refs[it.at..][0..16];
@@ -347,7 +349,7 @@ fn compare(gb: Box, got: []const u8, r: Ref) Diff {
 
 /// The pixel at column `x` (from the pen) and row `y` (rows above the baseline, the top row of
 /// the image being `b.top`), 0 outside the box.
-fn pixel(b: Box, px: []const u8, x: i32, y: i32) u8 {
+pub fn pixel(b: Box, px: []const u8, x: i32, y: i32) u8 {
     const c = x - b.left;
     const r = b.top - y;
     if (c < 0 or r < 0 or c >= b.w or r >= b.h) return 0;
@@ -355,7 +357,7 @@ fn pixel(b: Box, px: []const u8, x: i32, y: i32) u8 {
 }
 
 /// Rasterises one reference glyph here, into the caller's buffers.
-fn render(face: opentype.Face, r: Ref, o: *Outline, acc: []f32, out: []u8) struct { Box, []u8 } {
+pub fn render(face: opentype.Face, r: Ref, o: *Outline, acc: []f32, out: []u8) struct { Box, []u8 } {
     o.points = 0;
     o.contours = 0;
     face.outline(face.cmap.glyph(r.cp), o) catch unreachable;
@@ -368,13 +370,13 @@ fn render(face: opentype.Face, r: Ref, o: *Outline, acc: []f32, out: []u8) struc
 }
 
 /// Columns for one test glyph's outline.
-const TestOutline = struct {
+pub const TestOutline = struct {
     x: [256]f32 = undefined,
     y: [256]f32 = undefined,
     on: [256]bool = undefined,
     ends: [32]u32 = undefined,
 
-    fn outline(t: *TestOutline) Outline {
+    pub fn outline(t: *TestOutline) Outline {
         return .{ .x = &t.x, .y = &t.y, .on = &t.on, .ends = &t.ends };
     }
 };
