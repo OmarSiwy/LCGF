@@ -14,6 +14,7 @@ pub const strings = @import("core/strings.zig");
 pub const texts = @import("core/texts.zig");
 pub const customs = @import("core/customs.zig");
 pub const spec = @import("comptime/spec.zig");
+pub const flatten = @import("comptime/flatten.zig");
 
 test {
     std.testing.refAllDecls(@This());

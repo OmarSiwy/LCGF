@@ -68,12 +68,7 @@ pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
 
 // ---- tests -------------------------------------------------------------------------------------
 
-/// Nodes in `s`, itself included. Test helper; the front end's own count is lane ct-flatten's.
-fn nodeCount(comptime s: Spec) comptime_int {
-    var n = 1;
-    for (s.children) |c| n += nodeCount(c);
-    return n;
-}
+const nodeCount = @import("flatten.zig").count;
 
 /// Parent and end tables of `s` in depth-first order, as the probe's `Ui` computes them.
 /// Test helper: lets the probe's table expectations run before lane ct-flatten ports `Ui`.
