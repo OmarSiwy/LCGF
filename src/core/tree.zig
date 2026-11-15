@@ -11,6 +11,7 @@ const Id = types.Id;
 const Size = types.Size;
 const Align = types.Align;
 const Style = types.Style;
+const Rect = types.Rect;
 const b01 = simd.b2f;
 
 /// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
@@ -169,6 +170,15 @@ pub const Tree = struct {
     /// Closes node `i`: everything pushed since belongs to its subtree.
     pub fn seal(t: *Tree, i: u32) void {
         t.c.end[i] = t.len;
+    }
+
+    pub fn rect(t: *const Tree, i: u32) Rect {
+        return .{ .x0 = t.c.rect[0][i], .y0 = t.c.rect[1][i], .x1 = t.c.rect[2][i], .y1 = t.c.rect[3][i] };
+    }
+
+    /// Row of the node with `id`, or `none`. SIMD scan of the id column.
+    pub fn find(t: *const Tree, id: Id) u32 {
+        return simd.find(t.c.id, t.len, @backingInt(id));
     }
 };
 
@@ -349,4 +359,25 @@ test "seal closes a subtree over everything pushed since its node" {
     try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 1, 0 }, t.c.parent[0..5]);
     try testing.expectEqualSlices(u32, &.{ 5, 4, 3, 4, 5 }, t.c.end[0..5]);
     try testing.expectEqualSlices(f32, &.{ 2, 2, 0, 0, 0 }, t.c.nkids[0..5]);
+}
+
+test "find returns the first row with an id or none; rect reads the four rect columns" {
+    var fx: Fixture(40) = .{};
+    var t = fx.tree();
+    const row = Id.from("row");
+    for (0..37) |k| _ = t.push(0, row.with(@intCast(k)), &.{});
+    _ = t.push(0, row.with(5), &.{}); // a duplicate: the first row wins
+    try testing.expectEqual(0, t.find(row.with(0)));
+    try testing.expectEqual(5, t.find(row.with(5)));
+    try testing.expectEqual(36, t.find(row.with(36)));
+    try testing.expectEqual(none, t.find(row.with(99)));
+    // Rows past len are ignored even when they hold the id.
+    t.len = 30;
+    try testing.expectEqual(none, t.find(row.with(31)));
+
+    t.c.rect[0][3] = 1;
+    t.c.rect[1][3] = 2;
+    t.c.rect[2][3] = 30;
+    t.c.rect[3][3] = 40;
+    try testing.expectEqual(Rect{ .x0 = 1, .y0 = 2, .x1 = 30, .y1 = 40 }, t.rect(3));
 }
