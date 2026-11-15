@@ -2,6 +2,7 @@
 //! into the caller's `DrawList`. Ported from prototype/ui.zig ("paint").
 //!
 //!   1. nodes -> quads and an ordered op stream (write always, advance by 0 or 1)
+//!   2. side lists -> text runs and custom draws (one row per run or draw that exists)
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -13,9 +14,6 @@ const none = types.none;
 
 /// Tree and side lists in, draw list out. `strings` is the storage `TextRun.start` indexes.
 pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void {
-    _ = tx;
-    _ = cu;
-    _ = strings;
     const c = &t.c;
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
@@ -65,6 +63,37 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
         o += vis & @intFromBool(c.custom[i] != none);
     }
     d.quad_len = q;
+
+    // 2. Side lists -> geometry. One row per text run or custom draw that
+    //    exists; nodes without either cost nothing here.
+    for (0..tx.len) |k| {
+        const n = tx.c.node[k];
+        d.runs[k] = .{
+            .rect = .{
+                c.rect[0][n] + c.pad_lo[0][n], c.rect[1][n] + c.pad_lo[1][n],
+                c.rect[2][n] - c.pad_hi[0][n], c.rect[3][n] - c.pad_hi[1][n],
+            },
+            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
+            .start = tx.c.start[k],
+            .bytes = tx.c.bytes[k],
+            .px = tx.c.px[k],
+            .color = tx.c.color[k],
+            .font = tx.c.font[k],
+        };
+    }
+    d.run_len = tx.len;
+    for (0..cu.len) |k| {
+        const n = cu.c.node[k];
+        d.customs[k] = .{
+            .rect = .{ c.rect[0][n], c.rect[1][n], c.rect[2][n], c.rect[3][n] },
+            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
+            .data = cu.c.data[k],
+            .id = cu.c.id[k],
+            .node = n,
+        };
+    }
+    d.custom_len = cu.len;
+    d.strings = strings;
 }
 
 const testing = std.testing;
@@ -152,4 +181,25 @@ test "sweep 1: visible painted nodes become quads, every node its ops in paint o
     try testing.expectEqualSlices(u8, &.{ 0, 0, 1, 2, 0, 0 }, d.op.kind[0..6]);
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0, 3 << 16, 0 }, d.op.key[0..6]);
     try testing.expectEqualSlices(u32, &.{ 0, 1, 0, 0, 2, 3 }, d.op.ref[0..6]);
+}
+
+test "sweep 2: text runs get the content box, custom draws the node rect, both the parent clip" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    const sc: Scene = .build(&buf);
+    const d = &sc.d;
+    const label = sc.t.rect(Scene.label);
+    try testing.expectEqual(1, d.run_len);
+    try testing.expectEqual([4]f32{ label.x0 + 2, label.y0 + 2, label.x1 - 2, label.y1 - 2 }, d.runs[0].rect);
+    try testing.expectEqual([4]f32{ 2, 52, 42, 62 }, d.runs[0].rect);
+    try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, d.runs[0].clip);
+    try testing.expectEqualStrings("hello", d.strings[d.runs[0].start..][0..d.runs[0].bytes]);
+    try testing.expectEqual(10, d.runs[0].px);
+    try testing.expectEqual(Color.white.bitsOf(), d.runs[0].color);
+    try testing.expectEqual(0, d.runs[0].font);
+    try testing.expectEqual(1, d.custom_len);
+    try testing.expectEqual(sc.t.rect(Scene.view).array(), d.customs[0].rect);
+    try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, d.customs[0].clip);
+    try testing.expectEqual(77, d.customs[0].data);
+    try testing.expectEqual(@backingInt(Id.from("view")), d.customs[0].id);
+    try testing.expectEqual(Scene.view, d.customs[0].node);
 }
