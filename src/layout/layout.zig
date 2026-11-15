@@ -3,11 +3,14 @@
 //! no I/O. Ported from prototype/ui.zig ("layout").
 //!
 //!   prepare            SIMD     clear scratch, gap totals
+//!   applyText(.x)      scatter  text widths into leaves
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
+const Texts = @import("../core/texts.zig").Texts;
+const Axis = types.Axis;
 
 const W = simd.lanes;
 
@@ -29,9 +32,17 @@ pub fn prepare(t: *Tree) void {
     }
 }
 
+/// Scatters measured text extents into their leaf nodes for one axis.
+pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
+    const a = @backingInt(axis);
+    const extents = [2][]const f32{ tx.c.w, tx.c.h };
+    const src = extents[a];
+    const dst = t.c.fit[a];
+    for (tx.c.node[0..tx.len], src[0..tx.len]) |node, extent| dst[node] = extent;
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
-const Texts = @import("../core/texts.zig").Texts;
 const Strings = @import("../core/strings.zig").Strings;
 const Id = types.Id;
 
@@ -108,4 +119,15 @@ test "prepare: zeroes the scratch columns and sets gap_total = gap * (in-flow ch
     try expectCol(zeros[0..n], c.cursor);
     // root: 3 children, gap 5; bar: 2 children, gap 4; col: one child; leaves: none.
     try expectCol(&.{ 10, 4, 0, 0, 0, 0, 0 }, c.gap_total);
+}
+
+test "applyText: writes each run's extent into its node's fit, on the axis asked for" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    try expectCol(&.{ 0, 0, 0, 0, 0, 120, 0 }, s.t.c.fit[0]);
+    try expectCol(&.{ 0, 0, 0, 0, 0, 0, 0 }, s.t.c.fit[1]);
+    applyText(&s.t, &s.tx, .y);
+    try expectCol(&.{ 0, 0, 0, 0, 0, 12, 0 }, s.t.c.fit[1]);
 }
