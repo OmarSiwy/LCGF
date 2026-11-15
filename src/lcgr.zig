@@ -8,6 +8,7 @@ const std = @import("std");
 pub const simd = @import("core/simd.zig");
 pub const input = @import("core/input.zig");
 pub const types = @import("core/types.zig");
+pub const mem = @import("core/mem.zig");
 
 test {
     std.testing.refAllDecls(@This());

@@ -1,0 +1,2 @@
+# Every lane adds one export line here; keep both sides instead of conflicting.
+src/lcgr.zig merge=union
