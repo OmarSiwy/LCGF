@@ -7,6 +7,8 @@
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
+//!   zig build probe                    build one frame, then idle: resident memory and wake-ups
+//!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
 const ui = @import("ui");
 const linux = std.os.linux;
@@ -57,9 +59,13 @@ pub fn main(init: std.process.Init) !void {
     defer args.deinit();
     _ = args.next();
     var json_path: ?[]const u8 = null;
+    var idle = false;
     while (args.next()) |arg| {
-        if (!std.mem.eql(u8, arg, "--json")) return error.UnknownArgument;
-        json_path = args.next() orelse return error.MissingPath;
+        if (std.mem.eql(u8, arg, "--idle")) {
+            idle = true;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            json_path = args.next() orelse return error.MissingPath;
+        } else return error.UnknownArgument;
     }
 
     var ctx = try ui.Context.init(&buffer, limits);
@@ -69,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
     var sink: u64 = 0;
     var nodes: usize = 0;
     var texts: usize = 0;
-    for (0..frames) |k| {
+    for (0..if (idle) 1 else frames) |k| {
         in.pointer = .{ @floatFromInt(100 + (k * 7) % 900), @floatFromInt(50 + (k * 13) % 7000) };
         var m: [16]u64 = undefined;
         m[0] = now();
@@ -118,6 +124,14 @@ pub fn main(init: std.process.Init) !void {
     var buf: [4096]u8 = undefined;
     var out = std.Io.File.stdout().writerStreaming(init.io, &buf);
     const w = &out.interface;
+    if (idle) {
+        // Stand-in for a shell waiting for events: block on stdin until it closes.
+        try w.print("ready nodes={d} sink={d}\n", .{ nodes, sink });
+        try w.flush();
+        var byte: [1]u8 = undefined;
+        while (linux.read(0, &byte, 1) > 0) {}
+        return;
+    }
     try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
     for (pass_names, &samples) |name, *s| {

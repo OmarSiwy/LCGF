@@ -38,6 +38,10 @@ pub fn build(b: *std.Build) void {
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
     b.step("bench", "Run the frame benchmark (Linux)").dependOn(&bench_run.step);
+    const probe = b.addSystemCommand(&.{ "python3", "tools/bench/probe.py", "--" });
+    probe.addArtifactArg(bench);
+    probe.addArg("--idle");
+    b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
 
     // Section sizes per example, built ReleaseSmall. Linux (ELF64) only. Until examples/ exists the
     // examples are the prototype's frame dumper and the benchmark.

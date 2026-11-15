@@ -31,7 +31,8 @@ job() {
         zig build bench -- --json "$PWD/zig-out/bench.json"
         python3 tools/bench/compare.py --self-test
         python3 tools/bench/compare.py tools/bench/baseline.json zig-out/bench.json
-        zig build size ;;
+        zig build size
+        zig build probe ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
