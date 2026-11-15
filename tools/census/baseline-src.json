@@ -1,4 +1,24 @@
 {
+  "p_hit_near": {
+    "jcc": 3,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_hit": {
+    "jcc": 4,
+    "back": 1,
+    "short_fwd": 1
+  },
+  "p_paint": {
+    "jcc": 8,
+    "back": 4,
+    "short_fwd": 0
+  },
+  "p_tree_push": {
+    "jcc": 1,
+    "back": 0,
+    "short_fwd": 1
+  },
   "p_finalize": {
     "jcc": 4,
     "back": 2,
@@ -30,16 +50,6 @@
     "short_fwd": 1
   },
   "p_prepare": {
-    "jcc": 2,
-    "back": 1,
-    "short_fwd": 0
-  },
-  "p_hit": {
-    "jcc": 4,
-    "back": 1,
-    "short_fwd": 1
-  },
-  "p_hit_near": {
     "jcc": 2,
     "back": 1,
     "short_fwd": 0

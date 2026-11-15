@@ -49,7 +49,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
         // Painted when either colour has alpha.
         const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0);
         op_kind[o] = @backingInt(DrawList.Kind.quads);
-        op_key[o] = @as(u32, look.texture) << 16 | look.material;
+        op_key[o] = (@as(u32, look.texture) << 16) | look.material;
         op_ref[o] = q;
         q += has_quad;
         o += has_quad;

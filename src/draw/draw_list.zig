@@ -176,7 +176,7 @@ test "command: the columns read back as tagged unions, key split into texture an
     const kinds = [_]DrawList.Kind{ .quads, .text, .custom, .quads };
     const firsts = [_]u32{ 0, 5, 6, 3 };
     const counts = [_]u32{ 3, 1, 1, 1 };
-    const keys = [_]u32{ 0, 0, 0, 7 << 16 | 2 };
+    const keys = [_]u32{ 0, 0, 0, (7 << 16) | 2 };
     for (kinds, firsts, counts, keys, 0..) |kind, first, count, key, i| {
         d.cmd.kind[i] = @backingInt(kind);
         d.cmd.first[i] = first;

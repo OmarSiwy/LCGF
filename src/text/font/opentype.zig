@@ -199,7 +199,7 @@ pub const Style = struct {
 /// Face selection: the first face in the file whose style is `style`, or null. Faces that do
 /// not parse are skipped.
 pub fn findFace(data: []const u8, style: Style) Error!?u32 {
-    const want: u16 = @as(u16, @intFromBool(style.bold)) | @as(u16, @intFromBool(style.italic)) << 1;
+    const want: u16 = @as(u16, @intFromBool(style.bold)) | (@as(u16, @intFromBool(style.italic)) << 1);
     for (0..try faceCount(data)) |i| {
         const index: u32 = @intCast(i);
         const dir = Directory.parse(data, try faceOffset(data, index)) catch continue;

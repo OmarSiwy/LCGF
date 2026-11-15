@@ -72,7 +72,7 @@ pub fn bracket(cp: u21) Bracket {
 inline fn stage(comptime name: []const u8, cp: u21) @TypeOf(@field(tables, name ++ "_stage2")[0]) {
     const shift = @field(tables, name ++ "_shift");
     const block: usize = @field(tables, name ++ "_stage1")[cp >> shift];
-    return @field(tables, name ++ "_stage2")[block << shift | (cp & ((1 << shift) - 1))];
+    return @field(tables, name ++ "_stage2")[(block << shift) | (cp & ((1 << shift) - 1))];
 }
 
 /// Index of the last entry of `starts` that is <= cp (0 when cp is below them all). Fixed trip

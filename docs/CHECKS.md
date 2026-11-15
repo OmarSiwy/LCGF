@@ -73,7 +73,9 @@ read in the disassembly and re-recorded in `tools/census/baseline.json` and `bas
 adding the root to its own child count: the compiler turned `fl * b01(i != 0)` back into a branch,
 and an integer-mask rewrite gives the same code. It runs once per call, not inside a per-row loop,
 and is taken only for row 0. `p_step` gained one remainder test after an unrolled vector loop
-(loop control). No per-row loop gained a jump.
+(loop control). No per-row loop gained a jump. Later on the same build: `p_hit_near` has one jump more than on
+0.17.1 (3 against 2). It is the final `selU(@reduce(.Or, at_min), top, none)` after the loop, once per
+call.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
 one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
