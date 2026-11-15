@@ -126,6 +126,62 @@ pub fn Events(comptime spec: Spec) type {
             break :blk @Union(.auto, Widget, &ids.names, &types_, &@splat(.{}));
         };
 
+        /// Whether keyboard focus stops at a widget of `kind`: the ones that take input.
+        pub fn focusable(comptime kind: Kind) bool {
+            return switch (kind) {
+                .checkbox, .slider => true,
+                .label, .col, .row => false,
+            };
+        }
+
+        /// The keyboard focus order, computed while compiling: the focusable widgets in row
+        /// order, which is reading order (depth-first, children in declaration order).
+        pub const focus_order: []const Widget = &focus_table;
+        const focus_table = blk: {
+            var k: usize = 0;
+            for (widget_kinds) |kind| k += @intFromBool(focusable(kind));
+            var out: [k]Widget = undefined;
+            k = 0;
+            for (widget_kinds, 0..) |kind, w| if (focusable(kind)) {
+                out[k] = widget(w);
+                k += 1;
+            };
+            break :blk out;
+        };
+        /// Position of each widget in `focus_order`, by widget order; `none` when not
+        /// focusable. With `focus_order`, Tab is two table reads.
+        const focus_pos: [count]u32 = blk: {
+            var out: [count]u32 = @splat(none);
+            for (focus_table, 0..) |w, k| out[slotOf(w)] = k;
+            break :blk out;
+        };
+        fn slotOf(w: Widget) usize {
+            return std.mem.indexOfScalar(Index, &widget_nodes, @backingInt(w)).?;
+        }
+
+        /// The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from
+        /// `from`, wrapping at the ends. From no focus, or from a widget that is not
+        /// focusable, Tab goes to the first and Shift+Tab to the last. Null when nothing is
+        /// focusable.
+        pub fn nextFocus(from: ?Widget, back: bool) ?Widget {
+            const len: u32 = focus_table.len;
+            if (len == 0) return null;
+            const at_ = if (from) |w| focus_pos[slotOf(w)] else none;
+            const k = if (at_ == none)
+                (if (back) len - 1 else 0)
+            else if (back) (at_ + len - 1) % len else (at_ + 1) % len;
+            return focus_table[k];
+        }
+
+        /// Moves `focus` for every Tab press (and auto-repeat) in this frame's key events, in
+        /// order; Shift goes back. `tab` is the platform's scancode for Tab, as in `Input.Keys`.
+        pub fn focusKeys(focus: *?Widget, in: *const Input, tab: u8) void {
+            for (in.events) |e| {
+                if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
+                focus.* = nextFocus(focus.*, e.mods.shift);
+            }
+        }
+
         /// Pointer state across frames. The caller owns it and passes it to every `pointer`.
         pub const Pointer = struct {
             /// The widget the left button went down on, while it is held.
@@ -379,4 +435,41 @@ test "pointer: a click toggles a checkbox, a press and drag set a slider" {
     try testing.expectEqual(1, volume);
     try testing.expectEqual(0.5, pan);
     try testing.expectEqual(null, p.pressed);
+}
+
+test "focus_order: the focusable widgets in reading order, computed at compile time" {
+    try testing.expectEqualSlices(App.Widget, &.{ .mute, .volume, .pan }, App.focus_order);
+    // A clickable label with an id is a widget but takes no focus.
+    const L = Events(s.row(.{}, .{ s.slider(.b, .b), Spec{ .kind = .label, .id = "caption", .bind = "t" }, s.checkbox(.a, .a) }));
+    try testing.expectEqualSlices(L.Widget, &.{ .b, .a }, L.focus_order);
+    comptime {
+        if (App.focus_order.len != 3) unreachable; // a comptime-known table
+    }
+    try testing.expectEqual(null, Events(s.label(.x)).nextFocus(null, false));
+    try testing.expectEqual(L.Widget.b, L.nextFocus(.caption, false));
+    try testing.expectEqual(L.Widget.a, L.nextFocus(.caption, true));
+}
+
+test "nextFocus, focusKeys: Tab walks the order and wraps, Shift+Tab walks back" {
+    try testing.expectEqual(App.Widget.mute, App.nextFocus(null, false));
+    try testing.expectEqual(App.Widget.pan, App.nextFocus(null, true));
+    try testing.expectEqual(App.Widget.volume, App.nextFocus(.mute, false));
+    try testing.expectEqual(App.Widget.mute, App.nextFocus(.pan, false));
+    try testing.expectEqual(App.Widget.pan, App.nextFocus(.mute, true));
+    const tab = 15;
+    const events = [_]Input.Event{
+        .{ .kind = .press, .code = tab }, // mute
+        .{ .kind = .release, .code = tab },
+        .{ .kind = .press, .code = 30 }, // another key
+        .{ .kind = .press, .code = tab }, // volume
+        .{ .kind = .repeat, .code = tab }, // pan
+        .{ .kind = .press, .code = tab, .mods = .{ .shift = true } }, // volume
+    };
+    var focus: ?App.Widget = null;
+    App.focusKeys(&focus, &.{ .events = &events }, tab);
+    try testing.expectEqual(App.Widget.volume, focus.?);
+    switch (focus.?) { // the focused widget, handled exhaustively
+        .mute, .pan => return error.TestUnexpectedResult,
+        .volume => {},
+    }
 }
