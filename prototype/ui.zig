@@ -187,7 +187,7 @@ pub const Node = enum(u32) {
 pub const Axis = enum(u1) { x = 0, y = 1 };
 
 /// RGBA8, laid out so the bytes in memory are r, g, b, a on little-endian hosts.
-pub const Color = packed struct(u32) {
+pub const Color = bitpack struct(u32) {
     r: u8 = 0,
     g: u8 = 0,
     b: u8 = 0,
@@ -284,7 +284,7 @@ pub const Material = enum(u16) { solid = 0, _ };
 pub const Font = enum(u16) { default = 0, _ };
 
 /// What kinds of pointer interaction a node takes part in.
-pub const Sense = packed struct(u8) {
+pub const Sense = bitpack struct(u8) {
     hover: bool = false,
     click: bool = false,
     drag: bool = false,
@@ -296,7 +296,7 @@ pub const Sense = packed struct(u8) {
 };
 
 /// Result of `Frame.interact`. A bit set, assembled without branches.
-pub const Response = packed struct(u8) {
+pub const Response = bitpack struct(u8) {
     hovered: bool = false,
     /// Pointer is down and this widget owns it.
     held: bool = false,
@@ -438,8 +438,8 @@ pub const Input = struct {
     /// UTF-8 typed this frame. Only read during the frame.
     text: []const u8 = "",
 
-    pub const Buttons = packed struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
-    pub const Mods = packed struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 };
+    pub const Buttons = bitpack struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
+    pub const Mods = bitpack struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 };
 
     /// 256 key states as a bit set. Index with your platform's scancodes.
     pub const Keys = struct {
@@ -1082,7 +1082,7 @@ pub const Interaction = struct {
         const released: u8 = @intFromBool(k == s.released);
         const clicked: u8 = @intFromBool(k == s.clicked);
         const focused: u8 = @intFromBool(k == s.focus);
-        return @bitCast((hovered | held << 1 | pressed << 2 | released << 3 | clicked << 4 | focused << 5) * valid);
+        return @bitCast((hovered | (held << 1) | (pressed << 2) | (released << 3) | (clicked << 4) | (focused << 5)) * valid);
     }
 };
 
@@ -1227,7 +1227,7 @@ pub const paint = struct {
             // Painted when either colour has alpha.
             const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0);
             op_kind[o] = @backingInt(DrawList.Kind.quads);
-            op_key[o] = @as(u32, look.texture) << 16 | look.material;
+            op_key[o] = (@as(u32, look.texture) << 16) | look.material;
             op_ref[o] = q;
             q += has_quad;
             o += has_quad;
@@ -1507,7 +1507,7 @@ pub const Signals = struct {
         var h: u64 = 0xcbf2_9ce4_8422_2325;
         for (deps) |dep| {
             const i = @backingInt(dep);
-            h = (h ^ (@as(u64, i) << 32 | s.version[i])) *% 0x0000_0100_0000_01b3;
+            h = (h ^ ((@as(u64, i) << 32) | s.version[i])) *% 0x0000_0100_0000_01b3;
         }
         return h;
     }
@@ -1571,7 +1571,7 @@ pub const Platform = struct {
 
 /// Capacity problems this frame. Nothing is written out of bounds when a
 /// limit is hit; the frame is simply incomplete and says so here.
-pub const Status = packed struct(u8) {
+pub const Status = bitpack struct(u8) {
     nodes: bool = false,
     texts: bool = false,
     customs: bool = false,
@@ -2056,7 +2056,7 @@ pub const widgets = struct {
         const r = f.interact(node, .button);
         // State selects the colour by table index.
         const fills = [4]Color{ th.control, th.control_hot, th.control_held, th.control_held };
-        f.setFill(node, fills[@as(u8, @intFromBool(r.hovered)) | @as(u8, @intFromBool(r.held)) << 1]);
+        f.setFill(node, fills[@as(u8, @intFromBool(r.hovered)) | (@as(u8, @intFromBool(r.held)) << 1)]);
         f.setCursor(.pointer, r.hovered);
         _ = label(f, th, str);
         f.close();

@@ -1,11 +1,11 @@
 # Dependencies
 
-The core (tiers 0 to 2) needs the Zig 0.17.1 toolchain and three namespaces of its standard library. Everything else is optional and belongs to one back end, one shell or CI.
+The core (tiers 0 to 2) needs the Zig 0.18.0-dev.1151+8dfb7a7cc toolchain (pinned in flake.nix) and three namespaces of its standard library. Everything else is optional and belongs to one back end, one shell or CI.
 Adding a dependency that is not in this table is a design change: raise it, do not just add it.
 
 | Dependency | Kind | Needed by | Required? | Why | Note or alternative |
 |---|---|---|---|---|---|
-| Zig 0.17.1 toolchain | Toolchain | Everything | Required | Compiler, build system, test runner, cross-compilation. | Gompute's current head needs a Zig 0.18 development build; its last 0.17 build is commit abd75e4. |
+| Zig 0.18.0-dev.1151+8dfb7a7cc toolchain | Toolchain | Everything | Required | Compiler, build system, test runner, cross-compilation. | Gompute's current head needs a Zig 0.18 development build; its last 0.17 build is commit abd75e4. |
 | Zig standard library (simd, math, mem only) | Source | Core: tiers 0 to 2 | Required | Vector width query, integer helpers, slices. No libc, no allocator, no I/O. | The embedded profile removes the remaining uses that need an OS. |
 | C header translation package | Build time | Back ends that call C APIs: Vulkan, Wayland, X11, wgpu-native, AccessKit, HarfBuzz | Optional | Zig 0.17 removed @cImport, so C headers are translated in the build. | For small APIs, hand-written extern declarations avoid it. |
 | Shader translator (for example naga) | Build time | Renderers other than wgpu and web | Optional | Produces SPIR-V, MSL, HLSL and GLSL from the single WGSL source. | The quad shader is small enough to maintain by hand per back end. |

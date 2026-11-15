@@ -200,6 +200,6 @@ pub fn main(init: std.process.Init) !void {
         ns = @intCast(t0.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds());
     }
     std.debug.print("fuzz: {d} iterations x {d} entry points in {d}.{d:0>3} s, seed {d}, no crash\n", .{
-        runs, entry_points.len, ns / std.time.ns_per_s, ns / std.time.ns_per_ms % 1000, current.seed,
+        runs, entry_points.len, ns / std.time.ns_per_s, (ns / std.time.ns_per_ms) % 1000, current.seed,
     });
 }

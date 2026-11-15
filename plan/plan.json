@@ -2502,7 +2502,7 @@
    ],
    "spec": [],
    "targets": [],
-   "done_when": "zig build and zig build test pass on Zig 0.17.1",
+   "done_when": "zig build and zig build test pass on Zig 0.17.1 (now 0.18.0-dev.1151+8dfb7a7cc)",
    "unblocks": 1
   },
   {

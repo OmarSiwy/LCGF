@@ -3,12 +3,12 @@
 ## Set up
 
 ```
-nix develop          # Zig 0.17.1, Python 3, objdump
-zig version          # must print 0.17.1
+nix develop          # Zig 0.18.0-dev.1151+8dfb7a7cc, Python 3, objdump
+zig version          # must print 0.18.0-dev.1151+8dfb7a7cc
 zig build test
 ```
 
-Without Nix, install Zig 0.17.1 exactly; no other version is supported.
+Without Nix, install Zig 0.18.0-dev.1151+8dfb7a7cc exactly (ziglang.org/builds); no other build is supported.
 
 ## One logical change per commit
 
