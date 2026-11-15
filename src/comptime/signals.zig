@@ -78,46 +78,89 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             } else dst.* |= m;
         }
 
-        /// For each state field: the nodes to lay out and paint again when it changes, which are
-        /// every node bound to it or to a field derived from it, and their ancestors. Read-only
-        /// data, indexed by `@backingInt(field)`.
-        pub const dirty_masks: [field_count]Mask = blk: {
-            @setEvalBranchQuota(1000 + 4 * field_count * (derived_count + 1) * mask_len);
-            var masks = bind_masks;
-            for (0..field_count) |f| for (0..derived_count) |d| if (reaches[f][d]) {
-                const own = bind_masks[@backingInt(derived_field[d])];
-                if (is_array) {
-                    for (&masks[f], own) |*w, o| w.* |= o;
-                } else masks[f] |= own;
-            };
+        /// For each state field: every node a change can touch in either pass, which is every
+        /// node bound to it or to a field derived from it, and their ancestors (the probe's
+        /// `dirty_masks`; `layout_masks | paint_masks` is a subset). Read-only data, indexed by
+        /// `@backingInt(field)`.
+        pub const dirty_masks: [field_count]Mask = withDerived(bindMasks(.ancestors));
+
+        /// For each state field: the nodes to lay out again (and so paint again) when it
+        /// changes. A bound node whose size follows its value (a label's text) and its
+        /// ancestors; a checkbox or slider keeps its size, so it adds nothing here.
+        pub const layout_masks: [field_count]Mask = withDerived(bindMasks(.layout));
+
+        /// For each state field: the nodes to paint again, without layout, when it changes: its
+        /// bound nodes that `layout_masks` does not already cover. Damage tracking repaints
+        /// `layout | paint` and nothing else.
+        pub const paint_masks: [field_count]Mask = blk: {
+            var masks = withDerived(bindMasks(.nodes));
+            for (&masks, layout_masks) |*m, l| m.* = andNot(m.*, l);
             break :blk masks;
         };
-        const mask_len = if (is_array) mask_words else 1;
 
-        /// For each state field: the nodes bound to it and their ancestors.
-        const bind_masks: [field_count]Mask = blk: {
+        /// Kinds whose size depends on the bound value.
+        fn sizedByValue(comptime kind: @import("spec.zig").Kind) bool {
+            return switch (kind) {
+                .label => true,
+                .checkbox, .slider, .col, .row => false,
+            };
+        }
+
+        /// Which nodes of a binding a mask takes: every bound node and its ancestors; only the
+        /// ones `sizedByValue`, with ancestors; or the bound nodes alone.
+        const Reach = enum { ancestors, layout, nodes };
+
+        /// For each state field, the nodes `reach` takes of the bindings to it.
+        fn bindMasks(comptime reach: Reach) [field_count]Mask {
             // Per node: the walk, a field lookup and an ancestor walk up to `levels` steps.
             @setEvalBranchQuota(1000 + 4 * n * (F.levels + field_count + 2));
             var masks: [field_count]Mask = @splat(empty);
             var next: usize = 0;
-            bindWalk(spec, &next, &masks);
-            break :blk masks;
-        };
+            bindWalk(spec, reach, &next, &masks);
+            return masks;
+        }
 
         /// Visits `node` and its subtree depth-first from row `next.*`, as `Flat` numbers rows,
-        /// and ORs each bound node and its ancestors into its field's mask.
-        fn bindWalk(comptime node: Spec, comptime next: *usize, comptime masks: *[field_count]Mask) void {
+        /// and ORs the nodes `reach` takes of each binding into its field's mask.
+        fn bindWalk(comptime node: Spec, comptime reach: Reach, comptime next: *usize, comptime masks: *[field_count]Mask) void {
             const i = next.*;
             next.* += 1;
             if (node.bind) |name| {
-                const f = fieldNamed(name);
-                var a: usize = i;
-                while (true) : (a = F.parent[a]) {
-                    masks[@backingInt(f)] = withBit(masks[@backingInt(f)], a);
-                    if (a == 0) break;
+                const m = &masks[@backingInt(fieldNamed(name))];
+                switch (reach) {
+                    .nodes => m.* = withBit(m.*, i),
+                    .ancestors, .layout => if (reach == .ancestors or sizedByValue(node.kind)) {
+                        var a: usize = i;
+                        while (true) : (a = F.parent[a]) {
+                            m.* = withBit(m.*, a);
+                            if (a == 0) break;
+                        }
+                    },
                 }
             }
-            for (node.children) |c| bindWalk(c, next, masks);
+            for (node.children) |c| bindWalk(c, reach, next, masks);
+        }
+
+        /// `masks` with each field's mask ORed with the masks of the derived fields it reaches.
+        fn withDerived(comptime masks: [field_count]Mask) [field_count]Mask {
+            @setEvalBranchQuota(1000 + 4 * field_count * (derived_count + 1) * mask_len);
+            var out = masks;
+            for (0..field_count) |f| for (0..derived_count) |d| if (reaches[f][d]) {
+                const own = masks[@backingInt(derived_field[d])];
+                if (is_array) {
+                    for (&out[f], own) |*w, o| w.* |= o;
+                } else out[f] |= own;
+            };
+            return out;
+        }
+        const mask_len = if (is_array) mask_words else 1;
+
+        /// `a` without the nodes of `b`.
+        fn andNot(a: Mask, b: Mask) Mask {
+            if (!is_array) return a & ~b;
+            var r = a;
+            for (&r, b) |*w, o| w.* &= ~o;
+            return r;
         }
 
         /// The derived fields in declaration order of `State.derived`.
@@ -209,20 +252,25 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
         /// caller owns it; no allocator, no subscriber lists.
         pub const Runtime = struct {
             state: State = .{},
-            /// Every node starts dirty, so the first frame lays out and paints everything.
-            dirty: Mask = full,
+            /// Nodes to lay out (and paint) again. Every node starts dirty, so the first frame lays
+            /// out and paints everything.
+            layout_dirty: Mask = full,
+            /// Nodes to paint again whose layout has not changed.
+            paint_dirty: Mask = full,
             /// Derived fields whose inputs were staged since the last `commit`, bit d for
             /// `State.derived` entry d. Zero-sized without derived fields.
             stale: Stale = 0,
 
-            /// The whole signal graph: one store and one OR with a constant mask (one OR per
-            /// touched word when the mask is an array), then the derived fields that read
+            /// The whole signal graph: one store and one OR with a constant mask per pass the
+            /// field touches (one OR per touched word when the mask is an array; none for a pass
+            /// whose mask is 0, so a slider's setter is one OR into `paint_dirty`), then the derived fields that read
             /// `field`, recomputed in topological order. A derived field cannot be set.
             pub fn set(rt: *Runtime, comptime field: Field, value: FieldType(field)) void {
                 if (comptime derivedIndex(field) != null)
                     @compileError("'" ++ @tagName(field) ++ "' is derived; set its inputs instead");
                 @field(rt.state, @tagName(field)) = value;
-                orInto(&rt.dirty, dirty_masks[@backingInt(field)]);
+                orInto(&rt.layout_dirty, layout_masks[@backingInt(field)]);
+                orInto(&rt.paint_dirty, paint_masks[@backingInt(field)]);
                 recompute(&rt.state, reaches[@backingInt(field)]);
             }
 
@@ -234,7 +282,8 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 if (comptime derivedIndex(field) != null)
                     @compileError("'" ++ @tagName(field) ++ "' is derived; set its inputs instead");
                 @field(rt.state, @tagName(field)) = value;
-                orInto(&rt.dirty, dirty_masks[@backingInt(field)]);
+                orInto(&rt.layout_dirty, layout_masks[@backingInt(field)]);
+                orInto(&rt.paint_dirty, paint_masks[@backingInt(field)]);
                 if (comptime stale_bits[@backingInt(field)] != 0) rt.stale |= stale_bits[@backingInt(field)];
             }
 
@@ -248,10 +297,19 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 rt.stale = 0;
             }
 
-            /// The dirty nodes since the last call, cleared: what one frame lays out and paints.
-            pub fn takeDirty(rt: *Runtime) Mask {
-                defer rt.dirty = empty;
-                return rt.dirty;
+            /// What one frame redoes: `layout`, the nodes to lay out again, and `paint`, every
+            /// node to paint again (`layout` included).
+            pub const Dirty = struct { layout: Mask, paint: Mask };
+
+            /// The dirty nodes since the last call, cleared.
+            pub fn takeDirty(rt: *Runtime) Dirty {
+                var paint = rt.paint_dirty;
+                if (is_array) {
+                    for (&paint, rt.layout_dirty) |*w, l| w.* |= l;
+                } else paint |= rt.layout_dirty;
+                defer rt.layout_dirty = empty;
+                defer rt.paint_dirty = empty;
+                return .{ .layout = rt.layout_dirty, .paint = paint };
             }
 
             /// Recomputes, in topological order, every derived field marked in `which`.
@@ -344,23 +402,47 @@ fn bindsWalk(comptime sp: Spec, comptime next: *usize, comptime out: anytype) vo
     for (sp.children) |c| bindsWalk(c, next, out);
 }
 
-test "Runtime.set: stores the value and ORs in the field's mask" {
+test "Runtime.set: stores the value and ORs in the field's masks" {
     var rt: App.Runtime = .{};
-    try testing.expectEqual(0xff, rt.dirty);
-    rt.dirty = 0;
+    try testing.expectEqual(0xff, rt.layout_dirty);
+    try testing.expectEqual(0xff, rt.paint_dirty);
+    rt.layout_dirty = 0;
+    rt.paint_dirty = 0;
     rt.set(.volume, 0.9);
     try testing.expectEqual(0.9, rt.state.volume);
-    try testing.expectEqual(0b0001_0101, rt.dirty);
+    // A slider keeps its size: repaint node 4, lay out nothing.
+    try testing.expectEqual(0, rt.layout_dirty);
+    try testing.expectEqual(0b0001_0000, rt.paint_dirty);
     const hit: enum { mute, volume, pan } = .mute;
     switch (hit) {
         .mute => rt.set(.muted, true),
         .volume, .pan => {},
     }
     try testing.expect(rt.state.muted);
-    try testing.expectEqual(0b0001_1101, rt.dirty);
+    try testing.expectEqual(0b0001_1000, rt.paint_dirty);
+    // A label's text sizes it: lay out both title labels (1, 6), row 5 and the root.
     rt.set(.title, "Desk");
     try testing.expectEqualStrings("Desk", rt.state.title);
-    try testing.expectEqual(0b0111_1111, rt.dirty);
+    try testing.expectEqual(0b0110_0011, rt.layout_dirty);
+    const d = rt.takeDirty();
+    try testing.expectEqual(0b0110_0011, d.layout);
+    try testing.expectEqual(0b0111_1011, d.paint);
+    try testing.expectEqual(0, rt.layout_dirty);
+    try testing.expectEqual(0, rt.paint_dirty);
+}
+
+test "layout_masks, paint_masks: split the probe's dirty mask by pass" {
+    const L = App.layout_masks;
+    const P = App.paint_masks;
+    inline for (.{ .volume, .muted, .pan, .title }, .{ 0, 0, 0, 0b0110_0011 }, .{ 0b0001_0000, 0b0000_1000, 0b1000_0000, 0 }) |f, l, p| {
+        try testing.expectEqual(l, L[@backingInt(@as(App.Field, f))]);
+        try testing.expectEqual(p, P[@backingInt(@as(App.Field, f))]);
+    }
+    for (App.dirty_masks, L, P) |d, l, p| {
+        // Never more than the probe's mask, never overlapping, always the bound nodes.
+        try testing.expectEqual(0, (l | p) & ~d);
+        try testing.expectEqual(0, l & p);
+    }
 }
 
 /// One root over `n` leaves; leaf k (row k + 1) shows field `x` when k is `bound`, `y` otherwise.
@@ -390,13 +472,16 @@ test "Mask: an integer up to word_bits nodes, a bit-set array past that" {
 test "Runtime.set: an array mask ORs in only the words the field touches" {
     const B = Signals(XYState, wideBound(99, 98));
     var rt: B.Runtime = .{};
-    try testing.expectEqual(B.full, rt.dirty);
-    rt.dirty = B.empty;
+    try testing.expectEqual(B.full, rt.layout_dirty);
+    rt.layout_dirty = B.empty;
+    rt.paint_dirty = B.empty;
     rt.set(.x, 7);
     try testing.expectEqual(7, rt.state.x);
-    try testing.expectEqual([4]u32{ 1, 0, 0, 0b1000 }, rt.dirty);
+    try testing.expectEqual([4]u32{ 1, 0, 0, 0b1000 }, rt.layout_dirty);
+    try testing.expectEqual(B.empty, rt.paint_dirty);
     rt.set(.y, 1);
-    try testing.expectEqual(B.full, rt.dirty);
+    try testing.expectEqual(B.full, rt.layout_dirty);
+    try testing.expectEqual(B.full, rt.takeDirty().paint);
 }
 
 /// A mixer with derived fields: `gain` from volume and muted, `left` from gain and pan, and
@@ -455,12 +540,14 @@ test "derived: an input's mask covers the nodes of every field derived from it" 
 
 test "derived: set recomputes exactly the dependent fields, inputs first" {
     var rt: D.Runtime = .{};
-    rt.dirty = 0;
+    _ = rt.takeDirty();
     rt.set(.volume, 0.8);
     try testing.expectEqual(0.8, rt.state.gain);
     try testing.expectEqual(0.4, rt.state.left);
     try testing.expectEqual(5, rt.state.caption_len);
-    try testing.expectEqual(0b01_0001_0101, rt.dirty);
+    // The slider repaints; the derived `left` label (row 8) is laid out again with the root.
+    try testing.expectEqual(0b00_0001_0000, rt.paint_dirty);
+    try testing.expectEqual(0b01_0000_0001, rt.layout_dirty);
     rt.set(.muted, true);
     try testing.expectEqual(0, rt.state.gain);
     try testing.expectEqual(0, rt.state.left);
@@ -516,9 +603,13 @@ test "stage, commit: a batch recomputes each derived field once and dirties the 
     try testing.expectEqual(1, Counted.left_calls);
     try testing.expectEqual(0.6, rt.state.gain);
     try testing.expectEqual(0.6, rt.state.left);
-    // One mask for the whole batch: every slider, the checkbox, the label and the root.
-    try testing.expectEqual(0b1_1111, rt.takeDirty());
-    try testing.expectEqual(0, rt.dirty);
+    // One mask for the whole batch: lay out the label and the root, repaint them and every
+    // slider and the checkbox.
+    const d = rt.takeDirty();
+    try testing.expectEqual(0b1_0001, d.layout);
+    try testing.expectEqual(0b1_1111, d.paint);
+    try testing.expectEqual(0, rt.layout_dirty);
+    try testing.expectEqual(0, rt.paint_dirty);
     // A commit with nothing staged recomputes nothing; staging pan alone skips gain.
     rt.commit();
     rt.stage(.pan, 0);
@@ -536,8 +627,8 @@ test "stage, commit: a batch recomputes each derived field once and dirties the 
 test "stage: without derived fields it is set" {
     var a: App.Runtime = .{};
     var b: App.Runtime = .{};
-    a.dirty = 0;
-    b.dirty = 0;
+    _ = a.takeDirty();
+    _ = b.takeDirty();
     a.set(.volume, 0.9);
     b.stage(.volume, 0.9);
     b.commit();

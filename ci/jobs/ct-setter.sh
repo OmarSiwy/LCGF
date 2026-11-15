@@ -1,10 +1,12 @@
-# The comptime setter is one store and one OR with a constant (plans C0154, C0155, C0157).
+# The comptime setter is one store and one OR with a constant (plans C0154, C0155, C0157, C0158).
 # Disassembles src/comptime/setter_probe.zig and requires each setter to be, besides
 # frame-pointer setup, the return and alignment padding after it, exactly one store of the
 # value through %rdi and the listed ORs of immediates into memory, in order:
-#   set_volume  integer mask u8: one OR of 0x15 (the probe's volume mask: slider 4, row 2, root)
+#   set_volume  integer mask u8: one OR of 0x10 into paint_dirty (the slider, row 4; a slider
+#               keeps its size, so the layout mask is 0 and its OR is not emitted)
 #   stage_volume  the batched setter of the same field: the same as set_volume
-#   set_far     [4]u32 array mask: one OR per touched word, 0x1 (root) and 0x8 (row 99)
+#   set_far     [4]u32 array mask, a label: one OR per touched word of layout_dirty, 0x1 (root)
+#               and 0x8 (row 99); its paint-only mask is 0
 # x86-64 only: AT&T mnemonics.
 setter() { # <object> <opt> <function> <immediates...>
     local obj=$1 opt=$2 fn=$3; shift 3
@@ -35,7 +37,7 @@ setter() { # <object> <opt> <function> <immediates...>
 }
 for opt in ReleaseFast ReleaseSmall ReleaseSafe; do
     zig build ct-setter -Doptimize="$opt" -Dtarget=x86_64-linux
-    setter zig-out/ct_setter.o "$opt" set_volume 0x15
-    setter zig-out/ct_setter.o "$opt" stage_volume 0x15
+    setter zig-out/ct_setter.o "$opt" set_volume 0x10
+    setter zig-out/ct_setter.o "$opt" stage_volume 0x10
     setter zig-out/ct_setter.o "$opt" set_far 0x1 0x8
 done

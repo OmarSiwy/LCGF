@@ -2,7 +2,7 @@
 //! exported from src/lcgr.zig: it is its own module root and imports the package as `lcgr`.
 //!
 //! `set_volume` is the probe's: the check requires it to compile to one store of the value, one
-//! OR of a constant into the dirty mask, and the return.
+//! OR of a constant into one dirty mask (paint: a slider keeps its size), and the return.
 
 const lcgr = @import("lcgr");
 const s = lcgr.spec;
