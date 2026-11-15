@@ -5,6 +5,7 @@
 //!   Track        a track's size as three coefficients: fixed pixels, content, fraction
 //!   Grids        side tables: grid containers and their tracks
 //!   sizeTracks   one grid's track sizes and starts on one axis
+//!   autoPlace    cells for items pushed without one, in row order
 //!   fit          `layout.fit` with each grid's content size set from its tracks
 //!   resolve      `layout.resolve` with each grid item sized to its cell
 //!   run          every pass in order, as `layout.run`, for trees with grids
@@ -58,8 +59,11 @@ pub const Grids = struct {
     tr: TrackColumns,
 
     it: ItemColumns,
+    /// Scratch for `autoPlace`: one byte per cell of the grid being placed.
+    occupied: []u8,
 
-    pub const Capacity = struct { grids: u32, tracks: u32, items: u32 };
+    /// `cells` bounds columns x rows of any one grid that has auto-placed items.
+    pub const Capacity = struct { grids: u32, tracks: u32, items: u32, cells: u32 = 1 };
 
     pub const GridColumns = struct {
         node: []u32,
@@ -90,6 +94,8 @@ pub const Grids = struct {
         cell: [2][]u32,
         /// Number of columns and rows the item covers, at least 1.
         span: [2][]u32,
+        /// 1 when `autoPlace` chooses the cell.
+        auto: []u8,
         /// Next item of the same grid, or `none`.
         next: []u32,
         /// Written by the resolve step of the item's grid: the cell's size.
@@ -103,6 +109,7 @@ pub const Grids = struct {
             .g = carver.columns(GridColumns, simd.rows(cap.grids)),
             .tr = carver.columns(TrackColumns, simd.rows(cap.tracks)),
             .it = carver.columns(ItemColumns, simd.rows(cap.items)),
+            .occupied = carver.slice(u8, cap.cells),
         };
     }
     pub fn reset(gs: *Grids) void {
@@ -153,6 +160,7 @@ pub const Grids = struct {
         it.node[r] = node;
         it.grid[r] = k;
         it.next[r] = none;
+        it.auto[r] = 0;
         inline for (0..2) |a| {
             it.cell[a][r] = @min(cell[a], gs.g.count[a][k] -| 1);
             it.span[a][r] = 1;
@@ -164,6 +172,13 @@ pub const Grids = struct {
             it.next[gs.g.last_item[k]] = r;
         }
         gs.g.last_item[k] = r;
+        return r;
+    }
+    /// Places `node`, a floating child of grid `k`'s node, in the next free cell in row order,
+    /// chosen by `autoPlace`. Returns the item's row.
+    pub fn autoItem(gs: *Grids, k: u32, node: u32) u32 {
+        const r = gs.item(k, node, .{ 0, 0 });
+        gs.it.auto[r] = 1;
         return r;
     }
     /// Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks
@@ -192,6 +207,67 @@ pub fn sizeTracks(gs: *Grids, k: u32, a: u1) f32 {
         at += s;
     }
     return at;
+}
+
+/// Chooses cells for the items pushed with `autoItem`, grid by grid, as CSS auto-placement in
+/// row order (sparse): items with a cell take theirs first; then each auto item, in push
+/// order, takes the first position at or after the previous auto item's end where its whole
+/// span is free. A cursor, not a search from the start, so earlier holes stay empty. The grid
+/// does not grow implicit rows: an item that finds no room goes in the last cell and sets
+/// `overflow`, as does a grid with more cells than `cap.cells`.
+/// A build step, run once after the items are pushed and before `fit`; `run` calls it.
+// ponytail: the free-span test scans the span's cells at each candidate, O(cells * span area)
+// per grid at worst; a per-row run-length of free cells would make it O(cells) if grids get big.
+pub fn autoPlace(gs: *Grids) void {
+    for (0..gs.len) |k| {
+        const cols = gs.g.count[0][k];
+        const rows = gs.g.count[1][k];
+        const cells = cols * rows;
+        if (cells > gs.occupied.len) {
+            gs.overflow = true;
+            continue;
+        }
+        const occ = gs.occupied[0..cells];
+        @memset(occ, 0);
+        var it = gs.g.first_item[k];
+        while (it != none) : (it = gs.it.next[it]) {
+            if (gs.it.auto[it] == 0) mark(gs, occ, cols, it);
+        }
+        var cursor: u32 = 0;
+        it = gs.g.first_item[k];
+        while (it != none) : (it = gs.it.next[it]) {
+            if (gs.it.auto[it] == 0) continue;
+            const sc = gs.it.span[0][it];
+            const sr = gs.it.span[1][it];
+            var at = cursor;
+            while (at < cells) : (at += 1) {
+                const col = at % cols;
+                const row = at / cols;
+                if (col + sc > cols or row + sr > rows) continue;
+                if (free(occ, cols, col, row, sc, sr)) break;
+            }
+            const found = at < cells;
+            gs.overflow = simd.orB(gs.overflow, !found);
+            gs.it.cell[0][it] = if (found) at % cols else cols -| sc;
+            gs.it.cell[1][it] = if (found) at / cols else rows -| sr;
+            mark(gs, occ, cols, it);
+            cursor = if (found) at + sc else cells;
+        }
+    }
+}
+
+fn mark(gs: *const Grids, occ: []u8, cols: u32, it: u32) void {
+    const col = gs.it.cell[0][it];
+    for (gs.it.cell[1][it]..gs.it.cell[1][it] + gs.it.span[1][it]) |row| {
+        @memset(occ[row * cols + col ..][0..gs.it.span[0][it]], 1);
+    }
+}
+
+fn free(occ: []const u8, cols: u32, col: u32, row: u32, sc: u32, sr: u32) bool {
+    for (row..row + sr) |r| {
+        for (occ[r * cols + col ..][0..sc]) |o| if (o != 0) return false;
+    }
+    return true;
 }
 
 /// `layout.fit` for a tree with grids. Before each grid row is folded into its parent (the
@@ -268,6 +344,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
 
 /// Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.
 pub fn run(t: *Tree, tx: *Texts, gs: *Grids, viewport: [2]f32) void {
+    autoPlace(gs);
     layout.prepare(t);
     layout.applyText(t, tx, .x);
     fit(t, gs, .x);
@@ -335,7 +412,7 @@ const Scene = struct {
         var carver: mem.Carver = .{ .buf = &s.raw };
         s.t = Tree.init(&carver, 64);
         s.tx = Texts.init(&carver, 1);
-        s.gs = Grids.init(&carver, .{ .grids = 4, .tracks = 16, .items = 32 });
+        s.gs = Grids.init(&carver, .{ .grids = 4, .tracks = 16, .items = 32, .cells = 16 });
     }
     /// A floating grid item holding one fixed-size child, so its natural size is the child's.
     fn cell(s: *Scene, grid_node: u32, k: u32, at: [2]u32, content: [2]f32) u32 {
@@ -451,4 +528,52 @@ test "grid: spanning items cover several tracks and share their size among them"
     try testing.expectEqual(rect(0, 30, 50, 60), t.rect(b));
     try testing.expectEqual(rect(50, 30, 100, 60), t.rect(c));
     try testing.expectEqual(rect(0, 0, 140, 60), t.rect(g));
+}
+
+test "autoPlace: row order around explicit items, spans that do not fit move on" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const g = t.push(0, .none, &.{});
+    // 3 columns of 10, 3 rows of 10.
+    const k = s.gs.grid(g, &.{ .px(10), .px(10), .px(10) }, &.{ .px(10), .px(10), .px(10) });
+    var nodes: [6]u32 = undefined;
+    var rows: [6]u32 = undefined;
+    for (&nodes, &rows, 0..) |*n, *r, i| {
+        n.* = t.push(g, .none, &.{ .float = true });
+        t.seal(n.*);
+        // Item 1 is explicit at (1, 0); the others are auto.
+        r.* = if (i == 1) s.gs.item(k, n.*, .{ 1, 0 }) else s.gs.autoItem(k, n.*);
+    }
+    t.seal(g);
+    s.gs.span(rows[3], .{ 2, 1 }); // two columns wide
+    s.gs.span(rows[4], .{ 1, 2 }); // two rows high
+    autoPlace(&s.gs);
+    const at = struct {
+        fn f(gs: *const Grids, r: u32) [2]u32 {
+            return .{ gs.it.cell[0][r], gs.it.cell[1][r] };
+        }
+    }.f;
+    //   row 0:  0  1  2
+    //   row 1:  3  3  4
+    //   row 2:  5  .  4
+    try testing.expectEqual([2]u32{ 0, 0 }, at(&s.gs, rows[0]));
+    try testing.expectEqual([2]u32{ 1, 0 }, at(&s.gs, rows[1]));
+    try testing.expectEqual([2]u32{ 2, 0 }, at(&s.gs, rows[2]));
+    try testing.expectEqual([2]u32{ 0, 1 }, at(&s.gs, rows[3]));
+    try testing.expectEqual([2]u32{ 2, 1 }, at(&s.gs, rows[4]));
+    // After item 4 at (2, 1) the cursor is at (0, 2), so (1, 2) stays empty.
+    try testing.expectEqual([2]u32{ 0, 2 }, at(&s.gs, rows[5]));
+    try testing.expect(!s.gs.overflow);
+    run(t, &s.tx, &s.gs, .{ 100, 100 });
+    try testing.expectEqual(rect(0, 10, 20, 20), t.rect(nodes[3]));
+    try testing.expectEqual(rect(20, 10, 30, 30), t.rect(nodes[4]));
+
+    // One more auto item than there is room for: it goes in the last cell, flagged.
+    const extra = t.push(g, .none, &.{ .float = true });
+    t.seal(extra);
+    s.gs.span(s.gs.autoItem(k, extra), .{ 2, 2 });
+    autoPlace(&s.gs);
+    try testing.expect(s.gs.overflow);
+    try testing.expectEqual([2]u32{ 1, 1 }, at(&s.gs, s.gs.items_len - 1));
 }
