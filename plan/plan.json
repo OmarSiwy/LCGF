@@ -1308,8 +1308,8 @@
     "C0291",
     "C0292",
     "C0293",
-    "C0294",
-    "C0295"
+    "C0295",
+    "C0294"
    ]
   },
   "font-load": {
@@ -8550,7 +8550,7 @@
     "D2"
    ],
    "done_when": "draw-list tests pass; census clean",
-   "unblocks": 1
+   "unblocks": 2
   },
   {
    "id": "C0260",
@@ -9384,8 +9384,8 @@
    "unblocks": 1
   },
   {
-   "id": "C0294",
-   "title": "text: add Mono.quads for a byte-indexed atlas",
+   "id": "C0295",
+   "title": "text: add measurement cache keyed by string hash, font and size",
    "lane": "text-protocol",
    "phase": "P07",
    "wave": 29,
@@ -9396,7 +9396,7 @@
    "look_at": [
     {
      "ref": "ui.zig",
-     "detail": "fonts.Mono.quads"
+     "detail": "fonts.Mono"
     }
    ],
    "spec": [],
@@ -9407,19 +9407,20 @@
    "unblocks": 1
   },
   {
-   "id": "C0295",
-   "title": "text: add measurement cache keyed by string hash, font and size",
+   "id": "C0294",
+   "title": "text: add Mono.quads for a byte-indexed atlas",
    "lane": "text-protocol",
    "phase": "P07",
-   "wave": 30,
+   "wave": 39,
    "critical": false,
    "deps": [
-    "C0294"
+    "C0259",
+    "C0295"
    ],
    "look_at": [
     {
      "ref": "ui.zig",
-     "detail": "fonts.Mono"
+     "detail": "fonts.Mono.quads"
     }
    ],
    "spec": [],
@@ -9434,10 +9435,10 @@
    "title": "font: parse the table directory",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 31,
+   "wave": 40,
    "critical": false,
    "deps": [
-    "C0295"
+    "C0294"
    ],
    "look_at": [
     {
@@ -9466,7 +9467,7 @@
    "title": "font: parse cmap",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 32,
+   "wave": 41,
    "critical": false,
    "deps": [
     "C0296"
@@ -9498,7 +9499,7 @@
    "title": "font: parse head, hhea, hmtx and maxp",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 33,
+   "wave": 42,
    "critical": false,
    "deps": [
     "C0297"
@@ -9530,7 +9531,7 @@
    "title": "font: parse loca and glyf outlines",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 34,
+   "wave": 43,
    "critical": false,
    "deps": [
     "C0298"
@@ -9562,7 +9563,7 @@
    "title": "font: parse kern and basic GPOS pair adjustment",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 35,
+   "wave": 44,
    "critical": false,
    "deps": [
     "C0299"
@@ -9594,7 +9595,7 @@
    "title": "font: parse composite glyphs",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 36,
+   "wave": 45,
    "critical": false,
    "deps": [
     "C0300"
@@ -9626,7 +9627,7 @@
    "title": "font: add font collections and face selection",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 37,
+   "wave": 46,
    "critical": false,
    "deps": [
     "C0301"
@@ -9653,7 +9654,7 @@
    "title": "font: fuzz the parser",
    "lane": "font-load",
    "phase": "P07",
-   "wave": 38,
+   "wave": 47,
    "critical": false,
    "deps": [
     "C0302"
@@ -9680,7 +9681,7 @@
    "title": "raster: add outline scan conversion with accumulated coverage",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 39,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0303"
@@ -9703,7 +9704,7 @@
    "title": "raster: vectorise coverage accumulation",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 40,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0304"
@@ -9726,7 +9727,7 @@
    "title": "raster: add subpixel positioning",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 41,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0305"
@@ -9749,7 +9750,7 @@
    "title": "raster: add gamma-correct blending tables",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 42,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0306"
@@ -9772,7 +9773,7 @@
    "title": "atlas: add skyline packer",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 43,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0307"
@@ -9795,7 +9796,7 @@
    "title": "atlas: add eviction and repacking",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 44,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0308"
@@ -9818,7 +9819,7 @@
    "title": "atlas: upload dirty atlas regions only",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 45,
+   "wave": 54,
    "critical": false,
    "deps": [
     "C0309"
@@ -9841,7 +9842,7 @@
    "title": "raster: add optional signed-distance glyphs",
    "lane": "glyph-raster",
    "phase": "P07",
-   "wave": 46,
+   "wave": 55,
    "critical": false,
    "deps": [
     "C0310"
@@ -9864,7 +9865,7 @@
    "title": "shaping: add simple shaper (cmap, advances, kerning)",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 39,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0303"
@@ -9891,7 +9892,7 @@
    "title": "shaping: add ligatures through basic GSUB",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 40,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0312"
@@ -9923,7 +9924,7 @@
    "title": "shaping: add mark positioning through basic GPOS",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 41,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0313"
@@ -9955,7 +9956,7 @@
    "title": "shaping: add cluster mapping for cursor placement",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 42,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0314"
@@ -9982,7 +9983,7 @@
    "title": "shaping: add shaping cache",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 43,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0315"
@@ -10009,7 +10010,7 @@
    "title": "shaping: add optional HarfBuzz adapter behind the same data protocol",
    "lane": "shaping",
    "phase": "P07",
-   "wave": 44,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0316"
@@ -10036,10 +10037,10 @@
    "title": "unicode: generate property tables at comptime from the character database",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 31,
+   "wave": 40,
    "critical": false,
    "deps": [
-    "C0295"
+    "C0294"
    ],
    "look_at": [
     {
@@ -10064,7 +10065,7 @@
    "title": "unicode: add grapheme cluster iterator",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 32,
+   "wave": 41,
    "critical": false,
    "deps": [
     "C0318"
@@ -10092,7 +10093,7 @@
    "title": "unicode: add word boundary iterator",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 33,
+   "wave": 42,
    "critical": false,
    "deps": [
     "C0319"
@@ -10120,7 +10121,7 @@
    "title": "unicode: add line break opportunities",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 34,
+   "wave": 43,
    "critical": false,
    "deps": [
     "C0320"
@@ -10148,7 +10149,7 @@
    "title": "unicode: add bidi levels",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 35,
+   "wave": 44,
    "critical": false,
    "deps": [
     "C0321"
@@ -10176,7 +10177,7 @@
    "title": "unicode: add bidi reordering of runs",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 36,
+   "wave": 45,
    "critical": false,
    "deps": [
     "C0322"
@@ -10204,7 +10205,7 @@
    "title": "unicode: add script itemisation",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 37,
+   "wave": 46,
    "critical": false,
    "deps": [
     "C0323"
@@ -10227,7 +10228,7 @@
    "title": "unicode: run the conformance test files in CI",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 38,
+   "wave": 47,
    "critical": false,
    "deps": [
     "C0324"
@@ -10250,7 +10251,7 @@
    "title": "unicode: measure table size and compress with two-stage tables",
    "lane": "unicode",
    "phase": "P07",
-   "wave": 39,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0325"
@@ -10273,7 +10274,7 @@
    "title": "text: break shaped runs into lines",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 45,
+   "wave": 54,
    "critical": false,
    "deps": [
     "C0317",
@@ -10297,7 +10298,7 @@
    "title": "text: add alignment and justification",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 46,
+   "wave": 55,
    "critical": false,
    "deps": [
     "C0327"
@@ -10320,7 +10321,7 @@
    "title": "text: add ellipsis and maximum lines",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 47,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0328"
@@ -10343,7 +10344,7 @@
    "title": "text: add rich text spans",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 48,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0329"
@@ -10366,7 +10367,7 @@
    "title": "text: add position-to-index and index-to-position queries",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 49,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0330"
@@ -10389,7 +10390,7 @@
    "title": "text: plug the full stack into the measure / wrap protocol",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 50,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0331"
@@ -10412,7 +10413,7 @@
    "title": "text: add text layout tests",
    "lane": "text-layout",
    "phase": "P07",
-   "wave": 51,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0332"
@@ -10435,7 +10436,7 @@
    "title": "fallback: add fallback chain per script",
    "lane": "font-fallback",
    "phase": "P07",
-   "wave": 52,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0333"
@@ -10462,7 +10463,7 @@
    "title": "fallback: discover system fonts on Windows (DirectWrite)",
    "lane": "font-fallback",
    "phase": "P07",
-   "wave": 53,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0334"
@@ -10494,7 +10495,7 @@
    "title": "fallback: discover system fonts on macOS (Core Text)",
    "lane": "font-fallback",
    "phase": "P07",
-   "wave": 54,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0335"
@@ -10526,7 +10527,7 @@
    "title": "fallback: discover system fonts on Linux (fontconfig)",
    "lane": "font-fallback",
    "phase": "P07",
-   "wave": 55,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0336"
@@ -10553,7 +10554,7 @@
    "title": "fallback: add fallback tests",
    "lane": "font-fallback",
    "phase": "P07",
-   "wave": 56,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0337"
@@ -10580,7 +10581,7 @@
    "title": "edit: add text buffer with a gap",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 53,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0223",
@@ -10608,7 +10609,7 @@
    "title": "edit: move the caret by grapheme, word and line",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 54,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0339"
@@ -10640,7 +10641,7 @@
    "title": "edit: add selection with keyboard and pointer",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 55,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0340"
@@ -10667,7 +10668,7 @@
    "title": "edit: add cut, copy and paste",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 56,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0341"
@@ -10690,7 +10691,7 @@
    "title": "edit: add undo and redo",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 57,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0342"
@@ -10717,7 +10718,7 @@
    "title": "edit: add IME composition with a preedit range",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 58,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0343"
@@ -10740,7 +10741,7 @@
    "title": "edit: add password and single-line modes",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 59,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0344"
@@ -10767,7 +10768,7 @@
    "title": "edit: add bidi-aware caret movement",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 60,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0345"
@@ -10799,7 +10800,7 @@
    "title": "edit: add editing tests",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 61,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0346"
@@ -11070,7 +11071,7 @@
    "title": "sw: add framebuffer abstraction (RGBA8, BGRA8)",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 50,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0311",
@@ -11102,7 +11103,7 @@
    "title": "sw: fill opaque rects with SIMD spans",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 51,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0358"
@@ -11125,7 +11126,7 @@
    "title": "sw: blend premultiplied spans",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 52,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0359"
@@ -11161,7 +11162,7 @@
    "title": "sw: add rounded-rect coverage from the same distance function as the shader",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 53,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0360"
@@ -11184,7 +11185,7 @@
    "title": "sw: add borders",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 54,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0361"
@@ -11215,7 +11216,7 @@
    "title": "sw: apply per-quad clip rects",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 55,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0362"
@@ -11238,7 +11239,7 @@
    "title": "sw: blit glyph coverage",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 56,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0363"
@@ -11269,7 +11270,7 @@
    "title": "sw: blit and scale images",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 57,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0364"
@@ -11300,7 +11301,7 @@
    "title": "sw: add gradients",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 58,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0365"
@@ -11331,7 +11332,7 @@
    "title": "sw: redraw only the damage region",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 59,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0286",
@@ -11363,7 +11364,7 @@
    "title": "sw: split work into tiles across threads",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 60,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0367"
@@ -11394,7 +11395,7 @@
    "title": "sw: pass the conformance scenes",
    "lane": "render-sw",
    "phase": "P08",
-   "wave": 61,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0368"
@@ -12648,7 +12649,7 @@
    "title": "web: add 2D-canvas fallback from the software renderer",
    "lane": "render-web",
    "phase": "P08",
-   "wave": 62,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0369",
@@ -12676,7 +12677,7 @@
    "title": "web: measure wasm size",
    "lane": "render-web",
    "phase": "P08",
-   "wave": 63,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0415"
@@ -12699,7 +12700,7 @@
    "title": "web: add browser smoke test",
    "lane": "render-web",
    "phase": "P08",
-   "wave": 64,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0416"
@@ -12726,7 +12727,7 @@
    "title": "gompute: pin a Gompute revision that builds with the project's Zig",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 62,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0369"
@@ -12749,7 +12750,7 @@
    "title": "gompute: express the tile rasteriser as kernels that also run on the CPU",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 63,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0418"
@@ -12772,7 +12773,7 @@
    "title": "gompute: launch the kernels on CUDA and HIP",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 64,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0419"
@@ -12799,7 +12800,7 @@
    "title": "gompute: present by reading back to a CPU framebuffer",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 65,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0420"
@@ -12822,7 +12823,7 @@
    "title": "gompute: present through Vulkan external memory where available",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 67,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0390",
@@ -12846,7 +12847,7 @@
    "title": "gompute: measure context memory and start-up against Vulkan",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 68,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0422"
@@ -12873,7 +12874,7 @@
    "title": "gompute: measure frame time against the software and Vulkan back ends",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 69,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0423"
@@ -12896,7 +12897,7 @@
    "title": "gompute: record the decision (keep as offscreen and heavy-effects back end, or drop)",
    "lane": "render-gompute",
    "phase": "P08",
-   "wave": 70,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0424"
@@ -15052,7 +15053,7 @@
    "deps": [
     "C0180",
     "C0237",
-    "C0295"
+    "C0294"
    ],
    "look_at": [
     {
@@ -16915,7 +16916,7 @@
    "title": "textfield: add spec, state and compile-time validation",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -16943,7 +16944,7 @@
    "title": "textfield: lay out and paint in the default theme",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0576"
@@ -16966,7 +16967,7 @@
    "title": "textfield: handle input (editing, selection, IME)",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0577"
@@ -16994,7 +16995,7 @@
    "title": "textfield: expose role (text input), name, value and states",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0578"
@@ -17022,7 +17023,7 @@
    "title": "textfield: add example page, replay test and golden image",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0579"
@@ -17045,7 +17046,7 @@
    "title": "textarea: add spec, state and compile-time validation",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -17073,7 +17074,7 @@
    "title": "textarea: lay out and paint in the default theme",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0581"
@@ -17096,7 +17097,7 @@
    "title": "textarea: handle input (multiline editing and scrolling)",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0582"
@@ -17124,7 +17125,7 @@
    "title": "textarea: expose role (multiline text input), name, value and states",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0583"
@@ -17152,7 +17153,7 @@
    "title": "textarea: add example page, replay test and golden image",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0584"
@@ -17175,7 +17176,7 @@
    "title": "number: add spec, state and compile-time validation",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -17203,7 +17204,7 @@
    "title": "number: lay out and paint in the default theme",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0586"
@@ -17226,7 +17227,7 @@
    "title": "number: handle input (typing, arrows, wheel)",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0587"
@@ -17254,7 +17255,7 @@
    "title": "number: expose role (spin button), name, value and states",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0588"
@@ -17282,7 +17283,7 @@
    "title": "number: add example page, replay test and golden image",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0589"
@@ -17305,7 +17306,7 @@
    "title": "search: add spec, state and compile-time validation",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -17333,7 +17334,7 @@
    "title": "search: lay out and paint in the default theme",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0591"
@@ -17356,7 +17357,7 @@
    "title": "search: handle input (editing with clear button)",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0592"
@@ -17384,7 +17385,7 @@
    "title": "search: expose role (search box), name, value and states",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0593"
@@ -17412,7 +17413,7 @@
    "title": "search: add example page, replay test and golden image",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0594"
@@ -17953,7 +17954,7 @@
    "title": "combobox: add spec, state and compile-time validation",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -17981,7 +17982,7 @@
    "title": "combobox: lay out and paint in the default theme",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0616"
@@ -18004,7 +18005,7 @@
    "title": "combobox: handle input (typing filters; arrows pick)",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0617"
@@ -18032,7 +18033,7 @@
    "title": "combobox: expose role (combo box), name, value and states",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0618"
@@ -18060,7 +18061,7 @@
    "title": "combobox: add example page, replay test and golden image",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0619"
@@ -20365,7 +20366,7 @@
    "title": "datepicker: add spec, state and compile-time validation",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 62,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0347",
@@ -20393,7 +20394,7 @@
    "title": "datepicker: lay out and paint in the default theme",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 63,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0711"
@@ -20416,7 +20417,7 @@
    "title": "datepicker: handle input (grid navigation by day, week, month)",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 64,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0712"
@@ -20444,7 +20445,7 @@
    "title": "datepicker: expose role (dialog with grid), name, value and states",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 65,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0713"
@@ -20472,7 +20473,7 @@
    "title": "datepicker: add example page, replay test and golden image",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 66,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0714"
@@ -21775,7 +21776,7 @@
    "title": "i18n: add message catalogues checked at comptime",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 52,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0333"
@@ -21798,7 +21799,7 @@
    "title": "i18n: add plural selection",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 53,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0764"
@@ -21821,7 +21822,7 @@
    "title": "i18n: add number formatting",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 54,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0765"
@@ -21844,7 +21845,7 @@
    "title": "i18n: add date formatting",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 55,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0766"
@@ -21867,7 +21868,7 @@
    "title": "i18n: switch language at run time",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 56,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0767"
@@ -21890,7 +21891,7 @@
    "title": "i18n: add pseudo-localisation test mode",
    "lane": "i18n",
    "phase": "P14",
-   "wave": 57,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0768"
@@ -22846,7 +22847,7 @@
    "title": "devtools: add inspector overlay built with the framework",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 62,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0369",
@@ -22874,7 +22875,7 @@
    "title": "devtools: draw layout rects and clip rects",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 63,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0806"
@@ -22897,7 +22898,7 @@
    "title": "devtools: add per-pass timing display",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 64,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0807"
@@ -22920,7 +22921,7 @@
    "title": "devtools: add event log",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 65,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0808"
@@ -22947,7 +22948,7 @@
    "title": "devtools: show draw batches and overdraw",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 66,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0809"
@@ -22974,7 +22975,7 @@
    "title": "devtools: show signal changes and reuse decisions",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 67,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0810"
@@ -22997,7 +22998,7 @@
    "title": "devtools: record and replay sessions",
    "lane": "devtools",
    "phase": "P16",
-   "wave": 68,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0811"
@@ -23976,7 +23977,7 @@
     "C0280",
     "C0286",
     "C0290",
-    "C0295",
+    "C0294",
     "C0303",
     "C0311",
     "C0317",

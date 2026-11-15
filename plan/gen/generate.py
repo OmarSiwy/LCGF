@@ -415,7 +415,7 @@ lane("P05", "scheduler", ["context"], U("Context.needsFrame, Output.wake"), "D5"
 lane("P06", "draw-core", ["layout-core-done"], U("DrawList, paint"), "D2", "draw-list tests pass; census clean", [
     ("draw: add Quad as the GPU instance layout", dict(ref=U("Quad") + "; " + R("ZIG_VEC", "arrays, not vectors, in extern structs"))),
     ("draw: add TextRun and CustomDraw", dict(ref=U("TextRun, CustomDraw"))),
-    ("draw: add DrawList with command columns", dict(ref=U("DrawList, DrawList.CmdColumns"))),
+    ("draw: add DrawList with command columns", dict(ref=U("DrawList, DrawList.CmdColumns"), key="drawlist")),
     ("draw: add command() tagged-union view", dict(ref=U("DrawList.command, Cmd"))),
     ("paint: add sweep 1 (nodes to quads and ops)", dict(ref=U("paint.emit sweep 1"))),
     ("paint: add sweep 2 (side lists to geometry)", dict(ref=U("paint.emit sweep 2"))),
@@ -464,8 +464,9 @@ lane("P07", "text-protocol", ["sidelists"], U("fonts.Mono"), "G6", "tests pass",
     ("text: document the measure / wrap protocol (data, not callbacks)", dict(ref=U("fonts section comment") + "; " + R("CASEY_API", "flow control"))),
     ("text: add Mono.measure with SIMD", dict(ref=U("fonts.Mono.measure"))),
     ("text: add Mono.wrap with SIMD", dict(ref=U("fonts.Mono.wrap"))),
-    ("text: add Mono.quads for a byte-indexed atlas", dict(ref=U("fonts.Mono.quads"))),
-    ("text: add measurement cache keyed by string hash, font and size", dict(key="text-protocol-done")),
+    # The cache needs measure and Texts only; quads needs Quad and DrawList (lane draw-core).
+    ("text: add measurement cache keyed by string hash, font and size"),
+    ("text: add Mono.quads for a byte-indexed atlas", dict(ref=U("fonts.Mono.quads"), needs=["drawlist"], key="text-protocol-done")),
 ])
 lane("P07", "font-load", ["text-protocol"], R("DVUI", "font support") + "; " + R("DEVTO", "why the text stack dominates weight"), "D1", "a test font parses; metrics match known values", [
     ("font: parse the table directory", dict(spec=S("OT", "font file structure"))),
