@@ -116,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var buf: [4096]u8 = undefined;
-    var out = std.Io.File.stdout().writer(init.io, &buf);
+    var out = std.Io.File.stdout().writerStreaming(init.io, &buf);
     const w = &out.interface;
     try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
