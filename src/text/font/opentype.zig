@@ -74,6 +74,100 @@ pub const Directory = struct {
     }
 };
 
+/// A glyph id: an index into the font's glyph tables. OpenType stores them in 16 bits.
+pub const Glyph = u16;
+
+/// The character map: codepoint to glyph. Holds the one subtable that covers the most of
+/// Unicode: format 12 (all planes) over format 4 (the BMP), Unicode encodings over symbol.
+pub const Cmap = struct {
+    /// 4 or 12.
+    format: u16,
+    /// The chosen subtable; `parse` checked that its arrays fit.
+    table: []const u8,
+
+    pub fn parse(cmap: []const u8) Error!Cmap {
+        const count = try read(u16, cmap, 2);
+        var best: Cmap = .{ .format = 0, .table = &.{} };
+        var best_rank: u8 = 0;
+        for (0..count) |i| {
+            const rec = 4 + i * 8;
+            const platform = try read(u16, cmap, rec);
+            const encoding = try read(u16, cmap, rec + 2);
+            const off = try read(u32, cmap, rec + 4);
+            const format = try read(u16, cmap, off);
+            const unicode = platform == 0 or (platform == 3 and (encoding == 1 or encoding == 10));
+            const symbol = platform == 3 and encoding == 0;
+            const rank: u8 = if (format == 12 and unicode) 3 else if (format == 4 and unicode) 2 else if (format == 4 and symbol) 1 else 0;
+            if (rank <= best_rank) continue;
+            best = .{ .format = format, .table = try checkSubtable(cmap[off..], format) };
+            best_rank = rank;
+        }
+        if (best_rank == 0) return error.Unsupported;
+        return best;
+    }
+
+    /// Cuts a format 4 or 12 subtable to the bytes its arrays need, or fails if they do not fit.
+    fn checkSubtable(st: []const u8, format: u16) Error![]const u8 {
+        if (format == 12) return sub(st, 0, 16 +| @as(usize, try read(u32, st, 12)) *| 12);
+        const seg2 = try read(u16, st, 6);
+        if (seg2 & 1 != 0) return error.Unsupported;
+        // The glyph id array after the four segment arrays is checked per lookup.
+        return st;
+    }
+
+    /// The glyph for codepoint `cp`; 0 (`.notdef`) when the font has none, or when a format 4
+    /// range offset points outside the table.
+    pub fn glyph(c: Cmap, cp: u32) Glyph {
+        return if (c.format == 12) c.glyph12(cp) else c.glyph4(cp);
+    }
+
+    fn glyph4(c: Cmap, cp: u32) Glyph {
+        if (cp > 0xffff) return 0;
+        const st = c.table;
+        const seg2: usize = read(u16, st, 6) catch return 0;
+        const ends = 14;
+        const starts = 16 + seg2;
+        const deltas = starts + seg2;
+        const ranges = deltas + seg2;
+        // First segment whose end code is >= cp; segments are sorted by end code.
+        var lo: usize = 0;
+        var hi: usize = seg2 / 2;
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            const end = read(u16, st, ends + mid * 2) catch return 0;
+            if (end < cp) lo = mid + 1 else hi = mid;
+        }
+        if (lo == seg2 / 2) return 0;
+        const start = read(u16, st, starts + lo * 2) catch return 0;
+        if (cp < start) return 0;
+        const delta = read(u16, st, deltas + lo * 2) catch return 0;
+        const range = read(u16, st, ranges + lo * 2) catch return 0;
+        if (range == 0) return @truncate(cp +% delta);
+        // The range offset is relative to its own position in the idRangeOffset array.
+        const at = ranges + lo * 2 + range + (cp - start) * 2;
+        const g = read(u16, st, at) catch return 0;
+        return if (g == 0) 0 else g +% delta;
+    }
+
+    fn glyph12(c: Cmap, cp: u32) Glyph {
+        const groups = (c.table.len - 16) / 12;
+        var lo: usize = 0;
+        var hi: usize = groups;
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            const end = read(u32, c.table, 16 + mid * 12 + 4) catch return 0;
+            if (end < cp) lo = mid + 1 else hi = mid;
+        }
+        if (lo == groups) return 0;
+        const g = 16 + lo * 12;
+        const start = read(u32, c.table, g) catch return 0;
+        if (cp < start) return 0;
+        const first = read(u32, c.table, g + 8) catch return 0;
+        const id = first +| (cp - start);
+        return if (id > 0xffff) 0 else @intCast(id);
+    }
+};
+
 // Test font: a subset of Liberation Sans 2.1.5 (SIL OFL 1.1), built by testdata/make.py.
 // Expected numbers come from fontTools reading the same file.
 const test_ttf = @embedFile("testdata/test.ttf");
@@ -103,4 +197,32 @@ test "a damaged directory is an error, not a crash" {
     // A record whose table runs past the end of the file.
     const dir = try Directory.parse(test_ttf[0..1000], 0);
     try std.testing.expectError(error.Truncated, dir.find(tag("glyf")));
+}
+
+test "cmap maps the test font's characters" {
+    const dir = try Directory.parse(test_ttf, 0);
+    const cmap = try Cmap.parse(try dir.get(tag("cmap")));
+    try std.testing.expectEqual(4, cmap.format);
+    const chars = " AVTaeové";
+    const glyphs = [_]Glyph{ 1, 2, 4, 3, 5, 6, 7, 8, 10 };
+    var view = std.unicode.Utf8View.initUnchecked(chars).iterator();
+    var i: usize = 0;
+    while (view.nextCodepoint()) |cp| : (i += 1) try std.testing.expectEqual(glyphs[i], cmap.glyph(cp));
+    try std.testing.expectEqual(glyphs.len, i);
+    for ([_]u32{ 0, 'B', 0xffff, 0x1f600, 0xffff_ffff }) |cp| try std.testing.expectEqual(0, cmap.glyph(cp));
+}
+
+test "cmap format 12 covers the astral planes" {
+    // One encoding record (3, 10) pointing at a format 12 subtable with one group:
+    // U+1F600..U+1F602 -> glyphs 5..7.
+    const bytes = "\x00\x00\x00\x01" ++ "\x00\x03\x00\x0a\x00\x00\x00\x0c" ++
+        "\x00\x0c\x00\x00\x00\x00\x00\x1c\x00\x00\x00\x00\x00\x00\x00\x01" ++
+        "\x00\x01\xf6\x00\x00\x01\xf6\x02\x00\x00\x00\x05";
+    const cmap = try Cmap.parse(bytes);
+    try std.testing.expectEqual(12, cmap.format);
+    try std.testing.expectEqual(6, cmap.glyph(0x1f601));
+    try std.testing.expectEqual(0, cmap.glyph(0x1f603));
+    try std.testing.expectEqual(0, cmap.glyph('A'));
+    // The group count claims more groups than there are bytes.
+    try std.testing.expectError(error.Truncated, Cmap.parse(bytes[0 .. bytes.len - 1]));
 }
