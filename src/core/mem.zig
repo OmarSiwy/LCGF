@@ -5,7 +5,8 @@
 
 const std = @import("std");
 
-/// Each column starts on its own cache line.
+/// Each column starts on its own cache line. 64 bytes is also a whole number of vectors for every
+/// lane count up to 16 x f32, so a SIMD load of a column never straddles a line at its start.
 pub const column_align = 64;
 
 /// Bump pointer over a caller-owned buffer. With `buf == null` it only counts: sizing a buffer
@@ -18,12 +19,15 @@ pub const Carver = struct {
     /// next column starts on a fresh cache line. Asserts the buffer is large enough. When counting
     /// it advances `off` and returns an empty slice.
     pub fn slice(c: *Carver, comptime T: type, n: usize) []T {
+        comptime std.debug.assert(@alignOf(T) <= column_align);
+        std.debug.assert(c.off % column_align == 0);
         const bytes = std.mem.alignForward(usize, n * @sizeOf(T), column_align);
         const start = c.off;
         c.off += bytes;
         const b = c.buf orelse return &.{};
         std.debug.assert(c.off <= b.len);
         @memset(b[start..c.off], 0);
+        std.debug.assert(@intFromPtr(b.ptr + start) % column_align == 0);
         const p: [*]T = @ptrCast(@alignCast(b.ptr + start));
         return p[0..n];
     }
@@ -160,4 +164,24 @@ test "copyRows copies a row range of every column" {
 
     copyRows(Cols, &dst, 0, &src, 0, 0); // empty range is a no-op
     try std.testing.expectEqual(0, dst.id[0]);
+}
+
+test "every column starts on a 64-byte boundary" {
+    const Cols = struct {
+        a: []u8,
+        b: []u64,
+        c: [3][]u16,
+        d: []struct { x: f32, y: f32, z: f32 },
+    };
+    var buf: [64 * 64]u8 align(column_align) = undefined;
+    var c: Carver = .{ .buf = &buf };
+    for ([_]usize{ 1, 7, 13, 64, 65 }) |n| {
+        c.off = 0;
+        const cols = c.columns(Cols, n);
+        try std.testing.expectEqual(0, @intFromPtr(cols.a.ptr) % column_align);
+        try std.testing.expectEqual(0, @intFromPtr(cols.b.ptr) % column_align);
+        for (cols.c) |col| try std.testing.expectEqual(0, @intFromPtr(col.ptr) % column_align);
+        try std.testing.expectEqual(0, @intFromPtr(cols.d.ptr) % column_align);
+        try std.testing.expectEqual(0, c.off % column_align);
+    }
 }
