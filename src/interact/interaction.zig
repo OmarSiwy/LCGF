@@ -56,6 +56,21 @@ pub const Interaction = struct {
         s.pointer = in.pointer;
         s.buttons = in.buttons;
     }
+
+    /// What happened to widget `id` this frame. Id 0 (anonymous) reports nothing.
+    pub fn response(s: *const Interaction, id: types.Id) types.Response {
+        const k = @backingInt(id);
+        const valid: u8 = @intFromBool(k != 0);
+        // While something is held, only that widget reports hover.
+        const unowned: u8 = @intFromBool(s.active == 0) | @intFromBool(s.active == k);
+        const hovered: u8 = @intFromBool(k == s.hot) & unowned;
+        const held: u8 = @intFromBool(k == s.active);
+        const pressed: u8 = @intFromBool(k == s.pressed);
+        const released: u8 = @intFromBool(k == s.released);
+        const clicked: u8 = @intFromBool(k == s.clicked);
+        const focused: u8 = @intFromBool(k == s.focus);
+        return @bitCast((hovered | (held << 1) | (pressed << 2) | (released << 3) | (clicked << 4) | (focused << 5)) * valid);
+    }
 };
 
 /// What `step` reads as the id under the pointer when nothing is hit.
@@ -182,4 +197,52 @@ test "step: release elsewhere is not a click; pressing nothing clears active, ke
     try testing.expectEqual(@as(u32, 0), f[5].active);
     try testing.expectEqual(@as(u32, 0), f[5].pressed);
     try testing.expectEqual(@as(u32, 0), f[5].focus);
+}
+
+/// The response bits of `id` after each of `n` frames.
+fn responses(f: []const Interaction, id: types.Id, out: []u8) void {
+    for (f, out) |s, *o| o.* = @bitCast(s.response(id));
+}
+
+test "response: hover, held, pressed, released, clicked, focused as one bit set per frame" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var f: [8]Interaction = undefined;
+    const n = try play(&t,
+        \\frame
+        \\pointer 20 20
+        \\frame
+        \\buttons left
+        \\frame
+        \\pointer 70 20
+        \\frame
+        \\pointer 20 20
+        \\frame
+        \\buttons
+        \\frame
+        \\pointer 70 20
+    , &f);
+    const R = types.Response;
+    var a: [8]u8 = undefined;
+    var b: [8]u8 = undefined;
+    responses(f[0..n], id_a, a[0..n]);
+    responses(f[0..n], id_b, b[0..n]);
+    const bits = struct {
+        fn of(r: R) u8 {
+            return @bitCast(r);
+        }
+    }.of;
+    try testing.expectEqualSlices(u8, &.{
+        bits(.{ .hovered = true }),
+        bits(.{ .hovered = true, .held = true, .pressed = true, .focused = true }),
+        // Dragged off: still held, no longer hovered.
+        bits(.{ .held = true, .focused = true }),
+        bits(.{ .hovered = true, .held = true, .focused = true }),
+        bits(.{ .hovered = true, .released = true, .clicked = true, .focused = true }),
+        bits(.{ .focused = true }),
+    }, a[0..n]);
+    // b is under the pointer in frame 2 but a holds it, so b reports no hover.
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0, bits(.{ .hovered = true }) }, b[0..n]);
+    // Anonymous: nothing, even though the root (id 0) is never hot.
+    for (f[0..n]) |s| try testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(s.response(.none))));
 }
