@@ -22,6 +22,8 @@ pub const Dirty = struct {
         mark: [2][]u8,
         /// 1 when the node is a relayout boundary on that axis (`boundaries`).
         bound: [2][]u8,
+        /// 1 when the node's subtree has to be laid out again on that axis (`propagate`).
+        span: [2][]u8,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Dirty {
@@ -55,6 +57,35 @@ pub fn boundaries(t: *const Tree, d: *Dirty) void {
     inline for (0..2) |a| d.c.bound[a][0] = 1;
 }
 
+/// Moves every mark to the relayout boundary above it: a marked node can change its parent's
+/// fit, so it can change everything up to the first boundary ancestor of its parent, and nothing
+/// outside that ancestor's subtree. Sets `span` on those ancestors and clears the marks. Call
+/// after `boundaries`. Marks are few, so the scan skips whole vectors of unmarked rows and walks
+/// up from each mark; the walk is O(depth).
+pub fn propagate(t: *const Tree, d: *Dirty) void {
+    std.debug.assert(t.len <= d.cap);
+    const n = simd.padded(t.len);
+    const parent = t.c.parent;
+    inline for (0..2) |a| {
+        const marks = d.c.mark[a];
+        const bound = d.c.bound[a];
+        const span = d.c.span[a];
+        var i: usize = 0;
+        while (i < n) : (i += simd.lanes) {
+            const v: simd.Bytes = marks[i..][0..simd.lanes].*;
+            if (@reduce(.Or, v) == 0) continue;
+            for (i..@min(i + simd.lanes, t.len)) |j| {
+                if (marks[j] == 0) continue;
+                // The root's parent is itself, and the root is a boundary, so the walk ends.
+                var up = parent[j];
+                while (bound[up] == 0) up = parent[up];
+                span[up] = 1;
+            }
+            marks[i..][0..simd.lanes].* = @splat(0);
+        }
+    }
+}
+
 /// Lays out what the marks reach and clears them. With no marks the columns are left as they
 /// are: an idle frame does no layout work.
 pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
@@ -67,8 +98,9 @@ pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     }
     if (@reduce(.Or, any) == 0) return;
     boundaries(t, d);
+    propagate(t, d);
     layout.run(t, tx, viewport);
-    inline for (0..2) |a| @memset(d.c.mark[a][0..n], 0);
+    inline for (0..2) |a| @memset(d.c.span[a][0..n], 0);
 }
 
 const testing = std.testing;
@@ -261,6 +293,49 @@ test "boundaries: changes inside a boundary leave its natural size, and all outs
             try testing.expectEqualSlices(f32, before.c.pos[ax][o[0]..o[1]], after.c.pos[ax][o[0]..o[1]]);
         }
     }
+}
+
+test "propagate: outside the marked spans a change moves nothing on that axis" {
+    var raw: [2][1024 * 1024]u8 align(mem.column_align) = undefined;
+    var c0: mem.Carver = .{ .buf = &raw[0] };
+    var c1: mem.Carver = .{ .buf = &raw[1] };
+    var before = Tree.init(&c0, 600);
+    var after = Tree.init(&c1, 600);
+    var tx = Texts.init(&c0, 1);
+    var d = Dirty.init(&c1, 600);
+    var prng: std.Random.DefaultPrng = .init(0x113);
+    const r = prng.random();
+    var narrowed: u32 = 0;
+    for (0..300) |_| {
+        const seed = r.int(u64);
+        const n = 1 + r.uintLessThan(u32, before.cap);
+        var a: std.Random.DefaultPrng = .init(seed);
+        var b: std.Random.DefaultPrng = .init(seed);
+        check.randomTree(&before, a.random(), n);
+        check.randomTree(&after, b.random(), n);
+        layout.run(&before, &tx, .{ 1280, 800 });
+        for (0..1 + r.uintLessThan(u32, 3)) |_| Change.random(r, n).apply(&after, &d);
+        layout.run(&after, &tx, .{ 1280, 800 });
+        boundaries(&after, &d);
+        propagate(&after, &d);
+        inline for (0..2) |ax| {
+            const zeros: [600]u8 = @splat(0);
+            try testing.expectEqualSlices(u8, zeros[0..n], d.c.mark[ax][0..n]);
+            var covered: [600]bool = @splat(false);
+            for (0..n) |i| if (d.c.span[ax][i] != 0) @memset(covered[i..after.c.end[i]], true);
+            for (0..n) |i| {
+                if (covered[i]) continue;
+                try testing.expectEqual(before.c.size[ax][i], after.c.size[ax][i]);
+                try testing.expectEqual(before.c.pos[ax][i], after.c.pos[ax][i]);
+                try testing.expectEqual(before.c.nat[ax][i], after.c.nat[ax][i]);
+                try testing.expectEqual(before.c.fit[ax][i], after.c.fit[ax][i]);
+            }
+            narrowed += @intFromBool(!covered[0]);
+            @memset(d.c.span[ax], 0);
+        }
+    }
+    // Most changes stop below the root, or the test would not show anything.
+    try testing.expect(narrowed > 300);
 }
 
 test "update: no marks, no work" {
