@@ -139,6 +139,94 @@ pub const Interaction = struct {
     }
 };
 
+/// Press, release and click for up to `n` fingers or pens at once, from `Input.contacts`.
+/// Each contact is followed by its platform pointer id in one of `n` slots, so a widget keeps
+/// the finger that pressed it however the host orders its rows. Contacts beyond `n` are
+/// ignored. Fingers find widgets with `hit.near` (within `slop`), as fingers are wide. Focus
+/// stays with the mouse `Interaction`.
+pub fn Touches(comptime n: comptime_int) type {
+    return struct {
+        const Self = @This();
+        const V = @Vector(n, u32);
+        const B = @Vector(n, bool);
+        const F = @Vector(n, f32);
+        const iota = std.simd.iota(u32, n);
+
+        /// Platform pointer id per slot, or `none` for a free slot.
+        pointer: [n]u32 = @splat(none),
+        /// Id under the contact (its last position once lifted), 0 for nothing.
+        under: [n]u32 = @splat(0),
+        /// Id the contact pressed and still holds, 0 for nothing.
+        active: [n]u32 = @splat(0),
+        // Ids this frame, 0 for nothing; `clicked` is a lift over the widget pressed.
+        pressed: [n]u32 = @splat(0),
+        released: [n]u32 = @splat(0),
+        clicked: [n]u32 = @splat(0),
+        down: [n]bool = @splat(false),
+        x: [n]f32 = @splat(-1),
+        y: [n]f32 = @splat(-1),
+        /// Logical pixels a finger may miss a widget by.
+        slop: f32 = 8,
+
+        /// Advances by one frame, from last frame's geometry and this frame's contacts.
+        pub fn step(t: *Self, prev: *const Tree, in: *const Input) void {
+            var ptr: V = t.pointer;
+            var under: V = t.under;
+            var x: F = t.x;
+            var y: F = t.y;
+            var seen: B = @splat(false);
+            var down: B = @splat(false);
+            for (in.contacts) |c| {
+                // The slot already following this id, else the first free one, else none
+                // (dropped: `mine` is then all false).
+                const same = ptr == @as(V, @splat(c.id));
+                const own = @reduce(.Min, @select(u32, same, iota, @as(V, @splat(none))));
+                const free = @reduce(.Min, @select(u32, ptr == @as(V, @splat(none)), iota, @as(V, @splat(none))));
+                const mine = iota == @as(V, @splat(pick(u32, own != none, own, free)));
+                const node = hit.near(prev, c.pos[0], c.pos[1], .any, t.slop);
+                const row = @min(node, prev.cap - 1);
+                const id_at = [2]*const u32{ &zero_id, &prev.c.id[row] };
+                const id = id_at[@intFromBool(node +% 1 != 0)].*;
+                ptr = @select(u32, mine, @as(V, @splat(c.id)), ptr);
+                under = @select(u32, mine, @as(V, @splat(id)), under);
+                x = @select(f32, mine, @as(F, @splat(c.pos[0])), x);
+                y = @select(f32, mine, @as(F, @splat(c.pos[1])), y);
+                seen = seen | mine;
+                down = down | (mine & @as(B, @splat(c.down)));
+            }
+            const zero: V = @splat(0);
+            const was: B = t.down;
+            const held: V = t.active;
+            const press = down & !was;
+            const release = !down & was;
+            t.clicked = @select(u32, release & (held == under) & (under != zero), under, zero);
+            t.released = @select(u32, release, held, zero);
+            t.pressed = @select(u32, press, under, zero);
+            t.active = @select(u32, press, under, @select(u32, release, zero, held));
+            // A slot whose contact is gone is free again; its release is reported above.
+            t.pointer = @select(u32, seen, ptr, @as(V, @splat(none)));
+            t.under = under;
+            t.down = down;
+            t.x = x;
+            t.y = y;
+        }
+
+        /// What any contact did to widget `id` this frame. Hover means a contact (a finger
+        /// down, or a pen above the surface) is on it.
+        pub fn response(t: *const Self, id: types.Id) types.Response {
+            const k: V = @splat(@backingInt(id));
+            const live = @as(V, t.pointer) != @as(V, @splat(none));
+            const hovered: u8 = @intFromBool(@reduce(.Or, (@as(V, t.under) == k) & live));
+            const held: u8 = @intFromBool(@reduce(.Or, @as(V, t.active) == k));
+            const pressed: u8 = @intFromBool(@reduce(.Or, @as(V, t.pressed) == k));
+            const released: u8 = @intFromBool(@reduce(.Or, @as(V, t.released) == k));
+            const clicked: u8 = @intFromBool(@reduce(.Or, @as(V, t.clicked) == k));
+            const valid: u8 = @intFromBool(@backingInt(id) != 0);
+            return @bitCast((hovered | (held << 1) | (pressed << 2) | (released << 3) | (clicked << 4)) * valid);
+        }
+    };
+}
+
 /// `c ? a : b` as a cmov. `simd.selU`'s mask is seen through by Zig 0.18's LLVM, which then
 /// turns a select whose operand is a field loaded only for it into a branch around the load
 /// (CodeGenPrepare). The `.unpredictable` hint becomes `!unpredictable` metadata on the select,
@@ -481,4 +569,63 @@ test "step: drag starts past the threshold with the movement so far, then frame 
         \\pointer 31 20
     , &f);
     for (f[0..m], [5]u32{ 0, a, a, 0, 0 }) |s, w| try testing.expectEqual(w, s.dragging);
+}
+
+test "Touches: each finger keeps the widget it pressed, by pointer id, whatever the row order" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var contacts: [4]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    // Finger 7 presses a, finger 9 presses b (rows swap in frame 1, where a third finger is
+    // dropped: both slots are taken); 9 slides into the gap, 2 px from a, so within slop it is
+    // over a, and lifts there (no click on b); 7 lifts on a (click); finger 3 then takes a
+    // freed slot and presses b.
+    var r: Replay = .{ .src =
+        \\frame
+        \\touch 7 20 20
+        \\touch 9 70 20
+        \\frame
+        \\touch 9 70 20
+        \\touch 7 21 20
+        \\touch 3 150 80
+        \\frame
+        \\touch 7 21 20
+        \\touch 9 42 20
+        \\frame
+        \\touch 7 21 20
+        \\frame
+        \\frame
+        \\touch 3 70 20
+    };
+    var s: Touches(2) = .{};
+    const R = types.Response;
+    const want_a = [_]R{
+        .{ .hovered = true, .held = true, .pressed = true },
+        .{ .hovered = true, .held = true },
+        // Finger 9 is over a now, but it did not press a: a is held by 7 only.
+        .{ .hovered = true, .held = true },
+        .{ .hovered = true, .held = true },
+        // 7 lifted on a: a click. A lifted contact hovers nothing.
+        .{ .released = true, .clicked = true },
+        .{},
+    };
+    const want_b = [_]R{
+        .{ .hovered = true, .held = true, .pressed = true },
+        .{ .hovered = true, .held = true },
+        .{ .held = true },
+        // 9 lifted over a: b is released without a click.
+        .{ .released = true },
+        .{},
+        .{ .hovered = true, .held = true, .pressed = true },
+    };
+    var f: usize = 0;
+    while (try r.next(buf)) |in| : (f += 1) {
+        s.step(&t, in);
+        try testing.expectEqual(@as(u8, @bitCast(want_a[f])), @as(u8, @bitCast(s.response(id_a))));
+        try testing.expectEqual(@as(u8, @bitCast(want_b[f])), @as(u8, @bitCast(s.response(id_b))));
+        try testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(s.response(.none))));
+    }
+    try testing.expectEqual(@as(usize, 6), f);
 }

@@ -44,3 +44,6 @@ export fn p_hit_near(t: *const Tree, x: f32, y: f32) u32 {
 export fn p_step(s: *lcgr.interaction.Interaction, prev: *const Tree, in: *const lcgr.input.Input) void {
     s.step(prev, in);
 }
+export fn p_touch_step(s: *lcgr.interaction.Touches(10), prev: *const Tree, in: *const lcgr.input.Input) void {
+    s.step(prev, in);
+}
