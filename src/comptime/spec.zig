@@ -3,6 +3,8 @@
 //! tables. Tier 1. Ported from prototype/comptime_ui_probe.zig ("Spec").
 
 const std = @import("std");
+const types = @import("../core/types.zig");
+const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
 pub const Kind = enum(u8) { col, row, label, checkbox, slider };
@@ -14,8 +16,8 @@ pub const Spec = struct {
     id: ?[:0]const u8 = null,
     /// Name of the state field this node shows.
     bind: ?[]const u8 = null,
-    pad: u8 = 0,
-    gap: u8 = 0,
+    /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
+    style: Style = .{},
     children: []const Spec = &.{},
 };
 
@@ -27,14 +29,19 @@ fn kids(comptime tuple: anytype) []const Spec {
     return &final;
 }
 
-/// A vertical container. `children` is a tuple of specs: `col(.{ .pad = 8 }, .{ label("a"), ... })`.
-pub fn col(comptime s: struct { pad: u8 = 0, gap: u8 = 0 }, comptime children: anytype) Spec {
-    return .{ .kind = .col, .pad = s.pad, .gap = s.gap, .children = kids(children) };
+/// A vertical container. `children` is a tuple of specs:
+/// `col(.{ .pad = @splat(8), .gap = 4 }, .{ label("a"), ... })`. Its `dir` is always `.y`.
+pub fn col(comptime style: Style, comptime children: anytype) Spec {
+    var s = style;
+    s.dir = .y;
+    return .{ .kind = .col, .style = s, .children = kids(children) };
 }
 
-/// A horizontal container; as `col`.
-pub fn row(comptime s: struct { pad: u8 = 0, gap: u8 = 0 }, comptime children: anytype) Spec {
-    return .{ .kind = .row, .pad = s.pad, .gap = s.gap, .children = kids(children) };
+/// A horizontal container; as `col`, with `dir` always `.x`.
+pub fn row(comptime style: Style, comptime children: anytype) Spec {
+    var s = style;
+    s.dir = .x;
+    return .{ .kind = .row, .style = s, .children = kids(children) };
 }
 
 /// Text showing the state field `bind`.
@@ -118,19 +125,18 @@ test "Spec: defaults are an unnamed, unbound, unpadded leaf" {
     try std.testing.expectEqual(1, @sizeOf(Kind));
     try std.testing.expectEqual(null, s.id);
     try std.testing.expectEqual(null, s.bind);
-    try std.testing.expectEqual(0, s.pad);
-    try std.testing.expectEqual(0, s.gap);
+    try std.testing.expectEqual(Style{}, s.style);
     try std.testing.expectEqual(0, s.children.len);
 }
 
 test "Spec: the probe's mixer, written as literals, has 8 nodes" {
-    const mixer: Spec = comptime .{ .kind = .col, .pad = 8, .gap = 4, .children = &.{
+    const mixer: Spec = comptime .{ .kind = .col, .style = .{ .pad = @splat(8), .gap = 4 }, .children = &.{
         .{ .kind = .label, .bind = "title" },
-        .{ .kind = .row, .gap = 8, .children = &.{
+        .{ .kind = .row, .style = .{ .dir = .x, .gap = 8 }, .children = &.{
             .{ .kind = .checkbox, .id = "mute", .bind = "muted" },
             .{ .kind = .slider, .id = "volume", .bind = "volume" },
         } },
-        .{ .kind = .row, .gap = 8, .children = &.{
+        .{ .kind = .row, .style = .{ .dir = .x, .gap = 8 }, .children = &.{
             .{ .kind = .label, .bind = "title" },
             .{ .kind = .slider, .id = "pan", .bind = "pan" },
         } },
@@ -141,7 +147,7 @@ test "Spec: the probe's mixer, written as literals, has 8 nodes" {
 }
 
 test "col, row: the probe's mixer flattens to the probe's parent and end tables" {
-    const mixer = comptime col(.{ .pad = 8, .gap = 4 }, .{
+    const mixer = comptime col(.{ .pad = @splat(8), .gap = 4 }, .{
         Spec{ .kind = .label, .bind = "title" },
         row(.{ .gap = 8 }, .{ Spec{ .kind = .checkbox, .id = "mute", .bind = "muted" }, Spec{ .kind = .slider, .id = "volume", .bind = "volume" } }),
         row(.{ .gap = 8 }, .{ Spec{ .kind = .label, .bind = "title" }, Spec{ .kind = .slider, .id = "pan", .bind = "pan" } }),
@@ -150,20 +156,20 @@ test "col, row: the probe's mixer flattens to the probe's parent and end tables"
     try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &t[0]);
     try std.testing.expectEqualSlices(u32, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, &t[1]);
     try std.testing.expectEqual(Kind.col, mixer.kind);
-    try std.testing.expectEqual(8, mixer.pad);
-    try std.testing.expectEqual(4, mixer.gap);
+    try std.testing.expectEqual([4]f32{ 8, 8, 8, 8 }, mixer.style.pad);
+    try std.testing.expectEqual(4, mixer.style.gap);
     try std.testing.expectEqual(Kind.row, mixer.children[1].kind);
-    try std.testing.expectEqual(8, mixer.children[1].gap);
+    try std.testing.expectEqual(8, mixer.children[1].style.gap);
 }
 
 test "col, row: an empty tuple is a childless container" {
     const s = comptime row(.{}, .{});
     try std.testing.expectEqual(0, s.children.len);
-    try std.testing.expectEqual(0, s.pad);
+    try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, s.style.pad);
 }
 
 /// The probe's usage spec, built as the probe builds it.
-const probe_mixer = col(.{ .pad = 8, .gap = 4 }, .{
+const probe_mixer = col(.{ .pad = @splat(8), .gap = 4 }, .{
     label("title"),
     row(.{ .gap = 8 }, .{ checkbox("mute", "muted"), slider("volume", "volume") }),
     row(.{ .gap = 8 }, .{ label("title"), slider("pan", "pan") }),
@@ -196,4 +202,16 @@ test "label, checkbox, slider: leaves carry kind, id and binding, no children" {
     try std.testing.expectEqualStrings("muted", c.bind.?);
     try std.testing.expectEqual(Kind.slider, s.kind);
     try std.testing.expectEqual(0, s.children.len);
+}
+
+test "col, row: take the full Style; the container kind fixes the axis" {
+    const s = comptime row(.{ .dir = .y, .size = .{ .fill, .px(40) }, .cross = .center, .fill = .rgb(1, 2, 3), .radius = 4, .role = .group }, .{});
+    try std.testing.expectEqual(types.Axis.x, s.style.dir);
+    try std.testing.expectEqual(types.Size.fill, s.style.size[0]);
+    try std.testing.expectEqual(types.Size.px(40), s.style.size[1]);
+    try std.testing.expectEqual(types.Align.center, s.style.cross);
+    try std.testing.expectEqual(types.Color.rgb(1, 2, 3), s.style.fill);
+    try std.testing.expectEqual(4, s.style.radius);
+    try std.testing.expectEqual(types.Role.group, s.style.role);
+    try std.testing.expectEqual(types.Axis.y, (comptime col(.{ .dir = .x }, .{})).style.dir);
 }
