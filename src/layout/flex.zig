@@ -33,6 +33,10 @@ pub const Flex = struct {
         /// Space outside the node before and after it on each axis (left, top / right, bottom).
         margin_lo: [2][]f32,
         margin_hi: [2][]f32,
+        /// 1.0 for a row (main axis x) whose in-flow children wrap onto further lines.
+        wrap: []f32,
+        /// Where a wrapping row's lines sit across it when they leave space (`Align.factor`).
+        align_lines: []f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -40,7 +44,37 @@ pub const Flex = struct {
         /// Free space per unit of grow weight that the second round hands to each child that its
         /// max did not stop (`resolveFlex`, rewritten per axis).
         grow_extra: []f32,
+
+        // ---- wrapping (wrap.zig). A line is a row of these columns, indexed by line number,
+        //      not by node: a frame has at most `len` lines, so the same row count holds them.
+        //      Every node gets a line: the in-flow children of a wrapping row the line `wrap`
+        //      put them on, every other node `sink`, a spare row past `cap` that collects the
+        //      writes of nodes outside any wrapping row so no pass has to branch on "wraps?".
+        /// Line of the node in its parent; `sink` when the parent does not wrap.
+        line: []u32,
+        /// 1.0 when the node is the first of its line.
+        head: []f32,
+        /// Line a wrapping row is filling while `wrap` walks its children.
+        open: []u32,
+        /// Number of lines of a wrapping row, as f32 because it only feeds arithmetic.
+        nlines: []f32,
+        /// Per line: main-axis length of the line's children, margins and gaps.
+        line_main: []f32,
+        /// Per line: children on the line.
+        line_count: []f32,
+        /// Per line: cross size, the largest cross extent of its children (`fitFlex`, y).
+        line_cross: []f32,
+        /// Per line: cross offset inside the row's content box (`placeFlex`).
+        line_off: []f32,
+        /// Per line: main-axis cursor (`placeFlex`).
+        line_cursor: []f32,
     };
+
+    /// The row that collects the line writes of nodes outside any wrapping row: one past the
+    /// last line a tree of `cap` nodes can have, inside the padding `simd.rows` adds.
+    pub fn sink(fx: *const Flex) u32 {
+        return @intCast(fx.c.line.len - 1);
+    }
 
     /// What `set` writes for one node. The defaults change nothing.
     pub const Style = struct {
@@ -66,6 +100,12 @@ pub const Flex = struct {
         /// off the room it may stretch or shrink into; the node sits past its leading margin. A
         /// floating node ignores it. Margins do not collapse.
         margin: [4]f32 = @splat(0),
+        /// For a row (`Style.dir = .x`): children that do not fit on the current line start a
+        /// new one below it, as CSS `flex-wrap: wrap` (wrap.zig). Ignored on a column.
+        wrap: bool = false,
+        /// Where a wrapping row's lines sit across it when they leave space (CSS
+        /// `align-content`, without stretch).
+        lines: types.Align = .start,
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -84,6 +124,8 @@ pub const Flex = struct {
             fx.c.margin_lo[a][i] = s.margin[a];
             fx.c.margin_hi[a][i] = s.margin[a + 2];
         }
+        fx.c.wrap[i] = b01(s.wrap);
+        fx.c.align_lines[i] = types.Align.factor[@backingInt(s.lines)];
         fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
     }
 
