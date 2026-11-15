@@ -355,3 +355,20 @@ test "script runs: one script each, Common only where nothing else" {
     // ("」" closes the Hiragana bracket), Arabic, Hebrew.
     try std.testing.expectEqual(9, runs);
 }
+
+test "lookup speed" {
+    // Prints ns per line+grapheme lookup pair over every 7th code point; read it in ReleaseFast
+    // (`zig build conformance -Doptimize=ReleaseFast`). Timing only, nothing asserted.
+    var ts0: std.os.linux.timespec = undefined;
+    var ts1: std.os.linux.timespec = undefined;
+    var acc: u32 = 0;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts0);
+    for (0..20) |r| {
+        var cp: u32 = @intCast(r);
+        while (cp < 0x110000) : (cp += 7) acc +%= @as(u16, @bitCast(property.line(@intCast(cp)))) +% @as(u8, @bitCast(property.grapheme(@intCast(cp))));
+    }
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts1);
+    const ns: u64 = @intCast((ts1.sec - ts0.sec) * 1_000_000_000 + (ts1.nsec - ts0.nsec));
+    const pairs: u64 = 20 * (0x110000 / 7);
+    std.debug.print("unicode lookups: {d}.{d:0>2} ns per line+grapheme pair (checksum {d})\n", .{ ns / pairs, (ns * 100 / pairs) % 100, acc });
+}
