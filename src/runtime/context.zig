@@ -9,6 +9,11 @@ const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const Strings = @import("../core/strings.zig").Strings;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
+const simd = @import("../core/simd.zig");
+const types = @import("../core/types.zig");
+const Input = @import("../core/input.zig").Input;
+const Interaction = @import("../interact/interaction.zig").Interaction;
+const Frame = @import("frame.zig").Frame;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -36,6 +41,11 @@ pub const Context = struct {
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
+    inter: Interaction = .{},
+    frame: u32 = 0,
+    /// Frames still owed after the last input change.
+    settle: u32 = 0,
+    last_stamp: u64 = 0,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -66,7 +76,35 @@ pub const Context = struct {
         var carver: mem.Carver = .{ .buf = buffer };
         return build(&carver, limits);
     }
+
+    /// Starts a frame: swaps generations, empties the new one, steps interaction against last
+    /// frame's geometry and opens the root, sized to the viewport.
+    pub fn begin(ctx: *Context, in: *const Input) Frame {
+        // One extra frame after any input change, so state that this frame's events modify is
+        // visible without waiting for the next event.
+        const stamp = in.stamp();
+        ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
+        ctx.last_stamp = stamp;
+
+        ctx.cur ^= 1;
+        const t = &ctx.trees[ctx.cur];
+        t.reset();
+        ctx.texts[ctx.cur].reset();
+        ctx.customs[ctx.cur].reset();
+        ctx.strings[ctx.cur].reset();
+        ctx.frame +%= 1;
+
+        ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
+        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719).
+
+        const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
+        ctx.stack[0] = root;
+        ctx.depth = 1;
+        return .{ .ctx = ctx, .in = in };
+    }
 };
+
+pub const root_id = types.Id.from("ui.root");
 
 const testing = std.testing;
 
@@ -116,4 +154,60 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
     try testing.expectError(error.BufferTooSmall, Context.init(S.buffer[0 .. n - mem.column_align], example_limits));
+}
+
+test "begin: swaps generations, empties the new one and opens the root at the viewport" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+
+    var f = ctx.begin(&in);
+    try testing.expectEqual(@as(u1, 1), ctx.cur);
+    try testing.expectEqual(@as(u32, 1), ctx.frame);
+    try testing.expectEqual(&ctx.trees[1], f.tree());
+    try testing.expectEqual(&ctx.trees[0], f.prevTree());
+    try testing.expectEqual(@as(u32, 1), f.tree().len);
+    try testing.expectEqual(root_id, @as(types.Id, @fromBackingInt(@intCast(f.tree().c.id[0]))));
+    try testing.expectEqual(@as(f32, 320), f.tree().c.min[0][0]);
+    try testing.expectEqual(@as(f32, 200), f.tree().c.max[1][0]);
+    try testing.expectEqual(@as(u32, 1), ctx.depth);
+    // First input differs from the zero stamp: one settle frame is owed.
+    try testing.expectEqual(@as(u32, 1), ctx.settle);
+
+    // Leftovers in the new generation are dropped by the next begin.
+    _ = f.tree().push(0, .none, &.{});
+    _ = f.texts();
+    f = ctx.begin(&in);
+    try testing.expectEqual(@as(u1, 0), ctx.cur);
+    try testing.expectEqual(@as(u32, 2), f.prevTree().len);
+    try testing.expectEqual(@as(u32, 1), f.tree().len);
+    // Same input: the settle frame is used up.
+    try testing.expectEqual(@as(u32, 0), ctx.settle);
+}
+
+test "begin: interaction steps against last frame's tree" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var in: Input = .{ .viewport = .{ 320, 200 }, .pointer = .{ 10, 10 } };
+    // Frame 1 has no previous geometry: nothing is under the pointer.
+    _ = ctx.begin(&in);
+    try testing.expectEqual(@as(u32, 0), ctx.inter.hot);
+    // Lay frame 1's root out by hand and make it hoverable; frame 2 finds it.
+    const t = &ctx.trees[ctx.cur];
+    t.seal(0);
+    t.c.sense[0] = @bitCast(types.Sense.any);
+    t.c.vis[0][0] = 0;
+    t.c.vis[1][0] = 0;
+    t.c.vis[2][0] = 320;
+    t.c.vis[3][0] = 200;
+    t.c.visible[0] = 1;
+    in.pointer = .{ 20, 20 };
+    _ = ctx.begin(&in);
+    try testing.expectEqual(@backingInt(root_id), ctx.inter.hot);
 }

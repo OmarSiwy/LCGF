@@ -48,6 +48,7 @@ pub const shape_layout = @import("text/shape/layout.zig");
 pub const shape_cluster = @import("text/shape/cluster.zig");
 pub const shape_cache = @import("text/shape/cache.zig");
 pub const context = @import("runtime/context.zig");
+pub const frame = @import("runtime/frame.zig");
 
 test {
     std.testing.refAllDecls(@This());
