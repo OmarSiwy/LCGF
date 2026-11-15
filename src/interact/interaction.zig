@@ -44,6 +44,16 @@ pub const Interaction = struct {
     click_at: u64 = @bitCast(-std.math.inf(f64)),
     press_at: u64 = 0,
     long_fired: bool = false,
+    /// Id being dragged, or 0: the held id once the pointer has moved more than
+    /// `drag_threshold` logical pixels from where it was pressed. Latched up to and including
+    /// the release frame.
+    dragging: u32 = 0,
+    /// Pointer movement this frame while `dragging`; zero otherwise. The frame the threshold
+    /// is crossed carries all movement since the press, so none is lost.
+    drag_delta: [2]f32 = .{ 0, 0 },
+    drag_threshold: f32 = 4,
+    /// Pointer position that `drag_delta` is measured from: the press, then the last frame.
+    drag_from: [2]f32 = .{ 0, 0 },
 
     /// Advances by one frame, from last frame's geometry and this frame's pointer.
     pub fn step(s: *Interaction, prev: *const Tree, in: *const Input) void {
@@ -53,8 +63,8 @@ pub const Interaction = struct {
         // loaded value into a `je` around the load (`pick` too). Selecting the address, between the
         // row and a constant 0 (`node +% 1` is 0 only for `none`), keeps the load unconditional.
         const row = @min(node, prev.cap - 1);
-        const from = [2]*const u32{ &zero_id, &prev.c.id[row] };
-        const under = from[@intFromBool(node +% 1 != 0)].*;
+        const id_at = [2]*const u32{ &zero_id, &prev.c.id[row] };
+        const under = id_at[@intFromBool(node +% 1 != 0)].*;
         const press = simd.andB(in.buttons.left, !s.buttons.left);
         const release = simd.andB(!in.buttons.left, s.buttons.left);
         const takes_focus = (prev.c.sense[row] & @as(u8, @bitCast(Sense{ .focus = true }))) != 0;
@@ -84,6 +94,19 @@ pub const Interaction = struct {
         const due = simd.andB(simd.andB(s.active != 0, !fired), held_for >= s.long_time);
         s.long_pressed = pick(u32, due, s.active, 0);
         s.long_fired = simd.orB(fired, due);
+
+        // Positions are selected as their bits, as the times are.
+        const here: u64 = @bitCast(in.pointer);
+        const from: [2]f32 = @bitCast(pick(u64, press, here, @bitCast(s.drag_from)));
+        const moved = [2]f32{ in.pointer[0] - from[0], in.pointer[1] - from[1] };
+        const far = moved[0] * moved[0] + moved[1] * moved[1] > s.drag_threshold * s.drag_threshold;
+        // The release frame still drags (its movement and the drop belong to the drag).
+        const owner = s.active | s.released;
+        s.dragging = pick(u32, simd.andB(owner != 0, simd.orB(far, simd.andB(!press, s.dragging == owner))), owner, 0);
+        const moving = s.dragging != 0;
+        const keep = -%@as(u64, @intFromBool(moving));
+        s.drag_delta = @bitCast(@as(u64, @bitCast(moved)) & keep);
+        s.drag_from = @bitCast(pick(u64, moving, here, @bitCast(from)));
         // Anonymous rows have id 0, so nothing held must not search for 0: OR in all ones
         // (`none`) when `active` is 0 instead of the prototype's select.
         const idle = -%@as(u32, @intFromBool(s.active == 0));
@@ -91,6 +114,13 @@ pub const Interaction = struct {
         s.delta = .{ in.pointer[0] - s.pointer[0], in.pointer[1] - s.pointer[1] };
         s.pointer = in.pointer;
         s.buttons = in.buttons;
+    }
+
+    /// Pointer movement this frame while `id` is dragged; zero otherwise.
+    pub fn drag(s: *const Interaction, id: types.Id) [2]f32 {
+        const k = @backingInt(id);
+        const m = simd.b2f(simd.andB(k != 0, s.dragging == k));
+        return .{ s.drag_delta[0] * m, s.drag_delta[1] * m };
     }
 
     /// What happened to widget `id` this frame. Id 0 (anonymous) reports nothing.
@@ -397,4 +427,58 @@ test "step: the held widget captures the pointer until release, even off the win
     try testing.expectEqual(a, f[4].released);
     try testing.expectEqual(@as(u32, 0), f[4].clicked);
     try testing.expectEqual(@as(u8, @bitCast(types.Response{ .hovered = true })), @as(u8, @bitCast(f[4].response(id_b))));
+}
+
+test "step: drag starts past the threshold with the movement so far, then frame deltas" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var f: [8]Interaction = undefined;
+    const n = try play(&t,
+        \\frame
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\pointer 22 21
+        \\frame
+        \\pointer 25 20
+        \\frame
+        \\pointer 75 30
+        \\frame
+        \\pointer 74 30
+        \\buttons
+        \\frame
+        \\pointer 74 30
+        \\buttons left
+    , &f);
+    try testing.expectEqual(@as(usize, 6), n);
+    const a = @backingInt(id_a);
+    var dragging: [6]u32 = undefined;
+    for (f[0..n], &dragging) |s, *d| d.* = s.dragging;
+    // 2.2 px from the press is within 4; 5 px is past it. Pressing b right after the release
+    // is a new press, not a continued drag.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, a, a, a, 0 }, &dragging);
+    const want = [6][2]f32{ .{ 0, 0 }, .{ 0, 0 }, .{ 5, 0 }, .{ 50, 10 }, .{ -1, 0 }, .{ 0, 0 } };
+    for (f[0..n], want) |s, w| {
+        try testing.expectEqual(w, s.drag(id_a));
+        try testing.expectEqual([2]f32{ 0, 0 }, s.drag(id_b));
+        try testing.expectEqual([2]f32{ 0, 0 }, s.drag(.none));
+    }
+    // The release frame still moves the drag; the click is the prototype's: released over b.
+    try testing.expectEqual(@as(u32, 0), f[4].clicked);
+
+    // Re-pressing the widget just dragged starts below the threshold again.
+    const m = try play(&t,
+        \\frame
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\pointer 30 20
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\pointer 31 20
+    , &f);
+    for (f[0..m], [5]u32{ 0, a, a, 0, 0 }) |s, w| try testing.expectEqual(w, s.dragging);
 }
