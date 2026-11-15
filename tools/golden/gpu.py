@@ -101,6 +101,7 @@ def at(x, y): return tuple(px[(y * W + x) * 4:(y * W + x) * 4 + 3])
 
 write_png(out_png, W, H, px)
 
+if not any(l[0] == "reset" for l in lines): sys.exit(0)  # not the prototype scene: no fixed pixel checks
 reset = [float(v) for v in [l for l in lines if l[0] == "reset"][0][1:]]
 checks = {
     "toolbar panel":            (at(400, 4), (30, 31, 36)),
