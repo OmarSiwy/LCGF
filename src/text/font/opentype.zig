@@ -19,6 +19,11 @@ pub const Error = error{
     MissingTable,
     /// Valid OpenType that this parser does not read (CFF outlines, an unknown table version).
     Unsupported,
+    /// Table contents contradict each other (a glyph id past the glyph count, contour ends
+    /// out of order).
+    Malformed,
+    /// The caller's output columns are full.
+    NoSpace,
 };
 
 /// A table tag as the big-endian u32 the directory stores: `tag("glyf")`.
@@ -181,6 +186,10 @@ pub const Face = struct {
     cmap: Cmap,
     /// `hmetric_count` (advance, left bearing) pairs, then one left bearing per further glyph.
     hmtx: []const u8,
+    /// Glyph offsets into `glyf`, `glyph_count + 1` of them; both empty when the face has no
+    /// TrueType outlines.
+    loca: []const u8,
+    glyf: []const u8,
     units_per_em: u16,
     /// Typographic line metrics from hhea: baseline to top (positive), to bottom (negative),
     /// and the extra gap between lines.
@@ -212,10 +221,15 @@ pub const Face = struct {
         const hmetric_count = try read(u16, hhea, 34);
         if (hmetric_count == 0 or hmetric_count > glyph_count) return error.Unsupported;
         const hmtx_len = @as(usize, hmetric_count) * 4 + @as(usize, glyph_count - hmetric_count) * 2;
+        const glyf = (try dir.find(tag("glyf"))) orelse &.{};
+        const loca_len = (@as(usize, glyph_count) + 1) * @as(usize, if (loca_format == 1) 4 else 2);
+        const loca = if (glyf.len == 0) &.{} else try sub(try dir.get(tag("loca")), 0, loca_len);
         return .{
             .dir = dir,
             .cmap = try Cmap.parse(try dir.get(tag("cmap"))),
             .hmtx = try sub(hmtx, 0, hmtx_len),
+            .loca = loca,
+            .glyf = glyf,
             .units_per_em = units_per_em,
             .ascender = try read(i16, hhea, 4),
             .descender = try read(i16, hhea, 6),
@@ -241,7 +255,132 @@ pub const Face = struct {
             .left_bearing = read(i16, face.hmtx, bearing) catch unreachable,
         };
     }
+
+    /// The glyf record of `g`; empty for a glyph without an outline (a space, or a face
+    /// without glyf).
+    pub fn glyphRecord(face: Face, g: Glyph) Error![]const u8 {
+        if (g >= face.glyph_count) return error.Malformed;
+        if (face.glyf.len == 0) return &.{};
+        const i: usize = g;
+        const start: usize, const end: usize = if (face.loca_long)
+            .{ try read(u32, face.loca, i * 4), try read(u32, face.loca, i * 4 + 4) }
+        else
+            .{ @as(usize, try read(u16, face.loca, i * 2)) * 2, @as(usize, try read(u16, face.loca, i * 2 + 2)) * 2 };
+        if (end < start) return error.Malformed;
+        return sub(face.glyf, start, end - start);
+    }
+
+    /// Appends the outline of `g` to `out`, in font units. A glyph without an outline appends
+    /// nothing. Fails with `error.NoSpace`, leaving `out` as it was, when the columns are full.
+    pub fn outline(face: Face, g: Glyph, out: *Outline) Error!void {
+        std.debug.assert(out.y.len == out.x.len and out.on.len == out.x.len);
+        const rec = try face.glyphRecord(g);
+        if (rec.len == 0) return;
+        const contours = try read(i16, rec, 0);
+        if (contours < 0) return error.Unsupported;
+        return simpleOutline(rec, @intCast(contours), out);
+    }
 };
+
+/// Glyph outlines as columns the caller owns. `outline` appends to them: `points` and `contours`
+/// count the rows in use, and the slice lengths are the capacity (`x`, `y`, `on` equally long).
+/// Contour `c` runs from `ends[c - 1] + 1` (or 0) to `ends[c]` inclusive. Off-curve points are
+/// quadratic control points; two in a row imply an on-curve point midway (TrueType).
+pub const Outline = struct {
+    x: []f32,
+    y: []f32,
+    on: []bool,
+    ends: []u32,
+    points: u32 = 0,
+    contours: u32 = 0,
+};
+
+// Simple glyph flag bits.
+const on_curve = 0x01;
+const x_short = 0x02;
+const y_short = 0x04;
+const repeat = 0x08;
+const x_same = 0x10; // with x_short: the byte is positive; without: dx is 0
+const y_same = 0x20;
+
+/// Decodes a simple glyph record (`contours` >= 0) into `out`. Two passes over the flags:
+/// the first finds where the x deltas end (which is where the y deltas start), the second
+/// reads both delta streams, so no flag buffer is needed.
+fn simpleOutline(rec: []const u8, contours: usize, out: *Outline) Error!void {
+    if (contours == 0) return;
+    const ends_at = 10;
+    const count = @as(usize, try read(u16, rec, ends_at + (contours - 1) * 2)) + 1;
+    if (out.x.len - out.points < count or out.ends.len - out.contours < contours) return error.NoSpace;
+    const instructions = try read(u16, rec, ends_at + contours * 2);
+    const flags_at = ends_at + contours * 2 + 2 + @as(usize, instructions);
+
+    var at = flags_at;
+    var x_bytes: usize = 0;
+    var p: usize = 0;
+    while (p < count) {
+        const f = try read(u8, rec, at);
+        at += 1;
+        var times: usize = 1;
+        if (f & repeat != 0) {
+            times += try read(u8, rec, at);
+            at += 1;
+        }
+        times = @min(times, count - p);
+        const size: usize = if (f & x_short != 0) 1 else if (f & x_same != 0) 0 else 2;
+        x_bytes += times * size;
+        p += times;
+    }
+
+    const base = out.points;
+    var xa = at;
+    var ya = at + x_bytes;
+    var fa = flags_at;
+    var x: i32 = 0;
+    var y: i32 = 0;
+    p = 0;
+    while (p < count) {
+        // The first pass read these flag bytes already.
+        const f = rec[fa];
+        fa += 1;
+        var times: usize = 1;
+        if (f & repeat != 0) {
+            times += rec[fa];
+            fa += 1;
+        }
+        times = @min(times, count - p);
+        for (0..times) |_| {
+            x +%= try coordDelta(rec, &xa, f, x_short, x_same);
+            y +%= try coordDelta(rec, &ya, f, y_short, y_same);
+            out.x[base + p] = @floatFromInt(x);
+            out.y[base + p] = @floatFromInt(y);
+            out.on[base + p] = f & on_curve != 0;
+            p += 1;
+        }
+    }
+
+    var prev: usize = 0;
+    for (0..contours) |c| {
+        const e = try read(u16, rec, ends_at + c * 2);
+        if (c > 0 and e <= prev) return error.Malformed;
+        prev = e;
+        out.ends[out.contours + c] = @intCast(base + e);
+    }
+    out.points += @intCast(count);
+    out.contours += @intCast(contours);
+}
+
+/// One coordinate delta of a simple glyph, read at `at.*`, which advances past it.
+inline fn coordDelta(rec: []const u8, at: *usize, f: u8, short: u8, same: u8) Error!i32 {
+    if (f & short != 0) {
+        const b: i32 = try read(u8, rec, at.*);
+        at.* += 1;
+        return if (f & same != 0) b else -b;
+    }
+    if (f & same != 0) return 0;
+    const d = try read(i16, rec, at.*);
+    at.* += 2;
+    return d;
+}
 
 // Test font: a subset of Liberation Sans 2.1.5 (SIL OFL 1.1), built by testdata/make.py.
 // Expected numbers come from fontTools reading the same file.
@@ -329,4 +468,54 @@ test "glyphs past the last long metric share its advance" {
     face.hmtx = "\x01\x00\x00\x05\x02\x00\xff\xfe\x00\x07";
     try std.testing.expectEqual(HMetrics{ .advance = 0x200, .left_bearing = -2 }, face.hMetrics(1));
     try std.testing.expectEqual(HMetrics{ .advance = 0x200, .left_bearing = 7 }, face.hMetrics(2));
+}
+
+fn expectOutline(out: Outline, xy: []const [2]f32, on: []const u1, ends: []const u32) !void {
+    try std.testing.expectEqual(xy.len, out.points);
+    for (xy, on, 0..) |p, o, i| {
+        try std.testing.expectEqual(p[0], out.x[i]);
+        try std.testing.expectEqual(p[1], out.y[i]);
+        try std.testing.expectEqual(o == 1, out.on[i]);
+    }
+    try std.testing.expectEqualSlices(u32, ends, out.ends[0..out.contours]);
+}
+
+test "simple glyph outlines of the test font" {
+    const face = try Face.parse(test_ttf, 0);
+    var x: [64]f32 = undefined;
+    var y: [64]f32 = undefined;
+    var on: [64]bool = undefined;
+    var ends: [8]u32 = undefined;
+    var out: Outline = .{ .x = &x, .y = &y, .on = &on, .ends = &ends };
+    // Expected points: fontTools glyf['o'] and glyf['V'] of test.ttf.
+    try face.outline(face.cmap.glyph('o'), &out);
+    try expectOutline(out, &.{
+        .{ 1053, 542 }, .{ 1053, 258 }, .{ 803, -20 },  .{ 565, -20 },  .{ 328, -20 },  .{ 86, 269 },
+        .{ 86, 542 },   .{ 86, 1102 },  .{ 571, 1102 }, .{ 819, 1102 }, .{ 1053, 829 }, .{ 864, 542 },
+        .{ 864, 766 },  .{ 731, 969 },  .{ 574, 969 },  .{ 416, 969 },  .{ 275, 762 },  .{ 275, 542 },
+        .{ 275, 328 },  .{ 414, 113 },  .{ 563, 113 },  .{ 725, 113 },  .{ 864, 321 },
+    }, &.{ 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0 }, &.{ 10, 22 });
+    // Appending: V's points follow o's and its contour end is offset by o's 23 points.
+    try face.outline(face.cmap.glyph('V'), &out);
+    try std.testing.expectEqual(32, out.points);
+    try std.testing.expectEqualSlices(u32, &.{ 10, 22, 31 }, out.ends[0..3]);
+    try std.testing.expectEqual(@as(f32, 782), out.x[23]);
+    try std.testing.expectEqual(@as(f32, 1357), out.x[31]);
+    try std.testing.expectEqual(@as(f32, 1409), out.y[31]);
+    // A space has no outline.
+    try face.outline(face.cmap.glyph(' '), &out);
+    try std.testing.expectEqual(32, out.points);
+}
+
+test "outline errors leave the columns as they were" {
+    const face = try Face.parse(test_ttf, 0);
+    var x: [8]f32 = undefined;
+    var y: [8]f32 = undefined;
+    var on: [8]bool = undefined;
+    var ends: [1]u32 = undefined;
+    var out: Outline = .{ .x = &x, .y = &y, .on = &on, .ends = &ends };
+    try std.testing.expectError(error.NoSpace, face.outline(face.cmap.glyph('o'), &out));
+    try std.testing.expectEqual(0, out.points);
+    try std.testing.expectEqual(0, out.contours);
+    try std.testing.expectError(error.Malformed, face.outline(face.glyph_count, &out));
 }
