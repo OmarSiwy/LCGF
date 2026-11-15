@@ -54,6 +54,11 @@ pub const Interaction = struct {
     drag_threshold: f32 = 4,
     /// Pointer position that `drag_delta` is measured from: the press, then the last frame.
     drag_from: [2]f32 = .{ 0, 0 },
+    /// `hot` once it has stayed hot for `hover_delay` seconds (tooltips, hover cards), or 0.
+    hover_intent: u32 = 0,
+    hover_delay: f32 = 0.5,
+    /// When `hot` last changed, as `Input.time` bits.
+    hot_at: u64 = 0,
 
     /// Advances by one frame, from last frame's geometry and this frame's pointer.
     pub fn step(s: *Interaction, prev: *const Tree, in: *const Input) void {
@@ -77,6 +82,7 @@ pub const Interaction = struct {
         // Capture, judged on the new `active` as `response` judges hover, so the release frame
         // already shows hover again.
         const owned = simd.orB(s.active == 0, s.active == under);
+        const hot_was = s.hot;
         s.under = under;
         s.hot = pick(u32, owned, under, 0);
         s.hot_node = pick(u32, owned, node, none);
@@ -94,6 +100,9 @@ pub const Interaction = struct {
         const due = simd.andB(simd.andB(s.active != 0, !fired), held_for >= s.long_time);
         s.long_pressed = pick(u32, due, s.active, 0);
         s.long_fired = simd.orB(fired, due);
+        s.hot_at = pick(u64, s.hot != hot_was, now, s.hot_at);
+        const rested = in.time - @as(f64, @bitCast(s.hot_at)) >= s.hover_delay;
+        s.hover_intent = pick(u32, rested, s.hot, 0);
 
         // Positions are selected as their bits, as the times are.
         const here: u64 = @bitCast(in.pointer);
@@ -628,4 +637,36 @@ test "Touches: each finger keeps the widget it pressed, by pointer id, whatever 
         try testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(s.response(.none))));
     }
     try testing.expectEqual(@as(usize, 6), f);
+}
+
+test "step: hover intent after the pointer rests on one widget for hover_delay" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var f: [12]Interaction = undefined;
+    // dt 0.2: moving within a from 0 s to 0.6 s, onto b at 0.8 s, back to a, then off.
+    const n = try play(&t,
+        \\frame
+        \\dt 0.2
+        \\pointer 20 20
+        \\frame
+        \\pointer 25 25
+        \\frame
+        \\pointer 22 22
+        \\frame
+        \\pointer 21 21
+        \\frame
+        \\pointer 70 20
+        \\frame
+        \\pointer 20 20
+        \\frame
+        \\pointer 150 80
+        \\frame
+    , &f);
+    try testing.expectEqual(@as(usize, 8), n);
+    const a = @backingInt(id_a);
+    var intent: [8]u32 = undefined;
+    for (f[0..n], &intent) |s, *i| i.* = s.hover_intent;
+    // Moving within a keeps its clock: 0.6 s >= 0.5 at frame 3 (0.4 s is not). Each change of
+    // widget restarts it; nothing under the pointer is no intent.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, a, 0, 0, 0, 0 }, &intent);
 }
