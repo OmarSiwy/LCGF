@@ -41,6 +41,7 @@ const src_bytes = blk: {
     var counter: lcgr.mem.Carver = .{ .buf = null };
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
+    _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
     break :blk counter.off;
 };
 var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -110,6 +111,7 @@ pub fn main(init: std.process.Init) !void {
     var carver: lcgr.mem.Carver = .{ .buf = &src_buffer };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
+    var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
     var sink: u64 = 0;
     var nodes: usize = 0;
     var texts: usize = 0;
@@ -138,7 +140,8 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .x);
         lcgr.layout.fit(t, .x);
         m[6] = now();
-        lcgr.layout.resolve(t, .x, in.viewport[0]);
+        lcgr.coefs.coefs(t, &sk, .x);
+        lcgr.coefs.resolveK(t, &sk, .x, in.viewport[0]);
         m[7] = now();
         lcgr.layout.textAvail(t, tx);
         font.wrap(tx);
@@ -146,7 +149,8 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .y);
         lcgr.layout.fit(t, .y);
         m[9] = now();
-        lcgr.layout.resolve(t, .y, in.viewport[1]);
+        lcgr.coefs.coefs(t, &sk, .y);
+        lcgr.coefs.resolveK(t, &sk, .y, in.viewport[1]);
         m[10] = now();
         lcgr.layout.place(t);
         m[11] = now();

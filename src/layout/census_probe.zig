@@ -27,3 +27,9 @@ export fn p_place(t: *Tree) void {
 export fn p_finalize(t: *Tree) void {
     lcgr.layout.finalize(t);
 }
+export fn p_coefs(t: *const Tree, k: *lcgr.coefs.Coefs) void {
+    lcgr.coefs.coefs(t, k, .x);
+}
+export fn p_resolve_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
+    lcgr.coefs.resolveK(t, k, .x, 800);
+}
