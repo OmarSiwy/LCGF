@@ -32,11 +32,9 @@ const attrs = .{
     .{ 3, "uv", "float32x4" },
     .{ 4, "fill", "unorm8x4" },
     .{ 5, "border_color", "unorm8x4" },
-    .{ 6, "radius", "float32x2" }, // radius and border, adjacent
+    .{ 6, "radii", "float32x4" },
+    .{ 7, "border", "float32" },
 };
-comptime {
-    std.debug.assert(@offsetOf(Quad, "border") == @offsetOf(Quad, "radius") + 4);
-}
 
 const Scene = struct {
     t: Tree,
@@ -123,11 +121,22 @@ fn nineSlices(t: *Tree) void {
     t.seal(0);
 }
 
+/// Per-corner radii, including a corner larger than half the box (capped) and a bordered tab.
+fn corners(t: *Tree) void {
+    Scene.row(t, &.{
+        .{ .fill = .rgb(90, 160, 255), .radii = .{ 0, 20, 40, 60 } },
+        .{ .fill = .rgb(240, 120, 80), .radius = 30, .radii = .{ -1, 0, -1, 0 }, .border = 4, .border_color = .white },
+        .{ .fill = .rgb(120, 220, 140), .radii = .{ 24, 24, 0, 0 } },
+        .{ .fill = .rgb(250, 210, 90), .radii = .{ 200, 4, 200, 4 } },
+    });
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
     .{ "images", images },
     .{ "nine-slice", nineSlices },
+    .{ "corners", corners },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;

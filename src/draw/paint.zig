@@ -43,7 +43,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .uv = c.uv[i],
             .fill = look.fill,
             .border_color = look.border_color,
-            .radius = look.radius,
+            .radii = c.radii[i],
             .border = look.border,
         };
         // Painted when either colour has alpha.
@@ -197,7 +197,7 @@ test "sweep 1: visible painted nodes become quads, every node its ops in paint o
     try testing.expectEqual([4]f32{ 0, 0, 1, 1 }, d.quads[1].uv);
     try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), d.quads[1].fill);
     try testing.expectEqual(Color.white.bitsOf(), d.quads[1].border_color);
-    try testing.expectEqual(4, d.quads[1].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, d.quads[1].radii);
     try testing.expectEqual(2, d.quads[1].border);
     try testing.expectEqual(sc.t.rect(Scene.plain).array(), d.quads[3].rect);
     // The op stream: quad, quad, text, custom, quad on texture 3, quad.

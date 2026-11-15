@@ -345,6 +345,9 @@ pub const Style = struct {
     material: Material = .solid,
     /// Passed through to the material's shader.
     params: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Per-corner radii: top-left, top-right, bottom-right, bottom-left. A negative corner
+    /// takes `radius`, so the default is `radius` on all four.
+    radii: [4]f32 = .{ -1, -1, -1, -1 },
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics

@@ -121,6 +121,9 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             /// Texture coordinates u0, v0, u1, v1 of the quad's corners (`Style.uv`). Kept out
             /// of `Look`, which is a fixed GPU row; read only by paint.
             uv: Col([4]f32),
+            /// Corner radii top-left, top-right, bottom-right, bottom-left (`Style.radii`, with
+            /// negative corners taken from `Style.radius`).
+            radii: Col([4]f32),
 
             // ---- semantics, read by the host to build an accessibility tree
             role: Col(u8),
@@ -196,6 +199,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                 .material = @backingInt(s.material),
             };
             c.uv[i] = s.uv;
+            const corners: @Vector(4, f32) = s.radii;
+            c.radii[i] = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
             c.role[i] = @backingInt(s.role);
             c.value[i] = s.value;
             c.text[i] = none;
@@ -323,8 +328,9 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, radii, role,
+    // value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 16 + 1 + 4, rowBytes(Tree.Columns));
 }
 
 test "Look: one 36-byte row with the C layout the GPU reads" {
@@ -419,6 +425,7 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqualSlices(f32, &.{ 1, 0, 0 }, c.nkids[0..3]);
     try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
     try testing.expectEqual(4, c.look[a].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, c.radii[a]);
     try testing.expectEqual(9, c.look[a].texture);
     try testing.expectEqual(@backingInt(types.Role.button), c.role[a]);
     try testing.expectEqual(0.25, c.value[a]);

@@ -18,7 +18,8 @@ struct Instance {
     @location(3) uv: vec4f,
     @location(4) fill: vec4f,
     @location(5) border_color: vec4f,
-    @location(6) radius_border: vec2f,
+    @location(6) radii: vec4f,
+    @location(7) border: f32,
 }
 
 struct Frag {
@@ -27,12 +28,13 @@ struct Frag {
     @location(1) uv: vec2f,
     @location(2) pixel: vec2f,
     @location(3) @interpolate(flat) half: vec2f,
-    @location(4) @interpolate(flat) radius_border: vec2f,
+    @location(4) @interpolate(flat) radii: vec4f,
     @location(5) @interpolate(flat) fill: vec4f,
     @location(6) @interpolate(flat) border_color: vec4f,
     @location(7) @interpolate(flat) clip: vec4f,
     @location(8) @interpolate(flat) params: vec4u,
     @location(9) @interpolate(flat) uv_rect: vec4f,
+    @location(10) @interpolate(flat) border: f32,
 }
 
 @vertex
@@ -48,13 +50,22 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     out.uv = mix(inst.uv.xy, inst.uv.zw, (p - inst.rect.xy) / max(inst.rect.zw - inst.rect.xy, vec2f(1e-6)));
     out.pixel = p;
     out.half = (inst.rect.zw - inst.rect.xy) * 0.5;
-    out.radius_border = inst.radius_border;
+    out.radii = inst.radii;
+    out.border = inst.border;
     out.fill = inst.fill;
     out.border_color = inst.border_color;
     out.clip = inst.clip;
     out.params = inst.params;
     out.uv_rect = inst.uv;
     return out;
+}
+
+// radii: top-left, top-right, bottom-right, bottom-left; y points down. Picks the radius of the
+// quadrant p is in, capped by the half size.
+fn corner_radius(p: vec2f, half: vec2f, radii: vec4f) -> f32 {
+    let right = select(radii.y, radii.z, p.y > 0.0);
+    let left = select(radii.x, radii.w, p.y > 0.0);
+    return min(select(left, right, p.x > 0.0), min(half.x, half.y));
 }
 
 fn rounded_box(p: vec2f, half: vec2f, r: f32) -> f32 {
@@ -126,12 +137,12 @@ fn material(in: Frag) -> vec4f {
 
 @fragment
 fn fs(in: Frag) -> @location(0) vec4f {
-    let r = min(in.radius_border.x, min(in.half.x, in.half.y));
+    let r = corner_radius(in.local, in.half, in.radii);
     let d = rounded_box(in.local, in.half, r) * globals.scale;
     // Coverage instead of discard: one physical pixel of antialiasing, no branch.
     let shape = clamp(0.5 - d, 0.0, 1.0);
-    let inner = clamp(0.5 - (d + in.radius_border.y * globals.scale), 0.0, 1.0);
-    let has_border = step(0.001, in.radius_border.y);
+    let inner = clamp(0.5 - (d + in.border * globals.scale), 0.0, 1.0);
+    let has_border = step(0.001, in.border);
     let is_shadow = in.params.x == k_shadow;
     let color = select(mix(in.border_color, material(in), mix(1.0, inner, has_border)), in.fill, is_shadow);
     let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);

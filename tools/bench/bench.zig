@@ -75,8 +75,13 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
     const bytes = std.mem.sliceAsBytes;
     if (want.quad_len != got.quad_len or want.run_len != got.run_len or
         want.custom_len != got.custom_len or want.cmd_len != got.cmd_len) return error.PaintDiffers;
-    if (!eql(u8, want.quadBytes(), got.quadBytes()) or
-        !eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
+    // Quads field by field: src's row has per-corner radii where the prototype has one radius.
+    for (want.quads[0..want.quad_len], got.quads[0..got.quad_len]) |w, g| {
+        if (!eql(u8, bytes(&[4][4]f32{ w.rect, w.clip, w.params, w.uv }), bytes(&[4][4]f32{ g.rect, g.clip, g.params, g.uv })) or
+            w.fill != g.fill or w.border_color != g.border_color or w.border != g.border or
+            !eql(f32, &@as([4]f32, @splat(w.radius)), &g.radii)) return error.PaintDiffers;
+    }
+    if (!eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
         !eql(u8, bytes(want.customs[0..want.custom_len]), bytes(got.customs[0..got.custom_len])) or
         !eql(u8, want.strings, got.strings)) return error.PaintDiffers;
     const n = want.cmd_len;
@@ -205,6 +210,7 @@ pub fn main(init: std.process.Init) !void {
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
         @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
+        for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;
