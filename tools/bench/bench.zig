@@ -46,6 +46,7 @@ const src_bytes = blk: {
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
+    _ = lcgr.incremental.Dirty.init(&counter, limits.nodes);
     _ = Customs.init(&counter, limits.customs);
     _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     break :blk counter.off;
@@ -82,7 +83,55 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
     }
 }
 
-var samples: [pass_names.len][frames]u64 = undefined;
+/// The frame loop's passes, then incr_names.
+var samples: [all_names.len][frames]u64 = undefined;
+
+/// Incremental layout after the frame loop, on the last frame's tree: a full `layout.run` for
+/// reference, then one leaf's height changed and `incremental.update` each frame, first as the
+/// scene is (no px container, so the change reaches the root) and then with every row pinned to
+/// its own height (rows become relayout boundaries, so it reaches one row).
+const incr_names = [_][]const u8{ "full.run", "incr.root", "incr.row" };
+const all_names = pass_names ++ incr_names;
+const incr_samples = samples[pass_names.len..];
+
+fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f32) void {
+    lcgr.layout.run(t, tx, viewport);
+    for (&incr_samples[0]) |*s| {
+        const t0 = now();
+        lcgr.layout.run(t, tx, viewport);
+        s.* = now() - t0;
+    }
+    // The 12 x 12 accent leaf of the middle row.
+    var leaf: u32 = 0;
+    var seen: u32 = 0;
+    for (0..t.len) |i| {
+        if (t.c.min[0][i] != 12 or t.c.max[0][i] != 12 or t.c.max[1][i] != 12) continue;
+        seen += 1;
+        if (seen == rows / 2) leaf = @intCast(i);
+    }
+    std.debug.assert(leaf != 0);
+    const row = t.c.parent[leaf];
+    for (1..3) |v| {
+        if (v == 2) {
+            // Pin every row to the height it has: the layout is the same, the rows are boundaries.
+            for (0..t.len) |i| {
+                if (t.c.parent[i] != t.c.parent[row] or i == 0) continue;
+                t.c.min[1][i] = t.c.size[1][i];
+                t.c.max[1][i] = t.c.size[1][i];
+            }
+            lcgr.layout.run(t, tx, viewport);
+        }
+        for (&incr_samples[v], 0..) |*s, k| {
+            const h: f32 = if (k % 2 == 0) 14 else 12;
+            t.c.min[1][leaf] = h;
+            t.c.max[1][leaf] = h;
+            d.mark(leaf, .y);
+            const t0 = now();
+            lcgr.incremental.update(t, tx, d, viewport);
+            s.* = now() - t0;
+        }
+    }
+}
 var values: [rows]f32 = @splat(0.5);
 var checks: [rows]bool = @splat(false);
 
@@ -133,6 +182,7 @@ pub fn main(init: std.process.Init) !void {
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
+    var sdirty = lcgr.incremental.Dirty.init(&carver, limits.nodes);
     var scu = Customs.init(&carver, limits.customs);
     var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     var sink: u64 = 0;
@@ -213,9 +263,10 @@ pub fn main(init: std.process.Init) !void {
         while (linux.read(0, &byte, 1) > 0) {}
         return;
     }
+    incremental(&st, &stx, &sdirty, in.viewport);
     try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
-    for (pass_names, &samples) |name, *s| {
+    for (all_names, &samples) |name, *s| {
         std.mem.sort(u64, s, {}, std.sort.asc(u64));
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
     }
@@ -225,7 +276,7 @@ pub fn main(init: std.process.Init) !void {
     var json_buf: [4096]u8 = undefined;
     var j = std.Io.Writer.fixed(&json_buf);
     try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ nodes, texts, frames, ui.simd.lanes });
-    for (pass_names, &samples, 0..) |name, *s, p| {
+    for (all_names, &samples, 0..) |name, *s, p| {
         try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
     }
     try j.writeAll("\n}}\n");
