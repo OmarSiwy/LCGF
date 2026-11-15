@@ -6,12 +6,14 @@
 //!
 //!   direction  forward sweep   every node's sign: +1 left to right, -1 right to left
 //!   startEnd   SIMD            logical start/end padding written as left/right
+//!   factor     scalar          an `Align` factor as seen under a sign, for code placing on x
 //!   mirror     forward sweep   after `place`: x positions reflected inside RTL parents
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
 const Tree = @import("../core/tree.zig").Tree;
+const Align = @import("../core/types.zig").Align;
 
 /// Inline direction of a node's content. `inherit` takes the parent's; the root inherits
 /// left to right.
@@ -98,6 +100,16 @@ pub fn startEnd(t: *Tree, r: *const Rtl) void {
         simd.storeF(lo, i, l + logical * (left - l));
         simd.storeF(hi, i, h + logical * (right - h));
     }
+}
+
+/// The share of leftover space placed on the left for `a` (prototype `Align.factor`) under
+/// `sign`: `f` left to right, `1 - f` right to left, as `f + (1 - sign) / 2 * (1 - 2f)`. The
+/// layout passes do not need it: `mirror` reflects the result, which mirrors every alignment
+/// at once. It is for code that places along x by itself from a node's alignment and
+/// direction, such as a text run aligned inside its box.
+pub fn factor(a: Align, sign: f32) f32 {
+    const f = Align.factor[@backingInt(a)];
+    return f + (1 - sign) * 0.5 * (1 - 2 * f);
 }
 
 /// Reflects every child of a right-to-left parent along x inside the parent's content box, and
@@ -279,4 +291,51 @@ test "startEnd: start padding is on the left left to right and on the right righ
     // Running it twice gives the same padding.
     startEnd(t, &s.r);
     try testing.expectEqualSlices(f32, &.{ 2, 10 }, &.{ t.c.pad_lo[0][row], t.c.pad_hi[0][row] });
+}
+
+test "factor: start and end swap under -1, center stays" {
+    try testing.expectEqual(0, factor(.start, 1));
+    try testing.expectEqual(1, factor(.end, 1));
+    try testing.expectEqual(1, factor(.start, -1));
+    try testing.expectEqual(0, factor(.end, -1));
+    try testing.expectEqual(0.5, factor(.center, -1));
+    try testing.expectEqual(0.5, factor(.center, 1));
+}
+
+test "mirror: under RTL, alignment lands where the mirrored factor puts it left to right" {
+    // One child, aligned along x as the parent's main axis (a row) and as its cross axis (a
+    // column), for every Align: mirrored layout == plain layout with the x factor from `factor`.
+    inline for (.{ .start, .center, .end }) |al| {
+        inline for (.{ types.Axis.x, types.Axis.y }) |d| {
+            var rtl_: Scene = .{};
+            var ltr_: Scene = .{};
+            rtl_.init();
+            ltr_.init();
+            inline for (.{ &rtl_, &ltr_ }) |sc| {
+                const t = &sc.t;
+                const p = t.push(0, .none, &.{ .dir = d, .size = .{ .px(200), .px(50) }, .pad = .{ 3, 0, 7, 0 }, .main = al, .cross = al });
+                t.seal(t.push(p, .none, &.{ .size = .{ .px(40), .px(10) } }));
+                t.seal(p);
+                sc.r.reset();
+            }
+            rtl_.r.set(0, .rtl);
+            // The plain layout's x factor, as `factor` gives it for -1: the main one for a row,
+            // the cross one for a column. y is not mirrored.
+            if (d == .x) ltr_.t.c.align_main[0] = factor(al, -1) else ltr_.t.c.align_cross[0] = factor(al, -1);
+            rtl_.run(.{ 200, 50 });
+            ltr_.run(.{ 200, 50 });
+            try testing.expectEqual(ltr_.t.rect(1), rtl_.t.rect(1));
+        }
+    }
+    // Spelled out for the row: inner box 3..193; start puts the 40 px child at the right.
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const p = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(200), .px(50) }, .pad = .{ 3, 0, 7, 0 }, .cross = .end });
+    t.seal(t.push(p, .none, &.{ .size = .{ .px(40), .px(10) } }));
+    t.seal(p);
+    s.r.reset();
+    s.r.set(p, .rtl);
+    s.run(.{ 200, 50 });
+    try testing.expectEqual(rect(153, 40, 193, 50), t.rect(1));
 }
