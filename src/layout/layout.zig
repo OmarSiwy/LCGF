@@ -93,7 +93,8 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         nat_[i] = nat;
         // Fold into the parent: a sum along its main axis, a max across it.
         const p = parent[i];
-        const contrib = nat * flow[i];
+        var contrib = nat * flow[i];
+        if (flexed) contrib += fx.margin(a, i) * flow[i];
         const sum = fit_[p] + contrib;
         const mx = @max(fit_[p], contrib);
         fit_[p] = mx + main[p] * (sum - mx);
@@ -162,7 +163,9 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         var share = free * grow[i] * grow_inv[p];
         if (flexed) share += fx.secondShare(t, a, i, p, nat + share);
         // Across it: stretch when the node grows on this axis.
-        const stretched = nat + b01(grow[i] > 0) * (inner - nat);
+        // Margins (flex only) are outside the node: it stretches to the inner size less its own.
+        const m = if (flexed) fx.margin(a, i) else 0;
+        const stretched = nat + b01(grow[i] > 0) * (inner - m - nat);
         const flowed = stretched + main * (nat + share - stretched);
         // A percentage replaces both.
         const has_pct = b01(pct[i] > 0);
@@ -172,14 +175,14 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         const fl = flow[i];
         var s = floating + fl * (in_flow - floating);
         // Shrinkable nodes give way when the parent has no room for them.
-        const room = @max(inner - main * (taken - nat), 0);
+        const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
         var cut = shrink[i] * fl * @max(s - room, 0);
         if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
         s -= cut;
         if (flexed) s = fx.aspectSize(t, a, i, s);
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;
-        used[p] += s * fl;
+        used[p] += (s + m) * fl;
         if (flexed) fx.secondRound(t, a, i);
     }
 }
@@ -232,13 +235,16 @@ fn placeOf(t: *Tree, fx: anytype) void {
             const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
             var cross = align_cross[p];
             if (flexed) cross = fx.selfCross(i, cross);
-            const across = @max(inner - size[a][i], 0) * cross;
-            const along = lead + cursor[p];
+            const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
+            const m = if (flexed) fx.margin(a, i) else 0;
+            const across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
+            const along = lead + cursor[p] + m_lo;
             const in_flow = across + main[a][p] * (along - across);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
         }
         // Advance along whichever axis is the parent's main one.
-        const step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
+        var step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
+        if (flexed) step += fx.margin(0, i) * main[0][p] + fx.margin(1, i) * main[1][p];
         cursor[p] += (step + gap[p]) * fl;
     }
 }

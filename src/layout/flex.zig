@@ -30,6 +30,9 @@ pub const Flex = struct {
         /// Cross-axis alignment factor (`Align.factor`) that replaces the parent's for this
         /// node; -1 to use the parent's.
         self_cross: []f32,
+        /// Space outside the node before and after it on each axis (left, top / right, bottom).
+        margin_lo: [2][]f32,
+        margin_hi: [2][]f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -58,6 +61,11 @@ pub const Flex = struct {
         /// Where this node sits across its parent's main axis, instead of the parent's
         /// `Style.cross` (CSS `align-self`). null keeps the parent's.
         cross: ?types.Align = null,
+        /// left, top, right, bottom: space kept outside the node. In flow it adds to what the
+        /// node takes from its parent (natural size, used space, the cursor step) and is taken
+        /// off the room it may stretch or shrink into; the node sits past its leading margin. A
+        /// floating node ignores it. Margins do not collapse.
+        margin: [4]f32 = @splat(0),
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -72,6 +80,10 @@ pub const Flex = struct {
         fx.c.aspect[i] = s.aspect;
         fx.c.shrink[i] = s.shrink;
         fx.c.regrow[i] = b01(s.regrow);
+        inline for (0..2) |a| {
+            fx.c.margin_lo[a][i] = s.margin[a];
+            fx.c.margin_hi[a][i] = s.margin[a + 2];
+        }
         fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
     }
 
@@ -104,6 +116,11 @@ pub const Flex = struct {
     /// resolve: node `i`'s second-round share, given its first-round size `first`.
     pub inline fn secondShare(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, first: f32) f32 {
         return t.c.grow[a][i] * fx.c.grow_extra[p] * b01(first < t.c.max[a][i]);
+    }
+
+    /// Both margins of node `i` on axis `a`: what it takes beyond its own size.
+    pub inline fn margin(fx: *const Flex, a: u1, i: usize) f32 {
+        return fx.c.margin_lo[a][i] + fx.c.margin_hi[a][i];
     }
 
     /// place: the cross-axis factor for node `i`, its own or the parent's `parent_factor`.
@@ -534,4 +551,66 @@ test "cross: a floating node ignores it, as it ignores the parent's" {
     s.fx.set(f, &.{ .cross = .end });
     s.runFlex(100, 100);
     try testing.expectEqual(0, t.c.pos[1][f]);
+}
+
+test "margin: adds to the parent's natural size and to the cursor step; the node sits inside it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    const row = t.push(root, .none, &.{ .dir = .x, .gap = 2 });
+    const a = t.push(row, .none, &.{ .size = .{ .px(10), .px(10) } });
+    const b = t.push(row, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(row);
+    s.fx.set(a, &.{ .margin = .{ 1, 2, 3, 4 } });
+    s.runFlex(300, 300);
+    // x: 1 + 10 + 3 + gap 2 + 10; y: the taller of 2 + 10 + 4 and 10.
+    try testing.expectEqual([2]f32{ 26, 16 }, s.size(row));
+    try testing.expectEqual([2]f32{ 1, 2 }, [2]f32{ t.c.pos[0][a], t.c.pos[1][a] });
+    try testing.expectEqual(1 + 10 + 3 + 2, t.c.pos[0][b]);
+    // used holds sizes and margins; gaps are counted apart (gap_total).
+    try testing.expectEqual(24, t.c.used[0][row]);
+}
+
+test "margin: a stretched or grown node fills the room less its margins" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(20), .fill } });
+    s.fx.set(a, &.{ .margin = .{ 5, 5, 5, 5 } });
+    s.fx.set(b, &.{ .margin = .{ 0, 10, 0, 0 } });
+    s.runFlex(100, 50);
+    try testing.expectEqual([2]f32{ 70, 40 }, s.size(a));
+    try testing.expectEqual([2]f32{ 20, 40 }, s.size(b));
+    try testing.expectEqual([2]f32{ 5, 5 }, [2]f32{ t.c.pos[0][a], t.c.pos[1][a] });
+    try testing.expectEqual([2]f32{ 80, 10 }, [2]f32{ t.c.pos[0][b], t.c.pos[1][b] });
+}
+
+test "margin: alignment places the margin box; shrink makes room for it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) }, .main = .end, .cross = .end });
+    const a = t.push(root, .none, &.{ .size = .{ .px(20), .px(20) } });
+    s.fx.set(a, &.{ .margin = .{ 0, 0, 10, 5 } });
+    const w = t.push(root, .none, &.{ .shrink = true });
+    _ = t.push(w, .none, &.{ .size = .{ .px(90), .px(1) } });
+    t.seal(w);
+    s.runFlex(100, 50);
+    // 20 + 10 + 90 = 120 in 100: w gives up 20. Everything fits, so main = end moves nothing.
+    try testing.expectEqual(70, s.size(w)[0]);
+    try testing.expectEqual(0, t.c.pos[0][a]);
+    try testing.expectEqual(30, t.c.pos[0][w]);
+    // Across: 50 - 20 - 5 = 25 before a.
+    try testing.expectEqual(25, t.c.pos[1][a]);
+}
+
+test "margin: a floating node ignores it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(100), .px(50) } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .px(10), .px(10) } });
+    s.fx.set(f, &.{ .margin = @splat(7) });
+    s.runFlex(100, 50);
+    try testing.expectEqual([2]f32{ 0, 0 }, [2]f32{ t.c.pos[0][f], t.c.pos[1][f] });
+    try testing.expectEqual(0, t.c.fit[0][root]);
 }
