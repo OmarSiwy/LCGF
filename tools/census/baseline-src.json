@@ -33,5 +33,15 @@
     "jcc": 2,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_hit": {
+    "jcc": 4,
+    "back": 1,
+    "short_fwd": 1
+  },
+  "p_hit_near": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
   }
 }

@@ -114,3 +114,96 @@ test "near: the closest node within slop wins, a node under the point always win
     const probes = [_][2]f32{ .{ 0, 0 }, .{ 40, 20 }, .{ 39, 39 }, .{ 45, 20 }, .{ 50, 40 }, .{ 89, 0 } };
     for (probes) |p| try testing.expectEqual(at(&t, p[0], p[1], .any), near(&t, p[0], p[1], .any, 0));
 }
+
+/// Scalar references, written the obvious way, for the SIMD sweeps to match.
+fn atScalar(t: *const Tree, x: f32, y: f32, want: Sense) u32 {
+    const c = &t.c;
+    var found: u32 = none;
+    for (0..t.len) |i| {
+        const r: types.Rect = .{ .x0 = c.vis[0][i], .y0 = c.vis[1][i], .x1 = c.vis[2][i], .y1 = c.vis[3][i] };
+        if (r.contains(x, y) and (c.sense[i] & @as(u8, @bitCast(want))) != 0) found = @intCast(i);
+    }
+    return found;
+}
+fn nearScalar(t: *const Tree, x: f32, y: f32, want: Sense, slop: f32) u32 {
+    const c = &t.c;
+    var found: u32 = none;
+    var best: f32 = types.inf;
+    for (0..t.len) |i| {
+        if (c.visible[i] == 0 or (c.sense[i] & @as(u8, @bitCast(want))) == 0) continue;
+        const dx = @max(c.vis[0][i] - x, x - c.vis[2][i], 0);
+        const dy = @max(c.vis[1][i] - y, y - c.vis[3][i], 0);
+        const inside = x >= c.vis[0][i] and x < c.vis[2][i] and y >= c.vis[1][i] and y < c.vis[3][i];
+        const d = if (inside) 0 else @max(dx * dx + dy * dy, std.math.floatTrueMin(f32));
+        if (d <= slop * slop and d <= best) {
+            best = d;
+            found = @intCast(i);
+        }
+    }
+    return found;
+}
+
+/// 40 floating 30 x 30 boxes scattered over a clipping 200 x 200 root, overlapping each other
+/// and spilling past the clip, with senses that vary by row. Rows run past several vectors at
+/// every lane count, so ties across lanes and across steps are both exercised.
+fn scattered(raw: []align(mem.column_align) u8) Tree {
+    const layout = @import("../layout/layout.zig");
+    const Texts = @import("../core/texts.zig").Texts;
+    var carver: mem.Carver = .{ .buf = raw };
+    var t = Tree.init(&carver, 64);
+    var tx = Texts.init(&carver, 1);
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) }, .clip = true });
+    var seed: u32 = 12345;
+    for (0..40) |k| {
+        seed = seed *% 1103515245 +% 12345;
+        const ox: f32 = @floatFromInt((seed >> 8) % 220);
+        const oy: f32 = @floatFromInt((seed >> 20) % 220);
+        const i = t.push(root, .none, &.{ .float = true, .offset = .{ ox - 10, oy - 10 }, .size = .{ .px(30), .px(30) } });
+        t.c.sense[i] = @intCast(k % 5); // 0 (inert), hover, click, both, drag
+    }
+    t.seal(root);
+    layout.run(&t, &tx, .{ 200, 200 });
+    return t;
+}
+
+test "at and near match the scalar references on a scattered, clipped, overlapping tree" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    const t = scattered(&raw);
+    const wants = [_]Sense{ .any, .{ .hover = true }, .{ .click = true }, .{ .drag = true } };
+    var hits: u32 = 0;
+    var y: f32 = -12;
+    while (y < 215) : (y += 3.5) {
+        var x: f32 = -12;
+        while (x < 215) : (x += 3.5) {
+            for (wants) |w| {
+                const got = at(&t, x, y, w);
+                try testing.expectEqual(atScalar(&t, x, y, w), got);
+                hits += @intFromBool(got != none);
+                for ([_]f32{ 0, 2, 9 }) |slop|
+                    try testing.expectEqual(nearScalar(&t, x, y, w, slop), near(&t, x, y, w, slop));
+            }
+        }
+    }
+    // The grid did find things; an always-`none` sweep would pass the comparisons otherwise.
+    try testing.expect(hits > 100);
+}
+
+test "at: nothing is hit outside the clip, in an inert node, or in the padding rows" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var t = twoButtons(&raw);
+    // Outside the root, and inside the root but on no sensing node.
+    try testing.expectEqual(none, at(&t, 300, 20, .any));
+    try testing.expectEqual(none, at(&t, 150, 80, .any));
+    // A stale row past `len` with a big rect: finalize zeroed its sense, so it is never hit.
+    const pad = t.len;
+    t.c.vis[0][pad] = -1000;
+    t.c.vis[1][pad] = -1000;
+    t.c.vis[2][pad] = 1000;
+    t.c.vis[3][pad] = 1000;
+    try testing.expectEqual(none, at(&t, 150, 80, .any));
+    try testing.expectEqual(none, near(&t, 150, 80, .any, 20)); // 60 px from b
+    // An empty tree hits nothing.
+    t.len = 0;
+    try testing.expectEqual(none, at(&t, 20, 20, .any));
+    try testing.expectEqual(none, near(&t, 20, 20, .any, 8));
+}
