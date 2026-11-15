@@ -1,0 +1,282 @@
+//! Paragraph layout: shaped glyphs broken into lines and placed. Tier 0.
+//!
+//! The data flow, over columns the caller owns:
+//!
+//!   text ──shape──► Glyphs (px) ──breakLines──► Lines ──place──► Glyphs.x, Lines.top/baseline
+//!
+//! `Glyphs` is one paragraph's shaped glyphs in pixels, in text order (one left-to-right run;
+//! bidi reordering is not done here). `breakLines` walks the UAX #14 break opportunities of the
+//! text (src/text/unicode/line.zig) and fills lines greedily: a line takes whole segments (a
+//! word and the spaces after it) while the width of its ink fits; trailing spaces hang past the
+//! edge and do not count. A segment wider than the width on its own is broken between clusters,
+//! so no glyph is ever split. A mandatory break (newline) always ends a line.
+//!
+//! This is a scan over one paragraph's glyphs with a decision per segment, like shaping: it is
+//! not a row pass over the tree, and its branches are on the text, not on per-node columns.
+//! Ported from the role of `fonts.Mono.wrap` in prototype/ui.zig: Mono counts whole glyphs per
+//! line; this breaks real advances at real opportunities.
+
+const std = @import("std");
+const shape = @import("../shape/shape.zig");
+const property = @import("../unicode/property.zig");
+const utf8 = @import("../unicode/utf8.zig");
+const LineBreaks = @import("../unicode/line.zig").LineBreaks;
+
+/// Widths may exceed the limit by this much and still fit: layout hands back the width it was
+/// given after adding and removing padding, which can differ from it in the last bit.
+pub const slack: f32 = 1.0 / 64.0;
+
+/// A paragraph's glyphs in pixels, in text order. Capacity is the slices' length, all equal.
+pub const Glyphs = struct {
+    glyph: []u16,
+    /// Byte offset in the paragraph's text of the first character of the glyph's cluster.
+    cluster: []u32,
+    /// Pen advance after the glyph, px.
+    advance: []f32,
+    /// Where the glyph is drawn relative to its pen position, px, y up.
+    x_offset: []f32,
+    y_offset: []f32,
+    /// Written by `place`: the pen x of the glyph, px from the paragraph's left edge.
+    x: []f32,
+    len: u32 = 0,
+
+    /// Appends a shaped run at `scale` px per font unit (px / units_per_em). `base` is the byte
+    /// offset of the run's text in the paragraph's text.
+    pub fn append(g: *Glyphs, run: *const shape.Run, scale: f32, base: u32) error{NoSpace}!void {
+        if (g.glyph.len - g.len < run.len) return error.NoSpace;
+        for (0..run.len) |k| {
+            const at = g.len + k;
+            g.glyph[at] = run.glyph[k];
+            g.cluster[at] = base + run.cluster[k];
+            g.advance[at] = @as(f32, @floatFromInt(run.advance[k])) * scale;
+            g.x_offset[at] = @as(f32, @floatFromInt(run.x_offset[k])) * scale;
+            g.y_offset[at] = @as(f32, @floatFromInt(run.y_offset[k])) * scale;
+            g.x[at] = 0;
+        }
+        g.len += run.len;
+    }
+};
+
+/// A paragraph's lines, top to bottom. Glyph ranges are rows of `Glyphs`.
+pub const Lines = struct {
+    /// First glyph of the line.
+    first: []u32,
+    /// One past the last glyph, trailing spaces and the newline included.
+    end: []u32,
+    /// One past the last glyph with ink: the glyphs to draw are `first..ink`.
+    ink: []u32,
+    /// Byte offset of the line's text; it runs to the next line's `start` (or the text's end).
+    start: []u32,
+    /// Width of the ink, px: from the line's pen start to the end of its last inked glyph.
+    width: []f32,
+    /// 1.0 when the line ends at a mandatory break or the end of the text.
+    hard: []f32,
+    /// Written by `place`: left edge, top, baseline and height, px from the paragraph's top left.
+    x: []f32,
+    top: []f32,
+    baseline: []f32,
+    height: []f32,
+    len: u32 = 0,
+};
+
+/// Vertical metrics of a font at a size, px: ascender above the baseline, descender below it
+/// (positive), and the gap after a line.
+pub const Metrics = struct {
+    ascent: f32,
+    descent: f32,
+    gap: f32 = 0,
+
+    /// The face's hhea metrics at `px` pixels per em.
+    pub fn of(face: *const @import("../font/opentype.zig").Face, px: f32) Metrics {
+        const s = px / @as(f32, @floatFromInt(face.units_per_em));
+        return .{
+            .ascent = @as(f32, @floatFromInt(face.ascender)) * s,
+            .descent = -@as(f32, @floatFromInt(face.descender)) * s,
+            .gap = @as(f32, @floatFromInt(face.line_gap)) * s,
+        };
+    }
+
+    pub fn height(m: Metrics) f32 {
+        return m.ascent + m.descent + m.gap;
+    }
+};
+
+/// Breaks the glyphs of `text` (shaped from it, so clusters are offsets into it) into lines no
+/// wider than `width` px. Fills `lines` from row 0; `error.NoSpace` when it has too few rows.
+/// Empty text, and text ending in a newline, end with an empty line (where a caret goes).
+pub fn breakLines(g: *const Glyphs, text: []const u8, width: f32, lines: *Lines) error{NoSpace}!void {
+    lines.len = 0;
+    const limit = width + slack;
+    var first: u32 = 0; // first glyph of the open line
+    var x0: f32 = 0; // pen at `first`, from the paragraph's start
+    var gi: u32 = 0;
+    var pen: f32 = 0; // pen at `gi`
+    var it: LineBreaks = .{ .text = text };
+    while (it.next()) |o| {
+        // The segment: glyphs whose cluster starts before the opportunity.
+        const seg = gi;
+        const seg_pen = pen;
+        var ink: f32 = 0;
+        var inked = false;
+        while (gi < g.len and g.cluster[gi] < o.pos) : (gi += 1) {
+            pen += g.advance[gi];
+            const space = isSpace(text, g.cluster[gi]);
+            ink = if (space) ink else pen;
+            inked = inked or !space;
+        }
+        if (inked and seg > first and ink - x0 > limit) {
+            try push(lines, g, text, first, seg, false);
+            first = seg;
+            x0 = seg_pen;
+        }
+        if (inked and ink - x0 > limit) {
+            // Wider than a line on its own: break between clusters.
+            var k = first;
+            var kp = x0;
+            while (k < gi) {
+                var nk = k;
+                var np = kp;
+                while (nk < gi and g.cluster[nk] == g.cluster[k]) : (nk += 1) np += g.advance[nk];
+                if (!isSpace(text, g.cluster[k]) and k > first and np - x0 > limit) {
+                    try push(lines, g, text, first, k, false);
+                    first = k;
+                    x0 = kp;
+                }
+                k = nk;
+                kp = np;
+            }
+        }
+        if (o.mandatory) {
+            try push(lines, g, text, first, gi, true);
+            first = gi;
+            x0 = pen;
+        }
+    }
+    if (lines.len == 0 or endsInBreak(text)) try push(lines, g, text, g.len, g.len, true);
+}
+
+fn push(lines: *Lines, g: *const Glyphs, text: []const u8, first: u32, end: u32, hard: bool) error{NoSpace}!void {
+    const k = lines.len;
+    if (k == lines.first.len) return error.NoSpace;
+    var ink = first;
+    var pen: f32 = 0;
+    var width: f32 = 0;
+    for (first..end) |i| {
+        pen += g.advance[i];
+        const space = isSpace(text, g.cluster[i]);
+        ink = if (space) ink else @intCast(i + 1);
+        width = if (space) width else pen;
+    }
+    lines.first[k] = first;
+    lines.end[k] = end;
+    lines.ink[k] = ink;
+    lines.start[k] = if (first < g.len) g.cluster[first] else @intCast(text.len);
+    lines.width[k] = width;
+    lines.hard[k] = @floatFromInt(@intFromBool(hard));
+    lines.len = k + 1;
+}
+
+/// Whether the character at `at` hangs at a line's end: a space or a mandatory break.
+pub fn isSpace(text: []const u8, at: u32) bool {
+    const lb = property.line(utf8.decode(text, at).cp).lb;
+    return switch (lb) {
+        .SP, .BK, .CR, .LF, .NL => true,
+        else => false,
+    };
+}
+
+fn endsInBreak(text: []const u8) bool {
+    if (text.len == 0) return false;
+    var at = text.len - 1;
+    while (at > 0 and text[at] & 0xC0 == 0x80) at -= 1;
+    return switch (property.line(utf8.decode(text, at).cp).lb) {
+        .BK, .CR, .LF, .NL => true,
+        else => false,
+    };
+}
+
+/// Stacks the lines from the paragraph's top, every line `m.height()` tall with its baseline
+/// `m.ascent` below its top, and writes each glyph's pen x from the line's left edge (x = 0).
+pub fn place(lines: *Lines, g: *Glyphs, m: Metrics) void {
+    var top: f32 = 0;
+    for (0..lines.len) |k| {
+        lines.x[k] = 0;
+        lines.top[k] = top;
+        lines.baseline[k] = top + m.ascent;
+        lines.height[k] = m.height();
+        top += m.height();
+        var pen: f32 = 0;
+        for (lines.first[k]..lines.end[k]) |i| {
+            g.x[i] = pen;
+            pen += g.advance[i];
+        }
+    }
+}
+
+/// Height of the stacked lines, px.
+pub fn stackHeight(lines: *const Lines) f32 {
+    if (lines.len == 0) return 0;
+    const last = lines.len - 1;
+    return lines.top[last] + lines.height[last];
+}
+
+/// Width of the widest line's ink, px.
+pub fn widest(lines: *const Lines) f32 {
+    var w: f32 = 0;
+    for (lines.width[0..lines.len]) |v| w = @max(w, v);
+    return w;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const golden = @import("golden.zig");
+
+test "breakLines: words fill lines greedily, trailing spaces hang" {
+    var t: golden.Para = .{};
+    // Every glyph 10 px wide.
+    const text = "aa bb  cc dd";
+    t.fixed(text, 10);
+    // "aa bb" is 50 px of ink; the second space and "cc" do not fit in 60.
+    try breakLines(&t.g, text, 60, &t.l);
+    try testing.expectEqual(2, t.l.len);
+    try testing.expectEqualSlices(u32, &.{ 0, 7 }, t.l.first[0..2]);
+    try testing.expectEqualSlices(u32, &.{ 7, 12 }, t.l.end[0..2]);
+    try testing.expectEqualSlices(u32, &.{ 5, 12 }, t.l.ink[0..2]);
+    try testing.expectEqualSlices(u32, &.{ 0, 7 }, t.l.start[0..2]);
+    try testing.expectEqualSlices(f32, &.{ 50, 50 }, t.l.width[0..2]);
+    try testing.expectEqualSlices(f32, &.{ 0, 1 }, t.l.hard[0..2]);
+    // Exactly the ink width fits; one pixel less does not.
+    try breakLines(&t.g, text, 120, &t.l);
+    try testing.expectEqual(1, t.l.len);
+    try breakLines(&t.g, text, 119, &t.l);
+    try testing.expectEqual(2, t.l.len);
+}
+
+test "breakLines: newlines are mandatory, a long word breaks between clusters" {
+    var t: golden.Para = .{};
+    const text = "a\nabcdefg h\n";
+    t.fixed(text, 10);
+    try breakLines(&t.g, text, 30, &t.l);
+    // "a" | "abc" | "def" | "g h" (the rest of the word, then the next one fits) | "" after
+    // the final newline.
+    try testing.expectEqual(5, t.l.len);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 5, 8, 12 }, t.l.first[0..5]);
+    try testing.expectEqualSlices(u32, &.{ 1, 5, 8, 11, 12 }, t.l.ink[0..5]);
+    try testing.expectEqualSlices(f32, &.{ 1, 0, 0, 1, 1 }, t.l.hard[0..5]);
+    try testing.expectEqual(12, t.l.start[4]);
+    // Empty text is one empty line.
+    t.fixed("", 10);
+    try breakLines(&t.g, "", 30, &t.l);
+    try testing.expectEqual(1, t.l.len);
+    try testing.expectEqual(0, t.l.ink[0]);
+    // Too few rows.
+    t.fixed("a\nb\nc", 10);
+    t.l.first.len = 2;
+    try testing.expectError(error.NoSpace, breakLines(&t.g, "a\nb\nc", 100, &t.l));
+}
+
+test "golden: shaped paragraphs wrap like the reference" {
+    try golden.expectScene(.wrap);
+    try golden.expectScene(.narrow);
+}
