@@ -5,6 +5,7 @@
 //!   prepare            SIMD     clear scratch, gap totals
 //!   applyText(.x)      scatter  text widths into leaves
 //!   fit(.x)            reverse  natural widths, bottom-up (+ SIMD reciprocals)
+//!   resolve(.x)        forward  final widths, top-down
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -14,6 +15,7 @@ const Texts = @import("../core/texts.zig").Texts;
 const Axis = types.Axis;
 
 const W = simd.lanes;
+const b01 = simd.b2f;
 
 /// SIMD. Clears per-frame scratch and derives `gap_total`.
 pub fn prepare(t: *Tree) void {
@@ -87,6 +89,58 @@ pub fn fit(t: *Tree, axis: Axis) void {
     var j: usize = 0;
     while (j < n) : (j += W) {
         simd.storeF(grow_inv, j, simd.f(1) / @max(simd.loadF(grow_sum, j), simd.f(1e-6)));
+    }
+}
+
+/// Top-down: final size of every node on one axis. One forward sweep.
+/// Free space is shared out once by `grow` weight; a child stopped by its
+/// `max` leaves its remainder unused instead of triggering another round.
+pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
+    const a = @backingInt(axis);
+    if (t.len == 0) return;
+    const parent = t.c.parent;
+    const size = t.c.size[a];
+    const nat_ = t.c.nat[a];
+    const fit_ = t.c.fit[a];
+    const main_ = t.c.main[a];
+    const gap_total = t.c.gap_total;
+    const lo = t.c.pad_lo[a];
+    const hi = t.c.pad_hi[a];
+    const min = t.c.min[a];
+    const max = t.c.max[a];
+    const grow = t.c.grow[a];
+    const grow_inv = t.c.grow_inv[a];
+    const pct = t.c.pct[a];
+    const flow = t.c.flow;
+    const shrink = t.c.shrink;
+    const used = t.c.used[a];
+
+    size[0] = viewport;
+    for (1..t.len) |i| {
+        const p = parent[i];
+        const nat = nat_[i];
+        const inner = @max(size[p] - lo[p] - hi[p], 0);
+        const main = main_[p];
+        // Along the parent's main axis: natural size plus a share of what is left.
+        const taken = fit_[p] + gap_total[p];
+        const free = @max(inner - taken, 0);
+        const share = free * grow[i] * grow_inv[p];
+        // Across it: stretch when the node grows on this axis.
+        const stretched = nat + b01(grow[i] > 0) * (inner - nat);
+        const flowed = stretched + main * (nat + share - stretched);
+        // A percentage replaces both.
+        const has_pct = b01(pct[i] > 0);
+        const of_parent = pct[i] * inner;
+        const in_flow = flowed + has_pct * (of_parent - flowed);
+        const floating = nat + has_pct * (of_parent - nat);
+        const fl = flow[i];
+        var s = floating + fl * (in_flow - floating);
+        // Shrinkable nodes give way when the parent has no room for them.
+        const room = @max(inner - main * (taken - nat), 0);
+        s -= shrink[i] * fl * @max(s - room, 0);
+        s = @min(@max(s, min[i]), max[i]);
+        size[i] = s;
+        used[p] += s * fl;
     }
 }
 
@@ -219,4 +273,26 @@ test "fit: grow_inv is 1 / grow_sum on every padded row, with 1e-6 as the floor"
     applyText(&s.t, &s.tx, .y);
     fit(&s.t, .y);
     try expectCol(&.{ 1, 0.5, 1e6, 1e6, 1e6, 1e6, 1e6 }, c.grow_inv[1]);
+}
+
+test "resolve: final sizes top-down; growers share free space, shrinkers give way" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    fit(&s.t, .x);
+    resolve(&s.t, .x, 400);
+    // Inside root's 380: bar and body stretch across; b takes 380 - 100 - 4; para shrinks from
+    // its 120 px run to col's 100.
+    try expectCol(&.{ 400, 380, 100, 276, 100, 100, 380 }, c.size[0]);
+    try expectCol(&.{ 860, 376, 0, 0, 100, 0, 0 }, c.used[0]);
+
+    s.tx.c.h[0] = 24; // wrapped to two lines in the 100 px it was given
+    applyText(&s.t, &s.tx, .y);
+    fit(&s.t, .y);
+    resolve(&s.t, .y, 300);
+    // body takes what root's 280 has left after bar 40, col 24 and two 5 px gaps.
+    try expectCol(&.{ 300, 40, 40, 40, 24, 24, 206 }, c.size[1]);
+    try expectCol(&.{ 270, 80, 0, 0, 24, 0, 0 }, c.used[1]);
 }
