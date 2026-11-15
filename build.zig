@@ -11,6 +11,8 @@
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
 //!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
 //!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
+//!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; links the system
+//!                                  libharfbuzz (nix develop .#harfbuzz; ci/run.sh harfbuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -156,6 +158,18 @@ pub fn build(b: *std.Build) void {
     }) }));
     font_fuzz.addPassthruArgs();
     b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
+
+    // The optional HarfBuzz adapter: outside the tiers (it links a C library), so a module of
+    // its own over lcgr, never imported by it.
+    const harfbuzz = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/shape/harfbuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    harfbuzz.root_module.linkSystemLibrary("harfbuzz", .{});
+    b.step("harfbuzz", "Test the HarfBuzz shaping adapter (needs libharfbuzz)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
