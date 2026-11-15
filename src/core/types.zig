@@ -256,3 +256,178 @@ test "Align: factor table places leftover space by index" {
     try std.testing.expectEqual(@as(f32, 40), leftover * Align.factor[@backingInt(Align.end)]);
     try std.testing.expectEqual(@typeInfo(Align).@"enum".field_names.len, Align.factor.len);
 }
+
+/// What kinds of pointer interaction a node takes part in.
+pub const Sense = packed struct(u8) {
+    hover: bool = false,
+    click: bool = false,
+    drag: bool = false,
+    focus: bool = false,
+    _: u4 = 0,
+
+    pub const button: Sense = .{ .hover = true, .click = true, .focus = true };
+    pub const any: Sense = .{ .hover = true, .click = true, .drag = true, .focus = true };
+};
+
+/// Result of `Frame.interact`. A bit set, assembled without branches.
+pub const Response = packed struct(u8) {
+    hovered: bool = false,
+    /// Pointer is down and this widget owns it.
+    held: bool = false,
+    /// Went down this frame.
+    pressed: bool = false,
+    /// Went up this frame.
+    released: bool = false,
+    /// Went up this frame over the widget it went down on.
+    clicked: bool = false,
+    focused: bool = false,
+    _: u2 = 0,
+};
+
+test "Sense: one bit per interaction, presets as bit masks" {
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(Sense{})));
+    try std.testing.expectEqual(@as(u8, 0b1011), @as(u8, @bitCast(Sense.button)));
+    try std.testing.expectEqual(@as(u8, 0b1111), @as(u8, @bitCast(Sense.any)));
+}
+
+test "Response: bits are in declaration order and can be assembled from masks" {
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(Response{})));
+    const r: Response = @bitCast(@as(u8, 0b10_0001));
+    try std.testing.expect(r.hovered and r.focused);
+    try std.testing.expect(!r.held and !r.pressed and !r.released and !r.clicked);
+    try std.testing.expectEqual(@as(u8, 1 << 4), @as(u8, @bitCast(Response{ .clicked = true })));
+}
+
+/// What a node is to assistive technology. One byte per node; the accessibility tree reads it.
+pub const Role = enum(u8) { none, group, label, button, checkbox, slider, image, text_input };
+
+test "Role: one byte, none is the zero default" {
+    try std.testing.expectEqual(1, @sizeOf(Role));
+    try std.testing.expectEqual(@as(u8, 0), @backingInt(Role.none));
+    try std.testing.expectEqual(@as(u8, 7), @backingInt(Role.text_input));
+}
+
+/// Handles the renderer gives out. The core only stores and groups by them.
+pub const Texture = enum(u16) { white = 0, _ };
+pub const Material = enum(u16) { solid = 0, _ };
+pub const Font = enum(u16) { default = 0, _ };
+
+/// Everything a node can be told at creation. Plain data with defaults.
+pub const Style = struct {
+    // ---- layout
+    /// Axis children are stacked along.
+    dir: Axis = .y,
+    size: [2]Size = .{ .fit, .fit },
+    min: [2]f32 = .{ 0, 0 },
+    max: [2]f32 = .{ inf, inf },
+    /// left, top, right, bottom
+    pad: [4]f32 = .{ 0, 0, 0, 0 },
+    gap: f32 = 0,
+    /// Where children sit along `dir` when there is space left over.
+    main: Align = .start,
+    /// Where children sit across `dir`.
+    cross: Align = .start,
+    /// May become narrower than its content when the parent has no room.
+    shrink: bool = false,
+    /// Out of flow: placed at the parent's content origin plus `offset`.
+    float: bool = false,
+    offset: [2]f32 = .{ 0, 0 },
+    /// Clip children to this node's rect.
+    clip: bool = false,
+    /// Subtracted from children's positions (scroll containers).
+    scroll: [2]f32 = .{ 0, 0 },
+    // ---- paint
+    fill: Color = .transparent,
+    border_color: Color = .transparent,
+    border: f32 = 0,
+    radius: f32 = 0,
+    texture: Texture = .white,
+    material: Material = .solid,
+    /// Passed through to the material's shader.
+    params: [4]f32 = .{ 0, 0, 0, 0 },
+    // ---- semantics
+    role: Role = .none,
+    value: f32 = 0,
+};
+
+pub const TextStyle = struct {
+    px: f32 = 14,
+    color: Color = .white,
+    font: Font = .default,
+    wrap: bool = false,
+};
+
+test "Style: defaults are a fit-sized, unpainted, vertical group" {
+    const s: Style = .{};
+    try std.testing.expectEqual(Axis.y, s.dir);
+    try std.testing.expectEqual([2]Size{ .fit, .fit }, s.size);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.min);
+    try std.testing.expectEqual([2]f32{ inf, inf }, s.max);
+    try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, s.pad);
+    try std.testing.expectEqual(@as(f32, 0), s.gap);
+    try std.testing.expectEqual(Align.start, s.main);
+    try std.testing.expectEqual(Align.start, s.cross);
+    try std.testing.expect(!s.shrink and !s.float and !s.clip);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.offset);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.scroll);
+    try std.testing.expectEqual(Color.transparent, s.fill);
+    try std.testing.expectEqual(Color.transparent, s.border_color);
+    try std.testing.expectEqual(@as(f32, 0), s.border);
+    try std.testing.expectEqual(@as(f32, 0), s.radius);
+    try std.testing.expectEqual(Texture.white, s.texture);
+    try std.testing.expectEqual(Material.solid, s.material);
+    try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, s.params);
+    try std.testing.expectEqual(Role.none, s.role);
+    try std.testing.expectEqual(@as(f32, 0), s.value);
+}
+
+test "Style: fields take declaration literals as the prototype's call sites do" {
+    const s: Style = .{ .dir = .x, .size = .{ .px(100), .fill }, .pad = @splat(8), .cross = .center, .fill = .rgb(1, 2, 3) };
+    try std.testing.expectEqual(Size.px(100), s.size[0]);
+    try std.testing.expectEqual(Size.fill, s.size[1]);
+    try std.testing.expectEqual([4]f32{ 8, 8, 8, 8 }, s.pad);
+    try std.testing.expectEqual(Color.rgb(1, 2, 3), s.fill);
+}
+
+test "TextStyle: defaults are 14 px white text in the default font, no wrap" {
+    const t: TextStyle = .{};
+    try std.testing.expectEqual(@as(f32, 14), t.px);
+    try std.testing.expectEqual(Color.white, t.color);
+    try std.testing.expectEqual(Font.default, t.font);
+    try std.testing.expect(!t.wrap);
+}
+
+test "layout: sizes and offsets of every extern and packed type" {
+    const expectEqual = std.testing.expectEqual;
+    // extern: byte offsets are the C layout other tiers and the GPU rely on.
+    try expectEqual(16, @sizeOf(Rect));
+    try expectEqual(4, @alignOf(Rect));
+    inline for (.{ "x0", "y0", "x1", "y1" }, 0..) |name, i| try expectEqual(4 * i, @offsetOf(Rect, name));
+    try expectEqual(8, @sizeOf(Size));
+    try expectEqual(0, @offsetOf(Size, "kind"));
+    try expectEqual(4, @offsetOf(Size, "v"));
+    // packed: bit offsets inside the backing integer.
+    try expectEqual(4, @sizeOf(Color));
+    inline for (.{ "r", "g", "b", "a" }, 0..) |name, i| try expectEqual(8 * i, @bitOffsetOf(Color, name));
+    try expectEqual(1, @sizeOf(Sense));
+    inline for (.{ "hover", "click", "drag", "focus" }, 0..) |name, i| try expectEqual(i, @bitOffsetOf(Sense, name));
+    try expectEqual(1, @sizeOf(Response));
+    inline for (.{ "hovered", "held", "pressed", "released", "clicked", "focused" }, 0..) |name, i|
+        try expectEqual(i, @bitOffsetOf(Response, name));
+    // Index and handle enums, which become column element types.
+    try expectEqual(4, @sizeOf(Id));
+    try expectEqual(4, @sizeOf(Node));
+    try expectEqual(1, @bitSizeOf(Axis));
+    try expectEqual(1, @sizeOf(Size.Kind));
+    try expectEqual(1, @sizeOf(Align));
+    try expectEqual(1, @sizeOf(Role));
+    try expectEqual(2, @sizeOf(Texture));
+    try expectEqual(2, @sizeOf(Material));
+    try expectEqual(2, @sizeOf(Font));
+}
+
+test {
+    // Force semantic analysis of every public declaration.
+    inline for (.{ @This(), Id, Node, Color, Rect, Size, Align, Sense, Response, Style, TextStyle }) |T|
+        std.testing.refAllDecls(T);
+}
