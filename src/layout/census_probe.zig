@@ -65,18 +65,6 @@ export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
 export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.resolveFlex(t, fx, .y, 800);
 }
-export fn p_raster_coverage(acc: [*]const f32, out: [*]u8, n: usize) void {
-    lcgr.raster.coverage(acc[0..lcgr.simd.padded(n)], out[0..lcgr.simd.padded(n)], n);
-}
-export fn p_gamma_apply(g: *const lcgr.raster_gamma.Gamma, lum: u8, cov: [*]const u8, out: [*]u8, n: usize) void {
-    g.apply(lum, cov[0..n], out[0..n]);
-}
-export fn p_atlas_evict(c: *lcgr.raster_atlas.Cache, keep_from: u32) void {
-    c.evict(keep_from);
-}
-export fn p_sdf_distances(segs: *const lcgr.raster.Segments, n: usize, w: u32, h: u32, img: [*]u8, len: usize) void {
-    lcgr.raster_sdf.distances(segs, n, w, h, img[0..len], 31.75);
-}
 export fn p_place_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.placeFlex(t, fx);
 }
@@ -85,10 +73,4 @@ export fn p_wrap(t: *const Tree, fx: *const lcgr.flex.Flex) void {
 }
 export fn p_baseline_apply(t: *const Tree, fx: *const lcgr.flex.Flex, tx: *const Texts, ascent: [*]const f32) void {
     lcgr.baseline.apply(t, fx, tx, ascent[0..tx.len]);
-}
-export fn p_cluster_hit(c: *const lcgr.shape_cluster.Carets, x: i32) u32 {
-    return lcgr.shape_cluster.hit(c, x);
-}
-export fn p_cluster_caret_x(c: *const lcgr.shape_cluster.Carets, offset: u32) i32 {
-    return lcgr.shape_cluster.caretX(c, offset);
 }
