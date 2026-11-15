@@ -54,23 +54,33 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
 
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
 pub fn fit(t: *Tree, axis: Axis) void {
-    fitOf(t, {}, axis);
+    if (t.len == 0) return;
+    fitOf(t, {}, axis, 0, t.len);
 }
 
 /// `fit` with the extra sizing rules of `fx` (flex.zig).
 pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
-    fitOf(t, fx, axis);
+    if (t.len == 0) return;
+    fitOf(t, fx, axis, 0, t.len);
 }
 
-/// One body for both forms: with `fx` void every flex term is compiled out, so `fit` keeps the
-/// prototype's code.
-fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
+/// `fit` over rows [first, last): a whole subtree, `last = end[first]` (incremental layout).
+/// Rows after `first` fold into their parents as in `fit`; row `first` gets its natural size
+/// and is not folded into its own parent. `fit` and `grow_sum` of the rows must be cleared and
+/// their text extents applied first, as `prepare` and `applyText` do for the whole tree.
+pub fn fitSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+    fitOf(t, {}, axis, first, last);
+}
+
+/// One body for every form: with `fx` void every flex term is compiled out, so `fit` keeps the
+/// prototype's code; `first`/`last` select a subtree for incremental layout.
+fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
-    if (t.len == 0) return;
-    if (flexed) @memset(fx.c.shrink_sum[a][0..simd.padded(t.len)], 0);
-    if (flexed) @memset(fx.c.base_kids[0..simd.padded(t.len)], 0);
-    if (flexed) @memset(fx.c.below_kids[0..simd.padded(t.len)], 0);
+    std.debug.assert(first < last and last <= t.len);
+    if (flexed) @memset(fx.c.shrink_sum[a][first..simd.padded(last)], 0);
+    if (flexed) @memset(fx.c.base_kids[first..simd.padded(last)], 0);
+    if (flexed) @memset(fx.c.below_kids[first..simd.padded(last)], 0);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -86,8 +96,8 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
 
-    var i: u32 = t.len;
-    while (i > 1) {
+    var i: u32 = last;
+    while (i > first + 1) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
         var content = fit_[i] + main[i] * gap_total[i];
@@ -111,20 +121,21 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
         if (flexed) baseline.fold(t, fx, i, p);
     }
-    // The root has no parent to fold into.
-    var content = fit_[0] + main[0] * gap_total[0];
-    if (flexed) content += wrap.linesGap(t, fx, a, 0);
-    if (flexed) content = baseline.content(t, fx, a, 0, content);
-    var nat = content + lo[0] + hi[0];
-    if (flexed) nat = fx.aspectNat(t, a, 0, nat);
-    nat_[0] = @min(@max(nat, min[0]), max[0]);
-    if (flexed) baseline.settle(t, fx, 0, nat_[0]);
+    // The root (of the span) has no parent to fold into.
+    var content = fit_[first] + main[first] * gap_total[first];
+    if (flexed) content += wrap.linesGap(t, fx, a, first);
+    if (flexed) content = baseline.content(t, fx, a, first, content);
+    var nat = content + lo[first] + hi[first];
+    if (flexed) nat = fx.aspectNat(t, a, first, nat);
+    nat_[first] = @min(@max(nat, min[first]), max[first]);
+    if (flexed) baseline.settle(t, fx, first, nat_[first]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
-    // on its parent-to-child dependency chain.
+    // on its parent-to-child dependency chain. Whole vectors around the span: grow_inv is a
+    // function of grow_sum alone, so neighbouring rows get the value they already hold.
     const grow_inv = t.c.grow_inv[a];
-    const n = simd.padded(t.len);
-    var j: usize = 0;
+    const n = simd.padded(last);
+    var j: usize = std.mem.alignBackward(usize, first, W);
     while (j < n) : (j += W) {
         simd.storeF(grow_inv, j, simd.f(1) / @max(simd.loadF(grow_sum, j), simd.f(1e-6)));
     }
@@ -134,18 +145,29 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
 /// Free space is shared out once by `grow` weight; a child stopped by its
 /// `max` leaves its remainder unused instead of triggering another round.
 pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
-    resolveOf(t, {}, axis, viewport);
+    if (t.len == 0) return;
+    t.c.size[@backingInt(axis)][0] = viewport;
+    resolveOf(t, {}, axis, 0, t.len);
 }
 
 /// `resolve` with the extra sizing rules of `fx` (flex.zig).
 pub fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void {
-    resolveOf(t, fx, axis, viewport);
+    if (t.len == 0) return;
+    t.c.size[@backingInt(axis)][0] = viewport;
+    resolveOf(t, fx, axis, 0, t.len);
 }
 
-fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
+/// `resolve` over the subtree [first, last), `last = end[first]` (incremental layout): every row
+/// after `first` from its parent, with `first`'s own size taken as given. `used` of the rows
+/// must be cleared first, as `prepare` does for the whole tree.
+pub fn resolveSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+    resolveOf(t, {}, axis, first, last);
+}
+
+fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
-    if (t.len == 0) return;
+    std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
     const size = t.c.size[a];
     const nat_ = t.c.nat[a];
@@ -163,9 +185,8 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
     const shrink = t.c.shrink;
     const used = t.c.used[a];
 
-    size[0] = viewport;
-    if (flexed) fx.secondRound(t, a, 0);
-    for (1..t.len) |i| {
+    if (flexed) fx.secondRound(t, a, first);
+    for (first + 1..last) |i| {
         const p = parent[i];
         const nat = nat_[i];
         const main = main_[p];
@@ -187,12 +208,13 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         const inner = @max(size[p] - lo[p] - hi[p], 0);
         var s = k0 + k1 * inner + k2 * @max(inner - taken, 0);
         // Flex only: margins are outside the node, so a stretched node fills `inner` less its
-        // own; a grower may get a second-round share.
+        // own; a grower may get a second-round share; a stretched child of a wrapping row fills
+        // its line.
         const m = if (flexed) fx.margin(a, i) else 0;
         if (flexed) {
-            const first = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
+            const first_round = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
             const line = wrap.lineCross(t, fx, a, i, p, inner);
-            s += keep * fl * (main * fx.secondShare(t, a, i, p, first) + across * (line - m));
+            s += keep * fl * (main * fx.secondShare(t, a, i, p, first_round) + across * (line - m));
         }
         // Shrinkable nodes give way when the parent has no room for them.
         const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
@@ -220,17 +242,30 @@ pub fn textAvail(t: *const Tree, tx: *Texts) void {
 
 /// Top-down: position of every node on both axes. One forward sweep.
 pub fn place(t: *Tree) void {
-    placeOf(t, {});
+    if (t.len == 0) return;
+    t.c.pos[0][0] = 0;
+    t.c.pos[1][0] = 0;
+    placeOf(t, {}, 0, t.len);
 }
 
 /// `place` with the extra placement rules of `fx` (flex.zig).
 pub fn placeFlex(t: *Tree, fx: *const Flex) void {
-    placeOf(t, fx);
+    if (t.len == 0) return;
+    t.c.pos[0][0] = 0;
+    t.c.pos[1][0] = 0;
+    placeOf(t, fx, 0, t.len);
 }
 
-fn placeOf(t: *Tree, fx: anytype) void {
+/// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
+/// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
+/// rows must be cleared first, as `prepare` does for the whole tree.
+pub fn placeSpan(t: *Tree, first: u32, last: u32) void {
+    placeOf(t, {}, first, last);
+}
+
+fn placeOf(t: *Tree, fx: anytype, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
-    if (t.len == 0) return;
+    std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
     const pos = t.c.pos;
     const size = t.c.size;
@@ -247,9 +282,7 @@ fn placeOf(t: *Tree, fx: anytype) void {
     const align_main = t.c.align_main;
     const align_cross = t.c.align_cross;
 
-    pos[0][0] = 0;
-    pos[1][0] = 0;
-    for (1..t.len) |i| {
+    for (first + 1..last) |i| {
         const p = parent[i];
         const fl = flow[i];
         if (flexed) wrap.openLine(t, fx, i, p);
@@ -279,10 +312,20 @@ fn placeOf(t: *Tree, fx: anytype) void {
 /// Pixel-snapped rects (SIMD), then clip rects and visibility (one forward
 /// sweep with a 4-lane op per node).
 pub fn finalize(t: *Tree) void {
-    const c = &t.c;
     if (t.len == 0) return;
-    const n = simd.padded(t.len);
-    var j: usize = 0;
+    finalizeSpan(t, 0, t.len);
+    // Padding rows must never be hit.
+    @memset(t.c.sense[t.len..simd.padded(t.len)], 0);
+}
+
+/// `finalize` over the subtree [first, last), `last = end[first]` (incremental layout). The
+/// snap covers the whole vectors around the span: a rect depends on its own row alone, so
+/// neighbouring rows get the value they already hold.
+pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
+    std.debug.assert(first < last and last <= t.len);
+    const c = &t.c;
+    const n = simd.padded(last);
+    var j: usize = std.mem.alignBackward(usize, first, W);
     while (j < n) : (j += W) {
         const x = simd.loadF(c.pos[0], j);
         const y = simd.loadF(c.pos[1], j);
@@ -291,9 +334,6 @@ pub fn finalize(t: *Tree) void {
         simd.storeF(c.rect[2], j, @round(x + simd.loadF(c.size[0], j)));
         simd.storeF(c.rect[3], j, @round(y + simd.loadF(c.size[1], j)));
     }
-    // Padding rows must never be hit.
-    @memset(c.sense[t.len..n], 0);
-
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
     const everything: V4 = @splat(-inf);
@@ -304,7 +344,7 @@ pub fn finalize(t: *Tree) void {
     const clips_ = c.clips;
     const visible = c.visible;
     const looks = c.look;
-    for (0..t.len) |i| {
+    for (first..last) |i| {
         const r = V4{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] } * sign;
         const is_root: @Vector(4, bool) = @splat(i == 0);
         const inherited = @select(f32, is_root, everything, @as(V4, child_clip[parent[i]]));

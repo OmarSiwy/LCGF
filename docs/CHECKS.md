@@ -81,7 +81,14 @@ through the masks:
 Auto-vectorized loops add jumps that are all loop control: `p_anchor`'s subtree shift
 (`for (pos[a][n..end[n]]) |*v| v.* += delta`) became a 32-wide, a 4-wide and a scalar loop with
 trip-count dispatch between them, 12 -> 20 jcc, no jump on data. When the census flags an
-auto-vectorized loop, check that every new jump compares a trip count, not a column value. No per-row loop
+auto-vectorized loop, check that every new jump compares a trip count, not a column value.
+
+Two more ways around 0.18 re-branching a select, found by lane interaction: LLVM's CodeGenPrepare
+turns a select into a branch around a load when one operand is a field loaded only for that
+select (masks, `simd.selU`, `b2f` products and bit selects alike). An `if` whose body starts with
+`@branchHint(.unpredictable)` marks the select `!unpredictable` and it stays a cmov (`pick` in
+`src/interact/interaction.zig`). When even that fails, select the address and then load
+(`step`'s id under the pointer: the real row or a constant zero id). No per-row loop
 gained a jump; `tools/census/baseline.json` and `baseline-src.json` are recorded on this build.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where

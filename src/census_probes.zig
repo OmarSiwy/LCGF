@@ -3,4 +3,6 @@
 //! (this file merges by union) instead of editing a shared probe. Not exported from lcgr.zig.
 comptime {
     _ = @import("layout/census_probe.zig");
+    _ = @import("draw/census_probe.zig");
+    _ = @import("interact/census_probe.zig");
 }
