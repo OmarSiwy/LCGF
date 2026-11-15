@@ -25,6 +25,18 @@ pub const iota: U = std.simd.iota(u32, lanes);
 pub inline fn padded(n: usize) usize {
     return std.mem.alignForward(usize, n, lanes);
 }
+pub inline fn loadF(col: []const f32, i: usize) F {
+    return col[i..][0..lanes].*;
+}
+pub inline fn storeF(col: []f32, i: usize, v: F) void {
+    col[i..][0..lanes].* = v;
+}
+pub inline fn loadU(col: []const u32, i: usize) U {
+    return col[i..][0..lanes].*;
+}
+pub inline fn storeU(col: []u32, i: usize, v: U) void {
+    col[i..][0..lanes].* = v;
+}
 pub inline fn f(x: f32) F {
     return @splat(x);
 }
@@ -60,4 +72,27 @@ test "aliases have one lane per element" {
     // Lane 0 is the lowest bit.
     try testing.expectEqual(@as(Mask, 1), bits(iota == u(0)));
     try testing.expectEqual(~@as(Mask, 0), bits(iota < u(lanes)));
+}
+
+test "load and store move one vector at a column offset" {
+    var fc: [3 * lanes]f32 = @splat(0);
+    var uc: [3 * lanes]u32 = @splat(0);
+    for (&fc, &uc, 0..) |*a, *b, i| {
+        a.* = @floatFromInt(i);
+        b.* = @intCast(i);
+    }
+    // Any offset works, not only whole vectors.
+    for ([_]usize{ 0, 1, lanes, 2 * lanes }) |i| {
+        const base: u32 = @intCast(i);
+        try testing.expectEqual(iota + u(base), loadU(&uc, i));
+        const want: F = @floatFromInt(iota + u(base));
+        try testing.expectEqual(want, loadF(&fc, i));
+    }
+    storeF(&fc, lanes, f(-1));
+    storeU(&uc, lanes, u(9));
+    for (fc, uc, 0..) |a, b, i| {
+        const inside = i >= lanes and i < 2 * lanes;
+        try testing.expectEqual(if (inside) @as(f32, -1) else @as(f32, @floatFromInt(i)), a);
+        try testing.expectEqual(if (inside) @as(u32, 9) else @as(u32, @intCast(i)), b);
+    }
 }
