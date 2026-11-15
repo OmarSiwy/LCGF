@@ -43,7 +43,7 @@ pub const Tree = TreeOf(u32, .slice);
 /// side-list links stay u32: ids are hashes and side lists have their own capacity.
 pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
     comptime std.debug.assert(@typeInfo(Index).int.signedness == .unsigned);
-    if (storage == .array) comptime std.debug.assert(storage.array > 0 and storage.array < std.math.maxInt(Index));
+    if (storage == .array) comptime std.debug.assert(storage.array > 0 and storage.array <= std.math.maxInt(Index));
     return struct {
         const Self = @This();
         /// A column of `T`: one row per node, `simd.rows(cap)` rows.
@@ -137,7 +137,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// Slice storage only.
         pub fn init(carver: *mem.Carver, cap: u32) Self {
             comptime std.debug.assert(storage == .slice);
-            std.debug.assert(cap > 0 and cap < std.math.maxInt(Index));
+            std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index));
             return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
         }
         /// An empty tree with zeroed columns. Array storage only: the value holds every row.
@@ -577,4 +577,14 @@ test "TreeOf: u32 slices are the runtime tree; a small index type with array sto
     for (0..3) |_| _ = small.push(0, .none, &.{});
     try testing.expect(small.overflow);
     try testing.expectEqual(8, small.len);
+}
+
+test "TreeOf: a capacity of maxInt(Index) fits, as Ui().Index = IntFittingRange(0, n) needs" {
+    // end[i] is at most cap, so cap == maxInt(Index) is the largest capacity Index can describe.
+    var t: TreeOf(u3, .{ .array = 7 }) = .empty;
+    const root = t.push(0, .none, &.{});
+    for (1..7) |_| _ = t.push(root, .none, &.{});
+    t.seal(root);
+    try testing.expectEqual(@as(u3, 7), t.c.end[0]);
+    try testing.expect(!t.overflow);
 }
