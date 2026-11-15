@@ -8,7 +8,7 @@ a loaded machine; re-measure on the current Zig before building on them.
 |---|---|
 | `micro.zig` | resolve and place, prototype form against the K-coefficient form (C0118, C0119) |
 | `micro2.zig` | level-order storage: one resolve sweep 33.8 -> 10.5 us, but building the order 13.5 us and copying rows 27.1 us per frame (C0121) |
-| `micro3.zig` | prefetch of parent rows at distances 8, 16, 32: resolveK 18.0 -> 19.3 us, placeK 17.8 -> 20.5 us, slower (C0122, not committed) |
+| `micro3.zig` | prefetch of parent rows at distances 8, 16, 32: resolveK 18.0 -> 19.3 us, placeK 17.8 -> 20.5 us, slower (C0122, not adopted). Re-measured on Zig 0.18.0-dev.1151, min of three runs: resolveK 22.5 -> 23.7 us, placeK 17.3 -> 19.4 us at every distance, still slower |
 
 Build one from the repository root, pinned to one core:
 
@@ -18,5 +18,5 @@ nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgr -Mmain=docs/
 taskset -c 4 zig-out/micro
 ```
 
-`micro.tpl` is the template `micro.zig` was generated from. Open plan work: C0122 (record the
-prefetch result) and C0849 (the level-order sweep, which carries the 1.5x target).
+`micro.tpl` is the template `micro.zig` was generated from. C0122 recorded the prefetch result
+and kept no prefetch: it is slower at every distance on both Zig versions.
