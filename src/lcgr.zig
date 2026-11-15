@@ -17,6 +17,7 @@ pub const layout = @import("layout/layout.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const draw_list = @import("draw/draw_list.zig");
+pub const paint = @import("draw/paint.zig");
 
 test {
     std.testing.refAllDecls(@This());
