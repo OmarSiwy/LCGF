@@ -24,6 +24,8 @@ pub const Error = error{
     Malformed,
     /// The caller's output columns are full.
     NoSpace,
+    /// A face index past the number of faces in the file.
+    NoSuchFace,
 };
 
 /// A table tag as the big-endian u32 the directory stores: `tag("glyf")`.
@@ -172,6 +174,41 @@ pub const Cmap = struct {
         return if (id > 0xffff) 0 else @intCast(id);
     }
 };
+
+/// Number of faces in a font file: the count of a collection (.ttc, 'ttcf' header), else 1.
+pub fn faceCount(data: []const u8) Error!u32 {
+    if (try read(u32, data, 0) != tag("ttcf")) return 1;
+    const count = try read(u32, data, 8);
+    _ = try sub(data, 12, @as(usize, count) *| 4);
+    return count;
+}
+
+/// Where the table directory of face `index` starts: pass it to `Face.parse`.
+pub fn faceOffset(data: []const u8, index: u32) Error!usize {
+    if (index >= try faceCount(data)) return error.NoSuchFace;
+    if (try read(u32, data, 0) != tag("ttcf")) return 0;
+    return try read(u32, data, 12 + @as(usize, index) * 4);
+}
+
+/// Style bits a face is selected by, from head.macStyle.
+pub const Style = struct {
+    bold: bool = false,
+    italic: bool = false,
+};
+
+/// Face selection: the first face in the file whose style is `style`, or null. Faces that do
+/// not parse are skipped.
+pub fn findFace(data: []const u8, style: Style) Error!?u32 {
+    const want: u16 = @as(u16, @intFromBool(style.bold)) | @as(u16, @intFromBool(style.italic)) << 1;
+    for (0..try faceCount(data)) |i| {
+        const index: u32 = @intCast(i);
+        const dir = Directory.parse(data, try faceOffset(data, index)) catch continue;
+        const head = dir.get(tag("head")) catch continue;
+        const mac_style = read(u16, head, 44) catch continue;
+        if (mac_style & 3 == want) return index;
+    }
+    return null;
+}
 
 /// Horizontal metrics of one glyph, in font units.
 pub const HMetrics = struct {
@@ -699,6 +736,8 @@ fn gposKernFeature(gpos: []const u8) Error![]const u8 {
 // Test font: a subset of Liberation Sans 2.1.5 (SIL OFL 1.1), built by testdata/make.py.
 // Expected numbers come from fontTools reading the same file.
 const test_ttf = @embedFile("testdata/test.ttf");
+// Collection: the same Regular face and the Bold of the same family.
+const test_ttc = @embedFile("testdata/test.ttc");
 
 fn offsetIn(data: []const u8, s: []const u8) usize {
     return @intFromPtr(s.ptr) - @intFromPtr(data.ptr);
@@ -906,4 +945,42 @@ test "composite scale, point matching and cycles" {
     out.contours = 0;
     try std.testing.expectError(error.NoSpace, face.outline(1, &out));
     try std.testing.expectEqual(5, out.points);
+}
+
+test "faces of a collection" {
+    try std.testing.expectEqual(1, try faceCount(test_ttf));
+    try std.testing.expectEqual(0, try faceOffset(test_ttf, 0));
+    try std.testing.expectError(error.NoSuchFace, faceOffset(test_ttf, 1));
+    // Expected: fontTools TTCollection on test.ttc.
+    try std.testing.expectEqual(2, try faceCount(test_ttc));
+    try std.testing.expectEqual(20, try faceOffset(test_ttc, 0));
+    try std.testing.expectEqual(2096, try faceOffset(test_ttc, 1));
+    try std.testing.expectError(error.NoSuchFace, faceOffset(test_ttc, 2));
+    const regular = try Face.parse(test_ttc, try faceOffset(test_ttc, 0));
+    const bold = try Face.parse(test_ttc, try faceOffset(test_ttc, 1));
+    try std.testing.expectEqual(HMetrics{ .advance = 1366, .left_bearing = 4 }, regular.hMetrics(regular.cmap.glyph('A')));
+    try std.testing.expectEqual(HMetrics{ .advance = 1479, .left_bearing = 51 }, bold.hMetrics(bold.cmap.glyph('A')));
+    try std.testing.expectEqual(1854, bold.ascender);
+    try std.testing.expectEqual(2048, bold.units_per_em);
+    try std.testing.expectEqual(1, bold.mac_style);
+    // A collection header that claims more faces than it has offsets for.
+    try std.testing.expectError(error.Truncated, faceCount(test_ttc[0..15]));
+}
+
+test "face selection by style" {
+    try std.testing.expectEqual(0, try findFace(test_ttc, .{}));
+    try std.testing.expectEqual(1, try findFace(test_ttc, .{ .bold = true }));
+    try std.testing.expectEqual(null, try findFace(test_ttc, .{ .italic = true }));
+    try std.testing.expectEqual(0, try findFace(test_ttf, .{}));
+    try std.testing.expectEqual(null, try findFace(test_ttf, .{ .bold = true }));
+}
+
+test "mutated test fonts are errors, not crashes" {
+    // A short run of the fuzzer (fuzz.zig); `zig build font-fuzz` runs it for a set time.
+    const fuzz = @import("fuzz.zig");
+    var buf: [@max(test_ttf.len, test_ttc.len)]u8 = undefined;
+    for (0..300) |i| {
+        var prng: std.Random.DefaultPrng = .init(i);
+        fuzz.exercise(fuzz.mutate(prng.random(), &buf));
+    }
 }
