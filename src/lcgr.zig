@@ -30,6 +30,7 @@ pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");
 pub const raster = @import("text/raster/raster.zig");
 pub const raster_gamma = @import("text/raster/gamma.zig");
+pub const raster_atlas = @import("text/raster/atlas.zig");
 
 test {
     std.testing.refAllDecls(@This());

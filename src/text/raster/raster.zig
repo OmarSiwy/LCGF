@@ -324,9 +324,9 @@ pub const RefIter = struct {
 
 /// Largest per-pixel difference, and the sum of differences, between `got` (box `gb`) and the
 /// reference, over the union of both boxes (pixels outside a box are 0).
-const Diff = struct { max: u32 = 0, sum: u64 = 0, pixels: u64 = 0 };
+pub const Diff = struct { max: u32 = 0, sum: u64 = 0, pixels: u64 = 0 };
 
-fn compare(gb: Box, got: []const u8, r: Ref) Diff {
+pub fn compare(gb: Box, got: []const u8, r: Ref) Diff {
     var d: Diff = .{};
     const x0 = @min(gb.left, r.b.left);
     const x1 = @max(gb.left + @as(i32, @intCast(gb.w)), r.b.left + @as(i32, @intCast(r.b.w)));

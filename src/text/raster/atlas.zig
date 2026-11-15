@@ -1,0 +1,249 @@
+//! Glyph atlas: one 8-bit coverage texture that glyph images are packed into. Tier 0: the
+//! caller owns the pixels and the packer's columns.
+//!
+//! Packing is a skyline (Jylänki, "A Thousand Ways to Pack the Bin", 2010; the scheme Qt Quick's
+//! scene graph uses for its glyph and texture atlases): the packed area is described by its top
+//! edge, a list of horizontal segments left to right. A rectangle goes where its top would be
+//! lowest (bottom-left rule), resting on the highest segment under it; the segments it covers
+//! are replaced by one at its top. The skyline cannot reclaim space under a segment, which is
+//! what keeps it to a handful of segments per row of glyphs; glyphs are similar in height, so
+//! little is wasted.
+//!
+//! Packing runs once per glyph the atlas has not seen, not per frame or per pixel, so it is
+//! plain scalar code over a short list.
+//!
+//! The atlas contract of `fonts.Mono.quads` (prototype/ui.zig): a glyph's quad samples the
+//! rectangle `uv` of the texture, in 0..1 (`uv`).
+
+const std = @import("std");
+
+pub const Atlas = struct {
+    w: u32,
+    h: u32,
+    /// `w * h` coverage bytes, row by row: the texture.
+    pixels: []u8,
+    sky: Skyline,
+    /// Segments in use.
+    sky_len: u32 = 1,
+
+    /// The skyline, left to right: segment i spans x[i] .. x[i] + w[i] at height y[i] (rows
+    /// from the top that are taken). Capacity is the slices' length; `w` (the atlas width) is
+    /// always enough, since every segment is at least a pixel wide.
+    pub const Skyline = struct { x: []u32, y: []u32, w: []u32 };
+
+    /// A packed rectangle.
+    pub const Rect = struct { x: u32, y: u32, w: u32, h: u32 };
+
+    /// An empty atlas over the caller's `pixels` (`w * h`, cleared here) and skyline columns.
+    pub fn init(w: u32, h: u32, pixels: []u8, sky: Skyline) Atlas {
+        std.debug.assert(pixels.len >= @as(usize, w) * h and w > 0 and h > 0);
+        std.debug.assert(sky.y.len == sky.x.len and sky.w.len == sky.x.len and sky.x.len >= 1);
+        var a: Atlas = .{ .w = w, .h = h, .pixels = pixels[0 .. @as(usize, w) * h], .sky = sky };
+        a.clear();
+        return a;
+    }
+
+    /// Forgets every packed rectangle and clears the texture.
+    pub fn clear(a: *Atlas) void {
+        a.sky.x[0] = 0;
+        a.sky.y[0] = 0;
+        a.sky.w[0] = a.w;
+        a.sky_len = 1;
+        @memset(a.pixels, 0);
+    }
+
+    /// Room for a `w` x `h` rectangle, or null when the atlas has none. Reserves it: the
+    /// skyline rises over it. Glyphs sampled with bilinear filtering need a gap of a pixel
+    /// between them; pack `w + 1` x `h + 1` and use the top-left `w` x `h`.
+    pub fn pack(a: *Atlas, w: u32, h: u32) ?Rect {
+        std.debug.assert(w > 0 and h > 0);
+        var best: u32 = std.math.maxInt(u32);
+        var best_top: u32 = std.math.maxInt(u32);
+        var best_y: u32 = 0;
+        for (0..a.sky_len) |i| {
+            const y = a.restingHeight(@intCast(i), w) orelse continue;
+            if (y + h > a.h) continue;
+            // Lowest top wins; among equal tops, the leftmost (the first found).
+            if (y + h < best_top) {
+                best = @intCast(i);
+                best_top = y + h;
+                best_y = y;
+            }
+        }
+        if (best == std.math.maxInt(u32)) return null;
+        // The new segment, plus at most one split of a segment it covers part of.
+        if (a.sky_len + 1 > a.sky.x.len) return null;
+        const r: Rect = .{ .x = a.sky.x[best], .y = best_y, .w = w, .h = h };
+        a.rise(best, r);
+        return r;
+    }
+
+    /// The height a rectangle `w` wide would rest at with its left side on segment `i`: the
+    /// highest segment under it. Null when it would stick out on the right.
+    fn restingHeight(a: *const Atlas, i: u32, w: u32) ?u32 {
+        if (a.sky.x[i] + w > a.w) return null;
+        var y: u32 = 0;
+        var left = w;
+        var j = i;
+        while (left > 0) : (j += 1) {
+            y = @max(y, a.sky.y[j]);
+            left -= @min(left, a.sky.w[j]);
+        }
+        return y;
+    }
+
+    /// Raises the skyline over `r`, whose left side is segment `i`'s: one segment at its top
+    /// replaces the ones it covers, then neighbours of equal height merge.
+    fn rise(a: *Atlas, i: u32, r: Rect) void {
+        const s = a.sky;
+        const right = r.x + r.w;
+        a.insertSegment(i, r.x, r.y + r.h, r.w);
+        // Drop the segments now under the new one, and trim the one it ends inside.
+        const j = i + 1;
+        while (j < a.sky_len and s.x[j] < right) {
+            const end = s.x[j] + s.w[j];
+            if (end <= right) {
+                a.removeSegment(j);
+                continue;
+            }
+            s.w[j] = end - right;
+            s.x[j] = right;
+            break;
+        }
+        var k: u32 = 0;
+        while (k + 1 < a.sky_len) {
+            if (s.y[k] == s.y[k + 1]) {
+                s.w[k] += s.w[k + 1];
+                a.removeSegment(k + 1);
+            } else k += 1;
+        }
+    }
+
+    fn insertSegment(a: *Atlas, i: u32, x: u32, y: u32, w: u32) void {
+        const n = a.sky_len;
+        inline for (.{ a.sky.x, a.sky.y, a.sky.w }) |col| std.mem.copyBackwards(u32, col[i + 1 .. n + 1], col[i..n]);
+        a.sky.x[i] = x;
+        a.sky.y[i] = y;
+        a.sky.w[i] = w;
+        a.sky_len = n + 1;
+    }
+
+    fn removeSegment(a: *Atlas, i: u32) void {
+        const n = a.sky_len;
+        inline for (.{ a.sky.x, a.sky.y, a.sky.w }) |col| std.mem.copyForwards(u32, col[i .. n - 1], col[i + 1 .. n]);
+        a.sky_len = n - 1;
+    }
+
+    /// Copies a `r.w` x `r.h` image (row by row, `src.len >= r.w * r.h`) into the texture at `r`.
+    pub fn put(a: *Atlas, r: Rect, src: []const u8) void {
+        std.debug.assert(r.x + r.w <= a.w and r.y + r.h <= a.h and src.len >= @as(usize, r.w) * r.h);
+        for (0..r.h) |row| {
+            const to = (@as(usize, r.y) + row) * a.w + r.x;
+            @memcpy(a.pixels[to..][0..r.w], src[row * r.w ..][0..r.w]);
+        }
+    }
+
+    /// Texture coordinates of `r`: left, top, right, bottom in 0..1 (a quad's `uv`).
+    pub fn uv(a: *const Atlas, r: Rect) [4]f32 {
+        const w: f32 = @floatFromInt(a.w);
+        const h: f32 = @floatFromInt(a.h);
+        return .{
+            @as(f32, @floatFromInt(r.x)) / w,
+            @as(f32, @floatFromInt(r.y)) / h,
+            @as(f32, @floatFromInt(r.x + r.w)) / w,
+            @as(f32, @floatFromInt(r.y + r.h)) / h,
+        };
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+
+const raster = @import("raster.zig");
+const opentype = @import("../font/opentype.zig");
+
+/// Columns for a skyline of up to `n` segments.
+fn TestSky(comptime n: usize) type {
+    return struct {
+        x: [n]u32 = undefined,
+        y: [n]u32 = undefined,
+        w: [n]u32 = undefined,
+
+        fn sky(t: *@This()) Atlas.Skyline {
+            return .{ .x = &t.x, .y = &t.y, .w = &t.w };
+        }
+    };
+}
+
+fn overlap(p: Atlas.Rect, q: Atlas.Rect) bool {
+    return p.x < q.x + q.w and q.x < p.x + p.w and p.y < q.y + q.h and q.y < p.y + p.h;
+}
+
+test "glyph images packed into the atlas match the references" {
+    // Every image of testdata/ref.bin (160: 8 glyphs, 5 sizes, 4 subpixel shifts), rasterised,
+    // packed with a pixel of gap and copied in; then each is read back out of the texture.
+    const face = try opentype.Face.parse(raster.test_font, 0);
+    var cols: raster.TestOutline = .{};
+    var o = cols.outline();
+    var acc: [64 * 64]f32 = undefined;
+    var cov: [64 * 64]u8 = undefined;
+    var pixels: [256 * 256]u8 = undefined;
+    var sky: TestSky(256) = .{};
+    var a: Atlas = .init(256, 256, &pixels, sky.sky());
+    var rects: [160]Atlas.Rect = undefined;
+    var boxes: [160]raster.Box = undefined;
+    var refs: [160]raster.Ref = undefined;
+    var n: usize = 0;
+    var it: raster.RefIter = .{};
+    while (it.next()) |r| {
+        if (r.b.w == 0) continue;
+        const b, const img = raster.render(face, r, &o, &acc, &cov);
+        const slot = a.pack(b.w + 1, b.h + 1) orelse return error.AtlasFull;
+        const rect: Atlas.Rect = .{ .x = slot.x, .y = slot.y, .w = b.w, .h = b.h };
+        a.put(rect, img);
+        rects[n] = rect;
+        boxes[n] = b;
+        refs[n] = r;
+        n += 1;
+    }
+    try std.testing.expectEqual(160, n);
+    var used: usize = 0;
+    var total: raster.Diff = .{};
+    for (rects[0..n], boxes[0..n], refs[0..n], 0..) |rect, b, r, i| {
+        used += (@as(usize, rect.w) + 1) * (rect.h + 1);
+        for (rects[0..i]) |other| try std.testing.expect(!overlap(.{ .x = rect.x, .y = rect.y, .w = rect.w + 1, .h = rect.h + 1 }, other));
+        // Read back from the texture and compare with FreeType's image, as raster.zig does.
+        var back: [64 * 64]u8 = undefined;
+        for (0..rect.h) |row| @memcpy(back[row * rect.w ..][0..rect.w], a.pixels[(rect.y + row) * a.w + rect.x ..][0..rect.w]);
+        const d = raster.compare(b, back[0 .. @as(usize, b.w) * b.h], r);
+        total.max = @max(total.max, d.max);
+        total.sum += d.sum;
+        total.pixels += d.pixels;
+    }
+    // The bounds of raster.zig's reference test: packing moved the images, nothing else.
+    try std.testing.expect(total.max <= 16);
+    try std.testing.expect(total.sum < total.pixels);
+    // The skyline wastes little on glyphs of similar height: the 160 images (gaps included)
+    // fill 79% of the area under its highest segment (measured: 36,718 of 256 x 182 px).
+    var top: u32 = 0;
+    for (a.sky.y[0..a.sky_len]) |y| top = @max(top, y);
+    try std.testing.expect(used * 100 >= 75 * @as(usize, a.w) * top);
+}
+
+test "a full atlas refuses, and the skyline stays in order" {
+    var pixels: [16 * 16]u8 = undefined;
+    var sky: TestSky(16) = .{};
+    var a: Atlas = .init(16, 16, &pixels, sky.sky());
+    try std.testing.expectEqual(Atlas.Rect{ .x = 0, .y = 0, .w = 10, .h = 4 }, a.pack(10, 4).?);
+    try std.testing.expectEqual(Atlas.Rect{ .x = 10, .y = 0, .w = 6, .h = 2 }, a.pack(6, 2).?);
+    // Lowest top: beside the 6 x 2 (top 2 + 3 = 5) beats the 10 x 4 (4 + 3).
+    try std.testing.expectEqual(Atlas.Rect{ .x = 10, .y = 2, .w = 5, .h = 3 }, a.pack(5, 3).?);
+    try std.testing.expectEqual(null, a.pack(17, 1));
+    try std.testing.expectEqual(null, a.pack(1, 17));
+    // Segments now at heights 4, 5, 2: a full-width rectangle rests on the highest.
+    try std.testing.expectEqual(3, a.sky_len);
+    try std.testing.expectEqual(null, a.pack(16, 12));
+    try std.testing.expectEqual(Atlas.Rect{ .x = 0, .y = 5, .w = 16, .h = 11 }, a.pack(16, 11).?);
+    try std.testing.expectEqual(null, a.pack(1, 1));
+    try std.testing.expectEqual(1, a.sky_len);
+    try std.testing.expectEqual([4]f32{ 0, 0.3125, 1, 1 }, a.uv(.{ .x = 0, .y = 5, .w = 16, .h = 11 }));
+}
