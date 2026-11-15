@@ -33,3 +33,12 @@ export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
 export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
     lcgr.overlay.order(t, ly);
 }
+export fn p_extent(t: *const Tree, out: *const [2][]f32) void {
+    lcgr.scroll.extent(t, out.*);
+}
+export fn p_clamp(t: *Tree, ext: *const [2][]const f32) void {
+    lcgr.scroll.clamp(t, ext.*);
+}
+export fn p_stick(t: *Tree, st: *const lcgr.scroll.Sticky) void {
+    lcgr.scroll.stick(t, st);
+}

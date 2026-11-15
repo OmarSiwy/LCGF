@@ -19,7 +19,8 @@ const W = simd.lanes;
 /// content needs, padding included, before `min`, `max` or the parent cut it down. This is the
 /// `fit` column (prototype `Tree.Columns.fit`: the sum of the children along the main axis, the
 /// max across it) plus the gaps and padding, the same sum `fit` clamps into `nat`. A scroll
-/// container can move its content by up to `extent - size`. Floating children are not part of
+/// container can move its content by up to `extent - size`, so it needs a fixed size or `shrink`
+/// to be smaller than its content in the first place. Floating children are not part of
 /// it. Run after `fit` on both axes; `out` columns need `simd.padded(t.len)` rows.
 pub fn extent(t: *const Tree, out: [2][]f32) void {
     const c = &t.c;
@@ -353,4 +354,62 @@ test "stick: a header sticks at the top of the list until its section's end push
         try testing.expectEqual(k.a, t.c.pos[1][labels[0]]);
         try testing.expectEqual(2, t.c.pos[0][heads[0]]);
     }
+}
+
+test "scroll: a long list scrolled by a wheel, then to a focused row, with a sticky header" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var st = Sticky.init(&carver, 1);
+    // root { list 200x100, gap 1 { header 20, 50 rows of 10 } }: content 20 + 500 + 50 = 570.
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) } });
+    // A growing scroll container must also shrink: `resolve` never makes a grower smaller than
+    // its content, so without `shrink` it would be 570 high and have nothing to scroll.
+    const list = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .gap = 1, .clip = true, .shrink = true });
+    const header = t.push(list, .none, &.{ .size = .{ .fill, .px(20) } });
+    t.seal(header);
+    var rows: [50]u32 = undefined;
+    for (&rows) |*r| {
+        r.* = t.push(list, .none, &.{ .size = .{ .fill, .px(10) } });
+        t.seal(r.*);
+    }
+    t.seal(list);
+    t.seal(root);
+    _ = st.push(header, list, .{ 0, 0 }, .{ false, true });
+
+    const frame = struct {
+        fn f(sc: *Scene, sticky: *const Sticky) void {
+            sc.size(.{ 200, 100 });
+            extent(&sc.t, sc.ext);
+            clamp(&sc.t, sc.ext);
+            layout.place(&sc.t);
+            stick(&sc.t, sticky);
+            layout.finalize(&sc.t);
+        }
+    }.f;
+
+    // A wheel delta far past the end is clamped to 570 - 100.
+    t.c.scroll[1][list] = 0 + 10_000;
+    frame(&s, &st);
+    try testing.expectEqual(570, s.ext[1][list]);
+    try testing.expectEqual(470, t.c.scroll[1][list]);
+    // The last row ends at the list's bottom edge; the header still sits at its top.
+    try testing.expectEqual(100, t.rect(rows[49]).y1);
+    try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 200, .y1 = 20 }, t.rect(header));
+    // Rows scrolled out are clipped away; row 0 (content 21..31) is far above.
+    try testing.expectEqual(0, t.c.visible[rows[0]]);
+    try testing.expectEqual(1, t.c.visible[rows[49]]);
+
+    // Focus moves to row 3 (content 54..64): scroll back until its top meets the top edge.
+    const v = intoView(t, s.ext, list, rows[3]);
+    try testing.expectEqual([2]f32{ 0, 54 }, v);
+    t.c.scroll[1][list] = v[1];
+    frame(&s, &st);
+    try testing.expectEqual(0, t.rect(rows[3]).y0);
+    // The sticky header now covers it: the application scrolls by the header's height too,
+    // which `intoView` leaves to it because it does not know what covers the list.
+    try testing.expectEqual(0, t.rect(header).y0);
+    try testing.expectEqual(1, t.c.visible[rows[3]]);
 }

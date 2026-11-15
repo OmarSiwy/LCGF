@@ -43,5 +43,20 @@
     "jcc": 17,
     "back": 7,
     "short_fwd": 5
+  },
+  "p_stick": {
+    "jcc": 12,
+    "back": 6,
+    "short_fwd": 2
+  },
+  "p_clamp": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_extent": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
   }
 }
