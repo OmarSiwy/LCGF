@@ -16,6 +16,10 @@
 //! When the atlas is full it evicts the glyphs not drawn recently and repacks the rest from
 //! scratch, tallest first, which also recovers the space the skyline had lost.
 //!
+//! Uploads: the atlas tracks the bounds of what changed since the last upload (`takeDirty`),
+//! so the host writes only that region of its texture each frame (in the prototype the host
+//! owns the GPU texture and hands its view to `Renderer.addTexture`; prototype/ui_wgpu.zig).
+//!
 //! The atlas contract of `fonts.Mono.quads` (prototype/ui.zig): a glyph's quad samples the
 //! rectangle `uv` of the texture, in 0..1 (`uv`).
 
@@ -31,6 +35,10 @@ pub const Atlas = struct {
     sky: Skyline,
     /// Segments in use.
     sky_len: u32 = 1,
+    /// Bounds of the pixels changed since the last `takeDirty`: x0, y0, x1, y1 (empty when
+    /// x0 >= x1). One rectangle, not a list: the skyline puts one frame's new glyphs next to
+    /// each other, so their bounds are tight.
+    dirty: [4]u32 = .{ 0, 0, 0, 0 },
 
     /// The skyline, left to right: segment i spans x[i] .. x[i] + w[i] at height y[i] (rows
     /// from the top that are taken). Capacity is the slices' length; `w` (the atlas width) is
@@ -56,6 +64,7 @@ pub const Atlas = struct {
         a.sky.w[0] = a.w;
         a.sky_len = 1;
         @memset(a.pixels, 0);
+        a.dirty = .{ 0, 0, a.w, a.h };
     }
 
     /// Room for a `w` x `h` rectangle, or null when the atlas has none. Reserves it: the
@@ -147,7 +156,42 @@ pub const Atlas = struct {
             const to = (@as(usize, r.y) + row) * a.w + r.x;
             @memcpy(a.pixels[to..][0..r.w], src[row * r.w ..][0..r.w]);
         }
+        const d = a.dirty;
+        const empty = d[0] >= d[2];
+        a.dirty = if (empty)
+            .{ r.x, r.y, r.x + r.w, r.y + r.h }
+        else
+            .{ @min(d[0], r.x), @min(d[1], r.y), @max(d[2], r.x + r.w), @max(d[3], r.y + r.h) };
     }
+
+    /// The part of the texture to upload this frame: a region of `pixels` the GPU copy has
+    /// not seen, as the arguments of a texture write (wgpu `queue.writeTexture`: data
+    /// `pixels[offset..]`, `bytes_per_row`, origin `x`, `y`, extent `w`, `h`). Null when
+    /// nothing changed. Resets the dirty bounds: the caller uploads what this returns.
+    pub fn takeDirty(a: *Atlas) ?Upload {
+        const d = a.dirty;
+        if (d[0] >= d[2]) return null;
+        a.dirty = .{ 0, 0, 0, 0 };
+        return .{
+            .x = d[0],
+            .y = d[1],
+            .w = d[2] - d[0],
+            .h = d[3] - d[1],
+            .offset = @as(usize, d[1]) * a.w + d[0],
+            .bytes_per_row = a.w,
+        };
+    }
+
+    pub const Upload = struct {
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        /// Byte offset of the region's first pixel in `pixels`.
+        offset: usize,
+        /// Row pitch of the source: the atlas width.
+        bytes_per_row: u32,
+    };
 
     /// Texture coordinates of `r`: left, top, right, bottom in 0..1 (a quad's `uv`).
     pub fn uv(a: *const Atlas, r: Rect) [4]f32 {
@@ -466,4 +510,85 @@ test "evict keeps recent rows in order; repack moves pixels" {
     try std.testing.expectEqual(7, c.atlas.pixels[4 * 16 + 1]);
     try std.testing.expectEqual(0, c.atlas.pixels[5 * 16 + 1]);
     try std.testing.expectEqual(key(1, 2, 3, 1), (1 << 26) | (1 << 24) | (3 << 16) | 2);
+}
+
+/// What a host does with an `Upload`: copies the region into its texture, here a CPU array.
+fn upload(texture: []u8, a: *const Atlas, u: Atlas.Upload) usize {
+    for (0..u.h) |row| {
+        const at = u.offset + row * u.bytes_per_row;
+        @memcpy(texture[at..][0..u.w], a.pixels[at..][0..u.w]);
+    }
+    return @as(usize, u.w) * u.h;
+}
+
+test "uploading dirty regions only keeps the texture equal to the atlas" {
+    // The frames of "glyph images survive eviction and repacking", with a texture the host
+    // updates from takeDirty alone. After every frame the texture equals the atlas, and every
+    // glyph read from the texture matches FreeType's image.
+    const face = try opentype.Face.parse(raster.test_font, 0);
+    var cols: raster.TestOutline = .{};
+    var o = cols.outline();
+    var acc: [64 * 64]f32 = undefined;
+    var cov: [64 * 64]u8 = undefined;
+    var pixels: [256 * 128]u8 = undefined;
+    var scratch: [256 * 128]u8 = undefined;
+    var texture: [256 * 128]u8 = @splat(0xaa); // whatever the GPU memory held
+    var sky: TestSky(256) = .{};
+    const n = 64;
+    var keys: [simd.rows(n)]u32 = @splat(0);
+    var rects: [simd.rows(n)]Atlas.Rect = undefined;
+    var used: [simd.rows(n)]u32 = undefined;
+    var c: Cache = .init(.init(256, 128, &pixels, sky.sky()), .{ .key = &keys, .rect = &rects, .used = &used });
+    var uploaded: usize = 0;
+    var frames: usize = 0;
+    const it0: raster.RefIter = .{};
+    const sizes = [_]u16{ 9, 13, 16, 24, 40, 9, 13, 16, 24, 40, 40, 40 };
+    for (sizes, 1..) |px, frame| {
+        var it = it0;
+        var repacked = frame == 1; // a new atlas is uploaded whole once
+        while (it.next()) |r| {
+            if (r.px != px) continue;
+            const b, const img = raster.render(face, r, &o, &acc, &cov);
+            const before = c.len;
+            const got = c.reserve(refKey(face, r), b.w, b.h, @intCast(frame), &scratch);
+            try std.testing.expect(got.row != none);
+            repacked = repacked or (got.fresh and c.len <= before);
+            if (got.fresh) c.atlas.put(c.rows.rect[got.row], img);
+        }
+        const up = if (c.atlas.takeDirty()) |u| upload(&texture, &c.atlas, u) else 0;
+        // A repack moves everything, so the whole texture goes up; otherwise only the region
+        // the frame's new glyphs went to (measured: 6,630 to 13,770 of 32,768 bytes).
+        if (repacked) try std.testing.expectEqual(pixels.len, up) else try std.testing.expect(up * 2 < pixels.len);
+        uploaded += up;
+        frames += 1;
+        try std.testing.expectEqualSlices(u8, &pixels, &texture);
+        for (c.rows.key[0..c.len], c.rows.rect[0..c.len]) |k, rect| {
+            var all = it0;
+            const r = while (all.next()) |r| {
+                if (refKey(face, r) == k) break r;
+            } else unreachable;
+            const b, _ = raster.render(face, r, &o, &acc, &cov);
+            var back: [64 * 64]u8 = undefined;
+            for (0..rect.h) |row| @memcpy(back[row * rect.w ..][0..rect.w], texture[(rect.y + row) * c.atlas.w + rect.x ..][0..rect.w]);
+            try std.testing.expect(raster.compare(b, back[0 .. @as(usize, b.w) * b.h], r).max <= 16);
+        }
+    }
+    // The last two frames draw nothing new and upload nothing: 230,268 bytes over 12 frames,
+    // against 393,216 for whole-texture uploads, in a run that repacks every other frame.
+    try std.testing.expectEqual(null, c.atlas.takeDirty());
+    try std.testing.expectEqual(230_268, uploaded);
+    try std.testing.expectEqual(12, frames);
+}
+
+test "dirty bounds grow with each put and reset on take" {
+    var pixels: [16 * 16]u8 = undefined;
+    var sky: TestSky(16) = .{};
+    var a: Atlas = .init(16, 16, &pixels, sky.sky());
+    // A new atlas is dirty all over: the GPU texture starts undefined.
+    try std.testing.expectEqual(Atlas.Upload{ .x = 0, .y = 0, .w = 16, .h = 16, .offset = 0, .bytes_per_row = 16 }, a.takeDirty().?);
+    try std.testing.expectEqual(null, a.takeDirty());
+    const img: [6]u8 = @splat(1);
+    a.put(.{ .x = 3, .y = 2, .w = 3, .h = 2 }, &img);
+    a.put(.{ .x = 8, .y = 5, .w = 2, .h = 3 }, &img);
+    try std.testing.expectEqual(Atlas.Upload{ .x = 3, .y = 2, .w = 7, .h = 6, .offset = 2 * 16 + 3, .bytes_per_row = 16 }, a.takeDirty().?);
 }
