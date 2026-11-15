@@ -6,6 +6,7 @@
 //!      hash changed or it exists in only one of the two frames
 //!   3. union the old and new visible rects of the dirty rows into a `Region` of a few rects
 //!   4. after `paint.emit`, keep only the quads that touch the region (`cull`)
+//!   5. hand the region to the renderer in `DrawList.damage`, with the scissor rects to clip to
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -33,6 +34,13 @@ pub const Region = struct {
     y1: R = @splat(-inf),
 
     pub const empty: Region = .{};
+    /// One unbounded slot: repaint the whole target.
+    pub const everything: Region = .{
+        .x0 = .{ -inf, inf, inf, inf },
+        .y0 = .{ -inf, inf, inf, inf },
+        .x1 = .{ inf, -inf, -inf, -inf },
+        .y1 = .{ inf, -inf, -inf, -inf },
+    };
 
     /// Adds `box` (x0, y0, x1, y1) to the slot whose area grows least by it, the lowest such slot
     /// on a tie: a box inside or overlapping a slot joins it, a distant one takes an empty slot
@@ -65,6 +73,26 @@ pub const Region = struct {
         const x1: [max_rects]f32 = g.x1;
         const y1: [max_rects]f32 = g.y1;
         return .{ x0[k], y0[k], x1[k], y1[k] };
+    }
+
+    /// The smallest rect holding every slot, for a back end with one scissor rect.
+    pub fn bounds(g: *const Region) [4]f32 {
+        return .{ @reduce(.Min, g.x0), @reduce(.Min, g.y0), @reduce(.Max, g.x1), @reduce(.Max, g.y1) };
+    }
+
+    /// `box` as a scissor rect (x, y, w, h) on a target of `size` physical pixels, with
+    /// `scale` physical pixels per logical one: rounded outwards to whole pixels and clamped to
+    /// the target, so an empty box gives w = h = 0 and `everything` the whole target.
+    pub fn scissor(box: [4]f32, size: [2]u32, scale: f32) [4]u32 {
+        const lo = @Vector(2, f32){ box[0], box[1] } * @as(@Vector(2, f32), @splat(scale));
+        const hi = @Vector(2, f32){ box[2], box[3] } * @as(@Vector(2, f32), @splat(scale));
+        const top: @Vector(2, f32) = .{ @floatFromInt(size[0]), @floatFromInt(size[1]) };
+        const zero: @Vector(2, f32) = @splat(0);
+        const a = @min(@max(@floor(lo), zero), top);
+        const b = @max(@min(@ceil(hi), top), a);
+        const p: @Vector(2, u32) = @intFromFloat(a);
+        const e: @Vector(2, u32) = @intFromFloat(b - a);
+        return .{ p[0], p[1], e[0], e[1] };
     }
 
     /// True when `box` (x0, y0, x1, y1) overlaps a slot by some area. Empty slots overlap
@@ -211,6 +239,7 @@ pub const Damage = struct {
 /// reach it. Kept quads stay in paint order; a batch left empty is removed, text and custom
 /// commands are kept. Two batches with the same key that a removed batch used to separate are
 /// left as two commands. Rewrites `d` in place: every write lands at or before the row it reads.
+/// Sets `d.damage` to `g`, which is how the renderer learns what to redraw.
 pub fn cull(d: *DrawList, g: *const Region) void {
     const quads_kind = @backingInt(DrawList.Kind.quads);
     var q: u32 = 0;
@@ -236,6 +265,7 @@ pub fn cull(d: *DrawList, g: *const Region) void {
     }
     d.quad_len = q;
     d.cmd_len = n;
+    d.damage = g.*;
 }
 
 const testing = std.testing;
@@ -492,4 +522,48 @@ test "cull: a quad clipped away from the region is dropped even when its rect re
     // The root is dropped; the quads drawn over the damaged half stay.
     try testing.expect(sc.d.quad_len < before);
     for (sc.d.quads[0..sc.d.quad_len]) |quad| try testing.expect(!std.meta.eql(quad.rect, r));
+}
+
+test "DrawList.damage: a renderer scissors one small rect after a one-node change" {
+    var dm_buf: [
+        blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Damage.init(&counter, Scene.cap);
+            break :blk counter.off;
+        }
+    ]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &dm_buf };
+    var dm = Damage.init(&carver, Scene.cap);
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    const target: [2]u32 = .{ 800, 600 }; // 400x300 at scale 2
+
+    // A frame that was not culled says "everything"; so does the first culled one.
+    var sc: Scene = .build(&buf, .{});
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    try testing.expectEqual([4]u32{ 0, 0, 800, 600 }, Region.scissor(sc.d.damage.bounds(), target, 2));
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    cull(&sc.d, &dm.region);
+    try testing.expectEqual([4]u32{ 0, 0, 800, 600 }, Region.scissor(sc.d.damage.bounds(), target, 2));
+
+    // The host's loop over the damage rects: one scissor, the changed button's, in pixels.
+    sc = .build(&buf, .{ .ok_fill = .rgb(90, 90, 200) });
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    cull(&sc.d, &dm.region);
+    const ok = sc.t.rect(Scene.ok);
+    var scissors: u32 = 0;
+    for (0..sc.d.damage.count()) |k| {
+        const s = Region.scissor(sc.d.damage.rect(@intCast(k)), target, 2);
+        try testing.expectEqual([4]u32{ @intFromFloat(ok.x0 * 2), @intFromFloat(ok.y0 * 2), 80, 40 }, s);
+        scissors += 1;
+    }
+    try testing.expectEqual(1, scissors);
+    try testing.expectEqual(sc.d.damage.rect(0), sc.d.damage.bounds());
+}
+
+test "Region.scissor: rounds outwards, clamps to the target, empty stays empty" {
+    try testing.expectEqual([4]u32{ 1, 2, 3, 3 }, Region.scissor(.{ 1.5, 2.2, 3.1, 4.9 }, .{ 10, 10 }, 1));
+    try testing.expectEqual([4]u32{ 0, 0, 10, 10 }, Region.scissor(.{ -5, -5, 50, 50 }, .{ 10, 10 }, 1));
+    try testing.expectEqual(0, Region.scissor(Region.empty.bounds(), .{ 10, 10 }, 1)[2]);
+    try testing.expectEqual(0, Region.scissor(.{ 20, 20, 30, 30 }, .{ 10, 10 }, 1)[3]);
 }
