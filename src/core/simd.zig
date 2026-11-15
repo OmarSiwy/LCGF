@@ -102,6 +102,34 @@ pub fn rank(col: []const u32, len: u32, bound: u32) u32 {
     return @reduce(.Add, acc);
 }
 
+/// One step of a filtering loop: `out[w] = v` always, then the cursor moves
+/// by 0 or 1. `out` needs one spare row past the last kept one, because a
+/// dropped row is still written there.
+pub inline fn emit(comptime T: type, out: []T, w: u32, v: T, keep: bool) u32 {
+    out[w] = v;
+    return w + @intFromBool(keep);
+}
+
+/// Stream compaction over a set of columns: keeps, in order, the rows `r` of
+/// every slice field of `cols` for which `key[r] == want`, and returns the
+/// new length. Every row is copied to the write cursor, which advances only
+/// for kept rows. Rows from the new length up to `len` are zeroed so batch
+/// passes over the padding see inert rows. `key` may be one of the columns.
+pub fn compact(cols: anytype, len: u32, key: []const u32, want: u32) u32 {
+    const names = @typeInfo(@TypeOf(cols)).@"struct".field_names;
+    var w: u32 = 0;
+    for (0..len) |r| {
+        const keep = key[r] == want;
+        inline for (names) |name| @field(cols, name)[w] = @field(cols, name)[r];
+        w += @intFromBool(keep);
+    }
+    inline for (names) |name| {
+        const col = @field(cols, name);
+        @memset(col[w..len], std.mem.zeroes(@typeInfo(@TypeOf(col)).pointer.child));
+    }
+    return w;
+}
+
 const testing = std.testing;
 
 test "padded rounds up to whole vectors" {
@@ -207,4 +235,43 @@ test "rank is the insertion index on a sorted column" {
     }
     try testing.expectEqual(len, rank(&col, len, 0xffff_ffff));
     try testing.expectEqual(@as(u32, 0), rank(&col, 0, 5));
+}
+
+test "emit writes always and advances only for kept rows" {
+    var out: [3 * lanes + 1]u32 = @splat(0xdead);
+    var w: u32 = 0;
+    for (0..3 * lanes) |i| w = emit(u32, &out, w, @intCast(i), i % 3 == 0);
+    try testing.expectEqual(@as(u32, lanes), w);
+    for (out[0..w], 0..) |v, k| try testing.expectEqual(@as(u32, @intCast(3 * k)), v);
+    // The last dropped row landed in the spare slot.
+    try testing.expectEqual(@as(u32, 3 * lanes - 1), out[w]);
+}
+
+test "compact keeps matching rows in order and zeroes the rest" {
+    const n = 2 * lanes + 3;
+    var id: [n]u32 = undefined;
+    var x: [n]f32 = undefined;
+    var seen: [n]u32 = undefined;
+    for (0..n) |i| {
+        id[i] = @intCast(10 + i);
+        x[i] = @floatFromInt(i);
+        seen[i] = selU(i % 2 == 1 or i == 0, 7, 3);
+    }
+    const Cols = struct { id: []u32, x: []f32, seen: []u32 };
+    const cols: Cols = .{ .id = &id, .x = &x, .seen = &seen };
+    const len = compact(cols, n, cols.seen, 7);
+    // Kept: row 0 and every odd row; n is odd.
+    try testing.expectEqual(@as(u32, 1 + (n - 1) / 2), len);
+    for (0..len) |k| {
+        const r = (2 * k) -| 1;
+        try testing.expectEqual(@as(u32, @intCast(10 + r)), id[k]);
+        try testing.expectEqual(@as(f32, @floatFromInt(r)), x[k]);
+        try testing.expectEqual(@as(u32, 7), seen[k]);
+    }
+    for (len..n) |r| {
+        try testing.expectEqual(@as(u32, 0), id[r]);
+        try testing.expectEqual(@as(f32, 0), x[r]);
+        try testing.expectEqual(@as(u32, 0), seen[r]);
+    }
+    try testing.expectEqual(@as(u32, 0), compact(cols, len, cols.seen, 8));
 }
