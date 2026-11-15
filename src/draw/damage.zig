@@ -4,6 +4,7 @@
 //!   1. hash each node's paint inputs (rect, visible rect, look, text, custom data) into a column
 //!   2. compare the column against last frame's, `lanes` rows per step: a row is dirty when its
 //!      hash changed or it exists in only one of the two frames
+//!   3. union the old and new visible rects of the dirty rows into a `Region` of a few rects
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -14,6 +15,71 @@ const Customs = @import("../core/customs.zig").Customs;
 const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 const W = simd.lanes;
+const inf = types.inf;
+
+/// Rects a `Region` holds. Four keeps a region one vector wide per edge.
+pub const max_rects = 4;
+const R = @Vector(max_rects, f32);
+
+/// The part of the window to repaint: up to `max_rects` rects, stored as one vector per edge.
+/// An empty slot has x0 = y0 = inf and x1 = y1 = -inf, so a union with it is the other rect and
+/// its area is 0.
+pub const Region = struct {
+    x0: R = @splat(inf),
+    y0: R = @splat(inf),
+    x1: R = @splat(-inf),
+    y1: R = @splat(-inf),
+
+    pub const empty: Region = .{};
+
+    /// Adds `box` (x0, y0, x1, y1) to the slot whose area grows least by it, the lowest such slot
+    /// on a tie: a box inside or overlapping a slot joins it, a distant one takes an empty slot
+    /// while there is one. An empty box (x0 >= x1 or y0 >= y1) changes nothing. No branch.
+    pub fn add(g: *Region, box: [4]f32) void {
+        const has = (box[0] < box[2]) & (box[1] < box[3]);
+        const b: [4]f32 = .{
+            simd.selF(has, box[0], inf),  simd.selF(has, box[1], inf),
+            simd.selF(has, box[2], -inf), simd.selF(has, box[3], -inf),
+        };
+        // Union is min of the low edges and max of the high ones (Rect.intersect with the signs
+        // the other way round).
+        const ux0 = @min(g.x0, @as(R, @splat(b[0])));
+        const uy0 = @min(g.y0, @as(R, @splat(b[1])));
+        const ux1 = @max(g.x1, @as(R, @splat(b[2])));
+        const uy1 = @max(g.y1, @as(R, @splat(b[3])));
+        const grow = area(ux0, uy0, ux1, uy1) - area(g.x0, g.y0, g.x1, g.y1);
+        const best = @as(u32, @ctz(@as(@Int(.unsigned, max_rects), @bitCast(grow == @as(R, @splat(@reduce(.Min, grow)))))));
+        const pick = std.simd.iota(u32, max_rects) == @as(@Vector(max_rects, u32), @splat(best));
+        g.x0 = @select(f32, pick, ux0, g.x0);
+        g.y0 = @select(f32, pick, uy0, g.y0);
+        g.x1 = @select(f32, pick, ux1, g.x1);
+        g.y1 = @select(f32, pick, uy1, g.y1);
+    }
+
+    /// Slot `k` as (x0, y0, x1, y1); empty slots have x0 > x1.
+    pub fn rect(g: *const Region, k: u32) [4]f32 {
+        const x0: [max_rects]f32 = g.x0;
+        const y0: [max_rects]f32 = g.y0;
+        const x1: [max_rects]f32 = g.x1;
+        const y1: [max_rects]f32 = g.y1;
+        return .{ x0[k], y0[k], x1[k], y1[k] };
+    }
+
+    /// Number of non-empty slots. Slots fill in order, so they are slots [0, count).
+    pub fn count(g: *const Region) u32 {
+        return @reduce(.Add, @as(@Vector(max_rects, u32), @intFromBool(g.x0 < g.x1)));
+    }
+
+    /// Pixels covered, counting an overlap of two slots twice.
+    pub fn pixels(g: *const Region) f32 {
+        return @reduce(.Add, area(g.x0, g.y0, g.x1, g.y1));
+    }
+
+    inline fn area(x0: R, y0: R, x1: R, y1: R) R {
+        const zero: R = @splat(0);
+        return @max(x1 - x0, zero) * @max(y1 - y0, zero);
+    }
+};
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
 const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look };
@@ -60,21 +126,36 @@ pub const Damage = struct {
     cur: u1 = 0,
     /// 1 for a row to repaint, 0 otherwise, for rows [0, padded(max(len, last len))).
     dirty: []u32,
+    /// The dirty rows, in order, `dirty_len` of them (one spare row for the filtering write).
+    list: []u32,
+    dirty_len: u32 = 0,
+    /// The old and new visible rects of every dirty row, unioned.
+    region: Region = .empty,
 
-    pub const Gen = struct { len: u32 = 0, hash: []u32 };
+    /// One frame: its row count, per-row hash and visible rect (`Tree.Columns.vis`).
+    pub const Gen = struct { len: u32 = 0, hash: []u32, vis: [4][]f32 };
 
     /// Carves `simd.rows(cap)` rows per column. The first frame after `init` is all dirty.
     pub fn init(carver: *mem.Carver, cap: u32) Damage {
         const rows = simd.rows(cap);
         return .{
             .cap = cap,
-            .gen = .{ .{ .hash = carver.slice(u32, rows) }, .{ .hash = carver.slice(u32, rows) } },
+            .gen = .{ carveGen(carver, rows), carveGen(carver, rows) },
             .dirty = carver.slice(u32, rows),
+            .list = carver.slice(u32, rows),
         };
     }
 
-    /// Records this frame's paint inputs and marks in `dirty` the rows that differ from the last
-    /// frame recorded. Returns the number of dirty rows.
+    fn carveGen(carver: *mem.Carver, rows: usize) Gen {
+        return .{ .hash = carver.slice(u32, rows), .vis = .{
+            carver.slice(f32, rows), carver.slice(f32, rows),
+            carver.slice(f32, rows), carver.slice(f32, rows),
+        } };
+    }
+
+    /// Records this frame's paint inputs, marks in `dirty` the rows that differ from the last
+    /// frame recorded and sets `region` to what they covered then and cover now. Returns the
+    /// number of dirty rows.
     pub fn frame(dm: *Damage, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) u32 {
         std.debug.assert(t.len <= dm.cap);
         const now = &dm.gen[dm.cur];
@@ -92,8 +173,26 @@ pub const Damage = struct {
             simd.storeU(dm.dirty, i, d);
             count += d;
         }
+
+        // The dirty rows as a list, then their rects into the region. A row that exists in one
+        // frame only adds that frame's rect; the other is masked to an empty box.
+        inline for (0..4) |k| @memcpy(now.vis[k][0..t.len], t.c.vis[k][0..t.len]);
+        var w: u32 = 0;
+        for (0..@max(now.len, last.len)) |r| w = simd.emit(u32, dm.list, w, @intCast(r), dm.dirty[r] != 0);
+        dm.dirty_len = w;
+        std.debug.assert(w == @reduce(.Add, count));
+        dm.region = .empty;
+        for (dm.list[0..w]) |r| {
+            inline for (.{ last, now }) |g| {
+                const in = r < g.len;
+                dm.region.add(.{
+                    simd.selF(in, g.vis[0][r], inf),  simd.selF(in, g.vis[1][r], inf),
+                    simd.selF(in, g.vis[2][r], -inf), simd.selF(in, g.vis[3][r], -inf),
+                });
+            }
+        }
         dm.cur ^= 1;
-        return @reduce(.Add, count);
+        return w;
     }
 };
 
@@ -216,6 +315,54 @@ test "Damage.frame: first frame all dirty, a repeat none, a one-node change that
     sc = .build(&buf, .{});
     try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
     try testing.expectEqual(1, dm.dirty[Scene.ok]);
+}
+
+test "Region.add: overlapping boxes merge, distant ones take free slots, then the cheapest" {
+    var g: Region = .empty;
+    try testing.expectEqual(0, g.count());
+    g.add(.{ 5, 5, 5, 9 }); // empty: no change
+    try testing.expectEqual(0, g.count());
+    g.add(.{ 0, 0, 10, 10 });
+    g.add(.{ 5, 5, 15, 10 }); // overlaps slot 0
+    try testing.expectEqual(1, g.count());
+    try testing.expectEqual([4]f32{ 0, 0, 15, 10 }, g.rect(0));
+    g.add(.{ 2, 2, 4, 4 }); // inside slot 0: grows nothing
+    try testing.expectEqual(1, g.count());
+    g.add(.{ 100, 100, 110, 110 });
+    g.add(.{ 200, 0, 210, 10 });
+    g.add(.{ 0, 200, 10, 210 });
+    try testing.expectEqual(4, g.count());
+    try testing.expectEqual(150 + 100 * 3, g.pixels());
+    // Full: a fifth box joins the slot it grows least, here slot 1 at (100, 100).
+    g.add(.{ 112, 100, 120, 110 });
+    try testing.expectEqual(4, g.count());
+    try testing.expectEqual([4]f32{ 100, 100, 120, 110 }, g.rect(1));
+}
+
+test "Damage.frame: one changed node gives a region of one rect, that node's" {
+    var dm_buf: [
+        blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Damage.init(&counter, Scene.cap);
+            break :blk counter.off;
+        }
+    ]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &dm_buf };
+    var dm = Damage.init(&carver, Scene.cap);
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+
+    var sc: Scene = .build(&buf, .{});
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    try testing.expectEqual(400 * 300, dm.region.rect(0)[2] * dm.region.rect(0)[3]); // first frame: everything
+    sc = .build(&buf, .{});
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    try testing.expectEqual(0, dm.region.count());
+
+    sc = .build(&buf, .{ .ok_fill = .rgb(90, 90, 200) });
+    try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    try testing.expectEqual(1, dm.region.count());
+    try testing.expectEqual(sc.t.rect(Scene.ok).array(), dm.region.rect(0));
+    try testing.expectEqual(40 * 20, dm.region.pixels());
 }
 
 test "Damage.frame: rows only one frame has are dirty, padding rows never are" {
