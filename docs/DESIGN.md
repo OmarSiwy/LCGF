@@ -129,7 +129,10 @@ Commit C0002 writes this up as `CODE_STANDARD.md`; until then this section is th
 Do not reopen these inside a commit. If one looks wrong, say so in your report.
 
 - Zig 0.17.1 exactly. No language features from later versions.
-- Tiers 0 to 2 depend on `std.simd`, `std.math`, `std.mem` and nothing else: no libc, no allocator.
+- Tiers 0 to 2 depend on `std.simd`, `std.math`, `std.mem` and the parts of std that neither allocate
+  nor touch the OS (`std.hash`, `std.fmt.comptimePrint`, `std.meta`, `std.testing` in tests): no libc,
+  no allocator, no `std.Io`. (Widened from simd/math/mem only: the prototype's `Id` hashes with
+  `std.hash.Fnv1a_32`.)
 - The caller owns memory (one buffer, carved into columns) and the loop.
 - Ids are hashed from source location or name; state lives in the application, not in widgets.
 - One `DrawList` format for every renderer. Renderers are generic over a small binding namespace.
