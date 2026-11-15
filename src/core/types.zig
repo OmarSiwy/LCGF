@@ -132,3 +132,50 @@ test "Color: constructors, hex and bit layout" {
     try std.testing.expectEqual(@as(u32, 0x4433_2211), c.bitsOf());
     try std.testing.expectEqual(@as(u32, 0xff00_0000), Color.black.bitsOf());
 }
+
+pub const Rect = extern struct {
+    x0: f32 = 0,
+    y0: f32 = 0,
+    x1: f32 = 0,
+    y1: f32 = 0,
+
+    pub inline fn w(r: Rect) f32 {
+        return r.x1 - r.x0;
+    }
+    pub inline fn h(r: Rect) f32 {
+        return r.y1 - r.y0;
+    }
+    pub inline fn array(r: Rect) [4]f32 {
+        return .{ r.x0, r.y0, r.x1, r.y1 };
+    }
+    /// Stored as (x0, y0, -x1, -y1), the intersection of two rects is one @max.
+    pub inline fn intersect(a: Rect, b: Rect) Rect {
+        const sign: @Vector(4, f32) = .{ 1, 1, -1, -1 };
+        const v = @max(@as(@Vector(4, f32), a.array()) * sign, @as(@Vector(4, f32), b.array()) * sign) * sign;
+        return .{ .x0 = v[0], .y0 = v[1], .x1 = v[2], .y1 = v[3] };
+    }
+    pub inline fn contains(r: Rect, x: f32, y: f32) bool {
+        return (@intFromBool(x >= r.x0) & @intFromBool(x < r.x1) & @intFromBool(y >= r.y0) & @intFromBool(y < r.y1)) != 0;
+    }
+};
+
+test "Rect: size, intersection and half-open containment" {
+    const a: Rect = .{ .x0 = 0, .y0 = 0, .x1 = 100, .y1 = 50 };
+    const b: Rect = .{ .x0 = 40, .y0 = -10, .x1 = 200, .y1 = 30 };
+    try std.testing.expectEqual(@as(f32, 100), a.w());
+    try std.testing.expectEqual(@as(f32, 50), a.h());
+    try std.testing.expectEqual([4]f32{ 0, 0, 100, 50 }, a.array());
+    try std.testing.expectEqual(Rect{ .x0 = 40, .y0 = 0, .x1 = 100, .y1 = 30 }, a.intersect(b));
+    try std.testing.expectEqual(a.intersect(b), b.intersect(a));
+    try std.testing.expectEqual(a, a.intersect(a));
+    // Disjoint rects give an empty (inverted) rect, never a positive area.
+    const far: Rect = .{ .x0 = 300, .y0 = 300, .x1 = 400, .y1 = 400 };
+    const empty = a.intersect(far);
+    try std.testing.expect(empty.w() <= 0 and empty.h() <= 0);
+    try std.testing.expect(a.contains(0, 0));
+    try std.testing.expect(a.contains(99.5, 49.5));
+    try std.testing.expect(!a.contains(100, 10));
+    try std.testing.expect(!a.contains(10, 50));
+    try std.testing.expect(!a.contains(-0.5, 10));
+    try std.testing.expect(!empty.contains(350, 350));
+}
