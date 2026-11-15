@@ -3,11 +3,13 @@
 //! Three steps the caller sequences, over memory the caller owns:
 //!
 //! 1. `box`: the pixel box of the outline at a scale. The caller sizes two buffers from it:
-//!    `accLen(b)` floats of accumulation and `b.w * b.h` coverage bytes.
+//!    `accLen(b)` floats of accumulation and `imageLen(b)` coverage bytes (`b.w * b.h` pixels,
+//!    row by row, padded to whole vectors).
 //! 2. `fill`: every edge of the outline adds its signed area to the accumulation buffer, cell by
 //!    cell. Curves are flattened into lines first.
 //! 3. `coverage`: a running sum over the buffer turns the area deltas into coverage, |sum| clamped
-//!    to 1, written as bytes. This is the per-pixel loop.
+//!    to 1, written as bytes. This is the per-pixel loop, and it is SIMD: a prefix sum inside
+//!    each vector plus a carried total.
 //!
 //! The method is the one of font-rs (Raph Levien, "Inside the fastest font renderer in the
 //! world", 2016) and of FreeType's smooth rasteriser: each edge writes, into the cells it crosses
@@ -25,6 +27,9 @@
 const std = @import("std");
 const opentype = @import("../font/opentype.zig");
 const Outline = opentype.Outline;
+const simd = @import("../../core/simd.zig");
+
+const W = simd.lanes;
 
 /// Pixel box of a glyph image. `left` is the column of its first pixel relative to the pen,
 /// `top` the number of rows above the baseline (FreeType's bitmap_left and bitmap_top).
@@ -35,10 +40,16 @@ pub const Box = struct {
     h: u32 = 0,
 };
 
-/// Floats of accumulation buffer `fill` needs for `b`: one cell per pixel plus the two cells an
-/// edge on the last row's right border writes past the end.
+/// Floats of accumulation buffer `fill` needs for `b`: one cell per pixel, the two cells an
+/// edge on the last row's right border writes past the end, padded to whole vectors for
+/// `coverage`.
 pub fn accLen(b: Box) usize {
-    return @as(usize, b.w) * b.h + 2;
+    return simd.padded(@as(usize, b.w) * b.h + 2);
+}
+
+/// Bytes of coverage image `coverage` writes for `b`: `b.w * b.h` padded to whole vectors.
+pub fn imageLen(b: Box) usize {
+    return simd.padded(@as(usize, b.w) * b.h);
 }
 
 /// The pixel box covering every point of `o` at `scale` pixels per font unit, shifted right by
@@ -79,14 +90,39 @@ pub fn fill(o: *const Outline, scale: f32, dx: f32, b: Box, acc: []f32) void {
     }
 }
 
-/// Coverage bytes of the image: the running sum of `acc`, |sum| clamped to 1, times 255,
-/// rounded. `out.len` pixels are written; `acc` holds at least as many cells.
-pub fn coverage(acc: []const f32, out: []u8) void {
-    var sum: f32 = 0;
-    for (acc[0..out.len], out) |a, *px| {
-        sum += a;
-        px.* = @intFromFloat(@min(@abs(sum), 1) * 255 + 0.5);
+/// SIMD. Coverage bytes of the image: the running sum of `acc`, |sum| clamped to 1, times 255,
+/// rounded. Writes `padded(n)` bytes for an `n`-pixel image; `acc` and `out` hold at least
+/// that many (`accLen` and `imageLen` size them). Each vector is prefix-summed in registers
+/// (log2(lanes) shift-and-add steps) and the running total is carried in from the last lane.
+pub fn coverage(acc: []const f32, out: []u8, n: usize) void {
+    const end = simd.padded(n);
+    std.debug.assert(acc.len >= end and out.len >= end);
+    var carry: simd.F = @splat(0);
+    var i: usize = 0;
+    while (i < end) : (i += W) {
+        const sum = prefix(simd.loadF(acc, i)) + carry;
+        carry = @splat(sum[W - 1]);
+        const c = @min(@abs(sum), simd.f(1)) * simd.f(255) + simd.f(0.5);
+        out[i..][0..W].* = @as(simd.Bytes, @intFromFloat(c));
     }
+}
+
+/// Inclusive prefix sum across the lanes of `v`.
+inline fn prefix(v: simd.F) simd.F {
+    const zero: simd.F = @splat(0);
+    var s = v;
+    comptime var k = 1;
+    inline while (k < W) : (k *= 2) {
+        s += @shuffle(f32, s, zero, shiftMask(k));
+    }
+    return s;
+}
+
+/// Shuffle mask moving lane i - k to lane i, zero (lane 0 of the second operand) below k.
+fn shiftMask(k: comptime_int) @Vector(W, i32) {
+    var m: [W]i32 = undefined;
+    for (&m, 0..) |*e, i| e.* = if (i >= k) @intCast(i - k) else -1;
+    return m;
 }
 
 /// The accumulation buffer and the transform from font units to its pixels (x right, y down).
@@ -304,9 +340,8 @@ fn render(face: opentype.Face, r: Ref, o: *Outline, acc: []f32, out: []u8) struc
     const dx = @as(f32, @floatFromInt(r.offset)) / 64;
     const b = box(o, scale, dx);
     fill(o, scale, dx, b, acc);
-    const img = out[0 .. @as(usize, b.w) * b.h];
-    coverage(acc, img);
-    return .{ b, img };
+    coverage(acc, out, @as(usize, b.w) * b.h);
+    return .{ b, out[0 .. @as(usize, b.w) * b.h] };
 }
 
 /// Columns for one test glyph's outline.
@@ -372,10 +407,36 @@ test "a square half a pixel off the grid" {
     o.contours = 1;
     const b = box(&o, 1, 0);
     try std.testing.expectEqual(Box{ .left = 0, .top = 3, .w = 3, .h = 3 }, b);
-    var acc: [16]f32 = undefined;
-    var out: [9]u8 = undefined;
+    var acc: [32]f32 = undefined;
+    var out: [32]u8 = undefined;
     fill(&o, 1, 0, b, &acc);
-    coverage(&acc, &out);
+    coverage(&acc, &out, 9);
     // Corners a quarter covered, edges half, the centre fully.
-    try std.testing.expectEqualSlices(u8, &.{ 64, 128, 64, 128, 255, 128, 64, 128, 64 }, &out);
+    try std.testing.expectEqualSlices(u8, &.{ 64, 128, 64, 128, 255, 128, 64, 128, 64 }, out[0..9]);
+}
+
+/// The scalar running sum `coverage` vectorises: one add per pixel, in order.
+fn coverageScalar(acc: []const f32, out: []u8) void {
+    var sum: f32 = 0;
+    for (acc[0..out.len], out) |a, *px| {
+        sum += a;
+        px.* = @intFromFloat(@min(@abs(sum), 1) * 255 + 0.5);
+    }
+}
+
+test "SIMD coverage matches the scalar running sum" {
+    const face = try opentype.Face.parse(font, 0);
+    var cols: TestOutline = .{};
+    var o = cols.outline();
+    var acc: [64 * 64]f32 = undefined;
+    var out: [64 * 64]u8 = undefined;
+    var ref: [64 * 64]u8 = undefined;
+    var it: RefIter = .{};
+    while (it.next()) |r| {
+        if (r.offset != 0) continue;
+        _, const img = render(face, r, &o, &acc, &out);
+        coverageScalar(&acc, ref[0..img.len]);
+        // The sums run in a different order, so a pixel on a rounding boundary may differ by 1.
+        for (img, ref[0..img.len]) |v, s| try std.testing.expect(@abs(@as(i32, v) - s) <= 1);
+    }
 }
