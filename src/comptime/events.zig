@@ -7,6 +7,10 @@ const spec_zig = @import("spec.zig");
 const Spec = spec_zig.Spec;
 const Kind = spec_zig.Kind;
 const flatten = @import("flatten.zig");
+const simd = @import("../core/simd.zig");
+const none = @import("../core/types.zig").none;
+
+const W = simd.lanes;
 
 /// The interactive widgets of `spec` and how input reaches them.
 pub fn Events(comptime spec: Spec) type {
@@ -59,6 +63,47 @@ pub fn Events(comptime spec: Spec) type {
         /// The widget at position `k` of widget order.
         pub fn widget(k: usize) Widget {
             return @fromBackingInt(widget_nodes[k]);
+        }
+
+        /// Rows of the rect table: one per widget, padded to whole vectors.
+        pub const rect_rows = simd.padded(count);
+
+        /// Where each widget is on screen, in widget order: the static rect table. Exact size,
+        /// so there is no capacity to configure. The host or a layout pass fills it each time
+        /// layout changes; padding rows stay empty (x0 == x1), so nothing hits them.
+        pub const Rects = struct {
+            /// x0, y0, x1, y1 columns, in logical pixels, clipped as `Tree.Columns.vis`.
+            c: [4][rect_rows]f32 = @splat(@splat(0)),
+
+            /// The widgets' rows of a laid-out tree's `vis` columns (a tree built from this
+            /// spec, so row numbers agree).
+            pub fn fromTree(t: anytype) Rects {
+                var r: Rects = .{};
+                for (0..4) |side| {
+                    for (widget_nodes, 0..) |node, k| r.c[side][k] = t.c.vis[side][node];
+                }
+                return r;
+            }
+        };
+
+        /// Topmost widget under (x, y), or null. As `hit.at`: `lanes` rects per step, no early
+        /// exit, half-open edges, and the latest row wins where widgets overlap.
+        pub fn at(r: *const Rects, x: f32, y: f32) ?Widget {
+            const px = simd.f(x);
+            const py = simd.f(y);
+            var found: u32 = none;
+            var i: usize = 0;
+            while (i < rect_rows) : (i += W) {
+                const inside = (px >= simd.loadF(&r.c[0], i)) & (px < simd.loadF(&r.c[2], i)) &
+                    (py >= simd.loadF(&r.c[1], i)) & (py < simd.loadF(&r.c[3], i));
+                const m = simd.bits(inside);
+                // Highest set lane. Wraps when m == 0, and is then discarded.
+                const top = @as(u32, W - 1) -% @as(u32, @clz(m));
+                found = simd.selU(m != 0, @as(u32, @intCast(i)) +% top, found);
+            }
+            if (comptime count == 0) return null;
+            if (found == none) return null;
+            return widget(found);
         }
     };
 }
@@ -127,4 +172,100 @@ test "Widget: large specs need no quota from the caller" {
     const M = Events(many);
     try testing.expectEqual(2000, M.widget_count);
     try testing.expectEqual(2000, @backingInt(@field(M.Widget, "s1999")));
+}
+
+const Tree = @import("../core/tree.zig").Tree;
+const mem = @import("../core/mem.zig");
+const types = @import("../core/types.zig");
+
+/// The mixer with fixed sizes, so it lays out without text: root 200 x 100 at the origin, pad
+/// 8, gap 4; the checkbox and volume slider in a row at y 8..28, the pan slider below at y
+/// 32..52.
+const sized = Spec{ .kind = .col, .style = .{ .size = .{ .px(200), .px(100) }, .pad = @splat(8), .gap = 4 }, .children = &.{
+    .{ .kind = .row, .style = .{ .dir = .x, .gap = 8 }, .children = &.{
+        .{ .kind = .checkbox, .id = "mute", .bind = "muted", .style = .{ .size = .{ .px(20), .px(20) } } },
+        .{ .kind = .slider, .id = "volume", .bind = "volume", .style = .{ .size = .{ .px(100), .px(20) } } },
+    } },
+    .{ .kind = .row, .style = .{ .dir = .x }, .children = &.{
+        .{ .kind = .slider, .id = "pan", .bind = "pan", .style = .{ .size = .{ .px(100), .px(20) } } },
+    } },
+} };
+const Sized = Events(sized);
+
+/// `spec`'s tree, pushed and laid out by the runtime front end at `viewport`.
+fn laidOut(comptime sp: Spec, raw: []align(mem.column_align) u8, viewport: [2]f32) Tree {
+    const layout = @import("../layout/layout.zig");
+    const Texts = @import("../core/texts.zig").Texts;
+    var carver: mem.Carver = .{ .buf = raw };
+    var t = Tree.init(&carver, flatten.count(sp));
+    var tx = Texts.init(&carver, 1);
+    push(&t, &sp, 0);
+    layout.run(&t, &tx, viewport);
+    return t;
+}
+fn push(t: *Tree, n: *const Spec, parent: u32) void {
+    const i = t.push(parent, if (n.id) |name| .hash(name) else .none, &n.style);
+    for (n.children) |*c| push(t, c, i);
+    t.seal(i);
+}
+
+test "at: the widget under the point, from the laid-out tree's rects" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = laidOut(sized, &raw, .{ 200, 100 });
+    const r = Sized.Rects.fromTree(&t);
+    try testing.expectEqual([4]f32{ 8, 8, 28, 28 }, [4]f32{ r.c[0][0], r.c[1][0], r.c[2][0], r.c[3][0] });
+    try testing.expectEqual(Sized.Widget.mute, Sized.at(&r, 10, 10).?);
+    try testing.expectEqual(Sized.Widget.volume, Sized.at(&r, 36, 27).?);
+    try testing.expectEqual(Sized.Widget.pan, Sized.at(&r, 8, 32).?);
+    // The gap between checkbox and slider, the root's padding, and half-open edges.
+    try testing.expectEqual(null, Sized.at(&r, 30, 10));
+    try testing.expectEqual(null, Sized.at(&r, 4, 4));
+    try testing.expectEqual(null, Sized.at(&r, 28, 10));
+    try testing.expectEqual(null, Sized.at(&r, 108, 40));
+    // The comptime sweep agrees with hit.at over the tree, where every widget senses.
+    const hit = @import("../interact/hit.zig");
+    var tt = t;
+    for (Sized.widget_nodes) |node| tt.c.sense[node] = @bitCast(types.Sense.button);
+    var y: f32 = -2;
+    while (y < 102) : (y += 1.5) {
+        var x: f32 = -2;
+        while (x < 202) : (x += 1.5) {
+            const want = hit.at(&tt, x, y, .any);
+            const got = Sized.at(&r, x, y);
+            try testing.expectEqual(want, if (got) |w| @as(u32, @backingInt(w)) else none);
+        }
+    }
+}
+
+test "at: overlapping rects, the latest widget wins; matches a scalar sweep" {
+    const M = Events(many);
+    var r: M.Rects = .{};
+    var seed: u32 = 99;
+    for (0..M.widget_count) |k| {
+        seed = seed *% 1103515245 +% 12345;
+        const x: f32 = @floatFromInt((seed >> 8) % 500);
+        const y: f32 = @floatFromInt((seed >> 20) % 500);
+        r.c[0][k] = x;
+        r.c[1][k] = y;
+        r.c[2][k] = x + 30;
+        r.c[3][k] = y + 30;
+    }
+    var hits: u32 = 0;
+    var y: f32 = 0;
+    while (y < 530) : (y += 7.5) {
+        var x: f32 = 0;
+        while (x < 530) : (x += 7.5) {
+            var want: ?M.Widget = null;
+            for (0..M.widget_count) |k| {
+                if (x >= r.c[0][k] and x < r.c[2][k] and y >= r.c[1][k] and y < r.c[3][k]) want = M.widget(k);
+            }
+            try testing.expectEqual(want, M.at(&r, x, y));
+            hits += @intFromBool(want != null);
+        }
+    }
+    try testing.expect(hits > 1000);
+    // An empty table hits nothing, and a spec without widgets has no rows to sweep.
+    try testing.expectEqual(null, M.at(&.{}, 10, 10));
+    try testing.expectEqual(0, Events(s.label(.x)).rect_rows);
+    try testing.expectEqual(null, Events(s.label(.x)).at(&.{}, 0, 0));
 }
