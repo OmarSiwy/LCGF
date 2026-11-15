@@ -129,6 +129,11 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             /// Opacity paint applies: the product of `opacity` over the node and its ancestors,
             /// written by `draw.inherit.opacity`. Push sets it to the node's own.
             alpha: Col(f32),
+            /// `Style.transform` of this node alone, about its centre.
+            transform: Col([6]f32),
+            /// Layout space to screen: the node's transform after its ancestors', written by
+            /// `draw.inherit.transform`. Push sets the identity.
+            world: Col([6]f32),
 
             // ---- semantics, read by the host to build an accessibility tree
             role: Col(u8),
@@ -207,6 +212,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             const corners: @Vector(4, f32) = s.radii;
             c.opacity[i] = s.opacity;
             c.alpha[i] = s.opacity;
+            c.transform[i] = s.transform;
+            c.world[i] = .{ 1, 0, 0, 1, 0, 0 };
             c.radii[i] = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
             c.role[i] = @backingInt(s.role);
             c.value[i] = s.value;
@@ -336,8 +343,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
     // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, radii, opacity,
-    // alpha, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 16 + 4 + 4 + 1 + 4, rowBytes(Tree.Columns));
+    // alpha, transform, world, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 16 + 4 + 4 + 24 + 24 + 1 + 4, rowBytes(Tree.Columns));
 }
 
 test "Look: one 36-byte row with the C layout the GPU reads" {

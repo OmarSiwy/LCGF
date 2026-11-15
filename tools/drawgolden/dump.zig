@@ -35,7 +35,9 @@ const attrs = .{
     .{ 6, "radii", "float32x4" },
     .{ 7, "border", "float32" },
     .{ 8, "opacity", "float32" },
+    .{ 9, "xform", "float32x4" }, // a, b, c, d
 };
+const xform_t = .{ 10, @offsetOf(Quad, "xform") + 16, "float32x2" }; // tx, ty
 
 const Scene = struct {
     t: Tree,
@@ -161,6 +163,37 @@ fn opacity(t: *Tree) void {
     t.seal(0);
 }
 
+/// A card turned 15 degrees, one scaled to 0.75, one skewed, and inside a turned panel a child
+/// turned again (the angles add) over an untransformed outline of where layout put it.
+fn transforms(t: *Tree) void {
+    const rot = struct {
+        fn by(deg: f32) [6]f32 {
+            const a = deg * std.math.pi / 180.0;
+            return .{ @cos(a), @sin(a), -@sin(a), @cos(a), 0, 0 };
+        }
+    }.by;
+    _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(40), .gap = 40 });
+    const outline: Style = .{ .float = true, .size = .{ .px(140), .px(100) }, .border = 1, .border_color = .rgb(120, 120, 120) };
+    const looks = [_]Style{
+        .{ .fill = .rgb(90, 160, 255), .radius = 12, .transform = rot(15) },
+        .{ .fill = .rgb(240, 120, 80), .border = 4, .border_color = .white, .transform = .{ 0.75, 0, 0, 0.75, 0, 0 } },
+        .{ .fill = .rgb(120, 220, 140), .params = features.linear(.rgb(20, 60, 40), 0), .transform = .{ 1, 0, 0.4, 1, 0, 0 } },
+    };
+    for (looks) |look| {
+        const slot = t.push(0, .none, &.{ .size = .{ .px(140), .px(100) } });
+        _ = t.push(slot, .none, &outline);
+        var s = look;
+        s.float = true;
+        s.size = .{ .px(140), .px(100) };
+        _ = t.push(slot, .none, &s);
+        t.seal(slot);
+    }
+    const panel = t.push(0, .none, &.{ .size = .{ .px(140), .px(100) }, .pad = @splat(30), .fill = .rgb(60, 60, 80), .transform = rot(-20) });
+    _ = t.push(panel, .none, &.{ .size = .{ .px(80), .px(40) }, .fill = .rgb(250, 210, 90), .radius = 8, .transform = rot(-25) });
+    t.seal(panel);
+    t.seal(0);
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
@@ -169,6 +202,7 @@ const scenes = .{
     .{ "corners", corners },
     .{ "borders", borders },
     .{ "opacity", opacity },
+    .{ "transforms", transforms },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -193,6 +227,7 @@ pub fn main(init: std.process.Init) !void {
     if (!found) return error.UnknownScene;
     lcgr.layout.run(&sc.t, &sc.tx, viewport);
     lcgr.inherit.opacity(&sc.t);
+    lcgr.inherit.transform(&sc.t);
     lcgr.paint.emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
 
     const cwd = std.Io.Dir.cwd();
@@ -207,6 +242,7 @@ pub fn main(init: std.process.Init) !void {
     var w = std.Io.Writer.fixed(&text);
     try w.print("stride {d}\n", .{@sizeOf(Quad)});
     inline for (attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a[0], @offsetOf(Quad, a[1]), a[2] });
+    try w.print("attr {d} {d} {s}\n", xform_t);
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text, .custom => return error.SceneHasTextOrCustom,

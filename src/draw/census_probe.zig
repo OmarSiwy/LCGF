@@ -16,3 +16,6 @@ export fn p_damage_cull(d: *DrawList, g: *const lcgr.damage.Region) void {
 export fn p_inherit_opacity(t: *Tree) void {
     lcgr.inherit.opacity(t);
 }
+export fn p_inherit_transform(t: *Tree) void {
+    lcgr.inherit.transform(t);
+}

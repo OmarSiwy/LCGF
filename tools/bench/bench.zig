@@ -213,6 +213,8 @@ pub fn main(init: std.process.Init) !void {
         for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
         @memset(st.c.opacity[0..pt.len], 1); // and no opacity
         @memset(st.c.alpha[0..pt.len], 1);
+        @memset(st.c.transform[0..pt.len], .{ 1, 0, 0, 1, 0, 0 }); // and no transform
+        @memset(st.c.world[0..pt.len], .{ 1, 0, 0, 1, 0, 0 });
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;

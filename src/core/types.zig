@@ -351,6 +351,10 @@ pub const Style = struct {
     /// Opacity of this node and its whole subtree, 0 to 1; nested opacities multiply
     /// (`draw.inherit.opacity`).
     opacity: f32 = 1,
+    /// 2D affine transform a, b, c, d, tx, ty (x' = a x + c y + tx, y' = b x + d y + ty) about
+    /// the node's centre, applied to the node and its subtree when painted. Layout, clipping
+    /// and hit testing do not see it.
+    transform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics

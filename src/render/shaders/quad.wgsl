@@ -21,6 +21,8 @@ struct Instance {
     @location(6) radii: vec4f,
     @location(7) border: f32,
     @location(8) opacity: f32,
+    @location(9) xform_abcd: vec4f,
+    @location(10) xform_t: vec2f,
 }
 
 struct Frag {
@@ -47,10 +49,13 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     let grow = select(0.0, 3.0 * bitcast<f32>(inst.params.y), inst.params.x == k_shadow);
     let p = mix(inst.rect.xy - grow, inst.rect.zw + grow, corner);
     var out: Frag;
-    out.position = vec4f(p / globals.viewport * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+    // The node's transform moves the corners; local, uv and the distance field stay in the
+    // node's own space, so shapes rotate and scale with it.
+    let screen = inst.xform_abcd.xy * p.x + inst.xform_abcd.zw * p.y + inst.xform_t;
+    out.position = vec4f(screen / globals.viewport * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
     out.local = p - (inst.rect.xy + inst.rect.zw) * 0.5;
     out.uv = mix(inst.uv.xy, inst.uv.zw, (p - inst.rect.xy) / max(inst.rect.zw - inst.rect.xy, vec2f(1e-6)));
-    out.pixel = p;
+    out.pixel = screen;
     out.half = (inst.rect.zw - inst.rect.xy) * 0.5;
     out.radii = inst.radii;
     out.border = inst.border;

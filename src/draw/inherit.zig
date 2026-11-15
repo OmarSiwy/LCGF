@@ -17,6 +17,41 @@ pub fn opacity(t: *Tree) void {
     }
 }
 
+/// `world[i]` = the parent's `world` after node `i`'s `transform` about its own centre: what
+/// maps the node's layout rect to the screen. Run after layout (the centre comes from `rect`).
+/// The root's parent is the identity. Idempotent like `opacity`.
+pub fn transform(t: *Tree) void {
+    const c = &t.c;
+    const V6 = @Vector(6, f32);
+    const identity: V6 = .{ 1, 0, 0, 1, 0, 0 };
+    for (0..t.len) |i| {
+        const m = c.transform[i];
+        const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
+        const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
+        // Translate the centre to the origin, apply m, translate back.
+        const l: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
+        const p: [6]f32 = @select(f32, @as(@Vector(6, bool), @splat(i == 0)), identity, @as(V6, c.world[c.parent[i]]));
+        c.world[i] = compose(p, l);
+    }
+}
+
+/// p after l: x -> p(l(x)).
+inline fn compose(p: [6]f32, l: [6]f32) [6]f32 {
+    return .{
+        p[0] * l[0] + p[2] * l[1],
+        p[1] * l[0] + p[3] * l[1],
+        p[0] * l[2] + p[2] * l[3],
+        p[1] * l[2] + p[3] * l[3],
+        p[0] * l[4] + p[2] * l[5] + p[4],
+        p[1] * l[4] + p[3] * l[5] + p[5],
+    };
+}
+
+/// Where `world` sends the point (x, y).
+pub fn apply(m: [6]f32, x: f32, y: f32) [2]f32 {
+    return .{ m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5] };
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const Id = @import("../core/types.zig").Id;
@@ -87,4 +122,34 @@ test "opacity: paint fades quads by the instance opacity and text by its colour'
     try testing.expectEqual(0.0, t.c.alpha[gone]);
     // Text has no instance opacity: its colour's alpha is scaled, 200 * 0.5.
     try testing.expectEqual(@import("../core/types.zig").Color.rgba(10, 20, 30, 100).bitsOf(), sc.d.runs[0].color);
+}
+
+test "transform: about the centre, composed down the tree" {
+    const bytes = comptime blk: {
+        @setEvalBranchQuota(10_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Tree.init(&counter, 8);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = Tree.init(&carver, 8);
+    _ = t.push(0, Id.from("root"), &.{});
+    // A 100x100 box at (0, 0) turned 90 degrees clockwise about (50, 50), and inside it a child
+    // moved 10 px right in its own frame.
+    const box = t.push(0, .none, &.{ .transform = .{ 0, 1, -1, 0, 0, 0 } });
+    const kid = t.push(box, .none, &.{ .transform = .{ 1, 0, 0, 1, 10, 0 } });
+    t.seal(box);
+    t.seal(0);
+    // Rects as layout would leave them.
+    inline for (.{ 0, 0, 100, 100 }, 0..) |v, k| t.c.rect[k][box] = v;
+    inline for (.{ 0, 0, 20, 20 }, 0..) |v, k| t.c.rect[k][kid] = v;
+    transform(&t);
+    transform(&t);
+    try testing.expectEqual([6]f32{ 1, 0, 0, 1, 0, 0 }, t.c.world[0]);
+    // The box's centre stays put; its top-left corner goes to the top-right.
+    try testing.expectEqual([2]f32{ 50, 50 }, apply(t.c.world[box], 50, 50));
+    try testing.expectEqual([2]f32{ 100, 0 }, apply(t.c.world[box], 0, 0));
+    // The child: moved right by 10, then turned with the box: right becomes down.
+    try testing.expectEqual([2]f32{ 100, 10 }, apply(t.c.world[kid], 0, 0));
 }
