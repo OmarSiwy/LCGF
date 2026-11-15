@@ -160,3 +160,230 @@ test "GraphemeBreakTest.txt" {
 test "WordBreakTest.txt" {
     try expectBoundaries(lcgr.unicode_word.Words, word_test);
 }
+
+/// LineBreaks yields opportunities; the test files mark every opportunity, mandatory or not.
+const LineOffsets = struct {
+    text: []const u8,
+    it: ?lcgr.unicode_line.LineBreaks = null,
+
+    fn next(s: *LineOffsets) ?usize {
+        if (s.it == null) s.it = .{ .text = s.text };
+        return if (s.it.?.next()) |o| o.pos else null;
+    }
+};
+
+test "LineBreakTest.txt" {
+    try expectBoundaries(LineOffsets, line_test);
+}
+
+const bidi = lcgr.unicode_bidi;
+// The two bidi files are 14.2 MB as text and 1.7 MB gzipped, so they are stored compressed.
+const bidi_test_gz = @embedFile("data/BidiTest.txt.gz");
+const bidi_character_test_gz = @embedFile("data/BidiCharacterTest.txt.gz");
+
+/// The decompressed contents of a .gz file; the caller frees it.
+fn gunzip(gz: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer out.deinit();
+    var in: std.Io.Reader = .fixed(gz);
+    var d: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+    _ = try d.reader.streamRemaining(&out.writer);
+    return out.toOwnedSlice();
+}
+
+const BidiBuffers = struct {
+    orig: [256]property.BidiClass = undefined,
+    cls: [256]property.BidiClass = undefined,
+    next: [256]u32 = undefined,
+    pair: [256]u32 = undefined,
+    levels: [256]u8 = undefined,
+
+    fn scratch(b: *BidiBuffers) bidi.Scratch {
+        return .{ .cls = &b.cls, .next = &b.next, .pair = &b.pair };
+    }
+};
+
+/// Parses "1 x 0 2" into levels with 0xff for x.
+fn parseLevels(s: []const u8, out: []u8) usize {
+    var n: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, s, " \t");
+    while (tok.next()) |t| : (n += 1) out[n] = if (t[0] == 'x') 0xff else std.fmt.parseInt(u8, t, 10) catch unreachable;
+    return n;
+}
+
+fn expectLevels(want: []const u8, got: []const u8, line: usize) !void {
+    for (want, got[0..want.len]) |w, g| if (w != 0xff and w != g) {
+        std.debug.print("line {d}: levels want {any} got {any}\n", .{ line, want, got[0..want.len] });
+        return error.TestUnexpectedLevels;
+    };
+}
+
+test "BidiTest.txt: levels and order" {
+    const bidi_test = try gunzip(bidi_test_gz);
+    defer std.testing.allocator.free(bidi_test);
+    var b: BidiBuffers = .{};
+    var want: [256]u8 = undefined;
+    var n_want: usize = 0;
+    var want_order: [256]u32 = undefined;
+    var n_order: usize = 0;
+    var order: [256]u32 = undefined;
+    var lines = std.mem.splitScalar(u8, bidi_test, '\n');
+    var line: usize = 0;
+    var cases: usize = 0;
+    while (lines.next()) |ln| {
+        line += 1;
+        if (ln.len == 0 or ln[0] == '#') continue;
+        if (std.mem.startsWith(u8, ln, "@Levels:")) {
+            n_want = parseLevels(ln["@Levels:".len..], &want);
+            continue;
+        }
+        if (std.mem.startsWith(u8, ln, "@Reorder:")) {
+            n_order = parseOrder(ln["@Reorder:".len..], &want_order);
+            continue;
+        }
+        if (ln[0] == '@') continue;
+        const semi = std.mem.indexOfScalar(u8, ln, ';').?;
+        var n: usize = 0;
+        var tok = std.mem.tokenizeAny(u8, ln[0..semi], " \t");
+        while (tok.next()) |t| : (n += 1) b.orig[n] = std.meta.stringToEnum(property.BidiClass, t).?;
+        std.debug.assert(n == n_want);
+        const set = std.fmt.parseInt(u8, std.mem.trim(u8, ln[semi + 1 ..], " \t\r"), 16) catch unreachable;
+        for ([_]?u8{ null, 0, 1 }, 0..) |dir, bit| {
+            if (set & (@as(u8, 1) << @intCast(bit)) == 0) continue;
+            const orig = b.orig[0..n];
+            const para = dir orelse bidi.paragraphLevel(orig, b.scratch());
+            bidi.resolve(orig, &.{}, para, &b.levels, b.scratch());
+            bidi.lineLevels(orig, b.levels[0..n], para);
+            try expectLevels(want[0..n], &b.levels, line);
+            try expectOrder(want_order[0..n_order], order[0..visualOrder(want[0..n], &b.levels, &order)], line);
+            cases += 1;
+        }
+    }
+    try std.testing.expect(cases > 400_000);
+}
+
+test "BidiCharacterTest.txt: levels and order" {
+    const bidi_character_test = try gunzip(bidi_character_test_gz);
+    defer std.testing.allocator.free(bidi_character_test);
+    var b: BidiBuffers = .{};
+    var cps: [256]u21 = undefined;
+    var want: [256]u8 = undefined;
+    var lines = std.mem.splitScalar(u8, bidi_character_test, '\n');
+    var line: usize = 0;
+    var cases: usize = 0;
+    while (lines.next()) |ln| : (line += 1) {
+        if (ln.len == 0 or ln[0] == '#') continue;
+        var f = std.mem.splitScalar(u8, ln, ';');
+        var n: usize = 0;
+        var tok = std.mem.tokenizeAny(u8, f.next().?, " ");
+        while (tok.next()) |t| : (n += 1) cps[n] = std.fmt.parseInt(u21, t, 16) catch unreachable;
+        const dir = f.next().?[0] - '0';
+        const want_para = f.next().?[0] - '0';
+        std.debug.assert(parseLevels(f.next().?, &want) == n);
+        const orig = b.orig[0..n];
+        bidi.classes(cps[0..n], orig);
+        const para = if (dir == 2) bidi.paragraphLevel(orig, b.scratch()) else dir;
+        try std.testing.expectEqual(want_para, para);
+        bidi.resolve(orig, cps[0..n], para, &b.levels, b.scratch());
+        bidi.lineLevels(orig, b.levels[0..n], para);
+        try expectLevels(want[0..n], &b.levels, line + 1);
+        var want_order: [256]u32 = undefined;
+        var order: [256]u32 = undefined;
+        const n_order = parseOrder(f.next().?, &want_order);
+        try expectOrder(want_order[0..n_order], order[0..visualOrder(want[0..n], &b.levels, &order)], line + 1);
+        cases += 1;
+    }
+    try std.testing.expect(cases > 90_000);
+}
+
+/// L2 over the characters that have a level (the x ones are left out, as the files do), as
+/// logical indices into the whole input.
+fn visualOrder(want_levels: []const u8, levels: []const u8, out: []u32) usize {
+    var kept_levels: [256]u8 = undefined;
+    var kept_index: [256]u32 = undefined;
+    var k: usize = 0;
+    for (want_levels, levels[0..want_levels.len], 0..) |w, l, i| if (w != 0xff) {
+        kept_levels[k] = l;
+        kept_index[k] = @intCast(i);
+        k += 1;
+    };
+    var order: [256]u32 = undefined;
+    bidi.reorder(kept_levels[0..k], order[0..k]);
+    for (order[0..k], out[0..k]) |o, *v| v.* = kept_index[o];
+    return k;
+}
+
+fn parseOrder(s: []const u8, out: []u32) usize {
+    var n: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, s, " \t\r");
+    while (tok.next()) |t| : (n += 1) out[n] = std.fmt.parseInt(u32, t, 10) catch unreachable;
+    return n;
+}
+
+fn expectOrder(want: []const u32, got: []const u32, line: usize) !void {
+    std.testing.expectEqualSlices(u32, want, got) catch |err| {
+        std.debug.print("line {d}: order\n", .{line});
+        return err;
+    };
+}
+
+test "Scripts.txt: every code point" {
+    // Parsed here independently of gen.zig: unlisted code points are Unknown.
+    const want = try std.testing.allocator.alloc(property.Script, 0x110000);
+    defer std.testing.allocator.free(want);
+    @memset(want, .Unknown);
+    var lines = std.mem.splitScalar(u8, @embedFile("data/Scripts.txt"), '\n');
+    while (lines.next()) |ln| {
+        const data = ln[0 .. std.mem.indexOfScalar(u8, ln, '#') orelse ln.len];
+        const semi = std.mem.indexOfScalar(u8, data, ';') orelse continue;
+        const range = std.mem.trim(u8, data[0..semi], " ");
+        var ends = std.mem.splitSequence(u8, range, "..");
+        const lo = try std.fmt.parseInt(u21, ends.next().?, 16);
+        const hi = if (ends.next()) |h| try std.fmt.parseInt(u21, h, 16) else lo;
+        const s = std.meta.stringToEnum(property.Script, std.mem.trim(u8, data[semi + 1 ..], " ")).?;
+        @memset(want[lo .. @as(usize, hi) + 1], s);
+    }
+    for (want, 0..) |s, cp| try std.testing.expectEqual(s, property.script(@intCast(cp)));
+}
+
+test "script runs: one script each, Common only where nothing else" {
+    const text = "1. Hello, Κόσμε (мир) — こんにちは「世界」! مرحبا 123 שָׁלוֹם\u{301}";
+    var it = lcgr.unicode_script.Scripts{ .text = text };
+    var start: usize = 0;
+    var runs: usize = 0;
+    var prev: ?property.Script = null;
+    while (it.next()) |r| : (runs += 1) {
+        try std.testing.expect(r.end > start);
+        try std.testing.expect(prev == null or prev.? != r.script);
+        var i = start;
+        while (i < r.end) {
+            const d = lcgr.unicode_utf8.decode(text, i);
+            const s = property.script(d.cp);
+            if (s != .Common and s != .Inherited) try std.testing.expectEqual(s, r.script);
+            i += d.len;
+        }
+        start = r.end;
+        prev = r.script;
+    }
+    try std.testing.expectEqual(text.len, start);
+    // Latin, Greek, Cyrillic, Greek (")" closes the Greek bracket), Hiragana, Han, Hiragana
+    // ("」" closes the Hiragana bracket), Arabic, Hebrew.
+    try std.testing.expectEqual(9, runs);
+}
+
+test "lookup speed" {
+    // Prints ns per line+grapheme lookup pair over every 7th code point; read it in ReleaseFast
+    // (`zig build conformance -Doptimize=ReleaseFast`). Timing only, nothing asserted.
+    var ts0: std.os.linux.timespec = undefined;
+    var ts1: std.os.linux.timespec = undefined;
+    var acc: u32 = 0;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts0);
+    for (0..20) |r| {
+        var cp: u32 = @intCast(r);
+        while (cp < 0x110000) : (cp += 7) acc +%= @as(u16, @bitCast(property.line(@intCast(cp)))) +% @as(u8, @bitCast(property.grapheme(@intCast(cp))));
+    }
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts1);
+    const ns: u64 = @intCast((ts1.sec - ts0.sec) * 1_000_000_000 + (ts1.nsec - ts0.nsec));
+    const pairs: u64 = 20 * (0x110000 / 7);
+    std.debug.print("unicode lookups: {d}.{d:0>2} ns per line+grapheme pair (checksum {d})\n", .{ ns / pairs, (ns * 100 / pairs) % 100, acc });
+}

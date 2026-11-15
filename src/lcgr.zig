@@ -15,7 +15,10 @@ pub const texts = @import("core/texts.zig");
 pub const customs = @import("core/customs.zig");
 pub const layout = @import("layout/layout.zig");
 pub const hit = @import("interact/hit.zig");
+pub const overlay = @import("layout/overlay.zig");
 pub const flex = @import("layout/flex.zig");
+pub const layout_check = @import("layout/check.zig");
+pub const coefs = @import("layout/coefs.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
@@ -25,6 +28,10 @@ pub const unicode_property = @import("text/unicode/property.zig");
 pub const unicode_utf8 = @import("text/unicode/utf8.zig");
 pub const unicode_grapheme = @import("text/unicode/grapheme.zig");
 pub const unicode_word = @import("text/unicode/word.zig");
+pub const paint = @import("draw/paint.zig");
+pub const unicode_line = @import("text/unicode/line.zig");
+pub const unicode_bidi = @import("text/unicode/bidi.zig");
+pub const unicode_script = @import("text/unicode/script.zig");
 
 test {
     std.testing.refAllDecls(@This());

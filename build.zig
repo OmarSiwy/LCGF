@@ -9,6 +9,7 @@
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
 //!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
+//!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -57,7 +58,7 @@ pub fn build(b: *std.Build) void {
     const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
     lcgr_fast.addOptions("build_options", options);
     const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/layout/census_probe.zig"),
+        .root_source_file = b.path("src/census_probes.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
@@ -126,6 +127,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
+    const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/font/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    font_fuzz.addPassthruArgs();
+    b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

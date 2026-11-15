@@ -174,7 +174,6 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             }
             const fl = b01(!s.float);
             c.gap[i] = s.gap;
-            c.nkids[i] = 0;
             c.flow[i] = fl;
             c.shrink[i] = b01(s.shrink);
             c.align_main[i] = Align.factor[@backingInt(s.main)];
@@ -197,8 +196,11 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             c.value[i] = s.value;
             c.text[i] = none;
             c.custom[i] = none;
-            // The root is its own parent and must not count itself.
-            c.nkids[parent] += fl * b01(i != 0);
+            // Count this node in its parent, then clear its own count. The root is its own
+            // parent, so the clear also removes its self-count: no `i != 0` test, which
+            // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
+            c.nkids[parent] += fl;
+            c.nkids[i] = 0;
             return i;
         }
 

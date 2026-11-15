@@ -1,8 +1,8 @@
 {
   "p_push": {
-    "jcc": 1,
+    "jcc": 0,
     "back": 0,
-    "short_fwd": 1
+    "short_fwd": 0
   },
   "p_response": {
     "jcc": 0,
