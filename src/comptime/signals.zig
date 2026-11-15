@@ -188,6 +188,17 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             break :blk out;
         };
 
+        /// One bit per derived field, bit d for `State.derived` entry d.
+        const Stale = @Int(.unsigned, derived_count);
+        /// For each field: the derived fields it reaches, as `Stale` bits.
+        const stale_bits: [field_count]Stale = blk: {
+            var out: [field_count]Stale = @splat(0);
+            for (0..field_count) |f| for (0..derived_count) |d| if (reaches[f][d]) {
+                out[f] |= @as(Stale, 1) << d;
+            };
+            break :blk out;
+        };
+
         fn fieldNamed(comptime name: []const u8) Field {
             for (@typeInfo(Field).@"enum".field_names, 0..) |fname, k|
                 if (std.mem.eql(u8, fname, name)) return @fromBackingInt(@intCast(k));
@@ -200,6 +211,9 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             state: State = .{},
             /// Every node starts dirty, so the first frame lays out and paints everything.
             dirty: Mask = full,
+            /// Derived fields whose inputs were staged since the last `commit`, bit d for
+            /// `State.derived` entry d. Zero-sized without derived fields.
+            stale: Stale = 0,
 
             /// The whole signal graph: one store and one OR with a constant mask (one OR per
             /// touched word when the mask is an array), then the derived fields that read
@@ -210,6 +224,34 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 @field(rt.state, @tagName(field)) = value;
                 orInto(&rt.dirty, dirty_masks[@backingInt(field)]);
                 recompute(&rt.state, reaches[@backingInt(field)]);
+            }
+
+            /// A batched `set`: stores and marks the nodes dirty, but only marks the derived fields
+            /// that read `field` stale. Stage any number of changes, then `commit` once, so each
+            /// derived field is recomputed once per batch however many of its inputs changed.
+            /// The dirty mask coalesces as with `set`: one layout and one paint per batch.
+            pub fn stage(rt: *Runtime, comptime field: Field, value: FieldType(field)) void {
+                if (comptime derivedIndex(field) != null)
+                    @compileError("'" ++ @tagName(field) ++ "' is derived; set its inputs instead");
+                @field(rt.state, @tagName(field)) = value;
+                orInto(&rt.dirty, dirty_masks[@backingInt(field)]);
+                if (comptime stale_bits[@backingInt(field)] != 0) rt.stale |= stale_bits[@backingInt(field)];
+            }
+
+            /// Ends a batch: recomputes every stale derived field once, in topological order.
+            pub fn commit(rt: *Runtime) void {
+                inline for (topo_order) |field| {
+                    const d = comptime derivedIndex(field).?;
+                    if ((rt.stale >> d) & 1 != 0)
+                        @field(rt.state, @tagName(field)) = @field(derived_decl, derived_names[d]).compute(&rt.state);
+                }
+                rt.stale = 0;
+            }
+
+            /// The dirty nodes since the last call, cleared: what one frame lays out and paints.
+            pub fn takeDirty(rt: *Runtime) Mask {
+                defer rt.dirty = empty;
+                return rt.dirty;
             }
 
             /// Recomputes, in topological order, every derived field marked in `which`.
@@ -430,4 +472,75 @@ test "derived: set recomputes exactly the dependent fields, inputs first" {
     rt.set(.title, "Main bus");
     try testing.expectEqual(8, rt.state.caption_len);
     try testing.expectEqual(123, rt.state.left);
+}
+
+/// `Derived` with a counter in each compute function, to see how often a batch recomputes.
+const Counted = struct {
+    volume: f32 = 0.5,
+    muted: bool = false,
+    pan: f32 = 0,
+    gain: f32 = 0.5,
+    left: f32 = 0.25,
+
+    var gain_calls: u32 = 0;
+    var left_calls: u32 = 0;
+    pub const derived = .{
+        .gain = .{ .from = .{ .volume, .muted }, .compute = gainOf },
+        .left = .{ .from = .{ .gain, .pan }, .compute = leftOf },
+    };
+    fn gainOf(m: *const Counted) f32 {
+        gain_calls += 1;
+        return if (m.muted) 0 else m.volume;
+    }
+    fn leftOf(m: *const Counted) f32 {
+        left_calls += 1;
+        return m.gain * (1 - m.pan) / 2;
+    }
+};
+
+test "stage, commit: a batch recomputes each derived field once and dirties the union" {
+    const C = Signals(Counted, s.row(.{}, .{ s.slider(.v, .volume), s.checkbox(.m, .muted), s.slider(.p, .pan), s.label(.left) }));
+    var rt: C.Runtime = .{};
+    _ = rt.takeDirty();
+    Counted.gain_calls = 0;
+    Counted.left_calls = 0;
+    rt.stage(.volume, 0.8);
+    rt.stage(.muted, false);
+    rt.stage(.pan, -1);
+    rt.stage(.volume, 0.6);
+    // Nothing recomputed yet: the batch is not committed.
+    try testing.expectEqual(0, Counted.gain_calls);
+    try testing.expectEqual(0.5, rt.state.gain);
+    rt.commit();
+    try testing.expectEqual(1, Counted.gain_calls);
+    try testing.expectEqual(1, Counted.left_calls);
+    try testing.expectEqual(0.6, rt.state.gain);
+    try testing.expectEqual(0.6, rt.state.left);
+    // One mask for the whole batch: every slider, the checkbox, the label and the root.
+    try testing.expectEqual(0b1_1111, rt.takeDirty());
+    try testing.expectEqual(0, rt.dirty);
+    // A commit with nothing staged recomputes nothing; staging pan alone skips gain.
+    rt.commit();
+    rt.stage(.pan, 0);
+    rt.commit();
+    try testing.expectEqual(1, Counted.gain_calls);
+    try testing.expectEqual(2, Counted.left_calls);
+    try testing.expectEqual(0.3, rt.state.left);
+    // The same changes through set recompute after every call.
+    rt.set(.volume, 0.6);
+    rt.set(.muted, false);
+    try testing.expectEqual(3, Counted.gain_calls);
+    try testing.expectEqual(4, Counted.left_calls);
+}
+
+test "stage: without derived fields it is set" {
+    var a: App.Runtime = .{};
+    var b: App.Runtime = .{};
+    a.dirty = 0;
+    b.dirty = 0;
+    a.set(.volume, 0.9);
+    b.stage(.volume, 0.9);
+    b.commit();
+    try testing.expectEqual(a, b);
+    try testing.expectEqual(0, @sizeOf(@TypeOf(b.stale)));
 }

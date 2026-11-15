@@ -29,3 +29,8 @@ const Far = lcgr.signals.Signals(struct { x: u8 = 0, y: u8 = 0 }, blk: {
 export fn set_far(rt: *Far.Runtime, v: u8) void {
     rt.set(.x, v);
 }
+
+/// The batched setter: for a field nothing derives from, the same store and OR as `set`.
+export fn stage_volume(rt: *App.Runtime, v: f32) void {
+    rt.stage(.volume, v);
+}
