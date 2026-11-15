@@ -16,6 +16,7 @@ const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
+const Flex = @import("flex.zig").Flex;
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -51,6 +52,18 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
 
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
 pub fn fit(t: *Tree, axis: Axis) void {
+    fitOf(t, {}, axis);
+}
+
+/// `fit` with the extra sizing rules of `fx` (flex.zig).
+pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
+    fitOf(t, fx, axis);
+}
+
+/// One body for both forms: with `fx` void every flex term is compiled out, so `fit` keeps the
+/// prototype's code.
+fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
+    const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     if (t.len == 0) return;
     // Column slices are read into locals once, so the loop indexes them
@@ -73,7 +86,9 @@ pub fn fit(t: *Tree, axis: Axis) void {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
         const content = fit_[i] + main[i] * gap_total[i];
-        const nat = @min(@max(content + lo[i] + hi[i], min[i]), max[i]);
+        var nat = content + lo[i] + hi[i];
+        if (flexed) nat = fx.aspectNat(t, a, i, nat);
+        nat = @min(@max(nat, min[i]), max[i]);
         nat_[i] = nat;
         // Fold into the parent: a sum along its main axis, a max across it.
         const p = parent[i];
@@ -85,7 +100,9 @@ pub fn fit(t: *Tree, axis: Axis) void {
     }
     // The root has no parent to fold into.
     const content = fit_[0] + main[0] * gap_total[0];
-    nat_[0] = @min(@max(content + lo[0] + hi[0], min[0]), max[0]);
+    var nat = content + lo[0] + hi[0];
+    if (flexed) nat = fx.aspectNat(t, a, 0, nat);
+    nat_[0] = @min(@max(nat, min[0]), max[0]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
     // on its parent-to-child dependency chain.
@@ -101,6 +118,16 @@ pub fn fit(t: *Tree, axis: Axis) void {
 /// Free space is shared out once by `grow` weight; a child stopped by its
 /// `max` leaves its remainder unused instead of triggering another round.
 pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
+    resolveOf(t, {}, axis, viewport);
+}
+
+/// `resolve` with the extra sizing rules of `fx` (flex.zig).
+pub fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void {
+    resolveOf(t, fx, axis, viewport);
+}
+
+fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
+    const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     if (t.len == 0) return;
     const parent = t.c.parent;
@@ -143,6 +170,7 @@ pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
         // Shrinkable nodes give way when the parent has no room for them.
         const room = @max(inner - main * (taken - nat), 0);
         s -= shrink[i] * fl * @max(s - room, 0);
+        if (flexed) s = fx.aspectSize(t, a, i, s);
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;
         used[p] += s * fl;
@@ -254,6 +282,20 @@ pub fn run(t: *Tree, tx: *Texts, viewport: [2]f32) void {
     applyText(t, tx, .y);
     fit(t, .y);
     resolve(t, .y, viewport[1]);
+    place(t);
+    finalize(t);
+}
+
+/// `run` with the extra sizing rules of `fx` (flex.zig).
+pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
+    prepare(t);
+    applyText(t, tx, .x);
+    fitFlex(t, fx, .x);
+    resolveFlex(t, fx, .x, viewport[0]);
+    textAvail(t, tx);
+    applyText(t, tx, .y);
+    fitFlex(t, fx, .y);
+    resolveFlex(t, fx, .y, viewport[1]);
     place(t);
     finalize(t);
 }

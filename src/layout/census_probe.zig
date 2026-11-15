@@ -30,3 +30,9 @@ export fn p_finalize(t: *Tree) void {
 export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
     return t.push(parent, .none, s);
 }
+export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.fitFlex(t, fx, .y);
+}
+export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.resolveFlex(t, fx, .y, 800);
+}
