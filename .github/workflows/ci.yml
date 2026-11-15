@@ -25,3 +25,14 @@ jobs:
             range="${{ github.sha }}"
           fi
           python3 tools/commitlint/commitlint.py "$range"
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [debug, release-safe, release-fast]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop -c ci/run.sh ${{ matrix.job }}
