@@ -40,9 +40,9 @@
     "short_fwd": 0
   },
   "p_fit": {
-    "jcc": 8,
-    "back": 3,
-    "short_fwd": 1
+    "jcc": 4,
+    "back": 2,
+    "short_fwd": 0
   },
   "p_apply_text": {
     "jcc": 5,

@@ -86,8 +86,46 @@ pub fn propagate(t: *const Tree, d: *Dirty) void {
     }
 }
 
+/// The first span root at or after row `from` on one axis, or `t.len`. Skips whole vectors
+/// without one.
+fn nextSpan(t: *const Tree, span: []const u8, from: u32) u32 {
+    var i: usize = from;
+    while (i < t.len) {
+        const base = std.mem.alignBackward(usize, i, simd.lanes);
+        const v: simd.Bytes = span[base..][0..simd.lanes].*;
+        if (@reduce(.Or, v) == 0) {
+            i = base + simd.lanes;
+            continue;
+        }
+        if (span[i] != 0) return @intCast(i);
+        i += 1;
+    }
+    return t.len;
+}
+
+/// Natural sizes again for the subtree [root, end[root]) on one axis: clear its fit scratch,
+/// apply the text extents of its runs, recompute its gap totals, fit it.
+pub fn refit(t: *Tree, tx: *const Texts, axis: Axis, root: u32) void {
+    const a = @backingInt(axis);
+    const c = &t.c;
+    const last = c.end[root];
+    @memset(c.fit[a][root..last], 0);
+    @memset(c.grow_sum[a][root..last], 0);
+    // A changed gap changes gap_total; nkids is structure and stays.
+    for (c.gap_total[root..last], c.gap[root..last], c.nkids[root..last]) |*g, gap, kids| {
+        g.* = gap * @max(kids - 1, 0);
+    }
+    // Every run is written; runs outside the subtree write back what they read.
+    const extents = [2][]const f32{ tx.c.w, tx.c.h };
+    const dst = c.fit[a];
+    for (tx.c.node[0..tx.len], extents[a][0..tx.len]) |node, extent| {
+        dst[node] = simd.selF(simd.andB(node >= root, node < last), extent, dst[node]);
+    }
+    layout.fitSpan(t, axis, root, last);
+}
+
 /// Lays out what the marks reach and clears them. With no marks the columns are left as they
-/// are: an idle frame does no layout work.
+/// are: an idle frame does no layout work. Text must be settled, as for `layout.run`.
 pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     std.debug.assert(t.len <= d.cap);
     const n = simd.padded(t.len);
@@ -99,7 +137,19 @@ pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     if (@reduce(.Or, any) == 0) return;
     boundaries(t, d);
     propagate(t, d);
-    layout.run(t, tx, viewport);
+    inline for (0..2) |a| {
+        const axis: Axis = @fromBackingInt(@intCast(a));
+        var r = nextSpan(t, d.c.span[a], 0);
+        while (r < t.len) : (r = nextSpan(t, d.c.span[a], t.c.end[r])) refit(t, tx, axis, r);
+    }
+    // Sizes and positions are still recomputed for the whole tree.
+    inline for (0..2) |a| @memset(t.c.used[a][0..n], 0);
+    @memset(t.c.cursor[0..n], 0);
+    layout.resolve(t, .x, viewport[0]);
+    layout.textAvail(t, tx);
+    layout.resolve(t, .y, viewport[1]);
+    layout.place(t);
+    layout.finalize(t);
     inline for (0..2) |a| @memset(d.c.span[a][0..n], 0);
 }
 

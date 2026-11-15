@@ -51,8 +51,17 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
 
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
 pub fn fit(t: *Tree, axis: Axis) void {
-    const a = @backingInt(axis);
     if (t.len == 0) return;
+    fitSpan(t, axis, 0, t.len);
+}
+
+/// `fit` over rows [first, last): a whole subtree, `last = end[first]` (incremental layout).
+/// Rows after `first` fold into their parents as in `fit`; row `first` gets its natural size
+/// and is not folded into its own parent. `fit` and `grow_sum` of the rows must be cleared and
+/// their text extents applied first, as `prepare` and `applyText` do for the whole tree.
+pub fn fitSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+    const a = @backingInt(axis);
+    std.debug.assert(first < last and last <= t.len);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -68,8 +77,8 @@ pub fn fit(t: *Tree, axis: Axis) void {
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
 
-    var i: u32 = t.len;
-    while (i > 1) {
+    var i: u32 = last;
+    while (i > first + 1) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
         const content = fit_[i] + main[i] * gap_total[i];
@@ -83,15 +92,16 @@ pub fn fit(t: *Tree, axis: Axis) void {
         fit_[p] = mx + main[p] * (sum - mx);
         grow_sum[p] += grow[i] * flow[i];
     }
-    // The root has no parent to fold into.
-    const content = fit_[0] + main[0] * gap_total[0];
-    nat_[0] = @min(@max(content + lo[0] + hi[0], min[0]), max[0]);
+    // The root (of the span) has no parent to fold into.
+    const content = fit_[first] + main[first] * gap_total[first];
+    nat_[first] = @min(@max(content + lo[first] + hi[first], min[first]), max[first]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
-    // on its parent-to-child dependency chain.
+    // on its parent-to-child dependency chain. Whole vectors around the span: grow_inv is a
+    // function of grow_sum alone, so neighbouring rows get the value they already hold.
     const grow_inv = t.c.grow_inv[a];
-    const n = simd.padded(t.len);
-    var j: usize = 0;
+    const n = simd.padded(last);
+    var j: usize = std.mem.alignBackward(usize, first, W);
     while (j < n) : (j += W) {
         simd.storeF(grow_inv, j, simd.f(1) / @max(simd.loadF(grow_sum, j), simd.f(1e-6)));
     }
