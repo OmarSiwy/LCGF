@@ -4,7 +4,7 @@
 //!
 //!   prepare            SIMD     clear scratch, gap totals
 //!   applyText(.x)      scatter  text widths into leaves
-//!   fit(.x)            reverse  natural widths, bottom-up
+//!   fit(.x)            reverse  natural widths, bottom-up (+ SIMD reciprocals)
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -79,6 +79,15 @@ pub fn fit(t: *Tree, axis: Axis) void {
     // The root has no parent to fold into.
     const content = fit_[0] + main[0] * gap_total[0];
     nat_[0] = @min(@max(content + lo[0] + hi[0], min[0]), max[0]);
+
+    // SIMD: one reciprocal per node, so the top-down sweep has no division
+    // on its parent-to-child dependency chain.
+    const grow_inv = t.c.grow_inv[a];
+    const n = simd.padded(t.len);
+    var j: usize = 0;
+    while (j < n) : (j += W) {
+        simd.storeF(grow_inv, j, simd.f(1) / @max(simd.loadF(grow_sum, j), simd.f(1e-6)));
+    }
 }
 
 const testing = std.testing;
@@ -194,4 +203,20 @@ test "fit: natural sizes bottom-up, summed along the main axis and maxed across 
     try expectCol(&.{ 64, 0, 0, 0, 24, 24, 0 }, c.fit[1]);
     try expectCol(&.{ 300, 40, 0, 0, 24, 24, 0 }, c.nat[1]);
     try expectCol(&.{ 1, 2, 0, 0, 0, 0, 0 }, c.grow_sum[1]);
+}
+
+test "fit: grow_inv is 1 / grow_sum on every padded row, with 1e-6 as the floor" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    fit(&s.t, .x);
+    // No growing children: 1 / 1e-6, finite, so resolve multiplies a zero share by it.
+    try expectCol(&.{ 0.5, 1, 1e6, 1e6, 1e6, 1e6, 1e6 }, c.grow_inv[0]);
+    const n = simd.padded(s.t.len);
+    for (c.grow_inv[0][s.t.len..n]) |v| try testing.expectEqual(1e6, v);
+    applyText(&s.t, &s.tx, .y);
+    fit(&s.t, .y);
+    try expectCol(&.{ 1, 0.5, 1e6, 1e6, 1e6, 1e6, 1e6 }, c.grow_inv[1]);
 }
