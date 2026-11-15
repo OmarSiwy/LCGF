@@ -257,3 +257,71 @@ test "baseline alignment: a nested row aligns by its own baseline; columns ignor
     // The column stacks as before.
     try testing.expectEqual(12, t.c.pos[1][y] - t.c.pos[1][x]);
 }
+
+test "baseline: apply clears last frame's runs, so a node that lost its text synthesizes again" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const a = s.text(root, &.{}, 40, 12, 9);
+    s.run(200, 200);
+    try testing.expectEqual(9, s.base(a));
+    // Next frame: the same node, no run.
+    s.tx.reset();
+    t.c.text[a] = types.none;
+    s.run(200, 200);
+    try testing.expectEqual(0, s.fx.c.text_has[a]);
+    try testing.expectEqual(0, s.base(a)); // a leaf with no content: its bottom, at 0
+}
+
+test "baseline: growing or stretching a node later does not move its baseline" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(200), .px(100) } });
+    const a = s.text(root, &.{ .size = .{ .fill, .fill }, .pad = .{ 0, 3, 0, 0 } }, 40, 12, 9);
+    s.run(200, 100);
+    try testing.expectEqual(100, t.c.size[1][a]);
+    try testing.expectEqual(3 + 9, s.base(a));
+}
+
+test "baseline: without the flag the flex passes give the plain row's rects" {
+    var a: Scene = .{};
+    var b: Scene = .{};
+    inline for (.{ &a, &b }) |s| {
+        const t = s.init();
+        const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+        const row = t.push(root, .none, &.{ .dir = .x, .cross = .center, .gap = 3 });
+        _ = s.text(row, &.{}, 40, 12, 9);
+        _ = s.text(row, &.{ .pad = @splat(2) }, 40, 30, 24);
+        t.seal(row);
+    }
+    a.run(300, 300);
+    layout.run(&b.t, &b.tx, .{ 300, 300 });
+    inline for (0..4) |k| try testing.expectEqualSlices(f32, b.t.c.rect[k][0..b.t.len], a.t.c.rect[k][0..a.t.len]);
+}
+
+test "baseline: a form row, end to end through finalize" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(200) }, .pad = @splat(10) });
+    // label | input (padded box with 14 px text) | button (16 px text, more padding)
+    const row = t.push(root, .none, &.{ .dir = .x, .gap = 8 });
+    s.fx.set(row, &.{ .baseline = true });
+    const label = s.text(row, &.{}, 50, 12, 10);
+    const input = t.push(row, .none, &.{ .dir = .x, .pad = .{ 4, 3, 4, 3 } });
+    const value = s.text(input, &.{}, 100, 14, 11);
+    t.seal(input);
+    const button = t.push(row, .none, &.{ .dir = .x, .pad = .{ 6, 5, 6, 5 } });
+    const caption = s.text(button, &.{}, 40, 16, 13);
+    t.seal(button);
+    t.seal(row);
+    s.run(400, 200);
+    // Baselines: label 10, input 3 + 11 = 14, button 5 + 13 = 18. Shared: 18 below row's top.
+    const R = types.Rect;
+    try testing.expectEqual(R{ .x0 = 10, .y0 = 18, .x1 = 60, .y1 = 30 }, t.rect(label));
+    try testing.expectEqual(R{ .x0 = 68, .y0 = 14, .x1 = 176, .y1 = 34 }, t.rect(input));
+    try testing.expectEqual(R{ .x0 = 184, .y0 = 10, .x1 = 236, .y1 = 36 }, t.rect(button));
+    // Every text line sits on y = 10 + 18.
+    inline for (.{ label, value, caption }) |k| try testing.expectEqual(28, t.c.pos[1][k] + s.base(k));
+    // Row: 18 above, below: label 2, input 6, button 8.
+    try testing.expectEqual(26, t.c.size[1][row]);
+}
