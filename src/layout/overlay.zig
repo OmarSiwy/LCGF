@@ -5,12 +5,14 @@
 //!
 //!   zstack     a container whose children all overlap, sized to the largest of them
 //!   anchor     after `place`: moves anchored nodes (and their subtrees) to a point of a box
+//!   lastRect   where a node was in the previous frame's tree, to anchor a popover to it
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
+const Rect = types.Rect;
 
 /// Turns node `i` into a z-stack: its children overlap at its content origin, later rows on top,
 /// and it is as large as its largest child on both axes. Call after `push`, before the passes.
@@ -58,6 +60,10 @@ pub const Anchors = struct {
         pivot: [2][]f32,
         /// Added after anchoring, in pixels.
         offset: [2][]f32,
+        /// 1.0: the box is the parent's content box. 0.0: the box is `box`.
+        rel: []f32,
+        /// x0, y0, x1, y1 of an absolute box, for rows with `rel` 0.
+        box: [4][]f32,
     };
 
     /// Carves every column from `carver`, `simd.rows(cap)` rows each. With a counting carver
@@ -76,6 +82,22 @@ pub const Anchors = struct {
     /// (a dropdown). Push anchors in row order: a nested anchor then sees its parent's final
     /// place. Returns the anchor's row.
     pub fn push(an: *Anchors, node: u32, at: Anchor, pivot: Anchor, offset: [2]f32) u32 {
+        const k = an.row(node, at, pivot, offset);
+        an.c.rel[k] = 1;
+        inline for (0..4) |e| an.c.box[e][k] = 0;
+        return k;
+    }
+    /// Like `push`, but the box is the absolute rect `box`: typically another node's rect from
+    /// the previous frame (`lastRect`), for a tooltip or popover that belongs to one part of the
+    /// tree and is drawn next to another. The node is usually floating under the root or a
+    /// z-stack.
+    pub fn pushRect(an: *Anchors, node: u32, box: Rect, at: Anchor, pivot: Anchor, offset: [2]f32) u32 {
+        const k = an.row(node, at, pivot, offset);
+        an.c.rel[k] = 0;
+        inline for (0..4) |e| an.c.box[e][k] = box.array()[e];
+        return k;
+    }
+    fn row(an: *Anchors, node: u32, at: Anchor, pivot: Anchor, offset: [2]f32) u32 {
         const k = @min(an.len, an.cap - 1);
         an.overflow = simd.orB(an.overflow, an.len >= an.cap);
         an.len = k + 1;
@@ -99,6 +121,9 @@ pub const Anchors = struct {
 /// node anchored to a corner of a scroll container stays in that corner while the content
 /// scrolls. Anchoring is meant for floating nodes; an in-flow node is moved too, but its slot in
 /// the parent's flow stays where it was.
+///
+/// Rows pushed with `pushRect` use their absolute box instead of the parent's; the two cases are
+/// one formula blended by the `rel` coefficient.
 pub fn anchor(t: *Tree, an: *const Anchors) void {
     const pos = t.c.pos;
     const size = t.c.size;
@@ -110,20 +135,35 @@ pub fn anchor(t: *Tree, an: *const Anchors) void {
     for (0..an.len) |k| {
         const n = c.node[k];
         const p = parent[n];
+        const rel = c.rel[k];
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
-            const want = pos[a][p] + lo[a][p] + c.at[a][k] * inner - c.pivot[a][k] * size[a][n] + c.offset[a][k];
+            const b0 = c.box[a][k];
+            const origin = b0 + rel * (pos[a][p] + lo[a][p] - b0);
+            const span = c.box[a + 2][k] - b0;
+            const extent = span + rel * (inner - span);
+            const want = origin + c.at[a][k] * extent - c.pivot[a][k] * size[a][n] + c.offset[a][k];
             const delta = want - pos[a][n];
             for (pos[a][n..end[n]]) |*v| v.* += delta;
         }
     }
 }
 
+/// Where the node with `id` was laid out in `prev`, the previous frame's tree, or a zero rect
+/// if it was not there. A SIMD scan of the id column, O(n). Ported from prototype/ui.zig
+/// (`Frame.lastRect`); the caller keeps the previous tree, as the runtime front end does.
+pub fn lastRect(prev: *const Tree, id: types.Id) Rect {
+    const i = prev.find(id);
+    const r = @min(i, prev.cap - 1);
+    const m = simd.b2f(i != types.none);
+    const c = &prev.c;
+    return .{ .x0 = c.rect[0][r] * m, .y0 = c.rect[1][r] * m, .x1 = c.rect[2][r] * m, .y1 = c.rect[3][r] * m };
+}
+
 const testing = std.testing;
 const layout = @import("layout.zig");
 const Texts = @import("../core/texts.zig").Texts;
 const Id = types.Id;
-const Rect = types.Rect;
 
 /// A tree and an empty text list in a caller-owned buffer, for the tests.
 const Scene = struct {
@@ -255,4 +295,45 @@ test "anchor: no anchors leaves the layout untouched; overflow is reported" {
     try testing.expectEqual(1, an.len);
     an.reset();
     try testing.expectEqual(0, an.len);
+}
+
+test "anchor: a popover is placed against another node's rect from the previous frame" {
+    // Frame 1: a toolbar with a "save" button; nothing is anchored yet.
+    var prev: Scene = .{};
+    prev.init();
+    {
+        const t = &prev.t;
+        const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) }, .pad = @splat(10) });
+        const bar = t.push(root, .none, &.{ .dir = .x, .gap = 5 });
+        t.seal(t.push(bar, Id.from("open"), &.{ .size = .{ .px(60), .px(20) } }));
+        t.seal(t.push(bar, Id.from("save"), &.{ .size = .{ .px(60), .px(20) } }));
+        t.seal(bar);
+        t.seal(root);
+        prev.run(.{ 400, 300 });
+    }
+    const save = lastRect(&prev.t, Id.from("save"));
+    try testing.expectEqual(rect(75, 10, 135, 30), save);
+    // A node that was not there gives a zero rect.
+    try testing.expectEqual(Rect{}, lastRect(&prev.t, Id.from("absent")));
+
+    // Frame 2: a tooltip floating under the root, hung 2 px below the button's last rect and
+    // centred on it, with a child that follows.
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var an = Anchors.init(&carver, 2);
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) }, .pad = @splat(10) });
+    const tip = t.push(root, .none, &.{ .size = .{ .px(100), .px(24) }, .pad = @splat(2), .float = true });
+    const label = t.push(tip, .none, &.{ .size = .{ .px(50), .px(10) } });
+    t.seal(tip);
+    t.seal(root);
+    _ = an.pushRect(tip, save, .bottom, .top, .{ 0, 2 });
+    s.run(.{ 400, 300 });
+    anchor(t, &an);
+    layout.finalize(t);
+    // Centre x of the button is 105, so the 100 px tip spans 55..155, from y = 30 + 2.
+    try testing.expectEqual(rect(55, 32, 155, 56), t.rect(tip));
+    try testing.expectEqual(rect(57, 34, 107, 44), t.rect(label));
 }
