@@ -14,11 +14,14 @@ job() {
     debug)        both test ;;
     release-safe) both test -Doptimize=ReleaseSafe ;;
     release-fast) both test -Doptimize=ReleaseFast ;;
+    # simd.lanes follows the CPU: SSE2 baseline gives 4 f32 lanes, AVX2 gives 8.
+    lanes-4)      both test -Dcpu=x86_64 ;;
+    lanes-8)      both test -Dcpu=x86_64_v3 ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
 
-jobs=(debug release-safe release-fast)
+jobs=(debug release-safe release-fast lanes-4 lanes-8)
 if [ "${1-}" = all ]; then
     for j in "${jobs[@]}"; do echo "== $j"; job "$j"; done
     echo "all ${#jobs[@]} jobs green"
