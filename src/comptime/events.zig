@@ -9,6 +9,7 @@ const Kind = spec_zig.Kind;
 const flatten = @import("flatten.zig");
 const simd = @import("../core/simd.zig");
 const none = @import("../core/types.zig").none;
+const Input = @import("../core/input.zig").Input;
 
 const W = simd.lanes;
 
@@ -104,6 +105,62 @@ pub fn Events(comptime spec: Spec) type {
             if (comptime count == 0) return null;
             if (found == none) return null;
             return widget(found);
+        }
+
+        /// What an event on a widget of `kind` carries: a slider its new value, 0 at the left
+        /// edge to 1 at the right; a checkbox nothing (it was toggled); any other widget
+        /// nothing (it was clicked).
+        pub fn Payload(comptime kind: Kind) type {
+            return switch (kind) {
+                .slider => f32,
+                .checkbox, .label, .col, .row => void,
+            };
+        }
+
+        /// One input event on one widget, tagged by the widget, so handling events is an
+        /// exhaustive switch whose payload type follows the widget's kind:
+        /// `switch (e) { .mute => ..., .volume => |v| ..., .pan => |v| ... }`.
+        pub const Event = if (count == 0) union {} else blk: {
+            var types_: [count]type = undefined;
+            for (&types_, widget_kinds) |*T, kind| T.* = Payload(kind);
+            break :blk @Union(.auto, Widget, &ids.names, &types_, &@splat(.{}));
+        };
+
+        /// Pointer state across frames. The caller owns it and passes it to every `pointer`.
+        pub const Pointer = struct {
+            /// The widget the left button went down on, while it is held.
+            pressed: ?Widget = null,
+            /// The left button was down last frame.
+            down: bool = false,
+        };
+
+        /// The event this frame's mouse makes, or null. A slider reports its value on press and
+        /// every frame it stays pressed (a drag, clamped to the slider's ends, even outside
+        /// it); any other widget reports a click when the button goes up over the widget it
+        /// went down on.
+        pub fn pointer(p: *Pointer, r: *const Rects, in: *const Input) ?Event {
+            if (comptime count == 0) return null;
+            const down = in.buttons.left;
+            defer p.down = down;
+            const x = in.pointer[0];
+            const y = in.pointer[1];
+            if (down and !p.down) p.pressed = at(r, x, y);
+            const w = p.pressed orelse return null;
+            if (!down) p.pressed = null;
+            switch (w) {
+                inline else => |tag| {
+                    const k = comptime slot(tag);
+                    if (comptime widget_kinds[k] == .slider) {
+                        if (!down) return null;
+                        const x0 = r.c[0][k];
+                        const span = r.c[2][k] - x0;
+                        const v = std.math.clamp((x - x0) / @max(span, std.math.floatMin(f32)), 0, 1);
+                        return @unionInit(Event, @tagName(tag), v);
+                    }
+                    if (down or at(r, x, y) != tag) return null;
+                    return @unionInit(Event, @tagName(tag), {});
+                },
+            }
         }
     };
 }
@@ -268,4 +325,58 @@ test "at: overlapping rects, the latest widget wins; matches a scalar sweep" {
     try testing.expectEqual(null, M.at(&.{}, 10, 10));
     try testing.expectEqual(0, Events(s.label(.x)).rect_rows);
     try testing.expectEqual(null, Events(s.label(.x)).at(&.{}, 0, 0));
+}
+
+/// The sized mixer's rects, laid out.
+fn sizedRects() Sized.Rects {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = laidOut(sized, &raw, .{ 200, 100 });
+    return Sized.Rects.fromTree(&t);
+}
+
+/// One frame of mouse input: the pointer at (x, y), the left button held or not.
+fn mouse(x: f32, y: f32, left: bool) Input {
+    return .{ .pointer = .{ x, y }, .buttons = .{ .left = left } };
+}
+
+test "Event: a tagged union over widgets, payload by kind" {
+    try testing.expectEqual(Sized.Widget, @typeInfo(Sized.Event).@"union".tag_type.?);
+    try testing.expectEqual(void, @FieldType(Sized.Event, "mute"));
+    try testing.expectEqual(f32, @FieldType(Sized.Event, "volume"));
+    try testing.expectEqual(f32, @FieldType(Sized.Event, "pan"));
+}
+
+test "pointer: a click toggles a checkbox, a press and drag set a slider" {
+    const r = sizedRects();
+    var p: Sized.Pointer = .{};
+    var muted = false;
+    var volume: f32 = 0.5;
+    var pan: f32 = 0.5;
+    // The volume slider is x 36..136; the checkbox 8..28; both y 8..28.
+    const frames = [_]Input{
+        mouse(10, 10, false), mouse(10, 10, true), mouse(12, 12, true), mouse(12, 12, false), // click mute
+        mouse(61, 20, true), mouse(111, 20, true), mouse(500, 90, true), mouse(500, 90, false), // drag volume
+        mouse(10, 10, true), mouse(100, 90, false), // press mute, release elsewhere: no click
+        mouse(100, 90, true), mouse(10, 10, false), // press nothing, release on mute: no click
+    };
+    var events: u32 = 0;
+    var volumes: [3]f32 = undefined;
+    for (frames) |in| {
+        const e = Sized.pointer(&p, &r, &in) orelse continue;
+        switch (e) { // forgetting a widget here is a compile error
+            .mute => muted = !muted,
+            .volume => |v| {
+                volumes[events - 1] = v;
+                volume = v;
+            },
+            .pan => |v| pan = v,
+        }
+        events += 1;
+    }
+    try testing.expectEqual(4, events);
+    try testing.expect(muted);
+    try testing.expectEqualSlices(f32, &.{ 0.25, 0.75, 1 }, &volumes);
+    try testing.expectEqual(1, volume);
+    try testing.expectEqual(0.5, pan);
+    try testing.expectEqual(null, p.pressed);
 }
