@@ -152,7 +152,8 @@ pub fn main(init: std.process.Init) !void {
         lcgr.coefs.coefs(t, &sk, .y);
         lcgr.coefs.resolveK(t, &sk, .y, in.viewport[1]);
         m[10] = now();
-        lcgr.layout.place(t);
+        lcgr.coefs.placeRows(t, &sk);
+        lcgr.coefs.placeK(t, &sk);
         m[11] = now();
         lcgr.layout.finalize(t);
         m[12] = now();
