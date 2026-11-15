@@ -120,7 +120,7 @@ pub const Cache = struct {
         var n: u32 = 0;
         for (0..tx.len) |k| {
             const want = key(strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] }), c.font[k], c.px[k]);
-            const slot = want & cache.mask;
+            const slot: usize = @intCast(want & cache.mask); // mask < slot count, so it fits a 32-bit usize
             const hit = cache.c.key[slot] == want;
             c.w[k] = simd.selF(hit, cache.c.w[slot], c.w[k]);
             c.h[k] = simd.selF(hit, cache.c.h[slot], c.h[k]);
@@ -136,7 +136,7 @@ pub const Cache = struct {
         const c = &tx.c;
         for (rows) |k| {
             const want = key(strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] }), c.font[k], c.px[k]);
-            const slot = want & cache.mask;
+            const slot: usize = @intCast(want & cache.mask); // mask < slot count, so it fits a 32-bit usize
             cache.c.key[slot] = want;
             cache.c.w[slot] = c.w[k];
             cache.c.h[slot] = c.h[k];
