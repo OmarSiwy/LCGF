@@ -179,3 +179,63 @@ test "Rect: size, intersection and half-open containment" {
     try std.testing.expect(!a.contains(-0.5, 10));
     try std.testing.expect(!empty.contains(350, 350));
 }
+
+pub const inf = std.math.inf(f32);
+
+/// How a node is sized along one axis. Stored as data (kind + value), then
+/// turned into coefficients by table lookup, so layout never switches on it.
+pub const Size = extern struct {
+    kind: Kind = .fit,
+    v: f32 = 0,
+
+    pub const Kind = enum(u8) { fit, px, grow, pct };
+
+    /// As large as the content.
+    pub const fit: Size = .{};
+    /// Take all free space (weight 1).
+    pub const fill: Size = .{ .kind = .grow, .v = 1 };
+    /// Exactly `v` pixels.
+    pub fn px(v: f32) Size {
+        return .{ .kind = .px, .v = v };
+    }
+    /// A share of the parent's free space on its main axis; stretch on its cross axis.
+    pub fn grow(weight: f32) Size {
+        return .{ .kind = .grow, .v = weight };
+    }
+    /// A fraction (0..1) of the parent's inner size.
+    pub fn pct(fraction: f32) Size {
+        return .{ .kind = .pct, .v = fraction };
+    }
+
+    // Coefficient tables, indexed by Kind. Public because layout lives in another file.
+    //                                            fit  px  grow pct
+    pub const k_min = [4]f32{ 0, 1, 0, 0 }; //   min  = v * k_min
+    pub const k_max = [4]f32{ 0, 1, 0, 0 }; //   max  = v * k_max + c_max
+    pub const c_max = [4]f32{ inf, 0, inf, inf };
+    pub const k_grow = [4]f32{ 0, 0, 1, 0 }; //  grow = v * k_grow
+    pub const k_pct = [4]f32{ 0, 0, 0, 1 }; //   pct  = v * k_pct
+};
+
+test "Size: constructors store kind and value" {
+    try std.testing.expectEqual(Size{ .kind = .fit, .v = 0 }, Size.fit);
+    try std.testing.expectEqual(Size{ .kind = .grow, .v = 1 }, Size.fill);
+    try std.testing.expectEqual(Size{ .kind = .px, .v = 12 }, Size.px(12));
+    try std.testing.expectEqual(Size{ .kind = .grow, .v = 2 }, Size.grow(2));
+    try std.testing.expectEqual(Size{ .kind = .pct, .v = 0.25 }, Size.pct(0.25));
+}
+
+test "Size: coefficient tables give min, max, grow and pct without a switch" {
+    const cases = [_]struct { s: Size, min: f32, max: f32, grow: f32, pct: f32 }{
+        .{ .s = .fit, .min = 0, .max = inf, .grow = 0, .pct = 0 },
+        .{ .s = .px(30), .min = 30, .max = 30, .grow = 0, .pct = 0 },
+        .{ .s = .grow(3), .min = 0, .max = inf, .grow = 3, .pct = 0 },
+        .{ .s = .pct(0.5), .min = 0, .max = inf, .grow = 0, .pct = 0.5 },
+    };
+    for (cases) |c| {
+        const k = @backingInt(c.s.kind);
+        try std.testing.expectEqual(c.min, c.s.v * Size.k_min[k]);
+        try std.testing.expectEqual(c.max, c.s.v * Size.k_max[k] + Size.c_max[k]);
+        try std.testing.expectEqual(c.grow, c.s.v * Size.k_grow[k]);
+        try std.testing.expectEqual(c.pct, c.s.v * Size.k_pct[k]);
+    }
+}
