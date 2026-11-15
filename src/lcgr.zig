@@ -15,6 +15,7 @@ pub const texts = @import("core/texts.zig");
 pub const customs = @import("core/customs.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
+pub const unicode_property = @import("text/unicode/property.zig");
 
 test {
     std.testing.refAllDecls(@This());

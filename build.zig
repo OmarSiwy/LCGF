@@ -25,6 +25,16 @@ pub fn build(b: *std.Build) void {
     });
     lcgr.addOptions("build_options", options);
 
+    // Unicode property tables, generated on the host from the UCD files (src/text/unicode/gen.zig).
+    const ucd_gen = b.addRunArtifact(b.addExecutable(.{ .name = "ucd-gen", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/gen.zig"),
+        .target = b.graph.host,
+    }) }));
+    const ucd_tables = ucd_gen.addOutputFileArg("unicode_tables.zig");
+    for ([_][]const u8{ "GraphemeBreakProperty", "emoji-data", "DerivedCoreProperties", "WordBreakProperty", "LineBreak", "EastAsianWidth", "DerivedGeneralCategory", "DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
+        ucd_gen.addFileArg(b.path(b.fmt("src/text/unicode/data/{s}.txt", .{f})));
+    lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
     b.getInstallStep().dependOn(&lib.step);
 
@@ -33,6 +43,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
+    // The Unicode conformance files (src/text/unicode/conformance.zig): seconds, so not in `test`.
+    const conformance = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/conformance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
 
     // tools/bench measures the prototype core until the ported core exports the same names.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
