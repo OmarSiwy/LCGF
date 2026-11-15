@@ -70,6 +70,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     if (t.len == 0) return;
     if (flexed) @memset(fx.c.shrink_sum[a][0..simd.padded(t.len)], 0);
     if (flexed) @memset(fx.c.base_kids[0..simd.padded(t.len)], 0);
+    if (flexed) @memset(fx.c.below_kids[0..simd.padded(t.len)], 0);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -91,6 +92,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         // All descendants have larger rows, so fit_[i] is complete here.
         var content = fit_[i] + main[i] * gap_total[i];
         if (flexed) content += wrap.linesGap(t, fx, a, i);
+        if (flexed) content = baseline.content(t, fx, a, i, content);
         var nat = content + lo[i] + hi[i];
         if (flexed) nat = fx.aspectNat(t, a, i, nat);
         nat = @min(@max(nat, min[i]), max[i]);
@@ -112,6 +114,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     // The root has no parent to fold into.
     var content = fit_[0] + main[0] * gap_total[0];
     if (flexed) content += wrap.linesGap(t, fx, a, 0);
+    if (flexed) content = baseline.content(t, fx, a, 0, content);
     var nat = content + lo[0] + hi[0];
     if (flexed) nat = fx.aspectNat(t, a, 0, nat);
     nat_[0] = @min(@max(nat, min[0]), max[0]);
@@ -257,7 +260,8 @@ fn placeOf(t: *Tree, fx: anytype) void {
             if (flexed) cross = fx.selfCross(i, cross);
             const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
             const m = if (flexed) fx.margin(a, i) else 0;
-            const across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
+            var across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
+            if (flexed and a == 1) across = baseline.across(t, fx, i, p, across);
             const along = lead + cursor[p] + m_lo;
             var in_flow = across + main[a][p] * (along - across);
             if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, inner, cross, in_flow);

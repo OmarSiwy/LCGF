@@ -40,8 +40,8 @@ pub inline fn settle(t: *const Tree, fx: *const Flex, i: usize, nat: f32) void {
     const text = f.text_has[i];
     const kids = b01(t.c.nkids[i] > 0);
     const has = @max(text, kids);
-    const content = f.base_kids[i] + text * (f.text_base[i] - f.base_kids[i]);
-    f.base[i] = nat + has * (t.c.pad_lo[1][i] + content - nat);
+    const inside = f.base_kids[i] + text * (f.text_base[i] - f.base_kids[i]);
+    f.base[i] = nat + has * (t.c.pad_lo[1][i] + inside - nat);
 }
 
 /// fitFlex: folds in-flow child `i`'s baseline (below its top margin) into parent `p`: the
@@ -53,6 +53,32 @@ pub inline fn fold(t: *const Tree, fx: *const Flex, i: usize, p: usize) void {
     const row = @max(f.base_kids[p], v);
     const pick = row + t.c.main[1][p] * (v - row);
     f.base_kids[p] += t.c.flow[i] * (pick - f.base_kids[p]);
+    const below = t.c.nat[1][i] + f.margin_hi[1][i] - f.base[i];
+    f.below_kids[p] += t.c.flow[i] * (@max(f.below_kids[p], below) - f.below_kids[p]);
+}
+
+/// 1.0 when node `p` is a row that lines its children up by baseline: a row, not wrapping.
+inline fn baseRow(t: *const Tree, fx: *const Flex, p: usize) f32 {
+    return fx.c.align_base[p] * t.c.main[0][p] * (1 - fx.c.wrap[p]);
+}
+
+/// fitFlex, on y: a baseline-aligned row's content height is its children's highest part above
+/// the shared baseline plus their deepest part below it, not the tallest child. Otherwise
+/// `content`.
+pub inline fn content(t: *const Tree, fx: *const Flex, a: u1, i: usize, plain: f32) f32 {
+    const on_y: f32 = @floatFromInt(a);
+    const stacked = fx.c.base_kids[i] + fx.c.below_kids[i];
+    return plain + on_y * baseRow(t, fx, i) * (stacked - plain);
+}
+
+/// placeFlex, on y: in a baseline-aligned row, child `i` sits so its baseline is at the row's
+/// (`base_kids`, below the row's padding), unless it has its own cross alignment. Otherwise
+/// `plain`.
+pub inline fn across(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain: f32) f32 {
+    const f = &fx.c;
+    const own = b01(f.self_cross[i] >= 0);
+    const by_base = f.base_kids[p] - f.base[i];
+    return plain + baseRow(t, fx, p) * (1 - own) * (by_base - plain);
 }
 
 const testing = std.testing;
@@ -164,4 +190,70 @@ test "baseline: carried up through nesting, and measured from the node's own top
     try testing.expectEqual(10 + 4 + 12, s.base(outer));
     // The text line sits at outer's top + its baseline.
     try testing.expectEqual(s.t.c.pos[1][outer] + s.base(outer), s.t.c.pos[1][card] + s.base(card));
+}
+
+test "baseline alignment: children of a baseline row share one baseline" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    const row = t.push(root, .none, &.{ .dir = .x, .gap = 4, .pad = .{ 0, 2, 0, 0 } });
+    s.fx.set(row, &.{ .baseline = true });
+    const a = s.text(row, &.{}, 40, 12, 9); // small text
+    const b = s.text(row, &.{}, 40, 30, 24); // large text
+    const c = t.push(row, .none, &.{ .size = .{ .px(10), .px(40) } }); // a box: baseline at its bottom
+    t.seal(row);
+    s.run(300, 300);
+    // The row's baseline is the lowest: c's 40. Each child's baseline lands on y = 2 + 40.
+    try testing.expectEqual(2 + 40, s.base(row));
+    inline for (.{ a, b, c }) |k| try testing.expectEqual(2 + 40, t.c.pos[1][k] + s.base(k));
+    // Above: 40; below: a's 3, b's 6, c's 0.
+    try testing.expectEqual(2 + 40 + 6, t.c.size[1][row]);
+}
+
+test "baseline alignment: margins count; a child's own cross alignment wins" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    const row = t.push(root, .none, &.{ .dir = .x, .size = .{ .fit, .px(100) } });
+    s.fx.set(row, &.{ .baseline = true });
+    const a = s.text(row, &.{}, 40, 12, 9);
+    const b = s.text(row, &.{}, 40, 30, 24);
+    const c = s.text(row, &.{}, 40, 12, 9);
+    s.fx.set(a, &.{ .margin = .{ 0, 0, 0, 20 } }); // 20 below a: the row needs 3 + 20 under it
+    s.fx.set(b, &.{ .margin = .{ 0, 5, 0, 0 } }); // 5 above b: the baseline is 5 + 24
+    s.fx.set(c, &.{ .cross = .end });
+    t.seal(row);
+    s.run(300, 300);
+    try testing.expectEqual(29, s.fx.c.base_kids[row]);
+    try testing.expectEqual(29 - 9, t.c.pos[1][a]);
+    try testing.expectEqual(5, t.c.pos[1][b]);
+    try testing.expectEqual(100 - 12, t.c.pos[1][c]);
+    // Content: 29 above, 23 below (a's 3 + 20); the px(100) height then clamps the row.
+    try testing.expectEqual(23, s.fx.c.below_kids[row]);
+}
+
+test "baseline alignment: a nested row aligns by its own baseline; columns ignore the flag" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    const row = t.push(root, .none, &.{ .dir = .x });
+    s.fx.set(row, &.{ .baseline = true });
+    const label = s.text(row, &.{}, 40, 12, 9);
+    // A button: padding 6 around a 16 px run whose baseline is 12 down.
+    const button = t.push(row, .none, &.{ .dir = .x, .pad = @splat(6) });
+    const caption = s.text(button, &.{}, 30, 16, 12);
+    t.seal(button);
+    t.seal(row);
+    const col = t.push(root, .none, &.{});
+    s.fx.set(col, &.{ .baseline = true });
+    const x = s.text(col, &.{}, 40, 12, 9);
+    const y = s.text(col, &.{}, 40, 30, 24);
+    t.seal(col);
+    s.run(300, 300);
+    // button's baseline is 6 + 12 = 18; label moves down to meet it.
+    try testing.expectEqual(18, s.base(button));
+    try testing.expectEqual(t.c.pos[1][caption] + s.base(caption), t.c.pos[1][label] + s.base(label));
+    try testing.expectEqual(18 - 9, t.c.pos[1][label] - t.c.pos[1][row]);
+    // The column stacks as before.
+    try testing.expectEqual(12, t.c.pos[1][y] - t.c.pos[1][x]);
 }

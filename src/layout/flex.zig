@@ -37,6 +37,8 @@ pub const Flex = struct {
         wrap: []f32,
         /// Where a wrapping row's lines sit across it when they leave space (`Align.factor`).
         align_lines: []f32,
+        /// 1.0 for a row that lines its children up by their first baselines.
+        align_base: []f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -80,6 +82,9 @@ pub const Flex = struct {
         /// What the node's in-flow children give it as a baseline, inside its padding: the
         /// first child's in a column, the lowest in a row (`fitFlex`, y).
         base_kids: []f32,
+        /// The largest extent of an in-flow child below its baseline, bottom margin included
+        /// (`fitFlex`, y): with `base_kids` the height a baseline-aligned row needs.
+        below_kids: []f32,
     };
 
     /// The row that collects the line writes of nodes outside any wrapping row: one past the
@@ -118,6 +123,12 @@ pub const Flex = struct {
         /// Where a wrapping row's lines sit across it when they leave space (CSS
         /// `align-content`, without stretch).
         lines: types.Align = .start,
+        /// For a row that does not wrap: its in-flow children sit so that their first baselines
+        /// (baseline.zig) are on one line, as CSS `align-items: baseline`, and the row is as
+        /// tall as the highest part above that line plus the deepest below it. A child with its
+        /// own `cross` is placed by that instead (it still counts toward the row's baseline and
+        /// height, unlike CSS). Ignored on a column and on a wrapping row.
+        baseline: bool = false,
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -138,6 +149,7 @@ pub const Flex = struct {
         }
         fx.c.wrap[i] = b01(s.wrap);
         fx.c.align_lines[i] = types.Align.factor[@backingInt(s.lines)];
+        fx.c.align_base[i] = b01(s.baseline);
         fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
     }
 
