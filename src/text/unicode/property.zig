@@ -68,11 +68,14 @@ pub fn bracket(cp: u21) Bracket {
     return .{ .pair = if (hit) tables.bracket_pair[i] else cp, .kind = if (hit) (if (tables.bracket_open[i]) .open else .close) else .none };
 }
 
-/// Two-stage lookup: the block of `cp`, then the value inside it. Two loads, no branch.
-inline fn stage(comptime name: []const u8, cp: u21) @TypeOf(@field(tables, name ++ "_stage2")[0]) {
-    const shift = @field(tables, name ++ "_shift");
-    const block: usize = @field(tables, name ++ "_stage1")[cp >> shift];
-    return @field(tables, name ++ "_stage2")[(block << shift) | (cp & ((1 << shift) - 1))];
+/// Three-stage lookup: middle block, leaf block, value. Three dependent loads, no branch.
+inline fn stage(comptime name: []const u8, cp: u21) @TypeOf(@field(tables, name ++ "_stage3")[0]) {
+    const mid = @field(tables, name ++ "_mid");
+    const leaf = @field(tables, name ++ "_leaf");
+    const c: usize = cp;
+    const m: usize = @field(tables, name ++ "_stage1")[c >> (mid + leaf)];
+    const l: usize = @field(tables, name ++ "_stage2")[(m << mid) | ((c >> leaf) & ((1 << mid) - 1))];
+    return @field(tables, name ++ "_stage3")[(l << leaf) | (c & ((1 << leaf) - 1))];
 }
 
 /// Index of the last entry of `starts` that is <= cp (0 when cp is below them all). Fixed trip
@@ -89,12 +92,14 @@ fn find(starts: []const u21, cp: u21) usize {
 }
 
 test "table size" {
-    // Measured in C0326: 228,480 bytes of two-stage tables (the run-length form was 57,272).
+    // 79,320 bytes of three-stage tables plus the bracket list (two-stage was 228,480,
+    // run-length 57,272).
     var bytes: usize = @sizeOf(@TypeOf(tables.bracket_cp)) + @sizeOf(@TypeOf(tables.bracket_pair)) + @sizeOf(@TypeOf(tables.bracket_open));
     inline for (.{ "grapheme", "word", "line", "bidi", "script" }) |name| {
-        bytes += @sizeOf(@TypeOf(@field(tables, name ++ "_stage1"))) + @sizeOf(@TypeOf(@field(tables, name ++ "_stage2")));
+        bytes += @sizeOf(@TypeOf(@field(tables, name ++ "_stage1"))) + @sizeOf(@TypeOf(@field(tables, name ++ "_stage2"))) +
+            @sizeOf(@TypeOf(@field(tables, name ++ "_stage3")));
     }
-    try std.testing.expect(bytes < 240_000);
+    try std.testing.expect(bytes < 90_000);
 }
 
 test "property lookups match the data files" {
