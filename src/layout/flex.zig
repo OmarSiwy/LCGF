@@ -68,6 +68,18 @@ pub const Flex = struct {
         line_off: []f32,
         /// Per line: main-axis cursor (`placeFlex`).
         line_cursor: []f32,
+
+        // ---- baselines (baseline.zig)
+        /// Distance from the top of the node's text run to its first baseline, scattered from
+        /// the caller's per-run column by `baseline.apply`; read when `text_has` is 1.
+        text_base: []f32,
+        /// 1.0 when the node carries a text run this frame (`baseline.apply`).
+        text_has: []f32,
+        /// Distance from the node's top edge to its first baseline (`fitFlex`, y).
+        base: []f32,
+        /// What the node's in-flow children give it as a baseline, inside its padding: the
+        /// first child's in a column, the lowest in a row (`fitFlex`, y).
+        base_kids: []f32,
     };
 
     /// The row that collects the line writes of nodes outside any wrapping row: one past the

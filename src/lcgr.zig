@@ -18,6 +18,7 @@ pub const hit = @import("interact/hit.zig");
 pub const overlay = @import("layout/overlay.zig");
 pub const flex = @import("layout/flex.zig");
 pub const wrap = @import("layout/wrap.zig");
+pub const baseline = @import("layout/baseline.zig");
 pub const layout_check = @import("layout/check.zig");
 pub const coefs = @import("layout/coefs.zig");
 pub const spec = @import("comptime/spec.zig");

@@ -18,6 +18,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Flex = @import("flex.zig").Flex;
 const wrap = @import("wrap.zig");
+const baseline = @import("baseline.zig");
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -68,6 +69,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     const a = @backingInt(axis);
     if (t.len == 0) return;
     if (flexed) @memset(fx.c.shrink_sum[a][0..simd.padded(t.len)], 0);
+    if (flexed) @memset(fx.c.base_kids[0..simd.padded(t.len)], 0);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -93,6 +95,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         if (flexed) nat = fx.aspectNat(t, a, i, nat);
         nat = @min(@max(nat, min[i]), max[i]);
         nat_[i] = nat;
+        if (flexed) baseline.settle(t, fx, i, nat);
         // Fold into the parent: a sum along its main axis, a max across it.
         const p = parent[i];
         var contrib = nat * flow[i];
@@ -104,6 +107,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
+        if (flexed) baseline.fold(t, fx, i, p);
     }
     // The root has no parent to fold into.
     var content = fit_[0] + main[0] * gap_total[0];
@@ -111,6 +115,7 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     var nat = content + lo[0] + hi[0];
     if (flexed) nat = fx.aspectNat(t, a, 0, nat);
     nat_[0] = @min(@max(nat, min[0]), max[0]);
+    if (flexed) baseline.settle(t, fx, 0, nat_[0]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
     // on its parent-to-child dependency chain.
@@ -329,7 +334,9 @@ pub fn run(t: *Tree, tx: *Texts, viewport: [2]f32) void {
     finalize(t);
 }
 
-/// `run` with the extra sizing rules of `fx` (flex.zig).
+/// `run` with the extra sizing rules of `fx` (flex.zig), and wrapping rows (wrap.zig). Text
+/// baselines come from `baseline.apply`, which needs a per-run ascent column this call does not
+/// have: call the passes one by one, as baseline.zig's tests do, to line text up.
 pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
     prepare(t);
     applyText(t, tx, .x);

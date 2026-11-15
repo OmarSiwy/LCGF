@@ -71,3 +71,6 @@ export fn p_place_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
 export fn p_wrap(t: *const Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.wrap.wrap(t, fx);
 }
+export fn p_baseline_apply(t: *const Tree, fx: *const lcgr.flex.Flex, tx: *const Texts, ascent: [*]const f32) void {
+    lcgr.baseline.apply(t, fx, tx, ascent[0..tx.len]);
+}

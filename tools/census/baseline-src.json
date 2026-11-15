@@ -103,5 +103,10 @@
     "jcc": 3,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_baseline_apply": {
+    "jcc": 5,
+    "back": 2,
+    "short_fwd": 1
   }
 }
