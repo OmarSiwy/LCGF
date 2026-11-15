@@ -312,6 +312,7 @@
 "layout-latency\tlayout: group per-axis inputs into one row per node and measure": "C0120",
 "layout-latency\tlayout: precompute K coefficients in a SIMD pass": "C0119",
 "layout-latency\tlayout: rewrite resolve as K0 + K1*inner + K2*max(inner - taken, 0)": "C0118",
+"layout-latency\tlayout: sweep resolve and place by level through a derived level-order index": "C0849",
 "layout-overlay\tlayout: add anchor to another node's last rect": "C0095",
 "layout-overlay\tlayout: add anchors for floating nodes (edge and corner of the parent)": "C0094",
 "layout-overlay\tlayout: add layer index column for paint order": "C0097",

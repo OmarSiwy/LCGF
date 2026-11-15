@@ -1,6 +1,6 @@
 {
  "meta": {
-  "commits": 848,
+  "commits": 849,
   "lanes": 142,
   "waves": 82,
   "critical_path_commits": 82,
@@ -974,7 +974,8 @@
     "C0119",
     "C0120",
     "C0121",
-    "C0122"
+    "C0122",
+    "C0849"
    ]
   },
   "ct-spec": {
@@ -5187,7 +5188,7 @@
    "targets": [
     "C1"
    ],
-   "done_when": "resolve and place at least 1.5x faster in the benchmark, same results",
+   "done_when": "same results; median timing against the lane's start recorded in the message",
    "unblocks": 1
   },
   {
@@ -5210,7 +5211,7 @@
    "targets": [
     "C1"
    ],
-   "done_when": "resolve and place at least 1.5x faster in the benchmark, same results",
+   "done_when": "same results; median timing against the lane's start recorded in the message",
    "unblocks": 1
   },
   {
@@ -5233,7 +5234,7 @@
    "targets": [
     "C1"
    ],
-   "done_when": "resolve and place at least 1.5x faster in the benchmark, same results",
+   "done_when": "same results; median timing against the lane's start recorded in the message",
    "unblocks": 1
   },
   {
@@ -5279,7 +5280,30 @@
    "targets": [
     "C1"
    ],
-   "done_when": "resolve and place at least 1.5x faster in the benchmark, same results",
+   "done_when": "kept only if faster; numbers recorded either way",
+   "unblocks": 1
+  },
+  {
+   "id": "C0849",
+   "title": "layout: sweep resolve and place by level through a derived level-order index",
+   "lane": "layout-latency",
+   "phase": "P02",
+   "wave": 42,
+   "critical": false,
+   "deps": [
+    "C0122"
+   ],
+   "look_at": [
+    {
+     "ref": "Checks run earlier",
+     "detail": "resolve is latency-bound at about 9 ns per node"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "C1"
+   ],
+   "done_when": "resolve and place at least 1.5x faster than at the lane's start, same results",
    "unblocks": 1
   },
   {
@@ -23951,7 +23975,6 @@
     "C0107",
     "C0110",
     "C0117",
-    "C0122",
     "C0129",
     "C0136",
     "C0143",
@@ -24070,7 +24093,8 @@
     "C0828",
     "C0838",
     "C0845",
-    "C0847"
+    "C0847",
+    "C0849"
    ],
    "look_at": [
     {
