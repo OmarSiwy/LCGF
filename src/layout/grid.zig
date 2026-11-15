@@ -45,6 +45,19 @@ pub const Track = struct {
     }
 };
 
+/// Where an item sits inside its cell on one axis (CSS `justify-self` / `align-self`). Stored
+/// as two coefficients, so the resolve step blends instead of switching.
+pub const Justify = enum(u8) {
+    /// Fill the cell (within the item's own min and max). The default.
+    stretch,
+    start,
+    center,
+    end,
+
+    pub const k_stretch = [4]f32{ 1, 0, 0, 0 };
+    pub const factor = [4]f32{ 0, 0, 0.5, 1 };
+};
+
 /// The grid side tables. A grid row describes one container node; its tracks on axis `a` are
 /// rows `first[a][g] .. first[a][g] + count[a][g]` of the track columns.
 pub const Grids = struct {
@@ -72,6 +85,8 @@ pub const Grids = struct {
         /// visit only their own items; `none` when it has none.
         first_item: []u32,
         last_item: []u32,
+        /// Space between columns (x) and between rows (y).
+        gap: [2][]f32,
     };
 
     pub const TrackColumns = struct {
@@ -99,6 +114,11 @@ pub const Grids = struct {
         next: []u32,
         /// Written by the resolve step of the item's grid: the cell's size.
         cell_size: [2][]f32,
+        /// Written by the same step: where the cell starts in the grid's content box.
+        cell_start: [2][]f32,
+        /// From `Justify`: 1.0 to fill the cell, and the share of the leftover placed before.
+        stretch: [2][]f32,
+        factor: [2][]f32,
     };
 
     pub fn init(carver: *mem.Carver, cap: Capacity) Grids {
@@ -129,6 +149,8 @@ pub const Grids = struct {
         gs.len = k + 1;
         gs.g.node[k] = node;
         gs.g.first_item[k] = none;
+        gs.g.gap[0][k] = 0;
+        gs.g.gap[1][k] = 0;
         gs.g.last_item[k] = none;
         inline for (.{ columns, rows }, 0..) |list, a| {
             const n: u32 = if (fits) @intCast(list.len) else 0;
@@ -163,6 +185,8 @@ pub const Grids = struct {
         inline for (0..2) |a| {
             it.cell[a][r] = @min(cell[a], gs.g.count[a][k] -| 1);
             it.span[a][r] = 1;
+            it.stretch[a][r] = 1;
+            it.factor[a][r] = 0;
         }
         // Append to the grid's chain. On overflow the reused row may already be the tail.
         if (gs.g.last_item[k] == none) {
@@ -182,6 +206,19 @@ pub const Grids = struct {
     }
     /// Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks
     /// the grid has.
+    /// Sets grid `k`'s space between columns (`g[0]`) and between rows (`g[1]`).
+    pub fn gaps(gs: *Grids, k: u32, g: [2]f32) void {
+        gs.g.gap[0][k] = g[0];
+        gs.g.gap[1][k] = g[1];
+    }
+    /// Sets where item `r` sits in its cell across (`j[0]`) and down (`j[1]`). An item that
+    /// does not stretch takes its natural size, which may overflow the cell.
+    pub fn justify(gs: *Grids, r: u32, j: [2]Justify) void {
+        inline for (0..2) |a| {
+            gs.it.stretch[a][r] = Justify.k_stretch[@backingInt(j[a])];
+            gs.it.factor[a][r] = Justify.factor[@backingInt(j[a])];
+        }
+    }
     pub fn span(gs: *Grids, r: u32, n: [2]u32) void {
         const k = gs.it.grid[r];
         inline for (0..2) |a| {
@@ -199,11 +236,14 @@ pub const Grids = struct {
 /// instead repeats the share without the tracks whose content exceeds it ("find the size of
 /// an fr"); here such a track keeps its content and the grid may come out wider than `inner`.
 /// With `inner` 0 every fraction track is its content, which is the grid's natural size.
+/// The grid's gap on that axis separates the tracks and is taken before the share.
 pub fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32 {
     const first = gs.g.first[a][k];
     const n = gs.g.count[a][k];
     const tr = &gs.tr;
-    var taken: f32 = 0;
+    const gap = gs.g.gap[a][k];
+    const gaps_total = gap * @as(f32, @floatFromInt(n -| 1));
+    var taken: f32 = gaps_total;
     var weight: f32 = 0;
     for (first..first + n) |j| {
         const is_fr = b01(tr.k_fr[j] > 0);
@@ -218,9 +258,9 @@ pub fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32 {
         const s = fixed + b01(tr.k_fr[j] > 0) * (flexed - fixed);
         tr.size[j] = s;
         tr.start[j] = at;
-        at += s;
+        at += s + gap;
     }
-    return at;
+    return at - gap * b01(n > 0);
 }
 
 /// Chooses cells for the items pushed with `autoItem`, grid by grid, as CSS auto-placement in
@@ -307,7 +347,8 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
             // sorted by span; this is one pass.
             const j = first + gs.it.cell[a][it];
             const n = gs.it.span[a][it];
-            const share = nat[gs.it.node[it]] / @as(f32, @floatFromInt(n));
+            const gap = gs.g.gap[a][k];
+            const share = @max(nat[gs.it.node[it]] - gap * @as(f32, @floatFromInt(n - 1)), 0) / @as(f32, @floatFromInt(n));
             for (gs.tr.content[j..][0..n]) |*v| v.* = @max(v.*, share);
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
@@ -335,7 +376,14 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
         if (item_row <= grid_row) {
             // An item that is also a grid is sized as an item first.
             layout.resolveRows(t, axis, from, item_row);
-            c.size[a][item_row] = @min(@max(gs.it.cell_size[a][r], c.min[a][item_row]), c.max[a][item_row]);
+            const min = c.min[a][item_row];
+            const max = c.max[a][item_row];
+            const cell = gs.it.cell_size[a][r];
+            const natural = @min(@max(c.nat[a][item_row], min), max);
+            const filled = @min(@max(cell, min), max);
+            const sz = natural + gs.it.stretch[a][r] * (filled - natural);
+            c.size[a][item_row] = sz;
+            c.offset[a][item_row] = gs.it.cell_start[a][r] + (cell - sz) * gs.it.factor[a][r];
             from = item_row + 1;
             r += 1;
         } else {
@@ -349,7 +397,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
                 const j = first + gs.it.cell[a][it];
                 const last = j + gs.it.span[a][it] - 1;
                 gs.it.cell_size[a][it] = gs.tr.start[last] + gs.tr.size[last] - gs.tr.start[j];
-                c.offset[a][gs.it.node[it]] = gs.tr.start[j];
+                gs.it.cell_start[a][it] = gs.tr.start[j];
             }
             k += 1;
         }
@@ -632,4 +680,55 @@ test "grid: fraction columns split the grid's width; a growing grid stretches th
     try testing.expectEqual(rect(15, 10, 85, 30), t.rect(a));
     try testing.expectEqual(rect(85, 10, 160, 30), t.rect(b));
     try testing.expectEqual(rect(160, 10, 385, 30), t.rect(c));
+}
+
+test "grid: gaps between tracks, spans across gaps, and items aligned in their cells" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) } });
+    const g = t.push(root, .none, &.{ .size = .{ .px(230), .fit } });
+    const k = s.gs.grid(g, &.{ .px(50), .fr(1), .fr(1) }, &.{ .px(40), .fit });
+    s.gs.gaps(k, .{ 10, 4 });
+    // Row 0: three 20x10 items aligned start, centre, end on both axes.
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 20, 10 });
+    s.gs.justify(s.gs.items_len - 1, .{ .start, .start });
+    const b = s.cell(g, k, .{ 1, 0 }, .{ 20, 10 });
+    s.gs.justify(s.gs.items_len - 1, .{ .center, .center });
+    const c = s.cell(g, k, .{ 2, 0 }, .{ 20, 10 });
+    s.gs.justify(s.gs.items_len - 1, .{ .end, .end });
+    // Row 1: one stretched item over all three columns, gaps included; its 26 px height
+    // makes the fit row 26.
+    const d = s.cell(g, k, .{ 0, 1 }, .{ 30, 26 });
+    s.gs.span(s.gs.items_len - 1, .{ 3, 1 });
+    t.seal(g);
+    t.seal(root);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+    // Columns: 230 - 50 - 2 gaps of 10 = 160 shared, 80 each, starting at 0, 60, 150.
+    try testing.expectEqualSlices(f32, &.{ 50, 80, 80 }, s.gs.tr.size[0..3]);
+    try testing.expectEqualSlices(f32, &.{ 0, 60, 150 }, s.gs.tr.start[0..3]);
+    // Rows 40 and 26 with a 4 px gap.
+    try testing.expectEqual(rect(0, 0, 230, 70), t.rect(g));
+    try testing.expectEqual(rect(0, 0, 20, 10), t.rect(a));
+    try testing.expectEqual(rect(90, 15, 110, 25), t.rect(b));
+    try testing.expectEqual(rect(210, 30, 230, 40), t.rect(c));
+    try testing.expectEqual(rect(0, 44, 230, 70), t.rect(d));
+}
+
+test "grid: a spanning item's natural size leaves out the gaps it covers" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const g = t.push(0, .none, &.{});
+    const k = s.gs.grid(g, &.{ .fit, .fit }, &.{.fit});
+    s.gs.gaps(k, .{ 10, 0 });
+    const w = s.cell(g, k, .{ 0, 0 }, .{ 110, 10 });
+    s.gs.span(s.gs.items_len - 1, .{ 2, 1 });
+    t.seal(g);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+    // (110 - 10) / 2 = 50 per column: 50 + 10 + 50 is exactly the item.
+    try testing.expectEqualSlices(f32, &.{ 50, 50 }, s.gs.tr.size[0..2]);
+    try testing.expectEqual(rect(0, 0, 110, 10), t.rect(w));
+    // The grid is the root, so it is the viewport's size; its natural width is the tracks'.
+    try testing.expectEqual(110, t.c.nat[0][g]);
 }
