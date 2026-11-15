@@ -465,10 +465,10 @@ lane("P07", "text-protocol", ["sidelists"], U("fonts.Mono"), "G6", "tests pass",
     ("text: add Mono.measure with SIMD", dict(ref=U("fonts.Mono.measure"))),
     ("text: add Mono.wrap with SIMD", dict(ref=U("fonts.Mono.wrap"))),
     # The cache needs measure and Texts only; quads needs Quad and DrawList (lane draw-core).
-    ("text: add measurement cache keyed by string hash, font and size"),
+    ("text: add measurement cache keyed by string hash, font and size", dict(key="text-measure")),
     ("text: add Mono.quads for a byte-indexed atlas", dict(ref=U("fonts.Mono.quads"), needs=["drawlist"], key="text-protocol-done")),
 ])
-lane("P07", "font-load", ["text-protocol"], R("DVUI", "font support") + "; " + R("DEVTO", "why the text stack dominates weight"), "D1", "a test font parses; metrics match known values", [
+lane("P07", "font-load", ["text-measure"], R("DVUI", "font support") + "; " + R("DEVTO", "why the text stack dominates weight"), "D1", "a test font parses; metrics match known values", [
     ("font: parse the table directory", dict(spec=S("OT", "font file structure"))),
     ("font: parse cmap", dict(spec=S("OT", "cmap"))),
     ("font: parse head, hhea, hmtx and maxp", dict(spec=S("OT", "metrics tables"))),
@@ -496,7 +496,7 @@ lane("P07", "shaping", ["font-load"], R("ICED_FAQ", "shaping and IME status") + 
     ("shaping: add shaping cache", {}),
     ("shaping: add optional HarfBuzz adapter behind the same data protocol", dict(done="complex-script sample renders through the adapter")),
 ])
-lane("P07", "unicode", ["text-protocol"], M("H1"), "H1", "Unicode conformance files pass", [
+lane("P07", "unicode", ["text-measure"], M("H1"), "H1", "Unicode conformance files pass", [
     ("unicode: generate property tables at comptime from the character database", dict(spec=S("UAX29", "property data"))),
     ("unicode: add grapheme cluster iterator", dict(spec=S("UAX29", "grapheme cluster boundaries"))),
     ("unicode: add word boundary iterator", dict(spec=S("UAX29", "word boundaries"))),
