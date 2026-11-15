@@ -297,3 +297,12 @@ test "Response: bits are in declaration order and can be assembled from masks" {
     try std.testing.expect(!r.held and !r.pressed and !r.released and !r.clicked);
     try std.testing.expectEqual(@as(u8, 1 << 4), @as(u8, @bitCast(Response{ .clicked = true })));
 }
+
+/// What a node is to assistive technology. One byte per node; the accessibility tree reads it.
+pub const Role = enum(u8) { none, group, label, button, checkbox, slider, image, text_input };
+
+test "Role: one byte, none is the zero default" {
+    try std.testing.expectEqual(1, @sizeOf(Role));
+    try std.testing.expectEqual(@as(u8, 0), @backingInt(Role.none));
+    try std.testing.expectEqual(@as(u8, 7), @backingInt(Role.text_input));
+}
