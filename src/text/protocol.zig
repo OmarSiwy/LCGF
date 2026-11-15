@@ -48,6 +48,28 @@ pub const Mono = struct {
             simd.storeF(c.h, i, px * simd.f(font.line));
         }
     }
+
+    /// SIMD. Re-flows runs flagged `wrap` into `avail` and rewrites `w`, `h`. Runs after
+    /// `measure` and `layout.textAvail`. A run that does not wrap keeps `w` and gets one line.
+    pub fn wrap(font: Mono, tx: *Texts) void {
+        const c = &tx.c;
+        const n = simd.padded(tx.len);
+        const one = simd.f(1);
+        var i: usize = 0;
+        while (i < n) : (i += W) {
+            const px = simd.loadF(c.px, i);
+            // The floor keeps a zero-size font from dividing by zero.
+            const adv = @max(px * simd.f(font.advance), simd.f(1e-6));
+            const count: simd.F = @floatFromInt(simd.loadU(c.bytes, i));
+            const avail = simd.loadF(c.avail, i);
+            const wraps = simd.loadF(c.wrap, i) > simd.f(0);
+            const per_line = @max(@floor(avail / adv + simd.f(0.5)), one);
+            const lines = @max(@ceil(count / per_line), one);
+            const w = simd.loadF(c.w, i);
+            simd.storeF(c.w, i, @select(f32, wraps, @min(w, avail), w));
+            simd.storeF(c.h, i, @select(f32, wraps, lines, one) * px * simd.f(font.line));
+        }
+    }
 };
 
 const testing = std.testing;
@@ -96,4 +118,29 @@ test "Mono.measure: bytes * px * advance wide, px * line tall, for every run" {
     }
     try testing.expectEqual(240, tx.c.w[19]);
     try testing.expectEqual(24, tx.c.h[19]);
+}
+
+test "Mono.wrap: wrapping runs re-flow into avail, others keep one line" {
+    var fx: Fixture(20) = .{};
+    var tx = fx.texts();
+    // The prototype's paragraph: 24 bytes * 5 px = 120 px into 100 px is two lines.
+    for (0..10) |_| _ = tx.push(0, .{ .bytes = 24 }, &.{ .px = 10, .wrap = true });
+    for (0..10) |_| _ = tx.push(0, .{ .bytes = 24 }, &.{ .px = 10 });
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    font.measure(&tx);
+    for (0..20) |k| tx.c.avail[k] = 100;
+    tx.c.avail[1] = 200; // fits on one line: w stays 120
+    tx.c.avail[2] = 0; // no room: one byte per line, w clamps to 0
+    font.wrap(&tx);
+    try testing.expectEqual(100, tx.c.w[0]);
+    try testing.expectEqual(24, tx.c.h[0]);
+    try testing.expectEqual(120, tx.c.w[1]);
+    try testing.expectEqual(12, tx.c.h[1]);
+    try testing.expectEqual(0, tx.c.w[2]);
+    try testing.expectEqual(24 * 12, tx.c.h[2]);
+    for (3..10) |k| try testing.expectEqual(24, tx.c.h[k]);
+    for (10..20) |k| {
+        try testing.expectEqual(120, tx.c.w[k]);
+        try testing.expectEqual(12, tx.c.h[k]);
+    }
 }
