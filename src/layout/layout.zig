@@ -9,6 +9,7 @@
 //!   textAvail          gather   widths for wrapping   (caller re-measures here)
 //!   applyText/fit/resolve(.y)   the same three for heights
 //!   place              forward  positions on both axes
+//!   finalize           SIMD + forward   pixel snap, clip, visibility
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -19,6 +20,7 @@ const Axis = types.Axis;
 
 const W = simd.lanes;
 const b01 = simd.b2f;
+const inf = types.inf;
 
 /// SIMD. Clears per-frame scratch and derives `gap_total`.
 pub fn prepare(t: *Tree) void {
@@ -191,6 +193,53 @@ pub fn place(t: *Tree) void {
         // Advance along whichever axis is the parent's main one.
         const step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
         cursor[p] += (step + gap[p]) * fl;
+    }
+}
+
+/// Pixel-snapped rects (SIMD), then clip rects and visibility (one forward
+/// sweep with a 4-lane op per node).
+pub fn finalize(t: *Tree) void {
+    const c = &t.c;
+    if (t.len == 0) return;
+    const n = simd.padded(t.len);
+    var j: usize = 0;
+    while (j < n) : (j += W) {
+        const x = simd.loadF(c.pos[0], j);
+        const y = simd.loadF(c.pos[1], j);
+        simd.storeF(c.rect[0], j, @round(x));
+        simd.storeF(c.rect[1], j, @round(y));
+        simd.storeF(c.rect[2], j, @round(x + simd.loadF(c.size[0], j)));
+        simd.storeF(c.rect[3], j, @round(y + simd.loadF(c.size[1], j)));
+    }
+    // Padding rows must never be hit.
+    @memset(c.sense[t.len..n], 0);
+
+    const V4 = @Vector(4, f32);
+    const sign: V4 = .{ 1, 1, -1, -1 };
+    const everything: V4 = @splat(-inf);
+    const parent = c.parent;
+    const rect = c.rect;
+    const vis = c.vis;
+    const child_clip = c.child_clip;
+    const clips_ = c.clips;
+    const visible = c.visible;
+    const looks = c.look;
+    for (0..t.len) |i| {
+        const r = V4{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] } * sign;
+        const is_root: @Vector(4, bool) = @splat(i == 0);
+        const inherited = @select(f32, is_root, everything, @as(V4, child_clip[parent[i]]));
+        const v = @max(r, inherited);
+        // Children are clipped to the area inside the border. In the
+        // (min, -max) form, insetting all four edges is one add.
+        const inner = @max(inherited, r + @as(V4, @splat(looks[i].border)));
+        const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
+        child_clip[i] = @select(f32, clips, inner, inherited);
+        const out = v * sign;
+        vis[0][i] = out[0];
+        vis[1][i] = out[1];
+        vis[2][i] = out[2];
+        vis[3][i] = out[3];
+        visible[i] = @intFromBool(out[0] < out[2]) & @intFromBool(out[1] < out[3]);
     }
 }
 
@@ -406,4 +455,46 @@ test "place: floating nodes skip the cursor; offset and scroll move a node and i
     try testing.expectEqual(10 - 3, c.pos[1][Scene.para]);
     // body now follows bar directly: 10 + 40 + 5.
     try testing.expectEqual(55, c.pos[1][Scene.body]);
+}
+
+test "finalize: snapped rects, clipped to the parent chain, with visibility" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    sized(&s);
+    place(&s.t);
+    @memset(c.sense, 0xff); // stale padding rows
+    finalize(&s.t);
+    try expectCol(&.{ 0, 10, 10, 114, 10, 10, 10 }, c.rect[0]);
+    try expectCol(&.{ 0, 10, 10, 10, 55, 55, 84 }, c.rect[1]);
+    try expectCol(&.{ 400, 390, 110, 390, 110, 110, 390 }, c.rect[2]);
+    try expectCol(&.{ 300, 50, 50, 50, 79, 79, 290 }, c.rect[3]);
+    // Everything is inside root, so the clip changes nothing.
+    inline for (0..4) |k| try expectCol(c.rect[k][0..s.t.len], c.vis[k]);
+    try testing.expectEqualSlices(u8, &.{ 1, 1, 1, 1, 1, 1, 1 }, c.visible[0..s.t.len]);
+    // root clips with no border: its children inherit its rect, in (x0, y0, -x1, -y1) form.
+    for (c.child_clip[0..s.t.len]) |cc| try testing.expectEqual([4]f32{ 0, 0, -400, -300 }, cc);
+    const n = simd.padded(s.t.len);
+    for (c.sense[s.t.len..n]) |v| try testing.expectEqual(0, v);
+}
+
+test "finalize: a clipping parent insets by its border and hides what lies outside" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    sized(&s);
+    c.clips[Scene.col] = 1;
+    c.look[Scene.col].border = 2;
+    c.offset[0][Scene.para] = 150; // para's 100 px start past col's right edge
+    place(&s.t);
+    c.pos[0][Scene.body] += 0.4; // sub-pixel positions round to whole pixels
+    finalize(&s.t);
+    try testing.expectEqual(10, c.rect[0][Scene.body]);
+    try testing.expectEqual([4]f32{ 12, 57, -108, -77 }, c.child_clip[Scene.col]);
+    try testing.expectEqual([4]f32{ 12, 57, -108, -77 }, c.child_clip[Scene.para]);
+    try testing.expectEqual(160, c.rect[0][Scene.para]);
+    try testing.expectEqual(160, c.vis[0][Scene.para]);
+    try testing.expectEqual(108, c.vis[2][Scene.para]);
+    try testing.expectEqual(0, c.visible[Scene.para]);
+    try testing.expectEqual(1, c.visible[Scene.col]);
 }
