@@ -5,9 +5,9 @@ const std = @import("std");
 const lcgr = @import("lcgr");
 const property = lcgr.unicode_property;
 
-const grapheme_test = @embedFile("data/GraphemeBreakTest.txt");
-const word_test = @embedFile("data/WordBreakTest.txt");
-const line_test = @embedFile("data/LineBreakTest.txt");
+const grapheme_test = @embedFile("GraphemeBreakTest.txt");
+const word_test = @embedFile("WordBreakTest.txt");
+const line_test = @embedFile("LineBreakTest.txt");
 
 /// One line of a *BreakTest.txt file: code points, whether a boundary precedes each position
 /// (`breaks[i]` is before `cps[i]`, `breaks[cps.len]` is the end), and the class name the comment
@@ -177,19 +177,8 @@ test "LineBreakTest.txt" {
 }
 
 const bidi = lcgr.unicode_bidi;
-// The two bidi files are 14.2 MB as text and 1.7 MB gzipped, so they are stored compressed.
-const bidi_test_gz = @embedFile("data/BidiTest.txt.gz");
-const bidi_character_test_gz = @embedFile("data/BidiCharacterTest.txt.gz");
-
-/// The decompressed contents of a .gz file; the caller frees it.
-fn gunzip(gz: []const u8) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    errdefer out.deinit();
-    var in: std.Io.Reader = .fixed(gz);
-    var d: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
-    _ = try d.reader.streamRemaining(&out.writer);
-    return out.toOwnedSlice();
-}
+const bidi_test = @embedFile("BidiTest.txt");
+const bidi_character_test = @embedFile("BidiCharacterTest.txt");
 
 const BidiBuffers = struct {
     orig: [256]property.BidiClass = undefined,
@@ -219,8 +208,6 @@ fn expectLevels(want: []const u8, got: []const u8, line: usize) !void {
 }
 
 test "BidiTest.txt: levels and order" {
-    const bidi_test = try gunzip(bidi_test_gz);
-    defer std.testing.allocator.free(bidi_test);
     var b: BidiBuffers = .{};
     var want: [256]u8 = undefined;
     var n_want: usize = 0;
@@ -263,8 +250,6 @@ test "BidiTest.txt: levels and order" {
 }
 
 test "BidiCharacterTest.txt: levels and order" {
-    const bidi_character_test = try gunzip(bidi_character_test_gz);
-    defer std.testing.allocator.free(bidi_character_test);
     var b: BidiBuffers = .{};
     var cps: [256]u21 = undefined;
     var want: [256]u8 = undefined;
@@ -332,7 +317,7 @@ test "Scripts.txt: every code point" {
     const want = try std.testing.allocator.alloc(property.Script, 0x110000);
     defer std.testing.allocator.free(want);
     @memset(want, .Unknown);
-    var lines = std.mem.splitScalar(u8, @embedFile("data/Scripts.txt"), '\n');
+    var lines = std.mem.splitScalar(u8, @embedFile("Scripts.txt"), '\n');
     while (lines.next()) |ln| {
         const data = ln[0 .. std.mem.indexOfScalar(u8, ln, '#') orelse ln.len];
         const semi = std.mem.indexOfScalar(u8, data, ';') orelse continue;

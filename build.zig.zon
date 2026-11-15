@@ -1,6 +1,18 @@
 .{
     .name = .lcgr,
     .version = "0.0.0",
+    .dependencies = .{
+        .ucd = .{
+            .url = "https://www.unicode.org/Public/16.0.0/ucd/UCD.zip",
+            .hash = "N-V-__8AALTJcQJ3hosujokSgxYTsa3q1mDZ2dasYhuJwaOV",
+        },
+        .harfbuzz = .{
+            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/13.2.1/harfbuzz-13.2.1.tar.xz",
+            .hash = "N-V-__8AANG11wWTWAv2adhyXdbeBwNxCsePTkGuyWTjAh-T",
+            // Only `zig build harfbuzz` needs it.
+            .lazy = true,
+        },
+    },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE" },
