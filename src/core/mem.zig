@@ -8,20 +8,23 @@ const std = @import("std");
 /// Each column starts on its own cache line.
 pub const column_align = 64;
 
-/// Bump pointer over a caller-owned buffer.
+/// Bump pointer over a caller-owned buffer. With `buf == null` it only counts: sizing a buffer
+/// and carving it run the same code, so the two cannot disagree.
 pub const Carver = struct {
-    buf: []align(column_align) u8,
+    buf: ?[]align(column_align) u8,
     off: usize = 0,
 
     /// Next `n` rows of `T`, zeroed. The carved size is rounded up to `column_align`, so the
-    /// next column starts on a fresh cache line. Asserts the buffer is large enough.
+    /// next column starts on a fresh cache line. Asserts the buffer is large enough. When counting
+    /// it advances `off` and returns an empty slice.
     pub fn slice(c: *Carver, comptime T: type, n: usize) []T {
         const bytes = std.mem.alignForward(usize, n * @sizeOf(T), column_align);
         const start = c.off;
         c.off += bytes;
-        std.debug.assert(c.off <= c.buf.len);
-        @memset(c.buf[start..c.off], 0);
-        const p: [*]T = @ptrCast(@alignCast(c.buf.ptr + start));
+        const b = c.buf orelse return &.{};
+        std.debug.assert(c.off <= b.len);
+        @memset(b[start..c.off], 0);
+        const p: [*]T = @ptrCast(@alignCast(b.ptr + start));
         return p[0..n];
     }
 
@@ -86,4 +89,38 @@ test "Carver.columns carves every []T and [k][]T field in order" {
     try std.testing.expectEqual(@intFromPtr(&buf) + 64 * 5, @intFromPtr(cols.flag.ptr));
     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0 }, cols.flag);
     try std.testing.expectEqual(5, cols.id.len);
+}
+
+test "counting mode sizes a buffer with the same code that carves it" {
+    const Cols = struct { x: []f32, link: [2][]u32 };
+    const Owner = struct {
+        a: Cols,
+        names: []u8,
+
+        fn build(c: *Carver, n: usize) @This() {
+            return .{ .a = c.columns(Cols, n), .names = c.slice(u8, 3 * n) };
+        }
+
+        // Callable at comptime, as `Context.requiredBytes` is.
+        fn requiredBytes(n: usize) usize {
+            var counter: Carver = .{ .buf = null };
+            _ = build(&counter, n);
+            return counter.off;
+        }
+    };
+
+    const need = comptime Owner.requiredBytes(30);
+    try std.testing.expectEqual(4 * 128, need); // 120 B per column and 90 B of names, each to 128
+
+    var counter: Carver = .{ .buf = null };
+    const counted = Owner.build(&counter, 30);
+    try std.testing.expectEqual(0, counted.a.x.len);
+    try std.testing.expectEqual(need, counter.off);
+
+    var buf: [need]u8 align(column_align) = undefined;
+    var c: Carver = .{ .buf = &buf };
+    const o = Owner.build(&c, 30);
+    try std.testing.expectEqual(need, c.off);
+    try std.testing.expectEqual(30, o.a.link[1].len);
+    try std.testing.expectEqual(90, o.names.len);
 }
