@@ -37,6 +37,21 @@ pub fn row(comptime s: struct { pad: u8 = 0, gap: u8 = 0 }, comptime children: a
     return .{ .kind = .row, .pad = s.pad, .gap = s.gap, .children = kids(children) };
 }
 
+/// Text showing the state field `bind`.
+pub fn label(comptime bind: []const u8) Spec {
+    return .{ .kind = .label, .bind = bind };
+}
+
+/// A checkbox named `id`, showing and toggling the bool field `bind`.
+pub fn checkbox(comptime id: [:0]const u8, comptime bind: []const u8) Spec {
+    return .{ .kind = .checkbox, .id = id, .bind = bind };
+}
+
+/// A slider named `id`, showing and setting the f32 field `bind`.
+pub fn slider(comptime id: [:0]const u8, comptime bind: []const u8) Spec {
+    return .{ .kind = .slider, .id = id, .bind = bind };
+}
+
 // ---- tests -------------------------------------------------------------------------------------
 
 /// Nodes in `s`, itself included. Test helper; the front end's own count is lane ct-flatten's.
@@ -63,6 +78,39 @@ fn flatWalk(comptime s: Spec, comptime parent: u32, comptime next: *u32, comptim
     t[0][i] = parent;
     for (s.children) |c| flatWalk(c, i, next, t);
     t[1][i] = next.*;
+}
+
+/// Bit per node of every node bound to `field` and of its ancestors: the probe's dirty mask.
+/// Test helper; the real masks are lane ct-signals'.
+fn bindMask(comptime s: Spec, comptime field: []const u8) u64 {
+    comptime {
+        var next: u6 = 0;
+        return bindWalk(s, field, 0, &next);
+    }
+}
+
+fn bindWalk(comptime s: Spec, comptime field: []const u8, comptime path: u64, comptime next: *u6) u64 {
+    const here = path | @as(u64, 1) << next.*;
+    next.* += 1;
+    var m: u64 = if (s.bind != null and std.mem.eql(u8, s.bind.?, field)) here else 0;
+    for (s.children) |c| m |= bindWalk(c, field, here, next);
+    return m;
+}
+
+/// Depth-first row of the node named `id`: the probe's `Widget` enum value.
+fn nodeOf(comptime s: Spec, comptime id: []const u8) comptime_int {
+    comptime {
+        var i = 0;
+        return nodeWalk(s, id, &i) orelse @compileError("no widget '" ++ id ++ "'");
+    }
+}
+
+fn nodeWalk(comptime s: Spec, comptime id: []const u8, comptime next: *comptime_int) ?comptime_int {
+    const i = next.*;
+    next.* += 1;
+    if (s.id != null and std.mem.eql(u8, s.id.?, id)) return i;
+    for (s.children) |c| if (nodeWalk(c, id, next)) |r| return r;
+    return null;
 }
 
 test "Spec: defaults are an unnamed, unbound, unpadded leaf" {
@@ -112,4 +160,40 @@ test "col, row: an empty tuple is a childless container" {
     const s = comptime row(.{}, .{});
     try std.testing.expectEqual(0, s.children.len);
     try std.testing.expectEqual(0, s.pad);
+}
+
+/// The probe's usage spec, built as the probe builds it.
+const probe_mixer = col(.{ .pad = 8, .gap = 4 }, .{
+    label("title"),
+    row(.{ .gap = 8 }, .{ checkbox("mute", "muted"), slider("volume", "volume") }),
+    row(.{ .gap = 8 }, .{ label("title"), slider("pan", "pan") }),
+});
+
+test "label, checkbox, slider: the probe's mixer gives the probe's tables, masks and widget rows" {
+    const t = comptime flatTables(probe_mixer);
+    try std.testing.expectEqual(8, comptime nodeCount(probe_mixer));
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &t[0]);
+    try std.testing.expectEqualSlices(u32, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, &t[1]);
+    // volume -> slider (4), its row (2), root (0)
+    try std.testing.expectEqual(0b0001_0101, comptime bindMask(probe_mixer, "volume"));
+    // title is shown twice: nodes 1 and 6, row 5, root
+    try std.testing.expectEqual(0b0110_0011, comptime bindMask(probe_mixer, "title"));
+    try std.testing.expectEqual(0b0000_1101, comptime bindMask(probe_mixer, "muted"));
+    try std.testing.expectEqual(3, comptime nodeOf(probe_mixer, "mute"));
+    try std.testing.expectEqual(4, comptime nodeOf(probe_mixer, "volume"));
+    try std.testing.expectEqual(7, comptime nodeOf(probe_mixer, "pan"));
+}
+
+test "label, checkbox, slider: leaves carry kind, id and binding, no children" {
+    const l = comptime label("title");
+    const c = comptime checkbox("mute", "muted");
+    const s = comptime slider("volume", "volume");
+    try std.testing.expectEqual(Kind.label, l.kind);
+    try std.testing.expectEqual(null, l.id);
+    try std.testing.expectEqualStrings("title", l.bind.?);
+    try std.testing.expectEqual(Kind.checkbox, c.kind);
+    try std.testing.expectEqualStrings("mute", c.id.?);
+    try std.testing.expectEqualStrings("muted", c.bind.?);
+    try std.testing.expectEqual(Kind.slider, s.kind);
+    try std.testing.expectEqual(0, s.children.len);
 }
