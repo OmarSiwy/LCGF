@@ -396,3 +396,38 @@ test "TextStyle: defaults are 14 px white text in the default font, no wrap" {
     try std.testing.expectEqual(Font.default, t.font);
     try std.testing.expect(!t.wrap);
 }
+
+test "layout: sizes and offsets of every extern and packed type" {
+    const expectEqual = std.testing.expectEqual;
+    // extern: byte offsets are the C layout other tiers and the GPU rely on.
+    try expectEqual(16, @sizeOf(Rect));
+    try expectEqual(4, @alignOf(Rect));
+    inline for (.{ "x0", "y0", "x1", "y1" }, 0..) |name, i| try expectEqual(4 * i, @offsetOf(Rect, name));
+    try expectEqual(8, @sizeOf(Size));
+    try expectEqual(0, @offsetOf(Size, "kind"));
+    try expectEqual(4, @offsetOf(Size, "v"));
+    // packed: bit offsets inside the backing integer.
+    try expectEqual(4, @sizeOf(Color));
+    inline for (.{ "r", "g", "b", "a" }, 0..) |name, i| try expectEqual(8 * i, @bitOffsetOf(Color, name));
+    try expectEqual(1, @sizeOf(Sense));
+    inline for (.{ "hover", "click", "drag", "focus" }, 0..) |name, i| try expectEqual(i, @bitOffsetOf(Sense, name));
+    try expectEqual(1, @sizeOf(Response));
+    inline for (.{ "hovered", "held", "pressed", "released", "clicked", "focused" }, 0..) |name, i|
+        try expectEqual(i, @bitOffsetOf(Response, name));
+    // Index and handle enums, which become column element types.
+    try expectEqual(4, @sizeOf(Id));
+    try expectEqual(4, @sizeOf(Node));
+    try expectEqual(1, @bitSizeOf(Axis));
+    try expectEqual(1, @sizeOf(Size.Kind));
+    try expectEqual(1, @sizeOf(Align));
+    try expectEqual(1, @sizeOf(Role));
+    try expectEqual(2, @sizeOf(Texture));
+    try expectEqual(2, @sizeOf(Material));
+    try expectEqual(2, @sizeOf(Font));
+}
+
+test {
+    // Force semantic analysis of every public declaration.
+    inline for (.{ @This(), Id, Node, Color, Rect, Size, Align, Sense, Response, Style, TextStyle }) |T|
+        std.testing.refAllDecls(T);
+}
