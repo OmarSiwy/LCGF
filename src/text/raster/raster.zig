@@ -113,6 +113,37 @@ pub fn fill(o: *const Outline, scale: f32, dx: f32, b: Box, acc: []f32) void {
     }
 }
 
+/// Line segments as columns the caller owns; `len` counts the rows in use, the slice lengths
+/// are the capacity.
+pub const Segments = struct {
+    x0: []f32,
+    y0: []f32,
+    x1: []f32,
+    y1: []f32,
+    len: u32 = 0,
+};
+
+/// Appends the edges of `o` (curves flattened as `fill` flattens them) to `out`, in the pixel
+/// space of box `b`: x right from its left side, y down from its top. Horizontal edges are
+/// kept. Fails with `error.NoSpace`, `out.len` then unspecified, when the columns are full.
+pub fn segments(o: *const Outline, scale: f32, dx: f32, b: Box, out: *Segments) error{NoSpace}!void {
+    const g: Grid = .{
+        .acc = &.{},
+        .w = b.w,
+        .h = b.h,
+        .scale = scale,
+        .ox = dx - @as(f32, @floatFromInt(b.left)),
+        .oy = @floatFromInt(b.top),
+        .segs = out,
+    };
+    var start: usize = 0;
+    for (o.ends[0..o.contours]) |end| {
+        g.contour(o, start, end + 1);
+        start = end + 1;
+    }
+    if (out.len > out.x0.len) return error.NoSpace;
+}
+
 /// SIMD. Coverage bytes of the image: the running sum of `acc`, |sum| clamped to 1, times 255,
 /// rounded. Writes `padded(n)` bytes for an `n`-pixel image; `acc` and `out` hold at least
 /// that many (`accLen` and `imageLen` size them). Each vector is prefix-summed in registers
@@ -156,6 +187,8 @@ const Grid = struct {
     scale: f32,
     ox: f32,
     oy: f32,
+    /// When set, edges are listed here instead of accumulated (`segments`).
+    segs: ?*Segments = null,
 
     const P = [2]f32;
 
@@ -225,6 +258,17 @@ const Grid = struct {
 
     /// Adds the signed area of the edge `p0`-`p1` to every row it crosses.
     fn line(g: Grid, p0: P, p1: P) void {
+        if (g.segs) |s| {
+            // Counts past the capacity, so `segments` can report it; writes stop there.
+            if (s.len < s.x0.len) {
+                s.x0[s.len] = p0[0];
+                s.y0[s.len] = p0[1];
+                s.x1[s.len] = p1[0];
+                s.y1[s.len] = p1[1];
+            }
+            s.len += 1;
+            return;
+        }
         if (p0[1] == p1[1]) return; // a horizontal edge covers no area
         const down = p0[1] < p1[1];
         const dir: f32 = if (down) 1 else -1;

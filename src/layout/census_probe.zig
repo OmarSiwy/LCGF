@@ -50,3 +50,6 @@ export fn p_gamma_apply(g: *const lcgr.raster_gamma.Gamma, lum: u8, cov: [*]cons
 export fn p_atlas_evict(c: *lcgr.raster_atlas.Cache, keep_from: u32) void {
     c.evict(keep_from);
 }
+export fn p_sdf_distances(segs: *const lcgr.raster.Segments, n: usize, w: u32, h: u32, img: [*]u8, len: usize) void {
+    lcgr.raster_sdf.distances(segs, n, w, h, img[0..len], 31.75);
+}
