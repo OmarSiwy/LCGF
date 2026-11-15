@@ -25,6 +25,12 @@ Without Nix, install Zig 0.17.1 exactly; no other version is supported.
 - Compress after the second use: duplicate once, extract when a second caller appears
   (`docs/CODE_STANDARD.md`).
 
+## CI jobs
+
+Each CI job is one file, `ci/jobs/<name>.sh`; `ci/run.sh <name>` runs it and `ci/run.sh all` runs
+every job not marked `# all: no`. Add a job by adding a file: the workflow builds its matrix from
+that directory, so neither `ci/run.sh` nor `.github/workflows/ci.yml` needs editing.
+
 ## Commit messages
 
 ```

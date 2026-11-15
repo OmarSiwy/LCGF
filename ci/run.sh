@@ -1,46 +1,43 @@
 #!/usr/bin/env bash
-# One CI job by name. GitHub Actions (.github/workflows/ci.yml) and a local
-# run call the same thing:  nix develop -c ci/run.sh <job>     (or: all)
+# Run CI jobs. GitHub Actions and a local run call the same thing:
 #
-# Each job runs the root package and the prototype, whose tests are the
-# reference behaviour and must keep passing (CLAUDE.md).
+#   nix develop -c ci/run.sh <job>     one job
+#   nix develop -c ci/run.sh all       every job not marked `# all: no`
+#   ci/run.sh --matrix                 the job list as JSON, for the workflow
+#
+# A job is one file, ci/jobs/<name>.sh, run from the repository root with
+# `both` defined. A lane adds a job by adding a file; nothing else changes.
+# Header lines a job may have:
+#   # shell: <name>   the flake dev shell it needs (default: default)
+#   # all: no         left out of `all` (slow, or needs another shell)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Each test job runs the root package and the prototype, whose tests are the
+# reference behaviour and must keep passing (CLAUDE.md).
 both() { zig build "$@" && (cd prototype && zig build "$@"); }
 
+header() { sed -n "s/^# $2: *//p" "ci/jobs/$1.sh" | head -n1; }
+names() { for f in ci/jobs/*.sh; do basename "$f" .sh; done; }
+
 job() {
-    case "$1" in
-    debug)        both test ;;
-    release-safe) both test -Doptimize=ReleaseSafe ;;
-    release-fast) both test -Doptimize=ReleaseFast ;;
-    # simd.lanes follows the CPU: SSE2 baseline gives 4 f32 lanes, AVX2 gives 8.
-    lanes-4)      both test -Dcpu=x86_64 ;;
-    lanes-8)      both test -Dcpu=x86_64_v3 ;;
-    # Compile only: these targets cannot run here.
-    cross)
-        for t in aarch64-linux aarch64-macos x86_64-windows wasm32-wasi riscv64-linux; do
-            echo "-- $t"
-            zig build test-build -Dtarget="$t"
-        done
-        (cd prototype && zig build cross) ;;
-    # Prints numbers (tools/bench); timings are only comparable on one machine.
-    # Fails when a pass median is >50% slower than tools/bench/baseline.json.
-    bench)
-        mkdir -p zig-out
-        zig build bench -- --json "$PWD/zig-out/bench.json"
-        python3 tools/bench/compare.py --self-test
-        python3 tools/bench/compare.py tools/bench/baseline.json zig-out/bench.json
-        zig build size
-        zig build probe ;;
-    *) echo "unknown job: $1" >&2; exit 2 ;;
-    esac
+    [ -f "ci/jobs/$1.sh" ] || { echo "unknown job: $1" >&2; exit 2; }
+    (set -euo pipefail; source "ci/jobs/$1.sh")
 }
 
-jobs=(debug release-safe release-fast lanes-4 lanes-8 cross bench)
-if [ "${1-}" = all ]; then
-    for j in "${jobs[@]}"; do echo "== $j"; job "$j"; done
-    echo "all ${#jobs[@]} jobs green"
-else
-    job "${1:?usage: ci/run.sh <job>|all}"
-fi
+case "${1:?usage: ci/run.sh <job>|all|--matrix}" in
+all)
+    n=0
+    for j in $(names); do
+        [ "$(header "$j" all)" = no ] && continue
+        echo "== $j"; job "$j"; n=$((n + 1))
+    done
+    echo "all $n jobs green" ;;
+--matrix)
+    sep=""; printf '['
+    for j in $(names); do
+        s=$(header "$j" shell); printf '%s{"job":"%s","shell":"%s"}' "$sep" "$j" "${s:-default}"; sep=,
+    done
+    printf ']\n' ;;
+*) job "$1" ;;
+esac
