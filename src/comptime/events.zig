@@ -641,3 +641,56 @@ test "Shortcuts.pressed: key presses activate widgets, handled by exhaustive swi
     };
     try testing.expect(muted);
 }
+
+test "replay: recorded input drives events, focus and shortcuts into the signals" {
+    const Replay = @import("../core/input.zig").Replay;
+    const signals = @import("signals.zig");
+    const Mixer = struct { title: []const u8 = "Mixer", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
+    const Sig = signals.Signals(Mixer, sized);
+    const Keys = Sized.Shortcuts(&.{ .{ .code = 50, .mods = .{ .ctrl = true }, .widget = .mute }, .{ .code = 20, .widget = .pan } });
+
+    const r = sizedRects();
+    var rt: Sig.Runtime = .{};
+    var p: Sized.Pointer = .{};
+    var focus: ?Sized.Widget = null;
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    var replay: Replay = .{ .src = @embedFile("testdata/mixer.replay") };
+
+    // Per frame: what the frame left in the state, and what it marked for paint.
+    var muted: [12]bool = undefined;
+    var volume: [12]f32 = undefined;
+    var paint: [12]Sig.Mask = undefined;
+    var focused: [12]?Sized.Widget = undefined;
+    var frame: usize = 0;
+    while (try replay.next(buf)) |in| : (frame += 1) {
+        _ = rt.takeDirty();
+        if (Sized.pointer(&p, &r, in)) |e| switch (e) {
+            .mute => rt.set(.muted, !rt.state.muted),
+            .volume => |v| rt.set(.volume, v),
+            .pan => |v| rt.set(.pan, v),
+        };
+        Sized.focusKeys(&focus, in, 15);
+        var hits: [4]Sized.Widget = undefined;
+        for (hits[0..Keys.pressed(in, &hits)]) |w| switch (w) {
+            .mute => rt.set(.muted, !rt.state.muted),
+            .volume => {},
+            .pan => rt.set(.pan, 0.5),
+        };
+        muted[frame] = rt.state.muted;
+        volume[frame] = rt.state.volume;
+        paint[frame] = rt.takeDirty().paint;
+        focused[frame] = focus;
+    }
+    try testing.expectEqual(12, frame);
+    try testing.expectEqualSlices(bool, &.{ false, false, true, true, true, true, true, true, true, true, false, false }, &muted);
+    try testing.expectEqualSlices(f32, &.{ 0.5, 0.5, 0.5, 0.25, 0.75, 1, 1, 1, 1, 1, 1, 1 }, &volume);
+    // Rows: 2 mute, 3 volume, 5 pan. A frame repaints only the widget it changed.
+    try testing.expectEqualSlices(Sig.Mask, &.{ 0, 0, 0b000100, 0b001000, 0b001000, 0b001000, 0, 0, 0, 0, 0b000100, 0b100000 }, &paint);
+    try testing.expectEqual(null, focused[8]);
+    try testing.expectEqual(Sized.Widget.mute, focused[9].?);
+    try testing.expectEqual(Sized.Widget.mute, focused[11].?);
+    try testing.expectEqual(0.5, rt.state.pan);
+}
