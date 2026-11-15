@@ -40,6 +40,7 @@ pub const raster = @import("text/raster/raster.zig");
 pub const raster_gamma = @import("text/raster/gamma.zig");
 pub const raster_atlas = @import("text/raster/atlas.zig");
 pub const raster_sdf = @import("text/raster/sdf.zig");
+pub const shape = @import("text/shape/shape.zig");
 
 test {
     std.testing.refAllDecls(@This());
