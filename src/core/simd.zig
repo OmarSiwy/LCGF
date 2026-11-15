@@ -88,6 +88,20 @@ pub fn find(col: []const u32, len: u32, needle: u32) u32 {
     return found;
 }
 
+/// Number of values in `col[0..len]` that are below `bound`.
+/// On a sorted column this is the insertion index.
+/// `col` holds at least `padded(len)` rows; rows past `len` are ignored.
+pub fn rank(col: []const u32, len: u32, bound: u32) u32 {
+    var acc: U = @splat(0);
+    const n = padded(len);
+    var i: usize = 0;
+    while (i < n) : (i += lanes) {
+        const in_range = (iota + u(@intCast(i))) < u(len);
+        acc += @intFromBool((loadU(col, i) < u(bound)) & in_range);
+    }
+    return @reduce(.Add, acc);
+}
+
 const testing = std.testing;
 
 test "padded rounds up to whole vectors" {
@@ -172,4 +186,25 @@ test "find returns the first match, ignores rows past len, else none" {
     try testing.expectEqual(@as(u32, 0), find(&col, len, 100));
     col[0] = 0;
     try testing.expectEqual(@as(u32, lanes + 1), find(&col, len, 100));
+}
+
+test "rank is the insertion index on a sorted column" {
+    var col: [3 * lanes]u32 = undefined;
+    // 0, 0, 2, 2, 4, 4, ...: duplicates straddle vector edges at every lane count.
+    for (&col, 0..) |*v, i| v.* = @intCast(i / 2 * 2);
+    // Padding below every bound: must not be counted.
+    const len: u32 = 2 * lanes + 1;
+    for (len..col.len) |i| col[i] = 0;
+    try testing.expectEqual(@as(u32, 0), rank(&col, len, 0));
+    for (0..len) |k| {
+        const bound: u32 = @intCast(k);
+        const want = std.sort.lowerBound(u32, col[0..len], bound, struct {
+            fn order(b: u32, x: u32) std.math.Order {
+                return std.math.order(b, x);
+            }
+        }.order);
+        try testing.expectEqual(@as(u32, @intCast(want)), rank(&col, len, bound));
+    }
+    try testing.expectEqual(len, rank(&col, len, 0xffff_ffff));
+    try testing.expectEqual(@as(u32, 0), rank(&col, 0, 5));
 }
