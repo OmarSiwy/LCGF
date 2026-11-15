@@ -165,6 +165,11 @@ pub const Tree = struct {
         c.nkids[parent] += fl * b01(i != 0);
         return i;
     }
+
+    /// Closes node `i`: everything pushed since belongs to its subtree.
+    pub fn seal(t: *Tree, i: u32) void {
+        t.c.end[i] = t.len;
+    }
 };
 
 const testing = std.testing;
@@ -325,4 +330,23 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqual(0.25, c.value[a]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.text[0..3]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.custom[0..3]);
+}
+
+test "seal closes a subtree over everything pushed since its node" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    // root { a { a1 a2 } b }
+    const root = t.push(0, .none, &.{});
+    const a = t.push(root, .none, &.{});
+    const a1 = t.push(a, .none, &.{});
+    t.seal(a1);
+    const a2 = t.push(a, .none, &.{});
+    t.seal(a2);
+    t.seal(a);
+    const b = t.push(root, .none, &.{});
+    t.seal(b);
+    t.seal(root);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 1, 0 }, t.c.parent[0..5]);
+    try testing.expectEqualSlices(u32, &.{ 5, 4, 3, 4, 5 }, t.c.end[0..5]);
+    try testing.expectEqualSlices(f32, &.{ 2, 2, 0, 0, 0 }, t.c.nkids[0..5]);
 }
