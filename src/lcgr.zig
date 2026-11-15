@@ -20,6 +20,7 @@ pub const flex = @import("layout/flex.zig");
 pub const layout_check = @import("layout/check.zig");
 pub const coefs = @import("layout/coefs.zig");
 pub const incremental = @import("layout/incremental.zig");
+pub const interaction = @import("interact/interaction.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
