@@ -17,7 +17,9 @@ The rules, as text layout implements them:
 - Break opportunities are after a run of spaces, and after a newline (mandatory). A line takes
   whole words while the width of its ink (trailing spaces hang) fits the box, 1/64 px slack.
   A word wider than the box on its own is broken between clusters.
-- Lines start at the box's left edge.
+- Each line starts at (box - ink width) * align (0 start, 0.5 centre, 1 end). Justified lines
+  (all but the last and those ended by a newline) share the free width equally among their
+  inner spaces.
 - Lines stack from the top: each is as tall as the tallest span on it (ascender - descender +
   line gap) and its baseline is the tallest ascender below its top. Baselines snap to whole
   pixels (round half up), x stays fractional.
@@ -39,8 +41,12 @@ SLACK = 1 / 64
 
 # name: text, px, box (x, y, width), picture (w, h), align, justify, max_lines, spans
 # (byte start, px) after the first, which starts at 0 with `px`.
+PARA = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it."
 SCENES = {
     "wrap": dict(text="Type office fluff into a lovely file, then copy every line of it.", px=20, box=(4, 2, 200), size=(208, 88)),
+    "center": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), align=0.5),
+    "end": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), align=1),
+    "justify": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), justify=True),
     "narrow": dict(text="Pneumonoultramicroscopic words\nbreak hard.", px=16, box=(3, 1, 90), size=(96, 92)),
 }
 
@@ -174,11 +180,15 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
         on = glyphs[ln["first"]:ln["end"]] or [Glyph(0, 0, 0, 0, 0, px)]
         tall = max(g.px for g in on) / upem
         base = top + asc * tall
-        x = bx
+        ink = glyphs[ln["first"]:ln["ink"]]
+        spaces = sum(1 for g in ink if is_space(raw, g))
+        justified = scene.get("justify", False) and not ln["hard"] and spaces > 0
+        extra = (bw - ln["width"]) / spaces if justified else 0
+        x = bx + (0 if justified else (bw - ln["width"]) * scene.get("align", 0))
         y = math.floor(base + 0.5)
-        for g in glyphs[ln["first"]:ln["ink"]]:
+        for g in ink:
             draw(img, W, H, face, g, x, y)
-            x += g.advance
+            x += g.advance + (extra if is_space(raw, g) else 0)
         top += (asc - desc + gap) * tall
     return img
 

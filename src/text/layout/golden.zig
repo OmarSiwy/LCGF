@@ -38,13 +38,14 @@ pub const Para = struct {
     top: [32]f32 = undefined,
     baseline: [32]f32 = undefined,
     height: [32]f32 = undefined,
+    extra: [32]f32 = undefined,
     g: Glyphs = undefined,
     l: Lines = undefined,
 
     /// Points `g` and `l` at the arrays. `Para` must not move afterwards.
     pub fn bind(p: *Para) void {
         p.g = .{ .glyph = &p.glyph, .cluster = &p.cluster, .advance = &p.advance, .x_offset = &p.x_offset, .y_offset = &p.y_offset, .x = &p.x };
-        p.l = .{ .first = &p.first, .end = &p.end, .ink = &p.ink, .start = &p.start, .width = &p.width, .hard = &p.hard, .x = &p.lx, .top = &p.top, .baseline = &p.baseline, .height = &p.height };
+        p.l = .{ .first = &p.first, .end = &p.end, .ink = &p.ink, .start = &p.start, .width = &p.width, .hard = &p.hard, .x = &p.lx, .top = &p.top, .baseline = &p.baseline, .height = &p.height, .extra = &p.extra };
     }
 
     /// One glyph per byte of ASCII `text`, each `adv` px wide.
@@ -84,7 +85,7 @@ pub const RunCols = struct {
     }
 };
 
-pub const Scene = enum { wrap, narrow };
+pub const Scene = enum { wrap, narrow, center, end, justify };
 
 const Spec = struct {
     text: []const u8,
@@ -92,11 +93,18 @@ const Spec = struct {
     /// Left, top and width of the paragraph's box.
     box: [3]f32,
     size: [2]u32,
+    factor: f32 = 0,
+    justify: bool = false,
 };
+
+const para = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it.";
 
 fn spec(s: Scene) Spec {
     return switch (s) {
         .wrap => .{ .text = "Type office fluff into a lovely file, then copy every line of it.", .px = 20, .box = .{ 4, 2, 200 }, .size = .{ 208, 88 } },
+        .center => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .factor = 0.5 },
+        .end => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .factor = 1 },
+        .justify => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .justify = true },
         .narrow => .{ .text = "Pneumonoultramicroscopic words\nbreak hard.", .px = 16, .box = .{ 3, 1, 90 }, .size = .{ 96, 92 } },
     };
 }
@@ -111,11 +119,13 @@ pub fn expectScene(s: Scene) !void {
     var p: Para = .{};
     try p.shaped(&shaper, sp.text, sp.px);
     try lines_.breakLines(&p.g, sp.text, sp.box[2], &p.l);
-    lines_.place(&p.l, &p.g, .of(&shaper.face, sp.px));
+    lines_.place(&p.l, &p.g, sp.text, .of(&shaper.face, sp.px), .{ .width = sp.box[2], .factor = sp.factor, .justify = sp.justify });
 
     var img: [max_w * max_h]u8 = @splat(0);
     const w = sp.size[0];
     const h = sp.size[1];
+    // Every line is in the picture.
+    try std.testing.expect(sp.box[1] + lines_.stackHeight(&p.l) <= @as(f32, @floatFromInt(h)));
     try draw(&shaper.face, &p, sp.px, .{ sp.box[0], sp.box[1] }, img[0 .. w * h], w);
     try compare(s, img[0 .. w * h], w, h);
 }

@@ -71,12 +71,25 @@ pub const Lines = struct {
     width: []f32,
     /// 1.0 when the line ends at a mandatory break or the end of the text.
     hard: []f32,
-    /// Written by `place`: left edge, top, baseline and height, px from the paragraph's top left.
+    /// Written by `place`: left edge, top, baseline and height, px from the paragraph's top left,
+    /// and the space added after each inner space of a justified line.
     x: []f32,
     top: []f32,
     baseline: []f32,
     height: []f32,
+    extra: []f32,
     len: u32 = 0,
+};
+
+/// Where lines sit in a box `width` px wide. `factor` is 0 for the start, 0.5 for the centre,
+/// 1 for the end (the factors of `types.Align`). With `justify`, every line but the last and
+/// those ended by a newline fills the box: its free width is shared equally among the spaces
+/// inside its ink, and `factor` applies only to the lines left alone (CSS `text-align-last`
+/// is start; set `factor` for another).
+pub const Align = struct {
+    width: f32 = 0,
+    factor: f32 = 0,
+    justify: bool = false,
 };
 
 /// Vertical metrics of a font at a size, px: ascender above the baseline, descender below it
@@ -196,11 +209,19 @@ fn endsInBreak(text: []const u8) bool {
 }
 
 /// Stacks the lines from the paragraph's top, every line `m.height()` tall with its baseline
-/// `m.ascent` below its top, and writes each glyph's pen x from the line's left edge (x = 0).
-pub fn place(lines: *Lines, g: *Glyphs, m: Metrics) void {
+/// `m.ascent` below its top, aligns each in `a`, and writes each glyph's pen x from the line's
+/// left edge. Per line the mode is a coefficient: `j` is 1.0 for a justified line, so the
+/// offset and the extra space are products, not branches.
+pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, m: Metrics, a: Align) void {
+    const justify: f32 = @floatFromInt(@intFromBool(a.justify));
     var top: f32 = 0;
     for (0..lines.len) |k| {
-        lines.x[k] = 0;
+        var spaces: f32 = 0;
+        for (lines.first[k]..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
+        const free = a.width - lines.width[k];
+        const j = justify * (1 - lines.hard[k]) * @min(spaces, 1);
+        lines.extra[k] = j * free / @max(spaces, 1);
+        lines.x[k] = (1 - j) * free * a.factor;
         lines.top[k] = top;
         lines.baseline[k] = top + m.ascent;
         lines.height[k] = m.height();
@@ -208,9 +229,13 @@ pub fn place(lines: *Lines, g: *Glyphs, m: Metrics) void {
         var pen: f32 = 0;
         for (lines.first[k]..lines.end[k]) |i| {
             g.x[i] = pen;
-            pen += g.advance[i];
+            pen += g.advance[i] + lines.extra[k] * space01(text, g.cluster[i]);
         }
     }
+}
+
+fn space01(text: []const u8, at: u32) f32 {
+    return @floatFromInt(@intFromBool(isSpace(text, at)));
 }
 
 /// Height of the stacked lines, px.
@@ -274,6 +299,34 @@ test "breakLines: newlines are mandatory, a long word breaks between clusters" {
     t.fixed("a\nb\nc", 10);
     t.l.first.len = 2;
     try testing.expectError(error.NoSpace, breakLines(&t.g, "a\nb\nc", 100, &t.l));
+}
+
+test "place: alignment is an offset, justification widens inner spaces" {
+    var t: golden.Para = .{};
+    const text = "aa b cc d\nee";
+    t.fixed(text, 10);
+    try breakLines(&t.g, text, 60, &t.l);
+    // "aa b " | "cc d\n" | "ee"
+    try testing.expectEqual(3, t.l.len);
+    const m: Metrics = .{ .ascent = 8, .descent = 2 };
+    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 0.5 });
+    try testing.expectEqualSlices(f32, &.{ 10, 10, 20 }, t.l.x[0..3]);
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20 }, t.l.top[0..3]);
+    try testing.expectEqualSlices(f32, &.{ 8, 18, 28 }, t.l.baseline[0..3]);
+    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 1 });
+    try testing.expectEqualSlices(f32, &.{ 20, 20, 40 }, t.l.x[0..3]);
+    // Justified: line 0 has one inner space (the trailing one hangs) and 20 px free. Line 1
+    // ends at a newline and line 2 is the last: aligned as usual.
+    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 1, .justify = true });
+    try testing.expectEqualSlices(f32, &.{ 20, 0, 0 }, t.l.extra[0..3]);
+    try testing.expectEqualSlices(f32, &.{ 0, 20, 40 }, t.l.x[0..3]);
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 50 }, t.g.x[0..4]);
+}
+
+test "golden: aligned and justified paragraphs match the reference" {
+    try golden.expectScene(.center);
+    try golden.expectScene(.end);
+    try golden.expectScene(.justify);
 }
 
 test "golden: shaped paragraphs wrap like the reference" {
