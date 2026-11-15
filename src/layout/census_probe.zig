@@ -27,3 +27,6 @@ export fn p_place(t: *Tree) void {
 export fn p_finalize(t: *Tree) void {
     lcgr.layout.finalize(t);
 }
+export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
+    return t.push(parent, .none, s);
+}

@@ -2,6 +2,6 @@
     .name = .lcgr,
     .version = "0.0.0",
     .fingerprint = 0x8e920fae7b36f47d,
-    .minimum_zig_version = "0.17.1",
+    .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
     .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE" },
 }

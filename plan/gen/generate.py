@@ -44,7 +44,7 @@ PHASES = {
 # =============================================================================
 # P00 Foundations
 # =============================================================================
-lane("P00", "repo", [], R("ZIG17_BUILD", "what changed in build.zig"), "", "zig build and zig build test pass on Zig 0.17.1", [
+lane("P00", "repo", [], R("ZIG17_BUILD", "what changed in build.zig"), "", "zig build and zig build test pass on Zig 0.17.1 (now 0.18.0-dev.1151+8dfb7a7cc)", [
     ("repo: initialise with build.zig, build.zig.zon, licence and .editorconfig", dict(done="zig build succeeds on a clean checkout", key="repo-init")),
     ("docs: add CODE_STANDARD.md (names, small functions, no hidden allocation, comments say why)", dict(ref=R("CASEY_API", "the five characteristics") + "; " + R("CASEY_CLEAN", "where textbook clean code costs performance"), done="standard lists which clean-code rules are adopted and which are not")),
     ("docs: add ARCHITECTURE.md with the tier rule (a tier uses only tiers below it)", dict(ref=U("file header: TIERS and RULES"), done="document merged")),

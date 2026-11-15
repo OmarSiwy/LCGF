@@ -26,11 +26,11 @@ pub const BidiClass = enum(u5) { L, R, AL, EN, ES, ET, AN, CS, NSM, BN, B, S, WS
 pub const Script = tables.Script;
 
 /// What grapheme cluster breaking reads for one code point.
-pub const Grapheme = packed struct(u8) { gcb: Gcb, incb: InCB, ext_pict: bool, _pad: u1 = 0 };
+pub const Grapheme = bitpack struct(u8) { gcb: Gcb, incb: InCB, ext_pict: bool, _pad: u1 = 0 };
 /// What word breaking reads for one code point.
-pub const Word = packed struct(u8) { wb: Wb, ext_pict: bool, _pad: u2 = 0 };
+pub const Word = bitpack struct(u8) { wb: Wb, ext_pict: bool, _pad: u2 = 0 };
 /// What line breaking reads for one code point: the class and the other properties its rules name.
-pub const Line = packed struct(u16) {
+pub const Line = bitpack struct(u16) {
     lb: Lb,
     /// East_Asian_Width is F, W or H (`$EastAsian` in UAX #14).
     east_asian: bool,
