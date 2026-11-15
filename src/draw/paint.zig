@@ -249,3 +249,38 @@ test "sweep 3: a repaint into a used draw list gives the same commands" {
     try testing.expectEqual(first, sc.d.command(0));
     try testing.expectEqual(Cmd{ .quads = .{ .first = 3, .count = 1, .texture = .white, .material = .solid } }, sc.d.command(4));
 }
+
+test "children of a clipping node are clipped inside its border; a non-clipping border passes the clip on" {
+    // The inset itself is computed by layout.finalize into `child_clip`; paint must hand that
+    // clip, not the parent's outer rect, to every quad, run and custom draw of the children.
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var sc = Scene.carve(&carver);
+    const t = &sc.t;
+    const fill: Color = .rgb(0, 0, 200);
+    _ = t.push(0, Id.from("root"), &.{ .size = .{ .px(400), .px(300) }, .clip = true });
+    const framed = t.push(0, Id.from("framed"), &.{ .size = .{ .px(200), .px(100) }, .clip = true, .border = 3, .border_color = .white });
+    _ = t.push(framed, Id.from("inner"), &.{ .size = .{ .px(300), .px(20) }, .fill = fill });
+    const caption = t.push(framed, Id.from("caption"), &.{});
+    t.c.text[caption] = sc.tx.push(caption, sc.s.add("x"), &.{});
+    const view = t.push(framed, Id.from("view"), &.{ .size = .{ .px(10), .px(10) } });
+    t.c.custom[view] = sc.cu.push(view, Id.from("view"), 0);
+    t.seal(framed);
+    const open = t.push(0, Id.from("open"), &.{ .size = .{ .px(200), .px(100) }, .border = 3, .border_color = .white });
+    const loose = t.push(open, Id.from("loose"), &.{ .size = .{ .px(10), .px(10) }, .fill = fill });
+    t.seal(open);
+    t.seal(0);
+    layout.run(t, &sc.tx, .{ 400, 300 });
+    emit(t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    const d = &sc.d;
+
+    // Quads: framed (border only), inner, open, loose.
+    try testing.expectEqual(4, d.quad_len);
+    try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, d.quads[0].clip);
+    try testing.expectEqual([4]f32{ 0, 0, 300, 20 }, d.quads[1].rect);
+    try testing.expectEqual([4]f32{ 3, 3, 197, 97 }, d.quads[1].clip);
+    try testing.expectEqual([4]f32{ 3, 3, 197, 97 }, d.runs[0].clip);
+    try testing.expectEqual([4]f32{ 3, 3, 197, 97 }, d.customs[0].clip);
+    try testing.expectEqual(sc.t.rect(loose).array(), d.quads[3].rect);
+    try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, d.quads[3].clip);
+}
