@@ -553,3 +553,51 @@ test "run: equals the tier-0 calls it is shorthand for" {
     // Unwrapped, the 120 px run is one 12 px line, so para is 12 high.
     try testing.expectEqual(12, short.t.rect(Scene.para).h());
 }
+
+// Ported from prototype/example.zig. The prototype's last three lines check `hit.at` on the same
+// columns; hit testing is not in src/ yet, so they belong to the lane that ports it.
+test "tier 0 alone: no Context, caller sequences the passes" {
+    const Mono = @import("../text/protocol.zig").Mono;
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 64);
+    var tx = Texts.init(&carver, 8);
+    var strings: Strings = .{ .buf = carver.slice(u8, 256) };
+
+    const root = t.push(0, Id.from("ui.root"), &.{ .size = .{ .px(400), .px(300) }, .pad = @splat(10), .gap = 5, .clip = true });
+    const bar = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .px(40) }, .gap = 4 });
+    const a = t.push(bar, Id.from("a"), &.{ .size = .{ .px(100), .fill } });
+    const b = t.push(bar, Id.from("b"), &.{ .size = .{ .fill, .fill } });
+    t.seal(bar);
+    // A wrapping paragraph in a 100 px column.
+    const col = t.push(root, .none, &.{ .size = .{ .px(100), .fit } });
+    const para = t.push(col, .none, &.{ .shrink = true });
+    const words = "twenty-four characters!!";
+    t.c.text[para] = tx.push(para, strings.add(words), &.{ .px = 10, .wrap = true });
+    t.seal(col);
+    const body = t.push(root, Id.from("body"), &.{ .size = .{ .fill, .fill } });
+    t.seal(root);
+    t.c.sense[a] = @bitCast(types.Sense.button);
+    t.c.sense[body] = @bitCast(types.Sense.button);
+
+    // The same sequence Frame.end runs, spelled out.
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    font.measure(&tx);
+    prepare(&t);
+    applyText(&t, &tx, .x);
+    fit(&t, .x);
+    resolve(&t, .x, 400);
+    textAvail(&t, &tx);
+    font.wrap(&tx); // 24 bytes * 5 px = 120 px into 100 px: two lines
+    applyText(&t, &tx, .y);
+    fit(&t, .y);
+    resolve(&t, .y, 300);
+    place(&t);
+    finalize(&t);
+
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 10, .x1 = 390, .y1 = 50 }, t.rect(bar));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 50 }, t.rect(a));
+    try testing.expectEqual(types.Rect{ .x0 = 114, .y0 = 10, .x1 = 390, .y1 = 50 }, t.rect(b));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 55, .x1 = 110, .y1 = 79 }, t.rect(para));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 84, .x1 = 390, .y1 = 290 }, t.rect(body));
+}
