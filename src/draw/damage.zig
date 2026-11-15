@@ -5,6 +5,7 @@
 //!   2. compare the column against last frame's, `lanes` rows per step: a row is dirty when its
 //!      hash changed or it exists in only one of the two frames
 //!   3. union the old and new visible rects of the dirty rows into a `Region` of a few rects
+//!   4. after `paint.emit`, keep only the quads that touch the region (`cull`)
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -12,6 +13,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Look = @import("../core/tree.zig").Look;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
+const DrawList = @import("draw_list.zig").DrawList;
 const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 const W = simd.lanes;
@@ -63,6 +65,14 @@ pub const Region = struct {
         const x1: [max_rects]f32 = g.x1;
         const y1: [max_rects]f32 = g.y1;
         return .{ x0[k], y0[k], x1[k], y1[k] };
+    }
+
+    /// True when `box` (x0, y0, x1, y1) overlaps a slot by some area. Empty slots overlap
+    /// nothing.
+    pub fn touches(g: *const Region, box: [4]f32) bool {
+        const in = (g.x0 < @as(R, @splat(box[2]))) & (@as(R, @splat(box[0])) < g.x1) &
+            (g.y0 < @as(R, @splat(box[3]))) & (@as(R, @splat(box[1])) < g.y1);
+        return @reduce(.Or, in);
     }
 
     /// Number of non-empty slots. Slots fill in order, so they are slots [0, count).
@@ -196,6 +206,38 @@ pub const Damage = struct {
     }
 };
 
+/// Drops from `d`, as `paint.emit` wrote it, every quad whose painted area (rect inside its
+/// clip) misses `g`, so a renderer that redraws only the region uploads and draws only what can
+/// reach it. Kept quads stay in paint order; a batch left empty is removed, text and custom
+/// commands are kept. Two batches with the same key that a removed batch used to separate are
+/// left as two commands. Rewrites `d` in place: every write lands at or before the row it reads.
+pub fn cull(d: *DrawList, g: *const Region) void {
+    const quads_kind = @backingInt(DrawList.Kind.quads);
+    var q: u32 = 0;
+    var n: u32 = 0;
+    for (0..d.cmd_len) |i| {
+        const is_quads = d.cmd.kind[i] == quads_kind;
+        const first = d.cmd.first[i];
+        const q0 = q;
+        for (0..d.cmd.count[i] * @intFromBool(is_quads)) |j| {
+            const quad = d.quads[first + j];
+            d.quads[q] = quad;
+            const box: [4]f32 = .{
+                @max(quad.rect[0], quad.clip[0]), @max(quad.rect[1], quad.clip[1]),
+                @min(quad.rect[2], quad.clip[2]), @min(quad.rect[3], quad.clip[3]),
+            };
+            q += @intFromBool(g.touches(box));
+        }
+        d.cmd.kind[n] = d.cmd.kind[i];
+        d.cmd.key[n] = d.cmd.key[i];
+        d.cmd.first[n] = simd.selU(is_quads, q0, first);
+        d.cmd.count[n] = simd.selU(is_quads, q - q0, d.cmd.count[i]);
+        n += @intFromBool(simd.orB(!is_quads, q > q0));
+    }
+    d.quad_len = q;
+    d.cmd_len = n;
+}
+
 const testing = std.testing;
 const layout = @import("../layout/layout.zig");
 const Strings = @import("../core/strings.zig").Strings;
@@ -210,6 +252,7 @@ const Scene = struct {
     cu: Customs,
     s: Strings,
     hash: []u32,
+    d: DrawList,
 
     const cap = 16;
     const bytes = blk: {
@@ -225,6 +268,7 @@ const Scene = struct {
             .cu = Customs.init(carver, 4),
             .s = .{ .buf = carver.slice(u8, 64) },
             .hash = carver.slice(u32, simd.rows(cap)),
+            .d = DrawList.init(carver, cap, 4, 4),
         };
     }
 
@@ -387,4 +431,65 @@ test "Damage.frame: rows only one frame has are dirty, padding rows never are" {
     sc.t.len += 1;
     try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
     try testing.expectEqual(1, dm.dirty[7]);
+}
+
+const paint = @import("paint.zig");
+
+test "cull: one changed node repaints the quads under one small rect" {
+    var dm_buf: [
+        blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Damage.init(&counter, Scene.cap);
+            break :blk counter.off;
+        }
+    ]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &dm_buf };
+    var dm = Damage.init(&carver, Scene.cap);
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+
+    // First frame: the region is the window and every quad is kept.
+    var sc: Scene = .build(&buf, .{});
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    const all = sc.d.quad_len;
+    const all_cmds = sc.d.cmd_len;
+    try testing.expectEqual(6, all); // root, bar, three buttons, panel
+    cull(&sc.d, &dm.region);
+    try testing.expectEqual(all, sc.d.quad_len);
+    try testing.expectEqual(all_cmds, sc.d.cmd_len);
+
+    // One button changes: the region is that button, and only the quads under it are drawn:
+    // the root's background, the toolbar and the button itself, in paint order, one batch.
+    sc = .build(&buf, .{ .ok_fill = .rgb(90, 90, 200) });
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    cull(&sc.d, &dm.region);
+    try testing.expectEqual(1, dm.region.count());
+    try testing.expectEqual(40 * 20, dm.region.pixels());
+    try testing.expectEqual(3, sc.d.quad_len);
+    try testing.expectEqual(sc.t.rect(0).array(), sc.d.quads[0].rect);
+    try testing.expectEqual(sc.t.rect(1).array(), sc.d.quads[1].rect);
+    try testing.expectEqual(sc.t.rect(Scene.ok).array(), sc.d.quads[2].rect);
+    try testing.expectEqual(Color.rgb(90, 90, 200).bitsOf(), sc.d.quads[2].fill);
+    // Text and custom commands stay; the batch after them (the panel) is gone.
+    try testing.expectEqual(3, sc.d.cmd_len);
+    try testing.expectEqual(@import("draw_list.zig").Cmd{ .quads = .{ .first = 0, .count = 3, .texture = .white, .material = .solid } }, sc.d.command(0));
+    try testing.expectEqual(@import("draw_list.zig").Cmd{ .text = 0 }, sc.d.command(1));
+    try testing.expectEqual(@import("draw_list.zig").Cmd{ .custom = 0 }, sc.d.command(2));
+}
+
+test "cull: a quad clipped away from the region is dropped even when its rect reaches it" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var sc: Scene = .build(&buf, .{});
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    // Clip the first quad to its left half and damage only its right half.
+    const r = sc.d.quads[0].rect;
+    sc.d.quads[0].clip = .{ r[0], r[1], (r[0] + r[2]) / 2, r[3] };
+    var g: Region = .empty;
+    g.add(.{ (r[0] + r[2]) / 2 + 1, r[1], r[2], r[3] });
+    const before = sc.d.quad_len;
+    cull(&sc.d, &g);
+    // The root is dropped; the quads drawn over the damaged half stay.
+    try testing.expect(sc.d.quad_len < before);
+    for (sc.d.quads[0..sc.d.quad_len]) |quad| try testing.expect(!std.meta.eql(quad.rect, r));
 }
