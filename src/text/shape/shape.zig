@@ -6,7 +6,9 @@
 //! quads and an editor maps the cursor through; nothing is retained.
 //!
 //! What this shaper does: cmap lookup, ligatures (GSUB 'liga', lookup type 4), hmtx advances,
-//! and pair kerning (GPOS 'kern' or the kern table, via `Face.kerning`). Text is taken as one left-to-right run of one script; bidi
+//! pair kerning (GPOS 'kern' or the kern table, via `Face.kerning`), skipping marks, and mark
+//! attachment (GPOS 'mark' and 'mkmk', lookup types 4 and 6; marks are GDEF class 3 and take
+//! no advance). Text is taken as one left-to-right run of one script; bidi
 //! and script itemisation run before it (src/text/unicode/). Results match HarfBuzz for that
 //! case (testdata/hb.txt).
 //!
@@ -41,6 +43,8 @@ pub const Run = struct {
 pub const Features = struct {
     liga: bool = true,
     kern: bool = true,
+    /// Mark attachment, 'mark' and 'mkmk'.
+    mark: bool = true,
 };
 
 /// A face with its layout tables located and the lookups of each feature collected, once.
@@ -49,6 +53,11 @@ pub const Shaper = struct {
     face: Face,
     gsub: []const u8 = &.{},
     liga: layout.Lookups = .{},
+    gpos: []const u8 = &.{},
+    /// 'mark' and 'mkmk' lookups, merged in LookupList order.
+    marks: layout.Lookups = .{},
+    /// GDEF GlyphClassDef: class 3 is a mark. Empty without GDEF: then nothing is a mark.
+    classes: []const u8 = &.{},
 
     pub fn init(face: Face) Shaper {
         var s: Shaper = .{ .face = face };
@@ -56,7 +65,21 @@ pub const Shaper = struct {
         layout.featureLookups(s.gsub, opentype.tag("liga"), &s.liga) catch {
             s.liga = .{};
         };
+        s.gpos = (face.dir.find(opentype.tag("GPOS")) catch null) orelse &.{};
+        for ([_]u32{ opentype.tag("mark"), opentype.tag("mkmk") }) |t| layout.featureLookups(s.gpos, t, &s.marks) catch {
+            s.marks = .{};
+            break;
+        };
+        const gdef = (face.dir.find(opentype.tag("GDEF")) catch null) orelse &.{};
+        // GlyphClassDef offset at 4; 0 (or unreadable) means no classes.
+        const off = layout.read(u16, gdef, 4) catch 0;
+        s.classes = if (off == 0 or off > gdef.len) &.{} else gdef[off..];
         return s;
+    }
+
+    /// Whether glyph `g` is a mark (GDEF glyph class 3).
+    pub fn isMark(s: *const Shaper, g: u16) bool {
+        return (layout.classOf(s.classes, g) catch 0) == 3;
     }
 
     /// Shapes `text` into `run` (replacing what it held). Fails with `error.NoSpace`, `run.len`
@@ -65,7 +88,66 @@ pub const Shaper = struct {
         try map(&s.face, text, run);
         if (features.liga) for (s.liga.slice()) |index| s.ligatures(index, run) catch {};
         advances(&s.face, run);
-        if (features.kern) kern(&s.face, run);
+        if (features.mark) for (run.glyph[0..run.len], run.advance[0..run.len]) |g, *a| {
+            a.* = if (s.isMark(g)) 0 else a.*;
+        };
+        if (features.kern) s.kern(run);
+        if (features.mark) for (s.marks.slice()) |index| s.attach(index, run) catch {};
+    }
+
+    /// Pair kerning: each glyph's advance changes by the kerning with the next glyph that is
+    /// not a mark (kern lookups skip marks, so a mark between two letters keeps their pair).
+    fn kern(s: *const Shaper, run: *Run) void {
+        var k: u32 = 0;
+        while (k < run.len) : (k += 1) {
+            if (s.isMark(run.glyph[k])) continue;
+            var next = k + 1;
+            while (next < run.len and s.isMark(run.glyph[next])) next += 1;
+            if (next == run.len) break;
+            run.advance[k] += s.face.kerning(run.glyph[k], run.glyph[next]);
+        }
+    }
+
+    /// Applies GPOS lookup `index` if it attaches marks: mark-to-base (type 4) puts a mark's
+    /// anchor on the anchor of the closest glyph before it that is not a mark; mark-to-mark
+    /// (type 6) on the anchor of the mark right before it. Offsets are relative to the mark's
+    /// own pen position, as HarfBuzz gives them: the base's offset, plus the anchor difference,
+    /// minus the advances from the base to the mark.
+    fn attach(s: *const Shaper, index: u16, run: *Run) layout.Error!void {
+        const lk = try layout.lookup(s.gpos, index);
+        const count = try layout.read(u16, lk, 4);
+        var i: u32 = 1;
+        while (i < run.len) : (i += 1) {
+            if (!s.isMark(run.glyph[i])) continue;
+            for (0..count) |t| {
+                const st = try layout.subtable(lk, t, 9);
+                if ((st.kind != 4 and st.kind != 6) or try layout.read(u16, st.data, 0) != 1) continue;
+                const mark_index = (try layout.coverageIndex(try layout.at16(st.data, 2), run.glyph[i])) orelse continue;
+                // The glyph the mark attaches to.
+                var base = i - 1;
+                if (st.kind == 4) {
+                    while (base > 0 and s.isMark(run.glyph[base])) base -= 1;
+                    if (s.isMark(run.glyph[base])) continue;
+                } else if (!s.isMark(run.glyph[base])) continue;
+                const base_index = (try layout.coverageIndex(try layout.at16(st.data, 4), run.glyph[base])) orelse continue;
+                const classes = try layout.read(u16, st.data, 6);
+                const marks = try layout.at16(st.data, 8);
+                const bases = try layout.at16(st.data, 10);
+                if (mark_index >= try layout.read(u16, marks, 0) or base_index >= try layout.read(u16, bases, 0)) continue;
+                const rec = 2 + @as(usize, mark_index) * 4;
+                const class = try layout.read(u16, marks, rec);
+                if (class >= classes) continue;
+                const mark_anchor = try anchor(try layout.at16(marks, rec + 2));
+                const off = try layout.read(u16, bases, 2 + (@as(usize, base_index) * classes + class) * 2);
+                if (off == 0 or off > bases.len) continue; // no anchor for this class
+                const base_anchor = try anchor(bases[off..]);
+                var between: i32 = 0;
+                for (run.advance[base..i]) |a| between += a;
+                run.x_offset[i] = run.x_offset[base] + base_anchor[0] - mark_anchor[0] - between;
+                run.y_offset[i] = run.y_offset[base] + base_anchor[1] - mark_anchor[1];
+                break;
+            }
+        }
     }
 
     /// Applies GSUB lookup `index` (ligature substitution, type 4) along the run: at each glyph
@@ -141,10 +223,10 @@ fn advances(face: *const Face, run: *Run) void {
     }
 }
 
-/// Pair kerning of neighbours: the left glyph's advance changes.
-fn kern(face: *const Face, run: *Run) void {
-    if (run.len < 2) return;
-    for (0..run.len - 1) |k| run.advance[k] += face.kerning(run.glyph[k], run.glyph[k + 1]);
+/// The x, y of an Anchor table (formats 1 to 3 start alike; device and contour-point data
+/// are hinting, not used unhinted).
+fn anchor(a: []const u8) layout.Error![2]i32 {
+    return .{ try layout.read(i16, a, 2), try layout.read(i16, a, 4) };
 }
 
 /// Total advance of the run, font units.
@@ -256,12 +338,29 @@ pub fn expectHb(features: []const u8, opts: Features) !usize {
 }
 
 test "simple shaping matches HarfBuzz with kerning only" {
-    try std.testing.expectEqual(6, try expectHb("kern", .{ .liga = false }));
+    try std.testing.expectEqual(6, try expectHb("kern", .{ .liga = false, .mark = false }));
 }
 
 test "ligatures match HarfBuzz" {
     // "office fluff fi" becomes o ffi c e space fl u ff space fi; "Ta\u{301}ffi" ends in ffi.
-    try std.testing.expectEqual(6, try expectHb("kern,liga", .{}));
+    try std.testing.expectEqual(6, try expectHb("kern,liga", .{ .mark = false }));
+}
+
+test "mark positioning matches HarfBuzz" {
+    // e + acute, a + grave, o + dot below (mark-to-base), e + two acutes (mark-to-mark: the
+    // second sits 229 units above the first), and a mark between T a and the ffi ligature.
+    try std.testing.expectEqual(6, try expectHb("kern,liga,mark,mkmk", .{}));
+}
+
+test "marks are GDEF class 3 and take no advance" {
+    const shaper: Shaper = .init(try Face.parse(test_font, 0));
+    const face = &shaper.face;
+    try std.testing.expect(shaper.isMark(face.cmap.glyph(0x301)));
+    try std.testing.expect(!shaper.isMark(face.cmap.glyph('e')));
+    // The Liberation test font of font-load has no GDEF: nothing is a mark there.
+    const plain: Shaper = .init(try Face.parse(@import("../raster/raster.zig").test_font, 0));
+    try std.testing.expect(!plain.isMark(plain.face.cmap.glyph('e')));
+    try std.testing.expectEqual(0, plain.marks.len);
 }
 
 test "ligatures keep the first component's cluster" {
