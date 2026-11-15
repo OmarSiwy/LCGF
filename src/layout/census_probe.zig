@@ -36,3 +36,6 @@ export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
 export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.resolveFlex(t, fx, .y, 800);
 }
+export fn p_place_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.placeFlex(t, fx);
+}

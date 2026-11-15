@@ -195,6 +195,16 @@ pub fn textAvail(t: *const Tree, tx: *Texts) void {
 
 /// Top-down: position of every node on both axes. One forward sweep.
 pub fn place(t: *Tree) void {
+    placeOf(t, {});
+}
+
+/// `place` with the extra placement rules of `fx` (flex.zig).
+pub fn placeFlex(t: *Tree, fx: *const Flex) void {
+    placeOf(t, fx);
+}
+
+fn placeOf(t: *Tree, fx: anytype) void {
+    const flexed = @TypeOf(fx) != void;
     if (t.len == 0) return;
     const parent = t.c.parent;
     const pos = t.c.pos;
@@ -220,7 +230,9 @@ pub fn place(t: *Tree) void {
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
             const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
-            const across = @max(inner - size[a][i], 0) * align_cross[p];
+            var cross = align_cross[p];
+            if (flexed) cross = fx.selfCross(i, cross);
+            const across = @max(inner - size[a][i], 0) * cross;
             const along = lead + cursor[p];
             const in_flow = across + main[a][p] * (along - across);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
@@ -303,7 +315,7 @@ pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
     applyText(t, tx, .y);
     fitFlex(t, fx, .y);
     resolveFlex(t, fx, .y, viewport[1]);
-    place(t);
+    placeFlex(t, fx);
     finalize(t);
 }
 

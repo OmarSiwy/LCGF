@@ -27,6 +27,9 @@ pub const Flex = struct {
         shrink: []f32,
         /// 1.0 when the node shares out free space a second time; 0.0 for the prototype's one round.
         regrow: []f32,
+        /// Cross-axis alignment factor (`Align.factor`) that replaces the parent's for this
+        /// node; -1 to use the parent's.
+        self_cross: []f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -52,6 +55,9 @@ pub const Flex = struct {
         /// stopped by their max leave in the first round goes to the other growers by weight.
         /// Bounded to two; a grower stopped in the second round leaves its rest unused.
         regrow: bool = false,
+        /// Where this node sits across its parent's main axis, instead of the parent's
+        /// `Style.cross` (CSS `align-self`). null keeps the parent's.
+        cross: ?types.Align = null,
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -66,6 +72,7 @@ pub const Flex = struct {
         fx.c.aspect[i] = s.aspect;
         fx.c.shrink[i] = s.shrink;
         fx.c.regrow[i] = b01(s.regrow);
+        fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
     }
 
     /// resolve, once node `p` has its size: the first round's leftover per unit of weight that
@@ -97,6 +104,12 @@ pub const Flex = struct {
     /// resolve: node `i`'s second-round share, given its first-round size `first`.
     pub inline fn secondShare(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, first: f32) f32 {
         return t.c.grow[a][i] * fx.c.grow_extra[p] * b01(first < t.c.max[a][i]);
+    }
+
+    /// place: the cross-axis factor for node `i`, its own or the parent's `parent_factor`.
+    pub inline fn selfCross(fx: *const Flex, i: usize, parent_factor: f32) f32 {
+        const own = fx.c.self_cross[i];
+        return parent_factor + b01(own >= 0) * (own - parent_factor);
     }
 
     /// fit: what node `i` adds to its parent's `shrink_sum`.
@@ -482,4 +495,43 @@ test "regrow: percent and floating children take no part in either round" {
     try testing.expectEqual(60, s.size(b)[0]);
     try testing.expectEqual(0, s.size(f)[0]);
     try testing.expectEqual(250, s.size(c)[0]);
+}
+
+test "cross: a child's own alignment replaces the parent's across the main axis" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(100) }, .cross = .center });
+    const a = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const c = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const d = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    s.fx.set(b, &.{ .cross = .start });
+    s.fx.set(c, &.{ .cross = .end });
+    s.fx.set(d, &.{ .cross = .center });
+    s.runFlex(300, 100);
+    try testing.expectEqualSlices(f32, &.{ 40, 0, 80, 40 }, &.{ t.c.pos[1][a], t.c.pos[1][b], t.c.pos[1][c], t.c.pos[1][d] });
+    // Along the main axis nothing moves.
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30 }, &.{ t.c.pos[0][a], t.c.pos[0][b], t.c.pos[0][c], t.c.pos[0][d] });
+}
+
+test "cross: the override works in a column too, inside the padding" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(100), .px(100) }, .pad = .{ 5, 0, 15, 0 } });
+    const a = t.push(root, .none, &.{ .size = .{ .px(20), .px(10) } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(20), .px(10) } });
+    s.fx.set(b, &.{ .cross = .end });
+    s.runFlex(100, 100);
+    try testing.expectEqual(5, t.c.pos[0][a]);
+    try testing.expectEqual(5 + 80 - 20, t.c.pos[0][b]);
+}
+
+test "cross: a floating node ignores it, as it ignores the parent's" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(100) } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .px(20), .px(10) } });
+    s.fx.set(f, &.{ .cross = .end });
+    s.runFlex(100, 100);
+    try testing.expectEqual(0, t.c.pos[1][f]);
 }
