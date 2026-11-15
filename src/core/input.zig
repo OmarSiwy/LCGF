@@ -308,3 +308,250 @@ test "Input: high-resolution wheel and pixel scroll are separate deltas" {
     const as_scroll: Input = .{ .scroll = .{ 0, 1 } };
     try std.testing.expect(as_wheel.stamp() != as_scroll.stamp());
 }
+
+/// Recorded input, replayed one frame per `next` call, so tests can drive the core with input
+/// captured from a host. A recording is UTF-8 text, one setting per line:
+///
+///     # comment                 blank lines and comments anywhere
+///     frame                     starts a frame; the lines below it fill that frame
+///     time 1.5                  also dt, scale (one number)
+///     viewport 800 600          also pointer, wheel, scroll (two numbers)
+///     buttons left middle       the held set, replaced (left right middle); bare `buttons` clears
+///     mods shift ctrl           likewise (shift ctrl alt cmd)
+///     keys 30 31                likewise, scancodes
+///     press 30 ctrl             a key event (also release, repeat): code, then the mods held
+///     text hello there          a `.text` event: the rest of the line after one space
+///     touch 7 10 20 0.8         a finger: id x y [pressure]
+///     pen 3 30 40 0.5 0.1 0.2   a pen (also eraser): id x y pressure tilt_x tilt_y; down when pressure > 0
+///
+/// Held state (time, dt, viewport, scale, pointer, buttons, mods, keys) carries over to the next
+/// frame; wheel, scroll, text, events and contacts belong to one frame. `time` advances by `dt`
+/// each frame unless the frame sets it. Typed text cannot contain a newline.
+pub const Replay = struct {
+    src: []const u8,
+    /// Byte offset of the next line.
+    at: usize = 0,
+    /// 1-based number of the last line read; on an error, the line at fault.
+    line: u32 = 0,
+    in: Input = .{},
+    started: bool = false,
+
+    /// Caller-owned storage for the per-frame slices of the returned Input. Reused every frame.
+    pub const Buffers = struct { text: []u8, events: []Input.Event, contacts: []Input.Contact };
+    pub const Error = error{ Syntax, BufferFull };
+
+    const Words = std.mem.TokenIterator(u8, .scalar);
+    const Setting = enum { time, dt, scale, viewport, pointer, wheel, scroll, buttons, mods, keys, press, release, repeat, text, touch, pen, eraser };
+
+    /// The next frame, or null after the last. Valid until the next call.
+    pub fn next(r: *Replay, buf: Buffers) Error!?*const Input {
+        while (true) {
+            const l = r.take() orelse return null;
+            if (blank(l)) continue;
+            if (!std.mem.eql(u8, l, "frame")) return error.Syntax;
+            break;
+        }
+        if (r.started) r.in.time += r.in.dt;
+        r.started = true;
+        r.in.wheel = .{ 0, 0 };
+        r.in.scroll = .{ 0, 0 };
+        var n_text: usize = 0;
+        var n_events: usize = 0;
+        var n_contacts: usize = 0;
+        while (r.peek()) |l| {
+            if (std.mem.eql(u8, l, "frame")) break;
+            _ = r.take();
+            if (blank(l)) continue;
+            var words = std.mem.tokenizeScalar(u8, l, ' ');
+            const setting = std.meta.stringToEnum(Setting, words.next().?) orelse return error.Syntax;
+            const in = &r.in;
+            switch (setting) {
+                .time => in.time = try num(f64, &words),
+                .dt => in.dt = try num(f32, &words),
+                .scale => in.scale = try num(f32, &words),
+                .viewport => in.viewport = try pair(&words),
+                .pointer => in.pointer = try pair(&words),
+                .wheel => in.wheel = try pair(&words),
+                .scroll => in.scroll = try pair(&words),
+                .buttons => in.buttons = try flags(Input.Buttons, &words),
+                .mods => in.mods = try flags(Input.Mods, &words),
+                .keys => {
+                    in.keys = .{};
+                    while (words.next()) |w| in.keys.press(try int(u8, w));
+                },
+                inline .press, .release, .repeat => |key| {
+                    if (n_events == buf.events.len) return error.BufferFull;
+                    const code = try int(u8, words.next() orelse return error.Syntax);
+                    buf.events[n_events] = .{ .kind = @field(Input.Event.Kind, @tagName(key)), .code = code, .mods = try flags(Input.Mods, &words) };
+                    n_events += 1;
+                },
+                .text => {
+                    const t = l[@min(l.len, "text ".len)..];
+                    if (n_events == buf.events.len or buf.text.len - n_text < t.len) return error.BufferFull;
+                    @memcpy(buf.text[n_text..][0..t.len], t);
+                    buf.events[n_events] = .{ .kind = .text, .at = @intCast(n_text), .len = @intCast(t.len) };
+                    n_text += t.len;
+                    n_events += 1;
+                },
+                .touch, .pen, .eraser => {
+                    if (n_contacts == buf.contacts.len) return error.BufferFull;
+                    var c: Input.Contact = .{ .id = try int(u32, words.next() orelse return error.Syntax), .pos = .{ 0, 0 } };
+                    c.pos[0] = try num(f32, &words);
+                    c.pos[1] = try num(f32, &words);
+                    if (setting == .touch) {
+                        if (words.peek() != null) c.pressure = try num(f32, &words);
+                    } else {
+                        c.kind = if (setting == .pen) .pen else .eraser;
+                        c.pressure = try num(f32, &words);
+                        c.tilt = try pair(&words);
+                        c.down = c.pressure > 0;
+                    }
+                    if (words.next() != null) return error.Syntax;
+                    buf.contacts[n_contacts] = c;
+                    n_contacts += 1;
+                },
+            }
+        }
+        r.in.text = buf.text[0..n_text];
+        r.in.events = buf.events[0..n_events];
+        r.in.contacts = buf.contacts[0..n_contacts];
+        return &r.in;
+    }
+
+    fn peek(r: *const Replay) ?[]const u8 {
+        if (r.at >= r.src.len) return null;
+        const rest = r.src[r.at..];
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        return std.mem.trimEnd(u8, rest[0..end], "\r");
+    }
+
+    fn take(r: *Replay) ?[]const u8 {
+        const rest = r.src[@min(r.at, r.src.len)..];
+        const l = r.peek() orelse return null;
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        r.at += end + 1;
+        r.line += 1;
+        return l;
+    }
+
+    fn blank(l: []const u8) bool {
+        const t = std.mem.trimStart(u8, l, " ");
+        return t.len == 0 or t[0] == '#';
+    }
+
+    fn int(comptime T: type, w: []const u8) Error!T {
+        return std.fmt.parseInt(T, w, 10) catch error.Syntax;
+    }
+
+    fn num(comptime T: type, words: *Words) Error!T {
+        return std.fmt.parseFloat(T, words.next() orelse return error.Syntax) catch error.Syntax;
+    }
+
+    fn pair(words: *Words) Error![2]f32 {
+        const v: [2]f32 = .{ try num(f32, words), try num(f32, words) };
+        if (words.next() != null) return error.Syntax;
+        return v;
+    }
+
+    /// A packed bit set from the names of its fields, all on one line.
+    fn flags(comptime T: type, words: *Words) Error!T {
+        var v: T = .{};
+        while (words.next()) |w| {
+            var hit = false;
+            inline for (@typeInfo(T).@"struct".field_names) |name| {
+                if (comptime name[0] == '_') continue;
+                if (std.mem.eql(u8, w, name)) {
+                    @field(v, name) = true;
+                    hit = true;
+                }
+            }
+            if (!hit) return error.Syntax;
+        }
+        return v;
+    }
+};
+
+test "Replay: example recording replays from a file" {
+    var text: [64]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var contacts: [4]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    var r: Replay = .{ .src = @embedFile("testdata/click.replay") };
+    var stamps: [8]u64 = undefined;
+    var n: usize = 0;
+    while (try r.next(buf)) |in| : (n += 1) {
+        try std.testing.expectApproxEqAbs(@as(f64, 0.016) * @as(f64, @floatFromInt(n)), in.time, 1e-6);
+        stamps[n] = in.stamp();
+        switch (n) {
+            0 => {
+                try std.testing.expectEqual([2]f32{ 100, 40 }, in.pointer);
+                try std.testing.expect(!in.buttons.left);
+            },
+            1 => try std.testing.expect(in.buttons.left),
+            2 => try std.testing.expect(!in.buttons.left),
+            3 => {
+                try std.testing.expectEqualStrings("hI", in.text);
+                try std.testing.expectEqual(6, in.events.len);
+                try std.testing.expectEqualStrings("I", in.typed(in.events[4]));
+                try std.testing.expectEqual(Input.Event.Kind.press, in.events[3].kind);
+                try std.testing.expectEqual(@as(u8, 23), in.events[3].code);
+                try std.testing.expect(in.events[3].mods.shift and !in.events[2].mods.shift);
+            },
+            4 => {
+                try std.testing.expect(in.keys.down(42));
+                try std.testing.expectEqual(2, in.contacts.len);
+                const pen = in.contacts[in.contact(2)];
+                try std.testing.expectEqual(Input.Contact.Kind.pen, pen.kind);
+                try std.testing.expect(pen.down);
+                try std.testing.expectEqual([2]f32{ 0.1, -0.2 }, pen.tilt);
+                try std.testing.expectEqual(@as(f32, 1), in.contacts[in.contact(1)].pressure);
+            },
+            5 => {
+                try std.testing.expectEqual([2]f32{ 0, -12.5 }, in.scroll);
+                try std.testing.expectEqual([2]f32{ 0, 0.25 }, in.wheel);
+                try std.testing.expectEqual(0, in.contacts.len);
+                try std.testing.expect(!in.keys.down(42));
+            },
+            else => {
+                try std.testing.expectEqual(0, in.events.len);
+                try std.testing.expectEqual([2]f32{ 0, 0 }, in.scroll);
+            },
+        }
+    }
+    try std.testing.expectEqual(8, n);
+    // Idle detection on replayed input: a frame equal to an earlier one has its stamp.
+    try std.testing.expectEqual(stamps[0], stamps[2]);
+    try std.testing.expectEqual(stamps[2], stamps[6]);
+    try std.testing.expectEqual(stamps[6], stamps[7]);
+    try std.testing.expect(stamps[1] != stamps[0]);
+}
+
+test "Replay: errors name the line, buffers bound the frame" {
+    var text: [2]u8 = undefined;
+    var events: [1]Input.Event = undefined;
+    var contacts: [0]Input.Contact = .{};
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+
+    var bad: Replay = .{ .src = "frame\npointer 1\n" };
+    try std.testing.expectError(error.Syntax, bad.next(buf));
+    try std.testing.expectEqual(@as(u32, 2), bad.line);
+
+    var unknown: Replay = .{ .src = "# x\nframe\nbuttons left thumb" };
+    try std.testing.expectError(error.Syntax, unknown.next(buf));
+    try std.testing.expectEqual(@as(u32, 3), unknown.line);
+
+    var before: Replay = .{ .src = "pointer 1 2\nframe\n" };
+    try std.testing.expectError(error.Syntax, before.next(buf));
+
+    var full: Replay = .{ .src = "frame\npress 1\nrelease 1\n" };
+    try std.testing.expectError(error.BufferFull, full.next(buf));
+
+    var long: Replay = .{ .src = "frame\ntext abc" };
+    try std.testing.expectError(error.BufferFull, long.next(buf));
+
+    var touch: Replay = .{ .src = "frame\ntouch 1 2 3" };
+    try std.testing.expectError(error.BufferFull, touch.next(buf));
+
+    var empty: Replay = .{ .src = "" };
+    try std.testing.expectEqual(null, try empty.next(buf));
+}
