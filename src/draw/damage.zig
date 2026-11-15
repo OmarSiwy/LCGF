@@ -2,6 +2,8 @@
 //! caller's buffer, nothing is retained between calls except what the caller keeps.
 //!
 //!   1. hash each node's paint inputs (rect, visible rect, look, text, custom data) into a column
+//!   2. compare the column against last frame's, `lanes` rows per step: a row is dirty when its
+//!      hash changed or it exists in only one of the two frames
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -9,6 +11,9 @@ const Tree = @import("../core/tree.zig").Tree;
 const Look = @import("../core/tree.zig").Look;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
+const mem = @import("../core/mem.zig");
+const simd = @import("../core/simd.zig");
+const W = simd.lanes;
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
 const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look };
@@ -45,9 +50,54 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
     }
 }
 
+/// Damage state across frames: two generations of the per-node hash, written alternately, as
+/// prototype/ui.zig `Context.trees` keeps two trees. Rows are compared by index, so a node that
+/// moves to another row counts as changed in both rows.
+pub const Damage = struct {
+    cap: u32,
+    gen: [2]Gen,
+    /// The generation the next `frame` writes; the other one is last frame's.
+    cur: u1 = 0,
+    /// 1 for a row to repaint, 0 otherwise, for rows [0, padded(max(len, last len))).
+    dirty: []u32,
+
+    pub const Gen = struct { len: u32 = 0, hash: []u32 };
+
+    /// Carves `simd.rows(cap)` rows per column. The first frame after `init` is all dirty.
+    pub fn init(carver: *mem.Carver, cap: u32) Damage {
+        const rows = simd.rows(cap);
+        return .{
+            .cap = cap,
+            .gen = .{ .{ .hash = carver.slice(u32, rows) }, .{ .hash = carver.slice(u32, rows) } },
+            .dirty = carver.slice(u32, rows),
+        };
+    }
+
+    /// Records this frame's paint inputs and marks in `dirty` the rows that differ from the last
+    /// frame recorded. Returns the number of dirty rows.
+    pub fn frame(dm: *Damage, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) u32 {
+        std.debug.assert(t.len <= dm.cap);
+        const now = &dm.gen[dm.cur];
+        const last = &dm.gen[dm.cur ^ 1];
+        now.len = t.len;
+        hashNodes(t, tx, cu, strings, now.hash);
+        const both = simd.u(@min(now.len, last.len));
+        const either = simd.u(@max(now.len, last.len));
+        var count: simd.U = @splat(0);
+        var i: usize = 0;
+        while (i < simd.padded(@max(now.len, last.len))) : (i += W) {
+            const row = simd.iota + simd.u(@intCast(i));
+            const changed = (simd.loadU(now.hash, i) != simd.loadU(last.hash, i)) | !(row < both);
+            const d: simd.U = @intFromBool(changed & (row < either));
+            simd.storeU(dm.dirty, i, d);
+            count += d;
+        }
+        dm.cur ^= 1;
+        return @reduce(.Add, count);
+    }
+};
+
 const testing = std.testing;
-const mem = @import("../core/mem.zig");
-const simd = @import("../core/simd.zig");
 const layout = @import("../layout/layout.zig");
 const Strings = @import("../core/strings.zig").Strings;
 const Id = types.Id;
@@ -138,4 +188,56 @@ test "hashNodes: text content and custom data count as paint inputs of their nod
     try testing.expectEqual(1 << 5, Scene.changed(&a, &b));
     b = .build(&buf_b, .{ .view_data = 8 });
     try testing.expectEqual(1 << 6, Scene.changed(&a, &b));
+}
+
+test "Damage.frame: first frame all dirty, a repeat none, a one-node change that one row" {
+    var dm_buf: [
+        blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Damage.init(&counter, Scene.cap);
+            break :blk counter.off;
+        }
+    ]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &dm_buf };
+    var dm = Damage.init(&carver, Scene.cap);
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+
+    var sc: Scene = .build(&buf, .{});
+    try testing.expectEqual(8, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    sc = .build(&buf, .{});
+    try testing.expectEqual(0, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    sc = .build(&buf, .{ .ok_fill = .rgb(90, 90, 200) });
+    try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    try testing.expectEqual(1, dm.dirty[Scene.ok]);
+    // The one dirty row is a 40x20 button in a 400x300 window.
+    const r = sc.t.rect(Scene.ok);
+    try testing.expectEqual(40 * 20, r.w() * r.h());
+    // Back to the first look: the same row again, compared with the frame before.
+    sc = .build(&buf, .{});
+    try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    try testing.expectEqual(1, dm.dirty[Scene.ok]);
+}
+
+test "Damage.frame: rows only one frame has are dirty, padding rows never are" {
+    var dm_buf: [
+        blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Damage.init(&counter, Scene.cap);
+            break :blk counter.off;
+        }
+    ]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &dm_buf };
+    var dm = Damage.init(&carver, Scene.cap);
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var sc: Scene = .build(&buf, .{});
+    _ = dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]);
+    // Drop the last node (the panel): its row disappears.
+    sc.t.len -= 1;
+    try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    try testing.expectEqual(1, dm.dirty[7]);
+    for (dm.dirty[8..simd.padded(8)]) |d| try testing.expectEqual(0, d);
+    // And back: it reappears.
+    sc.t.len += 1;
+    try testing.expectEqual(1, dm.frame(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len]));
+    try testing.expectEqual(1, dm.dirty[7]);
 }
