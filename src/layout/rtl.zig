@@ -5,6 +5,7 @@
 //! right-to-left, so stacking order, alignment, offsets and scroll all flip with one formula.
 //!
 //!   direction  forward sweep   every node's sign: +1 left to right, -1 right to left
+//!   startEnd   SIMD            logical start/end padding written as left/right
 //!   mirror     forward sweep   after `place`: x positions reflected inside RTL parents
 
 const std = @import("std");
@@ -33,6 +34,10 @@ pub const Rtl = struct {
         sign: []f32,
         /// Scratch for `mirror`: how far each node has moved along x.
         shift: []f32,
+        /// 1.0 when the node's x padding is given as `start` and `end` (`pad`).
+        logical: []f32,
+        start: []f32,
+        end: []f32,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Rtl {
@@ -42,6 +47,15 @@ pub const Rtl = struct {
     /// Every node back to `inherit`, for the next frame.
     pub fn reset(r: *Rtl) void {
         @memset(r.c.dir, 0);
+        @memset(r.c.logical, 0);
+    }
+    /// Gives `node` padding at the start and end of its inline axis instead of `Style.pad`'s
+    /// left and right: start is the left in a left-to-right node, the right in a right-to-left
+    /// one. `startEnd` writes it into the tree.
+    pub fn pad(r: *Rtl, node: u32, start: f32, end: f32) void {
+        r.c.logical[node] = 1;
+        r.c.start[node] = start;
+        r.c.end[node] = end;
     }
     pub fn set(r: *Rtl, node: u32, d: Dir) void {
         r.c.dir[node] = Dir.sign[@backingInt(d)];
@@ -58,6 +72,32 @@ pub fn direction(t: *const Tree, r: *Rtl) void {
     const parent = t.c.parent;
     sign[0] = dir[0] + (1 - @abs(dir[0]));
     for (1..t.len) |i| sign[i] = dir[i] + (1 - @abs(dir[i])) * sign[parent[i]];
+}
+
+/// SIMD. Writes the left and right padding of every node given logical padding (`Rtl.pad`):
+/// start on the left under +1, on the right under -1. Other nodes keep `Style.pad`. Run after
+/// `direction` and before `fit`; it writes the same values every time, so it may run again.
+/// Because `mirror` reflects children inside the content box, the content box itself must
+/// already have its start padding on the right; that is what this pass is for.
+pub fn startEnd(t: *Tree, r: *const Rtl) void {
+    const lo = t.c.pad_lo[0];
+    const hi = t.c.pad_hi[0];
+    const n = simd.padded(t.len);
+    const one = simd.f(1);
+    const half = simd.f(0.5);
+    var i: usize = 0;
+    while (i < n) : (i += simd.lanes) {
+        const ltr = (one + simd.loadF(r.c.sign, i)) * half;
+        const start = simd.loadF(r.c.start, i);
+        const end = simd.loadF(r.c.end, i);
+        const left = end + ltr * (start - end);
+        const right = start + ltr * (end - start);
+        const logical = simd.loadF(r.c.logical, i);
+        const l = simd.loadF(lo, i);
+        const h = simd.loadF(hi, i);
+        simd.storeF(lo, i, l + logical * (left - l));
+        simd.storeF(hi, i, h + logical * (right - h));
+    }
 }
 
 /// Reflects every child of a right-to-left parent along x inside the parent's content box, and
@@ -107,9 +147,12 @@ const Scene = struct {
         s.tx = Texts.init(&carver, 1);
         s.r = Rtl.init(&carver, 32);
     }
-    /// `layout.run` with `direction` and `mirror` between `place` and `finalize`.
+    /// `layout.run` with `direction` and `startEnd` first and `mirror` between `place` and
+    /// `finalize`.
     fn run(s: *Scene, viewport: [2]f32) void {
         const t = &s.t;
+        direction(t, &s.r);
+        startEnd(t, &s.r);
         layout.prepare(t);
         layout.applyText(t, &s.tx, .x);
         layout.fit(t, .x);
@@ -118,7 +161,6 @@ const Scene = struct {
         layout.fit(t, .y);
         layout.resolve(t, .y, viewport[1]);
         layout.place(t);
-        direction(t, &s.r);
         mirror(t, &s.r);
         layout.finalize(t);
     }
@@ -192,4 +234,49 @@ test "mirror: a right-to-left row stacks from the right; subtrees follow, an LTR
     try testing.expectEqual(rect(30, 0, 70, 5), t.rect(c2));
     // y is untouched.
     try testing.expectEqual(0, t.rect(b1).y0);
+}
+
+test "startEnd: start padding is on the left left to right and on the right right to left" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    // col 200 wide { row (start 10, end 2) { a 50 }, box 100 (start 20) { b1 30 },
+    // plain 100 with physical left padding 5 { p1 30 } }
+    const col = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) } });
+    const row = t.push(col, .none, &.{ .dir = .x, .size = .{ .fill, .px(10) } });
+    const a = t.push(row, .none, &.{ .size = .{ .px(50), .px(10) } });
+    t.seal(a);
+    t.seal(row);
+    const box = t.push(col, .none, &.{ .size = .{ .px(100), .px(10) } });
+    const b1 = t.push(box, .none, &.{ .size = .{ .px(30), .px(5) } });
+    t.seal(b1);
+    t.seal(box);
+    const plain = t.push(col, .none, &.{ .size = .{ .px(100), .px(10) }, .pad = .{ 5, 0, 0, 0 } });
+    const p1 = t.push(plain, .none, &.{ .size = .{ .px(30), .px(5) } });
+    t.seal(p1);
+    t.seal(plain);
+    t.seal(col);
+    s.r.reset();
+    s.r.pad(row, 10, 2);
+    s.r.pad(box, 20, 0);
+
+    s.run(.{ 200, 100 });
+    try testing.expectEqual(10, t.rect(a).x0);
+    try testing.expectEqual(20, t.rect(b1).x0);
+    try testing.expectEqual(5, t.rect(p1).x0);
+
+    s.r.set(col, .rtl);
+    s.run(.{ 200, 100 });
+    // End padding 2 on the left, start 10 on the right: a ends at 200 - 10.
+    try testing.expectEqualSlices(f32, &.{ 2, 10 }, &.{ t.c.pad_lo[0][row], t.c.pad_hi[0][row] });
+    try testing.expectEqual(rect(140, 0, 190, 10), t.rect(a));
+    // box is placed at the right of col; b1 ends 20 px before box's right edge.
+    try testing.expectEqual(rect(100, 10, 200, 20), t.rect(box));
+    try testing.expectEqual(rect(150, 10, 180, 15), t.rect(b1));
+    // Physical padding stays on the left: p1 is mirrored inside plain's content box 105..200.
+    try testing.expectEqual(rect(170, 20, 200, 25), t.rect(p1));
+
+    // Running it twice gives the same padding.
+    startEnd(t, &s.r);
+    try testing.expectEqualSlices(f32, &.{ 2, 10 }, &.{ t.c.pad_lo[0][row], t.c.pad_hi[0][row] });
 }
