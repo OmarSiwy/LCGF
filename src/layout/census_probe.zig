@@ -68,3 +68,6 @@ export fn p_place_rows(t: *const Tree, k: *lcgr.coefs.Coefs) void {
 export fn p_place_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
     lcgr.coefs.placeK(t, k);
 }
+export fn p_wrap(t: *const Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.wrap.wrap(t, fx);
+}

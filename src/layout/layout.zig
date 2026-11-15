@@ -17,6 +17,7 @@ const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Flex = @import("flex.zig").Flex;
+const wrap = @import("wrap.zig");
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -323,6 +324,7 @@ pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
     applyText(t, tx, .x);
     fitFlex(t, fx, .x);
     resolveFlex(t, fx, .x, viewport[0]);
+    wrap.wrap(t, fx);
     textAvail(t, tx);
     applyText(t, tx, .y);
     fitFlex(t, fx, .y);
