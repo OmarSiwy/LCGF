@@ -275,3 +275,71 @@ test "compact keeps matching rows in order and zeroes the rest" {
     }
     try testing.expectEqual(@as(u32, 0), compact(cols, len, cols.seen, 8));
 }
+
+// Scalar reference implementations: the obvious loop with an early exit or an `if`.
+const reference = struct {
+    fn find(col: []const u32, needle: u32) u32 {
+        for (col, 0..) |v, i| if (v == needle) return @intCast(i);
+        return none;
+    }
+    fn rank(col: []const u32, bound: u32) u32 {
+        var k: u32 = 0;
+        for (col) |v| k += @intFromBool(v < bound);
+        return k;
+    }
+    fn compact(dst: []u32, src: []const u32, key: []const u32, want: u32) u32 {
+        var w: u32 = 0;
+        for (src, key) |v, k| if (k == want) {
+            dst[w] = v;
+            w += 1;
+        };
+        return w;
+    }
+};
+
+test "property: 10,000 random cases agree with the scalar references" {
+    const cases = 10_000;
+    const max_len = 5 * lanes;
+    var prng: std.Random.DefaultPrng = .init(0x5eed_0019);
+    const rnd = prng.random();
+    var col: [padded(max_len)]u32 = undefined;
+    var key: [max_len]u32 = undefined;
+    var want_col: [max_len]u32 = undefined;
+    var out: [max_len + 1]u32 = undefined;
+    var agreed: u32 = 0;
+    for (0..cases) |_| {
+        const len = rnd.uintAtMost(u32, max_len);
+        // Few distinct values, so duplicates and misses are both common.
+        for (&col) |*v| v.* = rnd.uintLessThan(u32, 2 * lanes);
+        const probe = rnd.uintLessThan(u32, 2 * lanes + 1);
+        const c = rnd.boolean();
+        const a = rnd.int(u32);
+        const b = rnd.int(u32);
+        const fa: f32 = @bitCast(a);
+        const fb: f32 = @bitCast(b);
+
+        try testing.expect(padded(len) % lanes == 0 and padded(len) - len < lanes);
+        try testing.expectEqual(if (c) a else b, selU(c, a, b));
+        try testing.expectEqual(if (c) a else b, @as(u32, @bitCast(selF(c, fa, fb))));
+        try testing.expectEqual(@as(f32, if (c) 1 else 0), b2f(c));
+        try testing.expectEqual(c and a < b, andB(c, a < b));
+        try testing.expectEqual(c or a < b, orB(c, a < b));
+        try testing.expectEqual(reference.find(col[0..len], probe), find(&col, len, probe));
+        try testing.expectEqual(reference.rank(col[0..len], probe), rank(&col, len, probe));
+        // Sorted, as rank's callers use it: insertion index.
+        std.mem.sort(u32, col[0..len], {}, std.sort.asc(u32));
+        try testing.expectEqual(reference.rank(col[0..len], probe), rank(&col, len, probe));
+
+        for (key[0..len]) |*k| k.* = rnd.uintLessThan(u32, 3);
+        const want_len = reference.compact(&want_col, col[0..len], key[0..len], 1);
+        var w: u32 = 0;
+        for (col[0..len], key[0..len]) |v, k| w = emit(u32, &out, w, v, k == 1);
+        try testing.expectEqualSlices(u32, want_col[0..want_len], out[0..w]);
+        const Cols = struct { v: []u32, k: []u32 };
+        const got_len = compact(Cols{ .v = col[0..len], .k = key[0..len] }, len, key[0..len], 1);
+        try testing.expectEqualSlices(u32, want_col[0..want_len], col[0..got_len]);
+        for (col[got_len..len], key[got_len..len]) |v, k| try testing.expect(v == 0 and k == 0);
+        agreed += 1;
+    }
+    try testing.expectEqual(@as(u32, cases), agreed);
+}
