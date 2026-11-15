@@ -7,6 +7,8 @@
 //!   fit(.x)            reverse  natural widths, bottom-up (+ SIMD reciprocals)
 //!   resolve(.x)        forward  final widths, top-down
 //!   textAvail          gather   widths for wrapping   (caller re-measures here)
+//!   applyText/fit/resolve(.y)   the same three for heights
+//!   place              forward  positions on both axes
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -154,6 +156,44 @@ pub fn textAvail(t: *const Tree, tx: *Texts) void {
     }
 }
 
+/// Top-down: position of every node on both axes. One forward sweep.
+pub fn place(t: *Tree) void {
+    if (t.len == 0) return;
+    const parent = t.c.parent;
+    const pos = t.c.pos;
+    const size = t.c.size;
+    const lo = t.c.pad_lo;
+    const hi = t.c.pad_hi;
+    const used = t.c.used;
+    const main = t.c.main;
+    const scroll = t.c.scroll;
+    const offset = t.c.offset;
+    const gap = t.c.gap;
+    const gap_total = t.c.gap_total;
+    const cursor = t.c.cursor;
+    const flow = t.c.flow;
+    const align_main = t.c.align_main;
+    const align_cross = t.c.align_cross;
+
+    pos[0][0] = 0;
+    pos[1][0] = 0;
+    for (1..t.len) |i| {
+        const p = parent[i];
+        const fl = flow[i];
+        inline for (0..2) |a| {
+            const inner = size[a][p] - lo[a][p] - hi[a][p];
+            const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
+            const across = @max(inner - size[a][i], 0) * align_cross[p];
+            const along = lead + cursor[p];
+            const in_flow = across + main[a][p] * (along - across);
+            pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
+        }
+        // Advance along whichever axis is the parent's main one.
+        const step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
+        cursor[p] += (step + gap[p]) * fl;
+    }
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const Strings = @import("../core/strings.zig").Strings;
@@ -205,6 +245,21 @@ const Scene = struct {
         return .{ .t = t, .tx = tx };
     }
 };
+
+/// The sizing passes of the tier-0 example, with the caller's wrap step (two 12 px lines in the
+/// 100 px textAvail gives the run) written in by hand.
+fn sized(s: *Scene) void {
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    fit(&s.t, .x);
+    resolve(&s.t, .x, 400);
+    textAvail(&s.t, &s.tx);
+    s.tx.c.w[0] = 100;
+    s.tx.c.h[0] = 24;
+    applyText(&s.t, &s.tx, .y);
+    fit(&s.t, .y);
+    resolve(&s.t, .y, 300);
+}
 
 fn expectCol(want: []const f32, col: []const f32) !void {
     try testing.expectEqualSlices(f32, want, col[0..want.len]);
@@ -323,4 +378,32 @@ test "textAvail: each run gets its node's resolved width inside the padding" {
     s.t.c.pad_hi[0][Scene.para] = 3;
     textAvail(&s.t, &s.tx);
     try expectCol(&.{94}, s.tx.c.avail);
+}
+
+test "place: children follow the parent's cursor along its main axis, inside its padding" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    sized(&s);
+    place(&s.t);
+    // a then b along bar's x with a 4 px gap; bar, col, body down root's y with 5 px gaps.
+    try expectCol(&.{ 0, 10, 10, 114, 10, 10, 10 }, c.pos[0]);
+    try expectCol(&.{ 0, 10, 10, 10, 55, 55, 84 }, c.pos[1]);
+    try expectCol(&.{ 285, 384, 0, 0, 24, 0, 0 }, c.cursor);
+}
+
+test "place: floating nodes skip the cursor; offset and scroll move a node and its children" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    sized(&s);
+    c.flow[Scene.col] = 0; // col floats: placed at root's content origin, not after bar
+    c.offset[0][Scene.col] = 7;
+    c.scroll[1][Scene.col] = 3; // scrolls para up by 3
+    place(&s.t);
+    try testing.expectEqual(10 + 7, c.pos[0][Scene.col]);
+    try testing.expectEqual(10, c.pos[1][Scene.col]);
+    try testing.expectEqual(10 - 3, c.pos[1][Scene.para]);
+    // body now follows bar directly: 10 + 40 + 5.
+    try testing.expectEqual(55, c.pos[1][Scene.body]);
 }
