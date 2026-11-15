@@ -77,7 +77,11 @@ through the masks:
 - `hit.near`: the final `selU(any, top, none)` became a max over rows shifted by one
   (`none +% 1 == 0`), minus one. With no match the result is `none`. 2 jumps, both loop control.
 
-`p_step` gained one remainder test after an unrolled vector loop (loop control). No per-row loop
+`p_step` gained one remainder test after an unrolled vector loop (loop control).
+Auto-vectorized loops add jumps that are all loop control: `p_anchor`'s subtree shift
+(`for (pos[a][n..end[n]]) |*v| v.* += delta`) became a 32-wide, a 4-wide and a scalar loop with
+trip-count dispatch between them, 12 -> 20 jcc, no jump on data. When the census flags an
+auto-vectorized loop, check that every new jump compares a trip count, not a column value. No per-row loop
 gained a jump; `tools/census/baseline.json` and `baseline-src.json` are recorded on this build.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where

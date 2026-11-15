@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
     const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
     lcgr_fast.addOptions("build_options", options);
     const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/layout/census_probe.zig"),
+        .root_source_file = b.path("src/census_probes.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
