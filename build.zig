@@ -8,6 +8,7 @@
 //!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
 //!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
+//!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -83,6 +84,15 @@ pub fn build(b: *std.Build) void {
     const fuzz_run = b.addRunArtifact(b.addExecutable(.{ .name = "fuzz", .root_module = fuzz_mod }));
     fuzz_run.addPassthruArgs();
     b.step("fuzz-run", "Fuzz for a time: -- [seconds] [seed] [first]").dependOn(&fuzz_run.step);
+
+    // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
+    const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/font/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    font_fuzz.addPassthruArgs();
+    b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

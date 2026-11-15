@@ -974,3 +974,13 @@ test "face selection by style" {
     try std.testing.expectEqual(0, try findFace(test_ttf, .{}));
     try std.testing.expectEqual(null, try findFace(test_ttf, .{ .bold = true }));
 }
+
+test "mutated test fonts are errors, not crashes" {
+    // A short run of the fuzzer (fuzz.zig); `zig build font-fuzz` runs it for a set time.
+    const fuzz = @import("fuzz.zig");
+    var buf: [@max(test_ttf.len, test_ttc.len)]u8 = undefined;
+    for (0..300) |i| {
+        var prng: std.Random.DefaultPrng = .init(i);
+        fuzz.exercise(fuzz.mutate(prng.random(), &buf));
+    }
+}
