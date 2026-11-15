@@ -69,6 +69,11 @@
     "jcc": 4,
     "short_fwd": 1
   },
+  "p_hit_layered": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
   "p_hit_near": {
     "back": 1,
     "jcc": 2,

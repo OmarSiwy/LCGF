@@ -35,6 +35,38 @@ pub fn at(t: *const Tree, x: f32, y: f32, want: Sense) u32 {
     return found;
 }
 
+/// Like `at`, but honouring paint layers: the node under (x, y) with the highest (layer, row),
+/// which is the last match in `overlay.order`'s paint order. `layer` is `overlay.Layers.c.layer`
+/// as `overlay.order` wrote it, padded like every column; with every layer 0 the result is
+/// `at`'s. A menu row that is earlier than the body it covers is hit, not the body under it.
+pub fn atLayered(t: *const Tree, layer: []const u8, x: f32, y: f32, want: Sense) u32 {
+    const c = &t.c;
+    const px = simd.f(x);
+    const py = simd.f(y);
+    const wantv: simd.Bytes = @splat(@as(u8, @bitCast(want)));
+    const zero8: simd.Bytes = @splat(0);
+    var best_l = simd.u(0);
+    var best_i = simd.u(none);
+    const n = simd.padded(t.len);
+    var i: usize = 0;
+    while (i < n) : (i += W) {
+        const inside = (px >= simd.loadF(c.vis[0], i)) & (px < simd.loadF(c.vis[2], i)) &
+            (py >= simd.loadF(c.vis[1], i)) & (py < simd.loadF(c.vis[3], i));
+        const senses: simd.Bytes = c.sense[i..][0..W].*;
+        const lb: simd.Bytes = layer[i..][0..W].*;
+        const l: simd.U = lb;
+        // Rows rise within a lane, so an equal layer means a later row: it wins.
+        const take = inside & ((senses & wantv) != zero8) & (l >= best_l);
+        best_l = @select(u32, take, l, best_l);
+        best_i = @select(u32, take, simd.iota + simd.u(@intCast(i)), best_i);
+    }
+    // Across lanes: the highest layer, then the highest row, by the shifted max of `near`.
+    // Lanes that never matched hold layer 0 and `none`, which shifts to 0 and loses.
+    const l_max = @reduce(.Max, best_l);
+    const shifted = @select(u32, best_l == simd.u(l_max), best_i +% simd.u(1), simd.u(0));
+    return @reduce(.Max, shifted) -% 1;
+}
+
 /// Like `at`, for a finger: the node nearest to (x, y) within `slop` logical pixels that takes
 /// part in `want`, or `none`. A node under the point is at distance 0, so it always beats one
 /// that is only near; among equal distances the topmost (latest) row wins, as in `at`. With
@@ -189,6 +221,89 @@ test "at and near match the scalar references on a scattered, clipped, overlappi
     }
     // The grid did find things; an always-`none` sweep would pass the comparisons otherwise.
     try testing.expect(hits > 100);
+}
+
+fn atLayeredScalar(t: *const Tree, layer: []const u8, x: f32, y: f32, want: Sense) u32 {
+    const c = &t.c;
+    var found: u32 = none;
+    var best: u8 = 0;
+    for (0..t.len) |i| {
+        const r: types.Rect = .{ .x0 = c.vis[0][i], .y0 = c.vis[1][i], .x1 = c.vis[2][i], .y1 = c.vis[3][i] };
+        if (r.contains(x, y) and (c.sense[i] & @as(u8, @bitCast(want))) != 0 and layer[i] >= best) {
+            found = @intCast(i);
+            best = layer[i];
+        }
+    }
+    return found;
+}
+
+test "atLayered matches the scalar reference, and is `at` when every layer is 0" {
+    const overlay = @import("../layout/overlay.zig");
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    const t = scattered(&raw);
+    var lraw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &lraw };
+    var ly = overlay.Layers.init(&carver, t.cap);
+    ly.reset();
+    overlay.order(&t, &ly);
+    const wants = [_]Sense{ .any, .{ .hover = true }, .{ .click = true }, .{ .drag = true } };
+    var y: f32 = -12;
+    while (y < 215) : (y += 7) {
+        var x: f32 = -12;
+        while (x < 215) : (x += 7) {
+            for (wants) |w| try testing.expectEqual(at(&t, x, y, w), atLayered(&t, ly.c.layer, x, y, w));
+        }
+    }
+    // Raise a scattering of rows (3 layers, some above earlier rows, some below later ones).
+    for (1..t.len) |i| ly.c.own[i] = @intCast((i * 7) % 4);
+    overlay.order(&t, &ly);
+    var differs: u32 = 0;
+    y = -12;
+    while (y < 215) : (y += 3.5) {
+        var x: f32 = -12;
+        while (x < 215) : (x += 3.5) {
+            for (wants) |w| {
+                const got = atLayered(&t, ly.c.layer, x, y, w);
+                try testing.expectEqual(atLayeredScalar(&t, ly.c.layer, x, y, w), got);
+                differs += @intFromBool(got != at(&t, x, y, w));
+            }
+        }
+    }
+    // Layers did change some answers; otherwise the comparison proves nothing new.
+    try testing.expect(differs > 20);
+}
+
+test "atLayered: an open menu covers the later body row under it" {
+    const overlay = @import("../layout/overlay.zig");
+    const layout = @import("../layout/layout.zig");
+    const Texts = @import("../core/texts.zig").Texts;
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 16);
+    var tx = Texts.init(&carver, 1);
+    var ly = overlay.Layers.init(&carver, 16);
+    // root { button { menu (floating, 80 x 60 over the body) { item } } body }
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const button = t.push(root, .none, &.{ .size = .{ .px(40), .px(20) } });
+    const menu = t.push(button, .none, &.{ .size = .{ .px(80), .px(60) }, .float = true, .offset = .{ 0, 20 } });
+    const item = t.push(menu, .none, &.{ .size = .{ .fill, .px(20) } });
+    t.seal(menu);
+    t.seal(button);
+    const body = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    t.seal(root);
+    for ([_]u32{ button, menu, item, body }) |k| t.c.sense[k] = @bitCast(Sense.button);
+    layout.run(&t, &tx, .{ 200, 200 });
+    ly.reset();
+    ly.c.own[menu] = 1;
+    overlay.order(&t, &ly);
+    // Row order alone puts the body on top of the menu.
+    try testing.expectEqual(body, at(&t, 10, 50, .any));
+    try testing.expectEqual(menu, atLayered(&t, ly.c.layer, 10, 50, .any));
+    try testing.expectEqual(item, atLayered(&t, ly.c.layer, 10, 30, .any));
+    // Outside the menu the body is hit as before; above it, the button.
+    try testing.expectEqual(body, atLayered(&t, ly.c.layer, 150, 150, .any));
+    try testing.expectEqual(button, atLayered(&t, ly.c.layer, 10, 10, .any));
+    try testing.expectEqual(none, atLayered(&t, ly.c.layer, 300, 10, .any));
 }
 
 test "at: nothing is hit outside the clip, in an inert node, or in the padding rows" {
