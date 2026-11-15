@@ -554,8 +554,8 @@ test "run: equals the tier-0 calls it is shorthand for" {
     try testing.expectEqual(12, short.t.rect(Scene.para).h());
 }
 
-// Ported from prototype/example.zig. The prototype's last three lines check `hit.at` on the same
-// columns; hit testing is not in src/ yet, so they belong to the lane that ports it.
+// Ported from prototype/example.zig, including its last three lines, which check `hit.at` on the
+// same columns.
 test "tier 0 alone: no Context, caller sequences the passes" {
     const Mono = @import("../text/protocol.zig").Mono;
     var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
@@ -600,4 +600,10 @@ test "tier 0 alone: no Context, caller sequences the passes" {
     try testing.expectEqual(types.Rect{ .x0 = 114, .y0 = 10, .x1 = 390, .y1 = 50 }, t.rect(b));
     try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 55, .x1 = 110, .y1 = 79 }, t.rect(para));
     try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 84, .x1 = 390, .y1 = 290 }, t.rect(body));
+
+    // Hit testing reads the same columns.
+    const hit = @import("../interact/hit.zig");
+    try testing.expectEqual(a, hit.at(&t, 50, 20, .any));
+    try testing.expectEqual(body, hit.at(&t, 50, 100, .any));
+    try testing.expectEqual(types.none, hit.at(&t, 200, 20, .any));
 }
