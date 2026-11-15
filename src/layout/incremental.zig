@@ -20,6 +20,8 @@ pub const Dirty = struct {
     pub const Columns = struct {
         /// 1 when the node's own inputs on that axis changed since the last update.
         mark: [2][]u8,
+        /// 1 when the node is a relayout boundary on that axis (`boundaries`).
+        bound: [2][]u8,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Dirty {
@@ -33,6 +35,26 @@ pub const Dirty = struct {
     }
 };
 
+/// SIMD. Marks relayout boundaries: nodes whose natural size on an axis cannot depend on their
+/// content, because `min >= max` clamps it to `max` (a px size, or a max below the min). A
+/// change inside such a node changes the sizes and positions of its descendants only: its own
+/// `nat`, and so its parent's fit and its siblings, stay as they were. The root is a boundary on
+/// both axes, since the viewport sets its size.
+pub fn boundaries(t: *const Tree, d: *Dirty) void {
+    std.debug.assert(t.len <= d.cap);
+    const n = simd.padded(t.len);
+    const one: simd.Bytes = @splat(1);
+    const zero: simd.Bytes = @splat(0);
+    var i: usize = 0;
+    while (i < n) : (i += simd.lanes) {
+        inline for (0..2) |a| {
+            const fixed = simd.loadF(t.c.min[a], i) >= simd.loadF(t.c.max[a], i);
+            d.c.bound[a][i..][0..simd.lanes].* = @select(u8, fixed, one, zero);
+        }
+    }
+    inline for (0..2) |a| d.c.bound[a][0] = 1;
+}
+
 /// Lays out what the marks reach and clears them. With no marks the columns are left as they
 /// are: an idle frame does no layout work.
 pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
@@ -44,6 +66,7 @@ pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
         inline for (0..2) |a| any |= d.c.mark[a][i..][0..simd.lanes].*;
     }
     if (@reduce(.Or, any) == 0) return;
+    boundaries(t, d);
     layout.run(t, tx, viewport);
     inline for (0..2) |a| @memset(d.c.mark[a][0..n], 0);
 }
@@ -180,6 +203,64 @@ fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
 
 test "update: equals a full layout after random changes to random trees" {
     try randomFrames(0x111, 40, 8, 3);
+}
+
+test "boundaries: px sizes and the root, not fit, grow or pct" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var d = Dirty.init(&carver, 8);
+    const root = t.push(0, .none, &.{});
+    // Rows 1..3: px(40) x fit, fill x 50%, and a max below its min across x.
+    _ = t.push(root, .none, &.{ .size = .{ .px(40), .fit } });
+    _ = t.push(root, .none, &.{ .size = .{ .fill, .pct(0.5) } });
+    _ = t.push(root, .none, &.{ .min = .{ 30, 0 }, .max = .{ 20, inf } });
+    t.seal(root);
+    boundaries(&t, &d);
+    try testing.expectEqualSlices(u8, &.{ 1, 1, 0, 1 }, d.c.bound[0][0..4]);
+    try testing.expectEqualSlices(u8, &.{ 1, 0, 0, 0 }, d.c.bound[1][0..4]);
+}
+
+test "boundaries: changes inside a boundary leave its natural size, and all outside it, alone" {
+    var raw: [2][1024 * 1024]u8 align(mem.column_align) = undefined;
+    var c0: mem.Carver = .{ .buf = &raw[0] };
+    var c1: mem.Carver = .{ .buf = &raw[1] };
+    var before = Tree.init(&c0, 600);
+    var after = Tree.init(&c1, 600);
+    var tx = Texts.init(&c0, 1);
+    var d = Dirty.init(&c0, 600);
+    var prng: std.Random.DefaultPrng = .init(0x112);
+    const r = prng.random();
+    var tried: u32 = 0;
+    while (tried < 200) {
+        const seed = r.int(u64);
+        const n = 2 + r.uintLessThan(u32, before.cap - 1);
+        var a: std.Random.DefaultPrng = .init(seed);
+        var b: std.Random.DefaultPrng = .init(seed);
+        check.randomTree(&before, a.random(), n);
+        check.randomTree(&after, b.random(), n);
+        boundaries(&before, &d);
+        // A boundary other than the root, with something inside it to change.
+        const k = 1 + r.uintLessThan(u32, n - 1);
+        const ax = r.int(u1);
+        if (d.c.bound[ax][k] == 0 or before.c.end[k] == k + 1) continue;
+        tried += 1;
+        const inside = k + 1 + r.uintLessThan(u32, before.c.end[k] - k - 1);
+        var ch = Change.random(r, n);
+        ch.node = inside;
+        ch.axis = ax;
+        if (ch.kind >= 7) ch.kind = 0; // keep the change on this axis
+        ch.apply(&after, null);
+        layout.run(&before, &tx, .{ 1280, 800 });
+        layout.run(&after, &tx, .{ 1280, 800 });
+        try testing.expectEqual(before.c.nat[ax][k], after.c.nat[ax][k]);
+        // Outside the subtree nothing on that axis moved.
+        const outside = [2][2]u32{ .{ 0, k + 1 }, .{ before.c.end[k], n } };
+        for (outside) |o| {
+            try testing.expectEqualSlices(f32, before.c.size[ax][o[0]..o[1]], after.c.size[ax][o[0]..o[1]]);
+            try testing.expectEqualSlices(f32, before.c.pos[ax][o[0]..o[1]], after.c.pos[ax][o[0]..o[1]]);
+        }
+    }
 }
 
 test "update: no marks, no work" {
