@@ -47,3 +47,9 @@ export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
 export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
     lcgr.overlay.order(t, ly);
 }
+export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.fitFlex(t, fx, .y);
+}
+export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.resolveFlex(t, fx, .y, 800);
+}

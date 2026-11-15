@@ -16,6 +16,7 @@ pub const customs = @import("core/customs.zig");
 pub const layout = @import("layout/layout.zig");
 pub const hit = @import("interact/hit.zig");
 pub const overlay = @import("layout/overlay.zig");
+pub const flex = @import("layout/flex.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
