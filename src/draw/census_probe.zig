@@ -22,3 +22,6 @@ export fn p_inherit_transform(t: *Tree) void {
 export fn p_inherit_clip(t: *Tree) void {
     lcgr.inherit.clip(t);
 }
+export fn p_paint_layered(t: *const Tree, tx: *const Texts, cu: *const Customs, ly: *const lcgr.overlay.Layers, d: *DrawList) void {
+    lcgr.paint.emitLayered(t, tx, cu, "", ly, d);
+}

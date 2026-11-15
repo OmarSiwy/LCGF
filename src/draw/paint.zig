@@ -12,10 +12,23 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const DrawList = @import("draw_list.zig").DrawList;
+const Layers = @import("../layout/overlay.zig").Layers;
 const none = types.none;
 
 /// Tree and side lists in, draw list out. `strings` is the storage `TextRun.start` indexes.
+/// Nodes paint in row order.
 pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void {
+    paintIn(t, tx, cu, strings, false, &.{}, d);
+}
+
+/// `emit` with nodes painted in stacking-layer order: `ly.c.order` as written by
+/// `overlay.order`, so a raised node and its subtree draw over every row of a lower layer.
+/// Each node still clips to its parent's clip.
+pub fn emitLayered(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, ly: *const Layers, d: *DrawList) void {
+    paintIn(t, tx, cu, strings, true, ly.c.order[0..t.len], d);
+}
+
+inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, comptime ordered: bool, order: []const u32, d: *DrawList) void {
     const c = &t.c;
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
@@ -32,7 +45,8 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
     const looks = c.look;
     var q: u32 = 0;
     var o: u32 = 0;
-    for (0..t.len) |i| {
+    for (0..t.len) |k| {
+        const i = if (ordered) order[k] else k;
         const vis: u32 = c.visible[i];
         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
         const look = looks[i];
