@@ -26,21 +26,25 @@ jobs:
           fi
           python3 tools/commitlint/commitlint.py "$range"
 
+  # One matrix entry per ci/jobs/<name>.sh, so adding a job never edits this file.
+  jobs:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "matrix=$(ci/run.sh --matrix)" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: jobs
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        job: [debug, release-safe, release-fast, lanes-4, lanes-8, cross, census, bench]
+        include: ${{ fromJSON(needs.jobs.outputs.matrix) }}
+    name: ${{ matrix.job }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix develop -c ci/run.sh ${{ matrix.job }}
-
-  # Golden images and the GPU pixel check (tools/golden/), on Mesa lavapipe.
-  golden:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - run: nix develop .#golden -c ci/run.sh golden
+      - run: nix develop .#${{ matrix.shell }} -c ci/run.sh ${{ matrix.job }}
