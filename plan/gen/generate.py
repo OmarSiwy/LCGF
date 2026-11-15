@@ -183,7 +183,7 @@ lane("P02", "layout-overlay", ["layout-core"], U("Style.float, Style.offset"), "
     ("layout: add anchors for floating nodes (edge and corner of the parent)", dict(ref=U("layout.place: offset"))),
     ("layout: add anchor to another node's last rect", dict(ref=U("Frame.lastRect"))),
     ("layout: add viewport collision flip for popovers", {}),
-    ("layout: add layer index column for paint order", dict(ref=U("hit.at doc: later rows win"))),
+    ("layout: add layer index column for paint order", dict(ref=U("hit.at doc: later rows win"), key="layer")),
     ("layout: add overlay tests", {}),
 ])
 lane("P02", "layout-scroll", ["layout-core"], U("Style.scroll, Style.clip"), "E1", "scroll tests pass", [
@@ -290,7 +290,7 @@ lane("P03", "ct-paint", ["ct-layout", "draw-core"], U("paint.emit, DrawList"), "
     ("comptime: add draw-list equivalence tests", {}),
     ("comptime: add paint benchmark for static UIs", {}),
 ])
-lane("P03", "ct-events", ["ct-flatten", "hit"], K("Ui().Widget") + "; " + U("hit.at"), "A2", "exhaustive-switch example compiles; tests pass", [
+lane("P03", "ct-events", ["ct-flatten", "hit-core"], K("Ui().Widget") + "; " + U("hit.at"), "A2", "exhaustive-switch example compiles; tests pass", [
     ("comptime: generate the Widget enum from ids", dict(ref=K("Ui().Widget via @Enum"))),
     ("comptime: hit test over the static rect table", dict(ref=U("hit.at"))),
     ("comptime: return events as a tagged union over widgets", {}),
@@ -332,11 +332,12 @@ lane("P03", "ct-budget", ["ct-layout-done"], R("ZIG17_NOTES", "incremental compi
 # =============================================================================
 lane("P04", "hit", ["layout-core-done"], U("hit.at"), "D2", "tests pass; census clean", [
     ("hit: add SIMD point-in-rect scan over visible rects", dict(ref=U("hit.at"))),
-    ("hit: respect paint layers", {}),
     ("hit: add touch slop", {}),
-    ("hit: add hit tests and census entry", dict(ref=R("CHK", "p_hit: loop control only"))),
+    ("hit: add hit tests and census entry", dict(ref=R("CHK", "p_hit: loop control only"), key="hit-core")),
+    # Layers come from layout-overlay; the rest of hit does not need them.
+    ("hit: respect paint layers", dict(needs=["layer"])),
 ])
-lane("P04", "interaction", ["hit", "input"], U("Interaction"), "A3", "replay tests pass", [
+lane("P04", "interaction", ["hit-core", "input"], U("Interaction"), "A3", "replay tests pass", [
     ("interaction: add step() for hover, press, release, click", dict(ref=U("Interaction.step"))),
     ("interaction: add response() as a bit set", dict(ref=U("Interaction.response"))),
     ("interaction: add double click and long press", {}),
