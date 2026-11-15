@@ -311,3 +311,47 @@ fn expectOrder(want: []const u32, got: []const u32, line: usize) !void {
         return err;
     };
 }
+
+test "Scripts.txt: every code point" {
+    // Parsed here independently of gen.zig: unlisted code points are Unknown.
+    const want = try std.testing.allocator.alloc(property.Script, 0x110000);
+    defer std.testing.allocator.free(want);
+    @memset(want, .Unknown);
+    var lines = std.mem.splitScalar(u8, @embedFile("data/Scripts.txt"), '\n');
+    while (lines.next()) |ln| {
+        const data = ln[0 .. std.mem.indexOfScalar(u8, ln, '#') orelse ln.len];
+        const semi = std.mem.indexOfScalar(u8, data, ';') orelse continue;
+        const range = std.mem.trim(u8, data[0..semi], " ");
+        var ends = std.mem.splitSequence(u8, range, "..");
+        const lo = try std.fmt.parseInt(u21, ends.next().?, 16);
+        const hi = if (ends.next()) |h| try std.fmt.parseInt(u21, h, 16) else lo;
+        const s = std.meta.stringToEnum(property.Script, std.mem.trim(u8, data[semi + 1 ..], " ")).?;
+        @memset(want[lo .. @as(usize, hi) + 1], s);
+    }
+    for (want, 0..) |s, cp| try std.testing.expectEqual(s, property.script(@intCast(cp)));
+}
+
+test "script runs: one script each, Common only where nothing else" {
+    const text = "1. Hello, Κόσμε (мир) — こんにちは「世界」! مرحبا 123 שָׁלוֹם\u{301}";
+    var it = lcgr.unicode_script.Scripts{ .text = text };
+    var start: usize = 0;
+    var runs: usize = 0;
+    var prev: ?property.Script = null;
+    while (it.next()) |r| : (runs += 1) {
+        try std.testing.expect(r.end > start);
+        try std.testing.expect(prev == null or prev.? != r.script);
+        var i = start;
+        while (i < r.end) {
+            const d = lcgr.unicode_utf8.decode(text, i);
+            const s = property.script(d.cp);
+            if (s != .Common and s != .Inherited) try std.testing.expectEqual(s, r.script);
+            i += d.len;
+        }
+        start = r.end;
+        prev = r.script;
+    }
+    try std.testing.expectEqual(text.len, start);
+    // Latin, Greek, Cyrillic, Greek (")" closes the Greek bracket), Hiragana, Han, Hiragana
+    // ("」" closes the Hiragana bracket), Arabic, Hebrew.
+    try std.testing.expectEqual(9, runs);
+}
