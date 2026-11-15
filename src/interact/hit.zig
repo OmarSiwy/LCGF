@@ -70,10 +70,13 @@ pub fn near(t: *const Tree, x: f32, y: f32, want: Sense, slop: f32) u32 {
     }
     // Per lane, `best_i` is the latest row at that lane's least distance; across lanes, the
     // least distance wins and then the highest row. Lanes that never matched hold `none`.
+    // Rows are shifted by one so a lane holding `none` contributes 0 (`none +% 1 == 0`); with
+    // no match the max is 0 and `-% 1` gives `none`. No final select, which Zig 0.18's LLVM
+    // turned into a branch.
     const d_min = @reduce(.Min, best_d);
-    const at_min = (best_d == simd.f(d_min)) & (best_i != simd.u(none));
-    const top = @reduce(.Max, @select(u32, at_min, best_i, simd.u(0)));
-    return simd.selU(@reduce(.Or, at_min), top, none);
+    const at_min = best_d == simd.f(d_min);
+    const shifted = @select(u32, at_min, best_i +% simd.u(1), simd.u(0));
+    return @reduce(.Max, shifted) -% 1;
 }
 
 const testing = std.testing;

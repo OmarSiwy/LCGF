@@ -67,15 +67,18 @@ Bool-to-float conversions written as `@floatFromInt(@intFromBool(c))` were compi
 compare-and-jump; `simd.b2f` avoids that with a bit pattern. Use the `simd` selects rather than
 writing your own.
 
-On Zig 0.18.0-dev.1151+8dfb7a7cc (the move from 0.17.1) the census changed in three places, each
-read in the disassembly and re-recorded in `tools/census/baseline.json` and `baseline-src.json`:
-`p_push` and the ported `p_tree_push` (now in the src census) gained one `test`/`je` that skips
-adding the root to its own child count: the compiler turned `fl * b01(i != 0)` back into a branch,
-and an integer-mask rewrite gives the same code. It runs once per call, not inside a per-row loop,
-and is taken only for row 0. `p_step` gained one remainder test after an unrolled vector loop
-(loop control). No per-row loop gained a jump. Later on the same build: `p_hit_near` has one jump more than on
-0.17.1 (3 against 2). It is the final `selU(@reduce(.Or, at_min), top, none)` after the loop, once per
-call.
+On Zig 0.18.0-dev.1151+8dfb7a7cc (the move from 0.17.1) LLVM turned two once-per-call selects
+back into `test`/`je`. Both were removed by deleting the condition, not by masking it, since LLVM saw
+through the masks:
+
+- `push` (prototype and `src/core/tree.zig`): `nkids[parent] += fl * b01(i != 0)` became
+  `nkids[parent] += fl; nkids[i] = 0;`. The root is its own parent, so clearing its own count after
+  the increment removes the self-count; every other row has `parent < i`. 0 jumps.
+- `hit.near`: the final `selU(any, top, none)` became a max over rows shifted by one
+  (`none +% 1 == 0`), minus one. With no match the result is `none`. 2 jumps, both loop control.
+
+`p_step` gained one remainder test after an unrolled vector loop (loop control). No per-row loop
+gained a jump; `tools/census/baseline.json` and `baseline-src.json` are recorded on this build.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
 one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
