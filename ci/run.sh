@@ -24,6 +24,8 @@ job() {
             zig build test-build -Dtarget="$t"
         done
         (cd prototype && zig build cross) ;;
+    # Not in `all`: CI runs it in the golden shell (nix develop .#golden -c ci/run.sh golden).
+    golden)       python3 tools/golden/golden.py --self-test ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
