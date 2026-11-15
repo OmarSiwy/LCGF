@@ -114,20 +114,30 @@ pub inline fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usi
 }
 
 /// placeFlex, before child `i` is placed: the first child of a line sets the line's offset
-/// down the row (the row's cursor, which for a wrapping row runs across it).
+/// down the row: the row's cursor (which for a wrapping row runs across it) plus the share of
+/// the row's spare height that `Style.lines` puts before its lines.
 pub inline fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void {
+    const c = &t.c;
     const f = &fx.c;
     const l = f.line[i];
     const h = f.head[i];
-    f.line_off[l] += h * (t.c.cursor[p] - f.line_off[l]);
+    const inner = c.size[1][p] - c.pad_lo[1][p] - c.pad_hi[1][p];
+    const spare = @max(inner - c.fit[1][p] - linesGap(t, fx, 1, p), 0);
+    f.line_off[l] += h * (c.cursor[p] + spare * f.align_lines[p] - f.line_off[l]);
 }
 
-/// placeFlex: child `i`'s offset inside a wrapping row's content box: along its line on x,
-/// down to its line on y. Otherwise `in_flow`.
-pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, in_flow: f32) f32 {
+/// placeFlex: child `i`'s offset inside a wrapping row's content box. Along x: its line's
+/// cursor after the line's own lead (the row's `Style.main` applied to each line's spare
+/// width). Down y: its line's offset plus its cross alignment (`cross`, the row's or its own)
+/// inside the line's height. `inner` is the row's inner size on axis `a`. Otherwise `in_flow`.
+pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, inner: f32, cross: f32, in_flow: f32) f32 {
+    const c = &t.c;
     const f = &fx.c;
     const l = f.line[i];
-    const at = if (a == 0) f.line_cursor[l] else f.line_off[l];
+    const at = if (a == 0)
+        @max(inner - f.line_main[l], 0) * c.align_main[p] + f.line_cursor[l]
+    else
+        f.line_off[l] + @max(f.line_cross[l] - c.size[1][i] - fx.margin(1, i), 0) * cross;
     return in_flow + wraps(t, fx, p) * (at + f.margin_lo[a][i] - in_flow);
 }
 
@@ -335,4 +345,46 @@ test "stack: a stretching child fills its line, not the row; children do not shr
     try testing.expectEqual(50, s.t.c.size[0][c]);
     try testing.expectEqual(30, s.t.c.pos[1][c]);
     try testing.expectEqual(0, s.t.c.pos[1][a]);
+}
+
+test "align: the row's main alignment applies to each line's own spare width" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const r = s.row(root, &.{ .dir = .x, .size = .{ .px(100), .fit }, .gap = 10, .main = .end }, &.{ .{ 40, 10 }, .{ 40, 10 }, .{ 30, 10 } });
+    s.run(200, 200);
+    // Line 0: 40 + 10 + 40 = 90, 10 spare; line 1: 30, 70 spare.
+    try testing.expectEqualSlices(f32, &.{ 10, 60, 70 }, t.c.pos[0][r + 1 ..][0..3]);
+    t.c.align_main[r] = 0.5;
+    s.run(200, 200);
+    try testing.expectEqualSlices(f32, &.{ 5, 55, 35 }, t.c.pos[0][r + 1 ..][0..3]);
+}
+
+test "align: children sit inside their line by the row's cross alignment or their own" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const r = s.row(root, &.{ .dir = .x, .size = .{ .px(100), .fit }, .cross = .end }, &.{ .{ 30, 20 }, .{ 30, 10 }, .{ 30, 4 }, .{ 30, 6 } });
+    s.fx.set(r + 3, &.{ .cross = .center });
+    s.run(200, 200);
+    // Line 0 is 20 high (the 30-wide fourth box breaks): ends at 20, centre at 8.
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 8 }, t.c.pos[1][r + 1 ..][0..3]);
+    try testing.expectEqual(20, t.c.pos[1][r + 4]);
+}
+
+test "align: lines sit across the row by Style.lines when it is taller than they are" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const r = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(50), .px(100) }, .gap = 5 });
+    s.fx.set(r, &.{ .wrap = true, .lines = .end });
+    _ = t.push(r, .none, &.{ .size = .{ .px(40), .px(20) } });
+    _ = t.push(r, .none, &.{ .size = .{ .px(40), .px(30) } });
+    t.seal(r);
+    s.run(200, 200);
+    // 20 + 5 + 30 = 55 of 100: 45 before the first line.
+    try testing.expectEqualSlices(f32, &.{ 45, 70 }, t.c.pos[1][r + 1 ..][0..2]);
+    s.fx.set(r, &.{ .wrap = true, .lines = .center });
+    s.run(200, 200);
+    try testing.expectEqualSlices(f32, &.{ 22.5, 47.5 }, t.c.pos[1][r + 1 ..][0..2]);
 }

@@ -255,7 +255,7 @@ fn placeOf(t: *Tree, fx: anytype) void {
             const across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
             const along = lead + cursor[p] + m_lo;
             var in_flow = across + main[a][p] * (along - across);
-            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, in_flow);
+            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, inner, cross, in_flow);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
         }
         // Advance along whichever axis is the parent's main one.
