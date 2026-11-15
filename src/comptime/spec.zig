@@ -5,6 +5,8 @@
 //! A component is a plain function that returns a `Spec`; there is no component type, registry
 //! or lifecycle. Its result goes in a child tuple like any builder's, and the flattened tables
 //! cannot tell it from the same nodes written inline (Muratori, "components are just functions").
+//! Parameters are comptime arguments: ids and fields as enum literals, styles and counts as
+//! values, and a list of ids as a tuple of enum literals the component loops over.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -34,7 +36,7 @@ fn kids(comptime tuple: anytype) []const Spec {
     return &final;
 }
 
-/// A vertical container. `children` is a tuple of specs:
+/// A vertical container. `children` is a tuple (or array) of specs:
 /// `col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.a), ... })`. Its `dir` is always `.y`.
 pub fn col(comptime style: Style, comptime children: anytype) Spec {
     var s = style;
@@ -253,4 +255,35 @@ test "composition: a function returning Spec flattens exactly like the nodes wri
     inline for (.{ "mute", "volume", "pan" }) |w|
         try std.testing.expectEqual(comptime nodeOf(probe_mixer, w), comptime nodeOf(composed, w));
     try std.testing.expectEqualDeep(probe_mixer.children[1], composed.children[1]);
+}
+
+/// A component with parameters: which widgets and fields it uses, and how it is spaced.
+fn channel(comptime mute: @EnumLiteral(), comptime muted: @EnumLiteral(), comptime level: @EnumLiteral(), comptime gap: f32) Spec {
+    return row(.{ .gap = gap }, .{ checkbox(mute, muted), slider(level, level) });
+}
+
+/// A component whose child count is a parameter: one slider per id in `levels`.
+fn faders(comptime levels: anytype) Spec {
+    var children: [levels.len]Spec = undefined;
+    for (&children, levels) |*c, l| c.* = slider(l, l);
+    return col(.{}, children);
+}
+
+test "parameters: comptime arguments choose ids, fields and style" {
+    const s = comptime col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.title), channel(.mute, .muted, .volume, 8), row(.{ .gap = 8 }, .{ label(.title), slider(.pan, .pan) }) });
+    try std.testing.expectEqualDeep(probe_mixer, s);
+    const other = comptime channel(.solo, .soloed, .gain, 2);
+    try std.testing.expectEqualStrings("solo", other.children[0].id.?);
+    try std.testing.expectEqualStrings("soloed", other.children[0].bind.?);
+    try std.testing.expectEqualStrings("gain", other.children[1].id.?);
+    try std.testing.expectEqual(2, other.style.gap);
+}
+
+test "parameters: a tuple of ids sets the child count" {
+    const s = comptime faders(.{ .a, .b, .c });
+    try std.testing.expectEqual(4, comptime nodeCount(s));
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &(comptime flatTables(s))[0]);
+    try std.testing.expectEqual(3, comptime nodeOf(s, "c"));
+    try std.testing.expectEqual(0b1001, comptime bindMask(s, "c"));
+    try std.testing.expectEqual(0, (comptime faders(.{})).children.len);
 }
