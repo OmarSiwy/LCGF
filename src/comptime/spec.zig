@@ -1,6 +1,10 @@
 //! Spec: a UI declared as a compile-time value. A spec is a tree of `Spec` nodes that exists
 //! only while compiling; the comptime front end (`Ui(State, spec)`) flattens it into read-only
 //! tables. Tier 1. Ported from prototype/comptime_ui_probe.zig ("Spec").
+//!
+//! A component is a plain function that returns a `Spec`; there is no component type, registry
+//! or lifecycle. Its result goes in a child tuple like any builder's, and the flattened tables
+//! cannot tell it from the same nodes written inline (Muratori, "components are just functions").
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -227,4 +231,26 @@ test "label, checkbox, slider: enum literals name widgets and fields" {
     // Field and Widget tags round-trip: a binding names a field of the state struct.
     const Mixer = struct { title: []const u8 = "", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
     try std.testing.expectEqual(std.meta.FieldEnum(Mixer).muted, std.meta.stringToEnum(std.meta.FieldEnum(Mixer), c.bind.?).?);
+}
+
+/// A component: a function that returns a Spec. Used by the composition tests.
+fn volumeRow() Spec {
+    return row(.{ .gap = 8 }, .{ checkbox(.mute, .muted), slider(.volume, .volume) });
+}
+
+/// A component built from another component.
+fn mixerBody() Spec {
+    return col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.title), volumeRow(), row(.{ .gap = 8 }, .{ label(.title), slider(.pan, .pan) }) });
+}
+
+test "composition: a function returning Spec flattens exactly like the nodes written inline" {
+    const composed = comptime mixerBody();
+    const a = comptime flatTables(composed);
+    const b = comptime flatTables(probe_mixer);
+    try std.testing.expectEqualDeep(b, a);
+    inline for (.{ "title", "volume", "muted", "pan" }) |f|
+        try std.testing.expectEqual(comptime bindMask(probe_mixer, f), comptime bindMask(composed, f));
+    inline for (.{ "mute", "volume", "pan" }) |w|
+        try std.testing.expectEqual(comptime nodeOf(probe_mixer, w), comptime nodeOf(composed, w));
+    try std.testing.expectEqualDeep(probe_mixer.children[1], composed.children[1]);
 }
