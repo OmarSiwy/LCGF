@@ -2,6 +2,31 @@
 //! one buffer and every column is a slice of it.
 //!
 //! Tier 0: imports only `std`.
+//!
+//! ## Budgeting limits
+//!
+//! A column of `n` rows of `T` costs `alignForward(n * @sizeOf(T), column_align)` bytes, so a
+//! front end's buffer is the sum over its columns, and its owner computes it with a counting
+//! `Carver` (`buf = null`) over the same build function that carves. Declare the buffer from that
+//! number at comptime; do not hand-compute it.
+//!
+//! Measured with `Context.requiredBytes` of the prototype's runtime front end (`prototype/ui.zig`,
+//! Zig 0.17.1), as the difference between two limits divided by the rows added; 4 and 8 lanes give
+//! the same per-row costs:
+//!
+//! | Capacity | Bytes per row |
+//! |---|---|
+//! | node (two tree generations plus draw list) | 646 (about 0.65 KB) |
+//! | text run | 150 |
+//! | custom draw | 102 |
+//! | anim + signal + memo, together | 52 |
+//! | string byte | 2 (one buffer per generation, by construction) |
+//!
+//! Default `Limits` (4,096 nodes, 1,024 texts, 64 KB strings, ...) need 2,959,232 bytes at 4
+//! lanes (8 lanes: 384 more, from padding), about 722 B per node all-in; `.{ .nodes = 1024,
+//! .texts = 256 }` needs 859,520. Size limits from the largest frame the app builds: nodes
+//! dominate, so budget about 0.65 KB per node of capacity plus twice the per-frame string bytes.
+//! The buffer is sized by capacity, not use: a smaller frame does not need less of it.
 
 const std = @import("std");
 
