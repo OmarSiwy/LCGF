@@ -24,11 +24,15 @@ job() {
             zig build test-build -Dtarget="$t"
         done
         (cd prototype && zig build cross) ;;
+    # Branch census (docs/CHECKS.md section 2). The CPU is fixed so codegen is the same everywhere.
+    census)
+        (cd prototype && zig build census-obj -Dcpu=x86_64_v3)
+        python3 tools/census/census.py prototype/zig-out/asm_probe.o ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
 
-jobs=(debug release-safe release-fast lanes-4 lanes-8 cross)
+jobs=(debug release-safe release-fast lanes-4 lanes-8 cross census)
 if [ "${1-}" = all ]; then
     for j in "${jobs[@]}"; do echo "== $j"; job "$j"; done
     echo "all ${#jobs[@]} jobs green"
