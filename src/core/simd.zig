@@ -2,6 +2,18 @@
 //!
 //! The lane count follows the target (8 with AVX2, 4 with SSE2 or NEON) unless the build forces
 //! it with `-Dlanes=N`; std's width query never returns 16, so that is how 16 lanes get tested.
+//!
+//! The padding contract, for every owner of a column (Tree, Texts, Customs, Anims and any new
+//! table):
+//!
+//! 1. Allocate `rows(cap)` rows per column: `padded(cap)` plus one spare vector. Batch loops then
+//!    run `i` from 0 to `padded(len)` in steps of `lanes` with no scalar tail, and a pass may read
+//!    or write one vector past `len` (a stream compaction's last dropped row, an offset load).
+//! 2. Rows from `len` to `rows(cap)` belong to the owner, not to the data. A reader either masks
+//!    them out (`find`, `rank` compare against `len`) or the owner keeps them inert, meaning a
+//!    value whose result is discarded or neutral: zero, as `compact` writes.
+//! 3. `len <= cap` always. A pass never assumes the padding holds anything in particular unless
+//!    the owner documents that it keeps it inert.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -25,6 +37,10 @@ pub const iota: U = std.simd.iota(u32, lanes);
 /// Rows are rounded up to whole vectors so batch loops need no scalar tail.
 pub inline fn padded(n: usize) usize {
     return std.mem.alignForward(usize, n, lanes);
+}
+/// Rows to allocate per column for a table of `cap` rows (contract rule 1).
+pub inline fn rows(cap: usize) usize {
+    return padded(cap) + lanes;
 }
 pub inline fn loadF(col: []const f32, i: usize) F {
     return col[i..][0..lanes].*;
@@ -141,6 +157,26 @@ test "padded rounds up to whole vectors" {
         const p = padded(n);
         try testing.expect(p >= n and p < n + lanes and p % lanes == 0);
     }
+}
+
+test "rows(cap) covers padded batch loops and one vector past len" {
+    for (0..4 * lanes) |cap| {
+        const r = rows(cap);
+        try testing.expect(r % lanes == 0);
+        for (0..cap + 1) |len| {
+            // Last batch load, and one vector past len.
+            try testing.expect(padded(len) <= r);
+            try testing.expect(len + lanes <= r);
+        }
+    }
+    // A table filled to capacity: the batch loop and an extra vector stay in the column.
+    var col: [rows(2 * lanes + 1)]f32 = @splat(0);
+    const len = 2 * lanes + 1;
+    var i: usize = 0;
+    while (i < padded(len)) : (i += lanes) storeF(&col, i, loadF(&col, i) + f(1));
+    storeF(&col, len, f(2));
+    try testing.expectEqual(@as(f32, 1), col[0]);
+    try testing.expectEqual(@as(f32, 2), col[len + lanes - 1]);
 }
 
 test "aliases have one lane per element" {
