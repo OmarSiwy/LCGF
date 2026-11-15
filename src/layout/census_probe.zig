@@ -27,3 +27,9 @@ export fn p_place(t: *Tree) void {
 export fn p_finalize(t: *Tree) void {
     lcgr.layout.finalize(t);
 }
+export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
+    lcgr.overlay.anchor(t, an, .{ .x1 = 800, .y1 = 600 });
+}
+export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
+    lcgr.overlay.order(t, ly);
+}

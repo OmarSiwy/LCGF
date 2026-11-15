@@ -503,3 +503,82 @@ test "order: raised nodes and their subtrees paint after layer 0, rows in order 
     order(t, &ly);
     try testing.expectEqualSlices(u32, &.{ 0, 1, 2, 3, 4, 5, 6 }, ly.c.order[0..t.len]);
 }
+
+test "overlay: a window with a menu, a tooltip from last frame's rect and paint layers" {
+    // window (z-stack) { app { bar { file, edit { menu { 3 items } } }, body }, tip }
+    const Built = struct { app: u32, file: u32, edit: u32, menu: u32, items: [3]u32, body: u32, tip: u32 };
+    const build = struct {
+        fn f(t: *Tree, with_popups: bool) Built {
+            var r: Built = undefined;
+            const window = t.push(0, .none, &.{ .size = .{ .px(300), .px(120) }, .clip = true });
+            zstack(t, window);
+            r.app = t.push(window, .none, &.{ .size = .{ .fill, .fill }, .pad = @splat(4), .gap = 4 });
+            const bar = t.push(r.app, .none, &.{ .dir = .x, .gap = 2 });
+            r.file = t.push(bar, Id.from("file"), &.{ .size = .{ .px(40), .px(16) } });
+            t.seal(r.file);
+            r.edit = t.push(bar, Id.from("edit"), &.{ .size = .{ .px(40), .px(16) } });
+            r.menu = r.edit;
+            if (with_popups) {
+                r.menu = t.push(r.edit, .none, &.{ .size = .{ .px(80), .fit }, .float = true, .pad = @splat(1) });
+                for (&r.items) |*it| it.* = t.push(r.menu, .none, &.{ .size = .{ .fill, .px(20) } });
+                t.seal(r.menu);
+            }
+            t.seal(r.edit);
+            t.seal(bar);
+            r.body = t.push(r.app, .none, &.{ .size = .{ .fill, .fill } });
+            t.seal(r.app);
+            r.tip = r.body;
+            if (with_popups) r.tip = t.push(window, .none, &.{ .size = .{ .px(60), .px(14) }, .float = true });
+            t.seal(window);
+            return r;
+        }
+    }.f;
+
+    var prev: Scene = .{};
+    prev.init();
+    _ = build(&prev.t, false);
+    prev.run(.{ 300, 120 });
+
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var an = Anchors.init(&carver, 4);
+    var ly = Layers.init(&carver, 32);
+    const r = build(t, true);
+    // The menu hangs below "edit" and fits there (20 + 62 < 120), so it does not flip. The
+    // tooltip asks to sit above "file", which is at the top edge, so it flips below it.
+    an.flip(an.push(r.menu, .bottom_left, .top_left, .{ 0, 0 }), .{ false, true });
+    an.flip(an.pushRect(r.tip, lastRect(&prev.t, Id.from("file")), .top, .bottom, .{ 0, -2 }), .{ false, true });
+    ly.reset();
+    ly.c.own[r.menu] = 1;
+    ly.c.own[r.tip] = 2;
+
+    s.run(.{ 300, 120 });
+    anchor(t, &an, rect(0, 0, 300, 120));
+    layout.finalize(t);
+    order(t, &ly);
+
+    try testing.expectEqual(rect(4, 4, 44, 20), t.rect(r.file));
+    try testing.expectEqual(rect(46, 4, 86, 20), t.rect(r.edit));
+    // The z-stack's growing child fills the window; the floats add nothing to its size.
+    try testing.expectEqual(rect(0, 0, 300, 120), t.rect(r.app));
+    try testing.expectEqual(rect(4, 24, 296, 116), t.rect(r.body));
+    // Menu: 3 x 20 + 2 px padding, directly below edit's content box.
+    try testing.expectEqual(rect(46, 20, 126, 82), t.rect(r.menu));
+    try testing.expectEqual(rect(47, 21, 125, 41), t.rect(r.items[0]));
+    try testing.expectEqual(rect(47, 61, 125, 81), t.rect(r.items[2]));
+    // Tip: above file would start at 4 - 2 - 14 < 0, so it hangs 2 px below: centred on x = 24.
+    try testing.expectEqual(rect(-6, 22, 54, 36), t.rect(r.tip));
+    // Clipped to the window on the left, still visible.
+    try testing.expectEqual(0, t.c.vis[0][r.tip]);
+    try testing.expectEqual(1, t.c.visible[r.tip]);
+    // Paint order: everything in layer 0 in row order (body after the menu's rows), then the
+    // menu and its items, then the tip.
+    const n = t.len;
+    try testing.expectEqual(r.tip, ly.c.order[n - 1]);
+    try testing.expectEqualSlices(u32, &.{ r.menu, r.items[0], r.items[1], r.items[2] }, ly.c.order[n - 5 .. n - 1]);
+    try testing.expectEqual(r.body, ly.c.order[n - 6]);
+    try testing.expect(r.body > r.items[2]);
+}
