@@ -25,6 +25,9 @@ pub const Input = struct {
     /// Key presses and typed text this frame, in the order they happened, so a fast typist's
     /// keys and characters are not merged. The host owns the slice. Only read during the frame.
     events: []const Event = &.{},
+    /// Fingers and pens on or over the surface this frame, one row each. The mouse stays in
+    /// `pointer` and `buttons`. The host owns the slice. Only read during the frame.
+    contacts: []const Contact = &.{},
 
     /// Mouse buttons held down this frame, one bit each.
     pub const Buttons = packed struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
@@ -57,6 +60,40 @@ pub const Input = struct {
         pub const Kind = enum(u8) { press, release, repeat, text };
     };
 
+    /// One finger or pen. Rows are state, not events: a contact is listed every frame it lasts.
+    pub const Contact = extern struct {
+        /// Pointer id from the platform, stable from touch-down to lift-off, so a widget can
+        /// follow one finger across frames.
+        id: u32,
+        kind: Kind = .touch,
+        /// On the surface. A pen can hover with `down = false`.
+        down: bool = true,
+        _pad: [2]u8 = @splat(0),
+        /// Logical pixels, like `pointer`.
+        pos: [2]f32,
+        /// 0 to 1; 1 on hardware without pressure.
+        pressure: f32 = 1,
+        /// Pen tilt from the surface normal in radians, along x and y; 0 for touch.
+        tilt: [2]f32 = .{ 0, 0 },
+
+        pub const Kind = enum(u8) { touch, pen, eraser };
+    };
+
+    /// No contact has the id (`contact` result).
+    pub const none: u32 = 0xffff_ffff;
+
+    /// Row of the contact with pointer id `id` in `contacts`, or `none`.
+    pub fn contact(in: *const Input, id: u32) u32 {
+        // Ids are unique per frame, so the last match is the only one. A mask select, not a
+        // branch (prototype simd.selU; use simd's once that lane exports it).
+        var at: u32 = none;
+        for (in.contacts, 0..) |c, i| {
+            const m = -%@as(u32, @intFromBool(c.id == id));
+            at ^= (@as(u32, @intCast(i)) ^ at) & m;
+        }
+        return at;
+    }
+
     /// The UTF-8 a `.text` event typed; empty for key events.
     pub fn typed(in: *const Input, e: Event) []const u8 {
         return in.text[e.at..][0..e.len];
@@ -78,8 +115,9 @@ pub const Input = struct {
         var h: u64 = 0xcbf2_9ce4_8422_2325;
         for (words) |w| h = (h ^ w) *% 0x0000_0100_0000_01b3;
         for (in.text) |ch| h = (h ^ ch) *% 0x0000_0100_0000_01b3;
-        // Events last: with none queued the stamp is the prototype's.
+        // Events and contacts last: with none the stamp is the prototype's.
         for (std.mem.sliceAsBytes(in.events)) |b| h = (h ^ b) *% 0x0000_0100_0000_01b3;
+        for (std.mem.sliceAsBytes(in.contacts)) |b| h = (h ^ b) *% 0x0000_0100_0000_01b3;
         return h;
     }
 };
@@ -213,4 +251,35 @@ test "Input.stamp: sees queued events" {
     b.events = &release;
     try std.testing.expect(a.stamp() != base.stamp());
     try std.testing.expect(a.stamp() != b.stamp());
+}
+
+test "Input.contacts: a finger and a pen found by pointer id" {
+    const rows = [_]Input.Contact{
+        .{ .id = 7, .pos = .{ 10, 20 } },
+        .{ .id = 3, .kind = .pen, .down = false, .pos = .{ 5, 5 }, .pressure = 0, .tilt = .{ 0.2, -0.1 } },
+    };
+    const in: Input = .{ .contacts = &rows };
+    try std.testing.expectEqual(28, @sizeOf(Input.Contact));
+    try std.testing.expectEqual(@as(u32, 0), in.contact(7));
+    try std.testing.expectEqual(@as(u32, 1), in.contact(3));
+    try std.testing.expectEqual(Input.none, in.contact(4));
+    try std.testing.expect(!in.contacts[in.contact(3)].down);
+    const empty: Input = .{};
+    try std.testing.expectEqual(Input.none, empty.contact(0));
+}
+
+test "Input.stamp: sees a contact move or lift" {
+    const base = busyInput();
+    const at = [_]Input.Contact{.{ .id = 1, .pos = .{ 10, 20 } }};
+    const moved = [_]Input.Contact{.{ .id = 1, .pos = .{ 10, 21 } }};
+    const lifted = [_]Input.Contact{.{ .id = 1, .down = false, .pos = .{ 10, 20 } }};
+    var a = base;
+    a.contacts = &at;
+    var b = base;
+    b.contacts = &moved;
+    var c = base;
+    c.contacts = &lifted;
+    try std.testing.expect(a.stamp() != base.stamp());
+    try std.testing.expect(a.stamp() != b.stamp());
+    try std.testing.expect(a.stamp() != c.stamp());
 }
