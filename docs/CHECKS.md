@@ -67,6 +67,14 @@ Bool-to-float conversions written as `@floatFromInt(@intFromBool(c))` were compi
 compare-and-jump; `simd.b2f` avoids that with a bit pattern. Use the `simd` selects rather than
 writing your own.
 
+The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
+one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
+the same branches as a plain `if` (13 jumps, no cmov); with both operands already loaded for the
+compare it is a cmov. Those branches span 0x36 bytes, past the census's 32-byte short-forward rule,
+so they show only in the `jcc` column. The per-pass census against `tools/census/baseline.json` is
+the gate, not the use of `simd` helpers. Prefer whole-vector selects (`@select` over `F`/`U`) in
+batch loops.
+
 ## 3. Benchmark
 
 ```
