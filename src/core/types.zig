@@ -95,3 +95,40 @@ test "Axis: one bit, usable as a two-entry index" {
     try std.testing.expectEqual(@as(f32, 10), pair[@backingInt(Axis.x)]);
     try std.testing.expectEqual(@as(f32, 20), pair[@backingInt(Axis.y)]);
 }
+
+/// RGBA8, laid out so the bytes in memory are r, g, b, a on little-endian hosts.
+pub const Color = packed struct(u32) {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 0,
+
+    pub const transparent: Color = .{};
+    pub const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    pub const black: Color = .{ .a = 255 };
+
+    pub fn rgb(r: u8, g: u8, b: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = 255 };
+    }
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
+    /// 0xRRGGBBAA
+    pub fn hex(v: u32) Color {
+        return .{ .r = @truncate(v >> 24), .g = @truncate(v >> 16), .b = @truncate(v >> 8), .a = @truncate(v) };
+    }
+    pub inline fn bitsOf(c: Color) u32 {
+        return @bitCast(c);
+    }
+};
+
+test "Color: constructors, hex and bit layout" {
+    const c = Color.hex(0x11223344);
+    try std.testing.expectEqual(Color.rgba(0x11, 0x22, 0x33, 0x44), c);
+    try std.testing.expectEqual(Color.rgba(1, 2, 3, 255), Color.rgb(1, 2, 3));
+    try std.testing.expectEqual(@as(u32, 0), Color.transparent.bitsOf());
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), Color.white.bitsOf());
+    // r is the low byte, so the bytes in memory are r, g, b, a on little-endian hosts.
+    try std.testing.expectEqual(@as(u32, 0x4433_2211), c.bitsOf());
+    try std.testing.expectEqual(@as(u32, 0xff00_0000), Color.black.bitsOf());
+}
