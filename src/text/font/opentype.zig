@@ -190,6 +190,12 @@ pub const Face = struct {
     /// TrueType outlines.
     loca: []const u8,
     glyf: []const u8,
+    /// The legacy kern table, empty when absent.
+    kern: []const u8,
+    /// The GPOS 'kern' Feature table and the GPOS LookupList it indexes; empty when absent or
+    /// unreadable (kerning then falls back to `kern`).
+    gpos_kern: []const u8,
+    gpos_lookups: []const u8,
     units_per_em: u16,
     /// Typographic line metrics from hhea: baseline to top (positive), to bottom (negative),
     /// and the extra gap between lines.
@@ -224,12 +230,19 @@ pub const Face = struct {
         const glyf = (try dir.find(tag("glyf"))) orelse &.{};
         const loca_len = (@as(usize, glyph_count) + 1) * @as(usize, if (loca_format == 1) 4 else 2);
         const loca = if (glyf.len == 0) &.{} else try sub(try dir.get(tag("loca")), 0, loca_len);
+        const gpos = (try dir.find(tag("GPOS"))) orelse &.{};
+        // A damaged GPOS costs kerning, not the face.
+        const gpos_kern = if (gpos.len == 0) &.{} else gposKernFeature(gpos) catch &.{};
+        const gpos_lookups = gpos[@min(read(u16, gpos, 8) catch 0, gpos.len)..];
         return .{
             .dir = dir,
             .cmap = try Cmap.parse(try dir.get(tag("cmap"))),
             .hmtx = try sub(hmtx, 0, hmtx_len),
             .loca = loca,
             .glyf = glyf,
+            .kern = (try dir.find(tag("kern"))) orelse &.{},
+            .gpos_kern = gpos_kern,
+            .gpos_lookups = gpos_lookups,
             .units_per_em = units_per_em,
             .ascender = try read(i16, hhea, 4),
             .descender = try read(i16, hhea, 6),
@@ -254,6 +267,14 @@ pub const Face = struct {
             .advance = read(u16, face.hmtx, row) catch unreachable,
             .left_bearing = read(i16, face.hmtx, bearing) catch unreachable,
         };
+    }
+
+    /// Change to the advance of `left` when `right` follows it, in font units: GPOS pair
+    /// adjustment (feature 'kern') when the face has it, else the legacy kern table. Damaged
+    /// kerning data reads as 0.
+    pub fn kerning(face: Face, left: Glyph, right: Glyph) i32 {
+        if (face.gpos_kern.len != 0) return gposKerning(face.gpos_kern, face.gpos_lookups, left, right) catch 0;
+        return kernTable(face.kern, left, right) catch 0;
     }
 
     /// The glyf record of `g`; empty for a glyph without an outline (a space, or a face
@@ -380,6 +401,201 @@ inline fn coordDelta(rec: []const u8, at: *usize, f: u8, short: u8, same: u8) Er
     const d = try read(i16, rec, at.*);
     at.* += 2;
     return d;
+}
+
+/// The legacy kern table (Microsoft version 0): the sum over horizontal, non-minimum,
+/// non-cross-stream format 0 subtables. Apple's version 1 table reads as no kerning.
+fn kernTable(kern: []const u8, left: Glyph, right: Glyph) Error!i32 {
+    if (kern.len == 0 or try read(u16, kern, 0) != 0) return 0;
+    const count = try read(u16, kern, 2);
+    const key = @as(u32, left) << 16 | right;
+    var total: i32 = 0;
+    var at: usize = 4;
+    for (0..count) |_| {
+        const len = try read(u16, kern, at + 2);
+        const coverage = try read(u16, kern, at + 4);
+        // Format 0 (high byte), horizontal (bit 0), not minimum (1) or cross-stream (2).
+        if (coverage & 0xff07 == 0x0001) {
+            const pairs = try read(u16, kern, at + 6);
+            var lo: usize = 0;
+            var hi: usize = pairs;
+            while (lo < hi) {
+                const mid = (lo + hi) / 2;
+                const row = at + 14 + mid * 6;
+                const k = try read(u32, kern, row);
+                if (k == key) {
+                    total += try read(i16, kern, row + 4);
+                    break;
+                }
+                if (k < key) lo = mid + 1 else hi = mid;
+            }
+        }
+        // A subtable's 16-bit length field overflows for big tables; such fonts have one.
+        if (len < 6) break;
+        at += len;
+    }
+    return total;
+}
+
+/// Index of `g` in a Coverage table, or null when it is not covered.
+fn coverageIndex(cov: []const u8, g: Glyph) Error!?u16 {
+    const format = try read(u16, cov, 0);
+    const count = try read(u16, cov, 2);
+    var lo: usize = 0;
+    var hi: usize = count;
+    if (format == 1) {
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            const v = try read(u16, cov, 4 + mid * 2);
+            if (v == g) return @intCast(mid);
+            if (v < g) lo = mid + 1 else hi = mid;
+        }
+        return null;
+    }
+    if (format != 2) return error.Unsupported;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const row = 4 + mid * 6;
+        const start = try read(u16, cov, row);
+        const end = try read(u16, cov, row + 2);
+        if (g < start) {
+            hi = mid;
+        } else if (g > end) {
+            lo = mid + 1;
+        } else return (try read(u16, cov, row + 4)) +% (g - start);
+    }
+    return null;
+}
+
+/// Class of `g` in a ClassDef table; 0 for a glyph it does not list.
+fn classOf(def: []const u8, g: Glyph) Error!u16 {
+    const format = try read(u16, def, 0);
+    if (format == 1) {
+        const first = try read(u16, def, 2);
+        const count = try read(u16, def, 4);
+        if (g < first or g - first >= count) return 0;
+        return read(u16, def, 6 + @as(usize, g - first) * 2);
+    }
+    if (format != 2) return error.Unsupported;
+    var lo: usize = 0;
+    var hi: usize = try read(u16, def, 2);
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        const row = 4 + mid * 6;
+        if (g < try read(u16, def, row)) {
+            hi = mid;
+        } else if (g > try read(u16, def, row + 2)) {
+            lo = mid + 1;
+        } else return read(u16, def, row + 4);
+    }
+    return 0;
+}
+
+/// Bytes of a ValueRecord with format `vf`: two per set bit.
+fn valueSize(vf: u16) usize {
+    return @as(usize, @popCount(vf)) * 2;
+}
+
+/// The XAdvance field of the ValueRecord at `at`, 0 when `vf` has none.
+fn xAdvance(st: []const u8, at: usize, vf: u16) Error!i32 {
+    if (vf & 0x0004 == 0) return 0;
+    return try read(i16, st, at + valueSize(vf & 0x0003));
+}
+
+/// One PairPos subtable: the first glyph's x advance change, or null when the subtable does
+/// not cover the pair (the next subtable of the lookup is tried then).
+fn pairPos(st: []const u8, left: Glyph, right: Glyph) Error!?i32 {
+    const format = try read(u16, st, 0);
+    const cov = try read(u16, st, 2);
+    const index = (try coverageIndex(st[@min(cov, st.len)..], left)) orelse return null;
+    const vf1 = try read(u16, st, 4);
+    const vf2 = try read(u16, st, 6);
+    const row = 2 + valueSize(vf1) + valueSize(vf2);
+    if (format == 1) {
+        const set_off = try read(u16, st, 10 + @as(usize, index) * 2);
+        const set = st[@min(set_off, st.len)..];
+        var lo: usize = 0;
+        var hi: usize = try read(u16, set, 0);
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            const at = 2 + mid * row;
+            const second = try read(u16, set, at);
+            if (second == right) return try xAdvance(set, at + 2, vf1);
+            if (second < right) lo = mid + 1 else hi = mid;
+        }
+        return null;
+    }
+    if (format != 2) return error.Unsupported;
+    const def1 = try read(u16, st, 8);
+    const def2 = try read(u16, st, 10);
+    const class1 = try classOf(st[@min(def1, st.len)..], left);
+    const class2 = try classOf(st[@min(def2, st.len)..], right);
+    const count1 = try read(u16, st, 12);
+    const count2 = try read(u16, st, 14);
+    if (class1 >= count1 or class2 >= count2) return error.Malformed;
+    const at = 16 + (@as(usize, class1) * count2 + class2) * (row - 2);
+    return try xAdvance(st, at, vf1);
+}
+
+/// Sum of the GPOS pair adjustments for `left` then `right` over the lookups of `feature`
+/// (a Feature table), each lookup applying its first subtable that covers the pair.
+fn gposKerning(feature: []const u8, lookups: []const u8, left: Glyph, right: Glyph) Error!i32 {
+    if (feature.len == 0) return 0;
+    const count = try read(u16, feature, 2);
+    var total: i32 = 0;
+    for (0..count) |i| {
+        const index = try read(u16, feature, 4 + i * 2);
+        const lookup = lookups[@min(try read(u16, lookups, 2 + @as(usize, index) * 2), lookups.len)..];
+        const kind = try read(u16, lookup, 0);
+        if (kind != 2 and kind != 9) continue;
+        const subtables = try read(u16, lookup, 4);
+        for (0..subtables) |s| {
+            var st = lookup[@min(try read(u16, lookup, 6 + s * 2), lookup.len)..];
+            // Extension (type 9): a 32-bit offset to the real subtable.
+            if (kind == 9) {
+                if (try read(u16, st, 2) != 2) break;
+                st = st[@min(try read(u32, st, 4), st.len)..];
+            }
+            if (try pairPos(st, left, right)) |v| {
+                total += v;
+                break;
+            }
+        }
+    }
+    return total;
+}
+
+/// The Feature table of the 'kern' feature for the default language of script DFLT, else
+/// latn, else the first script; empty when there is none. One language system lists each
+/// feature once, so no lookup is counted twice.
+fn gposKernFeature(gpos: []const u8) Error![]const u8 {
+    if (try read(u16, gpos, 0) != 1) return error.Unsupported;
+    const scripts = gpos[@min(try read(u16, gpos, 4), gpos.len)..];
+    const features = gpos[@min(try read(u16, gpos, 6), gpos.len)..];
+    const script_count = try read(u16, scripts, 0);
+    if (script_count == 0) return &.{};
+    var pick: usize = 0;
+    var rank: u8 = 0;
+    for (0..script_count) |i| {
+        const t = try read(u32, scripts, 2 + i * 6);
+        const r: u8 = if (t == tag("DFLT")) 2 else if (t == tag("latn")) 1 else 0;
+        if (r > rank) {
+            pick = i;
+            rank = r;
+        }
+    }
+    const script = scripts[@min(try read(u16, scripts, 2 + pick * 6 + 4), scripts.len)..];
+    const lang_off = try read(u16, script, 0);
+    if (lang_off == 0) return &.{};
+    const lang = script[@min(lang_off, script.len)..];
+    const lang_count = try read(u16, lang, 4);
+    for (0..lang_count) |i| {
+        const f = try read(u16, lang, 6 + i * 2);
+        const rec = 2 + @as(usize, f) * 6;
+        if (try read(u32, features, rec) != tag("kern")) continue;
+        return features[@min(try read(u16, features, rec + 4), features.len)..];
+    }
+    return &.{};
 }
 
 // Test font: a subset of Liberation Sans 2.1.5 (SIL OFL 1.1), built by testdata/make.py.
@@ -518,4 +734,30 @@ test "outline errors leave the columns as they were" {
     try std.testing.expectEqual(0, out.points);
     try std.testing.expectEqual(0, out.contours);
     try std.testing.expectError(error.Malformed, face.outline(face.glyph_count, &out));
+}
+
+test "kerning of the test font" {
+    var face = try Face.parse(test_ttf, 0);
+    const g = struct {
+        fn of(f: Face, c: u21) Glyph {
+            return f.cmap.glyph(c);
+        }
+    }.of;
+    // GPOS: PairPos format 1 pairs, and the format 2 class pair [o e eacute] v (make.py).
+    try std.testing.expectEqual(-152, face.kerning(g(face, 'A'), g(face, 'V')));
+    try std.testing.expectEqual(-227, face.kerning(g(face, 'T'), g(face, 'o')));
+    try std.testing.expectEqual(-113, face.kerning(g(face, ' '), g(face, 'A')));
+    try std.testing.expectEqual(-50, face.kerning(g(face, 'o'), g(face, 'v')));
+    try std.testing.expectEqual(-50, face.kerning(g(face, 0xe9), g(face, 'v')));
+    try std.testing.expectEqual(0, face.kerning(g(face, 'a'), g(face, 'v')));
+    try std.testing.expectEqual(0, face.kerning(g(face, 'V'), g(face, 'T')));
+    // The legacy kern table (fontTools kern.kernTables[0]): the same pairs, no class pair.
+    face.gpos_kern = &.{};
+    try std.testing.expectEqual(-152, face.kerning(g(face, 'A'), g(face, 'V')));
+    try std.testing.expectEqual(-113, face.kerning(g(face, 'V'), g(face, 'e')));
+    try std.testing.expectEqual(-37, face.kerning(g(face, 'A'), g(face, 'v')));
+    try std.testing.expectEqual(0, face.kerning(g(face, 'o'), g(face, 'v')));
+    // Damaged data reads as no kerning.
+    face.kern = face.kern[0..20];
+    try std.testing.expectEqual(0, face.kerning(g(face, 'V'), g(face, 'o')));
 }
