@@ -175,3 +175,96 @@ const LineOffsets = struct {
 test "LineBreakTest.txt" {
     try expectBoundaries(LineOffsets, line_test);
 }
+
+const bidi = lcgr.unicode_bidi;
+const bidi_test = @embedFile("data/BidiTest.txt");
+const bidi_character_test = @embedFile("data/BidiCharacterTest.txt");
+
+const BidiBuffers = struct {
+    orig: [256]property.BidiClass = undefined,
+    cls: [256]property.BidiClass = undefined,
+    next: [256]u32 = undefined,
+    pair: [256]u32 = undefined,
+    levels: [256]u8 = undefined,
+
+    fn scratch(b: *BidiBuffers) bidi.Scratch {
+        return .{ .cls = &b.cls, .next = &b.next, .pair = &b.pair };
+    }
+};
+
+/// Parses "1 x 0 2" into levels with 0xff for x.
+fn parseLevels(s: []const u8, out: []u8) usize {
+    var n: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, s, " \t");
+    while (tok.next()) |t| : (n += 1) out[n] = if (t[0] == 'x') 0xff else std.fmt.parseInt(u8, t, 10) catch unreachable;
+    return n;
+}
+
+fn expectLevels(want: []const u8, got: []const u8, line: usize) !void {
+    for (want, got[0..want.len]) |w, g| if (w != 0xff and w != g) {
+        std.debug.print("line {d}: levels want {any} got {any}\n", .{ line, want, got[0..want.len] });
+        return error.TestUnexpectedLevels;
+    };
+}
+
+test "BidiTest.txt: levels" {
+    var b: BidiBuffers = .{};
+    var want: [256]u8 = undefined;
+    var n_want: usize = 0;
+    var lines = std.mem.splitScalar(u8, bidi_test, '\n');
+    var line: usize = 0;
+    var cases: usize = 0;
+    while (lines.next()) |ln| {
+        line += 1;
+        if (ln.len == 0 or ln[0] == '#') continue;
+        if (std.mem.startsWith(u8, ln, "@Levels:")) {
+            n_want = parseLevels(ln["@Levels:".len..], &want);
+            continue;
+        }
+        if (ln[0] == '@') continue;
+        const semi = std.mem.indexOfScalar(u8, ln, ';').?;
+        var n: usize = 0;
+        var tok = std.mem.tokenizeAny(u8, ln[0..semi], " \t");
+        while (tok.next()) |t| : (n += 1) b.orig[n] = std.meta.stringToEnum(property.BidiClass, t).?;
+        std.debug.assert(n == n_want);
+        const set = std.fmt.parseInt(u8, std.mem.trim(u8, ln[semi + 1 ..], " \t\r"), 16) catch unreachable;
+        for ([_]?u8{ null, 0, 1 }, 0..) |dir, bit| {
+            if (set & (@as(u8, 1) << @intCast(bit)) == 0) continue;
+            const orig = b.orig[0..n];
+            const para = dir orelse bidi.paragraphLevel(orig, b.scratch());
+            bidi.resolve(orig, &.{}, para, &b.levels, b.scratch());
+            bidi.lineLevels(orig, b.levels[0..n], para);
+            try expectLevels(want[0..n], &b.levels, line);
+            cases += 1;
+        }
+    }
+    try std.testing.expect(cases > 400_000);
+}
+
+test "BidiCharacterTest.txt: levels" {
+    var b: BidiBuffers = .{};
+    var cps: [256]u21 = undefined;
+    var want: [256]u8 = undefined;
+    var lines = std.mem.splitScalar(u8, bidi_character_test, '\n');
+    var line: usize = 0;
+    var cases: usize = 0;
+    while (lines.next()) |ln| : (line += 1) {
+        if (ln.len == 0 or ln[0] == '#') continue;
+        var f = std.mem.splitScalar(u8, ln, ';');
+        var n: usize = 0;
+        var tok = std.mem.tokenizeAny(u8, f.next().?, " ");
+        while (tok.next()) |t| : (n += 1) cps[n] = std.fmt.parseInt(u21, t, 16) catch unreachable;
+        const dir = f.next().?[0] - '0';
+        const want_para = f.next().?[0] - '0';
+        std.debug.assert(parseLevels(f.next().?, &want) == n);
+        const orig = b.orig[0..n];
+        bidi.classes(cps[0..n], orig);
+        const para = if (dir == 2) bidi.paragraphLevel(orig, b.scratch()) else dir;
+        try std.testing.expectEqual(want_para, para);
+        bidi.resolve(orig, cps[0..n], para, &b.levels, b.scratch());
+        bidi.lineLevels(orig, b.levels[0..n], para);
+        try expectLevels(want[0..n], &b.levels, line + 1);
+        cases += 1;
+    }
+    try std.testing.expect(cases > 90_000);
+}
