@@ -3,6 +3,7 @@
 //! extern struct (docs/ZIG_0_17_1.md). Tier 0. Ported from prototype/ui.zig ("Draw list").
 
 const std = @import("std");
+const mem = @import("../core/mem.zig");
 
 /// One instance of the quad pipeline. This is the GPU vertex-buffer layout,
 /// so the whole array uploads with a single copy.
@@ -21,6 +22,72 @@ pub const Quad = extern struct {
     border: f32,
 };
 
+/// One text node's run, for the renderer's text pass.
+pub const TextRun = extern struct {
+    /// Content box of the text node.
+    rect: [4]f32,
+    clip: [4]f32,
+    /// Byte range in `DrawList.strings`.
+    start: u32,
+    bytes: u32,
+    px: f32,
+    color: u32,
+    font: u32,
+};
+
+/// A rectangle handed back to the host, which draws it with its own pipeline.
+pub const CustomDraw = extern struct {
+    rect: [4]f32,
+    clip: [4]f32,
+    /// Whatever the caller passed to `Frame.custom`.
+    data: u64,
+    id: u32,
+    node: u32,
+};
+
+/// One frame's paint output. Rows are carved from the caller's buffer by `init`; `paint.emit`
+/// rewrites them and the `*_len` counts every frame.
+pub const DrawList = struct {
+    quads: []Quad,
+    quad_len: u32 = 0,
+    runs: []TextRun,
+    run_len: u32 = 0,
+    customs: []CustomDraw,
+    custom_len: u32 = 0,
+    /// Storage that `TextRun.start` indexes.
+    strings: []const u8 = "",
+    /// Commands are stored as columns so they can be produced without
+    /// branches; `command` gives the tagged-union view.
+    cmd: CmdColumns,
+    cmd_len: u32 = 0,
+    op: OpColumns,
+
+    pub const Kind = enum(u8) { quads, text, custom };
+    /// `key` is texture << 16 | material for quad batches, 0 otherwise. `first` indexes `quads`,
+    /// `runs` or `customs` by kind; `count` is the batch length for quads.
+    pub const CmdColumns = struct { kind: []u8, first: []u32, count: []u32, key: []u32 };
+    /// Paint's intermediate stream: one op per painted quad, text run or custom draw, in paint
+    /// order, before quads with equal keys merge into commands.
+    pub const OpColumns = struct { kind: []u8, key: []u32, ref: []u32 };
+
+    pub fn init(carver: *mem.Carver, nodes: u32, texts: u32, customs: u32) DrawList {
+        // One spare row everywhere: emitters write first and advance after.
+        const ops = nodes + texts + customs + 4;
+        return .{
+            .quads = carver.slice(Quad, nodes + 1),
+            .runs = carver.slice(TextRun, texts + 1),
+            .customs = carver.slice(CustomDraw, customs + 1),
+            .cmd = carver.columns(CmdColumns, ops),
+            .op = carver.columns(OpColumns, ops),
+        };
+    }
+
+    /// The instance data, ready for one buffer write.
+    pub fn quadBytes(d: *const DrawList) []const u8 {
+        return std.mem.sliceAsBytes(d.quads[0..d.quad_len]);
+    }
+};
+
 const testing = std.testing;
 
 test "layout: Quad is the 80-byte instance row the quad pipeline declares" {
@@ -29,4 +96,39 @@ test "layout: Quad is the 80-byte instance row the quad pipeline declares" {
     try testing.expectEqual(4, @alignOf(Quad));
     inline for (.{ "rect", "clip", "params", "uv", "fill", "border_color", "radius", "border" }, .{ 0, 16, 32, 48, 64, 68, 72, 76 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Quad, name));
+}
+
+test "layout: TextRun and CustomDraw rows" {
+    try testing.expectEqual(52, @sizeOf(TextRun));
+    try testing.expectEqual(4, @alignOf(TextRun));
+    inline for (.{ "rect", "clip", "start", "bytes", "px", "color", "font" }, .{ 0, 16, 32, 36, 40, 44, 48 }) |name, off|
+        try testing.expectEqual(off, @offsetOf(TextRun, name));
+    try testing.expectEqual(48, @sizeOf(CustomDraw));
+    try testing.expectEqual(8, @alignOf(CustomDraw));
+    inline for (.{ "rect", "clip", "data", "id", "node" }, .{ 0, 16, 32, 40, 44 }) |name, off|
+        try testing.expectEqual(off, @offsetOf(CustomDraw, name));
+}
+
+test "DrawList.init carves one spare row per table and sizes like a counting carver" {
+    const bytes = comptime blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 10, 3, 2);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, 10, 3, 2);
+    try testing.expectEqual(bytes, carver.off);
+    try testing.expectEqual(11, d.quads.len);
+    try testing.expectEqual(4, d.runs.len);
+    try testing.expectEqual(3, d.customs.len);
+    inline for (.{ d.cmd.kind, d.cmd.first, d.cmd.count, d.cmd.key, d.op.kind, d.op.key, d.op.ref }) |col|
+        try testing.expectEqual(19, col.len);
+    try testing.expectEqual(0, d.quad_len + d.run_len + d.custom_len + d.cmd_len);
+    try testing.expectEqual(0, d.quadBytes().len);
+    d.quads[1].fill = 0xdead_beef;
+    d.quad_len = 2;
+    const raw = d.quadBytes();
+    try testing.expectEqual(2 * @sizeOf(Quad), raw.len);
+    try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + 64 ..][0..4]));
 }
