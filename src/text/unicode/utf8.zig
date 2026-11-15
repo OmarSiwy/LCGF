@@ -16,7 +16,7 @@ pub fn decode(text: []const u8, i: usize) Decoded {
     var cp: u21 = b0 & (@as(u8, 0x7F) >> len);
     for (text[i + 1 ..][0 .. len - 1]) |c| {
         if (c & 0xC0 != 0x80) return bad;
-        cp = cp << 6 | (c & 0x3F);
+        cp = (cp << 6) | (c & 0x3F);
     }
     const min = [5]u21{ 0, 0, 0x80, 0x800, 0x10000 };
     if (cp < min[len] or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF)) return bad;

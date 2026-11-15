@@ -97,7 +97,7 @@ test "Axis: one bit, usable as a two-entry index" {
 }
 
 /// RGBA8, laid out so the bytes in memory are r, g, b, a on little-endian hosts.
-pub const Color = packed struct(u32) {
+pub const Color = bitpack struct(u32) {
     r: u8 = 0,
     g: u8 = 0,
     b: u8 = 0,
@@ -258,7 +258,7 @@ test "Align: factor table places leftover space by index" {
 }
 
 /// What kinds of pointer interaction a node takes part in.
-pub const Sense = packed struct(u8) {
+pub const Sense = bitpack struct(u8) {
     hover: bool = false,
     click: bool = false,
     drag: bool = false,
@@ -270,7 +270,7 @@ pub const Sense = packed struct(u8) {
 };
 
 /// Result of `Frame.interact`. A bit set, assembled without branches.
-pub const Response = packed struct(u8) {
+pub const Response = bitpack struct(u8) {
     hovered: bool = false,
     /// Pointer is down and this widget owns it.
     held: bool = false,

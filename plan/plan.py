@@ -232,7 +232,7 @@ Rules for every commit in this brief:
   2. One git commit per plan commit, in the order given. Subject = the plan title. End the message
      with the trailer shown (Plan-Id: ...). plan.py counts a commit as done by that trailer.
   3. Before each commit: `nix develop -c ci/run.sh all` is green, `nix develop -c zig build fmt`
-     passes, and `python3 tools/commitlint/commitlint.py main..HEAD` passes (Zig 0.17.1 comes
+     passes, and `python3 tools/commitlint/commitlint.py main..HEAD` passes (Zig 0.18.0-dev.1151+8dfb7a7cc comes
      from the flake; run zig through `nix develop -c`).
   4. "Done when" is the acceptance test. Show it with a test or a tool's output. If it cannot be
      met, stop and report why; do not weaken it.
@@ -281,7 +281,7 @@ def cmd_prompt(a):
             if d not in in_run and d not in outside:
                 outside.append(d)
     out = []
-    out.append("You are implementing part of a GUI framework written in Zig 0.17.1. This brief is one lane of a")
+    out.append("You are implementing part of a GUI framework written in Zig 0.18.0-dev.1151+8dfb7a7cc. This brief is one lane of a")
     out.append("larger plan; other agents work on other lanes at the same time. Do only the commits listed here.")
     out.append("")
     out.append("Lane:    {}  ({}: {})".format(lane, phase_name(info["phase"]), PLAN["phases"][info["phase"]]["delivers"]))

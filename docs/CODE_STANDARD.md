@@ -42,7 +42,7 @@ public API of tiers 0 and 1.
 
 - **Columns, not objects.** Per-node properties are struct-of-arrays columns grouped by the pass
   that reads them. Fields always read together form one row.
-- **Explicit SIMD.** Zig 0.17.1 does not auto-vectorize; passes with independent rows use
+- **Explicit SIMD.** Passes with independent rows use
   `@Vector` over columns padded to whole vectors, with no scalar tail.
 - **Branchless per-row loops.** Selects are masks, modes are coefficients or table indices,
   filtering is "write always, advance by 0 or 1". Only loop control may branch.
