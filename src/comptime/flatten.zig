@@ -18,12 +18,41 @@ pub fn count(comptime s: Spec) comptime_int {
 
 /// Everything about the structure of `spec` that is known before the program runs.
 pub fn Flat(comptime spec: Spec) type {
+    @setEvalBranchQuota(100_000);
     const n = count(spec);
     return struct {
         pub const node_count = n;
         /// The smallest integer that can index every node and hold `end`, which reaches `n`:
         /// u4 for the probe's 8 nodes. `tree.TreeOf(Index, .{ .array = n })` takes it as is.
         pub const Index = std.math.IntFittingRange(0, n);
+
+        const Tables = struct {
+            parent: [n]Index,
+            end: [n]Index,
+        };
+
+        const tables: Tables = blk: {
+            var t: Tables = undefined;
+            var next: comptime_int = 0;
+            walk(spec, 0, &next, &t);
+            break :blk t;
+        };
+
+        /// Numbers `s` and its subtree depth-first from `next`, as `Tree.push` numbers rows.
+        fn walk(comptime s: Spec, comptime parent_ix: comptime_int, comptime next: *comptime_int, comptime t: *Tables) void {
+            const i = next.*;
+            next.* += 1;
+            t.parent[i] = parent_ix;
+            for (s.children) |c| walk(c, i, next, t);
+            t.end[i] = next.*;
+        }
+
+        // Read-only tables: comptime constants, so they live in read-only data, not in RAM the
+        // UI owns. Same contents as `Tree.Columns.parent` and `.end` after pushing the spec.
+        /// Row of each node's parent; the root is its own parent.
+        pub const parent: [n]Index = tables.parent;
+        /// One past each node's last descendant: the subtree of i is rows [i, end[i]).
+        pub const end: [n]Index = tables.end;
     };
 }
 
@@ -128,5 +157,20 @@ test "Flat.Index: the smallest index type for the count holds the runtime tree's
             try testing.expectEqual(big.c.end[i], small.c.end[i]);
         }
         try testing.expect(big.len <= std.math.maxInt(F.Index));
+    }
+}
+
+test "Flat.parent, Flat.end: equal the runtime tree's columns for the same UI" {
+    // The probe's expectations for its mixer.
+    try testing.expectEqualSlices(u4, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &Flat(mixer).parent);
+    try testing.expectEqualSlices(u4, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, &Flat(mixer).end);
+    inline for (shapes) |s| {
+        const F = Flat(s);
+        var r: Runtime(s) = .{};
+        const t = r.build();
+        for (0..F.node_count) |i| {
+            try testing.expectEqual(t.c.parent[i], F.parent[i]);
+            try testing.expectEqual(t.c.end[i], F.end[i]);
+        }
     }
 }
