@@ -41,3 +41,6 @@ export fn p_hit(t: *const Tree, x: f32, y: f32) u32 {
 export fn p_hit_near(t: *const Tree, x: f32, y: f32) u32 {
     return lcgr.hit.near(t, x, y, .any, 8);
 }
+export fn p_raster_coverage(acc: [*]const f32, out: [*]u8, n: usize) void {
+    lcgr.raster.coverage(acc[0..n], out[0..n]);
+}

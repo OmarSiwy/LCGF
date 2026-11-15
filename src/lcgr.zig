@@ -28,6 +28,7 @@ pub const paint = @import("draw/paint.zig");
 pub const unicode_line = @import("text/unicode/line.zig");
 pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");
+pub const raster = @import("text/raster/raster.zig");
 
 test {
     std.testing.refAllDecls(@This());
