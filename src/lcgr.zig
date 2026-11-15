@@ -16,6 +16,8 @@ pub const customs = @import("core/customs.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const unicode_property = @import("text/unicode/property.zig");
+pub const unicode_utf8 = @import("text/unicode/utf8.zig");
+pub const unicode_grapheme = @import("text/unicode/grapheme.zig");
 
 test {
     std.testing.refAllDecls(@This());

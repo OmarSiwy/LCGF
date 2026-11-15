@@ -117,3 +117,42 @@ test "property: classes named in LineBreakTest.txt" {
     };
     try std.testing.expect(checked > 40_000);
 }
+
+/// Runs a segmenter over every line of a *BreakTest.txt file: the offsets `Iter.next` returns
+/// must be exactly the boundaries the line marks with ÷ (after the first code point).
+fn expectBoundaries(comptime Iter: type, file: []const u8) !void {
+    var it = Cases{ .text = file };
+    var cases: usize = 0;
+    while (it.next()) |c| : (cases += 1) {
+        var buf: [1024]u8 = undefined;
+        var want: [257]usize = undefined;
+        var n_want: usize = 0;
+        var len: usize = 0;
+        for (c.cps[0..c.len], 1..) |cp, i| {
+            len += std.unicode.utf8Encode(cp, buf[len..]) catch unreachable;
+            if (c.breaks[i]) {
+                want[n_want] = len;
+                n_want += 1;
+            }
+        }
+        var seg = Iter{ .text = buf[0..len] };
+        var got: [257]usize = undefined;
+        var n_got: usize = 0;
+        while (seg.next()) |e| : (n_got += 1) got[n_got] = e;
+        std.testing.expectEqualSlices(usize, want[0..n_want], got[0..n_got]) catch |err| {
+            std.debug.print("line {d}: {s}\n", .{ c.line, file[lineStart(file, c.line)..][0..@min(160, file.len - lineStart(file, c.line))] });
+            return err;
+        };
+    }
+    try std.testing.expect(cases > 1000);
+}
+
+fn lineStart(file: []const u8, line: usize) usize {
+    var pos: usize = 0;
+    for (1..line) |_| pos = std.mem.indexOfScalarPos(u8, file, pos, '\n').? + 1;
+    return pos;
+}
+
+test "GraphemeBreakTest.txt" {
+    try expectBoundaries(lcgr.unicode_grapheme.Graphemes, grapheme_test);
+}
