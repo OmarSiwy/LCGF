@@ -53,3 +53,15 @@ export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
 export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.resolveFlex(t, fx, .y, 800);
 }
+export fn p_coefs(t: *const Tree, k: *lcgr.coefs.Coefs) void {
+    lcgr.coefs.coefs(t, k, .x);
+}
+export fn p_resolve_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
+    lcgr.coefs.resolveK(t, k, .x, 800);
+}
+export fn p_place_rows(t: *const Tree, k: *lcgr.coefs.Coefs) void {
+    lcgr.coefs.placeRows(t, k);
+}
+export fn p_place_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
+    lcgr.coefs.placeK(t, k);
+}

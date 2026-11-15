@@ -153,22 +153,24 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
     for (1..t.len) |i| {
         const p = parent[i];
         const nat = nat_[i];
-        const inner = @max(size[p] - lo[p] - hi[p], 0);
         const main = main_[p];
-        // Along the parent's main axis: natural size plus a share of what is left.
         const taken = fit_[p] + gap_total[p];
-        const free = @max(inner - taken, 0);
-        const share = free * grow[i] * grow_inv[p];
-        // Across it: stretch when the node grows on this axis.
-        const stretched = nat + b01(grow[i] > 0) * (inner - nat);
-        const flowed = stretched + main * (nat + share - stretched);
-        // A percentage replaces both.
-        const has_pct = b01(pct[i] > 0);
-        const of_parent = pct[i] * inner;
-        const in_flow = flowed + has_pct * (of_parent - flowed);
-        const floating = nat + has_pct * (of_parent - nat);
         const fl = flow[i];
-        var s = floating + fl * (in_flow - floating);
+        // Every sizing mode is linear in the parent's inner size and its free space:
+        //   s = k0 + k1 * inner + k2 * max(inner - taken, 0)
+        // Along the parent's main axis: natural size plus a `grow` share of the free space.
+        // Across it: natural size, or all of `inner` when the node grows. A percentage of
+        // `inner` replaces both; a floating node takes its natural size or its percentage.
+        // None of k0..k2 depends on the parent's size, so only the three terms below sit on
+        // the parent-to-child dependency chain.
+        const has_pct = b01(pct[i] > 0);
+        const keep = 1 - has_pct;
+        const across = (1 - main) * b01(grow[i] > 0);
+        const k0 = nat * keep * (1 - fl * across);
+        const k1 = has_pct * pct[i] + keep * fl * across;
+        const k2 = keep * fl * main * grow[i] * grow_inv[p];
+        const inner = @max(size[p] - lo[p] - hi[p], 0);
+        var s = k0 + k1 * inner + k2 * @max(inner - taken, 0);
         // Shrinkable nodes give way when the parent has no room for them.
         const room = @max(inner - main * (taken - nat), 0);
         var cut = shrink[i] * fl * @max(s - room, 0);
