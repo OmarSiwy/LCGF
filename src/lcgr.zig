@@ -20,6 +20,10 @@ pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
 pub const draw_list = @import("draw/draw_list.zig");
 pub const opentype = @import("text/font/opentype.zig");
+pub const unicode_property = @import("text/unicode/property.zig");
+pub const unicode_utf8 = @import("text/unicode/utf8.zig");
+pub const unicode_grapheme = @import("text/unicode/grapheme.zig");
+pub const unicode_word = @import("text/unicode/word.zig");
 
 test {
     std.testing.refAllDecls(@This());
