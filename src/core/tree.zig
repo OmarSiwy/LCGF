@@ -184,6 +184,48 @@ pub const Tree = struct {
     pub fn find(t: *const Tree, id: Id) u32 {
         return simd.find(t.c.id, t.len, @backingInt(id));
     }
+
+    pub const Invalid = error{
+        /// len > cap.
+        LenOverCap,
+        /// Row 0 is not its own parent.
+        RootParent,
+        /// A row's parent is not an earlier row.
+        ParentNotBefore,
+        /// end[i] is not in (i, len].
+        EndOutOfRange,
+        /// A row is not inside its parent's range, or a range before it still contains it:
+        /// the parent is not the innermost open range, so the ranges do not nest.
+        RangesCross,
+    };
+
+    /// Checks the structural invariants every pass relies on: rows in depth-first order,
+    /// parent before child, and subtree ranges [i, end[i]) that nest exactly as the parent
+    /// links say. O(len * depth), no memory. Callable in any build; `validate` is the
+    /// debug-only form.
+    pub fn check(t: *const Tree) Invalid!void {
+        if (t.len > t.cap) return error.LenOverCap;
+        if (t.len == 0) return;
+        const c = &t.c;
+        if (c.parent[0] != 0) return error.RootParent;
+        for (0..t.len) |j| {
+            if (c.end[j] <= j or c.end[j] > t.len) return error.EndOutOfRange;
+            if (j == 0) continue;
+            const p = c.parent[j];
+            if (p >= j) return error.ParentNotBefore;
+            // The innermost range still open at j must be j's parent: climb from the row
+            // before j past every range that closed at or before j.
+            var a: u32 = @intCast(j - 1);
+            while (c.end[a] <= j and a != 0) a = c.parent[a];
+            if (a != p or c.end[j] > c.end[p]) return error.RangesCross;
+        }
+    }
+
+    /// `check`, asserted in Debug and ReleaseSafe; compiled out in ReleaseFast and ReleaseSmall.
+    pub fn validate(t: *const Tree) void {
+        if (!std.debug.runtime_safety) return;
+        t.check() catch |e| std.debug.panic("tree: {s}", .{@errorName(e)});
+    }
 };
 
 const testing = std.testing;
@@ -363,6 +405,7 @@ test "seal closes a subtree over everything pushed since its node" {
     try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 1, 0 }, t.c.parent[0..5]);
     try testing.expectEqualSlices(u32, &.{ 5, 4, 3, 4, 5 }, t.c.end[0..5]);
     try testing.expectEqualSlices(f32, &.{ 2, 2, 0, 0, 0 }, t.c.nkids[0..5]);
+    try t.check();
 }
 
 test "find returns the first row with an id or none; rect reads the four rect columns" {
@@ -401,4 +444,51 @@ test "running out of rows is reported, not fatal" {
     t.reset();
     try testing.expect(!t.overflow);
     try testing.expectEqual(0, t.len);
+}
+
+test "check: parent < child and end ranges nest, and each break is named" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    try t.check(); // empty
+    // root { a { a1 a2 } b }
+    const root = t.push(0, .none, &.{});
+    const a = t.push(root, .none, &.{});
+    t.seal(t.push(a, .none, &.{}));
+    t.seal(t.push(a, .none, &.{}));
+    t.seal(a);
+    t.seal(t.push(root, .none, &.{}));
+    t.seal(root);
+    try t.check();
+    t.validate();
+
+    const parent: [5]u32 = t.c.parent[0..5].*;
+    const end: [5]u32 = t.c.end[0..5].*;
+    const Case = struct { row: u32, parent: ?u32 = null, end: ?u32 = null, err: Tree.Invalid };
+    const cases = [_]Case{
+        .{ .row = 0, .parent = 1, .err = error.RootParent },
+        .{ .row = 2, .parent = 3, .err = error.ParentNotBefore },
+        .{ .row = 2, .parent = 2, .err = error.ParentNotBefore },
+        .{ .row = 3, .end = 3, .err = error.EndOutOfRange },
+        .{ .row = 0, .end = 6, .err = error.EndOutOfRange },
+        // a1 claims a2 as its child while a2 says its parent is a.
+        .{ .row = 2, .end = 4, .err = error.RangesCross },
+        // a2 says its parent is the root, but a's range still contains it.
+        .{ .row = 3, .parent = 0, .err = error.RangesCross },
+        // b claims to be inside a, whose range closed before b.
+        .{ .row = 4, .parent = 1, .err = error.RangesCross },
+        // a's range swallows b, whose parent is the root.
+        .{ .row = 1, .end = 5, .err = error.RangesCross },
+    };
+    for (cases) |k| {
+        @memcpy(t.c.parent[0..5], &parent);
+        @memcpy(t.c.end[0..5], &end);
+        if (k.parent) |v| t.c.parent[k.row] = v;
+        if (k.end) |v| t.c.end[k.row] = v;
+        try testing.expectError(k.err, t.check());
+    }
+    @memcpy(t.c.parent[0..5], &parent);
+    @memcpy(t.c.end[0..5], &end);
+    try t.check();
+    t.len = 9;
+    try testing.expectError(error.LenOverCap, t.check());
 }
