@@ -168,6 +168,81 @@ pub const Cmap = struct {
     }
 };
 
+/// Horizontal metrics of one glyph, in font units.
+pub const HMetrics = struct {
+    advance: u16,
+    left_bearing: i16,
+};
+
+/// One font face: the tables a text stack reads for every glyph, located and checked once.
+/// Values are in font units; multiply by `px / units_per_em` for pixels.
+pub const Face = struct {
+    dir: Directory,
+    cmap: Cmap,
+    /// `hmetric_count` (advance, left bearing) pairs, then one left bearing per further glyph.
+    hmtx: []const u8,
+    units_per_em: u16,
+    /// Typographic line metrics from hhea: baseline to top (positive), to bottom (negative),
+    /// and the extra gap between lines.
+    ascender: i16,
+    descender: i16,
+    line_gap: i16,
+    /// The union of all glyph boxes: x min, y min, x max, y max.
+    bbox: [4]i16,
+    /// head.macStyle: bit 0 bold, bit 1 italic.
+    mac_style: u16,
+    /// loca holds 32-bit offsets (head.indexToLocFormat 1) instead of 16-bit halves.
+    loca_long: bool,
+    glyph_count: u16,
+    hmetric_count: u16,
+
+    /// Reads the face whose table directory starts at `offset` (0 for a plain .ttf).
+    pub fn parse(data: []const u8, offset: usize) Error!Face {
+        const dir = try Directory.parse(data, offset);
+        const head = try dir.get(tag("head"));
+        const hhea = try dir.get(tag("hhea"));
+        const maxp = try dir.get(tag("maxp"));
+        const hmtx = try dir.get(tag("hmtx"));
+        const units_per_em = try read(u16, head, 18);
+        // The spec allows 16 to 16384; zero would divide by zero in every scale.
+        if (units_per_em < 16 or units_per_em > 16384) return error.Unsupported;
+        const loca_format = try read(i16, head, 50);
+        if (loca_format != 0 and loca_format != 1) return error.Unsupported;
+        const glyph_count = try read(u16, maxp, 4);
+        const hmetric_count = try read(u16, hhea, 34);
+        if (hmetric_count == 0 or hmetric_count > glyph_count) return error.Unsupported;
+        const hmtx_len = @as(usize, hmetric_count) * 4 + @as(usize, glyph_count - hmetric_count) * 2;
+        return .{
+            .dir = dir,
+            .cmap = try Cmap.parse(try dir.get(tag("cmap"))),
+            .hmtx = try sub(hmtx, 0, hmtx_len),
+            .units_per_em = units_per_em,
+            .ascender = try read(i16, hhea, 4),
+            .descender = try read(i16, hhea, 6),
+            .line_gap = try read(i16, hhea, 8),
+            .bbox = .{ try read(i16, head, 36), try read(i16, head, 38), try read(i16, head, 40), try read(i16, head, 42) },
+            .mac_style = try read(u16, head, 44),
+            .loca_long = loca_format == 1,
+            .glyph_count = glyph_count,
+            .hmetric_count = hmetric_count,
+        };
+    }
+
+    /// Advance and left bearing of `g`; zeros for a glyph the face does not have. Glyphs past
+    /// `hmetric_count` share the last advance (monospaced tails).
+    pub fn hMetrics(face: Face, g: Glyph) HMetrics {
+        if (g >= face.glyph_count) return .{ .advance = 0, .left_bearing = 0 };
+        const last = @as(usize, face.hmetric_count) - 1;
+        const row = @min(@as(usize, g), last) * 4;
+        const bearing = if (g <= last) row + 2 else (last + 1) * 4 + (g - last - 1) * 2;
+        // parse sized hmtx for every glyph, so these reads cannot fail.
+        return .{
+            .advance = read(u16, face.hmtx, row) catch unreachable,
+            .left_bearing = read(i16, face.hmtx, bearing) catch unreachable,
+        };
+    }
+};
+
 // Test font: a subset of Liberation Sans 2.1.5 (SIL OFL 1.1), built by testdata/make.py.
 // Expected numbers come from fontTools reading the same file.
 const test_ttf = @embedFile("testdata/test.ttf");
@@ -225,4 +300,33 @@ test "cmap format 12 covers the astral planes" {
     try std.testing.expectEqual(0, cmap.glyph('A'));
     // The group count claims more groups than there are bytes.
     try std.testing.expectError(error.Truncated, Cmap.parse(bytes[0 .. bytes.len - 1]));
+}
+
+test "face metrics of the test font" {
+    const face = try Face.parse(test_ttf, 0);
+    try std.testing.expectEqual(2048, face.units_per_em);
+    try std.testing.expectEqual(1854, face.ascender);
+    try std.testing.expectEqual(-434, face.descender);
+    try std.testing.expectEqual(67, face.line_gap);
+    try std.testing.expectEqual([4]i16{ 4, -20, 1362, 1508 }, face.bbox);
+    try std.testing.expectEqual(0, face.mac_style);
+    try std.testing.expectEqual(false, face.loca_long);
+    try std.testing.expectEqual(11, face.glyph_count);
+    try std.testing.expectEqual(11, face.hmetric_count);
+    const a = face.hMetrics(face.cmap.glyph('A'));
+    try std.testing.expectEqual(HMetrics{ .advance = 1366, .left_bearing = 4 }, a);
+    try std.testing.expectEqual(HMetrics{ .advance = 1139, .left_bearing = 87 }, face.hMetrics(face.cmap.glyph(0xe9)));
+    try std.testing.expectEqual(HMetrics{ .advance = 569, .left_bearing = 0 }, face.hMetrics(face.cmap.glyph(' ')));
+    try std.testing.expectEqual(HMetrics{ .advance = 0, .left_bearing = 0 }, face.hMetrics(11));
+    try std.testing.expectError(error.Truncated, Face.parse(test_ttf[0..500], 0));
+}
+
+test "glyphs past the last long metric share its advance" {
+    // Two long metrics and one bearing-only glyph.
+    var face = try Face.parse(test_ttf, 0);
+    face.glyph_count = 3;
+    face.hmetric_count = 2;
+    face.hmtx = "\x01\x00\x00\x05\x02\x00\xff\xfe\x00\x07";
+    try std.testing.expectEqual(HMetrics{ .advance = 0x200, .left_bearing = -2 }, face.hMetrics(1));
+    try std.testing.expectEqual(HMetrics{ .advance = 0x200, .left_bearing = 7 }, face.hMetrics(2));
 }
