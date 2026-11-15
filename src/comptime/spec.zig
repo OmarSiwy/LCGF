@@ -68,30 +68,20 @@ pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
 
 // ---- tests -------------------------------------------------------------------------------------
 
-/// Nodes in `s`, itself included. Test helper; the front end's own count is lane ct-flatten's.
-fn nodeCount(comptime s: Spec) comptime_int {
-    var n = 1;
-    for (s.children) |c| n += nodeCount(c);
-    return n;
-}
+const flatten = @import("flatten.zig");
+const nodeCount = flatten.count;
 
-/// Parent and end tables of `s` in depth-first order, as the probe's `Ui` computes them.
-/// Test helper: lets the probe's table expectations run before lane ct-flatten ports `Ui`.
+/// Parent and end tables of `s` (flatten.Flat), widened to u32 for the tests below.
 fn flatTables(comptime s: Spec) [2][nodeCount(s)]u32 {
     comptime {
+        const F = flatten.Flat(s);
         var t: [2][nodeCount(s)]u32 = undefined;
-        var next: u32 = 0;
-        flatWalk(s, 0, &next, &t);
+        for (&t[0], &t[1], F.parent, F.end) |*p, *e, fp, fe| {
+            p.* = fp;
+            e.* = fe;
+        }
         return t;
     }
-}
-
-fn flatWalk(comptime s: Spec, comptime parent: u32, comptime next: *u32, comptime t: anytype) void {
-    const i = next.*;
-    next.* += 1;
-    t[0][i] = parent;
-    for (s.children) |c| flatWalk(c, i, next, t);
-    t[1][i] = next.*;
 }
 
 /// Bit per node of every node bound to `field` and of its ancestors: the probe's dirty mask.
@@ -104,7 +94,7 @@ fn bindMask(comptime s: Spec, comptime field: []const u8) u64 {
 }
 
 fn bindWalk(comptime s: Spec, comptime field: []const u8, comptime path: u64, comptime next: *u6) u64 {
-    const here = path | @as(u64, 1) << next.*;
+    const here = path | (@as(u64, 1) << next.*);
     next.* += 1;
     var m: u64 = if (s.bind != null and std.mem.eql(u8, s.bind.?, field)) here else 0;
     for (s.children) |c| m |= bindWalk(c, field, here, next);

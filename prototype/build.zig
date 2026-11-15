@@ -1,4 +1,4 @@
-//! Build file for the prototype. Verified on Zig 0.17.1.
+//! Build file for the prototype. Verified on Zig 0.17.1 and 0.18.0-dev.1151+8dfb7a7cc.
 //! It is also the known-good example of the 0.17 build API for commit C0001.
 //!
 //!   zig build test                 run every test file (each one pulls in ui.zig)

@@ -5,8 +5,10 @@
 //! Frames are built and painted by the prototype core ("ui", prototype/ui.zig). Text measuring
 //! and every layout pass run on the ported core ("lcgr", src/lcgr.zig): each frame the tree and
 //! text columns are copied into src/ tables, laid out there and copied back for paint. The
-//! copies are not timed. begin+hit, build and paint still time the prototype until those passes
-//! are ported; `frame` is the sum of the four timed parts.
+//! copies are not timed. Paint also runs on the ported core (src/draw/paint.zig) over those
+//! laid-out tables; the prototype's own paint in `Frame.finish` then runs untimed for its
+//! bookkeeping. begin+hit and build still time the prototype until those passes are ported;
+//! `frame` is the sum of the four timed parts.
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
@@ -36,12 +38,16 @@ comptime {
 
 const Tree = lcgr.tree.Tree;
 const Texts = lcgr.texts.Texts;
+const Customs = lcgr.customs.Customs;
+const DrawList = lcgr.draw_list.DrawList;
 const src_bytes = blk: {
     @setEvalBranchQuota(20_000);
     var counter: lcgr.mem.Carver = .{ .buf = null };
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
+    _ = Customs.init(&counter, limits.customs);
+    _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     break :blk counter.off;
 };
 var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -59,6 +65,21 @@ fn copyColumns(to: anytype, from: anytype, len: u32) void {
 fn copyRows(to: anytype, from: anytype, len: u32) void {
     const n = @min(lcgr.simd.rows(len), to.len);
     @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
+}
+
+fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
+    const eql = std.mem.eql;
+    const bytes = std.mem.sliceAsBytes;
+    if (want.quad_len != got.quad_len or want.run_len != got.run_len or
+        want.custom_len != got.custom_len or want.cmd_len != got.cmd_len) return error.PaintDiffers;
+    if (!eql(u8, want.quadBytes(), got.quadBytes()) or
+        !eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
+        !eql(u8, bytes(want.customs[0..want.custom_len]), bytes(got.customs[0..got.custom_len])) or
+        !eql(u8, want.strings, got.strings)) return error.PaintDiffers;
+    const n = want.cmd_len;
+    inline for (.{ "kind", "first", "count", "key" }) |name| {
+        if (!eql(@typeInfo(@TypeOf(@field(want.cmd, name))).pointer.child, @field(want.cmd, name)[0..n], @field(got.cmd, name)[0..n])) return error.PaintDiffers;
+    }
 }
 
 var samples: [pass_names.len][frames]u64 = undefined;
@@ -112,6 +133,8 @@ pub fn main(init: std.process.Init) !void {
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
+    var scu = Customs.init(&carver, limits.customs);
+    var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     var sink: u64 = 0;
     var nodes: usize = 0;
     var texts: usize = 0;
@@ -130,6 +153,10 @@ pub fn main(init: std.process.Init) !void {
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
         copyColumns(&stx.c, &ptx.c, ptx.len);
+        const pcu = &f.ctx.customs[f.ctx.cur];
+        scu.len = pcu.len;
+        copyColumns(&scu.c, &pcu.c, pcu.len);
+        const strings = &f.ctx.strings[f.ctx.cur];
         const t = &st;
         const tx = &stx;
         m[3] = now();
@@ -157,18 +184,20 @@ pub fn main(init: std.process.Init) !void {
         m[11] = now();
         lcgr.layout.finalize(t);
         m[12] = now();
+        lcgr.paint.emit(t, tx, &scu, strings.buf[0..strings.len], &sd);
+        m[13] = now();
         copyColumns(&pt.c, &st.c, pt.len);
         copyColumns(&ptx.c, &stx.c, ptx.len);
-        const paint_start = now();
         const out = f.finish();
-        m[13] = now();
-        sink +%= out.draw.cmd_len + out.draw.quad_len;
+        // Differential check, untimed: the ported paint must emit the prototype's draw list.
+        if (k == 0) try sameDrawList(out.draw, &sd);
+        sink +%= sd.cmd_len + sd.quad_len;
         nodes = t.len;
         texts = tx.len;
         samples[0][k] = m[1] - m[0];
         samples[1][k] = m[2] - m[1];
         samples[2][k] = m[12] - m[3];
-        samples[3][k] = m[13] - paint_start;
+        samples[3][k] = m[13] - m[12];
         samples[4][k] = samples[0][k] + samples[1][k] + samples[2][k] + samples[3][k];
         for (5..pass_names.len, 3..) |p, j| samples[p][k] = m[j + 1] - m[j];
     }

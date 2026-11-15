@@ -54,7 +54,7 @@ them; fields always read together are one row (`Look`, the child clip). Nodes, t
 draws refer to each other by `u32` index, never by pointer. Checked by: layout-size tests for every
 `extern` and `packed` type, and the bytes-per-node number in the benchmark.
 
-**SIMD.** Zig 0.17.1 does not auto-vectorize loops, so passes whose rows are independent are written
+**SIMD.** Passes whose rows are independent are written
 with `@Vector` over padded columns, with no scalar tail. Passes that follow parent links stay scalar,
 because a child needs its parent's result. Checked by: tests at 4, 8 and 16 lanes against scalar
 reference implementations.
@@ -128,7 +128,8 @@ Commit C0002 writes this up as `CODE_STANDARD.md`; until then this section is th
 
 Do not reopen these inside a commit. If one looks wrong, say so in your report.
 
-- Zig 0.17.1 exactly. No language features from later versions.
+- Zig 0.18.0-dev.1151+8dfb7a7cc exactly (pinned in `flake.nix`; moved from 0.17.1 for its loop auto-vectorizer,
+  `docs/ZIG_0_17_1.md`). No features from other builds.
 - Tiers 0 to 2 depend on `std.simd`, `std.math`, `std.mem` and the parts of std that neither allocate
   nor touch the OS (`std.hash`, `std.fmt.comptimePrint`, `std.meta`, `std.testing` in tests): no libc,
   no allocator, no `std.Io`. (Widened from simd/math/mem only: the prototype's `Id` hashes with

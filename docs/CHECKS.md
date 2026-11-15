@@ -4,7 +4,7 @@ The checks that were run on the prototype, how to repeat them, and what they pri
 "Checks run earlier" refers to this file. Lanes `tools-*` turn these into CI jobs; until then, run
 them by hand from `prototype/`.
 
-All commands were run with Zig 0.17.1 on x86-64 Linux. Timings came from a shared VM and move by
+The recorded numbers below were taken with Zig 0.17.1 on x86-64 Linux; the project now uses 0.18.0-dev.1151+8dfb7a7cc (see section 2 for the census on it). Timings came from a shared VM and move by
 about a third between runs: compare runs on one machine, never across machines.
 
 ## 1. Tests
@@ -67,6 +67,19 @@ Bool-to-float conversions written as `@floatFromInt(@intFromBool(c))` were compi
 compare-and-jump; `simd.b2f` avoids that with a bit pattern. Use the `simd` selects rather than
 writing your own.
 
+On Zig 0.18.0-dev.1151+8dfb7a7cc (the move from 0.17.1) LLVM turned two once-per-call selects
+back into `test`/`je`. Both were removed by deleting the condition, not by masking it, since LLVM saw
+through the masks:
+
+- `push` (prototype and `src/core/tree.zig`): `nkids[parent] += fl * b01(i != 0)` became
+  `nkids[parent] += fl; nkids[i] = 0;`. The root is its own parent, so clearing its own count after
+  the increment removes the self-count; every other row has `parent < i`. 0 jumps.
+- `hit.near`: the final `selU(any, top, none)` became a max over rows shifted by one
+  (`none +% 1 == 0`), minus one. With no match the result is `none`. 2 jumps, both loop control.
+
+`p_step` gained one remainder test after an unrolled vector loop (loop control). No per-row loop
+gained a jump; `tools/census/baseline.json` and `baseline-src.json` are recorded on this build.
+
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
 one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
 the same branches as a plain `if` (13 jumps, no cmov); with both operands already loaded for the
@@ -127,4 +140,4 @@ python3 mkindex.py         # rewrites API.md from ui.zig and ui_wgpu.zig
 python3 tools/zigcheck/zigcheck.py
 ```
 
-70 small cases behind `docs/ZIG_0_17_1.md`. All agree on 0.17.1.
+70 small cases behind `docs/ZIG_0_17_1.md`. All agree on 0.17.1 and on 0.18.0-dev.1151+8dfb7a7cc (after the `bitpack` rename).

@@ -12,7 +12,7 @@ Unzip this as the root of a new repository.
 | `plan/plan.json`, `plan/commits.csv` | The plan: 848 commits, 142 lanes, each commit with prerequisites, references and an acceptance test. |
 | `plan/gui-framework-commit-plan.xlsx` | The same plan as a workbook, for reading. |
 | `plan/gen/` | The scripts that generate the plan. Change the plan here, not in `plan.json`. |
-| `prototype/` | Working Zig 0.17.1 code: the core, a wgpu renderer, usage tests, the comptime-UI probe, a build file, and the check tools. |
+| `prototype/` | Working Zig code (written for 0.17.1, builds on 0.18.0-dev.1151+8dfb7a7cc): the core, a wgpu renderer, usage tests, the comptime-UI probe, a build file, and the check tools. |
 | `docs/ZIG_0_17_1.md` | What changed in Zig, verified on the compiler. The single most useful file for an agent. |
 | `docs/DESIGN.md` | Architecture, the four rules, settled decisions, and the three decisions that are yours. |
 | `docs/CHECKS.md` | How to repeat every measurement, with the recorded output. |
@@ -22,8 +22,9 @@ Unzip this as the root of a new repository.
 
 ## Start
 
-1. **Toolchain.** `zig version` must print `0.17.1`. (This package was built with the `ziglang`
-   0.17.1 Python package: `pip install ziglang==0.17.1`, then `python3 -m ziglang` is the compiler.)
+1. **Toolchain.** `nix develop -c zig version` must print `0.18.0-dev.1151+8dfb7a7cc`. The flake pins that exact
+   development build; it replaced 0.17.1, which the package was first written for, because it
+   auto-vectorizes plain loops (`docs/ZIG_0_17_1.md`).
 2. **Confirm the package on your machine.**
    ```
    (cd prototype && zig build test && zig build cross)

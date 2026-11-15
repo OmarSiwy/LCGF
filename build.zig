@@ -1,4 +1,4 @@
-//! Build file for LCGR. Zig 0.17.1 (prototype/build.zig is the verified example of this API).
+//! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
 //!   zig build                      compile the library module
 //!   zig build test                 run every test reachable from src/lcgr.zig
@@ -8,6 +8,8 @@
 //!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
 //!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
+//!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
+//!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -25,6 +27,16 @@ pub fn build(b: *std.Build) void {
     });
     lcgr.addOptions("build_options", options);
 
+    // Unicode property tables, generated on the host from the UCD files (src/text/unicode/gen.zig).
+    const ucd_gen = b.addRunArtifact(b.addExecutable(.{ .name = "ucd-gen", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/gen.zig"),
+        .target = b.graph.host,
+    }) }));
+    const ucd_tables = ucd_gen.addOutputFileArg("unicode_tables.zig");
+    for ([_][]const u8{ "GraphemeBreakProperty", "emoji-data", "DerivedCoreProperties", "WordBreakProperty", "LineBreak", "EastAsianWidth", "DerivedGeneralCategory", "DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
+        ucd_gen.addFileArg(b.path(b.fmt("src/text/unicode/data/{s}.txt", .{f})));
+    lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
     b.getInstallStep().dependOn(&lib.step);
 
@@ -33,6 +45,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
+    // The Unicode conformance files (src/text/unicode/conformance.zig): seconds, so not in `test`.
+    const conformance = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/conformance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
 
     // The package root built ReleaseFast, for the branch census and the benchmark.
     const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
@@ -97,6 +117,24 @@ pub fn build(b: *std.Build) void {
     const fuzz_run = b.addRunArtifact(b.addExecutable(.{ .name = "fuzz", .root_module = fuzz_mod }));
     fuzz_run.addPassthruArgs();
     b.step("fuzz-run", "Fuzz for a time: -- [seconds] [seed] [first]").dependOn(&fuzz_run.step);
+
+    // Object whose exported functions read the comptime flatten tables (ci/jobs/ct-rodata.sh
+    // checks they land in read-only data).
+    const ct_rodata = b.addObject(.{ .name = "ct_rodata", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/rodata_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
+    const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/font/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    font_fuzz.addPassthruArgs();
+    b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
