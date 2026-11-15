@@ -16,6 +16,17 @@ pub fn count(comptime s: Spec) comptime_int {
     return n;
 }
 
+/// Everything about the structure of `spec` that is known before the program runs.
+pub fn Flat(comptime spec: Spec) type {
+    const n = count(spec);
+    return struct {
+        pub const node_count = n;
+        /// The smallest integer that can index every node and hold `end`, which reaches `n`:
+        /// u4 for the probe's 8 nodes. `tree.TreeOf(Index, .{ .array = n })` takes it as is.
+        pub const Index = std.math.IntFittingRange(0, n);
+    };
+}
+
 // ---- tests -------------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -47,17 +58,18 @@ fn Runtime(comptime s: Spec) type {
         fn build(r: *@This()) Tree {
             var carver: mem.Carver = .{ .buf = &r.buf };
             var t = Tree.init(&carver, cap);
-            push(&t, s, 0);
+            pushSpec(&t, s, 0);
             return t;
         }
-
-        fn push(t: *Tree, comptime n: Spec, parent: u32) void {
-            const id: Id = if (n.id) |name| .from(name) else .none;
-            const i = t.push(parent, id, &n.style);
-            inline for (n.children) |c| push(t, c, i);
-            t.seal(i);
-        }
     };
+}
+
+/// Pushes `n` and its subtree under `parent` into any `TreeOf` tree, sealing every node.
+fn pushSpec(t: anytype, comptime n: Spec, parent: anytype) void {
+    const id: Id = if (n.id) |name| .from(name) else .none;
+    const i = t.push(parent, id, &n.style);
+    inline for (n.children) |c| pushSpec(t, c, i);
+    t.seal(i);
 }
 
 /// The probe's usage spec.
@@ -90,5 +102,31 @@ test "count: the node count is the runtime tree's row count for the same UI" {
         try t.check();
         try testing.expect(!t.overflow);
         try testing.expectEqual(count(s), t.len);
+    }
+}
+
+test "Flat.Index: the smallest index type for the count holds the runtime tree's rows" {
+    try testing.expectEqual(u4, Flat(mixer).Index);
+    try testing.expectEqual(u1, Flat(label(.x)).Index);
+    // 7 nodes: end reaches 7, so u3 is enough; 8 nodes need u4.
+    try testing.expectEqual(u3, Flat(wide(6)).Index);
+    try testing.expectEqual(u4, Flat(wide(7)).Index);
+    try testing.expectEqual(u5, Flat(wide(17)).Index);
+    inline for (shapes) |s| {
+        const F = Flat(s);
+        try testing.expectEqual(count(s), F.node_count);
+        var r: Runtime(s) = .{};
+        const big = r.build();
+        // The same UI pushed into a tree indexed by F.Index agrees row for row.
+        var small: tree.TreeOf(F.Index, .{ .array = F.node_count }) = .empty;
+        pushSpec(&small, s, @as(F.Index, 0));
+        try small.check();
+        try testing.expect(!small.overflow);
+        try testing.expectEqual(big.len, small.len);
+        for (0..big.len) |i| {
+            try testing.expectEqual(big.c.parent[i], small.c.parent[i]);
+            try testing.expectEqual(big.c.end[i], small.c.end[i]);
+        }
+        try testing.expect(big.len <= std.math.maxInt(F.Index));
     }
 }
