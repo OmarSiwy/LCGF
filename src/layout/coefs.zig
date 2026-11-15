@@ -8,6 +8,25 @@
 //!   resolveK(axis)     forward  s = k0 + k1 * inner + k2 * max(inner - taken, 0), shrink, clamp
 //!   placeRows          SIMD     a Place row per node, from resolve's sizes
 //!   placeK             forward  positions on both axes
+//!
+//! Level order (C0121, measured, not adopted as storage). Rows stay in depth-first order: the
+//! subtree ranges [i, end[i]) that hit testing, paint, reuse and incremental layout rely on
+//! exist only in that order. Stored level by level instead (every node of depth d before any of
+//! depth d+1), the children of one level are independent, so resolve becomes a SIMD sweep per
+//! level with the parent's size, pad and taken gathered lane by lane. Measured on the
+//! benchmark's tree shape (3,961 nodes, 4 levels; scratch program, ReleaseFast, 8 lanes, one P
+//! core, min of 4,000 reps, sizes bit-identical to resolveK):
+//!
+//!   resolveK(.x), depth-first rows                          33.8 us
+//!   level-order resolve, SIMD per level, used scattered     10.5 us   (6.1 us without used)
+//!   building the order each frame: depth, counting sort     13.5 us
+//!   ... plus copying Child/Parent rows into level order     27.1 us   (40.6 us in all)
+//!
+//! With the copy, one axis costs 51 us against 34; the copy disappears if `coefs` writes each
+//! row at its level-order rank (it already stores row by row), leaving 13.5 us of order, shared
+//! by both axes and place, plus 10.5 us per sweep and a gather back to depth-first order. That
+//! derived index, built by coefs and leaving the tree in depth-first order, is the form worth
+//! adopting; it needs a plan commit of its own (it is not one of this lane's).
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
