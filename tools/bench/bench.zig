@@ -6,6 +6,7 @@
 //! prototype/ui.zig; once the ported core exports the same names, point it at src/lcgr.zig.
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
+//!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
 const std = @import("std");
 const ui = @import("ui");
 const linux = std.os.linux;
@@ -52,6 +53,15 @@ fn us(ns: u64) f64 {
 }
 
 pub fn main(init: std.process.Init) !void {
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
+    _ = args.next();
+    var json_path: ?[]const u8 = null;
+    while (args.next()) |arg| {
+        if (!std.mem.eql(u8, arg, "--json")) return error.UnknownArgument;
+        json_path = args.next() orelse return error.MissingPath;
+    }
+
     var ctx = try ui.Context.init(&buffer, limits);
     const th: ui.Theme = .{};
     var in: ui.Input = .{ .viewport = .{ 1280, 8000 } };
@@ -115,4 +125,14 @@ pub fn main(init: std.process.Init) !void {
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
     }
     try w.flush();
+
+    const path = json_path orelse return;
+    var json_buf: [4096]u8 = undefined;
+    var j = std.Io.Writer.fixed(&json_buf);
+    try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ nodes, texts, frames, ui.simd.lanes });
+    for (pass_names, &samples, 0..) |name, *s, p| {
+        try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
+    }
+    try j.writeAll("\n}}\n");
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = j.buffered() });
 }
