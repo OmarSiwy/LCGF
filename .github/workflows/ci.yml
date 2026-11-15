@@ -36,3 +36,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - run: nix develop -c ci/run.sh ${{ matrix.job }}
+
+  # Golden images and the GPU pixel check (tools/golden/), on Mesa lavapipe.
+  golden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop .#golden -c ci/run.sh golden
