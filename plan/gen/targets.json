@@ -1,0 +1,212 @@
+{
+ "A1": {
+  "category": "Update model",
+  "name": "Fine-grained reactivity",
+  "yes_means": "A state change updates only the nodes that depend on it (signals or property bindings); no tree rebuild or diff.",
+  "why": "Update cost scales with what changed, not with the size of the UI.",
+  "serves": "Performant, Responsive"
+ },
+ "A2": {
+  "category": "Update model",
+  "name": "Compiled UI wiring",
+  "yes_means": "The UI description is compiled to direct update code; no runtime template interpreter or virtual tree. N/A for immediate-mode APIs.",
+  "why": "Removes runtime machinery from the binary and from the hot path.",
+  "serves": "Lightweight, Performant"
+ },
+ "A3": {
+  "category": "Update model",
+  "name": "Batched updates",
+  "yes_means": "Many state changes in one tick produce one update, one layout and one paint.",
+  "why": "Prevents redundant work and visible intermediate states.",
+  "serves": "Performant, Responsive"
+ },
+ "B1": {
+  "category": "State and memory",
+  "name": "Minimal retained state",
+  "yes_means": "No widget-object tree that mirrors app state: immediate mode, or a small ID-keyed cache.",
+  "why": "Less memory, and no bugs from keeping two copies of state in sync.",
+  "serves": "Lightweight"
+ },
+ "B2": {
+  "category": "State and memory",
+  "name": "Flat data layout",
+  "yes_means": "Nodes live in contiguous arrays or arenas and are referenced by index; no heap object and virtual call per widget.",
+  "why": "Fewer allocations and cache misses; cheap to traverse.",
+  "serves": "Lightweight, Performant"
+ },
+ "B3": {
+  "category": "State and memory",
+  "name": "Allocation-free steady state",
+  "yes_means": "A frame in which nothing structural changes performs no heap allocation.",
+  "why": "Predictable frame times; no allocator churn.",
+  "serves": "Performant, Responsive"
+ },
+ "B4": {
+  "category": "State and memory",
+  "name": "No GC or managed runtime",
+  "yes_means": "No garbage collector, VM or script engine in the process.",
+  "why": "No pauses, a smaller footprint and a faster start.",
+  "serves": "Lightweight, Responsive"
+ },
+ "C1": {
+  "category": "Layout",
+  "name": "Bounded-pass layout",
+  "yes_means": "Layout finishes in one pass or a fixed number of passes; no general constraint solver or repeated measure loops.",
+  "why": "Layout cost is linear and predictable.",
+  "serves": "Performant"
+ },
+ "C2": {
+  "category": "Layout",
+  "name": "Incremental layout",
+  "yes_means": "Only dirty subtrees are laid out again.",
+  "why": "Small changes stay cheap in large UIs.",
+  "serves": "Performant"
+ },
+ "D1": {
+  "category": "Rendering",
+  "name": "Small render and text stack",
+  "yes_means": "No bundled browser engine or large 2D library: a small renderer plus a modest or OS-provided text stack.",
+  "why": "Usually the largest share of binary size and memory.",
+  "serves": "Lightweight"
+ },
+ "D2": {
+  "category": "Rendering",
+  "name": "Batched GPU renderer",
+  "yes_means": "Few pipelines, instanced or batched draws, glyph atlas.",
+  "why": "Low CPU and GPU cost per frame.",
+  "serves": "Performant"
+ },
+ "D3": {
+  "category": "Rendering",
+  "name": "Software renderer",
+  "yes_means": "Can render without a GPU.",
+  "why": "Avoids graphics-driver memory overhead; needed on small devices and in VMs.",
+  "serves": "Lightweight"
+ },
+ "D4": {
+  "category": "Rendering",
+  "name": "Damage tracking",
+  "yes_means": "Only dirty regions are repainted.",
+  "why": "Cuts fill cost and power for small changes.",
+  "serves": "Performant"
+ },
+ "D5": {
+  "category": "Rendering",
+  "name": "Zero work when idle",
+  "yes_means": "Event-driven: no layout, paint or wake-ups while nothing changes.",
+  "why": "Battery life and background CPU.",
+  "serves": "Lightweight, Responsive"
+ },
+ "E1": {
+  "category": "Scale and footprint",
+  "name": "Built-in list virtualization",
+  "yes_means": "Only visible rows are built and laid out.",
+  "why": "Cost scales with the screen, not with the data.",
+  "serves": "Performant"
+ },
+ "E2": {
+  "category": "Scale and footprint",
+  "name": "Small binary, fast startup",
+  "yes_means": "A minimal app is a few MB or less and starts without booting a runtime.",
+  "why": "Download size and time to first frame.",
+  "serves": "Lightweight, Responsive"
+ },
+ "E3": {
+  "category": "Scale and footprint",
+  "name": "Runs on microcontrollers",
+  "yes_means": "Documented to run in well under 1 MB of RAM.",
+  "why": "Evidence that the core really is small.",
+  "serves": "Lightweight"
+ },
+ "F1": {
+  "category": "Responsiveness",
+  "name": "Async and background work",
+  "yes_means": "A built-in way to run work off the UI thread and deliver results back.",
+  "why": "The UI thread never blocks on I/O or computation.",
+  "serves": "Responsive"
+ },
+ "F2": {
+  "category": "Responsiveness",
+  "name": "Frame-clock animation",
+  "yes_means": "Built-in animations driven by the frame clock, redrawing only what animates.",
+  "why": "Smooth motion without continuous full redraw.",
+  "serves": "Responsive"
+ },
+ "F3": {
+  "category": "Responsiveness",
+  "name": "Decoupled render thread",
+  "yes_means": "Rendering can proceed on a thread separate from UI logic.",
+  "why": "Slow app code does not stall scrolling or animation.",
+  "serves": "Responsive"
+ },
+ "G1": {
+  "category": "Control",
+  "name": "First-class custom widgets",
+  "yes_means": "User widgets implement their own layout, paint and input through the same API the built-ins use.",
+  "why": "No ceiling on what can be built.",
+  "serves": "Customizable"
+ },
+ "G2": {
+  "category": "Control",
+  "name": "Unstyled, fully themable",
+  "yes_means": "No fixed look: every visual of every widget can be replaced.",
+  "why": "Product-specific design.",
+  "serves": "Customizable"
+ },
+ "G3": {
+  "category": "Control",
+  "name": "Custom shaders on elements",
+  "yes_means": "User shaders or materials can be attached to UI elements.",
+  "why": "Visual effects without leaving the UI system.",
+  "serves": "Customizable"
+ },
+ "G4": {
+  "category": "Control",
+  "name": "Raw GPU access inline",
+  "yes_means": "User code gets the device and queue and issues its own draw calls inside the framework's render pass, at the right z-order.",
+  "why": "Full control: 3D views, custom pipelines, zero-copy integration.",
+  "serves": "Customizable, Performant"
+ },
+ "G5": {
+  "category": "Control",
+  "name": "Texture interop",
+  "yes_means": "Externally rendered GPU textures can be shown as UI images, or the UI can be rendered into a user-supplied texture.",
+  "why": "Embedding engines, video and offscreen content.",
+  "serves": "Customizable"
+ },
+ "G6": {
+  "category": "Control",
+  "name": "Pluggable renderer",
+  "yes_means": "The renderer sits behind an interface that users can replace or choose among.",
+  "why": "Portability and future-proofing.",
+  "serves": "Customizable, Lightweight"
+ },
+ "G7": {
+  "category": "Control",
+  "name": "Embeddable",
+  "yes_means": "The host owns the event loop and the frame; the framework is a library the host calls.",
+  "why": "Integrates into engines and existing apps.",
+  "serves": "Customizable"
+ },
+ "H1": {
+  "category": "Completeness",
+  "name": "Text: shaping, bidi, IME",
+  "yes_means": "Complex-script shaping, bidirectional text and input-method editing all work.",
+  "why": "Required for international users.",
+  "serves": "Complete"
+ },
+ "H2": {
+  "category": "Completeness",
+  "name": "Accessibility tree",
+  "yes_means": "Exposes a screen-reader tree to the OS.",
+  "why": "Required for many products.",
+  "serves": "Complete"
+ },
+ "H3": {
+  "category": "Completeness",
+  "name": "Stable 1.0+ API",
+  "yes_means": "Has shipped a stable major version.",
+  "why": "Upgrade cost and long-term risk.",
+  "serves": "Complete"
+ }
+}

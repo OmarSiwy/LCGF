@@ -1,0 +1,12 @@
+.zig-cache/
+zig-out/
+__pycache__/
+*.o
+# written by the GPU pixel check in prototype/
+prototype/quad.wgsl
+prototype/quads.bin
+prototype/glyphs.bin
+prototype/cmds.txt
+prototype/frame.png
+# intermediate output of plan/gen/generate.py
+plan/gen/generated.json
