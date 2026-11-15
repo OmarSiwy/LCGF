@@ -38,11 +38,13 @@ struct Frag {
 fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     // Triangle strip: (0,0) (1,0) (0,1) (1,1).
     let corner = vec2f(f32(vi & 1u), f32(vi >> 1u));
-    let p = mix(inst.rect.xy, inst.rect.zw, corner);
+    // A shadow draws 3 sigma past its rect on every side, where the blur fades out.
+    let grow = select(0.0, 3.0 * bitcast<f32>(inst.params.y), inst.params.x == k_shadow);
+    let p = mix(inst.rect.xy - grow, inst.rect.zw + grow, corner);
     var out: Frag;
     out.position = vec4f(p / globals.viewport * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
     out.local = p - (inst.rect.xy + inst.rect.zw) * 0.5;
-    out.uv = mix(inst.uv.xy, inst.uv.zw, corner);
+    out.uv = mix(inst.uv.xy, inst.uv.zw, (p - inst.rect.xy) / max(inst.rect.zw - inst.rect.xy, vec2f(1e-6)));
     out.pixel = p;
     out.half = (inst.rect.zw - inst.rect.xy) * 0.5;
     out.radius_border = inst.radius_border;
@@ -61,6 +63,7 @@ fn rounded_box(p: vec2f, half: vec2f, r: f32) -> f32 {
 // Feature codes in params.x, as in src/draw/features.zig `Kind`.
 const k_linear = 1u;
 const k_radial = 2u;
+const k_shadow = 3u;
 
 // Gradients: fill is the start colour, params.y the end colour (rgba8).
 //   linear: params.z = angle in radians (0 runs left to right, y points down). t runs 0..1
@@ -79,6 +82,18 @@ fn gradient(in: Frag) -> vec4f {
     return select(in.fill, mix(in.fill, to, t), graded);
 }
 
+// Box shadow: the rounded rect blurred by a Gaussian of sigma = params.y pixels, in the fill
+// colour. Analytic: the coverage of a blurred edge at signed distance d is 0.5 - erf(d / (sigma
+// sqrt 2)) / 2, applied to the rounded-box distance (exact for straight edges, close at corners).
+fn shadow_coverage(d: f32, sigma: f32) -> f32 {
+    let x = d / (max(sigma, 1e-3) * 1.41421356);
+    // erf, Abramowitz and Stegun 7.1.26 style closed form, max error about 1e-4.
+    let a = 0.147;
+    let x2 = x * x;
+    let e = sign(x) * sqrt(1.0 - exp(-x2 * (1.27323954 + a * x2) / (1.0 + a * x2)));
+    return 0.5 - 0.5 * e;
+}
+
 // The stock material: the fill (or its gradient) times the bound texture.
 fn material(in: Frag) -> vec4f {
     return gradient(in) * textureSample(tex, samp, in.uv);
@@ -92,9 +107,11 @@ fn fs(in: Frag) -> @location(0) vec4f {
     let shape = clamp(0.5 - d, 0.0, 1.0);
     let inner = clamp(0.5 - (d + in.radius_border.y * globals.scale), 0.0, 1.0);
     let has_border = step(0.001, in.radius_border.y);
-    let color = mix(in.border_color, material(in), mix(1.0, inner, has_border));
+    let is_shadow = in.params.x == k_shadow;
+    let color = select(mix(in.border_color, material(in), mix(1.0, inner, has_border)), in.fill, is_shadow);
+    let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);
     // Per-instance clip, also as coverage.
     let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);
-    let alpha = shape * inside.x * inside.y;
+    let alpha = cover * inside.x * inside.y;
     return vec4f(color.rgb * color.a, color.a) * alpha;
 }

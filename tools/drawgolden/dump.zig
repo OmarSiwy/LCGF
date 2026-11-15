@@ -80,8 +80,23 @@ fn gradients(t: *Tree) void {
     });
 }
 
+/// Cards on a light page, each with its shadow node underneath: offset (6, 8), sigma 2 to 16.
+fn shadows(t: *Tree) void {
+    _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(40), .gap = 40, .fill = .rgb(230, 232, 236) });
+    const sigmas = [_]f32{ 2, 6, 16 };
+    const radii = [_]f32{ 0, 12, 40 };
+    for (sigmas, radii) |sigma, r| {
+        const card = t.push(0, .none, &.{ .size = .{ .px(180), .px(140) } });
+        _ = t.push(card, .none, &.{ .float = true, .offset = .{ 6, 8 }, .size = .{ .px(180), .px(140) }, .radius = r, .fill = .rgba(0, 0, 0, 140), .params = features.shadow(sigma) });
+        _ = t.push(card, .none, &.{ .float = true, .size = .{ .px(180), .px(140) }, .radius = r, .fill = .white });
+        t.seal(card);
+    }
+    t.seal(0);
+}
+
 const scenes = .{
     .{ "gradients", gradients },
+    .{ "shadows", shadows },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;

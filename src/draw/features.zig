@@ -12,7 +12,7 @@ const types = @import("../core/types.zig");
 const Color = types.Color;
 
 /// What `params.x` selects in the stock material. `solid` is all-zero params, the default.
-pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2 };
+pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3 };
 
 /// `Style.params` for a linear gradient from the node's `fill` to `to`. `angle` is in radians:
 /// 0 runs left to right, pi/2 top to bottom (y points down). The gradient spans the two corners
@@ -26,6 +26,15 @@ pub fn linear(to: Color, angle: f32) [4]f32 {
 /// is the middle.
 pub fn radial(to: Color, centre: [2]f32, radius: f32) [4]f32 {
     return words(.{ @backingInt(Kind.radial), to.bitsOf(), half2(centre), @bitCast(radius) });
+}
+
+/// `Style.params` for an analytic box shadow: the node's rounded rect (its `radius`) blurred by a
+/// Gaussian of `sigma` pixels, in the node's `fill`. The quad grows by 3 sigma on every side as
+/// it is drawn, so the node itself has the size of the box that casts the shadow; offset and
+/// spread are the node's position and size. Put the shadow node before the box it belongs to,
+/// so it paints underneath. Its border is not drawn.
+pub fn shadow(sigma: f32) [4]f32 {
+    return words(.{ @backingInt(Kind.shadow), @bitCast(sigma), 0, 0 });
 }
 
 /// Two f16 in one word, low half first: WGSL `unpack2x16float`.
@@ -53,4 +62,6 @@ test "features: solid is the zero default, kind and colour travel as exact words
     try testing.expectEqual(@backingInt(Kind.radial), q[0]);
     try testing.expectEqual(0x3c00_3400, q[2]); // f16 1.0 high, f16 0.25 low
     try testing.expectEqual(@as(f32, 40), @as(f32, @bitCast(q[3])));
+    const sh: [4]u32 = @bitCast(shadow(6));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.shadow), @bitCast(@as(f32, 6)), 0, 0 }, sh);
 }
