@@ -18,6 +18,7 @@ pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
 pub const draw_list = @import("draw/draw_list.zig");
+pub const opentype = @import("text/font/opentype.zig");
 
 test {
     std.testing.refAllDecls(@This());
