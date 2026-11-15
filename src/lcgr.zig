@@ -16,6 +16,7 @@ pub const customs = @import("core/customs.zig");
 pub const layout = @import("layout/layout.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
+pub const flatten = @import("comptime/flatten.zig");
 
 test {
     std.testing.refAllDecls(@This());
