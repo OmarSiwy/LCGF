@@ -25,11 +25,73 @@ pub const Flex = struct {
         aspect: []f32,
         /// Shrink weight (CSS `flex-shrink`) of a node whose `Style.shrink` is set.
         shrink: []f32,
+        /// 1.0 when the node shares out free space a second time; 0.0 for the prototype's one round.
+        regrow: []f32,
+        /// Cross-axis alignment factor (`Align.factor`) that replaces the parent's for this
+        /// node; -1 to use the parent's.
+        self_cross: []f32,
+        /// Space outside the node before and after it on each axis (left, top / right, bottom).
+        margin_lo: [2][]f32,
+        margin_hi: [2][]f32,
+        /// 1.0 for a row (main axis x) whose in-flow children wrap onto further lines.
+        wrap: []f32,
+        /// Where a wrapping row's lines sit across it when they leave space (`Align.factor`).
+        align_lines: []f32,
+        /// 1.0 for a row that lines its children up by their first baselines.
+        align_base: []f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
         shrink_sum: [2][]f32,
+        /// Free space per unit of grow weight that the second round hands to each child that its
+        /// max did not stop (`resolveFlex`, rewritten per axis).
+        grow_extra: []f32,
+
+        // ---- wrapping (wrap.zig). A line is a row of these columns, indexed by line number,
+        //      not by node: a frame has at most `len` lines, so the same row count holds them.
+        //      Every node gets a line: the in-flow children of a wrapping row the line `wrap`
+        //      put them on, every other node `sink`, a spare row past `cap` that collects the
+        //      writes of nodes outside any wrapping row so no pass has to branch on "wraps?".
+        /// Line of the node in its parent; `sink` when the parent does not wrap.
+        line: []u32,
+        /// 1.0 when the node is the first of its line.
+        head: []f32,
+        /// Line a wrapping row is filling while `wrap` walks its children.
+        open: []u32,
+        /// Number of lines of a wrapping row, as f32 because it only feeds arithmetic.
+        nlines: []f32,
+        /// Per line: main-axis length of the line's children, margins and gaps.
+        line_main: []f32,
+        /// Per line: children on the line.
+        line_count: []f32,
+        /// Per line: cross size, the largest cross extent of its children (`fitFlex`, y).
+        line_cross: []f32,
+        /// Per line: cross offset inside the row's content box (`placeFlex`).
+        line_off: []f32,
+        /// Per line: main-axis cursor (`placeFlex`).
+        line_cursor: []f32,
+
+        // ---- baselines (baseline.zig)
+        /// Distance from the top of the node's text run to its first baseline, scattered from
+        /// the caller's per-run column by `baseline.apply`; read when `text_has` is 1.
+        text_base: []f32,
+        /// 1.0 when the node carries a text run this frame (`baseline.apply`).
+        text_has: []f32,
+        /// Distance from the node's top edge to its first baseline (`fitFlex`, y).
+        base: []f32,
+        /// What the node's in-flow children give it as a baseline, inside its padding: the
+        /// first child's in a column, the lowest in a row (`fitFlex`, y).
+        base_kids: []f32,
+        /// The largest extent of an in-flow child below its baseline, bottom margin included
+        /// (`fitFlex`, y): with `base_kids` the height a baseline-aligned row needs.
+        below_kids: []f32,
     };
+
+    /// The row that collects the line writes of nodes outside any wrapping row: one past the
+    /// last line a tree of `cap` nodes can have, inside the padding `simd.rows` adds.
+    pub fn sink(fx: *const Flex) u32 {
+        return @intCast(fx.c.line.len - 1);
+    }
 
     /// What `set` writes for one node. The defaults change nothing.
     pub const Style = struct {
@@ -43,6 +105,30 @@ pub const Flex = struct {
         /// shrinkable node narrows to the parent's inner size). One round: a node stopped by its
         /// min leaves the rest of its part overflowing.
         shrink: f32 = 1,
+        /// Share free space along the main axis in two rounds instead of one: what growers
+        /// stopped by their max leave in the first round goes to the other growers by weight.
+        /// Bounded to two; a grower stopped in the second round leaves its rest unused.
+        regrow: bool = false,
+        /// Where this node sits across its parent's main axis, instead of the parent's
+        /// `Style.cross` (CSS `align-self`). null keeps the parent's.
+        cross: ?types.Align = null,
+        /// left, top, right, bottom: space kept outside the node. In flow it adds to what the
+        /// node takes from its parent (natural size, used space, the cursor step) and is taken
+        /// off the room it may stretch or shrink into; the node sits past its leading margin. A
+        /// floating node ignores it. Margins do not collapse.
+        margin: [4]f32 = @splat(0),
+        /// For a row (`Style.dir = .x`): children that do not fit on the current line start a
+        /// new one below it, as CSS `flex-wrap: wrap` (wrap.zig). Ignored on a column.
+        wrap: bool = false,
+        /// Where a wrapping row's lines sit across it when they leave space (CSS
+        /// `align-content`, without stretch).
+        lines: types.Align = .start,
+        /// For a row that does not wrap: its in-flow children sit so that their first baselines
+        /// (baseline.zig) are on one line, as CSS `align-items: baseline`, and the row is as
+        /// tall as the highest part above that line plus the deepest below it. A child with its
+        /// own `cross` is placed by that instead (it still counts toward the row's baseline and
+        /// height, unlike CSS). Ignored on a column and on a wrapping row.
+        baseline: bool = false,
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -56,6 +142,57 @@ pub const Flex = struct {
     pub fn set(fx: *Flex, i: u32, s: *const Style) void {
         fx.c.aspect[i] = s.aspect;
         fx.c.shrink[i] = s.shrink;
+        fx.c.regrow[i] = b01(s.regrow);
+        inline for (0..2) |a| {
+            fx.c.margin_lo[a][i] = s.margin[a];
+            fx.c.margin_hi[a][i] = s.margin[a + 2];
+        }
+        fx.c.wrap[i] = b01(s.wrap);
+        fx.c.align_lines[i] = types.Align.factor[@backingInt(s.lines)];
+        fx.c.align_base[i] = b01(s.baseline);
+        fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
+    }
+
+    /// resolve, once node `p` has its size: the first round's leftover per unit of weight that
+    /// is still free to grow, for `secondShare`. The walk over p's children runs only when p
+    /// opted in (its bound is p + 1 otherwise), so the loop is loop control, not a branch per
+    /// row, and costs nothing for the prototype's one round.
+    pub inline fn secondRound(fx: *const Flex, t: *const Tree, a: u1, p: usize) void {
+        const c = &t.c;
+        const inner = @max(c.size[a][p] - c.pad_lo[a][p] - c.pad_hi[a][p], 0);
+        const free = @max(inner - c.fit[a][p] - c.gap_total[p], 0);
+        const per_weight = free * c.grow_inv[a][p];
+        const opted = fx.c.regrow[p] * c.main[a][p];
+        // `opted` is exactly 0 or 1, so the bound is a product with no compare: 0.18 compiles a
+        // select on `opted > 0` into a jump around the load of end[p].
+        const first_child: u32 = @intCast(p + 1);
+        const stop = first_child + @as(u32, @intFromFloat(opted)) * (c.end[p] - first_child);
+        var left: f32 = 0;
+        var weight: f32 = 0;
+        var j = first_child;
+        while (j < stop) : (j = c.end[j]) {
+            const g = c.grow[a][j] * c.flow[j] * b01(c.pct[a][j] <= 0);
+            const first = c.nat[a][j] + per_weight * g;
+            left += @max(first - c.max[a][j], 0);
+            weight += g * b01(first < c.max[a][j]);
+        }
+        fx.c.grow_extra[p] = opted * left / @max(weight, 1e-6);
+    }
+
+    /// resolve: node `i`'s second-round share, given its first-round size `first`.
+    pub inline fn secondShare(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, first: f32) f32 {
+        return t.c.grow[a][i] * fx.c.grow_extra[p] * b01(first < t.c.max[a][i]);
+    }
+
+    /// Both margins of node `i` on axis `a`: what it takes beyond its own size.
+    pub inline fn margin(fx: *const Flex, a: u1, i: usize) f32 {
+        return fx.c.margin_lo[a][i] + fx.c.margin_hi[a][i];
+    }
+
+    /// place: the cross-axis factor for node `i`, its own or the parent's `parent_factor`.
+    pub inline fn selfCross(fx: *const Flex, i: usize, parent_factor: f32) f32 {
+        const own = fx.c.self_cross[i];
+        return parent_factor + b01(own >= 0) * (own - parent_factor);
     }
 
     /// fit: what node `i` adds to its parent's `shrink_sum`.
@@ -369,4 +506,177 @@ test "shrink: a node stopped by its min leaves the rest of its part overflowing 
     // 100 over, 50 each: a is 50, b stops at its min 90; 40 px overflow remain.
     try testing.expectEqual(50, s.size(a)[0]);
     try testing.expectEqual(90, s.size(b)[0]);
+}
+
+test "regrow: what a capped grower leaves goes to the other growers by weight" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 40, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    const c = t.push(root, .none, &.{ .size = .{ .grow(2), .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // Round one: 75, 75, 150; a stops at 40 and leaves 35, shared 1:2 by b and c.
+    try testing.expectEqual(40, s.size(a)[0]);
+    try testing.expectApproxEqAbs(75 + 35.0 / 3.0, s.size(b)[0], 1e-3);
+    try testing.expectApproxEqAbs(150 + 70.0 / 3.0, s.size(c)[0], 1e-3);
+    try testing.expectApproxEqAbs(300, t.c.used[0][root], 1e-3);
+}
+
+test "regrow: bounded to two rounds; a grower capped in the second leaves its rest unused" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 20, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 120, types.inf } });
+    const c = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // Round one: 100 each; a stops at 20 (80 left). Round two: b and c get 40 each; b stops at
+    // 120, and the 20 it cannot take is not handed out again.
+    try testing.expectEqual(20, s.size(a)[0]);
+    try testing.expectEqual(120, s.size(b)[0]);
+    try testing.expectEqual(140, s.size(c)[0]);
+}
+
+test "regrow: only for the container that opts in, only along its main axis" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(100) } });
+    // Not opted in: the prototype's one round.
+    const row = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .px(50) } });
+    const a = t.push(row, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 40, 10 } });
+    const b = t.push(row, .none, &.{ .size = .{ .fill, .fill } });
+    t.seal(row);
+    // Opted in, but across its main axis the growers stretch and nothing is shared.
+    const col = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .px(50) } });
+    const p = t.push(col, .none, &.{ .size = .{ .px(10), .fill }, .max = .{ types.inf, 20 } });
+    const q = t.push(col, .none, &.{ .size = .{ .px(10), .fill } });
+    t.seal(col);
+    s.fx.set(col, &.{ .regrow = true });
+    s.runFlex(300, 100);
+    try testing.expectEqual([2]f32{ 40, 10 }, s.size(a));
+    try testing.expectEqual([2]f32{ 150, 50 }, s.size(b));
+    try testing.expectEqual([2]f32{ 10, 20 }, s.size(p));
+    try testing.expectEqual([2]f32{ 10, 50 }, s.size(q));
+}
+
+test "regrow: percent and floating children take no part in either round" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 50, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .pct(0.2), .fill } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .fill, .fill } });
+    const c = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // grow_sum 2 (a, c): 150 each; a stops at 50, c takes 250; b is 60 regardless (a percentage
+    // is not counted in the free space, as in the one-round pass), f keeps its natural 0.
+    try testing.expectEqual(50, s.size(a)[0]);
+    try testing.expectEqual(60, s.size(b)[0]);
+    try testing.expectEqual(0, s.size(f)[0]);
+    try testing.expectEqual(250, s.size(c)[0]);
+}
+
+test "cross: a child's own alignment replaces the parent's across the main axis" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(100) }, .cross = .center });
+    const a = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const c = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    const d = t.push(root, .none, &.{ .size = .{ .px(10), .px(20) } });
+    s.fx.set(b, &.{ .cross = .start });
+    s.fx.set(c, &.{ .cross = .end });
+    s.fx.set(d, &.{ .cross = .center });
+    s.runFlex(300, 100);
+    try testing.expectEqualSlices(f32, &.{ 40, 0, 80, 40 }, &.{ t.c.pos[1][a], t.c.pos[1][b], t.c.pos[1][c], t.c.pos[1][d] });
+    // Along the main axis nothing moves.
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30 }, &.{ t.c.pos[0][a], t.c.pos[0][b], t.c.pos[0][c], t.c.pos[0][d] });
+}
+
+test "cross: the override works in a column too, inside the padding" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(100), .px(100) }, .pad = .{ 5, 0, 15, 0 } });
+    const a = t.push(root, .none, &.{ .size = .{ .px(20), .px(10) } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(20), .px(10) } });
+    s.fx.set(b, &.{ .cross = .end });
+    s.runFlex(100, 100);
+    try testing.expectEqual(5, t.c.pos[0][a]);
+    try testing.expectEqual(5 + 80 - 20, t.c.pos[0][b]);
+}
+
+test "cross: a floating node ignores it, as it ignores the parent's" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(100) } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .px(20), .px(10) } });
+    s.fx.set(f, &.{ .cross = .end });
+    s.runFlex(100, 100);
+    try testing.expectEqual(0, t.c.pos[1][f]);
+}
+
+test "margin: adds to the parent's natural size and to the cursor step; the node sits inside it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    const row = t.push(root, .none, &.{ .dir = .x, .gap = 2 });
+    const a = t.push(row, .none, &.{ .size = .{ .px(10), .px(10) } });
+    const b = t.push(row, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(row);
+    s.fx.set(a, &.{ .margin = .{ 1, 2, 3, 4 } });
+    s.runFlex(300, 300);
+    // x: 1 + 10 + 3 + gap 2 + 10; y: the taller of 2 + 10 + 4 and 10.
+    try testing.expectEqual([2]f32{ 26, 16 }, s.size(row));
+    try testing.expectEqual([2]f32{ 1, 2 }, [2]f32{ t.c.pos[0][a], t.c.pos[1][a] });
+    try testing.expectEqual(1 + 10 + 3 + 2, t.c.pos[0][b]);
+    // used holds sizes and margins; gaps are counted apart (gap_total).
+    try testing.expectEqual(24, t.c.used[0][row]);
+}
+
+test "margin: a stretched or grown node fills the room less its margins" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    const b = t.push(root, .none, &.{ .size = .{ .px(20), .fill } });
+    s.fx.set(a, &.{ .margin = .{ 5, 5, 5, 5 } });
+    s.fx.set(b, &.{ .margin = .{ 0, 10, 0, 0 } });
+    s.runFlex(100, 50);
+    try testing.expectEqual([2]f32{ 70, 40 }, s.size(a));
+    try testing.expectEqual([2]f32{ 20, 40 }, s.size(b));
+    try testing.expectEqual([2]f32{ 5, 5 }, [2]f32{ t.c.pos[0][a], t.c.pos[1][a] });
+    try testing.expectEqual([2]f32{ 80, 10 }, [2]f32{ t.c.pos[0][b], t.c.pos[1][b] });
+}
+
+test "margin: alignment places the margin box; shrink makes room for it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(100), .px(50) }, .main = .end, .cross = .end });
+    const a = t.push(root, .none, &.{ .size = .{ .px(20), .px(20) } });
+    s.fx.set(a, &.{ .margin = .{ 0, 0, 10, 5 } });
+    const w = t.push(root, .none, &.{ .shrink = true });
+    _ = t.push(w, .none, &.{ .size = .{ .px(90), .px(1) } });
+    t.seal(w);
+    s.runFlex(100, 50);
+    // 20 + 10 + 90 = 120 in 100: w gives up 20. Everything fits, so main = end moves nothing.
+    try testing.expectEqual(70, s.size(w)[0]);
+    try testing.expectEqual(0, t.c.pos[0][a]);
+    try testing.expectEqual(30, t.c.pos[0][w]);
+    // Across: 50 - 20 - 5 = 25 before a.
+    try testing.expectEqual(25, t.c.pos[1][a]);
+}
+
+test "margin: a floating node ignores it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(100), .px(50) } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .px(10), .px(10) } });
+    s.fx.set(f, &.{ .margin = @splat(7) });
+    s.runFlex(100, 50);
+    try testing.expectEqual([2]f32{ 0, 0 }, [2]f32{ t.c.pos[0][f], t.c.pos[1][f] });
+    try testing.expectEqual(0, t.c.fit[0][root]);
 }

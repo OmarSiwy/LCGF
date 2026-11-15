@@ -77,3 +77,12 @@ export fn p_atlas_evict(c: *lcgr.raster_atlas.Cache, keep_from: u32) void {
 export fn p_sdf_distances(segs: *const lcgr.raster.Segments, n: usize, w: u32, h: u32, img: [*]u8, len: usize) void {
     lcgr.raster_sdf.distances(segs, n, w, h, img[0..len], 31.75);
 }
+export fn p_place_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.placeFlex(t, fx);
+}
+export fn p_wrap(t: *const Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.wrap.wrap(t, fx);
+}
+export fn p_baseline_apply(t: *const Tree, fx: *const lcgr.flex.Flex, tx: *const Texts, ascent: [*]const f32) void {
+    lcgr.baseline.apply(t, fx, tx, ascent[0..tx.len]);
+}

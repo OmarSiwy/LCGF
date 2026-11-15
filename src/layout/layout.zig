@@ -17,6 +17,8 @@ const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Flex = @import("flex.zig").Flex;
+const wrap = @import("wrap.zig");
+const baseline = @import("baseline.zig");
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -77,6 +79,8 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
     if (flexed) @memset(fx.c.shrink_sum[a][first..simd.padded(last)], 0);
+    if (flexed) @memset(fx.c.base_kids[first..simd.padded(last)], 0);
+    if (flexed) @memset(fx.c.below_kids[first..simd.padded(last)], 0);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -96,25 +100,35 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     while (i > first + 1) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
-        const content = fit_[i] + main[i] * gap_total[i];
+        var content = fit_[i] + main[i] * gap_total[i];
+        if (flexed) content += wrap.linesGap(t, fx, a, i);
+        if (flexed) content = baseline.content(t, fx, a, i, content);
         var nat = content + lo[i] + hi[i];
         if (flexed) nat = fx.aspectNat(t, a, i, nat);
         nat = @min(@max(nat, min[i]), max[i]);
         nat_[i] = nat;
+        if (flexed) baseline.settle(t, fx, i, nat);
         // Fold into the parent: a sum along its main axis, a max across it.
         const p = parent[i];
-        const contrib = nat * flow[i];
+        var contrib = nat * flow[i];
+        if (flexed) contrib += fx.margin(a, i) * flow[i];
         const sum = fit_[p] + contrib;
         const mx = @max(fit_[p], contrib);
-        fit_[p] = mx + main[p] * (sum - mx);
+        var folded = mx + main[p] * (sum - mx);
+        if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded);
+        fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
+        if (flexed) baseline.fold(t, fx, i, p);
     }
     // The root (of the span) has no parent to fold into.
-    const content = fit_[first] + main[first] * gap_total[first];
+    var content = fit_[first] + main[first] * gap_total[first];
+    if (flexed) content += wrap.linesGap(t, fx, a, first);
+    if (flexed) content = baseline.content(t, fx, a, first, content);
     var nat = content + lo[first] + hi[first];
     if (flexed) nat = fx.aspectNat(t, a, first, nat);
     nat_[first] = @min(@max(nat, min[first]), max[first]);
+    if (flexed) baseline.settle(t, fx, first, nat_[first]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
     // on its parent-to-child dependency chain. Whole vectors around the span: grow_inv is a
@@ -171,6 +185,7 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const shrink = t.c.shrink;
     const used = t.c.used[a];
 
+    if (flexed) fx.secondRound(t, a, first);
     for (first + 1..last) |i| {
         const p = parent[i];
         const nat = nat_[i];
@@ -192,15 +207,27 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
         const k2 = keep * fl * main * grow[i] * grow_inv[p];
         const inner = @max(size[p] - lo[p] - hi[p], 0);
         var s = k0 + k1 * inner + k2 * @max(inner - taken, 0);
+        // Flex only: margins are outside the node, so a stretched node fills `inner` less its
+        // own; a grower may get a second-round share; a stretched child of a wrapping row fills
+        // its line.
+        const m = if (flexed) fx.margin(a, i) else 0;
+        if (flexed) {
+            const first_round = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
+            const line = wrap.lineCross(t, fx, a, i, p, inner);
+            s += keep * fl * (main * fx.secondShare(t, a, i, p, first_round) + across * (line - m));
+        }
         // Shrinkable nodes give way when the parent has no room for them.
-        const room = @max(inner - main * (taken - nat), 0);
+        const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
         var cut = shrink[i] * fl * @max(s - room, 0);
         if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
+        // A wrapping row breaks a line instead of shrinking along it.
+        if (flexed) cut *= 1 - fx.c.wrap[p] * main;
         s -= cut;
         if (flexed) s = fx.aspectSize(t, a, i, s);
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;
-        used[p] += s * fl;
+        used[p] += (s + m) * fl;
+        if (flexed) fx.secondRound(t, a, i);
     }
 }
 
@@ -218,13 +245,26 @@ pub fn place(t: *Tree) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
-    placeSpan(t, 0, t.len);
+    placeOf(t, {}, 0, t.len);
+}
+
+/// `place` with the extra placement rules of `fx` (flex.zig).
+pub fn placeFlex(t: *Tree, fx: *const Flex) void {
+    if (t.len == 0) return;
+    t.c.pos[0][0] = 0;
+    t.c.pos[1][0] = 0;
+    placeOf(t, fx, 0, t.len);
 }
 
 /// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
 /// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
 /// rows must be cleared first, as `prepare` does for the whole tree.
 pub fn placeSpan(t: *Tree, first: u32, last: u32) void {
+    placeOf(t, {}, first, last);
+}
+
+fn placeOf(t: *Tree, fx: anytype, first: u32, last: u32) void {
+    const flexed = @TypeOf(fx) != void;
     std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
     const pos = t.c.pos;
@@ -245,17 +285,27 @@ pub fn placeSpan(t: *Tree, first: u32, last: u32) void {
     for (first + 1..last) |i| {
         const p = parent[i];
         const fl = flow[i];
+        if (flexed) wrap.openLine(t, fx, i, p);
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
             const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
-            const across = @max(inner - size[a][i], 0) * align_cross[p];
-            const along = lead + cursor[p];
-            const in_flow = across + main[a][p] * (along - across);
+            var cross = align_cross[p];
+            if (flexed) cross = fx.selfCross(i, cross);
+            const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
+            const m = if (flexed) fx.margin(a, i) else 0;
+            var across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
+            if (flexed and a == 1) across = baseline.across(t, fx, i, p, across);
+            const along = lead + cursor[p] + m_lo;
+            var in_flow = across + main[a][p] * (along - across);
+            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, inner, cross, in_flow);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
         }
         // Advance along whichever axis is the parent's main one.
-        const step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
-        cursor[p] += (step + gap[p]) * fl;
+        var step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
+        if (flexed) step += fx.margin(0, i) * main[0][p] + fx.margin(1, i) * main[1][p];
+        var advance = step + gap[p];
+        if (flexed) advance = wrap.advance(t, fx, i, p, advance);
+        cursor[p] += advance * fl;
     }
 }
 
@@ -328,17 +378,20 @@ pub fn run(t: *Tree, tx: *Texts, viewport: [2]f32) void {
     finalize(t);
 }
 
-/// `run` with the extra sizing rules of `fx` (flex.zig).
+/// `run` with the extra sizing rules of `fx` (flex.zig), and wrapping rows (wrap.zig). Text
+/// baselines come from `baseline.apply`, which needs a per-run ascent column this call does not
+/// have: call the passes one by one, as baseline.zig's tests do, to line text up.
 pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
     prepare(t);
     applyText(t, tx, .x);
     fitFlex(t, fx, .x);
     resolveFlex(t, fx, .x, viewport[0]);
+    wrap.wrap(t, fx);
     textAvail(t, tx);
     applyText(t, tx, .y);
     fitFlex(t, fx, .y);
     resolveFlex(t, fx, .y, viewport[1]);
-    place(t);
+    placeFlex(t, fx);
     finalize(t);
 }
 

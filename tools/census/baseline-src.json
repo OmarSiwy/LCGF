@@ -40,9 +40,9 @@
     "short_fwd": 0
   },
   "p_fit_flex": {
-    "back": 3,
-    "jcc": 8,
-    "short_fwd": 1
+    "jcc": 4,
+    "back": 2,
+    "short_fwd": 0
   },
   "p_gamma_apply": {
     "back": 2,
@@ -100,8 +100,8 @@
     "short_fwd": 0
   },
   "p_resolve_flex": {
-    "back": 1,
-    "jcc": 3,
+    "jcc": 7,
+    "back": 3,
     "short_fwd": 0
   },
   "p_resolve_k": {
@@ -132,6 +132,21 @@
   "p_tree_push": {
     "back": 0,
     "jcc": 0,
+    "short_fwd": 0
+  },
+  "p_baseline_apply": {
+    "jcc": 5,
+    "back": 2,
+    "short_fwd": 1
+  },
+  "p_wrap": {
+    "jcc": 3,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_place_flex": {
+    "jcc": 3,
+    "back": 1,
     "short_fwd": 0
   }
 }

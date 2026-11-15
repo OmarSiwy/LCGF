@@ -47,6 +47,7 @@ const src_bytes = blk: {
     _ = Texts.init(&counter, limits.texts);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
     _ = lcgr.incremental.Dirty.init(&counter, limits.nodes);
+    _ = lcgr.flex.Flex.init(&counter, limits.nodes);
     _ = Customs.init(&counter, limits.customs);
     _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     break :blk counter.off;
@@ -91,8 +92,27 @@ var samples: [all_names.len][frames]u64 = undefined;
 /// scene is (no px container, so the change reaches the root) and then with every row pinned to
 /// its own height (rows become relayout boundaries, so it reaches one row).
 const incr_names = [_][]const u8{ "full.run", "incr.root", "incr.row" };
-const all_names = pass_names ++ incr_names;
+const all_names = pass_names ++ incr_names ++ flex_names;
 const incr_samples = samples[pass_names.len..];
+
+/// Flex layout after the frame loop, on the last frame's tree, with every row (dir x) a
+/// wrapping row in a 400 px viewport: `layout.runFlex` whole, then its line assignment pass
+/// alone (src/layout/wrap.zig).
+const flex_names = [_][]const u8{ "flex", "lines" };
+const flex_samples = samples[pass_names.len + incr_names.len ..];
+
+fn flexWrap(t: *Tree, tx: *Texts, fx: *lcgr.flex.Flex, viewport: [2]f32) void {
+    for (0..t.len) |i| fx.c.wrap[i] = t.c.main[0][i];
+    const narrow: [2]f32 = .{ 400, viewport[1] };
+    for (&flex_samples[0], &flex_samples[1]) |*whole, *lines| {
+        const t0 = now();
+        lcgr.layout.runFlex(t, fx, tx, narrow);
+        const t1 = now();
+        lcgr.wrap.wrap(t, fx);
+        lines.* = now() - t1;
+        whole.* = t1 - t0;
+    }
+}
 
 fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f32) void {
     lcgr.layout.run(t, tx, viewport);
@@ -183,6 +203,7 @@ pub fn main(init: std.process.Init) !void {
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
     var sdirty = lcgr.incremental.Dirty.init(&carver, limits.nodes);
+    var sflex = lcgr.flex.Flex.init(&carver, limits.nodes);
     var scu = Customs.init(&carver, limits.customs);
     var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     var sink: u64 = 0;
@@ -263,6 +284,7 @@ pub fn main(init: std.process.Init) !void {
         while (linux.read(0, &byte, 1) > 0) {}
         return;
     }
+    flexWrap(&st, &stx, &sflex, in.viewport);
     incremental(&st, &stx, &sdirty, in.viewport);
     try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
