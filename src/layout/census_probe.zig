@@ -41,3 +41,9 @@ export fn p_hit(t: *const Tree, x: f32, y: f32) u32 {
 export fn p_hit_near(t: *const Tree, x: f32, y: f32) u32 {
     return lcgr.hit.near(t, x, y, .any, 8);
 }
+export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
+    lcgr.overlay.anchor(t, an, .{ .x1 = 800, .y1 = 600 });
+}
+export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
+    lcgr.overlay.order(t, ly);
+}

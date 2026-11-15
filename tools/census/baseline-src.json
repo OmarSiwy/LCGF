@@ -53,5 +53,15 @@
     "jcc": 2,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_anchor": {
+    "jcc": 12,
+    "back": 6,
+    "short_fwd": 2
+  },
+  "p_order": {
+    "jcc": 17,
+    "back": 7,
+    "short_fwd": 5
   }
 }
