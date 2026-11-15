@@ -5,6 +5,13 @@
 const std = @import("std");
 const simd = @import("simd.zig");
 const mem = @import("mem.zig");
+const types = @import("types.zig");
+const none = types.none;
+const Id = types.Id;
+const Size = types.Size;
+const Align = types.Align;
+const Style = types.Style;
+const b01 = simd.b2f;
 
 /// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
 /// together and layout reads none, so they are one cold row instead of seven hot columns.
@@ -105,6 +112,59 @@ pub const Tree = struct {
     pub fn reset(t: *Tree) void {
         t.len = 0;
     }
+
+    /// Appends a node as the last child of `parent` and returns its row.
+    /// One row write per column; no searching, no allocation, no branch.
+    pub fn push(t: *Tree, parent: u32, id: Id, s: *const Style) u32 {
+        std.debug.assert(t.len < t.cap);
+        const c = &t.c;
+        const i = t.len;
+        t.len = i + 1;
+
+        c.id[i] = @backingInt(id);
+        c.parent[i] = parent;
+        c.end[i] = i + 1;
+        inline for (0..2) |a| {
+            const k = @backingInt(s.size[a].kind);
+            const v = s.size[a].v;
+            c.min[a][i] = @max(v * Size.k_min[k], s.min[a]);
+            c.max[a][i] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
+            c.grow[a][i] = v * Size.k_grow[k];
+            c.pct[a][i] = v * Size.k_pct[k];
+            c.pad_lo[a][i] = s.pad[a];
+            c.pad_hi[a][i] = s.pad[a + 2];
+            c.offset[a][i] = s.offset[a];
+            c.scroll[a][i] = s.scroll[a];
+        }
+        const fl = b01(!s.float);
+        c.gap[i] = s.gap;
+        c.nkids[i] = 0;
+        c.flow[i] = fl;
+        c.shrink[i] = b01(s.shrink);
+        c.align_main[i] = Align.factor[@backingInt(s.main)];
+        c.align_cross[i] = Align.factor[@backingInt(s.cross)];
+        const along_y: f32 = @floatFromInt(@backingInt(s.dir));
+        c.main[0][i] = 1 - along_y;
+        c.main[1][i] = along_y;
+        c.clips[i] = @intFromBool(s.clip);
+        c.sense[i] = 0;
+        c.look[i] = .{
+            .fill = s.fill.bitsOf(),
+            .border_color = s.border_color.bitsOf(),
+            .border = s.border,
+            .radius = s.radius,
+            .params = s.params,
+            .texture = @backingInt(s.texture),
+            .material = @backingInt(s.material),
+        };
+        c.role[i] = @backingInt(s.role);
+        c.value[i] = s.value;
+        c.text[i] = none;
+        c.custom[i] = none;
+        // The root is its own parent and must not count itself.
+        c.nkids[parent] += fl * b01(i != 0);
+        return i;
+    }
 };
 
 const testing = std.testing;
@@ -199,4 +259,70 @@ test "init carves rows(cap) rows per column; counting and carving agree; reset e
     t.reset();
     try testing.expectEqual(0, t.len);
     try testing.expectEqual(cap, t.cap);
+}
+
+/// A tree of `cap` rows in a caller-owned buffer, for tests.
+fn Fixture(comptime cap: u32) type {
+    return struct {
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+
+        const bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            _ = Tree.init(&counter, cap);
+            break :blk counter.off;
+        };
+        fn tree(f: *@This()) Tree {
+            var carver: mem.Carver = .{ .buf = &f.buf };
+            return Tree.init(&carver, cap);
+        }
+    };
+}
+
+test "push writes one row per column from the style's coefficients" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    const root = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(100), .fill }, .pad = .{ 1, 2, 3, 4 }, .gap = 5, .clip = true });
+    try testing.expectEqual(0, root);
+    const a = t.push(root, Id.from("a"), &.{ .size = .{ .pct(0.5), .fit }, .min = .{ 0, 7 }, .max = .{ 30, types.inf }, .main = .center, .cross = .end, .shrink = true, .fill = .rgb(1, 2, 3), .radius = 4, .texture = @fromBackingInt(9), .role = .button, .value = 0.25 });
+    const b = t.push(root, Id.from("b"), &.{ .float = true, .offset = .{ 6, 8 }, .scroll = .{ 1, 2 } });
+    try testing.expectEqual(1, a);
+    try testing.expectEqual(2, b);
+    try testing.expectEqual(3, t.len);
+    const c = t.c;
+
+    try testing.expectEqual(@backingInt(Id.from("a")), c.id[a]);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0 }, c.parent[0..3]);
+    // end is one past the row until `seal` closes the subtree.
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, c.end[0..3]);
+    // px(100) on x: min = max = 100; fill on y: grow 1, unbounded.
+    try testing.expectEqual(100, c.min[0][root]);
+    try testing.expectEqual(100, c.max[0][root]);
+    try testing.expectEqual(0, c.grow[0][root]);
+    try testing.expectEqual(1, c.grow[1][root]);
+    try testing.expectEqual(types.inf, c.max[1][root]);
+    // pct(0.5) is a coefficient, clamped by the style's own max; min on y comes from Style.min.
+    try testing.expectEqual(0.5, c.pct[0][a]);
+    try testing.expectEqual(30, c.max[0][a]);
+    try testing.expectEqual(7, c.min[1][a]);
+    try testing.expectEqualSlices(f32, &.{ 1, 2 }, &.{ c.pad_lo[0][root], c.pad_lo[1][root] });
+    try testing.expectEqualSlices(f32, &.{ 3, 4 }, &.{ c.pad_hi[0][root], c.pad_hi[1][root] });
+    try testing.expectEqual(5, c.gap[root]);
+    try testing.expectEqualSlices(f32, &.{ 6, 8, 1, 2 }, &.{ c.offset[0][b], c.offset[1][b], c.scroll[0][b], c.scroll[1][b] });
+    // Direction as a coefficient pair.
+    try testing.expectEqualSlices(f32, &.{ 1, 0 }, &.{ c.main[0][root], c.main[1][root] });
+    try testing.expectEqualSlices(f32, &.{ 0, 1 }, &.{ c.main[0][a], c.main[1][a] });
+    try testing.expectEqualSlices(f32, &.{ 0.5, 1 }, &.{ c.align_main[a], c.align_cross[a] });
+    try testing.expectEqualSlices(f32, &.{ 1, 0 }, &.{ c.shrink[a], c.shrink[b] });
+    try testing.expectEqualSlices(f32, &.{ 1, 1, 0 }, c.flow[0..3]);
+    try testing.expectEqualSlices(u8, &.{ 1, 0, 0 }, c.clips[0..3]);
+    // Only in-flow children are counted, and the root does not count itself.
+    try testing.expectEqualSlices(f32, &.{ 1, 0, 0 }, c.nkids[0..3]);
+    try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
+    try testing.expectEqual(4, c.look[a].radius);
+    try testing.expectEqual(9, c.look[a].texture);
+    try testing.expectEqual(@backingInt(types.Role.button), c.role[a]);
+    try testing.expectEqual(0.25, c.value[a]);
+    try testing.expectEqualSlices(u32, &.{ none, none, none }, c.text[0..3]);
+    try testing.expectEqualSlices(u32, &.{ none, none, none }, c.custom[0..3]);
 }
