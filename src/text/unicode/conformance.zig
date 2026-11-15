@@ -160,3 +160,18 @@ test "GraphemeBreakTest.txt" {
 test "WordBreakTest.txt" {
     try expectBoundaries(lcgr.unicode_word.Words, word_test);
 }
+
+/// LineBreaks yields opportunities; the test files mark every opportunity, mandatory or not.
+const LineOffsets = struct {
+    text: []const u8,
+    it: ?lcgr.unicode_line.LineBreaks = null,
+
+    fn next(s: *LineOffsets) ?usize {
+        if (s.it == null) s.it = .{ .text = s.text };
+        return if (s.it.?.next()) |o| o.pos else null;
+    }
+};
+
+test "LineBreakTest.txt" {
+    try expectBoundaries(LineOffsets, line_test);
+}
