@@ -1,0 +1,16 @@
+{"nodes": 3961, "texts": 1320, "frames": 3000, "lanes": 8, "passes": {
+  "begin+hit": {"median_us": 4.4, "p99_us": 6.1},
+  "build": {"median_us": 206.0, "p99_us": 241.3},
+  "layout": {"median_us": 406.7, "p99_us": 512.8},
+  "paint": {"median_us": 66.3, "p99_us": 85.1},
+  "frame": {"median_us": 692.3, "p99_us": 782.1},
+  "measure": {"median_us": 0.7, "p99_us": 1.5},
+  "prepare": {"median_us": 7.1, "p99_us": 13.9},
+  "fit.x": {"median_us": 44.7, "p99_us": 68.8},
+  "resolve.x": {"median_us": 90.3, "p99_us": 117.3},
+  "wrap": {"median_us": 4.0, "p99_us": 6.8},
+  "fit.y": {"median_us": 44.5, "p99_us": 68.5},
+  "resolve.y": {"median_us": 89.5, "p99_us": 113.2},
+  "place": {"median_us": 58.0, "p99_us": 88.1},
+  "finalize": {"median_us": 49.1, "p99_us": 65.1}
+}}

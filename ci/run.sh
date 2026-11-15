@@ -39,11 +39,19 @@ job() {
         prototype/zig-out/bin/dump 3>"$out/quad.wgsl" 4>"$out/quads.bin" 5>"$out/glyphs.bin" 6>"$out/cmds.txt"
         python3 tools/golden/gpu.py "$out" "$out/frame.png"
         python3 tools/golden/golden.py "$out/frame.png" prototype/wgpu-check.png ;;
+    # Prints numbers (tools/bench); timings are only comparable on one machine.
+    # Fails when a pass median is >50% slower than tools/bench/baseline.json.
+    bench)
+        mkdir -p zig-out
+        zig build bench -- --json "$PWD/zig-out/bench.json"
+        python3 tools/bench/compare.py --self-test
+        python3 tools/bench/compare.py tools/bench/baseline.json zig-out/bench.json
+        zig build size ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
 
-jobs=(debug release-safe release-fast lanes-4 lanes-8 cross census)
+jobs=(debug release-safe release-fast lanes-4 lanes-8 cross census bench)
 if [ "${1-}" = all ]; then
     for j in "${jobs[@]}"; do echo "== $j"; job "$j"; done
     echo "all ${#jobs[@]} jobs green"
