@@ -177,8 +177,19 @@ test "LineBreakTest.txt" {
 }
 
 const bidi = lcgr.unicode_bidi;
-const bidi_test = @embedFile("data/BidiTest.txt");
-const bidi_character_test = @embedFile("data/BidiCharacterTest.txt");
+// The two bidi files are 14.2 MB as text and 1.7 MB gzipped, so they are stored compressed.
+const bidi_test_gz = @embedFile("data/BidiTest.txt.gz");
+const bidi_character_test_gz = @embedFile("data/BidiCharacterTest.txt.gz");
+
+/// The decompressed contents of a .gz file; the caller frees it.
+fn gunzip(gz: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer out.deinit();
+    var in: std.Io.Reader = .fixed(gz);
+    var d: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+    _ = try d.reader.streamRemaining(&out.writer);
+    return out.toOwnedSlice();
+}
 
 const BidiBuffers = struct {
     orig: [256]property.BidiClass = undefined,
@@ -208,6 +219,8 @@ fn expectLevels(want: []const u8, got: []const u8, line: usize) !void {
 }
 
 test "BidiTest.txt: levels and order" {
+    const bidi_test = try gunzip(bidi_test_gz);
+    defer std.testing.allocator.free(bidi_test);
     var b: BidiBuffers = .{};
     var want: [256]u8 = undefined;
     var n_want: usize = 0;
@@ -250,6 +263,8 @@ test "BidiTest.txt: levels and order" {
 }
 
 test "BidiCharacterTest.txt: levels and order" {
+    const bidi_character_test = try gunzip(bidi_character_test_gz);
+    defer std.testing.allocator.free(bidi_character_test);
     var b: BidiBuffers = .{};
     var cps: [256]u21 = undefined;
     var want: [256]u8 = undefined;
@@ -354,4 +369,21 @@ test "script runs: one script each, Common only where nothing else" {
     // Latin, Greek, Cyrillic, Greek (")" closes the Greek bracket), Hiragana, Han, Hiragana
     // ("」" closes the Hiragana bracket), Arabic, Hebrew.
     try std.testing.expectEqual(9, runs);
+}
+
+test "lookup speed" {
+    // Prints ns per line+grapheme lookup pair over every 7th code point; read it in ReleaseFast
+    // (`zig build conformance -Doptimize=ReleaseFast`). Timing only, nothing asserted.
+    var ts0: std.os.linux.timespec = undefined;
+    var ts1: std.os.linux.timespec = undefined;
+    var acc: u32 = 0;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts0);
+    for (0..20) |r| {
+        var cp: u32 = @intCast(r);
+        while (cp < 0x110000) : (cp += 7) acc +%= @as(u16, @bitCast(property.line(@intCast(cp)))) +% @as(u8, @bitCast(property.grapheme(@intCast(cp))));
+    }
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts1);
+    const ns: u64 = @intCast((ts1.sec - ts0.sec) * 1_000_000_000 + (ts1.nsec - ts0.nsec));
+    const pairs: u64 = 20 * (0x110000 / 7);
+    std.debug.print("unicode lookups: {d}.{d:0>2} ns per line+grapheme pair (checksum {d})\n", .{ ns / pairs, (ns * 100 / pairs) % 100, acc });
 }

@@ -35,15 +35,33 @@ export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
 export fn p_paint(t: *const Tree, tx: *const Texts, cu: *const Customs, d: *DrawList) void {
     lcgr.paint.emit(t, tx, cu, "", d);
 }
-export fn p_damage_frame(dm: *lcgr.damage.Damage, t: *const Tree, tx: *const Texts, cu: *const Customs) u32 {
-    return dm.frame(t, tx, cu, "");
-}
-export fn p_damage_cull(d: *DrawList, g: *const lcgr.damage.Region) void {
-    lcgr.damage.cull(d, g);
-}
 export fn p_hit(t: *const Tree, x: f32, y: f32) u32 {
     return lcgr.hit.at(t, x, y, .any);
 }
 export fn p_hit_near(t: *const Tree, x: f32, y: f32) u32 {
     return lcgr.hit.near(t, x, y, .any, 8);
+}
+export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
+    lcgr.overlay.anchor(t, an, .{ .x1 = 800, .y1 = 600 });
+}
+export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
+    lcgr.overlay.order(t, ly);
+}
+export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.fitFlex(t, fx, .y);
+}
+export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
+    lcgr.layout.resolveFlex(t, fx, .y, 800);
+}
+export fn p_coefs(t: *const Tree, k: *lcgr.coefs.Coefs) void {
+    lcgr.coefs.coefs(t, k, .x);
+}
+export fn p_resolve_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
+    lcgr.coefs.resolveK(t, k, .x, 800);
+}
+export fn p_place_rows(t: *const Tree, k: *lcgr.coefs.Coefs) void {
+    lcgr.coefs.placeRows(t, k);
+}
+export fn p_place_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
+    lcgr.coefs.placeK(t, k);
 }

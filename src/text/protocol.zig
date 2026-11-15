@@ -26,6 +26,9 @@ const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
 const Texts = @import("../core/texts.zig").Texts;
 const Strings = @import("../core/strings.zig").Strings;
+const draw_list = @import("../draw/draw_list.zig");
+const DrawList = draw_list.DrawList;
+const Quad = draw_list.Quad;
 
 const W = simd.lanes;
 
@@ -70,6 +73,48 @@ pub const Mono = struct {
             simd.storeF(c.w, i, @select(f32, wraps, @min(w, avail), w));
             simd.storeF(c.h, i, @select(f32, wraps, lines, one) * px * simd.f(font.line));
         }
+    }
+
+    /// Where glyph quads for run k landed in the output of `quads`.
+    pub const Glyphs = struct { first: []u32, count: []u32 };
+
+    /// Expands the draw list's text runs into glyph quads for a 16x16 byte-indexed atlas: byte b
+    /// samples cell (b & 15, b >> 4). Bytes flow left to right and wrap at the run's width, the
+    /// same way `wrap` counted lines. `glyphs` (at least `d.run_len` long) gets each run's slice
+    /// of `out`. Returns the number of quads written; stops quietly when `out` is full (the last
+    /// row is then overwritten in place, never past the end).
+    pub fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32 {
+        std.debug.assert(out.len >= 1);
+        var n: u32 = 0;
+        const last: u32 = @intCast(out.len - 1);
+        for (d.runs[0..d.run_len], 0..) |r, k| {
+            const adv = @max(r.px * font.advance, 1e-6);
+            const line = r.px * font.line;
+            const per_line: u32 = @intFromFloat(@min(@max(@floor((r.rect[2] - r.rect[0]) / adv + 0.5), 1), 1e6));
+            glyphs.first[k] = n;
+            for (d.strings[r.start..][0..r.bytes], 0..) |byte, j| {
+                const col: f32 = @floatFromInt(j % per_line);
+                const row: f32 = @floatFromInt(j / per_line);
+                const u: f32 = @floatFromInt(byte & 15);
+                const v: f32 = @floatFromInt(byte >> 4);
+                const x = r.rect[0] + col * adv;
+                const y = r.rect[1] + row * line;
+                out[n] = .{
+                    .rect = .{ x, y, x + adv, y + line },
+                    .clip = r.clip,
+                    .params = .{ 0, 0, 0, 0 },
+                    .uv = .{ u / 16.0, v / 16.0, (u + 1) / 16.0, (v + 1) / 16.0 },
+                    .fill = r.color,
+                    .border_color = 0,
+                    .radius = 0,
+                    .border = 0,
+                };
+                // Write always, advance until the last row.
+                n = @min(n + 1, last);
+            }
+            glyphs.count[k] = n - glyphs.first[k];
+        }
+        return n;
     }
 };
 
@@ -272,6 +317,67 @@ test "Cache: key separates bytes, font and size, and is never the empty marker" 
     try testing.expect(a != Cache.key("abc", 0, 15));
     try testing.expectEqual(a, Cache.key("abc", 0, 14));
     try testing.expect(Cache.key("", 0, 0) != 0);
+}
+
+fn testList(runs: []draw_list.TextRun, strings: []const u8) DrawList {
+    return .{
+        .quads = &.{},
+        .runs = runs,
+        .run_len = @intCast(runs.len),
+        .customs = &.{},
+        .strings = strings,
+        .cmd = .{ .kind = &.{}, .first = &.{}, .count = &.{}, .key = &.{} },
+        .op = .{ .kind = &.{}, .key = &.{}, .ref = &.{} },
+    };
+}
+
+test "Mono.quads: one quad per byte, wrapped at the run width, uv from the byte's atlas cell" {
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    // Advance 5 px; run 0 is 10 px wide (2 glyphs per line), run 1 is wide enough for one line.
+    var runs = [_]draw_list.TextRun{
+        .{ .rect = .{ 100, 50, 110, 80 }, .clip = .{ 0, 0, 800, 600 }, .start = 0, .bytes = 3, .px = 10, .color = 0xff00ff00, .font = 0 },
+        .{ .rect = .{ 0, 0, 100, 12 }, .clip = .{ 1, 2, 3, 4 }, .start = 3, .bytes = 2, .px = 10, .color = 0xffffffff, .font = 0 },
+    };
+    var d = testList(&runs, "AB\x00\xff!");
+    var out: [8]Quad = undefined;
+    var first: [2]u32 = undefined;
+    var count: [2]u32 = undefined;
+    const n = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    try testing.expectEqual(5, n);
+    try testing.expectEqualSlices(u32, &.{ 0, 3 }, &first);
+    try testing.expectEqualSlices(u32, &.{ 3, 2 }, &count);
+    // "AB" on line 0, NUL wraps to line 1.
+    try testing.expectEqual([4]f32{ 100, 50, 105, 62 }, out[0].rect);
+    try testing.expectEqual([4]f32{ 105, 50, 110, 62 }, out[1].rect);
+    try testing.expectEqual([4]f32{ 100, 62, 105, 74 }, out[2].rect);
+    // 'A' = 0x41: column 1, row 4.
+    try testing.expectEqual([4]f32{ 1.0 / 16.0, 4.0 / 16.0, 2.0 / 16.0, 5.0 / 16.0 }, out[0].uv);
+    try testing.expectEqual([4]f32{ 0, 0, 1.0 / 16.0, 1.0 / 16.0 }, out[2].uv);
+    try testing.expectEqual([4]f32{ 15.0 / 16.0, 15.0 / 16.0, 1, 1 }, out[3].uv);
+    try testing.expectEqual([4]f32{ 5, 0, 10, 12 }, out[4].rect);
+    for (out[0..3]) |q| {
+        try testing.expectEqual(0xff00ff00, q.fill);
+        try testing.expectEqual([4]f32{ 0, 0, 800, 600 }, q.clip);
+        try testing.expectEqual(0, q.border_color);
+    }
+    try testing.expectEqual([4]f32{ 1, 2, 3, 4 }, out[4].clip);
+}
+
+test "Mono.quads: a full output stops at its last row, a zero-width run gets one glyph per line" {
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    var runs = [_]draw_list.TextRun{
+        .{ .rect = .{ 0, 0, 0, 0 }, .clip = .{ 0, 0, 1, 1 }, .start = 0, .bytes = 5, .px = 10, .color = 1, .font = 0 },
+    };
+    var d = testList(&runs, "hello");
+    var out: [3]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    const n = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    try testing.expectEqual(2, n);
+    try testing.expectEqual(2, count[0]);
+    // Rows 0 and 1 hold 'h' and 'e'; the last row was overwritten until 'o', on line 4.
+    try testing.expectEqual([4]f32{ 0, 12, 5, 24 }, out[1].rect);
+    try testing.expectEqual([4]f32{ 0, 48, 5, 60 }, out[2].rect);
 }
 
 const cache_bytes = blk: {
