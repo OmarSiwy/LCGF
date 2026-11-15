@@ -3,8 +3,9 @@
 //! it fills the same `Run` columns, in font units with byte clusters, so caret mapping,
 //! the shaping cache, measuring and rasterising work unchanged on its output.
 //!
-//! Outside the tiers: it links the C library libharfbuzz, so it is its own module over
-//! `lcgr` (`zig build harfbuzz`; `nix develop .#harfbuzz` provides the library), never
+//! Outside the tiers: it links the C library HarfBuzz, so it is its own module over
+//! `lcgr` (`zig build harfbuzz`; HarfBuzz 13.2.1 is a lazy build.zig.zon dependency built
+//! from source), never
 //! imported by the core and not exported from src/lcgr.zig. The C API is declared by hand
 //! below (docs/DEPENDENCIES.md: small APIs need no header translation). HarfBuzz allocates
 //! internally; the adapter keeps one face, font and buffer and reuses them.
