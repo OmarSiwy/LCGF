@@ -2,8 +2,8 @@
  "meta": {
   "commits": 848,
   "lanes": 142,
-  "waves": 83,
-  "critical_path_commits": 83,
+  "waves": 82,
+  "critical_path_commits": 82,
   "how_to_read": "A commit can start when every id in deps is merged. Commits in one lane are sequential. wave = 1 + the longest chain of prerequisites; commits in the same wave do not depend on each other."
  },
  "phases": {
@@ -1132,9 +1132,9 @@
    "home": "src/interact/hit.zig",
    "commits": [
     "C0201",
-    "C0202",
     "C0203",
-    "C0204"
+    "C0204",
+    "C0202"
    ]
   },
   "interaction": {
@@ -4688,7 +4688,7 @@
     "G1"
    ],
    "done_when": "overlay tests pass",
-   "unblocks": 1
+   "unblocks": 2
   },
   {
    "id": "C0098",
@@ -6526,7 +6526,7 @@
    "title": "comptime: generate the Widget enum from ids",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 40,
+   "wave": 39,
    "critical": false,
    "deps": [
     "C0136",
@@ -6550,7 +6550,7 @@
    "title": "comptime: hit test over the static rect table",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 41,
+   "wave": 40,
    "critical": false,
    "deps": [
     "C0175"
@@ -6573,7 +6573,7 @@
    "title": "comptime: return events as a tagged union over widgets",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 42,
+   "wave": 41,
    "critical": false,
    "deps": [
     "C0176"
@@ -6600,7 +6600,7 @@
    "title": "comptime: compute the keyboard focus order at compile time",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 43,
+   "wave": 42,
    "critical": false,
    "deps": [
     "C0177"
@@ -6627,7 +6627,7 @@
    "title": "comptime: build the shortcut table as a perfect hash",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 44,
+   "wave": 43,
    "critical": false,
    "deps": [
     "C0178"
@@ -6654,7 +6654,7 @@
    "title": "comptime: add event tests with replayed input",
    "lane": "ct-events",
    "phase": "P03",
-   "wave": 45,
+   "wave": 44,
    "critical": false,
    "deps": [
     "C0179"
@@ -6981,7 +6981,7 @@
    "title": "comptime: host a runtime Frame inside a comptime UI region",
    "lane": "ct-interop",
    "phase": "P03",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0167",
@@ -7005,7 +7005,7 @@
    "title": "comptime: host a comptime UI inside a runtime Frame",
    "lane": "ct-interop",
    "phase": "P03",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0193"
@@ -7032,7 +7032,7 @@
    "title": "comptime: share one draw list between both front ends",
    "lane": "ct-interop",
    "phase": "P03",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0194"
@@ -7055,7 +7055,7 @@
    "title": "comptime: add mixed-front-end example and tests",
    "lane": "ct-interop",
    "phase": "P03",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0195"
@@ -7193,8 +7193,8 @@
    "unblocks": 1
   },
   {
-   "id": "C0202",
-   "title": "hit: respect paint layers",
+   "id": "C0203",
+   "title": "hit: add touch slop",
    "lane": "hit",
    "phase": "P04",
    "wave": 37,
@@ -7216,34 +7216,11 @@
    "unblocks": 1
   },
   {
-   "id": "C0203",
-   "title": "hit: add touch slop",
-   "lane": "hit",
-   "phase": "P04",
-   "wave": 38,
-   "critical": true,
-   "deps": [
-    "C0202"
-   ],
-   "look_at": [
-    {
-     "ref": "ui.zig",
-     "detail": "hit.at"
-    }
-   ],
-   "spec": [],
-   "targets": [
-    "D2"
-   ],
-   "done_when": "tests pass; census clean",
-   "unblocks": 1
-  },
-  {
    "id": "C0204",
    "title": "hit: add hit tests and census entry",
    "lane": "hit",
    "phase": "P04",
-   "wave": 39,
+   "wave": 38,
    "critical": true,
    "deps": [
     "C0203"
@@ -7262,11 +7239,35 @@
    "unblocks": 3
   },
   {
+   "id": "C0202",
+   "title": "hit: respect paint layers",
+   "lane": "hit",
+   "phase": "P04",
+   "wave": 42,
+   "critical": false,
+   "deps": [
+    "C0097",
+    "C0204"
+   ],
+   "look_at": [
+    {
+     "ref": "ui.zig",
+     "detail": "hit.at"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "D2"
+   ],
+   "done_when": "tests pass; census clean",
+   "unblocks": 1
+  },
+  {
    "id": "C0205",
    "title": "interaction: add step() for hover, press, release, click",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 40,
+   "wave": 39,
    "critical": true,
    "deps": [
     "C0050",
@@ -7290,7 +7291,7 @@
    "title": "interaction: add response() as a bit set",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 41,
+   "wave": 40,
    "critical": true,
    "deps": [
     "C0205"
@@ -7313,7 +7314,7 @@
    "title": "interaction: add double click and long press",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 42,
+   "wave": 41,
    "critical": true,
    "deps": [
     "C0206"
@@ -7336,7 +7337,7 @@
    "title": "interaction: add pointer capture while held",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 43,
+   "wave": 42,
    "critical": true,
    "deps": [
     "C0207"
@@ -7359,7 +7360,7 @@
    "title": "interaction: add drag threshold and drag deltas",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 44,
+   "wave": 43,
    "critical": true,
    "deps": [
     "C0208"
@@ -7382,7 +7383,7 @@
    "title": "interaction: add multi-touch pointer ids",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 45,
+   "wave": 44,
    "critical": true,
    "deps": [
     "C0209"
@@ -7405,7 +7406,7 @@
    "title": "interaction: add hover intent delay",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 46,
+   "wave": 45,
    "critical": true,
    "deps": [
     "C0210"
@@ -7428,7 +7429,7 @@
    "title": "interaction: port click and drag tests",
    "lane": "interaction",
    "phase": "P04",
-   "wave": 47,
+   "wave": 46,
    "critical": true,
    "deps": [
     "C0211"
@@ -7451,7 +7452,7 @@
    "title": "focus: add focus ring state and visible indicator",
    "lane": "focus",
    "phase": "P04",
-   "wave": 48,
+   "wave": 47,
    "critical": false,
    "deps": [
     "C0212"
@@ -7474,7 +7475,7 @@
    "title": "focus: add tab order from tree order",
    "lane": "focus",
    "phase": "P04",
-   "wave": 49,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0213"
@@ -7497,7 +7498,7 @@
    "title": "focus: add arrow-key navigation within groups",
    "lane": "focus",
    "phase": "P04",
-   "wave": 50,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0214"
@@ -7525,7 +7526,7 @@
    "title": "focus: add focus trap for modal layers",
    "lane": "focus",
    "phase": "P04",
-   "wave": 51,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0215"
@@ -7553,7 +7554,7 @@
    "title": "focus: restore focus when a layer closes",
    "lane": "focus",
    "phase": "P04",
-   "wave": 52,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0216"
@@ -7576,7 +7577,7 @@
    "title": "focus: add focus tests",
    "lane": "focus",
    "phase": "P04",
-   "wave": 53,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0217"
@@ -7599,7 +7600,7 @@
    "title": "keyboard: route key events to the focused widget",
    "lane": "keyboard",
    "phase": "P04",
-   "wave": 48,
+   "wave": 47,
    "critical": false,
    "deps": [
     "C0212"
@@ -7622,7 +7623,7 @@
    "title": "keyboard: add shortcut table with modifiers",
    "lane": "keyboard",
    "phase": "P04",
-   "wave": 49,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0219"
@@ -7645,7 +7646,7 @@
    "title": "keyboard: add clipboard commands as platform output",
    "lane": "keyboard",
    "phase": "P04",
-   "wave": 50,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0220"
@@ -7668,7 +7669,7 @@
    "title": "keyboard: add text-input events with composition ranges",
    "lane": "keyboard",
    "phase": "P04",
-   "wave": 51,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0221"
@@ -7691,7 +7692,7 @@
    "title": "keyboard: add keyboard tests with replayed input",
    "lane": "keyboard",
    "phase": "P04",
-   "wave": 52,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0222"
@@ -7714,7 +7715,7 @@
    "title": "gestures: route wheel to the innermost scrollable under the pointer",
    "lane": "gestures",
    "phase": "P04",
-   "wave": 48,
+   "wave": 47,
    "critical": false,
    "deps": [
     "C0212"
@@ -7737,7 +7738,7 @@
    "title": "gestures: add kinetic scrolling with a spring",
    "lane": "gestures",
    "phase": "P04",
-   "wave": 49,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0224"
@@ -7760,7 +7761,7 @@
    "title": "gestures: add pinch zoom events",
    "lane": "gestures",
    "phase": "P04",
-   "wave": 50,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0225"
@@ -7783,7 +7784,7 @@
    "title": "gestures: add in-app drag and drop",
    "lane": "gestures",
    "phase": "P04",
-   "wave": 51,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0226"
@@ -7806,7 +7807,7 @@
    "title": "gestures: add external file drop as an input event",
    "lane": "gestures",
    "phase": "P04",
-   "wave": 52,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0227"
@@ -7829,7 +7830,7 @@
    "title": "context: add Limits and requiredBytes at comptime",
    "lane": "context",
    "phase": "P05",
-   "wave": 48,
+   "wave": 47,
    "critical": true,
    "deps": [
     "C0073",
@@ -7854,7 +7855,7 @@
    "title": "context: add init over a caller buffer",
    "lane": "context",
    "phase": "P05",
-   "wave": 49,
+   "wave": 48,
    "critical": true,
    "deps": [
     "C0229"
@@ -7877,7 +7878,7 @@
    "title": "context: add begin (swap generations, step interaction and springs)",
    "lane": "context",
    "phase": "P05",
-   "wave": 50,
+   "wave": 49,
    "critical": true,
    "deps": [
     "C0230"
@@ -7900,7 +7901,7 @@
    "title": "frame: add open, close and leaf",
    "lane": "context",
    "phase": "P05",
-   "wave": 51,
+   "wave": 50,
    "critical": true,
    "deps": [
     "C0231"
@@ -7923,7 +7924,7 @@
    "title": "frame: add text and custom leaves",
    "lane": "context",
    "phase": "P05",
-   "wave": 52,
+   "wave": 51,
    "critical": true,
    "deps": [
     "C0232"
@@ -7946,7 +7947,7 @@
    "title": "frame: add interact, drag, lastRect, heldRect",
    "lane": "context",
    "phase": "P05",
-   "wave": 53,
+   "wave": 52,
    "critical": true,
    "deps": [
     "C0233"
@@ -7969,7 +7970,7 @@
    "title": "frame: add end as the visible pass sequence, and finish",
    "lane": "context",
    "phase": "P05",
-   "wave": 54,
+   "wave": 53,
    "critical": true,
    "deps": [
     "C0234"
@@ -7992,7 +7993,7 @@
    "title": "context: report Status and Platform output as data",
    "lane": "context",
    "phase": "P05",
-   "wave": 55,
+   "wave": 54,
    "critical": true,
    "deps": [
     "C0235"
@@ -8019,7 +8020,7 @@
    "title": "context: port the host-loop test",
    "lane": "context",
    "phase": "P05",
-   "wave": 56,
+   "wave": 55,
    "critical": true,
    "deps": [
     "C0236"
@@ -8042,7 +8043,7 @@
    "title": "signals: add version counters and bump",
    "lane": "signals",
    "phase": "P05",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0237"
@@ -8065,7 +8066,7 @@
    "title": "signals: add Cell(T)",
    "lane": "signals",
    "phase": "P05",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0238"
@@ -8088,7 +8089,7 @@
    "title": "signals: add derived cells with cached stamps",
    "lane": "signals",
    "phase": "P05",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0239"
@@ -8111,7 +8112,7 @@
    "title": "signals: add transactions that coalesce changes",
    "lane": "signals",
    "phase": "P05",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0240"
@@ -8134,7 +8135,7 @@
    "title": "signals: add effects run once per frame",
    "lane": "signals",
    "phase": "P05",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0241"
@@ -8157,7 +8158,7 @@
    "title": "signals: add signal tests",
    "lane": "signals",
    "phase": "P05",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0242"
@@ -8180,7 +8181,7 @@
    "title": "reuse: add Memos table",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0243"
@@ -8203,7 +8204,7 @@
    "title": "reuse: add reuse() decision without branches until the final copy",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0244"
@@ -8226,7 +8227,7 @@
    "title": "reuse: add copySubtree with SIMD link rebasing",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0245"
@@ -8249,7 +8250,7 @@
    "title": "reuse: rebuild once after pointer interaction ends",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0246"
@@ -8272,7 +8273,7 @@
    "title": "reuse: allow reuse while unrelated springs move",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0247"
@@ -8295,7 +8296,7 @@
    "title": "reuse: skip layout for reused subtrees behind a relayout boundary",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0117",
@@ -8319,7 +8320,7 @@
    "title": "reuse: port the signals test",
    "lane": "reuse",
    "phase": "P05",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0249"
@@ -8342,7 +8343,7 @@
    "title": "scheduler: add needsFrame from input stamp, motion and signals",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 57,
+   "wave": 56,
    "critical": true,
    "deps": [
     "C0237"
@@ -8365,7 +8366,7 @@
    "title": "scheduler: add one settle frame after input",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 58,
+   "wave": 57,
    "critical": true,
    "deps": [
     "C0251"
@@ -8388,7 +8389,7 @@
    "title": "scheduler: add timers with the earliest deadline as wake",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 59,
+   "wave": 58,
    "critical": true,
    "deps": [
     "C0252"
@@ -8411,7 +8412,7 @@
    "title": "scheduler: add thread-safe wake and a queue for background results",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 60,
+   "wave": 59,
    "critical": true,
    "deps": [
     "C0253"
@@ -8434,7 +8435,7 @@
    "title": "scheduler: add frame pacing hints for the host",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 61,
+   "wave": 60,
    "critical": true,
    "deps": [
     "C0254"
@@ -8457,7 +8458,7 @@
    "title": "scheduler: add idle test",
    "lane": "scheduler",
    "phase": "P05",
-   "wave": 62,
+   "wave": 61,
    "critical": true,
    "deps": [
     "C0255"
@@ -10581,7 +10582,7 @@
    "title": "edit: add text buffer with a gap",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 53,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0223",
@@ -10609,7 +10610,7 @@
    "title": "edit: move the caret by grapheme, word and line",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 54,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0339"
@@ -10641,7 +10642,7 @@
    "title": "edit: add selection with keyboard and pointer",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 55,
+   "wave": 54,
    "critical": false,
    "deps": [
     "C0340"
@@ -10668,7 +10669,7 @@
    "title": "edit: add cut, copy and paste",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 56,
+   "wave": 55,
    "critical": false,
    "deps": [
     "C0341"
@@ -10691,7 +10692,7 @@
    "title": "edit: add undo and redo",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0342"
@@ -10718,7 +10719,7 @@
    "title": "edit: add IME composition with a preedit range",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0343"
@@ -10741,7 +10742,7 @@
    "title": "edit: add password and single-line modes",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0344"
@@ -10768,7 +10769,7 @@
    "title": "edit: add bidi-aware caret movement",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0345"
@@ -10800,7 +10801,7 @@
    "title": "edit: add editing tests",
    "lane": "text-edit",
    "phase": "P07",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0346"
@@ -12924,7 +12925,7 @@
    "title": "shell: define the host contract (poll events into Input, apply Platform)",
    "lane": "shell-iface",
    "phase": "P09",
-   "wave": 63,
+   "wave": 62,
    "critical": true,
    "deps": [
     "C0237",
@@ -12948,7 +12949,7 @@
    "title": "shell: add headless shell for tests",
    "lane": "shell-iface",
    "phase": "P09",
-   "wave": 64,
+   "wave": 63,
    "critical": true,
    "deps": [
     "C0426"
@@ -12971,7 +12972,7 @@
    "title": "shell: add run() as a short loop over the contract",
    "lane": "shell-iface",
    "phase": "P09",
-   "wave": 65,
+   "wave": 64,
    "critical": true,
    "deps": [
     "C0427"
@@ -12994,7 +12995,7 @@
    "title": "shell: document how to embed in an existing loop",
    "lane": "shell-iface",
    "phase": "P09",
-   "wave": 66,
+   "wave": 65,
    "critical": true,
    "deps": [
     "C0428"
@@ -13017,7 +13018,7 @@
    "title": "shell: add wake from other threads",
    "lane": "shell-iface",
    "phase": "P09",
-   "wave": 67,
+   "wave": 66,
    "critical": true,
    "deps": [
     "C0429"
@@ -13044,7 +13045,7 @@
    "title": "win32: create a window and pump messages without owning the loop",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -13072,7 +13073,7 @@
    "title": "win32: translate mouse, wheel and keyboard messages into Input",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0431"
@@ -13100,7 +13101,7 @@
    "title": "win32: handle per-monitor DPI and scale changes",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0432"
@@ -13128,7 +13129,7 @@
    "title": "win32: set cursors from Platform output",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0433"
@@ -13156,7 +13157,7 @@
    "title": "win32: add clipboard read and write",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0434"
@@ -13184,7 +13185,7 @@
    "title": "win32: add IME through the text-input framework",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0435"
@@ -13212,7 +13213,7 @@
    "title": "win32: add timers and cross-thread wake",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0436"
@@ -13240,7 +13241,7 @@
    "title": "win32: add multiple windows",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0437"
@@ -13268,7 +13269,7 @@
    "title": "win32: add file drop",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 76,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0438"
@@ -13296,7 +13297,7 @@
    "title": "win32: follow system dark mode and accent colour",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 77,
+   "wave": 76,
    "critical": false,
    "deps": [
     "C0439"
@@ -13324,7 +13325,7 @@
    "title": "win32: add platform test job and example",
    "lane": "shell-win32",
    "phase": "P09",
-   "wave": 78,
+   "wave": 77,
    "critical": false,
    "deps": [
     "C0440"
@@ -13347,7 +13348,7 @@
    "title": "macos: create a window and view through the Objective-C runtime",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -13375,7 +13376,7 @@
    "title": "macos: translate events into Input",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0442"
@@ -13403,7 +13404,7 @@
    "title": "macos: handle backing scale changes",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0443"
@@ -13431,7 +13432,7 @@
    "title": "macos: set cursors from Platform output",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0444"
@@ -13459,7 +13460,7 @@
    "title": "macos: add pasteboard read and write",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0445"
@@ -13487,7 +13488,7 @@
    "title": "macos: add IME through the text input client protocol",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0446"
@@ -13515,7 +13516,7 @@
    "title": "macos: add timers and cross-thread wake",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0447"
@@ -13543,7 +13544,7 @@
    "title": "macos: add multiple windows and the menu bar",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0448"
@@ -13571,7 +13572,7 @@
    "title": "macos: add file drop",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 76,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0449"
@@ -13599,7 +13600,7 @@
    "title": "macos: follow system appearance",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 77,
+   "wave": 76,
    "critical": false,
    "deps": [
     "C0450"
@@ -13627,7 +13628,7 @@
    "title": "macos: add platform test job and example",
    "lane": "shell-macos",
    "phase": "P09",
-   "wave": 78,
+   "wave": 77,
    "critical": false,
    "deps": [
     "C0451"
@@ -13650,7 +13651,7 @@
    "title": "wayland: connect and create an xdg toplevel",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -13682,7 +13683,7 @@
    "title": "wayland: translate pointer, keyboard (xkb) and touch events into Input",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0453"
@@ -13714,7 +13715,7 @@
    "title": "wayland: handle fractional scale",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0454"
@@ -13746,7 +13747,7 @@
    "title": "wayland: set cursors from Platform output",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0455"
@@ -13778,7 +13779,7 @@
    "title": "wayland: add clipboard through data devices",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0456"
@@ -13810,7 +13811,7 @@
    "title": "wayland: add IME through text-input",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0457"
@@ -13842,7 +13843,7 @@
    "title": "wayland: add timers and cross-thread wake",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0458"
@@ -13874,7 +13875,7 @@
    "title": "wayland: add multiple windows and popups",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0459"
@@ -13906,7 +13907,7 @@
    "title": "wayland: add file drop",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 76,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0460"
@@ -13938,7 +13939,7 @@
    "title": "wayland: add client-side decorations or the decoration protocol",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 77,
+   "wave": 76,
    "critical": false,
    "deps": [
     "C0461"
@@ -13970,7 +13971,7 @@
    "title": "wayland: add platform test job and example",
    "lane": "shell-wayland",
    "phase": "P09",
-   "wave": 78,
+   "wave": 77,
    "critical": false,
    "deps": [
     "C0462"
@@ -13993,7 +13994,7 @@
    "title": "x11: connect and create a window",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -14021,7 +14022,7 @@
    "title": "x11: translate events into Input with xkb",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0464"
@@ -14049,7 +14050,7 @@
    "title": "x11: handle DPI from resources and RandR",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0465"
@@ -14077,7 +14078,7 @@
    "title": "x11: set cursors from Platform output",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0466"
@@ -14105,7 +14106,7 @@
    "title": "x11: add clipboard through selections",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0467"
@@ -14133,7 +14134,7 @@
    "title": "x11: add IME through XIM or IBus",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0468"
@@ -14161,7 +14162,7 @@
    "title": "x11: add timers and cross-thread wake",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0469"
@@ -14189,7 +14190,7 @@
    "title": "x11: add multiple windows",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0470"
@@ -14217,7 +14218,7 @@
    "title": "x11: add file drop through XDND",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 76,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0471"
@@ -14245,7 +14246,7 @@
    "title": "x11: add platform test job and example",
    "lane": "shell-x11",
    "phase": "P09",
-   "wave": 77,
+   "wave": 76,
    "critical": false,
    "deps": [
     "C0472"
@@ -14268,7 +14269,7 @@
    "title": "web: attach to a canvas and animation frames",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -14296,7 +14297,7 @@
    "title": "web: translate DOM events into Input",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0474"
@@ -14324,7 +14325,7 @@
    "title": "web: handle device pixel ratio",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0475"
@@ -14352,7 +14353,7 @@
    "title": "web: set cursors through CSS",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0476"
@@ -14380,7 +14381,7 @@
    "title": "web: add clipboard through the async API",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0477"
@@ -14408,7 +14409,7 @@
    "title": "web: add IME through a hidden input element",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0478"
@@ -14436,7 +14437,7 @@
    "title": "web: add timers and wake",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0479"
@@ -14464,7 +14465,7 @@
    "title": "web: add platform test job and example",
    "lane": "shell-web",
    "phase": "P09",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0480"
@@ -14487,7 +14488,7 @@
    "title": "android: create a native activity surface",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -14519,7 +14520,7 @@
    "title": "android: translate touch and key events into Input",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0482"
@@ -14551,7 +14552,7 @@
    "title": "android: handle density and insets",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0483"
@@ -14583,7 +14584,7 @@
    "title": "android: add clipboard through JNI",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0484"
@@ -14615,7 +14616,7 @@
    "title": "android: add the soft keyboard and IME",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0485"
@@ -14647,7 +14648,7 @@
    "title": "android: handle pause, resume and surface loss",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0486"
@@ -14679,7 +14680,7 @@
    "title": "android: add platform test job and example",
    "lane": "shell-android",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0487"
@@ -14702,7 +14703,7 @@
    "title": "ios: create a view with a Metal layer",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430"
@@ -14734,7 +14735,7 @@
    "title": "ios: translate touches into Input",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0489"
@@ -14766,7 +14767,7 @@
    "title": "ios: handle scale and safe areas",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0490"
@@ -14798,7 +14799,7 @@
    "title": "ios: add pasteboard",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0491"
@@ -14830,7 +14831,7 @@
    "title": "ios: add the soft keyboard and IME",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0492"
@@ -14862,7 +14863,7 @@
    "title": "ios: handle backgrounding",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0493"
@@ -14894,7 +14895,7 @@
    "title": "ios: add platform test job and example",
    "lane": "shell-ios",
    "phase": "P09",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0494"
@@ -14917,7 +14918,7 @@
    "title": "baremetal: define the flush interface for a framebuffer or a line buffer",
    "lane": "shell-baremetal",
    "phase": "P09",
-   "wave": 68,
+   "wave": 67,
    "critical": true,
    "deps": [
     "C0430"
@@ -14944,7 +14945,7 @@
    "title": "baremetal: define the touch and encoder input interface",
    "lane": "shell-baremetal",
    "phase": "P09",
-   "wave": 69,
+   "wave": 68,
    "critical": true,
    "deps": [
     "C0496"
@@ -14971,7 +14972,7 @@
    "title": "baremetal: define the tick source",
    "lane": "shell-baremetal",
    "phase": "P09",
-   "wave": 70,
+   "wave": 69,
    "critical": true,
    "deps": [
     "C0497"
@@ -14998,7 +14999,7 @@
    "title": "baremetal: add a simulator shell on the desktop",
    "lane": "shell-baremetal",
    "phase": "P09",
-   "wave": 71,
+   "wave": 70,
    "critical": true,
    "deps": [
     "C0498"
@@ -15025,7 +15026,7 @@
    "title": "baremetal: add platform test job and example",
    "lane": "shell-baremetal",
    "phase": "P09",
-   "wave": 72,
+   "wave": 71,
    "critical": true,
    "deps": [
     "C0499"
@@ -15048,7 +15049,7 @@
    "title": "widgets: define the five-commit recipe (spec, look, behaviour, accessibility, tests)",
    "lane": "widget-base",
    "phase": "P10",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0180",
@@ -15073,7 +15074,7 @@
    "title": "widgets: add Theme with default tokens",
    "lane": "widget-base",
    "phase": "P10",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0501"
@@ -15096,7 +15097,7 @@
    "title": "widgets: add state-indexed colour tables",
    "lane": "widget-base",
    "phase": "P10",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0502"
@@ -15119,7 +15120,7 @@
    "title": "widgets: add shared helpers that stay public (unit clamp, state index)",
    "lane": "widget-base",
    "phase": "P10",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0503"
@@ -15142,7 +15143,7 @@
    "title": "widgets: add the widget test harness with replayed input and golden images",
    "lane": "widget-base",
    "phase": "P10",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0504"
@@ -15169,7 +15170,7 @@
    "title": "label: add spec, state and compile-time validation",
    "lane": "w-label",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15196,7 +15197,7 @@
    "title": "label: lay out and paint in the default theme",
    "lane": "w-label",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0506"
@@ -15219,7 +15220,7 @@
    "title": "label: take no input; verify hit testing and tab order skip it",
    "lane": "w-label",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0507"
@@ -15242,7 +15243,7 @@
    "title": "label: expose role (label), name, value and states",
    "lane": "w-label",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0508"
@@ -15265,7 +15266,7 @@
    "title": "label: add example page, replay test and golden image",
    "lane": "w-label",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0509"
@@ -15288,7 +15289,7 @@
    "title": "button: add spec, state and compile-time validation",
    "lane": "w-button",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15315,7 +15316,7 @@
    "title": "button: lay out and paint in the default theme",
    "lane": "w-button",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0511"
@@ -15338,7 +15339,7 @@
    "title": "button: handle input (click, Enter and Space)",
    "lane": "w-button",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0512"
@@ -15366,7 +15367,7 @@
    "title": "button: expose role (button), name, value and states",
    "lane": "w-button",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0513"
@@ -15394,7 +15395,7 @@
    "title": "button: add example page, replay test and golden image",
    "lane": "w-button",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0514"
@@ -15417,7 +15418,7 @@
    "title": "checkbox: add spec, state and compile-time validation",
    "lane": "w-checkbox",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15444,7 +15445,7 @@
    "title": "checkbox: lay out and paint in the default theme",
    "lane": "w-checkbox",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0516"
@@ -15467,7 +15468,7 @@
    "title": "checkbox: handle input (toggle on click and Space; mixed state)",
    "lane": "w-checkbox",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0517"
@@ -15495,7 +15496,7 @@
    "title": "checkbox: expose role (checkbox), name, value and states",
    "lane": "w-checkbox",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0518"
@@ -15523,7 +15524,7 @@
    "title": "checkbox: add example page, replay test and golden image",
    "lane": "w-checkbox",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0519"
@@ -15546,7 +15547,7 @@
    "title": "slider: add spec, state and compile-time validation",
    "lane": "w-slider",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15573,7 +15574,7 @@
    "title": "slider: lay out and paint in the default theme",
    "lane": "w-slider",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0521"
@@ -15596,7 +15597,7 @@
    "title": "slider: handle input (drag, arrows, Home and End)",
    "lane": "w-slider",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0522"
@@ -15624,7 +15625,7 @@
    "title": "slider: expose role (slider), name, value and states",
    "lane": "w-slider",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0523"
@@ -15652,7 +15653,7 @@
    "title": "slider: add example page, replay test and golden image",
    "lane": "w-slider",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0524"
@@ -15675,7 +15676,7 @@
    "title": "icon: add spec, state and compile-time validation",
    "lane": "w-icon",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15702,7 +15703,7 @@
    "title": "icon: lay out and paint in the default theme",
    "lane": "w-icon",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0526"
@@ -15725,7 +15726,7 @@
    "title": "icon: take no input; verify hit testing and tab order skip it",
    "lane": "w-icon",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0527"
@@ -15748,7 +15749,7 @@
    "title": "icon: expose role (image), name, value and states",
    "lane": "w-icon",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0528"
@@ -15771,7 +15772,7 @@
    "title": "icon: add example page, replay test and golden image",
    "lane": "w-icon",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0529"
@@ -15794,7 +15795,7 @@
    "title": "image: add spec, state and compile-time validation",
    "lane": "w-image",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505",
@@ -15822,7 +15823,7 @@
    "title": "image: lay out and paint in the default theme",
    "lane": "w-image",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0531"
@@ -15845,7 +15846,7 @@
    "title": "image: take no input; verify hit testing and tab order skip it",
    "lane": "w-image",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0532"
@@ -15868,7 +15869,7 @@
    "title": "image: expose role (image), name, value and states",
    "lane": "w-image",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0533"
@@ -15891,7 +15892,7 @@
    "title": "image: add example page, replay test and golden image",
    "lane": "w-image",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0534"
@@ -15914,7 +15915,7 @@
    "title": "separator: add spec, state and compile-time validation",
    "lane": "w-separator",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -15941,7 +15942,7 @@
    "title": "separator: lay out and paint in the default theme",
    "lane": "w-separator",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0536"
@@ -15964,7 +15965,7 @@
    "title": "separator: take no input; verify hit testing and tab order skip it",
    "lane": "w-separator",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0537"
@@ -15987,7 +15988,7 @@
    "title": "separator: expose role (separator), name, value and states",
    "lane": "w-separator",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0538"
@@ -16010,7 +16011,7 @@
    "title": "separator: add example page, replay test and golden image",
    "lane": "w-separator",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0539"
@@ -16033,7 +16034,7 @@
    "title": "spacer: add spec, state and compile-time validation",
    "lane": "w-spacer",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16060,7 +16061,7 @@
    "title": "spacer: lay out and paint in the default theme",
    "lane": "w-spacer",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0541"
@@ -16083,7 +16084,7 @@
    "title": "spacer: take no input; verify hit testing and tab order skip it",
    "lane": "w-spacer",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0542"
@@ -16106,7 +16107,7 @@
    "title": "spacer: expose role (none), name, value and states",
    "lane": "w-spacer",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0543"
@@ -16129,7 +16130,7 @@
    "title": "spacer: add example page, replay test and golden image",
    "lane": "w-spacer",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0544"
@@ -16152,7 +16153,7 @@
    "title": "toggle: add spec, state and compile-time validation",
    "lane": "w-toggle",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16179,7 +16180,7 @@
    "title": "toggle: lay out and paint in the default theme",
    "lane": "w-toggle",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0546"
@@ -16202,7 +16203,7 @@
    "title": "toggle: handle input (pressed state on click)",
    "lane": "w-toggle",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0547"
@@ -16230,7 +16231,7 @@
    "title": "toggle: expose role (toggle button), name, value and states",
    "lane": "w-toggle",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0548"
@@ -16258,7 +16259,7 @@
    "title": "toggle: add example page, replay test and golden image",
    "lane": "w-toggle",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0549"
@@ -16281,7 +16282,7 @@
    "title": "radio: add spec, state and compile-time validation",
    "lane": "w-radio",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16308,7 +16309,7 @@
    "title": "radio: lay out and paint in the default theme",
    "lane": "w-radio",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0551"
@@ -16331,7 +16332,7 @@
    "title": "radio: handle input (arrows move and select)",
    "lane": "w-radio",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0552"
@@ -16359,7 +16360,7 @@
    "title": "radio: expose role (radio group), name, value and states",
    "lane": "w-radio",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0553"
@@ -16387,7 +16388,7 @@
    "title": "radio: add example page, replay test and golden image",
    "lane": "w-radio",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0554"
@@ -16410,7 +16411,7 @@
    "title": "switch: add spec, state and compile-time validation",
    "lane": "w-switch",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16437,7 +16438,7 @@
    "title": "switch: lay out and paint in the default theme",
    "lane": "w-switch",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0556"
@@ -16460,7 +16461,7 @@
    "title": "switch: handle input (toggle on click and Space)",
    "lane": "w-switch",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0557"
@@ -16488,7 +16489,7 @@
    "title": "switch: expose role (switch), name, value and states",
    "lane": "w-switch",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0558"
@@ -16516,7 +16517,7 @@
    "title": "switch: add example page, replay test and golden image",
    "lane": "w-switch",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0559"
@@ -16539,7 +16540,7 @@
    "title": "range: add spec, state and compile-time validation",
    "lane": "w-range",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16566,7 +16567,7 @@
    "title": "range: lay out and paint in the default theme",
    "lane": "w-range",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0561"
@@ -16589,7 +16590,7 @@
    "title": "range: handle input (two thumbs, arrows per thumb)",
    "lane": "w-range",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0562"
@@ -16617,7 +16618,7 @@
    "title": "range: expose role (slider), name, value and states",
    "lane": "w-range",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0563"
@@ -16645,7 +16646,7 @@
    "title": "range: add example page, replay test and golden image",
    "lane": "w-range",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0564"
@@ -16668,7 +16669,7 @@
    "title": "progress: add spec, state and compile-time validation",
    "lane": "w-progress",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16695,7 +16696,7 @@
    "title": "progress: lay out and paint in the default theme",
    "lane": "w-progress",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0566"
@@ -16718,7 +16719,7 @@
    "title": "progress: take no input; verify hit testing and tab order skip it",
    "lane": "w-progress",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0567"
@@ -16746,7 +16747,7 @@
    "title": "progress: expose role (progress indicator), name, value and states",
    "lane": "w-progress",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0568"
@@ -16774,7 +16775,7 @@
    "title": "progress: add example page, replay test and golden image",
    "lane": "w-progress",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0569"
@@ -16797,7 +16798,7 @@
    "title": "spinner: add spec, state and compile-time validation",
    "lane": "w-spinner",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -16824,7 +16825,7 @@
    "title": "spinner: lay out and paint in the default theme",
    "lane": "w-spinner",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0571"
@@ -16847,7 +16848,7 @@
    "title": "spinner: take no input; verify hit testing and tab order skip it",
    "lane": "w-spinner",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0572"
@@ -16870,7 +16871,7 @@
    "title": "spinner: expose role (progress indicator), name, value and states",
    "lane": "w-spinner",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0573"
@@ -16893,7 +16894,7 @@
    "title": "spinner: add example page, replay test and golden image",
    "lane": "w-spinner",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0574"
@@ -16916,7 +16917,7 @@
    "title": "textfield: add spec, state and compile-time validation",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -16944,7 +16945,7 @@
    "title": "textfield: lay out and paint in the default theme",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0576"
@@ -16967,7 +16968,7 @@
    "title": "textfield: handle input (editing, selection, IME)",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0577"
@@ -16995,7 +16996,7 @@
    "title": "textfield: expose role (text input), name, value and states",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0578"
@@ -17023,7 +17024,7 @@
    "title": "textfield: add example page, replay test and golden image",
    "lane": "w-textfield",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0579"
@@ -17046,7 +17047,7 @@
    "title": "textarea: add spec, state and compile-time validation",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -17074,7 +17075,7 @@
    "title": "textarea: lay out and paint in the default theme",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0581"
@@ -17097,7 +17098,7 @@
    "title": "textarea: handle input (multiline editing and scrolling)",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0582"
@@ -17125,7 +17126,7 @@
    "title": "textarea: expose role (multiline text input), name, value and states",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0583"
@@ -17153,7 +17154,7 @@
    "title": "textarea: add example page, replay test and golden image",
    "lane": "w-textarea",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0584"
@@ -17176,7 +17177,7 @@
    "title": "number: add spec, state and compile-time validation",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -17204,7 +17205,7 @@
    "title": "number: lay out and paint in the default theme",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0586"
@@ -17227,7 +17228,7 @@
    "title": "number: handle input (typing, arrows, wheel)",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0587"
@@ -17255,7 +17256,7 @@
    "title": "number: expose role (spin button), name, value and states",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0588"
@@ -17283,7 +17284,7 @@
    "title": "number: add example page, replay test and golden image",
    "lane": "w-number",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0589"
@@ -17306,7 +17307,7 @@
    "title": "search: add spec, state and compile-time validation",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -17334,7 +17335,7 @@
    "title": "search: lay out and paint in the default theme",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0591"
@@ -17357,7 +17358,7 @@
    "title": "search: handle input (editing with clear button)",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0592"
@@ -17385,7 +17386,7 @@
    "title": "search: expose role (search box), name, value and states",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0593"
@@ -17413,7 +17414,7 @@
    "title": "search: add example page, replay test and golden image",
    "lane": "w-search",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0594"
@@ -17436,7 +17437,7 @@
    "title": "scroll: add spec, state and compile-time validation",
    "lane": "w-scroll",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -17463,7 +17464,7 @@
    "title": "scroll: lay out and paint in the default theme",
    "lane": "w-scroll",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0596"
@@ -17486,7 +17487,7 @@
    "title": "scroll: handle input (wheel, drag thumb, keyboard paging)",
    "lane": "w-scroll",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0597"
@@ -17509,7 +17510,7 @@
    "title": "scroll: expose role (scroll view), name, value and states",
    "lane": "w-scroll",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0598"
@@ -17532,7 +17533,7 @@
    "title": "scroll: add example page, replay test and golden image",
    "lane": "w-scroll",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0599"
@@ -17555,7 +17556,7 @@
    "title": "list: add spec, state and compile-time validation",
    "lane": "w-list",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -17582,7 +17583,7 @@
    "title": "list: lay out and paint in the default theme",
    "lane": "w-list",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0601"
@@ -17605,7 +17606,7 @@
    "title": "list: handle input (arrows, type-ahead, selection)",
    "lane": "w-list",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0602"
@@ -17633,7 +17634,7 @@
    "title": "list: expose role (list box), name, value and states",
    "lane": "w-list",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0603"
@@ -17661,7 +17662,7 @@
    "title": "list: add example page, replay test and golden image",
    "lane": "w-list",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0604"
@@ -17684,7 +17685,7 @@
    "title": "vlist: add spec, state and compile-time validation",
    "lane": "w-vlist",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -17715,7 +17716,7 @@
    "title": "vlist: lay out and paint in the default theme",
    "lane": "w-vlist",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0606"
@@ -17742,7 +17743,7 @@
    "title": "vlist: handle input (as list; builds only visible rows)",
    "lane": "w-vlist",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0607"
@@ -17774,7 +17775,7 @@
    "title": "vlist: expose role (list box), name, value and states",
    "lane": "w-vlist",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0608"
@@ -17802,7 +17803,7 @@
    "title": "vlist: add example page, replay test and golden image",
    "lane": "w-vlist",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0609"
@@ -17825,7 +17826,7 @@
    "title": "select: add spec, state and compile-time validation",
    "lane": "w-select",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -17852,7 +17853,7 @@
    "title": "select: lay out and paint in the default theme",
    "lane": "w-select",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0611"
@@ -17875,7 +17876,7 @@
    "title": "select: handle input (open, arrows, Enter, Escape)",
    "lane": "w-select",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0612"
@@ -17903,7 +17904,7 @@
    "title": "select: expose role (combo box), name, value and states",
    "lane": "w-select",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0613"
@@ -17931,7 +17932,7 @@
    "title": "select: add example page, replay test and golden image",
    "lane": "w-select",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0614"
@@ -17954,7 +17955,7 @@
    "title": "combobox: add spec, state and compile-time validation",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -17982,7 +17983,7 @@
    "title": "combobox: lay out and paint in the default theme",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0616"
@@ -18005,7 +18006,7 @@
    "title": "combobox: handle input (typing filters; arrows pick)",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0617"
@@ -18033,7 +18034,7 @@
    "title": "combobox: expose role (combo box), name, value and states",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0618"
@@ -18061,7 +18062,7 @@
    "title": "combobox: add example page, replay test and golden image",
    "lane": "w-combobox",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0619"
@@ -18084,7 +18085,7 @@
    "title": "menu: add spec, state and compile-time validation",
    "lane": "w-menu",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18111,7 +18112,7 @@
    "title": "menu: lay out and paint in the default theme",
    "lane": "w-menu",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0621"
@@ -18134,7 +18135,7 @@
    "title": "menu: handle input (arrows, Enter, Escape, submenus)",
    "lane": "w-menu",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0622"
@@ -18162,7 +18163,7 @@
    "title": "menu: expose role (menu), name, value and states",
    "lane": "w-menu",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0623"
@@ -18190,7 +18191,7 @@
    "title": "menu: add example page, replay test and golden image",
    "lane": "w-menu",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0624"
@@ -18213,7 +18214,7 @@
    "title": "menubar: add spec, state and compile-time validation",
    "lane": "w-menubar",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18240,7 +18241,7 @@
    "title": "menubar: lay out and paint in the default theme",
    "lane": "w-menubar",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0626"
@@ -18263,7 +18264,7 @@
    "title": "menubar: handle input (left and right move between menus)",
    "lane": "w-menubar",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0627"
@@ -18291,7 +18292,7 @@
    "title": "menubar: expose role (menu bar), name, value and states",
    "lane": "w-menubar",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0628"
@@ -18319,7 +18320,7 @@
    "title": "menubar: add example page, replay test and golden image",
    "lane": "w-menubar",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0629"
@@ -18342,7 +18343,7 @@
    "title": "contextmenu: add spec, state and compile-time validation",
    "lane": "w-contextmenu",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18369,7 +18370,7 @@
    "title": "contextmenu: lay out and paint in the default theme",
    "lane": "w-contextmenu",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0631"
@@ -18392,7 +18393,7 @@
    "title": "contextmenu: handle input (opens on secondary click and menu key)",
    "lane": "w-contextmenu",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0632"
@@ -18420,7 +18421,7 @@
    "title": "contextmenu: expose role (menu), name, value and states",
    "lane": "w-contextmenu",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0633"
@@ -18448,7 +18449,7 @@
    "title": "contextmenu: add example page, replay test and golden image",
    "lane": "w-contextmenu",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0634"
@@ -18471,7 +18472,7 @@
    "title": "tooltip: add spec, state and compile-time validation",
    "lane": "w-tooltip",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18498,7 +18499,7 @@
    "title": "tooltip: lay out and paint in the default theme",
    "lane": "w-tooltip",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0636"
@@ -18521,7 +18522,7 @@
    "title": "tooltip: handle input (hover delay; Escape closes)",
    "lane": "w-tooltip",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0637"
@@ -18549,7 +18550,7 @@
    "title": "tooltip: expose role (tooltip), name, value and states",
    "lane": "w-tooltip",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0638"
@@ -18577,7 +18578,7 @@
    "title": "tooltip: add example page, replay test and golden image",
    "lane": "w-tooltip",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0639"
@@ -18600,7 +18601,7 @@
    "title": "popover: add spec, state and compile-time validation",
    "lane": "w-popover",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18627,7 +18628,7 @@
    "title": "popover: lay out and paint in the default theme",
    "lane": "w-popover",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0641"
@@ -18650,7 +18651,7 @@
    "title": "popover: handle input (click outside and Escape close)",
    "lane": "w-popover",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0642"
@@ -18678,7 +18679,7 @@
    "title": "popover: expose role (dialog), name, value and states",
    "lane": "w-popover",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0643"
@@ -18706,7 +18707,7 @@
    "title": "popover: add example page, replay test and golden image",
    "lane": "w-popover",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0644"
@@ -18729,7 +18730,7 @@
    "title": "dialog: add spec, state and compile-time validation",
    "lane": "w-dialog",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18756,7 +18757,7 @@
    "title": "dialog: lay out and paint in the default theme",
    "lane": "w-dialog",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0646"
@@ -18779,7 +18780,7 @@
    "title": "dialog: handle input (focus trap; Escape closes)",
    "lane": "w-dialog",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0647"
@@ -18807,7 +18808,7 @@
    "title": "dialog: expose role (dialog), name, value and states",
    "lane": "w-dialog",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0648"
@@ -18835,7 +18836,7 @@
    "title": "dialog: add example page, replay test and golden image",
    "lane": "w-dialog",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0649"
@@ -18858,7 +18859,7 @@
    "title": "toast: add spec, state and compile-time validation",
    "lane": "w-toast",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -18885,7 +18886,7 @@
    "title": "toast: lay out and paint in the default theme",
    "lane": "w-toast",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0651"
@@ -18908,7 +18909,7 @@
    "title": "toast: handle input (times out; pause on hover)",
    "lane": "w-toast",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0652"
@@ -18936,7 +18937,7 @@
    "title": "toast: expose role (alert), name, value and states",
    "lane": "w-toast",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0653"
@@ -18964,7 +18965,7 @@
    "title": "toast: add example page, replay test and golden image",
    "lane": "w-toast",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0654"
@@ -18987,7 +18988,7 @@
    "title": "tabs: add spec, state and compile-time validation",
    "lane": "w-tabs",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19014,7 +19015,7 @@
    "title": "tabs: lay out and paint in the default theme",
    "lane": "w-tabs",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0656"
@@ -19037,7 +19038,7 @@
    "title": "tabs: handle input (arrows move; activation on focus or Enter)",
    "lane": "w-tabs",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0657"
@@ -19065,7 +19066,7 @@
    "title": "tabs: expose role (tab list), name, value and states",
    "lane": "w-tabs",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0658"
@@ -19093,7 +19094,7 @@
    "title": "tabs: add example page, replay test and golden image",
    "lane": "w-tabs",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0659"
@@ -19116,7 +19117,7 @@
    "title": "accordion: add spec, state and compile-time validation",
    "lane": "w-accordion",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19143,7 +19144,7 @@
    "title": "accordion: lay out and paint in the default theme",
    "lane": "w-accordion",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0661"
@@ -19166,7 +19167,7 @@
    "title": "accordion: handle input (Enter and Space expand)",
    "lane": "w-accordion",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0662"
@@ -19194,7 +19195,7 @@
    "title": "accordion: expose role (group with buttons), name, value and states",
    "lane": "w-accordion",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0663"
@@ -19222,7 +19223,7 @@
    "title": "accordion: add example page, replay test and golden image",
    "lane": "w-accordion",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0664"
@@ -19245,7 +19246,7 @@
    "title": "tree: add spec, state and compile-time validation",
    "lane": "w-tree",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19272,7 +19273,7 @@
    "title": "tree: lay out and paint in the default theme",
    "lane": "w-tree",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0666"
@@ -19295,7 +19296,7 @@
    "title": "tree: handle input (arrows expand, collapse and move)",
    "lane": "w-tree",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0667"
@@ -19323,7 +19324,7 @@
    "title": "tree: expose role (tree), name, value and states",
    "lane": "w-tree",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0668"
@@ -19351,7 +19352,7 @@
    "title": "tree: add example page, replay test and golden image",
    "lane": "w-tree",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0669"
@@ -19374,7 +19375,7 @@
    "title": "table: add spec, state and compile-time validation",
    "lane": "w-table",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19401,7 +19402,7 @@
    "title": "table: lay out and paint in the default theme",
    "lane": "w-table",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0671"
@@ -19424,7 +19425,7 @@
    "title": "table: handle input (cell navigation, sort, resize columns)",
    "lane": "w-table",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0672"
@@ -19452,7 +19453,7 @@
    "title": "table: expose role (grid), name, value and states",
    "lane": "w-table",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0673"
@@ -19480,7 +19481,7 @@
    "title": "table: add example page, replay test and golden image",
    "lane": "w-table",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0674"
@@ -19503,7 +19504,7 @@
    "title": "splitter: add spec, state and compile-time validation",
    "lane": "w-splitter",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19530,7 +19531,7 @@
    "title": "splitter: lay out and paint in the default theme",
    "lane": "w-splitter",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0676"
@@ -19553,7 +19554,7 @@
    "title": "splitter: handle input (drag and arrows resize panes)",
    "lane": "w-splitter",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0677"
@@ -19581,7 +19582,7 @@
    "title": "splitter: expose role (separator (focusable)), name, value and states",
    "lane": "w-splitter",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0678"
@@ -19609,7 +19610,7 @@
    "title": "splitter: add example page, replay test and golden image",
    "lane": "w-splitter",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0679"
@@ -19632,7 +19633,7 @@
    "title": "toolbar: add spec, state and compile-time validation",
    "lane": "w-toolbar",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19659,7 +19660,7 @@
    "title": "toolbar: lay out and paint in the default theme",
    "lane": "w-toolbar",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0681"
@@ -19682,7 +19683,7 @@
    "title": "toolbar: handle input (one tab stop; arrows inside)",
    "lane": "w-toolbar",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0682"
@@ -19710,7 +19711,7 @@
    "title": "toolbar: expose role (toolbar), name, value and states",
    "lane": "w-toolbar",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0683"
@@ -19738,7 +19739,7 @@
    "title": "toolbar: add example page, replay test and golden image",
    "lane": "w-toolbar",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0684"
@@ -19761,7 +19762,7 @@
    "title": "statusbar: add spec, state and compile-time validation",
    "lane": "w-statusbar",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19788,7 +19789,7 @@
    "title": "statusbar: lay out and paint in the default theme",
    "lane": "w-statusbar",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0686"
@@ -19811,7 +19812,7 @@
    "title": "statusbar: take no input; verify hit testing and tab order skip it",
    "lane": "w-statusbar",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0687"
@@ -19834,7 +19835,7 @@
    "title": "statusbar: expose role (status), name, value and states",
    "lane": "w-statusbar",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0688"
@@ -19857,7 +19858,7 @@
    "title": "statusbar: add example page, replay test and golden image",
    "lane": "w-statusbar",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0689"
@@ -19880,7 +19881,7 @@
    "title": "breadcrumb: add spec, state and compile-time validation",
    "lane": "w-breadcrumb",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -19907,7 +19908,7 @@
    "title": "breadcrumb: lay out and paint in the default theme",
    "lane": "w-breadcrumb",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0691"
@@ -19930,7 +19931,7 @@
    "title": "breadcrumb: handle input (links activate on Enter)",
    "lane": "w-breadcrumb",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0692"
@@ -19958,7 +19959,7 @@
    "title": "breadcrumb: expose role (navigation), name, value and states",
    "lane": "w-breadcrumb",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0693"
@@ -19986,7 +19987,7 @@
    "title": "breadcrumb: add example page, replay test and golden image",
    "lane": "w-breadcrumb",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0694"
@@ -20009,7 +20010,7 @@
    "title": "chip: add spec, state and compile-time validation",
    "lane": "w-chip",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -20036,7 +20037,7 @@
    "title": "chip: lay out and paint in the default theme",
    "lane": "w-chip",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0696"
@@ -20059,7 +20060,7 @@
    "title": "chip: handle input (optional remove button)",
    "lane": "w-chip",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0697"
@@ -20082,7 +20083,7 @@
    "title": "chip: expose role (button or static text), name, value and states",
    "lane": "w-chip",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0698"
@@ -20105,7 +20106,7 @@
    "title": "chip: add example page, replay test and golden image",
    "lane": "w-chip",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0699"
@@ -20128,7 +20129,7 @@
    "title": "card: add spec, state and compile-time validation",
    "lane": "w-card",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -20155,7 +20156,7 @@
    "title": "card: lay out and paint in the default theme",
    "lane": "w-card",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0701"
@@ -20178,7 +20179,7 @@
    "title": "card: take no input; verify hit testing and tab order skip it",
    "lane": "w-card",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0702"
@@ -20201,7 +20202,7 @@
    "title": "card: expose role (group), name, value and states",
    "lane": "w-card",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0703"
@@ -20224,7 +20225,7 @@
    "title": "card: add example page, replay test and golden image",
    "lane": "w-card",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0704"
@@ -20247,7 +20248,7 @@
    "title": "colorpicker: add spec, state and compile-time validation",
    "lane": "w-colorpicker",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -20274,7 +20275,7 @@
    "title": "colorpicker: lay out and paint in the default theme",
    "lane": "w-colorpicker",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0706"
@@ -20297,7 +20298,7 @@
    "title": "colorpicker: handle input (2D drag area plus sliders)",
    "lane": "w-colorpicker",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0707"
@@ -20320,7 +20321,7 @@
    "title": "colorpicker: expose role (group with sliders), name, value and states",
    "lane": "w-colorpicker",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0708"
@@ -20343,7 +20344,7 @@
    "title": "colorpicker: add example page, replay test and golden image",
    "lane": "w-colorpicker",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0709"
@@ -20366,7 +20367,7 @@
    "title": "datepicker: add spec, state and compile-time validation",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0347",
@@ -20394,7 +20395,7 @@
    "title": "datepicker: lay out and paint in the default theme",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0711"
@@ -20417,7 +20418,7 @@
    "title": "datepicker: handle input (grid navigation by day, week, month)",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0712"
@@ -20445,7 +20446,7 @@
    "title": "datepicker: expose role (dialog with grid), name, value and states",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0713"
@@ -20473,7 +20474,7 @@
    "title": "datepicker: add example page, replay test and golden image",
    "lane": "w-datepicker",
    "phase": "P10",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0714"
@@ -20496,7 +20497,7 @@
    "title": "anim: add spring columns and slot()",
    "lane": "anim",
    "phase": "P11",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0237"
@@ -20519,7 +20520,7 @@
    "title": "anim: add SIMD step()",
    "lane": "anim",
    "phase": "P11",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0716"
@@ -20542,7 +20543,7 @@
    "title": "anim: add sweep() by stream compaction",
    "lane": "anim",
    "phase": "P11",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0717"
@@ -20565,7 +20566,7 @@
    "title": "anim: add Frame.animate",
    "lane": "anim",
    "phase": "P11",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0718"
@@ -20588,7 +20589,7 @@
    "title": "anim: add tweens with an easing table",
    "lane": "anim",
    "phase": "P11",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0719"
@@ -20611,7 +20612,7 @@
    "title": "anim: add transitions on style change",
    "lane": "anim",
    "phase": "P11",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0720"
@@ -20634,7 +20635,7 @@
    "title": "anim: add keyframe sequences",
    "lane": "anim",
    "phase": "P11",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0721"
@@ -20657,7 +20658,7 @@
    "title": "anim: animate layout changes from the last rect",
    "lane": "anim",
    "phase": "P11",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0722"
@@ -20680,7 +20681,7 @@
    "title": "anim: honour the reduced-motion setting",
    "lane": "anim",
    "phase": "P11",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0723"
@@ -20703,7 +20704,7 @@
    "title": "anim: size spring arrays at comptime in the comptime front end",
    "lane": "anim",
    "phase": "P11",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0167",
@@ -20727,7 +20728,7 @@
    "title": "anim: port the spring test",
    "lane": "anim",
    "phase": "P11",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0725"
@@ -20750,7 +20751,7 @@
    "title": "a11y: complete the role set",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0218",
@@ -20783,7 +20784,7 @@
    "title": "a11y: compute accessible names from labels and text children",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0727"
@@ -20810,7 +20811,7 @@
    "title": "a11y: add states (checked, expanded, selected, disabled)",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0728"
@@ -20837,7 +20838,7 @@
    "title": "a11y: export the semantic tree as flat arrays",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0729"
@@ -20860,7 +20861,7 @@
    "title": "a11y: diff against last frame and emit only changes",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0730"
@@ -20883,7 +20884,7 @@
    "title": "a11y: accept actions (press, focus, set value) as input events",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0731"
@@ -20906,7 +20907,7 @@
    "title": "a11y: add export tests",
    "lane": "a11y-core",
    "phase": "P12",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0732"
@@ -20933,7 +20934,7 @@
    "title": "a11y: add AccessKit adapter through its C interface",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430",
@@ -20969,7 +20970,7 @@
    "title": "a11y: convert tree diffs into AccessKit updates",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0734"
@@ -21004,7 +21005,7 @@
    "title": "a11y: route AccessKit action requests into Input",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0735"
@@ -21039,7 +21040,7 @@
    "title": "a11y: wire the Windows adapter",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0736"
@@ -21079,7 +21080,7 @@
    "title": "a11y: wire the macOS adapter",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0737"
@@ -21119,7 +21120,7 @@
    "title": "a11y: wire the Linux adapter",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0738"
@@ -21159,7 +21160,7 @@
    "title": "a11y: add screen-reader smoke tests",
    "lane": "a11y-bridge",
    "phase": "P12",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0739"
@@ -21194,7 +21195,7 @@
    "title": "a11y: add high-contrast theme switch",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0733"
@@ -21217,7 +21218,7 @@
    "title": "a11y: add text scaling",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0741"
@@ -21240,7 +21241,7 @@
    "title": "a11y: add reduced motion",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0742"
@@ -21263,7 +21264,7 @@
    "title": "a11y: always show focus for keyboard users",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0743"
@@ -21286,7 +21287,7 @@
    "title": "a11y: add compile-time lint rules for the comptime front end",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0744"
@@ -21309,7 +21310,7 @@
    "title": "a11y: add contrast check for theme tokens",
    "lane": "a11y-settings",
    "phase": "P12",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0745"
@@ -21332,7 +21333,7 @@
    "title": "theme: add design tokens (colour, space, radius, type scale)",
    "lane": "theme",
    "phase": "P13",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -21355,7 +21356,7 @@
    "title": "theme: add state style tables indexed by interaction bits",
    "lane": "theme",
    "phase": "P13",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0747"
@@ -21378,7 +21379,7 @@
    "title": "theme: add light and dark themes",
    "lane": "theme",
    "phase": "P13",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0748"
@@ -21405,7 +21406,7 @@
    "title": "theme: add density settings",
    "lane": "theme",
    "phase": "P13",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0749"
@@ -21432,7 +21433,7 @@
    "title": "theme: fold comptime themes into constants",
    "lane": "theme",
    "phase": "P13",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0750"
@@ -21455,7 +21456,7 @@
    "title": "theme: switch themes at run time through palette indices",
    "lane": "theme",
    "phase": "P13",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0751"
@@ -21482,7 +21483,7 @@
    "title": "theme: inherit text colour and size down the tree",
    "lane": "theme",
    "phase": "P13",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0752"
@@ -21509,7 +21510,7 @@
    "title": "theme: allow per-widget overrides",
    "lane": "theme",
    "phase": "P13",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0753"
@@ -21532,7 +21533,7 @@
    "title": "theme: add custom material example",
    "lane": "theme",
    "phase": "P13",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0754"
@@ -21559,7 +21560,7 @@
    "title": "theme: add theme tests",
    "lane": "theme",
    "phase": "P13",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0755"
@@ -21914,7 +21915,7 @@
    "title": "bench: add static form scene (200 nodes)",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 57,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0011",
@@ -21942,7 +21943,7 @@
    "title": "bench: add long list scene (100,000 rows, virtualised)",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 58,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0770"
@@ -21965,7 +21966,7 @@
    "title": "bench: add text-heavy scene",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 59,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0771"
@@ -21992,7 +21993,7 @@
    "title": "bench: add animation scene (1,000 springs)",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 60,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0772"
@@ -22015,7 +22016,7 @@
    "title": "bench: add resize storm scene",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 61,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0773"
@@ -22042,7 +22043,7 @@
    "title": "bench: add idle scene",
    "lane": "bench-scenes",
    "phase": "P15",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0774"
@@ -22065,7 +22066,7 @@
    "title": "bench: port the scenes to Clay",
    "lane": "vs-clay",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22092,7 +22093,7 @@
    "title": "bench: automate Clay measurement (frame time, memory, binary size, idle)",
    "lane": "vs-clay",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0776"
@@ -22119,7 +22120,7 @@
    "title": "bench: port the scenes to Dear ImGui",
    "lane": "vs-imgui",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22146,7 +22147,7 @@
    "title": "bench: automate Dear ImGui measurement (frame time, memory, binary size, idle)",
    "lane": "vs-imgui",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0778"
@@ -22173,7 +22174,7 @@
    "title": "bench: port the scenes to egui",
    "lane": "vs-egui",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22200,7 +22201,7 @@
    "title": "bench: automate egui measurement (frame time, memory, binary size, idle)",
    "lane": "vs-egui",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0780"
@@ -22227,7 +22228,7 @@
    "title": "bench: port the scenes to Slint",
    "lane": "vs-slint",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22254,7 +22255,7 @@
    "title": "bench: automate Slint measurement (frame time, memory, binary size, idle)",
    "lane": "vs-slint",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0782"
@@ -22281,7 +22282,7 @@
    "title": "bench: port the scenes to LVGL",
    "lane": "vs-lvgl",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22308,7 +22309,7 @@
    "title": "bench: automate LVGL measurement (frame time, memory, binary size, idle)",
    "lane": "vs-lvgl",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0784"
@@ -22335,7 +22336,7 @@
    "title": "bench: port the scenes to Iced",
    "lane": "vs-iced",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22362,7 +22363,7 @@
    "title": "bench: automate Iced measurement (frame time, memory, binary size, idle)",
    "lane": "vs-iced",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0786"
@@ -22389,7 +22390,7 @@
    "title": "bench: port the scenes to Qt Quick",
    "lane": "vs-qtquick",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22416,7 +22417,7 @@
    "title": "bench: automate Qt Quick measurement (frame time, memory, binary size, idle)",
    "lane": "vs-qtquick",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0788"
@@ -22443,7 +22444,7 @@
    "title": "gates: frame CPU time no worse than the fastest comparison on each scene",
    "lane": "gates",
    "phase": "P15",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0018",
@@ -22478,7 +22479,7 @@
    "title": "gates: resident memory no worse than the lightest comparison on each scene",
    "lane": "gates",
    "phase": "P15",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0790"
@@ -22501,7 +22502,7 @@
    "title": "gates: binary size budget per example",
    "lane": "gates",
    "phase": "P15",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0791"
@@ -22524,7 +22525,7 @@
    "title": "gates: time to first frame budget",
    "lane": "gates",
    "phase": "P15",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0792"
@@ -22551,7 +22552,7 @@
    "title": "gates: zero wakeups in the idle scene",
    "lane": "gates",
    "phase": "P15",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0793"
@@ -22574,7 +22575,7 @@
    "title": "gates: input-to-photon latency budget",
    "lane": "gates",
    "phase": "P15",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0794"
@@ -22601,7 +22602,7 @@
    "title": "gates: compile-time budget for the comptime front end",
    "lane": "gates",
    "phase": "P15",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0795"
@@ -22628,7 +22629,7 @@
    "title": "gates: no conditional jumps in per-row loops",
    "lane": "gates",
    "phase": "P15",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0796"
@@ -22651,7 +22652,7 @@
    "title": "gates: publish the comparison table with methods",
    "lane": "gates",
    "phase": "P15",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0797"
@@ -22678,7 +22679,7 @@
    "title": "perf: profile cache misses per pass",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0775"
@@ -22705,7 +22706,7 @@
    "title": "perf: build rows from style templates with one copy",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0799"
@@ -22728,7 +22729,7 @@
    "title": "perf: regroup columns by measured access",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0800"
@@ -22751,7 +22752,7 @@
    "title": "perf: vectorise quad emission for runs of visible nodes",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0801"
@@ -22774,7 +22775,7 @@
    "title": "perf: try huge pages for the column buffer",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0802"
@@ -22801,7 +22802,7 @@
    "title": "perf: reduce bytes per node and record the result",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0803"
@@ -22824,7 +22825,7 @@
    "title": "perf: review every scalar sweep for dependency-chain length",
    "lane": "optimise",
    "phase": "P15",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0804"
@@ -23025,7 +23026,7 @@
    "title": "docs: generate the API index in the build",
    "lane": "docs",
    "phase": "P16",
-   "wave": 62,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0505"
@@ -23048,7 +23049,7 @@
    "title": "docs: write the comptime front end guide",
    "lane": "docs",
    "phase": "P16",
-   "wave": 63,
+   "wave": 62,
    "critical": false,
    "deps": [
     "C0813"
@@ -23071,7 +23072,7 @@
    "title": "docs: write the runtime front end guide",
    "lane": "docs",
    "phase": "P16",
-   "wave": 64,
+   "wave": 63,
    "critical": false,
    "deps": [
     "C0814"
@@ -23094,7 +23095,7 @@
    "title": "docs: write the custom rendering guide",
    "lane": "docs",
    "phase": "P16",
-   "wave": 65,
+   "wave": 64,
    "critical": false,
    "deps": [
     "C0815"
@@ -23117,7 +23118,7 @@
    "title": "docs: write the text protocol guide",
    "lane": "docs",
    "phase": "P16",
-   "wave": 66,
+   "wave": 65,
    "critical": false,
    "deps": [
     "C0816"
@@ -23140,7 +23141,7 @@
    "title": "docs: write the porting guide for a new platform",
    "lane": "docs",
    "phase": "P16",
-   "wave": 67,
+   "wave": 66,
    "critical": false,
    "deps": [
     "C0817"
@@ -23167,7 +23168,7 @@
    "title": "docs: write the performance guide with measured numbers",
    "lane": "docs",
    "phase": "P16",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0818"
@@ -23190,7 +23191,7 @@
    "title": "docs: catalogue compile errors with fixes",
    "lane": "docs",
    "phase": "P16",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0819"
@@ -23217,7 +23218,7 @@
    "title": "examples: hello window",
    "lane": "examples",
    "phase": "P16",
-   "wave": 68,
+   "wave": 67,
    "critical": false,
    "deps": [
     "C0430",
@@ -23241,7 +23242,7 @@
    "title": "examples: counter with signals",
    "lane": "examples",
    "phase": "P16",
-   "wave": 69,
+   "wave": 68,
    "critical": false,
    "deps": [
     "C0821"
@@ -23264,7 +23265,7 @@
    "title": "examples: form with validation",
    "lane": "examples",
    "phase": "P16",
-   "wave": 70,
+   "wave": 69,
    "critical": false,
    "deps": [
     "C0822"
@@ -23287,7 +23288,7 @@
    "title": "examples: list with 100,000 rows",
    "lane": "examples",
    "phase": "P16",
-   "wave": 71,
+   "wave": 70,
    "critical": false,
    "deps": [
     "C0823"
@@ -23310,7 +23311,7 @@
    "title": "examples: dashboard with charts as custom draws",
    "lane": "examples",
    "phase": "P16",
-   "wave": 72,
+   "wave": 71,
    "critical": false,
    "deps": [
     "C0824"
@@ -23333,7 +23334,7 @@
    "title": "examples: 3D viewport under the UI",
    "lane": "examples",
    "phase": "P16",
-   "wave": 73,
+   "wave": 72,
    "critical": false,
    "deps": [
     "C0825"
@@ -23360,7 +23361,7 @@
    "title": "examples: UI rendered into a texture",
    "lane": "examples",
    "phase": "P16",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0826"
@@ -23383,7 +23384,7 @@
    "title": "examples: microcontroller demo in the simulator",
    "lane": "examples",
    "phase": "P16",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0500",
@@ -23407,7 +23408,7 @@
    "title": "embedded: build freestanding without the standard library's I/O",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 73,
+   "wave": 72,
    "critical": true,
    "deps": [
     "C0167",
@@ -23440,7 +23441,7 @@
    "title": "embedded: add fixed-point coordinates as a build option",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 74,
+   "wave": 73,
    "critical": true,
    "deps": [
     "C0829"
@@ -23463,7 +23464,7 @@
    "title": "embedded: add RGB565 and 1-bit framebuffers",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 75,
+   "wave": 74,
    "critical": true,
    "deps": [
     "C0830"
@@ -23494,7 +23495,7 @@
    "title": "embedded: render line by line without a full framebuffer",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 76,
+   "wave": 75,
    "critical": true,
    "deps": [
     "C0831"
@@ -23517,7 +23518,7 @@
    "title": "embedded: flush only damaged regions",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 77,
+   "wave": 76,
    "critical": true,
    "deps": [
     "C0832"
@@ -23540,7 +23541,7 @@
    "title": "embedded: subset fonts at comptime",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 78,
+   "wave": 77,
    "critical": true,
    "deps": [
     "C0833"
@@ -23571,7 +23572,7 @@
    "title": "embedded: add a build without floating point",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 79,
+   "wave": 78,
    "critical": true,
    "deps": [
     "C0834"
@@ -23602,7 +23603,7 @@
    "title": "embedded: add flash and RAM budget tests",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 80,
+   "wave": 79,
    "critical": true,
    "deps": [
     "C0835"
@@ -23625,7 +23626,7 @@
    "title": "embedded: add a generic SPI display driver interface",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 81,
+   "wave": 80,
    "critical": true,
    "deps": [
     "C0836"
@@ -23656,7 +23657,7 @@
    "title": "embedded: add board example in the simulator",
    "lane": "embedded",
    "phase": "P17",
-   "wave": 82,
+   "wave": 81,
    "critical": true,
    "deps": [
     "C0837"
@@ -23687,7 +23688,7 @@
    "title": "release: review every public API against the five characteristics",
    "lane": "release",
    "phase": "P18",
-   "wave": 74,
+   "wave": 73,
    "critical": false,
    "deps": [
     "C0733",
@@ -23711,7 +23712,7 @@
    "title": "release: review names and module boundaries against the code standard",
    "lane": "release",
    "phase": "P18",
-   "wave": 75,
+   "wave": 74,
    "critical": false,
    "deps": [
     "C0839"
@@ -23738,7 +23739,7 @@
    "title": "release: define the versioning and deprecation policy",
    "lane": "release",
    "phase": "P18",
-   "wave": 76,
+   "wave": 75,
    "critical": false,
    "deps": [
     "C0840"
@@ -23761,7 +23762,7 @@
    "title": "release: package options in build.zig",
    "lane": "release",
    "phase": "P18",
-   "wave": 77,
+   "wave": 76,
    "critical": false,
    "deps": [
     "C0841"
@@ -23784,7 +23785,7 @@
    "title": "release: audit licences of optional dependencies",
    "lane": "release",
    "phase": "P18",
-   "wave": 78,
+   "wave": 77,
    "critical": false,
    "deps": [
     "C0842"
@@ -23811,7 +23812,7 @@
    "title": "release: write the changelog process",
    "lane": "release",
    "phase": "P18",
-   "wave": 79,
+   "wave": 78,
    "critical": false,
    "deps": [
     "C0843"
@@ -23838,7 +23839,7 @@
    "title": "release: publish docs and the comparison table",
    "lane": "release",
    "phase": "P18",
-   "wave": 80,
+   "wave": 79,
    "critical": false,
    "deps": [
     "C0820",
@@ -23866,7 +23867,7 @@
    "title": "release: tag 0.1 (core, both front ends, software and wgpu back ends, first desktop shell)",
    "lane": "milestones",
    "phase": "P18",
-   "wave": 79,
+   "wave": 78,
    "critical": false,
    "deps": [
     "C0167",
@@ -23893,7 +23894,7 @@
    "title": "release: tag 0.5 (all desktop shells, text stack, accessibility bridge, native GPU back ends)",
    "lane": "milestones",
    "phase": "P18",
-   "wave": 80,
+   "wave": 79,
    "critical": false,
    "deps": [
     "C0347",
@@ -23925,7 +23926,7 @@
    "title": "release: tag 1.0 when every lane is merged and every gate has held for three months",
    "lane": "milestones",
    "phase": "P18",
-   "wave": 83,
+   "wave": 82,
    "critical": true,
    "deps": [
     "C0005",
@@ -23963,7 +23964,7 @@
     "C0192",
     "C0196",
     "C0200",
-    "C0204",
+    "C0202",
     "C0212",
     "C0218",
     "C0223",
