@@ -47,6 +47,29 @@ pub inline fn bits(m: B) Mask {
     return @bitCast(m);
 }
 
+/// `c ? a : b` without a branch.
+pub inline fn selU(c: bool, a: u32, b: u32) u32 {
+    const m = -%@as(u32, @intFromBool(c));
+    return b ^ ((a ^ b) & m);
+}
+/// `c ? a : b` without a branch. A bit-level select, so inf and NaN pass through.
+pub inline fn selF(c: bool, a: f32, b: f32) f32 {
+    return @bitCast(selU(c, @bitCast(a), @bitCast(b)));
+}
+/// 1.0 or 0.0, built from the bit pattern so that it stays a mask
+/// operation instead of becoming a compare-and-jump.
+pub inline fn b2f(c: bool) f32 {
+    return @bitCast(-%@as(u32, @intFromBool(c)) & @as(u32, 0x3f80_0000));
+}
+/// `a and b` as one bitwise AND, with no short-circuit jump.
+pub inline fn andB(a: bool, b: bool) bool {
+    return (@intFromBool(a) & @intFromBool(b)) != 0;
+}
+/// `a or b` as one bitwise OR.
+pub inline fn orB(a: bool, b: bool) bool {
+    return (@intFromBool(a) | @intFromBool(b)) != 0;
+}
+
 const testing = std.testing;
 
 test "padded rounds up to whole vectors" {
@@ -95,4 +118,24 @@ test "load and store move one vector at a column offset" {
         try testing.expectEqual(if (inside) @as(f32, -1) else @as(f32, @floatFromInt(i)), a);
         try testing.expectEqual(if (inside) @as(u32, 9) else @as(u32, @intCast(i)), b);
     }
+}
+
+test "selects pick like if-else, bit for bit" {
+    const inf = std.math.inf(f32);
+    const nan = std.math.nan(f32);
+    try testing.expectEqual(@as(u32, 7), selU(true, 7, 9));
+    try testing.expectEqual(@as(u32, 9), selU(false, 7, 9));
+    try testing.expectEqual(@as(u32, 0xffff_ffff), selU(true, 0xffff_ffff, 0));
+    try testing.expectEqual(@as(f32, -0.5), selF(true, -0.5, 2));
+    try testing.expectEqual(@as(f32, 2), selF(false, -0.5, 2));
+    try testing.expectEqual(inf, selF(true, inf, 0));
+    try testing.expect(std.math.isNan(selF(false, 0, nan)));
+    // -0.0 keeps its sign: the select moves bits, not values.
+    try testing.expectEqual(@as(u32, 0x8000_0000), @as(u32, @bitCast(selF(true, -0.0, 0))));
+    try testing.expectEqual(@as(f32, 1), b2f(true));
+    try testing.expectEqual(@as(u32, 0), @as(u32, @bitCast(b2f(false))));
+    for ([_]bool{ false, true }) |a| for ([_]bool{ false, true }) |b| {
+        try testing.expectEqual(a and b, andB(a, b));
+        try testing.expectEqual(a or b, orB(a, b));
+    };
 }
