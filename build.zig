@@ -3,6 +3,7 @@
 //!   zig build                      compile the library module
 //!   zig build test                 run every test reachable from src/lcgr.zig
 //!   zig build test -Dcpu=x86_64_v3 same, with 8 SIMD lanes on x86-64
+//!   zig build test -Dlanes=16      same, with the SIMD lane count forced (simd.lanes)
 //!   zig build test-build           compile the tests only, e.g. with -Dtarget=aarch64-linux
 //!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
@@ -12,6 +13,9 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // std's width query never returns 16, so 16 lanes can only be tested by forcing the count.
+    const options = b.addOptions();
+    options.addOption(?u32, "lanes", b.option(u32, "lanes", "SIMD lanes per vector (default: the target's)"));
 
     // The package root. Every lane exports its file from here, so one module sees them all.
     const lcgr = b.addModule("lcgr", .{
@@ -19,6 +23,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lcgr.addOptions("build_options", options);
 
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
     b.getInstallStep().dependOn(&lib.step);
