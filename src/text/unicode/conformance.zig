@@ -207,10 +207,13 @@ fn expectLevels(want: []const u8, got: []const u8, line: usize) !void {
     };
 }
 
-test "BidiTest.txt: levels" {
+test "BidiTest.txt: levels and order" {
     var b: BidiBuffers = .{};
     var want: [256]u8 = undefined;
     var n_want: usize = 0;
+    var want_order: [256]u32 = undefined;
+    var n_order: usize = 0;
+    var order: [256]u32 = undefined;
     var lines = std.mem.splitScalar(u8, bidi_test, '\n');
     var line: usize = 0;
     var cases: usize = 0;
@@ -219,6 +222,10 @@ test "BidiTest.txt: levels" {
         if (ln.len == 0 or ln[0] == '#') continue;
         if (std.mem.startsWith(u8, ln, "@Levels:")) {
             n_want = parseLevels(ln["@Levels:".len..], &want);
+            continue;
+        }
+        if (std.mem.startsWith(u8, ln, "@Reorder:")) {
+            n_order = parseOrder(ln["@Reorder:".len..], &want_order);
             continue;
         }
         if (ln[0] == '@') continue;
@@ -235,13 +242,14 @@ test "BidiTest.txt: levels" {
             bidi.resolve(orig, &.{}, para, &b.levels, b.scratch());
             bidi.lineLevels(orig, b.levels[0..n], para);
             try expectLevels(want[0..n], &b.levels, line);
+            try expectOrder(want_order[0..n_order], order[0..visualOrder(want[0..n], &b.levels, &order)], line);
             cases += 1;
         }
     }
     try std.testing.expect(cases > 400_000);
 }
 
-test "BidiCharacterTest.txt: levels" {
+test "BidiCharacterTest.txt: levels and order" {
     var b: BidiBuffers = .{};
     var cps: [256]u21 = undefined;
     var want: [256]u8 = undefined;
@@ -264,7 +272,42 @@ test "BidiCharacterTest.txt: levels" {
         bidi.resolve(orig, cps[0..n], para, &b.levels, b.scratch());
         bidi.lineLevels(orig, b.levels[0..n], para);
         try expectLevels(want[0..n], &b.levels, line + 1);
+        var want_order: [256]u32 = undefined;
+        var order: [256]u32 = undefined;
+        const n_order = parseOrder(f.next().?, &want_order);
+        try expectOrder(want_order[0..n_order], order[0..visualOrder(want[0..n], &b.levels, &order)], line + 1);
         cases += 1;
     }
     try std.testing.expect(cases > 90_000);
+}
+
+/// L2 over the characters that have a level (the x ones are left out, as the files do), as
+/// logical indices into the whole input.
+fn visualOrder(want_levels: []const u8, levels: []const u8, out: []u32) usize {
+    var kept_levels: [256]u8 = undefined;
+    var kept_index: [256]u32 = undefined;
+    var k: usize = 0;
+    for (want_levels, levels[0..want_levels.len], 0..) |w, l, i| if (w != 0xff) {
+        kept_levels[k] = l;
+        kept_index[k] = @intCast(i);
+        k += 1;
+    };
+    var order: [256]u32 = undefined;
+    bidi.reorder(kept_levels[0..k], order[0..k]);
+    for (order[0..k], out[0..k]) |o, *v| v.* = kept_index[o];
+    return k;
+}
+
+fn parseOrder(s: []const u8, out: []u32) usize {
+    var n: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, s, " \t\r");
+    while (tok.next()) |t| : (n += 1) out[n] = std.fmt.parseInt(u32, t, 10) catch unreachable;
+    return n;
+}
+
+fn expectOrder(want: []const u32, got: []const u32, line: usize) !void {
+    std.testing.expectEqualSlices(u32, want, got) catch |err| {
+        std.debug.print("line {d}: order\n", .{line});
+        return err;
+    };
 }

@@ -425,3 +425,42 @@ test resolve {
     // An RTL paragraph: the Latin word goes up to 2, the brackets around it follow it (N0).
     try testResolve(&.{ 0x5D0, ' ', '(', 'a', ')' }, 1, &.{ 1, 1, 1, 2, 1 });
 }
+
+/// L2: the visual order of a line. `levels` holds one level per row (a character, or a run of
+/// characters at one level, such as a shaped run); `order[v]` receives the row shown at visual
+/// position `v`, left to right. Rows removed by X9 are the caller's to leave out first.
+pub fn reorder(levels: []const u8, order: []u32) void {
+    const n = levels.len;
+    var high: u8 = 0;
+    var low: u8 = 0xff;
+    for (levels, order[0..n], 0..) |l, *o, i| {
+        o.* = @intCast(i);
+        high = @max(high, l);
+        low = @min(low, l);
+    }
+    // The lowest odd level at or above the lowest level: runs below it never reverse.
+    const low_odd = low | 1;
+    // From the highest level down to the lowest odd one, reverse every run at or above it.
+    var level = high;
+    while (level >= low_odd) : (level -= 1) {
+        var i: usize = 0;
+        while (i < n) {
+            if (levels[order[i]] < level) {
+                i += 1;
+                continue;
+            }
+            var j = i;
+            while (j < n and levels[order[j]] >= level) j += 1;
+            std.mem.reverse(u32, order[i..j]);
+            i = j;
+        }
+    }
+}
+
+test reorder {
+    var order: [6]u32 = undefined;
+    // Two Latin rows, two Hebrew rows, two digits after them: the Hebrew reads right to left
+    // and the number inside it left to right.
+    reorder(&.{ 0, 0, 1, 1, 2, 2 }, &order);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 4, 5, 3, 2 }, &order);
+}
