@@ -25,10 +25,15 @@ pub const Flex = struct {
         aspect: []f32,
         /// Shrink weight (CSS `flex-shrink`) of a node whose `Style.shrink` is set.
         shrink: []f32,
+        /// 1.0 when the node shares out free space a second time; 0.0 for the prototype's one round.
+        regrow: []f32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
         shrink_sum: [2][]f32,
+        /// Free space per unit of grow weight that the second round hands to each child that its
+        /// max did not stop (`resolveFlex`, rewritten per axis).
+        grow_extra: []f32,
     };
 
     /// What `set` writes for one node. The defaults change nothing.
@@ -43,6 +48,10 @@ pub const Flex = struct {
         /// shrinkable node narrows to the parent's inner size). One round: a node stopped by its
         /// min leaves the rest of its part overflowing.
         shrink: f32 = 1,
+        /// Share free space along the main axis in two rounds instead of one: what growers
+        /// stopped by their max leave in the first round goes to the other growers by weight.
+        /// Bounded to two; a grower stopped in the second round leaves its rest unused.
+        regrow: bool = false,
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -56,6 +65,38 @@ pub const Flex = struct {
     pub fn set(fx: *Flex, i: u32, s: *const Style) void {
         fx.c.aspect[i] = s.aspect;
         fx.c.shrink[i] = s.shrink;
+        fx.c.regrow[i] = b01(s.regrow);
+    }
+
+    /// resolve, once node `p` has its size: the first round's leftover per unit of weight that
+    /// is still free to grow, for `secondShare`. The walk over p's children runs only when p
+    /// opted in (its bound is p + 1 otherwise), so the loop is loop control, not a branch per
+    /// row, and costs nothing for the prototype's one round.
+    pub inline fn secondRound(fx: *const Flex, t: *const Tree, a: u1, p: usize) void {
+        const c = &t.c;
+        const inner = @max(c.size[a][p] - c.pad_lo[a][p] - c.pad_hi[a][p], 0);
+        const free = @max(inner - c.fit[a][p] - c.gap_total[p], 0);
+        const per_weight = free * c.grow_inv[a][p];
+        const opted = fx.c.regrow[p] * c.main[a][p];
+        // `opted` is exactly 0 or 1, so the bound is a product with no compare: 0.18 compiles a
+        // select on `opted > 0` into a jump around the load of end[p].
+        const first_child: u32 = @intCast(p + 1);
+        const stop = first_child + @as(u32, @intFromFloat(opted)) * (c.end[p] - first_child);
+        var left: f32 = 0;
+        var weight: f32 = 0;
+        var j = first_child;
+        while (j < stop) : (j = c.end[j]) {
+            const g = c.grow[a][j] * c.flow[j] * b01(c.pct[a][j] <= 0);
+            const first = c.nat[a][j] + per_weight * g;
+            left += @max(first - c.max[a][j], 0);
+            weight += g * b01(first < c.max[a][j]);
+        }
+        fx.c.grow_extra[p] = opted * left / @max(weight, 1e-6);
+    }
+
+    /// resolve: node `i`'s second-round share, given its first-round size `first`.
+    pub inline fn secondShare(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, first: f32) f32 {
+        return t.c.grow[a][i] * fx.c.grow_extra[p] * b01(first < t.c.max[a][i]);
     }
 
     /// fit: what node `i` adds to its parent's `shrink_sum`.
@@ -369,4 +410,76 @@ test "shrink: a node stopped by its min leaves the rest of its part overflowing 
     // 100 over, 50 each: a is 50, b stops at its min 90; 40 px overflow remain.
     try testing.expectEqual(50, s.size(a)[0]);
     try testing.expectEqual(90, s.size(b)[0]);
+}
+
+test "regrow: what a capped grower leaves goes to the other growers by weight" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 40, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    const c = t.push(root, .none, &.{ .size = .{ .grow(2), .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // Round one: 75, 75, 150; a stops at 40 and leaves 35, shared 1:2 by b and c.
+    try testing.expectEqual(40, s.size(a)[0]);
+    try testing.expectApproxEqAbs(75 + 35.0 / 3.0, s.size(b)[0], 1e-3);
+    try testing.expectApproxEqAbs(150 + 70.0 / 3.0, s.size(c)[0], 1e-3);
+    try testing.expectApproxEqAbs(300, t.c.used[0][root], 1e-3);
+}
+
+test "regrow: bounded to two rounds; a grower capped in the second leaves its rest unused" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 20, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 120, types.inf } });
+    const c = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // Round one: 100 each; a stops at 20 (80 left). Round two: b and c get 40 each; b stops at
+    // 120, and the 20 it cannot take is not handed out again.
+    try testing.expectEqual(20, s.size(a)[0]);
+    try testing.expectEqual(120, s.size(b)[0]);
+    try testing.expectEqual(140, s.size(c)[0]);
+}
+
+test "regrow: only for the container that opts in, only along its main axis" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(100) } });
+    // Not opted in: the prototype's one round.
+    const row = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .px(50) } });
+    const a = t.push(row, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 40, 10 } });
+    const b = t.push(row, .none, &.{ .size = .{ .fill, .fill } });
+    t.seal(row);
+    // Opted in, but across its main axis the growers stretch and nothing is shared.
+    const col = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .px(50) } });
+    const p = t.push(col, .none, &.{ .size = .{ .px(10), .fill }, .max = .{ types.inf, 20 } });
+    const q = t.push(col, .none, &.{ .size = .{ .px(10), .fill } });
+    t.seal(col);
+    s.fx.set(col, &.{ .regrow = true });
+    s.runFlex(300, 100);
+    try testing.expectEqual([2]f32{ 40, 10 }, s.size(a));
+    try testing.expectEqual([2]f32{ 150, 50 }, s.size(b));
+    try testing.expectEqual([2]f32{ 10, 20 }, s.size(p));
+    try testing.expectEqual([2]f32{ 10, 50 }, s.size(q));
+}
+
+test "regrow: percent and floating children take no part in either round" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(50) } });
+    const a = t.push(root, .none, &.{ .size = .{ .fill, .fill }, .max = .{ 50, types.inf } });
+    const b = t.push(root, .none, &.{ .size = .{ .pct(0.2), .fill } });
+    const f = t.push(root, .none, &.{ .float = true, .size = .{ .fill, .fill } });
+    const c = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    s.fx.set(root, &.{ .regrow = true });
+    s.runFlex(300, 50);
+    // grow_sum 2 (a, c): 150 each; a stops at 50, c takes 250; b is 60 regardless (a percentage
+    // is not counted in the free space, as in the one-round pass), f keeps its natural 0.
+    try testing.expectEqual(50, s.size(a)[0]);
+    try testing.expectEqual(60, s.size(b)[0]);
+    try testing.expectEqual(0, s.size(f)[0]);
+    try testing.expectEqual(250, s.size(c)[0]);
 }

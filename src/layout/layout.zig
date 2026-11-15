@@ -150,6 +150,7 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
     const used = t.c.used[a];
 
     size[0] = viewport;
+    if (flexed) fx.secondRound(t, a, 0);
     for (1..t.len) |i| {
         const p = parent[i];
         const nat = nat_[i];
@@ -158,7 +159,8 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         // Along the parent's main axis: natural size plus a share of what is left.
         const taken = fit_[p] + gap_total[p];
         const free = @max(inner - taken, 0);
-        const share = free * grow[i] * grow_inv[p];
+        var share = free * grow[i] * grow_inv[p];
+        if (flexed) share += fx.secondShare(t, a, i, p, nat + share);
         // Across it: stretch when the node grows on this axis.
         const stretched = nat + b01(grow[i] > 0) * (inner - nat);
         const flowed = stretched + main * (nat + share - stretched);
@@ -178,6 +180,7 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;
         used[p] += s * fl;
+        if (flexed) fx.secondRound(t, a, i);
     }
 }
 

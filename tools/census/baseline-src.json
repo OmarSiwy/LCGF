@@ -45,8 +45,8 @@
     "short_fwd": 1
   },
   "p_resolve_flex": {
-    "jcc": 3,
-    "back": 1,
+    "jcc": 7,
+    "back": 3,
     "short_fwd": 0
   }
 }
