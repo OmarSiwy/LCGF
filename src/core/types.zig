@@ -66,3 +66,32 @@ test "Id.with: deterministic, distinct per index, never none" {
     }
     try std.testing.expect(Id.none.with(0) != .none);
 }
+
+/// "No index" for every u32 link in the core.
+pub const none: u32 = 0xffff_ffff;
+
+/// Index of a node in the current frame's `Tree`. Valid until the next `begin`.
+pub const Node = enum(u32) {
+    root = 0,
+    none = none,
+    _,
+    pub inline fn ix(n: Node) u32 {
+        return @backingInt(n);
+    }
+};
+
+pub const Axis = enum(u1) { x = 0, y = 1 };
+
+test "Node: root is row 0, none is the shared no-index value" {
+    try std.testing.expectEqual(@as(u32, 0), Node.root.ix());
+    try std.testing.expectEqual(none, Node.none.ix());
+    const n: Node = @fromBackingInt(42);
+    try std.testing.expectEqual(@as(u32, 42), n.ix());
+}
+
+test "Axis: one bit, usable as a two-entry index" {
+    try std.testing.expectEqual(1, @bitSizeOf(Axis));
+    const pair = [2]f32{ 10, 20 };
+    try std.testing.expectEqual(@as(f32, 10), pair[@backingInt(Axis.x)]);
+    try std.testing.expectEqual(@as(f32, 20), pair[@backingInt(Axis.y)]);
+}
