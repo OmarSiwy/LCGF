@@ -1,0 +1,27 @@
+# Recorded input for the replay test in src/core/input.zig (format: input.Replay).
+# A click at (100, 40), typing "hI", a finger and a pen, a scroll, then idle frames.
+frame
+viewport 800 600
+dt 0.016
+pointer 100 40
+frame
+buttons left
+frame
+buttons
+frame
+press 35
+text h
+release 35
+press 23 shift
+text I
+release 23 shift
+frame
+keys 42
+touch 1 10 20
+pen 2 30 40 0.5 0.1 -0.2
+frame
+keys
+scroll 0 -12.5
+wheel 0 0.25
+frame
+frame
