@@ -3,6 +3,7 @@
 //!   zig build                      compile the library module
 //!   zig build test                 run every test reachable from src/lcgr.zig
 //!   zig build test -Dcpu=x86_64_v3 same, with 8 SIMD lanes on x86-64
+//!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -21,4 +22,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = lcgr });
     b.step("test", "Run all tests").dependOn(&b.addRunArtifact(tests).step);
+
+    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
+    b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }

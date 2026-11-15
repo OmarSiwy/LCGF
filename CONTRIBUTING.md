@@ -17,7 +17,7 @@ Without Nix, install Zig 0.17.1 exactly; no other version is supported.
 - **Every commit builds and passes its tests.** Before committing:
   ```
   zig build test
-  zig fmt --check .
+  zig build fmt
   (cd prototype && zig build test)
   ```
   No "fix the build" follow-ups. A history in which every commit is green is what makes
@@ -37,6 +37,7 @@ Plan-Id: C0101                     trailer: the only record of progress
 ```
 
 Commits outside the plan have no `Plan-Id` and a plain imperative subject of at most 72 characters.
+`python3 tools/commitlint/commitlint.py main..HEAD` checks both forms; CI runs it with `zig build fmt`.
 
 ## Work in a lane
 

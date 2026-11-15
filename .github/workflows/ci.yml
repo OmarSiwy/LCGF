@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - name: Formatting
+        run: nix develop -c zig build fmt
+      - name: Commit messages
+        run: |
+          python3 tools/commitlint/commitlint.py --self-test
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event.before }}" != 0000000000000000000000000000000000000000 ]; then
+            range="${{ github.event.before }}..${{ github.sha }}"
+          else
+            range="${{ github.sha }}"
+          fi
+          python3 tools/commitlint/commitlint.py "$range"
