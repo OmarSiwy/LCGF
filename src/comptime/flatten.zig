@@ -186,46 +186,71 @@ test "Flat.Index: the smallest index type for the count holds the runtime tree's
     }
 }
 
-test "Flat.parent, Flat.end: equal the runtime tree's columns for the same UI" {
-    // The probe's expectations for its mixer.
+test "Flat.parent, Flat.end: the probe's tables for its mixer" {
     try testing.expectEqualSlices(u4, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &Flat(mixer).parent);
     try testing.expectEqualSlices(u4, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, &Flat(mixer).end);
-    inline for (shapes) |s| {
-        const F = Flat(s);
-        var r: Runtime(s) = .{};
-        const t = r.build();
-        for (0..F.node_count) |i| {
-            try testing.expectEqual(t.c.parent[i], F.parent[i]);
-            try testing.expectEqual(t.c.end[i], F.end[i]);
-        }
-    }
 }
 
-test "Flat.depth, Flat.level_order, Flat.level_start: equal the levels of the runtime tree" {
+test "Flat.depth, Flat.level_order, Flat.level_start: the mixer's levels" {
     const M = Flat(mixer);
     try testing.expectEqualSlices(u4, &.{ 0, 1, 1, 2, 2, 1, 2, 2 }, &M.depth);
     try testing.expectEqual(3, M.levels);
     try testing.expectEqualSlices(u4, &.{ 0, 1, 2, 5, 3, 4, 6, 7 }, &M.level_order);
     try testing.expectEqualSlices(u4, &.{ 0, 1, 4, 8 }, &M.level_start);
-    inline for (shapes) |s| {
-        const F = Flat(s);
-        var r: Runtime(s) = .{};
-        const t = r.build();
-        // Depth from the runtime parent column; parents come before children.
-        var d: [F.node_count]u32 = undefined;
-        d[0] = 0;
-        for (1..t.len) |i| d[i] = d[t.c.parent[i]] + 1;
-        for (0..t.len) |i| try testing.expectEqual(d[i], F.depth[i]);
-        // Level order: every row of depth 0, then depth 1, ..., each level in row order.
-        var k: usize = 0;
-        for (0..F.levels) |level| {
-            try testing.expectEqual(k, F.level_start[level]);
-            for (0..t.len) |i| if (d[i] == level) {
-                try testing.expectEqual(i, F.level_order[k]);
-                k += 1;
-            };
-        }
-        try testing.expectEqual(t.len, k);
-        try testing.expectEqual(t.len, F.level_start[F.levels]);
+}
+
+/// Every table of `Flat(s)` equals what `Tree.push` builds from the same spec: the row count,
+/// parent and end row for row, the depth derived from the runtime parent column, and the level
+/// order read off that depth.
+fn expectSameTree(comptime s: Spec) !void {
+    const F = Flat(s);
+    var r: Runtime(s) = .{};
+    const t = r.build();
+    try t.check();
+    try testing.expect(!t.overflow);
+    try testing.expectEqual(F.node_count, t.len);
+    for (0..t.len) |i| {
+        try testing.expectEqual(t.c.parent[i], F.parent[i]);
+        try testing.expectEqual(t.c.end[i], F.end[i]);
     }
+    // Depth from the runtime parent column; parents come before children.
+    var d: [F.node_count]u32 = undefined;
+    d[0] = 0;
+    for (1..t.len) |i| d[i] = d[t.c.parent[i]] + 1;
+    for (0..t.len) |i| try testing.expectEqual(d[i], F.depth[i]);
+    // Level order: every row of depth 0, then depth 1, ..., each level in row order.
+    var k: usize = 0;
+    for (0..F.levels) |level| {
+        try testing.expectEqual(k, F.level_start[level]);
+        for (0..t.len) |i| if (d[i] == level) {
+            try testing.expectEqual(i, F.level_order[k]);
+            k += 1;
+        };
+    }
+    try testing.expectEqual(t.len, k);
+    try testing.expectEqual(t.len, F.level_start[F.levels]);
+}
+
+/// A spec of `n` nodes whose shape follows `seed`: each node splits what is left of its subtree
+/// into children of pseudo-random sizes, alternating rows and columns, ids and bindings.
+fn randomSpec(comptime seed: u64, comptime n: comptime_int) Spec {
+    @setEvalBranchQuota(1000 + 100 * n);
+    if (n == 1) return if (seed & 1 == 0) label(.x) else slider(.s, .s);
+    var children: []const Spec = &.{};
+    var rest = n - 1;
+    var x = seed;
+    while (rest > 0) {
+        x = x *% 6364136223846793005 +% 1442695040888963407;
+        const size = 1 + (x >> 33) % rest;
+        children = children ++ [_]Spec{randomSpec(x, size)};
+        rest -= size;
+    }
+    const style: @import("../core/types.zig").Style = .{ .gap = @floatFromInt(seed % 7), .pad = @splat(@floatFromInt(n % 5)) };
+    return if (seed & 2 == 0) .{ .kind = .col, .style = style, .children = children } else .{ .kind = .row, .style = style, .children = children };
+}
+
+test "equivalence: every flatten table equals the tree Tree.push builds from the same UI" {
+    inline for (shapes) |s| try expectSameTree(s);
+    inline for (0..24) |k| try expectSameTree(comptime randomSpec(k * 7919 + 1, 1 + k * 3));
+    try expectSameTree(comptime randomSpec(42, 300));
 }
