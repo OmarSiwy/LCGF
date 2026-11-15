@@ -2,6 +2,8 @@
 //! Tier 0: plain data, no allocator, no I/O. Ported from prototype/ui.zig ("Input").
 
 const std = @import("std");
+const simd = @import("simd.zig");
+const types = @import("types.zig");
 
 /// Everything the core reads from the host for one frame. The host owns it and refills it
 /// before each frame; the core only reads it.
@@ -85,17 +87,13 @@ pub const Input = struct {
     };
 
     /// No contact has the id (`contact` result).
-    pub const none: u32 = 0xffff_ffff;
+    pub const none = types.none;
 
     /// Row of the contact with pointer id `id` in `contacts`, or `none`.
     pub fn contact(in: *const Input, id: u32) u32 {
-        // Ids are unique per frame, so the last match is the only one. A mask select, not a
-        // branch (prototype simd.selU; use simd's once that lane exports it).
+        // Ids are unique per frame, so the last match is the only one. A mask select, not a branch.
         var at: u32 = none;
-        for (in.contacts, 0..) |c, i| {
-            const m = -%@as(u32, @intFromBool(c.id == id));
-            at ^= (@as(u32, @intCast(i)) ^ at) & m;
-        }
+        for (in.contacts, 0..) |c, i| at = simd.selU(c.id == id, @intCast(i), at);
         return at;
     }
 
