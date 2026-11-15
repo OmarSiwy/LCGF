@@ -306,3 +306,93 @@ test "Role: one byte, none is the zero default" {
     try std.testing.expectEqual(@as(u8, 0), @backingInt(Role.none));
     try std.testing.expectEqual(@as(u8, 7), @backingInt(Role.text_input));
 }
+
+/// Handles the renderer gives out. The core only stores and groups by them.
+pub const Texture = enum(u16) { white = 0, _ };
+pub const Material = enum(u16) { solid = 0, _ };
+pub const Font = enum(u16) { default = 0, _ };
+
+/// Everything a node can be told at creation. Plain data with defaults.
+pub const Style = struct {
+    // ---- layout
+    /// Axis children are stacked along.
+    dir: Axis = .y,
+    size: [2]Size = .{ .fit, .fit },
+    min: [2]f32 = .{ 0, 0 },
+    max: [2]f32 = .{ inf, inf },
+    /// left, top, right, bottom
+    pad: [4]f32 = .{ 0, 0, 0, 0 },
+    gap: f32 = 0,
+    /// Where children sit along `dir` when there is space left over.
+    main: Align = .start,
+    /// Where children sit across `dir`.
+    cross: Align = .start,
+    /// May become narrower than its content when the parent has no room.
+    shrink: bool = false,
+    /// Out of flow: placed at the parent's content origin plus `offset`.
+    float: bool = false,
+    offset: [2]f32 = .{ 0, 0 },
+    /// Clip children to this node's rect.
+    clip: bool = false,
+    /// Subtracted from children's positions (scroll containers).
+    scroll: [2]f32 = .{ 0, 0 },
+    // ---- paint
+    fill: Color = .transparent,
+    border_color: Color = .transparent,
+    border: f32 = 0,
+    radius: f32 = 0,
+    texture: Texture = .white,
+    material: Material = .solid,
+    /// Passed through to the material's shader.
+    params: [4]f32 = .{ 0, 0, 0, 0 },
+    // ---- semantics
+    role: Role = .none,
+    value: f32 = 0,
+};
+
+pub const TextStyle = struct {
+    px: f32 = 14,
+    color: Color = .white,
+    font: Font = .default,
+    wrap: bool = false,
+};
+
+test "Style: defaults are a fit-sized, unpainted, vertical group" {
+    const s: Style = .{};
+    try std.testing.expectEqual(Axis.y, s.dir);
+    try std.testing.expectEqual([2]Size{ .fit, .fit }, s.size);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.min);
+    try std.testing.expectEqual([2]f32{ inf, inf }, s.max);
+    try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, s.pad);
+    try std.testing.expectEqual(@as(f32, 0), s.gap);
+    try std.testing.expectEqual(Align.start, s.main);
+    try std.testing.expectEqual(Align.start, s.cross);
+    try std.testing.expect(!s.shrink and !s.float and !s.clip);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.offset);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, s.scroll);
+    try std.testing.expectEqual(Color.transparent, s.fill);
+    try std.testing.expectEqual(Color.transparent, s.border_color);
+    try std.testing.expectEqual(@as(f32, 0), s.border);
+    try std.testing.expectEqual(@as(f32, 0), s.radius);
+    try std.testing.expectEqual(Texture.white, s.texture);
+    try std.testing.expectEqual(Material.solid, s.material);
+    try std.testing.expectEqual([4]f32{ 0, 0, 0, 0 }, s.params);
+    try std.testing.expectEqual(Role.none, s.role);
+    try std.testing.expectEqual(@as(f32, 0), s.value);
+}
+
+test "Style: fields take declaration literals as the prototype's call sites do" {
+    const s: Style = .{ .dir = .x, .size = .{ .px(100), .fill }, .pad = @splat(8), .cross = .center, .fill = .rgb(1, 2, 3) };
+    try std.testing.expectEqual(Size.px(100), s.size[0]);
+    try std.testing.expectEqual(Size.fill, s.size[1]);
+    try std.testing.expectEqual([4]f32{ 8, 8, 8, 8 }, s.pad);
+    try std.testing.expectEqual(Color.rgb(1, 2, 3), s.fill);
+}
+
+test "TextStyle: defaults are 14 px white text in the default font, no wrap" {
+    const t: TextStyle = .{};
+    try std.testing.expectEqual(@as(f32, 14), t.px);
+    try std.testing.expectEqual(Color.white, t.color);
+    try std.testing.expectEqual(Font.default, t.font);
+    try std.testing.expect(!t.wrap);
+}
