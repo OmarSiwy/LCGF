@@ -131,12 +131,24 @@ fn corners(t: *Tree) void {
     });
 }
 
+/// Dashed and dotted borders on plain, rounded and unfilled boxes.
+fn borders(t: *Tree) void {
+    const line: Color = .rgb(240, 240, 240);
+    Scene.row(t, &.{
+        .{ .border = 3, .border_color = line, .params = features.dashed(12, 6) },
+        .{ .fill = .rgb(50, 70, 120), .border = 4, .border_color = .rgb(255, 200, 60), .radius = 16, .params = features.dashed(10, 10) },
+        .{ .border = 6, .border_color = line, .params = features.dotted(6) },
+        .{ .fill = .rgb(120, 40, 60), .border = 8, .border_color = .rgb(120, 220, 255), .params = features.dotted(4) },
+    });
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
     .{ "images", images },
     .{ "nine-slice", nineSlices },
     .{ "corners", corners },
+    .{ "borders", borders },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;

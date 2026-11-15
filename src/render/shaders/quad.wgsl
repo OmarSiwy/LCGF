@@ -78,6 +78,8 @@ const k_linear = 1u;
 const k_radial = 2u;
 const k_shadow = 3u;
 const k_nine = 4u;
+const k_dashed = 5u;
+const k_dotted = 6u;
 
 // Gradients: fill is the start colour, params.y the end colour (rgba8).
 //   linear: params.z = angle in radians (0 runs left to right, y points down). t runs 0..1
@@ -129,6 +131,25 @@ fn nine_uv(in: Frag) -> vec2f {
     return mix(in.uv_rect.xy, in.uv_rect.zw, f);
 }
 
+// Dashed and dotted borders: how much of the border is drawn at this pixel, 0 to 1, with one
+// pixel of antialiasing. Position along the border is measured on the nearest side from its
+// top or left end. params.y = dash length, params.z = gap, in pixels.
+//   dashed: dashes of params.y with gaps of params.z
+//   dotted: round dots as wide as the border, params.z apart
+fn border_pattern(in: Frag) -> f32 {
+    let edge = in.half - abs(in.local);
+    let along_y = edge.x < edge.y;
+    let s = select(in.local.x + in.half.x, in.local.y + in.half.y, along_y);
+    let across = min(edge.x, edge.y);
+    let dash = select(bitcast<f32>(in.params.y), in.border, in.params.x == k_dotted);
+    let period = max(dash + bitcast<f32>(in.params.z), 1e-3);
+    let at = s - floor(s / period) * period;
+    let dashed = clamp((min(at, dash - at) + 0.5) * globals.scale, 0.0, 1.0);
+    let r = in.border * 0.5;
+    let dotted = clamp(0.5 - (length(vec2f(at - r, across - r)) - r) * globals.scale, 0.0, 1.0);
+    return select(select(1.0, dashed, in.params.x == k_dashed), dotted, in.params.x == k_dotted);
+}
+
 // The stock material: the fill (or its gradient) times the bound texture.
 fn material(in: Frag) -> vec4f {
     let uv = select(in.uv, nine_uv(in), in.params.x == k_nine);
@@ -144,7 +165,8 @@ fn fs(in: Frag) -> @location(0) vec4f {
     let inner = clamp(0.5 - (d + in.border * globals.scale), 0.0, 1.0);
     let has_border = step(0.001, in.border);
     let is_shadow = in.params.x == k_shadow;
-    let color = select(mix(in.border_color, material(in), mix(1.0, inner, has_border)), in.fill, is_shadow);
+    let on_border = (1.0 - mix(1.0, inner, has_border)) * border_pattern(in);
+    let color = select(mix(material(in), in.border_color, on_border), in.fill, is_shadow);
     let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);
     // Per-instance clip, also as coverage.
     let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);

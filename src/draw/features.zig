@@ -12,7 +12,7 @@ const types = @import("../core/types.zig");
 const Color = types.Color;
 
 /// What `params.x` selects in the stock material. `solid` is all-zero params, the default.
-pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4 };
+pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6 };
 
 /// `Style.params` for a linear gradient from the node's `fill` to `to`. `angle` is in radians:
 /// 0 runs left to right, pi/2 top to bottom (y points down). The gradient spans the two corners
@@ -46,6 +46,18 @@ pub fn nineSlice(dst: [4]f32, src: [4]f32) [4]f32 {
     var px: u32 = 0;
     for (dst, 0..) |v, k| px |= @as(u32, @intFromFloat(std.math.clamp(@round(v), 0, 255))) << @intCast(8 * k);
     return words(.{ @backingInt(Kind.nine_slice), px, unorm2(src[0], src[1]), unorm2(src[2], src[3]) });
+}
+
+/// `Style.params` for a dashed border: dashes of `dash` pixels with `gap` pixels between, in the
+/// node's `border_color` and `border` width. The gaps show the node's fill, which reaches under
+/// the border as CSS backgrounds do. Dashes are laid along each side from its top or left end.
+pub fn dashed(dash: f32, gap: f32) [4]f32 {
+    return words(.{ @backingInt(Kind.dashed), @bitCast(dash), @bitCast(gap), 0 });
+}
+
+/// `Style.params` for a dotted border: round dots as wide as `border`, `gap` pixels apart.
+pub fn dotted(gap: f32) [4]f32 {
+    return words(.{ @backingInt(Kind.dotted), 0, @bitCast(gap), 0 });
 }
 
 /// Two unorm16 in one word, low half first: WGSL `unpack2x16unorm`.
@@ -82,6 +94,10 @@ test "features: solid is the zero default, kind and colour travel as exact words
     try testing.expectEqual(@as(f32, 40), @as(f32, @bitCast(q[3])));
     const ns: [4]u32 = @bitCast(nineSlice(.{ 12, 8, 300, -1 }, .{ 0.25, 0.5, 1, 0 }));
     try testing.expectEqual([4]u32{ @backingInt(Kind.nine_slice), 0x00ff_080c, 0x8000_4000, 0x0000_ffff }, ns);
+    const da: [4]u32 = @bitCast(dashed(8, 4));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.dashed), @bitCast(@as(f32, 8)), @bitCast(@as(f32, 4)), 0 }, da);
+    const dt: [4]u32 = @bitCast(dotted(3));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.dotted), 0, @bitCast(@as(f32, 3)), 0 }, dt);
     const sh: [4]u32 = @bitCast(shadow(6));
     try testing.expectEqual([4]u32{ @backingInt(Kind.shadow), @bitCast(@as(f32, 6)), 0, 0 }, sh);
 }
