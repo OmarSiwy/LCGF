@@ -1,4 +1,4 @@
-//! Build file for LCGR. Zig 0.17.1 (prototype/build.zig is the verified example of this API).
+//! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
 //!   zig build                      compile the library module
 //!   zig build test                 run every test reachable from src/lcgr.zig

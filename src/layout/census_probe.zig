@@ -57,3 +57,6 @@ export fn p_start_end(t: *Tree, r: *const lcgr.rtl.Rtl) void {
 export fn p_mirror(t: *Tree, r: *lcgr.rtl.Rtl) void {
     lcgr.rtl.mirror(t, r);
 }
+export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
+    return t.push(parent, .none, s);
+}

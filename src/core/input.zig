@@ -37,9 +37,9 @@ pub const Input = struct {
     contacts: []const Contact = &.{},
 
     /// Mouse buttons held down this frame, one bit each.
-    pub const Buttons = packed struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
+    pub const Buttons = bitpack struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
     /// Modifier keys held down this frame, one bit each. `cmd` is the platform's command or super key.
-    pub const Mods = packed struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 };
+    pub const Mods = bitpack struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 };
 
     /// 256 key states as a bit set. Index with your platform's scancodes.
     pub const Keys = struct {
@@ -105,7 +105,7 @@ pub const Input = struct {
     /// Wheel and scroll of one axis in one stamp word: wheel bits low, scroll bits high. With
     /// no pixel scroll (+0.0) this is the prototype's wheel word, so its stamps are kept.
     inline fn wheelWord(in: *const Input, axis: usize) u64 {
-        return @as(u64, @as(u32, @bitCast(in.scroll[axis]))) << 32 | @as(u32, @bitCast(in.wheel[axis]));
+        return (@as(u64, @as(u32, @bitCast(in.scroll[axis]))) << 32) | @as(u32, @bitCast(in.wheel[axis]));
     }
 
     /// Fingerprint of everything except the clock. Equal stamps mean a frame

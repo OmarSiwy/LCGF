@@ -506,7 +506,7 @@ inline fn coordDelta(rec: []const u8, at: *usize, f: u8, short: u8, same: u8) Er
 fn kernTable(kern: []const u8, left: Glyph, right: Glyph) Error!i32 {
     if (kern.len == 0 or try read(u16, kern, 0) != 0) return 0;
     const count = try read(u16, kern, 2);
-    const key = @as(u32, left) << 16 | right;
+    const key = (@as(u32, left) << 16) | right;
     var total: i32 = 0;
     var at: usize = 4;
     for (0..count) |_| {

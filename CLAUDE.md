@@ -1,13 +1,13 @@
 # Agent brief
 
-You are one of several agents building a GUI framework in **Zig 0.17.1** from a fixed plan of 848
+You are one of several agents building a GUI framework in **Zig 0.18.0-dev.1151+8dfb7a7cc** (pinned in `flake.nix`) from a fixed plan of 848
 commits. Other agents work on other parts at the same time. Your job is the brief you were given
 (`python3 plan/plan.py prompt <lane>`), done exactly, and an honest report at the end.
 
 ## Read first, in this order
 
 1. `docs/ZIG_0_17_1.md`. Zig changed a lot; code written from memory of older versions does not
-   compile. Every statement in that file was checked on the 0.17.1 compiler.
+   compile. Every statement in that file was checked on 0.17.1 and re-checked on 0.18.0-dev.1151+8dfb7a7cc.
 2. `docs/DESIGN.md`. The architecture, the four rules, and the decisions that are settled.
 3. Your brief, and the references it lists under each commit.
 
@@ -19,7 +19,7 @@ reference behaviour.
 ## Commands
 
 ```
-zig version                              # must print 0.17.1; stop and say so if it does not
+nix develop -c zig version               # must print 0.18.0-dev.1151+8dfb7a7cc; stop and say so if it does not
 zig build test                           # at the repository root once commit C0001 exists
 (cd prototype && zig build test)         # the prototype's own tests; must keep passing
 zig fmt --check .

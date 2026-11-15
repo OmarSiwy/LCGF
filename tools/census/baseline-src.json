@@ -1,4 +1,9 @@
 {
+  "p_tree_push": {
+    "jcc": 1,
+    "back": 0,
+    "short_fwd": 1
+  },
   "p_finalize": {
     "jcc": 4,
     "back": 2,
@@ -35,9 +40,9 @@
     "short_fwd": 0
   },
   "p_anchor": {
-    "jcc": 12,
-    "back": 6,
-    "short_fwd": 2
+    "jcc": 20,
+    "back": 9,
+    "short_fwd": 5
   },
   "p_order": {
     "jcc": 17,
@@ -45,9 +50,9 @@
     "short_fwd": 5
   },
   "p_stick": {
-    "jcc": 12,
-    "back": 6,
-    "short_fwd": 2
+    "jcc": 20,
+    "back": 9,
+    "short_fwd": 4
   },
   "p_clamp": {
     "jcc": 2,
@@ -60,9 +65,9 @@
     "short_fwd": 0
   },
   "p_grid_fit": {
-    "jcc": 19,
-    "back": 9,
-    "short_fwd": 2
+    "jcc": 23,
+    "back": 11,
+    "short_fwd": 3
   },
   "p_grid_resolve": {
     "jcc": 16,
