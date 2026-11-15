@@ -18,6 +18,7 @@ pub const protocol = @import("text/protocol.zig");
 pub const unicode_property = @import("text/unicode/property.zig");
 pub const unicode_utf8 = @import("text/unicode/utf8.zig");
 pub const unicode_grapheme = @import("text/unicode/grapheme.zig");
+pub const unicode_word = @import("text/unicode/word.zig");
 
 test {
     std.testing.refAllDecls(@This());

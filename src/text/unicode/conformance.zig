@@ -156,3 +156,7 @@ fn lineStart(file: []const u8, line: usize) usize {
 test "GraphemeBreakTest.txt" {
     try expectBoundaries(lcgr.unicode_grapheme.Graphemes, grapheme_test);
 }
+
+test "WordBreakTest.txt" {
+    try expectBoundaries(lcgr.unicode_word.Words, word_test);
+}
