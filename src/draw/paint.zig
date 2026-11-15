@@ -3,8 +3,10 @@
 //!
 //!   1. nodes -> quads and an ordered op stream (write always, advance by 0 or 1)
 //!   2. side lists -> text runs and custom draws (one row per run or draw that exists)
+//!   3. ops -> commands by run-length encoding (equal-key quads merge into one batch)
 
 const std = @import("std");
+const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
@@ -94,6 +96,26 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
     }
     d.custom_len = cu.len;
     d.strings = strings;
+
+    // 3. Ops -> commands by run-length encoding. Consecutive quads with the
+    //    same texture and material merge; text and custom ops stand alone.
+    var n: u32 = 0;
+    var prev_kind: u8 = 0xff;
+    var prev_key: u32 = 0;
+    for (0..o) |j| {
+        const kind = d.op.kind[j];
+        const key = d.op.key[j];
+        const brk: u32 = @intFromBool(kind != 0) | @intFromBool(kind != prev_kind) | @intFromBool(key != prev_key);
+        n += brk;
+        const k = n - 1; // the first op always breaks, so n >= 1 here
+        d.cmd.kind[k] = kind;
+        d.cmd.key[k] = key;
+        d.cmd.first[k] = simd.selU(brk != 0, d.op.ref[j], d.cmd.first[k]);
+        d.cmd.count[k] = d.cmd.count[k] * (1 - brk) + 1;
+        prev_kind = kind;
+        prev_key = key;
+    }
+    d.cmd_len = n;
 }
 
 const testing = std.testing;
@@ -102,6 +124,7 @@ const layout = @import("../layout/layout.zig");
 const Strings = @import("../core/strings.zig").Strings;
 const Id = types.Id;
 const Color = types.Color;
+const Cmd = @import("draw_list.zig").Cmd;
 
 /// A laid-out scene of every op kind: root (clips, filled), a bordered quad, a text leaf, a
 /// custom leaf, a quad on another texture, a quad back on the root's texture, and a filled
@@ -202,4 +225,27 @@ test "sweep 2: text runs get the content box, custom draws the node rect, both t
     try testing.expectEqual(77, d.customs[0].data);
     try testing.expectEqual(@backingInt(Id.from("view")), d.customs[0].id);
     try testing.expectEqual(Scene.view, d.customs[0].node);
+}
+
+test "sweep 3: equal-key quads merge, a key change or a text or custom op breaks the batch" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    const sc: Scene = .build(&buf);
+    const d = &sc.d;
+    try testing.expectEqual(5, d.cmd_len);
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 0, .count = 2, .texture = .white, .material = .solid } }, d.command(0));
+    try testing.expectEqual(Cmd{ .text = 0 }, d.command(1));
+    try testing.expectEqual(Cmd{ .custom = 0 }, d.command(2));
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 2, .count = 1, .texture = @fromBackingInt(3), .material = .solid } }, d.command(3));
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 3, .count = 1, .texture = .white, .material = .solid } }, d.command(4));
+}
+
+test "sweep 3: a repaint into a used draw list gives the same commands" {
+    // `count` accumulates from the previous row's value, so stale rows must not leak in.
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var sc: Scene = .build(&buf);
+    const first = sc.d.command(0);
+    emit(&sc.t, &sc.tx, &sc.cu, sc.d.strings, &sc.d);
+    try testing.expectEqual(5, sc.d.cmd_len);
+    try testing.expectEqual(first, sc.d.command(0));
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 3, .count = 1, .texture = .white, .material = .solid } }, sc.d.command(4));
 }
