@@ -17,7 +17,12 @@ pub const Input = struct {
     /// Logical pixels; `{ -1, -1 }` when the pointer is outside the window.
     pointer: [2]f32 = .{ -1, -1 },
     buttons: Buttons = .{},
+    /// Mouse wheel this frame in notches (detents), x and y. Fractional for high-resolution
+    /// wheels: a host with 120 units per notch passes `units / 120`.
     wheel: [2]f32 = .{ 0, 0 },
+    /// Pixel-precise scroll this frame in logical pixels, x and y, from touchpads and other
+    /// smooth-scrolling devices. A scroll view moves by `wheel * line_height + scroll`.
+    scroll: [2]f32 = .{ 0, 0 },
     mods: Mods = .{},
     keys: Keys = .{},
     /// UTF-8 typed this frame. Only read during the frame.
@@ -99,14 +104,20 @@ pub const Input = struct {
         return in.text[e.at..][0..e.len];
     }
 
+    /// Wheel and scroll of one axis in one stamp word: wheel bits low, scroll bits high. With
+    /// no pixel scroll (+0.0) this is the prototype's wheel word, so its stamps are kept.
+    inline fn wheelWord(in: *const Input, axis: usize) u64 {
+        return @as(u64, @as(u32, @bitCast(in.scroll[axis]))) << 32 | @as(u32, @bitCast(in.wheel[axis]));
+    }
+
     /// Fingerprint of everything except the clock. Equal stamps mean a frame
     /// built from this input would come out identical to the previous one.
     pub fn stamp(in: *const Input) u64 {
         const words = [_]u64{
             @as(u32, @bitCast(in.viewport[0])), @as(u32, @bitCast(in.viewport[1])),
             @as(u32, @bitCast(in.scale)),       @as(u32, @bitCast(in.pointer[0])),
-            @as(u32, @bitCast(in.pointer[1])),  @as(u32, @bitCast(in.wheel[0])),
-            @as(u32, @bitCast(in.wheel[1])),    @as(u8, @bitCast(in.buttons)),
+            @as(u32, @bitCast(in.pointer[1])),  wheelWord(in, 0),
+            wheelWord(in, 1),                   @as(u8, @bitCast(in.buttons)),
             @as(u8, @bitCast(in.mods)),         in.keys.bits[0],
             in.keys.bits[1],                    in.keys.bits[2],
             in.keys.bits[3],                    in.text.len,
@@ -202,7 +213,7 @@ test "Input.stamp: ignores the clock, sees every other field" {
     clock.dt = 0.5;
     try std.testing.expectEqual(base.stamp(), clock.stamp());
 
-    var changed: [10]Input = @splat(base);
+    var changed: [12]Input = @splat(base);
     changed[0].viewport[1] = 769;
     changed[1].scale = 1;
     changed[2].pointer[0] = 11;
@@ -213,6 +224,8 @@ test "Input.stamp: ignores the clock, sees every other field" {
     changed[7].text = "h\xc3\xa8"; // same length, different byte
     changed[8].text = "h";
     changed[9].keys.press(255);
+    changed[10].scroll[0] = 0.5;
+    changed[11].scroll[1] = -12;
     for (changed) |c| try std.testing.expect(c.stamp() != base.stamp());
 }
 
@@ -282,4 +295,16 @@ test "Input.stamp: sees a contact move or lift" {
     try std.testing.expect(a.stamp() != base.stamp());
     try std.testing.expect(a.stamp() != b.stamp());
     try std.testing.expect(a.stamp() != c.stamp());
+}
+
+test "Input: high-resolution wheel and pixel scroll are separate deltas" {
+    // A 120-units-per-notch host reporting 30 units, and a touchpad reporting pixels.
+    const in: Input = .{ .wheel = .{ 0, 30.0 / 120.0 }, .scroll = .{ -3.5, 12 } };
+    const line_height: f32 = 20;
+    try std.testing.expectEqual(@as(f32, 5 + 12), in.wheel[1] * line_height + in.scroll[1]);
+    try std.testing.expectEqual(@as(f32, -3.5), in.wheel[0] * line_height + in.scroll[0]);
+    // Wheel and scroll of the same size are different stamps.
+    const as_wheel: Input = .{ .wheel = .{ 0, 1 } };
+    const as_scroll: Input = .{ .scroll = .{ 0, 1 } };
+    try std.testing.expect(as_wheel.stamp() != as_scroll.stamp());
 }
