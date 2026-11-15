@@ -4,6 +4,7 @@
 //!
 //!   prepare            SIMD     clear scratch, gap totals
 //!   applyText(.x)      scatter  text widths into leaves
+//!   fit(.x)            reverse  natural widths, bottom-up
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -39,6 +40,45 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
     const src = extents[a];
     const dst = t.c.fit[a];
     for (tx.c.node[0..tx.len], src[0..tx.len]) |node, extent| dst[node] = extent;
+}
+
+/// Bottom-up: natural size of every node on one axis. One reverse sweep.
+pub fn fit(t: *Tree, axis: Axis) void {
+    const a = @backingInt(axis);
+    if (t.len == 0) return;
+    // Column slices are read into locals once, so the loop indexes them
+    // directly instead of reloading each slice from the struct.
+    const parent = t.c.parent;
+    const fit_ = t.c.fit[a];
+    const nat_ = t.c.nat[a];
+    const main = t.c.main[a];
+    const gap_total = t.c.gap_total;
+    const lo = t.c.pad_lo[a];
+    const hi = t.c.pad_hi[a];
+    const min = t.c.min[a];
+    const max = t.c.max[a];
+    const flow = t.c.flow;
+    const grow = t.c.grow[a];
+    const grow_sum = t.c.grow_sum[a];
+
+    var i: u32 = t.len;
+    while (i > 1) {
+        i -= 1;
+        // All descendants have larger rows, so fit_[i] is complete here.
+        const content = fit_[i] + main[i] * gap_total[i];
+        const nat = @min(@max(content + lo[i] + hi[i], min[i]), max[i]);
+        nat_[i] = nat;
+        // Fold into the parent: a sum along its main axis, a max across it.
+        const p = parent[i];
+        const contrib = nat * flow[i];
+        const sum = fit_[p] + contrib;
+        const mx = @max(fit_[p], contrib);
+        fit_[p] = mx + main[p] * (sum - mx);
+        grow_sum[p] += grow[i] * flow[i];
+    }
+    // The root has no parent to fold into.
+    const content = fit_[0] + main[0] * gap_total[0];
+    nat_[0] = @min(@max(content + lo[0] + hi[0], min[0]), max[0]);
 }
 
 const testing = std.testing;
@@ -130,4 +170,28 @@ test "applyText: writes each run's extent into its node's fit, on the axis asked
     try expectCol(&.{ 0, 0, 0, 0, 0, 0, 0 }, s.t.c.fit[1]);
     applyText(&s.t, &s.tx, .y);
     try expectCol(&.{ 0, 0, 0, 0, 0, 12, 0 }, s.t.c.fit[1]);
+}
+
+test "fit: natural sizes bottom-up, summed along the main axis and maxed across it" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    fit(&s.t, .x);
+    // bar lays a (100) and b (0) along x: 100 + gap 4 = 104 natural, while its fit is the sum 100.
+    // col is px(100); para holds the 120 px run; root is px(400).
+    try expectCol(&.{ 104, 100, 0, 0, 120, 120, 0 }, c.fit[0]);
+    try expectCol(&.{ 400, 104, 100, 0, 100, 120, 0 }, c.nat[0]);
+    // Grow weights of in-flow children: root has bar and body, bar has b.
+    try expectCol(&.{ 2, 1, 0, 0, 0, 0, 0 }, c.grow_sum[0]);
+
+    // Heights, with the run already wrapped to two 12 px lines.
+    s.tx.c.h[0] = 24;
+    applyText(&s.t, &s.tx, .y);
+    fit(&s.t, .y);
+    // root stacks along y: bar 40 + col 24 + body 0.
+    try expectCol(&.{ 64, 0, 0, 0, 24, 24, 0 }, c.fit[1]);
+    try expectCol(&.{ 300, 40, 0, 0, 24, 24, 0 }, c.nat[1]);
+    try expectCol(&.{ 1, 2, 0, 0, 0, 0, 0 }, c.grow_sum[1]);
 }
