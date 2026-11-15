@@ -1,6 +1,14 @@
 //! Signals: the comptime front end's signal graph, resolved by the compiler. Each state field is
 //! a signal; what it affects is a constant, so a setter needs no subscriber list. Tier 1. Ported
 //! from prototype/comptime_ui_probe.zig (`Ui().Field`, `Ui().dirty_masks`, `Runtime.set`).
+//!
+//! Derived fields (Floem's memos) are state fields computed from other fields. `State` declares
+//! them as `pub const derived = .{ .total = .{ .from = .{ .a, .b }, .compute = sum } };` where
+//! `compute` is `fn (*const State) T` for the field's type T. Inputs may be derived themselves;
+//! the compiler orders them topologically (a cycle is a compile error), and setting an input
+//! recomputes exactly the derived fields that depend on it, in that order. Because which fields
+//! depend on which is constant, a setter's work is fixed at compile time: a field nothing derives
+//! from still compiles to one store and one OR.
 
 const std = @import("std");
 const Spec = @import("spec.zig").Spec;
@@ -12,6 +20,9 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
     const F = flatten.Flat(spec);
     const n = F.node_count;
     const field_count = @typeInfo(State).@"struct".field_names.len;
+    const derived_decl = if (@hasDecl(State, "derived")) State.derived else .{};
+    const derived_names = @typeInfo(@TypeOf(derived_decl)).@"struct".field_names;
+    const derived_count = derived_names.len;
     return struct {
         /// One tag per state field, in declaration order: tag k is field k, so a field's
         /// tables are indexed by `@backingInt(field)`.
@@ -68,9 +79,23 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
         }
 
         /// For each state field: the nodes to lay out and paint again when it changes, which are
-        /// every node bound to it and their ancestors. Read-only data, indexed by
-        /// `@backingInt(field)`.
+        /// every node bound to it or to a field derived from it, and their ancestors. Read-only
+        /// data, indexed by `@backingInt(field)`.
         pub const dirty_masks: [field_count]Mask = blk: {
+            @setEvalBranchQuota(1000 + 4 * field_count * (derived_count + 1) * mask_len);
+            var masks = bind_masks;
+            for (0..field_count) |f| for (0..derived_count) |d| if (reaches[f][d]) {
+                const own = bind_masks[@backingInt(derived_field[d])];
+                if (is_array) {
+                    for (&masks[f], own) |*w, o| w.* |= o;
+                } else masks[f] |= own;
+            };
+            break :blk masks;
+        };
+        const mask_len = if (is_array) mask_words else 1;
+
+        /// For each state field: the nodes bound to it and their ancestors.
+        const bind_masks: [field_count]Mask = blk: {
             // Per node: the walk, a field lookup and an ancestor walk up to `levels` steps.
             @setEvalBranchQuota(1000 + 4 * n * (F.levels + field_count + 2));
             var masks: [field_count]Mask = @splat(empty);
@@ -95,6 +120,74 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             for (node.children) |c| bindWalk(c, next, masks);
         }
 
+        /// The derived fields in declaration order of `State.derived`.
+        const derived_field: [derived_count]Field = blk: {
+            var out: [derived_count]Field = undefined;
+            for (derived_names, &out) |name, *f| f.* = fieldNamed(name);
+            break :blk out;
+        };
+
+        /// Index into `derived_field` of `field`, or null for a field that is set directly.
+        fn derivedIndex(comptime field: Field) ?usize {
+            for (derived_field, 0..) |f, d| if (f == field) return d;
+            return null;
+        }
+
+        /// `inputs[d][f]`: derived field d reads field f directly.
+        const inputs: [derived_count][field_count]bool = blk: {
+            var out: [derived_count][field_count]bool = @splat(@splat(false));
+            for (derived_names, 0..) |name, d| {
+                const entry = @field(derived_decl, name);
+                const FT = FieldType(derived_field[d]);
+                if (@TypeOf(entry.compute) != fn (*const State) FT)
+                    @compileError("derived field '" ++ name ++ "' needs compute: fn (*const " ++ @typeName(State) ++ ") " ++ @typeName(FT));
+                for (entry.from) |input| {
+                    const f = fieldNamed(@tagName(input));
+                    if (f == derived_field[d]) @compileError("derived field '" ++ name ++ "' reads itself");
+                    out[d][@backingInt(f)] = true;
+                }
+            }
+            break :blk out;
+        };
+
+        /// Derived fields, every input before the fields that read it (Kahn's algorithm,
+        /// declaration order among the ready ones).
+        pub const topo_order: [derived_count]Field = blk: {
+            @setEvalBranchQuota(1000 + 4 * derived_count * derived_count * (derived_count + field_count));
+            var out: [derived_count]Field = undefined;
+            var placed: [derived_count]bool = @splat(false);
+            for (0..derived_count) |k| {
+                const ready = for (0..derived_count) |d| {
+                    if (placed[d]) continue;
+                    const waits = for (0..derived_count) |e| {
+                        if (!placed[e] and inputs[d][@backingInt(derived_field[e])]) break true;
+                    } else false;
+                    if (!waits) break d;
+                } else @compileError("derived fields of " ++ @typeName(State) ++ " form a cycle");
+                placed[ready] = true;
+                out[k] = derived_field[ready];
+            }
+            break :blk out;
+        };
+
+        /// `reaches[f][d]`: changing field f changes derived field d, directly or through other
+        /// derived fields.
+        const reaches: [field_count][derived_count]bool = blk: {
+            @setEvalBranchQuota(1000 + 4 * field_count * derived_count * derived_count);
+            var out: [field_count][derived_count]bool = @splat(@splat(false));
+            for (0..field_count) |f| {
+                // In topological order, so a derived input's reach is final when it is read.
+                for (topo_order) |field| {
+                    const d = derivedIndex(field).?;
+                    if (inputs[d][f]) out[f][d] = true;
+                    for (0..derived_count) |e| if (out[f][e] and inputs[d][@backingInt(derived_field[e])]) {
+                        out[f][d] = true;
+                    };
+                }
+            }
+            break :blk out;
+        };
+
         fn fieldNamed(comptime name: []const u8) Field {
             for (@typeInfo(Field).@"enum".field_names, 0..) |fname, k|
                 if (std.mem.eql(u8, fname, name)) return @fromBackingInt(@intCast(k));
@@ -109,10 +202,23 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             dirty: Mask = full,
 
             /// The whole signal graph: one store and one OR with a constant mask (one OR per
-            /// touched word when the mask is an array).
+            /// touched word when the mask is an array), then the derived fields that read
+            /// `field`, recomputed in topological order. A derived field cannot be set.
             pub fn set(rt: *Runtime, comptime field: Field, value: FieldType(field)) void {
+                if (comptime derivedIndex(field) != null)
+                    @compileError("'" ++ @tagName(field) ++ "' is derived; set its inputs instead");
                 @field(rt.state, @tagName(field)) = value;
                 orInto(&rt.dirty, dirty_masks[@backingInt(field)]);
+                recompute(&rt.state, reaches[@backingInt(field)]);
+            }
+
+            /// Recomputes, in topological order, every derived field marked in `which`.
+            inline fn recompute(state: *State, comptime which: [derived_count]bool) void {
+                inline for (topo_order) |field| {
+                    const d = comptime derivedIndex(field).?;
+                    if (comptime which[d])
+                        @field(state, @tagName(field)) = @field(derived_decl, derived_names[d]).compute(state);
+                }
             }
         };
     };
@@ -249,4 +355,79 @@ test "Runtime.set: an array mask ORs in only the words the field touches" {
     try testing.expectEqual([4]u32{ 1, 0, 0, 0b1000 }, rt.dirty);
     rt.set(.y, 1);
     try testing.expectEqual(B.full, rt.dirty);
+}
+
+/// A mixer with derived fields: `gain` from volume and muted, `left` from gain and pan, and
+/// `caption` from title, declared out of order so the topological sort has work to do.
+const Derived = struct {
+    title: []const u8 = "Mixer",
+    volume: f32 = 0.5,
+    muted: bool = false,
+    pan: f32 = 0,
+    left: f32 = 0.25,
+    gain: f32 = 0.5,
+    caption_len: usize = 5,
+
+    pub const derived = .{
+        .left = .{ .from = .{ .gain, .pan }, .compute = leftOf },
+        .gain = .{ .from = .{ .volume, .muted }, .compute = gainOf },
+        .caption_len = .{ .from = .{.title}, .compute = captionLen },
+    };
+    fn leftOf(m: *const Derived) f32 {
+        return m.gain * (1 - m.pan) / 2;
+    }
+    fn gainOf(m: *const Derived) f32 {
+        return if (m.muted) 0 else m.volume;
+    }
+    fn captionLen(m: *const Derived) usize {
+        return m.title.len;
+    }
+};
+/// The mixer with a label for each derived field: left (row 8) and caption_len (row 9).
+const derived_mixer = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
+    s.label(.title),
+    s.row(.{ .gap = 8 }, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }),
+    s.row(.{ .gap = 8 }, .{ s.label(.title), s.slider(.pan, .pan) }),
+    s.label(.left),
+    s.label(.caption_len),
+});
+const D = Signals(Derived, derived_mixer);
+
+test "derived: topological order puts every input before its readers" {
+    try testing.expectEqualSlices(D.Field, &.{ .gain, .left, .caption_len }, &D.topo_order);
+    try testing.expectEqual(0, Signals(Mixer, mixer).topo_order.len);
+}
+
+test "derived: an input's mask covers the nodes of every field derived from it" {
+    const m = D.dirty_masks;
+    // volume: its slider (4), row 2, root, and through gain -> left the label at row 8.
+    try testing.expectEqual(0b01_0001_0101, m[@backingInt(D.Field.volume)]);
+    // pan: slider 7, row 5, root, and left at row 8.
+    try testing.expectEqual(0b01_1010_0001, m[@backingInt(D.Field.pan)]);
+    // title: both labels, row 5, root, and caption_len at row 9.
+    try testing.expectEqual(0b10_0110_0011, m[@backingInt(D.Field.title)]);
+    // gain is shown nowhere, but left reads it.
+    try testing.expectEqual(0b01_0000_0001, m[@backingInt(D.Field.gain)]);
+    try testing.expectEqual(0b01_0000_0001, m[@backingInt(D.Field.left)]);
+}
+
+test "derived: set recomputes exactly the dependent fields, inputs first" {
+    var rt: D.Runtime = .{};
+    rt.dirty = 0;
+    rt.set(.volume, 0.8);
+    try testing.expectEqual(0.8, rt.state.gain);
+    try testing.expectEqual(0.4, rt.state.left);
+    try testing.expectEqual(5, rt.state.caption_len);
+    try testing.expectEqual(0b01_0001_0101, rt.dirty);
+    rt.set(.muted, true);
+    try testing.expectEqual(0, rt.state.gain);
+    try testing.expectEqual(0, rt.state.left);
+    rt.set(.muted, false);
+    rt.set(.pan, -1);
+    try testing.expectEqual(0.8, rt.state.left);
+    // A field read by no derived field leaves them alone.
+    rt.state.left = 123;
+    rt.set(.title, "Main bus");
+    try testing.expectEqual(8, rt.state.caption_len);
+    try testing.expectEqual(123, rt.state.left);
 }
