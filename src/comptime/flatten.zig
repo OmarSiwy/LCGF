@@ -11,14 +11,40 @@ const Spec = spec_zig.Spec;
 
 /// Nodes in `s`, itself included: the row count of the flattened spec.
 pub fn count(comptime s: Spec) comptime_int {
-    var n = 1;
-    for (s.children) |c| n += count(c);
+    var n: comptime_int = 0;
+    countFrom(s, &n);
     return n;
+}
+
+fn countFrom(comptime s: Spec, comptime n: *comptime_int) void {
+    n.* += 1;
+    @setEvalBranchQuota(quota(n.*));
+    for (s.children) |c| countFrom(c, n);
+}
+
+/// Comptime backward branches (loop iterations and calls) the flatten may spend per node.
+/// Measured: `count` spends three per node (its call, the `quota` call, a loop iteration) and is
+/// the most expensive scope; 2 per node fails at 998 nodes, 3 passes every test here, and 4
+/// leaves one spare. `Flat` raises the quota to `quota(n)` in every comptime scope it evaluates
+/// (each container-level `const` is a scope of its own and starts at the default 1,000), and
+/// `count` raises it as it goes, so no caller sets a quota for the flatten. Branches add up
+/// within one evaluation, so a caller that builds a large spec with its own loops in the same
+/// expression pays for those loops itself (or declares the spec as a container-level `const`).
+///
+/// Not a quota but a ceiling: the walks recurse once per level, and the compiler's own stack
+/// limits that. Measured on x86-64 Linux: 2,000 levels compile with an 8 MiB stack (ulimit -s
+/// 8192), 2,500 crash the compiler with 16 MiB and compile with an unlimited stack. A UI is
+/// rarely 50 levels deep; an explicit-stack walk would lift the ceiling if one ever needs it.
+const branches_per_node = 4;
+
+/// The quota for evaluating the flatten of `nodes` nodes: the default plus `branches_per_node`
+/// per node.
+fn quota(comptime nodes: comptime_int) comptime_int {
+    return 1000 + branches_per_node * nodes;
 }
 
 /// Everything about the structure of `spec` that is known before the program runs.
 pub fn Flat(comptime spec: Spec) type {
-    @setEvalBranchQuota(100_000);
     const n = count(spec);
     return struct {
         pub const node_count = n;
@@ -33,6 +59,7 @@ pub fn Flat(comptime spec: Spec) type {
         };
 
         const tables: Tables = blk: {
+            @setEvalBranchQuota(quota(n));
             var t: Tables = undefined;
             var next: comptime_int = 0;
             walk(spec, 0, 0, &next, &t);
@@ -59,9 +86,13 @@ pub fn Flat(comptime spec: Spec) type {
         pub const depth: [n]Index = tables.depth;
 
         /// Distinct depths: one more than the deepest node's depth.
-        pub const levels = @as(comptime_int, std.mem.max(Index, &depth)) + 1;
+        pub const levels = blk: {
+            @setEvalBranchQuota(quota(n));
+            break :blk @as(comptime_int, std.mem.max(Index, &depth)) + 1;
+        };
         /// Level d is `level_order[level_start[d]..level_start[d + 1]]`.
         pub const level_start: [levels + 1]Index = start: {
+            @setEvalBranchQuota(quota(n));
             var out: [levels + 1]Index = @splat(0);
             for (depth) |d| out[d + 1] += 1;
             for (1..levels + 1) |d| out[d] += out[d - 1];
@@ -71,6 +102,7 @@ pub fn Flat(comptime spec: Spec) type {
         /// depth), so a pass that needs every parent done before its children can run one level
         /// at a time.
         pub const level_order: [n]Index = order: {
+            @setEvalBranchQuota(quota(n));
             var out: [n]Index = undefined;
             var next: [levels]Index = level_start[0..levels].*;
             for (depth, 0..) |d, i| {
@@ -95,11 +127,13 @@ const label = spec_zig.label;
 const checkbox = spec_zig.checkbox;
 const slider = spec_zig.slider;
 
-/// The runtime front end's tree, built with `Tree.push` from the same spec, in a buffer it owns.
-/// The reference every table here is compared against.
+/// The runtime front end's tree, built with `Tree.push` from the same spec, in a buffer from the
+/// testing allocator (a few thousand nodes are megabytes, too much for the stack). The reference
+/// every table here is compared against.
 fn Runtime(comptime s: Spec) type {
     return struct {
-        buf: [bytes]u8 align(mem.column_align) = undefined,
+        buf: []align(mem.column_align) u8,
+        tree: Tree,
 
         const cap = count(s);
         const bytes = blk: {
@@ -109,21 +143,27 @@ fn Runtime(comptime s: Spec) type {
             break :blk counter.off;
         };
 
-        /// Pushes `s` depth-first, as `open` / `leaf` / `close` would, and seals every node.
-        fn build(r: *@This()) Tree {
-            var carver: mem.Carver = .{ .buf = &r.buf };
+        fn init() !@This() {
+            const buf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(mem.column_align), bytes);
+            var carver: mem.Carver = .{ .buf = buf };
             var t = Tree.init(&carver, cap);
-            pushSpec(&t, s, 0);
-            return t;
+            pushSpec(&t, &s, @as(u32, 0));
+            return .{ .buf = buf, .tree = t };
+        }
+
+        fn deinit(r: *const @This()) void {
+            testing.allocator.free(r.buf);
         }
     };
 }
 
-/// Pushes `n` and its subtree under `parent` into any `TreeOf` tree, sealing every node.
-fn pushSpec(t: anytype, comptime n: Spec, parent: anytype) void {
-    const id: Id = if (n.id) |name| .from(name) else .none;
+/// Pushes `n` and its subtree under `parent` into any `TreeOf` tree, depth-first as `open` /
+/// `leaf` / `close` would, sealing every node. A run-time walk over the spec's nodes (a `Spec`
+/// is plain data), so large specs do not unroll into code.
+fn pushSpec(t: anytype, n: *const Spec, parent: anytype) void {
+    const id: Id = if (n.id) |name| .hash(name) else .none;
     const i = t.push(parent, id, &n.style);
-    inline for (n.children) |c| pushSpec(t, c, i);
+    for (n.children) |*c| pushSpec(t, c, i);
     t.seal(i);
 }
 
@@ -152,8 +192,9 @@ const shapes = .{ mixer, label(.x), col(.{}, .{}), chain(9), wide(17), col(.{}, 
 test "count: the node count is the runtime tree's row count for the same UI" {
     try testing.expectEqual(8, count(mixer));
     inline for (shapes) |s| {
-        var r: Runtime(s) = .{};
-        const t = r.build();
+        const r = try Runtime(s).init();
+        defer r.deinit();
+        const t = r.tree;
         try t.check();
         try testing.expect(!t.overflow);
         try testing.expectEqual(count(s), t.len);
@@ -170,11 +211,12 @@ test "Flat.Index: the smallest index type for the count holds the runtime tree's
     inline for (shapes) |s| {
         const F = Flat(s);
         try testing.expectEqual(count(s), F.node_count);
-        var r: Runtime(s) = .{};
-        const big = r.build();
+        const r = try Runtime(s).init();
+        defer r.deinit();
+        const big = r.tree;
         // The same UI pushed into a tree indexed by F.Index agrees row for row.
         var small: tree.TreeOf(F.Index, .{ .array = F.node_count }) = .empty;
-        pushSpec(&small, s, @as(F.Index, 0));
+        pushSpec(&small, &s, @as(F.Index, 0));
         try small.check();
         try testing.expect(!small.overflow);
         try testing.expectEqual(big.len, small.len);
@@ -204,8 +246,9 @@ test "Flat.depth, Flat.level_order, Flat.level_start: the mixer's levels" {
 /// order read off that depth.
 fn expectSameTree(comptime s: Spec) !void {
     const F = Flat(s);
-    var r: Runtime(s) = .{};
-    const t = r.build();
+    const r = try Runtime(s).init();
+    defer r.deinit();
+    const t = r.tree;
     try t.check();
     try testing.expect(!t.overflow);
     try testing.expectEqual(F.node_count, t.len);
@@ -253,4 +296,35 @@ test "equivalence: every flatten table equals the tree Tree.push builds from the
     inline for (shapes) |s| try expectSameTree(s);
     inline for (0..24) |k| try expectSameTree(comptime randomSpec(k * 7919 + 1, 1 + k * 3));
     try expectSameTree(comptime randomSpec(42, 300));
+}
+
+/// A row over `n` leaves, built without recursion (a tuple of thousands would be slow to write).
+fn bigWide(comptime n: comptime_int) Spec {
+    @setEvalBranchQuota(quota(n));
+    var leaves: [n]Spec = undefined;
+    for (&leaves) |*l| l.* = label(.x);
+    return row(.{}, leaves);
+}
+
+/// `chain(n)` built in a loop, so building it does not recurse.
+fn bigChain(comptime n: comptime_int) Spec {
+    @setEvalBranchQuota(quota(n));
+    var s = label(.x);
+    for (0..n - 1) |_| s = col(.{}, .{s});
+    return s;
+}
+
+// Container-level, so building each spec is an evaluation of its own: branches spent inside one
+// evaluation add up, and the flatten's quota covers the flatten, not the caller's own loops.
+const wide_5000 = bigWide(5000);
+const chain_1000 = bigChain(1000);
+const random_2000 = randomSpec(7, 2000);
+
+test "quotas: large specs flatten without the caller raising a quota, and equal the runtime tree" {
+    // 5,001 nodes, one level: the widest loops (count, walk, the level tables).
+    try expectSameTree(wide_5000);
+    try testing.expectEqual(u13, Flat(wide_5000).Index);
+    // 1,000 levels: the deepest comptime recursion this test keeps (see `branches_per_node`).
+    try expectSameTree(chain_1000);
+    try expectSameTree(random_2000);
 }
