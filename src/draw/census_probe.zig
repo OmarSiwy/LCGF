@@ -19,3 +19,6 @@ export fn p_inherit_opacity(t: *Tree) void {
 export fn p_inherit_transform(t: *Tree) void {
     lcgr.inherit.transform(t);
 }
+export fn p_inherit_clip(t: *Tree) void {
+    lcgr.inherit.clip(t);
+}

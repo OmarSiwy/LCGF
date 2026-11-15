@@ -123,5 +123,10 @@
     "jcc": 2,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_inherit_clip": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
   }
 }

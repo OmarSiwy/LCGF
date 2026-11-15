@@ -23,6 +23,7 @@ struct Instance {
     @location(8) opacity: f32,
     @location(9) xform_abcd: vec4f,
     @location(10) xform_t: vec2f,
+    @location(11) clip_radii: vec4f,
 }
 
 struct Frag {
@@ -39,6 +40,7 @@ struct Frag {
     @location(9) @interpolate(flat) uv_rect: vec4f,
     @location(10) @interpolate(flat) border: f32,
     @location(11) @interpolate(flat) opacity: f32,
+    @location(12) @interpolate(flat) clip_radii: vec4f,
 }
 
 @vertex
@@ -60,6 +62,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     out.radii = inst.radii;
     out.border = inst.border;
     out.opacity = inst.opacity;
+    out.clip_radii = inst.clip_radii;
     out.fill = inst.fill;
     out.border_color = inst.border_color;
     out.clip = inst.clip;
@@ -176,8 +179,15 @@ fn fs(in: Frag) -> @location(0) vec4f {
     let on_border = (1.0 - mix(1.0, inner, has_border)) * border_pattern(in);
     let color = select(mix(material(in), in.border_color, on_border), in.fill, is_shadow);
     let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);
-    // Per-instance clip, also as coverage.
+    // Per-instance clip, also as coverage: the rect as a step, its rounded corners (when it has
+    // any) as a distance field with one pixel of antialiasing. A square clip skips the field,
+    // which also keeps an unbounded clip (infinite edges) away from it.
     let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);
-    let alpha = cover * inside.x * inside.y * in.opacity;
+    let clip_centre = (in.clip.xy + in.clip.zw) * 0.5;
+    let clip_half = (in.clip.zw - in.clip.xy) * 0.5;
+    let to_clip = in.pixel - clip_centre;
+    let clip_d = rounded_box(to_clip, clip_half, corner_radius(to_clip, clip_half, in.clip_radii)) * globals.scale;
+    let rounded = select(1.0, clamp(0.5 - clip_d, 0.0, 1.0), any(in.clip_radii > vec4f(0.0)));
+    let alpha = cover * inside.x * inside.y * rounded * in.opacity;
     return vec4f(color.rgb * color.a, color.a) * alpha;
 }

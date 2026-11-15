@@ -47,6 +47,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .border = look.border,
             .opacity = c.alpha[i],
             .xform = c.world[i],
+            .clip_radii = c.clip_radii[parent[i]],
         };
         // Painted when either colour has alpha and the node is not fully transparent.
         const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(c.alpha[i] > 0);

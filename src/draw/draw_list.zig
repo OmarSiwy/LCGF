@@ -29,6 +29,8 @@ pub const Quad = extern struct {
     opacity: f32,
     /// Layout space to screen, a, b, c, d, tx, ty: applied to the corners in the vertex shader.
     xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    /// Corner radii of `clip` (top-left, top-right, bottom-right, bottom-left); 0 is square.
+    clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
 };
 
 /// One text node's run, for the renderer's text pass.
@@ -131,13 +133,13 @@ pub const DrawList = struct {
 
 const testing = std.testing;
 
-test "layout: Quad is the 120-byte instance row the quad pipeline declares" {
+test "layout: Quad is the 136-byte instance row the quad pipeline declares" {
     // Renderers declare vertex attributes at these offsets (src/render/shaders/quad.wgsl). The
     // prototype's 80-byte row had one `radius` after the colours; per-corner `radii` replaced it,
-    // and `opacity` and `xform` were added.
-    try testing.expectEqual(120, @sizeOf(Quad));
+    // and `opacity`, `xform` and `clip_radii` were added.
+    try testing.expectEqual(136, @sizeOf(Quad));
     try testing.expectEqual(4, @alignOf(Quad));
-    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border", "opacity", "xform" }, .{ 0, 16, 32, 48, 64, 80, 84, 88, 92, 96 }) |name, off|
+    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border", "opacity", "xform", "clip_radii" }, .{ 0, 16, 32, 48, 64, 80, 84, 88, 92, 96, 120 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Quad, name));
 }
 

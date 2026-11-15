@@ -215,6 +215,7 @@ pub fn main(init: std.process.Init) !void {
         @memset(st.c.alpha[0..pt.len], 1);
         @memset(st.c.transform[0..pt.len], .{ 1, 0, 0, 1, 0, 0 }); // and no transform
         @memset(st.c.world[0..pt.len], .{ 1, 0, 0, 1, 0, 0 });
+        @memset(st.c.clip_radii[0..pt.len], @splat(0)); // and square clips
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;

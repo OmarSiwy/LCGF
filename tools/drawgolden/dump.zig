@@ -38,6 +38,7 @@ const attrs = .{
     .{ 9, "xform", "float32x4" }, // a, b, c, d
 };
 const xform_t = .{ 10, @offsetOf(Quad, "xform") + 16, "float32x2" }; // tx, ty
+const clip_radii = .{ 11, @offsetOf(Quad, "clip_radii"), "float32x4" };
 
 const Scene = struct {
     t: Tree,
@@ -194,6 +195,26 @@ fn transforms(t: *Tree) void {
     t.seal(0);
 }
 
+/// Rounded clipping: a bordered rounded card whose children overflow it (a full-width band and
+/// an image), a pill clipping a gradient bar through a non-clipping row, and a card with
+/// different corners. Each over a square-cornered grey box so the clipped corners show.
+fn roundedClip(t: *Tree) void {
+    _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(30), .gap = 30, .fill = .rgb(90, 90, 100) });
+    const card = t.push(0, .none, &.{ .size = .{ .px(200), .px(150) }, .clip = true, .radius = 28, .border = 3, .border_color = .white, .fill = .rgb(30, 40, 70) });
+    _ = t.push(card, .none, &.{ .size = .{ .px(240), .px(50) }, .fill = .rgb(240, 120, 80) });
+    _ = t.push(card, .none, &.{ .size = .{ .px(240), .px(100) }, .fill = .white, .texture = @fromBackingInt(1), .uv = .{ 0, 0.125, 1, 0.5 } });
+    t.seal(card);
+    const pill = t.push(0, .none, &.{ .size = .{ .px(160), .px(40) }, .clip = true, .radius = 20, .fill = .rgb(20, 20, 20) });
+    const row = t.push(pill, .none, &.{ .size = .{ .px(160), .px(40) } });
+    _ = t.push(row, .none, &.{ .size = .{ .px(120), .px(40) }, .fill = .rgb(60, 200, 120), .params = features.linear(.rgb(250, 230, 60), 0) });
+    t.seal(row);
+    t.seal(pill);
+    const odd = t.push(0, .none, &.{ .size = .{ .px(150), .px(150) }, .clip = true, .radii = .{ 60, 0, 30, 10 } });
+    _ = t.push(odd, .none, &.{ .size = .{ .px(150), .px(150) }, .fill = .rgb(90, 160, 255) });
+    t.seal(odd);
+    t.seal(0);
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
@@ -203,6 +224,7 @@ const scenes = .{
     .{ "borders", borders },
     .{ "opacity", opacity },
     .{ "transforms", transforms },
+    .{ "rounded-clip", roundedClip },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -228,6 +250,7 @@ pub fn main(init: std.process.Init) !void {
     lcgr.layout.run(&sc.t, &sc.tx, viewport);
     lcgr.inherit.opacity(&sc.t);
     lcgr.inherit.transform(&sc.t);
+    lcgr.inherit.clip(&sc.t);
     lcgr.paint.emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
 
     const cwd = std.Io.Dir.cwd();
@@ -243,6 +266,7 @@ pub fn main(init: std.process.Init) !void {
     try w.print("stride {d}\n", .{@sizeOf(Quad)});
     inline for (attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a[0], @offsetOf(Quad, a[1]), a[2] });
     try w.print("attr {d} {d} {s}\n", xform_t);
+    try w.print("attr {d} {d} {s}\n", clip_radii);
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text, .custom => return error.SceneHasTextOrCustom,

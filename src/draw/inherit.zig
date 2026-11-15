@@ -35,6 +35,22 @@ pub fn transform(t: *Tree) void {
     }
 }
 
+/// `clip_radii[i]`: the corner radii of the clip node `i` hands its children. A clipping node
+/// clips to the area inside its border, so its radii less the border (not below 0); any other
+/// node passes its parent's on; the root's parent has square corners. Paint gives each quad its
+/// parent's. Rounded corners are applied to the clip rect the quad gets, which is the clipping
+/// node's inner rect unless an outer clip cut into it.
+pub fn clip(t: *Tree) void {
+    const c = &t.c;
+    const V4 = @Vector(4, f32);
+    const zero: V4 = @splat(0);
+    for (0..t.len) |i| {
+        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.look[i].border)), zero);
+        const up = @select(f32, @as(@Vector(4, bool), @splat(i == 0)), zero, @as(V4, c.clip_radii[c.parent[i]]));
+        c.clip_radii[i] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, up);
+    }
+}
+
 /// p after l: x -> p(l(x)).
 inline fn compose(p: [6]f32, l: [6]f32) [6]f32 {
     return .{
@@ -152,4 +168,30 @@ test "transform: about the centre, composed down the tree" {
     try testing.expectEqual([2]f32{ 100, 0 }, apply(t.c.world[box], 0, 0));
     // The child: moved right by 10, then turned with the box: right becomes down.
     try testing.expectEqual([2]f32{ 100, 10 }, apply(t.c.world[kid], 0, 0));
+}
+
+test "clip: a clipping node's radii less its border reach every descendant until the next clip" {
+    const bytes = comptime blk: {
+        @setEvalBranchQuota(10_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Tree.init(&counter, 8);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = Tree.init(&carver, 8);
+    _ = t.push(0, Id.from("root"), &.{ .radius = 9 });
+    const card = t.push(0, .none, &.{ .clip = true, .radius = 12, .border = 2, .radii = .{ -1, -1, 1, 0 } });
+    const row = t.push(card, .none, &.{ .radius = 30 });
+    const inner = t.push(row, .none, &.{ .clip = true });
+    t.seal(inner);
+    t.seal(row);
+    t.seal(card);
+    t.seal(0);
+    clip(&t);
+    clip(&t);
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, t.c.clip_radii[0]); // root does not clip
+    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, t.c.clip_radii[card]);
+    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, t.c.clip_radii[row]); // not clipping: passes it on
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, t.c.clip_radii[inner]); // square clip of its own
 }
