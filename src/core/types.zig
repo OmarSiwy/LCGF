@@ -256,3 +256,44 @@ test "Align: factor table places leftover space by index" {
     try std.testing.expectEqual(@as(f32, 40), leftover * Align.factor[@backingInt(Align.end)]);
     try std.testing.expectEqual(@typeInfo(Align).@"enum".field_names.len, Align.factor.len);
 }
+
+/// What kinds of pointer interaction a node takes part in.
+pub const Sense = packed struct(u8) {
+    hover: bool = false,
+    click: bool = false,
+    drag: bool = false,
+    focus: bool = false,
+    _: u4 = 0,
+
+    pub const button: Sense = .{ .hover = true, .click = true, .focus = true };
+    pub const any: Sense = .{ .hover = true, .click = true, .drag = true, .focus = true };
+};
+
+/// Result of `Frame.interact`. A bit set, assembled without branches.
+pub const Response = packed struct(u8) {
+    hovered: bool = false,
+    /// Pointer is down and this widget owns it.
+    held: bool = false,
+    /// Went down this frame.
+    pressed: bool = false,
+    /// Went up this frame.
+    released: bool = false,
+    /// Went up this frame over the widget it went down on.
+    clicked: bool = false,
+    focused: bool = false,
+    _: u2 = 0,
+};
+
+test "Sense: one bit per interaction, presets as bit masks" {
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(Sense{})));
+    try std.testing.expectEqual(@as(u8, 0b1011), @as(u8, @bitCast(Sense.button)));
+    try std.testing.expectEqual(@as(u8, 0b1111), @as(u8, @bitCast(Sense.any)));
+}
+
+test "Response: bits are in declaration order and can be assembled from masks" {
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(Response{})));
+    const r: Response = @bitCast(@as(u8, 0b10_0001));
+    try std.testing.expect(r.hovered and r.focused);
+    try std.testing.expect(!r.held and !r.pressed and !r.released and !r.clicked);
+    try std.testing.expectEqual(@as(u8, 1 << 4), @as(u8, @bitCast(Response{ .clicked = true })));
+}
