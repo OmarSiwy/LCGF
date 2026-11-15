@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const none = @import("types.zig").none;
 
 /// f32/u32 lanes per vector.
 pub const lanes: comptime_int = build_options.lanes orelse (std.simd.suggestVectorLength(f32) orelse 4);
@@ -68,6 +69,23 @@ pub inline fn andB(a: bool, b: bool) bool {
 /// `a or b` as one bitwise OR.
 pub inline fn orB(a: bool, b: bool) bool {
     return (@intFromBool(a) | @intFromBool(b)) != 0;
+}
+
+/// First index of `needle` in `col[0..len]`, or `none`.
+/// Compares `lanes` values per step and never exits early.
+/// `col` holds at least `padded(len)` rows; rows past `len` are ignored.
+pub fn find(col: []const u32, len: u32, needle: u32) u32 {
+    var found: u32 = none;
+    const n = padded(len);
+    var i: usize = 0;
+    while (i < n) : (i += lanes) {
+        const base: u32 = @intCast(i);
+        const in_range = (iota + u(base)) < u(len);
+        const m = bits((loadU(col, i) == u(needle)) & in_range);
+        const idx = base + @as(u32, @ctz(m));
+        found = selU(andB(m != 0, found == none), idx, found);
+    }
+    return found;
 }
 
 const testing = std.testing;
@@ -138,4 +156,20 @@ test "selects pick like if-else, bit for bit" {
         try testing.expectEqual(a and b, andB(a, b));
         try testing.expectEqual(a or b, orB(a, b));
     };
+}
+
+test "find returns the first match, ignores rows past len, else none" {
+    var col: [3 * lanes]u32 = undefined;
+    for (&col, 0..) |*v, i| v.* = @intCast(100 + i);
+    const len: u32 = 2 * lanes + 1;
+    for (0..len) |i| try testing.expectEqual(@as(u32, @intCast(i)), find(&col, len, @intCast(100 + i)));
+    // Present in the padding only: not found.
+    try testing.expectEqual(none, find(&col, len, 100 + len));
+    try testing.expectEqual(none, find(&col, 0, 100));
+    try testing.expectEqual(none, find(&col, len, 7));
+    // Duplicates across vectors: the lowest index wins.
+    col[lanes + 1] = 100;
+    try testing.expectEqual(@as(u32, 0), find(&col, len, 100));
+    col[0] = 0;
+    try testing.expectEqual(@as(u32, lanes + 1), find(&col, len, 100));
 }
