@@ -10,6 +10,9 @@ pub const input = @import("core/input.zig");
 pub const types = @import("core/types.zig");
 pub const mem = @import("core/mem.zig");
 pub const tree = @import("core/tree.zig");
+pub const strings = @import("core/strings.zig");
+pub const texts = @import("core/texts.zig");
+pub const customs = @import("core/customs.zig");
 
 test {
     std.testing.refAllDecls(@This());
