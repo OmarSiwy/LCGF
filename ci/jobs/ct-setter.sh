@@ -1,21 +1,35 @@
-# The comptime setter is one store and one OR with a constant (plan C0154). Disassembles
-# set_volume from src/comptime/setter_probe.zig and requires, besides frame-pointer setup and
-# the return, exactly one store of the value and one OR of the immediate 0x15 (the probe's
-# volume mask: slider 4, its row 2, root 0) into memory. x86-64 only: AT&T mnemonics.
-for opt in ReleaseFast ReleaseSmall ReleaseSafe; do
-    zig build ct-setter -Doptimize="$opt" -Dtarget=x86_64-linux
-    objdump -d --no-show-raw-insn zig-out/ct_setter.o | sed -n '/<set_volume>:/,/^$/p' | awk -v opt="$opt" '
+# The comptime setter is one store and one OR with a constant (plans C0154, C0155).
+# Disassembles src/comptime/setter_probe.zig and requires each setter to be, besides
+# frame-pointer setup, the return and alignment padding after it, exactly one store of the
+# value through %rdi and the listed ORs of immediates into memory, in order:
+#   set_volume  integer mask u8: one OR of 0x15 (the probe's volume mask: slider 4, row 2, root)
+#   set_far     [4]u32 array mask: one OR per touched word, 0x1 (root) and 0x8 (row 99)
+# x86-64 only: AT&T mnemonics.
+setter() { # <object> <opt> <function> <immediates...>
+    local obj=$1 opt=$2 fn=$3; shift 3
+    objdump -d --no-show-raw-insn "$obj" | sed -n "/<$fn>:/,/^\$/p" | awk -v opt="$opt" -v fn="$fn" -v want="$*" '
         /^ *[0-9a-f]+:\t/ {
-            sub(/^ *[0-9a-f]+:\t/, ""); n++
-            if ($0 ~ /^(push|pop) +%rbp$/ || $0 ~ /^mov +%rsp,%rbp$/ || $0 ~ /^ret/) next
-            if ($0 ~ /^movss +%xmm0,(0x[0-9a-f]+)?\(%rdi\)$/) { store++; next }
-            if ($0 ~ /^orb? +\$0x15,(0x[0-9a-f]+)?\(%rdi\)$/) { or_++; next }
-            print opt ": unexpected instruction: " $0; bad = 1
+            sub(/^ *[0-9a-f]+:\t/, "")
+            if (done) next # padding after ret
+            n++
+            if ($0 ~ /^(push|pop) +%rbp$/ || $0 ~ /^mov +%rsp,%rbp$/) next
+            if ($0 ~ /^ret/) { done = 1; next }
+            if ($0 ~ /^(mov[a-z]*) +%[a-z0-9]+,(0x[0-9a-f]+)?\(%rdi\)$/) { store++; next }
+            if ($0 ~ /^or[bwlq]? +\$0x[0-9a-f]+,(0x[0-9a-f]+)?\(%rdi\)$/) {
+                imm = $0; sub(/^or[bwlq]? +\$/, "", imm); sub(/,.*/, "", imm)
+                got = got (got == "" ? "" : " ") imm; next
+            }
+            print opt ": " fn ": unexpected instruction: " $0; bad = 1
         }
         END {
-            if (n == 0) { print opt ": set_volume not found"; exit 1 }
-            if (store != 1 || or_ != 1) { print opt ": " store + 0 " stores, " or_ + 0 " ORs (want 1 and 1)"; bad = 1 }
+            if (n == 0) { print opt ": " fn " not found"; exit 1 }
+            if (store != 1 || got != want) { print opt ": " fn ": " store + 0 " stores, ORs [" got "] (want 1 store, ORs [" want "])"; bad = 1 }
             if (bad) exit 1
-            printf "%s: set_volume is 1 store + 1 OR of 0x15 (%d instructions)\n", opt, n
+            printf "%s: %s is 1 store + ORs of %s (%d instructions)\n", opt, fn, want, n
         }'
+}
+for opt in ReleaseFast ReleaseSmall ReleaseSafe; do
+    zig build ct-setter -Doptimize="$opt" -Dtarget=x86_64-linux
+    setter zig-out/ct_setter.o "$opt" set_volume 0x15
+    setter zig-out/ct_setter.o "$opt" set_far 0x1 0x8
 done

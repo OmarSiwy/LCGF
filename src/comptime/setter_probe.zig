@@ -17,3 +17,15 @@ const App = lcgr.signals.Signals(Mixer, s.col(.{ .pad = @splat(8), .gap = 4 }, .
 export fn set_volume(rt: *App.Runtime, v: f32) void {
     rt.set(.volume, v);
 }
+
+/// 100 nodes, so the mask is a [4]u32 array; `x` is shown by the last leaf only, so its mask
+/// touches word 0 (the root) and word 3 (row 99): two ORs.
+const Far = lcgr.signals.Signals(struct { x: u8 = 0, y: u8 = 0 }, blk: {
+    var leaves: [99]s.Spec = undefined;
+    for (&leaves, 0..) |*l, k| l.* = if (k == 98) s.label(.x) else s.label(.y);
+    break :blk s.row(.{}, leaves);
+});
+
+export fn set_far(rt: *Far.Runtime, v: u8) void {
+    rt.set(.x, v);
+}
