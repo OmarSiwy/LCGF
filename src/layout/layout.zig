@@ -6,6 +6,7 @@
 //!   applyText(.x)      scatter  text widths into leaves
 //!   fit(.x)            reverse  natural widths, bottom-up (+ SIMD reciprocals)
 //!   resolve(.x)        forward  final widths, top-down
+//!   textAvail          gather   widths for wrapping   (caller re-measures here)
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -141,6 +142,15 @@ pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
         s = @min(@max(s, min[i]), max[i]);
         size[i] = s;
         used[p] += s * fl;
+    }
+}
+
+/// Gathers the width layout gave each text run. Call after `resolve(.x)`;
+/// the caller then rewrites `h` for runs that wrap.
+pub fn textAvail(t: *const Tree, tx: *Texts) void {
+    const c = &t.c;
+    for (tx.c.node[0..tx.len], tx.c.avail[0..tx.len]) |node, *avail| {
+        avail.* = c.size[0][node] - c.pad_lo[0][node] - c.pad_hi[0][node];
     }
 }
 
@@ -295,4 +305,22 @@ test "resolve: final sizes top-down; growers share free space, shrinkers give wa
     // body takes what root's 280 has left after bar 40, col 24 and two 5 px gaps.
     try expectCol(&.{ 300, 40, 40, 40, 24, 24, 206 }, c.size[1]);
     try expectCol(&.{ 270, 80, 0, 0, 24, 0, 0 }, c.used[1]);
+}
+
+test "textAvail: each run gets its node's resolved width inside the padding" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    prepare(&s.t);
+    applyText(&s.t, &s.tx, .x);
+    fit(&s.t, .x);
+    resolve(&s.t, .x, 400);
+    textAvail(&s.t, &s.tx);
+    // para shrank to 100, so its 120 px run has 100 px to wrap into.
+    try expectCol(&.{100}, s.tx.c.avail);
+
+    // Padding is taken off: give para 3 px on each side and gather again.
+    s.t.c.pad_lo[0][Scene.para] = 3;
+    s.t.c.pad_hi[0][Scene.para] = 3;
+    textAvail(&s.t, &s.tx);
+    try expectCol(&.{94}, s.tx.c.avail);
 }
