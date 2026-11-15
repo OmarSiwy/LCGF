@@ -5,6 +5,8 @@
 //!   zig build test -Dcpu=x86_64_v3 same, with 8 SIMD lanes on x86-64
 //!   zig build test-build           compile the tests only, e.g. with -Dtarget=aarch64-linux
 //!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
+//!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
+//!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -63,6 +65,19 @@ pub fn build(b: *std.Build) void {
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
+
+    // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
+    const fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("tools/fuzz/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "ui", .module = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig") }) }},
+    });
+    const fuzz_tests = b.addTest(.{ .root_module = fuzz_mod });
+    b.step("fuzz", "Run the fuzz tests (add --fuzz=N to fuzz)").dependOn(&b.addRunArtifact(fuzz_tests).step);
+    const fuzz_run = b.addRunArtifact(b.addExecutable(.{ .name = "fuzz", .root_module = fuzz_mod }));
+    fuzz_run.addPassthruArgs();
+    b.step("fuzz-run", "Fuzz for a time: -- [seconds] [seed] [first]").dependOn(&fuzz_run.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
