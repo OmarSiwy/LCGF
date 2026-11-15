@@ -1,0 +1,48 @@
+# The sized mixer (src/comptime/events.zig): checkbox `mute` at x 8..28, y 8..28; slider
+# `volume` at x 36..136, y 8..28; slider `pan` at x 8..108, y 32..52. Scancodes: 15 Tab,
+# 50 M, 20 P.
+
+# 0: hover the checkbox
+frame
+viewport 200 100
+pointer 10 10
+# 1: press
+frame
+buttons left
+# 2: release over it: click, mute toggles on
+frame
+buttons
+# 3: press the volume slider at a quarter
+frame
+pointer 61 20
+buttons left
+# 4: drag to three quarters
+frame
+pointer 111 20
+# 5: drag past the right end: clamped to 1
+frame
+pointer 300 20
+# 6: release: no event
+frame
+buttons
+# 7, 8: press the checkbox, release on the pan slider: no click
+frame
+pointer 12 12
+buttons left
+frame
+pointer 50 40
+buttons
+# 9: Tab twice, then Shift+Tab: focus on mute
+frame
+press 15
+release 15
+press 15
+press 15 shift
+# 10: Ctrl+M toggles mute off; M alone and Ctrl+P (no shortcut) do nothing
+frame
+press 50 ctrl
+press 50
+press 20 ctrl
+# 11: P sets pan to the middle through its shortcut
+frame
+press 20

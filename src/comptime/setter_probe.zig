@@ -34,3 +34,14 @@ export fn set_far(rt: *Far.Runtime, v: u8) void {
 export fn stage_volume(rt: *App.Runtime, v: f32) void {
     rt.stage(.volume, v);
 }
+
+/// The comptime hit sweep over the probe's widgets, for the branch census
+/// (`tools/census/census.py zig-out/ct_setter.o --prefix p_`).
+const Hit = lcgr.events.Events(s.col(.{ .pad = @splat(8), .gap = 4 }, .{
+    s.label(.title),
+    s.row(.{ .gap = 8 }, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }),
+    s.row(.{ .gap = 8 }, .{ s.label(.title), s.slider(.pan, .pan) }),
+}));
+export fn p_ct_hit(r: *const Hit.Rects, x: f32, y: f32) u32 {
+    return if (Hit.at(r, x, y)) |w| @backingInt(w) else 0xff;
+}
