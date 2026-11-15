@@ -65,9 +65,3 @@ export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
 export fn p_resolve_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.resolveFlex(t, fx, .y, 800);
 }
-export fn p_step(s: *lcgr.interaction.Interaction, prev: *const Tree, in: *const lcgr.input.Input) void {
-    s.step(prev, in);
-}
-export fn p_touch_step(s: *lcgr.interaction.Touches(10), prev: *const Tree, in: *const lcgr.input.Input) void {
-    s.step(prev, in);
-}
