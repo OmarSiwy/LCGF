@@ -21,6 +21,10 @@
 //! The result is linear coverage, nonzero winding, with the abs taken so either contour
 //! direction works. Images match FreeType's (testdata/make.py) to within a few levels.
 //!
+//! Subpixel positioning: `box` and `fill` take a horizontal shift `dx`, so one glyph has an image
+//! per quarter pixel (`pen`, `shift`). A run places the image of the bin its pen x rounds to at
+//! the pen's whole pixel, and keeps its spacing to a quarter pixel instead of a whole one.
+//!
 //! Output is the atlas contract of `fonts.Mono.quads` in prototype/ui.zig: a glyph is a
 //! rectangle of coverage placed at the pen position plus (`left`, -`top`), y down.
 
@@ -50,6 +54,25 @@ pub fn accLen(b: Box) usize {
 /// Bytes of coverage image `coverage` writes for `b`: `b.w * b.h` padded to whole vectors.
 pub fn imageLen(b: Box) usize {
     return simd.padded(@as(usize, b.w) * b.h);
+}
+
+/// Horizontal subpixel positions a glyph is rasterised at: a quarter pixel apart. Four images
+/// per glyph is where the eye stops seeing the steps in spacing (FreeType's and Skia's choice).
+pub const subpixel_bins = 4;
+
+/// A pen x split for rasterising: the whole pixel the glyph's box is placed from, and the
+/// subpixel bin (0 to `subpixel_bins - 1`) whose image is drawn there. The pen rounds to the
+/// nearest bin. `shift(bin)` is the `dx` to rasterise that bin's image with.
+pub const Pen = struct { pixel: i32, bin: u32 };
+
+pub fn pen(x: f32) Pen {
+    const q: i32 = @intFromFloat(@round(x * subpixel_bins));
+    return .{ .pixel = @divFloor(q, subpixel_bins), .bin = @intCast(@mod(q, subpixel_bins)) };
+}
+
+/// The rasterising shift of subpixel `bin`, in pixels.
+pub fn shift(bin: u32) f32 {
+    return @as(f32, @floatFromInt(bin)) / subpixel_bins;
 }
 
 /// The pixel box covering every point of `o` at `scale` pixels per font unit, shifted right by
@@ -366,7 +389,6 @@ test "glyph images match the FreeType references" {
     var total: Diff = .{};
     var images: u32 = 0;
     while (it.next()) |r| {
-        if (r.offset != 0) continue;
         const b, const img = render(face, r, &o, &acc, &out);
         // FreeType takes the box from the control box too, but of points rounded to 1/64 px, so
         // an edge within 1/128 px of a pixel border can land on the other side.
@@ -379,10 +401,12 @@ test "glyph images match the FreeType references" {
         total.pixels += d.pixels;
         images += 1;
     }
-    try std.testing.expectEqual(40, images);
+    // 8 glyphs, 5 sizes, 4 subpixel shifts.
+    try std.testing.expectEqual(160, images);
     // FreeType rounds points to 1/64 px and flattens curves more coarsely: straight edges agree
-    // to 3 levels of 255, curved ones to 14 (measured: 4,613 levels over 8,037 pixels, a mean
-    // of 0.57).
+    // to 3 levels of 255, curved ones to 14 (measured at shift 0: 4,613 levels over 8,037
+    // pixels, a mean of 0.57; over all four shifts: max 14,
+    // 18,596 over 32,489, again 0.57).
     try std.testing.expect(total.max <= 16);
     try std.testing.expect(total.sum < total.pixels);
 }
@@ -439,4 +463,41 @@ test "SIMD coverage matches the scalar running sum" {
         // The sums run in a different order, so a pixel on a rounding boundary may differ by 1.
         for (img, ref[0..img.len]) |v, s| try std.testing.expect(@abs(@as(i32, v) - s) <= 1);
     }
+}
+
+test "pen positions split into a pixel and a quarter-pixel bin" {
+    try std.testing.expectEqual(Pen{ .pixel = 2, .bin = 1 }, pen(2.3));
+    try std.testing.expectEqual(Pen{ .pixel = 3, .bin = 0 }, pen(2.9));
+    try std.testing.expectEqual(Pen{ .pixel = -1, .bin = 3 }, pen(-0.25));
+    try std.testing.expectEqual(Pen{ .pixel = 0, .bin = 2 }, pen(0.5));
+    try std.testing.expectEqual(@as(f32, 0.75), shift(3));
+}
+
+test "a subpixel shift moves the image, not just its box" {
+    const face = try opentype.Face.parse(font, 0);
+    var cols: TestOutline = .{};
+    var o = cols.outline();
+    o.points = 0;
+    o.contours = 0;
+    try face.outline(face.cmap.glyph('V'), &o);
+    const scale = 16 / @as(f32, @floatFromInt(face.units_per_em));
+    var acc: [2][64 * 64]f32 = undefined;
+    var img: [2][64 * 64]u8 = undefined;
+    var boxes: [2]Box = undefined;
+    for (0..2) |k| {
+        boxes[k] = box(&o, scale, shift(@intCast(k * 2)));
+        fill(&o, scale, shift(@intCast(k * 2)), boxes[k], &acc[k]);
+        coverage(&acc[k], &img[k], @as(usize, boxes[k].w) * boxes[k].h);
+    }
+    // Half a pixel to the right: the ink moves by half a pixel, so its centre of mass does.
+    var mass: [2]f64 = .{ 0, 0 };
+    var ink: [2]f64 = .{ 0, 0 };
+    for (0..2) |k| {
+        for (0..@as(usize, boxes[k].w) * boxes[k].h) |i| {
+            const x: f64 = @floatFromInt(@as(i32, @intCast(i % boxes[k].w)) + boxes[k].left);
+            mass[k] += (x + 0.5) * @as(f64, @floatFromInt(img[k][i]));
+            ink[k] += @floatFromInt(img[k][i]);
+        }
+    }
+    try std.testing.expectApproxEqAbs(0.5, mass[1] / ink[1] - mass[0] / ink[0], 0.02);
 }
