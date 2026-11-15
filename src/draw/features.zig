@@ -12,7 +12,7 @@ const types = @import("../core/types.zig");
 const Color = types.Color;
 
 /// What `params.x` selects in the stock material. `solid` is all-zero params, the default.
-pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3 };
+pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4 };
 
 /// `Style.params` for a linear gradient from the node's `fill` to `to`. `angle` is in radians:
 /// 0 runs left to right, pi/2 top to bottom (y points down). The gradient spans the two corners
@@ -35,6 +35,24 @@ pub fn radial(to: Color, centre: [2]f32, radius: f32) [4]f32 {
 /// so it paints underneath. Its border is not drawn.
 pub fn shadow(sigma: f32) [4]f32 {
     return words(.{ @backingInt(Kind.shadow), @bitCast(sigma), 0, 0 });
+}
+
+/// `Style.params` for a nine-slice image: the node's texture rect (`Style.uv`) is cut into a 3x3
+/// grid. `dst` is the size of the border cells on screen, left, top, right, bottom, in whole
+/// pixels from 0 to 255; `src` is where the image is cut, as fractions of the image (0 to 1).
+/// Corners keep their size as the node grows, edges stretch along one axis, the middle along
+/// both.
+pub fn nineSlice(dst: [4]f32, src: [4]f32) [4]f32 {
+    var px: u32 = 0;
+    for (dst, 0..) |v, k| px |= @as(u32, @intFromFloat(std.math.clamp(@round(v), 0, 255))) << @intCast(8 * k);
+    return words(.{ @backingInt(Kind.nine_slice), px, unorm2(src[0], src[1]), unorm2(src[2], src[3]) });
+}
+
+/// Two unorm16 in one word, low half first: WGSL `unpack2x16unorm`.
+fn unorm2(lo: f32, hi: f32) u32 {
+    const a: u32 = @intFromFloat(@round(std.math.clamp(lo, 0, 1) * 65535));
+    const b: u32 = @intFromFloat(@round(std.math.clamp(hi, 0, 1) * 65535));
+    return (b << 16) | a;
 }
 
 /// Two f16 in one word, low half first: WGSL `unpack2x16float`.
@@ -62,6 +80,8 @@ test "features: solid is the zero default, kind and colour travel as exact words
     try testing.expectEqual(@backingInt(Kind.radial), q[0]);
     try testing.expectEqual(0x3c00_3400, q[2]); // f16 1.0 high, f16 0.25 low
     try testing.expectEqual(@as(f32, 40), @as(f32, @bitCast(q[3])));
+    const ns: [4]u32 = @bitCast(nineSlice(.{ 12, 8, 300, -1 }, .{ 0.25, 0.5, 1, 0 }));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.nine_slice), 0x00ff_080c, 0x8000_4000, 0x0000_ffff }, ns);
     const sh: [4]u32 = @bitCast(shadow(6));
     try testing.expectEqual([4]u32{ @backingInt(Kind.shadow), @bitCast(@as(f32, 6)), 0, 0 }, sh);
 }

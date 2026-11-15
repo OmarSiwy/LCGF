@@ -32,6 +32,7 @@ struct Frag {
     @location(6) @interpolate(flat) border_color: vec4f,
     @location(7) @interpolate(flat) clip: vec4f,
     @location(8) @interpolate(flat) params: vec4u,
+    @location(9) @interpolate(flat) uv_rect: vec4f,
 }
 
 @vertex
@@ -52,6 +53,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     out.border_color = inst.border_color;
     out.clip = inst.clip;
     out.params = inst.params;
+    out.uv_rect = inst.uv;
     return out;
 }
 
@@ -64,6 +66,7 @@ fn rounded_box(p: vec2f, half: vec2f, r: f32) -> f32 {
 const k_linear = 1u;
 const k_radial = 2u;
 const k_shadow = 3u;
+const k_nine = 4u;
 
 // Gradients: fill is the start colour, params.y the end colour (rgba8).
 //   linear: params.z = angle in radians (0 runs left to right, y points down). t runs 0..1
@@ -94,9 +97,31 @@ fn shadow_coverage(d: f32, sigma: f32) -> f32 {
     return 0.5 - 0.5 * e;
 }
 
+// Nine-slice: the image (uv_rect) is cut into a 3x3 grid by insets; corners keep their pixel
+// size, edges stretch along one axis, the middle along both.
+//   params.y = destination insets left, top, right, bottom in pixels, one byte each
+//   params.z, params.w = source insets (left, top), (right, bottom) as unorm16 fractions of the image
+fn nine_axis(pos: f32, size: f32, lo: f32, hi: f32, src_lo: f32, src_hi: f32) -> f32 {
+    let start = pos / max(lo, 1e-6) * src_lo;
+    let end = 1.0 - (size - pos) / max(hi, 1e-6) * src_hi;
+    let mid = src_lo + (pos - lo) / max(size - lo - hi, 1e-6) * (1.0 - src_lo - src_hi);
+    return select(select(mid, end, pos > size - hi), start, pos < lo);
+}
+
+fn nine_uv(in: Frag) -> vec2f {
+    let dst = unpack4x8unorm(in.params.y) * 255.0;
+    let src = vec4f(unpack2x16unorm(in.params.z), unpack2x16unorm(in.params.w));
+    let pos = in.local + in.half;
+    let size = in.half * 2.0;
+    let f = vec2f(nine_axis(pos.x, size.x, dst.x, dst.z, src.x, src.z),
+                  nine_axis(pos.y, size.y, dst.y, dst.w, src.y, src.w));
+    return mix(in.uv_rect.xy, in.uv_rect.zw, f);
+}
+
 // The stock material: the fill (or its gradient) times the bound texture.
 fn material(in: Frag) -> vec4f {
-    return gradient(in) * textureSample(tex, samp, in.uv);
+    let uv = select(in.uv, nine_uv(in), in.params.x == k_nine);
+    return gradient(in) * textureSample(tex, samp, uv);
 }
 
 @fragment

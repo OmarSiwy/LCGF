@@ -107,10 +107,27 @@ fn images(t: *Tree) void {
     });
 }
 
+/// One 4x4-texel atlas cell (byte 33: texels x 1-2, y 1-3 set) cut one texel in from every side
+/// and drawn with 12-pixel borders at three sizes: the border cells keep 12 pixels.
+fn nineSlices(t: *Tree) void {
+    const atlas: lcgr.types.Texture = @fromBackingInt(1);
+    _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(20), .gap = 20 });
+    const sizes = [_][2]f32{ .{ 160, 120 }, .{ 60, 60 }, .{ 300, 40 } };
+    for (sizes) |wh| _ = t.push(0, .none, &.{
+        .size = .{ .px(wh[0]), .px(wh[1]) },
+        .fill = .rgb(255, 210, 120),
+        .texture = atlas,
+        .uv = .{ 1.0 / 16.0, 2.0 / 16.0, 2.0 / 16.0, 3.0 / 16.0 },
+        .params = features.nineSlice(@splat(12), @splat(0.25)),
+    });
+    t.seal(0);
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
     .{ "images", images },
+    .{ "nine-slice", nineSlices },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;
