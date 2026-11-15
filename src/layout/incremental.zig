@@ -263,15 +263,17 @@ fn expectSameLayout(want: *const Tree, got: *const Tree) !void {
 }
 
 /// Two identical random trees, laid out in full. Frame after frame the same random changes go
-/// into both, and now and then a new viewport; `full` is laid out from scratch, `inc` through `update`. They must agree bit for bit.
-fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
+/// into both, and now and then a new viewport; `full` is laid out from scratch, `inc` through
+/// `update`. They must agree bit for bit. With `texts`, about a third of the leaves carry a
+/// measured text run, and changes also give runs new extents.
+fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32, texts: bool) !void {
     var raw: [2][1024 * 1024]u8 align(mem.column_align) = undefined;
     var c0: mem.Carver = .{ .buf = &raw[0] };
     var c1: mem.Carver = .{ .buf = &raw[1] };
     var full = Tree.init(&c0, 600);
     var inc = Tree.init(&c1, 600);
-    var full_tx = Texts.init(&c0, 1);
-    var inc_tx = Texts.init(&c1, 1);
+    var full_tx = Texts.init(&c0, 600);
+    var inc_tx = Texts.init(&c1, 600);
     var d = Dirty.init(&c1, 600);
     var vp: [2]f32 = .{ 1280, 800 };
     var prng: std.Random.DefaultPrng = .init(seed);
@@ -283,6 +285,21 @@ fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
         var b: std.Random.DefaultPrng = .init(tree_seed);
         check.randomTree(&full, a.random(), n);
         check.randomTree(&inc, b.random(), n);
+        full_tx.reset();
+        inc_tx.reset();
+        for (0..n) |i| {
+            if (!texts or full.c.end[i] != i + 1 or r.uintLessThan(u32, 3) != 0) continue;
+            const node: u32 = @intCast(i);
+            for ([2]*Texts{ &full_tx, &inc_tx }, [2]*Tree{ &full, &inc }) |tx, t| {
+                t.c.text[node] = tx.push(node, .{}, &.{});
+            }
+            const w: f32 = @floatFromInt(r.uintLessThan(u32, 300));
+            const h: f32 = @floatFromInt(r.uintLessThan(u32, 40));
+            full_tx.c.w[full_tx.len - 1] = w;
+            full_tx.c.h[full_tx.len - 1] = h;
+            inc_tx.c.w[inc_tx.len - 1] = w;
+            inc_tx.c.h[inc_tx.len - 1] = h;
+        }
         layout.run(&full, &full_tx, vp);
         layout.run(&inc, &inc_tx, vp);
         for (0..frames) |_| {
@@ -290,17 +307,34 @@ fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
                 const ch = Change.random(r, n);
                 ch.apply(&full, null);
                 ch.apply(&inc, &d);
+                if (full_tx.len == 0 or r.boolean()) continue;
+                // A run measured again: new extents, both axes of its node.
+                const k = r.uintLessThan(u32, full_tx.len);
+                const w: f32 = @floatFromInt(r.uintLessThan(u32, 300));
+                full_tx.c.w[k] = w;
+                inc_tx.c.w[k] = w;
+                full_tx.c.h[k] = w / 10;
+                inc_tx.c.h[k] = w / 10;
+                d.mark(inc_tx.c.node[k], .x);
+                d.mark(inc_tx.c.node[k], .y);
             }
             if (r.uintLessThan(u32, 8) == 0) vp[r.int(u1)] = @floatFromInt(400 + r.uintLessThan(u32, 1200));
             layout.run(&full, &full_tx, vp);
             update(&inc, &inc_tx, &d, vp);
             try expectSameLayout(&full, &inc);
+            try testing.expectEqualSlices(f32, full_tx.c.avail[0..full_tx.len], inc_tx.c.avail[0..inc_tx.len]);
         }
     }
 }
 
 test "update: equals a full layout after random changes to random trees" {
-    try randomFrames(0x111, 40, 8, 3);
+    try randomFrames(0x111, 40, 8, 3, false);
+}
+
+test "update: equals a full layout with text runs, many changes per frame and many seeds" {
+    // One change per frame, the common case, then bursts of up to 40.
+    for (0..4) |s| try randomFrames(0x1160 + s, 30, 10, 1, true);
+    for (0..4) |s| try randomFrames(0x1170 + s, 20, 6, 40, true);
 }
 
 test "boundaries: px sizes and the root, not fit, grow or pct" {
