@@ -20,6 +20,10 @@
 //!
 //! The result is linear coverage, nonzero winding, with the abs taken so either contour
 //! direction works. Images match FreeType's (testdata/make.py) to within a few levels.
+//! Overlapping contours (left in variable-font instances, flagged OVERLAP_SIMPLE) over-cover
+//! where two edges share a pixel, since areas add before the clamp: up to about 50 levels on
+//! Noto Sans Devanagari at 32 px, where FreeType oversamples such glyphs instead. Fonts with
+//! merged contours, the usual case for static fonts, are not affected.
 //!
 //! Subpixel positioning: `box` and `fill` take a horizontal shift `dx`, so one glyph has an image
 //! per quarter pixel (`pen`, `shift`). A run places the image of the bin its pen x rounds to at
