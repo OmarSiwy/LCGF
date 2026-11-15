@@ -58,8 +58,20 @@ pub fn Events(comptime spec: Spec) type {
 
         /// The widget's position in widget order: its index into the per-widget tables.
         pub fn slot(comptime w: Widget) usize {
-            return comptime std.mem.indexOfScalar(Index, &widget_nodes, @backingInt(w)).?;
+            return comptime slotOf(w);
         }
+
+        /// `slot` at run time: one table read.
+        fn slotOf(w: Widget) usize {
+            return slot_of_row[@backingInt(w)];
+        }
+        /// Widget position of each row; rows that are not widgets hold 0 and are never read.
+        const slot_of_row: [F.node_count]u32 = blk: {
+            @setEvalBranchQuota(1000 + 8 * F.node_count);
+            var out: [F.node_count]u32 = @splat(0);
+            for (widget_nodes, 0..) |node, k| out[node] = k;
+            break :blk out;
+        };
 
         /// The widget at position `k` of widget order.
         pub fn widget(k: usize) Widget {
@@ -121,6 +133,7 @@ pub fn Events(comptime spec: Spec) type {
         /// exhaustive switch whose payload type follows the widget's kind:
         /// `switch (e) { .mute => ..., .volume => |v| ..., .pan => |v| ... }`.
         pub const Event = if (count == 0) union {} else blk: {
+            @setEvalBranchQuota(1000 + 8 * count);
             var types_: [count]type = undefined;
             for (&types_, widget_kinds) |*T, kind| T.* = Payload(kind);
             break :blk @Union(.auto, Widget, &ids.names, &types_, &@splat(.{}));
@@ -138,6 +151,7 @@ pub fn Events(comptime spec: Spec) type {
         /// order, which is reading order (depth-first, children in declaration order).
         pub const focus_order: []const Widget = &focus_table;
         const focus_table = blk: {
+            @setEvalBranchQuota(1000 + 8 * F.node_count);
             var k: usize = 0;
             for (widget_kinds) |kind| k += @intFromBool(focusable(kind));
             var out: [k]Widget = undefined;
@@ -151,13 +165,11 @@ pub fn Events(comptime spec: Spec) type {
         /// Position of each widget in `focus_order`, by widget order; `none` when not
         /// focusable. With `focus_order`, Tab is two table reads.
         const focus_pos: [count]u32 = blk: {
+            @setEvalBranchQuota(1000 + 8 * F.node_count);
             var out: [count]u32 = @splat(none);
             for (focus_table, 0..) |w, k| out[slotOf(w)] = k;
             break :blk out;
         };
-        fn slotOf(w: Widget) usize {
-            return std.mem.indexOfScalar(Index, &widget_nodes, @backingInt(w)).?;
-        }
 
         /// The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from
         /// `from`, wrapping at the ends. From no focus, or from a widget that is not
@@ -180,6 +192,89 @@ pub fn Events(comptime spec: Spec) type {
                 if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
                 focus.* = nextFocus(focus.*, e.mods.shift);
             }
+        }
+
+        /// One keyboard shortcut: a scancode (as in `Input.Keys`), the modifiers that must be
+        /// held, exactly, and the widget it activates.
+        pub const Shortcut = struct { code: u8, mods: Input.Mods = .{}, widget: Widget };
+
+        /// The shortcut table for `shortcuts`, built while compiling as a perfect hash: every
+        /// chord lands in a slot of its own, so a lookup is one multiply, one shift and one
+        /// compare, with no probing and no collision path. Two shortcuts on one chord are a
+        /// compile error.
+        pub fn Shortcuts(comptime shortcuts: []const Shortcut) type {
+            return struct {
+                /// Slots: a power of two, at least twice the shortcuts (at least 2).
+                pub const slots = hash.slots;
+                /// The multiplier that makes every chord's slot unique.
+                pub const seed = hash.seed;
+                const bits = std.math.log2_int(usize, slots);
+
+                const hash = blk: {
+                    @setEvalBranchQuota(10_000 + 200 * shortcuts.len * shortcuts.len);
+                    for (shortcuts, 0..) |a, i| for (shortcuts[0..i]) |b| {
+                        if (chord(a.code, a.mods) == chord(b.code, b.mods))
+                            @compileError(std.fmt.comptimePrint("two shortcuts on key {d} with the same modifiers", .{a.code}));
+                    };
+                    var m: usize = @max(2, std.math.ceilPowerOfTwo(usize, @max(1, 2 * shortcuts.len)) catch unreachable);
+                    while (true) : (m *= 2) {
+                        var s_: u32 = 0x9e37_79b1;
+                        for (0..64) |_| {
+                            if (collisionFree(s_, m)) break :blk .{ .slots = m, .seed = s_ };
+                            s_ = s_ *% 0x2c1b_3c6d +% 0x297a_2d39;
+                        }
+                    }
+                };
+
+                fn collisionFree(comptime s_: u32, comptime m: usize) bool {
+                    var used: [m]bool = @splat(false);
+                    for (shortcuts) |sc| {
+                        const h = slotOfChord(chord(sc.code, sc.mods), s_, std.math.log2_int(usize, m));
+                        if (used[h]) return false;
+                        used[h] = true;
+                    }
+                    return true;
+                }
+
+                /// Each slot's chord plus one (0 for an empty slot) and widget position.
+                const keys: [slots]u16 = tables[0];
+                const targets: [slots]u32 = tables[1];
+                const tables = blk: {
+                    @setEvalBranchQuota(1000 + 8 * shortcuts.len);
+                    var k: [slots]u16 = @splat(0);
+                    var w: [slots]u32 = @splat(0);
+                    for (shortcuts) |sc| {
+                        const c = chord(sc.code, sc.mods);
+                        const h = slotOfChord(c, seed, bits);
+                        k[h] = c + 1;
+                        w[h] = slotOf(sc.widget);
+                    }
+                    break :blk .{ k, w };
+                };
+
+                /// The widget the chord activates, or null.
+                pub fn lookup(code: u8, mods: Input.Mods) ?Widget {
+                    if (comptime count == 0) return null;
+                    const c = chord(code, mods);
+                    const h = slotOfChord(c, seed, bits);
+                    if (keys[h] != c + 1) return null;
+                    return widget(targets[h]);
+                }
+
+                /// The widgets this frame's key presses activate, in order, written to `out`;
+                /// returns how many. Auto-repeat does not activate.
+                pub fn pressed(in: *const Input, out: []Widget) usize {
+                    var n: usize = 0;
+                    for (in.events) |e| {
+                        if (e.kind != .press or n == out.len) continue;
+                        if (lookup(e.code, e.mods)) |w| {
+                            out[n] = w;
+                            n += 1;
+                        }
+                    }
+                    return n;
+                }
+            };
         }
 
         /// Pointer state across frames. The caller owns it and passes it to every `pointer`.
@@ -219,6 +314,16 @@ pub fn Events(comptime spec: Spec) type {
             }
         }
     };
+}
+
+/// A key and the four modifiers as one 12-bit number.
+fn chord(code: u8, mods: Input.Mods) u16 {
+    return (@as(u16, @as(u8, @bitCast(mods)) & 0xf) << 8) | code;
+}
+
+/// The slot of chord `c` in a table of 2^bits slots: the top bits of a multiplicative hash.
+fn slotOfChord(c: u16, seed: u32, comptime bits: comptime_int) usize {
+    return @intCast((@as(u32, c) *% seed) >> (32 - bits));
 }
 
 /// Spec nodes in `node`'s subtree with an id.
@@ -472,4 +577,67 @@ test "nextFocus, focusKeys: Tab walks the order and wraps, Shift+Tab walks back"
         .mute, .pan => return error.TestUnexpectedResult,
         .volume => {},
     }
+}
+
+test "Shortcuts: a perfect hash over chords, built at compile time" {
+    const S = App.Shortcuts(&.{
+        .{ .code = 50, .mods = .{ .ctrl = true }, .widget = .mute }, // Ctrl+M
+        .{ .code = 50, .widget = .volume }, // M alone is another chord
+        .{ .code = 25, .mods = .{ .ctrl = true, .shift = true }, .widget = .pan },
+        .{ .code = 33, .mods = .{ .alt = true }, .widget = .mute },
+    });
+    try testing.expectEqual(8, S.slots);
+    try testing.expectEqual(App.Widget.mute, S.lookup(50, .{ .ctrl = true }).?);
+    try testing.expectEqual(App.Widget.volume, S.lookup(50, .{}).?);
+    try testing.expectEqual(App.Widget.pan, S.lookup(25, .{ .ctrl = true, .shift = true }).?);
+    try testing.expectEqual(App.Widget.mute, S.lookup(33, .{ .alt = true }).?);
+    // Modifiers must match exactly; unknown keys miss.
+    try testing.expectEqual(null, S.lookup(25, .{ .ctrl = true }));
+    try testing.expectEqual(null, S.lookup(50, .{ .cmd = true }));
+    try testing.expectEqual(null, S.lookup(51, .{}));
+    // Every slot holds at most one chord, and every chord its own slot.
+    var filled: usize = 0;
+    for (S.keys) |k| filled += @intFromBool(k != 0);
+    try testing.expectEqual(4, filled);
+    // An empty table misses everything.
+    const E = App.Shortcuts(&.{});
+    try testing.expectEqual(null, E.lookup(50, .{}));
+}
+
+test "Shortcuts: misses for every other chord, and many shortcuts still hash perfectly" {
+    const M = Events(many);
+    const list = comptime blk: {
+        var out: [200]M.Shortcut = undefined;
+        for (&out, 0..) |*sc, k| sc.* = .{ .code = @intCast(k % 100 + 1), .mods = .{ .shift = k >= 100 }, .widget = M.widget(k * 7) };
+        break :blk out;
+    };
+    const S = M.Shortcuts(&list);
+    try testing.expect(S.slots >= 400);
+    // The focus tables of 2,000 widgets need no quota from the caller either.
+    try testing.expectEqual(2000, M.focus_order.len);
+    try testing.expectEqual(M.widget(0), M.nextFocus(M.widget(1999), false).?);
+    for (0..256) |code| for ([_]bool{ false, true }) |shift| for ([_]bool{ false, true }) |ctrl| {
+        const got = S.lookup(@intCast(code), .{ .shift = shift, .ctrl = ctrl });
+        const want: ?M.Widget = if (code >= 1 and code <= 100 and !ctrl) M.widget(((code - 1) + @as(usize, if (shift) 100 else 0)) * 7) else null;
+        try testing.expectEqual(want, got);
+    };
+}
+
+test "Shortcuts.pressed: key presses activate widgets, handled by exhaustive switch" {
+    const S = App.Shortcuts(&.{ .{ .code = 50, .mods = .{ .ctrl = true }, .widget = .mute }, .{ .code = 20, .widget = .pan } });
+    const events = [_]Input.Event{
+        .{ .kind = .press, .code = 50, .mods = .{ .ctrl = true } },
+        .{ .kind = .repeat, .code = 50, .mods = .{ .ctrl = true } },
+        .{ .kind = .press, .code = 21 },
+        .{ .kind = .press, .code = 20 },
+    };
+    var out: [4]App.Widget = undefined;
+    const n = S.pressed(&.{ .events = &events }, &out);
+    try testing.expectEqualSlices(App.Widget, &.{ .mute, .pan }, out[0..n]);
+    var muted = false;
+    for (out[0..n]) |w| switch (w) {
+        .mute => muted = !muted,
+        .volume, .pan => {},
+    };
+    try testing.expect(muted);
 }
