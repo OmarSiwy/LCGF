@@ -94,7 +94,7 @@ fn bindMask(comptime s: Spec, comptime field: []const u8) u64 {
 }
 
 fn bindWalk(comptime s: Spec, comptime field: []const u8, comptime path: u64, comptime next: *u6) u64 {
-    const here = path | @as(u64, 1) << next.*;
+    const here = path | (@as(u64, 1) << next.*);
     next.* += 1;
     var m: u64 = if (s.bind != null and std.mem.eql(u8, s.bind.?, field)) here else 0;
     for (s.children) |c| m |= bindWalk(c, field, here, next);

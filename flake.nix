@@ -19,8 +19,9 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # The plan pins Zig 0.17.1 exactly (docs/DESIGN.md).
-        zig = zig-overlay.packages.${system}."0.17.1";
+        # One exact Zig development build (docs/DESIGN.md): 0.18.0-dev.1151+8dfb7a7cc, chosen for
+        # its loop auto-vectorizer. Change it on purpose only, and re-run the census and bench.
+        zig = zig-overlay.packages.${system}."master-2026-11-14";
       in
       rec {
         devShells.default = pkgs.mkShell {

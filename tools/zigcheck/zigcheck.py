@@ -9,7 +9,7 @@ Each case is a few lines of Zig and whether it is expected to compile (and pass,
 if it is a test). A mismatch means the notes are wrong for your compiler: fix
 the notes before trusting them. To settle a question about the language or std,
 add a case here and run it; that is cheaper than guessing.
-Results below were recorded on Zig 0.17.1 (x86-64 Linux).
+Results below were recorded on Zig 0.17.1 and re-checked on 0.18.0-dev.1151+8dfb7a7cc (x86-64 Linux).
 """
 import os
 import shlex
@@ -114,7 +114,7 @@ CASES = {
     "debug_print_and_bufPrint": (True, STD + 'test { std.debug.print("", .{}); var b: [32]u8 = undefined; _ = try std.fmt.bufPrint(&b, "{d} {s} {d:.2}", .{ 1, "x", @as(f32, 1.5) }); }'),
     # ---- layout guarantees the renderer relies on
     "extern_struct_layout": (True, 'const Q = extern struct { r: [4]f32, c: u32 };\ntest { comptime { if (@sizeOf(Q) != 20) unreachable; if (@offsetOf(Q, "c") != 16) unreachable; } }'),
-    "packed_struct_bitcast": (True, "const P = packed struct(u8) { a: bool, b: u7 };\ntest { const p: P = @bitCast(@as(u8, 3)); _ = p; }"),
+    "packed_struct_bitcast": (True, "const P = bitpack struct(u8) { a: bool, b: u7 };\ntest { const p: P = @bitCast(@as(u8, 3)); _ = p; }"),
 }
 
 
@@ -148,8 +148,8 @@ def autovectorization(work):
     except FileNotFoundError:
         return "objdump not found: auto-vectorization not checked"
     packed = sum(1 for l in asm.splitlines() if "ymm" in l)
-    return ("plain loops ARE auto-vectorized by this compiler ({} ymm instructions): the notes say they are not".format(packed)
-            if packed else "plain loops are not auto-vectorized (as the notes say): write @Vector code by hand")
+    return ("plain loops are auto-vectorized ({} ymm instructions), as the notes say; passes still use @Vector".format(packed)
+            if packed else "plain loops are NOT auto-vectorized by this compiler: the notes say they are")
 
 
 def main():

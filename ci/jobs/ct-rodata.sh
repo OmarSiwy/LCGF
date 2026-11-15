@@ -2,13 +2,19 @@
 # exports one ro_* function per table, each reading it at a run-time row; every relocation an
 # ro_* function makes must point into a .rodata* section. rw_control reads a mutable copy and
 # must point into .data or .bss, so a check that cannot tell the two apart fails too.
-# x86-64 only: the relocation names are ELF x86-64's.
+# x86-64 only: the relocation names are ELF x86-64's. A relocation may name a section or a local
+# symbol (Zig 0.18 names `.Lcomptime...` symbols); symbols are resolved to their section through
+# the symbol table, and a name that maps to more than one section counts as unknown.
 for opt in ReleaseSmall ReleaseFast; do
     zig build ct-rodata -Doptimize="$opt" -Dtarget=x86_64-linux
-    objdump -dr zig-out/ct_rodata.o | awk -v opt="$opt" '
+    { objdump -t zig-out/ct_rodata.o | sed -n 's/^[0-9a-f]* [^.]*\(\.[^ \t]*\)\t[0-9a-f]* \([^ ]*\).*/SYM \2 \1/p'
+      objdump -dr zig-out/ct_rodata.o; } | awk -v opt="$opt" '
+        $1 == "SYM" { k = ($3 ~ /^\.rodata/) ? ".rodata" : $3
+                      if (($2 in where) && where[$2] != k) where[$2] = "?ambiguous"; else where[$2] = k; next }
         /^[0-9a-f]+ <.*>:$/ { fn = $2; gsub(/[<>:]/, "", fn); next }
         /R_X86_64_/ {
             sec = $3; sub(/[+-].*/, "", sec)
+            if (sec in where) sec = where[sec]
             if (fn ~ /^ro_/) { n_ro[fn]++; if (sec !~ /^\.rodata/) { print opt ": " fn " reads " sec; bad = 1 } }
             if (fn == "rw_control" && sec ~ /^\.(data|bss)/) rw = 1
         }

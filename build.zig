@@ -1,4 +1,4 @@
-//! Build file for LCGR. Zig 0.17.1 (prototype/build.zig is the verified example of this API).
+//! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
 //!   zig build                      compile the library module
 //!   zig build test                 run every test reachable from src/lcgr.zig
@@ -26,6 +26,16 @@ pub fn build(b: *std.Build) void {
     });
     lcgr.addOptions("build_options", options);
 
+    // Unicode property tables, generated on the host from the UCD files (src/text/unicode/gen.zig).
+    const ucd_gen = b.addRunArtifact(b.addExecutable(.{ .name = "ucd-gen", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/gen.zig"),
+        .target = b.graph.host,
+    }) }));
+    const ucd_tables = ucd_gen.addOutputFileArg("unicode_tables.zig");
+    for ([_][]const u8{ "GraphemeBreakProperty", "emoji-data", "DerivedCoreProperties", "WordBreakProperty", "LineBreak", "EastAsianWidth", "DerivedGeneralCategory", "DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
+        ucd_gen.addFileArg(b.path(b.fmt("src/text/unicode/data/{s}.txt", .{f})));
+    lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
     b.getInstallStep().dependOn(&lib.step);
 
@@ -34,14 +44,34 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
+    // The Unicode conformance files (src/text/unicode/conformance.zig): seconds, so not in `test`.
+    const conformance = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/unicode/conformance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
 
-    // tools/bench measures the prototype core until the ported core exports the same names.
+    // The package root built ReleaseFast, for the branch census and the benchmark.
+    const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
+    lcgr_fast.addOptions("build_options", options);
+    const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/layout/census_probe.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) });
+    b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+
+    // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
+    // the rest moves to src/ as it is ported.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "ui", .module = bench_core }},
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -59,12 +89,14 @@ pub fn build(b: *std.Build) void {
     }) });
     const size_run = b.addRunArtifact(size_tool);
     const small_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseSmall });
+    const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
+    lcgr_small.addOptions("build_options", options);
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{.{ .name = "ui", .module = small_core }},
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small } },
         }) });
         size_run.addArtifactArg(exe);
     }

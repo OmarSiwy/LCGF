@@ -44,7 +44,7 @@ PHASES = {
 # =============================================================================
 # P00 Foundations
 # =============================================================================
-lane("P00", "repo", [], R("ZIG17_BUILD", "what changed in build.zig"), "", "zig build and zig build test pass on Zig 0.17.1", [
+lane("P00", "repo", [], R("ZIG17_BUILD", "what changed in build.zig"), "", "zig build and zig build test pass on Zig 0.17.1 (now 0.18.0-dev.1151+8dfb7a7cc)", [
     ("repo: initialise with build.zig, build.zig.zon, licence and .editorconfig", dict(done="zig build succeeds on a clean checkout", key="repo-init")),
     ("docs: add CODE_STANDARD.md (names, small functions, no hidden allocation, comments say why)", dict(ref=R("CASEY_API", "the five characteristics") + "; " + R("CASEY_CLEAN", "where textbook clean code costs performance"), done="standard lists which clean-code rules are adopted and which are not")),
     ("docs: add ARCHITECTURE.md with the tier rule (a tier uses only tiers below it)", dict(ref=U("file header: TIERS and RULES"), done="document merged")),
@@ -183,7 +183,7 @@ lane("P02", "layout-overlay", ["layout-core"], U("Style.float, Style.offset"), "
     ("layout: add anchors for floating nodes (edge and corner of the parent)", dict(ref=U("layout.place: offset"))),
     ("layout: add anchor to another node's last rect", dict(ref=U("Frame.lastRect"))),
     ("layout: add viewport collision flip for popovers", {}),
-    ("layout: add layer index column for paint order", dict(ref=U("hit.at doc: later rows win"))),
+    ("layout: add layer index column for paint order", dict(ref=U("hit.at doc: later rows win"), key="layer")),
     ("layout: add overlay tests", {}),
 ])
 lane("P02", "layout-scroll", ["layout-core"], U("Style.scroll, Style.clip"), "E1", "scroll tests pass", [
@@ -290,7 +290,7 @@ lane("P03", "ct-paint", ["ct-layout", "draw-core"], U("paint.emit, DrawList"), "
     ("comptime: add draw-list equivalence tests", {}),
     ("comptime: add paint benchmark for static UIs", {}),
 ])
-lane("P03", "ct-events", ["ct-flatten", "hit"], K("Ui().Widget") + "; " + U("hit.at"), "A2", "exhaustive-switch example compiles; tests pass", [
+lane("P03", "ct-events", ["ct-flatten", "hit-core"], K("Ui().Widget") + "; " + U("hit.at"), "A2", "exhaustive-switch example compiles; tests pass", [
     ("comptime: generate the Widget enum from ids", dict(ref=K("Ui().Widget via @Enum"))),
     ("comptime: hit test over the static rect table", dict(ref=U("hit.at"))),
     ("comptime: return events as a tagged union over widgets", {}),
@@ -332,11 +332,12 @@ lane("P03", "ct-budget", ["ct-layout-done"], R("ZIG17_NOTES", "incremental compi
 # =============================================================================
 lane("P04", "hit", ["layout-core-done"], U("hit.at"), "D2", "tests pass; census clean", [
     ("hit: add SIMD point-in-rect scan over visible rects", dict(ref=U("hit.at"))),
-    ("hit: respect paint layers", {}),
     ("hit: add touch slop", {}),
-    ("hit: add hit tests and census entry", dict(ref=R("CHK", "p_hit: loop control only"))),
+    ("hit: add hit tests and census entry", dict(ref=R("CHK", "p_hit: loop control only"), key="hit-core")),
+    # Layers come from layout-overlay; the rest of hit does not need them.
+    ("hit: respect paint layers", dict(needs=["layer"])),
 ])
-lane("P04", "interaction", ["hit", "input"], U("Interaction"), "A3", "replay tests pass", [
+lane("P04", "interaction", ["hit-core", "input"], U("Interaction"), "A3", "replay tests pass", [
     ("interaction: add step() for hover, press, release, click", dict(ref=U("Interaction.step"))),
     ("interaction: add response() as a bit set", dict(ref=U("Interaction.response"))),
     ("interaction: add double click and long press", {}),
@@ -415,7 +416,7 @@ lane("P05", "scheduler", ["context"], U("Context.needsFrame, Output.wake"), "D5"
 lane("P06", "draw-core", ["layout-core-done"], U("DrawList, paint"), "D2", "draw-list tests pass; census clean", [
     ("draw: add Quad as the GPU instance layout", dict(ref=U("Quad") + "; " + R("ZIG_VEC", "arrays, not vectors, in extern structs"))),
     ("draw: add TextRun and CustomDraw", dict(ref=U("TextRun, CustomDraw"))),
-    ("draw: add DrawList with command columns", dict(ref=U("DrawList, DrawList.CmdColumns"))),
+    ("draw: add DrawList with command columns", dict(ref=U("DrawList, DrawList.CmdColumns"), key="drawlist")),
     ("draw: add command() tagged-union view", dict(ref=U("DrawList.command, Cmd"))),
     ("paint: add sweep 1 (nodes to quads and ops)", dict(ref=U("paint.emit sweep 1"))),
     ("paint: add sweep 2 (side lists to geometry)", dict(ref=U("paint.emit sweep 2"))),
@@ -464,10 +465,11 @@ lane("P07", "text-protocol", ["sidelists"], U("fonts.Mono"), "G6", "tests pass",
     ("text: document the measure / wrap protocol (data, not callbacks)", dict(ref=U("fonts section comment") + "; " + R("CASEY_API", "flow control"))),
     ("text: add Mono.measure with SIMD", dict(ref=U("fonts.Mono.measure"))),
     ("text: add Mono.wrap with SIMD", dict(ref=U("fonts.Mono.wrap"))),
-    ("text: add Mono.quads for a byte-indexed atlas", dict(ref=U("fonts.Mono.quads"))),
-    ("text: add measurement cache keyed by string hash, font and size", dict(key="text-protocol-done")),
+    # The cache needs measure and Texts only; quads needs Quad and DrawList (lane draw-core).
+    ("text: add measurement cache keyed by string hash, font and size", dict(key="text-measure")),
+    ("text: add Mono.quads for a byte-indexed atlas", dict(ref=U("fonts.Mono.quads"), needs=["drawlist"], key="text-protocol-done")),
 ])
-lane("P07", "font-load", ["text-protocol"], R("DVUI", "font support") + "; " + R("DEVTO", "why the text stack dominates weight"), "D1", "a test font parses; metrics match known values", [
+lane("P07", "font-load", ["text-measure"], R("DVUI", "font support") + "; " + R("DEVTO", "why the text stack dominates weight"), "D1", "a test font parses; metrics match known values", [
     ("font: parse the table directory", dict(spec=S("OT", "font file structure"))),
     ("font: parse cmap", dict(spec=S("OT", "cmap"))),
     ("font: parse head, hhea, hmtx and maxp", dict(spec=S("OT", "metrics tables"))),
@@ -495,7 +497,7 @@ lane("P07", "shaping", ["font-load"], R("ICED_FAQ", "shaping and IME status") + 
     ("shaping: add shaping cache", {}),
     ("shaping: add optional HarfBuzz adapter behind the same data protocol", dict(done="complex-script sample renders through the adapter")),
 ])
-lane("P07", "unicode", ["text-protocol"], M("H1"), "H1", "Unicode conformance files pass", [
+lane("P07", "unicode", ["text-measure"], M("H1"), "H1", "Unicode conformance files pass", [
     ("unicode: generate property tables at comptime from the character database", dict(spec=S("UAX29", "property data"))),
     ("unicode: add grapheme cluster iterator", dict(spec=S("UAX29", "grapheme cluster boundaries"))),
     ("unicode: add word boundary iterator", dict(spec=S("UAX29", "word boundaries"))),
