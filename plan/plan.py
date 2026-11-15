@@ -231,7 +231,9 @@ Rules for every commit in this brief:
      older Zig versions is wrong in places; the notes and the compiler win.
   2. One git commit per plan commit, in the order given. Subject = the plan title. End the message
      with the trailer shown (Plan-Id: ...). plan.py counts a commit as done by that trailer.
-  3. Before each commit: `zig fmt --check .` and `zig build test` pass on Zig 0.17.1.
+  3. Before each commit: `nix develop -c ci/run.sh all` is green, `nix develop -c zig build fmt`
+     passes, and `python3 tools/commitlint/commitlint.py main..HEAD` passes (Zig 0.17.1 comes
+     from the flake; run zig through `nix develop -c`).
   4. "Done when" is the acceptance test. Show it with a test or a tool's output. If it cannot be
      met, stop and report why; do not weaken it.
   5. Where a commit cites prototype/ code, port that behaviour into the lane's home. Keep the
@@ -239,6 +241,9 @@ Rules for every commit in this brief:
   6. Stay inside the lane's home unless the commit itself requires otherwise. No new dependency
      without it being named in docs/DEPENDENCIES.md.
   7. Do not start commits that are not in this brief.
+  8. Export each new src/ file from the package root src/lcgr.zig with one `pub const` line
+     (docs/ARCHITECTURE.md). Add a CI job as a new file ci/jobs/<name>.sh (CONTRIBUTING.md).
+     Import `none` and `inf` from src/core/types.zig; do not redefine shared constants.
 
 When you finish or get stuck, report for each commit: id, git hash, how "Done when" was shown.
 Then list anything in the plan that was wrong, missing or out of order, so the plan can be fixed
