@@ -6,6 +6,7 @@
 //!   zstack     a container whose children all overlap, sized to the largest of them
 //!   anchor     after `place`: moves anchored nodes (and their subtrees) to a point of a box
 //!              and flips them to the other side when they would leave the viewport
+//!   order      paint order by layer: popovers and tooltips above the rows after them
 //!   lastRect   where a node was in the previous frame's tree, to anchor a popover to it
 
 const std = @import("std");
@@ -172,6 +173,61 @@ pub fn anchor(t: *Tree, an: *const Anchors, viewport: Rect) void {
             const delta = want - pos[a][n];
             for (pos[a][n..end[n]]) |*v| v.* += delta;
         }
+    }
+}
+
+/// The layer column: which layer each node is painted in, and the paint order that follows.
+/// Within a layer, later rows are on top, as in prototype/ui.zig (`hit.at`: "later rows are
+/// drawn later, so the highest matching row wins"); a higher layer is on top of every row of
+/// a lower one. A node is in its own layer or its parent's, whichever is higher, so a popover's
+/// contents stay with it.
+pub const Layers = struct {
+    c: Columns,
+
+    pub const Columns = struct {
+        /// Set by the caller: the node's own layer, 0 unless raised.
+        own: []u8,
+        /// Written by `order`: max(own, the parent's layer).
+        layer: []u8,
+        /// Written by `order`: rows in paint order, back to front. `order[k]` is painted k-th.
+        order: []u32,
+    };
+
+    /// One row per node of a tree of capacity `cap`.
+    pub fn init(carver: *mem.Carver, cap: u32) Layers {
+        std.debug.assert(cap > 0);
+        return .{ .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+    /// Puts every node back in layer 0, for the next frame.
+    pub fn reset(ly: *Layers) void {
+        @memset(ly.c.own, 0);
+    }
+};
+
+/// Fills `layer` (one forward sweep) and `order`, a stable counting sort of the rows by layer:
+/// a histogram, a prefix sum over the 256 layers, and a scatter. O(n + 256), no comparison
+/// and no data-dependent branch. Run any time after the tree is built; it reads only `parent`.
+/// Hit testing that honours layers takes the highest (layer, row), which is the last match in
+/// `order`.
+pub fn order(t: *const Tree, ly: *Layers) void {
+    if (t.len == 0) return;
+    const parent = t.c.parent;
+    const own = ly.c.own;
+    const layer = ly.c.layer;
+    layer[0] = own[0];
+    for (1..t.len) |i| layer[i] = @max(own[i], layer[parent[i]]);
+
+    var start: [256]u32 = @splat(0);
+    for (layer[0..t.len]) |l| start[l] += 1;
+    var sum: u32 = 0;
+    for (&start) |*s| {
+        const count = s.*;
+        s.* = sum;
+        sum += count;
+    }
+    for (layer[0..t.len], 0..) |l, i| {
+        ly.c.order[start[l]] = @intCast(i);
+        start[l] += 1;
     }
 }
 
@@ -405,4 +461,45 @@ test "anchor: flip to the other side only when the first side leaves the viewpor
     anchor(t, &an, rect(0, 0, 200, 100));
     layout.finalize(t);
     try testing.expectEqual(rect(116, 10, 166, 50), t.rect(menu));
+}
+
+test "order: raised nodes and their subtrees paint after layer 0, rows in order within a layer" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var ly = Layers.init(&carver, 32);
+    // root { a { menu { item } } b { tip } c }
+    const root = t.push(0, .none, &.{});
+    const a = t.push(root, .none, &.{});
+    const menu = t.push(a, .none, &.{ .float = true });
+    const item = t.push(menu, .none, &.{});
+    t.seal(menu);
+    t.seal(a);
+    const b = t.push(root, .none, &.{});
+    const tip = t.push(b, .none, &.{ .float = true });
+    t.seal(b);
+    const c = t.push(root, .none, &.{});
+    t.seal(root);
+    ly.reset();
+    ly.c.own[menu] = 1;
+    ly.c.own[tip] = 2;
+    order(t, &ly);
+    // item inherits the menu's layer.
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 1, 1, 0, 2, 0 }, ly.c.layer[0..t.len]);
+    try testing.expectEqualSlices(u32, &.{ root, a, b, c, menu, item, tip }, ly.c.order[0..t.len]);
+
+    // A child can raise itself above its raised parent, never below it.
+    ly.c.own[item] = 3;
+    ly.c.own[tip] = 0;
+    ly.c.own[b] = 1;
+    order(t, &ly);
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 1, 3, 1, 1, 0 }, ly.c.layer[0..t.len]);
+    try testing.expectEqualSlices(u32, &.{ root, a, c, menu, b, tip, item }, ly.c.order[0..t.len]);
+
+    // All in layer 0: paint order is row order.
+    ly.reset();
+    order(t, &ly);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 2, 3, 4, 5, 6 }, ly.c.order[0..t.len]);
 }
