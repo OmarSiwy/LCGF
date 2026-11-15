@@ -12,10 +12,16 @@
 //! Packing runs once per glyph the atlas has not seen, not per frame or per pixel, so it is
 //! plain scalar code over a short list.
 //!
+//! `Cache` puts a glyph table on top: which glyph image is where, and when it was last drawn.
+//! When the atlas is full it evicts the glyphs not drawn recently and repacks the rest from
+//! scratch, tallest first, which also recovers the space the skyline had lost.
+//!
 //! The atlas contract of `fonts.Mono.quads` (prototype/ui.zig): a glyph's quad samples the
 //! rectangle `uv` of the texture, in 0..1 (`uv`).
 
 const std = @import("std");
+const simd = @import("../../core/simd.zig");
+const none = @import("../../core/types.zig").none;
 
 pub const Atlas = struct {
     w: u32,
@@ -156,6 +162,134 @@ pub const Atlas = struct {
     }
 };
 
+/// Key of one glyph image: face (< 64), glyph id, pixel size (< 256) and subpixel bin (< 4),
+/// packed into 32 bits, so two different images never share a key.
+pub fn key(face: u32, glyph: u16, px: u32, bin: u32) u32 {
+    std.debug.assert(face < 64 and px < 256 and bin < 4);
+    return (face << 26) | (bin << 24) | (px << 16) | glyph;
+}
+
+/// The atlas plus its glyph table: one row per image in the atlas. Rows are in no particular
+/// order and move on `evict`; a row index is valid until the next `evict` or `repack`.
+pub const Cache = struct {
+    atlas: Atlas,
+    rows: Rows,
+    len: u32 = 0,
+
+    /// Capacity is `rows(cap)` rows per column (the simd padding contract, for `find`).
+    pub const Rows = struct {
+        key: []u32,
+        /// Where the image is; `w`, `h` without the gap.
+        rect: []Atlas.Rect,
+        /// Frame the image was last drawn in.
+        used: []u32,
+    };
+
+    pub fn init(atlas: Atlas, rows: Rows) Cache {
+        std.debug.assert(rows.rect.len == rows.key.len and rows.used.len == rows.key.len);
+        std.debug.assert(rows.key.len >= simd.rows(1));
+        return .{ .atlas = atlas, .rows = rows };
+    }
+
+    fn cap(c: *const Cache) u32 {
+        return @intCast(c.rows.key.len - simd.lanes);
+    }
+
+    /// Row of the image with key `k`, or `none`. SIMD.
+    pub fn find(c: *const Cache, k: u32) u32 {
+        return simd.find(c.rows.key, c.len, k);
+    }
+
+    /// Room for a `w` x `h` image with key `k` drawn in `frame`: a new row with its rectangle,
+    /// or `none` when the atlas or the table is full. The caller rasterises into it with
+    /// `atlas.put(rows.rect[row], image)`.
+    pub fn insert(c: *Cache, k: u32, w: u32, h: u32, frame: u32) u32 {
+        if (c.len == c.cap() or w == 0 or h == 0) return none;
+        const slot = c.atlas.pack(w + 1, h + 1) orelse return none;
+        const i = c.len;
+        c.rows.key[i] = k;
+        c.rows.rect[i] = .{ .x = slot.x, .y = slot.y, .w = w, .h = h };
+        c.rows.used[i] = frame;
+        c.len = i + 1;
+        return i;
+    }
+
+    /// Drops every image last drawn before frame `keep_from`. Their space comes back on the
+    /// next `repack`. Write-always compaction: no branch per row.
+    pub fn evict(c: *Cache, keep_from: u32) void {
+        var w: u32 = 0;
+        for (0..c.len) |i| {
+            c.rows.key[w] = c.rows.key[i];
+            c.rows.rect[w] = c.rows.rect[i];
+            c.rows.used[w] = c.rows.used[i];
+            w += @intFromBool(c.rows.used[i] >= keep_from);
+        }
+        // Rows past len stay inert for `find`, which masks them by `len` anyway.
+        c.len = w;
+    }
+
+    /// Packs the remaining images again from an empty skyline, tallest first, moving their
+    /// pixels: `scratch` (at least `atlas.w * atlas.h` bytes) holds the old texture meanwhile.
+    /// Returns the number of images that no longer fit and were dropped (0 unless the table
+    /// was nearly full to begin with). Rows move; the whole texture changes.
+    pub fn repack(c: *Cache, scratch: []u8) u32 {
+        const a = &c.atlas;
+        @memcpy(scratch[0..a.pixels.len], a.pixels);
+        a.clear();
+        std.mem.sortUnstableContext(0, c.len, ByHeight{ .rows = c.rows });
+        var kept: u32 = 0;
+        for (0..c.len) |i| {
+            const old = c.rows.rect[i];
+            const slot = a.pack(old.w + 1, old.h + 1) orelse continue;
+            const new: Atlas.Rect = .{ .x = slot.x, .y = slot.y, .w = old.w, .h = old.h };
+            for (0..old.h) |row| {
+                @memcpy(
+                    a.pixels[(new.y + row) * a.w + new.x ..][0..old.w],
+                    scratch[(old.y + row) * a.w + old.x ..][0..old.w],
+                );
+            }
+            c.rows.key[kept] = c.rows.key[i];
+            c.rows.rect[kept] = new;
+            c.rows.used[kept] = c.rows.used[i];
+            kept += 1;
+        }
+        const dropped = c.len - kept;
+        c.len = kept;
+        return dropped;
+    }
+
+    /// The common case in one call: the row of image `k` for `frame`, marked drawn, inserted
+    /// if new (`fresh` says the caller must rasterise into it). When the atlas is full, images
+    /// not drawn in `frame` are evicted and the rest repacked, once. `none` when even that
+    /// leaves no room: this frame draws more than the atlas holds.
+    pub fn reserve(c: *Cache, k: u32, w: u32, h: u32, frame: u32, scratch: []u8) struct { row: u32, fresh: bool } {
+        const found = c.find(k);
+        if (found != none) {
+            c.rows.used[found] = frame;
+            return .{ .row = found, .fresh = false };
+        }
+        var row = c.insert(k, w, h, frame);
+        if (row == none and w != 0 and h != 0) {
+            c.evict(frame);
+            _ = c.repack(scratch);
+            row = c.insert(k, w, h, frame);
+        }
+        return .{ .row = row, .fresh = row != none };
+    }
+
+    const ByHeight = struct {
+        rows: Rows,
+        pub fn lessThan(ctx: ByHeight, i: usize, j: usize) bool {
+            return ctx.rows.rect[i].h > ctx.rows.rect[j].h;
+        }
+        pub fn swap(ctx: ByHeight, i: usize, j: usize) void {
+            std.mem.swap(u32, &ctx.rows.key[i], &ctx.rows.key[j]);
+            std.mem.swap(Atlas.Rect, &ctx.rows.rect[i], &ctx.rows.rect[j]);
+            std.mem.swap(u32, &ctx.rows.used[i], &ctx.rows.used[j]);
+        }
+    };
+};
+
 // ---------------------------------------------------------------------------------------------
 
 const raster = @import("raster.zig");
@@ -246,4 +380,90 @@ test "a full atlas refuses, and the skyline stays in order" {
     try std.testing.expectEqual(null, a.pack(1, 1));
     try std.testing.expectEqual(1, a.sky_len);
     try std.testing.expectEqual([4]f32{ 0, 0.3125, 1, 1 }, a.uv(.{ .x = 0, .y = 5, .w = 16, .h = 11 }));
+}
+
+test "glyph images survive eviction and repacking" {
+    // Ten frames, each drawing every image of one size (8 glyphs, 4 shifts) from
+    // testdata/ref.bin, cycling 9, 13, 16, 24, 40 px twice, through an atlas too small for
+    // all of them. After every frame each image of the frame is read back and compared with
+    // FreeType's, and so is every older image that survived.
+    const face = try opentype.Face.parse(raster.test_font, 0);
+    var cols: raster.TestOutline = .{};
+    var o = cols.outline();
+    var acc: [64 * 64]f32 = undefined;
+    var cov: [64 * 64]u8 = undefined;
+    var pixels: [256 * 128]u8 = undefined;
+    var scratch: [256 * 128]u8 = undefined;
+    var sky: TestSky(256) = .{};
+    const n = 64;
+    var keys: [simd.rows(n)]u32 = @splat(0);
+    var rects: [simd.rows(n)]Atlas.Rect = undefined;
+    var used: [simd.rows(n)]u32 = undefined;
+    var c: Cache = .init(.init(256, 128, &pixels, sky.sky()), .{ .key = &keys, .rect = &rects, .used = &used });
+    // The reference of every key, to check survivors.
+    var all: [160]raster.Ref = undefined;
+    var all_len: usize = 0;
+    var it: raster.RefIter = .{};
+    while (it.next()) |r| : (all_len += 1) all[all_len] = r;
+    const sizes = [_]u16{ 9, 13, 16, 24, 40 };
+    var repacks: u32 = 0;
+    var frame: u32 = 1;
+    while (frame <= 10) : (frame += 1) {
+        const px = sizes[(frame - 1) % sizes.len];
+        for (all) |r| {
+            if (r.px != px) continue;
+            const b, const img = raster.render(face, r, &o, &acc, &cov);
+            const before = c.len;
+            const got = c.reserve(refKey(face, r), b.w, b.h, frame, &scratch);
+            try std.testing.expect(got.row != none);
+            repacks += @intFromBool(got.fresh and c.len <= before);
+            if (got.fresh) c.atlas.put(c.rows.rect[got.row], img);
+        }
+        // Everything still in the table reads back as its reference image.
+        for (c.rows.key[0..c.len], c.rows.rect[0..c.len]) |k, rect| {
+            const r = for (all) |r| {
+                if (refKey(face, r) == k) break r;
+            } else unreachable;
+            const b, _ = raster.render(face, r, &o, &acc, &cov);
+            try std.testing.expectEqual(rect.w, b.w);
+            var back: [64 * 64]u8 = undefined;
+            for (0..rect.h) |row| @memcpy(back[row * rect.w ..][0..rect.w], c.atlas.pixels[(rect.y + row) * c.atlas.w + rect.x ..][0..rect.w]);
+            const d = raster.compare(b, back[0 .. @as(usize, b.w) * b.h], r);
+            try std.testing.expect(d.max <= 16);
+        }
+    }
+    // The atlas filled up and was repacked more than once (measured: 5 times).
+    try std.testing.expect(repacks >= 2);
+}
+
+fn refKey(face: opentype.Face, r: raster.Ref) u32 {
+    return key(0, face.cmap.glyph(r.cp), r.px, r.offset / 16);
+}
+
+test "evict keeps recent rows in order; repack moves pixels" {
+    var pixels: [16 * 16]u8 = undefined;
+    var scratch: [16 * 16]u8 = undefined;
+    var sky: TestSky(16) = .{};
+    var keys: [simd.rows(4)]u32 = @splat(0);
+    var rects: [simd.rows(4)]Atlas.Rect = undefined;
+    var used: [simd.rows(4)]u32 = undefined;
+    var c: Cache = .init(.init(16, 16, &pixels, sky.sky()), .{ .key = &keys, .rect = &rects, .used = &used });
+    const a = c.insert(10, 3, 3, 1);
+    const b = c.insert(11, 4, 2, 2);
+    const d = c.insert(12, 2, 5, 3);
+    const sevens: [10]u8 = @splat(7);
+    c.atlas.put(c.rows.rect[d], &sevens);
+    try std.testing.expectEqual(.{ 0, 1, 2 }, .{ a, b, d });
+    try std.testing.expectEqual(1, c.find(11));
+    c.evict(2);
+    try std.testing.expectEqual(none, c.find(10));
+    try std.testing.expectEqual(0, c.find(11));
+    try std.testing.expectEqual(1, c.find(12));
+    try std.testing.expectEqual(0, c.repack(&scratch));
+    // Tallest first: key 12 now sits at the origin, with its pixels.
+    const r = c.rows.rect[c.find(12)];
+    try std.testing.expectEqual(Atlas.Rect{ .x = 0, .y = 0, .w = 2, .h = 5 }, r);
+    try std.testing.expectEqual(7, c.atlas.pixels[4 * 16 + 1]);
+    try std.testing.expectEqual(0, c.atlas.pixels[5 * 16 + 1]);
+    try std.testing.expectEqual(key(1, 2, 3, 1), (1 << 26) | (1 << 24) | (3 << 16) | 2);
 }

@@ -47,3 +47,6 @@ export fn p_raster_coverage(acc: [*]const f32, out: [*]u8, n: usize) void {
 export fn p_gamma_apply(g: *const lcgr.raster_gamma.Gamma, lum: u8, cov: [*]const u8, out: [*]u8, n: usize) void {
     g.apply(lum, cov[0..n], out[0..n]);
 }
+export fn p_atlas_evict(c: *lcgr.raster_atlas.Cache, keep_from: u32) void {
+    c.evict(keep_from);
+}
