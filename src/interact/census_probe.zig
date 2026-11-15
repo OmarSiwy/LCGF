@@ -10,3 +10,6 @@ export fn p_step(s: *lcgr.interaction.Interaction, prev: *const Tree, in: *const
 export fn p_touch_step(s: *lcgr.interaction.Touches(10), prev: *const Tree, in: *const Input) void {
     s.step(prev, in);
 }
+export fn p_hit_layered(t: *const Tree, ly: *const lcgr.overlay.Layers, x: f32, y: f32) u32 {
+    return lcgr.hit.atLayered(t, ly.c.layer, x, y, .any);
+}
