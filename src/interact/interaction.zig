@@ -26,13 +26,27 @@ pub const Interaction = struct {
     pointer: [2]f32 = .{ -1, -1 },
     delta: [2]f32 = .{ 0, 0 },
     buttons: Input.Buttons = .{},
+    /// Id clicked this frame within `double_time` of a click on the same id, or 0. The click
+    /// after a double click starts a new pair, so a triple click is one double click.
+    double_clicked: u32 = 0,
+    /// Id held for `long_time` this frame, or 0. Once per press.
+    long_pressed: u32 = 0,
+    // Seconds; the caller may change them.
+    double_time: f32 = 0.4,
+    long_time: f32 = 0.5,
+    // Bookkeeping for the two above. The times are `Input.time` stored as its bits, so `pick`
+    // selects them in integer registers (x86 has no cmov for floats).
+    last_click: u32 = 0,
+    click_at: u64 = @bitCast(-std.math.inf(f64)),
+    press_at: u64 = 0,
+    long_fired: bool = false,
 
     /// Advances by one frame, from last frame's geometry and this frame's pointer.
     pub fn step(s: *Interaction, prev: *const Tree, in: *const Input) void {
         const node = hit.at(prev, in.pointer[0], in.pointer[1], .any);
         // Clamp instead of branching: the read stays in bounds when nothing is hit. The prototype
         // then selected the id on `node != none`; Zig 0.18's LLVM turns a select (or a mask) on a
-        // loaded value into a `je` around the load. Selecting the address instead, between the
+        // loaded value into a `je` around the load (`pick` too). Selecting the address, between the
         // row and a constant 0 (`node +% 1` is 0 only for `none`), keeps the load unconditional.
         const row = @min(node, prev.cap - 1);
         const from = [2]*const u32{ &zero_id, &prev.c.id[row] };
@@ -41,13 +55,27 @@ pub const Interaction = struct {
         const release = simd.andB(!in.buttons.left, s.buttons.left);
         const takes_focus = (prev.c.sense[row] & @as(u8, @bitCast(Sense{ .focus = true }))) != 0;
 
-        s.clicked = simd.selU(simd.andB(release, simd.andB(s.active == hot, hot != 0)), hot, 0);
-        s.released = simd.selU(release, s.active, 0);
-        s.pressed = simd.selU(press, hot, 0);
-        s.focus = simd.selU(press, simd.selU(takes_focus, hot, 0), s.focus);
-        s.active = simd.selU(press, hot, simd.selU(release, 0, s.active));
+        s.clicked = pick(u32, simd.andB(release, simd.andB(s.active == hot, hot != 0)), hot, 0);
+        s.released = pick(u32, release, s.active, 0);
+        s.pressed = pick(u32, press, hot, 0);
+        s.focus = pick(u32, press, pick(u32, takes_focus, hot, 0), s.focus);
+        s.active = pick(u32, press, hot, pick(u32, release, 0, s.active));
         s.hot = hot;
         s.hot_node = node;
+
+        const now: u64 = @bitCast(in.time);
+        const clicked = s.clicked != 0;
+        const since = in.time - @as(f64, @bitCast(s.click_at));
+        const repeat = simd.andB(simd.andB(clicked, s.clicked == s.last_click), since <= s.double_time);
+        s.double_clicked = pick(u32, repeat, s.clicked, 0);
+        s.last_click = pick(u32, clicked, pick(u32, repeat, 0, s.clicked), s.last_click);
+        s.click_at = pick(u64, clicked, now, s.click_at);
+        s.press_at = pick(u64, press, now, s.press_at);
+        const held_for = in.time - @as(f64, @bitCast(s.press_at));
+        const fired = simd.andB(s.long_fired, !press);
+        const due = simd.andB(simd.andB(s.active != 0, !fired), held_for >= s.long_time);
+        s.long_pressed = pick(u32, due, s.active, 0);
+        s.long_fired = simd.orB(fired, due);
         // Anonymous rows have id 0, so nothing held must not search for 0: OR in all ones
         // (`none`) when `active` is 0 instead of the prototype's select.
         const idle = -%@as(u32, @intFromBool(s.active == 0));
@@ -72,6 +100,17 @@ pub const Interaction = struct {
         return @bitCast((hovered | (held << 1) | (pressed << 2) | (released << 3) | (clicked << 4) | (focused << 5)) * valid);
     }
 };
+
+/// `c ? a : b` as a cmov. `simd.selU`'s mask is seen through by Zig 0.18's LLVM, which then
+/// turns a select whose operand is a field loaded only for it into a branch around the load
+/// (CodeGenPrepare). The `.unpredictable` hint becomes `!unpredictable` metadata on the select,
+/// which keeps it a cmov: p_step has no forward jump outside loop control (census).
+inline fn pick(comptime T: type, c: bool, a: T, b: T) T {
+    return if (c) blk: {
+        @branchHint(.unpredictable);
+        break :blk a;
+    } else b;
+}
 
 /// What `step` reads as the id under the pointer when nothing is hit.
 const zero_id: u32 = 0;
@@ -245,4 +284,67 @@ test "response: hover, held, pressed, released, clicked, focused as one bit set 
     try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0, bits(.{ .hovered = true }) }, b[0..n]);
     // Anonymous: nothing, even though the root (id 0) is never hot.
     for (f[0..n]) |s| try testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(s.response(.none))));
+}
+
+test "step: double click within double_time on the same id; long press once per hold" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var f: [16]Interaction = undefined;
+    // dt 0.1: clicks end at frames 1, 3, 5 (0.2 s apart), then one on b, one on a 0.4+ s later.
+    const n = try play(&t,
+        \\frame
+        \\dt 0.1
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\pointer 70 20
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\buttons
+    , &f);
+    try testing.expectEqual(@as(usize, 10), n);
+    const a = @backingInt(id_a);
+    var dbl: [10]u32 = undefined;
+    for (f[0..n], &dbl) |s, *d| d.* = s.double_clicked;
+    // Frame 3 pairs with 1; frame 5 starts a new pair; b at 7 breaks it; a at 9 is a single.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, a, 0, 0, 0, 0, 0, 0 }, &dbl);
+    for (f[0..n]) |s| try testing.expectEqual(@as(u32, 0), s.long_pressed);
+
+    const m = try play(&t,
+        \\frame
+        \\dt 0.2
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\frame
+        \\frame
+        \\frame
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\frame
+        \\frame
+    , &f);
+    try testing.expectEqual(@as(usize, 10), m);
+    var long: [10]u32 = undefined;
+    for (f[0..m], &long) |s, *l| l.* = s.long_pressed;
+    // Pressed at 0 s: 0.6 s is past 0.5 (0.4 is not), and it fires once. Again for the next hold.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, a, 0, 0, 0, 0, 0, a }, &long);
 }
