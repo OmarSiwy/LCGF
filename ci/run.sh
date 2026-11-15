@@ -24,6 +24,8 @@ job() {
             zig build test-build -Dtarget="$t"
         done
         (cd prototype && zig build cross) ;;
+    # Not in `all`: it runs for 60 s. Seeded random loop over tools/fuzz entry points.
+    fuzz)         zig build fuzz && zig build fuzz-run -Doptimize=ReleaseSafe -- 60 "${FUZZ_SEED:-$(date +%s)}" ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
