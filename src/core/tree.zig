@@ -6,6 +6,19 @@ const std = @import("std");
 const simd = @import("simd.zig");
 const mem = @import("mem.zig");
 
+/// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
+/// together and layout reads none, so they are one cold row instead of seven hot columns.
+/// `extern` because the row crosses to the GPU; hence `[4]f32`, not a vector.
+pub const Look = extern struct {
+    fill: u32,
+    border_color: u32,
+    border: f32,
+    radius: f32,
+    params: [4]f32,
+    texture: u16,
+    material: u16,
+};
+
 pub const Tree = struct {
     len: u32 = 0,
     cap: u32,
@@ -65,6 +78,10 @@ pub const Tree = struct {
         clips: []u8,
         sense: []u8,
 
+        // ---- paint inputs. Cold during layout and always read together, so
+        //      they are one row per node rather than seven columns.
+        look: []Look,
+
         // ---- semantics, read by the host to build an accessibility tree
         role: []u8,
         value: []f32,
@@ -120,7 +137,7 @@ test "Columns: every column is carved with rows(cap) rows, zeroed and cache-line
 test "Columns: structure first, then layout, outputs, semantics and links, in pass order" {
     const names = @typeInfo(Tree.Columns).@"struct".field_names;
     // Each group starts where the previous one ends; a pass reads one contiguous run of columns.
-    const firsts = .{ "id", "min", "fit", "size", "role", "text" };
+    const firsts = .{ "id", "min", "fit", "size", "look", "role", "text" };
     var at: usize = 0;
     inline for (firsts) |first| {
         const k = std.meta.fieldIndex(Tree.Columns, first).?;
@@ -132,6 +149,14 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
+}
+
+test "Look: one 36-byte row with the C layout the GPU reads" {
+    try testing.expectEqual(36, @sizeOf(Look));
+    try testing.expectEqual(4, @alignOf(Look));
+    inline for (.{ "fill", "border_color", "border", "radius", "params", "texture", "material" }, .{ 0, 4, 8, 12, 16, 32, 34 }) |name, off|
+        try testing.expectEqual(off, @offsetOf(Look, name));
+    try testing.expectEqual([]Look, @FieldType(Tree.Columns, "look"));
 }
