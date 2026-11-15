@@ -4,6 +4,7 @@
 //! This file adds the numbers around it.
 //!
 //!   extent     SIMD   content size of every node, from `fit`
+//!   clamp      SIMD   scroll offsets kept inside [0, extent - size]
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -26,6 +27,23 @@ pub fn extent(t: *const Tree, out: [2][]f32) void {
         inline for (0..2) |a| {
             const content = simd.loadF(c.fit[a], i) + simd.loadF(c.main[a], i) * gaps;
             simd.storeF(out[a], i, content + simd.loadF(c.pad_lo[a], i) + simd.loadF(c.pad_hi[a], i));
+        }
+    }
+}
+
+/// SIMD. Clamps every node's `scroll` to [0, max(extent - size, 0)] on both axes, so content is
+/// never scrolled past its start or its end, and a node whose content fits does not scroll. Run
+/// after `resolve` on both axes and `extent`, before `place`. The clamped value is what the
+/// application keeps for the next frame (a wheel delta is added to it, then clamped again).
+pub fn clamp(t: *Tree, ext: [2][]const f32) void {
+    const c = &t.c;
+    const n = simd.padded(t.len);
+    const zero = simd.f(0);
+    var i: usize = 0;
+    while (i < n) : (i += W) {
+        inline for (0..2) |a| {
+            const room = @max(simd.loadF(ext[a], i) - simd.loadF(c.size[a], i), zero);
+            simd.storeF(c.scroll[a], i, @min(@max(simd.loadF(c.scroll[a], i), zero), room));
         }
     }
 }
@@ -100,4 +118,49 @@ test "extent: content size with gaps and padding, larger than the node when it o
     // The root's content is the list stacked over the label, not its own 300 x 200.
     try testing.expectEqual(100, s.ext[0][root]);
     try testing.expectEqual(62, s.ext[1][root]);
+}
+
+test "clamp: scroll stays between the content start and its end" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    // root { list 100x50 pad 3, gap 2 { 4 rows of 30 } (content 132 high), short 100x50 { one row } }
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(200) } });
+    const list = t.push(root, .none, &.{ .size = .{ .px(100), .px(50) }, .pad = @splat(3), .gap = 2, .clip = true });
+    var rows: [4]u32 = undefined;
+    for (&rows) |*r| r.* = t.push(list, .none, &.{ .size = .{ .px(80), .px(30) } });
+    t.seal(list);
+    const short = t.push(root, .none, &.{ .size = .{ .px(100), .px(50) }, .clip = true });
+    t.seal(t.push(short, .none, &.{ .size = .{ .px(80), .px(30) } }));
+    t.seal(short);
+    t.seal(root);
+
+    const Case = struct { asked: [2]f32, list: [2]f32, short: [2]f32 };
+    const cases = [_]Case{
+        // In range: unchanged.
+        .{ .asked = .{ 0, 40 }, .list = .{ 0, 40 }, .short = .{ 0, 0 } },
+        // Past the end: 132 - 50 = 82 at most on y; the widest row fits across, so x is 0.
+        .{ .asked = .{ 30, 500 }, .list = .{ 0, 82 }, .short = .{ 0, 0 } },
+        // Before the start.
+        .{ .asked = .{ -10, -10 }, .list = .{ 0, 0 }, .short = .{ 0, 0 } },
+    };
+    for (cases) |k| {
+        inline for (0..2) |a| {
+            t.c.scroll[a][list] = k.asked[a];
+            t.c.scroll[a][short] = k.asked[a];
+        }
+        s.size(.{ 300, 200 });
+        extent(t, s.ext);
+        clamp(t, s.ext);
+        inline for (0..2) |a| {
+            try testing.expectEqual(k.list[a], t.c.scroll[a][list]);
+            try testing.expectEqual(k.short[a], t.c.scroll[a][short]);
+        }
+    }
+    // Scrolled to the end, the last row's bottom meets the list's inner bottom edge.
+    t.c.scroll[1][list] = 1000;
+    clamp(t, s.ext);
+    layout.place(t);
+    layout.finalize(t);
+    try testing.expectEqual(t.rect(list).y1 - 3, t.rect(rows[3]).y1);
 }
