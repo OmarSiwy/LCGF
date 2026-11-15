@@ -239,3 +239,20 @@ test "Size: coefficient tables give min, max, grow and pct without a switch" {
         try std.testing.expectEqual(c.pct, c.s.v * Size.k_pct[k]);
     }
 }
+
+pub const Align = enum(u8) {
+    start,
+    center,
+    end,
+    /// Share of the leftover space placed before the children, indexed by the tag.
+    /// Public because layout lives in another file.
+    pub const factor = [3]f32{ 0, 0.5, 1 };
+};
+
+test "Align: factor table places leftover space by index" {
+    const leftover: f32 = 40;
+    try std.testing.expectEqual(@as(f32, 0), leftover * Align.factor[@backingInt(Align.start)]);
+    try std.testing.expectEqual(@as(f32, 20), leftover * Align.factor[@backingInt(Align.center)]);
+    try std.testing.expectEqual(@as(f32, 40), leftover * Align.factor[@backingInt(Align.end)]);
+    try std.testing.expectEqual(@typeInfo(Align).@"enum".field_names.len, Align.factor.len);
+}
