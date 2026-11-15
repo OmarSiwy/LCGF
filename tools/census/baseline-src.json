@@ -38,5 +38,10 @@
     "jcc": 2,
     "back": 1,
     "short_fwd": 0
+  },
+  "p_paint": {
+    "jcc": 8,
+    "back": 4,
+    "short_fwd": 0
   }
 }

@@ -5,6 +5,8 @@
 const lcgr = @import("lcgr");
 const Tree = lcgr.tree.Tree;
 const Texts = lcgr.texts.Texts;
+const Customs = lcgr.customs.Customs;
+const DrawList = lcgr.draw_list.DrawList;
 
 export fn p_prepare(t: *Tree) void {
     lcgr.layout.prepare(t);
@@ -29,4 +31,7 @@ export fn p_finalize(t: *Tree) void {
 }
 export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
     return t.push(parent, .none, s);
+}
+export fn p_paint(t: *const Tree, tx: *const Texts, cu: *const Customs, d: *DrawList) void {
+    lcgr.paint.emit(t, tx, cu, "", d);
 }
