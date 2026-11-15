@@ -14,13 +14,17 @@ const none = types.none;
 /// once per frame.
 pub const Interaction = struct {
     // Id backing ints; 0 means nothing.
+    /// Id under the pointer. While a widget is held it captures the pointer: `hot` is that
+    /// widget or nothing, so no other widget lights up during a drag.
     hot: u32 = 0,
+    /// Id under the pointer regardless of capture.
+    under: u32 = 0,
     active: u32 = 0,
     focus: u32 = 0,
     pressed: u32 = 0,
     released: u32 = 0,
     clicked: u32 = 0,
-    // Rows in the previous frame's tree, or `none`.
+    // Rows in the previous frame's tree, or `none`. `hot_node` follows `hot`'s capture.
     hot_node: u32 = none,
     active_node: u32 = none,
     pointer: [2]f32 = .{ -1, -1 },
@@ -50,18 +54,22 @@ pub const Interaction = struct {
         // row and a constant 0 (`node +% 1` is 0 only for `none`), keeps the load unconditional.
         const row = @min(node, prev.cap - 1);
         const from = [2]*const u32{ &zero_id, &prev.c.id[row] };
-        const hot = from[@intFromBool(node +% 1 != 0)].*;
+        const under = from[@intFromBool(node +% 1 != 0)].*;
         const press = simd.andB(in.buttons.left, !s.buttons.left);
         const release = simd.andB(!in.buttons.left, s.buttons.left);
         const takes_focus = (prev.c.sense[row] & @as(u8, @bitCast(Sense{ .focus = true }))) != 0;
 
-        s.clicked = pick(u32, simd.andB(release, simd.andB(s.active == hot, hot != 0)), hot, 0);
+        s.clicked = pick(u32, simd.andB(release, simd.andB(s.active == under, under != 0)), under, 0);
         s.released = pick(u32, release, s.active, 0);
-        s.pressed = pick(u32, press, hot, 0);
-        s.focus = pick(u32, press, pick(u32, takes_focus, hot, 0), s.focus);
-        s.active = pick(u32, press, hot, pick(u32, release, 0, s.active));
-        s.hot = hot;
-        s.hot_node = node;
+        s.pressed = pick(u32, press, under, 0);
+        s.focus = pick(u32, press, pick(u32, takes_focus, under, 0), s.focus);
+        s.active = pick(u32, press, under, pick(u32, release, 0, s.active));
+        // Capture, judged on the new `active` as `response` judges hover, so the release frame
+        // already shows hover again.
+        const owned = simd.orB(s.active == 0, s.active == under);
+        s.under = under;
+        s.hot = pick(u32, owned, under, 0);
+        s.hot_node = pick(u32, owned, node, none);
 
         const now: u64 = @bitCast(in.time);
         const clicked = s.clicked != 0;
@@ -220,8 +228,10 @@ test "step: release elsewhere is not a click; pressing nothing clears active, ke
     const a = @backingInt(id_a);
     const b = @backingInt(id_b);
     try testing.expectEqual(a, f[0].active);
-    // Moved onto b while held: b is hot, a stays active.
-    try testing.expectEqual(b, f[1].hot);
+    // Moved onto b while held: a captures the pointer, so b is under it but not hot.
+    try testing.expectEqual(b, f[1].under);
+    try testing.expectEqual(@as(u32, 0), f[1].hot);
+    try testing.expectEqual(none, f[1].hot_node);
     try testing.expectEqual(a, f[1].active);
     // Released over b: a released, nothing clicked.
     try testing.expectEqual(a, f[2].released);
@@ -347,4 +357,44 @@ test "step: double click within double_time on the same id; long press once per 
     for (f[0..m], &long) |s, *l| l.* = s.long_pressed;
     // Pressed at 0 s: 0.6 s is past 0.5 (0.4 is not), and it fires once. Again for the next hold.
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, a, 0, 0, 0, 0, 0, a }, &long);
+}
+
+test "step: the held widget captures the pointer until release, even off the window" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    var f: [8]Interaction = undefined;
+    const n = try play(&t,
+        \\frame
+        \\pointer 20 20
+        \\buttons left
+        \\frame
+        \\pointer 70 20
+        \\frame
+        \\pointer -1 -1
+        \\frame
+        \\pointer 70 20
+        \\frame
+        \\buttons
+        \\frame
+    , &f);
+    try testing.expectEqual(@as(usize, 6), n);
+    const a = @backingInt(id_a);
+    const b = @backingInt(id_b);
+    var hot: [6]u32 = undefined;
+    var node: [6]u32 = undefined;
+    var under: [6]u32 = undefined;
+    for (f[0..n], &hot, &node, &under) |s, *h, *nd, *u| {
+        h.* = s.hot;
+        nd.* = s.hot_node;
+        u.* = s.under;
+    }
+    // Held from frame 0 to 4: only a may be hot, and a is not under the pointer after frame 0.
+    try testing.expectEqualSlices(u32, &.{ a, 0, 0, 0, b, b }, &hot);
+    try testing.expectEqualSlices(u32, &.{ 1, none, none, none, 2, 2 }, &node);
+    try testing.expectEqualSlices(u32, &.{ a, b, 0, b, b, b }, &under);
+    // a stays active through the trip off the window; the release goes to a, no click.
+    for (f[0..4]) |s| try testing.expectEqual(a, s.active);
+    try testing.expectEqual(a, f[4].released);
+    try testing.expectEqual(@as(u32, 0), f[4].clicked);
+    try testing.expectEqual(@as(u8, @bitCast(types.Response{ .hovered = true })), @as(u8, @bitCast(f[4].response(id_b))));
 }
