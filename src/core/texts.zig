@@ -14,6 +14,9 @@ const b01 = simd.b2f;
 pub const Texts = struct {
     len: u32 = 0,
     cap: u32,
+    /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+    /// The front end reports it as `Status.texts`.
+    overflow: bool = false,
     c: Columns,
 
     pub const Columns = struct {
@@ -42,12 +45,13 @@ pub const Texts = struct {
     /// Empties the list for the next frame. Stale rows are rewritten before they are read.
     pub fn reset(tx: *Texts) void {
         tx.len = 0;
+        tx.overflow = false;
     }
     /// Appends a run of `span` for `node` and returns its row. Measured extents and the
     /// available width start at 0 for the measure and layout passes to fill.
     pub fn push(tx: *Texts, node: u32, span: Span, ts: *const TextStyle) u32 {
-        std.debug.assert(tx.len < tx.cap);
-        const k = tx.len;
+        const k = @min(tx.len, tx.cap - 1);
+        tx.overflow = simd.orB(tx.overflow, tx.len >= tx.cap);
         tx.len = k + 1;
         tx.c.node[k] = node;
         tx.c.start[k] = span.start;
@@ -105,4 +109,21 @@ test "push writes one row per run with its node, span and style" {
     _ = tx.push(0, .{}, &.{});
     try testing.expectEqual(0, c.w[1]);
     try testing.expectEqual(0, c.avail[1]);
+}
+
+test "running out of rows is reported, not fatal" {
+    var fx: Fixture(2) = .{};
+    var tx = fx.texts();
+    _ = tx.push(0, .{}, &.{});
+    _ = tx.push(1, .{}, &.{});
+    try testing.expect(!tx.overflow);
+    // Pushes past cap keep rewriting the last row; len and every write stay in bounds.
+    for (0..20) |k| try testing.expectEqual(1, tx.push(@intCast(10 + k), .{ .start = @intCast(k), .bytes = 1 }, &.{}));
+    try testing.expect(tx.overflow);
+    try testing.expectEqual(2, tx.len);
+    try testing.expectEqualSlices(u32, &.{ 0, 29 }, tx.c.node[0..2]);
+    try testing.expectEqual(19, tx.c.start[1]);
+    tx.reset();
+    try testing.expect(!tx.overflow);
+    try testing.expectEqual(0, tx.len);
 }

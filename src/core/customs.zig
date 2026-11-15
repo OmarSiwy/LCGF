@@ -11,6 +11,9 @@ const Id = @import("types.zig").Id;
 pub const Customs = struct {
     len: u32 = 0,
     cap: u32,
+    /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+    /// The front end reports it as `Status.customs`.
+    overflow: bool = false,
     c: Columns,
 
     pub const Columns = struct {
@@ -29,11 +32,12 @@ pub const Customs = struct {
     /// Empties the list for the next frame. Stale rows are rewritten before they are read.
     pub fn reset(cu: *Customs) void {
         cu.len = 0;
+        cu.overflow = false;
     }
     /// Appends a custom draw for `node` and returns its row.
     pub fn push(cu: *Customs, node: u32, id: Id, data: u64) u32 {
-        std.debug.assert(cu.len < cu.cap);
-        const k = cu.len;
+        const k = @min(cu.len, cu.cap - 1);
+        cu.overflow = simd.orB(cu.overflow, cu.len >= cu.cap);
         cu.len = k + 1;
         cu.c.node[k] = node;
         cu.c.id[k] = @backingInt(id);
@@ -73,4 +77,21 @@ test "push writes node, id and opaque data; reset empties the list" {
     cu.reset();
     try testing.expectEqual(0, cu.len);
     try testing.expectEqual(0, cu.push(9, .none, 7));
+}
+
+test "running out of rows is reported, not fatal" {
+    var fx: Fixture(1) = .{};
+    var cu = fx.customs();
+    _ = cu.push(0, .none, 1);
+    try testing.expect(!cu.overflow);
+    // Pushes past cap keep rewriting the last row; len and every write stay in bounds.
+    for (0..20) |k| try testing.expectEqual(0, cu.push(@intCast(k), Id.from("c").with(@intCast(k)), k));
+    try testing.expect(cu.overflow);
+    try testing.expectEqual(1, cu.len);
+    try testing.expectEqual(19, cu.c.node[0]);
+    try testing.expectEqual(@backingInt(Id.from("c").with(19)), cu.c.id[0]);
+    try testing.expectEqual(19, cu.c.data[0]);
+    cu.reset();
+    try testing.expect(!cu.overflow);
+    try testing.expectEqual(0, cu.len);
 }
