@@ -25,11 +25,14 @@ const frames = 3000;
 const limits: ui.Limits = .{ .nodes = 4096, .texts = 2048, .strings = 128 * 1024 };
 var buffer: [ui.Context.requiredBytes(limits)]u8 align(ui.mem.column_align) = undefined;
 
-/// Frame passes first, then the layout passes that make up `layout`.
+/// Frame passes first, then the layout passes that make up `layout`. Last, not part of `frame`:
+/// the flex form of the whole layout on the same tree with every row wrapping in a 400 px
+/// viewport (`flex`), and its line assignment pass alone (`lines`, src/layout/wrap.zig).
 const pass_names = [_][]const u8{
     "begin+hit", "build",     "layout", "paint",     "frame",
     "measure",   "prepare",   "fit.x",  "resolve.x", "wrap",
-    "fit.y",     "resolve.y", "place",  "finalize",
+    "fit.y",     "resolve.y", "place",  "finalize",  "flex",
+    "lines",
 };
 comptime {
     // The copies below move whole vectors of rows, so both cores must pad alike.
@@ -48,6 +51,7 @@ const src_bytes = blk: {
     _ = Customs.init(&counter, limits.customs);
     _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
+    _ = lcgr.flex.Flex.init(&counter, limits.nodes);
     break :blk counter.off;
 };
 var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -135,12 +139,13 @@ pub fn main(init: std.process.Init) !void {
     var scu = Customs.init(&carver, limits.customs);
     var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
+    var sf = lcgr.flex.Flex.init(&carver, limits.nodes);
     var sink: u64 = 0;
     var nodes: usize = 0;
     var texts: usize = 0;
     for (0..if (idle) 1 else frames) |k| {
         in.pointer = .{ @floatFromInt(100 + (k * 7) % 900), @floatFromInt(50 + (k * 13) % 7000) };
-        var m: [16]u64 = undefined;
+        var m: [17]u64 = undefined;
         m[0] = now();
         var f = ctx.begin(&in); // includes the SIMD hit test and spring step
         m[1] = now();
@@ -191,6 +196,13 @@ pub fn main(init: std.process.Init) !void {
         const out = f.finish();
         // Differential check, untimed: the ported paint must emit the prototype's draw list.
         if (k == 0) try sameDrawList(out.draw, &sd);
+        // The flex layout, after paint has read the plain one. Every row wraps.
+        for (0..t.len) |i| sf.c.wrap[i] = t.c.main[0][i];
+        m[14] = now();
+        lcgr.layout.runFlex(t, &sf, tx, .{ 400, in.viewport[1] });
+        m[15] = now();
+        lcgr.wrap.wrap(t, &sf);
+        m[16] = now();
         sink +%= sd.cmd_len + sd.quad_len;
         nodes = t.len;
         texts = tx.len;
@@ -199,7 +211,9 @@ pub fn main(init: std.process.Init) !void {
         samples[2][k] = m[12] - m[3];
         samples[3][k] = m[13] - m[12];
         samples[4][k] = samples[0][k] + samples[1][k] + samples[2][k] + samples[3][k];
-        for (5..pass_names.len, 3..) |p, j| samples[p][k] = m[j + 1] - m[j];
+        for (5..14, 3..) |p, j| samples[p][k] = m[j + 1] - m[j];
+        samples[14][k] = m[15] - m[14];
+        samples[15][k] = m[16] - m[15];
     }
 
     var buf: [4096]u8 = undefined;

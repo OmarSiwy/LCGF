@@ -388,3 +388,66 @@ test "align: lines sit across the row by Style.lines when it is taller than they
     s.run(200, 200);
     try testing.expectEqualSlices(f32, &.{ 22.5, 47.5 }, t.c.pos[1][r + 1 ..][0..2]);
 }
+
+test "wrap: when everything fits on one line the rects are those of a row that does not wrap" {
+    var a: Scene = .{};
+    var b: Scene = .{};
+    inline for (.{ &a, &b }, .{ true, false }) |s, wraps_| {
+        const t = s.init();
+        const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(200) }, .pad = @splat(6) });
+        const r = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .fit }, .gap = 3, .pad = @splat(2), .main = .center, .cross = .end });
+        s.fx.set(r, &.{ .wrap = wraps_ });
+        _ = t.push(r, .none, &.{ .size = .{ .px(40), .px(12) } });
+        const m = t.push(r, .none, &.{ .size = .{ .px(25), .px(30) } });
+        s.fx.set(m, &.{ .margin = .{ 4, 1, 2, 3 }, .cross = .center });
+        _ = t.push(r, .none, &.{ .size = .{ .px(60), .px(7) } });
+        t.seal(r);
+    }
+    a.run(300, 200);
+    b.run(300, 200);
+    inline for (0..4) |k| try testing.expectEqualSlices(f32, b.t.c.rect[k][0..b.t.len], a.t.c.rect[k][0..a.t.len]);
+    try testing.expectEqual(1, a.fx.c.nlines[1]);
+}
+
+test "wrap: a child per line uses one line per child and never reaches the sink" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(10), .fit } });
+    s.fx.set(root, &.{ .wrap = true });
+    for (1..s.t.cap) |_| _ = t.push(root, .none, &.{ .size = .{ .px(8), .px(2) } });
+    s.run(10, 1000);
+    const n = s.t.len - 1;
+    try testing.expectEqual(@as(f32, @floatFromInt(n)), s.fx.c.nlines[root]);
+    for (s.fx.c.line[1..s.t.len], 0..) |l, k| try testing.expectEqual(@as(u32, @intCast(k)), l);
+    try testing.expect(s.fx.sink() > n);
+    // Lines stack with no gap: child k at y = 2k; the row's natural height is 2n (the root
+    // itself always takes the viewport).
+    for (1..s.t.len) |k| try testing.expectEqual(@as(f32, @floatFromInt(2 * (k - 1))), s.t.c.pos[1][k]);
+    try testing.expectEqual(@as(f32, @floatFromInt(2 * n)), s.t.c.nat[1][root]);
+}
+
+test "wrap: a tag cloud in a column, end to end through finalize" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(120), .px(200) }, .pad = @splat(10), .gap = 6 });
+    const title = t.push(root, .none, &.{ .size = .{ .fill, .px(20) } });
+    const tags = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .fit }, .gap = 4, .main = .center });
+    s.fx.set(tags, &.{ .wrap = true });
+    var tag: [5]u32 = undefined;
+    for (&tag, [5]f32{ 30, 50, 20, 60, 40 }) |*row, w| row.* = t.push(tags, .none, &.{ .size = .{ .px(w), .px(16) } });
+    t.seal(tags);
+    const foot = t.push(root, .none, &.{ .size = .{ .fill, .px(10) } });
+    s.run(120, 200);
+    // inner 100: [30 50] = 84 | [20 60] = 84 | [40]; each line centred, 8 px lead on the first two.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 1, 2 }, s.lineOf(tag[0], 5));
+    const R = @import("../core/types.zig").Rect;
+    try testing.expectEqual(R{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 30 }, t.rect(title));
+    try testing.expectEqual(R{ .x0 = 10, .y0 = 36, .x1 = 110, .y1 = 92 }, t.rect(tags));
+    try testing.expectEqual(R{ .x0 = 18, .y0 = 36, .x1 = 48, .y1 = 52 }, t.rect(tag[0]));
+    try testing.expectEqual(R{ .x0 = 52, .y0 = 36, .x1 = 102, .y1 = 52 }, t.rect(tag[1]));
+    try testing.expectEqual(R{ .x0 = 18, .y0 = 56, .x1 = 38, .y1 = 72 }, t.rect(tag[2]));
+    try testing.expectEqual(R{ .x0 = 42, .y0 = 56, .x1 = 102, .y1 = 72 }, t.rect(tag[3]));
+    try testing.expectEqual(R{ .x0 = 40, .y0 = 76, .x1 = 80, .y1 = 92 }, t.rect(tag[4]));
+    // The footer follows the three 16 px lines and their two 4 px gaps.
+    try testing.expectEqual(R{ .x0 = 10, .y0 = 98, .x1 = 110, .y1 = 108 }, t.rect(foot));
+}
