@@ -52,6 +52,20 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             }
             for (node.children) |c| bindWalk(c, next, masks);
         }
+
+        /// The run-time half of the signals: the state and the nodes it has made dirty. The
+        /// caller owns it; no allocator, no subscriber lists.
+        pub const Runtime = struct {
+            state: State = .{},
+            /// Every node starts dirty, so the first frame lays out and paints everything.
+            dirty: Mask = std.math.maxInt(Mask),
+
+            /// The whole signal graph: one store and one OR with a constant mask.
+            pub fn set(rt: *Runtime, comptime field: Field, value: FieldType(field)) void {
+                @field(rt.state, @tagName(field)) = value;
+                rt.dirty |= dirty_masks[@backingInt(field)];
+            }
+        };
     };
 }
 
@@ -130,4 +144,23 @@ fn bindsWalk(comptime sp: Spec, comptime next: *usize, comptime out: anytype) vo
     out[next.*] = sp.bind;
     next.* += 1;
     for (sp.children) |c| bindsWalk(c, next, out);
+}
+
+test "Runtime.set: stores the value and ORs in the field's mask" {
+    var rt: App.Runtime = .{};
+    try testing.expectEqual(0xff, rt.dirty);
+    rt.dirty = 0;
+    rt.set(.volume, 0.9);
+    try testing.expectEqual(0.9, rt.state.volume);
+    try testing.expectEqual(0b0001_0101, rt.dirty);
+    const hit: enum { mute, volume, pan } = .mute;
+    switch (hit) {
+        .mute => rt.set(.muted, true),
+        .volume, .pan => {},
+    }
+    try testing.expect(rt.state.muted);
+    try testing.expectEqual(0b0001_1101, rt.dirty);
+    rt.set(.title, "Desk");
+    try testing.expectEqualStrings("Desk", rt.state.title);
+    try testing.expectEqual(0b0111_1111, rt.dirty);
 }
