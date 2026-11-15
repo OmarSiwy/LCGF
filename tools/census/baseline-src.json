@@ -158,5 +158,20 @@
     "back": 1,
     "jcc": 3,
     "short_fwd": 0
+  },
+  "p_inherit_opacity": {
+    "jcc": 6,
+    "back": 2,
+    "short_fwd": 0
+  },
+  "p_inherit_transform": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
+  },
+  "p_inherit_clip": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
   }
 }

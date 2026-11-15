@@ -56,9 +56,11 @@ var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
 /// same name in `to`. The column sets have the same names and row sizes (Look is the same
-/// 36-byte extern row in both); a missing name is a compile error.
+/// 36-byte extern row in both). Columns only src/ has (paint inputs added after the port, such
+/// as `uv`) are left as they are; the caller gives them the values the prototype implies.
 fn copyColumns(to: anytype, from: anytype, len: u32) void {
     inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
+        if (comptime !@hasField(@TypeOf(from.*), name)) continue;
         if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
             inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
         } else copyRows(@field(to, name), @field(from, name), len);
@@ -74,8 +76,13 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
     const bytes = std.mem.sliceAsBytes;
     if (want.quad_len != got.quad_len or want.run_len != got.run_len or
         want.custom_len != got.custom_len or want.cmd_len != got.cmd_len) return error.PaintDiffers;
-    if (!eql(u8, want.quadBytes(), got.quadBytes()) or
-        !eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
+    // Quads field by field: src's row has per-corner radii where the prototype has one radius.
+    for (want.quads[0..want.quad_len], got.quads[0..got.quad_len]) |w, g| {
+        if (!eql(u8, bytes(&[4][4]f32{ w.rect, w.clip, w.params, w.uv }), bytes(&[4][4]f32{ g.rect, g.clip, g.params, g.uv })) or
+            w.fill != g.fill or w.border_color != g.border_color or w.border != g.border or
+            !eql(f32, &@as([4]f32, @splat(w.radius)), &g.radii)) return error.PaintDiffers;
+    }
+    if (!eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
         !eql(u8, bytes(want.customs[0..want.custom_len]), bytes(got.customs[0..got.custom_len])) or
         !eql(u8, want.strings, got.strings)) return error.PaintDiffers;
     const n = want.cmd_len;
@@ -223,6 +230,13 @@ pub fn main(init: std.process.Init) !void {
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
+        @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
+        for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
+        @memset(st.c.opacity[0..pt.len], 1); // and no opacity
+        @memset(st.c.alpha[0..pt.len], 1);
+        @memset(st.c.transform[0..pt.len], .{ 1, 0, 0, 1, 0, 0 }); // and no transform
+        @memset(st.c.world[0..pt.len], .{ 1, 0, 0, 1, 0, 0 });
+        @memset(st.c.clip_radii[0..pt.len], @splat(0)); // and square clips
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;

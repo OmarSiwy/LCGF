@@ -72,6 +72,18 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
 
+    // tools/drawgolden: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
+    const draw_dump_mod = b.createModule(.{
+        .root_source_file = b.path("tools/drawgolden/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    draw_dump_mod.addAnonymousImport("quad.wgsl", .{ .root_source_file = b.path("src/render/shaders/quad.wgsl") });
+    const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
+    draw_dump.addPassthruArgs();
+    b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
+
     // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
     // the rest moves to src/ as it is ported.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });

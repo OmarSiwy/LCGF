@@ -106,8 +106,9 @@ pub const Mono = struct {
                     .uv = .{ u / 16.0, v / 16.0, (u + 1) / 16.0, (v + 1) / 16.0 },
                     .fill = r.color,
                     .border_color = 0,
-                    .radius = 0,
+                    .radii = @splat(0),
                     .border = 0,
+                    .opacity = 1, // the run's colour already carries its opacity
                 };
                 // Write always, advance until the last row.
                 n = @min(n + 1, last);

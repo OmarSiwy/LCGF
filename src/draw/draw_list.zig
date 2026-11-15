@@ -20,10 +20,17 @@ pub const Quad = extern struct {
     params: [4]f32,
     /// u0, v0, u1, v1.
     uv: [4]f32,
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    radii: [4]f32,
     fill: u32,
     border_color: u32,
-    radius: f32,
     border: f32,
+    /// Multiplies the whole quad's output: the node's inherited opacity.
+    opacity: f32,
+    /// Layout space to screen, a, b, c, d, tx, ty: applied to the corners in the vertex shader.
+    xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    /// Corner radii of `clip` (top-left, top-right, bottom-right, bottom-left); 0 is square.
+    clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
 };
 
 /// One text node's run, for the renderer's text pass.
@@ -126,11 +133,13 @@ pub const DrawList = struct {
 
 const testing = std.testing;
 
-test "layout: Quad is the 80-byte instance row the quad pipeline declares" {
-    // Renderers declare vertex attributes at these offsets (prototype/ui_wgpu.zig quad_attrs).
-    try testing.expectEqual(80, @sizeOf(Quad));
+test "layout: Quad is the 136-byte instance row the quad pipeline declares" {
+    // Renderers declare vertex attributes at these offsets (src/render/shaders/quad.wgsl). The
+    // prototype's 80-byte row had one `radius` after the colours; per-corner `radii` replaced it,
+    // and `opacity`, `xform` and `clip_radii` were added.
+    try testing.expectEqual(136, @sizeOf(Quad));
     try testing.expectEqual(4, @alignOf(Quad));
-    inline for (.{ "rect", "clip", "params", "uv", "fill", "border_color", "radius", "border" }, .{ 0, 16, 32, 48, 64, 68, 72, 76 }) |name, off|
+    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border", "opacity", "xform", "clip_radii" }, .{ 0, 16, 32, 48, 64, 80, 84, 88, 92, 96, 120 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Quad, name));
 }
 
@@ -166,7 +175,7 @@ test "DrawList.init carves one spare row per table and sizes like a counting car
     d.quad_len = 2;
     const raw = d.quadBytes();
     try testing.expectEqual(2 * @sizeOf(Quad), raw.len);
-    try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + 64 ..][0..4]));
+    try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + @offsetOf(Quad, "fill") ..][0..4]));
 }
 
 test "command: the columns read back as tagged unions, key split into texture and material" {

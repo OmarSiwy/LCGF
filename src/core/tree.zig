@@ -108,8 +108,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             rect: [4]Col(f32),
             /// `rect` cut down to the inherited clip. What hit testing reads.
             vis: [4]Col(f32),
-            /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular:
-            /// children of a rounded node are not clipped to its corners.
+            /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular here; its
+            /// rounded corners are `clip_radii`, which paint passes to the shader.
             child_clip: Col([4]f32),
             visible: Col(u8),
             clips: Col(u8),
@@ -118,6 +118,26 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             // ---- paint inputs. Cold during layout and always read together, so
             //      they are one row per node rather than seven columns.
             look: Col(Look),
+            /// Texture coordinates u0, v0, u1, v1 of the quad's corners (`Style.uv`). Kept out
+            /// of `Look`, which is a fixed GPU row; read only by paint.
+            uv: Col([4]f32),
+            /// Corner radii top-left, top-right, bottom-right, bottom-left (`Style.radii`, with
+            /// negative corners taken from `Style.radius`).
+            radii: Col([4]f32),
+            /// `Style.opacity` of this node alone.
+            opacity: Col(f32),
+            /// Opacity paint applies: the product of `opacity` over the node and its ancestors,
+            /// written by `draw.inherit.opacity`. Push sets it to the node's own.
+            alpha: Col(f32),
+            /// `Style.transform` of this node alone, about its centre.
+            transform: Col([6]f32),
+            /// Layout space to screen: the node's transform after its ancestors', written by
+            /// `draw.inherit.transform`. Push sets the identity.
+            world: Col([6]f32),
+            /// Corner radii of the clip handed to children (`child_clip`), written by
+            /// `draw.inherit.clip`: a clipping node's radii less its border, otherwise the
+            /// parent's. Push sets 0, a rectangular clip.
+            clip_radii: Col([4]f32),
 
             // ---- semantics, read by the host to build an accessibility tree
             role: Col(u8),
@@ -192,6 +212,14 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                 .texture = @backingInt(s.texture),
                 .material = @backingInt(s.material),
             };
+            c.uv[i] = s.uv;
+            const corners: @Vector(4, f32) = s.radii;
+            c.opacity[i] = s.opacity;
+            c.alpha[i] = s.opacity;
+            c.transform[i] = s.transform;
+            c.world[i] = .{ 1, 0, 0, 1, 0, 0 };
+            c.clip_radii[i] = @splat(0);
+            c.radii[i] = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
             c.role[i] = @backingInt(s.role);
             c.value[i] = s.value;
             c.text[i] = none;
@@ -319,8 +347,9 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, radii, opacity,
+    // alpha, transform, world, clip radii, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 16 + 4 + 4 + 24 + 24 + 16 + 1 + 4, rowBytes(Tree.Columns));
 }
 
 test "Look: one 36-byte row with the C layout the GPU reads" {
@@ -415,6 +444,7 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqualSlices(f32, &.{ 1, 0, 0 }, c.nkids[0..3]);
     try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
     try testing.expectEqual(4, c.look[a].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, c.radii[a]);
     try testing.expectEqual(9, c.look[a].texture);
     try testing.expectEqual(@backingInt(types.Role.button), c.role[a]);
     try testing.expectEqual(0.25, c.value[a]);

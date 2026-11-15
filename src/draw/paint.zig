@@ -40,14 +40,17 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
             .params = look.params,
-            .uv = .{ 0, 0, 1, 1 },
+            .uv = c.uv[i],
             .fill = look.fill,
             .border_color = look.border_color,
-            .radius = look.radius,
+            .radii = c.radii[i],
             .border = look.border,
+            .opacity = c.alpha[i],
+            .xform = c.world[i],
+            .clip_radii = c.clip_radii[parent[i]],
         };
-        // Painted when either colour has alpha.
-        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0);
+        // Painted when either colour has alpha and the node is not fully transparent.
+        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(c.alpha[i] > 0);
         op_kind[o] = @backingInt(DrawList.Kind.quads);
         op_key[o] = (@as(u32, look.texture) << 16) | look.material;
         op_ref[o] = q;
@@ -79,7 +82,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .start = tx.c.start[k],
             .bytes = tx.c.bytes[k],
             .px = tx.c.px[k],
-            .color = tx.c.color[k],
+            .color = fade(tx.c.color[k], c.alpha[n]),
             .font = tx.c.font[k],
         };
     }
@@ -116,6 +119,13 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
         prev_key = key;
     }
     d.cmd_len = n;
+}
+
+/// `color` (rgba8, alpha in the top byte) with its alpha times `alpha`, rounded. Exact for 1.
+inline fn fade(color: u32, alpha: f32) u32 {
+    const a: f32 = @floatFromInt(color >> 24);
+    const scaled: u32 = @intFromFloat(@round(a * std.math.clamp(alpha, 0, 1)));
+    return (color & 0x00ff_ffff) | (scaled << 24);
 }
 
 const testing = std.testing;
@@ -197,7 +207,7 @@ test "sweep 1: visible painted nodes become quads, every node its ops in paint o
     try testing.expectEqual([4]f32{ 0, 0, 1, 1 }, d.quads[1].uv);
     try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), d.quads[1].fill);
     try testing.expectEqual(Color.white.bitsOf(), d.quads[1].border_color);
-    try testing.expectEqual(4, d.quads[1].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, d.quads[1].radii);
     try testing.expectEqual(2, d.quads[1].border);
     try testing.expectEqual(sc.t.rect(Scene.plain).array(), d.quads[3].rect);
     // The op stream: quad, quad, text, custom, quad on texture 3, quad.
