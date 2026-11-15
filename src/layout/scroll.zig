@@ -5,6 +5,7 @@
 //!
 //!   extent     SIMD   content size of every node, from `fit`
 //!   clamp      SIMD   scroll offsets kept inside [0, extent - size]
+//!   intoView   query  the scroll that brings a descendant into view
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -46,6 +47,27 @@ pub fn clamp(t: *Tree, ext: [2][]const f32) void {
             simd.storeF(c.scroll[a], i, @min(@max(simd.loadF(c.scroll[a], i), zero), room));
         }
     }
+}
+
+/// The scroll offset of `container` that brings `target`, one of its descendants, fully into
+/// view with the least movement: unchanged if it is already visible, else its near edge is put
+/// at the near inner edge (scrolling back) or its far edge at the far inner edge (scrolling on).
+/// A target larger than the container shows its start. The result is clamped like `clamp`.
+/// A query over the columns after `place`; the caller writes the result into its scroll state
+/// for the next frame. Nested scroll containers are one query each, innermost first.
+pub fn intoView(t: *const Tree, ext: [2][]const f32, container: u32, target: u32) [2]f32 {
+    const c = &t.c;
+    var out: [2]f32 = undefined;
+    inline for (0..2) |a| {
+        const cur = c.scroll[a][container];
+        const inner = c.size[a][container] - c.pad_lo[a][container] - c.pad_hi[a][container];
+        // Where the target starts in the container's content, independent of the current scroll.
+        const start = c.pos[a][target] - c.pos[a][container] - c.pad_lo[a][container] + cur;
+        const want = @min(@max(cur, start + c.size[a][target] - inner), start);
+        const room = @max(ext[a][container] - c.size[a][container], 0);
+        out[a] = @min(@max(want, 0), room);
+    }
+    return out;
 }
 
 const testing = std.testing;
@@ -163,4 +185,52 @@ test "clamp: scroll stays between the content start and its end" {
     layout.place(t);
     layout.finalize(t);
     try testing.expectEqual(t.rect(list).y1 - 3, t.rect(rows[3]).y1);
+}
+
+test "intoView: least movement that shows a row, clamped to the content" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    // list 100x50, pad 3, gap 2 { 10 rows of 80x30 }: row k starts at 32k in the content.
+    const list = t.push(0, .none, &.{ .size = .{ .px(100), .px(50) }, .pad = @splat(3), .gap = 2, .clip = true });
+    var rows: [10]u32 = undefined;
+    for (&rows) |*r| r.* = t.push(list, .none, &.{ .size = .{ .px(80), .px(30) } });
+    const big = t.push(list, .none, &.{ .size = .{ .px(80), .px(60) } });
+    t.seal(list);
+    const Case = struct { scroll: f32, row: u32, want: f32 };
+    const cases = [_]Case{
+        // Visible already: no movement.
+        .{ .scroll = 0, .row = rows[0], .want = 0 },
+        .{ .scroll = 64, .row = rows[2], .want = 64 },
+        // Below: its bottom (32 * 5 + 30 = 190) meets the 44 px inner bottom.
+        .{ .scroll = 0, .row = rows[5], .want = 146 },
+        // Partly below: 2 * 32 + 30 - 44 = 50.
+        .{ .scroll = 40, .row = rows[2], .want = 50 },
+        // Above: its top meets the inner top.
+        .{ .scroll = 146, .row = rows[1], .want = 32 },
+        // Taller than the inner box: its start is shown.
+        .{ .scroll = 0, .row = big, .want = 320 },
+    };
+    for (cases) |k| {
+        t.c.scroll[1][list] = k.scroll;
+        s.size(.{ 100, 50 });
+        extent(t, s.ext);
+        layout.place(t);
+        const v = intoView(t, s.ext, list, k.row);
+        try testing.expectEqual(0, v[0]);
+        try testing.expectEqual(k.want, v[1]);
+        // Applying it shows the row's top edge inside the list.
+        t.c.scroll[1][list] = v[1];
+        layout.place(t);
+        try testing.expect(t.c.pos[1][k.row] >= 3);
+    }
+    // The clamp bites when the target lies past the content's end, here moved by an offset
+    // that the extent does not count: 320 + 100 asked, 10 * 30 + 60 + 10 gaps + 6 - 50 = 336.
+    t.c.scroll[1][list] = 0;
+    t.c.offset[1][big] = 100;
+    s.size(.{ 100, 50 });
+    extent(t, s.ext);
+    layout.place(t);
+    try testing.expectEqual(336, intoView(t, s.ext, list, big)[1]);
+    try testing.expectEqual(274, intoView(t, s.ext, list, rows[9])[1]);
 }
