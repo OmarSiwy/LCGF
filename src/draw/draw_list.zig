@@ -7,6 +7,7 @@ const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
 const Texture = types.Texture;
 const Material = types.Material;
+const Region = @import("damage.zig").Region;
 
 /// One instance of the quad pipeline. This is the GPU vertex-buffer layout,
 /// so the whole array uploads with a single copy.
@@ -77,6 +78,10 @@ pub const DrawList = struct {
     cmd: CmdColumns,
     cmd_len: u32 = 0,
     op: OpColumns,
+    /// What changed since the last frame (`damage.cull` sets it): a renderer that keeps last
+    /// frame's pixels redraws only inside these rects and may leave the rest. `everything`
+    /// unless the frame was culled.
+    damage: Region = .everything,
 
     pub const Kind = enum(u8) { quads, text, custom };
     /// `key` is texture << 16 | material for quad batches, 0 otherwise. `first` indexes `quads`,
