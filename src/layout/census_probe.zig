@@ -42,3 +42,9 @@ export fn p_clamp(t: *Tree, ext: *const [2][]const f32) void {
 export fn p_stick(t: *Tree, st: *const lcgr.scroll.Sticky) void {
     lcgr.scroll.stick(t, st);
 }
+export fn p_grid_fit(t: *Tree, gs: *lcgr.grid.Grids) void {
+    lcgr.grid.fit(t, gs, .x);
+}
+export fn p_grid_resolve(t: *Tree, gs: *lcgr.grid.Grids) void {
+    lcgr.grid.resolve(t, gs, .x, 800);
+}

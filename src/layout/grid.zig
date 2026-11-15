@@ -732,3 +732,60 @@ test "grid: a spanning item's natural size leaves out the gaps it covers" {
     // The grid is the root, so it is the viewport's size; its natural width is the tracks'.
     try testing.expectEqual(110, t.c.nat[0][g]);
 }
+
+test "grid: a settings form of text labels and fields, auto-placed, inside a flow column" {
+    const Mono = @import("../text/protocol.zig").Mono;
+    const Strings = @import("../core/strings.zig").Strings;
+    var s: Scene = .{};
+    s.init();
+    var carver: mem.Carver = .{ .buf = s.raw[200 * 1024 ..] };
+    s.tx = Texts.init(&carver, 4);
+    var strings: Strings = .{ .buf = carver.slice(u8, 256) };
+    const t = &s.t;
+    // column 300 wide { title 20 high, form grid [fit, fr(1)] x [fit, fit, fit], footer }
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(400) }, .pad = @splat(10), .gap = 6 });
+    const title = t.push(root, .none, &.{ .size = .{ .fill, .px(20) } });
+    t.seal(title);
+    const form = t.push(root, .none, &.{ .size = .{ .fill, .fit } });
+    const k = s.gs.grid(form, &.{ .fit, .fr(1) }, &.{ .fit, .fit, .fit });
+    s.gs.gaps(k, .{ 8, 4 });
+    const words = [_][]const u8{ "Name", "E-mail", "Notes" };
+    var labels: [3]u32 = undefined;
+    var fields: [3]u32 = undefined;
+    for (words, &labels, &fields) |w, *l, *f| {
+        l.* = t.push(form, .none, &.{ .float = true });
+        t.c.text[l.*] = s.tx.push(l.*, strings.add(w), &.{ .px = 10 });
+        t.seal(l.*);
+        s.gs.justify(s.gs.autoItem(k, l.*), .{ .end, .center });
+        f.* = t.push(form, .none, &.{ .float = true, .size = .{ .fit, .px(18) } });
+        t.seal(f.*);
+        _ = s.gs.autoItem(k, f.*);
+    }
+    // The notes field spans down two rows' worth of height: make it taller instead.
+    t.c.min[1][fields[2]] = 40;
+    t.c.max[1][fields[2]] = 40;
+    t.seal(form);
+    const footer = t.push(root, .none, &.{ .size = .{ .fill, .px(10) } });
+    t.seal(footer);
+    t.seal(root);
+
+    // Mono at 10 px: 5 px per byte, 12 px lines.
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    font.measure(&s.tx);
+    run(t, &s.tx, &s.gs, .{ 300, 400 });
+
+    // Labels column: "E-mail" is 30 px; fields take 280 - 30 - 8 = 242.
+    try testing.expectEqualSlices(f32, &.{ 30, 242 }, s.gs.tr.size[0..2]);
+    // Rows: 18, 18, 40 (fields are taller than the 12 px labels), with 4 px gaps.
+    try testing.expectEqualSlices(f32, &.{ 18, 18, 40 }, s.gs.tr.size[2..5]);
+    try testing.expectEqual(rect(10, 36, 290, 120), t.rect(form));
+    // Labels sit at the end of their column and in the middle of their row.
+    try testing.expectEqual(rect(20, 39, 40, 51), t.rect(labels[0]));
+    try testing.expectEqual(rect(10, 61, 40, 73), t.rect(labels[1]));
+    try testing.expectEqual(rect(15, 94, 40, 106), t.rect(labels[2]));
+    try testing.expectEqual(rect(48, 36, 290, 54), t.rect(fields[0]));
+    try testing.expectEqual(rect(48, 80, 290, 120), t.rect(fields[2]));
+    // The flow after the grid continues below it.
+    try testing.expectEqual(rect(10, 126, 290, 136), t.rect(footer));
+    try testing.expect(!s.gs.overflow);
+}

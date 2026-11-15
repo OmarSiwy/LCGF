@@ -59,7 +59,7 @@ pub fn fit(t: *Tree, axis: Axis) void {
 /// The sweep of `fit` over rows [from, to) only, last row first; `from` >= 1. Every row past
 /// `to` must already be folded. A caller that sizes some nodes itself (grid) runs the sweep in
 /// pieces and writes those nodes' `fit` in between, then calls `fitRoot`.
-pub fn fitRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
+pub inline fn fitRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
     const a = @backingInt(axis);
     std.debug.assert(from >= 1 and to <= t.len);
     // Column slices are read into locals once, so the loop indexes them
@@ -132,7 +132,7 @@ pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
 
 /// The sweep of `resolve` over rows [from, to) only; `from` >= 1 and every parent of those rows
 /// already sized. A caller that sizes some nodes itself (grid) resolves in pieces around them.
-pub fn resolveRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
+pub inline fn resolveRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
     const a = @backingInt(axis);
     std.debug.assert(from >= 1 and to <= t.len);
     const parent = t.c.parent;

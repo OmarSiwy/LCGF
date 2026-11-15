@@ -8,6 +8,9 @@
 //! copies are not timed. begin+hit, build and paint still time the prototype until those passes
 //! are ported; `frame` is the sum of the four timed parts.
 //!
+//! A second scene times the grid passes (src/layout/grid.zig): one grid of 16 columns and 250
+//! rows holding 4,000 auto-placed items, laid out `grid_frames` times.
+//!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
@@ -61,6 +64,67 @@ fn copyRows(to: anytype, from: anytype, len: u32) void {
 }
 
 var samples: [pass_names.len][frames]u64 = undefined;
+
+const grid_frames = 1000;
+const grid_items = 4000;
+const grid_cols = 16;
+const grid_rows = grid_items / grid_cols;
+const grid_pass_names = [_][]const u8{ "grid.place", "grid.fit.x", "grid.resolve.x", "grid.fit.y", "grid.resolve.y" };
+var grid_samples: [grid_pass_names.len][grid_frames]u64 = undefined;
+const grid_cap: lcgr.grid.Grids.Capacity = .{ .grids = 1, .tracks = grid_cols + grid_rows, .items = grid_items, .cells = grid_items };
+const grid_bytes = blk: {
+    @setEvalBranchQuota(20_000);
+    var counter: lcgr.mem.Carver = .{ .buf = null };
+    _ = Tree.init(&counter, grid_items + 2);
+    _ = Texts.init(&counter, 1);
+    _ = lcgr.grid.Grids.init(&counter, grid_cap);
+    break :blk counter.off;
+};
+var grid_buffer: [grid_bytes]u8 align(lcgr.mem.column_align) = undefined;
+
+/// Times the grid passes on a 4,000-item grid: columns cycle through fixed, fit and fraction
+/// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
+fn gridBench() void {
+    var carver: lcgr.mem.Carver = .{ .buf = &grid_buffer };
+    var t = Tree.init(&carver, grid_items + 2);
+    var tx = Texts.init(&carver, 1);
+    var gs = lcgr.grid.Grids.init(&carver, grid_cap);
+    const root = t.push(0, .none, &.{ .size = .{ .px(1280), .fit } });
+    const g = t.push(root, .none, &.{ .size = .{ .fill, .fit } });
+    var cols: [grid_cols]lcgr.grid.Track = undefined;
+    const kinds = [4]lcgr.grid.Track{ .px(40), .fit, .fr(1), .fr(2) };
+    for (&cols, 0..) |*c, i| c.* = kinds[i % 4];
+    const rows_: [grid_rows]lcgr.grid.Track = @splat(.fit);
+    const k = gs.grid(g, &cols, &rows_);
+    gs.gaps(k, .{ 4, 2 });
+    for (0..grid_items) |i| {
+        const w: f32 = @floatFromInt(10 + i % 7);
+        const n = t.push(g, .none, &.{ .float = true, .min = .{ w, 12 } });
+        t.seal(n);
+        _ = gs.autoItem(k, n);
+    }
+    t.seal(g);
+    t.seal(root);
+    for (0..grid_frames) |f| {
+        var m: [grid_pass_names.len + 1]u64 = undefined;
+        m[0] = now();
+        lcgr.grid.autoPlace(&gs);
+        m[1] = now();
+        lcgr.layout.prepare(&t);
+        lcgr.layout.applyText(&t, &tx, .x);
+        lcgr.grid.fit(&t, &gs, .x);
+        m[2] = now();
+        lcgr.grid.resolve(&t, &gs, .x, 1280);
+        m[3] = now();
+        lcgr.layout.applyText(&t, &tx, .y);
+        lcgr.grid.fit(&t, &gs, .y);
+        m[4] = now();
+        lcgr.grid.resolve(&t, &gs, .y, 8000);
+        m[5] = now();
+        lcgr.layout.place(&t);
+        for (0..grid_pass_names.len) |p| grid_samples[p][f] = m[p + 1] - m[p];
+    }
+}
 var values: [rows]f32 = @splat(0.5);
 var checks: [rows]bool = @splat(false);
 
@@ -179,11 +243,17 @@ pub fn main(init: std.process.Init) !void {
         while (linux.read(0, &byte, 1) > 0) {}
         return;
     }
+    gridBench();
     try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
     for (pass_names, &samples) |name, *s| {
         std.mem.sort(u64, s, {}, std.sort.asc(u64));
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
+    }
+    try w.print("grid: items={d} frames={d}\n", .{ grid_items, grid_frames });
+    for (grid_pass_names, &grid_samples) |name, *s| {
+        std.mem.sort(u64, s, {}, std.sort.asc(u64));
+        try w.print("{s:<14} {d:9.1} {d:9.1}\n", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
     }
     try w.flush();
 
@@ -193,6 +263,9 @@ pub fn main(init: std.process.Init) !void {
     try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ nodes, texts, frames, ui.simd.lanes });
     for (pass_names, &samples, 0..) |name, *s, p| {
         try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
+    }
+    for (grid_pass_names, &grid_samples) |name, *s| {
+        try j.print(",\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
     }
     try j.writeAll("\n}}\n");
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = j.buffered() });
