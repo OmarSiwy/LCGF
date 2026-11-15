@@ -5,6 +5,7 @@
 //!
 //!   zstack     a container whose children all overlap, sized to the largest of them
 //!   anchor     after `place`: moves anchored nodes (and their subtrees) to a point of a box
+//!              and flips them to the other side when they would leave the viewport
 //!   lastRect   where a node was in the previous frame's tree, to anchor a popover to it
 
 const std = @import("std");
@@ -13,6 +14,7 @@ const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Rect = types.Rect;
+const b01 = simd.b2f;
 
 /// Turns node `i` into a z-stack: its children overlap at its content origin, later rows on top,
 /// and it is as large as its largest child on both axes. Call after `push`, before the passes.
@@ -64,6 +66,8 @@ pub const Anchors = struct {
         rel: []f32,
         /// x0, y0, x1, y1 of an absolute box, for rows with `rel` 0.
         box: [4][]f32,
+        /// 1.0: on this axis, move to the opposite side when the node would leave the viewport.
+        flip: [2][]f32,
     };
 
     /// Carves every column from `carver`, `simd.rows(cap)` rows each. With a counting carver
@@ -97,6 +101,13 @@ pub const Anchors = struct {
         inline for (0..4) |e| an.c.box[e][k] = box.array()[e];
         return k;
     }
+    /// Lets anchor row `k` flip on the axes set in `axes`: when the node would cross an edge of
+    /// the viewport and the mirrored placement would not, `at`, `pivot` and `offset` are taken
+    /// from the other side (a menu hung below a button opens above it near the bottom of the
+    /// window). Off by default.
+    pub fn flip(an: *Anchors, k: u32, axes: [2]bool) void {
+        inline for (0..2) |a| an.c.flip[a][k] = simd.b2f(axes[a]);
+    }
     fn row(an: *Anchors, node: u32, at: Anchor, pivot: Anchor, offset: [2]f32) u32 {
         const k = @min(an.len, an.cap - 1);
         an.overflow = simd.orB(an.overflow, an.len >= an.cap);
@@ -109,6 +120,8 @@ pub const Anchors = struct {
         c.pivot[1][k] = Anchor.fy[@backingInt(pivot)];
         c.offset[0][k] = offset[0];
         c.offset[1][k] = offset[1];
+        c.flip[0][k] = 0;
+        c.flip[1][k] = 0;
         return k;
     }
 };
@@ -124,7 +137,11 @@ pub const Anchors = struct {
 ///
 /// Rows pushed with `pushRect` use their absolute box instead of the parent's; the two cases are
 /// one formula blended by the `rel` coefficient.
-pub fn anchor(t: *Tree, an: *const Anchors) void {
+///
+/// `viewport` is the area flipping rows must stay inside, usually the window: (0, 0, w, h). The
+/// flip is one test per axis, not a search: if neither side fits, the first side is kept.
+pub fn anchor(t: *Tree, an: *const Anchors, viewport: Rect) void {
+    const vp = viewport.array();
     const pos = t.c.pos;
     const size = t.c.size;
     const lo = t.c.pad_lo;
@@ -142,7 +159,16 @@ pub fn anchor(t: *Tree, an: *const Anchors) void {
             const origin = b0 + rel * (pos[a][p] + lo[a][p] - b0);
             const span = c.box[a + 2][k] - b0;
             const extent = span + rel * (inner - span);
-            const want = origin + c.at[a][k] * extent - c.pivot[a][k] * size[a][n] + c.offset[a][k];
+            const sz = size[a][n];
+            const at = c.at[a][k];
+            const pivot = c.pivot[a][k];
+            const off = c.offset[a][k];
+            const first = origin + at * extent - pivot * sz + off;
+            const other = origin + (1 - at) * extent - (1 - pivot) * sz - off;
+            const leaves_first = @max(b01(first < vp[a]), b01(first + sz > vp[a + 2]));
+            const leaves_other = @max(b01(other < vp[a]), b01(other + sz > vp[a + 2]));
+            const use_other = c.flip[a][k] * leaves_first * (1 - leaves_other);
+            const want = first + use_other * (other - first);
             const delta = want - pos[a][n];
             for (pos[a][n..end[n]]) |*v| v.* += delta;
         }
@@ -260,7 +286,7 @@ test "anchor: corners and edges of the parent's content box, with the subtree ca
     layout.fit(t, .y);
     layout.resolve(t, .y, 300);
     layout.place(t);
-    anchor(t, &an);
+    anchor(t, &an, rect(0, 0, 400, 300));
     layout.finalize(t);
 
     try testing.expectEqual(rect(50, 40, 150, 70), t.rect(button));
@@ -285,7 +311,7 @@ test "anchor: no anchors leaves the layout untouched; overflow is reported" {
     t.seal(root);
     s.run(.{ 40, 40 });
     const before = t.rect(a);
-    anchor(t, &an);
+    anchor(t, &an, rect(0, 0, 40, 40));
     layout.finalize(t);
     try testing.expectEqual(before, t.rect(a));
     _ = an.push(a, .center, .center, .{ 0, 0 });
@@ -331,9 +357,52 @@ test "anchor: a popover is placed against another node's rect from the previous 
     t.seal(root);
     _ = an.pushRect(tip, save, .bottom, .top, .{ 0, 2 });
     s.run(.{ 400, 300 });
-    anchor(t, &an);
+    anchor(t, &an, rect(0, 0, 400, 300));
     layout.finalize(t);
     // Centre x of the button is 105, so the 100 px tip spans 55..155, from y = 30 + 2.
     try testing.expectEqual(rect(55, 32, 155, 56), t.rect(tip));
     try testing.expectEqual(rect(57, 34, 107, 44), t.rect(label));
+}
+
+test "anchor: flip to the other side only when the first side leaves the viewport" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var an = Anchors.init(&carver, 4);
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) } });
+    const menu = t.push(root, .none, &.{ .size = .{ .px(50), .px(40) }, .float = true });
+    const item = t.push(menu, .none, &.{ .size = .{ .px(50), .px(10) } });
+    t.seal(menu);
+    const fits = t.push(root, .none, &.{ .size = .{ .px(50), .px(20) }, .float = true });
+    const stuck = t.push(root, .none, &.{ .size = .{ .px(50), .px(90) }, .float = true });
+    const off = t.push(root, .none, &.{ .size = .{ .px(50), .px(40) }, .float = true });
+    t.seal(root);
+    const near_bottom = rect(150, 70, 190, 90);
+    // A menu hung 2 px below a button near the bottom-right corner: it would end at y = 132,
+    // so it opens 2 px above the button; across, it ends at x = 200, inside, so x stays.
+    an.flip(an.pushRect(menu, near_bottom, .bottom_left, .top_left, .{ 0, 2 }), .{ true, true });
+    // Room below: no flip.
+    an.flip(an.pushRect(fits, rect(10, 10, 60, 30), .bottom_left, .top_left, .{ 0, 2 }), .{ true, true });
+    // 90 px high in a 100 px viewport: neither side fits, so the first is kept.
+    an.flip(an.pushRect(stuck, near_bottom, .bottom_left, .top_left, .{ 0, 2 }), .{ true, true });
+    // Flipping is off unless asked for.
+    _ = an.pushRect(off, near_bottom, .bottom_left, .top_left, .{ 0, 2 });
+    s.run(.{ 200, 100 });
+    anchor(t, &an, rect(0, 0, 200, 100));
+    layout.finalize(t);
+    try testing.expectEqual(rect(150, 28, 200, 68), t.rect(menu));
+    try testing.expectEqual(rect(150, 28, 200, 38), t.rect(item));
+    try testing.expectEqual(rect(10, 32, 60, 52), t.rect(fits));
+    try testing.expectEqual(rect(150, 92, 200, 182), t.rect(stuck));
+    try testing.expectEqual(rect(150, 92, 200, 132), t.rect(off));
+
+    // Across: a submenu opened to the right of an item at the right edge opens to its left.
+    an.reset();
+    an.flip(an.pushRect(menu, rect(170, 10, 190, 20), .top_right, .top_left, .{ 4, 0 }), .{ true, false });
+    s.run(.{ 200, 100 });
+    anchor(t, &an, rect(0, 0, 200, 100));
+    layout.finalize(t);
+    try testing.expectEqual(rect(116, 10, 166, 50), t.rect(menu));
 }
