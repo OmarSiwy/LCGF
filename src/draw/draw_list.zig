@@ -4,6 +4,9 @@
 
 const std = @import("std");
 const mem = @import("../core/mem.zig");
+const types = @import("../core/types.zig");
+const Texture = types.Texture;
+const Material = types.Material;
 
 /// One instance of the quad pipeline. This is the GPU vertex-buffer layout,
 /// so the whole array uploads with a single copy.
@@ -45,6 +48,19 @@ pub const CustomDraw = extern struct {
     node: u32,
 };
 
+/// A run of quads sharing one texture and material: one instanced draw.
+pub const Batch = struct { first: u32, count: u32, texture: Texture, material: Material };
+
+/// One step for the renderer, in paint order.
+pub const Cmd = union(DrawList.Kind) {
+    /// A run of `quads` sharing one texture and material.
+    quads: Batch,
+    /// Index into `runs`.
+    text: u32,
+    /// Index into `customs`: the caller draws this one itself.
+    custom: u32,
+};
+
 /// One frame's paint output. Rows are carved from the caller's buffer by `init`; `paint.emit`
 /// rewrites them and the `*_len` counts every frame.
 pub const DrawList = struct {
@@ -79,6 +95,21 @@ pub const DrawList = struct {
             .customs = carver.slice(CustomDraw, customs + 1),
             .cmd = carver.columns(CmdColumns, ops),
             .op = carver.columns(OpColumns, ops),
+        };
+    }
+
+    /// Command `i` as a tagged union, for a renderer's one switch per command.
+    pub fn command(d: *const DrawList, i: u32) Cmd {
+        const key = d.cmd.key[i];
+        return switch (@as(Kind, @fromBackingInt(d.cmd.kind[i]))) {
+            .quads => .{ .quads = .{
+                .first = d.cmd.first[i],
+                .count = d.cmd.count[i],
+                .texture = @fromBackingInt(@as(u16, @truncate(key >> 16))),
+                .material = @fromBackingInt(@as(u16, @truncate(key))),
+            } },
+            .text => .{ .text = d.cmd.first[i] },
+            .custom => .{ .custom = d.cmd.first[i] },
         };
     }
 
@@ -131,4 +162,30 @@ test "DrawList.init carves one spare row per table and sizes like a counting car
     const raw = d.quadBytes();
     try testing.expectEqual(2 * @sizeOf(Quad), raw.len);
     try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + 64 ..][0..4]));
+}
+
+test "command: the columns read back as tagged unions, key split into texture and material" {
+    const bytes = comptime blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 4, 1, 1);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, 4, 1, 1);
+    const kinds = [_]DrawList.Kind{ .quads, .text, .custom, .quads };
+    const firsts = [_]u32{ 0, 5, 6, 3 };
+    const counts = [_]u32{ 3, 1, 1, 1 };
+    const keys = [_]u32{ 0, 0, 0, 7 << 16 | 2 };
+    for (kinds, firsts, counts, keys, 0..) |kind, first, count, key, i| {
+        d.cmd.kind[i] = @backingInt(kind);
+        d.cmd.first[i] = first;
+        d.cmd.count[i] = count;
+        d.cmd.key[i] = key;
+    }
+    d.cmd_len = kinds.len;
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 0, .count = 3, .texture = .white, .material = .solid } }, d.command(0));
+    try testing.expectEqual(Cmd{ .text = 5 }, d.command(1));
+    try testing.expectEqual(Cmd{ .custom = 6 }, d.command(2));
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 3, .count = 1, .texture = @fromBackingInt(7), .material = @fromBackingInt(2) } }, d.command(3));
 }
