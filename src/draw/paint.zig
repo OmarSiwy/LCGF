@@ -284,3 +284,43 @@ test "children of a clipping node are clipped inside its border; a non-clipping 
     try testing.expectEqual(sc.t.rect(loose).array(), d.quads[3].rect);
     try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, d.quads[3].clip);
 }
+
+test "a renderer's one switch per command draws every quad, run and custom once, in order" {
+    // The host loop of prototype/example.zig: one switch per command.
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    const sc: Scene = .build(&buf);
+    const d = &sc.d;
+    var next_quad: u32 = 0;
+    var batches: u32 = 0;
+    var runs: u32 = 0;
+    var customs: u32 = 0;
+    for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
+        .quads => |batch| {
+            try testing.expectEqual(next_quad, batch.first);
+            next_quad += batch.count;
+            batches += 1;
+        },
+        .text => |k| {
+            try testing.expectEqual(runs, k);
+            runs += 1;
+        },
+        .custom => |k| {
+            try testing.expectEqual(customs, k);
+            try testing.expectEqual(sc.t.rect(Scene.view).array(), d.customs[k].rect);
+            customs += 1;
+        },
+    };
+    try testing.expectEqual(d.quad_len, next_quad);
+    try testing.expect(batches < d.quad_len);
+    try testing.expectEqual(d.run_len, runs);
+    try testing.expectEqual(d.custom_len, customs);
+    try testing.expectEqual(d.quad_len * @sizeOf(@import("draw_list.zig").Quad), d.quadBytes().len);
+}
+
+test "an empty tree paints nothing" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var sc = Scene.carve(&carver);
+    emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
+    try testing.expectEqual(0, sc.d.quad_len + sc.d.run_len + sc.d.custom_len + sc.d.cmd_len);
+}
