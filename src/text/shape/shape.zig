@@ -5,8 +5,8 @@
 //! every pixel size (multiply by `px / units_per_em`). This is the data a renderer turns into
 //! quads and an editor maps the cursor through; nothing is retained.
 //!
-//! What this shaper does: cmap lookup, hmtx advances, and pair kerning (GPOS 'kern' or the
-//! kern table, via `Face.kerning`). Text is taken as one left-to-right run of one script; bidi
+//! What this shaper does: cmap lookup, ligatures (GSUB 'liga', lookup type 4), hmtx advances,
+//! and pair kerning (GPOS 'kern' or the kern table, via `Face.kerning`). Text is taken as one left-to-right run of one script; bidi
 //! and script itemisation run before it (src/text/unicode/). Results match HarfBuzz for that
 //! case (testdata/hb.txt).
 //!
@@ -18,6 +18,8 @@ const opentype = @import("../font/opentype.zig");
 const utf8 = @import("../unicode/utf8.zig");
 const Texts = @import("../../core/texts.zig").Texts;
 const Strings = @import("../../core/strings.zig").Strings;
+
+const layout = @import("layout.zig");
 
 const Face = opentype.Face;
 
@@ -35,30 +37,107 @@ pub const Run = struct {
     len: u32 = 0,
 };
 
-/// Shapes `text` with `face` into `run` (replacing what it held). One glyph per code point
-/// before substitutions. Fails with `error.NoSpace`, `run.len` then unspecified, when the
-/// run's columns are too short.
+/// Which steps `Shaper.shape` runs. All on is what HarfBuzz does by default for these features.
+pub const Features = struct {
+    liga: bool = true,
+    kern: bool = true,
+};
+
+/// A face with its layout tables located and the lookups of each feature collected, once.
+/// Damaged layout tables cost the features they hold, not the face.
+pub const Shaper = struct {
+    face: Face,
+    gsub: []const u8 = &.{},
+    liga: layout.Lookups = .{},
+
+    pub fn init(face: Face) Shaper {
+        var s: Shaper = .{ .face = face };
+        s.gsub = (face.dir.find(opentype.tag("GSUB")) catch null) orelse &.{};
+        layout.featureLookups(s.gsub, opentype.tag("liga"), &s.liga) catch {
+            s.liga = .{};
+        };
+        return s;
+    }
+
+    /// Shapes `text` into `run` (replacing what it held). Fails with `error.NoSpace`, `run.len`
+    /// then unspecified, when the run's columns are too short for the text's code points.
+    pub fn shape(s: *const Shaper, text: []const u8, run: *Run, features: Features) error{NoSpace}!void {
+        try map(&s.face, text, run);
+        if (features.liga) for (s.liga.slice()) |index| s.ligatures(index, run) catch {};
+        advances(&s.face, run);
+        if (features.kern) kern(&s.face, run);
+    }
+
+    /// Applies GSUB lookup `index` (ligature substitution, type 4) along the run: at each glyph
+    /// the first ligature of its set whose components follow it replaces them all. The ligature
+    /// keeps the cluster of its first component. Other lookup types are skipped.
+    fn ligatures(s: *const Shaper, index: u16, run: *Run) layout.Error!void {
+        const lk = try layout.lookup(s.gsub, index);
+        const count = try layout.read(u16, lk, 4);
+        var i: u32 = 0;
+        while (i < run.len) : (i += 1) {
+            subtables: for (0..count) |t| {
+                const st = try layout.subtable(lk, t, 7);
+                if (st.kind != 4 or try layout.read(u16, st.data, 0) != 1) continue;
+                const cov = try layout.at16(st.data, 2);
+                const set_index = (try layout.coverageIndex(cov, run.glyph[i])) orelse continue;
+                if (set_index >= try layout.read(u16, st.data, 4)) continue;
+                const set = try layout.at16(st.data, 6 + @as(usize, set_index) * 2);
+                for (0..try layout.read(u16, set, 0)) |l| {
+                    const lig = try layout.at16(set, 2 + l * 2);
+                    const comps = try layout.read(u16, lig, 2);
+                    if (comps == 0 or i + comps > run.len) continue;
+                    const matched = for (1..comps) |c| {
+                        if (run.glyph[i + c] != try layout.read(u16, lig, 4 + (c - 1) * 2)) break false;
+                    } else true;
+                    if (!matched) continue;
+                    run.glyph[i] = try layout.read(u16, lig, 0);
+                    remove(run, i + 1, comps - 1);
+                    break :subtables;
+                }
+                // The first subtable that covers the glyph decides, matched or not.
+                break;
+            }
+        }
+    }
+};
+
+/// Shapes `text` with every feature: the common case in one call.
 pub fn shape(face: *const Face, text: []const u8, run: *Run) error{NoSpace}!void {
-    try map(face, text, run);
-    kern(face, run);
+    const s: Shaper = .init(face.*);
+    return s.shape(text, run, .{});
 }
 
-/// Code points to nominal glyphs with their advances.
+/// Code points to nominal glyphs, with clusters.
 fn map(face: *const Face, text: []const u8, run: *Run) error{NoSpace}!void {
     run.len = 0;
     var i: usize = 0;
     while (i < text.len) {
         if (run.len == run.glyph.len) return error.NoSpace;
         const d = utf8.decode(text, i);
-        const g = face.cmap.glyph(d.cp);
         const k = run.len;
-        run.glyph[k] = g;
+        run.glyph[k] = face.cmap.glyph(d.cp);
         run.cluster[k] = @intCast(i);
-        run.advance[k] = face.hMetrics(g).advance;
-        run.x_offset[k] = 0;
-        run.y_offset[k] = 0;
         run.len = k + 1;
         i += d.len;
+    }
+}
+
+/// Drops `n` glyphs from row `at` on.
+fn remove(run: *Run, at: u32, n: u32) void {
+    if (n == 0) return;
+    const len = run.len;
+    std.mem.copyForwards(u16, run.glyph[at .. len - n], run.glyph[at + n .. len]);
+    std.mem.copyForwards(u32, run.cluster[at .. len - n], run.cluster[at + n .. len]);
+    run.len = len - n;
+}
+
+/// Nominal advances from hmtx, offsets zero.
+fn advances(face: *const Face, run: *Run) void {
+    for (run.glyph[0..run.len], run.advance[0..run.len], run.x_offset[0..run.len], run.y_offset[0..run.len]) |g, *a, *x, *y| {
+        a.* = face.hMetrics(g).advance;
+        x.* = 0;
+        y.* = 0;
     }
 }
 
@@ -80,7 +159,8 @@ pub fn width(run: *const Run) i32 {
 /// height (ascender - descender + line gap), in pixels. Other runs are left as they are.
 /// `run` is scratch for one run's glyphs; a run that does not fit in it is measured as far as
 /// it fits.
-pub fn measure(face: *const Face, font: u16, tx: *Texts, strings: *const Strings, run: *Run) void {
+pub fn measure(shaper: *const Shaper, font: u16, tx: *Texts, strings: *const Strings, run: *Run) void {
+    const face = &shaper.face;
     const c = &tx.c;
     const line: f32 = @floatFromInt(@as(i32, face.ascender) - face.descender + face.line_gap);
     const em: f32 = @floatFromInt(face.units_per_em);
@@ -88,7 +168,7 @@ pub fn measure(face: *const Face, font: u16, tx: *Texts, strings: *const Strings
         // Shaping is per run and reads its bytes: not a row pass, so it may skip rows.
         if (c.font[k] != font) continue;
         const text = strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] });
-        shape(face, text, run) catch {};
+        shaper.shape(text, run, .{}) catch {};
         const scale = c.px[k] / em;
         c.w[k] = @as(f32, @floatFromInt(width(run))) * scale;
         c.h[k] = line * scale;
@@ -155,15 +235,15 @@ pub fn hbCases(features: []const u8, buf: *[1024]u8, out: []HbCase) !usize {
 }
 
 /// Shapes every case of `features` with `shaper` and compares each column with HarfBuzz's.
-pub fn expectHb(features: []const u8, comptime shaper: fn (*const Face, []const u8, *Run) error{NoSpace}!void) !usize {
-    const face = try Face.parse(test_font, 0);
+pub fn expectHb(features: []const u8, opts: Features) !usize {
+    const shaper: Shaper = .init(try Face.parse(test_font, 0));
     var buf: [1024]u8 = undefined;
     var cases: [16]HbCase = undefined;
     const n = try hbCases(features, &buf, &cases);
     for (cases[0..n]) |*c| {
         var cols: TestRun = .{};
         var run = cols.run();
-        try shaper(&face, c.text, &run);
+        try shaper.shape(c.text, &run, opts);
         errdefer std.debug.print("case {s} \"{s}\"\n", .{ c.features, c.text });
         try std.testing.expectEqual(c.len, run.len);
         try std.testing.expectEqualSlices(u16, c.expected.glyph[0..c.len], run.glyph[0..run.len]);
@@ -176,7 +256,21 @@ pub fn expectHb(features: []const u8, comptime shaper: fn (*const Face, []const 
 }
 
 test "simple shaping matches HarfBuzz with kerning only" {
-    try std.testing.expectEqual(6, try expectHb("kern", shape));
+    try std.testing.expectEqual(6, try expectHb("kern", .{ .liga = false }));
+}
+
+test "ligatures match HarfBuzz" {
+    // "office fluff fi" becomes o ffi c e space fl u ff space fi; "Ta\u{301}ffi" ends in ffi.
+    try std.testing.expectEqual(6, try expectHb("kern,liga", .{}));
+}
+
+test "ligatures keep the first component's cluster" {
+    const face = try Face.parse(test_font, 0);
+    var cols: TestRun = .{};
+    var run = cols.run();
+    try shape(&face, "office", &run);
+    try std.testing.expectEqual(4, run.len);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 4, 5 }, run.cluster[0..4]);
 }
 
 test "a run that does not fit fails" {
@@ -199,7 +293,8 @@ test "measure fills the extents of the runs in this font" {
     const b = tx.push(1, strings.add("AVTavo"), &.{ .px = 20, .font = @fromBackingInt(0) });
     var cols: TestRun = .{};
     var run = cols.run();
-    measure(&face, 1, &tx, &strings, &run);
+    const shaper: Shaper = .init(face);
+    measure(&shaper, 1, &tx, &strings, &run);
     // HarfBuzz: 599 + 600 + 476 + 561 + 508 + 605 = 3349 units at 20 / 1000 px per unit.
     try std.testing.expectApproxEqAbs(3349.0 * 20 / @as(f32, @floatFromInt(face.units_per_em)), tx.c.w[a], 1e-3);
     try std.testing.expect(tx.c.h[a] > 20);
