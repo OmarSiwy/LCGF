@@ -2,6 +2,12 @@
 //! a signal; what it affects is a constant, so a setter needs no subscriber list. Tier 1. Ported
 //! from prototype/comptime_ui_probe.zig (`Ui().Field`, `Ui().dirty_masks`, `Runtime.set`).
 //!
+//! Effects are named reactions the caller runs. `State` declares them as
+//! `pub const effects = .{ .save = .{ .volume, .muted } };`: an effect is pending once a field it
+//! watches changes, directly or through a derived field. The setter ORs a constant into a
+//! pending mask; `takeEffect` hands pending effects back as a generated `Effect` enum, so running
+//! them is the caller's exhaustive switch, with no callbacks and no subscriber lists.
+//!
 //! Derived fields (Floem's memos) are state fields computed from other fields. `State` declares
 //! them as `pub const derived = .{ .total = .{ .from = .{ .a, .b }, .compute = sum } };` where
 //! `compute` is `fn (*const State) T` for the field's type T. Inputs may be derived themselves;
@@ -23,6 +29,9 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
     const derived_decl = if (@hasDecl(State, "derived")) State.derived else .{};
     const derived_names = @typeInfo(@TypeOf(derived_decl)).@"struct".field_names;
     const derived_count = derived_names.len;
+    const effects_decl = if (@hasDecl(State, "effects")) State.effects else .{};
+    const effect_names = @typeInfo(@TypeOf(effects_decl)).@"struct".field_names;
+    const effect_count = effect_names.len;
     return struct {
         /// One tag per state field, in declaration order: tag k is field k, so a field's
         /// tables are indexed by `@backingInt(field)`.
@@ -242,6 +251,30 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             break :blk out;
         };
 
+        /// One tag per declared effect, in declaration order: tag e is bit e of `Pending`.
+        pub const Effect = if (effect_count == 0) enum {} else blk: {
+            var values: [effect_count]u32 = undefined;
+            for (&values, 0..) |*v, e| v.* = e;
+            break :blk @Enum(u32, .exhaustive, effect_names, &values);
+        };
+        /// One bit per effect.
+        pub const Pending = @Int(.unsigned, effect_count);
+
+        /// For each field: the effects a change makes pending, those watching the field itself
+        /// or a derived field it reaches.
+        pub const effect_masks: [field_count]Pending = blk: {
+            var watch: [field_count]Pending = @splat(0);
+            for (effect_names, 0..) |name, e| {
+                for (@field(effects_decl, name)) |field|
+                    watch[@backingInt(fieldNamed(@tagName(field)))] |= @as(Pending, 1) << e;
+            }
+            var out = watch;
+            for (0..field_count) |f| for (0..derived_count) |d| if (reaches[f][d]) {
+                out[f] |= watch[@backingInt(derived_field[d])];
+            };
+            break :blk out;
+        };
+
         fn fieldNamed(comptime name: []const u8) Field {
             for (@typeInfo(Field).@"enum".field_names, 0..) |fname, k|
                 if (std.mem.eql(u8, fname, name)) return @fromBackingInt(@intCast(k));
@@ -260,6 +293,9 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
             /// Derived fields whose inputs were staged since the last `commit`, bit d for
             /// `State.derived` entry d. Zero-sized without derived fields.
             stale: Stale = 0,
+            /// Effects to run, bit e for `Effect` tag e. Zero-sized without effects; nothing is
+            /// pending at start, since no field has changed yet.
+            pending: Pending = 0,
 
             /// The whole signal graph: one store and one OR with a constant mask per pass the
             /// field touches (one OR per touched word when the mask is an array; none for a pass
@@ -271,6 +307,7 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 @field(rt.state, @tagName(field)) = value;
                 orInto(&rt.layout_dirty, layout_masks[@backingInt(field)]);
                 orInto(&rt.paint_dirty, paint_masks[@backingInt(field)]);
+                if (comptime effect_masks[@backingInt(field)] != 0) rt.pending |= effect_masks[@backingInt(field)];
                 recompute(&rt.state, reaches[@backingInt(field)]);
             }
 
@@ -284,6 +321,7 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 @field(rt.state, @tagName(field)) = value;
                 orInto(&rt.layout_dirty, layout_masks[@backingInt(field)]);
                 orInto(&rt.paint_dirty, paint_masks[@backingInt(field)]);
+                if (comptime effect_masks[@backingInt(field)] != 0) rt.pending |= effect_masks[@backingInt(field)];
                 if (comptime stale_bits[@backingInt(field)] != 0) rt.stale |= stale_bits[@backingInt(field)];
             }
 
@@ -310,6 +348,16 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 defer rt.layout_dirty = empty;
                 defer rt.paint_dirty = empty;
                 return .{ .layout = rt.layout_dirty, .paint = paint };
+            }
+
+            /// The pending effect with the lowest tag, now no longer pending, or null. The caller
+            /// runs it: `while (rt.takeEffect()) |e| switch (e) { ... }`.
+            pub fn takeEffect(rt: *Runtime) ?Effect {
+                if (comptime effect_count == 0) return null;
+                if (rt.pending == 0) return null;
+                const e = @ctz(rt.pending);
+                rt.pending &= rt.pending - 1;
+                return @fromBackingInt(@intCast(e));
             }
 
             /// Recomputes, in topological order, every derived field marked in `which`.
@@ -634,4 +682,52 @@ test "stage: without derived fields it is set" {
     b.commit();
     try testing.expectEqual(a, b);
     try testing.expectEqual(0, @sizeOf(@TypeOf(b.stale)));
+}
+
+/// The mixer with effects: `save` when anything persisted changes, `meter` when the derived
+/// gain changes (so through volume and muted), `retitle` when the title changes.
+const Effects = struct {
+    title: []const u8 = "Mixer",
+    volume: f32 = 0.5,
+    muted: bool = false,
+    pan: f32 = 0,
+    gain: f32 = 0.5,
+
+    pub const derived = .{ .gain = .{ .from = .{ .volume, .muted }, .compute = gainOf } };
+    pub const effects = .{ .save = .{ .volume, .muted, .pan }, .meter = .{.gain}, .retitle = .{.title} };
+    fn gainOf(m: *const Effects) f32 {
+        return if (m.muted) 0 else m.volume;
+    }
+};
+
+test "effects: a change makes its watchers pending, and the caller runs them by switch" {
+    const E = Signals(Effects, mixer);
+    try testing.expectEqual(0b011, E.effect_masks[@backingInt(E.Field.volume)]);
+    try testing.expectEqual(0b001, E.effect_masks[@backingInt(E.Field.pan)]);
+    try testing.expectEqual(0b100, E.effect_masks[@backingInt(E.Field.title)]);
+    var rt: E.Runtime = .{};
+    try testing.expectEqual(null, rt.takeEffect());
+    rt.set(.volume, 0.7);
+    rt.stage(.muted, true);
+    rt.commit();
+    var saved: u32 = 0;
+    var metered: f32 = -1;
+    var retitled = false;
+    // An effect set twice runs once.
+    while (rt.takeEffect()) |e| switch (e) { // forgetting an effect here is a compile error
+        .save => saved += 1,
+        .meter => metered = rt.state.gain,
+        .retitle => retitled = true,
+    };
+    try testing.expectEqual(1, saved);
+    try testing.expectEqual(0, metered);
+    try testing.expect(!retitled);
+    rt.set(.title, "Bus");
+    try testing.expectEqual(E.Effect.retitle, rt.takeEffect().?);
+    try testing.expectEqual(null, rt.takeEffect());
+    // Without effects, nothing is ever pending and the mask takes no room.
+    var plain: App.Runtime = .{};
+    plain.set(.volume, 1);
+    try testing.expectEqual(null, plain.takeEffect());
+    try testing.expectEqual(0, @sizeOf(App.Pending));
 }
