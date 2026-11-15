@@ -90,6 +90,21 @@ pub const Tree = struct {
         text: []u32,
         custom: []u32,
     };
+
+    /// Rows allocated for `cap` nodes: whole vectors plus one spare, so batch
+    /// passes may read and write one vector past `len`.
+    pub fn rows(cap: u32) usize {
+        return simd.rows(cap);
+    }
+    /// Carves every column from `carver`. With a counting carver this sizes the buffer instead.
+    pub fn init(carver: *mem.Carver, cap: u32) Tree {
+        return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
+    }
+    /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
+    /// row is rewritten before it is read again.
+    pub fn reset(t: *Tree) void {
+        t.len = 0;
+    }
 };
 
 const testing = std.testing;
@@ -159,4 +174,29 @@ test "Look: one 36-byte row with the C layout the GPU reads" {
     inline for (.{ "fill", "border_color", "border", "radius", "params", "texture", "material" }, .{ 0, 4, 8, 12, 16, 32, 34 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Look, name));
     try testing.expectEqual([]Look, @FieldType(Tree.Columns, "look"));
+}
+
+test "init carves rows(cap) rows per column; counting and carving agree; reset empties" {
+    const cap = 10;
+    const bytes = comptime blk: {
+        @setEvalBranchQuota(20_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Tree.init(&counter, cap);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = Tree.init(&carver, cap);
+    try testing.expectEqual(bytes, carver.off);
+    try testing.expectEqual(0, t.len);
+    try testing.expectEqual(cap, t.cap);
+    try testing.expectEqual(simd.padded(cap) + simd.lanes, Tree.rows(cap));
+    try testing.expectEqual(Tree.rows(cap), t.c.id.len);
+    try testing.expectEqual(Tree.rows(cap), t.c.look.len);
+    try testing.expectEqual(Tree.rows(cap), t.c.vis[3].len);
+
+    t.len = 7;
+    t.reset();
+    try testing.expectEqual(0, t.len);
+    try testing.expectEqual(cap, t.cap);
 }
