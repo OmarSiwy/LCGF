@@ -46,6 +46,21 @@ pub const Carver = struct {
     }
 };
 
+/// Copies rows [src_at, src_at + n) of every column in `src` to rows starting at `dst_at` in
+/// `dst`. `S` is a column set as taken by `Carver.columns`; the ranges must not overlap.
+pub fn copyRows(comptime S: type, dst: *const S, dst_at: usize, src: *const S, src_at: usize, n: usize) void {
+    const info = @typeInfo(S).@"struct";
+    inline for (info.field_names, info.field_types) |name, FT| {
+        switch (@typeInfo(FT)) {
+            .pointer => @memcpy(@field(dst, name)[dst_at..][0..n], @field(src, name)[src_at..][0..n]),
+            .array => |a| inline for (0..a.len) |k| {
+                @memcpy(@field(dst, name)[k][dst_at..][0..n], @field(src, name)[k][src_at..][0..n]);
+            },
+            else => @compileError("column sets hold only []T and [k][]T fields"),
+        }
+    }
+}
+
 test "Carver.slice carves zeroed, cache-line aligned slices in order" {
     var buf: [256]u8 align(column_align) = @splat(0xaa);
     var c: Carver = .{ .buf = &buf };
@@ -123,4 +138,26 @@ test "counting mode sizes a buffer with the same code that carves it" {
     try std.testing.expectEqual(need, c.off);
     try std.testing.expectEqual(30, o.a.link[1].len);
     try std.testing.expectEqual(90, o.names.len);
+}
+
+test "copyRows copies a row range of every column" {
+    const Cols = struct { id: []u32, pos: [2][]f32 };
+    var buf: [64 * 6]u8 align(column_align) = undefined;
+    var c: Carver = .{ .buf = &buf };
+    const src = c.columns(Cols, 6);
+    const dst = c.columns(Cols, 6);
+    for (0..6) |i| {
+        src.id[i] = @intCast(10 + i);
+        src.pos[0][i] = @floatFromInt(i);
+        src.pos[1][i] = @floatFromInt(100 + i);
+    }
+
+    copyRows(Cols, &dst, 1, &src, 3, 2);
+
+    try std.testing.expectEqualSlices(u32, &.{ 0, 13, 14, 0, 0, 0 }, dst.id);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 3, 4, 0, 0, 0 }, dst.pos[0]);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 103, 104, 0, 0, 0 }, dst.pos[1]);
+
+    copyRows(Cols, &dst, 0, &src, 0, 0); // empty range is a no-op
+    try std.testing.expectEqual(0, dst.id[0]);
 }
