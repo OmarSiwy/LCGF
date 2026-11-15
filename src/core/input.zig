@@ -19,6 +19,7 @@ pub const Input = struct {
     buttons: Buttons = .{},
     wheel: [2]f32 = .{ 0, 0 },
     mods: Mods = .{},
+    keys: Keys = .{},
     /// UTF-8 typed this frame. Only read during the frame.
     text: []const u8 = "",
 
@@ -26,6 +27,17 @@ pub const Input = struct {
     pub const Buttons = packed struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
     /// Modifier keys held down this frame, one bit each. `cmd` is the platform's command or super key.
     pub const Mods = packed struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 };
+
+    /// 256 key states as a bit set. Index with your platform's scancodes.
+    pub const Keys = struct {
+        bits: [4]u64 = @splat(0),
+        pub fn press(k: *Keys, code: u8) void {
+            k.bits[code >> 6] |= @as(u64, 1) << @as(u6, @truncate(code));
+        }
+        pub fn down(k: *const Keys, code: u8) bool {
+            return ((k.bits[code >> 6] >> @as(u6, @truncate(code))) & 1) != 0;
+        }
+    };
 };
 
 test "Input: defaults match the prototype" {
@@ -56,4 +68,23 @@ test "Input: Buttons and Mods are one byte with the prototype's bit order" {
     const in: Input = .{};
     try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(in.buttons)));
     try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(in.mods)));
+}
+
+test "Input.Keys: every code sets exactly its own bit" {
+    for (0..256) |c| {
+        const code: u8 = @intCast(c);
+        var k: Input.Keys = .{};
+        try std.testing.expect(!k.down(code));
+        k.press(code);
+        try std.testing.expect(k.down(code));
+        try std.testing.expectEqual(@as(u64, 1) << @as(u6, @truncate(code)), k.bits[code >> 6]);
+        var total: u32 = 0;
+        for (k.bits) |w| total += @popCount(w);
+        try std.testing.expectEqual(@as(u32, 1), total);
+    }
+    var k: Input.Keys = .{};
+    k.press(0);
+    k.press(255);
+    k.press(0);
+    try std.testing.expect(k.down(0) and k.down(255) and !k.down(128));
 }
