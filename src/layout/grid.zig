@@ -39,8 +39,7 @@ pub const Track = struct {
     }
     /// As large as the largest item in it (CSS `auto` / `max-content`).
     pub const fit: Track = .{ .k_fit = 1 };
-    /// A share `w` of the space the other tracks leave (CSS `fr`). Until fractions are
-    /// resolved it is sized like `fit`.
+    /// A share `w` of the space the other tracks leave (CSS `fr`), never less than its content.
     pub fn fr(w: f32) Track {
         return .{ .k_fr = w };
     }
@@ -192,16 +191,31 @@ pub const Grids = struct {
     }
 };
 
-/// Sizes the tracks of grid `k` on axis `a` from their coefficients and `content`, writes each
-/// track's `size` and `start` (a running sum), and returns the total: the grid's content size
-/// on that axis. One pass over the grid's tracks.
-pub fn sizeTracks(gs: *Grids, k: u32, a: u1) f32 {
+/// Sizes the tracks of grid `k` on axis `a` inside `inner`, the grid's content size, writes
+/// each track's `size` and `start` (a running sum), and returns the total.
+///
+/// Fixed and fit tracks are sized first; what they leave of `inner` is shared out among the
+/// fraction tracks by weight, in one pass: a fraction track is `max(content, share)`. CSS
+/// instead repeats the share without the tracks whose content exceeds it ("find the size of
+/// an fr"); here such a track keeps its content and the grid may come out wider than `inner`.
+/// With `inner` 0 every fraction track is its content, which is the grid's natural size.
+pub fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32 {
     const first = gs.g.first[a][k];
     const n = gs.g.count[a][k];
     const tr = &gs.tr;
+    var taken: f32 = 0;
+    var weight: f32 = 0;
+    for (first..first + n) |j| {
+        const is_fr = b01(tr.k_fr[j] > 0);
+        taken += (tr.k_px[j] + tr.content[j] * tr.k_fit[j]) * (1 - is_fr);
+        weight += tr.k_fr[j];
+    }
+    const per_weight = @max(inner - taken, 0) / @max(weight, 1e-6);
     var at: f32 = 0;
     for (first..first + n) |j| {
-        const s = tr.k_px[j] + tr.content[j] * (tr.k_fit[j] + b01(tr.k_fr[j] > 0));
+        const fixed = tr.k_px[j] + tr.content[j] * tr.k_fit[j];
+        const flexed = @max(tr.content[j], tr.k_fr[j] * per_weight);
+        const s = fixed + b01(tr.k_fr[j] > 0) * (flexed - fixed);
         tr.size[j] = s;
         tr.start[j] = at;
         at += s;
@@ -296,7 +310,7 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
             const share = nat[gs.it.node[it]] / @as(f32, @floatFromInt(n));
             for (gs.tr.content[j..][0..n]) |*v| v.* = @max(v.*, share);
         }
-        t.c.fit[a][node] = sizeTracks(gs, k, a);
+        t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
     }
     layout.fitRows(t, axis, 1, to);
     layout.fitRoot(t, axis);
@@ -327,7 +341,8 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
         } else {
             layout.resolveRows(t, axis, from, grid_row + 1);
             from = grid_row + 1;
-            _ = sizeTracks(gs, k, a);
+            const node = gs.g.node[k];
+            _ = sizeTracks(gs, k, a, c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node]);
             const first = gs.g.first[a][k];
             var it = gs.g.first_item[k];
             while (it != none) : (it = gs.it.next[it]) {
@@ -373,10 +388,10 @@ test "sizeTracks: fixed tracks take their pixels, fit and fraction tracks their 
 
     // Content as the fit step leaves it: the fixed track's content does not count.
     @memcpy(gs.tr.content[0..5], &[_]f32{ 500, 40, 25, 12, 99 });
-    try testing.expectEqual(165, sizeTracks(&gs, k, 0));
+    try testing.expectEqual(165, sizeTracks(&gs, k, 0, 0));
     try testing.expectEqualSlices(f32, &.{ 100, 40, 25 }, gs.tr.size[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 100, 140 }, gs.tr.start[0..3]);
-    try testing.expectEqual(42, sizeTracks(&gs, k, 1));
+    try testing.expectEqual(42, sizeTracks(&gs, k, 1, 0));
     try testing.expectEqualSlices(f32, &.{ 12, 30 }, gs.tr.size[3..5]);
     try testing.expectEqualSlices(f32, &.{ 0, 12 }, gs.tr.start[3..5]);
 }
@@ -392,7 +407,7 @@ test "Grids: running out of grid or track rows is reported and writes nothing ou
     const k = gs.grid(0, &.{ .fit, .fit }, &.{ .fit, .fit });
     try testing.expect(gs.overflow);
     try testing.expectEqual(0, gs.g.count[0][k] + gs.g.count[1][k]);
-    try testing.expectEqual(0, sizeTracks(&gs, k, 0));
+    try testing.expectEqual(0, sizeTracks(&gs, k, 0, 0));
     // Too many grids: the last row is reused.
     gs.reset();
     _ = gs.grid(0, &.{.fit}, &.{});
@@ -576,4 +591,45 @@ test "autoPlace: row order around explicit items, spans that do not fit move on"
     autoPlace(&s.gs);
     try testing.expect(s.gs.overflow);
     try testing.expectEqual([2]u32{ 1, 1 }, at(&s.gs, s.gs.items_len - 1));
+}
+
+test "sizeTracks: fraction tracks share what fixed and fit tracks leave, by weight, once" {
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var gs = Grids.init(&carver, .{ .grids = 1, .tracks = 8, .items = 1 });
+    const k = gs.grid(0, &.{ .px(50), .fr(1), .fr(2), .fit }, &.{.fr(1)});
+    @memcpy(gs.tr.content[0..5], &[_]f32{ 0, 10, 20, 40, 5 });
+    // 300 - 50 - 40 = 210 left: 70 and 140.
+    try testing.expectEqual(300, sizeTracks(&gs, k, 0, 300));
+    try testing.expectEqualSlices(f32, &.{ 50, 70, 140, 40 }, gs.tr.size[0..4]);
+    try testing.expectEqualSlices(f32, &.{ 0, 50, 120, 260 }, gs.tr.start[0..4]);
+    // Natural size (inner 0): every fraction track is its content.
+    try testing.expectEqual(120, sizeTracks(&gs, k, 0, 0));
+    // A fraction track whose content exceeds its share keeps its content; the others are not
+    // shared out again, so the total passes the inner size.
+    gs.tr.content[1] = 100;
+    try testing.expectEqual(330, sizeTracks(&gs, k, 0, 300));
+    try testing.expectEqualSlices(f32, &.{ 50, 100, 140, 40 }, gs.tr.size[0..4]);
+    // Less room than the fixed tracks take: fractions get their content only.
+    try testing.expectEqual(210, sizeTracks(&gs, k, 0, 60));
+}
+
+test "grid: fraction columns split the grid's width; a growing grid stretches them" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) }, .pad = @splat(10) });
+    const g = t.push(root, .none, &.{ .size = .{ .fill, .fit }, .pad = .{ 5, 0, 5, 0 } });
+    const k = s.gs.grid(g, &.{ .px(70), .fr(1), .fr(3) }, &.{.fit});
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 10, 20 });
+    const b = s.cell(g, k, .{ 1, 0 }, .{ 10, 20 });
+    const c = s.cell(g, k, .{ 2, 0 }, .{ 10, 20 });
+    t.seal(g);
+    t.seal(root);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+    // The grid fills 380 across; inside its padding 370 - 70 = 300 is shared 1 : 3.
+    try testing.expectEqual(rect(10, 10, 390, 30), t.rect(g));
+    try testing.expectEqual(rect(15, 10, 85, 30), t.rect(a));
+    try testing.expectEqual(rect(85, 10, 160, 30), t.rect(b));
+    try testing.expectEqual(rect(160, 10, 385, 30), t.rect(c));
 }
