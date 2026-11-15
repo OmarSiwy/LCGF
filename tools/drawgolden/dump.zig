@@ -94,9 +94,23 @@ fn shadows(t: *Tree) void {
     t.seal(0);
 }
 
+/// Texture 1, which gpu.py binds to its stand-in 64x64 glyph atlas (16x16 cells of 4x4 texels,
+/// nearest sampling): the whole atlas, a UV rect of rows 2 to 7 tinted, one cell, and a rounded
+/// image.
+fn images(t: *Tree) void {
+    const atlas: lcgr.types.Texture = @fromBackingInt(1);
+    Scene.row(t, &.{
+        .{ .fill = .white, .texture = atlas },
+        .{ .fill = .rgb(120, 200, 255), .texture = atlas, .uv = .{ 0, 0.125, 1, 0.5 } },
+        .{ .fill = .rgb(255, 200, 80), .texture = atlas, .uv = .{ 1.0 / 16.0, 2.0 / 16.0, 2.0 / 16.0, 3.0 / 16.0 } },
+        .{ .fill = .white, .texture = atlas, .uv = .{ 0, 0.25, 0.5, 0.5 }, .radius = 30, .border = 4, .border_color = .rgb(255, 80, 80) },
+    });
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
+    .{ "images", images },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;

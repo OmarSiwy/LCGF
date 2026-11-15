@@ -118,6 +118,9 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             // ---- paint inputs. Cold during layout and always read together, so
             //      they are one row per node rather than seven columns.
             look: Col(Look),
+            /// Texture coordinates u0, v0, u1, v1 of the quad's corners (`Style.uv`). Kept out
+            /// of `Look`, which is a fixed GPU row; read only by paint.
+            uv: Col([4]f32),
 
             // ---- semantics, read by the host to build an accessibility tree
             role: Col(u8),
@@ -192,6 +195,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                 .texture = @backingInt(s.texture),
                 .material = @backingInt(s.material),
             };
+            c.uv[i] = s.uv;
             c.role[i] = @backingInt(s.role);
             c.value[i] = s.value;
             c.text[i] = none;
@@ -319,8 +323,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 1 + 4, rowBytes(Tree.Columns));
 }
 
 test "Look: one 36-byte row with the C layout the GPU reads" {

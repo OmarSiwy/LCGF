@@ -55,9 +55,11 @@ var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
 /// same name in `to`. The column sets have the same names and row sizes (Look is the same
-/// 36-byte extern row in both); a missing name is a compile error.
+/// 36-byte extern row in both). Columns only src/ has (paint inputs added after the port, such
+/// as `uv`) are left as they are; the caller gives them the values the prototype implies.
 fn copyColumns(to: anytype, from: anytype, len: u32) void {
     inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
+        if (comptime !@hasField(@TypeOf(from.*), name)) continue;
         if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
             inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
         } else copyRows(@field(to, name), @field(from, name), len);
@@ -202,6 +204,7 @@ pub fn main(init: std.process.Init) !void {
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
+        @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;

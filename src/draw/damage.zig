@@ -120,7 +120,7 @@ pub const Region = struct {
 };
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
-const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look };
+const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, uv: [4]f32 };
 
 /// Writes, for every node of `t`, a hash of what painting it reads: its rect, its visible
 /// (clipped) rect, its look, and the text run or custom draw it owns. Two frames that paint a
@@ -133,6 +133,7 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
             .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
+            .uv = c.uv[i],
         };
         out[i] = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&row)));
     }

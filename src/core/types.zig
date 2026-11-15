@@ -345,6 +345,8 @@ pub const Style = struct {
     material: Material = .solid,
     /// Passed through to the material's shader.
     params: [4]f32 = .{ 0, 0, 0, 0 },
+    /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
+    uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics
     role: Role = .none,
     value: f32 = 0,

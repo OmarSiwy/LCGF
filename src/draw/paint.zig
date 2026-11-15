@@ -40,7 +40,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
             .params = look.params,
-            .uv = .{ 0, 0, 1, 1 },
+            .uv = c.uv[i],
             .fill = look.fill,
             .border_color = look.border_color,
             .radius = look.radius,
