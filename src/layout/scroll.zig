@@ -6,9 +6,11 @@
 //!   extent     SIMD   content size of every node, from `fit`
 //!   clamp      SIMD   scroll offsets kept inside [0, extent - size]
 //!   intoView   query  the scroll that brings a descendant into view
+//!   stick      after `place`: sticky children held at a scroll container's inner edge
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
+const mem = @import("../core/mem.zig");
 const Tree = @import("../core/tree.zig").Tree;
 
 const W = simd.lanes;
@@ -70,14 +72,84 @@ pub fn intoView(t: *const Tree, ext: [2][]const f32, container: u32, target: u32
     return out;
 }
 
+/// The sticky side list: one row per sticky node, as CSS `position: sticky` with a start inset.
+pub const Sticky = struct {
+    len: u32 = 0,
+    cap: u32,
+    /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+    overflow: bool = false,
+    c: Columns,
+
+    pub const Columns = struct {
+        node: []u32,
+        /// The scroll container whose inner start edge the node sticks to.
+        scroller: []u32,
+        /// Distance from that edge, in pixels.
+        inset: [2][]f32,
+        /// 1.0 when the node sticks on this axis.
+        on: [2][]f32,
+    };
+
+    pub fn init(carver: *mem.Carver, cap: u32) Sticky {
+        std.debug.assert(cap > 0);
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+    pub fn reset(st: *Sticky) void {
+        st.len = 0;
+        st.overflow = false;
+    }
+    /// Makes `node` stick `inset` pixels from the inner start edge of `scroller` (an ancestor)
+    /// on the axes in `axes`. Push in row order, so a sticky node inside another sees its
+    /// final place. Returns the row.
+    pub fn push(st: *Sticky, node: u32, scroller: u32, inset: [2]f32, axes: [2]bool) u32 {
+        const k = @min(st.len, st.cap - 1);
+        st.overflow = simd.orB(st.overflow, st.len >= st.cap);
+        st.len = k + 1;
+        st.c.node[k] = node;
+        st.c.scroller[k] = scroller;
+        inline for (0..2) |a| {
+            st.c.inset[a][k] = inset[a];
+            st.c.on[a][k] = simd.b2f(axes[a]);
+        }
+        return k;
+    }
+};
+
+/// Moves each sticky node, with its subtree, so it does not go past its scroller's inner start
+/// edge (plus inset) when the content is scrolled, but never out of its parent's content box:
+/// a section header sticks at the top of a list until the end of its section pushes it out.
+/// Run after `place` (and `overlay.anchor`, if used), before `finalize`. Only the start edge
+/// sticks; nodes sticking to the end edge are not supported. Paint order is unchanged, so a
+/// header that should cover the rows scrolling under it is raised with `overlay.Layers`.
+pub fn stick(t: *Tree, st: *const Sticky) void {
+    const pos = t.c.pos;
+    const size = t.c.size;
+    const lo = t.c.pad_lo;
+    const hi = t.c.pad_hi;
+    const parent = t.c.parent;
+    const end = t.c.end;
+    const c = &st.c;
+    for (0..st.len) |k| {
+        const n = c.node[k];
+        const sc = c.scroller[k];
+        const p = parent[n];
+        inline for (0..2) |a| {
+            const edge = pos[a][sc] + lo[a][sc] + c.inset[a][k];
+            const last = pos[a][p] + size[a][p] - hi[a][p] - size[a][n];
+            const want = @max(pos[a][n], @min(edge, last));
+            const delta = c.on[a][k] * (want - pos[a][n]);
+            for (pos[a][n..end[n]]) |*v| v.* += delta;
+        }
+    }
+}
+
 const testing = std.testing;
-const mem = @import("../core/mem.zig");
 const layout = @import("layout.zig");
 const Texts = @import("../core/texts.zig").Texts;
 const Strings = @import("../core/strings.zig").Strings;
 const types = @import("../core/types.zig");
 
-const cap = 64;
+const rows_cap = 64;
 
 /// A tree, a text list and two extent columns in a caller-owned buffer, for the tests.
 const Scene = struct {
@@ -88,9 +160,9 @@ const Scene = struct {
 
     fn init(s: *Scene) void {
         var carver: mem.Carver = .{ .buf = &s.raw };
-        s.t = Tree.init(&carver, cap);
+        s.t = Tree.init(&carver, rows_cap);
         s.tx = Texts.init(&carver, 4);
-        s.ext = .{ carver.slice(f32, simd.rows(cap)), carver.slice(f32, simd.rows(cap)) };
+        s.ext = .{ carver.slice(f32, simd.rows(rows_cap)), carver.slice(f32, simd.rows(rows_cap)) };
     }
     /// Every sizing pass of `layout.run`, with the text extents already settled.
     fn size(s: *Scene, viewport: [2]f32) void {
@@ -233,4 +305,52 @@ test "intoView: least movement that shows a row, clamped to the content" {
     layout.place(t);
     try testing.expectEqual(336, intoView(t, s.ext, list, big)[1]);
     try testing.expectEqual(274, intoView(t, s.ext, list, rows[9])[1]);
+}
+
+test "stick: a header sticks at the top of the list until its section's end pushes it out" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var st = Sticky.init(&carver, 4);
+    // list 100x60, pad 2 { section a { header 20, 3 items of 20 }, section b { header 20, 3 items } }
+    // Section a spans content 0..80, b 80..160.
+    const list = t.push(0, .none, &.{ .size = .{ .px(100), .px(60) }, .pad = @splat(2), .clip = true });
+    var heads: [2]u32 = undefined;
+    var labels: [2]u32 = undefined;
+    for (&heads, &labels) |*h, *l| {
+        const sec = t.push(list, .none, &.{ .size = .{ .fill, .fit } });
+        h.* = t.push(sec, .none, &.{ .size = .{ .fill, .px(20) } });
+        l.* = t.push(h.*, .none, &.{ .size = .{ .px(30), .px(10) } });
+        t.seal(h.*);
+        for (0..3) |_| t.seal(t.push(sec, .none, &.{ .size = .{ .fill, .px(20) } }));
+        t.seal(sec);
+    }
+    t.seal(list);
+    for (heads) |h| _ = st.push(h, list, .{ 0, 0 }, .{ false, true });
+
+    const Case = struct { scroll: f32, a: f32, b: f32 };
+    const cases = [_]Case{
+        // Not scrolled: both where the flow put them (b is below the visible part).
+        .{ .scroll = 0, .a = 2, .b = 82 },
+        // a would be at -28: held at the inner top edge, y = 2.
+        .{ .scroll = 30, .a = 2, .b = 52 },
+        // a's section ends at 80 - 70 + 2 = 12, so its header is pushed up to 12 - 20 = -8;
+        // b is not scrolled past yet.
+        .{ .scroll = 70, .a = -8, .b = 12 },
+        // b's turn: a is gone with its section, b sticks.
+        .{ .scroll = 100, .a = -38, .b = 2 },
+    };
+    for (cases) |k| {
+        t.c.scroll[1][list] = k.scroll;
+        s.size(.{ 100, 60 });
+        layout.place(t);
+        stick(t, &st);
+        try testing.expectEqual(k.a, t.c.pos[1][heads[0]]);
+        try testing.expectEqual(k.b, t.c.pos[1][heads[1]]);
+        // The header's children move with it; x does not stick.
+        try testing.expectEqual(k.a, t.c.pos[1][labels[0]]);
+        try testing.expectEqual(2, t.c.pos[0][heads[0]]);
+    }
 }
