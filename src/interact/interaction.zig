@@ -670,3 +670,104 @@ test "step: hover intent after the pointer rests on one widget for hover_delay" 
     // widget restarts it; nothing under the pointer is no intent.
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, a, 0, 0, 0, 0 }, &intent);
 }
+
+// ---- Ported from prototype/example.zig, test "host loop: layout, draw list, click, drag,
+// idle": its click and drag parts at tier 0. The prototype's Context, Frame and widgets are
+// tier 1 and 2; here the test is the host and the widgets are a few lines over `response`.
+
+const id_reset = types.Id.from("reset");
+const id_exposure = types.Id.from("exposure");
+
+/// A toolbar with a Reset button and an exposure slider track, as the prototype's buildUi
+/// lays them out, over an 800 x 600 viewport.
+fn toolbar(raw: []align(mem.column_align) u8) Tree {
+    const layout = @import("../layout/layout.zig");
+    const Texts = @import("../core/texts.zig").Texts;
+    var carver: mem.Carver = .{ .buf = raw };
+    var t = Tree.init(&carver, 16);
+    var tx = Texts.init(&carver, 1);
+    const root = t.push(0, .none, &.{ .size = .{ .px(800), .px(600) } });
+    const bar = t.push(root, types.Id.from("toolbar"), &.{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center });
+    const reset = t.push(bar, id_reset, &.{ .size = .{ .px(60), .px(30) } });
+    const track = t.push(bar, id_exposure, &.{ .dir = .x, .size = .{ .fill, .px(8) }, .min = .{ 40, 0 } });
+    t.seal(root);
+    t.c.sense[reset] = @bitCast(Sense.button);
+    t.c.sense[track] = @bitCast(Sense.any);
+    layout.run(&t, &tx, .{ 800, 600 });
+    return t;
+}
+
+const App = struct {
+    resets: u32 = 0,
+    exposure: f32 = 1,
+
+    /// The prototype's button and slider logic, against `Interaction` instead of `Frame`.
+    fn update(app: *App, s: *const Interaction, t: *const Tree, in: *const Input) void {
+        if (s.response(id_reset).clicked) {
+            app.resets += 1;
+            app.exposure = 1;
+        }
+        // While held, the value follows the pointer across last frame's rect of the held node.
+        const r = s.response(id_exposure);
+        const rect = t.rect(@min(s.active_node, t.cap - 1));
+        const along = std.math.clamp((in.pointer[0] - rect.x0) / @max(rect.w(), 1), 0, 1);
+        app.exposure = simd.selF(r.held, 0 + along * 4, app.exposure);
+    }
+};
+
+test "host loop: click, drag" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = toolbar(&raw);
+    // The geometry the recording below aims at: Reset at 8..68 x 8..38, the track at 76..792
+    // x 19..27 (716 wide, so 75% is x 613 and 25% is x 255).
+    try testing.expectEqual(types.Rect{ .x0 = 8, .y0 = 8, .x1 = 68, .y1 = 38 }, t.rect(t.find(id_reset)));
+    try testing.expectEqual(types.Rect{ .x0 = 76, .y0 = 19, .x1 = 792, .y1 = 27 }, t.rect(t.find(id_exposure)));
+
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var contacts: [4]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    var r: Replay = .{ .src =
+        \\# 0: idle. 1-3: click Reset. 4-6: hold the slider at 75%. 7-8: drag it to 25%, release.
+        \\frame
+        \\viewport 800 600
+        \\frame
+        \\pointer 38 23
+        \\frame
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\pointer 613 23
+        \\frame
+        \\buttons left
+        \\frame
+        \\frame
+        \\pointer 255 40
+        \\frame
+        \\buttons
+    };
+    var s: Interaction = .{};
+    var app: App = .{};
+    var resets: [9]u32 = undefined;
+    var exposure: [9]f32 = undefined;
+    var dx: [9]f32 = undefined;
+    var f: usize = 0;
+    while (try r.next(buf)) |in| : (f += 1) {
+        s.step(&t, in);
+        app.update(&s, &t, in);
+        resets[f] = app.resets;
+        exposure[f] = app.exposure;
+        dx[f] = s.drag(id_exposure)[0];
+        // The pointer over Reset shows it hovered (the prototype checks the pointer cursor).
+        if (f == 1) try testing.expect(s.response(id_reset).hovered);
+    }
+    try testing.expectEqual(@as(usize, 9), f);
+    // The click counts on release, not on press.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 1, 1, 1, 1, 1 }, &resets);
+    // Holding the slider at 75% of its track sets the value to 3 of 0..4; dragging to 25%
+    // (off the track, which keeps it: capture) sets 1, and the release keeps it.
+    try testing.expectEqualSlices(f32, &.{ 1, 1, 1, 1, 1, 3, 3, 1, 1 }, &exposure);
+    // The drag starts at the move past the threshold and carries the whole movement.
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 0, 0, 0, 0, 0, 255 - 613, 0 }, &dx);
+}
