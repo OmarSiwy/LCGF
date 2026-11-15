@@ -9,6 +9,7 @@
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
 //!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
+//!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
 //!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
 const std = @import("std");
 
@@ -127,6 +128,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Object exporting the comptime setter (ci/jobs/ct-setter.sh checks it is a store and an OR).
+    const ct_setter = b.addObject(.{ .name = "ct_setter", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/setter_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("ct-setter", "Build the object the setter-shape check reads").dependOn(&b.addInstallFile(ct_setter.getEmittedBin(), "ct_setter.o").step);
     // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
     const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
         .root_source_file = b.path("src/text/font/fuzz.zig"),

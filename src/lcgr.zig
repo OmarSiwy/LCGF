@@ -24,6 +24,7 @@ pub const interaction = @import("interact/interaction.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
+pub const signals = @import("comptime/signals.zig");
 pub const draw_list = @import("draw/draw_list.zig");
 pub const opentype = @import("text/font/opentype.zig");
 pub const unicode_property = @import("text/unicode/property.zig");
