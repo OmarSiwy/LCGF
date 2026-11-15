@@ -111,8 +111,17 @@ pub fn fitSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
 /// Free space is shared out once by `grow` weight; a child stopped by its
 /// `max` leaves its remainder unused instead of triggering another round.
 pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
-    const a = @backingInt(axis);
     if (t.len == 0) return;
+    t.c.size[@backingInt(axis)][0] = viewport;
+    resolveSpan(t, axis, 0, t.len);
+}
+
+/// `resolve` over the subtree [first, last), `last = end[first]` (incremental layout): every row
+/// after `first` from its parent, with `first`'s own size taken as given. `used` of the rows
+/// must be cleared first, as `prepare` does for the whole tree.
+pub fn resolveSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+    const a = @backingInt(axis);
+    std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
     const size = t.c.size[a];
     const nat_ = t.c.nat[a];
@@ -130,8 +139,7 @@ pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
     const shrink = t.c.shrink;
     const used = t.c.used[a];
 
-    size[0] = viewport;
-    for (1..t.len) |i| {
+    for (first + 1..last) |i| {
         const p = parent[i];
         const nat = nat_[i];
         const main = main_[p];
@@ -173,6 +181,16 @@ pub fn textAvail(t: *const Tree, tx: *Texts) void {
 /// Top-down: position of every node on both axes. One forward sweep.
 pub fn place(t: *Tree) void {
     if (t.len == 0) return;
+    t.c.pos[0][0] = 0;
+    t.c.pos[1][0] = 0;
+    placeSpan(t, 0, t.len);
+}
+
+/// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
+/// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
+/// rows must be cleared first, as `prepare` does for the whole tree.
+pub fn placeSpan(t: *Tree, first: u32, last: u32) void {
+    std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
     const pos = t.c.pos;
     const size = t.c.size;
@@ -189,9 +207,7 @@ pub fn place(t: *Tree) void {
     const align_main = t.c.align_main;
     const align_cross = t.c.align_cross;
 
-    pos[0][0] = 0;
-    pos[1][0] = 0;
-    for (1..t.len) |i| {
+    for (first + 1..last) |i| {
         const p = parent[i];
         const fl = flow[i];
         inline for (0..2) |a| {
@@ -211,10 +227,20 @@ pub fn place(t: *Tree) void {
 /// Pixel-snapped rects (SIMD), then clip rects and visibility (one forward
 /// sweep with a 4-lane op per node).
 pub fn finalize(t: *Tree) void {
-    const c = &t.c;
     if (t.len == 0) return;
-    const n = simd.padded(t.len);
-    var j: usize = 0;
+    finalizeSpan(t, 0, t.len);
+    // Padding rows must never be hit.
+    @memset(t.c.sense[t.len..simd.padded(t.len)], 0);
+}
+
+/// `finalize` over the subtree [first, last), `last = end[first]` (incremental layout). The
+/// snap covers the whole vectors around the span: a rect depends on its own row alone, so
+/// neighbouring rows get the value they already hold.
+pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
+    std.debug.assert(first < last and last <= t.len);
+    const c = &t.c;
+    const n = simd.padded(last);
+    var j: usize = std.mem.alignBackward(usize, first, W);
     while (j < n) : (j += W) {
         const x = simd.loadF(c.pos[0], j);
         const y = simd.loadF(c.pos[1], j);
@@ -223,9 +249,6 @@ pub fn finalize(t: *Tree) void {
         simd.storeF(c.rect[2], j, @round(x + simd.loadF(c.size[0], j)));
         simd.storeF(c.rect[3], j, @round(y + simd.loadF(c.size[1], j)));
     }
-    // Padding rows must never be hit.
-    @memset(c.sense[t.len..n], 0);
-
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
     const everything: V4 = @splat(-inf);
@@ -236,7 +259,7 @@ pub fn finalize(t: *Tree) void {
     const clips_ = c.clips;
     const visible = c.visible;
     const looks = c.look;
-    for (0..t.len) |i| {
+    for (first..last) |i| {
         const r = V4{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] } * sign;
         const is_root: @Vector(4, bool) = @splat(i == 0);
         const inherited = @select(f32, is_root, everything, @as(V4, child_clip[parent[i]]));

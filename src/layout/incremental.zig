@@ -124,11 +124,18 @@ pub fn refit(t: *Tree, tx: *const Texts, axis: Axis, root: u32) void {
     layout.fitSpan(t, axis, root, last);
 }
 
-/// Lays out what the marks reach and clears them. With no marks the columns are left as they
-/// are: an idle frame does no layout work. Text must be settled, as for `layout.run`.
+/// Lays out what the marks reach and clears them: per axis, each outermost span is fitted and
+/// resolved again; then every outermost span of either axis is placed and finalized. With no
+/// marks the columns are left as they are: an idle frame does no layout work. Text must be
+/// settled, as for `layout.run`. A new viewport marks the root. `t` must have been laid out
+/// in full once (`layout.run`) since its structure last changed.
 pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     std.debug.assert(t.len <= d.cap);
+    if (t.len == 0) return;
     const n = simd.padded(t.len);
+    const c = &t.c;
+    // Once per frame, not per row: the root's size is the viewport.
+    inline for (0..2) |a| d.c.mark[a][0] |= @intFromBool(c.size[a][0] != viewport[a]);
     var any: simd.Bytes = @splat(0);
     var i: usize = 0;
     while (i < n) : (i += simd.lanes) {
@@ -139,17 +146,25 @@ pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     propagate(t, d);
     inline for (0..2) |a| {
         const axis: Axis = @fromBackingInt(@intCast(a));
+        c.size[a][0] = viewport[a];
         var r = nextSpan(t, d.c.span[a], 0);
-        while (r < t.len) : (r = nextSpan(t, d.c.span[a], t.c.end[r])) refit(t, tx, axis, r);
+        while (r < t.len) : (r = nextSpan(t, d.c.span[a], c.end[r])) {
+            refit(t, tx, axis, r);
+            @memset(c.used[a][r..c.end[r]], 0);
+            layout.resolveSpan(t, axis, r, c.end[r]);
+        }
+        // Runs outside the spans get the width they already had.
+        if (a == 0) layout.textAvail(t, tx);
     }
-    // Sizes and positions are still recomputed for the whole tree.
-    inline for (0..2) |a| @memset(t.c.used[a][0..n], 0);
-    @memset(t.c.cursor[0..n], 0);
-    layout.resolve(t, .x, viewport[0]);
-    layout.textAvail(t, tx);
-    layout.resolve(t, .y, viewport[1]);
-    layout.place(t);
-    layout.finalize(t);
+    // A span on either axis moves positions on both: place reads both axes' sizes.
+    var r = @min(nextSpan(t, d.c.span[0], 0), nextSpan(t, d.c.span[1], 0));
+    while (r < t.len) {
+        const last = c.end[r];
+        @memset(c.cursor[r..last], 0);
+        layout.placeSpan(t, r, last);
+        layout.finalizeSpan(t, r, last);
+        r = @min(nextSpan(t, d.c.span[0], last), nextSpan(t, d.c.span[1], last));
+    }
     inline for (0..2) |a| @memset(d.c.span[a][0..n], 0);
 }
 
@@ -248,7 +263,7 @@ fn expectSameLayout(want: *const Tree, got: *const Tree) !void {
 }
 
 /// Two identical random trees, laid out in full. Frame after frame the same random changes go
-/// into both; `full` is laid out from scratch, `inc` through `update`. They must agree bit for bit.
+/// into both, and now and then a new viewport; `full` is laid out from scratch, `inc` through `update`. They must agree bit for bit.
 fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
     var raw: [2][1024 * 1024]u8 align(mem.column_align) = undefined;
     var c0: mem.Carver = .{ .buf = &raw[0] };
@@ -258,7 +273,7 @@ fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
     var full_tx = Texts.init(&c0, 1);
     var inc_tx = Texts.init(&c1, 1);
     var d = Dirty.init(&c1, 600);
-    const vp: [2]f32 = .{ 1280, 800 };
+    var vp: [2]f32 = .{ 1280, 800 };
     var prng: std.Random.DefaultPrng = .init(seed);
     const r = prng.random();
     for (0..trees) |_| {
@@ -276,6 +291,7 @@ fn randomFrames(seed: u64, trees: u32, frames: u32, changes: u32) !void {
                 ch.apply(&full, null);
                 ch.apply(&inc, &d);
             }
+            if (r.uintLessThan(u32, 8) == 0) vp[r.int(u1)] = @floatFromInt(400 + r.uintLessThan(u32, 1200));
             layout.run(&full, &full_tx, vp);
             update(&inc, &inc_tx, &d, vp);
             try expectSameLayout(&full, &inc);
@@ -386,6 +402,51 @@ test "propagate: outside the marked spans a change moves nothing on that axis" {
     }
     // Most changes stop below the root, or the test would not show anything.
     try testing.expect(narrowed > 300);
+}
+
+test "update: a new viewport lays out the root's subtree again" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    var d = Dirty.init(&carver, 8);
+    const root = t.push(0, .none, &.{});
+    const fill = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
+    t.seal(root);
+    layout.run(&t, &tx, .{ 100, 50 });
+    update(&t, &tx, &d, .{ 300, 70 });
+    try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 300, .y1 = 70 }, t.rect(fill));
+}
+
+test "update: a change inside a px panel leaves the rows outside it untouched" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    var d = Dirty.init(&carver, 8);
+    const root = t.push(0, .none, &.{ .dir = .x });
+    const left = t.push(root, .none, &.{ .size = .{ .px(100), .px(100) } });
+    const a = t.push(left, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(left);
+    const right = t.push(root, .none, &.{ .size = .{ .px(100), .px(100) } });
+    const b = t.push(right, .none, &.{ .size = .{ .px(10), .px(10) } });
+    const c = t.push(right, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(right);
+    t.seal(root);
+    layout.run(&t, &tx, .{ 400, 300 });
+    // Stale values the update must not reach. (Not `rect`: its SIMD snap rewrites whole
+    // vectors around a span, with the values the rows already hold.)
+    inline for (.{ root, left, a, right }) |k| t.c.vis[2][k] = -1;
+    t.c.min[1][b] = 30;
+    t.c.max[1][b] = 30;
+    d.mark(b, .y);
+    update(&t, &tx, &d, .{ 400, 300 });
+    // b grew to 30, so c moves down by 20; right is px, so nothing above it moves.
+    try testing.expectEqual(types.Rect{ .x0 = 100, .y0 = 0, .x1 = 110, .y1 = 30 }, t.rect(b));
+    try testing.expectEqual(types.Rect{ .x0 = 100, .y0 = 30, .x1 = 110, .y1 = 40 }, t.rect(c));
+    inline for (.{ root, left, a }) |k| try testing.expectEqual(-1, t.c.vis[2][k]);
+    // right is the span root: finalized again, so its stale value is gone.
+    try testing.expectEqual(200, t.c.vis[2][right]);
 }
 
 test "update: no marks, no work" {
