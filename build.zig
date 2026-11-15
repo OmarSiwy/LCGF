@@ -8,6 +8,7 @@
 //!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
 //!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
 //!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
+//!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -83,6 +84,16 @@ pub fn build(b: *std.Build) void {
     const fuzz_run = b.addRunArtifact(b.addExecutable(.{ .name = "fuzz", .root_module = fuzz_mod }));
     fuzz_run.addPassthruArgs();
     b.step("fuzz-run", "Fuzz for a time: -- [seconds] [seed] [first]").dependOn(&fuzz_run.step);
+
+    // Object whose exported functions read the comptime flatten tables (ci/jobs/ct-rodata.sh
+    // checks they land in read-only data).
+    const ct_rodata = b.addObject(.{ .name = "ct_rodata", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/rodata_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
