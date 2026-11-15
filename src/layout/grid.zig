@@ -88,6 +88,8 @@ pub const Grids = struct {
         grid: []u32,
         /// Column (x) and row (y) of the item's cell, counted from 0 inside its grid.
         cell: [2][]u32,
+        /// Number of columns and rows the item covers, at least 1.
+        span: [2][]u32,
         /// Next item of the same grid, or `none`.
         next: []u32,
         /// Written by the resolve step of the item's grid: the cell's size.
@@ -151,7 +153,10 @@ pub const Grids = struct {
         it.node[r] = node;
         it.grid[r] = k;
         it.next[r] = none;
-        inline for (0..2) |a| it.cell[a][r] = @min(cell[a], gs.g.count[a][k] -| 1);
+        inline for (0..2) |a| {
+            it.cell[a][r] = @min(cell[a], gs.g.count[a][k] -| 1);
+            it.span[a][r] = 1;
+        }
         // Append to the grid's chain. On overflow the reused row may already be the tail.
         if (gs.g.last_item[k] == none) {
             gs.g.first_item[k] = r;
@@ -160,6 +165,15 @@ pub const Grids = struct {
         }
         gs.g.last_item[k] = r;
         return r;
+    }
+    /// Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks
+    /// the grid has.
+    pub fn span(gs: *Grids, r: u32, n: [2]u32) void {
+        const k = gs.it.grid[r];
+        inline for (0..2) |a| {
+            const left = @max(gs.g.count[a][k] -| gs.it.cell[a][r], 1);
+            gs.it.span[a][r] = @min(@max(n[a], 1), left);
+        }
     }
 };
 
@@ -198,8 +212,13 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
         @memset(gs.tr.content[first..][0..gs.g.count[a][k]], 0);
         var it = gs.g.first_item[k];
         while (it != none) : (it = gs.it.next[it]) {
+            // A spanning item asks each of its tracks for an equal share. Not CSS's
+            // distribution of the excess over the tracks' other content, which needs items
+            // sorted by span; this is one pass.
             const j = first + gs.it.cell[a][it];
-            gs.tr.content[j] = @max(gs.tr.content[j], nat[gs.it.node[it]]);
+            const n = gs.it.span[a][it];
+            const share = nat[gs.it.node[it]] / @as(f32, @floatFromInt(n));
+            for (gs.tr.content[j..][0..n]) |*v| v.* = @max(v.*, share);
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a);
     }
@@ -237,7 +256,8 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             var it = gs.g.first_item[k];
             while (it != none) : (it = gs.it.next[it]) {
                 const j = first + gs.it.cell[a][it];
-                gs.it.cell_size[a][it] = gs.tr.size[j];
+                const last = j + gs.it.span[a][it] - 1;
+                gs.it.cell_size[a][it] = gs.tr.start[last] + gs.tr.size[last] - gs.tr.start[j];
                 c.offset[a][gs.it.node[it]] = gs.tr.start[j];
             }
             k += 1;
@@ -405,4 +425,30 @@ test "grid: with no grids, fit and resolve are the layout passes" {
     run(&a.t, &a.tx, &a.gs, .{ 200, 100 });
     layout.run(&b.t, &b.tx, .{ 200, 100 });
     for (0..3) |i| try testing.expectEqual(b.t.rect(@intCast(i)), a.t.rect(@intCast(i)));
+}
+
+test "grid: spanning items cover several tracks and share their size among them" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) } });
+    const g = t.push(root, .none, &.{});
+    const k = s.gs.grid(g, &.{ .fit, .fit, .fit }, &.{ .fit, .fit });
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 100, 10 });
+    s.gs.span(s.gs.items_len - 1, .{ 2, 1 });
+    const d = s.cell(g, k, .{ 2, 0 }, .{ 40, 60 });
+    s.gs.span(s.gs.items_len - 1, .{ 5, 2 }); // 5 columns from the last one: clamped to 1
+    const b = s.cell(g, k, .{ 0, 1 }, .{ 30, 10 });
+    const c = s.cell(g, k, .{ 1, 1 }, .{ 20, 10 });
+    t.seal(g);
+    t.seal(root);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+    try testing.expectEqualSlices(u32, &.{ 2, 1 }, &.{ s.gs.it.span[0][0], s.gs.it.span[0][1] });
+    // Columns: a's 100 split over two gives 50, 50 (b and c are smaller); d's 40.
+    // Rows: d's 60 split over two gives 30, 30 (a, b and c are 10).
+    try testing.expectEqual(rect(0, 0, 100, 30), t.rect(a));
+    try testing.expectEqual(rect(100, 0, 140, 60), t.rect(d));
+    try testing.expectEqual(rect(0, 30, 50, 60), t.rect(b));
+    try testing.expectEqual(rect(50, 30, 100, 60), t.rect(c));
+    try testing.expectEqual(rect(0, 0, 140, 60), t.rect(g));
 }
