@@ -24,11 +24,13 @@ job() {
             zig build test-build -Dtarget="$t"
         done
         (cd prototype && zig build cross) ;;
+    # Prints numbers (tools/bench); timings are only comparable on one machine.
+    bench)        zig build bench ;;
     *) echo "unknown job: $1" >&2; exit 2 ;;
     esac
 }
 
-jobs=(debug release-safe release-fast lanes-4 lanes-8 cross)
+jobs=(debug release-safe release-fast lanes-4 lanes-8 cross bench)
 if [ "${1-}" = all ]; then
     for j in "${jobs[@]}"; do echo "== $j"; job "$j"; done
     echo "all ${#jobs[@]} jobs green"

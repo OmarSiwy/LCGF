@@ -26,6 +26,18 @@ pub fn build(b: *std.Build) void {
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
 
+    // tools/bench measures the prototype core until the ported core exports the same names.
+    const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
+    const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/bench/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "ui", .module = bench_core }},
+    }) });
+    const bench_run = b.addRunArtifact(bench);
+    bench_run.addPassthruArgs();
+    b.step("bench", "Run the frame benchmark (Linux)").dependOn(&bench_run.step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
