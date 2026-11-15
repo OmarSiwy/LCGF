@@ -5,6 +5,8 @@
 
 const std = @import("std");
 
+pub const mem = @import("core/mem.zig");
+
 test {
     std.testing.refAllDecls(@This());
 }
