@@ -243,6 +243,21 @@ pub fn finalize(t: *Tree) void {
     }
 }
 
+/// Diagonal: every pass in order, for text that does not wrap (or whose
+/// `w`/`h` the caller has already settled). `Frame.end` is this plus wrapping.
+pub fn run(t: *Tree, tx: *Texts, viewport: [2]f32) void {
+    prepare(t);
+    applyText(t, tx, .x);
+    fit(t, .x);
+    resolve(t, .x, viewport[0]);
+    textAvail(t, tx);
+    applyText(t, tx, .y);
+    fit(t, .y);
+    resolve(t, .y, viewport[1]);
+    place(t);
+    finalize(t);
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const Strings = @import("../core/strings.zig").Strings;
@@ -497,4 +512,44 @@ test "finalize: a clipping parent insets by its border and hides what lies outsi
     try testing.expectEqual(108, c.vis[2][Scene.para]);
     try testing.expectEqual(0, c.visible[Scene.para]);
     try testing.expectEqual(1, c.visible[Scene.col]);
+}
+
+test "run: the passes in order; with settled text it gives the tier-0 rects" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    // The caller already knows the run's wrapped extent.
+    s.tx.c.w[0] = 100;
+    s.tx.c.h[0] = 24;
+    run(&s.t, &s.tx, .{ 400, 300 });
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 10, .x1 = 390, .y1 = 50 }, s.t.rect(Scene.bar));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 50 }, s.t.rect(Scene.a));
+    try testing.expectEqual(types.Rect{ .x0 = 114, .y0 = 10, .x1 = 390, .y1 = 50 }, s.t.rect(Scene.b));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 55, .x1 = 110, .y1 = 79 }, s.t.rect(Scene.para));
+    try testing.expectEqual(types.Rect{ .x0 = 10, .y0 = 84, .x1 = 390, .y1 = 290 }, s.t.rect(Scene.body));
+    try expectCol(&.{100}, s.tx.c.avail);
+}
+
+test "run: equals the tier-0 calls it is shorthand for" {
+    var raw_a: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var raw_b: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var short = Scene.init(&raw_a);
+    var long = Scene.init(&raw_b);
+    run(&short.t, &short.tx, .{ 400, 300 });
+    prepare(&long.t);
+    applyText(&long.t, &long.tx, .x);
+    fit(&long.t, .x);
+    resolve(&long.t, .x, 400);
+    textAvail(&long.t, &long.tx);
+    applyText(&long.t, &long.tx, .y);
+    fit(&long.t, .y);
+    resolve(&long.t, .y, 300);
+    place(&long.t);
+    finalize(&long.t);
+    const n = long.t.len;
+    inline for (0..4) |k| {
+        try expectCol(long.t.c.rect[k][0..n], short.t.c.rect[k]);
+        try expectCol(long.t.c.vis[k][0..n], short.t.c.vis[k]);
+    }
+    // Unwrapped, the 120 px run is one 12 px line, so para is 12 high.
+    try testing.expectEqual(12, short.t.rect(Scene.para).h());
 }
