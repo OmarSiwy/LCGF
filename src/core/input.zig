@@ -22,6 +22,9 @@ pub const Input = struct {
     keys: Keys = .{},
     /// UTF-8 typed this frame. Only read during the frame.
     text: []const u8 = "",
+    /// Key presses and typed text this frame, in the order they happened, so a fast typist's
+    /// keys and characters are not merged. The host owns the slice. Only read during the frame.
+    events: []const Event = &.{},
 
     /// Mouse buttons held down this frame, one bit each.
     pub const Buttons = packed struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };
@@ -39,6 +42,26 @@ pub const Input = struct {
         }
     };
 
+    /// One key transition or one piece of typed text.
+    pub const Event = extern struct {
+        kind: Kind,
+        /// Modifiers held when the event happened.
+        mods: Mods = .{},
+        /// Scancode, as for `Keys`. 0 for `.text`.
+        code: u8 = 0,
+        _pad: u8 = 0,
+        /// For `.text`: the bytes `Input.text[at..][0..len]`. 0 and 0 for key events.
+        at: u32 = 0,
+        len: u32 = 0,
+
+        pub const Kind = enum(u8) { press, release, repeat, text };
+    };
+
+    /// The UTF-8 a `.text` event typed; empty for key events.
+    pub fn typed(in: *const Input, e: Event) []const u8 {
+        return in.text[e.at..][0..e.len];
+    }
+
     /// Fingerprint of everything except the clock. Equal stamps mean a frame
     /// built from this input would come out identical to the previous one.
     pub fn stamp(in: *const Input) u64 {
@@ -55,6 +78,8 @@ pub const Input = struct {
         var h: u64 = 0xcbf2_9ce4_8422_2325;
         for (words) |w| h = (h ^ w) *% 0x0000_0100_0000_01b3;
         for (in.text) |ch| h = (h ^ ch) *% 0x0000_0100_0000_01b3;
+        // Events last: with none queued the stamp is the prototype's.
+        for (std.mem.sliceAsBytes(in.events)) |b| h = (h ^ b) *% 0x0000_0100_0000_01b3;
         return h;
     }
 };
@@ -151,4 +176,41 @@ test "Input.stamp: ignores the clock, sees every other field" {
     changed[8].text = "h";
     changed[9].keys.press(255);
     for (changed) |c| try std.testing.expect(c.stamp() != base.stamp());
+}
+
+test "Input.events: keys and typed text keep their order" {
+    const ctrl: Input.Mods = .{ .ctrl = true };
+    const queue = [_]Input.Event{
+        .{ .kind = .press, .code = 30 },
+        .{ .kind = .text, .at = 0, .len = 1 },
+        .{ .kind = .release, .code = 30 },
+        .{ .kind = .text, .at = 1, .len = 2 },
+        .{ .kind = .press, .code = 31, .mods = ctrl },
+        .{ .kind = .repeat, .code = 31, .mods = ctrl },
+    };
+    const in: Input = .{ .text = "a\xc3\xa9", .events = &queue };
+    try std.testing.expectEqual(12, @sizeOf(Input.Event));
+    try std.testing.expectEqualStrings("a", in.typed(in.events[1]));
+    try std.testing.expectEqualStrings("\xc3\xa9", in.typed(in.events[3]));
+    try std.testing.expectEqualStrings("", in.typed(in.events[0]));
+    var joined: [3]u8 = undefined;
+    var n: usize = 0;
+    for (in.events) |e| {
+        const t = in.typed(e);
+        @memcpy(joined[n..][0..t.len], t);
+        n += t.len;
+    }
+    try std.testing.expectEqualStrings(in.text, joined[0..n]);
+}
+
+test "Input.stamp: sees queued events" {
+    const base = busyInput();
+    const press = [_]Input.Event{.{ .kind = .press, .code = 30 }};
+    const release = [_]Input.Event{.{ .kind = .release, .code = 30 }};
+    var a = base;
+    a.events = &press;
+    var b = base;
+    b.events = &release;
+    try std.testing.expect(a.stamp() != base.stamp());
+    try std.testing.expect(a.stamp() != b.stamp());
 }
