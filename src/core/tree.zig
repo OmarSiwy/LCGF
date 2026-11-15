@@ -30,6 +30,9 @@ pub const Look = extern struct {
 pub const Tree = struct {
     len: u32 = 0,
     cap: u32,
+    /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+    /// The front end reports it as `Status.nodes`.
+    overflow: bool = false,
     c: Columns,
 
     /// One slice per property, grouped by the pass that reads them, so a pass touches only the
@@ -112,14 +115,15 @@ pub const Tree = struct {
     /// row is rewritten before it is read again.
     pub fn reset(t: *Tree) void {
         t.len = 0;
+        t.overflow = false;
     }
 
     /// Appends a node as the last child of `parent` and returns its row.
     /// One row write per column; no searching, no allocation, no branch.
     pub fn push(t: *Tree, parent: u32, id: Id, s: *const Style) u32 {
-        std.debug.assert(t.len < t.cap);
         const c = &t.c;
-        const i = t.len;
+        const i = @min(t.len, t.cap - 1);
+        t.overflow = simd.orB(t.overflow, t.len >= t.cap);
         t.len = i + 1;
 
         c.id[i] = @backingInt(id);
@@ -380,4 +384,21 @@ test "find returns the first row with an id or none; rect reads the four rect co
     t.c.rect[2][3] = 30;
     t.c.rect[3][3] = 40;
     try testing.expectEqual(Rect{ .x0 = 1, .y0 = 2, .x1 = 30, .y1 = 40 }, t.rect(3));
+}
+
+test "running out of rows is reported, not fatal" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    const root = t.push(0, .none, &.{});
+    for (1..8) |_| _ = t.push(root, .none, &.{});
+    try testing.expect(!t.overflow);
+    try testing.expectEqual(8, t.len);
+    // Pushes past cap keep rewriting the last row; len and every write stay in bounds.
+    for (0..40) |k| try testing.expectEqual(7, t.push(root, Id.from("n").with(@intCast(k)), &.{}));
+    try testing.expect(t.overflow);
+    try testing.expectEqual(8, t.len);
+    try testing.expectEqual(@backingInt(Id.from("n").with(39)), t.c.id[7]);
+    t.reset();
+    try testing.expect(!t.overflow);
+    try testing.expectEqual(0, t.len);
 }
