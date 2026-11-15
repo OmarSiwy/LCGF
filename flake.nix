@@ -41,6 +41,14 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
           VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
         };
+        # The optional HarfBuzz shaping adapter (lane shaping, src/text/shape/harfbuzz.zig).
+        devShells.harfbuzz = pkgs.mkShell {
+          inputsFrom = [ devShells.default ];
+          packages = [
+            pkgs.harfbuzz
+            pkgs.pkg-config
+          ];
+        };
       }
     );
 }

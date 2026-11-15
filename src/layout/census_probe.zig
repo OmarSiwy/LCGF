@@ -86,3 +86,9 @@ export fn p_wrap(t: *const Tree, fx: *const lcgr.flex.Flex) void {
 export fn p_baseline_apply(t: *const Tree, fx: *const lcgr.flex.Flex, tx: *const Texts, ascent: [*]const f32) void {
     lcgr.baseline.apply(t, fx, tx, ascent[0..tx.len]);
 }
+export fn p_cluster_hit(c: *const lcgr.shape_cluster.Carets, x: i32) u32 {
+    return lcgr.shape_cluster.hit(c, x);
+}
+export fn p_cluster_caret_x(c: *const lcgr.shape_cluster.Carets, offset: u32) i32 {
+    return lcgr.shape_cluster.caretX(c, offset);
+}

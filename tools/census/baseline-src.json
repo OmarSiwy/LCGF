@@ -14,6 +14,21 @@
     "jcc": 4,
     "short_fwd": 2
   },
+  "p_baseline_apply": {
+    "back": 2,
+    "jcc": 5,
+    "short_fwd": 1
+  },
+  "p_cluster_caret_x": {
+    "back": 3,
+    "jcc": 8,
+    "short_fwd": 3
+  },
+  "p_cluster_hit": {
+    "back": 3,
+    "jcc": 8,
+    "short_fwd": 2
+  },
   "p_coefs": {
     "back": 1,
     "jcc": 2,
@@ -40,8 +55,8 @@
     "short_fwd": 0
   },
   "p_fit_flex": {
-    "jcc": 4,
     "back": 2,
+    "jcc": 4,
     "short_fwd": 0
   },
   "p_gamma_apply": {
@@ -74,6 +89,11 @@
     "jcc": 3,
     "short_fwd": 0
   },
+  "p_place_flex": {
+    "back": 1,
+    "jcc": 3,
+    "short_fwd": 0
+  },
   "p_place_k": {
     "back": 1,
     "jcc": 3,
@@ -100,8 +120,8 @@
     "short_fwd": 0
   },
   "p_resolve_flex": {
-    "jcc": 7,
     "back": 3,
+    "jcc": 7,
     "short_fwd": 0
   },
   "p_resolve_k": {
@@ -134,19 +154,9 @@
     "jcc": 0,
     "short_fwd": 0
   },
-  "p_baseline_apply": {
-    "jcc": 5,
-    "back": 2,
-    "short_fwd": 1
-  },
   "p_wrap": {
-    "jcc": 3,
     "back": 1,
-    "short_fwd": 0
-  },
-  "p_place_flex": {
     "jcc": 3,
-    "back": 1,
     "short_fwd": 0
   }
 }
