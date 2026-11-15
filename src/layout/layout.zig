@@ -87,7 +87,8 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
     while (i > 1) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
-        const content = fit_[i] + main[i] * gap_total[i];
+        var content = fit_[i] + main[i] * gap_total[i];
+        if (flexed) content += wrap.linesGap(t, fx, a, i);
         var nat = content + lo[i] + hi[i];
         if (flexed) nat = fx.aspectNat(t, a, i, nat);
         nat = @min(@max(nat, min[i]), max[i]);
@@ -98,12 +99,15 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis) void {
         if (flexed) contrib += fx.margin(a, i) * flow[i];
         const sum = fit_[p] + contrib;
         const mx = @max(fit_[p], contrib);
-        fit_[p] = mx + main[p] * (sum - mx);
+        var folded = mx + main[p] * (sum - mx);
+        if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded);
+        fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
     }
     // The root has no parent to fold into.
-    const content = fit_[0] + main[0] * gap_total[0];
+    var content = fit_[0] + main[0] * gap_total[0];
+    if (flexed) content += wrap.linesGap(t, fx, a, 0);
     var nat = content + lo[0] + hi[0];
     if (flexed) nat = fx.aspectNat(t, a, 0, nat);
     nat_[0] = @min(@max(nat, min[0]), max[0]);
@@ -179,12 +183,15 @@ fn resolveOf(t: *Tree, fx: anytype, axis: Axis, viewport: f32) void {
         const m = if (flexed) fx.margin(a, i) else 0;
         if (flexed) {
             const first = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
-            s += keep * fl * (main * fx.secondShare(t, a, i, p, first) - across * m);
+            const line = wrap.lineCross(t, fx, a, i, p, inner);
+            s += keep * fl * (main * fx.secondShare(t, a, i, p, first) + across * (line - m));
         }
         // Shrinkable nodes give way when the parent has no room for them.
         const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
         var cut = shrink[i] * fl * @max(s - room, 0);
         if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
+        // A wrapping row breaks a line instead of shrinking along it.
+        if (flexed) cut *= 1 - fx.c.wrap[p] * main;
         s -= cut;
         if (flexed) s = fx.aspectSize(t, a, i, s);
         s = @min(@max(s, min[i]), max[i]);
@@ -237,6 +244,7 @@ fn placeOf(t: *Tree, fx: anytype) void {
     for (1..t.len) |i| {
         const p = parent[i];
         const fl = flow[i];
+        if (flexed) wrap.openLine(t, fx, i, p);
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
             const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
@@ -246,13 +254,16 @@ fn placeOf(t: *Tree, fx: anytype) void {
             const m = if (flexed) fx.margin(a, i) else 0;
             const across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
             const along = lead + cursor[p] + m_lo;
-            const in_flow = across + main[a][p] * (along - across);
+            var in_flow = across + main[a][p] * (along - across);
+            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, in_flow);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
         }
         // Advance along whichever axis is the parent's main one.
         var step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
         if (flexed) step += fx.margin(0, i) * main[0][p] + fx.margin(1, i) * main[1][p];
-        cursor[p] += (step + gap[p]) * fl;
+        var advance = step + gap[p];
+        if (flexed) advance = wrap.advance(t, fx, i, p, advance);
+        cursor[p] += advance * fl;
     }
 }
 

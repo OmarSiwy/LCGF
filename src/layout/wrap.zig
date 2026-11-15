@@ -66,12 +66,12 @@ pub fn wrap(t: *const Tree, fx: *const Flex) void {
 
 /// A wrapping row opens its first line; every other node points its children at the sink.
 inline fn openLines(c: *const Tree.Columns, f: *const Flex.Columns, i: usize, lines: *u32) void {
-    const wraps: u32 = @intFromFloat(f.wrap[i] * c.main[0][i]);
+    const opens: u32 = @intFromFloat(f.wrap[i] * c.main[0][i]);
     const sink: u32 = @intCast(f.line.len - 1);
-    f.open[i] = sink +% wraps *% (lines.* -% sink);
-    f.nlines[i] = @floatFromInt(wraps);
+    f.open[i] = sink +% opens *% (lines.* -% sink);
+    f.nlines[i] = @floatFromInt(opens);
     clearLine(f, lines.*);
-    lines.* += wraps;
+    lines.* += opens;
 }
 
 /// Zeroes line `l`'s accumulators. Called for the next free line whether or not it is used, so
@@ -81,6 +81,65 @@ inline fn clearLine(f: *const Flex.Columns, l: u32) void {
     f.line_count[l] = 0;
     f.line_cross[l] = 0;
     f.line_cursor[l] = 0;
+}
+
+/// 1.0 when node `p` is a wrapping row, in flex form.
+inline fn wraps(t: *const Tree, fx: *const Flex, p: usize) f32 {
+    return fx.c.wrap[p] * t.c.main[0][p];
+}
+
+/// fitFlex: the gaps between a wrapping row's lines, on y. Zero for every other node and axis.
+pub inline fn linesGap(t: *const Tree, fx: *const Flex, a: u1, i: usize) f32 {
+    const on_y: f32 = @floatFromInt(a);
+    return on_y * wraps(t, fx, i) * @max(fx.c.nlines[i] - 1, 0) * t.c.gap[i];
+}
+
+/// fitFlex: on y, child `i` of a wrapping row raises its line's cross size to its own extent,
+/// and the line joins the row's sum when its first child (the last one the reverse sweep sees)
+/// folds in. Otherwise `folded`, the plain fold.
+pub inline fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, contrib: f32, folded: f32) f32 {
+    const f = &fx.c;
+    const l = f.line[i];
+    f.line_cross[l] = @max(f.line_cross[l], contrib);
+    const stacked = t.c.fit[a][p] + f.head[i] * f.line_cross[l];
+    const on_y: f32 = @floatFromInt(a);
+    return folded + on_y * wraps(t, fx, p) * (stacked - folded);
+}
+
+/// resolveFlex: how much more than the parent's inner size a stretching child of a wrapping
+/// row gets on y: its line's cross size instead of the whole row. Zero otherwise.
+pub inline fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, inner: f32) f32 {
+    const on_y: f32 = @floatFromInt(a);
+    return on_y * wraps(t, fx, p) * (fx.c.line_cross[fx.c.line[i]] - inner);
+}
+
+/// placeFlex, before child `i` is placed: the first child of a line sets the line's offset
+/// down the row (the row's cursor, which for a wrapping row runs across it).
+pub inline fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void {
+    const f = &fx.c;
+    const l = f.line[i];
+    const h = f.head[i];
+    f.line_off[l] += h * (t.c.cursor[p] - f.line_off[l]);
+}
+
+/// placeFlex: child `i`'s offset inside a wrapping row's content box: along its line on x,
+/// down to its line on y. Otherwise `in_flow`.
+pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, in_flow: f32) f32 {
+    const f = &fx.c;
+    const l = f.line[i];
+    const at = if (a == 0) f.line_cursor[l] else f.line_off[l];
+    return in_flow + wraps(t, fx, p) * (at + f.margin_lo[a][i] - in_flow);
+}
+
+/// placeFlex, after child `i` is placed: it moves its line's cursor along x, and a line's first
+/// child moves the row's cursor down past the line. Returns the row's cursor step.
+pub inline fn advance(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain: f32) f32 {
+    const f = &fx.c;
+    const l = f.line[i];
+    const w = wraps(t, fx, p);
+    f.line_cursor[l] += w * t.c.flow[i] * (t.c.size[0][i] + fx.margin(0, i) + t.c.gap[p]);
+    const down = f.head[i] * (f.line_cross[l] + t.c.gap[p]);
+    return plain + w * (down - plain);
 }
 
 const testing = std.testing;
@@ -229,4 +288,51 @@ test "runFlex: one fixed sequence of passes, whatever the lines" {
     layout.finalize(&b.t);
     inline for (0..4) |k| try testing.expectEqualSlices(f32, b.t.c.rect[k][0..b.t.len], a.t.c.rect[k][0..a.t.len]);
     try testing.expectEqualSlices(u32, b.fx.c.line[0..b.t.len], a.fx.c.line[0..a.t.len]);
+}
+
+test "stack: a line is as tall as its tallest child; the row sums its lines and their gaps" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const r = s.row(root, &.{ .dir = .x, .size = .{ .px(70), .fit }, .gap = 4, .pad = .{ 0, 3, 0, 2 } }, &.{ .{ 30, 10 }, .{ 30, 20 }, .{ 30, 15 }, .{ 30, 5 }, .{ 30, 8 } });
+    s.run(200, 200);
+    const f = &s.fx.c;
+    // Lines: 30 + 4 + 30 = 64 fits 70, so two per line: heights 20, 15, 8.
+    try testing.expectEqualSlices(f32, &.{ 20, 15, 8 }, f.line_cross[0..3]);
+    try testing.expectEqual(3, f.nlines[r]);
+    // 20 + 15 + 8 + two 4 px gaps + 3 + 2 padding.
+    try testing.expectEqual(20 + 15 + 8 + 2 * 4 + 5, s.t.c.size[1][r]);
+}
+
+test "stack: lines go down the row, children along each line from its start" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) }, .pad = @splat(10) });
+    const r = s.row(root, &.{ .dir = .x, .size = .{ .px(70), .fit }, .gap = 4, .pad = .{ 1, 3, 0, 0 } }, &.{ .{ 30, 10 }, .{ 30, 20 }, .{ 30, 15 }, .{ 30, 5 }, .{ 30, 8 } });
+    s.run(200, 200);
+    const x = t.c.pos[0][r + 1 ..][0..5];
+    const y = t.c.pos[1][r + 1 ..][0..5];
+    try testing.expectEqualSlices(f32, &.{ 11, 45, 11, 45, 11 }, x);
+    // Row content starts at 10 + 3; lines at +0, +20 + 4, +24 + 15 + 4.
+    try testing.expectEqualSlices(f32, &.{ 13, 13, 37, 37, 56 }, y);
+}
+
+test "stack: a stretching child fills its line, not the row; children do not shrink along it" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    const r = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(60), .px(100) } });
+    s.fx.set(r, &.{ .wrap = true });
+    const a = t.push(r, .none, &.{ .size = .{ .px(40), .px(30) } });
+    const b = t.push(r, .none, &.{ .size = .{ .px(10), .fill } });
+    const c = t.push(r, .none, &.{ .shrink = true });
+    _ = t.push(c, .none, &.{ .size = .{ .px(50), .px(10) } });
+    t.seal(c);
+    t.seal(r);
+    s.run(200, 200);
+    // Line 0 holds a and b (40 + 10); c (50) breaks to line 1 at its natural width.
+    try testing.expectEqual(30, s.t.c.size[1][b]);
+    try testing.expectEqual(50, s.t.c.size[0][c]);
+    try testing.expectEqual(30, s.t.c.pos[1][c]);
+    try testing.expectEqual(0, s.t.c.pos[1][a]);
 }
