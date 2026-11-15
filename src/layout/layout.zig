@@ -51,8 +51,17 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
 
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
 pub fn fit(t: *Tree, axis: Axis) void {
-    const a = @backingInt(axis);
     if (t.len == 0) return;
+    fitRows(t, axis, 1, t.len);
+    fitRoot(t, axis);
+}
+
+/// The sweep of `fit` over rows [from, to) only, last row first; `from` >= 1. Every row past
+/// `to` must already be folded. A caller that sizes some nodes itself (grid) runs the sweep in
+/// pieces and writes those nodes' `fit` in between, then calls `fitRoot`.
+pub fn fitRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
+    const a = @backingInt(axis);
+    std.debug.assert(from >= 1 and to <= t.len);
     // Column slices are read into locals once, so the loop indexes them
     // directly instead of reloading each slice from the struct.
     const parent = t.c.parent;
@@ -68,8 +77,8 @@ pub fn fit(t: *Tree, axis: Axis) void {
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
 
-    var i: u32 = t.len;
-    while (i > 1) {
+    var i: u32 = to;
+    while (i > from) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.
         const content = fit_[i] + main[i] * gap_total[i];
@@ -83,6 +92,21 @@ pub fn fit(t: *Tree, axis: Axis) void {
         fit_[p] = mx + main[p] * (sum - mx);
         grow_sum[p] += grow[i] * flow[i];
     }
+}
+
+/// The end of `fit`, after every row but the root is folded: the root's natural size and the
+/// grow reciprocals.
+pub fn fitRoot(t: *Tree, axis: Axis) void {
+    const a = @backingInt(axis);
+    const fit_ = t.c.fit[a];
+    const nat_ = t.c.nat[a];
+    const main = t.c.main[a];
+    const gap_total = t.c.gap_total;
+    const lo = t.c.pad_lo[a];
+    const hi = t.c.pad_hi[a];
+    const min = t.c.min[a];
+    const max = t.c.max[a];
+    const grow_sum = t.c.grow_sum[a];
     // The root has no parent to fold into.
     const content = fit_[0] + main[0] * gap_total[0];
     nat_[0] = @min(@max(content + lo[0] + hi[0], min[0]), max[0]);
@@ -101,8 +125,16 @@ pub fn fit(t: *Tree, axis: Axis) void {
 /// Free space is shared out once by `grow` weight; a child stopped by its
 /// `max` leaves its remainder unused instead of triggering another round.
 pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
-    const a = @backingInt(axis);
     if (t.len == 0) return;
+    t.c.size[@backingInt(axis)][0] = viewport;
+    resolveRows(t, axis, 1, t.len);
+}
+
+/// The sweep of `resolve` over rows [from, to) only; `from` >= 1 and every parent of those rows
+/// already sized. A caller that sizes some nodes itself (grid) resolves in pieces around them.
+pub fn resolveRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
+    const a = @backingInt(axis);
+    std.debug.assert(from >= 1 and to <= t.len);
     const parent = t.c.parent;
     const size = t.c.size[a];
     const nat_ = t.c.nat[a];
@@ -120,8 +152,7 @@ pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
     const shrink = t.c.shrink;
     const used = t.c.used[a];
 
-    size[0] = viewport;
-    for (1..t.len) |i| {
+    for (from..to) |i| {
         const p = parent[i];
         const nat = nat_[i];
         const inner = @max(size[p] - lo[p] - hi[p], 0);

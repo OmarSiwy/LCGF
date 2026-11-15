@@ -5,10 +5,25 @@
 //!   Track        a track's size as three coefficients: fixed pixels, content, fraction
 //!   Grids        side tables: grid containers and their tracks
 //!   sizeTracks   one grid's track sizes and starts on one axis
+//!   fit          `layout.fit` with each grid's content size set from its tracks
+//!   resolve      `layout.resolve` with each grid item sized to its cell
+//!   run          every pass in order, as `layout.run`, for trees with grids
+//!
+//! A grid item is a child of the grid node pushed with `Style.float = true`, so the flow passes
+//! leave it alone; the grid owns its size and its `offset` (the cell's place in the grid). The
+//! layout passes are run in pieces around grid rows (`layout.fitRows`, `layout.resolveRows`):
+//! a grid's tracks need its items' natural sizes before the grid is folded into its parent, and
+//! its items need the grid's final size before their own children are resolved.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
+const types = @import("../core/types.zig");
+const layout = @import("layout.zig");
+const Tree = @import("../core/tree.zig").Tree;
+const Texts = @import("../core/texts.zig").Texts;
+const Axis = types.Axis;
+const none = types.none;
 
 /// The size of one track (a column or a row). Like `types.Size`, the kind is data turned into
 /// coefficients, so sizing a track is `k_px + content * (k_fit + k_fr)` with no switch.
@@ -35,18 +50,25 @@ pub const Track = struct {
 pub const Grids = struct {
     len: u32 = 0,
     tracks_len: u32 = 0,
+    items_len: u32 = 0,
     /// A push ran out of grid or track rows. Nothing is written out of bounds.
     overflow: bool = false,
     cap: Capacity,
     g: GridColumns,
     tr: TrackColumns,
 
-    pub const Capacity = struct { grids: u32, tracks: u32 };
+    it: ItemColumns,
+
+    pub const Capacity = struct { grids: u32, tracks: u32, items: u32 };
 
     pub const GridColumns = struct {
         node: []u32,
         first: [2][]u32,
         count: [2][]u32,
+        /// The grid's items as a chain through `ItemColumns.next`, so the fit and resolve steps
+        /// visit only their own items; `none` when it has none.
+        first_item: []u32,
+        last_item: []u32,
     };
 
     pub const TrackColumns = struct {
@@ -60,17 +82,31 @@ pub const Grids = struct {
         start: []f32,
     };
 
+    pub const ItemColumns = struct {
+        node: []u32,
+        /// Row of the item's grid.
+        grid: []u32,
+        /// Column (x) and row (y) of the item's cell, counted from 0 inside its grid.
+        cell: [2][]u32,
+        /// Next item of the same grid, or `none`.
+        next: []u32,
+        /// Written by the resolve step of the item's grid: the cell's size.
+        cell_size: [2][]f32,
+    };
+
     pub fn init(carver: *mem.Carver, cap: Capacity) Grids {
         std.debug.assert(cap.grids > 0 and cap.tracks > 0);
         return .{
             .cap = cap,
             .g = carver.columns(GridColumns, simd.rows(cap.grids)),
             .tr = carver.columns(TrackColumns, simd.rows(cap.tracks)),
+            .it = carver.columns(ItemColumns, simd.rows(cap.items)),
         };
     }
     pub fn reset(gs: *Grids) void {
         gs.len = 0;
         gs.tracks_len = 0;
+        gs.items_len = 0;
         gs.overflow = false;
     }
 
@@ -84,9 +120,13 @@ pub const Grids = struct {
         const fits = need <= gs.cap.tracks;
         gs.len = k + 1;
         gs.g.node[k] = node;
+        gs.g.first_item[k] = none;
+        gs.g.last_item[k] = none;
         inline for (.{ columns, rows }, 0..) |list, a| {
             const n: u32 = if (fits) @intCast(list.len) else 0;
-            gs.g.first[a][k] = gs.tracks_len;
+            // A grid with no tracks on an axis points at the spare row past `cap.tracks`, which
+            // its items may write and no other grid owns.
+            gs.g.first[a][k] = if (n == 0) gs.cap.tracks else gs.tracks_len;
             gs.g.count[a][k] = n;
             for (list[0..n], gs.tracks_len..) |tk, j| {
                 gs.tr.k_px[j] = tk.k_px;
@@ -97,6 +137,29 @@ pub const Grids = struct {
             gs.tracks_len += n;
         }
         return k;
+    }
+
+    /// Places `node`, a floating child of grid `k`'s node, in the cell at column `cell[0]`,
+    /// row `cell[1]`. A cell past the last track is clamped to it. Push items in row order
+    /// (the order they are pushed to the tree). Returns the item's row.
+    pub fn item(gs: *Grids, k: u32, node: u32, cell: [2]u32) u32 {
+        const r = @min(gs.items_len, gs.cap.items - 1);
+        gs.overflow = simd.orB(gs.overflow, gs.items_len >= gs.cap.items);
+        std.debug.assert(r == 0 or gs.it.node[r - 1] < node or gs.items_len >= gs.cap.items);
+        gs.items_len = r + 1;
+        const it = &gs.it;
+        it.node[r] = node;
+        it.grid[r] = k;
+        it.next[r] = none;
+        inline for (0..2) |a| it.cell[a][r] = @min(cell[a], gs.g.count[a][k] -| 1);
+        // Append to the grid's chain. On overflow the reused row may already be the tail.
+        if (gs.g.last_item[k] == none) {
+            gs.g.first_item[k] = r;
+        } else if (gs.g.last_item[k] != r) {
+            it.next[gs.g.last_item[k]] = r;
+        }
+        gs.g.last_item[k] = r;
+        return r;
     }
 };
 
@@ -117,13 +180,93 @@ pub fn sizeTracks(gs: *Grids, k: u32, a: u1) f32 {
     return at;
 }
 
+/// `layout.fit` for a tree with grids. Before each grid row is folded into its parent (the
+/// sweep runs last row first, so all its items are done), its tracks take their content from
+/// the items' natural sizes and the grid's `fit` becomes the tracks' total.
+pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
+    if (t.len == 0) return;
+    const a = @backingInt(axis);
+    const nat = t.c.nat[a];
+    var to = t.len;
+    var k = gs.len;
+    while (k > 0) {
+        k -= 1;
+        const node = gs.g.node[k];
+        layout.fitRows(t, axis, @max(node + 1, 1), to);
+        to = @max(node + 1, 1);
+        const first = gs.g.first[a][k];
+        @memset(gs.tr.content[first..][0..gs.g.count[a][k]], 0);
+        var it = gs.g.first_item[k];
+        while (it != none) : (it = gs.it.next[it]) {
+            const j = first + gs.it.cell[a][it];
+            gs.tr.content[j] = @max(gs.tr.content[j], nat[gs.it.node[it]]);
+        }
+        t.c.fit[a][node] = sizeTracks(gs, k, a);
+    }
+    layout.fitRows(t, axis, 1, to);
+    layout.fitRoot(t, axis);
+}
+
+/// `layout.resolve` for a tree with grids. Rows are resolved in order, in pieces: after a grid
+/// row is sized, its tracks are sized inside it and each item gets its cell's size and start;
+/// an item row then takes its cell size (within its own min and max) instead of the flow
+/// formula, and its children are resolved inside it as usual.
+pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
+    if (t.len == 0) return;
+    const a = @backingInt(axis);
+    const c = &t.c;
+    c.size[a][0] = viewport;
+    var from: u32 = 1;
+    var k: u32 = 0;
+    var r: u32 = 0;
+    while (true) {
+        const grid_row = if (k < gs.len) gs.g.node[k] else none;
+        const item_row = if (r < gs.items_len) gs.it.node[r] else none;
+        if (grid_row == none and item_row == none) break;
+        if (item_row <= grid_row) {
+            // An item that is also a grid is sized as an item first.
+            layout.resolveRows(t, axis, from, item_row);
+            c.size[a][item_row] = @min(@max(gs.it.cell_size[a][r], c.min[a][item_row]), c.max[a][item_row]);
+            from = item_row + 1;
+            r += 1;
+        } else {
+            layout.resolveRows(t, axis, from, grid_row + 1);
+            from = grid_row + 1;
+            _ = sizeTracks(gs, k, a);
+            const first = gs.g.first[a][k];
+            var it = gs.g.first_item[k];
+            while (it != none) : (it = gs.it.next[it]) {
+                const j = first + gs.it.cell[a][it];
+                gs.it.cell_size[a][it] = gs.tr.size[j];
+                c.offset[a][gs.it.node[it]] = gs.tr.start[j];
+            }
+            k += 1;
+        }
+    }
+    layout.resolveRows(t, axis, from, t.len);
+}
+
+/// Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.
+pub fn run(t: *Tree, tx: *Texts, gs: *Grids, viewport: [2]f32) void {
+    layout.prepare(t);
+    layout.applyText(t, tx, .x);
+    fit(t, gs, .x);
+    resolve(t, gs, .x, viewport[0]);
+    layout.textAvail(t, tx);
+    layout.applyText(t, tx, .y);
+    fit(t, gs, .y);
+    resolve(t, gs, .y, viewport[1]);
+    layout.place(t);
+    layout.finalize(t);
+}
+
 const b01 = simd.b2f;
 const testing = std.testing;
 
 test "sizeTracks: fixed tracks take their pixels, fit and fraction tracks their content" {
     var raw: [8192]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &raw };
-    var gs = Grids.init(&carver, .{ .grids = 2, .tracks = 8 });
+    var gs = Grids.init(&carver, .{ .grids = 2, .tracks = 8, .items = 1 });
     const k = gs.grid(7, &.{ .px(100), .fit, .fr(2) }, &.{ .fit, .px(30) });
     try testing.expectEqual(0, k);
     try testing.expectEqual(5, gs.tracks_len);
@@ -144,7 +287,7 @@ test "sizeTracks: fixed tracks take their pixels, fit and fraction tracks their 
 test "Grids: running out of grid or track rows is reported and writes nothing out of bounds" {
     var raw: [8192]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &raw };
-    var gs = Grids.init(&carver, .{ .grids = 1, .tracks = 3 });
+    var gs = Grids.init(&carver, .{ .grids = 1, .tracks = 3, .items = 1 });
     _ = gs.grid(0, &.{ .fit, .fit }, &.{.fit});
     try testing.expect(!gs.overflow);
     // Too many tracks: the grid is kept with none.
@@ -159,4 +302,107 @@ test "Grids: running out of grid or track rows is reported and writes nothing ou
     try testing.expectEqual(0, gs.grid(1, &.{.fit}, &.{}));
     try testing.expect(gs.overflow);
     try testing.expectEqual(1, gs.len);
+}
+
+/// A tree, an empty text list and grid tables in a caller-owned buffer, for the tests.
+const Scene = struct {
+    raw: [256 * 1024]u8 align(mem.column_align) = undefined,
+    t: Tree = undefined,
+    tx: Texts = undefined,
+    gs: Grids = undefined,
+
+    fn init(s: *Scene) void {
+        var carver: mem.Carver = .{ .buf = &s.raw };
+        s.t = Tree.init(&carver, 64);
+        s.tx = Texts.init(&carver, 1);
+        s.gs = Grids.init(&carver, .{ .grids = 4, .tracks = 16, .items = 32 });
+    }
+    /// A floating grid item holding one fixed-size child, so its natural size is the child's.
+    fn cell(s: *Scene, grid_node: u32, k: u32, at: [2]u32, content: [2]f32) u32 {
+        const n = s.t.push(grid_node, .none, &.{ .float = true });
+        s.t.seal(s.t.push(n, .none, &.{ .size = .{ .px(content[0]), .px(content[1]) } }));
+        s.t.seal(n);
+        _ = s.gs.item(k, n, at);
+        return n;
+    }
+};
+
+fn rect(x0: f32, y0: f32, x1: f32, y1: f32) types.Rect {
+    return .{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 };
+}
+
+test "grid: items in explicit cells; fit tracks take the largest item, items fill their cell" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) }, .pad = @splat(10) });
+    const g = t.push(root, .none, &.{ .pad = @splat(5) });
+    const k = s.gs.grid(g, &.{ .px(100), .fit }, &.{ .fit, .px(30) });
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 40, 15 });
+    const b = s.cell(g, k, .{ 1, 0 }, .{ 70, 25 });
+    const c = s.cell(g, k, .{ 0, 1 }, .{ 20, 10 });
+    const d = s.cell(g, k, .{ 1, 1 }, .{ 60, 50 });
+    // A cell past the last track is clamped to it.
+    const e = s.cell(g, k, .{ 9, 9 }, .{ 5, 5 });
+    t.seal(g);
+    const after = t.push(root, .none, &.{ .size = .{ .px(20), .px(20) } });
+    t.seal(root);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+
+    // Columns 100 and max(70, 60, 5) = 70; rows max(15, 25) = 25 and 30. Plus padding 5.
+    try testing.expectEqual(rect(10, 10, 190, 75), t.rect(g));
+    try testing.expectEqual(rect(15, 15, 115, 40), t.rect(a));
+    try testing.expectEqual(rect(115, 15, 185, 40), t.rect(b));
+    try testing.expectEqual(rect(15, 40, 115, 70), t.rect(c));
+    try testing.expectEqual(rect(115, 40, 185, 70), t.rect(d));
+    try testing.expectEqual(t.rect(d), t.rect(e));
+    // An item's children are laid out inside it as usual; d's taller child overflows its row.
+    try testing.expectEqual(rect(115, 40, 175, 90), t.rect(d + 1));
+    // The grid takes part in its parent's flow with its tracks' size.
+    try testing.expectEqual(rect(10, 75, 30, 95), t.rect(after));
+}
+
+test "grid: a grid inside a grid cell, and a fixed-size item kept to its own size" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const root = t.push(0, .none, &.{ .size = .{ .px(400), .px(300) } });
+    const outer = t.push(root, .none, &.{});
+    const ko = s.gs.grid(outer, &.{ .fit, .fit }, &.{.fit});
+    // Cell (0, 0) holds a 2 x 1 grid of 30x10 and 50x20 items.
+    const inner = t.push(outer, .none, &.{ .float = true });
+    _ = s.gs.item(ko, inner, .{ 0, 0 });
+    const ki = s.gs.grid(inner, &.{ .fit, .fit }, &.{.fit});
+    const p = s.cell(inner, ki, .{ 0, 0 }, .{ 30, 10 });
+    const q = s.cell(inner, ki, .{ 1, 0 }, .{ 50, 20 });
+    t.seal(inner);
+    // Cell (1, 0): a px item keeps its size; it is not stretched to the 20 px row.
+    const fixed = t.push(outer, .none, &.{ .size = .{ .px(15), .px(8) }, .float = true });
+    _ = s.gs.item(ko, fixed, .{ 1, 0 });
+    t.seal(fixed);
+    t.seal(outer);
+    t.seal(root);
+    run(t, &s.tx, &s.gs, .{ 400, 300 });
+    try testing.expectEqual(rect(0, 0, 80, 20), t.rect(inner));
+    try testing.expectEqual(rect(0, 0, 30, 20), t.rect(p));
+    try testing.expectEqual(rect(30, 0, 80, 20), t.rect(q));
+    try testing.expectEqual(rect(80, 0, 95, 8), t.rect(fixed));
+    try testing.expectEqual(rect(0, 0, 95, 20), t.rect(outer));
+}
+
+test "grid: with no grids, fit and resolve are the layout passes" {
+    var a: Scene = .{};
+    var b: Scene = .{};
+    a.init();
+    b.init();
+    inline for (.{ &a, &b }) |s| {
+        const t = &s.t;
+        const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) }, .pad = @splat(4), .gap = 3 });
+        t.seal(t.push(root, .none, &.{ .size = .{ .fill, .px(20) } }));
+        t.seal(t.push(root, .none, &.{ .size = .{ .px(50), .fill }, .shrink = true }));
+        t.seal(root);
+    }
+    run(&a.t, &a.tx, &a.gs, .{ 200, 100 });
+    layout.run(&b.t, &b.tx, .{ 200, 100 });
+    for (0..3) |i| try testing.expectEqual(b.t.rect(@intCast(i)), a.t.rect(@intCast(i)));
 }
