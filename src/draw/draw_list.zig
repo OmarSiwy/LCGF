@@ -25,6 +25,8 @@ pub const Quad = extern struct {
     fill: u32,
     border_color: u32,
     border: f32,
+    /// Multiplies the whole quad's output: the node's inherited opacity.
+    opacity: f32,
 };
 
 /// One text node's run, for the renderer's text pass.
@@ -127,12 +129,13 @@ pub const DrawList = struct {
 
 const testing = std.testing;
 
-test "layout: Quad is the 92-byte instance row the quad pipeline declares" {
+test "layout: Quad is the 96-byte instance row the quad pipeline declares" {
     // Renderers declare vertex attributes at these offsets (src/render/shaders/quad.wgsl). The
-    // prototype's 80-byte row had one `radius` after the colours; per-corner `radii` replaced it.
-    try testing.expectEqual(92, @sizeOf(Quad));
+    // prototype's 80-byte row had one `radius` after the colours; per-corner `radii` replaced it,
+    // and `opacity` was added.
+    try testing.expectEqual(96, @sizeOf(Quad));
     try testing.expectEqual(4, @alignOf(Quad));
-    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border" }, .{ 0, 16, 32, 48, 64, 80, 84, 88 }) |name, off|
+    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border", "opacity" }, .{ 0, 16, 32, 48, 64, 80, 84, 88, 92 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Quad, name));
 }
 

@@ -348,6 +348,9 @@ pub const Style = struct {
     /// Per-corner radii: top-left, top-right, bottom-right, bottom-left. A negative corner
     /// takes `radius`, so the default is `radius` on all four.
     radii: [4]f32 = .{ -1, -1, -1, -1 },
+    /// Opacity of this node and its whole subtree, 0 to 1; nested opacities multiply
+    /// (`draw.inherit.opacity`).
+    opacity: f32 = 1,
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics

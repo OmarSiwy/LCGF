@@ -34,6 +34,7 @@ const attrs = .{
     .{ 5, "border_color", "unorm8x4" },
     .{ 6, "radii", "float32x4" },
     .{ 7, "border", "float32" },
+    .{ 8, "opacity", "float32" },
 };
 
 const Scene = struct {
@@ -142,6 +143,24 @@ fn borders(t: *Tree) void {
     });
 }
 
+/// A panel at opacity 1, 0.5 and 0.5 inside 0.5, each holding a gradient, a bordered rounded
+/// box and an image, over a striped background so the transparency shows.
+fn opacity(t: *Tree) void {
+    _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(20), .gap = 20 });
+    for (0..8) |k| _ = t.push(0, .none, &.{ .float = true, .offset = .{ 0, @floatFromInt(20 * k) }, .size = .{ .px(800), .px(10) }, .fill = .rgb(200, 200, 200) });
+    const levels = [_][2]f32{ .{ 1, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 } };
+    for (levels) |lv| {
+        const outer = t.push(0, .none, &.{ .opacity = lv[0], .size = .{ .px(220), .px(140) } });
+        const panel = t.push(outer, .none, &.{ .opacity = lv[1], .dir = .x, .size = .{ .px(220), .px(140) }, .pad = @splat(10), .gap = 10, .fill = .rgb(40, 60, 120), .radius = 10 });
+        _ = t.push(panel, .none, &.{ .size = .{ .px(60), .px(120) }, .fill = .rgb(255, 80, 80), .params = features.linear(.rgb(255, 230, 60), std.math.pi / 2.0) });
+        _ = t.push(panel, .none, &.{ .size = .{ .px(60), .px(120) }, .fill = .rgb(80, 220, 120), .radius = 12, .border = 4, .border_color = .white });
+        _ = t.push(panel, .none, &.{ .size = .{ .px(60), .px(120) }, .fill = .white, .texture = @fromBackingInt(1), .uv = .{ 0, 0.125, 0.5, 0.5 } });
+        t.seal(panel);
+        t.seal(outer);
+    }
+    t.seal(0);
+}
+
 const scenes = .{
     .{ "gradients", gradients },
     .{ "shadows", shadows },
@@ -149,6 +168,7 @@ const scenes = .{
     .{ "nine-slice", nineSlices },
     .{ "corners", corners },
     .{ "borders", borders },
+    .{ "opacity", opacity },
 };
 
 var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;
@@ -172,6 +192,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (!found) return error.UnknownScene;
     lcgr.layout.run(&sc.t, &sc.tx, viewport);
+    lcgr.inherit.opacity(&sc.t);
     lcgr.paint.emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
 
     const cwd = std.Io.Dir.cwd();

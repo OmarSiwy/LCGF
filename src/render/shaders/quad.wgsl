@@ -20,6 +20,7 @@ struct Instance {
     @location(5) border_color: vec4f,
     @location(6) radii: vec4f,
     @location(7) border: f32,
+    @location(8) opacity: f32,
 }
 
 struct Frag {
@@ -35,6 +36,7 @@ struct Frag {
     @location(8) @interpolate(flat) params: vec4u,
     @location(9) @interpolate(flat) uv_rect: vec4f,
     @location(10) @interpolate(flat) border: f32,
+    @location(11) @interpolate(flat) opacity: f32,
 }
 
 @vertex
@@ -52,6 +54,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     out.half = (inst.rect.zw - inst.rect.xy) * 0.5;
     out.radii = inst.radii;
     out.border = inst.border;
+    out.opacity = inst.opacity;
     out.fill = inst.fill;
     out.border_color = inst.border_color;
     out.clip = inst.clip;
@@ -170,6 +173,6 @@ fn fs(in: Frag) -> @location(0) vec4f {
     let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);
     // Per-instance clip, also as coverage.
     let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);
-    let alpha = cover * inside.x * inside.y;
+    let alpha = cover * inside.x * inside.y * in.opacity;
     return vec4f(color.rgb * color.a, color.a) * alpha;
 }

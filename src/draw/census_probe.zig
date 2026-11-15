@@ -13,3 +13,6 @@ export fn p_damage_frame(dm: *lcgr.damage.Damage, t: *const Tree, tx: *const Tex
 export fn p_damage_cull(d: *DrawList, g: *const lcgr.damage.Region) void {
     lcgr.damage.cull(d, g);
 }
+export fn p_inherit_opacity(t: *Tree) void {
+    lcgr.inherit.opacity(t);
+}

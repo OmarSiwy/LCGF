@@ -108,6 +108,7 @@ pub const Mono = struct {
                     .border_color = 0,
                     .radii = @splat(0),
                     .border = 0,
+                    .opacity = 1, // the run's colour already carries its opacity
                 };
                 // Write always, advance until the last row.
                 n = @min(n + 1, last);
