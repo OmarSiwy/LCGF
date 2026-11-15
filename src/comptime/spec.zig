@@ -12,9 +12,10 @@ pub const Kind = enum(u8) { col, row, label, checkbox, slider };
 /// One node of the declaration. Exists only at compile time.
 pub const Spec = struct {
     kind: Kind,
-    /// Name of an interactive widget; becomes a tag of the generated `Widget` enum.
+    /// Name of an interactive widget; becomes a tag of the generated `Widget` enum. Builders
+    /// take it as an enum literal (`.mute`) and store its name, which is what `@Enum` takes.
     id: ?[:0]const u8 = null,
-    /// Name of the state field this node shows.
+    /// Name of the state field this node shows; builders take it as an enum literal (`.volume`).
     bind: ?[]const u8 = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
@@ -30,7 +31,7 @@ fn kids(comptime tuple: anytype) []const Spec {
 }
 
 /// A vertical container. `children` is a tuple of specs:
-/// `col(.{ .pad = @splat(8), .gap = 4 }, .{ label("a"), ... })`. Its `dir` is always `.y`.
+/// `col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.a), ... })`. Its `dir` is always `.y`.
 pub fn col(comptime style: Style, comptime children: anytype) Spec {
     var s = style;
     s.dir = .y;
@@ -44,19 +45,19 @@ pub fn row(comptime style: Style, comptime children: anytype) Spec {
     return .{ .kind = .row, .style = s, .children = kids(children) };
 }
 
-/// Text showing the state field `bind`.
-pub fn label(comptime bind: []const u8) Spec {
-    return .{ .kind = .label, .bind = bind };
+/// Text showing the state field `bind`: `label(.title)`.
+pub fn label(comptime bind: @EnumLiteral()) Spec {
+    return .{ .kind = .label, .bind = @tagName(bind) };
 }
 
-/// A checkbox named `id`, showing and toggling the bool field `bind`.
-pub fn checkbox(comptime id: [:0]const u8, comptime bind: []const u8) Spec {
-    return .{ .kind = .checkbox, .id = id, .bind = bind };
+/// A checkbox named `id`, showing and toggling the bool field `bind`: `checkbox(.mute, .muted)`.
+pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
+    return .{ .kind = .checkbox, .id = @tagName(id), .bind = @tagName(bind) };
 }
 
-/// A slider named `id`, showing and setting the f32 field `bind`.
-pub fn slider(comptime id: [:0]const u8, comptime bind: []const u8) Spec {
-    return .{ .kind = .slider, .id = id, .bind = bind };
+/// A slider named `id`, showing and setting the f32 field `bind`: `slider(.volume, .volume)`.
+pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
+    return .{ .kind = .slider, .id = @tagName(id), .bind = @tagName(bind) };
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -170,9 +171,9 @@ test "col, row: an empty tuple is a childless container" {
 
 /// The probe's usage spec, built as the probe builds it.
 const probe_mixer = col(.{ .pad = @splat(8), .gap = 4 }, .{
-    label("title"),
-    row(.{ .gap = 8 }, .{ checkbox("mute", "muted"), slider("volume", "volume") }),
-    row(.{ .gap = 8 }, .{ label("title"), slider("pan", "pan") }),
+    label(.title),
+    row(.{ .gap = 8 }, .{ checkbox(.mute, .muted), slider(.volume, .volume) }),
+    row(.{ .gap = 8 }, .{ label(.title), slider(.pan, .pan) }),
 });
 
 test "label, checkbox, slider: the probe's mixer gives the probe's tables, masks and widget rows" {
@@ -191,9 +192,9 @@ test "label, checkbox, slider: the probe's mixer gives the probe's tables, masks
 }
 
 test "label, checkbox, slider: leaves carry kind, id and binding, no children" {
-    const l = comptime label("title");
-    const c = comptime checkbox("mute", "muted");
-    const s = comptime slider("volume", "volume");
+    const l = comptime label(.title);
+    const c = comptime checkbox(.mute, .muted);
+    const s = comptime slider(.volume, .volume);
     try std.testing.expectEqual(Kind.label, l.kind);
     try std.testing.expectEqual(null, l.id);
     try std.testing.expectEqualStrings("title", l.bind.?);
@@ -214,4 +215,16 @@ test "col, row: take the full Style; the container kind fixes the axis" {
     try std.testing.expectEqual(4, s.style.radius);
     try std.testing.expectEqual(types.Role.group, s.style.role);
     try std.testing.expectEqual(types.Axis.y, (comptime col(.{ .dir = .x }, .{})).style.dir);
+}
+
+test "label, checkbox, slider: enum literals name widgets and fields" {
+    const c = comptime checkbox(.mute, .muted);
+    try std.testing.expectEqualStrings("mute", c.id.?);
+    try std.testing.expectEqualStrings("muted", c.bind.?);
+    // The stored id is sentinel-terminated, as `@Enum` takes field names.
+    const id: [:0]const u8 = c.id.?;
+    try std.testing.expectEqual(0, id[id.len]);
+    // Field and Widget tags round-trip: a binding names a field of the state struct.
+    const Mixer = struct { title: []const u8 = "", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
+    try std.testing.expectEqual(std.meta.FieldEnum(Mixer).muted, std.meta.stringToEnum(std.meta.FieldEnum(Mixer), c.bind.?).?);
 }
