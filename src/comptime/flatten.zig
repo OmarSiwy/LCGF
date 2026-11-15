@@ -29,21 +29,23 @@ pub fn Flat(comptime spec: Spec) type {
         const Tables = struct {
             parent: [n]Index,
             end: [n]Index,
+            depth: [n]Index,
         };
 
         const tables: Tables = blk: {
             var t: Tables = undefined;
             var next: comptime_int = 0;
-            walk(spec, 0, &next, &t);
+            walk(spec, 0, 0, &next, &t);
             break :blk t;
         };
 
         /// Numbers `s` and its subtree depth-first from `next`, as `Tree.push` numbers rows.
-        fn walk(comptime s: Spec, comptime parent_ix: comptime_int, comptime next: *comptime_int, comptime t: *Tables) void {
+        fn walk(comptime s: Spec, comptime parent_ix: comptime_int, comptime d: comptime_int, comptime next: *comptime_int, comptime t: *Tables) void {
             const i = next.*;
             next.* += 1;
             t.parent[i] = parent_ix;
-            for (s.children) |c| walk(c, i, next, t);
+            t.depth[i] = d;
+            for (s.children) |c| walk(c, i, d + 1, next, t);
             t.end[i] = next.*;
         }
 
@@ -53,6 +55,30 @@ pub fn Flat(comptime spec: Spec) type {
         pub const parent: [n]Index = tables.parent;
         /// One past each node's last descendant: the subtree of i is rows [i, end[i]).
         pub const end: [n]Index = tables.end;
+        /// Edges from the root to each node: 0 for the root, depth[parent] + 1 otherwise.
+        pub const depth: [n]Index = tables.depth;
+
+        /// Distinct depths: one more than the deepest node's depth.
+        pub const levels = @as(comptime_int, std.mem.max(Index, &depth)) + 1;
+        /// Level d is `level_order[level_start[d]..level_start[d + 1]]`.
+        pub const level_start: [levels + 1]Index = start: {
+            var out: [levels + 1]Index = @splat(0);
+            for (depth) |d| out[d + 1] += 1;
+            for (1..levels + 1) |d| out[d] += out[d - 1];
+            break :start out;
+        };
+        /// Rows ordered by depth, depth-first order within a depth (a stable counting sort by
+        /// depth), so a pass that needs every parent done before its children can run one level
+        /// at a time.
+        pub const level_order: [n]Index = order: {
+            var out: [n]Index = undefined;
+            var next: [levels]Index = level_start[0..levels].*;
+            for (depth, 0..) |d, i| {
+                out[next[d]] = i;
+                next[d] += 1;
+            }
+            break :order out;
+        };
     };
 }
 
@@ -172,5 +198,34 @@ test "Flat.parent, Flat.end: equal the runtime tree's columns for the same UI" {
             try testing.expectEqual(t.c.parent[i], F.parent[i]);
             try testing.expectEqual(t.c.end[i], F.end[i]);
         }
+    }
+}
+
+test "Flat.depth, Flat.level_order, Flat.level_start: equal the levels of the runtime tree" {
+    const M = Flat(mixer);
+    try testing.expectEqualSlices(u4, &.{ 0, 1, 1, 2, 2, 1, 2, 2 }, &M.depth);
+    try testing.expectEqual(3, M.levels);
+    try testing.expectEqualSlices(u4, &.{ 0, 1, 2, 5, 3, 4, 6, 7 }, &M.level_order);
+    try testing.expectEqualSlices(u4, &.{ 0, 1, 4, 8 }, &M.level_start);
+    inline for (shapes) |s| {
+        const F = Flat(s);
+        var r: Runtime(s) = .{};
+        const t = r.build();
+        // Depth from the runtime parent column; parents come before children.
+        var d: [F.node_count]u32 = undefined;
+        d[0] = 0;
+        for (1..t.len) |i| d[i] = d[t.c.parent[i]] + 1;
+        for (0..t.len) |i| try testing.expectEqual(d[i], F.depth[i]);
+        // Level order: every row of depth 0, then depth 1, ..., each level in row order.
+        var k: usize = 0;
+        for (0..F.levels) |level| {
+            try testing.expectEqual(k, F.level_start[level]);
+            for (0..t.len) |i| if (d[i] == level) {
+                try testing.expectEqual(i, F.level_order[k]);
+                k += 1;
+            };
+        }
+        try testing.expectEqual(t.len, k);
+        try testing.expectEqual(t.len, F.level_start[F.levels]);
     }
 }
