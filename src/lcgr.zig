@@ -13,6 +13,7 @@ pub const tree = @import("core/tree.zig");
 pub const strings = @import("core/strings.zig");
 pub const texts = @import("core/texts.zig");
 pub const customs = @import("core/customs.zig");
+pub const spec = @import("comptime/spec.zig");
 
 test {
     std.testing.refAllDecls(@This());
