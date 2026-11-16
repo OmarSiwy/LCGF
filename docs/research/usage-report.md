@@ -49,6 +49,12 @@ Every claim carries one tag:
    microcontroller, `std.debug.print` does not compile for `freestanding` [M], so the print is
    gated at compile time and a shell may supply its own sink.
 
+7. **Quiet by default (owner's later decision).** `-Dlcgr-usage=never` is the default. Keep the
+   recording compiled in and gate only the printing: compiling it out saves one instruction per
+   push, a per-frame fold below the noise, 770 bytes of ReleaseSmall code and 200 bytes of
+   `Context`, and costs `ctx.usage()` in some builds plus a build-option branch in every tier-0
+   table [M]. See "Decision change".
+
 **Found on the way** (each is a separate fix, not part of this feature):
 
 - **A limit hit can crash the frame.** The shell example at `.{ .nodes = 8 }` panics in Debug
@@ -126,9 +132,9 @@ What carries over [I]:
   the new piece, and it costs one add (question 2).
 - **Silence by default is what gets ignored.** Clay's default handler is empty and warns once;
   issue #102 is a user finding the cap the hard way. LCGR's `Output.status` has the same shape:
-  data the host may never read. The owner chose quiet by default, turned on with
-  `-Dlcgr-usage=auto|always` in every mode; a limit that is hit still sets `Output.status`, and
-  with the report on, it names the limit and the setter to raise.
+  data the host may never read. The owner first chose to print by default, then (see "Decision
+  change") to stay quiet unless the build asks; with the report off, the widened `Status` and
+  `ctx.usage()` are what a host has, so a shell or the inspector should surface them.
 - **Name the knob.** Clay's messages name the setter. The report ends with a paste-ready
   `Limits` literal for the same reason.
 - **Attribute exactly, or not at all.** LLM's rule (every byte in exactly one category, the
@@ -273,8 +279,8 @@ Plainly:
 
 So the owner's premise holds for the process, not for the report: ReleaseFast does use memory
 differently (smaller code, `.bss` instead of `.data` for static buffers), but the numbers the
-report prints are the same in every mode. Printing in every mode costs nothing in information,
-and a release build is where the real screens are visited.
+report prints are the same in every mode. Turning the report on in a release build costs
+nothing in information, and a release build is where the real screens are visited.
 
 ## 5. The margin and the rounding
 
@@ -529,11 +535,70 @@ In `src/runtime/context.zig` and `src/runtime/frame.zig` unless named:
 
 ### Measured cost, for the commit message
 
+Recording always on (the recommendation in "Decision change"):
+
 `Tree.pushRow` +1 instruction (an `add` replaces the `or` of the overflow flag), no conditional
 jump in any census probe; the 3,961-node build, interleaved in one process, +0.0 to +0.6 us on
 108 us at load 14 (`docs/research/usage/pushab.zig`); one 16-lane fold per frame; 200 bytes in
 `Context`, none in the buffer. Re-measure `pushab.zig` at load under 8 before quoting a number
 below 0.5%.
+
+## Decision change: quiet by default
+
+The owner changed the default: `-Dlcgr-usage=never` is the default; `auto` (prints when a limit
+was hit or use was under 25%) and `always` turn the report on, in every build mode. Two ways to
+build `never`, both designed and measured here.
+
+**Option 1: recording always on, only the printing gated.** Everything in "Design" stays; under
+`never`, `src/shell/usage.zig`'s `report` is `if (comptime build_options.usage == .never)
+return;`, so the formatter and `std.debug.print` are not referenced and not linked.
+`ctx.usage()` and the 11-bit `Status` work in every build.
+
+**Option 2: recording compiled out under `never`.** `const record = build_options.usage !=
+.never;` in `src/runtime/context.zig`; `Usage`'s counters, `open` and `open_peak` become `if
+(record) T else void`, the fold in `finish` and the depth counting in `open`/`close` sit under
+`if (comptime record)`, and `ctx.usage()` is a `@compileError` when `!record`. The `lost`
+counters cannot go: `Status` is reported in every build and needs "this table was full", which
+is what `lost != 0` is. Keeping a bool instead under `never` means two versions of every push
+(`overflow` or `lost`), in tier 0, chosen by a build option.
+
+Measured, this checkout's `src/` at 3aa2f9d (option 2 under `never` is exactly that code) against
+`prototype.diff` (option 1; the diff keeps `overflow` beside `lost`, so its cost is an upper
+bound) [M]:
+
+| | option 2, `never` | option 1 | difference |
+|---|---|---|---|
+| `Tree.pushRow`, disassembled | 1 jcc | 1 jcc, `xor` and `add` more (the `or` of `overflow` goes in the design) | +1 instruction net |
+| 3,961-node build (`pushab.zig`), median of 5 | 107.8-109.3 us | 108.3-109.2 us | +0.0 to +0.6 us |
+| shell example frame, 18 nodes, `begin` to `end` (`frameab.zig`), medians of 10 processes, order alternated | 2,969-3,698 ns | 2,924-3,828 ns | -77 to +130 ns, median of the ten differences +6 ns |
+| `.text`, ReleaseSmall, a program running the example (`one.zig`) | 39,430 B | 40,200 B | +770 B |
+| `.text`, ReleaseFast, same | 74,603 B | 76,563 B | +1,960 B |
+| `Context` | 4,112 B | about 4,312 B | +200 B (three 64-byte vectors, two `u32`) |
+| buffer (`requiredBytes`) | unchanged | unchanged | 0 |
+
+Load 11 to 14, CPU 8, interleaved in one process; the per-frame difference does not resolve at
+this load in either direction, so the fixed per-frame cost is under about 0.1 us [M].
+
+**Recommendation: option 1.** The cost it would save is one instruction per push, a fold per
+frame that does not show above the noise, under 1 KB of ReleaseSmall code and 200 bytes of
+`Context`. What option 2 costs instead [I]:
+
+- `ctx.usage()` exists only in some builds, so a host that reads it (its own loop, the devtools
+  inspector, a test) stops compiling, or reads zeros, when a dependency builds with `never`;
+- the six silent limits stay silent under `never` unless their counters stay anyway, which is
+  most of the recording;
+- every table in tier 0 grows a build-option branch in its type, and each configuration needs
+  its own test run (the test matrix doubles for `src/core`, `src/anim`, `src/runtime`);
+- the report's numbers would only be trustworthy in builds where it is on, while the bug it
+  exists to find (a frame bigger than the limits) happens in the build that ships.
+
+Changes to "Design" under option 1: the build option's default is `never`; `run` compiles the
+report only when the option is `auto` or `always`; test 9 checks that under `never` the shell's
+`report` is not called and `std.debug.print` is not referenced (the ReleaseSmall `.text` of the
+headless example is unchanged by the feature beyond the recording, +770 B or less); add test 12,
+"usage: recorded under never": `ctx.usage()` after frames that hit a limit gives the counts with
+`-Dlcgr-usage=never`. Re-measure `frameab.zig` and `pushab.zig` at load under 8 before quoting
+anything finer than "under 0.1 us per frame, under 0.5% of build".
 
 ## Sources
 
