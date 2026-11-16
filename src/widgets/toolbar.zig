@@ -17,26 +17,38 @@ const Style = types.Style;
 const Id = types.Id;
 const Theme = base.Theme;
 const none = types.none;
+const simd = @import("../core/simd.zig");
+const keys = @import("keys.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
 /// A toolbar of one button per title: button `k` has the identity `ids[k]` and shows
-/// `titles[k]`. `current.*` (the button that is the toolbar's tab stop) is clamped into
-/// range. Returns the index of the button activated this frame, or `none`.
+/// `titles[k]`. Input moves `current.*` (the button that is the toolbar's tab stop) and
+/// keyboard focus first (`rove`); it is clamped into range. Returns the index of the button
+/// activated this frame, or `none`.
 pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8, current: *u32) u32 {
     std.debug.assert(ids.len == titles.len and ids.len > 0);
-    current.* = @min(current.*, @as(u32, @intCast(ids.len - 1)));
+    var clicked: u32 = none;
+    var focused: u32 = none;
+    for (ids, 0..) |id, k| {
+        const r = f.ctx.inter.response(id);
+        clicked = simd.selU(r.clicked, @intCast(k), clicked);
+        focused = simd.selU(r.focused, @intCast(k), focused);
+    }
+    const m = rove(current.*, @intCast(ids.len), clicked, focused, f.in);
+    current.* = m.current;
+    if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
     _ = f.open(.none, barStyle(th));
-    for (ids, titles) |id, title| {
+    for (ids, titles, 0..) |id, title, k| {
         const item = f.open(id, itemStyle(th));
-        const r = f.interact(item, .button);
+        const r = f.interact(item, sense(k == current.*));
         f.setFill(item, base.buttonFill(th, r));
         f.setCursor(.pointer, r.hovered);
         _ = base.label(f, th, title);
         f.close();
     }
     f.close();
-    return none;
+    return m.activated;
 }
 
 /// The bar: its buttons side by side on the panel colour, padded and spaced by the theme,
@@ -49,6 +61,42 @@ pub fn barStyle(th: *const Theme) Style {
 /// (`base.buttonFill`).
 pub fn itemStyle(th: *const Theme) Style {
     return base.buttonStyle(th);
+}
+
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// Only the current button senses focus, so the toolbar is one stop in the tab order (and
+/// in `focus.seek`); the others still sense the pointer.
+pub fn sense(is_current: bool) types.Sense {
+    const senses = [2]types.Sense{ .{ .hover = true, .click = true }, .button };
+    return senses[@intFromBool(is_current)];
+}
+
+/// Where the tab stop, focus and activation go: button indices, `none` for none.
+pub const Move = struct { current: u32, focus: u32, activated: u32 };
+
+/// The next state of a toolbar of `count` buttons (WAI-ARIA APG toolbar pattern, roving
+/// tab stop). A click on button `clicked` activates it, focuses it and makes it the tab
+/// stop. While button `focused` has focus, Right and Left move focus to the next and
+/// previous button (wrapping), Home and End to the first and last, and the tab stop follows;
+/// Enter and Space activate the focused button. `clicked` and `focused` are `none` when no
+/// button was clicked or has focus; then keys do nothing.
+pub fn rove(current: u32, count: u32, clicked: u32, focused: u32, in: *const Input) Move {
+    const last = count - 1;
+    const click = clicked != none;
+    var cur = @min(simd.selU(click, clicked, current), last);
+    var foc = simd.selU(click, clicked, focused);
+    var act = clicked;
+    if (foc == none) return .{ .current = cur, .focus = none, .activated = act };
+    for (in.events) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        const k = keys.map;
+        const to = if (e.code == k.right) (foc + 1) % count else if (e.code == k.left) (foc + last) % count else if (e.code == k.home) 0 else if (e.code == k.end) last else none;
+        foc = simd.selU(to != none, to, foc);
+        cur = foc;
+        act = simd.selU(e.kind == .press and (e.code == keys.enter or e.code == keys.space), foc, act);
+    }
+    return .{ .current = cur, .focus = foc, .activated = act };
 }
 
 /// The toolbar as a spec node.
@@ -77,15 +125,24 @@ pub const ct = struct {
     /// How the comptime front end builds and drives one toolbar.
     fn Toolbar(comptime current: []const u8, comptime activated: []const u8, comptime names: []const [:0]const u8) type {
         return struct {
-            /// Clamps `current`; nothing is activated yet.
+            /// The tab stop, focus and activation from the frame's click event and
+            /// `ui.focus` (`rove`).
             pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
                 _ = row;
-                _ = event;
-                _ = in;
                 const U = @TypeOf(ui.*);
-                const cur: u32 = @field(ui.signals.state, current);
-                ui.signals.set(comptime U.field(current), @min(cur, names.len - 1));
-                ui.signals.set(comptime U.field(activated), none);
+                var clicked: u32 = none;
+                var focused: u32 = none;
+                inline for (names, 0..) |name, k| {
+                    const me = @field(U.Events.Widget, name);
+                    if (event) |e| clicked = simd.selU(std.meta.activeTag(e) == me, k, clicked);
+                    focused = simd.selU(ui.focus == me, k, focused);
+                }
+                const m = rove(@field(ui.signals.state, current), names.len, clicked, focused, in);
+                ui.signals.set(comptime U.field(current), m.current);
+                ui.signals.set(comptime U.field(activated), m.activated);
+                inline for (names, 0..) |name, k| {
+                    if (m.focus == k) ui.focus = @field(U.Events.Widget, name);
+                }
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -193,6 +250,76 @@ test "toolbar: buttons on a panel bar, filled by state; any theme alike" {
     _ = try S.light.frame(&in);
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(180, 180, 190).bitsOf(), lo.runtime.tree.c.look[rows.item[2]].fill);
+}
+
+test "rove: click activates and moves the stop; arrows move focus and stop; Enter activates" {
+    const k = keys.map;
+    const ev = struct {
+        fn of(comptime codes: []const u8) Input {
+            const list = comptime blk: {
+                var l: [codes.len]Input.Event = undefined;
+                for (&l, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+                break :blk l;
+            };
+            return .{ .events = &list };
+        }
+    };
+    const none_in: Input = .{};
+    try testing.expectEqual(Move{ .current = 2, .focus = 2, .activated = 2 }, rove(0, 3, 2, none, &none_in));
+    try testing.expectEqual(Move{ .current = 0, .focus = none, .activated = none }, rove(0, 3, none, none, &ev.of(&.{k.right})));
+    try testing.expectEqual(Move{ .current = 1, .focus = 1, .activated = none }, rove(0, 3, none, 0, &ev.of(&.{k.right})));
+    try testing.expectEqual(Move{ .current = 2, .focus = 2, .activated = none }, rove(0, 3, none, 0, &ev.of(&.{k.left})));
+    try testing.expectEqual(Move{ .current = 2, .focus = 2, .activated = 2 }, rove(0, 3, none, 0, &ev.of(&.{ k.end, keys.space })));
+    try testing.expectEqual(Move{ .current = 0, .focus = 0, .activated = 0 }, rove(1, 3, none, 1, &ev.of(&.{ k.home, keys.enter })));
+    try testing.expectEqual(types.Sense.button, sense(true));
+    try testing.expect(!sense(false).focus);
+}
+
+test "toolbar: one tab stop; click and Enter activate; arrows rove; in both front ends" {
+    const focus = @import("../interact/focus.zig");
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    // Tab stops: the current button and the checkbox, nothing else.
+    const fmask: u8 = @bitCast(types.Sense{ .focus = true });
+    var t = out.runtime.tree;
+    const first = focus.seek(t, t.c.sense, fmask, 0, t.len, none, false);
+    try testing.expectEqual(rows.item[0], first);
+    try testing.expectEqual(t.find(.from("wire")), focus.seek(t, t.c.sense, fmask, 0, t.len, first, false));
+    // Click Underline: activated once, focused, the new stop.
+    const r = t.rect(rows.item[2]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 2), h.app.activated);
+    try testing.expectEqual(@as(u32, 2), h.ui.signals.state.activated);
+    try testing.expectEqual(@as(u32, 2), h.app.current);
+    try testing.expectEqual(@as(u32, 2), h.ui.signals.state.current);
+    out = try h.frame(&in);
+    try testing.expectEqual(none, h.app.activated);
+    try testing.expectEqual(none, h.ui.signals.state.activated);
+    t = out.runtime.tree;
+    try testing.expectEqual(rows.item[2], focus.seek(t, t.c.sense, fmask, 0, t.len, none, false));
+    // Right wraps to Bold; Enter activates it.
+    const steps = [_]struct { code: u8, cur: u32, act: u32 }{
+        .{ .code = keys.map.right, .cur = 0, .act = none },
+        .{ .code = keys.enter, .cur = 0, .act = 0 },
+        .{ .code = keys.map.end, .cur = 2, .act = none },
+        .{ .code = keys.map.left, .cur = 1, .act = none },
+    };
+    for (steps) |st| {
+        const e = [1]Input.Event{.{ .kind = .press, .code = st.code }};
+        in.events = &e;
+        _ = try h.frame(&in);
+        try testing.expectEqual(st.cur, h.app.current);
+        try testing.expectEqual(st.cur, h.ui.signals.state.current);
+        try testing.expectEqual(st.act, h.app.activated);
+        try testing.expectEqual(st.act, h.ui.signals.state.activated);
+        try testing.expectEqual(@backingInt(Default.ids[st.cur]), h.ctx.inter.focus);
+    }
 }
 
 test {
