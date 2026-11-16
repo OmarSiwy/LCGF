@@ -109,9 +109,11 @@ pub fn Popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open:
             return checkOpen(State, id, @tagName(open));
         }
 
+        /// The trigger's click toggles; a press on the scrim or Escape closes.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            const was = @field(sig.state, @tagName(open));
+            const toggled = toggle(was, isWidget(v.event, id));
+            sig.set(open, dismiss(toggled, isWidget(v.pressed, scrim), keyPressed(v.in, keys.escape)));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -160,24 +162,89 @@ pub fn plainPart(comptime th: Theme, comptime n: Spec, r: Response) Part {
     return .{ .style = s };
 }
 
+// ---- behaviour: pure functions of the state and what happened --------------------------------
+
+/// Scancodes of the keys the overlay widgets read, as USB HID usage ids (as `focus.Keymap`;
+/// what SDL and the web's `KeyboardEvent.code` map to).
+pub const keys = struct {
+    pub const enter: u8 = 0x28;
+    pub const escape: u8 = 0x29;
+    pub const tab: u8 = 0x2b;
+    pub const space: u8 = 0x2c;
+    pub const f10: u8 = 0x43;
+    pub const right: u8 = 0x4f;
+    pub const left: u8 = 0x50;
+    pub const down: u8 = 0x51;
+    pub const up: u8 = 0x52;
+    pub const home: u8 = 0x4a;
+    pub const end: u8 = 0x4d;
+    /// The context-menu ("Application") key.
+    pub const menu: u8 = 0x65;
+};
+
+/// Key `code` went down (or repeated) in this frame's events.
+pub fn keyPressed(in: *const Input, code: u8) bool {
+    return keyCount(in, code, .{}, false) != 0;
+}
+
+/// Times key `code` went down this frame, auto-repeat included; with `exact`, only with exactly
+/// `mods` held.
+pub fn keyCount(in: *const Input, code: u8, mods: Input.Mods, exact: bool) u32 {
+    var n: u32 = 0;
+    for (in.events) |e| {
+        const went = simd.orB(e.kind == .press, e.kind == .repeat);
+        const same = simd.orB(!exact, @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(mods)));
+        n += @intFromBool(simd.andB(went, simd.andB(e.code == code, same)));
+    }
+    return n;
+}
+
+/// Clicking the trigger toggles the popover.
+pub const toggle = base.toggle;
+
+/// An open popover stays open unless the pointer went down outside it (on the scrim) or
+/// Escape was pressed.
+pub fn dismiss(open: bool, outside: bool, escape: bool) bool {
+    return simd.andB(open, !simd.orB(outside, escape));
+}
+
+/// Whether optional event or widget `w` (a `?Events.Event` or `?Events.Widget`) is the widget
+/// named `name`.
+pub fn isWidget(w: anytype, comptime name: []const u8) bool {
+    const T = @typeInfo(@TypeOf(w)).optional.child;
+    const x = w orelse return false;
+    if (@typeInfo(T) == .@"union") return std.meta.activeTag(x) == @field(std.meta.Tag(T), name);
+    return x == @field(T, name);
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
-/// The trigger: a button named `name` showing `text`.
+/// The trigger: a button named `name` showing `text`. A click toggles `open`.
 pub fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, text: []const u8) Response {
-    _ = open;
-    return base.button(f, th, .from(name), text);
+    const r = base.button(f, th, .from(name), text);
+    open.* = toggle(open.*, r.clicked);
+    return r;
 }
 
 /// Opens the scrim and the panel of popover `name` if it is open, and returns whether it did;
 /// the caller then adds the content and calls `end`. Call it at the root's depth, after the
 /// rest of the page, so the panel is drawn on top.
+/// A press outside the panel (on the scrim, which last frame's tree has while it is open) or
+/// Escape closes it first.
 pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool {
+    const scrim: Id = .from(partName(name, "scrim"));
+    // The scrim's response is asked for before it is built: if it closes the popover, the
+    // scrim is not built at all, as in the comptime front end.
+    open.* = dismiss(open.*, f.ctx.inter.response(scrim).pressed, keyPressed(f.in, keys.escape));
     if (!open.*) return false;
-    _ = f.open(.from(partName(name, "scrim")), scrimStyle(f.in.viewport));
+    _ = f.interact(f.open(scrim, scrimStyle(f.in.viewport)), overlay_sense);
     const p = f.open(.from(partName(name, "panel")), panelStyle(th, f.lastRect(.from(name))));
-    _ = p;
+    _ = f.interact(p, overlay_sense);
     return true;
 }
+
+/// How the scrim and the panel take the pointer: they are hit, so what is under them is not.
+pub const overlay_sense: types.Sense = .{ .hover = true, .click = true };
 
 /// Closes the panel and the scrim `begin` opened.
 pub fn end(f: *Frame) void {
@@ -486,6 +553,76 @@ test "Popover: another theme restyles both front ends alike" {
     const panel = t.find(.from("details_panel"));
     try testing.expectEqual(th.panel.bitsOf(), t.c.look[panel].fill);
     try testing.expectEqual(t.rect(t.find(.from("details"))).y1 + 10, t.rect(panel).y0);
+}
+
+test "dismiss, toggle, keyPressed: the behaviour as pure functions" {
+    try testing.expect(dismiss(true, false, false));
+    try testing.expect(!dismiss(true, true, false));
+    try testing.expect(!dismiss(true, false, true));
+    try testing.expect(!dismiss(false, false, false));
+    try testing.expect(toggle(false, true) and !toggle(true, true) and toggle(true, false));
+    const evs = [_]Input.Event{ .{ .kind = .release, .code = keys.escape }, .{ .kind = .press, .code = keys.enter, .mods = .{ .shift = true } } };
+    const in: Input = .{ .events = &evs };
+    try testing.expect(!keyPressed(&in, keys.escape));
+    try testing.expect(keyPressed(&in, keys.enter));
+    try testing.expectEqual(@as(u32, 0), keyCount(&in, keys.enter, .{}, true));
+    try testing.expectEqual(@as(u32, 1), keyCount(&in, keys.enter, .{ .shift = true }, true));
+}
+
+/// Where a step of a scripted run points: the centre of a part's rect last frame, or a point.
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null, open: bool };
+
+/// Runs `script` through both front ends in theme `th`, aiming at last frame's rects, and
+/// requires the open state after every step in both.
+fn expectScript(comptime th: Theme, script: []const Step) !void {
+    const S = struct {
+        var h: Page(th).Run = .{};
+    };
+    const h = &S.h;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    for (script) |st| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(st.open, h.app.open);
+        try testing.expectEqual(st.open, h.ui.signals.state.open);
+    }
+}
+
+test "Popover: click opens; a press inside keeps it; a press outside or Escape closes" {
+    try expectScript(.default, &.{
+        .{ .aim = .{ .part = "details" }, .open = false }, // hover
+        .{ .aim = .{ .part = "details" }, .left = true, .open = false }, // hold
+        .{ .aim = .{ .part = "details" }, .open = true }, // click: open
+        .{ .aim = .{ .part = "details_panel" }, .open = true },
+        .{ .aim = .{ .part = "details_panel" }, .left = true, .open = true }, // press inside
+        .{ .aim = .{ .part = "details_panel" }, .open = true },
+        .{ .aim = .{ .at = .{ 380, 280 } }, .left = true, .open = false }, // press outside: closed
+        .{ .aim = .{ .at = .{ 380, 280 } }, .open = false },
+        .{ .aim = .{ .part = "details" }, .left = true, .open = false },
+        .{ .aim = .{ .part = "details" }, .open = true }, // open again
+        .{ .aim = .{ .part = "details" }, .left = true, .open = false }, // the trigger is under the scrim: closes
+        .{ .aim = .{ .part = "details" }, .open = false }, // and its release is no click
+        .{ .aim = .{ .part = "details" }, .left = true, .open = false },
+        .{ .aim = .{ .part = "details" }, .open = true },
+        .{ .aim = .{ .part = "details" }, .key = keys.escape, .open = false }, // Escape
+        .{ .aim = .{ .part = "details" }, .key = keys.escape, .open = false }, // Escape when closed: nothing
+    });
 }
 
 test "check: a popover's open field must be a bool" {
