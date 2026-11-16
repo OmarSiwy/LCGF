@@ -167,23 +167,39 @@ fn itemSpec(comptime id: []const u8, comptime item: [:0]const u8) Spec {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The list, floating below the trigger's rect `at` (last frame's).
+/// The list, floating `th.gap` below the trigger's rect `at` (last frame's), left edges
+/// aligned: the popover's panel (panel fill, control outline), with half a gap of padding and
+/// the items touching.
 pub fn listStyle(th: *const Theme, at: Rect) Style {
-    _ = th;
-    return .{ .float = true, .offset = .{ at.x0, at.y1 } };
+    var s = popover.panelStyle(th, at);
+    s.pad = @splat(th.gap * 0.5);
+    s.gap = 0;
+    return s;
 }
 
-/// The submenu, floating to the right of the rect `at` of the item that opens it.
+/// The submenu: the list's look, to the right of the rect `at` of the item that opens it, its
+/// first item level with that item.
 pub fn subStyle(th: *const Theme, at: Rect) Style {
-    _ = th;
-    return .{ .float = true, .offset = .{ at.x1, at.y0 } };
+    var s = listStyle(th, at);
+    s.offset = .{ at.x1 + th.gap * 0.5, at.y0 - th.gap * 0.5 };
+    return s;
 }
 
-/// An item row.
+/// An item row, as wide as the list: padded like a button, filled when highlighted.
 pub fn itemStyle(th: *const Theme, active: bool) Style {
-    _ = th;
-    _ = active;
-    return .{ .dir = .x };
+    return .{
+        .dir = .x,
+        .size = .{ .fill, .fit },
+        .pad = .{ th.pad, th.gap, th.pad, th.gap },
+        .cross = .center,
+        .radius = th.radius,
+        .fill = itemFills(th)[@intFromBool(active)],
+    };
+}
+
+/// An item's fill by highlight, indexed by it: none, then the hot control colour.
+pub fn itemFills(th: *const Theme) base.OnOff {
+    return .{ .transparent, th.control_hot };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -284,13 +300,49 @@ test "Menu: the page agrees in both front ends, closed, open and with the submen
     const at = t.rect(t.find(.from("file")));
     const list = t.rect(t.find(.from("file_panel")));
     try testing.expectEqual(at.x0, list.x0);
+    try testing.expectEqual(at.y1 + Theme.default.gap, list.y0);
     h.app.menu.sub = true;
     h.ui.signals.set(.menu, .{ .open = true, .sub = true });
     _ = try h.frame(&in);
     t = (try h.frame(&in)).runtime.tree;
     try testing.expectEqual(@as(u32, 6 + 2 + 8 + 1 + 4), t.len);
     // The submenu opens to the right of Recent.
-    try testing.expectEqual(t.rect(t.find(.from("file_recent"))).x1, t.rect(t.find(.from("file_sub"))).x0);
+    const recent = t.rect(t.find(.from("file_recent")));
+    try testing.expectEqual(recent.x1 + 3, t.rect(t.find(.from("file_sub"))).x0);
+    try testing.expectEqual(recent.y0, t.rect(t.find(.from("file_scene1"))).y0);
+}
+
+test "listStyle, subStyle, itemStyle: the theme's tokens" {
+    const th: Theme = .default;
+    const at: Rect = .{ .x0 = 10, .y0 = 20, .x1 = 60, .y1 = 40 };
+    const l = listStyle(&th, at);
+    try testing.expect(l.float);
+    try testing.expectEqual([2]f32{ 10, 40 + th.gap }, l.offset);
+    try testing.expectEqual(th.panel, l.fill);
+    try testing.expectEqual(th.control_hot, l.border_color);
+    try testing.expectEqual([4]f32{ 3, 3, 3, 3 }, l.pad);
+    try testing.expectEqual([2]f32{ 63, 17 }, subStyle(&th, at).offset);
+    try testing.expectEqual(types.Color.transparent, itemStyle(&th, false).fill);
+    try testing.expectEqual(th.control_hot, itemStyle(&th, true).fill);
+    try testing.expectEqual(types.Size.fill, itemStyle(&th, true).size[0]);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Menu: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try S.h.frame(&in);
+    S.h.app.menu = .{ .open = true, .sub = true };
+    S.h.ui.signals.set(.menu, .{ .open = true, .sub = true });
+    _ = try S.h.frame(&in);
+    const t = (try S.h.frame(&in)).runtime.tree;
+    try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("file_sub"))].fill);
+    // Items are as wide as their list.
+    try testing.expectEqual(t.rect(t.find(.from("file_new"))).w(), t.rect(t.find(.from("file_quit"))).w());
 }
 
 test "checkMenu: the state field, the item fields and the submenu" {
