@@ -464,7 +464,15 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
                 },
                 .radio_option => unreachable, // pushed by its group
-                .toggle => @compileError("the comptime toggle button is built from C0547 on"),
+                .toggle => {
+                    const value: bool = @field(state, n.bind.?);
+                    var s = n.style;
+                    s.fill = toggle_zig.toggleFill(&th, value, ui.response(next.* - 1, in));
+                    s.value = simd.b2f(value);
+                    const i = tb.t.push(parent, .hash(n.id.?), &s);
+                    ui.push(n.children[0], i, next, in);
+                    tb.t.seal(i);
+                },
                 .@"switch" => {
                     const value: bool = @field(state, n.bind.?);
                     const i = tb.t.push(parent, .hash(n.id.?), &n.style);
