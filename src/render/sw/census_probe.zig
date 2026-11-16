@@ -15,6 +15,12 @@ fn shade(comptime kind: lcgr.features.Kind, t: *const sw.Target, q: *const lcgr.
 export fn p_sw_solid(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
     shade(.solid, t, q, img, scale);
 }
+export fn p_sw_linear(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.linear, t, q, img, scale);
+}
+export fn p_sw_radial(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.radial, t, q, img, scale);
+}
 export fn p_sw_nine_slice(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
     shade(.nine_slice, t, q, img, scale);
 }

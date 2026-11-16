@@ -283,11 +283,22 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
 
     const fill = rgba(q.fill);
     const edge = rgba(q.border_color);
+    const to = rgba(p[1]);
     const border = q.border;
     const has_border: f32 = @floatFromInt(@intFromBool(border >= 0.001));
     const uv = q.uv;
     const inv_w = 1 / @max(x1 - x0, 1e-6);
     const inv_h = 1 / @max(y1 - y0, 1e-6);
+    // Linear gradient: direction and the reach to the corners it meets.
+    const angle: f32 = @bitCast(p[2]);
+    const dir_x = @cos(angle);
+    const dir_y = @sin(angle);
+    const reach = @max(@abs(hx * dir_x) + @abs(hy * dir_y), 1e-6);
+    // Radial gradient: centre as two f16 fractions of the size, radius in pixels.
+    const centre: [2]f16 = @bitCast(p[2]);
+    const rc_x = (@as(f32, centre[0]) * 2 - 1) * hx;
+    const rc_y = (@as(f32, centre[1]) * 2 - 1) * hy;
+    const radius = @max(@as(f32, @bitCast(p[3])), 1e-6);
     // Nine-slice insets.
     const dst: [4]f32 = rgba(p[1]) * @as(@Vector(4, f32), @splat(255));
     const src = [4]f32{ unorm16(p[2]), unorm16(p[2] >> 16), unorm16(p[3]), unorm16(p[3] >> 16) };
@@ -336,7 +347,7 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             }
             const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
 
-            // Material: the fill times the texture.
+            // Material: the fill or its gradient, times the texture.
             var tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * (qx - simd.f(x0)) * simd.f(inv_w);
             var tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * (qy - simd.f(y0)) * simd.f(inv_h);
             if (kind == .nine_slice) {
@@ -345,7 +356,14 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
                 tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * fu;
                 tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * fv;
             }
-            const base: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
+            var base: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
+            if (kind == .linear or kind == .radial) {
+                const g = sat(if (kind == .linear)
+                    (lx * simd.f(dir_x) + ly * simd.f(dir_y)) / simd.f(reach) * simd.f(0.5) + simd.f(0.5)
+                else
+                    len2(lx - simd.f(rc_x), ly - simd.f(rc_y)) / simd.f(radius));
+                inline for (0..4) |i| base[i] += (simd.f(to[i]) - base[i]) * g;
+            }
             var color: [4]F = undefined;
             const cover = shape;
             const tex = sample(img, tu, tv);

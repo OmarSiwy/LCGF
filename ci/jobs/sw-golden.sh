@@ -15,7 +15,7 @@ for n in rects custom clip text; do
     zig-out/bin/sw-play "$s" "$s/sw.png"
     python3 tools/golden/golden.py "$s/sw.png" "src/render/conformance/$n.png"
 done
-for scene in corners borders images nine-slice; do
+for scene in corners borders images nine-slice gradients opacity rounded-clip; do
     ref=tools/drawgolden/ref/$scene.png
     case $scene in images) bad=2258 ;; borders) bad=29 ;; *) bad=0 ;; esac
     zig build draw-dump -- "$scene" "$PWD/$out/draw/$scene"
