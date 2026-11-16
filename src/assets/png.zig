@@ -15,7 +15,8 @@
 //! allowed bit depth, PLTE, tRNS and Adam7 interlacing; chunk CRCs and the zlib checksum are
 //! checked. 16-bit samples are rounded to 8. Ancillary chunks other than tRNS (gAMA, iCCP,
 //! sRGB, text) are skipped: the image is drawn as stored. A file is untrusted input: any bytes
-//! end in an image or an error, never a crash or a read out of bounds.
+//! end in an image or an error, never a crash or a read out of bounds
+//! (`zig build png-fuzz`, png_fuzz.zig).
 //!
 //! Decoding is not a per-row pass over tree columns, so the branchless rule does not bind it;
 //! the per-byte loops still avoid data-dependent branches (Paeth is selects, palette lookups go
@@ -621,41 +622,16 @@ test "gray at 1, 4 and 8 bits scales to the full range" {
 }
 
 test "mutated files are errors, not crashes" {
-    // A short seeded run; C0762's fuzzer runs the same idea for a set time.
-    const gpa = testing.allocator;
-    const raw = try adam7Raw(gpa, 9, 9);
-    defer gpa.free(raw);
-    const plte = [_]u8{ 1, 2, 3, 4, 5, 6 };
-    const seeds = [_][]u8{
-        try encodeForTest(gpa, 9, 9, 8, .gray, true, &.{.{ .type = tag("tRNS"), .data = &.{ 0, 7 } }}, raw),
-        try encodeForTest(gpa, 2, 2, 2, .palette, false, &.{ .{ .type = tag("PLTE"), .data = &plte }, .{ .type = tag("tRNS"), .data = &.{9} } }, &.{ 4, 0x40, 1, 0x80 }),
-    };
-    defer for (seeds) |s| gpa.free(s);
-    var buf: [512]u8 = undefined;
-    var px: [4096]u8 = undefined;
-    var scratch: [4096]u8 = undefined;
-    var prng: std.Random.DefaultPrng = .init(0x9e3779b9);
-    const r = prng.random();
-    for (0..3000) |_| {
-        const s = seeds[r.uintLessThan(usize, seeds.len)];
-        @memcpy(buf[0..s.len], s);
-        var n = s.len;
-        for (0..r.intRangeAtMost(u32, 1, 3)) |_| {
-            // Past the signature: a broken signature only tests one compare.
-            const at = 8 + r.uintLessThan(usize, n - 8);
-            switch (r.uintLessThan(u8, 8)) {
-                0 => buf[at] ^= @as(u8, 1) << r.int(u3),
-                1, 2, 3 => buf[at] = r.int(u8),
-                4, 5, 6 => buf[at] +%= 1,
-                else => n = @max(9, r.uintAtMost(usize, n)),
-            }
-        }
-        // Mutations mostly break a CRC; fix them most of the time so the bytes reach inflate.
-        if (r.uintLessThan(u8, 8) != 0) fixCrcs(buf[0..n]);
-        if (decode(buf[0..n], &px, &scratch)) |i| {
-            try testing.expect(i.pixelBytes() <= px.len);
-        } else |_| {}
+    // A short run of the fuzzer (png_fuzz.zig); `zig build png-fuzz` runs it for a set time.
+    const fuzz = @import("png_fuzz.zig");
+    var buf: [fuzz.max_seed]u8 = undefined;
+    var decoded: u32 = 0;
+    for (0..2000) |k| {
+        var prng: std.Random.DefaultPrng = .init(k);
+        decoded += @intFromBool(fuzz.exercise(fuzz.mutate(prng.random(), &buf)));
     }
+    // The mutations reach the decoder, not only the chunk checks.
+    try testing.expect(decoded > 100);
 }
 
 /// Rewrites every whole chunk's CRC, so a mutated file gets past the CRC check.

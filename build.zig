@@ -11,6 +11,7 @@
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
 //!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
 //!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
+//!   zig build png-fuzz -- 300      PNG decoder seeded mutation loop for 300 s (ci/run.sh png-fuzz)
 //!   zig build conformance-dump     the render conformance scenes as files (ci/run.sh conformance)
 //!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; HarfBuzz is a lazy
 //!                                  build.zig.zon dependency built from source (ci/run.sh harfbuzz)
@@ -171,6 +172,14 @@ pub fn build(b: *std.Build) void {
     }) }));
     font_fuzz.addPassthruArgs();
     b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
+    // PNG decoder fuzzing (src/assets/png_fuzz.zig): seeded mutation loop for a set time.
+    const png_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "png-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/assets/png_fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    png_fuzz.addPassthruArgs();
+    b.step("png-fuzz", "Fuzz the PNG decoder: -- [seconds] [seed] [first]").dependOn(&png_fuzz.step);
 
     // The optional HarfBuzz adapter: outside the tiers (it links a C library), so a module of
     // its own over lcgr, never imported by it.
