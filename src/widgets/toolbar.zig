@@ -179,8 +179,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// A toolbar of Bold, Italic and Underline above a checkbox.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar of Bold, Italic and Underline above a checkbox, in both front
+/// ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {
         pub const ids = [_]Id{ .from("bold"), .from("italic"), .from("under") };
@@ -212,6 +213,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/toolbar.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/toolbar-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "hover", 1 },
+    .{ "roved", 4 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -356,6 +367,34 @@ test "toolbar: role toolbar holding buttons named by their titles, in both front
             try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
         }
     }
+}
+
+test "toolbar: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var current: [8]u32 = undefined;
+    var activated: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        current[k] = h.app.current;
+        activated[k] = h.app.activated;
+        try testing.expectEqual(h.app.current, h.ui.signals.state.current);
+        try testing.expectEqual(h.app.activated, h.ui.signals.state.activated);
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 2, 2, 0, 2 }, &current);
+    try testing.expectEqualSlices(u32, &.{ none, none, none, 1, none, 2, none, none }, &activated);
+}
+
+test "golden_frames: name frames the toolbar replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {

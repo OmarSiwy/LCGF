@@ -26,6 +26,7 @@ const pages = .{
     .{ "tabs-", lcgr.widgets_tabs.Page(.default), lcgr.widgets_tabs.replay, lcgr.widgets_tabs.golden_frames },
     .{ "splitter-", lcgr.widgets_splitter.Page(.default), lcgr.widgets_splitter.replay, lcgr.widgets_splitter.golden_frames },
     .{ "scroll-", lcgr.widgets_scroll.Page(.default), lcgr.widgets_scroll.replay, lcgr.widgets_scroll.golden_frames },
+    .{ "toolbar-", lcgr.widgets_toolbar.Page(.default), lcgr.widgets_toolbar.replay, lcgr.widgets_toolbar.golden_frames },
     .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
     .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
     .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },

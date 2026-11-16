@@ -1,0 +1,29 @@
+# Recorded input for the toolbar example page (widgets/toolbar.zig, `Page`), at 320 x 200 in
+# the default theme: Bold at 16..66, Italic at 72..138, Underline at 144..236, all at y 16..50.
+# Keys are USB HID codes: 79 Right, 80 Left, 74 Home, 44 Space (format: input.Replay).
+# 0: rest, Bold is the tab stop
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: hover Italic
+frame
+pointer 105 33
+# 2: press it
+frame
+buttons left
+# 3: release over it: Italic activated, focused, the tab stop
+frame
+buttons
+# 4: Right: focus and the stop move to Underline
+frame
+press 79
+# 5: Space: Underline activated
+frame
+press 44
+# 6: Home: to Bold
+frame
+press 74
+# 7: Left: wraps to Underline
+frame
+press 80
