@@ -81,6 +81,15 @@ pub const Keyboard = struct {
         };
     }
 
+    /// The composition for `id`: `ime` with its range clamped into its text and ordered, or
+    /// an empty composition unless `id` is focused.
+    pub fn composition(k: *const Keyboard, id: Id, ime: *const Composition) Composition {
+        const len: u32 = @intCast(ime.text.len * @intFromBool(k.mine(id)));
+        const a = @min(ime.range[0], len);
+        const b = @min(ime.range[1], len);
+        return .{ .text = ime.text[0..len], .range = .{ @min(a, b), @max(a, b) } };
+    }
+
     /// `id` is focused and key `code` is held this frame (`Input.keys`).
     pub fn down(k: *const Keyboard, id: Id, code: u8) bool {
         return simd.andB(k.mine(id), k.in.keys.down(code));
@@ -134,6 +143,41 @@ pub const Clipboard = struct {
     /// Paste: ask the host for the clipboard's text.
     pub fn requestPaste(o: *Clipboard) void {
         o.paste = true;
+    }
+};
+
+/// What an input method (IME) is composing, filled by the host each frame beside `Input`, as
+/// Iced 0.14's input method events carry it: the preedit text with an optional range in it.
+/// Committed text is not here: it arrives as typed text (`Input.text`, a `.text` event), which
+/// also ends the composition, so a widget that already handles typing handles commits.
+pub const Composition = struct {
+    /// UTF-8 being composed and not yet committed; empty when nothing is.
+    text: []const u8 = "",
+    /// Byte range of `text` the IME highlights (the converted clause); a caret when both ends
+    /// are equal. Host data: `Keyboard.composition` clamps it before a widget slices with it.
+    range: [2]u32 = .{ 0, 0 },
+};
+
+/// What the text input purpose is, so the host picks the right keyboard and IME behaviour
+/// (Iced 0.14 `input_method::Purpose`).
+pub const Purpose = enum(u8) { normal, secure, terminal };
+
+/// A request to the host for text input, as platform output (prototype/ui.zig
+/// `Platform.wants_text` and `ime_rect`): the focused text widget fills it during the frame;
+/// the host shows the on-screen keyboard or enables the IME, puts its candidate window at
+/// `rect`, and turns both off when no widget asked.
+pub const TextInput = struct {
+    wants_text: bool = false,
+    /// Where the caret or composition is, in logical pixels: the IME's window goes next to it.
+    rect: types.Rect = .{},
+    purpose: Purpose = .normal,
+
+    pub fn reset(o: *TextInput) void {
+        o.* = .{};
+    }
+    /// Asks for text input at `rect`.
+    pub fn request(o: *TextInput, rect: types.Rect, purpose: Purpose) void {
+        o.* = .{ .wants_text = true, .rect = rect, .purpose = purpose };
     }
 };
 
@@ -384,4 +428,36 @@ test "commands: Ctrl+A, C, X, V reach the focused widget, which answers through 
     const in2: Input = .{ .events = &cmd_a };
     const k2 = Keyboard.route(&it, &fo, &in2);
     try testing.expectEqual(Commands{ .select_all = true }, k2.commands(field, mac));
+}
+
+test "composition: preedit and range go to the focused widget; the commit is typed text" {
+    const it: Interaction = .{ .focus = @backingInt(field) };
+    const fo: Focus = .{};
+    // Frame 1: composing "nihon" with "hon" highlighted. Frame 2: the IME commits.
+    const composing: Composition = .{ .text = "nihon", .range = .{ 2, 5 } };
+    const in1: Input = .{};
+    const k1 = Keyboard.route(&it, &fo, &in1);
+    const c = k1.composition(field, &composing);
+    try testing.expectEqualStrings("nihon", c.text);
+    try testing.expectEqualStrings("hon", c.text[c.range[0]..c.range[1]]);
+    try testing.expectEqualStrings("", k1.composition(other, &composing).text);
+    try testing.expectEqualStrings("", k1.text(field));
+
+    const commit = [_]Input.Event{.{ .kind = .text, .at = 0, .len = 6 }};
+    const in2: Input = .{ .text = "\xe6\x97\xa5\xe6\x9c\xac", .events = &commit };
+    const k2 = Keyboard.route(&it, &fo, &in2);
+    try testing.expectEqualStrings("\xe6\x97\xa5\xe6\x9c\xac", k2.text(field));
+    try testing.expectEqualStrings("", k2.composition(field, &.{}).text);
+
+    // A range from the host past the end, or backwards, is clamped and ordered.
+    const bad: Composition = .{ .text = "abc", .range = .{ 9, 1 } };
+    try testing.expectEqual([2]u32{ 1, 3 }, k1.composition(field, &bad).range);
+
+    // The widget asks the host for the IME next to its caret.
+    var out: TextInput = .{};
+    out.request(.{ .x0 = 10, .y0 = 20, .x1 = 11, .y1 = 36 }, .normal);
+    try testing.expect(out.wants_text);
+    try testing.expectEqual(@as(f32, 36), out.rect.y1);
+    out.reset();
+    try testing.expect(!out.wants_text);
 }
