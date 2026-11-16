@@ -1,0 +1,24 @@
+# Recorded input for the spacer example page (widgets/spacer.zig, `Page`), at 320 x 200 in the
+# default theme: the bar's spacer spans x 123..246, Close is at 254..312 x 8..42; the side
+# column's spacer spans y 75..175 (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: press in the bar's gap, where the spacer is
+frame
+pointer 184 25
+buttons left
+# 2: release: nothing
+frame
+buttons
+# 3: hover Close at the far end
+frame
+pointer 283 25
+# 4: hold it
+frame
+buttons left
+# 5: release over it: a click
+frame
+buttons
