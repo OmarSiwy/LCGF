@@ -322,7 +322,7 @@ pub const Ios = struct {
     touches: [translate.max_contacts]?Id = @splat(null),
     /// Text input as last applied: whether the view is first responder (keyboard up), and
     /// the rect (points) the IME's candidates and the text-selection UI anchor to.
-    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{} } = .{},
+    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{}, purpose: lcgr.keyboard.Purpose = .normal } = .{},
     /// The IME's marked text (retained, an NSString) and the UTF-16 range it selects: the
     /// whole document UITextInput sees (text_input).
     marked: ?Id = null,
@@ -392,18 +392,6 @@ pub const Ios = struct {
         s.t.setInsets(@floatCast(i.top), @floatCast(i.left), @floatCast(i.bottom), @floatCast(i.right));
     }
 
-    /// True once after the app returned from the background: build a frame (post the
-    /// context's waker), since frames built while it was away were not presented.
-    pub fn resumed(s: *Ios) bool {
-        return s.t.takeResumed();
-    }
-
-    /// The safe area as root padding (`Style.pad`): what the notch, the Dynamic Island and
-    /// the home indicator cover.
-    pub fn safeArea(s: *const Ios) [4]f32 {
-        return s.t.safe;
-    }
-
     fn touch(s: *Ios, view: Id, ui: Id) void {
         const phase: translate.Phase = @fromBackingInt(@intCast(@as(u8, @intCast(@min(msg(objc.NSInteger, ui, "phase", .{}), 4)))));
         const kind: translate.Kind = @fromBackingInt(@intCast(@as(u8, @intCast(@min(msg(objc.NSInteger, ui, "type", .{}), 3)))));
@@ -446,12 +434,20 @@ pub const Ios = struct {
         return s.t.frame(ev);
     }
 
-    /// Applies a frame's effects: text the frame copies goes to the general pasteboard; while
-    /// a widget wants text the view is first responder, which brings up the soft keyboard (or
-    /// takes a hardware keyboard's text), and its IME anchors at `ime_rect`.
+    /// Applies a frame's effects: text the frame copies goes to the general pasteboard, and a
+    /// paste reads it; while a widget wants text the view is first responder, which brings up
+    /// the soft keyboard (or takes a hardware keyboard's text) laid out for `purpose`, and its
+    /// IME anchors at `ime_rect`.
     pub fn apply(s: *Ios, p: *const Platform) void {
         if (p.clipboard.len > 0) s.copy(p.clipboard);
+        if (p.paste) s.paste();
         s.text.rect = p.ime_rect;
+        if (p.purpose != s.text.purpose) {
+            s.text.purpose = p.purpose;
+            // UIKit reads the traits when the view becomes first responder; already one, it
+            // reads them again here.
+            if (s.text.wants) msg(void, s.view, "reloadInputViews", .{});
+        }
         if (p.wants_text != s.text.wants) {
             s.text.wants = p.wants_text;
             if (p.wants_text) {
@@ -473,10 +469,9 @@ pub const Ios = struct {
         msg(void, generalPasteboard(), "setString:", .{str});
     }
 
-    /// Types the pasteboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
-    /// host to: call it after a frame whose widgets requested a paste. iOS may ask the user
-    /// first ("Allow Paste") and returns nothing if they decline.
-    pub fn paste(s: *Ios) void {
+    /// Types the pasteboard's text into the next frame (`Platform.paste`). iOS may ask the
+    /// user first ("Allow Paste") and returns nothing if they decline.
+    fn paste(s: *Ios) void {
         const pool = objc.Pool.push();
         defer pool.pop();
         const str = msg(?Id, generalPasteboard(), "string", .{}) orelse return;

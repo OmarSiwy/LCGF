@@ -55,13 +55,6 @@ pub const Translator = struct {
     /// The application is terminating (`applicationWillTerminate:`): no more frames.
     closed: bool = false,
     state: State = .active,
-    /// The app came back to the foreground since `takeResumed` was last called.
-    resumed: bool = false,
-    /// The view's safe area as padding, logical pixels, in `Style.pad`'s order (left, top,
-    /// right, bottom): what the notch, the Dynamic Island, the home indicator and the status
-    /// bar cover. The host pads its root node with it (example.zig) so nothing lands under them;
-    /// a full-bleed background still fills the whole viewport.
-    safe: [4]f32 = .{ 0, 0, 0, 0 },
     /// Fingers and pencils on the screen, in the order they touched down. `fresh`: touched
     /// down since the last frame, so not reported yet; `lift`: ended, removed once reported.
     rows: [max_contacts]Input.Contact = undefined,
@@ -124,21 +117,25 @@ pub const Translator = struct {
         t.in.scale = if (scale > 0) scale else 1;
     }
 
-    /// The view's `safeAreaInsets` (top, left, bottom, right in points, UIEdgeInsets' order).
+    /// The view's `safeAreaInsets` (top, left, bottom, right in points, UIEdgeInsets' order),
+    /// as `Input.safe_area`: what the notch, the Dynamic Island, the home indicator and the
+    /// status bar cover. The host pads its root node with it (example.zig) so nothing lands
+    /// under them; a full-bleed background still fills the whole viewport.
     pub fn setInsets(t: *Translator, top: f32, left: f32, bottom: f32, right: f32) void {
-        t.safe = .{ left, top, right, bottom };
+        t.in.safe_area = .{ left, top, right, bottom };
     }
 
     /// The application's state changed (the delegate's `applicationWillResignActive:`,
     /// `applicationDidEnterBackground:`, `applicationWillEnterForeground:`,
     /// `applicationDidBecomeActive:`). Leaving `.active` lets go of held keys and modifiers:
-    /// their key-ups go elsewhere (UIKit cancels the touches itself).
+    /// their key-ups go elsewhere (UIKit cancels the touches itself). Coming back from the
+    /// background asks for a frame (`Input.redraw`): what was built there was never presented.
     pub fn lifecycle(t: *Translator, state: State) void {
         if (state != .active) {
             t.in.keys = .{};
             t.in.mods = .{};
         }
-        if (t.state == .background and state != .background) t.resumed = true;
+        if (t.state == .background and state != .background) t.in.redraw = true;
         t.state = state;
     }
 
@@ -146,13 +143,6 @@ pub const Translator = struct {
     /// Metal command buffer committed there gets the app killed) and nothing is on screen.
     pub fn visible(t: *const Translator) bool {
         return t.state != .background;
-    }
-
-    /// True once after the app returned from the background: what was built while it was
-    /// there was never presented, so the host builds a frame now (posts its waker).
-    pub fn takeResumed(t: *Translator) bool {
-        defer t.resumed = false;
-        return t.resumed;
     }
 
     pub fn terminate(t: *Translator) void {
@@ -376,6 +366,7 @@ pub const Translator = struct {
         t.n_events = 0;
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
+        t.in.redraw = false;
         // What this frame reported is settled: lifted rows go, the deferred release follows.
         var row: u32 = n;
         while (row > 0) {
@@ -665,13 +656,13 @@ test "translate: scale and safe area, portrait then landscape" {
         try testing.expect(t.frame(&ev));
         try testing.expectEqual(@as(f32, 3), ev.in.scale);
         try testing.expectEqual(w.vp, ev.in.viewport);
-        try testing.expectEqual(w.safe, t.safe);
+        try testing.expectEqual(w.safe, ev.in.safe_area);
         // Touches stay in points whatever the scale.
         try testing.expectEqual([2]f32{ 100, 70 }, ev.in.pointer);
         // The host pads its root with the safe area: the example stays clear of the island
         // and the home indicator.
         var f = ctx.begin(&ev.in);
-        _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = t.safe });
+        _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = ev.in.safe_area });
         app.build(&f, &ev);
         f.close();
         const out = f.end(.{});
@@ -836,8 +827,7 @@ test "translate: backgrounding hides the app, releases keys, and asks for a fram
         try testing.expectEqual(w.visible, t.visible());
         try testing.expectEqual(w.shift, ev.in.keys.down(0xe1));
         try testing.expectEqual(w.shift, ev.in.mods.shift);
-        try testing.expectEqual(w.resumed, t.takeResumed());
-        try testing.expect(!t.takeResumed());
+        try testing.expectEqual(w.resumed, ev.in.redraw);
     }
     try testing.expect(try r.next(&t));
     try testing.expect(!t.frame(&ev));
