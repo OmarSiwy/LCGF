@@ -538,6 +538,19 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/list.replay");
+    pub const golden_frames = .{
+        .{ "list-rest", 0 },
+        .{ "list-hover", 1 },
+        .{ "list-selected", 3 },
+        .{ "list-keys", 5 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -545,6 +558,36 @@ const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
 
 var harness: Example(theme).Run = .{};
+
+test "list: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var sel: [12]u32 = undefined;
+    var hot: [12]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        try testing.expectEqual(h.app.selected, h.ui.signals.state.selected);
+        try testing.expectEqual(h.app.clicked, if (out.comptime_.event) |e| e == .fruit else false);
+        sel[k] = h.app.selected;
+        // Which option shows the hover fill.
+        const t = out.runtime.tree;
+        const box = t.find(.from("fruit"));
+        hot[k] = none;
+        for (0..5) |j| {
+            if (t.c.look[box + 1 + 2 * j].fill == theme.control.bitsOf()) hot[k] = @intCast(j);
+        }
+        try testing.expectEqual(selectedValue(h.app.selected), t.c.value[box]);
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(u32, &.{ none, none, none, 1, 2, 4, 1, 0, 0, 0, 0, 0 }, &sel);
+    try testing.expectEqualSlices(u32, &.{ none, 1, 1, none, 1, 1, none, 1, 1, none, none, none }, &hot);
+}
 
 test "list: roles, value and the selected state for accessibility" {
     const h = &harness;
