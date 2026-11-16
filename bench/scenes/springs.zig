@@ -3,7 +3,7 @@
 const ui = @import("ui");
 const Scene = @import("scenes.zig").Scene;
 
-pub const scene: Scene = .{ .name = "springs", .frames = 3000, .input = input, .build = build };
+pub const scene: Scene = .{ .name = "springs", .frames = 3000, .input = input, .build = build, .every = true };
 
 const grid_rows = 40;
 const grid_cols = 25;

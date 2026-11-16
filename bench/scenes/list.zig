@@ -4,7 +4,7 @@ const std = @import("std");
 const ui = @import("ui");
 const Scene = @import("scenes.zig").Scene;
 
-pub const scene: Scene = .{ .name = "list", .frames = 3000, .input = input, .build = build };
+pub const scene: Scene = .{ .name = "list", .frames = 3000, .input = input, .build = build, .every = true };
 
 const total = 100_000;
 const row_h = 24;

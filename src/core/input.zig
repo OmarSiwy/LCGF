@@ -16,8 +16,8 @@ pub const Input = struct {
     viewport: [2]f32 = .{ 800, 600 },
     /// Physical pixels per logical pixel.
     scale: f32 = 1,
-    /// Logical pixels; `{ -1, -1 }` when the pointer is outside the window.
-    pointer: [2]f32 = .{ -1, -1 },
+    /// Logical pixels; `outside` when the pointer is outside the window.
+    pointer: [2]f32 = outside,
     buttons: Buttons = .{},
     /// Mouse wheel this frame in notches (detents), x and y. Fractional for high-resolution
     /// wheels: a host with 120 units per notch passes `units / 120`.
@@ -35,6 +35,9 @@ pub const Input = struct {
     /// Fingers and pens on or over the surface this frame, one row each. The mouse stays in
     /// `pointer` and `buttons`. The host owns the slice. Only read during the frame.
     contacts: []const Contact = &.{},
+
+    /// `pointer` when the pointer is outside the window.
+    pub const outside: [2]f32 = .{ -1, -1 };
 
     /// Mouse buttons held down this frame, one bit each.
     pub const Buttons = bitpack struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 };

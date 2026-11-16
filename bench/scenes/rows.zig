@@ -4,7 +4,7 @@
 const ui = @import("ui");
 const Scene = @import("scenes.zig").Scene;
 
-pub const scene: Scene = .{ .name = "rows", .frames = 3000, .input = input, .build = build };
+pub const scene: Scene = .{ .name = "rows", .frames = 3000, .input = input, .build = build, .every = true };
 
 pub const count = 330;
 var values: [count]f32 = @splat(0.5);

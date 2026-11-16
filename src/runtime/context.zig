@@ -113,6 +113,10 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
+    /// Every pointer move asks for a frame, also over nodes that sense nothing. Set it while
+    /// the UI draws from the raw pointer position outside sensing nodes (a crosshair, the
+    /// inspector's outline); otherwise such a move changes no frame and `needsFrame` skips it.
+    track_pointer: bool = false,
     /// The platform's accessibility settings; the host sets them, on change or every frame.
     /// Under `reduced_motion` springs, tweens, transitions and sequences show their end state at
     /// once and layout changes do not slide, so nothing keeps the host awake.
