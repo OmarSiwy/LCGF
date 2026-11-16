@@ -677,3 +677,57 @@ test "wayland: nothing to paste" {
     _ = shell.poll(&ev);
     try testing.expect(!shell.paste());
 }
+
+test "wayland: the input method follows wants_text, composes, then commits" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"zwp_text_input_manager_v3"}));
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    const ti = shell.ime.text_input;
+    try testing.expect(ti != 0);
+    try testing.expectEqual(shell.globals.get(.wl_seat), fake.sent(.text_input_manager, 1).?.arg1);
+
+    // Not focused yet: a request waits for enter.
+    const field: lcgr.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
+    fake.logged = 0;
+    shell.apply(&.{ .wants_text = true, .ime_rect = field });
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.text_input, 1) == null);
+    fake.send(ti, 0, .{shell.surface}); // enter
+    fake.flush();
+    _ = shell.poll(&ev);
+    shell.apply(&.{ .wants_text = true, .ime_rect = field });
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.text_input, 1) != null); // enable
+    const r = fake.sent(.text_input, 6).?; // set_cursor_rectangle
+    try testing.expectEqual([2]u32{ 10, 20 }, [2]u32{ r.arg0, r.arg1 });
+    try testing.expect(fake.sent(.text_input, 7) != null); // commit
+
+    // Composing "にほ" with the caret after the first character, then committing "日本".
+    fake.send(ti, 2, .{ @as([]const u8, "\xe3\x81\xab\xe3\x81\xbb"), @as(i32, 3), @as(i32, 3) });
+    fake.send(ti, 5, .{@as(u32, 1)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("\xe3\x81\xab\xe3\x81\xbb", ev.composition.text);
+    try testing.expectEqual([2]u32{ 3, 3 }, ev.composition.range);
+    try testing.expectEqualStrings("", ev.in.text);
+    fake.send(ti, 3, .{@as([]const u8, "\xe6\x97\xa5\xe6\x9c\xac")});
+    fake.send(ti, 5, .{@as(u32, 1)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("", ev.composition.text);
+    try testing.expectEqualStrings("\xe6\x97\xa5\xe6\x9c\xac", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{.{ .kind = .text, .at = 0, .len = 6 }}, ev.in.events);
+
+    // Same request: nothing sent. Focus leaves the field: disable.
+    fake.logged = 0;
+    shell.apply(&.{ .wants_text = true, .ime_rect = field });
+    fake.pump(&shell);
+    try testing.expectEqual(@as(usize, 0), fake.logged);
+    shell.apply(&.{});
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.text_input, 2) != null); // disable
+}

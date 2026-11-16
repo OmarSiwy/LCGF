@@ -24,6 +24,7 @@ const lcgr = @import("lcgr");
 const wire = @import("wire.zig");
 const Seat = @import("input.zig").Seat;
 const Data = @import("data.zig").Data;
+const Ime = @import("ime.zig").Ime;
 const linux = std.os.linux;
 const iface = lcgr.shell_iface;
 const Events = iface.Events;
@@ -73,10 +74,12 @@ pub const Kind = enum(u8) {
     data_manager,
     data_device,
     data_source,
+    text_input_manager,
+    text_input,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager };
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager, zwp_text_input_manager_v3 };
 const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_compositor = 6,
     .wl_shm = 1,
@@ -86,6 +89,7 @@ const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wp_fractional_scale_manager_v1 = 1,
     .wp_cursor_shape_manager_v1 = 1,
     .wl_data_device_manager = 3,
+    .zwp_text_input_manager_v3 = 1,
 });
 const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_compositor = .compositor,
@@ -96,6 +100,7 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wp_fractional_scale_manager_v1 = .fractional_manager,
     .wp_cursor_shape_manager_v1 = .cursor_manager,
     .wl_data_device_manager = .data_manager,
+    .zwp_text_input_manager_v3 = .text_input_manager,
 });
 
 /// `wp_cursor_shape_device_v1` shapes (cursor-shape-v1.xml) by `Cursor`: default, pointer,
@@ -169,6 +174,8 @@ pub const Wayland = struct {
     seat: Seat = .{},
     /// Clipboard (data.zig).
     data: Data = .{},
+    /// Input method (ime.zig).
+    ime: Ime = .{},
     /// The cursor last set, and the pointer enter it was set for.
     cursor: context.Cursor = .arrow,
     cursor_serial: u32 = 0,
@@ -248,6 +255,7 @@ pub const Wayland = struct {
     pub fn poll(w: *Wayland, ev: *Events) bool {
         w.dispatch();
         w.data.bind(w);
+        w.ime.bind(w);
         w.data.readPaste(w);
         w.flush();
         _ = w.woken.swap(false, .acquire);
@@ -262,6 +270,7 @@ pub const Wayland = struct {
         w.in.time = t;
         w.seat.fill(&w.in);
         ev.in = w.in;
+        ev.composition = w.ime.composition();
         return !w.closed;
     }
 
@@ -279,6 +288,7 @@ pub const Wayland = struct {
             w.cursor_serial = s.enter_serial;
         }
         w.data.set(w, p.clipboard);
+        w.ime.apply(w, p.wants_text, p.ime_rect);
         w.flush();
     }
 
@@ -458,6 +468,7 @@ pub const Wayland = struct {
             },
             .data_device => w.data.deviceEvent(w, m.opcode, &a),
             .data_source => w.data.sourceEvent(w, m.opcode, &a),
+            .text_input => w.ime.event(w, m.opcode, &a),
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
             },
