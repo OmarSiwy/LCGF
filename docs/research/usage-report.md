@@ -38,11 +38,11 @@ Every claim carries one tag:
    a static buffer declared `= undefined` is 0xAA-filled `.data` in Debug and `.bss` in release
    builds, so in Debug it is in the file, resident once touched, and **not zero**, which breaks
    `Context.initZeroed`'s precondition [M]. Peaks are the app's data and do not depend on the mode.
-5. **Margin and rounding.** Keep 1.25. Go's slices grow by 1.25x asymptotically [S], and the
-   measured cost of the margin is a quarter of the peak's bytes. Rounding up to whole SIMD rows
+5. **Margin and rounding.** No margin: the owner decided the suggestion is the peak itself
+   (the research had proposed 1.25x; see section 5). Rounding up to whole SIMD rows
    is free for every table carved with `simd.rows`, but not for the draw list (`n + 1` rows of
    136-byte quads) or the tree's extras (`rows(cap + 1)`): at 8 lanes, rounding nodes up to the
-   next multiple of 8 costs at most about 3 KB [M], negligible against the margin.
+   next multiple of 8 costs at most about 3 KB [M].
 6. **Edge cases.** Peaks are a lower bound (only frames that ran), and after a limit is hit they
    are the demand of the degraded frame, which can be lower than the real one [M]. The comptime
    front end has nothing to report at run time. Each `Context` reports its own table. On a
@@ -277,13 +277,11 @@ and a release build is where the real screens are visited.
 
 ## 5. The margin and the rounding
 
-**1.25.** Prior art for a growth factor that keeps a capacity ahead of its use: Go grows slices
-by 2x below 256 elements and then by `(newcap + 3*256) >> 2` per step, which tends to 1.25x
-(`src/runtime/slice.go:333-341`) [S]. Zig's arena keeps exactly the peak (`retain_capacity`), but
-it can grow when the peak is passed; a fixed buffer cannot, so it needs headroom [I]. No source
-gives a better number for a fixed UI capacity. 1.25 holds: it costs a quarter of the peak's bytes
-(for nodes, 231 bytes per node of peak), and a frame bigger than any seen by more than a quarter
-is reported anyway, with its frame number, the next time the report prints [I].
+**No margin (owner's decision).** The suggestion is exactly the peak, or the "wanted" count when a
+limit was hit, rounded up to the step below. The research had proposed 1.25x, after Go's slice
+growth factor (`src/runtime/slice.go:333-341`) [S], as headroom for screens a run did not visit;
+the owner removed it. The report's "this run only" line says the numbers cover only the frames
+built, so headroom is the developer's choice, not the framework's.
 
 **Rounding.** `simd.rows(cap) = alignForward(cap, lanes) + lanes` (`src/core/simd.zig:38-44`), so
 for every table carved with `rows(cap)` all `cap` in one block of `lanes` cost the same: rounding
@@ -298,8 +296,8 @@ up inside the block is free. Two parts do not follow it [M]:
 4,115,904, 4,116,032, 4,116,160, 4,118,144, 4,119,040, 4,119,168, 4,119,296, 4,119,424,
 4,119,552, 4,119,680, 4,119,808, 4,121,920, 4,129,600. The large step (+7,680) is the block
 boundary of the main columns, at 4,105. Rounding to a multiple of the lane count costs at most
-about 3 KB at 8 lanes (4,090 to 4,096: +3,136), against a margin of about 1 MB at that size: not
-free, negligible. Round each limit up to a step: `simd.lanes` for row tables, 64 for `strings`
+about 3 KB at 8 lanes (4,090 to 4,096: +3,136): not
+free, but small. Round each limit up to a step: `simd.lanes` for row tables, 64 for `strings`
 (one cache line of bytes), 16 for `depth` (a cache line of `u32`), and never below one step,
 because every table asserts or relies on `cap > 0` (`src/core/texts.zig:42`,
 `src/anim/anims.zig:70` computes `cap - 1`) [S].
@@ -307,7 +305,7 @@ because every table asserts or relies on `cap > 0` (`src/core/texts.zig:42`,
 ## 6. Edge cases
 
 **Frames that never ran.** The peak is of the frames built. A screen the session did not visit
-is not in it. The report says how many frames it covers, and the margin is the only allowance;
+is not in it. The report says how many frames it covers, and there is no allowance for it;
 the honest wording is "peaks of N frames" [I].
 
 **After a limit is hit, the count is a lower bound too.** With the shell example, limits that
@@ -429,7 +427,7 @@ the same `cap` (`reuse.zig:201-202`) and needs no separate count.
 
 A new file outside the tiers, `src/shell/usage.zig`, so tier 0-2 stay free of `std.Io`:
 
-- `pub fn suggest(u: Usage) Limits`: per limit, `max(step, roundUp(ceil(peak * 5 / 4), step))`,
+- `pub fn suggest(u: Usage) Limits`: per limit, `max(step, roundUp(peak, step))`, with `peak` the wanted count when the limit was hit,
   with `step` = `simd.lanes`, 64 for `strings`, 16 for `depth`. Integer arithmetic, no float.
 - `pub fn write(w: *std.Io.Writer, u: Usage, label: []const u8) !void`: the text below. Works into
   `std.Io.Writer.fixed` for hosts with their own loop and sink.
@@ -439,6 +437,8 @@ A new file outside the tiers, `src/shell/usage.zig`, so tier 0-2 stay free of `s
   else `std.debug.print("{s}", .{text})` when `builtin.os.tag != .freestanding`, else nothing.
 
 Exact text, shell example at the example's limits after 30 frames (numbers measured with the
+(The example below was computed with the old 1.25x margin; the implementation recomputes it from
+the real numbers with the margin removed.)
 prototype; suggested limits as `suggest` defines them; bytes are `partBytes` of each) [M]:
 
 ```
@@ -514,8 +514,8 @@ In `src/runtime/context.zig` and `src/runtime/frame.zig` unless named:
    every limit odd; runs at 4, 8 and 16 lanes in the test matrix.
 6. "Tree column groups cover every column once": a comptime check in `src/core/tree.zig`, plus a
    test that the groups sum to `Tree.init`'s count.
-7. "suggest: 1.25x, rounded up to the step, never zero": peaks 0, 1, 18, 4096 and 65536 bytes;
-   `requiredBytes(suggest(u))` is at most `requiredBytes` of the exact `ceil(1.25 x peak)` limits
+7. "suggest: the peak rounded up to the step, never zero": peaks 0, 1, 18, 4096 and 65536 bytes;
+   `requiredBytes(suggest(u))` is at most `requiredBytes` of the exact peak limits
    plus 4 KB.
 8. "report: the exact text" in `src/shell/usage.zig`: a fixed `Usage` written into
    `std.Io.Writer.fixed`, compared with the expected string, once without hits and once with.
