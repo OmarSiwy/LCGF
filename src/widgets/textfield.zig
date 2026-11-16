@@ -10,7 +10,9 @@
 //!
 //! Text is measured as the front ends measure it, with `Mono`: every byte is `advance` wide, so
 //! the caret's x is its byte offset times the advance, and a click maps back the same way to
-//! the nearest grapheme boundary.
+//! the nearest grapheme boundary. A host that lays the text out itself (text/layout/, with
+//! bidi reordering) hands that layout over as `Text.view`; the caret, clicks and selection
+//! then follow it, the selection as one band per direction run (`query.selection`).
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -20,6 +22,9 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
+const moves = @import("../text/edit/moves.zig");
+const query = @import("../text/layout/query.zig");
+const lines_ = @import("../text/layout/lines.zig");
 const keyboard = @import("../interact/keyboard.zig");
 const Mono = @import("../text/protocol.zig").Mono;
 const Graphemes = @import("../text/unicode/grapheme.zig").Graphemes;
@@ -62,6 +67,11 @@ pub fn Text(comptime cap: u32) type {
         scroll: f32 = 0,
         /// The pointer held the field last frame: a press is the first frame it does.
         held: bool = false,
+        /// Set by the host before the frame, or null: the layout of `text()` as the host drew
+        /// it (px from the text's top left; for a text area, one laid-out line per line between
+        /// newlines, unwrapped). Used only while its text is the field's (`fresh`): after an
+        /// edit, until the host lays the text out again, the field falls back to `Mono`.
+        view: ?moves.View = null,
 
         /// A field holding `initial` (cut at `cap` bytes, at a code point), caret at its end.
         pub fn init(initial: []const u8) Self {
@@ -184,13 +194,21 @@ pub fn caretStyle(th: *const Theme, x: f32, top: f32, focused: bool) Style {
     return .{ .float = true, .offset = .{ x, top }, .size = .{ .px(1), .px(lineHeight(th)) }, .fill = colors[@intFromBool(focused)] };
 }
 
+/// Selection bands a text field keeps per line, so that its rows are fixed: one per run of
+/// one direction the selection covers. A selection crossing more direction changes on a line
+/// than this shows only its first `bands` runs.
+pub const bands = 4;
+
 /// What a single-line field shows this frame: its text or placeholder, and where the caret and
-/// the selection are, px from the text's left edge.
+/// the selection are, px from the text's left edge. `sel` is the selection as one band in
+/// `Mono` (the number and search fields draw it); `band` the text field's bands, from `view`
+/// when it is fresh, else `sel` and empty bands.
 pub const Shown = struct {
     str: []const u8,
     hint: bool,
     caret: f32,
     sel: [2]f32,
+    band: [bands][2]f32,
 };
 
 pub fn shown(s: anytype, th: *const Theme, hint: []const u8) Shown {
@@ -199,12 +217,35 @@ pub fn shown(s: anytype, th: *const Theme, hint: []const u8) Shown {
     const adv = advance(th);
     const sel = ed.selection();
     const empty = t.len == 0;
+    const mono = [2]f32{ @as(f32, @floatFromInt(sel[0])) * adv, @as(f32, @floatFromInt(sel[1])) * adv };
+    var band: [bands][2]f32 = @splat(.{ 0, 0 });
+    band[0] = mono;
+    if (fresh(s)) |v| {
+        var rects: [bands]Rect = undefined;
+        const n = query.selection(v.l, v.g, v.text, sel[0], sel[1], &rects);
+        band = @splat(.{ 0, 0 });
+        for (rects[0..n], 0..) |r, k| band[k] = .{ r.x0, r.x1 };
+    }
     return .{
         .str = if (empty) hint else t,
         .hint = empty,
-        .caret = @as(f32, @floatFromInt(ed.shownCaret())) * adv,
-        .sel = .{ @as(f32, @floatFromInt(sel[0])) * adv, @as(f32, @floatFromInt(sel[1])) * adv },
+        .caret = caretX(s, th, ed.shownCaret()),
+        .sel = mono,
+        .band = band,
     };
+}
+
+/// `s.view` while it is the layout of the field's current text, else null.
+pub fn fresh(s: anytype) ?moves.View {
+    const v = s.view orelse return null;
+    return if (v.l.len > 0 and std.mem.eql(u8, v.text, s.text())) v else null;
+}
+
+/// The caret's x at byte `at`, px from the text's left edge: from the view when fresh, else
+/// `at` advances.
+pub fn caretX(s: anytype, th: *const Theme, at: u32) f32 {
+    if (fresh(s)) |v| return v.caretRect(at).x0;
+    return @as(f32, @floatFromInt(at)) * advance(th);
 }
 
 // ---- behaviour ------------------------------------------------------------------------------
@@ -237,7 +278,7 @@ pub fn reveal(scroll: f32, x: f32, view: f32, content: f32) f32 {
 pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void {
     const ed = point(s, th, r, last, in);
     const k = keyboardOf(in, id, r.focused);
-    s.result = ed.update(&k, id, .{ .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
+    s.result = ed.update(&k, id, .{ .view = fresh(s), .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
     follow(s, th, r, last);
 }
 
@@ -250,7 +291,8 @@ pub fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const I
     s.input.reset();
     if (r.held) {
         const x0 = last.x0 + padding(th)[0];
-        const at = stopNear(ed.text(), (in.pointer[0] - x0 + s.scroll) / advance(th));
+        const px = in.pointer[0] - x0 + s.scroll;
+        const at = if (fresh(s)) |v| v.hit(px, v.l.top[0] + v.l.height[0] / 2) else stopNear(ed.text(), px / advance(th));
         ed.caret = at;
         if (!s.held and !in.mods.shift) ed.anchor = at;
         ed.goal = std.math.nan(f32);
@@ -266,9 +308,10 @@ pub fn follow(s: anytype, th: *const Theme, r: Response, last: Rect) void {
     const ed = s.editor();
     const adv = advance(th);
     const pad = padding(th);
-    const x = @as(f32, @floatFromInt(ed.shownCaret())) * adv;
+    const x = caretX(s, th, ed.shownCaret());
+    const content = if (fresh(s)) |v| lines_.widest(v.l) else @as(f32, @floatFromInt(ed.text().len)) * adv;
     const view = last.w() - pad[0] - pad[2];
-    if (view > 0) s.scroll = reveal(s.scroll, x, view, @as(f32, @floatFromInt(ed.text().len)) * adv);
+    if (view > 0) s.scroll = reveal(s.scroll, x, view, content);
     if (r.focused) {
         const cx = last.x0 + pad[0] - s.scroll + x;
         const top = last.y0 + pad[1];
@@ -323,7 +366,7 @@ pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const 
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
     const v = shown(s, th, hint);
-    _ = f.leaf(.none, selectionStyle(th, v.sel, 0));
+    for (v.band) |b| _ = f.leaf(.none, selectionStyle(th, b, 0));
     _ = f.textStyled(v.str, textStyle(th, v.hint), .{});
     _ = f.leaf(.none, caretStyle(th, v.caret, 0, r0.focused));
     f.close();
@@ -355,7 +398,8 @@ pub const ct = struct {
     /// `hint` while empty. Its events carry the `edit.Result` of a frame that changed the text
     /// or submitted it.
     pub fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec {
-        var s = spec_zig.row(fieldStyle(&th, false, 0), .{ Spec{ .kind = .col }, Spec{ .kind = .label }, Spec{ .kind = .col } });
+        const band: [bands]Spec = @splat(.{ .kind = .col });
+        var s = spec_zig.row(fieldStyle(&th, false, 0), band ++ [2]Spec{ .{ .kind = .label }, .{ .kind = .col } });
         s.id = @tagName(id);
         s.bind = @tagName(bind);
         s.widget = Comptime(@tagName(id), @tagName(bind), @tagName(hint));
@@ -381,10 +425,10 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
-            next.* += 4; // the box, the selection, the text and the caret
+            next.* += bands + 3; // the box, the selection bands, the text and the caret
             const i = t.push(parent, .hash(name), &fieldStyle(th, focused, s.scroll));
             const v = shown(s, th, @field(ui.signals.state, hint));
-            _ = t.push(i, .none, &selectionStyle(th, v.sel, 0));
+            for (v.band) |b| _ = t.push(i, .none, &selectionStyle(th, b, 0));
             pushText(ui, i, v.str, textStyle(th, v.hint));
             _ = t.push(i, .none, &caretStyle(th, v.caret, 0, focused));
             t.seal(i);
@@ -450,7 +494,7 @@ pub const Page = struct {
         ct.textfield(th, .city, .city, .city_hint),
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
-    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
     pub const replay = @embedFile("testdata/textfield.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/textfield-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "selected", 3 }, .{ "drag", 8 } };
@@ -459,6 +503,10 @@ pub const Page = struct {
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+/// Rows of a text field below its box: the bands, then the text, then the caret.
+const text_row = 1 + bands;
+const caret_row = 2 + bands;
 
 test "Text: init, set and the editor over the value's own bytes, after a move" {
     var a: Text(8) = .init("hello");
@@ -501,8 +549,8 @@ test "textfield: the page agrees in both front ends at rest" {
     const in: Input = .{ .viewport = .{ 320, 140 } };
     const out = try h.frame(&in);
     const t = out.runtime.tree;
-    // panel, two captions, two fields of four rows each.
-    try testing.expectEqual(@as(u32, 1 + 1 + 2 + 8), t.len);
+    // root, panel, two captions, two fields of a box, the bands, a text and a caret each.
+    try testing.expectEqual(@as(u32, 1 + 1 + 2 + 2 * (bands + 3)), t.len);
     try testing.expectEqual(@backingInt(types.Role.text_input), t.c.role[t.find(.from("name"))]);
 }
 
@@ -522,12 +570,12 @@ test "textfield look: an inset box one line tall, the placeholder dimmed, the ca
     try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[f].border_color);
     // The placeholder, in the hint colour; City's text in the text colour.
     const tx = out.runtime.texts;
-    try testing.expectEqual(hintColor(&th).bitsOf(), tx.c.color[t.c.text[f + 2]]);
+    try testing.expectEqual(hintColor(&th).bitsOf(), tx.c.color[t.c.text[f + text_row]]);
     const c = t.find(.from("city"));
-    try testing.expectEqual(th.text.bitsOf(), tx.c.color[t.c.text[c + 2]]);
-    try testing.expectApproxEqAbs(4 * advance(&th), t.rect(c + 2).w(), 0.5);
+    try testing.expectEqual(th.text.bitsOf(), tx.c.color[t.c.text[c + text_row]]);
+    try testing.expectApproxEqAbs(4 * advance(&th), t.rect(c + text_row).w(), 0.5);
     // The caret is there but clear; no selection.
-    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[f + 3].fill);
+    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[f + caret_row].fill);
     try testing.expectEqual(@as(f32, 0), t.rect(f + 1).w());
     // Focused: the accent border, and the caret drawn at the editor's caret.
     in.pointer = .{ box.x0 + 4, (t.rect(c).y0 + t.rect(c).y1) * 0.5 };
@@ -538,13 +586,13 @@ test "textfield look: an inset box one line tall, the placeholder dimmed, the ca
     out = try h.frame(&in);
     t = out.runtime.tree;
     try testing.expectEqual(th.accent.bitsOf(), t.c.look[c].border_color);
-    try testing.expectEqual(th.text.bitsOf(), t.c.look[c + 3].fill);
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[c + caret_row].fill);
     const at: f32 = @floatFromInt(h.app.city.ed.caret);
-    try testing.expectApproxEqAbs(t.rect(c).x0 + th.pad + at * advance(&th), t.rect(c + 3).x0, 0.5);
-    try testing.expectEqual(@as(f32, 1), t.rect(c + 3).w());
+    try testing.expectApproxEqAbs(t.rect(c).x0 + th.pad + at * advance(&th), t.rect(c + caret_row).x0, 0.5);
+    try testing.expectEqual(@as(f32, 1), t.rect(c + caret_row).w());
 }
 
-var field_semantics: base.Semantic(16) = .{};
+var field_semantics: base.Semantic(32) = .{};
 
 test "textfield a11y: role text input named by its caption; text and caret presentational" {
     const h = &page;
@@ -560,7 +608,7 @@ test "textfield a11y: role text input named by its caption; text and caret prese
     try testing.expectEqual(@backingInt(Id.from("name")), x.out[0].c.id[r]);
     try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
     // Selection, text and caret are not exported.
-    for (1..4) |k| try testing.expectEqual(null, x.row(f + @as(u32, @intCast(k))));
+    for (1..bands + 3) |k| try testing.expectEqual(null, x.row(f + @as(u32, @intCast(k))));
     // Named by its caption through `semantics`, in either front end's tree.
     const check = @import("check.zig");
     const ctx = &h.ctx;
@@ -738,6 +786,90 @@ test "textfield input: a long text scrolls to keep the caret in view" {
     in.events = &home;
     _ = try both(h, &in);
     try testing.expectEqual(@as(f32, 0), h.app.name.scroll);
+}
+
+/// A host's layout of a text as text/layout draws it, reordered, one `adv` per code point, one
+/// line per line between newlines: what a host hands over as `Text.view`. For `text` (a
+/// left-to-right paragraph with a Hebrew word in it) the glyphs sit at a b c _ ג ב א _ d e f,
+/// so "c" and the space before the Hebrew word are one run on screen and "א" another, at the
+/// word's right end.
+pub const Mixed = struct {
+    pub const text = "abc \u{5D0}\u{5D1}\u{5D2} def";
+    para: @import("../text/layout/golden.zig").Para = .{},
+    raw: [8 * 1024]u8 align(@import("../core/mem.zig").column_align) = undefined,
+
+    /// Lays `str` out; `m` must not move afterwards (the view points into it).
+    pub fn view(m: *Mixed, str: []const u8, adv: f32, line: f32) !moves.View {
+        var carver: @import("../core/mem.zig").Carver = .{ .buf = &m.raw };
+        const scratch = carver.columns(lines_.BidiScratch, 32);
+        const p = &m.para;
+        p.fixed(str, adv);
+        try lines_.breakLines(&p.g, str, std.math.inf(f32), &p.l);
+        const a: lines_.Align = .{ .width = @as(f32, @floatFromInt(p.g.len)) * adv };
+        lines_.place(&p.l, &p.g, str, &.{.{ .ascent = line * 0.8, .descent = line * 0.2 }}, a);
+        try lines_.reorder(&p.l, &p.g, str, a, scratch);
+        return .{ .l = &p.l, .g = &p.g, .text = str };
+    }
+};
+
+var mixed: Mixed = .{};
+
+test "textfield view: a mixed-direction line selects one band per run and clicks on its layout" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    const adv = advance(&th);
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try both(h, &in);
+    const c = out.runtime.tree.find(.from("city"));
+    const box = out.runtime.tree.rect(c);
+    const v = try mixed.view(Mixed.text, adv, lineHeight(&th));
+    // "c" and the space, then "א": bytes 2 to 6.
+    for ([2]*Page.Field{ &h.app.city, &h.ui.signals.state.city }) |f| {
+        f.set(Mixed.text);
+        f.view = v;
+        f.ed.anchor = 2;
+        f.ed.caret = 6;
+    }
+    out = try both(h, &in);
+    var t = out.runtime.tree;
+    const x0 = box.x0 + th.pad;
+    // Laid out to whole pixels: within one of the exact place.
+    try testing.expectApproxEqAbs(x0 + 2 * adv, t.rect(c + 1).x0, 1);
+    try testing.expectApproxEqAbs(2 * adv, t.rect(c + 1).w(), 1);
+    try testing.expectApproxEqAbs(x0 + 6 * adv, t.rect(c + 2).x0, 1);
+    try testing.expectApproxEqAbs(adv, t.rect(c + 2).w(), 1);
+    try testing.expectEqual(@as(f32, 0), t.rect(c + 3).w());
+    try testing.expectEqual(@as(f32, 0), t.rect(c + 4).w());
+    // Without the view (Mono): one band, bytes 2 to 6.
+    for ([2]*Page.Field{ &h.app.city, &h.ui.signals.state.city }) |f| f.view = null;
+    out = try both(h, &in);
+    t = out.runtime.tree;
+    try testing.expectApproxEqAbs(4 * adv, t.rect(c + 1).w(), 1);
+    try testing.expectEqual(@as(f32, 0), t.rect(c + 2).w());
+    // A click near the right edge of "א" lands where the layout puts its logical start (4),
+    // and the caret is drawn there, at the word's right end.
+    for ([2]*Page.Field{ &h.app.city, &h.ui.signals.state.city }) |f| f.view = v;
+    const want = v.hit(6.8 * adv, 1);
+    try testing.expectEqual(@as(u32, 4), want);
+    in.pointer = .{ x0 + 6.8 * adv, (box.y0 + box.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    out = try both(h, &in);
+    try testing.expectEqual(want, h.app.city.ed.caret);
+    t = out.runtime.tree;
+    try testing.expectApproxEqAbs(x0 + v.caretRect(4).x0, t.rect(c + caret_row).x0, 1);
+    try testing.expectApproxEqAbs(x0 + 7 * adv, t.rect(c + caret_row).x0, 1);
+    // An edit makes the view stale: the field falls back to Mono until the host lays it out.
+    var z = "z".*;
+    const ev = [_]Input.Event{.{ .kind = .text, .at = 0, .len = 1 }};
+    in.text = &z;
+    in.events = &ev;
+    out = try both(h, &in);
+    try testing.expectEqual(null, fresh(&h.app.city));
+    t = out.runtime.tree;
+    try testing.expectApproxEqAbs(x0 + 5 * adv, t.rect(c + caret_row).x0, 1);
 }
 
 test "Page: the text field replay types, selects and submits, in both front ends" {
