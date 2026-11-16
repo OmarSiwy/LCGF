@@ -1,6 +1,12 @@
 //! Slider: a value between two ends, set by dragging along a track. Tier 2, written against
 //! the public API of tiers 0 and 1 (the recipe in base.zig).
 //!
+//! Accessibility: role slider (`sliderTrack`), value the value itself in the tree's value
+//! column; the thumb is presentational. Two things ARIA wants are not in the exported tree:
+//! the range (`aria-valuemin`, `aria-valuemax`; a11y/tree.zig `Export` has a value column
+//! only) and a name (a slider has no text of its own; the application labels it with
+//! `Semantics.labelled_by`).
+//!
 //! State: the application's `f32`, between `lo` and `hi`. The runtime front end takes a
 //! pointer to it and the ends as arguments; the comptime front end binds an `f32` field
 //! (checked while compiling) and takes the ends as a `Range`, carried in the spec node
@@ -256,6 +262,27 @@ test "slider input: drag, then arrows, Page Up, Home and End while focused, in b
         try testing.expectEqual(h.app.gain, h.ui.signals.state.gain);
         try testing.expectEqual(h.app.gain, out.runtime.tree.c.value[2]);
     }
+}
+
+var slider_semantics: base.Semantic(16) = .{};
+
+test "slider a11y: role slider, its value as the value, no states, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &gain;
+    h.init();
+    const in: Input = .{ .viewport = .{ 216, 40 } };
+    _ = try h.frame(&in);
+    const x = &slider_semantics;
+    try x.run(h);
+    const r = x.row(2).?;
+    try testing.expectEqual(@backingInt(a11y.Role.slider), x.out[0].c.role[r]);
+    try testing.expectEqual(@backingInt(Id.from("gain")), x.out[0].c.id[r]);
+    try testing.expectEqual(@as(f32, 6), x.out[0].c.value[r]);
+    try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    try testing.expectEqualStrings("", x.name(0, r));
+    // The thumb is presentational: the root and the slider.
+    try testing.expectEqual(null, x.row(3));
+    try testing.expectEqual(@as(u32, 2), x.out[0].len);
 }
 
 test {
