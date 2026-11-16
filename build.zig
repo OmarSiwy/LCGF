@@ -757,6 +757,56 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
 
-    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
+    // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
+    // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
+    const api_index = b.addSystemCommand(&.{"python3"});
+    api_index.addFileArg(b.path("docs/api/apiindex.py"));
+    api_index.addFileArg(b.path("src/lcgr.zig"));
+    api_index.has_side_effects = true;
+    const docs_step = b.step("docs", "Generate zig-out/docs/API.md and test the guides' examples");
+    docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
+    // The guides (docs/guide/*.md): their examples run as tests, and every zig block they show
+    // must be a piece of those examples (docs/guide/snippets.py).
+    const guide_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("docs/guide/guides.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
+    const snippets = b.addSystemCommand(&.{"python3"});
+    snippets.addFileArg(b.path("docs/guide/snippets.py"));
+    snippets.addDirectoryArg(b.path("docs/guide"));
+    snippets.has_side_effects = true;
+    docs_step.dependOn(&snippets.step);
+    // The compile-error catalogue (docs/guide/errors.md): each case in docs/guide/errors/ must
+    // fail with the message on its `//! expect: ` first line, as in ct-compile-fail above.
+    {
+        const io = b.graph.io;
+        const sub = "docs/guide/errors";
+        var dir = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer dir.close(io);
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = dir.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            b.dependOnFileContents(b.path(b.pathJoin(&.{ sub, entry.name })));
+            const text = dir.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch @panic("cannot read a compile-error case");
+            const tag = "//! expect: ";
+            if (!std.mem.startsWith(u8, text, tag)) std.debug.panic("{s}/{s}: first line is not '{s}<message>'", .{ sub, entry.name, tag });
+            const case = b.addObject(.{ .name = b.dupe(entry.name[0 .. entry.name.len - 4]), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
+            docs_step.dependOn(&case.step);
+        }
+    }
+
+    // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
+    // cannot parse.
+    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
