@@ -216,6 +216,21 @@ pub fn build(b: *std.Build) void {
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
+    // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
+    // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
+    const fallback_system = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/fallback/system.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = target.result.os.tag != .windows,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const fallback_run = b.addRunArtifact(fallback_system);
+    // Its result depends on the installed fonts, which the cache cannot see.
+    fallback_run.has_side_effects = true;
+    b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&fallback_run.step);
+    b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
+
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
     const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
         .root_source_file = b.path("src/draw/paths_golden.zig"),
@@ -244,6 +259,23 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    // The wgpu side of the Vulkan back end's probe (src/render/vk/probe_wgpu.zig), over the
+    // wgpu back end's native.zig as a module.
+    const vk_probe_wgpu = b.addExecutable(.{ .name = "vk-probe-wgpu", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/probe_wgpu.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const wgpu_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/native.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    vk_probe_wgpu.root_module.addImport("wgpu_native", wgpu_native_mod);
     // The wgpu-native major to build against: one archive per major and host target in
     // build.zig.zon, fetched only when picked, so plain builds download none. The binding
     // compiles against the picked release's own translated header.
@@ -256,16 +288,19 @@ pub fn build(b: *std.Build) void {
     } else false;
     const wgpu_step = b.step("wgpu", "Test the wgpu-native back end on a real adapter, -Dwgpu-native=v29 (ci/run.sh wgpu)");
     const wgpu_play_step = b.step("wgpu-play", "Build zig-out/bin/wgpu-play (draws the render conformance scenes with wgpu-native)");
+    const vk_probe_wgpu_step = b.step("vk-probe-wgpu", "Build zig-out/bin/vk-probe-wgpu (the wgpu side of the Vulkan back end's probe), -Dwgpu-native=v29");
     if (!wgpu_supported) {
         const fail = b.addFail(if (wgpu_version == null) "the wgpu steps need -Dwgpu-native=v27 or v29" else "wgpu-native has no archive for this target in build.zig.zon");
         wgpu_step.dependOn(&fail.step);
         wgpu_play_step.dependOn(&fail.step);
+        vk_probe_wgpu_step.dependOn(&fail.step);
     }
     if (if (wgpu_supported) b.lazyDependency(b.fmt("wgpu_native_{s}_{s}", .{ @tagName(wgpu_version.?), wgpu_host }), .{}) else null) |wgpu_native| {
         const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
         wgpu_h.addIncludePath(wgpu_native.path("include"));
         const wgpu_c = wgpu_h.createModule();
-        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module }) |m| {
+        wgpu_native_mod.addImport("wgpu_c", wgpu_c);
+        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module, vk_probe_wgpu.root_module }) |m| {
             m.addImport("wgpu_c", wgpu_c);
             m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
             switch (target.result.os.tag) {
@@ -277,6 +312,51 @@ pub fn build(b: *std.Build) void {
         }
         wgpu_step.dependOn(&b.addRunArtifact(wgpu_tests).step);
         wgpu_play_step.dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
+        vk_probe_wgpu_step.dependOn(&b.addInstallArtifact(vk_probe_wgpu, .{}).step);
+    }
+
+    // The Vulkan back end (src/render/vk/vk.zig): a module of its own over lcgr. Khronos
+    // Vulkan-Headers (build.zig.zon, lazy) translated with VK_NO_PROTOTYPES; the loader is the
+    // platform's libvulkan, opened at run time, so nothing Vulkan is linked.
+    const vk_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/vk.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // Draws the render conformance scenes as PNGs (src/render/vk/play.zig).
+    const vk_play = b.addExecutable(.{ .name = "vk-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // Memory and frame-time probe against the wgpu back end (src/render/vk/probe.zig).
+    const vk_probe = b.addExecutable(.{ .name = "vk-probe", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
+    const vk_play_step = b.step("vk-play", "Build zig-out/bin/vk-play (draws the render conformance scenes with Vulkan) and vk-probe");
+    if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+        const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
+        vk_h.addIncludePath(vulkan_headers.path("include"));
+        vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+        const vk_c = vk_h.createModule();
+        for ([_]*std.Build.Module{ vk_tests.root_module, vk_play.root_module, vk_probe.root_module }) |m| {
+            m.addImport("vk_c", vk_c);
+            // The committed SPIR-V of the shipped shaders (src/render/shaders/gen/, from naga).
+            m.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+            m.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        }
+        vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
+        vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
+        vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });

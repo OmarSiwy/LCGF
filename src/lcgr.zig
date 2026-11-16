@@ -78,9 +78,12 @@ pub const widgets_spinner = @import("widgets/spinner.zig");
 pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
 pub const widgets_card = @import("widgets/card.zig");
 pub const widgets_separator = @import("widgets/separator.zig");
+pub const theme = @import("theme/theme.zig");
 pub const widgets_check = @import("widgets/check.zig");
 pub const widgets_spacer = @import("widgets/spacer.zig");
 pub const widgets_accordion = @import("widgets/accordion.zig");
+pub const widgets_popover = @import("widgets/popover.zig");
+pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
@@ -95,9 +98,15 @@ pub const text_moves = @import("text/edit/moves.zig");
 pub const text_edit = @import("text/edit/edit.zig");
 pub const text_history = @import("text/edit/history.zig");
 pub const text_edit_tests = @import("text/edit/tests.zig");
+pub const fallback = @import("text/fallback/fallback.zig");
+pub const fallback_tests = @import("text/fallback/tests.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
+pub const shell_headless = @import("shell/headless.zig");
 
 test {
     std.testing.refAllDecls(@This());
 }
+pub const i18n_catalogue = @import("i18n/catalogue.zig");
+pub const i18n_plural = @import("i18n/plural.zig");
+pub const i18n_number = @import("i18n/number.zig");
