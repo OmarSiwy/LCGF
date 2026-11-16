@@ -58,6 +58,9 @@ pub const ct = struct {
 const testing = std.testing;
 const context = @import("../runtime/context.zig");
 const Input = @import("../core/input.zig").Input;
+const Tree = @import("../core/tree.zig").Tree;
+const hit = @import("../interact/hit.zig");
+const focus = @import("../interact/focus.zig");
 
 /// A card holding a button and a group box holding a checkbox, in both front ends.
 fn Page(comptime th: Theme) type {
@@ -84,7 +87,8 @@ fn Page(comptime th: Theme) type {
             base.ct.button(th, .go, .go_text),
             ct.card(th, .group_box, .options, .{base.ct.checkbox(th, .wire, .wire, .wire_text)}),
         });
-        pub const Run = base.Harness(App, base.ComptimeUi(State, spec, th), .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
+        pub const Ui = base.ComptimeUi(State, spec, th);
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
 
@@ -141,6 +145,54 @@ test "card: other theme tokens restyle both front ends alike" {
     const out = try S.h.frame(&in);
     const t = out.runtime.tree;
     try testing.expectEqual(t.rect(1).x0 + 12, t.rect(2).x0);
+}
+
+/// Checks that rows `inert` take no input in laid-out tree `t`: they sense nothing, a hit test
+/// at each one's centre finds something else (or nothing), and walking the tab order from
+/// nothing (`focus.seek`, what Tab does) never stops on one.
+fn expectInert(t: *const Tree, inert: []const u32) !void {
+    const any: u8 = @bitCast(types.Sense.any);
+    const focusable: u8 = @bitCast(types.Sense{ .focus = true });
+    for (inert) |r| {
+        try testing.expectEqual(@as(u8, 0), t.c.sense[r] & any);
+        const b = t.rect(r);
+        const at = hit.at(t, (b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5, .any);
+        try testing.expect(at != r);
+    }
+    var cur: u32 = types.none;
+    for (0..t.len) |_| {
+        cur = focus.seek(t, t.c.sense, focusable, 0, t.len, cur, false);
+        if (cur == types.none) break;
+        try testing.expect(std.mem.indexOfScalar(u32, inert, cur) == null);
+    }
+}
+
+test "card: takes no input; hit testing and the tab order pass through it to its children" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var out = try h.frame(&in);
+    // Click in the card's padding, then on its title: nothing is pressed, nothing focused.
+    const t0 = out.runtime.tree;
+    in.pointer = .{ t0.rect(1).x0 + 2, t0.rect(1).y0 + 2 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    // Held over the card: neither front end has anything held.
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    try testing.expectEqual(@as(?Default.Ui.Events.Widget, null), h.ui.pointer.pressed);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    const t = out.runtime.tree;
+    try expectInert(t, &.{ 1, 2, 5, 6 });
+    // The widgets inside still take input and focus: the button and the checkbox.
+    try testing.expectEqual(t.find(.from("go")), hit.at(t, (t.rect(3).x0 + t.rect(3).x1) * 0.5, (t.rect(3).y0 + t.rect(3).y1) * 0.5, .any));
+    const focusable: u8 = @bitCast(types.Sense{ .focus = true });
+    const first = focus.seek(t, t.c.sense, focusable, 0, t.len, types.none, false);
+    try testing.expectEqual(t.find(.from("go")), first);
+    try testing.expectEqual(t.find(.from("wire")), focus.seek(t, t.c.sense, focusable, 0, t.len, first, false));
+    // In the comptime front end the containers are not widgets at all.
+    try testing.expectEqual(2, Default.Ui.Events.widget_count);
 }
 
 test {
