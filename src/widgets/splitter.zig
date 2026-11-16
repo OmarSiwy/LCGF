@@ -36,7 +36,10 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32) void {
 pub fn handle(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: f32) void {
     f.close();
     _ = f.open(.none, secondStyle(th, axis, split));
-    _ = f.leaf(id.with(1), handleStyle(th, axis));
+    const hd = f.leaf(id.with(1), handleStyle(th, axis));
+    const r = f.interact(hd, .any);
+    f.setFill(hd, handleFill(th, r));
+    f.setCursor(cursors[@backingInt(axis)], r.hovered or r.held);
     _ = f.open(.none, bodyStyle(th));
 }
 
@@ -60,12 +63,21 @@ pub fn firstStyle(th: *const Theme, axis: Axis, split: f32) Style {
     return .{ .dir = .y, .size = sizes[@backingInt(axis)], .clip = true };
 }
 
-/// The handle: `handle_px` along `axis`, the full container across.
+/// The handle: `handle_px` along `axis`, the full container across, with rounded ends.
 pub fn handleStyle(th: *const Theme, axis: Axis) Style {
-    _ = th;
     const sizes = [2][2]types.Size{ .{ .px(handle_px), .fill }, .{ .fill, .px(handle_px) } };
-    return .{ .size = sizes[@backingInt(axis)] };
+    return .{ .size = sizes[@backingInt(axis)], .radius = @min(th.radius, handle_px / 2) };
 }
+
+/// The handle's fill by interaction state (`base.stateIndex`): control at rest, control-hot
+/// under the pointer, accent while dragged.
+pub fn handleFill(th: *const Theme, r: types.Response) types.Color {
+    const fills: base.StateColors = .{ th.control, th.control_hot, th.accent, th.accent };
+    return fills[base.stateIndex(r)];
+}
+
+/// The pointer over the handle shows which way it moves, by axis.
+pub const cursors = [2]@import("../runtime/context.zig").Cursor{ .resize_h, .resize_v };
 
 /// The second pane: the rest of the container, `1 - split`, holding the handle at its start
 /// and then the body. Both panes are percentages of the container, so they always add up to
@@ -111,7 +123,9 @@ pub const ct = struct {
                 inline for (n.children[0].children) |c| ui.push(c, a, next, in);
                 t.seal(a);
                 const rest = t.push(box, .none, &secondStyle(&th, axis, value));
-                _ = t.push(rest, .hash(id), &n.children[1].children[0].style);
+                var hs = n.children[1].children[0].style;
+                hs.fill = handleFill(&th, ui.response(next.* + 1, in));
+                _ = t.push(rest, .hash(id), &hs);
                 const b = t.push(rest, .none, &n.children[1].children[1].style);
                 next.* += 3;
                 inline for (n.children[1].children[1].children) |c| ui.push(c, b, next, in);
@@ -184,6 +198,36 @@ test "splitter: both front ends split the container at the bound fraction around
     try testing.expectEqual(t.rect(rows.handle).x1, t.rect(rows.body).x0);
     try testing.expectEqual(box.x1, t.rect(rows.second).x1);
     try testing.expectEqual(box.h(), t.rect(rows.handle).h());
+}
+
+test "splitter: handle filled by state, resize cursor; any theme alike" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const th = Theme.default;
+    try testing.expectEqual(th.control.bitsOf(), out.runtime.tree.c.look[rows.handle].fill);
+    const r = out.runtime.tree.rect(rows.handle);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    out = try h.frame(&in);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[rows.handle].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[rows.handle].fill);
+    try testing.expectEqual(@import("../runtime/context.zig").Cursor.resize_h, out.runtime.platform.cursor);
+    in.buttons.left = true;
+    out = try h.frame(&in);
+    try testing.expectEqual(th.accent.bitsOf(), out.runtime.tree.c.look[rows.handle].fill);
+    try testing.expectEqual(th.accent.bitsOf(), out.comptime_.tree.c.look[rows.handle].fill);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+
+    const Light = Page(.{ .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .accent = .rgb(0, 120, 60), .text = .rgb(20, 20, 20), .radius = 0 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(200, 200, 205).bitsOf(), lo.runtime.tree.c.look[rows.handle].fill);
+    try testing.expectEqual(handle_px / 2, handleStyle(&th, .x).radius);
 }
 
 test {
