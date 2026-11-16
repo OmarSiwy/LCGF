@@ -49,16 +49,20 @@ pub const clear_text = "Clear";
 
 // ---- look -----------------------------------------------------------------------------------
 
-/// The box around the field and the button: as wide as it is given (at least 80). Not yet
-/// painted.
+/// The box around the field and the button: as wide as it is given (at least 80), inset, its
+/// border the accent while the field is focused.
 pub fn boxStyle(th: *const Theme, focused: bool) Style {
-    _ = focused;
+    const border = base.OnOff{ th.control_hot, th.accent };
     return .{
         .dir = .x,
         .size = .{ .fill, .fit },
         .min = .{ 80, 0 },
         .pad = .{ 0, 0, th.pad / 2, 0 },
         .cross = .center,
+        .radius = th.radius,
+        .fill = th.control_held,
+        .border = 1,
+        .border_color = border[@intFromBool(focused)],
     };
 }
 
@@ -73,16 +77,17 @@ pub fn inputStyle(th: *const Theme, scroll: f32) Style {
     return s;
 }
 
-/// The clear button (it keeps its place, so the field does not move).
+/// The clear button: a small button face by interaction state while there is text (`shown`),
+/// clear otherwise (it keeps its place, so the field does not move).
 pub fn clearStyle(th: *const Theme, r: Response, shown: bool) Style {
-    _ = .{ r, shown };
-    return .{ .pad = .{ th.pad / 2, 2, th.pad / 2, 2 } };
+    const faces = [2]Color{ .transparent, th.controlFills()[base.stateIndex(r)] };
+    return .{ .pad = .{ th.pad / 2, 2, th.pad / 2, 2 }, .radius = th.radius, .fill = faces[@intFromBool(shown)] };
 }
 
-/// The clear button's caption.
+/// The clear button's caption, in the text colour while shown.
 pub fn clearText(th: *const Theme, shown: bool) TextStyle {
-    _ = shown;
-    return .{ .px = th.text_px, .color = th.text };
+    const colors = base.OnOff{ .transparent, th.text };
+    return .{ .px = th.text_px, .color = colors[@intFromBool(shown)] };
 }
 
 // ---- runtime front end ----------------------------------------------------------------------
@@ -243,7 +248,7 @@ fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
     return out;
 }
 
-test "search: the page agrees in both front ends, with and without text" {
+test "search: the page agrees in both front ends; the clear button only shows with text" {
     const h = &page;
     h.init();
     var in: Input = .{ .viewport = .{ 320, 100 } };
@@ -255,12 +260,43 @@ test "search: the page agrees in both front ends, with and without text" {
     // The field inside the box.
     try testing.expectEqual(f - 1, t.c.parent[f]);
     const b = t.find(clearId(.from("find")));
+    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[b].fill);
     // With text, the button shows.
     h.app.find.set("zig");
     h.ui.signals.state.find.set("zig");
     out = try both(h, &in);
     t = out.runtime.tree;
-    try testing.expectEqual(Theme.default.text.bitsOf(), out.runtime.texts.c.color[t.c.text[b + 1]]);
+    try testing.expectEqual(Theme.default.control.bitsOf(), t.c.look[b].fill);
+}
+
+test "search look: one inset box around the field and the button; the button lights on hover" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    var in: Input = .{ .viewport = .{ 320, 100 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const f = t.find(.from("find"));
+    const b = t.find(clearId(.from("find")));
+    try testing.expectEqual(th.control_held.bitsOf(), t.c.look[f - 1].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[f - 1].border_color);
+    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[f].fill);
+    // The field takes the width the button leaves; the button sits at the right.
+    const box = t.rect(f - 1);
+    try testing.expectEqual(box.x0, t.rect(f).x0);
+    try testing.expectApproxEqAbs(t.rect(f).x1, t.rect(b).x0, 0.5);
+    try testing.expectApproxEqAbs(box.x1 - th.pad / 2, t.rect(b).x1, 0.5);
+    try testing.expectEqual(hintColor(&th).bitsOf(), out.runtime.texts.c.color[t.c.text[f + 2]]);
+    // With text, over the button: hot.
+    h.app.find.set("zig");
+    h.ui.signals.state.find.set("zig");
+    const r = t.rect(b);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    _ = try h.frame(&in);
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[b].fill);
+    try testing.expectEqual(th.text.bitsOf(), out.runtime.texts.c.color[t.c.text[b + 1]]);
 }
 
 test {
