@@ -51,5 +51,12 @@
    "loaded": 270918,
    "bss": 12001548
   }
+ },
+ "first-frame": {
+  "idle": {
+   "held": false,
+   "ratio": 7.101,
+   "best": "clay"
+  }
  }
 }

@@ -3,6 +3,8 @@
 
     python3 bench/gates/gates.py frame DIR      frame CPU time against the fastest comparison
     python3 bench/gates/gates.py rss DIR        resident memory against the lightest comparison
+    python3 bench/gates/gates.py first-frame DIR   time to first frame against the lightest comparison
+    python3 bench/gates/gates.py measure-first-frame JSON EXE   add EXE's time to first frame to JSON
     python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py --self-test
 
@@ -23,7 +25,10 @@ import argparse
 import glob
 import json
 import os
+import statistics
+import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDED = os.path.join(HERE, "recorded.json")
@@ -90,7 +95,32 @@ def check_rss(runs, recorded):
     return {"idle": e}, [row], failed
 
 
-CHECKS = {"frame": (check_frame, True), "rss": (check_rss, False)}  # gate: (check, timed)
+def measure_first_frame(exe, runs=11):
+    """Median milliseconds from starting `exe --idle --scene idle` to its "ready" line: process
+    start, loading, setup and the first frame, until the harness waits for input (the protocol of
+    bench/vs/measure.py)."""
+    times = []
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        p = subprocess.Popen([exe, "--idle", "--scene", "idle"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        line = p.stdout.readline()
+        times.append((time.perf_counter() - t0) * 1000)
+        p.stdin.close()
+        p.wait(timeout=10)
+        if not line.startswith("ready"):
+            sys.exit(f"gates: {exe} printed {line!r}, not a ready line")
+    return statistics.median(times)
+
+
+def check_first_frame(runs, recorded):
+    """Time to first frame (measure_first_frame), LCGR against the lightest other framework."""
+    values = {n: r["first_frame_ms"] for n, r in runs.items()}
+    e, status, failed = versus(values, recorded.get("idle"), TOLERANCE)
+    row = f"idle     lcgr {values['lcgr']:9.2f} ms  best {e['best']:<8} {values[e['best']]:9.2f} ms  x{e['ratio']:<6} {status}"
+    return {"idle": e}, [row], failed
+
+
+CHECKS = {"frame": (check_frame, True), "rss": (check_rss, False), "first-frame": (check_first_frame, True)}  # gate: (check, timed)
 
 
 def check_size(text, budgets):
@@ -212,6 +242,12 @@ def self_test():
     assert check_size(out, {"dump": {"loaded": 148, "bss": 7}})[2] is False  # 1.4% over
     assert check_size(out, {"dump": {"loaded": 150, "bss": 7}, "gone": {}})[2] is True
     assert check_size(out, {})[2] is True
+    for r, ms in zip(runs.values(), (1.0, 2.0)):
+        r["first_frame_ms"] = ms
+    entries, _, failed = check_first_frame(runs, {})
+    assert entries["idle"] == {"held": True, "ratio": 0.5, "best": "a"}
+    runs["lcgr"]["first_frame_ms"] = 3.0
+    assert check_first_frame(runs, entries)[2] is True
     print("gates self-test ok")
 
 
@@ -220,10 +256,21 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=sorted(CHECKS) + ["size"])
+    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "measure-first-frame"])
     ap.add_argument("path", help="DIR of results, or for size the output of zig build size")
+    ap.add_argument("exe", nargs="?", help="for measure-first-frame: the harness")
     ap.add_argument("--record", action="store_true")
     a = ap.parse_args()
+    if a.gate == "measure-first-frame":
+        with open(a.path) as f:
+            r = json.load(f)
+        r["first_frame_ms"] = measure_first_frame(a.exe)
+        with open("/proc/loadavg") as f:  # the timing gates' load check covers this run too
+            r["load_after"] = max(r["load_after"], float(f.read().split()[0]))
+        with open(a.path, "w") as f:
+            json.dump(r, f, indent=1)
+        print(f"{r['name']}: first frame {r['first_frame_ms']:.2f} ms")
+        return 0
     if a.gate == "size":
         return run_size(a.path, a.record)
     return run_compare(a.gate, a.path, a.record)
