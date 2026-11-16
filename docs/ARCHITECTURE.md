@@ -14,7 +14,7 @@ read and write the core's data, and the core never imports them.
 | 0 | Plain data and free functions over columns. | `std.simd`, `std.math`, `std.mem`, and std parts that neither allocate nor touch the OS (`std.hash`, `std.fmt.comptimePrint`, `std.meta`). No allocator, no `std.Io`, no OS, no GPU. | `src/core/`, `src/layout/`, `src/interact/`, `src/draw/`, `src/text/`, `src/anim/`, `src/a11y/` (tree only) |
 | 1 | Front ends. Each owns the columns and sequences the tier-0 passes. Runtime: `Context` / `Frame`. Comptime: `Ui(State, spec)`. | Tier 0 | `src/runtime/`, `src/comptime/` |
 | 2 | Conveniences written only against the public API of tiers 0 and 1. | Tiers 0 and 1, public API only | `src/widgets/`, `src/theme/` |
-| outside | Renderers consume a `DrawList`. Shells produce `Input` and present frames. | Any tier, plus their platform or GPU API | `src/render/*/`, `src/shell/*/` |
+| outside | Renderers consume a `DrawList`. Shells produce `Input` and present frames. Assets decode files (images) and may run work on the host's `std.Io`. | Any tier, plus their platform, GPU or `std.Io` API | `src/render/*/`, `src/shell/*/`, `src/assets/` |
 
 Two consequences:
 
