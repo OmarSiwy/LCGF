@@ -233,6 +233,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Read-only and RAM bytes of each example comptime UI (ci/jobs/ct-sizes.sh).
+    const ct_sizes = b.addRunArtifact(b.addExecutable(.{ .name = "ct-sizes", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/sizes.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) }));
+    b.step("ct-sizes", "Print read-only and RAM bytes of each example comptime UI").dependOn(&ct_sizes.step);
     // Compile-fail cases for the comptime front end's rules (src/comptime/compile_fail/): each
     // file is built as an object and must fail with the message on its `//! expect: ` first line.
     const compile_fail = b.step("ct-compile-fail", "Check each comptime rule rejects its compile-fail case");
