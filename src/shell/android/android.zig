@@ -103,9 +103,29 @@ extern "android" fn ANativeWindow_getHeight(w: *ANativeWindow) i32;
 extern "android" fn ANativeWindow_acquire(w: *ANativeWindow) void;
 extern "android" fn ANativeWindow_release(w: *ANativeWindow) void;
 extern "android" fn ANativeActivity_finish(a: Act) void;
+extern "android" fn AInputEvent_getType(e: *const AInputEvent) i32;
+extern "android" fn AMotionEvent_getAction(e: *const AInputEvent) i32;
+extern "android" fn AMotionEvent_getButtonState(e: *const AInputEvent) i32;
+extern "android" fn AMotionEvent_getPointerCount(e: *const AInputEvent) usize;
+extern "android" fn AMotionEvent_getPointerId(e: *const AInputEvent, i: usize) i32;
+extern "android" fn AMotionEvent_getToolType(e: *const AInputEvent, i: usize) i32;
+extern "android" fn AMotionEvent_getX(e: *const AInputEvent, i: usize) f32;
+extern "android" fn AMotionEvent_getY(e: *const AInputEvent, i: usize) f32;
+extern "android" fn AMotionEvent_getPressure(e: *const AInputEvent, i: usize) f32;
+extern "android" fn AMotionEvent_getAxisValue(e: *const AInputEvent, axis: i32, i: usize) f32;
+extern "android" fn AKeyEvent_getAction(e: *const AInputEvent) i32;
+extern "android" fn AKeyEvent_getKeyCode(e: *const AInputEvent) i32;
+extern "android" fn AKeyEvent_getMetaState(e: *const AInputEvent) i32;
+extern "android" fn AKeyEvent_getRepeatCount(e: *const AInputEvent) i32;
 extern "log" fn __android_log_write(prio: c_int, tag: [*:0]const u8, text: [*:0]const u8) c_int;
 
 const looper_poll_timeout = -3;
+const input_event_type_key = 1;
+const input_event_type_motion = 2;
+const axis_orientation = 8;
+const axis_vscroll = 9;
+const axis_hscroll = 10;
+const axis_tilt = 25;
 /// The looper ident the input queue reports with.
 const ident_input = 1;
 const log_error = 6;
@@ -322,6 +342,9 @@ const Target = struct {
     frames: vk.frame.Frames,
 };
 
+/// Most pointers read from one motion event.
+const translate_max = 16;
+
 // ---- The shell -----------------------------------------------------------------------------------
 
 pub const Android = struct {
@@ -458,9 +481,36 @@ pub const Android = struct {
         }
     }
 
-    /// Reads one input event; true when it was used.
-    fn handle(_: *Android, _: *AInputEvent) bool {
-        return false;
+    /// Reads one input event into the translator; true when it was used.
+    fn handle(s: *Android, e: *AInputEvent) bool {
+        switch (AInputEvent_getType(e)) {
+            input_event_type_motion => {
+                var ptrs: [translate_max]translate.Pointer = undefined;
+                const n = @min(AMotionEvent_getPointerCount(e), ptrs.len);
+                for (ptrs[0..n], 0..) |*p, i| p.* = .{
+                    .id = @bitCast(AMotionEvent_getPointerId(e, i)),
+                    .tool = @fromBackingInt(@intCast(@as(u8, @truncate(@as(u32, @bitCast(AMotionEvent_getToolType(e, i))))))),
+                    .pos = .{ AMotionEvent_getX(e, i), AMotionEvent_getY(e, i) },
+                    .pressure = AMotionEvent_getPressure(e, i),
+                    .tilt = AMotionEvent_getAxisValue(e, axis_tilt, i),
+                    .orientation = AMotionEvent_getAxisValue(e, axis_orientation, i),
+                };
+                s.t.motion(.{
+                    .action = @bitCast(AMotionEvent_getAction(e)),
+                    .pointers = ptrs[0..n],
+                    .buttons = @bitCast(AMotionEvent_getButtonState(e)),
+                    .scroll = .{ AMotionEvent_getAxisValue(e, axis_hscroll, 0), AMotionEvent_getAxisValue(e, axis_vscroll, 0) },
+                });
+                return true;
+            },
+            input_event_type_key => return s.t.key(
+                @fromBackingInt(@intCast(@as(u8, @truncate(@as(u32, @bitCast(AKeyEvent_getAction(e))))))),
+                @bitCast(AKeyEvent_getKeyCode(e)),
+                @bitCast(AKeyEvent_getMetaState(e)),
+                @bitCast(AKeyEvent_getRepeatCount(e)),
+            ),
+            else => return false,
+        }
     }
 
     pub fn apply(_: *Android, _: *const Platform) void {}

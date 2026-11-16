@@ -14,8 +14,9 @@ const none = @import("../../core/types.zig").none;
 /// `UITouchPhase`, by value.
 pub const Phase = enum(u8) { began, moved, stationary, ended, cancelled };
 /// `UITouchType`, by value: a finger on the screen, a finger on a remote surface, an Apple
-/// Pencil, and a trackpad or mouse click on iPad.
-pub const Kind = enum(u8) { direct, indirect, pencil, pointer };
+/// Pencil, and a trackpad or mouse click on iPad. `eraser` is a stylus's eraser end, which
+/// UIKit does not report (the Android shell does).
+pub const Kind = enum(u8) { direct, indirect, pencil, pointer, eraser };
 
 /// One UITouch as `touchesBegan:withEvent:` and the others report it.
 pub const Touch = struct {
@@ -206,7 +207,11 @@ pub const Translator = struct {
             t.n_rows += 1;
         }
         const row = if (at == none) t.n_rows - 1 else at;
-        const kind: Input.Contact.Kind = if (c.kind == .pencil) .pen else .touch;
+        const kind: Input.Contact.Kind = switch (c.kind) {
+            .pencil => .pen,
+            .eraser => .eraser,
+            else => .touch,
+        };
         t.rows[row] = .{ .id = c.id, .kind = kind, .pos = c.pos, .pressure = c.pressure, .tilt = c.tilt };
         switch (c.phase) {
             .began, .moved, .stationary => {},
@@ -239,17 +244,22 @@ pub const Translator = struct {
     /// `modifierFlags` (UIKeyModifierFlags).
     pub fn key(t: *Translator, code: u32, down: bool, flags: u64) void {
         if (code == 0 or code > 0xff) return;
-        t.in.mods = .{
+        t.keyEvent(@intCast(code), if (down) .press else .release, .{
             .shift = flags & mod_shift != 0,
             .ctrl = flags & mod_control != 0,
             .alt = flags & mod_alternate != 0,
             .cmd = flags & mod_command != 0,
-        };
-        const c: u8 = @intCast(code);
-        const k = &t.in.keys.bits[c >> 6];
-        const bit = @as(u64, 1) << @as(u6, @truncate(c));
-        k.* = if (down) k.* | bit else k.* & ~bit;
-        t.push(.{ .kind = if (down) .press else .release, .mods = t.in.mods, .code = c }, t.n_text);
+        });
+    }
+
+    /// A key event in the core's terms: HID usage `code` pressed, repeated or released with
+    /// `mods` held. Held keys and modifiers follow it.
+    pub fn keyEvent(t: *Translator, code: u8, kind: Input.Event.Kind, mods: Input.Mods) void {
+        t.in.mods = mods;
+        const k = &t.in.keys.bits[code >> 6];
+        const bit = @as(u64, 1) << @as(u6, @truncate(code));
+        k.* = if (kind == .release) k.* & ~bit else k.* | bit;
+        t.push(.{ .kind = kind, .mods = mods, .code = code }, t.n_text);
     }
 
     /// Text the keyboard typed or the IME committed (`insertText:`): one `.text` event. It
@@ -364,6 +374,8 @@ pub const Translator = struct {
         ev.composition = .{ .text = t.out_preedit[0..c.len], .range = c.range };
         t.n_text = 0;
         t.n_events = 0;
+        t.in.wheel = .{ 0, 0 };
+        t.in.scroll = .{ 0, 0 };
         // What this frame reported is settled: lifted rows go, the deferred release follows.
         var row: u32 = n;
         while (row > 0) {
