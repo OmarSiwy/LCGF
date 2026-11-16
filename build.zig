@@ -338,6 +338,9 @@ pub fn build(b: *std.Build) void {
             // The committed SPIR-V of the shipped shaders (src/render/shaders/gen/, from naga).
             m.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
             m.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+            // The render conformance goldens, for the in-test comparison (src/render/vk/scenes.zig).
+            for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
+                m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
         }
         vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
