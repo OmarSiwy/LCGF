@@ -108,22 +108,35 @@ fn named(comptime n: Spec, comptime want: []const u8) bool {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The button: a theme button, filled by its response.
+/// The button: a theme button filled by its response, at least 120 wide, its text at the
+/// start.
 pub fn buttonStyle(th: *const Theme, r: Response) Style {
     var s = base.buttonStyle(th);
     s.fill = base.buttonFill(th, r);
+    s.min = .{ 120, 0 };
+    s.main = .start;
     return s;
 }
 
-/// The list, below the button's rect `at` (last frame's).
+/// The list: menu.zig's list below the button's rect `at` (last frame's), at least as wide as
+/// the button.
 pub fn listStyle(th: *const Theme, at: Rect) Style {
-    return menu.listStyle(th, at);
+    var s = menu.listStyle(th, at);
+    s.min = .{ at.w(), 0 };
+    return s;
 }
 
-/// An option row.
+/// An option row: menu.zig's item, filled from `optionFills` by highlight and choice.
 pub fn optionStyle(th: *const Theme, active: bool, selected: bool) Style {
-    _ = selected;
-    return menu.itemStyle(th, active);
+    var s = menu.itemStyle(th, active);
+    s.fill = optionFills(th)[(@as(u2, @intFromBool(active)) << 1) | @intFromBool(selected)];
+    return s;
+}
+
+/// An option's fill, indexed by `active << 1 | selected`: none, the control colour for the
+/// chosen one, the hot control colour for the highlighted one, chosen or not.
+pub fn optionFills(th: *const Theme) base.StateColors {
+    return .{ .transparent, th.control, th.control_hot, th.control_hot };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -225,6 +238,33 @@ test "Select: the page agrees in both front ends, closed and open" {
     try testing.expectEqual(@as(u32, 6 + 2 + 6), t.len);
     const at = t.rect(t.find(.from("shape")));
     try testing.expectEqual(at.x0, t.rect(t.find(.from("shape_panel"))).x0);
+}
+
+test "buttonStyle, listStyle, optionStyle: the theme's tokens" {
+    const th: Theme = .default;
+    try testing.expectEqual(th.control_hot, buttonStyle(&th, .{ .hovered = true }).fill);
+    try testing.expectEqual([2]f32{ 120, 0 }, buttonStyle(&th, .{}).min);
+    const l = listStyle(&th, .{ .x0 = 10, .y0 = 0, .x1 = 150, .y1 = 30 });
+    try testing.expectEqual([2]f32{ 140, 0 }, l.min);
+    try testing.expectEqual(th.panel, l.fill);
+    try testing.expectEqual(types.Color.transparent, optionStyle(&th, false, false).fill);
+    try testing.expectEqual(th.control, optionStyle(&th, false, true).fill);
+    try testing.expectEqual(th.control_hot, optionStyle(&th, true, false).fill);
+    try testing.expectEqual(th.control_hot, optionStyle(&th, true, true).fill);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Select: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const t = try setState(&S.h, .{ .selected = 2, .menu = .{ .open = true } });
+    try testing.expectEqual(light.control.bitsOf(), t.c.look[t.find(.from("shape_triangle"))].fill);
+    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("shape_circle"))].fill);
+    // The list is at least as wide as the button.
+    try testing.expect(t.rect(t.find(.from("shape_panel"))).w() >= t.rect(t.find(.from("shape"))).w());
 }
 
 test "checkSelect: the state field, the button's text and the options" {
