@@ -315,6 +315,7 @@ pub const op = struct {
     pub const delete_property = 19;
     pub const get_property = 20;
     pub const set_selection_owner = 22;
+    pub const get_selection_owner = 23;
     pub const convert_selection = 24;
     pub const send_event = 25;
     pub const set_input_focus = 42;
@@ -408,6 +409,13 @@ pub fn changePropertySize(data_len: usize) usize {
 pub fn changeProperty(b: *Buf, window: u32, property: u32, kind: u32, format: u8, data: []const u8) void {
     changePropertyHead(b, window, property, kind, format, data.len);
     b.str(data);
+}
+
+/// `changeProperty` in Append mode: `data` goes after what the property holds.
+pub fn appendProperty(b: *Buf, window: u32, property: u32, kind: u32, format: u8, data: []const u8) void {
+    const start = b.len;
+    changeProperty(b, window, property, kind, format, data);
+    b.bytes[start + 1] = 2;
 }
 
 pub const change_property_head = 24;
@@ -553,6 +561,25 @@ pub const xfixes_get_cursor_image_size = 4;
 /// hot spot at 16 and 18, serial at 20, ARGB pixels from 32.
 pub fn xfixesGetCursorImage(b: *Buf, xfixes: u8) void {
     b.head(xfixes, 4, 1);
+}
+
+pub const get_selection_owner_size = 8;
+
+/// The owner window of `selection` is at byte 8 of the reply (0: none).
+pub fn getSelectionOwner(b: *Buf, selection: u32) void {
+    b.head(op.get_selection_owner, 0, get_selection_owner_size / 4);
+    b.int(u32, selection);
+}
+
+/// A ClientMessage event of `format` 8 (20 bytes of `data`, zero-padded) or 32 (five u32).
+pub fn clientMessage(window: u32, kind: u32, format: u8, data: []const u8) [32]u8 {
+    var e: [32]u8 = @splat(0);
+    e[0] = client_message;
+    e[1] = format;
+    std.mem.writeInt(u32, e[4..8], window, .little);
+    std.mem.writeInt(u32, e[8..12], kind, .little);
+    @memcpy(e[12..][0..data.len], data);
+    return e;
 }
 
 pub const send_event_size = 44;
@@ -838,6 +865,8 @@ test "requests: lengths match the bytes written" {
         .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
         .{ set_input_focus_size, setInputFocus, .{1} },
         .{ set_selection_owner_size, setSelectionOwner, .{ 1, 2 } },
+        .{ get_selection_owner_size, getSelectionOwner, .{1} },
+        .{ changePropertySize(3), appendProperty, .{ 1, 2, 3, 8, "abc" } },
         .{ convert_selection_size, convertSelection, .{ 1, 2, 3, 4 } },
         .{ change_event_mask_size, changeEventMask, .{ 1, 2 } },
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },

@@ -16,6 +16,7 @@ const linux = std.os.linux;
 const lcgr = @import("lcgr");
 const wire = lcgr.shell_x11_wire;
 const keys = lcgr.shell_x11_keys;
+const xim = lcgr.shell_x11_xim;
 const Input = lcgr.input.Input;
 const iface = lcgr.shell_iface;
 const Events = iface.Events;
@@ -39,6 +40,8 @@ pub const Error = error{
     /// A reply larger than the read buffer.
     MessageTooLarge,
     NoExtension,
+    /// `openIme`: no input method server of that name.
+    NoInputMethod,
     TooManyWindows,
 } || wire.Setup.Error;
 
@@ -54,6 +57,10 @@ pub const Atoms = struct {
     TEXT: u32 = 0,
     /// Where a paste is delivered, on the requesting window.
     LCGR_PASTE: u32 = 0,
+    /// The XIM transport's ClientMessage types.
+    _XIM_XCONNECT: u32 = 0,
+    _XIM_PROTOCOL: u32 = 0,
+    _XIM_MOREDATA: u32 = 0,
 };
 
 /// Predefined atoms.
@@ -99,6 +106,10 @@ pub const Connection = struct {
     clip: [64 * 1024]u8 = undefined,
     clip_len: usize = 0,
     clip_owner: u32 = 0,
+    /// The input method connection (`openIme`).
+    ime: Ime = .{},
+    /// A key event the input method gave back is being handled: it is not forwarded again.
+    replaying: bool = false,
     /// Set when the socket failed or closed; every window's `poll` is false after it.
     err: ?Error = null,
 
@@ -282,6 +293,7 @@ pub const Connection = struct {
             if (linux.errno(r) != .SUCCESS or r == 0) break;
             try c.readSome();
         }
+        try c.readImeProperties();
         if (c.scale_stale) {
             c.scale_stale = false;
             try c.readScale();
@@ -310,6 +322,7 @@ pub const Connection = struct {
         }
         if (kind == wire.mapping_notify and m[4] != 0) c.keymap_stale = true; // keyboard or modifiers
         if (kind == wire.selection_request) c.answer(m) catch {};
+        if (kind == wire.client_message and c.ime.window != 0 and wire.get(u32, m, 4) == c.ime.window) return c.imeEvent(m);
         if (kind == wire.selection_clear and wire.get(u32, m, 12) == c.atoms.CLIPBOARD) c.clip_owner = 0;
         if (kind == wire.property_notify and wire.get(u32, m, 4) == c.setup.root and wire.get(u32, m, 8) == c.atoms.RESOURCE_MANAGER) c.scale_stale = true;
         if (c.randr_event != 0 and kind == c.randr_event) {
@@ -323,6 +336,160 @@ pub const Connection = struct {
             const w = slot orelse continue;
             if (w.id == target) w.handle(m);
         }
+    }
+
+    /// Connects to the XIM input method server `name` (what follows `@im=` in XMODIFIERS, such
+    /// as "ibus" or "fcitx") for `locale` (such as "en_US"). Asynchronous: the handshake runs in
+    /// later `poll`s, and windows use the IME once it is ready (`ime.state == .ready`) and a
+    /// frame asks for text input. Over-the-spot: the server draws the composition next to the
+    /// frame's `ime_rect` and sends committed text, which arrives as typed text. Keys the server
+    /// does not use come back and are reported as usual.
+    pub fn openIme(c: *Connection, name: []const u8, locale: []const u8) Error!void {
+        var buf: [96]u8 = undefined;
+        const server = std.fmt.bufPrint(&buf, "@server={s}", .{name}) catch return error.NoInputMethod;
+        const atom = wire.get(u32, try c.reply(c.send(wire.internAtomSize(server), wire.internAtom, .{server})), 8);
+        const owner = wire.get(u32, try c.reply(c.send(wire.get_selection_owner_size, wire.getSelectionOwner, .{atom})), 8);
+        if (owner == 0) return error.NoInputMethod;
+        c.ime = .{ .window = c.id() };
+        try c.ime.init(c, locale);
+        _ = c.send(wire.create_window_size, wire.createWindow, .{ c.ime.window, c.setup.root, 1, 1, 0 });
+        const l = [5]u32{ c.ime.window, 0, 0, 0, 0 };
+        const msg = wire.clientMessage(owner, c.atoms._XIM_XCONNECT, 32, std.mem.asBytes(&l));
+        _ = c.send(wire.send_event_size, wire.sendEvent, .{ owner, 0, &msg });
+        c.ime.state = .xconnect;
+        try c.flush();
+    }
+
+    /// Reads the XIM messages that came as properties (their ClientMessage only names them).
+    fn readImeProperties(c: *Connection) Error!void {
+        const ime = &c.ime;
+        // In order: more may be added while a reply is awaited.
+        while (ime.pending_len > 0) {
+            const p = ime.pending[0];
+            std.mem.copyForwards([2]u32, ime.pending[0 .. ime.pending_len - 1], ime.pending[1..ime.pending_len]);
+            ime.pending_len -= 1;
+            const words = @min((p[1] + 3) / 4, ime.in.len / 4);
+            const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ ime.window, p[0], true, @as(u32, @intCast(words)) }));
+            const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32, ime.in.len);
+            @memcpy(ime.in[0..len], r[32..][0..len]);
+            ime.in_len = len;
+            c.imeMessage();
+        }
+    }
+
+    /// The XIM transport: a ClientMessage to our IM window.
+    fn imeEvent(c: *Connection, m: []const u8) void {
+        const ime = &c.ime;
+        const a = c.atoms;
+        const kind = wire.get(u32, m, 8);
+        if (kind == a._XIM_XCONNECT and ime.state == .xconnect) {
+            ime.server = wire.get(u32, m, 12);
+            ime.major = wire.get(u32, m, 16);
+            ime.dividing = wire.get(u32, m, 24);
+            ime.state = .connect;
+            var b: [12]u8 = undefined;
+            var w: wire.Buf = .{ .bytes = &b };
+            xim.connect(&w);
+            c.imeSend(ime, b[0..w.len]);
+        } else if (kind == a._XIM_MOREDATA or (kind == a._XIM_PROTOCOL and m[1] == 8)) {
+            const n = @min(20, ime.in.len - ime.in_len);
+            @memcpy(ime.in[ime.in_len..][0..n], m[12..][0..n]);
+            ime.in_len += n;
+            if (kind == a._XIM_PROTOCOL) c.imeMessage();
+        } else if (kind == a._XIM_PROTOCOL and ime.pending_len < ime.pending.len) {
+            // Format 32: the message is in a property of ours, read after this batch of events.
+            ime.pending[ime.pending_len] = .{ wire.get(u32, m, 16), wire.get(u32, m, 12) };
+            ime.pending_len += 1;
+        }
+    }
+
+    /// Sends one XIM message over the transport the server chose: ClientMessages of 20 bytes
+    /// (major 0, chained with _XIM_MOREDATA), or a property and a ClientMessage naming it
+    /// (major 2, and major 1 above the dividing size).
+    fn imeSend(c: *Connection, ime: *Ime, msg: []const u8) void {
+        const a = c.atoms;
+        if (ime.major == 0 or (ime.major == 1 and msg.len <= @min(ime.dividing, 20))) {
+            var at: usize = 0;
+            while (at < msg.len) : (at += 20) {
+                const last = at + 20 >= msg.len;
+                const chunk = msg[at..@min(at + 20, msg.len)];
+                const e = wire.clientMessage(ime.server, if (last) a._XIM_PROTOCOL else a._XIM_MOREDATA, 8, chunk);
+                _ = c.send(wire.send_event_size, wire.sendEvent, .{ ime.server, 0, &e });
+            }
+        } else {
+            // Properties take turns, so the server can read one while the next is written.
+            const prop = ime.props[ime.next_prop % ime.props.len];
+            ime.next_prop +%= 1;
+            _ = c.send(wire.changePropertySize(msg.len), wire.appendProperty, .{ ime.server, prop, atom_string, 8, msg });
+            const l = [5]u32{ @intCast(msg.len), prop, 0, 0, 0 };
+            const e = wire.clientMessage(ime.server, a._XIM_PROTOCOL, 32, std.mem.asBytes(&l));
+            _ = c.send(wire.send_event_size, wire.sendEvent, .{ ime.server, 0, &e });
+        }
+        c.flush() catch {};
+    }
+
+    /// Handles the XIM message gathered in `ime.in`.
+    fn imeMessage(c: *Connection) void {
+        const ime = &c.ime;
+        defer ime.in_len = 0;
+        if (ime.in_len < 4) return;
+        const msg = ime.in[0..@min(xim.size(&ime.in), ime.in_len)];
+        var out: [64]u8 = undefined;
+        var b: wire.Buf = .{ .bytes = &out };
+        switch (msg[0]) {
+            xim.op.connect_reply => {
+                xim.open(&b, ime.locale[0..ime.locale_len]);
+                ime.state = .open;
+            },
+            xim.op.open_reply => {
+                const r = xim.openReply(msg);
+                ime.im = r.im;
+                ime.attrs = r.attrs;
+                if (!r.attrs.complete()) {
+                    ime.state = .failed;
+                    return;
+                }
+                xim.encodingNegotiation(&b, ime.im);
+                ime.state = .ready;
+            },
+            xim.op.set_event_mask => if (msg.len >= 16) {
+                ime.forward_mask = wire.get(u32, msg, 8);
+                ime.sync_mask = wire.get(u32, msg, 12);
+            },
+            xim.op.create_ic_reply => if (ime.creating) |w| {
+                ime.creating = null;
+                w.ic = wire.get(u16, msg, 6);
+                if (w.applied.wants_text) {
+                    xim.onIc(&b, xim.op.set_ic_focus, ime.im, w.ic);
+                    w.ime_on = true;
+                }
+            },
+            xim.op.forward_event => if (msg.len >= 44) {
+                // A key the input method did not use: handled as if it came from the server.
+                c.replaying = true;
+                c.handle(msg[12..44]);
+                c.replaying = false;
+                if (wire.get(u16, msg, 8) & 1 != 0) xim.onIc(&b, xim.op.sync_reply, ime.im, wire.get(u16, msg, 6));
+            },
+            xim.op.commit => {
+                const commit = xim.Commit.parse(msg);
+                const ic = wire.get(u16, msg, 6);
+                for (c.windows) |slot| {
+                    const w = slot orelse continue;
+                    if (w.ic != ic) continue;
+                    var text: [512]u8 = undefined;
+                    const n = xim.compoundToUtf8(commit.text, &text);
+                    const f = &w.frames[w.cur];
+                    if (n > 0) f.typedBytes(text[0..n]) else if (keys.codepoint(commit.keysym) != 0) f.typed(keys.codepoint(commit.keysym));
+                }
+                if (commit.flag & xim.Commit.synchronous != 0) xim.onIc(&b, xim.op.sync_reply, ime.im, ic);
+            },
+            xim.op.sync => xim.onIc(&b, xim.op.sync_reply, ime.im, wire.get(u16, msg, 6)),
+            // The server refused something; keys are handled here from now on.
+            xim.op.err => ime.state = .failed,
+            else => {},
+        }
+        if (b.len > 0) c.imeSend(ime, out[0..b.len]);
     }
 
     /// Answers another client's request for the clipboard: the list of targets, or the text as
@@ -367,6 +534,55 @@ const cursor_glyphs = [_]u16{ 68, 60, 152, 52, 108, 116 };
 comptime {
     std.debug.assert(cursor_glyphs.len == @typeInfo(context.Cursor).@"enum".field_names.len);
 }
+
+/// The XIM connection of a `Connection`.
+pub const Ime = struct {
+    state: State = .off,
+    /// Our window for the transport, and the server's.
+    window: u32 = 0,
+    server: u32 = 0,
+    /// Transport version and dividing size from the server's _XIM_XCONNECT.
+    major: u32 = 0,
+    dividing: u32 = 20,
+    im: u16 = 0,
+    attrs: xim.Attrs = .{},
+    /// Events (KeyPress 1, KeyRelease 2) to forward, and those to forward synchronously.
+    forward_mask: u32 = 0,
+    sync_mask: u32 = 0,
+    /// The window whose XIM_CREATE_IC awaits its reply.
+    creating: ?*Window = null,
+    locale: [32]u8 = undefined,
+    locale_len: usize = 0,
+    /// Properties for messages sent that way, used in turn.
+    props: [8]u32 = @splat(0),
+    next_prop: u32 = 0,
+    /// The message being gathered from ClientMessages, or read from a property.
+    in: [4096]u8 = undefined,
+    in_len: usize = 0,
+    /// Properties named by format-32 _XIM_PROTOCOL messages: atom and length.
+    pending: [8][2]u32 = undefined,
+    pending_len: usize = 0,
+
+    pub const State = enum { off, xconnect, connect, open, ready, failed };
+
+    fn init(ime: *Ime, c: *Connection, locale: []const u8) Error!void {
+        ime.locale_len = @min(locale.len, ime.locale.len);
+        @memcpy(ime.locale[0..ime.locale_len], locale[0..ime.locale_len]);
+        var seqs: [8]u16 = undefined;
+        for (&seqs, 0..) |*s, i| {
+            var name: [16]u8 = undefined;
+            const n = std.fmt.bufPrint(&name, "_LCGR_XIM{d}", .{i}) catch unreachable;
+            s.* = c.send(wire.internAtomSize(n), wire.internAtom, .{n});
+        }
+        for (seqs, &ime.props) |s, *p| p.* = wire.get(u32, try c.reply(s), 8);
+    }
+
+    /// Whether `w`'s key event `kind` goes to the input method instead of being handled here.
+    fn forwards(ime: *const Ime, w: *const Window, kind: u8, replaying: bool) bool {
+        const bit: u32 = if (kind == wire.key_press) 1 else 2;
+        return ime.state == .ready and w.ic != 0 and w.ime_on and !replaying and ime.forward_mask & bit != 0;
+    }
+};
 
 fn connectUnix(path: []const u8) Error!i32 {
     const r = linux.socket(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0);
@@ -418,6 +634,11 @@ pub const Window = struct {
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
     applied: Platform = .{},
+    /// The window's XIM input context (0: none yet), whether it has the IME's focus, and where
+    /// the spot was last put, in physical pixels.
+    ic: u16 = 0,
+    ime_on: bool = false,
+    spot: [2]i16 = .{ 0, 0 },
     /// A SelectionNotify said the pasted text is in LCGR_PASTE; `poll` reads it.
     paste_ready: bool = false,
     /// The cursor the window shows, so `apply` sends only changes.
@@ -549,7 +770,15 @@ pub const Window = struct {
                 w.height = wire.get(u16, m, 22);
                 in.viewport = .{ @as(f32, @floatFromInt(w.width)) / w.scale, @as(f32, @floatFromInt(w.height)) / w.scale };
             },
-            wire.key_press, wire.key_release => w.key(m),
+            wire.key_press, wire.key_release => {
+                const c = w.conn;
+                if (!c.ime.forwards(w, m[0] & 0x7f, c.replaying)) return w.key(m);
+                var out: [xim.forward_event_size]u8 = undefined;
+                var b: wire.Buf = .{ .bytes = &out };
+                const bit: u32 = if ((m[0] & 0x7f) == wire.key_press) 1 else 2;
+                xim.forwardEvent(&b, c.ime.im, w.ic, @intFromBool(c.ime.sync_mask & bit != 0), m);
+                c.imeSend(&c.ime, &out);
+            },
             wire.focus_out => {
                 // Keys released while another window has the focus never reach this one.
                 in.keys = .{};
@@ -600,6 +829,35 @@ pub const Window = struct {
         if (!down or mods.ctrl or mods.alt or mods.cmd) return;
         const cp = keys.codepoint(w.conn.keymap.keysym(m[1], state));
         if (cp != 0) f.typed(cp);
+    }
+
+    /// Turns the IME on where the frame asks for text and off where it does not, and keeps its
+    /// spot at the bottom left of `ime_rect`. The input context is created on first use.
+    fn applyIme(w: *Window, p: *const Platform) void {
+        const c = w.conn;
+        const ime = &c.ime;
+        if (ime.state != .ready) return;
+        const spot: [2]i16 = .{ @intFromFloat(std.math.clamp(p.ime_rect.x0 * w.scale, -32768, 32767)), @intFromFloat(std.math.clamp(p.ime_rect.y1 * w.scale, -32768, 32767)) };
+        var out: [64]u8 = undefined;
+        var b: wire.Buf = .{ .bytes = &out };
+        if (w.ic == 0) {
+            if (!p.wants_text or ime.creating != null) return;
+            ime.creating = w;
+            w.spot = spot;
+            xim.createIc(&b, ime.im, ime.attrs, w.id, spot[0], spot[1]);
+            return c.imeSend(ime, out[0..b.len]);
+        }
+        if (p.wants_text != w.ime_on) {
+            w.ime_on = p.wants_text;
+            xim.onIc(&b, if (p.wants_text) xim.op.set_ic_focus else xim.op.unset_ic_focus, ime.im, w.ic);
+            c.imeSend(ime, out[0..b.len]);
+            b.len = 0;
+        }
+        if (p.wants_text and !std.meta.eql(spot, w.spot)) {
+            w.spot = spot;
+            xim.setSpot(&b, ime.im, w.ic, ime.attrs, spot[0], spot[1]);
+            c.imeSend(ime, out[0..b.len]);
+        }
     }
 
     /// Handles the server's pending events and gives this window's frame. False once the window
@@ -653,6 +911,7 @@ pub const Window = struct {
     /// on the clipboard (the CLIPBOARD selection, owned by this window).
     pub fn apply(w: *Window, p: *const Platform) void {
         w.applied = p.*;
+        w.applyIme(p);
         if (p.clipboard.len > 0) {
             const c = w.conn;
             c.clip_len = @min(p.clipboard.len, c.clip.len);
@@ -1098,4 +1357,326 @@ test "x11: copy in one application, paste in another" {
         a.waitReadable(0.005);
     } else return error.PasteNeverArrived;
     try testing.expectEqualStrings("theirs", ev.in.text);
+}
+
+/// An input method server for the IME test, on a connection of its own: the server side of
+/// the XIM transport and the messages a client sends. Typing k twice composes, Space commits
+/// "日本" (as COMPOUND_TEXT with a UTF-8 segment), every other key comes back unused.
+const FakeIme = struct {
+    conn: *Connection,
+    /// The selection window, and the window for this client.
+    owner: u32,
+    window: u32 = 0,
+    /// How it talks to the client: `Ime.imeSend` with the client's window as the far end.
+    to: Ime = .{},
+    major: u32,
+    in: [4096]u8 = undefined,
+    in_len: usize = 0,
+    focused: bool = false,
+    spot: [2]i16 = .{ -1, -1 },
+    composing: u32 = 0,
+    sync_replies: u32 = 0,
+    ics: u32 = 0,
+    /// ClientMessages that arrived while waiting for a reply, handled next.
+    queue: [64][32]u8 = undefined,
+    queued: usize = 0,
+
+    const im = 3;
+    const ic = 9;
+
+    fn start(f: *FakeIme, display: []const u8, name: []const u8) !void {
+        const c = f.conn;
+        try c.open(display, "");
+        f.owner = c.id();
+        _ = c.send(wire.create_window_size, wire.createWindow, .{ f.owner, c.setup.root, 1, 1, 0 });
+        var buf: [64]u8 = undefined;
+        const server = try std.fmt.bufPrint(&buf, "@server={s}", .{name});
+        const atom = wire.get(u32, try c.reply(c.send(wire.internAtomSize(server), wire.internAtom, .{server})), 8);
+        _ = c.send(wire.set_selection_owner_size, wire.setSelectionOwner, .{ f.owner, atom });
+        try f.to.init(c, "");
+        try c.sync();
+    }
+
+    /// Handles what the client sent so far.
+    fn step(f: *FakeIme) !void {
+        const c = f.conn;
+        try c.flush();
+        var p = [_]linux.pollfd{.{ .fd = c.fd, .events = linux.POLL.IN }};
+        if (linux.poll(&p, 1, 0) == 1) try c.readSome();
+        while (try c.message()) |m| f.keep(m);
+        var i: usize = 0;
+        while (i < f.queued) : (i += 1) {
+            const m: []const u8 = &f.queue[i];
+            const a = c.atoms;
+            const kind = wire.get(u32, m, 8);
+            if (kind == a._XIM_XCONNECT) {
+                f.window = c.id();
+                _ = c.send(wire.create_window_size, wire.createWindow, .{ f.window, c.setup.root, 1, 1, 0 });
+                f.to.server = wire.get(u32, m, 12);
+                f.to.major = f.major;
+                const l = [5]u32{ f.window, f.major, 0, 20, 0 };
+                const e = wire.clientMessage(f.to.server, a._XIM_XCONNECT, 32, std.mem.asBytes(&l));
+                _ = c.send(wire.send_event_size, wire.sendEvent, .{ f.to.server, 0, &e });
+            } else if (kind == a._XIM_MOREDATA or (kind == a._XIM_PROTOCOL and m[1] == 8)) {
+                @memcpy(f.in[f.in_len..][0..20], m[12..32]);
+                f.in_len += 20;
+                if (kind == a._XIM_PROTOCOL) try f.message();
+            } else if (kind == a._XIM_PROTOCOL) {
+                // Connection.reply would drop the ClientMessages that come meanwhile; keep them.
+                const len = wire.get(u32, m, 12);
+                const seq = c.send(wire.get_property_size, wire.getProperty, .{ f.window, wire.get(u32, m, 16), true, (len + 3) / 4 });
+                try c.flush();
+                const r = while (true) {
+                    const got = try c.message() orelse {
+                        try c.readSome();
+                        continue;
+                    };
+                    if (got[0] == wire.reply and wire.get(u16, got, 2) == seq) break got;
+                    f.keep(got);
+                };
+                const n = wire.get(u32, r, 16);
+                @memcpy(f.in[0..n], r[32..][0..n]);
+                f.in_len = n;
+                try f.message();
+            }
+        }
+        f.queued = 0;
+        try c.flush();
+    }
+
+    fn keep(f: *FakeIme, m: []const u8) void {
+        if ((m[0] & 0x7f) != wire.client_message) return;
+        std.debug.assert(f.queued < f.queue.len);
+        f.queue[f.queued] = m[0..32].*;
+        f.queued += 1;
+    }
+
+    fn message(f: *FakeIme) !void {
+        defer f.in_len = 0;
+        const msg = f.in[0..xim.size(&f.in)];
+        var out: [256]u8 = undefined;
+        var b: wire.Buf = .{ .bytes = &out };
+        switch (msg[0]) {
+            xim.op.connect => {
+                try testing.expectEqual(@as(u8, 'l'), msg[4]);
+                head(&b, xim.op.connect_reply, 4);
+                b.int(u16, 1);
+                b.int(u16, 0);
+            },
+            xim.op.open => {
+                try testing.expectEqualStrings("en_US", msg[5..][0..msg[4]]);
+                const ic_attrs = [_][]const u8{ "inputStyle", "clientWindow", "focusWindow", "preeditAttributes", "spotLocation", "separatorofNestedList" };
+                var n: usize = 0;
+                for (ic_attrs) |a| n += 6 + a.len + wire.pad4(2 + a.len);
+                head(&b, xim.op.open_reply, 8 + n);
+                b.int(u16, im);
+                b.int(u16, 0); // no IM attributes
+                b.int(u16, @intCast(n));
+                b.zeros(2);
+                for (ic_attrs, 0..) |a, id| {
+                    b.int(u16, @intCast(id));
+                    b.int(u16, 3);
+                    b.int(u16, @intCast(a.len));
+                    @memcpy(out[b.len..][0..a.len], a);
+                    b.len += a.len;
+                    b.zeros(wire.pad4(2 + a.len));
+                }
+                f.send(out[0..b.len]);
+                b.len = 0;
+                // Static event flow: forward key presses and releases.
+                head(&b, xim.op.set_event_mask, 12);
+                b.int(u16, im);
+                b.int(u16, 0);
+                b.int(u32, 3);
+                b.int(u32, 0);
+            },
+            xim.op.encoding_negotiation => {
+                head(&b, xim.op.encoding_negotiation_reply, 8);
+                b.int(u16, im);
+                b.int(u16, 0);
+                b.int(i16, 0);
+                b.zeros(2);
+            },
+            xim.op.create_ic => {
+                f.ics += 1;
+                // inputStyle, clientWindow, focusWindow, then preeditAttributes holding the spot.
+                try testing.expectEqual(@as(u32, xim.style_preedit_position | xim.style_status_nothing), wire.get(u32, msg, 12));
+                f.spot = .{ wire.get(i16, msg, 40), wire.get(i16, msg, 42) };
+                head(&b, xim.op.create_ic_reply, 4);
+                b.int(u16, im);
+                b.int(u16, ic);
+            },
+            xim.op.set_ic_values => {
+                f.spot = .{ wire.get(i16, msg, 20), wire.get(i16, msg, 22) };
+                head(&b, xim.op.set_ic_values_reply, 4);
+                b.int(u16, im);
+                b.int(u16, ic);
+            },
+            xim.op.set_ic_focus => f.focused = true,
+            xim.op.unset_ic_focus => f.focused = false,
+            xim.op.sync_reply => f.sync_replies += 1,
+            xim.op.forward_event => {
+                const ev = msg[12..44];
+                const press = (ev[0] & 0x7f) == wire.key_press;
+                const code = keys.hid(ev[1]);
+                const eaten = code == 0x0e or (code == 0x2c and (f.composing > 0 or !press));
+                if (eaten) {
+                    // k composes; Space commits what was composed. Releases of both are eaten.
+                    if (!press) return;
+                    if (code == 0x0e) {
+                        f.composing += 1;
+                        return;
+                    }
+                    f.composing = 0;
+                    const ct = "\x1b%G\xe6\x97\xa5\xe6\x9c\xac\x1b%@";
+                    head(&b, xim.op.commit, 8 + ct.len + wire.pad4(ct.len));
+                    b.int(u16, im);
+                    b.int(u16, ic);
+                    b.int(u16, xim.Commit.synchronous | 2);
+                    b.int(u16, ct.len);
+                    b.str(ct);
+                } else {
+                    // Not used: back to the client, which must answer the synchronous flag.
+                    head(&b, xim.op.forward_event, 40);
+                    b.int(u16, im);
+                    b.int(u16, ic);
+                    b.int(u16, 1);
+                    b.int(u16, 0);
+                    @memcpy(out[b.len..][0..32], ev);
+                    b.len += 32;
+                }
+            },
+            else => {},
+        }
+        if (b.len > 0) f.send(out[0..b.len]);
+    }
+
+    fn head(b: *wire.Buf, major: u8, body: usize) void {
+        b.int(u8, major);
+        b.int(u8, 0);
+        b.int(u16, @intCast(body / 4));
+    }
+
+    fn send(f: *FakeIme, msg: []const u8) void {
+        f.conn.imeSend(&f.to, msg);
+    }
+};
+
+test "x11: IME over XIM: compose, commit, keys it does not use, spot and focus" {
+    const display = try testDisplay();
+    // Major 0 carries messages in ClientMessages only; 2 in properties.
+    for ([_]u32{ 0, 2 }) |major| {
+        const S = struct {
+            var server: Connection = .{};
+        };
+        var fake: FakeIme = .{ .conn = &S.server, .owner = 0, .major = major };
+        try fake.start(display, "lcgrtest");
+        defer S.server.close();
+
+        const c = &Fixture.conn;
+        try c.open(display, "");
+        defer c.close();
+        const xtest = try c.extension("XTEST");
+        var w: Window = undefined;
+        try w.open(c, 200, 100, "ime", Fixture.buffers);
+        defer w.close();
+        _ = c.send(wire.set_input_focus_size, wire.setInputFocus, .{w.id});
+        try testing.expectError(error.NoInputMethod, c.openIme("nosuchim", "en_US"));
+        try c.openIme("lcgrtest", "en_US");
+
+        var ev: Events = .{};
+        const Until = struct {
+            fn run(cw: *Window, f: *FakeIme, e: *Events, comptime cond: fn (*Window, *FakeIme, *Events) bool) !void {
+                for (0..2000) |_| {
+                    try f.step();
+                    try testing.expect(cw.poll(e));
+                    if (cond(cw, f, e)) return;
+                    cw.conn.waitReadable(0.002);
+                }
+                return error.ImeNeverAnswered;
+            }
+        };
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(cw: *Window, _: *FakeIme, _: *Events) bool {
+                return cw.conn.ime.state == .ready;
+            }
+        }.f);
+        try testing.expectEqual(@as(u32, 3), c.ime.forward_mask);
+
+        // A frame asks for text with the caret at (10, 20)..(12, 40): the IC is made, focused,
+        // and its spot is the caret's bottom left.
+        w.apply(&.{ .wants_text = true, .ime_rect = .{ .x0 = 10, .y0 = 20, .x1 = 12, .y1 = 40 } });
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(cw: *Window, fk: *FakeIme, _: *Events) bool {
+                return cw.ime_on and fk.focused;
+            }
+        }.f);
+        try testing.expectEqual([2]i16{ 10, 40 }, fake.spot);
+
+        // k k Space a: the first three are the input method's, "日本" is committed, a comes back.
+        for ([_]u8{ 0x0e, 0x0e, 0x2c, 0x04 }) |code| {
+            for ([_]u8{ wire.key_press, wire.key_release }) |kind|
+                _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, kind, keys.keycodeOf(code), c.setup.root, 0, 0 });
+        }
+        try c.flush();
+        var events: [16]Input.Event = undefined;
+        var n: usize = 0;
+        var text: [64]u8 = undefined;
+        var n_text: usize = 0;
+        for (0..2000) |_| {
+            try fake.step();
+            try testing.expect(w.poll(&ev));
+            for (ev.in.events) |e| {
+                var copy = e;
+                if (e.kind == .text) {
+                    copy.at = @intCast(n_text);
+                    @memcpy(text[n_text..][0..e.len], ev.in.typed(e));
+                    n_text += e.len;
+                }
+                events[n] = copy;
+                n += 1;
+            }
+            if (n > 0 and events[n - 1].kind == .release and events[n - 1].code == 0x04) break;
+            c.waitReadable(0.002);
+        } else return error.ImeNeverAnswered;
+        try testing.expectEqualStrings("\xe6\x97\xa5\xe6\x9c\xaca", text[0..n_text]);
+        try testing.expectEqualSlices(Input.Event, &.{
+            .{ .kind = .text, .at = 0, .len = 6 },
+            .{ .kind = .press, .code = 0x04 },
+            .{ .kind = .text, .at = 6, .len = 1 },
+            .{ .kind = .release, .code = 0x04 },
+        }, events[0..n]);
+        // The commit and the two returned events were synchronous; each was answered.
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(_: *Window, fk: *FakeIme, _: *Events) bool {
+                return fk.sync_replies >= 3;
+            }
+        }.f);
+        try testing.expectEqual(@as(u32, 3), fake.sync_replies);
+
+        // The caret moves; then no widget wants text and keys stay here.
+        w.apply(&.{ .wants_text = true, .ime_rect = .{ .x0 = 30, .y0 = 20, .x1 = 32, .y1 = 40 } });
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(_: *Window, fk: *FakeIme, _: *Events) bool {
+                return fk.spot[0] == 30;
+            }
+        }.f);
+        w.apply(&.{});
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(_: *Window, fk: *FakeIme, _: *Events) bool {
+                return !fk.focused;
+            }
+        }.f);
+        _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.key_press, keys.keycodeOf(0x0e), c.setup.root, 0, 0 });
+        _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.key_release, keys.keycodeOf(0x0e), c.setup.root, 0, 0 });
+        try Until.run(&w, &fake, &ev, struct {
+            fn f(_: *Window, _: *FakeIme, e: *Events) bool {
+                return std.mem.eql(u8, e.in.text, "k");
+            }
+        }.f);
+        try testing.expectEqual(@as(u32, 1), fake.ics);
+        try testing.expectEqual(@as(u32, 0), fake.composing);
+        try testing.expectEqual(@as(u32, 0), c.errors);
+        try testing.expectEqual(@as(u32, 0), S.server.errors);
+    }
 }
