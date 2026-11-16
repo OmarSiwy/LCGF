@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -253,7 +254,7 @@ test "chip look: a rounded pill around its caption and its remove button, in bot
 test "chip input: the remove button asks for removal on click, Enter and Space; the chip takes nothing, in both front ends" {
     const h = &two;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 240, 60 } };
     const out = try h.frame(&in);
     const t = out.runtime.tree;

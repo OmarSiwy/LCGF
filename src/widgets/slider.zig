@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
@@ -44,7 +45,7 @@ pub fn bindError(comptime State: type, comptime name: []const u8) ?[]const u8 {
 /// one away, Page Up and Page Down a tenth, Home goes to `lo` and End to `hi` (WAI-ARIA APG
 /// slider pattern), in event order, clamped to the ends. Auto-repeat moves again.
 pub fn keyed(value: f32, lo: f32, hi: f32, in: *const Input) ?f32 {
-    const k = base.keys;
+    const k = keys;
     const step = (hi - lo) / 100;
     var v = value;
     var any = false;
@@ -149,7 +150,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const Ui = @TypeOf(ui.*);
             const r = base.ctResponse(ui, row, event, in);
             var v: f32 = @field(ui.signals.state, bind);
-            if (r.held) {
+            if (r.held and ui.built) {
                 // Last frame's tree is still in the tables while input is applied.
                 const rect = ui.tables.t.rect(row + 1);
                 v = base.slide(v, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), range.lo, range.hi);
@@ -280,7 +281,7 @@ test "slider look: an 8 px track filled to the value's fraction, in both front e
 }
 
 test "keyed: arrows a hundredth, pages a tenth, Home and End the ends, clamped, in order" {
-    const k = base.keys;
+    const k = keys;
     const ev = struct {
         fn of(comptime codes: []const u8) Input {
             const list = comptime blk: {
@@ -308,7 +309,7 @@ test "keyed: arrows a hundredth, pages a tenth, Home and End the ends, clamped, 
 test "slider input: drag, then arrows, Page Up, Home and End while focused, in both front ends" {
     const h = &gain;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 216, 40 } };
     _ = try h.frame(&in);
     // Press at a quarter (-6), drag to the right end and beyond (12), release.

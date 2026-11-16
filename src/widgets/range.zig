@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const slider_zig = @import("slider.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -203,7 +204,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             inline for (0..2) |i| {
                 const res = base.ctResponse(ui, row + 1 + thumb_rows * i, event, in);
                 var along: f32 = 0;
-                if (res.held) {
+                if (res.held and ui.built) {
                     // Last frame's tree is still in the tables while input is applied.
                     const rect = ui.tables.t.rect(row + 1);
                     along = (in.pointer[0] - rect.x0) / @max(rect.w(), 1);
@@ -328,7 +329,7 @@ test "parts: thumbs together at an end leave no division by zero" {
 }
 
 test "move, step: thumbs follow the pointer or the keys and never cross" {
-    const k = base.keys;
+    const k = keys;
     try testing.expectEqual([2]f32{ 30, 60 }, move(.{ 20, 60 }, 0, 30));
     try testing.expectEqual([2]f32{ 60, 60 }, move(.{ 20, 60 }, 0, 90));
     try testing.expectEqual([2]f32{ 20, 20 }, move(.{ 20, 60 }, 1, 5));
@@ -345,7 +346,7 @@ test "move, step: thumbs follow the pointer or the keys and never cross" {
 test "range input: a press grabs the nearer thumb, drags across the track; arrows per thumb, in both front ends" {
     const h = &band;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 216, 40 } };
     _ = try h.frame(&in);
     const Step = struct { x: f32, left: bool, key: ?u8 = null, band: [2]f32 };

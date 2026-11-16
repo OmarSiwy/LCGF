@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -60,10 +61,10 @@ pub const Step = struct { value: u32, focus: u32 };
 pub fn step(n: u32, clicked: u32, focused: u32, in: *const Input) ?Step {
     if (clicked != none) return .{ .value = clicked, .focus = clicked };
     if (focused == none) return null;
-    const k = base.keys;
-    const fwd = base.keyCount(in, k.right, .press) + base.keyCount(in, k.down, .press);
-    const back = base.keyCount(in, k.left, .press) + base.keyCount(in, k.up, .press);
-    const space = base.keyCount(in, k.space, .release) != 0;
+    const k = keys;
+    const fwd = keys.keyCount(in, k.right, .press) + keys.keyCount(in, k.down, .press);
+    const back = keys.keyCount(in, k.left, .press) + keys.keyCount(in, k.up, .press);
+    const space = keys.keyCount(in, k.space, .release) != 0;
     if (fwd == back and !space) return null;
     // Moves count from the focused option; `n` * back keeps the sum from wrapping below 0.
     const to = (focused + fwd + (n - 1) * back) % n;
@@ -369,7 +370,7 @@ test "radio look: theme tokens reach both front ends" {
 }
 
 test "step: a click selects; arrows move from the focused option, wrapping; Space selects it" {
-    const k = base.keys;
+    const k = keys;
     const ev = struct {
         fn in(comptime list: []const Input.Event) Input {
             return .{ .events = list };
@@ -391,7 +392,7 @@ test "step: a click selects; arrows move from the focused option, wrapping; Spac
 test "radio input: click selects, arrows move selection and focus, in both front ends" {
     const h = &sizes;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 200, 120 } };
     var out = try h.frame(&in);
     const t = out.runtime.tree;

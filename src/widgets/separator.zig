@@ -70,8 +70,9 @@ pub const ct = struct {
 const testing = std.testing;
 const check = @import("check.zig");
 
-/// Two labels split by a horizontal rule, then a row of two labels split by a vertical one.
-fn Page(comptime th: Theme) type {
+/// The example page: two labels split by a horizontal rule, then a row of two labels split by
+/// a vertical one, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .size = .{ .px(200), .fit }, .pad = @splat(8), .gap = 8 };
     const row: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .gap = 8 };
     return struct {
@@ -105,6 +106,14 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/separator.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/separator-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -183,6 +192,32 @@ test "separator: role separator, no name, value 0, no states, in both front ends
             try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
         }
     }
+}
+
+test "separator: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var first: ?[2]u32 = null;
+    while (try rp.next(buf)) |in| {
+        const out = try h.frame(in);
+        const d = out.runtime.draw;
+        // Pressing on the rules changes nothing: every frame draws the same two quads.
+        try testing.expectEqual(@as(u32, 2), d.quad_len);
+        const fills = [2]u32{ d.quads[0].fill, d.quads[1].fill };
+        if (first) |f| try testing.expectEqual(f, fills) else first = fills;
+        try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    }
+    try testing.expectEqual(@as(u32, 5), h.frames);
+}
+
+test "golden_frames: name frames the separator replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 5);
 }
 
 test {

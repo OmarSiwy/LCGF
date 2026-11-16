@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const checkbox_zig = @import("checkbox.zig");
 const types = @import("../core/types.zig");
@@ -264,7 +265,7 @@ test "switch look: theme tokens reach both front ends" {
 test "switch input: click and Space flip it, Enter and Space down do not, in both front ends" {
     const h = &two;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 200, 100 } };
     var out = try h.frame(&in);
     const t = out.runtime.tree;

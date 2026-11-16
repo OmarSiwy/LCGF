@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -42,7 +43,7 @@ pub fn buttonFill(th: *const Theme, r: Response) Color {
 /// up (the WAI-ARIA APG button pattern; Space on release, as native buttons do, so holding it
 /// does not repeat).
 pub fn activated(clicked: bool, focused: bool, in: *const Input) bool {
-    const keyed = base.keyCount(in, base.keys.enter, .press) + base.keyCount(in, base.keys.space, .release) != 0;
+    const keyed = keys.keyCount(in, keys.enter, .press) + keys.keyCount(in, keys.space, .release) != 0;
     return simd.orB(clicked, simd.andB(focused, keyed));
 }
 
@@ -225,14 +226,14 @@ test "activated: a click, or Enter down or Space up while focused; nothing with 
     const none: Input = .{};
     try testing.expect(activated(true, false, &none));
     try testing.expect(!activated(false, true, &none));
-    const enter = ev.in(&.{.{ .kind = .press, .code = base.keys.enter }});
+    const enter = ev.in(&.{.{ .kind = .press, .code = keys.enter }});
     try testing.expect(activated(false, true, &enter));
     try testing.expect(!activated(false, false, &enter));
-    const space_down = ev.in(&.{.{ .kind = .press, .code = base.keys.space }});
+    const space_down = ev.in(&.{.{ .kind = .press, .code = keys.space }});
     try testing.expect(!activated(false, true, &space_down));
-    const space_up = ev.in(&.{.{ .kind = .release, .code = base.keys.space }});
+    const space_up = ev.in(&.{.{ .kind = .release, .code = keys.space }});
     try testing.expect(activated(false, true, &space_up));
-    const ctrl_enter = ev.in(&.{.{ .kind = .press, .code = base.keys.enter, .mods = .{ .ctrl = true } }});
+    const ctrl_enter = ev.in(&.{.{ .kind = .press, .code = keys.enter, .mods = .{ .ctrl = true } }});
     try testing.expect(!activated(false, true, &ctrl_enter));
 }
 
@@ -244,9 +245,9 @@ test "button input: click, then Enter and Space while focused, fire in both fron
     const face = out.runtime.tree.rect(2);
     in.pointer = .{ (face.x0 + face.x1) * 0.5, (face.y0 + face.y1) * 0.5 };
     const Step = struct { left: bool = false, events: []const Input.Event = &.{}, fires: bool };
-    const enter: Input.Event = .{ .kind = .press, .code = base.keys.enter };
-    const space_down: Input.Event = .{ .kind = .press, .code = base.keys.space };
-    const space_up: Input.Event = .{ .kind = .release, .code = base.keys.space };
+    const enter: Input.Event = .{ .kind = .press, .code = keys.enter };
+    const space_down: Input.Event = .{ .kind = .press, .code = keys.space };
+    const space_up: Input.Event = .{ .kind = .release, .code = keys.space };
     const steps = [_]Step{
         .{ .fires = false }, // hover
         .{ .left = true, .fires = false }, // press: focus
@@ -254,7 +255,7 @@ test "button input: click, then Enter and Space while focused, fire in both fron
         .{ .events = &.{enter}, .fires = true },
         .{ .events = &.{space_down}, .fires = false },
         .{ .events = &.{space_up}, .fires = true },
-        .{ .events = &.{.{ .kind = .press, .code = base.keys.enter, .mods = .{ .shift = true } }}, .fires = false },
+        .{ .events = &.{.{ .kind = .press, .code = keys.enter, .mods = .{ .shift = true } }}, .fires = false },
     };
     for (steps) |st| {
         in.buttons.left = st.left;

@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -71,7 +72,7 @@ pub fn flip(v: anytype, clicked: bool) @TypeOf(v) {
 /// APG checkbox pattern: Space toggles, Enter does not; on release, as native checkboxes do).
 /// What it toggles to is `flip`'s: a mixed box goes to on.
 pub fn toggled(clicked: bool, focused: bool, in: *const Input) bool {
-    return simd.orB(clicked, simd.andB(focused, base.keyCount(in, base.keys.space, .release) != 0));
+    return simd.orB(clicked, simd.andB(focused, keys.keyCount(in, keys.space, .release) != 0));
 }
 
 // ---- look -----------------------------------------------------------------------------------
@@ -310,9 +311,9 @@ test "checkbox look: the theme's control, accent and text tokens reach both fron
 }
 
 test "toggled: a click, or Space up while focused; not Enter, not Space down" {
-    const up = [_]Input.Event{.{ .kind = .release, .code = base.keys.space }};
-    const down = [_]Input.Event{.{ .kind = .press, .code = base.keys.space }};
-    const enter = [_]Input.Event{.{ .kind = .press, .code = base.keys.enter }};
+    const up = [_]Input.Event{.{ .kind = .release, .code = keys.space }};
+    const down = [_]Input.Event{.{ .kind = .press, .code = keys.space }};
+    const enter = [_]Input.Event{.{ .kind = .press, .code = keys.enter }};
     const none: Input = .{};
     try testing.expect(toggled(true, false, &none));
     try testing.expect(toggled(false, true, &.{ .events = &up }));
@@ -329,8 +330,8 @@ test "checkbox input: click and Space toggle; mixed goes to on, then off and on;
     const t = out.runtime.tree;
     const box_on = t.rect(t.find(.from("on")));
     const box_tri = t.rect(t.find(.from("tri")));
-    const space_up = [_]Input.Event{.{ .kind = .release, .code = base.keys.space }};
-    const space_down = [_]Input.Event{.{ .kind = .press, .code = base.keys.space }};
+    const space_up = [_]Input.Event{.{ .kind = .release, .code = keys.space }};
+    const space_down = [_]Input.Event{.{ .kind = .press, .code = keys.space }};
     const Step = struct { at: types.Rect, left: bool = false, events: []const Input.Event = &.{}, on: bool, tri: Check };
     const steps = [_]Step{
         .{ .at = box_tri, .on = false, .tri = .mixed },

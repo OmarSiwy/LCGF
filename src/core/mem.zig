@@ -78,15 +78,23 @@ pub const Carver = struct {
 /// Copies rows [src_at, src_at + n) of every column in `src` to rows starting at `dst_at` in
 /// `dst`. `S` is a column set as taken by `Carver.columns`; the ranges must not overlap.
 pub fn copyRows(comptime S: type, dst: *const S, dst_at: usize, src: *const S, src_at: usize, n: usize) void {
+    copyRowsExcept(S, dst, dst_at, src, src_at, n, &.{});
+}
+
+/// `copyRows` of every column but those named in `skip`.
+pub fn copyRowsExcept(comptime S: type, dst: *const S, dst_at: usize, src: *const S, src_at: usize, n: usize, comptime skip: []const []const u8) void {
     const info = @typeInfo(S).@"struct";
     inline for (info.field_names, info.field_types) |name, FT| {
-        switch (@typeInfo(FT)) {
+        const skipped = comptime for (skip) |s| {
+            if (std.mem.eql(u8, s, name)) break true;
+        } else false;
+        if (!skipped) switch (@typeInfo(FT)) {
             .pointer => @memcpy(@field(dst, name)[dst_at..][0..n], @field(src, name)[src_at..][0..n]),
             .array => |a| inline for (0..a.len) |k| {
                 @memcpy(@field(dst, name)[k][dst_at..][0..n], @field(src, name)[k][src_at..][0..n]);
             },
             else => @compileError("column sets hold only []T and [k][]T fields"),
-        }
+        };
     }
 }
 

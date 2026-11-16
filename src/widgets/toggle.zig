@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const keys = @import("keys.zig");
 const label_zig = @import("label.zig");
 const button_zig = @import("button.zig");
 const types = @import("../core/types.zig");
@@ -234,7 +235,7 @@ test "toggle look: a button's face, filled by pressed and by hover, in both fron
 test "toggle input: click, Enter and Space up flip it; Space down does not, in both front ends" {
     const h = &two;
     h.init();
-    const k = base.keys;
+    const k = keys;
     var in: Input = .{ .viewport = .{ 200, 60 } };
     var out = try h.frame(&in);
     const t = out.runtime.tree;
