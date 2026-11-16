@@ -1,6 +1,9 @@
 //! Button: a caption on a face that reports a click. Tier 2, written against the public API
 //! of tiers 0 and 1 (the recipe in base.zig).
 //!
+//! Accessibility: role button, named by its caption (ARIA name from content), no value and
+//! no states; the bridge reads both from the tree's `role` and `value` columns.
+//!
 //! State: none of its own. The caption is the application's string (`str` in the runtime
 //! front end, a `[]const u8` field bound by the caption's label in the comptime one, checked
 //! as a label's binding), and a click is reported, not stored: `Response.clicked` in the
@@ -219,6 +222,31 @@ test "button input: click, then Enter and Space while focused, fire in both fron
     try testing.expect(!h.app.clicked);
     try testing.expectEqual(null, out.comptime_.event);
     try testing.expectEqual(null, h.ui.focus);
+}
+
+var button_semantics: base.Semantic(16) = .{};
+
+test "button a11y: role button, named by its caption, value 0, no states, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &one;
+    h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    _ = try h.frame(&in);
+    // Held and focused: still no state bits and no value.
+    in.pointer = .{ 20, 20 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    const x = &button_semantics;
+    try x.run(h);
+    const r = x.row(2).?;
+    try testing.expectEqual(@backingInt(a11y.Role.button), x.out[0].c.role[r]);
+    try testing.expectEqual(@backingInt(Id.from("go")), x.out[0].c.id[r]);
+    try testing.expectEqualStrings("Go", x.name(0, r));
+    try testing.expectEqualStrings("Go", x.name(1, r));
+    try testing.expectEqual(@as(f32, 0), x.out[0].c.value[r]);
+    try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    // Its caption is exported as its child, static text.
+    try testing.expectEqual(r, x.out[0].c.parent[x.row(3).?]);
 }
 
 test {
