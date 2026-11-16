@@ -3,6 +3,7 @@
 
     python3 bench/gates/gates.py frame DIR      frame CPU time against the fastest comparison
     python3 bench/gates/gates.py rss DIR        resident memory against the lightest comparison
+    python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py --self-test
 
 DIR holds one bench/vs/measure.py JSON per framework, lcgr.json among them (ci/jobs/gates-vs.sh
@@ -27,6 +28,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDED = os.path.join(HERE, "recorded.json")
 TOLERANCE = 0.5  # timings move by about a third between runs on one machine (docs/CHECKS.md)
+SIZE_GROWTH = 0.02  # docs/GATES.md: growth above 2% fails CI
 MEMORY_TOLERANCE = 0.1  # LCGR measured 12,476 and 12,104 KiB in two gates-vs runs (3%)
 # The idle scene is gated by frames built and wake-ups (the idle gate), not by frame time.
 TIMED_SCENES = ("form", "list", "text", "springs", "resize")
@@ -89,6 +91,54 @@ def check_rss(runs, recorded):
 
 
 CHECKS = {"frame": (check_frame, True), "rss": (check_rss, False)}  # gate: (check, timed)
+
+
+def check_size(text, budgets):
+    """Binary size: `zig build size` output (tools/bench/size.zig, ReleaseSmall) against the
+    budget of each example, loaded bytes (text + rodata + data) and bss separately. Sizes do not
+    depend on load, so this gate always applies. Returns (sizes, rows, failed)."""
+    sizes, rows, failed = {}, [], False
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) != 5 or not f[1].isdigit():
+            continue
+        t, ro, d, bss = map(int, f[1:])
+        sizes[f[0]] = {"loaded": t + ro + d, "bss": bss}
+    for name, now in sizes.items():
+        budget = budgets.get(name)
+        for k in ("loaded", "bss"):
+            if budget is None:
+                status, bad = "no budget", True
+            elif now[k] > budget[k] * (1 + SIZE_GROWTH):
+                status, bad = f"OVER BUDGET {budget[k]} by {now[k] / budget[k] - 1:+.1%}", True
+            elif now[k] < budget[k] * (1 - SIZE_GROWTH):
+                status, bad = f"under budget {budget[k]} by {now[k] / budget[k] - 1:+.1%}: lower it", False
+            else:
+                status, bad = f"within budget {budget[k]}", False
+            failed |= bad
+            rows.append(f"{name:<8} {k:<7} {now[k]:>10} B  {status}")
+    missing = [n for n in budgets if n not in sizes]
+    rows += [f"{n:<8} no size reported" for n in missing]
+    return sizes, rows, failed or bool(missing)
+
+
+def run_size(path, record):
+    rec = {}
+    if os.path.exists(RECORDED):
+        with open(RECORDED) as f:
+            rec = json.load(f)
+    with open(path) as f:
+        sizes, rows, failed = check_size(f.read(), rec.get("size", {}))
+    print("gate size: loaded bytes and bss of each example (ReleaseSmall)")
+    print("\n".join(rows))
+    if record:
+        rec["size"] = sizes
+        with open(RECORDED, "w") as f:
+            json.dump(rec, f, indent=1)
+            f.write("\n")
+        print(f"gates: recorded size in {RECORDED}")
+        return 0
+    return 1 if failed else 0
 
 
 def frameworks_missing(runs, recorded):
@@ -155,6 +205,13 @@ def self_test():
     _, rows, failed = check_rss(runs, entries)
     assert failed and "REGRESSED" in rows[0], rows
     assert frameworks_missing(runs, {"frameworks": ["a", "b"]}) == ["b"]
+    out = "example text rodata data bss\ndump 100 50 0 7\n"
+    sizes, _, failed = check_size(out, {"dump": {"loaded": 150, "bss": 7}})
+    assert not failed and sizes == {"dump": {"loaded": 150, "bss": 7}}
+    assert check_size(out, {"dump": {"loaded": 146, "bss": 7}})[2] is True  # 2.7% over
+    assert check_size(out, {"dump": {"loaded": 148, "bss": 7}})[2] is False  # 1.4% over
+    assert check_size(out, {"dump": {"loaded": 150, "bss": 7}, "gone": {}})[2] is True
+    assert check_size(out, {})[2] is True
     print("gates self-test ok")
 
 
@@ -163,11 +220,13 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=sorted(CHECKS))
-    ap.add_argument("dir")
+    ap.add_argument("gate", choices=sorted(CHECKS) + ["size"])
+    ap.add_argument("path", help="DIR of results, or for size the output of zig build size")
     ap.add_argument("--record", action="store_true")
     a = ap.parse_args()
-    return run_compare(a.gate, a.dir, a.record)
+    if a.gate == "size":
+        return run_size(a.path, a.record)
+    return run_compare(a.gate, a.path, a.record)
 
 
 if __name__ == "__main__":

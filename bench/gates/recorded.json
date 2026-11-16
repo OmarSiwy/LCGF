@@ -41,5 +41,15 @@
    "ratio": 5.656,
    "best": "clay"
   }
+ },
+ "size": {
+  "dump": {
+   "loaded": 34232,
+   "bss": 1107984
+  },
+  "bench": {
+   "loaded": 270918,
+   "bss": 12001548
+  }
  }
 }
