@@ -25,3 +25,6 @@ export fn p_shortcut_fire(sh: *const lcgr.keyboard.Shortcuts, k: *lcgr.keyboard.
 export fn p_wheel_route(t: *const Tree, sc: *const lcgr.gestures.Scrollables, in: *const Input, out: *lcgr.gestures.Wheel) void {
     out.* = lcgr.gestures.route(t, sc, in, 16);
 }
+export fn p_kinetic_step(k: *lcgr.gestures.Kinetic, dt: f32) f32 {
+    return k.step(dt);
+}

@@ -86,6 +86,124 @@ pub fn route(t: *const Tree, sc: *const Scrollables, in: *const Input, line: f32
     return out;
 }
 
+/// Kinetic scrolling: one row per scroll axis that moves on its own after a fling, stepped
+/// together as prototype/ui.zig `Anims.step` steps its springs. Inside its range a row coasts
+/// and slows by `friction`; past either end a spring (`Anims`' stiffness and damping) pulls it
+/// back to the end, so a fling overshoots and settles and a drag past the end rubber-bands.
+pub const Kinetic = struct {
+    len: u32 = 0,
+    cap: u32,
+    c: Columns,
+    /// Velocity lost per second while coasting, as a fraction: v *= exp(-friction * dt).
+    friction: f32 = 4,
+    /// The pull back from past an end (prototype `Spring` defaults).
+    stiffness: f32 = 170,
+    damping: f32 = 26,
+    /// A drag past an end moves the content by this fraction of the pointer's movement.
+    resistance: f32 = 0.5,
+
+    pub const Columns = struct {
+        /// The scroller's id and axis, as the caller chooses to key them.
+        id: []u32,
+        /// Scroll offset in logical pixels.
+        x: []f32,
+        /// Pixels per second.
+        v: []f32,
+        /// Range the offset rests in: 0 and content minus viewport, usually.
+        lo: []f32,
+        hi: []f32,
+        /// 1.0 while a finger or the mouse holds the content: no coasting, no spring.
+        held: []f32,
+    };
+
+    pub fn init(carver: *mem.Carver, cap: u32) Kinetic {
+        std.debug.assert(cap > 0);
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+
+    /// Row for `id`, created at rest at offset `initial` with range [lo, hi] on first use; the
+    /// range is updated every call (content and viewport change). SIMD lookup. A full table
+    /// reuses its last row.
+    pub fn slot(k: *Kinetic, id: u32, initial: f32, lo: f32, hi: f32) u32 {
+        const c = &k.c;
+        const found = simd.find(c.id, k.len, id);
+        const is_new = found == none;
+        const i = simd.selU(is_new, @min(k.len, k.cap - 1), found);
+        k.len = @min(k.len + @intFromBool(is_new), k.cap);
+        c.id[i] = id;
+        c.x[i] = simd.selF(is_new, initial, c.x[i]);
+        c.v[i] = simd.selF(is_new, 0, c.v[i]);
+        c.held[i] = simd.selF(is_new, 0, c.held[i]);
+        c.lo[i] = lo;
+        c.hi[i] = @max(lo, hi);
+        return i;
+    }
+
+    /// A wheel notch or touchpad delta (`Wheel.delta`): moves at once, kept in range, and stops
+    /// any coasting.
+    pub fn scroll(k: *Kinetic, i: u32, delta: f32) void {
+        const c = &k.c;
+        c.x[i] = std.math.clamp(c.x[i] + delta, c.lo[i], c.hi[i]);
+        c.v[i] = 0;
+    }
+
+    /// The content is held and moved by `delta` this frame of `dt` seconds (a finger or a
+    /// mouse drag, in scroll direction). Past an end it moves by `resistance` of that. The
+    /// velocity follows the movement, so `release` flings at the speed of the last frames.
+    pub fn drag(k: *Kinetic, i: u32, delta: f32, dt: f32) void {
+        const c = &k.c;
+        const x = c.x[i];
+        const out = simd.orB(x < c.lo[i], x > c.hi[i]);
+        const d = delta * simd.selF(out, k.resistance, 1);
+        c.x[i] = x + d;
+        // Half the last estimate, half this frame: smooths one-frame jitter.
+        c.v[i] = 0.5 * c.v[i] + 0.5 * d / @max(dt, 1e-4);
+        c.held[i] = 1;
+    }
+
+    /// Lets go: the row coasts at its velocity (a fling), or springs back if past an end.
+    pub fn release(k: *Kinetic, i: u32) void {
+        k.c.held[i] = 0;
+    }
+
+    /// SIMD. Advances every free row by `dt` seconds. Returns how much is still moving, in
+    /// pixels plus pixels per second; 0 means every row is at rest (the host may sleep).
+    pub fn step(k: *Kinetic, dt: f32) f32 {
+        const c = &k.c;
+        const h = @min(dt, 1.0 / 30.0);
+        const hv = simd.f(h);
+        const decay = simd.f(@exp(-k.friction * h));
+        const stiff = simd.f(k.stiffness);
+        const damp = simd.f(k.damping);
+        const zero = simd.f(0);
+        var motion = zero;
+        const n = simd.padded(k.len);
+        var i: usize = 0;
+        while (i < n) : (i += W) {
+            const x = simd.loadF(c.x, i);
+            const v = simd.loadF(c.v, i);
+            const lo = simd.loadF(c.lo, i);
+            const hi = simd.loadF(c.hi, i);
+            const free = simd.loadF(c.held, i) == zero;
+            const end = @min(@max(x, lo), hi);
+            const out = end != x;
+            const pulled = v + (stiff * (end - x) - damp * v) * hv;
+            const v1 = @select(f32, out, pulled, v * decay);
+            const x1 = x + v1 * hv;
+            const end1 = @min(@max(x1, lo), hi);
+            const left = @abs(end1 - x1);
+            const speed = @abs(v1);
+            // At rest: inside (or within a thousandth of an end) and slower than a pixel per
+            // ten seconds. Snaps to the end and stops.
+            const rest = (left < simd.f(1e-3)) & (speed < simd.f(0.1));
+            simd.storeF(c.x, i, @select(f32, free, @select(f32, rest, end1, x1), x));
+            simd.storeF(c.v, i, @select(f32, free, @select(f32, rest, zero, v1), v));
+            motion = @max(motion, @select(f32, free & !rest, left + speed, zero));
+        }
+        return @reduce(.Max, motion);
+    }
+};
+
 /// What `route` reads as the id when an axis has no target.
 const zero_id: u32 = 0;
 
@@ -156,4 +274,96 @@ test "route: a strip scrolled out of its list's clip no longer takes the wheel" 
     // A node that is not scrollable takes nothing, whatever it covers.
     f.sc.reset();
     try testing.expectEqual(Wheel{}, route(&f.t, &f.sc, &in, 10));
+}
+
+/// Steps `k` at 60 Hz until it rests or `max` frames pass; returns the frames taken.
+fn settle(k: *Kinetic, max: u32) u32 {
+    var f: u32 = 0;
+    while (f < max) : (f += 1) if (k.step(1.0 / 60.0) == 0) return f + 1;
+    return max;
+}
+
+test "Kinetic: a fling coasts, slows and rests inside the range" {
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var k = Kinetic.init(&carver, 4);
+    const r = k.slot(1, 100, 0, 1000);
+    k.c.v[r] = 600;
+    try testing.expect(k.step(1.0 / 60.0) > 0);
+    try testing.expect(k.c.x[r] > 100);
+    const frames = settle(&k, 600);
+    try testing.expect(frames < 600);
+    // Frame by frame it moves v * h * d^n with d = exp(-friction * h): a geometric sum of
+    // v * h * d / (1 - d) = 145.0 px (the continuous v / friction is 150). It stays inside
+    // the range and stops.
+    const d = @exp(-4.0 / 60.0);
+    try testing.expectApproxEqAbs(100 + 600.0 / 60.0 * d / (1 - d), k.c.x[r], 0.5);
+    try testing.expectEqual(0, k.c.v[r]);
+    try testing.expectEqual(0, k.step(1.0 / 60.0));
+}
+
+test "Kinetic: a fling past the end overshoots, springs back and rests on the end" {
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var k = Kinetic.init(&carver, 4);
+    const r = k.slot(1, 950, 0, 1000);
+    k.c.v[r] = 2000;
+    var peak: f32 = 0;
+    var f: u32 = 0;
+    while (f < 600 and k.step(1.0 / 60.0) != 0) : (f += 1) peak = @max(peak, k.c.x[r]);
+    try testing.expect(f < 600);
+    try testing.expect(peak > 1000);
+    try testing.expectEqual(1000, k.c.x[r]);
+    try testing.expectEqual(0, k.c.v[r]);
+}
+
+test "Kinetic: a drag rubber-bands past the end, holds while held, returns when released" {
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var k = Kinetic.init(&carver, 4);
+    const r = k.slot(7, 0, 0, 500);
+    // Pull 40 px before the start in two frames: the first 20 at full rate takes it to -20,
+    // the second, already past the end, moves half: -30.
+    k.drag(r, -20, 1.0 / 60.0);
+    _ = k.step(1.0 / 60.0);
+    try testing.expectEqual(-20, k.c.x[r]);
+    k.drag(r, -20, 1.0 / 60.0);
+    try testing.expectEqual(-30, k.c.x[r]);
+    // Held: stepping does not move it.
+    for (0..10) |_| _ = k.step(1.0 / 60.0);
+    try testing.expectEqual(-30, k.c.x[r]);
+    k.release(r);
+    try testing.expect(settle(&k, 600) < 600);
+    try testing.expectEqual(0, k.c.x[r]);
+    // A wheel moves at once inside the range and never past it.
+    k.scroll(r, 120);
+    try testing.expectEqual(120, k.c.x[r]);
+    k.scroll(r, 9000);
+    try testing.expectEqual(500, k.c.x[r]);
+    // `slot` finds the row again and takes the new range.
+    try testing.expectEqual(r, k.slot(7, 0, 0, 300));
+    try testing.expectEqual(500, k.c.x[r]);
+    try testing.expect(settle(&k, 600) < 600);
+    try testing.expectEqual(300, k.c.x[r]);
+}
+
+test "Kinetic: rows step independently, across vectors" {
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var k = Kinetic.init(&carver, 40);
+    for (0..37) |j| {
+        const r = k.slot(@intCast(j + 1), @floatFromInt(j * 8), 0, 300);
+        k.c.v[r] = @floatFromInt(@as(i32, @intCast(j % 7)) * 300 - 900);
+    }
+    var x0: [37]f32 = undefined;
+    @memcpy(&x0, k.c.x[0..37]);
+    try testing.expect(settle(&k, 1200) < 1200);
+    for (0..37) |j| {
+        // Each row rests inside its range, on the side its velocity pushed it.
+        try testing.expect(k.c.x[j] >= 0 and k.c.x[j] <= 300);
+        const v0: f32 = @floatFromInt(@as(i32, @intCast(j % 7)) * 300 - 900);
+        if (v0 > 0) try testing.expect(k.c.x[j] >= x0[j]);
+        if (v0 < 0) try testing.expect(k.c.x[j] <= x0[j]);
+        if (v0 == 0) try testing.expect(k.c.x[j] == x0[j]);
+    }
 }
