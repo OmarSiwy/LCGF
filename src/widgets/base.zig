@@ -57,6 +57,7 @@ const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
 const label_zig = @import("label.zig");
 const button_zig = @import("button.zig");
+const checkbox_zig = @import("checkbox.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -172,6 +173,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
         if (n.bind) |name| {
             const err: ?[]const u8 = switch (n.kind) {
                 .label => label_zig.bindError(State, name),
+                .checkbox => checkbox_zig.bindError(State, name),
                 else => null,
             };
             if (err) |msg| @compileError(msg);
@@ -228,16 +230,7 @@ pub const label = label_zig.label;
 
 pub const button = button_zig.button;
 
-pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
-    const row = f.open(id, checkboxStyle(th));
-    const r = f.interact(row, .button);
-    value.* = toggle(value.*, r.clicked);
-    _ = f.leaf(.none, checkboxBox(th, value.*));
-    _ = label(f, th, str);
-    f.close();
-    f.tree().c.value[row.ix()] = simd.b2f(value.*);
-    return r;
-}
+pub const checkbox = checkbox_zig.checkbox;
 
 pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response {
     const track = f.open(id, sliderTrack(th));
@@ -261,14 +254,7 @@ pub const ct = struct {
 
     pub const button = button_zig.ct.button;
 
-    /// A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
-    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
-        var s = spec_zig.row(checkboxStyle(&th), .{ Spec{ .kind = .col }, ct.label(th, text) });
-        s.kind = .checkbox;
-        s.id = @tagName(id);
-        s.bind = @tagName(bind);
-        return s;
-    }
+    pub const checkbox = checkbox_zig.ct.checkbox;
 
     /// A slider named `id` setting the f32 field `bind`, 0 to 1.
     pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
@@ -346,7 +332,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     const k = comptime E.slot(tag);
                     const n = comptime nodeAt(spec, E.widget_nodes[k]);
                     switch (comptime E.widget_kinds[k]) {
-                        .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
+                        .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
                         .label, .col, .row, .button => {},
                     }
@@ -422,12 +408,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     tb.t.c.text[i] = tb.tx.push(i, span, &labelText(&th));
                 },
                 .checkbox => {
-                    const value: bool = @field(state, n.bind.?);
+                    const value = checkbox_zig.Check.of(@field(state, n.bind.?));
                     var s = n.style;
-                    s.value = simd.b2f(value);
+                    s.value = value.value();
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &checkboxBox(&th, value));
+                    _ = tb.t.push(i, .none, &checkboxBox(&th, value == .on));
                     ui.push(n.children[1], i, next, in);
                     tb.t.seal(i);
                 },
