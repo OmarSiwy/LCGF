@@ -106,10 +106,10 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   worth removing is the abstraction and validation layer above the GPU API, not the API.
 - **wgpu**: the portable back end, and the route for applications that want raw wgpu. The host owns
   device, queue and pass; see the header of `prototype/ui_wgpu.zig` for the five kinds of raw access.
-- **Gompute** (CUDA / HIP compute kernels): optional and experimental, for offscreen effects. It
-  cannot replace a graphics API here: it has no way to present to a window, supports two vendors,
-  and a compute-only rasterizer gives up the fixed-function hardware a GUI uses most. Its head also
-  needs a Zig 0.18 development build; commit `abd75e4` is its last for 0.17.
+- **Gompute** (CUDA / HIP compute kernels): measured and dropped. Lane render-gompute built it
+  (C0418-C0425) and it lost to the Vulkan back end on every measure on an RTX 4060: frame time,
+  resident and GPU memory, start-up, vendors, and presenting. docs/research/gompute.md has the
+  numbers; Vulkan compute covers the offscreen effects it was meant for.
 
 ## Code standard: which "clean code" rules apply
 
