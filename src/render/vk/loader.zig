@@ -71,7 +71,7 @@ pub const Library = struct {
         } else return error.NoLoader;
         errdefer _ = std.c.dlclose(handle);
         const sym = std.c.dlsym(handle, "vkGetInstanceProcAddr") orelse return error.NoLoader;
-        const get: c.PFN_vkGetInstanceProcAddr = @ptrCast(sym);
+        const get: c.PFN_vkGetInstanceProcAddr = @ptrCast(@alignCast(sym));
         return .{ .handle = handle, .getInstanceProcAddr = get, .fns = try load(GlobalFns, get, @as(c.VkInstance, null)) };
     }
 

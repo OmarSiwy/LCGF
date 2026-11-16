@@ -351,7 +351,7 @@ const Gpu = struct {
     /// Fills `g` in place (the renderer keeps a pointer to its device). `surface` picks a
     /// device that can present to it.
     fn init(g: *Gpu, surface_window: *ANativeWindow) !c.VkSurfaceKHR {
-        g.lib = try openVulkan();
+        g.lib = try vk.loader.Library.open();
         errdefer g.lib.close();
         g.instance = try vk.loader.Instance.init(&g.lib, .{ .app_name = "lcgr-android", .extensions = &instance_extensions });
         errdefer g.instance.deinit();
@@ -384,17 +384,6 @@ const Gpu = struct {
         g.lib.close();
     }
 };
-
-/// `vk.loader.Library.open` for Android's libvulkan.so. ponytail: open's own dlsym cast does
-/// not compile for aarch64 (a function pointer is 4-aligned there and the cast lacks an
-/// @alignCast; the Vulkan lane's code); use open again once it does.
-fn openVulkan() !vk.loader.Library {
-    const handle = std.c.dlopen("libvulkan.so", .{ .NOW = true }) orelse return error.NoLoader;
-    errdefer _ = std.c.dlclose(handle);
-    const sym = std.c.dlsym(handle, "vkGetInstanceProcAddr") orelse return error.NoLoader;
-    const get: c.PFN_vkGetInstanceProcAddr = @ptrCast(@alignCast(sym));
-    return .{ .handle = handle, .getInstanceProcAddr = get, .fns = try vk.loader.load(vk.loader.GlobalFns, get, @as(c.VkInstance, null)) };
-}
 
 fn createSurface(instance: *const vk.loader.Instance, window: *ANativeWindow) !c.VkSurfaceKHR {
     const create = instance.proc(PFN_vkCreateAndroidSurfaceKHR, "vkCreateAndroidSurfaceKHR") orelse return error.MissingExtension;
