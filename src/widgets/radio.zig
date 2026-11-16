@@ -9,8 +9,8 @@
 //!
 //! Accessibility: the group has role radio group, each option role radio, named by its
 //! caption, value 1 when selected (a11y/tree.zig `states` sets `checked` from it). The group
-//! has no accessible name yet: the ARIA pattern labels it by a heading, which these
-//! front ends cannot point at (`Semantics.labelled_by` is the application's to set).
+//! has no text of its own to be named by: the application names it, by a heading on the page
+//! (`Semantics.labelled_by`) or by a label shown nowhere (`Semantics.label`), as `Page` does.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -30,6 +30,7 @@ const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
 const none = types.none;
 const a11y = @import("../a11y/tree.zig");
+const Strings = @import("../core/strings.zig").Strings;
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -268,6 +269,14 @@ pub const Page = struct {
     pub const spec = spec_zig.col(panel, .{ct.radio(th, .quality, .quality, .{ .low, .medium, .high })});
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+
+    /// The page's accessibility beyond the tree, for either front end's tree `t`: the group's
+    /// name, which no caption on the page shows (`Semantics.label`, added to the frame's
+    /// strings `str`).
+    pub fn semantics(t: *const Tree, s: *a11y.Semantics, str: *Strings) void {
+        const g = t.find(.from("quality"));
+        if (g != none) s.c.label[g] = str.add("Quality");
+    }
     pub const replay = @embedFile("testdata/radio.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/radio-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "clicked", 2 }, .{ "down", 3 } };
@@ -454,6 +463,35 @@ test "radio a11y: a radio group of radios, named by their captions, the selected
 }
 
 var page: Page.Run = .{};
+var page_semantics: [2]@import("popover.zig").Semantic(32) = .{ .{}, .{} };
+
+test "Page a11y: the radio group named, its options by their captions, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &page;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 320, 240 } });
+    const trees = [2]*const Tree{ &h.ctx.trees[h.ctx.cur], &h.ui.tables.t };
+    Page.semantics(trees[0], page_semantics[0].begin(), &h.ctx.strings[h.ctx.cur]);
+    Page.semantics(trees[1], page_semantics[1].begin(), &h.ui.tables.strings);
+    const strs = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const e = page_semantics[0].finish(trees[0], &h.ctx.texts[h.ctx.cur], strs[0]);
+    const c = page_semantics[1].finish(trees[1], &h.ui.tables.tx, strs[1]);
+    try testing.expect(popover.sameSemantics(e, c));
+    const name = struct {
+        fn of(x: *const a11y.Export, str: []const u8, r: u32) []const u8 {
+            return str[x.c.name_start[r]..][0..x.c.name_bytes[r]];
+        }
+    }.of;
+    const g = popover.exportRow(e, trees[0].find(.from("quality")));
+    try testing.expectEqual(@backingInt(a11y.Role.radio_group), e.c.role[g]);
+    try testing.expectEqualStrings("Quality", name(e, strs[0], g));
+    try testing.expectEqualStrings("Quality", name(c, strs[1], g));
+    for ([3][]const u8{ "Low", "Medium", "High" }, 0..) |want, k| {
+        const r = popover.exportRow(e, trees[0].find(optionId(.from("quality"), @intCast(k))));
+        try testing.expectEqualStrings(want, name(e, strs[0], r));
+        try testing.expectEqualStrings(want, name(c, strs[1], r));
+    }
+}
 
 test "Page: the radio replay selects by click and arrows, focus following, in both front ends" {
     const Replay = @import("../core/input.zig").Replay;

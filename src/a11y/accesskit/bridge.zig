@@ -729,7 +729,7 @@ test "accesskit: action requests reach the example as the user's own input" {
             a11y.apply(&cx.inter, acts);
             ap.build(&f, e);
             const out = f.end(.{});
-            ap.semantics(out.tree, &hh.s);
+            ap.semantics(out.tree, &hh.s, &cx.strings[cx.cur]);
             hh.frame(cx, &out);
         }
     };
@@ -746,6 +746,7 @@ test "accesskit: action requests reach the example as the user's own input" {
     try expectHas(d, "label: \"Add layer\"");
     try expectHas(d, "value: \"Layer 2\""); // static text: AccessKit reads a label's value
     try expectHas(d, "max_numeric_value: 4.0"); // the example's semantics: Exposure's range
+    try expectHas(d, "label: \"Exposure\""); // and its name
     try expectHas(d, "Increment");
     c.accesskit_tree_update_free(u);
 
