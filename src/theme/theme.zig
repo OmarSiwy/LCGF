@@ -12,6 +12,12 @@ const types = @import("../core/types.zig");
 const base = @import("../widgets/base.zig");
 const simd = @import("../core/simd.zig");
 const DrawList = @import("../draw/draw_list.zig").DrawList;
+const Tree = @import("../core/tree.zig").Tree;
+const Texts = @import("../core/texts.zig").Texts;
+const Mono = @import("../text/protocol.zig").Mono;
+const layout = @import("../layout/layout.zig");
+const runtime_frame = @import("../runtime/frame.zig");
+const Output = @import("../runtime/context.zig").Output;
 const Color = types.Color;
 const Style = types.Style;
 const Response = types.Response;
@@ -231,6 +237,79 @@ inline fn remap(c: u32, from: *const Palette, to: *const Palette) u32 {
 pub fn distinct(p: *const Palette) bool {
     for (p, 0..) |a, i| for (p[i + 1 ..]) |b| if (a.bitsOf() == b.bitsOf()) return false;
     return true;
+}
+
+// ---- inherited text --------------------------------------------------------------------------
+
+/// Text colour and size a node hands down to its subtree: two caller-owned columns, one row per
+/// tree row. 0 in a row means "the parent's"; row 0 (the root) holds the page's defaults. Each
+/// frame: `clear`, set the root and any overrides, build, then `endInherited` (or `resolve`
+/// before measuring text, in your own copy of `Frame.end`).
+pub const Inherited = struct {
+    /// `Color.bitsOf()`, 0 to inherit.
+    color: []u32,
+    /// Logical pixels, 0 to inherit.
+    px: []f32,
+
+    /// Every row inherits, and the root starts from `th`'s text.
+    pub fn clear(in: Inherited, th: *const base.Theme) void {
+        @memset(in.color, 0);
+        @memset(in.px, 0);
+        in.color[0] = th.text.bitsOf();
+        in.px[0] = th.text_px;
+    }
+
+    /// Node `node`'s subtree takes colour `color` and size `px` (either 0 to keep inheriting).
+    pub fn set(in: Inherited, node: types.Node, color: Color, px: f32) void {
+        in.color[node.ix()] = color.bitsOf();
+        in.px[node.ix()] = px;
+    }
+
+    /// Resolves the columns down `t` (rows are in push order, so a parent is final before its
+    /// children read it), then gives each text run of `tx` that inherits (colour 0 or size 0)
+    /// its node's resolved value. Run before text is measured: size changes layout.
+    pub fn resolve(in: Inherited, t: *const Tree, tx: *Texts) void {
+        const parent = t.c.parent;
+        for (1..t.len) |i| {
+            in.color[i] = simd.selU(in.color[i] == 0, in.color[parent[i]], in.color[i]);
+            in.px[i] = simd.selF(in.px[i] == 0, in.px[parent[i]], in.px[i]);
+        }
+        for (0..tx.len) |r| {
+            const n = tx.c.node[r];
+            tx.c.color[r] = simd.selU(tx.c.color[r] == 0, in.color[n], tx.c.color[r]);
+            tx.c.px[r] = simd.selF(tx.c.px[r] == 0, in.px[n], tx.c.px[r]);
+        }
+    }
+};
+
+/// `th` whose labels inherit their colour and size from the tree (`Inherited`) instead of
+/// carrying the theme's: every widget's text follows, with no per-widget code.
+pub fn inheriting(th: base.Theme) base.Theme {
+    var out = th;
+    out.text = .transparent;
+    out.text_px = 0;
+    return out;
+}
+
+/// `Frame.end` with `in.resolve` before text is measured.
+pub fn endInherited(f: *runtime_frame.Frame, font: Mono, in: Inherited) Output {
+    const t = f.tree();
+    const tx = f.texts();
+    t.seal(0);
+    in.resolve(t, tx);
+    font.measure(tx);
+    layout.prepare(t);
+    layout.applyText(t, tx, .x);
+    layout.fit(t, .x);
+    layout.resolve(t, .x, f.in.viewport[0]);
+    layout.textAvail(t, tx);
+    font.wrap(tx);
+    layout.applyText(t, tx, .y);
+    layout.fit(t, .y);
+    layout.resolve(t, .y, f.in.viewport[1]);
+    layout.place(t);
+    layout.finalize(t);
+    return f.finish();
 }
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -535,5 +614,54 @@ test "theme switch: at run time, by palette index, in both front ends" {
         try testing.expect(base.sameDraw(rt.draw, cp.draw));
         try testing.expectEqual(app.wireframe, ui.signals.state.wireframe);
         try testing.expectEqual(th.panel.bitsOf(), rt.draw.quads[0].fill);
+    }
+}
+
+var inherit_buffer: [context.Context.requiredBytes(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 6 })]u8 align(mem.column_align) = undefined;
+
+test "theme switch: text colour and size inherit down the tree" {
+    var ctx = try context.Context.init(&inherit_buffer, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 6 });
+    var color: [32]u32 = undefined;
+    var px: [32]f32 = undefined;
+    const inh: Inherited = .{ .color = &color, .px = &px };
+    const in: Input = .{ .viewport = .{ 400, 200 } };
+    const big = Color.rgb(200, 30, 30);
+    for ([2]base.Theme{ Dark.theme, Light.theme }) |page| {
+        // Widgets in an inheriting theme: their labels take the tree's text.
+        const th = inheriting(page);
+        inh.clear(&page);
+        var f = ctx.begin(&in);
+        _ = f.open(.from("panel"), .{ .gap = 4 });
+        _ = base.label(&f, &th, "plain");
+        _ = base.button(&f, &th, .from("b"), "Go");
+        const header = f.open(.from("header"), .{});
+        inh.set(header, big, 20);
+        _ = base.label(&f, &th, "title");
+        const sub = f.open(.from("sub"), .{});
+        inh.set(sub, .transparent, 11); // size only: colour still from the header
+        _ = base.label(&f, &th, "note");
+        // A label with its own colour keeps it.
+        _ = f.text("own", .{ .px = 13, .color = Color.white });
+        f.close();
+        f.close();
+        f.close();
+        const out = endInherited(&f, .{}, inh);
+        const d = out.draw;
+        try testing.expectEqual(@as(u32, 5), d.run_len);
+        const want = [5]struct { u32, f32 }{
+            .{ page.text.bitsOf(), page.text_px }, // plain: the page's
+            .{ page.text.bitsOf(), page.text_px }, // the button's caption
+            .{ big.bitsOf(), 20 }, // title: the header's
+            .{ big.bitsOf(), 11 }, // note: header colour, own size
+            .{ Color.white.bitsOf(), 13 }, // own
+        };
+        for (d.runs[0..5], want) |run, w| {
+            try testing.expectEqual(w[0], run.color);
+            try testing.expectEqual(w[1], run.px);
+        }
+        // Inherited size reaches layout: the 20 px title is laid out taller than the 11 px note.
+        const title = d.runs[2].rect;
+        const note = d.runs[3].rect;
+        try testing.expect(title[3] - title[1] > note[3] - note[1]);
     }
 }
