@@ -236,6 +236,17 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/spinner.replay");
+    pub const golden_frames = .{
+        .{ "spinner-start", 0 },
+        .{ "spinner-turned", 3 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -259,6 +270,27 @@ fn headDrawn(t: *const Tree) u32 {
         }
     }
     return best;
+}
+
+test "spinner: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var heads: [6]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        heads[k] = headDrawn(out.runtime.tree);
+        try testing.expect(h.app.busy);
+    }
+    try testing.expectEqual(@as(u32, 6), h.frames);
+    // 0, 0.1, 0.25, 0.5 and 0.7 s (a press on it changes nothing), then 1.0 s: 12 steps a
+    // second around 8 dots.
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 3, 6, 0, 4 }, &heads);
 }
 
 test "spinner: role, value and a name from its caption" {
