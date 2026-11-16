@@ -6,6 +6,11 @@
 //! field (checked while compiling) and takes the captions as a tuple of string fields, one
 //! option per field. Each option is a widget of its own (a hit target and a focus stop), named
 //! `<group>.<index>` in the comptime `Widget` enum and `group.with(index)` at run time.
+//!
+//! Accessibility: the group has role radio group, each option role radio, named by its
+//! caption, value 1 when selected (a11y/tree.zig `states` sets `checked` from it). The group
+//! has no accessible name yet: the ARIA pattern labels it by a heading, which these
+//! front ends cannot point at (`Semantics.labelled_by` is the application's to set).
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -23,6 +28,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
 const none = types.none;
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -134,14 +140,18 @@ pub fn radio(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const
     return r;
 }
 
-/// Writes the dots' fills and the options' value column (1 selected, 0 not) for the group at
-/// tree row `group` with `n` options, selection `value`. Both front ends call it.
+/// Writes the dots' fills, the options' value column (1 selected, 0 not) and the roles for
+/// the group at tree row `group` with `n` options, selection `value`: the group is a radio
+/// group and each option a radio, roles past `types.Role` written to the column directly.
+/// Both front ends call it.
 pub fn paintSelection(t: *Tree, th: *const Theme, group: u32, value: u32, n: u32) void {
+    t.c.role[group] = @backingInt(a11y.Role.radio_group);
     for (0..n) |i| {
         const o = group + 1 + option_rows * @as(u32, @intCast(i));
         const on = value == i;
         t.c.look[o + 2].fill = dotStyle(th, on).fill.bitsOf();
         t.c.value[o] = simd.b2f(on);
+        t.c.role[o] = @backingInt(a11y.Role.radio);
     }
 }
 
@@ -323,6 +333,33 @@ test "radio input: click selects, arrows move selection and focus, in both front
         try testing.expectEqual(st.focus, (@as(u32, @backingInt(h.ui.focus.?)) - 2) / option_rows);
         for (0..3) |i| try testing.expectEqual(simd.b2f(i == st.value), out.runtime.tree.c.value[3 + option_rows * i]);
     }
+}
+
+var radio_semantics: base.Semantic(32) = .{};
+
+test "radio a11y: a radio group of radios, named by their captions, the selected one checked, in both front ends" {
+    const h = &sizes;
+    h.init();
+    const in: Input = .{ .viewport = .{ 200, 120 } };
+    _ = try h.frame(&in);
+    const x = &radio_semantics;
+    try x.run(h);
+    const g = x.row(2).?;
+    try testing.expectEqual(@backingInt(a11y.Role.radio_group), x.out[0].c.role[g]);
+    try testing.expectEqual(@backingInt(Id.from("size")), x.out[0].c.id[g]);
+    const checked = a11y.State.bitsOf(.{ .checked = true });
+    for (0..3, [3][]const u8{ "Small", "Medium", "Large" }) |i, name| {
+        const r = x.row(3 + option_rows * @as(u32, @intCast(i))).?;
+        try testing.expectEqual(@backingInt(a11y.Role.radio), x.out[0].c.role[r]);
+        try testing.expectEqual(g, x.out[0].c.parent[r]);
+        try testing.expectEqual(@backingInt(optionId(.from("size"), @intCast(i))), x.out[0].c.id[r]);
+        try testing.expectEqualStrings(name, x.name(0, r));
+        try testing.expectEqualStrings(name, x.name(1, r));
+        try testing.expectEqual(simd.b2f(i == 1), x.out[0].c.value[r]);
+        try testing.expectEqual(if (i == 1) checked else 0, x.out[0].c.state[r]);
+    }
+    // Ring and dot are presentational: the root, the group, three options and three captions.
+    try testing.expectEqual(@as(u32, 8), x.out[0].len);
 }
 
 test {
