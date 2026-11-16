@@ -414,18 +414,10 @@ pub const Wayland = struct {
             w.cursor_serial = s.enter_serial;
         }
         w.data.set(w, p.clipboard);
-        if (w.ime.focus == surface) w.ime.apply(w, p.wants_text, p.ime_rect);
+        // A paste's text arrives as typed text in a later poll; nothing when there is none.
+        if (p.paste) _ = w.data.paste(w);
+        if (w.ime.focus == surface) w.ime.apply(w, p);
         w.flush();
-    }
-
-    /// Asks for the clipboard's text, which arrives as typed text (`Input.text` and a `.text`
-    /// event) in a later poll. The host calls it when a widget asks to paste
-    /// (`keyboard.Clipboard.paste`): `Platform` carries no paste request. False when the
-    /// clipboard holds no text.
-    pub fn paste(w: *Wayland) bool {
-        const ok = w.data.paste(w);
-        w.flush();
-        return ok;
     }
 
     /// The contract's present, for the main window.
