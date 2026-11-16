@@ -148,6 +148,33 @@ pub fn build(b: *std.Build) void {
             vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
         }
     }
+    const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
+    vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("imgui", .{})) |imgui| {
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-imgui", "vs-imgui-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libcpp = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/imgui/main.cpp"), .flags = &.{"-std=c++17"} });
+            exe.root_module.addCSourceFiles(.{ .root = imgui.path(""), .files = &.{ "imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp", "imgui_tables.cpp", "backends/imgui_impl_null.cpp" }, .flags = &.{"-std=c++17"} });
+            exe.root_module.addIncludePath(imgui.path(""));
+            exe.root_module.addIncludePath(imgui.path("backends"));
+            vs_imgui.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
+    const vs_lvgl = b.step("vs-lvgl", "Build the LVGL comparison harness (bench/vs/lvgl/)");
+    vs_lvgl.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("lvgl", .{})) |lvgl| {
+        // LVGL's defaults (LV_CONF_SKIP, no lv_conf.h) plus: 32-bit colour, Montserrat 20 for the
+        // headings, and the C library's malloc instead of LVGL's fixed 64 KiB pool.
+        const flags: []const []const u8 = &.{ "-std=gnu99", "-DLV_CONF_SKIP", "-DLV_COLOR_DEPTH=32", "-DLV_FONT_MONTSERRAT_20=1", "-DLV_USE_STDLIB_MALLOC=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_STRING=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_SPRINTF=LV_STDLIB_CLIB" };
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lvgl", "vs-lvgl-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/lvgl/main.c"), .flags = flags });
+            exe.root_module.addCSourceFiles(.{ .root = lvgl.path(""), .files = &@import("bench/vs/lvgl/sources.zig").files, .flags = flags });
+            exe.root_module.addIncludePath(lvgl.path("include"));
+            exe.root_module.addIncludePath(lvgl.path("src"));
+            vs_lvgl.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
 
     // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
     const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{

@@ -16,6 +16,7 @@ the LCGR benchmark itself (zig build vs-lcgr), which gives the reference row.
 """
 import argparse
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -45,6 +46,19 @@ def probe(cmd, seconds):
     return rss, hwm, wakeups
 
 
+def libraries(cmd):
+    """Bytes of the shared libraries mapped once the harness is idle (files, counted once each)."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    if not p.stdout.readline().startswith("ready"):
+        p.kill()
+        sys.exit("measure: expected a 'ready' line")
+    with open(f"/proc/{p.pid}/maps") as f:
+        paths = {line.split()[-1] for line in f if ".so" in line.split()[-1]}
+    p.stdin.close()
+    p.wait(timeout=5)
+    return len(paths), sum(os.path.getsize(path) for path in paths)
+
+
 def size(size_tool, exe):
     out = subprocess.run([size_tool, exe], check=True, capture_output=True, text=True).stdout
     text, rodata, data, bss = map(int, out.splitlines()[1].split()[1:])
@@ -59,6 +73,8 @@ def main():
     ap.add_argument("--size-tool", default="zig-out/bin/size")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--seconds", type=float, default=2.0, help="idle window of each probe")
+    ap.add_argument("--libraries", action="store_true",
+                    help="also sum the shared libraries mapped when idle (for frameworks that ship as them)")
     ap.add_argument("--json", help="also write the numbers here")
     a = ap.parse_args()
 
@@ -75,6 +91,8 @@ def main():
     r["peak_kib"] = statistics.median(p[1] for p in probes)
     r["idle_wakeups_per_s"] = statistics.median(p[2] for p in probes) / a.seconds
     r["loaded_bytes"], r["bss_bytes"] = size(a.size_tool, a.small or a.exe)
+    if a.libraries:
+        r["libraries"], r["library_bytes"] = libraries([a.exe, "--idle", "--scene", "idle"])
     r["load_after"] = load()
 
     print(f"{a.name}: medians of {a.runs} runs, load {r['load_before']:.2f} -> {r['load_after']:.2f}")
@@ -84,6 +102,8 @@ def main():
     print(f"resident {r['rss_kib']:.0f} KiB (peak {r['peak_kib']:.0f} KiB), "
           f"idle {r['idle_wakeups_per_s']:.1f} wake-ups/s, "
           f"binary {r['loaded_bytes']} B loaded + {r['bss_bytes']} B bss")
+    if a.libraries:
+        print(f"shared libraries mapped when idle: {r['libraries']} files, {r['library_bytes']} B")
     if a.json:
         with open(a.json, "w") as f:
             json.dump(r, f, indent=1)
