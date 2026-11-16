@@ -7,7 +7,7 @@ Inside a private D-Bus session: starts the accessibility bus and registry (at-sp
 enables accessibility, runs the example (zig-out/bin/accesskit-smoke) and then
 
 1. walks its AT-SPI tree with busctl, as any assistive technology sees it, and checks the
-   window, the Reset button, the Wireframe check box and the slider are there with their
+   window, the Reset button, the Wireframe check box and the Exposure slider are there with their
    names and roles;
 2. clicks Reset and Wireframe through AT-SPI's Action interface and checks the example ran
    them (it prints `resets=1`, `wireframe=true`);
@@ -129,7 +129,7 @@ print("ok   actions: AT-SPI clicks on Reset and Wireframe ran in the example")
 # 3. Orca, while the example moves focus round Reset, Wireframe and Exposure.
 orca_log = os.path.join(out, "orca.log")
 start(["orca", "--debug", "--debug-file=" + orca_log], "orca.out")
-expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'slider "]
+expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent"]
 spoken = []
 
 
@@ -143,6 +143,6 @@ def heard():
 wait_for(heard, lambda: "Orca to announce %s (it said %r)" % (expected, spoken), seconds=20)
 for s in spoken:
     print("     orca: " + s.split("{")[0])
-print("ok   orca announced the window, Reset, Wireframe (checked) and the slider")
+print("ok   orca announced the window, Reset, Wireframe (checked) and the Exposure slider at a quarter of its range")
 for p in procs:
     p.kill()

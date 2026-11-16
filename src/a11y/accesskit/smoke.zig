@@ -71,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
             a11y.apply(&ctx.inter, acts_buf[0..n]);
             app.build(&f, &ev);
             const out = f.end(.{});
-            app.semantics(out.tree, &host.s);
+            app.semantics(out.tree, &host.s, &ctx.strings[ctx.cur]);
             host.frame(&ctx, &out);
             ak.update(&host.b);
         }

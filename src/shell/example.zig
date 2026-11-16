@@ -11,6 +11,7 @@ const w = @import("../widgets/base.zig");
 const Events = @import("iface.zig").Events;
 const Tree = @import("../core/tree.zig").Tree;
 const a11y = @import("../a11y/tree.zig");
+const Strings = @import("../core/strings.zig").Strings;
 const slider = @import("../widgets/slider.zig");
 
 pub const id_reset = types.Id.from("reset");
@@ -57,9 +58,13 @@ pub const App = struct {
     }
 
     /// What the tree `build` made does not say to assistive technology: the exposure slider's
-    /// range. A host with an accessibility bridge calls it after each built frame.
-    pub fn semantics(_: *const App, t: *const Tree, s: *a11y.Semantics) void {
+    /// range, and its name, which no text on screen gives (`Semantics.label`, added to the
+    /// frame's strings `str`). A host with an accessibility bridge calls it after each built
+    /// frame.
+    pub fn semantics(_: *const App, t: *const Tree, s: *a11y.Semantics, str: *Strings) void {
         slider.semantics(t, s, id_exposure, exposure_lo, exposure_hi);
+        const r = t.find(id_exposure);
+        if (r != types.none) s.c.label[r] = str.add("Exposure");
     }
 };
 

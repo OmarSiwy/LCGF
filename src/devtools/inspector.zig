@@ -25,6 +25,7 @@ const std = @import("std");
 const types = @import("lcgr").types;
 const Frame = @import("lcgr").frame.Frame;
 const Tree = @import("lcgr").tree.Tree;
+const a11y = @import("lcgr").a11y_tree;
 const w = @import("lcgr").widgets_base;
 const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
@@ -279,8 +280,10 @@ pub fn depth(t: *const Tree, i: u32) u32 {
     return d;
 }
 
+/// Row `i`'s role, read as an accessibility role: the column holds those too, past
+/// `types.Role` (a tab, a link, a status bar).
 fn roleName(t: *const Tree, i: u32) []const u8 {
-    return @tagName(@as(types.Role, @fromBackingInt(@intCast(t.c.role[i]))));
+    return a11y.roleName(t.c.role[i]);
 }
 
 // ---- tests: the inspector inside the example (src/shell/example.zig) -----------------------
@@ -444,6 +447,71 @@ test "inspector: names the node under the pointer, takes the pointer, hides on F
     out = f.end(.{});
     try testing.expectEqual(none, out.tree.find(id_panel));
     try testing.expectEqual(out.tree.len, host.insp.own_first);
+}
+
+/// A page of widgets whose roles `types.Role` does not have: tabs, a breadcrumb's link, a toggle
+/// button, a scroll view and a status bar.
+const RolesApp = struct {
+    tab: u32 = 0,
+    bold: bool = true,
+    offset: f32 = 0,
+
+    pub fn build(app: *RolesApp, f: *Frame, _: *const iface.Events) void {
+        const lcgr = @import("lcgr");
+        const th = w.Theme.default;
+        _ = f.open(.from("page"), .{ .dir = .y, .size = .{ .fill, .fill }, .gap = 4 });
+        lcgr.widgets_tabs.open(f, &th, &.{.from("tab-a")}, &app.tab, &.{"A"});
+        _ = lcgr.widgets_tabs.panel(f, &th, app.tab, 0);
+        f.close();
+        lcgr.widgets_tabs.close(f);
+        _ = lcgr.widgets_breadcrumb.trail(f, &th, &.{.from("home")}, &.{ "Home", "Here" });
+        _ = lcgr.widgets_toggle.toggle(f, &th, .from("bold"), &app.bold, "B");
+        _ = f.open(.none, .{ .size = .{ .fill, .px(60) } });
+        lcgr.widgets_scroll.open(f, &th, .from("view"), &app.offset);
+        _ = w.label(f, &th, "Line");
+        lcgr.widgets_scroll.close(f, &th, .from("view"), app.offset);
+        f.close();
+        _ = lcgr.widgets_statusbar.bar(f, &th, &.{"Ready"});
+        f.close();
+    }
+};
+
+test "inspector: rows with accessibility roles past types.Role are named by them" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: struct {
+        app: RolesApp = .{},
+        insp: Inspector = .{ .max_lines = 64 },
+        pub fn build(h: anytype, f: *Frame, ev: *const iface.Events) void {
+            h.app.build(f, ev);
+            h.insp.build(f);
+        }
+    } = .{};
+    var in: Input = .{ .viewport = .{ 800, 600 } };
+    var out: context.Output = undefined;
+    // The inspector shows last frame's tree: two frames.
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        host.build(&f, &.{ .in = in });
+        out = f.end(.{});
+    }
+    for ([_][]const u8{ " tab_list ", " tab ", " tab_panel ", " navigation ", " link ", " toggle_button ", " scroll_view ", " scroll_bar ", " status " }) |role| {
+        if (!shows(&out, role)) {
+            std.debug.print("no '{s}' in the inspector's tree\n", .{role});
+            return error.TestUnexpectedResult;
+        }
+    }
+    // The hover line and the event log name them too: the pointer over the toggle button.
+    const prev = &ctx.trees[ctx.cur ^ 1];
+    const r = prev.rect(prev.find(.from("bold")));
+    in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        host.build(&f, &.{ .in = in });
+        out = f.end(.{});
+    }
+    try testing.expect(shows(&out, " toggle_button "));
+    try testing.expect(std.mem.indexOf(u8, host.insp.log.newest(0), "hover #") != null);
+    try testing.expect(std.mem.endsWith(u8, host.insp.log.newest(0), " toggle_button"));
 }
 
 test "timing.end: the same frames as Frame.end, with every pass timed" {

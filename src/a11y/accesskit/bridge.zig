@@ -96,6 +96,7 @@ pub const roles: [256]c.Role = blk: {
         .status => .status,
         // AccessKit's toggle button is a button with `toggled` (`offers`).
         .toggle_button => .button,
+        .scroll_view => .scroll_view,
     };
     break :blk m;
 };
@@ -284,7 +285,8 @@ pub const Bridge = struct {
             c.accesskit_node_set_max_numeric_value(n, hi);
         }
         if (of.value and step > 0) c.accesskit_node_set_numeric_value_step(n, step);
-        if (role == @backingInt(Role.status)) c.accesskit_node_set_live(n, .polite);
+        const politeness = a11y.live[role];
+        if (politeness != .off) c.accesskit_node_set_live(n, @fromBackingInt(@backingInt(politeness)));
         // A disabled control takes focus (to be read) but does nothing.
         if (of.focus) c.accesskit_node_add_action(n, .focus);
         if (st.disabled) return n;
@@ -588,6 +590,23 @@ test "accesskit: later frames send only the rows that changed, and the window wh
     try expectHas(debugText(u, &buf), "live: Polite");
     c.accesskit_tree_update_free(u);
 
+    // An alert (assertive) and a scroll view.
+    f.reset();
+    buildToolbar(&f, false, 2);
+    const al = f.t.push(0, .from("alert"), &.{});
+    f.t.c.role[al] = @backingInt(Role.alert);
+    _ = f.text(al, "Saved");
+    f.t.seal(al);
+    const sv = f.t.push(0, .from("view"), &.{});
+    f.t.c.role[sv] = @backingInt(Role.scroll_view);
+    f.t.seal(sv);
+    f.end(0);
+    u = Bridge.factory(&f.b).?;
+    const d2 = debugText(u, &buf);
+    try expectHas(d2, "live: Assertive");
+    try expectHas(d2, "role: ScrollView");
+    c.accesskit_tree_update_free(u);
+
     // Activation again (a screen reader restarted): the whole tree, whatever changed.
     f.reset();
     buildToolbar(&f, false, 2);
@@ -710,7 +729,7 @@ test "accesskit: action requests reach the example as the user's own input" {
             a11y.apply(&cx.inter, acts);
             ap.build(&f, e);
             const out = f.end(.{});
-            ap.semantics(out.tree, &hh.s);
+            ap.semantics(out.tree, &hh.s, &cx.strings[cx.cur]);
             hh.frame(cx, &out);
         }
     };
@@ -727,6 +746,7 @@ test "accesskit: action requests reach the example as the user's own input" {
     try expectHas(d, "label: \"Add layer\"");
     try expectHas(d, "value: \"Layer 2\""); // static text: AccessKit reads a label's value
     try expectHas(d, "max_numeric_value: 4.0"); // the example's semantics: Exposure's range
+    try expectHas(d, "label: \"Exposure\""); // and its name
     try expectHas(d, "Increment");
     c.accesskit_tree_update_free(u);
 
