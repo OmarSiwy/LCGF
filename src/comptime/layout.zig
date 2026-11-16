@@ -117,7 +117,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             for (info.field_types, writes, &types) |FT, w, *T| T.* = Field(FT, R, w);
             break :blk @Struct(.auto, null, info.field_names, &types, &@splat(.{}));
         };
-        const ViewExtras = struct { border: *const [simd.rows(n + 1)]f32 };
+        const ViewExtras = struct { row: *const [simd.rows(n + 1)]tree.Extra };
 
         /// What the layout passes take as their tree.
         pub const View = if (unroll)
@@ -129,7 +129,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         /// read-only tables.
         pub fn view(scratch: *Scratch) View {
             @setEvalBranchQuota(100_000);
-            var v: View = .{ .len = n, .c = undefined, .x = .{ .border = &C.pushed.x.border } };
+            var v: View = .{ .len = n, .c = undefined, .x = .{ .row = &C.pushed.x.row } };
             inline for (info.field_names, writes) |name, w| {
                 if (w) {
                     const dst = &@field(scratch, name);
@@ -257,7 +257,7 @@ fn FoldPlan(comptime C: type) type {
             var out: [n]bool = undefined;
             out[0] = false;
             for (1..n) |i| {
-                const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] == 0 and c.pct[1][i] == 0 and
+                const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] < 0 and c.pct[1][i] < 0 and
                     (c.shrink[i] == 0 or c.flow[i] == 0);
                 out[i] = out[c.parent[i]] or own;
             }
