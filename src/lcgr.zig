@@ -150,6 +150,7 @@ pub const shell_x11_keys = @import("shell/x11/keys.zig");
 pub const shell_x11_xim = @import("shell/x11/xim.zig");
 pub const shell_win32_translate = @import("shell/win32/translate.zig");
 pub const shell_ios_translate = @import("shell/ios/translate.zig");
+pub const shell_android_translate = @import("shell/android/translate.zig");
 
 test {
     std.testing.refAllDecls(@This());

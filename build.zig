@@ -761,6 +761,64 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios; --replay runs the input replay test)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
 
+    // The Android shell (src/shell/android/android.zig) and its example, over lcgr and the
+    // Vulkan back end: a shared library a NativeActivity loads. There is no NDK here, so the
+    // Android libraries are linked through stubs: empty shared libraries named libandroid.so,
+    // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` so it is kept), and empty
+    // crtbegin_so.o / crtend_so.o, in a sysroot under the install prefix that a libc file
+    // points Zig at. They only give the library its DT_NEEDED entries; at run time the device's
+    // own libraries answer. Every NDK declaration is written by hand (android.zig).
+    const android_step = b.step("android-build", "Build zig-out/lib/libandroid-example.so, the example in the Android shell (-Dtarget=aarch64-linux-android)");
+    if (target.result.abi.isAndroid()) {
+        const stubs = b.addWriteFiles();
+        const empty_src = stubs.add("empty.zig", "");
+        const libc_src = stubs.add("libc.zig", "export fn abort() void {}\n");
+        const crt = b.addObject(.{ .name = "crt", .root_module = b.createModule(.{ .root_source_file = empty_src, .target = target, .optimize = .ReleaseSmall }) });
+        const sysroot_tool = b.addRunArtifact(b.addExecutable(.{ .name = "android-sysroot", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/sysroot.zig"),
+            .target = b.graph.host,
+        }) }));
+        const sysroot = sysroot_tool.addOutputDirectoryArg("android-sysroot");
+        sysroot_tool.addFileArg(crt.getEmittedBin());
+        for ([_][]const u8{ "c", "m", "dl", "android", "log" }) |name| {
+            const stub = b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = b.createModule(.{
+                .root_source_file = if (std.mem.eql(u8, name, "c")) libc_src else empty_src,
+                .target = target,
+                .optimize = .ReleaseSmall,
+            }) });
+            sysroot_tool.addFileArg(stub.getEmittedBin());
+        }
+        const android_vk = b.createModule(.{
+            .root_source_file = b.path("src/render/vk/vk.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        });
+        android_vk.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+        android_vk.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        const android_example = b.addLibrary(.{ .name = "android-example", .linkage = .dynamic, .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/example.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "vk", .module = android_vk } },
+        }) });
+        android_example.setLibCFile(sysroot.path(b, "libc.txt"));
+        android_example.root_module.addLibraryPath(sysroot);
+        for ([_][]const u8{ "dl", "android", "log" }) |name| android_example.root_module.linkSystemLibrary(name, .{ .needed = true, .use_pkg_config = .no });
+        if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+            // Translated for plain Linux on the same CPU: the headers are the same (VKAPI_CALL
+            // differs only on 32-bit ARM); translate-c rejects any ABI version but glibc's.
+            const linux = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu });
+            const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = linux, .optimize = optimize });
+            vk_h.addIncludePath(vulkan_headers.path("include"));
+            vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+            android_vk.addImport("vk_c", vk_h.createModule());
+        }
+        android_step.dependOn(&b.addInstallArtifact(android_example, .{}).step);
+    } else android_step.dependOn(&b.addFail("android-build needs -Dtarget=aarch64-linux-android").step);
+
     // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
     // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
     const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
