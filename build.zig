@@ -503,6 +503,18 @@ pub fn build(b: *std.Build) void {
         web_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     }
     web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/render/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+    // The web shell's example (src/shell/web/): the shell from lcgr, the back end as a module.
+    const render_web = b.createModule(.{ .root_source_file = b.path("src/render/web/web.zig"), .target = web_target, .optimize = web_optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr_web }} });
+    const shell_wasm = b.addExecutable(.{ .name = "shell", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/web/main.zig"),
+        .target = web_target,
+        .optimize = web_optimize,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_web }, .{ .name = "render_web", .module = render_web } },
+    }) });
+    shell_wasm.entry = .disabled;
+    shell_wasm.rdynamic = true;
+    web_step.dependOn(&b.addInstallArtifact(shell_wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
+    web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/shell/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

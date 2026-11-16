@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lcgr: web shell example</title>
+<!-- The shell example (src/shell/example.zig) in a page: shell.wasm (main.zig) through the web
+     shell (web.zig, shell.js), drawn on the canvas. Serve zig-out/web/ over HTTP and open this
+     page; test_shell.py drives it in headless Chromium. -->
+<style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+<canvas id="c"></canvas>
+<script type="module">
+import { load, webgpu, canvas2d } from "./lcgr.js";
+import { attach, shell } from "./shell.js";
+
+const canvas = document.getElementById("c");
+const page = {};
+const ui = await load("shell.wasm", webgpu, canvas2d(canvas), shell(page));
+if (!ui.exports.lcgr_init()) throw new Error("lcgr_init: buffer too small");
+attach(ui, canvas, page);
+window.lcgr = { ui, page };
+</script>

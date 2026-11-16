@@ -142,6 +142,11 @@ class Page:
     def send(self, method, params=None, timeout=30):
         return self.browser.send(method, params, self.session, timeout)
 
+    def metrics(self, width, height, scale=1):
+        """Sets the page's viewport to `width` x `height` CSS pixels at device pixel ratio `scale`
+        (the window size flag leaves room for browser chrome even headless)."""
+        self.send("Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": scale, "mobile": False})
+
     def eval(self, expr, timeout=30):
         """The value of `expr` (awaited if a promise), as JSON-compatible data."""
         r = self.send("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, timeout)
