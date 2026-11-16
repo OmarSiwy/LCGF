@@ -15,3 +15,6 @@ for p in $pages; do
         python3 tools/golden/golden.py "$out/$p/$(basename "$ref")" "$ref"
     done
 done
+# The smoke test: demo.html, the page a person opens, with WebGPU and without (the 2D-canvas
+# fallback, its screenshot compared with the goldens).
+python3 src/render/web/smoke.py zig-out/web zig-out/web-smoke

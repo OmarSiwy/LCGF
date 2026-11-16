@@ -62,7 +62,8 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 class Browser:
-    def __init__(self, extra_flags=()):
+    def __init__(self, extra_flags=(), webgpu=True):
+        """`webgpu=False` leaves out --enable-unsafe-webgpu: Linux Chromium then gives no adapter."""
         exe = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
         if not exe:
             raise Error("no chromium on PATH (nix develop .#web)")
@@ -75,7 +76,7 @@ class Browser:
             os.dup2(from_chrome, 4)
 
         self.proc = subprocess.Popen(
-            [exe, *FLAGS, *extra_flags, "--remote-debugging-pipe", f"--user-data-dir={self.profile}", "about:blank"],
+            [exe, *(f for f in FLAGS if webgpu or f != "--enable-unsafe-webgpu"), *extra_flags, "--remote-debugging-pipe", f"--user-data-dir={self.profile}", "about:blank"],
             pass_fds=(3, 4), preexec_fn=fds, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.close(to_chrome)
         os.close(from_chrome)
