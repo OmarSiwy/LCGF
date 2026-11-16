@@ -252,3 +252,16 @@ test "es2: the GLSL ES 1.00 program links on a real driver and draws past the ho
     try h.check();
     try testing.expectEqualSlices(u8, &.{ 30, 31, 36, 255 }, px[(60 * 160 + 80) * 4 ..][0..4]);
 }
+
+/// Wyhash of quad.wgsl's stock shader (quad.wgsl + material.wgsl) that es2/quad.vert and
+/// es2/quad.frag were last ported from.
+const ported_from: u64 = 0x94a966e5a06ac89b;
+
+test "es2: the hand-written GLSL ES 1.00 shaders were ported from the current quad.wgsl" {
+    // Fails when quad.wgsl or material.wgsl change: port the change into es2/quad.vert and
+    // es2/quad.frag (naga cannot write GLSL ES 1.00), check `ci/run.sh gles`, then set
+    // `ported_from` to the hash this prints.
+    const now = std.hash.Wyhash.hash(0, quad_shader.wgsl);
+    if (now != ported_from) std.debug.print("quad.wgsl hash: 0x{x}\n", .{now});
+    try testing.expectEqual(ported_from, now);
+}

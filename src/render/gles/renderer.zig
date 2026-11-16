@@ -12,7 +12,9 @@
 //! The shaders are the committed GLSL ES 3.0 that naga translated from quad.wgsl
 //! (src/render/shaders/gen/stock.vert, .frag). GL ES 3.0 has no base instance, so a draw that
 //! starts at quad `first` points the attributes `first * stride` bytes into the buffer; the
-//! rebinding the contract requires for every draw does that for free.
+//! rebinding the contract requires for every draw does that for free. After each draw the
+//! renderer's vertex array is unbound again: its attributes carry instance divisors, and a host
+//! drawing next with the default vertex array must not edit (or draw through) it.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -178,12 +180,14 @@ pub const Renderer = struct {
     pub fn drawBatch(r: *const Renderer, _: Pass, batch: draw_list.Batch) void {
         r.bind(batch.material, batch.texture, @as(usize, batch.first) * quad_shader.stride);
         r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(batch.count));
+        r.f3.glBindVertexArray(0);
     }
 
     /// One instanced draw for a text run's glyphs.
     pub fn drawText(r: *const Renderer, _: Pass, run: u32) void {
         r.bind(.solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.first[run]) * quad_shader.stride);
         r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(r.glyphs.count[run]));
+        r.f3.glBindVertexArray(0);
     }
 
     /// The scissor for an inline custom draw (x, y, width, height): `custom.rect` cut by

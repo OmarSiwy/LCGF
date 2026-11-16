@@ -7,7 +7,8 @@
 //! (es2.zig) on a GL ES 2 context.
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
-//! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
+//! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas. Custom
+//! commands are drawn by the host's own program between the UI's draws (custom.zig).
 const std = @import("std");
 const lcgr = @import("lcgr");
 const gles = @import("gles.zig");
@@ -36,19 +37,21 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("gles-play: {s}, {s}\n", .{ h.gl.glGetString(gl.RENDERER).?, h.gl.glGetString(gl.VERSION).? });
     const atlas = h.texture(64, 64, &standInAtlas());
     defer h.deleteTexture(atlas);
+    var gradient = try gles.custom.Gradient.init(&h.gl);
+    defer gradient.deinit();
     if (es2) {
         const scratch = try gpa.alignedAlloc(u8, .of(lcgr.draw_list.Quad), gles.es2.scratchBytes(.{}));
         var gfx = try gles.es2.Renderer.init(&h.gl, .{}, scratch);
         defer gfx.deinit();
-        try drawScenes(io, gpa, out, &h, &gfx, gfx.addTexture(atlas, 64, 64));
+        try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas, 64, 64));
     } else {
         var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
         defer gfx.deinit();
-        try drawScenes(io, gpa, out, &h, &gfx, gfx.addTexture(atlas));
+        try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas));
     }
 }
 
-fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, atlas: lcgr.types.Texture) !void {
+fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, gradient: *const gles.custom.Gradient, atlas: lcgr.types.Texture) !void {
     for (&conformance.scenes) |*s| {
         st.load(s);
         const w: u32 = @intFromFloat(s.viewport[0]);
@@ -59,7 +62,11 @@ fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host
         glyphs.texture = atlas;
         gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
         target.begin(h, .{ 0, 0, 0, 1 });
-        gfx.render({}, &st.draw);
+        // The host's loop: UI draws up to each custom command, its own program there.
+        var i = iface.drawUntilCustom(gfx, {}, &st.draw, 0);
+        while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(gfx, {}, &st.draw, i + 1)) {
+            gradient.draw(gfx.customScissor(st.draw.customs[st.draw.command(i).custom]), gfx.extent);
+        }
         const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
         h.readback(w, ht, px);
         try h.check();

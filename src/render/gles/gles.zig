@@ -12,6 +12,7 @@ pub const program = @import("program.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
 pub const es2 = @import("es2.zig");
+pub const custom = @import("custom.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -21,4 +22,5 @@ test {
     std.testing.refAllDecls(program);
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(es2);
+    std.testing.refAllDecls(custom);
 }
