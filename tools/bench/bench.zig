@@ -15,6 +15,8 @@
 //!   zig build bench -- --scene NAME    run another scene of bench/scenes/ (frame passes only)
 //!   zig build bench -- --counters      also count cycles, instructions, L1D and LLC read misses
 //!                                      per pass (perf_event_open; pin to one core with taskset)
+//!   zig build bench -- --huge          put both column buffers in 2 MB transparent huge pages
+//!                                      (mmap + madvise; docs/perf/huge-pages.md)
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
 //!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
@@ -250,6 +252,19 @@ const Marks = struct {
     }
 };
 
+/// `n` bytes of anonymous memory, 2 MB aligned, advised as transparent huge pages and touched,
+/// so the kernel backs it with huge pages now rather than on first use inside a timed pass.
+fn hugeBuffer(n: usize) ![]align(2 << 20) u8 {
+    const huge = 2 << 20;
+    const size = std.mem.alignForward(usize, n, huge);
+    const rc = linux.mmap(null, size + huge, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+    if (@as(isize, @bitCast(rc)) < 0) return error.Mmap;
+    const base: [*]align(huge) u8 = @ptrFromInt(std.mem.alignForward(usize, rc, huge));
+    if (linux.madvise(base, size, linux.MADV.HUGEPAGE) != 0) return error.Madvise;
+    @memset(base[0..size], 0);
+    return base[0..n];
+}
+
 fn us(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1000.0;
 }
@@ -261,10 +276,13 @@ pub fn main(init: std.process.Init) !void {
     var json_path: ?[]const u8 = null;
     var idle = false;
     var counters = false;
+    var huge = false;
     var scene = rows_scene;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--idle")) {
             idle = true;
+        } else if (std.mem.eql(u8, arg, "--huge")) {
+            huge = true;
         } else if (std.mem.eql(u8, arg, "--counters")) {
             counters = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
@@ -278,11 +296,13 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (counters) try openCounters();
-    var ctx = try ui.Context.init(&buffer, limits);
+    const proto_buf: []align(ui.mem.column_align) u8 = if (huge) try hugeBuffer(buffer.len) else &buffer;
+    const src_buf: []align(lcgr.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
+    var ctx = try ui.Context.init(proto_buf, limits);
     const th: ui.Theme = .{};
     var in: ui.Input = .{};
     const font: lcgr.protocol.Mono = .{};
-    var carver: lcgr.mem.Carver = .{ .buf = &src_buffer };
+    var carver: lcgr.mem.Carver = .{ .buf = src_buf };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
