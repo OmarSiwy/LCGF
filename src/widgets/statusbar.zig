@@ -25,10 +25,11 @@ pub fn bar(f: *Frame, th: *const Theme, texts: []const []const u8) Node {
     return n;
 }
 
-/// The strip: as wide as its parent, its texts in a row.
+/// The strip: as wide as its parent, on the panel colour, its texts in a row spaced by two
+/// pads, inset by a pad at the ends and by the gap above and below (a status bar is
+/// thinner than a toolbar).
 pub fn barStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .size = .{ .fill, .fit } };
+    return .{ .dir = .x, .size = .{ .fill, .fit }, .pad = .{ th.pad, th.gap, th.pad, th.gap }, .gap = 2 * th.pad, .cross = .center, .fill = th.panel };
 }
 
 /// The status bar as a spec node.
@@ -100,6 +101,30 @@ test "statusbar: both front ends build a strip of texts at the window's foot" {
     try testing.expectEqual(@as(f32, 320), r.w());
     try testing.expectEqual(@as(f32, 200), r.y1);
     try testing.expect(t.rect(rows.text[1]).x0 >= t.rect(rows.text[0]).x1);
+}
+
+test "statusbar: on the panel colour, texts inset and spaced; any theme alike" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    const th = Theme.default;
+    const t = out.runtime.tree;
+    const r = t.rect(rows.bar);
+    try testing.expectEqual(th.panel.bitsOf(), t.c.look[rows.bar].fill);
+    try testing.expectEqual(r.x0 + th.pad, t.rect(rows.text[0]).x0);
+    try testing.expectEqual(r.y0 + th.gap, t.rect(rows.text[0]).y0);
+    try testing.expectEqual(t.rect(rows.text[0]).x1 + 2 * th.pad, t.rect(rows.text[1]).x0);
+    try testing.expectEqual(th.text.bitsOf(), out.runtime.texts.c.color[t.c.text[rows.text[0]]]);
+
+    const Light = Page(.{ .panel = .rgb(240, 240, 240), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    const lo = try S.light.frame(&in);
+    const lt = lo.runtime.tree;
+    try testing.expectEqual(lt.rect(rows.bar).x0 + 12, lt.rect(rows.text[0]).x0);
 }
 
 test {
