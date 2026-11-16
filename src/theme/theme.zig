@@ -10,6 +10,8 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const base = @import("../widgets/base.zig");
+const simd = @import("../core/simd.zig");
+const DrawList = @import("../draw/draw_list.zig").DrawList;
 const Color = types.Color;
 const Style = types.Style;
 const Response = types.Response;
@@ -189,12 +191,55 @@ pub fn Folded(comptime tok: Tokens, comptime d: Density) type {
 pub const Dark = Folded(dark, .comfortable);
 pub const Light = Folded(light, .comfortable);
 
+// ---- run-time switching -----------------------------------------------------------------------
+
+/// The stock palettes, by index: what a run-time theme switch picks from. An application keeps
+/// its own table the same way and stores only the index.
+pub const palettes = [_]Palette{ dark_palette, light_palette };
+
+/// `tok` with palette `p`: switching theme at run time is swapping the palette, sizes stay.
+/// The runtime front end rebuilds every frame, so the next frame built with `widgets` of the
+/// result is in the new theme.
+pub fn withPalette(tok: Tokens, p: Palette) Tokens {
+    var out = tok;
+    out.palette = p;
+    return out;
+}
+
+/// Switches a frame painted in palette `from` to palette `to` without rebuilding it: each quad
+/// fill and outline and each text colour that is `from[role]` becomes `to[role]`. This is how a
+/// comptime UI, whose theme is fixed when it is compiled, changes theme at run time: paint as
+/// usual, then recolor its draw list by palette index. Colours not in `from` (transparent,
+/// custom fills) are left alone. `from`'s colours must be distinct, or a role is ambiguous.
+pub fn recolor(d: *DrawList, from: *const Palette, to: *const Palette) void {
+    for (d.quads[0..d.quad_len]) |*q| {
+        q.fill = remap(q.fill, from, to);
+        q.border_color = remap(q.border_color, from, to);
+    }
+    for (d.runs[0..d.run_len]) |*r| r.color = remap(r.color, from, to);
+}
+
+/// `c` through the palette map, as selects over every role; each compares the original `c`, so
+/// a colour already mapped is never mapped again.
+inline fn remap(c: u32, from: *const Palette, to: *const Palette) u32 {
+    var out = c;
+    inline for (0..role_count) |k| out = simd.selU(c == from[k].bitsOf(), to[k].bitsOf(), out);
+    return out;
+}
+
+/// Whether `p`'s colours are distinct, which `recolor` needs of its `from`.
+pub fn distinct(p: *const Palette) bool {
+    for (p, 0..) |a, i| for (p[i + 1 ..]) |b| if (a.bitsOf() == b.bitsOf()) return false;
+    return true;
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
 const mem = @import("../core/mem.zig");
 const context = @import("../runtime/context.zig");
+const Frame = @import("../runtime/frame.zig").Frame;
 
 /// The theme switch test: the reference page (`widgets_base.Reference`) driven in theme `a` and
 /// in theme `b` by the same script of hovers, clicks and drags, each aimed at last frame's rect
@@ -421,4 +466,74 @@ test "Folded: comptime themes are constants" {
 test "theme switch: between folded themes" {
     try expectSwitch(Dark.theme, Light.theme);
     try expectSwitch(Light.theme, Folded(light, .compact).theme);
+}
+
+test "recolor: maps each role once, leaves other colours" {
+    var quads: [3]@import("../draw/draw_list.zig").Quad = undefined;
+    for (&quads) |*q| q.* = std.mem.zeroes(@TypeOf(q.*));
+    quads[0].fill = dark_palette[2].bitsOf();
+    quads[0].border_color = dark_palette[3].bitsOf();
+    quads[1].fill = 0x1234_5678;
+    // A map whose target is another role's source: still one step.
+    const to: Palette = .{ dark_palette[2], dark_palette[0], dark_palette[1], dark_palette[3], dark_palette[4], dark_palette[5] };
+    const twice: Palette = .{ dark_palette[0], dark_palette[0], dark_palette[1], dark_palette[3], dark_palette[4], dark_palette[5] };
+    var d: DrawList = undefined;
+    d.quads = &quads;
+    d.quad_len = 2;
+    d.run_len = 0;
+    recolor(&d, &dark_palette, &to);
+    try testing.expectEqual(dark_palette[1].bitsOf(), quads[0].fill);
+    try testing.expectEqual(dark_palette[3].bitsOf(), quads[0].border_color);
+    try testing.expectEqual(@as(u32, 0x1234_5678), quads[1].fill);
+    try testing.expectEqual(@as(u32, 0), quads[1].border_color);
+    for (&palettes) |*p| try testing.expect(distinct(p));
+    try testing.expect(distinct(&to));
+    try testing.expect(!distinct(&twice));
+}
+
+/// The comptime reference page in `Dark`, and the same page in the runtime front end built in
+/// a theme chosen each frame (`widgets_base.Reference`'s App with the theme as a parameter).
+const SwitchPage = struct {
+    const limits = base.Reference(Dark.theme).page_limits;
+    var buffer: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ui: base.Reference(Dark.theme).Ui = .{};
+
+    const App = struct {
+        wireframe: bool = false,
+        exposure: f32 = 0.25,
+
+        fn build(app: *App, f: *Frame, th: *const base.Theme) void {
+            _ = f.open(.from("toolbar"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel });
+            _ = base.button(f, th, .from("reset"), "Reset");
+            _ = base.checkbox(f, th, .from("wire"), &app.wireframe, "Wireframe");
+            _ = base.slider(f, th, .from("exposure"), &app.exposure, 0, 1);
+            _ = base.label(f, th, "Layer 0");
+            f.close();
+        }
+    };
+};
+
+test "theme switch: at run time, by palette index, in both front ends" {
+    var ctx = try context.Context.init(&SwitchPage.buffer, SwitchPage.limits);
+    const ui = &SwitchPage.ui;
+    ui.* = .{};
+    var app: SwitchPage.App = .{};
+    var in: Input = .{ .viewport = .{ 400, 100 } };
+    // The active palette changes every frame while the pointer moves across the toolbar and
+    // clicks (the checkbox sits near x = 80).
+    for (0..10) |k| {
+        const active: u32 = @intCast(k % 2);
+        in.pointer = .{ @floatFromInt(k * 20), 20 };
+        in.buttons.left = k == 4;
+        const th = widgets(&withPalette(dark, palettes[active]));
+        var f = ctx.begin(&in);
+        app.build(&f, &th);
+        const rt = f.end(ui.font);
+        // Comptime: compiled in Dark, recolored to the active palette.
+        const cp = ui.frame(&in);
+        recolor(&ui.tables.d, &palettes[0], &palettes[active]);
+        try testing.expect(base.sameDraw(rt.draw, cp.draw));
+        try testing.expectEqual(app.wireframe, ui.signals.state.wireframe);
+        try testing.expectEqual(th.panel.bitsOf(), rt.draw.quads[0].fill);
+    }
 }
