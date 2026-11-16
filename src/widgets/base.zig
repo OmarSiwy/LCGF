@@ -88,7 +88,25 @@ pub const Theme = struct {
 
     /// The default tokens.
     pub const default: Theme = .{};
+
+    /// A control's face by interaction state: rest, hot, held, held and hot. A held control
+    /// looks held wherever the pointer is.
+    pub fn controlFills(th: *const Theme) StateColors {
+        return .{ th.control, th.control_hot, th.control_held, th.control_held };
+    }
+
+    /// A mark (a checkbox's box) by value: off, on.
+    pub fn marks(th: *const Theme) OnOff {
+        return .{ th.control, th.accent };
+    }
 };
+
+/// One colour per interaction state, indexed by `hovered | held << 1`. A widget picks its colour
+/// by indexing, never by branching on its state, so the choice is one load whatever the state.
+pub const StateColors = [4]Color;
+
+/// One colour per value of a two-state widget, indexed by the value (false 0, true 1).
+pub const OnOff = [2]Color;
 
 inline fn unit(x: f32) f32 {
     return @min(@max(x, 0), 1);
@@ -106,8 +124,7 @@ pub fn buttonStyle(th: *const Theme) Style {
 
 /// State selects the colour by table index.
 pub fn buttonFill(th: *const Theme, r: Response) Color {
-    const fills = [4]Color{ th.control, th.control_hot, th.control_held, th.control_held };
-    return fills[@as(u8, @intFromBool(r.hovered)) | (@as(u8, @intFromBool(r.held)) << 1)];
+    return th.controlFills()[@as(u8, @intFromBool(r.hovered)) | (@as(u8, @intFromBool(r.held)) << 1)];
 }
 
 pub fn checkboxStyle(th: *const Theme) Style {
@@ -115,8 +132,7 @@ pub fn checkboxStyle(th: *const Theme) Style {
 }
 
 pub fn checkboxBox(th: *const Theme, value: bool) Style {
-    const marks = [2]Color{ th.control, th.accent };
-    return .{ .size = .{ .px(16), .px(16) }, .radius = 3, .fill = marks[@intFromBool(value)], .border = 1, .border_color = th.control_hot };
+    return .{ .size = .{ .px(16), .px(16) }, .radius = 3, .fill = th.marks()[@intFromBool(value)], .border = 1, .border_color = th.control_hot };
 }
 
 pub fn sliderTrack(th: *const Theme) Style {
@@ -575,6 +591,23 @@ test "Theme: other tokens restyle both front ends alike" {
         w.* = out.tree.rect(out.tree.find(.from("b"))).w();
     }
     try testing.expectEqual(widths[0] + 16, widths[1]);
+}
+
+test "StateColors, OnOff: the theme's tables, indexed by state and value" {
+    const th = Theme.default;
+    try testing.expectEqual(StateColors{ th.control, th.control_hot, th.control_held, th.control_held }, th.controlFills());
+    try testing.expectEqual(OnOff{ th.control, th.accent }, th.marks());
+    // Every state picks its row of the table, for buttons in both front ends (`buttonFill`).
+    for (0..4) |k| {
+        const r: Response = .{ .hovered = k & 1 != 0, .held = k & 2 != 0 };
+        try testing.expectEqual(th.controlFills()[k], buttonFill(&th, r));
+    }
+    // Other bits of the response do not move the index.
+    try testing.expectEqual(th.control, buttonFill(&th, .{ .pressed = true, .released = true, .clicked = true, .focused = true }));
+    for ([2]bool{ false, true }, th.marks()) |v, c| try testing.expectEqual(c, checkboxBox(&th, v).fill);
+    // A comptime theme gives comptime tables: they can live in read-only data.
+    const fills = comptime Theme.default.controlFills();
+    try testing.expectEqual(th.control_hot, fills[1]);
 }
 
 test "button: hover and hold pick the fill by table index; click on release over it" {
