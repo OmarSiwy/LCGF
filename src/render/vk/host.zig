@@ -50,6 +50,12 @@ pub const Once = struct {
 
     /// Submits and waits until the GPU is done with it.
     pub fn submit(o: *Once, d: *const Device) Error!void {
+        try o.send(d);
+        try o.wait(d);
+    }
+
+    /// Submits without waiting; `wait` before the next `begin`.
+    pub fn send(o: *Once, d: *const Device) Error!void {
         try check(d.fns.vkEndCommandBuffer.?(o.cmd));
         const info: c.VkCommandBufferSubmitInfo = .{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = o.cmd };
         try check(d.fns.vkQueueSubmit2.?(d.queue, 1, &.{
@@ -57,6 +63,9 @@ pub const Once = struct {
             .commandBufferInfoCount = 1,
             .pCommandBufferInfos = &info,
         }, o.fence));
+    }
+
+    pub fn wait(o: *Once, d: *const Device) Error!void {
         try check(d.fns.vkWaitForFences.?(d.handle, 1, &o.fence, c.VK_TRUE, std.math.maxInt(u64)));
         try check(d.fns.vkResetFences.?(d.handle, 1, &o.fence));
     }
