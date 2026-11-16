@@ -12,3 +12,6 @@ zig build vs-lcgr
 { zig-out/bin/vs-lcgr --scene idle; python3 tools/bench/probe.py -- zig-out/bin/vs-lcgr --idle --scene idle; } > zig-out/gates/idle.txt
 cat zig-out/gates/idle.txt
 python3 bench/gates/gates.py idle zig-out/gates/idle.txt
+# Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
+zig build gates-latency > zig-out/gates/latency.txt
+python3 bench/gates/gates.py latency zig-out/gates/latency.txt

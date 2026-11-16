@@ -58,5 +58,6 @@
    "ratio": 7.101,
    "best": "clay"
   }
- }
+ },
+ "latency_us": 345.5
 }
