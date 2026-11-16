@@ -99,3 +99,4 @@ pub const shell_example = @import("shell/example.zig");
 test {
     std.testing.refAllDecls(@This());
 }
+pub const i18n_catalogue = @import("i18n/catalogue.zig");
