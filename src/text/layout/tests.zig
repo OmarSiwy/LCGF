@@ -197,8 +197,10 @@ test "text-edit's screen-order caret sits on the glyph it moved to over reordere
     for (texts) |text| {
         p.fixed(text, 10);
         try lines.breakLines(&p.g, text, std.math.inf(f32), &p.l);
-        lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, .{});
-        try lines.reorder(&p.l, &p.g, text, .{}, s);
+        // In a box as wide as the line, so it starts at 0 in either direction.
+        const a: lines.Align = .{ .width = @floatFromInt(p.g.len * 10) };
+        lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, a);
+        try lines.reorder(&p.l, &p.g, text, a, s);
         const v: moves.View = .{ .l = &p.l, .g = &p.g, .text = text };
         // From the left end, Right moves the drawn caret strictly rightwards, each time onto
         // the glyph moves.visual placed the stop at, up to the right end; Left walks back.
