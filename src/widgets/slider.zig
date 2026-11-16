@@ -123,6 +123,46 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The slider's example page: Volume (0..100) and Gain (-12..12), each under its label, on a
+/// panel, in both front ends. Its replay (testdata/slider.replay) drags and uses the keys;
+/// its golden images (tools/widgetgolden/ref/slider-*.png) show the fill following.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
+
+    pub const App = struct {
+        volume: f32 = 50,
+        gain: f32 = 0,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = base.label(f, &th, "Volume");
+            _ = slider(f, &th, .from("volume"), &app.volume, 0, 100);
+            _ = base.label(f, &th, "Gain");
+            _ = slider(f, &th, .from("gain"), &app.gain, -12, 12);
+            f.close();
+        }
+    };
+    pub const State = struct {
+        volume_text: []const u8 = "Volume",
+        volume: f32 = 50,
+        gain_text: []const u8 = "Gain",
+        gain: f32 = 0,
+    };
+    pub const spec = spec_zig.col(panel, .{
+        base.ct.label(th, .volume_text),
+        ct.slider(th, .volume, .volume, .{ .hi = 100 }),
+        base.ct.label(th, .gain_text),
+        ct.slider(th, .gain, .gain, .{ .lo = -12, .hi = 12 }),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/slider.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/slider-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 1 }, .{ "keys", 6 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -283,6 +323,41 @@ test "slider a11y: role slider, its value as the value, no states, in both front
     // The thumb is presentational: the root and the slider.
     try testing.expectEqual(null, x.row(3));
     try testing.expectEqual(@as(u32, 2), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the slider replay drags and steps by keys, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var volume: [11]f32 = undefined;
+    var gain_: [11]f32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.volume, h.ui.signals.state.volume);
+        try testing.expectEqual(h.app.gain, h.ui.signals.state.gain);
+        volume[k] = h.app.volume;
+        gain_[k] = h.app.gain;
+    }
+    const t = &h.ctx.trees[h.ctx.cur];
+    // The rects the replay's comment gives.
+    try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 46 }, t.rect(t.find(.from("volume"))));
+    try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = 79, .x1 = 308, .y1 = 87 }, t.rect(t.find(.from("gain"))));
+    try testing.expectEqual(@as(u32, 11), h.frames);
+    const want_v = [11]f32{ 50, 25, 75, 100, 100, 99, 0, 0, 0, 0, 0 };
+    const want_g = [11]f32{ 0, 0, 0, 0, 0, 0, 0, 0, 12, 9.6, 9.6 };
+    for (want_v, volume, want_g, gain_) |wv, v, wg, g| {
+        try testing.expectApproxEqAbs(wv, v, 1e-4);
+        try testing.expectApproxEqAbs(wg, g, 1e-4);
+    }
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 11);
 }
 
 test {
