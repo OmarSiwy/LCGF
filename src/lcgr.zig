@@ -136,6 +136,7 @@ pub const keyframes = @import("anim/keyframes.zig");
 pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
 pub const shell_x11_wire = @import("shell/x11/wire.zig");
+pub const shell_x11_keys = @import("shell/x11/keys.zig");
 
 test {
     std.testing.refAllDecls(@This());

@@ -15,6 +15,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const lcgr = @import("lcgr");
 const wire = lcgr.shell_x11_wire;
+const keys = lcgr.shell_x11_keys;
 const Input = lcgr.input.Input;
 const iface = lcgr.shell_iface;
 const Events = iface.Events;
@@ -68,6 +69,9 @@ pub const Connection = struct {
     /// Errors the server sent for requests nobody waited on, and the last one (32 bytes).
     errors: u32 = 0,
     last_error: [32]u8 = @splat(0),
+    keymap: keys.Keymap = .{},
+    /// A MappingNotify said the keyboard map changed; reloaded at the end of the next `pump`.
+    keymap_stale: bool = false,
     /// Set when the socket failed or closed; every window's `poll` is false after it.
     err: ?Error = null,
 
@@ -97,6 +101,18 @@ pub const Connection = struct {
         var seqs: [names.len]u16 = undefined;
         inline for (names, &seqs) |name, *s| s.* = c.send(wire.internAtomSize(name), wire.internAtom, .{name});
         inline for (names, seqs) |name, s| @field(c.atoms, name) = wire.get(u32, try c.reply(s), 8);
+        try c.loadKeymap();
+        // Held keys repeat as presses alone (`.repeat`), where the server supports XKB.
+        if (c.extension("XKEYBOARD")) |xkb| {
+            const use = try c.reply(c.send(wire.xkb_use_extension_size, wire.xkbUseExtension, .{xkb}));
+            if (use[1] != 0) _ = try c.reply(c.send(wire.xkb_per_client_flags_size, wire.xkbDetectableAutoRepeat, .{xkb}));
+        } else |_| {}
+    }
+
+    fn loadKeymap(c: *Connection) Error!void {
+        const s = c.setup;
+        const r = try c.reply(c.send(wire.get_keyboard_mapping_size, wire.getKeyboardMapping, .{ s.min_keycode, s.max_keycode - s.min_keycode + 1 }));
+        c.keymap.load(r, s.min_keycode);
     }
 
     pub fn close(c: *Connection) void {
@@ -217,8 +233,12 @@ pub const Connection = struct {
             while (try c.message()) |m| c.handle(m);
             var p = [_]linux.pollfd{.{ .fd = c.fd, .events = linux.POLL.IN }};
             const r = linux.poll(&p, 1, 0);
-            if (linux.errno(r) != .SUCCESS or r == 0) return;
+            if (linux.errno(r) != .SUCCESS or r == 0) break;
             try c.readSome();
+        }
+        if (c.keymap_stale) {
+            c.keymap_stale = false;
+            try c.loadKeymap();
         }
     }
 
@@ -238,6 +258,7 @@ pub const Connection = struct {
             @memcpy(&c.last_error, m[0..32]);
             return;
         }
+        if (kind == wire.mapping_notify and m[4] != 0) c.keymap_stale = true; // keyboard or modifiers
         const target = wire.eventWindow(m);
         for (c.windows) |slot| {
             const w = slot orelse continue;
@@ -308,6 +329,25 @@ pub const Window = struct {
 
     const PerFrame = struct {
         wheel: [2]f32 = .{ 0, 0 },
+        /// Typed UTF-8 and key events, in order. A frame that overflows them drops the rest.
+        text: [256]u8 = undefined,
+        text_len: u32 = 0,
+        events: [64]Input.Event = undefined,
+        events_len: u32 = 0,
+
+        fn add(f: *PerFrame, e: Input.Event) void {
+            if (f.events_len == f.events.len) return;
+            f.events[f.events_len] = e;
+            f.events_len += 1;
+        }
+        fn typed(f: *PerFrame, cp: u21) void {
+            var utf8: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(cp, &utf8) catch return;
+            if (f.text.len - f.text_len < n or f.events_len == f.events.len) return;
+            @memcpy(f.text[f.text_len..][0..n], utf8[0..n]);
+            f.add(.{ .kind = .text, .at = f.text_len, .len = n });
+            f.text_len += n;
+        }
     };
 
     /// Caller-owned storage. `pixels` holds `sw.Framebuffer.len(w, h)` for the largest size the
@@ -397,6 +437,12 @@ pub const Window = struct {
                 w.height = wire.get(u16, m, 22);
                 in.viewport = .{ @as(f32, @floatFromInt(w.width)) / w.scale, @as(f32, @floatFromInt(w.height)) / w.scale };
             },
+            wire.key_press, wire.key_release => w.key(m),
+            wire.focus_out => {
+                // Keys released while another window has the focus never reach this one.
+                in.keys = .{};
+                in.mods = .{};
+            },
             wire.expose => w.damaged = true,
             wire.destroy_notify => w.is_open = false,
             wire.client_message => {
@@ -405,6 +451,39 @@ pub const Window = struct {
             },
             else => {},
         }
+    }
+
+    /// A key event: the held keys and modifiers, a press, repeat or release, and the text the
+    /// key types with no Ctrl, Alt or Super held (those make it a command).
+    fn key(w: *Window, m: []const u8) void {
+        const in = &w.held;
+        const f = &w.frames[w.cur];
+        const down = (m[0] & 0x7f) == wire.key_press;
+        const state = wire.Pointer.of(m).state;
+        const code = keys.hid(m[1]);
+        // The state is from before the event; a modifier key's own transition is added here.
+        var mods: Input.Mods = .{
+            .shift = state & wire.State.shift != 0,
+            .ctrl = state & wire.State.control != 0,
+            .alt = state & wire.State.mod1 != 0,
+            .cmd = state & wire.State.mod4 != 0,
+        };
+        switch (code) {
+            0xe0, 0xe4 => mods.ctrl = down,
+            0xe1, 0xe5 => mods.shift = down,
+            0xe2, 0xe6 => mods.alt = down,
+            0xe3, 0xe7 => mods.cmd = down,
+            else => {},
+        }
+        in.mods = mods;
+        const bit = @as(u64, 1) << @as(u6, @truncate(code));
+        const held = in.keys.down(code);
+        in.keys.bits[code >> 6] = if (down) in.keys.bits[code >> 6] | bit else in.keys.bits[code >> 6] & ~bit;
+        if (code == 0) return;
+        f.add(.{ .kind = if (!down) .release else if (held) .repeat else .press, .code = code, .mods = mods });
+        if (!down or mods.ctrl or mods.alt or mods.cmd) return;
+        const cp = keys.codepoint(w.conn.keymap.keysym(m[1], state));
+        if (cp != 0) f.typed(cp);
     }
 
     /// Handles the server's pending events and gives this window's frame. False once the window
@@ -425,6 +504,8 @@ pub const Window = struct {
         const f = &w.frames[w.cur];
         ev.in = w.held;
         ev.in.wheel = f.wheel;
+        ev.in.text = f.text[0..f.text_len];
+        ev.in.events = f.events[0..f.events_len];
         w.cur ^= 1;
         w.frames[w.cur] = .{};
         w.polls += 1;
@@ -623,4 +704,83 @@ test "x11: closing the window ends poll" {
     try c.sync();
     try testing.expect(!w.poll(&ev));
     w.close();
+}
+
+test "x11: keys from the key recording become the recorded events and text" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    const xtest = try c.extension("XTEST");
+    var w: Window = undefined;
+    try w.open(c, fb_w, fb_h, "keys", Fixture.buffers);
+    defer w.close();
+    // Key events go to the focused window; with no window manager that is set by hand.
+    _ = c.send(wire.set_input_focus_size, wire.setInputFocus, .{w.id});
+    try c.sync();
+
+    var replay: Replay = .{ .src = @embedFile("testdata/keys.replay") };
+    const buf: Replay.Buffers = .{ .text = &Fixture.text, .events = &Fixture.events, .contacts = &Fixture.contacts };
+    var ev: Events = .{};
+    var frames: u32 = 0;
+    while (try replay.next(buf)) |want| : (frames += 1) {
+        for (want.events) |e| {
+            if (e.kind == .text) continue;
+            const kind: u8 = if (e.kind == .release) wire.key_release else wire.key_press;
+            _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, kind, keys.keycodeOf(e.code), c.setup.root, 0, 0 });
+        }
+        // Wait until every event of the frame has arrived.
+        for (0..2000) |_| {
+            try c.pump();
+            if (w.frames[w.cur].events_len >= want.events.len) break;
+            c.waitReadable(0.005);
+        } else return error.InputNeverArrived;
+        try testing.expect(w.poll(&ev));
+        try testing.expectEqualSlices(Input.Event, want.events, ev.in.events);
+        try testing.expectEqualStrings(want.text, ev.in.text);
+        try testing.expectEqual(want.mods, ev.in.mods);
+    }
+    try testing.expectEqual(@as(u32, 10), frames);
+    try testing.expectEqual(Input.Keys{}, ev.in.keys);
+}
+
+test "x11: a held key repeats as presses" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    const xtest = try c.extension("XTEST");
+    var w: Window = undefined;
+    try w.open(c, 64, 64, "repeat", Fixture.buffers);
+    defer w.close();
+    _ = c.send(wire.set_input_focus_size, wire.setInputFocus, .{w.id});
+    // Held past the server's autorepeat delay (660 ms by default), then released.
+    const a_key = keys.keycodeOf(0x04);
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.key_press, a_key, c.setup.root, 0, 0 });
+    try c.flush();
+    for (0..1000) |_| {
+        try c.pump();
+        if (w.frames[w.cur].events_len >= 4) break;
+        c.waitReadable(0.005);
+    } else return error.InputNeverArrived;
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.key_release, a_key, c.setup.root, 0, 0 });
+    try c.sync();
+    for (0..1000) |_| {
+        try c.pump();
+        const f = &w.frames[w.cur];
+        if (f.events[f.events_len - 1].kind == .release) break;
+        c.waitReadable(0.005);
+    } else return error.InputNeverArrived;
+    var ev: Events = .{};
+    try testing.expect(w.poll(&ev));
+    // Press, then repeats, each with its text, and one release: no release-press pairs.
+    const es = ev.in.events;
+    try testing.expectEqual(Input.Event.Kind.press, es[0].kind);
+    try testing.expectEqual(Input.Event.Kind.release, es[es.len - 1].kind);
+    for (es[0 .. es.len - 1], 0..) |e, i| {
+        const want: Input.Event.Kind = if (i % 2 == 1) .text else if (i == 0) .press else .repeat;
+        try testing.expectEqual(want, e.kind);
+    }
+    try testing.expect(es.len >= 5);
+    for (ev.in.text) |ch| try testing.expectEqual(@as(u8, 'a'), ch);
 }

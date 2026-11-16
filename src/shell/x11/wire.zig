@@ -289,6 +289,7 @@ pub const op = struct {
     pub const set_selection_owner = 22;
     pub const convert_selection = 24;
     pub const send_event = 25;
+    pub const set_input_focus = 42;
     pub const get_input_focus = 43;
     pub const open_font = 45;
     pub const create_gc = 55;
@@ -411,6 +412,15 @@ pub fn sendEvent(b: *Buf, window: u32, mask: u32, event: *const [32]u8) void {
     b.len += 32;
 }
 
+pub const set_input_focus_size = 12;
+
+/// Gives `window` the keyboard focus (revert to the root; CurrentTime).
+pub fn setInputFocus(b: *Buf, window: u32) void {
+    b.head(op.set_input_focus, 1, set_input_focus_size / 4);
+    b.int(u32, window);
+    b.int(u32, 0);
+}
+
 pub const get_input_focus_size = 4;
 
 /// Has a reply and no effect: a round trip, after which the server has handled every earlier
@@ -472,6 +482,42 @@ pub fn queryExtension(b: *Buf, name: []const u8) void {
     b.int(u16, @intCast(name.len));
     b.zeros(2);
     b.str(name);
+}
+
+pub const get_keyboard_mapping_size = 8;
+
+/// The keysyms of `count` keycodes from `first`. The reply: keysyms per keycode at byte 1, the
+/// keysyms from byte 32.
+pub fn getKeyboardMapping(b: *Buf, first: u8, count: u8) void {
+    b.head(op.get_keyboard_mapping, 0, get_keyboard_mapping_size / 4);
+    b.int(u8, first);
+    b.int(u8, count);
+    b.zeros(2);
+}
+
+pub const xkb_use_extension_size = 8;
+
+/// XKB UseExtension 1.0 (minor 0): required before any other XKB request. The reply says
+/// whether it is supported at byte 1.
+pub fn xkbUseExtension(b: *Buf, xkb: u8) void {
+    b.head(xkb, 0, xkb_use_extension_size / 4);
+    b.int(u16, 1);
+    b.int(u16, 0);
+}
+
+pub const xkb_per_client_flags_size = 28;
+
+/// XKB PerClientFlags (minor 21) turning on DetectableAutoRepeat for the core keyboard: a held
+/// key then repeats as presses alone, not as release and press pairs. Has a reply.
+pub fn xkbDetectableAutoRepeat(b: *Buf, xkb: u8) void {
+    b.head(xkb, 21, xkb_per_client_flags_size / 4);
+    b.int(u16, 0x100); // UseCoreKbd
+    b.zeros(2);
+    b.int(u32, 1); // change: DetectableAutoRepeat
+    b.int(u32, 1); // value
+    b.int(u32, 0);
+    b.int(u32, 0);
+    b.int(u32, 0);
 }
 
 pub const fake_input_size = 36;
@@ -635,6 +681,10 @@ test "requests: lengths match the bytes written" {
         .{ get_image_size, getImage, .{ 1, 0, 0, 1, 1 } },
         .{ queryExtensionSize("XTEST"), queryExtension, .{"XTEST"} },
         .{ fake_input_size, fakeInput, .{ 130, 6, 0, 1, 10, 20 } },
+        .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
+        .{ set_input_focus_size, setInputFocus, .{1} },
+        .{ xkb_use_extension_size, xkbUseExtension, .{130} },
+        .{ xkb_per_client_flags_size, xkbDetectableAutoRepeat, .{130} },
     }) |c| {
         var b: Buf = .{ .bytes = &bytes };
         @call(.auto, c[1], .{&b} ++ c[2]);
