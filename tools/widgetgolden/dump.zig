@@ -19,6 +19,7 @@ const gfx = lcgr.quad_shader;
 const pages = .{
     .{ "", w.Reference(.default), w.reference_replay, w.golden_frames },
     .{ "card-", lcgr.widgets_card.Page(.default), lcgr.widgets_card.replay, lcgr.widgets_card.golden_frames },
+    .{ "separator-", lcgr.widgets_separator.Page(.default), lcgr.widgets_separator.replay, lcgr.widgets_separator.golden_frames },
 };
 var glyph_quads: [1024]Quad = undefined;
 var first: [16]u32 = undefined;
