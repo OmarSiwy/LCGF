@@ -11,8 +11,13 @@ pub const Scene = struct {
     /// Sets the input of frame `k` (counted from 0).
     input: *const fn (in: *ui.Input, k: u32) void,
     build: *const fn (f: *ui.Frame, th: *const ui.Theme) void,
-    /// Build only the frames `Context.needsFrame` asks for, as a host that sleeps when idle.
+    /// At most the first and the settle frame may be built (target D5).
     idle: bool = false,
+    /// Build every poll. Otherwise only the frames `Context.needsFrame` asks for are built, as a
+    /// host that sleeps between events does. Rows builds every poll so its per-pass numbers stay
+    /// comparable; list and springs because their state changes outside `Input` (the scroll
+    /// position, the spring targets), which a host learns from the app, not from needsFrame.
+    every: bool = false,
 };
 
 pub const rows = @import("rows.zig");

@@ -5,7 +5,9 @@
 //! Every pass times lcgr's runtime front end (src/runtime/): `Context.begin` (settle, hit test,
 //! spring and tween step) is begin+hit, the scene building through `Frame` and the reference
 //! widgets (src/widgets/base.zig) is build, the body of `Frame.end` split at each pass is layout,
-//! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four. The
+//! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four, over the
+//! frames built; `poll` times every poll, `Context.needsFrame` included, as a host polls (every
+//! scene but rows builds only the frames needsFrame asks for: bench/scenes/scenes.zig). The
 //! first frame's draw list must equal the prototype's own first frame of the same scene.
 //!
 //! `--core=prototype` keeps the old numbers reproducible: frames are begun and built by the
@@ -208,6 +210,9 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
 
 /// The frame loop's passes, then incr_names.
 var samples: [all_names.len][frames]u64 = undefined;
+/// Every poll: `Context.needsFrame`, and the frame when it asked for one. The comparison's
+/// frame time (bench/vs/measure.py), as the other harnesses time every poll.
+var poll_samples: [frames]u64 = undefined;
 
 /// Incremental layout after the frame loop, on the last frame's tree: a full `layout.run` for
 /// reference, then one leaf's height changed and `incremental.update` each frame, first as the
@@ -398,7 +403,11 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
-        if (scene.idle and !ctx.needsFrame(&in)) continue;
+        const p0 = now();
+        if (!scene.every and !ctx.needsFrame(&in)) {
+            poll_samples[k] = now() - p0;
+            continue;
+        }
         var m: Marks = .{};
         m.mark(0);
         var f = ctx.begin(&in);
@@ -444,6 +453,7 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         r.nodes = t.len;
         r.texts = tx.len;
         record(&m, r.built);
+        poll_samples[k] = m.t[13] - p0;
         r.built += 1;
     }
     r.viewport = in.viewport;
@@ -463,7 +473,11 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
-        if (scene.idle and !ctx.needsFrame(&in)) continue;
+        const p0 = now();
+        if (!scene.every and !ctx.needsFrame(&in)) {
+            poll_samples[k] = now() - p0;
+            continue;
+        }
         var m: Marks = .{};
         m.mark(0);
         var f = ctx.begin(&in); // includes the SIMD hit test and spring step
@@ -520,6 +534,7 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
         r.nodes = t.len;
         r.texts = tx.len;
         record(&m, r.built);
+        poll_samples[k] = m.t[13] - p0;
         r.built += 1;
     }
     r.viewport = in.viewport;
@@ -610,6 +625,8 @@ pub fn main(init: std.process.Init) !void {
         const n = if (p < pass_names.len) built else frames;
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[n / 2]), us(s[n * 99 / 100]) });
     }
+    std.mem.sort(u64, poll_samples[0..polls], {}, std.sort.asc(u64));
+    try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ "poll", us(poll_samples[polls / 2]), us(poll_samples[polls * 99 / 100]) });
     if (group >= 0) {
         // Means per built frame. Each read is a syscall: its kernel half is not counted, but it
         // evicts some L1 lines, so short passes carry a few dozen extra misses.

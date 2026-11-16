@@ -14,7 +14,7 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 
 | Row | Frame timed | Text | Notes |
 |---|---|---|---|
-| LCGR | `tools/bench/bench.zig`: begin + hit test, build, layout, paint into the draw list | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
+| LCGR | `tools/bench/bench.zig`: every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes (its `poll` line); rows, list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
 | Clay 0.14 | `Clay_BeginLayout`, declarations, `Clay_EndLayout` (layout and render commands) | the same monospace measure, word wrap by Clay | Clay has no widgets or animation: they are built from elements, springs are the prototype's step |
 | Dear ImGui 1.93.0 | input, `NewFrame`, ImGui's own widgets, `Render` (vertex and index buffers), null back end | default font (ProggyClean) at 14 and 20 px, every glyph laid out into vertices | springs are the prototype's step (no animation API) |
 | egui 0.37.0 | `Context::run_ui` (input, egui's own widgets, layout, shapes) and `Context::tessellate` (meshes), no eframe, no window | default fonts at 14 and 20 px, every glyph tessellated into vertices | springs are the prototype's step (egui's animation helpers are tweens) |
@@ -134,6 +134,25 @@ libraries, so its executable is only the harness: once idle it maps 107 shared l
   widths each frame, which re-evaluates the 1,000 JavaScript bindings that read it: most of its
   12 ms. Its idle loop (`exec`, with nothing animating and no cursor blinking) did not wake in the
   2 s window. Resident memory is mostly the shared libraries' pages and the QML engine.
+
+## Pointer moves that change nothing (form, text)
+
+Until the perf-gaps branch the LCGR row built every poll, while LVGL, Slint and Qt Quick time
+every poll and redraw only what changed. In form and text the only input is the pointer
+moving: LVGL (no hover styles in its default theme) redrew nothing after the first frame and a
+poll cost about a microsecond, against 16 to 18 us for an LCGR rebuild: the x22.6 and x17.9 of
+the gates were that, not slower passes. `Frame.reuse` could not have applied: a reused subtree
+still copies its rows, lays out what is not kept and paints every node, and no scene uses it.
+
+`Context.needsFrame` now stamps the pointer position only while it is over a node that senses
+the pointer, while a button is held, or when the app sets `Context.track_pointer` (the
+inspector does while open); elsewhere a move stamps as "outside the window" and no frame is
+built (`src/runtime/scheduler.zig`, `stamp`). Entering or leaving a sensing node builds the
+hover frame and its settle frame. The harness asks needsFrame every poll, as a host does, and
+times every poll (the `poll` line, which `measure.py` reads) as the other harnesses do. The
+form builds 908 of 3,000 polls (the pointer is over a checkbox, slider or button, or just left
+one), text 2 of 3,000. Rows, list and springs still build every poll: their state changes
+outside `Input` (the per-pass benchmark's pointer, the scroll position, the spring targets).
 
 ## What could not be measured fairly here
 

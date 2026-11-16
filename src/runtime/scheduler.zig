@@ -8,6 +8,7 @@ const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const mem = @import("../core/mem.zig");
 const Input = @import("../core/input.zig").Input;
+const hit = @import("../interact/hit.zig");
 const Context = @import("context.zig").Context;
 const Limits = @import("context.zig").Limits;
 const Frame = @import("frame.zig").Frame;
@@ -16,10 +17,11 @@ const Id = types.Id;
 const none = types.none;
 
 /// False when a frame built from `in` would be identical to the last one: the input is unchanged
-/// (its stamp leaves out the clock), nothing moves, no settle frame is owed and no signal changed.
-/// The host can then sleep until the next event.
+/// (its stamp leaves out the clock, and the pointer position where it changes nothing: see
+/// `stamp`), nothing moves, no settle frame is owed and no signal changed. The host can then
+/// sleep until the next event.
 pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
-    const changed = simd.orB(ctx.frame == 0, in.stamp() != ctx.last_stamp);
+    const changed = simd.orB(ctx.frame == 0, stamp(ctx, in) != ctx.last_stamp);
     const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.signals.dirty));
     const due = in.time >= deadline(ctx);
     const woken = ctx.waker.flag.load(.acquire);
@@ -151,9 +153,23 @@ pub const TimerMode = enum { once, repeat };
 /// events modify (a click handled after the widget was drawn) is visible without waiting for the
 /// next event. Unchanged input pays one owed frame back.
 pub fn settle(ctx: *Context, in: *const Input) void {
-    const stamp = in.stamp();
-    ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
-    ctx.last_stamp = stamp;
+    const s = stamp(ctx, in);
+    ctx.settle = simd.selU(s != ctx.last_stamp, 1, ctx.settle -| 1);
+    ctx.last_stamp = s;
+}
+
+/// `Input.stamp` as the frame sees it. Widgets read the pointer position only over a node that
+/// senses the pointer or while a button is held, so elsewhere the position is stamped as
+/// "outside the window": a move across text and panels builds no frame, as a retained toolkit
+/// redraws nothing for it. Entering or leaving a sensing node changes the stamp. Judged on the
+/// last frame's tree, as `Interaction.step` judges hover. `Context.track_pointer` keeps every move.
+fn stamp(ctx: *const Context, in: *const Input) u64 {
+    const over = hit.at(&ctx.trees[ctx.cur], in.pointer[0], in.pointer[1], .any) != none;
+    const held = simd.orB(@as(u8, @bitCast(in.buttons)) != 0, ctx.inter.active != 0);
+    const keep = simd.orB(simd.orB(over, held), ctx.track_pointer);
+    var seen = in.*;
+    seen.pointer = @bitCast(selD(keep, @bitCast(in.pointer), @bitCast(Input.outside)));
+    return seen.stamp();
 }
 
 /// A frame request that any thread may post: a background job posts it after pushing its result
@@ -246,7 +262,10 @@ test "needsFrame: the first frame, then only input changes, motion and signals" 
     in.time += 10;
     try testing.expect(!ctx.needsFrame(&in));
 
+    // The pointer moving over nodes that sense nothing changes no frame (see the next test).
     in.pointer = .{ 5, 5 };
+    try testing.expect(!ctx.needsFrame(&in));
+    in.viewport = .{ 120, 100 };
     try testing.expect(ctx.needsFrame(&in));
     _ = frame(&ctx, &in);
     _ = frame(&ctx, &in);
@@ -262,6 +281,60 @@ test "needsFrame: the first frame, then only input changes, motion and signals" 
     try testing.expect(ctx.needsFrame(&in));
     _ = frame(&ctx, &in);
     try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "needsFrame: the pointer position counts over sensing nodes and while held" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 }, .pointer = .{ 50, 50 } };
+    const S = struct {
+        // A button over the left half, a plain panel over the right.
+        fn run(c: *Context, input: *const Input) u32 {
+            var built: u32 = 0;
+            while (c.needsFrame(input)) : (built += 1) {
+                var f = c.begin(input);
+                _ = f.open(.from("row"), .{ .dir = .x, .size = .{ .fill, .fill } });
+                const b = f.leaf(.from("b"), .{ .size = .{ .px(50), .fill } });
+                _ = f.interact(b, .button);
+                _ = f.leaf(.from("panel"), .{ .size = .{ .px(50), .fill } });
+                f.close();
+                _ = f.end(.{});
+            }
+            return built;
+        }
+    };
+    in.pointer = .{ 75, 50 };
+    try testing.expectEqual(@as(u32, 2), S.run(&ctx, &in));
+    // Across the panel: nothing to build.
+    for (0..10) |i| {
+        in.pointer = .{ 60 + @as(f32, @floatFromInt(i)), 10 + @as(f32, @floatFromInt(i)) };
+        try testing.expectEqual(@as(u32, 0), S.run(&ctx, &in));
+    }
+    // Onto the button: the hover frame and its settle frame; every move over it builds.
+    in.pointer = .{ 25, 50 };
+    try testing.expectEqual(@as(u32, 2), S.run(&ctx, &in));
+    try testing.expectEqual(@backingInt(Id.from("b")), ctx.inter.hot);
+    in.pointer = .{ 26, 50 };
+    try testing.expect(ctx.needsFrame(&in));
+    try testing.expectEqual(@as(u32, 2), S.run(&ctx, &in));
+    // Off it: the frame that drops the hover, then quiet again.
+    in.pointer = .{ 80, 50 };
+    try testing.expectEqual(@as(u32, 2), S.run(&ctx, &in));
+    try testing.expectEqual(@as(u32, 0), ctx.inter.hot);
+    in.pointer = .{ 90, 50 };
+    try testing.expectEqual(@as(u32, 0), S.run(&ctx, &in));
+    // A held button makes every move count (a drag that leaves its widget).
+    in.buttons.left = true;
+    try testing.expect(S.run(&ctx, &in) > 0);
+    in.pointer = .{ 91, 50 };
+    try testing.expect(ctx.needsFrame(&in));
+    _ = S.run(&ctx, &in);
+    in.buttons.left = false;
+    _ = S.run(&ctx, &in);
+    // So does `track_pointer`.
+    ctx.track_pointer = true;
+    in.pointer = .{ 92, 50 };
+    try testing.expect(ctx.needsFrame(&in));
 }
 
 test "needsFrame: moving springs ask for a frame now through wake" {
@@ -289,7 +362,7 @@ test "settle: one frame owed after each input change, none after unchanged input
     try testing.expectEqual(@as(u32, 0), ctx.settle);
     // A change on every frame keeps exactly one frame owed.
     for (0..3) |i| {
-        in.pointer[0] = @floatFromInt(i);
+        in.viewport[0] = @floatFromInt(101 + i);
         settle(&ctx, &in);
         try testing.expectEqual(@as(u32, 1), ctx.settle);
     }
@@ -391,8 +464,9 @@ test "deadline: a pending hover intent wakes a sleeping host through needsFrame"
     var in: Input = .{ .viewport = .{ 100, 100 }, .pointer = .{ 5, 5 } };
     _ = frame(&ctx, &in);
     in.time = 1;
-    // The box becomes hot at t = 1 (it needs a sense to be hit).
-    for (0..2) |_| {
+    // The box becomes hot at t = 1 (it needs a sense to be hit). The pointer now stands over a
+    // sensing node, which changes its stamp: one settle frame follows.
+    for (0..3) |_| {
         var f = ctx.begin(&in);
         const b = f.leaf(.from("box"), .{ .size = .{ .px(10), .px(10) } });
         _ = f.interact(b, .any);

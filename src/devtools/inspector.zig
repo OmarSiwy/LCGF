@@ -111,6 +111,8 @@ pub const Inspector = struct {
         const ctx = f.ctx;
         insp.draw = batches.stats(&ctx.draw, prev, insp.rows, ctx.texts[ctx.cur ^ 1].c.node, ctx.customs[ctx.cur ^ 1].c.node, f.in.viewport);
         insp.hovered = under(prev, insp.rows, f.in.pointer);
+        // The outline follows the pointer over any row, sensing or not.
+        f.ctx.track_pointer = insp.open;
         insp.own_first = f.tree().len;
         insp.signals.diff(&f.ctx.signals);
         if (insp.recorder) |*r| if (insp.recording) r.frame(f.in);

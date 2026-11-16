@@ -11,7 +11,7 @@ symbols or debug info). The 1-minute load average is printed before and after: t
 loaded machine mean little, and timings never compare across machines.
 
 Every harness speaks the protocol of tools/bench/bench.zig: a header line with `frames=N`, a line
-`frame MEDIAN P99` in microseconds, and with `--idle` a line starting "ready". So `--exe` may also be
+`frame MEDIAN P99` in microseconds over every poll (LCGR's `poll` line, when there is one), and with `--idle` a line starting "ready". So `--exe` may also be
 the LCGR benchmark itself (zig build vs-lcgr), which gives the reference row.
 """
 import argparse
@@ -33,7 +33,10 @@ def load():
 def frame(cmd):
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     built = int(re.search(r"\bframes=(\d+)", out).group(1))
-    med, p99 = re.search(r"^frame\s+([\d.]+)\s+([\d.]+)", out, re.M).groups()
+    # LCGR's `poll` line times every poll as the other harnesses' `frame` lines do; its `frame`
+    # line covers only the frames built.
+    line = lambda name: re.search(rf"^{name}\s+([\d.]+)\s+([\d.]+)", out, re.M)
+    med, p99 = (line("poll") or line("frame")).groups()
     return built, float(med), float(p99)
 
 
