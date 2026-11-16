@@ -29,6 +29,7 @@ const pages = .{
     .{ "toolbar-", lcgr.widgets_toolbar.Page(.default), lcgr.widgets_toolbar.replay, lcgr.widgets_toolbar.golden_frames },
     .{ "breadcrumb-", lcgr.widgets_breadcrumb.Page(.default), lcgr.widgets_breadcrumb.replay, lcgr.widgets_breadcrumb.golden_frames },
     .{ "icon-", lcgr.widgets_icon.Page(.default), lcgr.widgets_icon.replay, lcgr.widgets_icon.golden_frames },
+    .{ "statusbar-", lcgr.widgets_statusbar.Page(.default), lcgr.widgets_statusbar.replay, lcgr.widgets_statusbar.golden_frames },
     .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
     .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
     .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },

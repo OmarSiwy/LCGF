@@ -75,20 +75,21 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// A window: a body that fills it, with a button, and a status bar of two texts at its foot.
-fn Page(comptime th: Theme) type {
+/// The example page: a window whose body (a Save button) fills it, and a status bar of two
+/// texts at its foot, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const window: Style = .{ .dir = .y, .size = .{ .fill, .fill } };
     const body: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(8) };
     return struct {
         pub const App = struct {
             saves: u32 = 0,
+            status: []const u8 = "Ready",
             pub fn build(app: *App, f: *Frame) void {
                 _ = f.open(.none, window);
                 _ = f.open(.none, body);
                 app.saves += @intFromBool(base.button(f, &th, .from("save"), "Save").clicked);
                 f.close();
-                const saved: []const u8 = if (app.saves > 0) "Saved" else "Ready";
-                _ = bar(f, &th, &.{ saved, "Ln 4, Col 12" });
+                _ = bar(f, &th, &.{ app.status, "Ln 4, Col 12" });
                 f.close();
             }
         };
@@ -105,6 +106,15 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/statusbar.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/statusbar-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "saved", 6 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -196,6 +206,39 @@ test "statusbar: role status holding its texts, no name, value 0, no states, in 
             try testing.expectEqualStrings(want, check.nameOf(&sem, tx, str, r));
         }
     }
+}
+
+test "statusbar: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var clicks: [7]bool = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        clicks[k] = if (out.comptime_.event) |e| e == .save else false;
+        // The application acts on the click: the status text changes in both front ends.
+        if (clicks[k]) {
+            h.app.status = "Saved";
+            h.ui.signals.set(.status, "Saved");
+        }
+        const t = out.runtime.tree;
+        const run = t.c.text[rows.text[0]];
+        const shown = h.ctx.strings[h.ctx.cur].buf[out.runtime.texts.c.start[run]..][0..out.runtime.texts.c.bytes[run]];
+        try testing.expectEqualStrings(if (k == 6) "Saved" else "Ready", shown);
+    }
+    try testing.expectEqual(@as(u32, 7), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true, false }, &clicks);
+    try testing.expectEqual(@as(u32, 1), h.app.saves);
+}
+
+test "golden_frames: name frames the status bar replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 7);
 }
 
 test {
