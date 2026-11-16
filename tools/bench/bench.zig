@@ -142,12 +142,15 @@ const grid_bytes = blk: {
     _ = lcgr.grid.Grids.init(&counter, grid_cap);
     break :blk counter.off;
 };
-var grid_buffer: [grid_bytes]u8 align(lcgr.mem.column_align) = undefined;
+comptime {
+    // The grid scene borrows the prototype core's buffer, whose frames are done by then.
+    std.debug.assert(grid_bytes <= buffer.len);
+}
 
-/// Times the grid passes on a 4,000-item grid: columns cycle through fixed, fit and fraction
+/// Times the grid passes on a 4,000-item grid, in `buffer` (run after the frame loops): columns cycle through fixed, fit and fraction
 /// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
 fn gridBench() void {
-    var carver: lcgr.mem.Carver = .{ .buf = &grid_buffer };
+    var carver: lcgr.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
     var t = Tree.init(&carver, grid_items + 2);
     var tx = Texts.init(&carver, 1);
     var gs = lcgr.grid.Grids.init(&carver, grid_cap);
