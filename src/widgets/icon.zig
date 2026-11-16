@@ -15,6 +15,7 @@ const Spec = spec_zig.Spec;
 const Style = types.Style;
 const Node = types.Node;
 const Theme = base.Theme;
+const a11y = @import("../a11y/tree.zig");
 
 /// Where a rasterised icon is: its texture, the rect it covers there (u0, v0, u1, v1), and
 /// the size it is drawn at, logical pixels. Plain data; the application fills it when it
@@ -37,7 +38,17 @@ pub fn icon(f: *Frame, th: *const Theme, ic: Icon) Node {
 /// with the theme's text colour, as a glyph is: a coverage icon takes the colour of the text
 /// beside it.
 pub fn style(th: *const Theme, ic: Icon) Style {
-    return .{ .size = .{ .px(ic.size[0]), .px(ic.size[1]) }, .texture = ic.texture, .uv = ic.uv, .fill = th.text };
+    return .{ .size = .{ .px(ic.size[0]), .px(ic.size[1]) }, .texture = ic.texture, .uv = ic.uv, .fill = th.text, .role = .image };
+}
+
+// ---- accessibility ------------------------------------------------------------------------
+
+/// Names the icon at tree row `row` by the text of row `by` (`aria-labelledby`) in the
+/// caller's semantic columns. An icon is an `image` (the style's role) with no text of its
+/// own, so without this it has no name; value 0, no states. An icon that only decorates a
+/// labelled control needs no name.
+pub fn name(s: *a11y.Semantics, row: u32, by: u32) void {
+    s.c.labelled_by[row] = by;
 }
 
 /// The icon as a spec node.
@@ -170,6 +181,31 @@ test "icon: takes no input; a press on it goes to what holds it; tab order skips
     try testing.expectEqual(@as(u32, 1), h.app.saves);
     try testing.expect(out.comptime_.event != null and out.comptime_.event.? == .save);
     try check.expectInert(out.runtime.tree, &.{ rows.small, rows.large });
+}
+
+test "icon: role image, named by the text it is given, value 0, no states, in both front ends" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        name(&sem, rows.small, rows.small + 1);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        for ([2]u32{ rows.small, rows.large }) |r| {
+            try testing.expectEqual(a11y.Role.image, @as(a11y.Role, @fromBackingInt(t.c.role[r])));
+            try testing.expectEqual(@as(f32, 0), t.c.value[r]);
+            try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
+        }
+        try testing.expectEqualStrings("Documents", check.nameOf(&sem, tx, str, rows.small));
+        try testing.expectEqual(types.none, sem.c.name[rows.large]);
+    }
 }
 
 test {
