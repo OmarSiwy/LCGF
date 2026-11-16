@@ -644,3 +644,40 @@ test "wake: long press and hover intent wake the host when they fall due, once" 
     try testing.expectEqual(@backingInt(Id.from("a")), ctx.inter.long_pressed);
     try testing.expectEqual(types.inf, f.finish().wake);
 }
+
+test "limits: a frame past every limit at once reports it and never crashes" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 2, .customs = 1, .strings = 16, .depth = 3, .anims = 2, .tweens = 2, .flips = 2, .signals = 2, .timers = 2, .memos = 2 });
+    var ctx = try Fx.context();
+    // Three frames, so the second and third hit-test, reuse and animate against a full tree.
+    for (0..3) |frame| {
+        const in: Input = .{ .viewport = .{ 200, 100 }, .pointer = .{ 10, 10 }, .dt = 1.0 / 60.0 };
+        var f = ctx.begin(&in);
+        for (0..6) |k| {
+            const deep = f.open(.hash(std.mem.asBytes(&k)), .{ .size = .{ .pct(0.5), .fill }, .fill = .white });
+            _ = f.interact(deep, .button);
+            f.animateLayout(deep, .{});
+        }
+        for (0..12) |k| {
+            const tag = 100 + k;
+            const id: Id = .hash(std.mem.asBytes(&tag));
+            _ = f.text("past the string limit", .{ .px = 10, .wrap = true });
+            _ = f.custom(id, .{ .size = .{ .px(4), .px(4) } }, k);
+            _ = f.animate(id, @floatFromInt(k), .{});
+            _ = f.tween(id, @floatFromInt(k), 0.2, .linear);
+            _ = scheduler.timer(&f, id, 0.1, .repeat);
+            if (!@import("reuse.zig").reuse(&f, id, &.{})) {
+                _ = f.open(id, .{});
+                _ = f.leaf(.none, .{ .fill = .black });
+                f.close();
+            }
+        }
+        for (0..10) |_| f.close();
+        const out = f.end(.{});
+        try testing.expect(ctx.status.nodes and ctx.status.texts and ctx.status.customs and ctx.status.strings and ctx.status.depth);
+        try testing.expect(out.tree.len <= 8);
+        // Every row's parent comes before it (the rewritten last row included), which
+        // levels.build, the parent-following passes and paint rely on.
+        for (1..out.tree.len) |i| try testing.expect(out.tree.c.parent[i] < i);
+        _ = frame;
+    }
+}
