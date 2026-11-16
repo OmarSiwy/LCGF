@@ -112,6 +112,14 @@ pub fn build(b: *std.Build) void {
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
     b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
+    // Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
+    const gates_latency = b.addRunArtifact(b.addExecutable(.{ .name = "gates-latency", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/gates/latency.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) }));
+    b.step("gates-latency", "Print input-to-photon latency of the example, headless (bench/gates/)").dependOn(&gates_latency.step);
 
     // Section sizes per example, built ReleaseSmall. Linux (ELF64) only. Until examples/ exists the
     // examples are the prototype's frame dumper and the benchmark.
