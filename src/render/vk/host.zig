@@ -156,6 +156,22 @@ fn upload(d: *const Device, cmd: c.VkCommandBuffer, image: c.VkImage, buffer: c.
     uploadRegion(d, cmd, image, buffer, offset, c.VK_IMAGE_LAYOUT_UNDEFINED, .{ .w = extent.width, .h = extent.height });
 }
 
+/// Nearest-texel sampling, clamped: what the golden images were drawn with.
+pub fn nearestSampler(d: *const Device) Error!c.VkSampler {
+    var s: c.VkSampler = null;
+    try check(d.fns.vkCreateSampler.?(d.handle, &.{
+        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = c.VK_FILTER_NEAREST,
+        .minFilter = c.VK_FILTER_NEAREST,
+        .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .maxLod = 32,
+    }, null, &s));
+    return s;
+}
+
 /// An RGBA8 image a pass draws into and `readback` copies from. With `samples` above 1 the pass
 /// draws into `msaa` and resolves into `image`.
 pub const Target = struct {

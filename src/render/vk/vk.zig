@@ -15,6 +15,7 @@ pub const swapchain = @import("swapchain.zig");
 pub const pass = @import("pass.zig");
 pub const host = @import("host.zig");
 pub const renderer = @import("renderer.zig");
+pub const Renderer = renderer.Renderer;
 
 test {
     std.testing.refAllDecls(@This());

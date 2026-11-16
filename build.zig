@@ -289,19 +289,29 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    // Draws the render conformance scenes as PNGs (src/render/vk/play.zig).
+    const vk_play = b.addExecutable(.{ .name = "vk-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
     const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
+    const vk_play_step = b.step("vk-play", "Build zig-out/bin/vk-play (draws the render conformance scenes with Vulkan)");
     if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
         const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
         vk_h.addIncludePath(vulkan_headers.path("include"));
         vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
         const vk_c = vk_h.createModule();
-        for ([_]*std.Build.Module{vk_tests.root_module}) |m| {
+        for ([_]*std.Build.Module{ vk_tests.root_module, vk_play.root_module }) |m| {
             m.addImport("vk_c", vk_c);
             // The committed SPIR-V of the shipped shaders (src/render/shaders/gen/, from naga).
             m.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
             m.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
         }
         vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
+        vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
     }
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
