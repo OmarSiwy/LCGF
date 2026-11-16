@@ -33,10 +33,11 @@ pub fn icon(f: *Frame, th: *const Theme, ic: Icon) Node {
     return f.leaf(.none, style(th, ic));
 }
 
-/// The icon's node: exactly its size.
+/// The icon's node: exactly its size, one quad sampling `ic.texture` over `ic.uv`, tinted
+/// with the theme's text colour, as a glyph is: a coverage icon takes the colour of the text
+/// beside it.
 pub fn style(th: *const Theme, ic: Icon) Style {
-    _ = th;
-    return .{ .size = .{ .px(ic.size[0]), .px(ic.size[1]) } };
+    return .{ .size = .{ .px(ic.size[0]), .px(ic.size[1]) }, .texture = ic.texture, .uv = ic.uv, .fill = th.text };
 }
 
 /// The icon as a spec node.
@@ -117,6 +118,30 @@ test "icon: both front ends build one leaf of the icon's size" {
     try testing.expectEqual(@as(f32, 24), t.rect(rows.large).w());
     // The button fits its icon and its padding.
     try testing.expectEqual(24 + 2 * Theme.default.pad, t.rect(rows.button).w());
+}
+
+test "icon: one quad of the icon's texture rect, tinted with the text colour; any theme alike" {
+    const th = Theme.default;
+    const atlas: types.Texture = @fromBackingInt(3);
+    const s = style(&th, .{ .texture = atlas, .uv = .{ 0.25, 0, 0.5, 0.25 }, .size = .{ 20, 10 } });
+    try testing.expectEqual(atlas, s.texture);
+    try testing.expectEqual([4]f32{ 0.25, 0, 0.5, 0.25 }, s.uv);
+    try testing.expectEqual(th.text, s.fill);
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[rows.small].fill);
+    try testing.expectEqual(th.text.bitsOf(), out.comptime_.tree.c.look[rows.large].fill);
+
+    const Light = Page(.{ .text = .rgb(20, 20, 20), .control = .rgb(200, 200, 205) });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(20, 20, 20).bitsOf(), lo.runtime.tree.c.look[rows.small].fill);
 }
 
 test {
