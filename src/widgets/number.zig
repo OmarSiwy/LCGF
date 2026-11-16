@@ -58,12 +58,24 @@ pub fn numberStyle(th: *const Theme, focused: bool, scroll: f32) Style {
     return tf.fieldStyle(th, focused, scroll);
 }
 
+/// `value` written as the field shows it: the shortest text that reads back as it.
+pub fn format(value: f32, buf: *[24]u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{value}) catch unreachable;
+}
+
+/// Writes the value as the text, caret at its end.
+pub fn show(s: *Number) void {
+    var buf: [24]u8 = undefined;
+    s.text.set(format(s.value, &buf));
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A number field named `id` over `s`, running `range`. Returns its response.
 pub fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Response {
     const r0 = f.ctx.inter.response(id);
     _ = range;
+    if (!r0.focused) show(s);
     const node = f.open(id, numberStyle(th, r0.focused, s.text.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -109,6 +121,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
+            if (!focused) show(s);
             next.* += 4;
             const i = t.push(parent, .hash(name), &numberStyle(th, focused, s.text.scroll));
             const v = tf.shown(&s.text, th, "");
@@ -173,6 +186,13 @@ test "bindError, rangeError: a number field binds a Number over an ordered range
     try testing.expectEqualStrings("number 'n': step (0) must be above 0", comptime rangeError("n", .{ .step = 0 }).?);
 }
 
+test "format: the shortest text of a value" {
+    var buf: [24]u8 = undefined;
+    try testing.expectEqualStrings("3", format(3, &buf));
+    try testing.expectEqualStrings("-0.25", format(-0.25, &buf));
+    try testing.expectEqualStrings("0.1", format(0.1, &buf));
+}
+
 var page: Page.Run = .{};
 
 fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
@@ -187,7 +207,7 @@ fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
     return out;
 }
 
-test "number: the page agrees in both front ends" {
+test "number: the page agrees in both front ends; the text shows the value" {
     const h = &page;
     h.init();
     const in: Input = .{ .viewport = .{ 320, 140 } };
@@ -195,6 +215,32 @@ test "number: the page agrees in both front ends" {
     const t = out.runtime.tree;
     // root, panel, two captions, two fields of four rows each.
     try testing.expectEqual(@as(u32, 12), t.len);
+    try testing.expectEqualStrings("3", h.app.qty.text.text());
+    try testing.expectEqualStrings("0.5", h.app.scale.text.text());
+}
+
+test "number look: a text field's box showing the value, the caret at its end while focused" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const q = t.find(.from("qty"));
+    try testing.expectEqual(th.control_held.bitsOf(), t.c.look[q].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[q].border_color);
+    try testing.expectEqual(th.text.bitsOf(), out.runtime.texts.c.color[t.c.text[q + 2]]);
+    try testing.expectApproxEqAbs(tf.lineHeight(&th) + th.pad, t.rect(q).h(), 0.5);
+    const box = t.rect(q);
+    in.pointer = .{ box.x1 - 4, (box.y0 + box.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[q].border_color);
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[q + 3].fill);
+    try testing.expectApproxEqAbs(box.x0 + th.pad + tf.advance(&th), t.rect(q + 3).x0, 0.5);
 }
 
 test {
