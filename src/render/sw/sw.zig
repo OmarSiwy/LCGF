@@ -177,9 +177,12 @@ pub fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32 {
     return .{ 0, fb.height * k / n, fb.width, fb.height * (k + 1) / n };
 }
 
+/// `a` cut to `b`. An `a` wholly past `b`'s right or bottom edge comes out empty at that edge,
+/// not past it: the shade loop reads whole vectors from the box's start, so a start past the
+/// row would read beyond it.
 fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
-    const lo = @max(a[0], b[0]);
-    const top = @max(a[1], b[1]);
+    const lo = @min(@max(a[0], b[0]), b[2]);
+    const top = @min(@max(a[1], b[1]), b[3]);
     return .{ lo, top, @max(@min(a[2], b[2]), lo), @max(@min(a[3], b[3]), top) };
 }
 
@@ -537,6 +540,22 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     q.fill = Color.rgb(9, 99, 199).bitsOf();
     shade(.solid, t, &q, Image.white, 1);
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
+}
+
+test "shade: a quad that starts right of the scissor, off a lane boundary, draws nothing" {
+    // A width of whole vectors leaves rows no padding, so a box starting past the scissor's
+    // right edge would read the vector after the row.
+    const w = 2 * simd.lanes;
+    var f: Frame(w, 4) = .{};
+    var fb = f.fb(.rgba8);
+    try testing.expectEqual(@as(u32, w), fb.stride);
+    fb.clear(.black);
+    const t: Target = .{ .fb = &fb, .scissor = fb.all() };
+    var q = testQuad(.{ w + 5, 1, w + 13, 3 }, .rgba(255, 0, 0, 128));
+    shade(.solid, t, &q, Image.white, 1);
+    q.fill = Color.rgb(255, 0, 0).bitsOf();
+    shade(.solid, t, &q, Image.white, 1);
+    for (0..4) |y| for (0..w) |x| try testing.expectEqual(Color.black, fb.at(@intCast(x), @intCast(y)));
 }
 
 test "redraw: only the damage rects change, cleared to the background first" {
