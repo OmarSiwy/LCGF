@@ -71,6 +71,8 @@ pub const scheduler = @import("runtime/scheduler.zig");
 pub const widgets_base = @import("widgets/base.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
+pub const shell_iface = @import("shell/iface.zig");
+pub const shell_example = @import("shell/example.zig");
 
 test {
     std.testing.refAllDecls(@This());
