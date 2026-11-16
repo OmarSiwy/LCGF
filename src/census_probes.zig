@@ -7,4 +7,5 @@ comptime {
     _ = @import("draw/census_probe_paths.zig");
     _ = @import("interact/census_probe.zig");
     _ = @import("text/census_probe.zig");
+    _ = @import("a11y/census_probe.zig");
 }
