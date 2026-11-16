@@ -74,6 +74,9 @@ const BITMAPINFOHEADER = extern struct {
     clr_important: u32 = 0,
 };
 const TRACKMOUSEEVENT = extern struct { size: u32 = @sizeOf(TRACKMOUSEEVENT), flags: u32, hwnd: HWND, hover_time: u32 = 0 };
+const COMPOSITIONFORM = extern struct { style: u32, pos: POINT, area: RECT = .{} };
+const CANDIDATEFORM = extern struct { index: u32 = 0, style: u32, pos: POINT, area: RECT };
+const HIMC = *opaque {};
 const PAINTSTRUCT = extern struct { hdc: ?HDC, erase: BOOL, paint: RECT, restore: BOOL, inc_update: BOOL, reserved: [32]u8 };
 
 const ws_overlappedwindow: u32 = 0x00cf_0000;
@@ -92,6 +95,19 @@ const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
 const cf_unicodetext = 13;
+const wm_ime_setcontext = 0x0281;
+const wm_ime_startcomposition = 0x010d;
+const wm_ime_endcomposition = 0x010e;
+const wm_ime_composition = 0x010f;
+const gcs_compstr = 0x0008;
+const gcs_compattr = 0x0010;
+const gcs_cursorpos = 0x0080;
+const gcs_resultstr = 0x0800;
+/// WM_IME_SETCONTEXT's flag for the IME's own composition window, which the UI replaces.
+const isc_showuicompositionwindow: usize = 0x8000_0000;
+const iace_default = 0x0010;
+const cfs_point = 0x0002;
+const cfs_exclude = 0x0080;
 const gmem_moveable = 0x0002;
 const wm_setcursor = 0x0020;
 /// WM_SETCURSOR's hit-test code for the client area; the frame's codes keep the system's
@@ -139,6 +155,12 @@ extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
 extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
 extern "kernel32" fn GlobalSize(HANDLE) callconv(.winapi) usize;
+extern "imm32" fn ImmGetContext(HWND) callconv(.winapi) ?HIMC;
+extern "imm32" fn ImmReleaseContext(HWND, HIMC) callconv(.winapi) BOOL;
+extern "imm32" fn ImmGetCompositionStringW(HIMC, index: u32, buf: ?*anyopaque, bytes: u32) callconv(.winapi) i32;
+extern "imm32" fn ImmSetCompositionWindow(HIMC, *const COMPOSITIONFORM) callconv(.winapi) BOOL;
+extern "imm32" fn ImmSetCandidateWindow(HIMC, *const CANDIDATEFORM) callconv(.winapi) BOOL;
+extern "imm32" fn ImmAssociateContextEx(HWND, ?HIMC, flags: u32) callconv(.winapi) BOOL;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -166,6 +188,10 @@ pub const Win32 = struct {
     /// over the client area.
     cursors: [translate.cursor_ids.len]?HANDLE = @splat(null),
     cursor: ?HANDLE = null,
+    /// What the IME gives, before the translator reads it: one composition's UTF-16 units and
+    /// their attributes. ponytail: 256 units; a longer composition is cut.
+    ime_units: [256]u16 = undefined,
+    ime_attrs: [256]u8 = undefined,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
@@ -181,10 +207,12 @@ pub const Win32 = struct {
     /// Caller-owned storage, as for the headless shell: `pixels` holds the largest client area
     /// to draw (`sw.Framebuffer.len(w, h)`; a larger window is drawn cut off), `glyphs` one quad
     /// per byte of text in a frame, `first` and `count` one row per text run. `text` and
-    /// `events` hold one frame's typed text and key events (`translate.Translator.Buffers`).
+    /// `events` hold one frame's typed text and key events, `preedit` the IME's composition
+    /// (`translate.Translator.Buffers`).
     pub const Buffers = struct {
         text: []u8,
         events: []lcgr.input.Input.Event,
+        preedit: []u8,
         pixels: []u32,
         glyphs: []Quad,
         first: []u32,
@@ -204,7 +232,7 @@ pub const Win32 = struct {
         w.* = .{
             .hwnd = undefined,
             .instance = instance,
-            .t = .init(.{ .text = buf.text, .events = buf.events }),
+            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit }),
             .fb = .init(buf.pixels, 0, 0, .bgra8),
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
@@ -219,6 +247,8 @@ pub const Win32 = struct {
         var r: RECT = .{ .right = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[0])) * w.t.in.scale)), .bottom = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[1])) * w.t.in.scale)) };
         _ = AdjustWindowRectExForDpi(&r, ws_overlappedwindow, 0, 0, dpi);
         _ = SetWindowPos(w.hwnd, null, 0, 0, r.right - r.left, r.bottom - r.top, swp_nomove | swp_nozorder | swp_noactivate);
+        // No IME until a frame asks for text (`apply`).
+        _ = ImmAssociateContextEx(w.hwnd, null, 0);
         if (opt.show) _ = ShowWindow(w.hwnd, sw_show);
     }
 
@@ -249,7 +279,40 @@ pub const Win32 = struct {
         if (cursor != w.cursor and w.t.in.pointer[0] >= 0) _ = SetCursor(cursor);
         w.cursor = cursor;
         if (p.clipboard.len > 0) w.copy(p.clipboard);
+        w.ime(p);
         w.applied = p.*;
+    }
+
+    /// Turns the IME on while a widget wants text, and puts its windows at `ime_rect`: the
+    /// composition at its top left, the candidates below it without covering it.
+    fn ime(w: *Win32, p: *const Platform) void {
+        if (p.wants_text != w.applied.wants_text) _ = ImmAssociateContextEx(w.hwnd, null, if (p.wants_text) iace_default else 0);
+        if (!p.wants_text) return;
+        const himc = ImmGetContext(w.hwnd) orelse return;
+        defer _ = ImmReleaseContext(w.hwnd, himc);
+        const r = translate.physicalRect(p.ime_rect, w.t.in.scale);
+        const area: RECT = .{ .left = r[0], .top = r[1], .right = r[2], .bottom = r[3] };
+        _ = ImmSetCompositionWindow(himc, &.{ .style = cfs_point, .pos = .{ .x = r[0], .y = r[1] } });
+        _ = ImmSetCandidateWindow(himc, &.{ .style = cfs_exclude, .pos = .{ .x = r[0], .y = r[3] }, .area = area });
+    }
+
+    /// Reads the IME's composition or result (WM_IME_COMPOSITION) into the translator.
+    fn imeComposition(w: *Win32, flags: usize) void {
+        const himc = ImmGetContext(w.hwnd) orelse return;
+        defer _ = ImmReleaseContext(w.hwnd, himc);
+        if (flags & gcs_resultstr != 0) w.t.commit(w.imeString(himc, gcs_resultstr));
+        if (flags & gcs_compstr != 0) {
+            const units = w.imeString(himc, gcs_compstr);
+            const attr_bytes = ImmGetCompositionStringW(himc, gcs_compattr, &w.ime_attrs, w.ime_attrs.len);
+            const attrs = w.ime_attrs[0..@intCast(std.math.clamp(attr_bytes, 0, w.ime_attrs.len))];
+            const cursor = ImmGetCompositionStringW(himc, gcs_cursorpos, null, 0);
+            w.t.compose(units, attrs, @intCast(@max(cursor, 0)));
+        }
+    }
+
+    fn imeString(w: *Win32, himc: HIMC, index: u32) []const u16 {
+        const bytes = ImmGetCompositionStringW(himc, index, &w.ime_units, @sizeOf(@TypeOf(w.ime_units)));
+        return w.ime_units[0..@intCast(std.math.clamp(@divTrunc(bytes, 2), 0, w.ime_units.len))];
     }
 
     /// Puts UTF-8 text on the clipboard. Called by `apply` for `Platform.clipboard`. Invalid
@@ -339,6 +402,17 @@ pub const Win32 = struct {
                 _ = EndPaint(hwnd, &ps);
                 return 0;
             },
+            // The UI draws the composition itself (Events.composition); the IME draws the rest.
+            wm_ime_setcontext => return DefWindowProcW(hwnd, msg, wp, lp & ~@as(isize, @bitCast(isc_showuicompositionwindow))),
+            wm_ime_startcomposition => return 0,
+            wm_ime_composition => {
+                w.imeComposition(@bitCast(lp));
+                return 0;
+            },
+            wm_ime_endcomposition => {
+                w.t.compose(&.{}, &.{}, 0);
+                return 0;
+            },
             // Windows resets the cursor on every move; over the client it is the frame's.
             wm_setcursor => if (@as(u16, @truncate(@as(usize, @bitCast(lp)))) == ht_client) {
                 _ = SetCursor(w.cursor);
@@ -394,12 +468,13 @@ const Fixture = struct {
     var pixels: [sw.Framebuffer.len(1024, 768)]u32 = undefined;
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
+    var preedit: [64]u8 = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [example_limits.texts]u32 = undefined;
     var count: [example_limits.texts]u32 = undefined;
 
     fn open(w: *Win32) !void {
-        try w.init(.{ .show = false }, .{ .text = &text, .events = &events, .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
+        try w.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 

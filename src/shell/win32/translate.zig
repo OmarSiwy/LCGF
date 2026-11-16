@@ -10,6 +10,7 @@ const std = @import("std");
 const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
 const Cursor = @import("../../runtime/context.zig").Cursor;
+const Rect = @import("../../core/types.zig").Rect;
 
 /// The window messages the translator reads, by their winuser.h values.
 pub const Wm = enum(u32) {
@@ -122,11 +123,15 @@ pub const Translator = struct {
     dropped: u32 = 0,
     /// A UTF-16 high surrogate from `WM_CHAR`, waiting for its low half in the next one.
     high: u16 = 0,
+    /// The IME's composition as UTF-8, held until it changes or ends (`compose`).
+    preedit: []u8 = &.{},
+    composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 } } = .{},
 
-    pub const Buffers = struct { text: []u8, events: []Input.Event };
+    /// `preedit` holds the longest composition shown; a longer one is cut at a character.
+    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
-        return .{ .text = buf.text, .events = buf.events };
+        return .{ .text = buf.text, .events = buf.events, .preedit = buf.preedit };
     }
 
     /// Clears the per-frame state, before the messages of the next frame.
@@ -233,6 +238,41 @@ pub const Translator = struct {
         t.n_text += @intCast(n);
     }
 
+    /// The IME's composition string (`ImmGetCompositionStringW` with `GCS_COMPSTR`), its
+    /// attributes (`GCS_COMPATTR`, one byte per UTF-16 unit) and the caret (`GCS_CURSORPOS`,
+    /// in UTF-16 units), as `Events.composition`: UTF-8, with the range the IME converts
+    /// (the target clause) or, without one, the caret. Empty `units` ends the composition.
+    pub fn compose(t: *Translator, units: []const u16, attrs: []const u8, cursor: u32) void {
+        var n: u32 = 0;
+        var range: [2]u32 = .{ std.math.maxInt(u32), 0 };
+        var caret: u32 = 0;
+        var i: usize = 0;
+        while (i < units.len) {
+            const pair = std.unicode.utf16IsHighSurrogate(units[i]) and i + 1 < units.len;
+            const w: usize = if (pair) 2 else 1;
+            const cp: u21 = if (pair) std.unicode.utf16DecodeSurrogatePair(units[i..][0..2]) catch 0xfffd else units[i];
+            const len = std.unicode.utf8CodepointSequenceLength(cp) catch 3;
+            if (t.preedit.len - n < len) break;
+            n += std.unicode.utf8Encode(cp, t.preedit[n..]) catch blk: {
+                t.preedit[n..][0..3].* = "\u{fffd}".*;
+                break :blk 3;
+            };
+            const attr = if (i < attrs.len) attrs[i] else 0;
+            if (attr == attr_target_converted or attr == attr_target_notconverted) {
+                range = .{ @min(range[0], n - len), n };
+            }
+            i += w;
+            if (i <= cursor) caret = n;
+        }
+        t.composition.len = n;
+        t.composition.range = if (range[0] <= range[1]) range else .{ caret, caret };
+    }
+
+    /// Text the IME committed (`GCS_RESULTSTR`): typed, as one `.text` event.
+    pub fn commit(t: *Translator, units: []const u16) void {
+        t.paste(units);
+    }
+
     /// Clipboard text (`CF_UNICODETEXT`) delivered as typed text, the way `keyboard.Clipboard`
     /// asks a host to answer a paste: one `.text` event, line ends as `\n`, other control
     /// characters but tabs left out. A paste that does not fit is dropped whole.
@@ -274,9 +314,23 @@ pub const Translator = struct {
         ev.in = t.in;
         ev.in.text = t.text[0..t.n_text];
         ev.in.events = t.events[0..t.n_events];
+        ev.composition = .{ .text = t.preedit[0..t.composition.len], .range = t.composition.range };
         return !t.closed;
     }
 };
+
+/// `GCS_COMPATTR` values of the clause being converted.
+const attr_target_converted = 1;
+const attr_target_notconverted = 3;
+
+/// `r` (logical pixels) in physical pixels at `scale`, rounded out to whole pixels: left, top,
+/// right, bottom, for the IME's candidate and composition windows.
+pub fn physicalRect(r: Rect, scale: f32) [4]i32 {
+    return .{
+        @intFromFloat(@floor(r.x0 * scale)), @intFromFloat(@floor(r.y0 * scale)),
+        @intFromFloat(@ceil(r.x1 * scale)),  @intFromFloat(@ceil(r.y1 * scale)),
+    };
+}
 
 /// `utf8` as clipboard text (`CF_UNICODETEXT`): UTF-16 with `\r\n` line ends and a NUL, in
 /// `out`, which needs `clipboardUnits(utf8.len)` units. Null if `utf8` is not valid UTF-8.
@@ -612,6 +666,53 @@ test "clipboard: pasted text is typed in one event, copied text gets CRLF" {
     const want = std.unicode.utf8ToUtf16LeStringLiteral("a\r\n\u{e9}\u{1f600}");
     try testing.expectEqualSlices(u16, want[0 .. want.len + 1], clipboardText("a\n\u{e9}\u{1f600}", &out).?);
     try testing.expectEqual(null, clipboardText("\xff", &out));
+}
+
+test "ime: a composition is shown, converted, then committed as typed text" {
+    var text: [32]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var preedit: [32]u8 = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events, .preedit = &preedit });
+    var ev: Events = .{};
+    const u = std.unicode.utf8ToUtf16LeStringLiteral;
+
+    // Typing "nihon": the reading so far, caret at its end, nothing converted.
+    t.compose(u("\u{306b}\u{307b}\u{3093}"), &.{ 0, 0, 0 }, 3);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{306b}\u{307b}\u{3093}", ev.composition.text);
+    try testing.expectEqual([2]u32{ 9, 9 }, ev.composition.range);
+    try testing.expectEqualStrings("", ev.in.text);
+
+    // Space converts: two clauses, the first ("nichi" -> U+65E5) the target.
+    t.begin();
+    t.compose(u("\u{65e5}\u{672c}"), &.{ attr_target_converted, 2 }, 1);
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]u32{ 0, 3 }, ev.composition.range);
+
+    // A surrogate pair and a caret after it.
+    t.begin();
+    t.compose(u("a\u{20bb7}b"), &.{ 0, 0, 0, 0 }, 3);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("a\u{20bb7}b", ev.composition.text);
+    try testing.expectEqual([2]u32{ 5, 5 }, ev.composition.range);
+
+    // Enter commits: the result is typed, the composition ends.
+    t.begin();
+    t.commit(u("\u{65e5}\u{672c}"));
+    t.compose(&.{}, &.{}, 0);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.in.text);
+    try testing.expectEqualStrings("", ev.composition.text);
+    try testing.expectEqual(Input.Event.Kind.text, ev.in.events[0].kind);
+
+    // A composition longer than the buffer is cut at a character.
+    var small: [4]u8 = undefined;
+    t.preedit = &small;
+    t.compose(u("\u{65e5}\u{672c}"), &.{}, 2);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}", ev.composition.text);
+
+    try testing.expectEqual([4]i32{ 15, 30, 61, 91 }, physicalRect(.{ .x0 = 10.4, .y0 = 20, .x1 = 40.2, .y1 = 60.5 }, 1.5));
 }
 
 test "translate: a full frame drops what does not fit and counts it" {
