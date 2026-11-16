@@ -45,6 +45,30 @@ pub const Signals = struct {
     }
 };
 
+/// A value paired with its signal. Nothing here the caller could not write with `Signals.bump`;
+/// it exists so the common case is one call.
+pub fn Cell(comptime T: type) type {
+    return struct {
+        value: T,
+        signal: Signal,
+
+        const Self = @This();
+
+        pub fn init(signals: *Signals, value: T) Self {
+            return .{ .value = value, .signal = signals.create() };
+        }
+        pub fn get(self: *const Self) T {
+            return self.value;
+        }
+        /// Stores `value`; the signal is bumped only if it differs from the old one.
+        pub fn set(self: *Self, signals: *Signals, value: T) void {
+            const changed = !std.meta.eql(self.value, value);
+            self.value = value;
+            signals.bump(self.signal, changed);
+        }
+    };
+}
+
 const testing = std.testing;
 
 /// Signals over a static buffer, for tests.
@@ -92,4 +116,23 @@ test "create: past capacity, new signals share the last row" {
     const extra = s.create();
     try testing.expectEqual(last, extra);
     try testing.expectEqual(@as(u32, 2), s.len);
+}
+
+test "Cell: set bumps its signal only when the value changes" {
+    var s = fixture(4);
+    var n: Cell(u32) = .init(&s, 3);
+    var p: Cell([2]f32) = .init(&s, .{ 1, 2 });
+    try testing.expect(n.signal != p.signal);
+    try testing.expectEqual(@as(u32, 3), n.get());
+
+    n.set(&s, 3);
+    p.set(&s, .{ 1, 2 });
+    try testing.expect(!s.dirty);
+    try testing.expectEqual(@as(u32, 0), s.version[@backingInt(n.signal)]);
+
+    n.set(&s, 4);
+    try testing.expectEqual(@as(u32, 4), n.get());
+    try testing.expectEqual(@as(u32, 1), s.version[@backingInt(n.signal)]);
+    try testing.expectEqual(@as(u32, 0), s.version[@backingInt(p.signal)]);
+    try testing.expect(s.dirty);
 }
