@@ -738,8 +738,22 @@ pub fn build(b: *std.Build) void {
     api_index.addFileArg(b.path("docs/api/apiindex.py"));
     api_index.addFileArg(b.path("src/lcgr.zig"));
     api_index.has_side_effects = true;
-    const docs_step = b.step("docs", "Generate zig-out/docs/API.md from the sources");
+    const docs_step = b.step("docs", "Generate zig-out/docs/API.md and test the guides' examples");
     docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
+    // The guides (docs/guide/*.md): their examples run as tests, and every zig block they show
+    // must be a piece of those examples (docs/guide/snippets.py).
+    const guide_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("docs/guide/guides.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
+    const snippets = b.addSystemCommand(&.{"python3"});
+    snippets.addFileArg(b.path("docs/guide/snippets.py"));
+    snippets.addDirectoryArg(b.path("docs/guide"));
+    snippets.has_side_effects = true;
+    docs_step.dependOn(&snippets.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
