@@ -4,7 +4,7 @@
 // The built-in visual features live here, chosen per instance by `params.x` (src/draw/features.zig
 // writes the params), so quads with different features still share one pipeline and one batch.
 // `params` is read as four u32 bit patterns: features store colours and packed values in it.
-// A user material replaces `material`; its params are its own.
+// A user material replaces the stock `material`; its params are its own.
 
 struct Globals { viewport: vec2f, scale: f32, pad: f32 }
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -161,11 +161,8 @@ fn border_pattern(in: Frag) -> f32 {
     return select(select(1.0, dashed, in.params.x == k_dashed), dotted, in.params.x == k_dotted);
 }
 
-// The stock material: the fill (or its gradient) times the bound texture.
-fn material(in: Frag) -> vec4f {
-    let uv = select(in.uv, nine_uv(in), in.params.x == k_nine);
-    return gradient(in) * textureSample(tex, samp, uv);
-}
+// The material function is not here: quad.zig `shader` appends one (WGSL resolves
+// module-scope names in any order), the stock one from material.wgsl or a user's.
 
 @fragment
 fn fs(in: Frag) -> @location(0) vec4f {

@@ -130,6 +130,15 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
 
+    // Every shader variant as files for a real GPU to validate (src/render/shaders/, ci/run.sh shaders).
+    const shaders_dump = b.addExecutable(.{ .name = "shaders-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/shaders/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("shaders-dump", "Build zig-out/bin/shaders-dump (writes every shader variant)").dependOn(&b.addInstallArtifact(shaders_dump, .{}).step);
+
     // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
     const fuzz_mod = b.createModule(.{
         .root_source_file = b.path("tools/fuzz/fuzz.zig"),
