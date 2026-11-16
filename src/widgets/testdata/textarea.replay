@@ -1,0 +1,41 @@
+# Recorded input for the text area page (widgets/textarea.zig, `Page`), at 320 x 140 in the
+# default theme: the Notes area ("one\ntwo", three lines shown) at x 12..308, y 38..98; text
+# starts at (20, 42), 8.4 px per byte, 17.5 px per line. One line per frame below (format:
+# input.Replay). Scancodes: Enter 40, Up 82, Down 81, Backspace 42.
+# 0: rest
+frame
+viewport 320 140
+dt 0.016
+pointer 300 135
+# 1: press after "two": focused, caret at its end
+frame
+pointer 200 68
+buttons left
+# 2: release
+frame
+buttons
+# 3: Enter and a third line
+frame
+press 40
+text three
+# 4: Up twice and Down again: back at the end of "two" (column 5 is past its end)
+frame
+press 82
+press 82
+press 81
+# 5: Down to the last line, Enter, a fourth line: the view scrolls by one line
+frame
+press 81
+press 40
+text four
+# 6: the wheel scrolls back to the top; the caret stays
+frame
+wheel 0 2
+# 7: Shift+Up three times selects up to column 3 of "one"
+frame
+press 82 shift
+press 82 shift
+press 82 shift
+# 8: Backspace deletes the selection: "one" is left
+frame
+press 42
