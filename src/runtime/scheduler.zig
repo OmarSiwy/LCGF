@@ -1,6 +1,7 @@
 //! Scheduler: when the host must run a frame and when it may sleep (tier 1). The host asks
-//! `Context.needsFrame` before building a frame and sleeps until the next event when it is false.
-//! Ported from prototype/ui.zig (`Context.needsFrame`).
+//! `Context.needsFrame` before building a frame; when it is false it sleeps until the next event
+//! or until `Output.wake` seconds pass, whichever comes first. Ported from prototype/ui.zig
+//! (`Context.needsFrame`, the settle step of `Context.begin`, `Output.wake`).
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -9,6 +10,9 @@ const mem = @import("../core/mem.zig");
 const Input = @import("../core/input.zig").Input;
 const Context = @import("context.zig").Context;
 const Limits = @import("context.zig").Limits;
+const Frame = @import("frame.zig").Frame;
+const Id = types.Id;
+const none = types.none;
 
 /// False when a frame built from `in` would be identical to the last one: the input is unchanged
 /// (its stamp leaves out the clock), nothing moves, no settle frame is owed and no signal changed.
@@ -16,7 +20,97 @@ const Limits = @import("context.zig").Limits;
 pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     const changed = simd.orB(ctx.frame == 0, in.stamp() != ctx.last_stamp);
     const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.dirty));
-    return simd.orB(changed, pending);
+    const due = in.time >= deadline(ctx);
+    return simd.orB(changed, simd.orB(pending, due));
+}
+
+/// Seconds until a frame is due with no new input: 0 while a settle frame is owed or a spring
+/// moves, else the time left to `deadline`, else inf (sleep until the next event).
+pub fn wake(ctx: *const Context, in: *const Input) f32 {
+    const left: f32 = @floatCast(@max(deadline(ctx) - in.time, 0));
+    const awake = simd.orB(ctx.motion > 0, ctx.settle > 0);
+    return simd.selF(awake, 0, left);
+}
+
+/// Earliest clock time (`Input.time`) at which a frame is due without new input, or inf: a
+/// timer of `Frame.timer`, a held press reaching `long_time`, the hot widget reaching
+/// `hover_delay`. Kept in f64 so that `needsFrame` at exactly that time says yes. A timer that
+/// has fired is no longer pending.
+pub fn deadline(ctx: *const Context) f64 {
+    const s = &ctx.inter;
+    const long_at = @as(f64, @bitCast(s.press_at)) + s.long_time;
+    const hover_at = @as(f64, @bitCast(s.hot_at)) + s.hover_delay;
+    const long_due = selD(simd.andB(s.active != 0, !s.long_fired), long_at, inf);
+    const hover_due = selD(simd.andB(s.hot != 0, s.hover_intent == 0), hover_at, inf);
+    return @min(ctx.timers.earliest(), @min(long_due, hover_due));
+}
+
+const inf = std.math.inf(f64);
+
+/// `c ? a : b` on f64 bits, without a branch.
+fn selD(c: bool, a: f64, b: f64) f64 {
+    const m = -%@as(u64, @intFromBool(c));
+    const ab: u64 = @bitCast(a);
+    const bb: u64 = @bitCast(b);
+    return @bitCast(bb ^ ((ab ^ bb) & m));
+}
+
+/// One row per armed timer. Deadlines are absolute clock times (`Input.time`), so a host that
+/// sleeps through several frames still fires them on time.
+pub const Timers = struct {
+    len: u32 = 0,
+    cap: u32,
+    c: Columns,
+
+    pub const Columns = struct {
+        id: []u32,
+        at: []f64,
+        /// Frame that last asked for the timer; `sweep` drops the others.
+        seen: []u32,
+    };
+
+    pub fn init(carver: *mem.Carver, cap: u32) Timers {
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+
+    /// The nearest deadline, or inf when no timer is armed.
+    pub fn earliest(t: *const Timers) f64 {
+        var m: f64 = inf;
+        for (t.c.at[0..t.len]) |at| m = @min(m, at);
+        return m;
+    }
+
+    /// Drops timers nobody asked for in frame `frame`, so a timer the UI stopped asking for
+    /// cannot keep waking the host. Branch-free stream compaction.
+    pub fn sweep(t: *Timers, frame_no: u32) void {
+        t.len = simd.compact(t.c, t.len, t.c.seen, frame_no);
+    }
+};
+
+/// True on the first frame at least `seconds` after the frame that first asked for timer `id`,
+/// which then restarts. Ask every frame for a repeating timer (a caret blink); stop asking to
+/// drop it (it is gone after the first frame that does not ask). `Output.wake` brings the host
+/// back in time, with no input:
+///
+///     if (f.timer(.from("caret"), 0.5)) caret_on = !caret_on;
+///
+/// Past `Limits.timers` the last row is shared, so extra timers fire early or late, never out of
+/// bounds.
+pub fn timer(f: *Frame, id: Id, seconds: f32) bool {
+    const ctx = f.ctx;
+    const t = &ctx.timers;
+    const k = @backingInt(id);
+    const found = simd.find(t.c.id, t.len, k);
+    const is_new = found == none;
+    const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
+    t.len = @min(t.len + @intFromBool(is_new), t.cap);
+    const now = f.in.time;
+    const at = selD(is_new, now + seconds, t.c.at[i]);
+    const fired = now >= at;
+    t.c.id[i] = k;
+    t.c.at[i] = selD(fired, now + seconds, at);
+    t.c.seen[i] = ctx.frame;
+    return fired;
 }
 
 /// Called by `begin`. Owes one extra frame after any input change, so state that this frame's
@@ -136,6 +230,78 @@ test "settle: a click is drawn by the frame after the one that handled it" {
     // Without the settle frame the last frame would still show 0.
     try testing.expectEqual(@as(u32, 1), drawn);
     try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "timer: fires once per period; the earliest deadline is the wake" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 } };
+    // Two settle-free frames first, so wake answers for the timers alone.
+    _ = frame(&ctx, &in);
+    _ = frame(&ctx, &in);
+    var fired: [2]bool = undefined;
+    const S = struct {
+        fn run(c: *Context, input: *const Input, out: *[2]bool) f32 {
+            var f = c.begin(input);
+            out[0] = f.timer(.from("slow"), 2);
+            out[1] = f.timer(.from("fast"), 0.5);
+            return f.end(.{}).wake;
+        }
+    };
+    in.time = 10;
+    try testing.expectEqual(@as(f32, 0.5), S.run(&ctx, &in, &fired));
+    try testing.expectEqual([2]bool{ false, false }, fired);
+    try testing.expectEqual(@as(u32, 2), ctx.timers.len);
+
+    // The host sleeps for `wake`; needsFrame agrees at exactly the deadline, not before.
+    in.time = 10.25;
+    try testing.expect(!ctx.needsFrame(&in));
+    in.time = 10.5;
+    try testing.expect(ctx.needsFrame(&in));
+    // "fast" fires and restarts: next due at 11, before "slow" at 12.
+    try testing.expectEqual(@as(f32, 0.5), S.run(&ctx, &in, &fired));
+    try testing.expectEqual([2]bool{ false, true }, fired);
+    in.time = 12;
+    _ = S.run(&ctx, &in, &fired);
+    try testing.expectEqual([2]bool{ true, true }, fired);
+
+    // Nobody asks any more: the timers are dropped and the host sleeps.
+    var f = ctx.begin(&in);
+    try testing.expectEqual(types.inf, f.end(.{}).wake);
+    try testing.expectEqual(@as(u32, 0), ctx.timers.len);
+    in.time = 100;
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "timer: past the limit the last row is shared, never written out of bounds" {
+    const Fx = Fixture(.{ .nodes = 4, .texts = 1, .customs = 1, .strings = 16, .depth = 2, .timers = 2 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    for (0..5) |i| _ = f.timer(Id.from("t").with(@intCast(i)), 1);
+    try testing.expectEqual(@as(u32, 2), ctx.timers.len);
+    _ = f.end(.{});
+    try testing.expectEqual(@as(f64, 1), ctx.timers.earliest());
+}
+
+test "deadline: a pending hover intent wakes a sleeping host through needsFrame" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 }, .pointer = .{ 5, 5 } };
+    _ = frame(&ctx, &in);
+    in.time = 1;
+    // The box becomes hot at t = 1 (it needs a sense to be hit).
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        const b = f.leaf(.from("box"), .{ .size = .{ .px(10), .px(10) } });
+        _ = f.interact(b, .any);
+        _ = f.end(.{});
+    }
+    try testing.expectEqual(@as(f64, 1.5), deadline(&ctx));
+    in.time = 1.4;
+    try testing.expect(!ctx.needsFrame(&in));
+    in.time = 1.5;
+    try testing.expect(ctx.needsFrame(&in));
 }
 
 /// What an event-driven host did over `ticks` turns of its loop with no new input: frames it

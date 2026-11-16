@@ -25,6 +25,8 @@ pub const Limits = struct {
     strings: u32 = 64 * 1024,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
+    /// Timers armed by `Frame.timer`.
+    timers: u32 = 32,
 };
 
 /// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
@@ -95,6 +97,7 @@ pub const Context = struct {
     /// Data behind a signal changed since the last frame. The signals lane's bump sets it
     /// (C0238); `Frame.finish` clears it.
     dirty: bool = false,
+    timers: scheduler.Timers,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -107,6 +110,7 @@ pub const Context = struct {
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
             .stack = carver.slice(u32, limits.depth),
+            .timers = scheduler.Timers.init(carver, limits.timers),
         };
     }
 

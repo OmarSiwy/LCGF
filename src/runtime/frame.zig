@@ -22,6 +22,7 @@ const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
+const scheduler = @import("scheduler.zig");
 
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
@@ -132,6 +133,8 @@ pub const Frame = struct {
         p.cursor = @fromBackingInt(@as(u8, @truncate(simd.selU(when, @backingInt(cursor), @backingInt(p.cursor)))));
     }
 
+    pub const timer = scheduler.timer;
+
     // ---- finishing ------------------------------------------------------------
 
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
@@ -173,30 +176,17 @@ pub const Frame = struct {
             .depth = ctx.status.depth,
         };
         ctx.dirty = false;
+        ctx.timers.sweep(ctx.frame);
         return .{
             .draw = &ctx.draw,
             .tree = t,
             .texts = tx,
             .platform = ctx.platform,
             .status = ctx.status,
-            .wake = wake(ctx, f.in),
+            .wake = scheduler.wake(ctx, f.in),
         };
     }
 };
-
-/// Seconds until a frame is due with no new input: 0 while a settle frame is owed or a spring
-/// moves, else the
-/// nearest pending timer of the interaction step (a held press reaching `long_time`, the hot
-/// widget reaching `hover_delay`), else inf. A timer that has fired is no longer pending.
-fn wake(ctx: *const Context, in: *const Input) f32 {
-    const s = &ctx.inter;
-    const held: f32 = @floatCast(in.time - @as(f64, @bitCast(s.press_at)));
-    const resting: f32 = @floatCast(in.time - @as(f64, @bitCast(s.hot_at)));
-    const long_due = simd.selF(simd.andB(s.active != 0, !s.long_fired), @max(s.long_time - held, 0), types.inf);
-    const hover_due = simd.selF(simd.andB(s.hot != 0, s.hover_intent == 0), @max(s.hover_delay - resting, 0), types.inf);
-    const awake = simd.orB(ctx.motion > 0, ctx.settle > 0);
-    return @min(simd.selF(awake, 0, types.inf), @min(long_due, hover_due));
-}
 
 /// Rect of row `i` of `t`, or a zero rect for `none`. The read is clamped into bounds and the
 /// result scaled by 0 or 1, so there is no branch.
