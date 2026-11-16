@@ -10,8 +10,10 @@
 const std = @import("std");
 pub const loader = @import("loader.zig");
 pub const c = loader.c;
+pub const device = @import("device.zig");
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(loader);
+    std.testing.refAllDecls(device);
 }
