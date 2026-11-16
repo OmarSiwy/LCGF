@@ -19,6 +19,15 @@ pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     return simd.orB(changed, pending);
 }
 
+/// Called by `begin`. Owes one extra frame after any input change, so state that this frame's
+/// events modify (a click handled after the widget was drawn) is visible without waiting for the
+/// next event. Unchanged input pays one owed frame back.
+pub fn settle(ctx: *Context, in: *const Input) void {
+    const stamp = in.stamp();
+    ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
+    ctx.last_stamp = stamp;
+}
+
 const testing = std.testing;
 
 /// A context over a static buffer, for tests.
@@ -82,6 +91,51 @@ test "needsFrame: moving springs ask for a frame now through wake" {
     var f = ctx.begin(&in);
     ctx.motion = 0.25;
     try testing.expectEqual(@as(f32, 0), f.end(.{}).wake);
+}
+
+test "settle: one frame owed after each input change, none after unchanged input" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 } };
+    settle(&ctx, &in);
+    try testing.expectEqual(@as(u32, 1), ctx.settle);
+    settle(&ctx, &in);
+    try testing.expectEqual(@as(u32, 0), ctx.settle);
+    // Never below zero, and the clock alone is not a change.
+    in.time = 3;
+    settle(&ctx, &in);
+    try testing.expectEqual(@as(u32, 0), ctx.settle);
+    // A change on every frame keeps exactly one frame owed.
+    for (0..3) |i| {
+        in.pointer[0] = @floatFromInt(i);
+        settle(&ctx, &in);
+        try testing.expectEqual(@as(u32, 1), ctx.settle);
+    }
+}
+
+test "settle: a click is drawn by the frame after the one that handled it" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 } };
+    var clicks: u32 = 0;
+    var drawn: u32 = 0;
+    for (0..4) |i| {
+        // Press on tick 1, release on tick 2; no input after that.
+        in.pointer = .{ 5, 5 };
+        in.buttons.left = i == 1;
+        if (!ctx.needsFrame(&in)) continue;
+        var f = ctx.begin(&in);
+        // The label shows the count before the button handles this frame's click, as a
+        // widget drawn above its handler does.
+        drawn = clicks;
+        const b = f.leaf(.from("b"), .{ .size = .{ .px(10), .px(10) } });
+        clicks += @intFromBool(f.interact(b, .button).clicked);
+        _ = f.end(.{});
+    }
+    try testing.expectEqual(@as(u32, 1), clicks);
+    // Without the settle frame the last frame would still show 0.
+    try testing.expectEqual(@as(u32, 1), drawn);
+    try testing.expect(!ctx.needsFrame(&in));
 }
 
 /// What an event-driven host did over `ticks` turns of its loop with no new input: frames it

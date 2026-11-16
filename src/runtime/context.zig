@@ -131,11 +131,7 @@ pub const Context = struct {
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
-        // One extra frame after any input change, so state that this frame's events modify is
-        // visible without waiting for the next event.
-        const stamp = in.stamp();
-        ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
-        ctx.last_stamp = stamp;
+        scheduler.settle(ctx, in);
 
         ctx.cur ^= 1;
         const t = &ctx.trees[ctx.cur];
