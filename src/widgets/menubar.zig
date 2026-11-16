@@ -366,23 +366,25 @@ fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: 
     f.close();
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
+/// The example's bar: File (menu.zig's example menu) and Edit (Undo, Redo).
+pub const edit_menu: menu.Def = .{ .items = &.{ "undo", "redo" } };
+pub const bar_def: BarDef = .{ .names = &.{ "file", "edit" }, .menus = &.{ menu.file_menu, edit_menu } };
+pub const bar_texts = [_][]const u8{ "File", "Edit" };
+pub const item_texts = [_][]const []const u8{ &menu.file_texts, &.{ "Undo", "Redo" } };
 
-const edit_menu: menu.Def = .{ .items = &.{ "undo", "redo" } };
-const bar_def: BarDef = .{ .names = &.{ "file", "edit" }, .menus = &.{ menu.file_menu, edit_menu } };
-const bar_texts = [_][]const u8{ "File", "Edit" };
-const item_texts = [_][]const []const u8{ &menu.file_texts, &.{ "Undo", "Redo" } };
-
-/// The test page: the bar above a status label, and its menus.
-fn Page(comptime th: Theme) type {
+/// The example page: the bar above a status label, and its menus, in both front ends, in
+/// theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
+        const page_style: Style = .{ .size = .{ .fill, .fill } };
+
         pub const App = struct {
             bar: BarState = .{},
 
             pub fn build(app: *App, f: *Frame) void {
-                _ = f.open(.none, .{});
+                _ = f.open(.none, page_style);
                 bar(f, &th, "main", bar_def, &app.bar, &bar_texts);
                 _ = base.label(f, &th, "Ready");
                 menus(f, &th, "main", bar_def, &app.bar, &item_texts);
@@ -405,12 +407,35 @@ fn Page(comptime th: Theme) type {
             redo: []const u8 = "Redo",
         };
         pub const B = MenuBar(th, .main, .bar, bar_def);
-        pub const spec = spec_zig.col(.{}, .{ B.row(), base.ct.label(th, .status), B.layer() });
+        pub const spec = spec_zig.col(page_style, .{ B.row(), base.ct.label(th, .status), B.layer() });
         pub const Ui = popover.ComptimePage(State, spec, th, B);
         pub const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/menubar.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "menubar-file", 2 },
+    .{ "menubar-edit", 3 },
+    .{ "menubar-keyed", 5 },
+    .{ "menubar-closed", 8 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -463,6 +488,44 @@ test "MenuBar: another theme restyles both front ends alike" {
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("main_bar"))].fill);
     // The list hangs th.gap below its button.
     try testing.expectEqual(t.rect(t.find(.from("main_edit"))).y1 + 10, t.rect(t.find(.from("main_edit_panel"))).y0);
+}
+
+test "MenuBar: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var st: [13]BarState = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.bar, h.ui.signals.state.bar);
+        st[k] = h.app.bar;
+        const want = [_]struct { u32, []const u8, Rect }{
+            .{ 2, "main_file", .{ .x0 = 3, .y0 = 3, .x1 = 53, .y1 = 33 } },
+            .{ 2, "main_file_panel", .{ .x0 = 3, .y0 = 39, .x1 = 75, .y1 = 163 } },
+            .{ 2, "main_file_quit", .{ .x0 = 6, .y0 = 131, .x1 = 72, .y1 = 160 } },
+            .{ 3, "main_edit", .{ .x0 = 53, .y0 = 3, .x1 = 102, .y1 = 33 } },
+            .{ 3, "main_edit_panel", .{ .x0 = 53, .y0 = 39, .x1 = 109, .y1 = 104 } },
+        };
+        // The rects the replay's comments give.
+        for (want) |w| if (w[0] == k) try testing.expectEqual(w[2], t.rect(t.find(.hash(w[1]))));
+    }
+    try testing.expectEqual(@as(u32, 13), h.frames);
+    const opens = [_]u8{ no_item, no_item, 0, 1, 0, 0, 0, 0, no_item, no_item, 1, 0, no_item };
+    for (opens, st) |o, s| try testing.expectEqual(o, s.open);
+    try testing.expectEqual(@as(u8, 1), st[5].menu.active);
+    try testing.expectEqual(@as(u8, 3), st[6].menu.active);
+    try testing.expect(st[8].from == 0 and st[8].menu.chosen == 4);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 13);
 }
 
 test "advance: buttons, hover between menus, Left and Right, choosing" {

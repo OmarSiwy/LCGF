@@ -1,0 +1,50 @@
+# Recorded input for the menu bar example page (widgets/menubar.zig, `Example`), at 800 x 600
+# in the default theme: the bar at y 0..36; File at x 3..53 and Edit at x 53..102, y 3..33.
+# File's list at x 3..75, y 39..163: New (y 42..72), Open (72..101), Recent (101..131), Quit
+# (131..160), x 6..72. Edit's list at x 53..109, y 39..104: Undo (y 42..72), Redo (72..101).
+# One line per frame says what it does (format: input.Replay). Keys are USB HID: 80 Left,
+# 81 Down, 79 Right.
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 300
+# 1: press File
+frame
+pointer 28 18
+buttons left
+# 2: release: File's menu opens
+frame
+buttons
+# 3: the pointer reaches Edit: Edit's menu opens instead
+frame
+pointer 77 18
+# 4: Left: File's menu
+frame
+press 80
+# 5: Down: Open
+frame
+press 81
+# 6: the pointer reaches Quit
+frame
+pointer 39 145
+# 7: press it
+frame
+buttons left
+# 8: release: Quit chosen, the menu closes
+frame
+buttons
+# 9: press Edit
+frame
+pointer 77 18
+buttons left
+# 10: release: Edit's menu opens
+frame
+buttons
+# 11: Right: wraps to File's menu
+frame
+press 79
+# 12: press outside: closed
+frame
+pointer 400 300
+buttons left
