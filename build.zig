@@ -907,6 +907,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    // docs/guide/backends.zig draws through the selector: its own lcgr_render, with sw, so the
+    // example runs without a GPU whatever -Drender says.
+    const guide_render_options = b.addOptions();
+    guide_render_options.addOption(Render, "render", .sw);
+    const guide_render = b.createModule(.{ .root_source_file = b.path("src/render/select.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    guide_render.addOptions("render_options", guide_render_options);
+    guide_tests.root_module.addImport("lcgr_render", guide_render);
     docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
     const snippets = b.addSystemCommand(&.{"python3"});
     snippets.addFileArg(b.path("docs/guide/snippets.py"));
