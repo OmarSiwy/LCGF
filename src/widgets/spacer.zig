@@ -51,9 +51,9 @@ const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
 const check = @import("check.zig");
 
-/// A toolbar row of two buttons, a spacer and a third button, and a column with a label, a
-/// spacer and a label at its foot.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar row of two buttons, a spacer and a third button, and a column
+/// with a label, a spacer and a label at its foot, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const bar: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .fill = th.panel };
     const side: Style = .{ .dir = .y, .size = .{ .px(120), .fill }, .pad = @splat(8) };
     const page: Style = .{ .dir = .y, .size = .{ .fill, .fill } };
@@ -91,6 +91,15 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/spacer.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/spacer-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "hover", 3 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -185,6 +194,37 @@ test "spacer: role none, so not exported; no name, value 0, no states, in both f
         // The buttons and labels around them are exported.
         try testing.expect(ex.len >= 8);
     }
+}
+
+test "spacer: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var clicks: [6]bool = undefined;
+    var fills: [6]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        clicks[k] = if (out.comptime_.event) |e| e == .close else false;
+        fills[k] = t.c.look[t.find(.from("close"))].fill;
+        // Close stays at the far end every frame.
+        try testing.expectEqual(t.rect(2).x1 - 8, t.rect(t.find(.from("close"))).x1);
+    }
+    try testing.expectEqual(@as(u32, 6), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true }, &clicks);
+    try testing.expectEqual(@as(u32, 1), h.app.closes);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[0].bitsOf(), c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, &fills);
+}
+
+test "golden_frames: name frames the spacer replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 6);
 }
 
 test {
