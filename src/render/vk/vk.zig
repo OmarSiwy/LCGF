@@ -17,6 +17,7 @@ pub const frame = @import("frame.zig");
 pub const host = @import("host.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const custom = @import("custom.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -27,4 +28,5 @@ test {
     std.testing.refAllDecls(frame);
     std.testing.refAllDecls(host);
     std.testing.refAllDecls(renderer);
+    std.testing.refAllDecls(custom);
 }

@@ -62,6 +62,8 @@ pub fn main(init: std.process.Init) !void {
     var gfx = try vk.Renderer.init(d, .{ .format = format, .frames = 2 }, white.view, sampler);
     defer gfx.deinit(d);
     const atlas_handle = try gfx.addTexture(d, atlas.view, sampler);
+    var gradient = try vk.custom.Gradient.init(d, format, 1);
+    defer gradient.deinit(d);
 
     for (&conformance.scenes) |*s| {
         st.load(s);
@@ -78,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
             const f = try frames.begin(d, &chain);
             gfx.prepare(f.slot, &st.draw, glyphs, s.viewport, 1);
             pass.begin(d, f.cmd, .{ .image = f.image, .view = f.view, .extent = chain.extent });
-            drawScene(&gfx, f.cmd);
+            drawScene(d, &gfx, &gradient, f.cmd);
             pass.end(d, f.cmd, .{ .image = f.image, .layout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL });
             copyOut(d, f.cmd, f.image, chain.extent, staging.handle);
             pass.transition(d, f.cmd, f.image, c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
@@ -94,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
             gfx.prepare(0, &st.draw, glyphs, s.viewport, 1);
             const cmd = try h.once.begin(d);
             pass.begin(d, cmd, target.begin(.{ 0, 0, 0, 1 }));
-            drawScene(&gfx, cmd);
+            drawScene(d, &gfx, &gradient, cmd);
             pass.end(d, cmd, .{ .image = target.image.handle, .layout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL });
             try h.once.submit(d);
             try h.readback(target.image.handle, target.image.extent, px);
@@ -104,10 +106,13 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-/// The host's loop over the scene's commands.
-fn drawScene(gfx: *const vk.Renderer, cmd: c.VkCommandBuffer) void {
+/// The host's loop: UI draws up to each custom command, the host's own pipeline there, in the
+/// same command buffer.
+fn drawScene(d: *const vk.device.Device, gfx: *const vk.Renderer, gradient: *const vk.custom.Gradient, cmd: c.VkCommandBuffer) void {
     var i = iface.drawUntilCustom(gfx, cmd, &st.draw, 0);
-    while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(gfx, cmd, &st.draw, i + 1)) {}
+    while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(gfx, cmd, &st.draw, i + 1)) {
+        gradient.draw(d, cmd, gfx.customScissor(st.draw.customs[st.draw.command(i).custom]), gfx.extent);
+    }
 }
 
 fn copyOut(d: *const vk.device.Device, cmd: c.VkCommandBuffer, image: c.VkImage, extent: c.VkExtent2D, buffer: c.VkBuffer) void {

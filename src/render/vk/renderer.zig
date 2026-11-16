@@ -102,6 +102,7 @@ pub const Renderer = struct {
     base: u64 = 0,
     /// Physical pixels: viewport * scale from the last `prepare`.
     extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
+    scale: f32 = 1,
     glyphs: Glyphs = .{},
     /// Set 0 points at the ring's globals; each draw picks the slot with a dynamic offset. Set
     /// i of `textures` is `Texture` i. All come from one pool sized once at init.
@@ -115,7 +116,11 @@ pub const Renderer = struct {
     /// `prepare` takes the frame slot (0 to `desc.frames - 1`): the host's frame index, whose
     /// fence it waited on, so the GPU is done reading that slot.
     pub const Queue = u32;
-    /// The host's command buffer, inside `pass.begin` / `pass.end`.
+    /// The host's command buffer, inside `pass.begin` / `pass.end`. It is the raw Vulkan
+    /// handle, not a wrapper: at a custom command (`iface.drawUntilCustom` stops there) the
+    /// host records its own vkCmd* into it, with its own pipeline, layout, descriptor sets and
+    /// push constants, then hands it back. Nothing needs restoring: the next UI draw rebinds
+    /// every piece of state it uses. `customScissor` gives the custom rect in pixels.
     pub const Pass = c.VkCommandBuffer;
 
     /// `white` is a 1x1 opaque white image view; it becomes `Texture.white`.
@@ -283,6 +288,7 @@ pub const Renderer = struct {
         const gn = @min(glyph_bytes.len, @as(usize, r.desc.max_glyphs) * quad_shader.stride);
         @memcpy(slot[@intCast(r.glyphsAt())..][0..gn], glyph_bytes[0..gn]);
         r.glyphs = glyphs;
+        r.scale = scale;
         r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
     }
 
@@ -297,6 +303,22 @@ pub const Renderer = struct {
     pub fn drawText(r: *const Renderer, cmd: Pass, run: u32) void {
         r.bind(r.dev, cmd, .solid, r.glyphs.texture, r.glyphsAt());
         r.dev.fns.vkCmdDraw.?(cmd, 4, r.glyphs.count[run], 0, r.glyphs.first[run]);
+    }
+
+    /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
+    /// physical pixels of the last `prepare`, inside the target. Pixels a quad would cover
+    /// partly are included (floor the start, ceil the end); an empty result has zero extent.
+    pub fn customScissor(r: *const Renderer, custom: draw_list.CustomDraw) c.VkRect2D {
+        const w: f32 = @floatFromInt(r.extent.width);
+        const h: f32 = @floatFromInt(r.extent.height);
+        const x0 = std.math.clamp(@floor(@max(custom.rect[0], custom.clip[0]) * r.scale), 0, w);
+        const y0 = std.math.clamp(@floor(@max(custom.rect[1], custom.clip[1]) * r.scale), 0, h);
+        const x1 = std.math.clamp(@ceil(@min(custom.rect[2], custom.clip[2]) * r.scale), x0, w);
+        const y1 = std.math.clamp(@ceil(@min(custom.rect[3], custom.clip[3]) * r.scale), y0, h);
+        return .{
+            .offset = .{ .x = @intFromFloat(x0), .y = @intFromFloat(y0) },
+            .extent = .{ .width = @intFromFloat(x1 - x0), .height = @intFromFloat(y1 - y0) },
+        };
     }
 
     /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
@@ -455,6 +477,19 @@ test "renderer: prepare writes each frame into its own slot of the mapped ring" 
     try testing.expectEqualSlices(u8, st.draw.quadBytes(), r.ring.mapped[@intCast(r.base + globals_slot)..][0 .. 3 * @sizeOf(Quad)]);
     r.prepare(2, &st.draw, st.glyphs(), .{ 160, 120 }, 1); // wraps to slot 0
     try testing.expectEqual(@as(u64, 0), r.base);
+}
+
+test "renderer: the custom scissor is the rect cut by its clip, in pixels, inside the target" {
+    var r: Renderer = undefined;
+    r.extent = .{ .width = 320, .height = 240 };
+    r.scale = 2;
+    const open: [4]f32 = .{ -1e6, -1e6, 1e6, 1e6 };
+    var sc = r.customScissor(.{ .rect = .{ 8, 8, 152, 112 }, .clip = open, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(c.VkRect2D{ .offset = .{ .x = 16, .y = 16 }, .extent = .{ .width = 288, .height = 208 } }, sc);
+    sc = r.customScissor(.{ .rect = .{ -10, 100.25, 400, 300 }, .clip = .{ 0, 0, 150.2, 1e6 }, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(c.VkRect2D{ .offset = .{ .x = 0, .y = 200 }, .extent = .{ .width = 301, .height = 40 } }, sc);
+    sc = r.customScissor(.{ .rect = .{ 50, 50, 60, 60 }, .clip = .{ 70, 70, 80, 80 }, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(@as(u32, 0), sc.extent.width * sc.extent.height);
 }
 
 test "quad_attrs follow the shader's layout of Quad" {
