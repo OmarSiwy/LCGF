@@ -1,0 +1,26 @@
+# Recorded input for the spinner example (widgets/spinner.zig, `Example`), at 320 x 240 in the
+# default theme: the spinner at x 16..40, y 16..40, turning 12 steps a second. Each frame sets
+# the time; frame 4 presses on the spinner, which changes nothing.
+# 0: 0 s, the head on dot 0
+frame
+viewport 320 240
+time 0
+pointer 300 225
+# 1: 0.1 s
+frame
+time 0.1
+# 2: 0.25 s
+frame
+time 0.25
+# 3: 0.5 s
+frame
+time 0.5
+# 4: 0.7 s, pressed on
+frame
+time 0.7
+pointer 28 28
+buttons left
+# 5: 1.0 s, released
+frame
+time 1.0
+buttons

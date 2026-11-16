@@ -1,0 +1,47 @@
+# Recorded input for the table example (widgets/table.zig, `Example`), at 320 x 240 in the
+# default theme: three 96 px columns from x 16 (Name, Kind, Size), the header row at y 41.5..71.5,
+# five 30 px body rows below it. A resize handle is the 4 px at a header's right edge.
+# Keys are USB HID usage ids: 79 Right, 81 Down.
+# 0: rest
+frame
+viewport 320 240
+dt 0.016
+pointer 300 225
+# 1: hover the Kind header
+frame
+pointer 150 56
+# 2: press it
+frame
+buttons left
+# 3: release: sorted by Kind, ascending
+frame
+buttons
+# 4: press it again
+frame
+buttons left
+# 5: release: descending
+frame
+buttons
+# 6: press the cell in row 2, column 0
+frame
+pointer 40 146.5
+buttons left
+# 7: release: it is active, the body focused
+frame
+buttons
+# 8: Right
+frame
+press 79
+# 9: Down
+frame
+press 81
+# 10: press the Name column's resize handle
+frame
+pointer 110 56
+buttons left
+# 11: drag it to x 150: the column is 134 px wide
+frame
+pointer 150 56
+# 12: release
+frame
+buttons

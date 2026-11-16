@@ -19,10 +19,18 @@ const gfx = lcgr.quad_shader;
 const pages = .{
     .{ "", w.Reference(.default), w.reference_replay, w.golden_frames },
     .{ "card-", lcgr.widgets_card.Page(.default), lcgr.widgets_card.replay, lcgr.widgets_card.golden_frames },
+    .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
+    .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
+    .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },
+    .{ "tree-", lcgr.widgets_tree.Page, lcgr.widgets_tree.Page.replay, lcgr.widgets_tree.Page.golden_frames },
+    .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
+    .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
+    .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
 };
-var glyph_quads: [1024]Quad = undefined;
-var first: [16]u32 = undefined;
-var count: [16]u32 = undefined;
+// Room for the largest page's text (the table example has 23 runs).
+var glyph_quads: [4096]Quad = undefined;
+var first: [256]u32 = undefined;
+var count: [256]u32 = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -44,9 +52,9 @@ fn dump(comptime Page: type, replay_src: []const u8, target: u32, io: std.Io, ou
     };
     const harness = &S.harness;
     harness.init();
-    var text: [16]u8 = undefined;
-    var events: [8]Input.Event = undefined;
-    var contacts: [1]Input.Contact = undefined;
+    var text: [256]u8 = undefined;
+    var events: [64]Input.Event = undefined;
+    var contacts: [8]Input.Contact = undefined;
     const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
     var replay: Replay = .{ .src = replay_src };
     var pair: ?Page.Run.Pair = null;
