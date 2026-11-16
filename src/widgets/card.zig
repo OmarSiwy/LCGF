@@ -16,6 +16,7 @@ const Spec = spec_zig.Spec;
 const Style = types.Style;
 const Node = types.Node;
 const Theme = base.Theme;
+const a11y = @import("../a11y/tree.zig");
 
 /// Which frame the container draws.
 pub const Variant = enum(u1) { card, group_box };
@@ -39,7 +40,18 @@ pub fn style(th: *const Theme, variant: Variant) Style {
     const fills = [2]types.Color{ th.panel, .transparent };
     const borders = [2]types.Color{ .transparent, th.control_hot };
     const widths = [2]f32{ 0, 1 };
-    return .{ .dir = .y, .pad = @splat(th.pad), .gap = th.gap, .radius = th.radius, .fill = fills[k], .border_color = borders[k], .border = widths[k] };
+    return .{ .dir = .y, .role = .group, .pad = @splat(th.pad), .gap = th.gap, .radius = th.radius, .fill = fills[k], .border_color = borders[k], .border = widths[k] };
+}
+
+// ---- accessibility ------------------------------------------------------------------------
+
+/// Names the container at tree row `row` by its title, the row after it (`aria-labelledby`),
+/// in the caller's semantic columns: a `group` does not take its name from its content. Its
+/// role is `group` (the style's), its value 0, and it has no states of its own; `a11y.states`
+/// passes a disabled state down from it to its children. Call after the frame is built, for
+/// either front end: their rows are the same.
+pub fn name(s: *a11y.Semantics, row: u32) void {
+    s.c.labelled_by[row] = row + 1;
 }
 
 /// The containers as spec nodes.
@@ -193,6 +205,59 @@ test "card: takes no input; hit testing and the tab order pass through it to its
     try testing.expectEqual(t.find(.from("wire")), focus.seek(t, t.c.sense, focusable, 0, t.len, first, false));
     // In the comptime front end the containers are not widgets at all.
     try testing.expectEqual(2, Default.Ui.Events.widget_count);
+}
+
+/// Semantic columns for a test tree of up to 32 rows.
+const SemBuf = struct {
+    buf: [bytes]u8 align(@import("../core/mem.zig").column_align) = undefined,
+    const bytes = blk: {
+        var counter: @import("../core/mem.zig").Carver = .{ .buf = null };
+        _ = a11y.Semantics.init(&counter, 32);
+        break :blk counter.off;
+    };
+    fn init(b: *SemBuf) a11y.Semantics {
+        var carver: @import("../core/mem.zig").Carver = .{ .buf = &b.buf };
+        var sem = a11y.Semantics.init(&carver, 32);
+        sem.clear();
+        return sem;
+    }
+};
+
+/// The accessible name of row `row` as the bridge reads it: the bytes of its name run.
+fn nameOf(sem: *const a11y.Semantics, tx: *const @import("../core/texts.zig").Texts, strings: []const u8, row: u32) []const u8 {
+    const run = sem.c.name[row];
+    if (run == types.none) return "";
+    return strings[tx.c.start[run]..][0..tx.c.bytes[run]];
+}
+
+test "card: role group, named by its title, value 0, no states, in both front ends" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    const out = try h.frame(&in);
+    var sb: [2]SemBuf = undefined;
+    const trees = [2]*const Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings, &sb) |t, tx, str, *b| {
+        var sem = b.init();
+        name(&sem, 1);
+        name(&sem, 5);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(@backingInt(a11y.Role.group), t.c.role[1]);
+        try testing.expectEqual(@backingInt(a11y.Role.group), t.c.role[5]);
+        try testing.expectEqualStrings("Render", nameOf(&sem, tx, str, 1));
+        try testing.expectEqualStrings("Options", nameOf(&sem, tx, str, 5));
+        try testing.expectEqual(@as(f32, 0), t.c.value[1]);
+        try testing.expectEqual(@as(u8, 0), sem.c.state[1]);
+        try testing.expectEqual(@as(u8, 0), sem.c.state[5]);
+    }
+    // Disabled passes from the card to what it holds.
+    var sem = sb[0].init();
+    sem.c.state[1] = a11y.State.bitsOf(.{ .disabled = true });
+    a11y.states(out.runtime.tree, &sem);
+    try testing.expectEqual(sem.c.state[1], sem.c.state[out.runtime.tree.find(.from("go"))]);
 }
 
 test {
