@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>lcgr: glue test</title>
+<!-- Loads hello.wasm through lcgr.js and checks one frame of the shell example built in the
+     browser against the layout the native tests expect (src/shell/iface.zig, "contract"). Run by
+     browser.py (ci/jobs/web.sh). -->
+<script type="module">
+import { load } from "./lcgr.js";
+window.lcgrTest = (async () => {
+    const ui = await load("hello.wasm");
+    const nodes = ui.exports.lcgr_hello(800, 600);
+    const sidebar = ui.logs.at(-1);
+    // The size probe (layout.wasm, size.py) runs too: the view fills 800 - 160.
+    const layout = await load("layout.wasm");
+    const view = layout.exports.lcgr_layout(800, 600);
+    return { ok: nodes > 0 && sidebar === "sidebar 0 50 160 600" && view === 640, nodes, sidebar, view,
+             wasm_exports: Object.keys(ui.exports) };
+})();
+</script>
