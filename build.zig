@@ -216,6 +216,18 @@ pub fn build(b: *std.Build) void {
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
+    // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
+    // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
+    const fallback_system = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/fallback/system.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = target.result.os.tag != .windows,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&b.addRunArtifact(fallback_system).step);
+    b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
+
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
     const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
         .root_source_file = b.path("src/draw/paths_golden.zig"),
