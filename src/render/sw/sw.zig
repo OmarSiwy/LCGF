@@ -16,6 +16,7 @@ const std = @import("std");
 const simd = @import("../../core/simd.zig");
 const types = @import("../../core/types.zig");
 const draw_list = @import("../../draw/draw_list.zig");
+const damage = @import("../../draw/damage.zig");
 const features = @import("../../draw/features.zig");
 const iface = @import("../iface.zig");
 const Color = types.Color;
@@ -148,6 +149,20 @@ pub const Software = struct {
             switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
                 inline else => |kind| shade(kind, t, q, img, s.scale),
             }
+        }
+    }
+
+    /// Clears every damage rect of `draw` inside `scissor` to `background` and draws the whole
+    /// list into it, leaving last frame's pixels everywhere else (`DrawList.damage`). Custom
+    /// commands are skipped: a host with custom draws runs its own `iface.drawUntilCustom` loop
+    /// per rect. Rects may overlap; a pixel in two is cleared and drawn twice, with the same result.
+    pub fn redraw(s: *const Software, fb: *Framebuffer, scissor: [4]u32, draw: *const DrawList, background: Color) void {
+        for (0..damage.max_rects) |k| {
+            const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ fb.width, fb.height }, s.scale);
+            const box = clampBox(.{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, scissor);
+            if (box[0] >= box[2] or box[1] >= box[3]) continue;
+            fb.fill(box, background);
+            iface.render(s, .{ .fb = fb, .scissor = box }, draw);
         }
     }
 };
@@ -397,6 +412,7 @@ fn unorm16(v: u32) f32 {
 }
 
 const testing = std.testing;
+const conformance = @import("../conformance.zig");
 
 fn Frame(comptime w: u32, comptime h: u32) type {
     return struct {
@@ -457,4 +473,21 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     q.fill = Color.rgb(9, 99, 199).bitsOf();
     shade(.solid, t, &q, Image.white, 1);
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
+}
+
+test "redraw: only the damage rects change, cleared to the background first" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[0]);
+    var f: Frame(160, 120) = .{};
+    var fb = f.fb(.rgba8);
+    fb.clear(.rgb(1, 2, 3));
+    var s: Software = .{};
+    s.prepare({}, &st.draw, st.glyphs(), .{ 160, 120 }, 1);
+    st.draw.damage = .empty;
+    st.draw.damage.add(.{ 10, 10, 30, 30 });
+    s.redraw(&fb, fb.all(), &st.draw, .black);
+    try testing.expectEqual(Color.rgb(1, 2, 3), fb.at(9, 15));
+    try testing.expectEqual(Color.rgb(1, 2, 3), fb.at(30, 15));
+    try testing.expectEqual(Color.rgb(30, 31, 36), fb.at(10, 10)); // the panel, outside the card
+    try testing.expectEqual(Color.rgb(90, 140, 255), fb.at(29, 29)); // the card, inside its border
 }
