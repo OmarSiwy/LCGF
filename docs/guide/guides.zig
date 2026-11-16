@@ -5,4 +5,5 @@ test {
     _ = @import("runtime.zig");
     _ = @import("custom.zig");
     _ = @import("text.zig");
+    _ = @import("porting.zig");
 }
