@@ -59,6 +59,11 @@
     "jcc": 5,
     "short_fwd": 1
   },
+  "p_clamp": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
+  },
   "p_cluster_caret_x": {
     "back": 3,
     "jcc": 8,
@@ -89,9 +94,19 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_direction": {
+    "jcc": 6,
+    "back": 2,
+    "short_fwd": 1
+  },
   "p_drop_step": {
     "back": 2,
     "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_extent": {
+    "jcc": 2,
+    "back": 1,
     "short_fwd": 0
   },
   "p_files_route": {
@@ -133,6 +148,16 @@
     "back": 2,
     "jcc": 5,
     "short_fwd": 1
+  },
+  "p_grid_fit": {
+    "jcc": 14,
+    "back": 7,
+    "short_fwd": 2
+  },
+  "p_grid_resolve": {
+    "jcc": 11,
+    "back": 4,
+    "short_fwd": 0
   },
   "p_hit": {
     "back": 1,
@@ -183,6 +208,11 @@
     "back": 6,
     "jcc": 12,
     "short_fwd": 2
+  },
+  "p_mirror": {
+    "jcc": 3,
+    "back": 1,
+    "short_fwd": 0
   },
   "p_order": {
     "back": 7,
@@ -279,10 +309,20 @@
     "jcc": 6,
     "short_fwd": 1
   },
+  "p_start_end": {
+    "jcc": 2,
+    "back": 1,
+    "short_fwd": 0
+  },
   "p_step": {
     "back": 2,
     "jcc": 6,
     "short_fwd": 0
+  },
+  "p_stick": {
+    "jcc": 20,
+    "back": 9,
+    "short_fwd": 4
   },
   "p_sw_dashed": {
     "back": 2,
