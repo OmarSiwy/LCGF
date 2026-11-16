@@ -530,6 +530,29 @@ pub fn build(b: *std.Build) void {
     const render_check = b.addObject(.{ .name = "render-select", .root_module = lcgr_render });
     b.step("render", "Compile the lcgr_render module for -Drender and -Dtarget (src/render/select.zig)").dependOn(&render_check.step);
     if (render == .wgpu and !wgpu_supported) render_check.step.dependOn(&b.addFail("-Drender=wgpu needs -Dwgpu-native=v27 or v29 on a target with an archive").step);
+    // The selector's zero-cost check (src/render/select_probe.zig, ci/run.sh render-select):
+    // one probe object through lcgr_render and one through the back end's own module,
+    // ReleaseFast and stripped, in zig-out/render-probe/.
+    const render_probe_step = b.step("render-probe", "Build the -Drender probe through the selector and directly into zig-out/render-probe/");
+    render_probe_step.dependOn(&render_check.step);
+    for ([_]bool{ true, false }) |selector| {
+        const probe_options = b.addOptions();
+        probe_options.addOption(bool, "selector", selector);
+        const m = b.createModule(.{
+            .root_source_file = b.path("src/render/select_probe.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        });
+        m.addOptions("probe_options", probe_options);
+        if (selector) m.addImport("lcgr_render", lcgr_render) else {
+            m.addOptions("render_options", render_options);
+            if (renderBackend(b, render, target, optimize, lcgr, wgpu_native_mod)) |backend| m.addImport("render_backend", backend);
+        }
+        const obj = b.addObject(.{ .name = "probe", .root_module = m });
+        render_probe_step.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("render-probe/{s}.o", .{if (selector) "selector" else "direct"})).step);
+    }
 
     // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
