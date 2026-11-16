@@ -108,8 +108,17 @@ pub const StateColors = [4]Color;
 /// One colour per value of a two-state widget, indexed by the value (false 0, true 1).
 pub const OnOff = [2]Color;
 
-inline fn unit(x: f32) f32 {
+// ---- shared helpers: public, so a widget written outside this file uses the same ones ------
+
+/// `x` clamped to 0..1: a position along a track, a fraction of a range.
+pub inline fn unit(x: f32) f32 {
     return @min(@max(x, 0), 1);
+}
+
+/// The row of a `StateColors` table for response `r`: `hovered | held << 1`. Other bits of the
+/// response do not move it.
+pub inline fn stateIndex(r: Response) u2 {
+    return @as(u2, @intFromBool(r.hovered)) | (@as(u2, @intFromBool(r.held)) << 1);
 }
 
 // ---- look: one function per part, called by both front ends -------------------------------
@@ -124,7 +133,7 @@ pub fn buttonStyle(th: *const Theme) Style {
 
 /// State selects the colour by table index.
 pub fn buttonFill(th: *const Theme, r: Response) Color {
-    return th.controlFills()[@as(u8, @intFromBool(r.hovered)) | (@as(u8, @intFromBool(r.held)) << 1)];
+    return th.controlFills()[stateIndex(r)];
 }
 
 pub fn checkboxStyle(th: *const Theme) Style {
@@ -591,6 +600,24 @@ test "Theme: other tokens restyle both front ends alike" {
         w.* = out.tree.rect(out.tree.find(.from("b"))).w();
     }
     try testing.expectEqual(widths[0] + 16, widths[1]);
+}
+
+test "unit, stateIndex: the shared helpers" {
+    try testing.expectEqual(@as(f32, 0), unit(-3));
+    try testing.expectEqual(@as(f32, 0.25), unit(0.25));
+    try testing.expectEqual(@as(f32, 1), unit(7));
+    try testing.expectEqual(@as(f32, 1), unit(types.inf));
+    try testing.expectEqual(@as(f32, 0), unit(-types.inf));
+    try testing.expectEqual(@as(u2, 0), stateIndex(.{}));
+    try testing.expectEqual(@as(u2, 1), stateIndex(.{ .hovered = true }));
+    try testing.expectEqual(@as(u2, 2), stateIndex(.{ .held = true }));
+    try testing.expectEqual(@as(u2, 3), stateIndex(.{ .hovered = true, .held = true }));
+    try testing.expectEqual(@as(u2, 0), stateIndex(.{ .pressed = true, .released = true, .clicked = true, .focused = true }));
+    // The value helpers are built on unit: out-of-range input clamps to the ends.
+    try testing.expectEqual(@as(f32, 4), slide(1, true, 1.5, 0, 4));
+    try testing.expectEqual(@as(f32, 1), slide(1, false, 0.5, 0, 4));
+    try testing.expectEqual(@as(f32, 0), fraction(-2, 0, 4));
+    try testing.expectEqual(@as(f32, 0.75), fraction(3, 0, 4));
 }
 
 test "StateColors, OnOff: the theme's tables, indexed by state and value" {
