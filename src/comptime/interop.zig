@@ -4,6 +4,11 @@
 //! over `regionInput`: the region's size as its viewport and the pointer in the region's
 //! coordinates. The inner front end's root (`Context.begin`'s, or a comptime spec's) is laid out
 //! at (0, 0) in its region, as the prototype's `Frame.open` / `Frame.end` lay out any root.
+//!
+//! The other way round, a runtime `Frame` reserves the region as a node (`Frame.custom`, so the
+//! draw list keeps its place in paint order), and after `Frame.end` the comptime `Layout` runs
+//! with that node's size as its viewport; `widgetRects` and `regionInput` give `Events` its
+//! rects and pointer.
 
 const std = @import("std");
 const Input = @import("../core/input.zig").Input;
@@ -25,6 +30,17 @@ pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
 pub fn rectOf(ram: anytype, row: usize) [4]f32 {
     var r: [4]f32 = undefined;
     inline for (&r, 0..) |*x, k| x.* = toF32(ram.rect[k][row]);
+    return r;
+}
+
+/// The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's
+/// visible rect (`vis`), in the layout's own coordinates, as `Rects.fromTree` takes it from a
+/// runtime tree. Judge the pointer against it through `regionInput`.
+pub fn widgetRects(comptime E: type, ram: anytype) E.Rects {
+    var r: E.Rects = .{};
+    for (0..4) |side| {
+        for (E.widget_nodes, 0..) |node, k| r.c[side][k] = toF32(ram.vis[side][node]);
+    }
     return r;
 }
 
@@ -116,4 +132,52 @@ test "regionInput: a runtime Frame hosted in a comptime UI's region" {
         _ = f.end(.{ .advance = 0.5, .line = 1.2 });
     }
     try testing.expectEqual(@as(?u32, null), clicked);
+}
+
+test "widgetRects: a comptime UI hosted in a runtime Frame's node" {
+    // The comptime panel: a checkbox and a slider of fixed size in a padded row.
+    const panel = comptime blk: {
+        var mute = s.checkbox(.mute, .muted);
+        mute.style.size = .{ .px(20), .px(20) };
+        var volume = s.slider(.volume, .volume);
+        volume.style.size = .{ .px(100), .px(20) };
+        break :blk s.row(.{ .pad = @splat(10), .gap = 10 }, .{ mute, volume });
+    };
+    const L = Layout(panel, .{});
+    const E = Events(panel);
+    var scratch: L.Scratch = undefined;
+    var ram: L.Cols.Dynamic = undefined;
+    var pointer: E.Pointer = .{};
+
+    const S = struct {
+        var buffer: [Context.requiredBytes(list_limits)]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, list_limits);
+    const panel_id: types.Id = .from("panel");
+
+    // Window (90, 60) is over the slider: 50 px into its 100, so 0.5. Then a click on the
+    // checkbox at (20, 60).
+    const script = [_]struct { at: [2]f32, down: bool }{ .{ .at = .{ 90, 60 }, .down = true }, .{ .at = .{ 90, 60 }, .down = false }, .{ .at = .{ 20, 60 }, .down = true }, .{ .at = .{ 20, 60 }, .down = false } };
+    var got: [script.len]?E.Event = undefined;
+    for (script, &got) |step, *g| {
+        const outer: Input = .{ .viewport = .{ 400, 300 }, .pointer = step.at, .buttons = .{ .left = step.down } };
+        // The runtime page: a 40 px toolbar, then the panel's node filling the rest.
+        var f = ctx.begin(&outer);
+        _ = f.leaf(.from("toolbar"), .{ .size = .{ .fill, .px(40) } });
+        _ = f.custom(panel_id, .{ .size = .{ .fill, .fill } }, 0);
+        const out = f.end(.{ .advance = 0.5, .line = 1.2 });
+        const r = out.tree.rect(out.tree.find(panel_id));
+        const rect: [4]f32 = .{ r.x0, r.y0, r.x1, r.y1 };
+        try testing.expectEqual([4]f32{ 0, 40, 400, 300 }, rect);
+
+        const in = regionInput(&outer, rect);
+        L.run(&scratch, &ram, in.viewport);
+        const rects = widgetRects(E, &ram);
+        try testing.expectEqual([4]f32{ 40, 10, 140, 30 }, [4]f32{ rects.c[0][1], rects.c[1][1], rects.c[2][1], rects.c[3][1] });
+        g.* = E.pointer(&pointer, &rects, &in);
+    }
+    try testing.expectEqual(@as(?E.Event, .{ .volume = 0.5 }), got[0]);
+    try testing.expectEqual(@as(?E.Event, null), got[1]);
+    try testing.expectEqual(@as(?E.Event, null), got[2]);
+    try testing.expectEqual(@as(?E.Event, .mute), got[3]);
 }
