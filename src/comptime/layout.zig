@@ -51,7 +51,9 @@ fn Field(comptime FT: type, comptime R: usize, comptime writable: bool) type {
     };
 }
 
-pub fn Layout(comptime spec: Spec, comptime options: Options) type {
+/// Layout of `spec` over its own columns, every row through every pass (see the file comment).
+/// `Layout` adds folding on top.
+pub fn Plain(comptime spec: Spec, comptime options: Options) type {
     const C = columns.Columns(spec, options);
     const n = C.node_count;
     const R = simd.rows(n);
@@ -142,6 +144,14 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         /// (labels measure zero until text measurement reaches the comptime front end), then the
         /// kept outputs into `ram`.
         pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
+            passes(scratch, viewport);
+            var v = view(scratch);
+            layout.finalize(&v);
+            keep(scratch, ram);
+        }
+
+        /// Every pass but `finalize`, which leaves sizes and positions in `scratch`.
+        pub fn passes(scratch: *Scratch, viewport: [2]f32) void {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
@@ -151,13 +161,11 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
             layout.fit(&v, .y);
             layout.resolve(&v, .y, viewport[1]);
             layout.place(&v);
-            layout.finalize(&v);
-            keep(scratch, ram);
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
         /// into `Coordinate` (they are already whole pixels: finalize snaps them).
-        fn keep(scratch: *const Scratch, ram: *C.Dynamic) void {
+        pub fn keep(scratch: *const Scratch, ram: *C.Dynamic) void {
             @setEvalBranchQuota(100_000);
             inline for (@typeInfo(C.Dynamic).@"struct".field_names) |name| {
                 if (comptime std.mem.eql(u8, name, "value")) continue; // state writes it, not layout
@@ -176,6 +184,163 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
                 const hi: f32 = std.math.maxInt(T);
                 for (dst, src) |*d, s| d.* = @intFromFloat(@min(@max(s, lo), hi));
             } else dst.* = src.*;
+        }
+    };
+}
+
+/// Which rows of a UI fold: `root[j]` is true for a row whose subtree is laid out while
+/// compiling. A row's size is independent of the viewport when its parent's is, or when its
+/// own sizing never reads the parent's box: no `grow`, no `pct`, and no `shrink` while in flow
+/// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
+/// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
+/// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
+fn FoldPlan(comptime C: type) type {
+    const n = C.node_count;
+    const c = C.pushed.c;
+    return struct {
+        const indep: [n]bool = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [n]bool = undefined;
+            out[0] = false;
+            for (1..n) |i| {
+                const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] == 0 and c.pct[1][i] == 0 and
+                    (c.shrink[i] == 0 or c.flow[i] == 0);
+                out[i] = out[c.parent[i]] or own;
+            }
+            break :blk out;
+        };
+        const root: [n]bool = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [n]bool = undefined;
+            for (0..n) |i| out[i] = indep[i] and !indep[c.parent[i]] and c.end[i] - i > 1;
+            break :blk out;
+        };
+        /// Rows inside a fold root's subtree, the root not counted: they leave the skeleton.
+        const inside: [n]bool = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [n]bool = @splat(false);
+            for (0..n) |i| if (root[i]) for (i + 1..c.end[i]) |j| {
+                out[j] = true;
+            };
+            break :blk out;
+        };
+        const folded_rows = std.mem.count(bool, &inside, &.{true});
+    };
+}
+
+/// `s` with every fold root (`plan.root`) replaced by a leaf of its laid-out size: the skeleton
+/// the passes run over.
+fn skeleton(comptime s: Spec, comptime plan: type, comptime size: anytype, comptime next: *usize) Spec {
+    const i = next.*;
+    next.* += 1;
+    if (plan.root[i]) {
+        next.* = i + @import("flatten.zig").count(s);
+        var leaf = s;
+        leaf.children = &.{};
+        leaf.style.size = .{ .px(size[0][i]), .px(size[1][i]) };
+        leaf.style.min = .{ 0, 0 };
+        leaf.style.max = .{ std.math.inf(f32), std.math.inf(f32) };
+        return leaf;
+    }
+    var kids: [s.children.len]Spec = undefined;
+    for (&kids, s.children) |*k, c| k.* = skeleton(c, plan, size, next);
+    var out = s;
+    const final = kids;
+    out.children = &final;
+    return out;
+}
+
+/// Layout of `spec`: as `Plain`, except that subtrees whose layout does not depend on the
+/// viewport (`FoldPlan`) are laid out while compiling. The passes run over a skeleton in which
+/// each such subtree is one leaf of its fixed size; then every folded row's position is its
+/// fold root's plus a constant offset, and its size a constant (one select per row, no branch),
+/// and `finalize` runs over the whole tree for rects, clips and visibility.
+pub fn Layout(comptime spec: Spec, comptime options: Options) type {
+    const P = Plain(spec, options);
+    const C = P.Cols;
+    const n = C.node_count;
+    const plan = FoldPlan(C);
+    if (plan.folded_rows == 0) return struct {
+        pub const Cols = C;
+        pub const Scratch = P.Scratch;
+        pub const folded_rows = 0;
+        pub const run = P.run;
+    };
+    const R = simd.rows(n);
+    return struct {
+        pub const Cols = C;
+        /// Rows laid out while compiling.
+        pub const folded_rows = plan.folded_rows;
+
+        /// Sizes and positions of the whole tree in any viewport, from the passes run by the
+        /// compiler: only the folded rows' are used, and those do not depend on the viewport.
+        const Reference = struct { size: [2][R]f32, pos: [2][R]f32 };
+        const reference: Reference = blk: {
+            @setEvalBranchQuota(2_000_000 + 100_000 * n);
+            var scratch: P.Scratch = undefined;
+            P.passes(&scratch, .{ 1000, 1000 });
+            break :blk .{ .size = scratch.size, .pos = scratch.pos };
+        };
+
+        const skel_spec = blk: {
+            @setEvalBranchQuota(10_000 + 1_000 * n);
+            var next: usize = 0;
+            break :blk skeleton(spec, plan, reference.size, &next);
+        };
+        const S = Plain(skel_spec, options);
+
+        /// For each row: the skeleton row its position starts from (itself, or its fold root),
+        /// the constant offset from there, and, for folded rows, its constant size and 0 in
+        /// `keep_size` (1 for skeleton rows, whose size comes from the passes).
+        const Expand = struct { base: [R]u32, rel: [2][R]f32, size: [2][R]f32, keep_size: [R]f32 };
+        const expand: Expand = blk: {
+            @setEvalBranchQuota(10_000 + 200 * n);
+            var base: [R]u32 = @splat(0);
+            var rel: [2][R]f32 = @splat(@splat(0));
+            var size: [2][R]f32 = @splat(@splat(0));
+            var keep_size: [R]f32 = @splat(1);
+            var k: u32 = 0;
+            var root_k: u32 = 0;
+            var root_row: usize = 0;
+            for (0..n) |j| {
+                if (plan.inside[j]) {
+                    base[j] = root_k;
+                    keep_size[j] = 0;
+                    for (0..2) |a| {
+                        rel[a][j] = reference.pos[a][j] - reference.pos[a][root_row];
+                        size[a][j] = reference.size[a][j];
+                    }
+                } else {
+                    base[j] = k;
+                    if (plan.root[j]) {
+                        root_k = k;
+                        root_row = j;
+                    }
+                    k += 1;
+                }
+            }
+            std.debug.assert(k == S.Cols.node_count);
+            break :blk .{ .base = base, .rel = rel, .size = size, .keep_size = keep_size };
+        };
+
+        /// Per-frame memory: the skeleton's and the whole tree's.
+        pub const Scratch = struct { skel: S.Scratch, full: P.Scratch };
+
+        pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
+            S.passes(&scratch.skel, viewport);
+            const sk = &scratch.skel;
+            const full = &scratch.full;
+            for (0..n) |j| {
+                const b = expand.base[j];
+                inline for (0..2) |a| {
+                    full.pos[a][j] = sk.pos[a][b] + expand.rel[a][j];
+                    full.size[a][j] = sk.size[a][b] * expand.keep_size[j] + expand.size[a][j];
+                }
+            }
+            full.sense = C.pushed.c.sense;
+            var v = P.view(full);
+            layout.finalize(&v);
+            P.keep(full, ram);
         }
     };
 }
@@ -231,6 +396,17 @@ fn expectBoth(comptime e: examples.Example) !void {
     if (e.options.viewport) |vp| return expectSameLayout(e, vp);
     try expectSameLayout(e, .{ 800, 600 });
     try expectSameLayout(e, .{ 40, 30 });
+}
+
+test "Layout: subtrees that do not depend on the viewport are laid out while compiling" {
+    // The mixer's root takes the viewport; its label and its two fit-sized rows do not, so the
+    // rows' children (4 of 8 nodes) fold.
+    try testing.expectEqual(4, Layout(examples.mixer, .{}).folded_rows);
+    // The settings rows fill the width, so nothing below them is fixed but their leaves.
+    try testing.expectEqual(0, Layout(examples.settings, .{ .viewport = .{ 320, 240 } }).folded_rows);
+    // Folded results equal the runtime layout in any viewport, however small.
+    inline for (.{ [2]f32{ 1, 1 }, [2]f32{ 5000, 20 }, [2]f32{ 123.5, 77.25 } }) |vp|
+        try expectSameLayout(examples.all[0], vp);
 }
 
 test "Layout.run: equals the runtime layout of the same UI" {
