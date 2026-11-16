@@ -46,6 +46,7 @@ const pages = .{
     .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
     .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
     .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
+    .{ "image-", lcgr.widgets_image.Page(.default), lcgr.widgets_image.replay, lcgr.widgets_image.golden_frames },
     .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
     .{ "", lcgr.widgets_tooltip.golden, lcgr.widgets_tooltip.golden.src, lcgr.widgets_tooltip.golden.frames },
     .{ "", lcgr.widgets_menu.golden, lcgr.widgets_menu.golden.src, lcgr.widgets_menu.golden.frames },

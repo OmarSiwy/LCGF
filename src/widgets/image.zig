@@ -160,8 +160,11 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// The test page: a caption over a picture at its size, and the same picture in a box.
-fn Page(comptime th: Theme) type {
+/// The example page: a caption over a picture at its size, the same picture covering a box,
+/// and a button holding it as a thumbnail, in both front ends, in theme `th`. The picture is
+/// a quarter of texture 1, which the golden image renderer (tools/golden/gpu.py) fills with
+/// its stand-in atlas; an application uploads its own pixels there.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {
         pub const photo: Image = .{ .texture = @fromBackingInt(1), .uv = .{ 0, 0, 0.5, 0.5 }, .size = .{ 64, 48 } };
@@ -198,6 +201,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 240, one commented line per frame.
+pub const replay = @embedFile("testdata/image.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/image-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "over", 1 },
+    .{ "hover", 2 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -330,6 +343,46 @@ test "image: role image, named by its caption, value 0, no states, in both front
         // The thumbnail only decorates its button: no name.
         try testing.expectEqual(types.none, sem.c.name[rows.thumb]);
     }
+}
+
+test "image: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var clicks: [6]bool = undefined;
+    var fills: [6]u32 = undefined;
+    const look = (try h.frame(&.{ .viewport = .{ 320, 240 } })).runtime.tree.c.look;
+    const rest = [3]@import("../core/tree.zig").Look{ look[rows.natural], look[rows.boxed], look[rows.thumb] };
+    h.init();
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        clicks[k] = if (out.comptime_.event) |e| e == .zoom else false;
+        fills[k] = t.c.look[rows.button].fill;
+        // The pictures keep their look whatever the pointer does.
+        try testing.expectEqual(rest, [3]@import("../core/tree.zig").Look{ t.c.look[rows.natural], t.c.look[rows.boxed], t.c.look[rows.thumb] });
+        if (k == 0) {
+            // The rects the replay's comments give.
+            try testing.expectEqual(types.Rect{ .x0 = 8, .y0 = 34, .x1 = 72, .y1 = 82 }, t.rect(rows.natural));
+            try testing.expectEqual(types.Rect{ .x0 = 8, .y0 = 90, .x1 = 104, .y1 = 186 }, t.rect(rows.boxed));
+            try testing.expectEqual(types.Rect{ .x0 = 8, .y0 = 194, .x1 = 48, .y1 = 228 }, t.rect(rows.button));
+        }
+    }
+    try testing.expectEqual(@as(u32, 6), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, true, false }, &clicks);
+    try testing.expectEqual(@as(u32, 1), h.app.zooms);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf(), c[0].bitsOf() }, &fills);
+}
+
+test "golden_frames: name frames the image replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 6);
 }
 
 test "checkImage: a size, a texture rect and a box" {
