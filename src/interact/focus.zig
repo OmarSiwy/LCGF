@@ -113,6 +113,13 @@ pub const Focus = struct {
     /// Focus at the end of the last step, to put back when the pointer takes focus out of a
     /// modal layer.
     last: u32 = 0,
+    /// Open modal layers, oldest first, by id, with the focus each one opened over: what to
+    /// put back when it closes. Layers nested deeper than `max_layers` are not remembered.
+    layers: [max_layers]u32 = @splat(0),
+    saved: [max_layers]u32 = @splat(0),
+    depth: u32 = 0,
+
+    pub const max_layers = 8;
 
     /// Advances by one frame. Run after `Interaction.step` on the same input and tree: `prev`
     /// is last frame's tree, which the keys move focus through. Tab moves to the next node
@@ -130,12 +137,18 @@ pub const Focus = struct {
     /// wrap among its stops, and focus found outside it (the layer just opened, or a click
     /// behind it) moves in, back to where it was in the layer, else to its first stop, else
     /// to nothing.
+    ///
+    /// When a layer closes, focus goes back to what had it when the layer opened, usually the
+    /// button that opened it (APG dialog pattern); closing several at once goes back to what
+    /// was focused before the oldest of them. Layers are told apart by id, so a modal layer
+    /// needs one.
     pub fn step(s: *Focus, it: *Interaction, prev: *const Tree, sc: *const Scopes, in: *const Input) void {
         const press = simd.andB(in.buttons.left, !s.left);
         const focusable: u8 = @bitCast(types.Sense{ .focus = true });
         const k = s.keys;
         const c = &sc.c;
         const last = prev.cap - 1;
+        s.restore(it, pick(u32, sc.modal != none, prev.c.id[@min(sc.modal, last)], 0));
         // The rows focus may be in: the open layer's descendants, or the whole tree.
         const trapped = sc.modal != none;
         const lo_t = pick(u32, trapped, sc.modal +% 1, 0);
@@ -180,6 +193,31 @@ pub const Focus = struct {
         s.visible = simd.andB(simd.orB(s.visible, key), !press);
         s.left = in.buttons.left;
         s.last = it.focus;
+    }
+
+    /// Follows the open modal layer `top` (an id, 0 for none): a new layer is pushed with the
+    /// focus it opens over; a layer further down the stack, or none, pops back to it and puts
+    /// back the focus saved by the first layer popped. Once per frame over at most
+    /// `max_layers` entries.
+    fn restore(s: *Focus, it: *Interaction, top: u32) void {
+        const open = s.layers[0..s.depth];
+        if (s.depth > 0 and open[s.depth - 1] == top) return;
+        // Where `top` is in the stack: its depth, else 0 (`top` 0 closes them all).
+        var keep: u32 = 0;
+        for (open, 1..) |id, d| keep = pick(u32, id == top, @intCast(d), keep);
+        if (keep == 0 and top != 0) {
+            // Newly open. A full stack keeps its oldest entries and replaces the newest.
+            const d = @min(s.depth, max_layers - 1);
+            s.layers[d] = top;
+            s.saved[d] = it.focus;
+            s.depth = d + 1;
+            return;
+        }
+        if (keep < s.depth) {
+            it.focus = s.saved[keep];
+            s.last = it.focus;
+            s.depth = keep;
+        }
     }
 
     /// Where to draw the focus ring this frame: the focused node's rect in `t`, grown by
@@ -524,8 +562,11 @@ const Dialog = struct {
     const field = Id.from("field");
     const yes = Id.from("yes");
     const no = Id.from("no");
+    const confirm = Id.from("confirm");
+    const sure = Id.from("sure");
 
-    fn build(f: *Dialog, open: bool) void {
+    /// `open` dialogs: 0, the dialog, or the dialog and a confirmation on top of it.
+    fn build(f: *Dialog, open: u32) void {
         const layout = @import("../layout/layout.zig");
         const Texts = @import("../core/texts.zig").Texts;
         var carver: mem.Carver = .{ .buf = &f.raw };
@@ -536,10 +577,16 @@ const Dialog = struct {
         const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
         f.leaf(root, name);
         f.leaf(root, ok);
-        if (open) {
+        if (open > 0) {
             const d = t.push(root, dialog, &.{ .float = true, .offset = .{ 100, 0 } });
             f.sc.c.kind[d] = Scopes.trap;
             for ([_]Id{ field, yes, no }) |id| f.leaf(d, id);
+            t.seal(d);
+        }
+        if (open > 1) {
+            const d = t.push(root, confirm, &.{ .float = true, .offset = .{ 100, 100 } });
+            f.sc.c.kind[d] = Scopes.trap;
+            f.leaf(d, sure);
             t.seal(d);
         }
         t.seal(root);
@@ -556,14 +603,14 @@ test "walkthrough: a modal layer keeps focus inside it until it closes" {
     var f: Dialog = .{};
     var w: Walk = .{};
     const D = Dialog;
-    f.build(false);
+    f.build(0);
     try w.run(&f.t, &f.sc,
         \\frame
         \\press 43
     );
     // The dialog opens: focus moves to its first stop with no key, then Tab and Shift+Tab
     // wrap inside it.
-    f.build(true);
+    f.build(1);
     try w.run(&f.t, &f.sc,
         \\frame
         \\frame
@@ -588,18 +635,19 @@ test "walkthrough: a modal layer keeps focus inside it until it closes" {
         bi(D.name), bi(D.field), bi(D.yes), bi(D.field), bi(D.no), bi(D.no), bi(D.no), bi(D.yes),
     }, w.focus[0..w.n]);
     try testing.expectEqual(3, f.sc.modal);
-    // Closed again: Tab reaches the rows behind it.
-    f.build(false);
+    // Closed again: focus is back on "name", which had it when the dialog opened, and Tab
+    // reaches the rows behind.
+    f.build(0);
     try w.run(&f.t, &f.sc,
         \\frame
         \\press 43
     );
-    try testing.expectEqual(bi(D.name), w.focus[w.n - 1]);
+    try testing.expectEqual(bi(D.ok), w.focus[w.n - 1]);
 }
 
 test "step: a modal layer with nothing focusable leaves nothing focused" {
     var f: Dialog = .{};
-    f.build(true);
+    f.build(1);
     for (4..7) |r| f.t.c.sense[r] = 0;
     var w: Walk = .{};
     w.it.focus = bi(Dialog.name);
@@ -608,4 +656,52 @@ test "step: a modal layer with nothing focusable leaves nothing focused" {
         \\press 43
     );
     try testing.expectEqual(0, w.focus[0]);
+}
+
+test "walkthrough: closing a layer gives focus back to what opened it, nested layers too" {
+    var f: Dialog = .{};
+    var w: Walk = .{};
+    const D = Dialog;
+    // Tab to "ok"; the app opens the dialog; Tab to "yes"; the app opens the confirmation;
+    // closing it returns to "yes", closing the dialog to "ok".
+    f.build(0);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\press 43
+        \\press 43
+    );
+    f.build(1);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\frame
+        \\press 43
+    );
+    f.build(2);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\frame
+        \\press 43
+    );
+    f.build(1);
+    try w.run(&f.t, &f.sc,
+        \\frame
+    );
+    f.build(0);
+    try w.run(&f.t, &f.sc,
+        \\frame
+    );
+    try testing.expectEqualSlices(u32, &.{
+        bi(D.ok), bi(D.field), bi(D.yes), bi(D.sure), bi(D.sure), bi(D.yes), bi(D.ok),
+    }, w.focus[0..w.n]);
+    try testing.expectEqual(0, w.fo.depth);
+
+    // Both closed in one frame: back to what had focus before the first opened.
+    f.build(1);
+    try w.run(&f.t, &f.sc, "frame\n");
+    f.build(2);
+    try w.run(&f.t, &f.sc, "frame\n");
+    try testing.expectEqual(bi(D.sure), w.focus[w.n - 1]);
+    f.build(0);
+    try w.run(&f.t, &f.sc, "frame\n");
+    try testing.expectEqual(bi(D.ok), w.focus[w.n - 1]);
 }
