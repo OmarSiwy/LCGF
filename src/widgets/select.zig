@@ -93,14 +93,14 @@ pub fn Select(comptime th: Theme, comptime name: @EnumLiteral(), comptime field:
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
             const ss: SelectState = @field(st, field_name);
-            if (comptime named(n, id)) return .{ .style = buttonStyle(&th, v.response) };
+            if (comptime named(n, id)) return .{ .style = valued(buttonStyle(&th, v.response), ss), .role = .combobox };
             if (comptime named(n, partName(id, "scrim"))) {
                 if (!ss.menu.open) return null;
                 return .{ .style = popover.scrimStyle(v.in.viewport) };
             }
-            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)) };
+            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)), .role = .listbox };
             inline for (def.items, 0..) |o, k| {
-                if (comptime named(n, partName(id, o))) return .{ .style = optionStyle(&th, ss.menu.active == k, ss.selected == k) };
+                if (comptime named(n, partName(id, o))) return .{ .style = optionStyle(&th, ss.menu.active == k, ss.selected == k), .role = .option };
             }
             return popover.plainPart(th, n, v.response);
         }
@@ -158,6 +158,40 @@ pub fn advance(comptime def: menu.Def, st: SelectState, hits: menu.Hits, evs: []
     return s;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The button's style with the value column set: the chosen option's position.
+pub fn valued(s: Style, st: SelectState) Style {
+    var out = s;
+    out.value = @floatFromInt(st.selected);
+    return out;
+}
+
+/// The semantics of select `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`. The columns hold the roles
+/// (the button `combobox`, its value the chosen option's position; the list `listbox`; the
+/// options `option`, named by their text). Here: the combobox is named by the row `label` (its
+/// caption, `aria-labelledby`; `none` for none), is expandable and expanded while the list is
+/// shown (`aria-expanded`), and names the list; the chosen option is `selected`
+/// (`aria-selected`). Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: menu.Def, st: SelectState, label: u32) void {
+    const b = t.find(.from(name));
+    if (b == types.none) return;
+    const l = t.find(.from(partName(name, "panel")));
+    s.c.state[b] |= a11y.State.bitsOf(.{ .expandable = true, .expanded = l != types.none });
+    if (label != types.none) s.c.labelled_by[b] = label;
+    if (l == types.none) return;
+    s.c.labelled_by[l] = if (label != types.none) label else b;
+    inline for (def.items, 0..) |o, k| {
+        const row = t.find(.from(partName(name, o)));
+        if (row != types.none and st.selected == k) s.c.state[row] |= a11y.State.bitsOf(.{ .selected = true });
+    }
+}
+
+fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
+    f.tree().c.role[n.ix()] = @backingInt(r);
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The button of select `name` (options `def`, labelled `texts`), in the page's flow, showing
@@ -171,8 +205,9 @@ pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime d
     var hits: menu.Hits = .{ .toggle = r.clicked, .outside = inter.response(.from(partName(name, "scrim"))).pressed };
     inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(partName(name, o))));
     st.* = advance(def, st.*, hits, f.in.events);
-    const b = f.open(.from(name), buttonStyle(th, r));
+    const b = f.open(.from(name), valued(buttonStyle(th, r), st.*));
     _ = f.interact(b, .button);
+    role(f, b, .combobox);
     _ = base.label(f, th, texts[st.selected]);
     f.close();
     return r;
@@ -183,9 +218,13 @@ pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime d
 pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8) void {
     if (!st.menu.open) return;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
-    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
+    const l = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    _ = f.interact(l, popover.overlay_sense);
+    role(f, l, .listbox);
     inline for (def.items, 0..) |o, k| {
-        _ = f.interact(f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k)), popover.overlay_sense);
+        const row = f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k));
+        _ = f.interact(row, popover.overlay_sense);
+        role(f, row, .option);
         _ = base.label(f, th, texts[k]);
         f.close();
     }
@@ -373,6 +412,38 @@ test "Select: open, arrows, Enter, Escape and clicks in both front ends" {
     try testing.expect(!s[8].menu.open and s[8].selected == 2);
     try testing.expectEqual(@as(u8, 1), s[11].menu.active);
     try testing.expect(!s[12].menu.open and s[12].selected == 2);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Select: a combobox named by its caption, valued by its choice, with a listbox of options" {
+    const h = &harness;
+    h.init();
+    const t = try setState(h, .{ .selected = 1, .menu = .{ .open = true, .active = 2 } });
+    const cp = &h.ui.tables.t;
+    // The caption is the row before the button.
+    const caption = t.find(.from("shape")) - 1;
+    semantics(t, sem[0].begin(), "shape", shapes, h.app.shape, caption);
+    semantics(cp, sem[1].begin(), "shape", shapes, h.ui.signals.state.shape, caption);
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, tr: *const Tree, comptime id: []const u8) u32 {
+            return popover.exportRow(x, tr.find(.from(id)));
+        }
+    }.of;
+    const H = std.hash.Fnv1a_32;
+    const b = row(e, t, "shape");
+    try testing.expectEqual(@backingInt(a11y.Role.combobox), e.c.role[b]);
+    try testing.expectEqual(H.hash("Shape"), e.c.name_hash[b]);
+    try testing.expectEqual(@as(f32, 1), e.c.value[b]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true }), e.c.state[b]);
+    try testing.expectEqual(@backingInt(a11y.Role.listbox), e.c.role[row(e, t, "shape_panel")]);
+    try testing.expectEqual(H.hash("Shape"), e.c.name_hash[row(e, t, "shape_panel")]);
+    try testing.expectEqual(@backingInt(a11y.Role.option), e.c.role[row(e, t, "shape_square")]);
+    try testing.expectEqual(H.hash("Square"), e.c.name_hash[row(e, t, "shape_square")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "shape_square")]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[row(e, t, "shape_triangle")]);
 }
 
 test "checkSelect: the state field, the button's text and the options" {
