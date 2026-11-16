@@ -4,8 +4,10 @@
 //!
 //!   text ──shape──► Glyphs (px) ──breakLines──► Lines ──place──► Glyphs.x, Lines.top/baseline
 //!
-//! `Glyphs` is one paragraph's shaped glyphs in pixels, in text order (one left-to-right run;
-//! bidi reordering is not done here). `breakLines` walks the UAX #14 break opportunities of the
+//! `Glyphs` is one paragraph's shaped glyphs in pixels, in text order. `place` lays each line
+//! out left to right in that order; `reorder` then moves the glyphs of right-to-left and mixed
+//! lines to their display order (UAX #9 L1, L2), each run of newline-free lines one bidi
+//! paragraph. `breakLines` walks the UAX #14 break opportunities of the
 //! text (src/text/unicode/line.zig) and fills lines greedily: a line takes whole segments (a
 //! word and the spaces after it) while the width of its ink fits; trailing spaces hang past the
 //! edge and do not count. A segment wider than the width on its own is broken between clusters,
@@ -21,6 +23,7 @@ const shape = @import("../shape/shape.zig");
 const property = @import("../unicode/property.zig");
 const utf8 = @import("../unicode/utf8.zig");
 const LineBreaks = @import("../unicode/line.zig").LineBreaks;
+const bidi = @import("../unicode/bidi.zig");
 
 /// Widths may exceed the limit by this much and still fit: layout hands back the width it was
 /// given after adding and removing padding, which can differ from it in the last bit.
@@ -40,6 +43,9 @@ pub const Glyphs = struct {
     span: []u32,
     /// Written by `place`: the pen x of the glyph, px from the line's left edge.
     x: []f32,
+    /// The glyph's bidi embedding level: 0 from `place`, resolved by `reorder`. Odd is right
+    /// to left.
+    level: []u8,
     len: u32 = 0,
 
     /// Appends a shaped run at `scale` px per font unit (px / units_per_em), shaped in span
@@ -55,6 +61,7 @@ pub const Glyphs = struct {
             g.y_offset[at] = @as(f32, @floatFromInt(run.y_offset[k])) * scale;
             g.span[at] = span;
             g.x[at] = 0;
+            g.level[at] = 0;
         }
         g.len += run.len;
     }
@@ -287,8 +294,92 @@ pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metri
         var pen: f32 = 0;
         for (first..lines.end[k]) |i| {
             g.x[i] = pen;
+            g.level[i] = 0;
             pen += g.advance[i] + lines.extra[k] * space01(text, g.cluster[i]);
         }
+    }
+}
+
+/// Scratch for `reorder`. The UAX #9 columns (`cps` to `pair`) are at least as long as the
+/// longest bidi paragraph in code points, `order` as the longest line in glyphs
+/// (`mem.Carver.columns` carves them all at one length).
+pub const BidiScratch = struct {
+    cps: []u21,
+    /// Byte offset of each code point.
+    at: []u32,
+    orig: []property.BidiClass,
+    levels: []u8,
+    cls: []property.BidiClass,
+    next: []u32,
+    pair: []u32,
+    order: []u32,
+};
+
+/// Call after `place`: resolves the bidi levels of the text (UAX #9 to L1, per line), writes
+/// `Glyphs.level`, and rewrites `Glyphs.x` so each line's glyphs sit in display order (L2).
+/// A bidi paragraph is a run of lines up to one ended by a mandatory break (`Lines.hard`),
+/// its direction taken from its first strong character. The ink keeps its place and width;
+/// the hanging glyphs after it sit past its end in the paragraph's direction (left of the
+/// ink, at negative x, in a right-to-left paragraph). Lines without right-to-left text keep
+/// the x `place` gave them. `error.NoSpace` when a paragraph or line is longer than `s`; the
+/// lines before it are reordered.
+pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, s: BidiScratch) error{NoSpace}!void {
+    var k: u32 = 0;
+    while (k < lines.len) {
+        var last = k;
+        while (lines.hard[last] == 0 and last + 1 < lines.len) last += 1;
+        const to: u32 = if (last + 1 < lines.len) lines.start[last + 1] else @intCast(text.len);
+        var n: u32 = 0;
+        var pos = lines.start[k];
+        while (pos < to) : (n += 1) {
+            if (n == s.cps.len) return error.NoSpace;
+            const d = utf8.decode(text, pos);
+            s.cps[n] = d.cp;
+            s.at[n] = pos;
+            pos += d.len;
+        }
+        const orig = s.orig[0..n];
+        bidi.classes(s.cps[0..n], orig);
+        const scratch: bidi.Scratch = .{ .cls = s.cls, .next = s.next, .pair = s.pair };
+        const para = bidi.paragraphLevel(orig, scratch);
+        bidi.resolve(orig, s.cps[0..n], para, s.levels, scratch);
+        var c: u32 = 0; // the open line's first code point
+        while (k <= last) : (k += 1) {
+            const stop = if (k < last) lines.start[k + 1] else to;
+            var c1 = c;
+            while (c1 < n and s.at[c1] < stop) c1 += 1;
+            bidi.lineLevels(orig[c..c1], s.levels[c..c1], para);
+            var cp = c;
+            for (lines.first[k]..lines.end[k]) |i| {
+                while (cp + 1 < c1 and s.at[cp + 1] <= g.cluster[i]) cp += 1;
+                g.level[i] = s.levels[cp];
+            }
+            try visualLine(lines, g, text, k, para, s.order);
+            c = c1;
+        }
+    }
+}
+
+/// Lays line `k` out in display order from its glyphs' levels.
+fn visualLine(lines: *const Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, order: []u32) error{NoSpace}!void {
+    const first = lines.first[k];
+    const n = lines.ink[k] - first;
+    if (n > order.len) return error.NoSpace;
+    bidi.reorder(g.level[first..lines.ink[k]], order[0..n]);
+    const extra = lines.extra[k];
+    var pen: f32 = 0;
+    for (order[0..n]) |o| {
+        const i = first + o;
+        g.x[i] = pen;
+        pen += g.advance[i] + extra * space01(text, g.cluster[i]);
+    }
+    const rtl = para & 1 == 1;
+    var back: f32 = 0;
+    for (lines.ink[k]..lines.end[k]) |i| {
+        const w = g.advance[i] + extra * space01(text, g.cluster[i]);
+        back -= w;
+        g.x[i] = if (rtl) back else pen;
+        pen += w;
     }
 }
 
@@ -384,6 +475,41 @@ test "place: alignment is an offset, justification widens inner spaces" {
     place(&t.l, &t.g, text, &.{m}, .{ .width = std.math.inf(f32), .justify = true });
     try testing.expectEqualSlices(f32, &.{ 0, 0 }, t.l.x[0..2]);
     try testing.expectEqualSlices(f32, &.{ 0, 0 }, t.l.extra[0..2]);
+}
+
+test "reorder: right-to-left runs and paragraphs in display order, spaces hang at the end" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(BidiScratch, 32);
+    const m: Metrics = .{ .ascent = 8, .descent = 2 };
+    var t: golden.Para = .{};
+    // "abc " then alef bet gimel: on screen "abc גבא", the Hebrew read from the right.
+    const mixed = "abc \u{5D0}\u{5D1}\u{5D2}";
+    t.fixed(mixed, 10);
+    try breakLines(&t.g, mixed, 1000, &t.l);
+    place(&t.l, &t.g, mixed, &.{m}, .{});
+    try reorder(&t.l, &t.g, mixed, s);
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30, 60, 50, 40 }, t.g.x[0..7]);
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 1, 1, 1 }, t.g.level[0..7]);
+    // A right-to-left paragraph over two lines: "אב cd " | "ג": the Latin word keeps its
+    // order, the trailing space hangs left of the ink, and the second line is its own line.
+    const rtl = "\u{5D0}\u{5D1} cd \u{5D2}";
+    t.fixed(rtl, 10);
+    try breakLines(&t.g, rtl, 50, &t.l);
+    try testing.expectEqual(2, t.l.len);
+    place(&t.l, &t.g, rtl, &.{m}, .{});
+    try reorder(&t.l, &t.g, rtl, s);
+    try testing.expectEqualSlices(f32, &.{ 40, 30, 20, 0, 10, -10, 0 }, t.g.x[0..7]);
+    try testing.expectEqualSlices(u8, &.{ 1, 1, 1, 2, 2, 1, 1 }, t.g.level[0..7]);
+    // Left to right only: the x of `place`. Too long for the scratch: NoSpace.
+    t.fixed("ab cd", 10);
+    try breakLines(&t.g, "ab cd", 1000, &t.l);
+    place(&t.l, &t.g, "ab cd", &.{m}, .{});
+    try reorder(&t.l, &t.g, "ab cd", s);
+    try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30, 40 }, t.g.x[0..5]);
+    const small = carver.columns(BidiScratch, 4);
+    try testing.expectError(error.NoSpace, reorder(&t.l, &t.g, "ab cd", small));
 }
 
 test "golden: aligned and justified paragraphs match the reference" {

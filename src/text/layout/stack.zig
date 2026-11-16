@@ -33,6 +33,8 @@ pub const Stack = struct {
     run: shape.Run,
     g: lines.Glyphs,
     l: lines.Lines,
+    /// When set, lines are reordered for display (`lines.reorder`) after placing.
+    bidi: ?lines.BidiScratch = null,
     /// A run did not fit the scratch: it was measured as empty. Reset by the caller.
     overflow: bool = false,
 
@@ -42,7 +44,8 @@ pub const Stack = struct {
     }
 
     /// Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at
-    /// `width`: shaped with its font at its size, then `lines.breakLines` and `lines.place`.
+    /// `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and,
+    /// with `bidi`, `lines.reorder`.
     pub fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void {
         const c = &tx.c;
         const sh = &st.shapers[c.font[k]];
@@ -52,6 +55,7 @@ pub const Stack = struct {
         try st.g.append(&st.run, c.px[k] / @as(f32, @floatFromInt(sh.face.units_per_em)), 0, 0);
         try lines.breakLines(&st.g, text, width, &st.l);
         lines.place(&st.l, &st.g, text, &.{lines.Metrics.of(&sh.face, c.px[k])}, .{ .width = width });
+        if (st.bidi) |s| try lines.reorder(&st.l, &st.g, text, s);
     }
 
     /// Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.

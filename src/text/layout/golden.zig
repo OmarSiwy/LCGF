@@ -31,6 +31,7 @@ pub const Para = struct {
     y_offset: [256]f32 = undefined,
     x: [256]f32 = undefined,
     span: [256]u32 = undefined,
+    level: [256]u8 = undefined,
     first: [32]u32 = undefined,
     end: [32]u32 = undefined,
     ink: [32]u32 = undefined,
@@ -53,24 +54,29 @@ pub const Para = struct {
 
     /// Points `g`, `l` and `s` at the arrays. `Para` must not move afterwards.
     pub fn bind(p: *Para) void {
-        p.g = .{ .glyph = &p.glyph, .cluster = &p.cluster, .advance = &p.advance, .x_offset = &p.x_offset, .y_offset = &p.y_offset, .span = &p.span, .x = &p.x };
+        p.g = .{ .glyph = &p.glyph, .cluster = &p.cluster, .advance = &p.advance, .x_offset = &p.x_offset, .y_offset = &p.y_offset, .span = &p.span, .x = &p.x, .level = &p.level };
         p.l = .{ .first = &p.first, .end = &p.end, .ink = &p.ink, .start = &p.start, .width = &p.width, .hard = &p.hard, .x = &p.lx, .top = &p.top, .baseline = &p.baseline, .height = &p.height, .extra = &p.extra };
         p.s = .{ .start = &p.s_start, .font = &p.s_font, .px = &p.s_px, .color = &p.s_color };
     }
 
-    /// One glyph per byte of ASCII `text`, each `adv` px wide.
+    /// One glyph per code point of `text`, each `adv` px wide.
     pub fn fixed(p: *Para, text: []const u8, adv: f32) void {
         p.bind();
-        for (text, 0..) |byte, k| {
-            p.glyph[k] = byte;
-            p.cluster[k] = @intCast(k);
+        var k: u32 = 0;
+        var at: u32 = 0;
+        while (at < text.len) : (k += 1) {
+            const d = @import("../unicode/utf8.zig").decode(text, at);
+            p.glyph[k] = @truncate(d.cp);
+            p.cluster[k] = at;
             p.advance[k] = adv;
             p.x_offset[k] = 0;
             p.y_offset[k] = 0;
             p.span[k] = 0;
             p.x[k] = 0;
+            p.level[k] = 0;
+            at += d.len;
         }
-        p.g.len = @intCast(text.len);
+        p.g.len = k;
     }
 
     /// `text` shaped with the built-in shaper, in the spans already pushed to `s`.

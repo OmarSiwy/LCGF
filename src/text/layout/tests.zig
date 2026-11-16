@@ -6,7 +6,8 @@ const std = @import("std");
 const lines = @import("lines.zig");
 const query = @import("query.zig");
 const spans = @import("spans.zig");
-const golden = @import("golden.zig");
+/// For src/text/layout/conformance.zig, a separate test root.
+pub const golden = @import("golden.zig");
 const shape = @import("../shape/shape.zig");
 const opentype = @import("../font/opentype.zig");
 
@@ -178,4 +179,62 @@ test "a paragraph of spans keeps its offsets through breaking and queries" {
     try testing.expectEqual(1, c.line);
     try testing.expectEqual(m[1].height(), c.height);
     try testing.expectEqual(5, query.hit(&p.l, &p.g, text, -1, c.top + 1));
+}
+
+test "text-edit's screen-order caret sits on the glyph it moved to over reordered lines" {
+    const mem = @import("../../core/mem.zig");
+    const moves = @import("../edit/moves.zig");
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(lines.BidiScratch, 32);
+    const ms = carver.columns(moves.BidiScratch, 32);
+    var p: golden.Para = .{};
+    const texts = [_][]const u8{
+        "abc \u{5D0}\u{5D1}\u{5D2} de", // left-to-right paragraph with a Hebrew word
+        "\u{5D0}\u{5D1} ab 12 \u{5D2}", // right-to-left paragraph with Latin and digits
+        "\u{5D0}(a)\u{5D1}",
+    };
+    for (texts) |text| {
+        p.fixed(text, 10);
+        try lines.breakLines(&p.g, text, std.math.inf(f32), &p.l);
+        lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, .{});
+        try lines.reorder(&p.l, &p.g, text, s);
+        const v: moves.View = .{ .l = &p.l, .g = &p.g, .text = text };
+        // From the left end, Right moves the drawn caret strictly rightwards, each time onto
+        // the glyph moves.visual placed the stop at, up to the right end; Left walks back.
+        // (Two offsets at a direction change are one stop, so a step can cross two glyphs.)
+        const right: f32 = @floatFromInt(p.g.len * 10);
+        var at: u32 = 0;
+        for (0..2 * p.g.len) |_| at = moves.visual(text, at, -1, ms).?;
+        try testing.expectEqual(0, v.x(at));
+        var prev: f32 = 0;
+        var steps: u32 = 0;
+        while (prev < right) : (steps += 1) {
+            at = moves.visual(text, at, 1, ms).?;
+            try testing.expect(v.x(at) > prev);
+            try expectOnGlyph(&p, text, at);
+            prev = v.x(at);
+        }
+        try testing.expectEqual(right, prev);
+        try testing.expect(steps + 2 >= p.g.len);
+        while (prev > 0) {
+            at = moves.visual(text, at, -1, ms).?;
+            try testing.expect(v.x(at) < prev);
+            try expectOnGlyph(&p, text, at);
+            prev = v.x(at);
+        }
+    }
+}
+
+/// The caret at `at` is drawn on the leading edge of the glyph after it (its left edge, the
+/// right edge of a right-to-left one) or, at the text's end, the trailing edge of the last.
+fn expectOnGlyph(p: *const golden.Para, text: []const u8, at: u32) !void {
+    const x = query.caret(&p.l, &p.g, text, at).x;
+    for (0..p.g.len) |i| if (p.g.cluster[i] == at) {
+        const rtl: f32 = @floatFromInt(p.g.level[i] & 1);
+        return testing.expectEqual(p.g.x[i] + p.g.advance[i] * rtl, x);
+    };
+    const last = p.g.len - 1;
+    const rtl: f32 = @floatFromInt(p.g.level[last] & 1);
+    try testing.expectEqual(p.g.x[last] + p.g.advance[last] * (1 - rtl), x);
 }
