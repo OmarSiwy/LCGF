@@ -1,0 +1,31 @@
+# The shells' example (src/shell/example.zig) under fingers, as UIKit reports it: the view's
+# bounds, then touches. Positions are the example's layout at 800 x 600 points.
+frame
+bounds 800 600
+# Unchanged: the settle frame, then a frame with nothing to build.
+frame
+frame
+# Tap Reset (8,8 .. 66,42): down in one frame, up in the next.
+frame
+touch began 1 37 25
+frame
+touch ended 1 37 25
+frame
+# Tap Add layer (8,58 .. 100,91) quicker than a frame: down and up between two polls.
+frame
+touch began 2 54 74
+touch ended 2 54 74
+frame
+frame
+# Hold the exposure slider (180 .. 792) at 75% of its track; a second finger lands elsewhere.
+frame
+touch began 3 639 25
+frame
+touch stationary 3 639 25
+touch began 4 300 300
+frame
+# The system takes the slider finger for a gesture; the other lifts.
+touch cancelled 3 639 25
+frame
+touch ended 4 300 300
+frame

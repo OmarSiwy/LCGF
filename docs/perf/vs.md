@@ -14,7 +14,7 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 
 | Row | Frame timed | Text | Notes |
 |---|---|---|---|
-| LCGR | `tools/bench/bench.zig`: begin + hit test, build, layout, paint into the draw list | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
+| LCGR | `bench/vs/lcgr/main.zig`: harness.h's driver in Zig, a static binary without libc; every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes; list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
 | Clay 0.14 | `Clay_BeginLayout`, declarations, `Clay_EndLayout` (layout and render commands) | the same monospace measure, word wrap by Clay | Clay has no widgets or animation: they are built from elements, springs are the prototype's step |
 | Dear ImGui 1.93.0 | input, `NewFrame`, ImGui's own widgets, `Render` (vertex and index buffers), null back end | default font (ProggyClean) at 14 and 20 px, every glyph laid out into vertices | springs are the prototype's step (no animation API) |
 | egui 0.37.0 | `Context::run_ui` (input, egui's own widgets, layout, shapes) and `Context::tessellate` (meshes), no eframe, no window | default fonts at 14 and 20 px, every glyph tessellated into vertices | springs are the prototype's step (egui's animation helpers are tweens) |
@@ -134,6 +134,78 @@ libraries, so its executable is only the harness: once idle it maps 107 shared l
   widths each frame, which re-evaluates the 1,000 JavaScript bindings that read it: most of its
   12 ms. Its idle loop (`exec`, with nothing animating and no cursor blinking) did not wake in the
   2 s window. Resident memory is mostly the shared libraries' pages and the QML engine.
+
+## Pointer moves that change nothing (form, text)
+
+Until the perf-gaps branch the LCGR row built every poll, while LVGL, Slint and Qt Quick time
+every poll and redraw only what changed. In form and text the only input is the pointer
+moving: LVGL (no hover styles in its default theme) redrew nothing after the first frame and a
+poll cost about a microsecond, against 16 to 18 us for an LCGR rebuild: the x22.6 and x17.9 of
+the gates were that, not slower passes. `Frame.reuse` could not have applied: a reused subtree
+still copies its rows, lays out what is not kept and paints every node, and no scene uses it.
+
+`Context.needsFrame` now stamps the pointer position only while it is over a node that senses
+the pointer, while a button is held, or when the app sets `Context.track_pointer` (the
+inspector does while open); elsewhere a move stamps as "outside the window" and no frame is
+built (`src/runtime/scheduler.zig`, `stamp`). Entering or leaving a sensing node builds the
+hover frame and its settle frame. The harness asks needsFrame every poll, as a host does, and
+times every poll (the `poll` line, which `measure.py` reads) as the other harnesses do. The
+form builds 908 of 3,000 polls (the pointer is over a checkbox, slider or button, or just left
+one), text 2 of 3,000. Rows, list and springs still build every poll: their state changes
+outside `Input` (the per-pass benchmark's pointer, the scroll position, the spring targets).
+
+## Resident memory and time to first frame
+
+Two causes, found on the perf-gaps branch, made the LCGR row 12,104 KiB and 4.72 ms against
+Clay's 2,140 KiB and 0.67 ms. First, the harness: `--idle` ran the untimed differential check
+against the prototype core, which builds a whole prototype context (3.3 MB) beside LCGR's;
+it now runs only in timed runs. Second, the library: `mem.Carver` cleared every column it
+carved, so a context made every byte of its capacity resident (4.4 MB for 4,096 nodes) and
+paid for clearing it before the first frame. Clay mallocs its arena (8,192 elements by default)
+and touches only what it uses. `Carver.zeroed` / `Context.initZeroed` skip the clear for a
+buffer that is zero already (the benchmark's static buffers), so only touched pages count.
+Measured, pinned, at load 30 to 47 of 32 CPUs: resident 12,000 -> 8,932 (harness) -> 1,752 KiB
+(Clay 2,140 in the same window); first frame 6.9 -> 5.2 -> 1.8 ms (Clay 1.0).
+
+A third cause was the harness again: std's default 256 KB thread-local signal stack, which
+start.zig clears before main (64 page faults per start). The benchmark sets
+`std_options.signal_stack_size = null`. Pinned, 31 starts, load 4: first frame 2.90 ms before
+the branch, 0.57 after the two fixes above, 0.47 without the signal stack (Clay 0.45);
+resident 1,624 KiB (Clay 2,076).
+
+## Springs and list against Dear ImGui (not met)
+
+Quiet run (load 5, pinned, `measure.py --runs 3`): springs 75.4 us against ImGui's 57.0 (x1.32),
+list 12.2 against 11.9 (x1.03, inside the run-to-run spread; x1.13 in the gates run). Both
+harnesses build every frame of these scenes, so the comparison is fair as it stands. The
+springs frame splits into build 30 us, layout 33 us and paint 13 us (1,042 nodes). The profile
+is flat: `Tree.push` 26% (about 20 ns a node, store-bound over its columns, as
+docs/perf/port-perf.md found), `paint.emit` 16%, the scene's `animate` calls and styles 15%,
+`levels.resolve` 13%, `fitSpan` 10%, `place` 7%. No function has a hotspot to remove. ImGui
+puts each bar at its cursor in one pass and writes four vertices; LCGR runs the eight-pass flex
+layout over every node and paints from the laid-out columns. Closing x1.32 needs fewer
+passes or fewer columns written per node, which is a layout and tree design change, not a fix
+in this branch.
+
+## The LCGR row's harness, and capacity
+
+Until the perf-gaps branch the LCGR row was the per-pass benchmark (`tools/bench`): it carried
+the prototype core, the differential check against it, static buffers for 4,096 nodes and
+std's formatting, so its size (280 KB loaded, 11.8 MB bss) said little about LCGR.
+`bench/vs/lcgr/main.zig` now does what the Clay harness does and nothing else: harness.h's
+driver, LCGR's frame, its context in a mapped buffer as Clay's arena is malloced.
+
+Fair in both directions, two more changes:
+
+- Capacity per scene (harness.h `vs_capacity`): every harness that sizes its tables does so
+  for the scene, LCGR's node count rounded up to a power of two, at least 256 (Clay's max
+  element count, LCGR's limits). A fixed capacity favours whichever library touches less of
+  what it does not use: at 4,096 LCGR's first frame touches one page per column (684 KiB
+  resident), at 256 it is 388 KiB; Clay moves less (448 -> 376 KiB, static).
+- The LCGR row has no libc. Clay's resident memory and start-up are measured on
+  `vs-clay-static`, built static against musl (`measure.py --startup`), so neither row pays for
+  a dynamic C library; its frame times stay on the glibc build (musl's snprintf and memcpy made
+  its text frame 31 -> 48 us), and its size on the dynamic build (libc not in its bytes).
 
 ## What could not be measured fairly here
 

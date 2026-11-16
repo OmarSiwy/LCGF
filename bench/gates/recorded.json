@@ -1,0 +1,138 @@
+{
+ "frame": {
+  "form": {
+   "held": true,
+   "ratio": 0.143,
+   "best": "lvgl",
+   "values": {
+    "clay": 28.6,
+    "egui": 215.9,
+    "iced": 21.3,
+    "imgui": 15.7,
+    "lcgr": 0.1,
+    "lvgl": 0.7,
+    "qtquick": 116.4,
+    "slint": 46.2
+   }
+  },
+  "list": {
+   "held": false,
+   "ratio": 1.055,
+   "best": "imgui",
+   "values": {
+    "clay": 23.6,
+    "egui": 236.1,
+    "iced": 217.1,
+    "imgui": 11.0,
+    "lcgr": 11.6,
+    "lvgl": 798.7,
+    "qtquick": 206.2,
+    "slint": 2234.4
+   }
+  },
+  "text": {
+   "held": true,
+   "ratio": 0.1,
+   "best": "lvgl",
+   "values": {
+    "clay": 34.2,
+    "egui": 129.3,
+    "iced": 20.0,
+    "imgui": 89.4,
+    "lcgr": 0.1,
+    "lvgl": 1.0,
+    "qtquick": 215.2,
+    "slint": 31.6
+   }
+  },
+  "springs": {
+   "held": false,
+   "ratio": 1.418,
+   "best": "imgui",
+   "values": {
+    "clay": 121.0,
+    "egui": 316.9,
+    "iced": 161.1,
+    "imgui": 52.6,
+    "lcgr": 74.6,
+    "lvgl": 3253.4,
+    "qtquick": 12267.4,
+    "slint": 5285.2
+   }
+  },
+  "resize": {
+   "held": true,
+   "ratio": 0.487,
+   "best": "clay",
+   "values": {
+    "clay": 34.3,
+    "egui": 282.6,
+    "iced": 142.2,
+    "imgui": 90.7,
+    "lcgr": 16.7,
+    "lvgl": 1967.7,
+    "qtquick": 322.7,
+    "slint": 2623.2
+   }
+  }
+ },
+ "frameworks": [
+  "clay",
+  "egui",
+  "iced",
+  "imgui",
+  "lvgl",
+  "qtquick",
+  "slint"
+ ],
+ "rss": {
+  "idle": {
+   "held": false,
+   "ratio": 1.038,
+   "best": "clay",
+   "values": {
+    "clay": 420,
+    "egui": 6632,
+    "iced": 6152,
+    "imgui": 3904,
+    "lcgr": 436,
+    "lvgl": 3496,
+    "qtquick": 70712,
+    "slint": 15008
+   }
+  }
+ },
+ "size": {
+  "dump": {
+   "loaded": 34232,
+   "bss": 1107984
+  },
+  "bench": {
+   "loaded": 277895,
+   "bss": 11807916
+  }
+ },
+ "first-frame": {
+  "idle": {
+   "held": false,
+   "ratio": 1.026,
+   "best": "clay",
+   "values": {
+    "clay": 0.30996400164440274,
+    "egui": 2.435469999909401,
+    "iced": 9.01317098760046,
+    "imgui": 0.9327020088676363,
+    "lcgr": 0.3179130144417286,
+    "lvgl": 2.911218994995579,
+    "qtquick": 60.7227600121405,
+    "slint": 26.63601000676863
+   }
+  }
+ },
+ "latency_us": 345.5,
+ "compile_time_s": {
+  "100": 0.094,
+  "1000": 0.146,
+  "10000": 0.53
+ }
+}

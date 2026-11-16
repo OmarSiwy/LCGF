@@ -6,6 +6,7 @@
 //! caller's loop, which polls until it is set.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("wgpu_c");
 
 pub const Error = error{ NoAdapter, NoDevice, MapFailed };
@@ -29,7 +30,14 @@ pub const Host = struct {
     queue: c.WGPUQueue,
 
     pub fn init() Error!Host {
-        const instance = c.wgpuCreateInstance(null);
+        // One back end, not wgpu-native's default of all: every enabled back end is initialised
+        // at instance creation, and the GL one loads the EGL driver it never uses (+46 MB
+        // resident on lavapipe, +81 MB on NVIDIA; docs/research/render-select.md, section 3).
+        var extras: c.WGPUInstanceExtras = .{
+            .chain = .{ .sType = c.WGPUSType_InstanceExtras },
+            .backends = if (builtin.target.os.tag.isDarwin()) c.WGPUInstanceBackend_Metal else c.WGPUInstanceBackend_Vulkan,
+        };
+        const instance = c.wgpuCreateInstance(&.{ .nextInChain = &extras.chain });
         var got_adapter: GotAdapter = .{};
         _ = c.wgpuInstanceRequestAdapter(instance, null, .{
             .mode = c.WGPUCallbackMode_AllowProcessEvents,

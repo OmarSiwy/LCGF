@@ -276,6 +276,13 @@ test "button input: click, then Enter and Space while focused, fire in both fron
     try testing.expect(!h.app.clicked);
     try testing.expectEqual(null, out.comptime_.event);
     try testing.expectEqual(null, h.ui.focus);
+    // Tab gives it focus back without the pointer; Enter fires again.
+    in.events = &.{.{ .kind = .press, .code = 0x2b }};
+    _ = try h.frame(&in);
+    in.events = &.{enter};
+    out = try h.frame(&in);
+    try testing.expect(h.app.clicked);
+    try testing.expect(out.comptime_.event != null);
 }
 
 var button_semantics: base.Semantic(16) = .{};

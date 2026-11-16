@@ -46,6 +46,7 @@ const pages = .{
     .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
     .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
     .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
+    .{ "image-", lcgr.widgets_image.Page(.default), lcgr.widgets_image.replay, lcgr.widgets_image.golden_frames },
     .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
     .{ "", lcgr.widgets_tooltip.golden, lcgr.widgets_tooltip.golden.src, lcgr.widgets_tooltip.golden.frames },
     .{ "", lcgr.widgets_menu.golden, lcgr.widgets_menu.golden.src, lcgr.widgets_menu.golden.frames },
@@ -54,6 +55,12 @@ const pages = .{
     .{ "", lcgr.widgets_dialog.golden, lcgr.widgets_dialog.golden.src, lcgr.widgets_dialog.golden.frames },
     .{ "", lcgr.widgets_toast.golden, lcgr.widgets_toast.golden.src, lcgr.widgets_toast.golden.frames },
     .{ "", lcgr.widgets_select.golden, lcgr.widgets_select.golden.src, lcgr.widgets_select.golden.frames },
+    .{ "", lcgr.widgets_combobox.golden, lcgr.widgets_combobox.golden.src, lcgr.widgets_combobox.golden.frames },
+    .{ "", lcgr.widgets_datepicker.golden, lcgr.widgets_datepicker.golden.src, lcgr.widgets_datepicker.golden.frames },
+    .{ "search-", lcgr.widgets_search.Page, lcgr.widgets_search.Page.replay, lcgr.widgets_search.Page.golden_frames },
+    .{ "number-", lcgr.widgets_number.Page, lcgr.widgets_number.Page.replay, lcgr.widgets_number.Page.golden_frames },
+    .{ "textarea-", lcgr.widgets_textarea.Page, lcgr.widgets_textarea.Page.replay, lcgr.widgets_textarea.Page.golden_frames },
+    .{ "textfield-", lcgr.widgets_textfield.Page, lcgr.widgets_textfield.Page.replay, lcgr.widgets_textfield.Page.golden_frames },
 };
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;

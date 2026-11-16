@@ -149,6 +149,14 @@ static void springs(uint32_t tick, float dt) {
 }
 
 static uint64_t vs_frame(int scene, uint32_t k) {
+    if (k == 0) {
+        // Sized for the scene (harness.h vs_capacity), then Clay's own defaults.
+        Clay_SetMaxElementCount((int32_t)vs_capacity[scene]);
+        uint32_t bytes = Clay_MinMemorySize();
+        Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(bytes, malloc(bytes));
+        Clay_Initialize(arena, (Clay_Dimensions){800, 600}, (Clay_ErrorHandler){on_error, 0});
+        Clay_SetMeasureTextFunction(measure, 0);
+    }
     VsInput in = vs_input(scene, k);
     Clay_SetLayoutDimensions((Clay_Dimensions){in.w, in.h});
     Clay_SetPointerState((Clay_Vector2){in.px, in.py}, false);
@@ -169,10 +177,4 @@ static uint64_t vs_frame(int scene, uint32_t k) {
 // Clay has no event loop: the host sleeps until input arrives, as tools/bench does.
 static void vs_idle(void) { vs_block_on_stdin(); }
 
-int main(int argc, char **argv) {
-    uint32_t bytes = Clay_MinMemorySize();
-    Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(bytes, malloc(bytes));
-    Clay_Initialize(arena, (Clay_Dimensions){800, 600}, (Clay_ErrorHandler){on_error, 0});
-    Clay_SetMeasureTextFunction(measure, 0);
-    return vs_main(argc, argv, "clay-0.14");
-}
+int main(int argc, char **argv) { return vs_main(argc, argv, "clay-0.14"); }

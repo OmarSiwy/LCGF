@@ -112,6 +112,14 @@ pub fn build(b: *std.Build) void {
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
     b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
+    // Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
+    const gates_latency = b.addRunArtifact(b.addExecutable(.{ .name = "gates-latency", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/gates/latency.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) }));
+    b.step("gates-latency", "Print input-to-photon latency of the example, headless (bench/gates/)").dependOn(&gates_latency.step);
 
     // Section sizes per example, built ReleaseSmall. Linux (ELF64) only. Until examples/ exists the
     // examples are the prototype's frame dumper and the benchmark.
@@ -126,10 +134,23 @@ pub fn build(b: *std.Build) void {
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
     const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
-    // The reference row of docs/perf/vs.md: the benchmark itself, fast and small (bench/vs/measure.py).
-    const vs_lcgr = b.step("vs-lcgr", "Install the benchmark as the LCGR row of the comparison (bench/vs/)");
-    vs_lcgr.dependOn(&b.addInstallArtifact(bench, .{ .dest_sub_path = "vs-lcgr" }).step);
+    // The reference row of docs/perf/vs.md: bench/vs/lcgr/, harness.h's driver over LCGR's
+    // frame, fast and small (bench/vs/measure.py).
+    const vs_lcgr = b.step("vs-lcgr", "Build the LCGR row of the comparison (bench/vs/lcgr/)");
     vs_lcgr.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgr", "vs-lcgr-small" }) |mode, name| {
+        const core = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = mode });
+        core.addOptions("build_options", options);
+        const ui_mod = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = core }} });
+        const scenes_mod = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
+        const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/vs/lcgr/main.zig"),
+            .target = target,
+            .optimize = mode,
+            .imports = &.{ .{ .name = "lcgr", .module = core }, .{ .name = "scenes", .module = scenes_mod } },
+        }) });
+        vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{}).step);
+    }
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
@@ -138,7 +159,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
-        if (std.mem.eql(u8, ex[0], "bench")) vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "vs-lcgr-small" }).step);
     }
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
@@ -150,12 +170,28 @@ pub fn build(b: *std.Build) void {
     const vs_clay = b.step("vs-clay", "Build the Clay comparison harness (bench/vs/clay/)");
     vs_clay.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     if (b.lazyDependency("clay", .{})) |clay| {
-        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-clay", "vs-clay-small" }) |mode, name| {
-            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+        // vs-clay links glibc dynamically (Clay's fastest frames; libc's code is not in its
+        // loaded bytes); vs-clay-static is static against musl, for resident memory and start-up
+        // beside the LCGR row, a static binary without libc: neither then pays for a dynamic C
+        // library's loading and pages (bench/vs/measure.py --startup).
+        var musl = target.query;
+        musl.abi = .musl;
+        const static = b.resolveTargetQuery(musl);
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall, .ReleaseFast }, [_][]const u8{ "vs-clay", "vs-clay-small", "vs-clay-static" }, [_]bool{ false, false, true }) |mode, name, is_static| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = if (is_static) static else target, .optimize = mode, .link_libc = true }) });
             exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/main.c"), .flags = &.{"-std=gnu99"} });
             exe.root_module.addIncludePath(clay.path(""));
             vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
         }
+        // Clay's layout alone, built as src/render/web/layout.zig is (zig-out/web/clay-layout.wasm).
+        const wasm = b.addExecutable(.{ .name = "clay-layout", .root_module = b.createModule(.{
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = .ReleaseSmall,
+        }) });
+        wasm.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/layout.c"), .flags = &.{"-std=gnu99"} });
+        wasm.root_module.addIncludePath(clay.path(""));
+        wasm.entry = .disabled; // its one export is named in the source: no --export-dynamic
+        vs_clay.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     }
     const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
     vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
@@ -492,6 +528,42 @@ pub fn build(b: *std.Build) void {
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
 
+    // The Gompute back end (src/render/gompute/): kernels written in Zig, compiled to PTX and HSACO
+    // and embedded, launched through Gompute's run-time driver loader (build.zig.zon, lazy).
+    // Device targets are pinned, not Gompute's `.auto` (which probes the build machine's GPU).
+    const gompute_step = b.step("gompute", "Test the Gompute back end: kernels on the CPU, and on CUDA when a driver and card are present");
+    const gompute_play_step = b.step("gompute-play", "Build zig-out/bin/gompute-play (draws a dumped frame with the Gompute back end)");
+    if (b.lazyDependency("gompute", .{ .target = target, .optimize = optimize })) |gompute_dep| {
+        if (b.lazyImport(@This(), "gompute")) |gompute_build| {
+            const k = gompute_build.addKernels(b, gompute_dep, .{
+                .root_source_file = b.path("src/render/gompute/kernels.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &gomputeDeviceImports,
+                .imports_ctx = options,
+                .cuda = .{ .gpu = .{ .name = "sm_75" }, .sass = false },
+                .hip = .{ .gpu = .{ .name = "gfx1100" } },
+            });
+            const gompute_tests = b.addTest(.{ .root_module = b.createModule(.{
+                .root_source_file = b.path("src/render/gompute/gompute.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "gompute", .module = k.gompute } },
+            }) });
+            gompute_step.dependOn(&b.addRunArtifact(gompute_tests).step);
+            // Draws a dumped frame as a PNG (src/render/gompute/play.zig, ci/run.sh gompute-golden).
+            const gompute_play = b.addExecutable(.{ .name = "gompute-play", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/render/gompute/play.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+                .link_libc = true,
+                .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute } },
+            }) });
+            gompute_play_step.dependOn(&b.addInstallArtifact(gompute_play, .{}).step);
+        }
+    }
+
     // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
     const gles_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -518,6 +590,419 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
-    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
+    // The bare-metal example (src/shell/baremetal/firmware.zig), a module of its own over lcgr:
+    // its test runs it here, and it is built as a freestanding executable for two
+    // microcontrollers (ci/run.sh baremetal).
+    const baremetal_step = b.step("baremetal", "Run the bare-metal example and build it for Cortex-M7 and RV32IMAC");
+    const firmware_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    baremetal_step.dependOn(&b.addRunArtifact(firmware_test).step);
+    for ([_]struct { []const u8, std.Target.Query }{
+        .{ "cortex-m7", .{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } } },
+        .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } }, // RV32IMAC
+    }) |mcu| {
+        const mcu_target = b.resolveTargetQuery(mcu[1]);
+        const mcu_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
+        mcu_lcgr.addOptions("build_options", options);
+        mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const firmware = b.addExecutable(.{ .name = b.fmt("firmware-{s}", .{mcu[0]}), .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
+            .target = mcu_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
+        }) });
+        firmware.entry = .{ .symbol_name = "_start" };
+        baremetal_step.dependOn(&b.addInstallArtifact(firmware, .{}).step);
+    }
+    // The web back end (src/render/web/): wasm32-freestanding modules and the JavaScript that
+    // loads them, installed together in zig-out/web/ for a browser (ci/run.sh web).
+    const web_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const web_optimize = b.option(std.builtin.OptimizeMode, "web-optimize", "Optimize mode of the web modules (default ReleaseSmall)") orelse .small;
+    const lcgr_web = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = web_target, .optimize = web_optimize });
+    lcgr_web.addOptions("build_options", options);
+    lcgr_web.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const web_step = b.step("web", "Build the web examples and their JavaScript into zig-out/web/ (ci/run.sh web)");
+    for ([_][]const u8{ "hello", "scenes", "layout" }) |name| {
+        const wasm = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("src/render/web/{s}.zig", .{name})),
+            .target = web_target,
+            .optimize = web_optimize,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr_web }},
+        }) });
+        wasm.entry = .disabled;
+        wasm.rdynamic = true;
+        web_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
+    }
+    web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/render/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+    // The web shell's example (src/shell/web/): the shell from lcgr, the back end as a module.
+    const render_web = b.createModule(.{ .root_source_file = b.path("src/render/web/web.zig"), .target = web_target, .optimize = web_optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr_web }} });
+    const shell_wasm = b.addExecutable(.{ .name = "shell", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/web/main.zig"),
+        .target = web_target,
+        .optimize = web_optimize,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_web }, .{ .name = "render_web", .module = render_web } },
+    }) });
+    shell_wasm.entry = .disabled;
+    shell_wasm.rdynamic = true;
+    web_step.dependOn(&b.addInstallArtifact(shell_wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
+    web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/shell/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+
+    // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgr. libobjc,
+    // Metal and QuartzCore are the platform's, opened at run time, so nothing is linked and it
+    // cross-compiles from Linux (ci/run.sh metal).
+    const metal_tests = b.addTest(.{ .name = "metal-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // Draws the render conformance scenes as PNGs on a Mac (src/render/metal/play.zig).
+    const metal_play = b.addExecutable(.{ .name = "metal-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // The committed MSL of the shipped shaders (src/render/shaders/gen/, from naga).
+    for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module }) |m| for ([_][]const u8{ "stock", "example" }) |v|
+        m.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
+    b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
+    b.step("metal-play", "Build zig-out/bin/metal-play (draws the render conformance scenes with Metal)").dependOn(&b.addInstallArtifact(metal_play, .{}).step);
+
+    // The Direct3D 12 back end (src/render/d3d12/d3d12.zig): a module of its own over lcgr, always
+    // built for x86_64-windows (ci/run.sh d3d12 runs it under Wine). Zig's own MinGW-w64 headers
+    // are translated for the structs and constants (com.zig checks its hand-written vtable slots
+    // against them); d3d12, dxgi and d3dcompiler_47 are linked from Zig's MinGW import libraries.
+    const win = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu });
+    const lcgr_win = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = win, .optimize = optimize });
+    lcgr_win.addOptions("build_options", options);
+    lcgr_win.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const d3d12_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c.h"), .target = win, .optimize = optimize, .link_libc = true });
+    const d3d12_c = d3d12_h.createModule();
+    const d3d12_tests = b.addTest(.{ .name = "d3d12-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/d3d12/d3d12.zig"),
+        .target = win,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+    }) });
+    // Draws the render conformance scenes as PNGs (src/render/d3d12/play.zig).
+    const d3d12_play = b.addExecutable(.{ .name = "d3d12-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/d3d12/play.zig"),
+        .target = win,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+    }) });
+    for ([_]*std.Build.Module{ d3d12_tests.root_module, d3d12_play.root_module }) |m| {
+        for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
+        // The committed HLSL of the shipped shaders (src/render/shaders/gen/, from naga).
+        for ([_][]const u8{ "stock", "example" }) |v|
+            m.addAnonymousImport(b.fmt("{s}_hlsl", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.hlsl", .{v})) });
+        for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
+            m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
+    }
+    const d3d12_step = b.step("d3d12", "Build zig-out/bin/d3d12-test.exe (the Direct3D 12 back end's tests) and d3d12-play.exe (draws the render conformance scenes); ci/run.sh d3d12 runs them under Wine");
+    d3d12_step.dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
+    d3d12_step.dependOn(&b.addInstallArtifact(d3d12_play, .{}).step);
+
+    // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
+    // lcgr. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
+    // libraries per target; its few calls are declared by hand (c.zig), so no header is
+    // translated.
+    const accesskit_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/a11y/accesskit/bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const accesskit_step = b.step("accesskit", "Test the AccessKit bridge against AccessKit's C library (ci/run.sh accesskit)");
+    const accesskit_build_step = b.step("accesskit-build", "Compile and link the AccessKit bridge tests without running them");
+    const accesskit_smoke_step = b.step("accesskit-smoke", "Build zig-out/bin/accesskit-smoke (the example on AT-SPI, Linux)");
+    const ak_os = target.result.os.tag;
+    const ak_arch: ?[]const u8 = switch (target.result.cpu.arch) {
+        .x86_64 => "x86_64",
+        .x86 => "x86",
+        .aarch64 => if (ak_os == .macos) "arm64" else if (ak_os == .windows) "arm64" else null,
+        else => null,
+    };
+    const ak_lib: ?[]const u8 = if (ak_arch) |arch| switch (ak_os) {
+        .linux => b.fmt("lib/linux/{s}/static/libaccesskit.a", .{arch}),
+        .macos => b.fmt("lib/macos/{s}/static/libaccesskit.a", .{arch}),
+        .windows => if (target.result.abi == .msvc) b.fmt("lib/windows/{s}/msvc/static/accesskit.lib", .{arch}) else b.fmt("lib/windows/{s}/mingw/static/libaccesskit.a", .{arch}),
+        else => null,
+    } else null;
+    if (ak_lib == null) {
+        const fail = b.addFail("AccessKit's archive has no static library for this target");
+        accesskit_step.dependOn(&fail.step);
+        accesskit_build_step.dependOn(&fail.step);
+    }
+    if (if (ak_lib != null) b.lazyDependency("accesskit", .{}) else null) |ak| {
+        const m = accesskit_tests.root_module;
+        m.addObjectFile(ak.path(ak_lib.?));
+        switch (ak_os) {
+            .macos => for ([_][]const u8{ "AppKit", "Foundation" }) |f| m.linkFramework(f, .{}),
+            .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            // Rust panics unwind: libunwind is Zig's own, built for the target.
+            else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+        }
+        if (ak_os == .linux) {
+            // The example on AT-SPI with no window, for the screen-reader smoke test
+            // (src/a11y/accesskit/smoke.zig, ci/jobs/accesskit-linux.sh).
+            const smoke = b.addExecutable(.{ .name = "accesskit-smoke", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/a11y/accesskit/smoke.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            smoke.root_module.addObjectFile(ak.path(ak_lib.?));
+            for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| smoke.root_module.linkSystemLibrary(l, .{});
+            accesskit_smoke_step.dependOn(&b.addInstallArtifact(smoke, .{}).step);
+        }
+        accesskit_step.dependOn(&b.addRunArtifact(accesskit_tests).step);
+        accesskit_build_step.dependOn(&accesskit_tests.step);
+    }
+
+    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
+    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
+    const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/x11.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    x11_tests.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
+    const x11_run = b.addRunArtifact(x11_tests);
+    x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
+    b.step("x11", "Test the X11 shell (on a server when LCGR_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
+    // The example application in an X11 window (src/shell/x11/example.zig).
+    const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
+
+    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgr. user32, gdi32
+    // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
+    const win32_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("win32", "Test the Win32 shell on Windows").dependOn(&b.addRunArtifact(win32_tests).step);
+    b.step("win32-build", "Compile the Win32 shell's tests without running them (ci/run.sh win32)").dependOn(&win32_tests.step);
+    // The shells' example in a Win32 window (src/shell/win32/example.zig).
+    const win32_example = b.addExecutable(.{ .name = "win32-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
+
+    // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgr and the Metal back end.
+    // UIKit, Core Foundation and Metal are opened at run time; without an iOS SDK nothing links
+    // here, so the example is a static library an app bundle links (ci/run.sh ios).
+    const ios_metal = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    for ([_][]const u8{ "stock", "example" }) |v|
+        ios_metal.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    const ios_example = b.addLibrary(.{ .name = "ios-example", .linkage = .static, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/ios/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = ios_metal } },
+    }) });
+    b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios; --replay runs the input replay test)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
+
+    // The Android shell (src/shell/android/android.zig) and its example, over lcgr and the
+    // Vulkan back end: a shared library a NativeActivity loads. There is no NDK here, so the
+    // Android libraries are linked through stubs: empty shared libraries named libandroid.so,
+    // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` and `pthread_create`,
+    // which the shell always calls, so the linker keeps it), and empty crtbegin_so.o and
+    // crtend_so.o, in a sysroot a build tool lays out with the libc file that points Zig at
+    // it. They only give the library its DT_NEEDED entries; at run time the device's own
+    // libraries answer. Every NDK declaration is written by hand (android.zig).
+    const android_step = b.step("android-build", "Build zig-out/lib/libandroid-example.so, the example in the Android shell (-Dtarget=aarch64-linux-android)");
+    if (target.result.abi.isAndroid()) {
+        const stubs = b.addWriteFiles();
+        const empty_src = stubs.add("empty.zig", "");
+        const libc_src = stubs.add("libc.zig", "export fn abort() void {}\nexport fn pthread_create() void {}\n");
+        const crt = b.addObject(.{ .name = "crt", .root_module = b.createModule(.{ .root_source_file = empty_src, .target = target, .optimize = .ReleaseSmall }) });
+        const sysroot_tool = b.addRunArtifact(b.addExecutable(.{ .name = "android-sysroot", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/sysroot.zig"),
+            .target = b.graph.host,
+        }) }));
+        const sysroot = sysroot_tool.addOutputDirectoryArg("android-sysroot");
+        sysroot_tool.addFileArg(crt.getEmittedBin());
+        for ([_][]const u8{ "c", "m", "dl", "android", "log" }) |name| {
+            const stub = b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = b.createModule(.{
+                .root_source_file = if (std.mem.eql(u8, name, "c")) libc_src else empty_src,
+                .target = target,
+                .optimize = .ReleaseSmall,
+            }) });
+            sysroot_tool.addFileArg(stub.getEmittedBin());
+        }
+        const android_vk = b.createModule(.{
+            .root_source_file = b.path("src/render/vk/vk.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        });
+        android_vk.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+        android_vk.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        const android_example = b.addLibrary(.{ .name = "android-example", .linkage = .dynamic, .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/example.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "vk", .module = android_vk } },
+        }) });
+        android_example.setLibCFile(sysroot.path(b, "libc.txt"));
+        android_example.root_module.addLibraryPath(sysroot);
+        for ([_][]const u8{ "dl", "android", "log" }) |name| android_example.root_module.linkSystemLibrary(name, .{ .needed = true, .use_pkg_config = .no });
+        if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+            // Translated for plain Linux on the same CPU: the headers are the same (VKAPI_CALL
+            // differs only on 32-bit ARM); translate-c rejects any ABI version but glibc's.
+            const linux = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu });
+            const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = linux, .optimize = optimize });
+            vk_h.addIncludePath(vulkan_headers.path("include"));
+            vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+            android_vk.addImport("vk_c", vk_h.createModule());
+        }
+        android_step.dependOn(&b.addInstallArtifact(android_example, .{}).step);
+    } else android_step.dependOn(&b.addFail("android-build needs -Dtarget=aarch64-linux-android").step);
+
+    // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
+    // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
+    const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/wayland.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland", "Test the Wayland shell against a fake compositor (ci/run.sh wayland)").dependOn(&b.addRunArtifact(wayland_tests).step);
+    const wayland_example = b.addExecutable(.{ .name = "wayland-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
+
+    // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
+    // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
+    const api_index = b.addSystemCommand(&.{"python3"});
+    api_index.addFileArg(b.path("docs/api/apiindex.py"));
+    api_index.addFileArg(b.path("src/lcgr.zig"));
+    api_index.has_side_effects = true;
+    const docs_step = b.step("docs", "Generate zig-out/docs/API.md and test the guides' examples");
+    docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
+    // The guides (docs/guide/*.md): their examples run as tests, and every zig block they show
+    // must be a piece of those examples (docs/guide/snippets.py).
+    const guide_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("docs/guide/guides.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
+    const snippets = b.addSystemCommand(&.{"python3"});
+    snippets.addFileArg(b.path("docs/guide/snippets.py"));
+    snippets.addDirectoryArg(b.path("docs/guide"));
+    snippets.has_side_effects = true;
+    docs_step.dependOn(&snippets.step);
+    // The compile-error catalogue (docs/guide/errors.md): each case in docs/guide/errors/ must
+    // fail with the message on its `//! expect: ` first line, as in ct-compile-fail above.
+    {
+        const io = b.graph.io;
+        const sub = "docs/guide/errors";
+        var dir = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer dir.close(io);
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = dir.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            b.dependOnFileContents(b.path(b.pathJoin(&.{ sub, entry.name })));
+            const text = dir.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch @panic("cannot read a compile-error case");
+            const tag = "//! expect: ";
+            if (!std.mem.startsWith(u8, text, tag)) std.debug.panic("{s}/{s}: first line is not '{s}<message>'", .{ sub, entry.name, tag });
+            const case = b.addObject(.{ .name = b.dupe(entry.name[0 .. entry.name.len - 4]), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
+            docs_step.dependOn(&case.step);
+        }
+    }
+
+    // The examples (examples/): their smoke tests, and each one in an X11 window
+    // (examples/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
+    const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
+    const examples_host = b.createModule(.{ .root_source_file = b.path("examples/host.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/examples.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } },
+    }) });
+    examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
+    const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    for ([_][]const u8{ "hello", "counter", "form", "list", "dashboard", "viewport", "texture" }) |name| {
+        const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } } });
+        const exe = b.addExecutable(.{ .name = b.fmt("example-{s}", .{name}), .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "x11", .module = examples_x11 }, .{ .name = "host", .module = examples_host }, .{ .name = "example", .module = app } },
+        }) });
+        examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
+    }
+    // The microcontroller demo (examples/mcu.zig) also links for a Cortex-M7 with no OS.
+    const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
+    const m7_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = m7, .optimize = .ReleaseSmall });
+    m7_lcgr.addOptions("build_options", options);
+    m7_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const mcu_exe = b.addExecutable(.{ .name = "example-mcu-cortex-m7", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/mcu.zig"),
+        .target = m7,
+        .optimize = .ReleaseSmall,
+        .imports = &.{.{ .name = "lcgr", .module = m7_lcgr }},
+    }) });
+    mcu_exe.entry = .{ .symbol_name = "_start" };
+    examples_step.dependOn(&b.addInstallArtifact(mcu_exe, .{ .dest_dir = .{ .override = .{ .custom = "mcu" } } }).step);
+
+    // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
+    // cannot parse.
+    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
+}
+
+/// The device compilations of src/render/gompute/kernels.zig import lcgr built for the GPU
+/// target (Gompute calls this once per backend); only what the kernels name is analysed.
+fn gomputeDeviceImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, ctx: ?*anyopaque) []const std.Build.Module.Import {
+    const lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = optimize });
+    lcgr.addOptions("build_options", @ptrCast(@alignCast(ctx.?)));
+    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "lcgr", .module = lcgr }}) catch @panic("OOM");
 }

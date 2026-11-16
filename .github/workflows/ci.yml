@@ -38,7 +38,7 @@ jobs:
 
   test:
     needs: jobs
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,5 +46,16 @@ jobs:
     name: ${{ matrix.job }}
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - run: nix develop .#${{ matrix.shell }} -c ci/run.sh ${{ matrix.job }}
+      # Linux and macOS: the flake's dev shell. Windows has no Nix: the same Zig build as
+      # flake.nix pins, from setup-zig, and Git Bash runs the job.
+      - if: runner.os != 'Windows'
+        uses: cachix/install-nix-action@v31
+      - if: runner.os != 'Windows'
+        run: nix develop .#${{ matrix.shell }} -c ci/run.sh ${{ matrix.job }}
+      - if: runner.os == 'Windows'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.18.0-dev.1151+8dfb7a7cc # keep equal to flake.nix
+      - if: runner.os == 'Windows'
+        shell: bash
+        run: ci/run.sh ${{ matrix.job }}

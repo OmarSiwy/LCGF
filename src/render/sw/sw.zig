@@ -135,7 +135,8 @@ pub const Software = struct {
 
     pub fn drawText(s: *const Software, t: Target, run: u32) void {
         const g = s.glyphs;
-        s.drawQuads(t, g.quads[g.first[run]..][0..g.count[run]], s.images[@backingInt(g.texture)]);
+        const r = g.span(run);
+        s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
     }
 
     fn drawQuads(s: *const Software, t: Target, quads: []const Quad, img: Image) void {
@@ -177,9 +178,12 @@ pub fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32 {
     return .{ 0, fb.height * k / n, fb.width, fb.height * (k + 1) / n };
 }
 
+/// `a` cut to `b`. An `a` wholly past `b`'s right or bottom edge comes out empty at that edge,
+/// not past it: the shade loop reads whole vectors from the box's start, so a start past the
+/// row would read beyond it.
 fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
-    const lo = @max(a[0], b[0]);
-    const top = @max(a[1], b[1]);
+    const lo = @min(@max(a[0], b[0]), b[2]);
+    const top = @min(@max(a[1], b[1]), b[3]);
     return .{ lo, top, @max(@min(a[2], b[2]), lo), @max(@min(a[3], b[3]), top) };
 }
 
@@ -539,6 +543,22 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
 }
 
+test "shade: a quad that starts right of the scissor, off a lane boundary, draws nothing" {
+    // A width of whole vectors leaves rows no padding, so a box starting past the scissor's
+    // right edge would read the vector after the row.
+    const w = 2 * simd.lanes;
+    var f: Frame(w, 4) = .{};
+    var fb = f.fb(.rgba8);
+    try testing.expectEqual(@as(u32, w), fb.stride);
+    fb.clear(.black);
+    const t: Target = .{ .fb = &fb, .scissor = fb.all() };
+    var q = testQuad(.{ w + 5, 1, w + 13, 3 }, .rgba(255, 0, 0, 128));
+    shade(.solid, t, &q, Image.white, 1);
+    q.fill = Color.rgb(255, 0, 0).bitsOf();
+    shade(.solid, t, &q, Image.white, 1);
+    for (0..4) |y| for (0..w) |x| try testing.expectEqual(Color.black, fb.at(@intCast(x), @intCast(y)));
+}
+
 test "redraw: only the damage rects change, cleared to the background first" {
     var st: conformance.Storage = .{};
     st.load(&conformance.scenes[0]);
@@ -558,6 +578,23 @@ test "redraw: only the damage rects change, cleared to the background first" {
 
 fn drawBand(s: *const Software, fb: *Framebuffer, draw: *const DrawList, k: u32, n: u32) void {
     s.redraw(fb, tile(fb, k, n), draw, .black);
+}
+
+test "drawText: a frame with text runs and no glyphs draws its quads and no text" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[2]);
+    try testing.expectEqualStrings("text", conformance.scenes[2].name);
+    var f: Frame(160, 120) = .{};
+    var fb = f.fb(.rgba8);
+    fb.clear(.black);
+    var s: Software = .{};
+    s.prepare({}, &st.draw, .{}, .{ 160, 120 }, 1);
+    iface.render(&s, .{ .fb = &fb, .scissor = fb.all() }, &st.draw);
+    // The panel and the bar, and no glyph over either.
+    for (0..120) |y| for (0..160) |x| {
+        const want: Color = if (y >= 90) .rgb(90, 140, 255) else .rgb(30, 31, 36);
+        try testing.expectEqual(want, fb.at(@intCast(x), @intCast(y)));
+    };
 }
 
 test "tiles: bands drawn on separate threads give the single-threaded frame" {

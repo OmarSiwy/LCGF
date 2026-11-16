@@ -1,0 +1,52 @@
+# Recorded input for the combo box example page (widgets/combobox.zig, `Example`), at 800 x 600
+# in the default theme: the box at x 58..218, y 8..42; its open list at x 58..218,
+# y 48..172: Apple (y 51..81), Apricot (81..110), Banana, Cherry, x 61..215; filtered to Banana
+# alone, Banana is at y 51..81.
+# One line per frame says what it does (format: input.Replay). Keys are USB HID: 81 Down,
+# 40 Enter, 41 Escape.
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 300
+# 1: press the box: it takes the keyboard
+frame
+pointer 138 25
+buttons left
+# 2: release: the list opens, all four options shown
+frame
+buttons
+# 3: type "ap": Apple and Apricot shown
+frame
+text ap
+# 4: Down: Apple
+frame
+press 81
+# 5: Down: Apricot
+frame
+press 81
+# 6: Enter: Apricot chosen, the list closes
+frame
+press 40
+# 7: Escape with the list closed: the text cleared
+frame
+press 41
+# 8: type "b": Banana shown
+frame
+text b
+# 9: the pointer reaches Banana
+frame
+pointer 138 66
+# 10: press it
+frame
+buttons left
+# 11: release: Banana chosen
+frame
+buttons
+# 12: press elsewhere: the box gives up the keyboard
+frame
+pointer 700 500
+buttons left
+# 13: release
+frame
+buttons

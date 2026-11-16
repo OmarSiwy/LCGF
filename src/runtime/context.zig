@@ -13,6 +13,7 @@ const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
 const Interaction = @import("../interact/interaction.zig").Interaction;
+const focus = @import("../interact/focus.zig");
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
@@ -107,12 +108,22 @@ pub const Context = struct {
     stack: []u32,
     depth: u32 = 0,
     inter: Interaction = .{},
+    /// Keyboard focus: Tab and Shift+Tab, arrows in focus groups, modal traps, the ring.
+    /// `begin` steps it after `inter`, so `inter.focus` is where the keys left it.
+    focus: focus.Focus = .{},
+    /// Focus groups and traps (`kind`, set while building; cleared by `begin`) of the tree
+    /// `focus` steps through: the next `begin` scans the tree that set them, then steps.
+    scopes: focus.Scopes,
     platform: Platform = .{},
     status: Status = .{},
     frame: u32 = 0,
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
+    /// Every pointer move asks for a frame, also over nodes that sense nothing. Set it while
+    /// the UI draws from the raw pointer position outside sensing nodes (a crosshair, the
+    /// inspector's outline); otherwise such a move changes no frame and `needsFrame` skips it.
+    track_pointer: bool = false,
     /// The platform's accessibility settings; the host sets them, on change or every frame.
     /// Under `reduced_motion` springs, tweens, transitions and sequences show their end state at
     /// once and layout changes do not slide, so nothing keeps the host awake.
@@ -149,6 +160,7 @@ pub const Context = struct {
             .timers = scheduler.Timers.init(carver, limits.timers),
             .memos = Memos.init(carver, limits.memos),
             .levels = Levels.init(carver, limits.nodes),
+            .scopes = focus.Scopes.init(carver, limits.nodes),
         };
     }
 
@@ -168,12 +180,20 @@ pub const Context = struct {
         return build(&carver, limits);
     }
 
+    /// `init` over a buffer that is all zero bytes (a static buffer never used before, fresh
+    /// `mmap` memory): it is not cleared, so capacity the frames never reach stays untouched and
+    /// costs no resident memory. A reused buffer needs `init`.
+    pub fn initZeroed(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context {
+        if (buffer.len < requiredBytes(limits)) return error.BufferTooSmall;
+        var carver: mem.Carver = .{ .buf = buffer, .zeroed = true };
+        return build(&carver, limits);
+    }
+
     pub const needsFrame = scheduler.needsFrame;
 
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
-        scheduler.settle(ctx, in);
         // Cleared before the app drains its mailboxes, so a result posted after this point
         // wakes the next frame instead of being missed.
         _ = ctx.waker.flag.swap(false, .acq_rel);
@@ -189,7 +209,17 @@ pub const Context = struct {
         ctx.frame +%= 1;
         ctx.memos.kept_len = 0;
 
-        ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
+        const prev = &ctx.trees[ctx.cur ^ 1];
+        ctx.inter.step(prev, in);
+        // Focus groups and traps of last frame's tree. ponytail: scanned only when a key could
+        // move focus or a scope is set, since the scan is a scalar sweep of every row (about
+        // 30 us at 4,000 nodes); without either, nothing in `step` reads what it would write.
+        const sc = &ctx.scopes;
+        if (in.events.len != 0 or !std.mem.allEqual(u8, sc.c.kind[0..prev.len], 0)) focus.scan(prev, sc) else sc.modal = types.none;
+        ctx.focus.step(&ctx.inter, prev, sc, in);
+        ctx.focus.visible = simd.orB(ctx.focus.visible, ctx.settings.always_show_focus);
+        ctx.scopes.reset();
+        scheduler.settle(ctx, in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
         ctx.flips.len = 0;
 
@@ -229,15 +259,16 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
-test "requiredBytes: 914 bytes per node of capacity (docs/perf/bytes.md)" {
+test "requiredBytes: 924 bytes per node of capacity (docs/perf/bytes.md)" {
     // Two tree generations of 276 bytes a row and a 112-byte extras row each, less the 48
-    // bytes of layout scratch they share, plus 170 bytes of draw list and 16 of level-order
-    // index (docs/perf/port-perf.md). A change here is a change to the recorded footprint.
+    // bytes of layout scratch they share, plus 170 bytes of draw list, 16 of level-order
+    // index (docs/perf/port-perf.md) and 10 of focus scopes. A change here is a change to the
+    // recorded footprint.
     var a = example_limits;
     a.nodes = 4096;
     var b = a;
     b.nodes = 8192;
-    try testing.expectEqual(914 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+    try testing.expectEqual(924 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {
@@ -322,6 +353,45 @@ test "begin: interaction steps against last frame's tree" {
     in.pointer = .{ 20, 20 };
     _ = ctx.begin(&in);
     try testing.expectEqual(@backingInt(root_id), ctx.inter.hot);
+}
+
+test "begin: Tab and Shift+Tab move focus through the focusable nodes in tree order" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const ids = [_]types.Id{ .from("a"), .from("label"), .from("b"), .from("c") };
+    const tab: Input.Event = .{ .kind = .press, .code = ctx.focus.keys.tab };
+    const back: Input.Event = .{ .kind = .press, .code = ctx.focus.keys.tab, .mods = .{ .shift = true } };
+    // Each frame presses one key; the label senses no focus, so Tab skips it, as the comptime
+    // front end's `focus_order` does.
+    const Step = struct { key: Input.Event, want: usize };
+    const steps = [_]Step{
+        .{ .key = tab, .want = 0 },
+        .{ .key = tab, .want = 2 },
+        .{ .key = tab, .want = 3 },
+        .{ .key = tab, .want = 0 }, // wraps
+        .{ .key = back, .want = 3 }, // and back
+        .{ .key = back, .want = 2 },
+    };
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var events: [1]Input.Event = undefined;
+    for (0..steps.len + 1) |k| {
+        var f = ctx.begin(&in);
+        for (ids, 0..) |id, i| {
+            const node = f.leaf(id, .{ .size = .{ .px(40), .px(20) } });
+            _ = f.interact(node, if (i == 1) .{ .hover = true } else .button);
+        }
+        _ = f.end(.{});
+        if (k == steps.len) break;
+        events[0] = steps[k].key;
+        in.events = &events;
+        if (k > 0) try testing.expectEqual(@backingInt(ids[steps[k - 1].want]), ctx.inter.focus);
+    }
+    try testing.expectEqual(@backingInt(ids[steps[steps.len - 1].want]), ctx.inter.focus);
+    // The ring shows after a key.
+    try testing.expect(ctx.focus.visible);
 }
 
 // ---- the prototype example's host loop ---------------------------------------

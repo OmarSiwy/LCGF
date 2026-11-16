@@ -1,0 +1,782 @@
+//! NativeActivity events as `Events`: the part of the Android shell (android.zig) that touches
+//! no OS, so it builds and is tested on any host. The shell's activity callbacks and input queue
+//! hand what Android reports (the window's size, motion and key events, typed text) to a
+//! `Translator`; `poll` calls `frame`. It allocates nothing.
+//!
+//! The mobile event model (the first finger drives the pointer, typed text, the IME's
+//! composition, the app's foreground state) is the iOS shell's translator, which this one
+//! wraps: Android's events are converted to it, in Android's units (physical pixels) turned
+//! into logical ones.
+
+const std = @import("std");
+const Input = @import("../../core/input.zig").Input;
+const Events = @import("../iface.zig").Events;
+const mobile = @import("../ios/translate.zig");
+
+/// `AMOTION_EVENT_ACTION_*`, the low byte of `AMotionEvent_getAction`; the next byte is the
+/// index of the pointer a `pointer_down` or `pointer_up` is about.
+pub const Action = enum(u8) {
+    down = 0,
+    up = 1,
+    move = 2,
+    cancel = 3,
+    outside = 4,
+    pointer_down = 5,
+    pointer_up = 6,
+    hover_move = 7,
+    scroll = 8,
+    hover_enter = 9,
+    hover_exit = 10,
+    button_press = 11,
+    button_release = 12,
+    _,
+};
+
+/// `AMOTION_EVENT_TOOL_TYPE_*`.
+pub const Tool = enum(u8) { unknown = 0, finger = 1, stylus = 2, mouse = 3, eraser = 4, _ };
+
+/// One pointer of a motion event, as `AMotionEvent_getPointerId`, `_getToolType`, `_getX`,
+/// `_getY`, `_getPressure` and the tilt and orientation axes give it. Positions in physical
+/// pixels of the window.
+pub const Pointer = struct {
+    id: u32,
+    tool: Tool = .finger,
+    pos: [2]f32,
+    pressure: f32 = 1,
+    /// AXIS_TILT (radians from the screen's normal) and AXIS_ORIENTATION (radians clockwise
+    /// from up), for a stylus.
+    tilt: f32 = 0,
+    orientation: f32 = 0,
+};
+
+/// One motion event: its action word, its pointers, the mouse buttons held
+/// (`AMotionEvent_getButtonState`) and, for `scroll`, AXIS_HSCROLL and AXIS_VSCROLL.
+pub const Motion = struct {
+    action: u32,
+    pointers: []const Pointer,
+    buttons: u32 = 0,
+    scroll: [2]f32 = .{ 0, 0 },
+};
+
+/// The activity lifecycle callbacks that change what the app may do.
+pub const Lifecycle = enum { start, resume_, pause, stop };
+
+/// The density at which one logical pixel is one physical pixel (ACONFIGURATION_DENSITY_MEDIUM).
+pub const density_default = 160;
+
+/// `KeyCharacterMap.COMBINING_ACCENT`: the character is a dead key's accent.
+pub const combining_accent = 0x8000_0000;
+
+/// `AKEY_EVENT_ACTION_*`.
+pub const KeyAction = enum(u8) { down = 0, up = 1, multiple = 2, _ };
+
+/// `AMETA_*` bits of a key event's meta state.
+const meta_shift = 0x1;
+const meta_alt = 0x2;
+const meta_ctrl = 0x1000;
+const meta_meta = 0x10000;
+/// `AMOTION_EVENT_BUTTON_*`.
+const button_primary = 1;
+const button_secondary = 2;
+const button_tertiary = 4;
+
+/// USB HID usage (the scancodes of `Input.Keys`) of each Android keycode
+/// (`AKEYCODE_*`, android/keycodes.h), 0 for keys with none.
+pub const hid: [256]u8 = table: {
+    var t: [256]u8 = @splat(0);
+    for (0..26) |i| t[29 + i] = 0x04 + i; // A..Z
+    t[7] = 0x27; // 0
+    for (1..10) |i| t[7 + i] = 0x1e + i - 1; // 1..9
+    for (0..12) |i| t[131 + i] = 0x3a + i; // F1..F12
+    const pairs = [_][2]u8{
+        .{ 19, 0x52 }, .{ 20, 0x51 }, .{ 21, 0x50 }, .{ 22, 0x4f }, // DPAD up, down, left, right
+        .{ 55, 0x36 }, .{ 56, 0x37 }, .{ 57, 0xe2 }, .{ 58, 0xe6 }, // , . left Alt, right Alt
+        .{ 59, 0xe1 }, .{ 60, 0xe5 }, .{ 61, 0x2b }, .{ 62, 0x2c }, // left Shift, right Shift, Tab, Space
+        .{ 66, 0x28 }, .{ 67, 0x2a }, .{ 68, 0x35 }, .{ 69, 0x2d }, // Enter, Del (Backspace), ` -
+        .{ 70, 0x2e }, .{ 71, 0x2f }, .{ 72, 0x30 }, .{ 73, 0x31 }, // = [ ] \
+        .{ 74, 0x33 }, .{ 75, 0x34 }, .{ 76, 0x38 }, .{ 92, 0x4b }, // ; ' / PageUp
+        .{ 93, 0x4e }, .{ 111, 0x29 }, .{ 112, 0x4c }, .{ 113, 0xe0 }, // PageDown, Escape, ForwardDel, left Ctrl
+        .{ 114, 0xe4 }, .{ 115, 0x39 }, .{ 117, 0xe3 }, .{ 118, 0xe7 }, // right Ctrl, CapsLock, left Meta, right Meta
+        .{ 122, 0x4a }, .{ 123, 0x4d }, .{ 124, 0x49 }, // Home, End, Insert
+    };
+    for (pairs) |p| t[p[0]] = p[1];
+    break :table t;
+};
+
+pub const Translator = struct {
+    /// The event model and its held state; `m.in` is the next frame's Input.
+    m: mobile.Translator = .{},
+    /// The window's size in physical pixels (`ANativeWindow_getWidth` / `_getHeight`).
+    window: [2]f32 = .{ 800, 600 },
+    /// The part of the window the system bars and cutouts leave the app
+    /// (`onContentRectChanged`), physical pixels: left, top, right, bottom. Null: the whole window.
+    content: ?[4]f32 = null,
+    /// A native window exists to draw into (between `onNativeWindowCreated` and
+    /// `onNativeWindowDestroyed`).
+    has_window: bool = false,
+
+    pub const Buffers = mobile.Translator.Buffers;
+
+    pub fn init(buf: Buffers) Translator {
+        return .{ .m = .init(buf) };
+    }
+
+    /// The native window was created or resized (`onNativeWindowCreated`,
+    /// `onNativeWindowResized`): `w` x `h` physical pixels.
+    pub fn resize(t: *Translator, w: f32, h: f32) void {
+        t.window = .{ w, h };
+        t.has_window = true;
+        t.update();
+    }
+
+    /// The native window is gone (`onNativeWindowDestroyed`): the surface with it. Frames are
+    /// not shown until the next window; its size arrives with it.
+    pub fn windowLost(t: *Translator) void {
+        t.has_window = false;
+    }
+
+    /// The activity's lifecycle (`onStart`, `onResume`, `onPause`, `onStop`) as the mobile
+    /// model's state: resumed is active, started or paused is visible but not in front
+    /// (inactive), stopped is the background. Coming back from the background asks for a
+    /// frame (`takeResumed`).
+    pub fn lifecycle(t: *Translator, event: Lifecycle) void {
+        t.m.lifecycle(switch (event) {
+            .resume_ => .active,
+            .start, .pause => .inactive,
+            .stop => .background,
+        });
+    }
+
+    /// The window gained or lost input focus (`onWindowFocusChanged`): without it, held keys
+    /// and modifiers are let go, since their key-ups go elsewhere.
+    pub fn focus(t: *Translator, focused: bool) void {
+        if (focused) return;
+        t.m.in.keys = .{};
+        t.m.in.mods = .{};
+    }
+
+    /// Whether a frame can be shown: a window exists and the activity is not stopped.
+    pub fn visible(t: *const Translator) bool {
+        return t.has_window and t.m.visible();
+    }
+
+    /// True once after the activity returned from the background; see the mobile translator.
+    pub fn takeResumed(t: *Translator) bool {
+        return t.m.takeResumed();
+    }
+
+    /// The screen's density (`AConfiguration_getDensity`, dots per inch): 160 is one physical
+    /// pixel per logical one (Android's dp), 420 is 2.625. 0 (ACONFIGURATION_DENSITY_DEFAULT)
+    /// and 0xffff (none) count as 160.
+    pub fn setDensity(t: *Translator, dpi: u32) void {
+        const d: f32 = @floatFromInt(if (dpi == 0 or dpi == 0xffff) density_default else dpi);
+        t.m.setScale(d / density_default);
+        t.update();
+    }
+
+    /// The content rect (`onContentRectChanged`), window pixels.
+    pub fn setContent(t: *Translator, left: f32, top: f32, right: f32, bottom: f32) void {
+        t.content = .{ left, top, right, bottom };
+        t.update();
+    }
+
+    /// Viewport and safe area from the window, the density and the content rect.
+    fn update(t: *Translator) void {
+        const s = t.m.in.scale;
+        const w = t.window;
+        t.m.resize(w[0] / s, w[1] / s);
+        const r = t.content orelse [4]f32{ 0, 0, w[0], w[1] };
+        t.m.setInsets(@max(r[1], 0) / s, @max(r[0], 0) / s, @max(w[1] - r[3], 0) / s, @max(w[0] - r[2], 0) / s);
+    }
+
+    /// The safe area as root padding (`Style.pad`'s order), logical pixels.
+    pub fn safe(t: *const Translator) [4]f32 {
+        return t.m.safe;
+    }
+
+    /// A motion event. Fingers, styluses and erasers are touches in the mobile model (the
+    /// first finger also drives the pointer); a mouse is the pointer, its buttons and wheel.
+    pub fn motion(t: *Translator, m: Motion) void {
+        const action: Action = @fromBackingInt(@intCast(@as(u8, @truncate(m.action))));
+        const index: usize = (m.action >> 8) & 0xff;
+        const scale = t.m.in.scale;
+        for (m.pointers, 0..) |p, i| {
+            const pos: [2]f32 = .{ p.pos[0] / scale, p.pos[1] / scale };
+            if (p.tool == .mouse) {
+                t.mouse(action, pos, m);
+                continue;
+            }
+            const phase: mobile.Phase = switch (action) {
+                .down => .began,
+                .pointer_down => if (i == index) .began else .moved,
+                .up => .ended,
+                .pointer_up => if (i == index) .ended else .moved,
+                .move => .moved,
+                .cancel => .cancelled,
+                // ponytail: a stylus hovering is not a contact yet (Contact.down = false needs
+                // the mobile model to list hovering pens); widgets see it only once it touches.
+                else => continue,
+            };
+            const kind: mobile.Kind = switch (p.tool) {
+                .stylus => .pencil,
+                .eraser => .eraser,
+                else => .direct,
+            };
+            const lean: [2]f32 = .{ p.tilt * @sin(p.orientation), -p.tilt * @cos(p.orientation) };
+            t.m.touch(.{ .id = p.id, .phase = phase, .pos = pos, .kind = kind, .pressure = p.pressure, .tilt = if (kind == .direct) .{ 0, 0 } else lean });
+        }
+    }
+
+    fn mouse(t: *Translator, action: Action, pos: [2]f32, m: Motion) void {
+        const in = &t.m.in;
+        switch (action) {
+            .hover_exit => in.pointer = .{ -1, -1 },
+            // AXIS_VSCROLL is positive away from the user, as `Input.wheel`; AXIS_HSCROLL is
+            // positive to the right, which scrolls toward the end, so it is negated.
+            .scroll => {
+                in.pointer = pos;
+                in.wheel = .{ in.wheel[0] - m.scroll[0], in.wheel[1] + m.scroll[1] };
+            },
+            else => {
+                in.pointer = pos;
+                // Some mice report a primary press without a button state.
+                const held = if (action == .down and m.buttons == 0) button_primary else m.buttons;
+                in.buttons = .{
+                    .left = held & button_primary != 0 and action != .up,
+                    .right = held & button_secondary != 0,
+                    .middle = held & button_tertiary != 0,
+                };
+            },
+        }
+    }
+
+    /// A key event: Android keycode `code`, `AKeyEvent_getMetaState`'s `meta`, the repeat
+    /// count, and the character the key types with that meta state (`KeyCharacterMap.get`,
+    /// 0 for none; a dead key's has `combining_accent` set and types nothing). A press that
+    /// types a character also gives it as text, after the key event: soft keyboards on a
+    /// NativeActivity commit text as such key events. True when the UI read the key; the shell
+    /// hands the others (Back, volume) back to the system.
+    pub fn key(t: *Translator, action: KeyAction, code: u32, meta: u32, repeat: u32, char: u32) bool {
+        const usage = if (code < hid.len) hid[code] else 0;
+        const typed = action == .down and char >= 0x20 and char != 0x7f and char <= 0x10ffff;
+        if (usage == 0 and !typed) return false;
+        const mods: Input.Mods = .{
+            .shift = meta & meta_shift != 0,
+            .alt = meta & meta_alt != 0,
+            .ctrl = meta & meta_ctrl != 0,
+            .cmd = meta & meta_meta != 0,
+        };
+        if (usage != 0) switch (action) {
+            .down => t.m.keyEvent(usage, if (repeat > 0) .repeat else .press, mods),
+            .up => t.m.keyEvent(usage, .release, mods),
+            else => return false,
+        };
+        if (typed) {
+            var utf8: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(@intCast(char), &utf8) catch return true;
+            t.m.insert(utf8[0..n]);
+        }
+        return true;
+    }
+
+    /// Text a key event carries whole (ACTION_MULTIPLE with AKEYCODE_UNKNOWN, `getCharacters`):
+    /// what a soft keyboard commits that no key types (emoji, most scripts). `scratch` holds
+    /// its UTF-8.
+    pub fn characters(t: *Translator, units: []const u16, scratch: []u8) void {
+        const utf8 = utf16ToUtf8(units, scratch) orelse {
+            t.m.dropped += 1;
+            return;
+        };
+        t.m.insert(utf8);
+    }
+
+    /// Clipboard text (`ClipData.Item.coerceToText`, a Java String's UTF-16) typed into the
+    /// next frame, as `keyboard.Clipboard.paste` asks a host to answer a paste (the mobile
+    /// translator's `paste`). `scratch` holds its UTF-8; text that does not fit, or is not
+    /// valid UTF-16, is dropped whole.
+    pub fn paste(t: *Translator, units: []const u16, scratch: []u8) void {
+        const utf8 = utf16ToUtf8(units, scratch) orelse {
+            t.m.dropped += 1;
+            return;
+        };
+        t.m.paste(utf8);
+    }
+
+    /// The activity is being destroyed for good (`onDestroy`): no more frames.
+    pub fn destroy(t: *Translator) void {
+        t.m.terminate();
+    }
+
+    /// This frame's events, in `ev` until the next call. False once the activity is destroyed.
+    pub fn frame(t: *Translator, ev: *Events) bool {
+        return t.m.frame(ev);
+    }
+};
+
+/// `units` (UTF-16) as UTF-8 in `out`, or null if it is not valid UTF-16 or does not fit.
+pub fn utf16ToUtf8(units: []const u16, out: []u8) ?[]u8 {
+    var n: usize = 0;
+    var it = std.unicode.Utf16LeIterator.init(units);
+    while (it.nextCodepoint() catch return null) |cp| {
+        const len = std.unicode.utf8CodepointSequenceLength(cp) catch return null;
+        if (out.len - n < len) return null;
+        n += std.unicode.utf8Encode(cp, out[n..]) catch return null;
+    }
+    return out[0..n];
+}
+
+/// `utf8` as UTF-16 for a Java String (`ClipData.newPlainText`) in `out`, which needs as many
+/// units as `utf8` has bytes; null if it is not valid UTF-8 or does not fit.
+pub fn utf8ToUtf16(utf8: []const u8, out: []u16) ?[]u16 {
+    if (!std.unicode.utf8ValidateSlice(utf8) or out.len < utf8.len) return null;
+    return out[0 .. std.unicode.utf8ToUtf16Le(out, utf8) catch return null];
+}
+
+/// Recorded NativeActivity events, replayed one frame per `next` into a translator, so tests
+/// drive it with what a session produced. UTF-8 text, one line each:
+///
+///     # comment              blank lines and comments anywhere
+///     frame                  starts a frame; the events below it arrive before its poll
+///     window 1080 2400       the native window's size, physical pixels
+///     window_lost            onNativeWindowDestroyed
+///     start, resume, pause, stop   the activity's lifecycle callbacks
+///     focus 0                onWindowFocusChanged
+///     density 420            the configuration's density, dpi
+///     content 0 63 1080 2337 the content rect: left, top, right, bottom, window pixels
+///     motion down 0 1,finger,37,25
+///                            a motion event: its action (`pointer_down/1`: about pointer 1),
+///                            the button state, then each pointer as id,tool,x,y[,pressure]
+///     wheel 0 -1             a mouse wheel: AXIS_HSCROLL, AXIS_VSCROLL
+///     key down 29 1 0 65     a key event: action, keycode, meta state, repeat count, and
+///                            optionally the character it types
+///     characters 日本        ACTION_MULTIPLE's characters (the rest of the line)
+///     paste two words        the clipboard's text, the rest of the line (`\n` for a line end)
+///     destroy                onDestroy
+pub const Replay = struct {
+    src: []const u8,
+    at: usize = 0,
+    /// 1-based number of the last line read; on an error, the line at fault.
+    line: u32 = 0,
+
+    pub const Error = error{Syntax};
+    const Words = std.mem.TokenIterator(u8, .scalar);
+    const Line = enum { window, window_lost, start, @"resume", pause, stop, focus, density, content, motion, wheel, key, characters, paste, destroy };
+
+    /// Feeds the next frame's events to `t`. False after the last frame.
+    pub fn next(r: *Replay, t: *Translator) Error!bool {
+        while (true) {
+            const l = r.take() orelse return false;
+            if (blank(l)) continue;
+            if (!std.mem.eql(u8, l, "frame")) return error.Syntax;
+            break;
+        }
+        while (r.peek()) |l| {
+            if (std.mem.eql(u8, l, "frame")) break;
+            _ = r.take();
+            if (blank(l)) continue;
+            var w = std.mem.tokenizeScalar(u8, l, ' ');
+            switch (std.meta.stringToEnum(Line, w.next().?) orelse return error.Syntax) {
+                .window => t.resize(try num(&w), try num(&w)),
+                .destroy => t.destroy(),
+                .window_lost => t.windowLost(),
+                .start => t.lifecycle(.start),
+                .@"resume" => t.lifecycle(.resume_),
+                .pause => t.lifecycle(.pause),
+                .stop => t.lifecycle(.stop),
+                .focus => t.focus(try int(w.next() orelse return error.Syntax) != 0),
+                .paste => {
+                    var line: [256]u8 = undefined;
+                    var units: [256]u16 = undefined;
+                    var scratch: [256]u8 = undefined;
+                    const rest = w.rest();
+                    const n = std.mem.replace(u8, rest[0..@min(rest.len, line.len)], "\\n", "\n", &line);
+                    const u = utf8ToUtf16(line[0 .. @min(rest.len, line.len) - n], &units) orelse return error.Syntax;
+                    t.paste(u, &scratch);
+                    continue;
+                },
+                .density => t.setDensity(try int(w.next() orelse return error.Syntax)),
+                .content => t.setContent(try num(&w), try num(&w), try num(&w), try num(&w)),
+                .motion => {
+                    var a = std.mem.splitScalar(u8, w.next() orelse return error.Syntax, '/');
+                    const action = std.meta.stringToEnum(Action, a.first()) orelse return error.Syntax;
+                    const index = if (a.next()) |i| try int(i) else 0;
+                    const buttons = try int(w.next() orelse return error.Syntax);
+                    var ptrs: [16]Pointer = undefined;
+                    var n: usize = 0;
+                    while (w.next()) |p| : (n += 1) {
+                        if (n == ptrs.len) return error.Syntax;
+                        var f = std.mem.splitScalar(u8, p, ',');
+                        ptrs[n] = .{ .id = try int(f.first()), .pos = undefined };
+                        ptrs[n].tool = std.meta.stringToEnum(Tool, f.next() orelse return error.Syntax) orelse return error.Syntax;
+                        ptrs[n].pos = .{ try float(f.next()), try float(f.next()) };
+                        if (f.next()) |pr| ptrs[n].pressure = try float(pr);
+                    }
+                    t.motion(.{ .action = @backingInt(action) | (index << 8), .pointers = ptrs[0..n], .buttons = buttons });
+                },
+                .wheel => {
+                    const at: Pointer = .{ .id = 0, .tool = .mouse, .pos = .{ t.m.in.pointer[0] * t.m.in.scale, t.m.in.pointer[1] * t.m.in.scale } };
+                    t.motion(.{ .action = @backingInt(Action.scroll), .pointers = &.{at}, .scroll = .{ try num(&w), try num(&w) } });
+                },
+                .key => {
+                    const action = std.meta.stringToEnum(KeyAction, w.next() orelse return error.Syntax) orelse return error.Syntax;
+                    const code = try int(w.next() orelse return error.Syntax);
+                    const meta = try int(w.next() orelse return error.Syntax);
+                    const repeat = try int(w.next() orelse return error.Syntax);
+                    _ = t.key(action, code, meta, repeat, if (w.next()) |ch| try int(ch) else 0);
+                },
+                .characters => {
+                    var units: [256]u16 = undefined;
+                    var scratch: [256]u8 = undefined;
+                    t.characters(utf8ToUtf16(w.rest(), &units) orelse return error.Syntax, &scratch);
+                    continue;
+                },
+            }
+            if (w.next() != null) return error.Syntax;
+        }
+        return true;
+    }
+
+    fn int(s: []const u8) Error!u32 {
+        return std.fmt.parseInt(u32, s, 0) catch error.Syntax;
+    }
+
+    fn float(s: ?[]const u8) Error!f32 {
+        return std.fmt.parseFloat(f32, s orelse return error.Syntax) catch error.Syntax;
+    }
+
+    fn num(w: *Words) Error!f32 {
+        return std.fmt.parseFloat(f32, w.next() orelse return error.Syntax) catch error.Syntax;
+    }
+
+    fn peek(r: *const Replay) ?[]const u8 {
+        if (r.at >= r.src.len) return null;
+        const rest = r.src[r.at..];
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        return std.mem.trimEnd(u8, rest[0..end], "\r");
+    }
+
+    fn take(r: *Replay) ?[]const u8 {
+        const rest = r.src[@min(r.at, r.src.len)..];
+        const l = r.peek() orelse return null;
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        r.at += end + 1;
+        r.line += 1;
+        return l;
+    }
+
+    fn blank(l: []const u8) bool {
+        const s = std.mem.trimStart(u8, l, " ");
+        return s.len == 0 or s[0] == '#';
+    }
+};
+
+const testing = std.testing;
+const context = @import("../../runtime/context.zig");
+const mem = @import("../../core/mem.zig");
+const types = @import("../../core/types.zig");
+const example = @import("../example.zig");
+
+const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
+var example_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
+
+test "replay: errors name the line, unknown events are refused" {
+    var t: Translator = .{};
+    var r: Replay = .{ .src = "frame\nwindow 1080\n" };
+    try testing.expectError(error.Syntax, r.next(&t));
+    try testing.expectEqual(@as(u32, 2), r.line);
+    r = .{ .src = "frame\nvibrate\n" };
+    try testing.expectError(error.Syntax, r.next(&t));
+    r = .{ .src = "window 1 2\n" };
+    try testing.expectError(error.Syntax, r.next(&t));
+}
+
+test "translate: the window's size lays out the example, and destruction ends it" {
+    // A phone's window in portrait, then rotated, then the activity is finished.
+    var r: Replay = .{ .src =
+        \\frame
+        \\window 1080 2400
+        \\frame
+        \\frame
+        \\window 2400 1080
+        \\frame
+        \\destroy
+    };
+    var t: Translator = .{};
+    var ctx = try context.Context.init(&example_buffer, example_limits);
+    var app: example.App = .{};
+    var ev: Events = .{};
+    const sizes = [_][2]f32{ .{ 1080, 2400 }, .{ 1080, 2400 }, .{ 2400, 1080 } };
+    for (sizes) |vp| {
+        try testing.expect(try r.next(&t));
+        try testing.expect(t.frame(&ev));
+        try testing.expectEqual(vp, ev.in.viewport);
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        app.build(&f, &ev);
+        const out = f.end(.{});
+        try testing.expect(out.status.ok());
+        try testing.expectEqual(types.Rect{ .x0 = 160, .y0 = 50, .x1 = vp[0], .y1 = vp[1] }, out.tree.rect(out.tree.find(example.id_viewport)));
+    }
+    try testing.expect(try r.next(&t));
+    try testing.expect(!t.frame(&ev));
+    try testing.expect(!try r.next(&t));
+    try testing.expectEqual(@as(u32, 3), app.builds);
+}
+
+const InputReplay = @import("../../core/input.zig").Replay;
+
+test "translate: the example's motion events give the recorded input and run the example" {
+    // The iOS shell's session (src/shell/ios/testdata/example.uikit) as Android reports it
+    // (testdata/example.events): motion events with all their pointers. Frame by frame it must
+    // give the iOS shell's Input but for the cancel, which on Android takes the whole gesture
+    // (testdata/example.replay), and the same results.
+    var r: Replay = .{ .src = @embedFile("testdata/example.events") };
+    var want: InputReplay = .{ .src = @embedFile("testdata/example.replay") };
+    var want_text: [16]u8 = undefined;
+    var want_events: [16]Input.Event = undefined;
+    var want_contacts: [mobile.max_contacts]Input.Contact = undefined;
+    const buf: InputReplay.Buffers = .{ .text = &want_text, .events = &want_events, .contacts = &want_contacts };
+    var t: Translator = .{};
+    var ctx = try context.Context.init(&example_buffer, example_limits);
+    var app: example.App = .{};
+    var ev: Events = .{};
+    var frames: u32 = 0;
+    while (try r.next(&t)) : (frames += 1) {
+        try testing.expect(t.frame(&ev));
+        const in = (try want.next(buf)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(in.pointer, ev.in.pointer);
+        try testing.expectEqual(in.buttons, ev.in.buttons);
+        try testing.expectEqualSlices(Input.Contact, in.contacts, ev.in.contacts);
+        try testing.expectEqual(in.stamp(), ev.in.stamp());
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        app.build(&f, &ev);
+        _ = f.end(.{});
+    }
+    try testing.expectEqual(null, try want.next(buf));
+    try testing.expectEqual(@as(u32, 14), frames);
+    try testing.expectEqual(@as(u32, 1), app.resets);
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+}
+
+test "translate: keys, a mouse with its wheel, a stylus and its eraser" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\# Shift down, A pressed then repeated (keycodes 59 and 29); Back is the system's.
+        \\key down 59 1 0
+        \\key down 29 1 0
+        \\key down 29 1 1
+        \\key down 4 0 0
+        \\frame
+        \\key up 29 1 0
+        \\key up 59 0 0
+        \\# A mouse: moved, right button, wheel one notch away and one to the right.
+        \\motion hover_move 0 0,mouse,100,50
+        \\motion down 2 0,mouse,100,50
+        \\wheel 1 1
+        \\frame
+        \\motion up 0 0,mouse,100,50
+        \\motion hover_exit 0 0,mouse,100,50
+        \\# A stylus at half pressure, its eraser end elsewhere.
+        \\motion down 0 3,stylus,10,10,0.5
+        \\motion pointer_down/1 0 3,stylus,10,10,0.5 4,eraser,20,20
+    };
+    var text: [16]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    const shift: Input.Mods = .{ .shift = true };
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .press, .code = 0xe1, .mods = shift },
+        .{ .kind = .press, .code = 0x04, .mods = shift },
+        .{ .kind = .repeat, .code = 0x04, .mods = shift },
+    }, ev.in.events);
+    try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe1));
+    try testing.expect(!t.key(.down, 4, 0, 0, 0));
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual(Input.Keys{}, ev.in.keys);
+    try testing.expectEqual([2]f32{ 100, 50 }, ev.in.pointer);
+    try testing.expectEqual(Input.Buttons{ .right = true }, ev.in.buttons);
+    try testing.expectEqual([2]f32{ -1, 1 }, ev.in.wheel);
+    try testing.expectEqual(@as(usize, 0), ev.in.contacts.len);
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.wheel);
+    try testing.expectEqual(Input.Contact{ .id = 3, .kind = .pen, .pos = .{ 10, 10 }, .pressure = 0.5 }, ev.in.contacts[0]);
+    try testing.expectEqual(Input.Contact.Kind.eraser, ev.in.contacts[1].kind);
+    // The stylus is the first contact down, so it drives the pointer; the mouse left.
+    try testing.expectEqual([2]f32{ 10, 10 }, ev.in.pointer);
+    try testing.expect(ev.in.buttons.left);
+}
+
+test "translate: density scales the window, the content rect insets it" {
+    // A 1080 x 2400 phone at 420 dpi (2.625): 411.4 x 914.3 dp. The status bar (63 px) and the
+    // gesture bar (63 px) leave the content rect; rotated, a camera cutout is on the left.
+    var r: Replay = .{ .src =
+        \\frame
+        \\density 420
+        \\window 1080 2400
+        \\content 0 63 1080 2337
+        \\motion down 0 1,finger,525,1050
+        \\frame
+        \\motion up 0 1,finger,525,1050
+        \\window 2400 1080
+        \\content 105 0 2400 1017
+    };
+    var t: Translator = .{};
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(f32, 2.625), ev.in.scale);
+    try testing.expectEqual([2]f32{ 1080.0 / 2.625, 2400.0 / 2.625 }, ev.in.viewport);
+    try testing.expectEqual([4]f32{ 0, 24, 0, 24 }, t.safe());
+    try testing.expectEqual([2]f32{ 200, 400 }, ev.in.pointer);
+    try testing.expectEqual(Input.Contact{ .id = 1, .pos = .{ 200, 400 } }, ev.in.contacts[0]);
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]f32{ 2400.0 / 2.625, 1080.0 / 2.625 }, ev.in.viewport);
+    try testing.expectEqual([4]f32{ 40, 0, 0, 24 }, t.safe());
+    // Without a content rect the whole window is the app's; an unknown density is 160.
+    var u: Translator = .{};
+    u.setDensity(0);
+    u.resize(800, 600);
+    try testing.expectEqual(@as(f32, 1), u.m.in.scale);
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.safe());
+}
+
+test "translate: clipboard text crosses UTF-16 both ways and is pasted as typed text" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\paste two\nlines 😀
+    };
+    var text: [64]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("two\nlines \u{1f600}", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{.{ .kind = .text, .at = 0, .len = 14 }}, ev.in.events);
+
+    // Copy: UTF-8 to a Java String's UTF-16 (a surrogate pair for the emoji), and back.
+    var units: [16]u16 = undefined;
+    var back: [16]u8 = undefined;
+    const u = utf8ToUtf16("\u{e9}\u{1f600}", &units).?;
+    try testing.expectEqualSlices(u16, &.{ 0xe9, 0xd83d, 0xde00 }, u);
+    try testing.expectEqualStrings("\u{e9}\u{1f600}", utf16ToUtf8(u, &back).?);
+    // Invalid either way, or too long for the buffer: nothing.
+    try testing.expectEqual(null, utf8ToUtf16("\xff", &units));
+    try testing.expectEqual(null, utf16ToUtf8(&.{0xd83d}, &back));
+    try testing.expectEqual(null, utf16ToUtf8(u, back[0..4]));
+    t.paste(&.{0xd83d}, &back);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(u32, 1), t.m.dropped);
+}
+
+test "translate: the soft keyboard's keys type their characters, whole text arrives as characters" {
+    // A soft keyboard on a NativeActivity: "Hi" as key events with their characters (Shift
+    // held for H), Delete and Enter as keys, a dead key typing nothing, then text no key types.
+    var r: Replay = .{ .src =
+        \\frame
+        \\key down 59 1 0
+        \\key down 36 1 0 72
+        \\key up 36 1 0
+        \\key up 59 0 0
+        \\key down 37 0 0 105
+        \\key up 37 0 0
+        \\key down 67 0 0
+        \\key up 67 0 0
+        \\key down 66 0 0 10
+        \\key up 66 0 0
+        \\key down 75 2 0 0x80000060
+        \\# @ has no HID usage on its own: text only.
+        \\key down 77 0 0 64
+        \\characters 日本😀
+    };
+    var text: [64]u8 = undefined;
+    var events: [32]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("Hi@日本😀", ev.in.text);
+    const shift: Input.Mods = .{ .shift = true };
+    const alt: Input.Mods = .{ .alt = true };
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .press, .code = 0xe1, .mods = shift },
+        .{ .kind = .press, .code = 0x0b, .mods = shift },
+        .{ .kind = .text, .at = 0, .len = 1, .mods = shift },
+        .{ .kind = .release, .code = 0x0b, .mods = shift },
+        .{ .kind = .release, .code = 0xe1 },
+        .{ .kind = .press, .code = 0x0c },
+        .{ .kind = .text, .at = 1, .len = 1 },
+        .{ .kind = .release, .code = 0x0c },
+        .{ .kind = .press, .code = 0x2a },
+        .{ .kind = .release, .code = 0x2a },
+        .{ .kind = .press, .code = 0x28 },
+        .{ .kind = .release, .code = 0x28 },
+        .{ .kind = .press, .code = 0x34, .mods = alt },
+        .{ .kind = .text, .at = 2, .len = 1, .mods = alt },
+        .{ .kind = .text, .at = 3, .len = 10, .mods = alt },
+    }, ev.in.events);
+    // Nothing to compose: a NativeActivity's input connection keeps the IME's composition to
+    // itself, so the frame's composition is empty.
+    try testing.expectEqualStrings("", ev.composition.text);
+}
+
+test "translate: pause, stop, a lost surface and the way back" {
+    // Started and resumed with a window; a key held when the notification shade takes focus;
+    // paused, stopped (home), the surface destroyed; then back: started, a new window,
+    // resumed. Rotation recreating the window works the same way.
+    var r: Replay = .{ .src =
+        \\frame
+        \\start
+        \\window 1080 2400
+        \\resume
+        \\key down 59 1 0
+        \\frame
+        \\focus 0
+        \\pause
+        \\frame
+        \\stop
+        \\window_lost
+        \\frame
+        \\start
+        \\window 2400 1080
+        \\resume
+        \\focus 1
+    };
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    const want = [_]struct { visible: bool, shift: bool, resumed: bool, state: mobile.State }{
+        .{ .visible = true, .shift = true, .resumed = false, .state = .active },
+        .{ .visible = true, .shift = false, .resumed = false, .state = .inactive },
+        .{ .visible = false, .shift = false, .resumed = false, .state = .background },
+        .{ .visible = true, .shift = false, .resumed = true, .state = .active },
+    };
+    for (want) |w| {
+        try testing.expect(try r.next(&t));
+        try testing.expect(t.frame(&ev));
+        try testing.expectEqual(w.visible, t.visible());
+        try testing.expectEqual(w.shift, ev.in.keys.down(0xe1));
+        try testing.expectEqual(w.resumed, t.takeResumed());
+        try testing.expectEqual(w.state, t.m.state);
+    }
+    try testing.expectEqual([2]f32{ 2400, 1080 }, ev.in.viewport);
+    // A stopped activity with a window still shows nothing; a resumed one without, nothing.
+    t.lifecycle(.stop);
+    try testing.expect(!t.visible());
+    t.lifecycle(.resume_);
+    t.windowLost();
+    try testing.expect(!t.visible());
+}

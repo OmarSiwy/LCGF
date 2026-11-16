@@ -5,13 +5,18 @@
 //! Every pass times lcgr's runtime front end (src/runtime/): `Context.begin` (settle, hit test,
 //! spring and tween step) is begin+hit, the scene building through `Frame` and the reference
 //! widgets (src/widgets/base.zig) is build, the body of `Frame.end` split at each pass is layout,
-//! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four. The
+//! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four, over the
+//! frames built; `poll` times every poll, `Context.needsFrame` included, as a host polls (every
+//! scene but rows builds only the frames needsFrame asks for: bench/scenes/scenes.zig). The
 //! first frame's draw list must equal the prototype's own first frame of the same scene.
 //!
 //! `--core=prototype` keeps the old numbers reproducible: frames are begun and built by the
 //! prototype core ("ui", prototype/ui.zig), its tree and text columns are copied (untimed) into
 //! src/ tables, laid out and painted there by lcgr's tier-0 passes, and copied back for the
 //! prototype's untimed `Frame.finish`.
+//!
+//! A second scene times the grid passes (src/layout/grid.zig): one grid of 16 columns and 250
+//! rows holding 4,000 auto-placed items, laid out `grid_frames` times.
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --core=prototype  the same with the prototype front end
@@ -29,6 +34,10 @@ const lcgr = @import("lcgr");
 const scenes = @import("scenes");
 const src_scenes = @import("src_scenes");
 const linux = std.os.linux;
+
+/// No 256 KB thread-local signal stack (std's default, for stack traces on a crash): start.zig
+/// clears it before main, which the other harnesses' start-up does not pay.
+pub const std_options: std.Options = .{ .signal_stack_size = null };
 
 const rows = scenes.rows.count;
 const frames = 3000;
@@ -122,6 +131,70 @@ fn copyRows(to: anytype, from: anytype, len: u32) void {
     @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
 }
 
+const grid_frames = 1000;
+const grid_items = 4000;
+const grid_cols = 16;
+const grid_rows = grid_items / grid_cols;
+const grid_pass_names = [_][]const u8{ "grid.place", "grid.fit.x", "grid.resolve.x", "grid.fit.y", "grid.resolve.y" };
+var grid_samples: [grid_pass_names.len][grid_frames]u64 = undefined;
+const grid_cap: lcgr.grid.Grids.Capacity = .{ .grids = 1, .tracks = grid_cols + grid_rows, .items = grid_items, .cells = grid_items };
+const grid_bytes = blk: {
+    @setEvalBranchQuota(20_000);
+    var counter: lcgr.mem.Carver = .{ .buf = null };
+    _ = Tree.init(&counter, grid_items + 2);
+    _ = Texts.init(&counter, 1);
+    _ = lcgr.grid.Grids.init(&counter, grid_cap);
+    break :blk counter.off;
+};
+comptime {
+    // The grid scene borrows the prototype core's buffer, whose frames are done by then.
+    std.debug.assert(grid_bytes <= buffer.len);
+}
+
+/// Times the grid passes on a 4,000-item grid, in `buffer` (run after the frame loops): columns cycle through fixed, fit and fraction
+/// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
+fn gridBench() void {
+    var carver: lcgr.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
+    var t = Tree.init(&carver, grid_items + 2);
+    var tx = Texts.init(&carver, 1);
+    var gs = lcgr.grid.Grids.init(&carver, grid_cap);
+    const root = t.push(0, .none, &.{ .size = .{ .px(1280), .fit } });
+    const g = t.push(root, .none, &.{ .size = .{ .fill, .fit } });
+    var cols: [grid_cols]lcgr.grid.Track = undefined;
+    const kinds = [4]lcgr.grid.Track{ .px(40), .fit, .fr(1), .fr(2) };
+    for (&cols, 0..) |*c, i| c.* = kinds[i % 4];
+    const rows_: [grid_rows]lcgr.grid.Track = @splat(.fit);
+    const k = gs.grid(g, &cols, &rows_);
+    gs.gaps(k, .{ 4, 2 });
+    for (0..grid_items) |i| {
+        const w: f32 = @floatFromInt(10 + i % 7);
+        const n = t.push(g, .none, &.{ .float = true, .min = .{ w, 12 } });
+        t.seal(n);
+        _ = gs.autoItem(k, n);
+    }
+    t.seal(g);
+    t.seal(root);
+    for (0..grid_frames) |f| {
+        var m: [grid_pass_names.len + 1]u64 = undefined;
+        m[0] = now();
+        lcgr.grid.autoPlace(&gs);
+        m[1] = now();
+        lcgr.layout.prepare(&t);
+        lcgr.layout.applyText(&t, &tx, .x);
+        lcgr.grid.fit(&t, &gs, .x);
+        m[2] = now();
+        lcgr.grid.resolve(&t, &gs, .x, 1280);
+        m[3] = now();
+        lcgr.layout.applyText(&t, &tx, .y);
+        lcgr.grid.fit(&t, &gs, .y);
+        m[4] = now();
+        lcgr.grid.resolve(&t, &gs, .y, 8000);
+        m[5] = now();
+        lcgr.layout.place(&t);
+        for (0..grid_pass_names.len) |p| grid_samples[p][f] = m[p + 1] - m[p];
+    }
+}
+
 fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
     const eql = std.mem.eql;
     const bytes = std.mem.sliceAsBytes;
@@ -144,6 +217,9 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
 
 /// The frame loop's passes, then incr_names.
 var samples: [all_names.len][frames]u64 = undefined;
+/// Every poll: `Context.needsFrame`, and the frame when it asked for one. The comparison's
+/// frame time (bench/vs/measure.py), as the other harnesses time every poll.
+var poll_samples: [frames]u64 = undefined;
 
 /// Incremental layout after the frame loop, on the last frame's tree: a full `layout.run` for
 /// reference, then one leaf's height changed and `incremental.update` each frame, first as the
@@ -326,7 +402,8 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         var ctx: Context = undefined;
     };
     const ctx = &S.ctx;
-    ctx.* = try Context.init(buf, ctx_limits);
+    // A static buffer in bss (or fresh huge pages), used once: zero already.
+    ctx.* = try Context.initZeroed(buf, ctx_limits);
     const th: lcgr.widgets_base.Theme = .{};
     var in: lcgr.input.Input = .{};
     const font: lcgr.protocol.Mono = .{};
@@ -334,7 +411,11 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
-        if (scene.idle and !ctx.needsFrame(&in)) continue;
+        const p0 = now();
+        if (!scene.every and !ctx.needsFrame(&in)) {
+            poll_samples[k] = now() - p0;
+            continue;
+        }
         var m: Marks = .{};
         m.mark(0);
         var f = ctx.begin(&in);
@@ -374,12 +455,14 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         m.mark(12);
         const out = f.finish();
         m.mark(13);
-        // Differential check, untimed: the first frame draws what the prototype's first frame draws.
-        if (r.built == 0) try sameDrawList(try prototypeFirst(index), out.draw);
+        // Differential check, untimed: the first frame draws what the prototype's first frame
+        // draws. Not under --idle (one poll), whose memory and start-up are LCGR's alone.
+        if (r.built == 0 and polls > 1) try sameDrawList(try prototypeFirst(index), out.draw);
         r.sink +%= out.draw.cmd_len + out.draw.quad_len;
         r.nodes = t.len;
         r.texts = tx.len;
         record(&m, r.built);
+        poll_samples[k] = m.t[13] - p0;
         r.built += 1;
     }
     r.viewport = in.viewport;
@@ -399,7 +482,11 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
-        if (scene.idle and !ctx.needsFrame(&in)) continue;
+        const p0 = now();
+        if (!scene.every and !ctx.needsFrame(&in)) {
+            poll_samples[k] = now() - p0;
+            continue;
+        }
         var m: Marks = .{};
         m.mark(0);
         var f = ctx.begin(&in); // includes the SIMD hit test and spring step
@@ -456,6 +543,7 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
         r.nodes = t.len;
         r.texts = tx.len;
         record(&m, r.built);
+        poll_samples[k] = m.t[13] - p0;
         r.built += 1;
     }
     r.viewport = in.viewport;
@@ -497,7 +585,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (counters) try openCounters();
     const src_buf: []align(lcgr.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
-    var carver: lcgr.mem.Carver = .{ .buf = src_buf };
+    var carver: lcgr.mem.Carver = .{ .buf = src_buf, .zeroed = true };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
@@ -533,6 +621,7 @@ pub fn main(init: std.process.Init) !void {
     // The incremental and flex passes are measured on the rows scene only, on the last frame's tree.
     const is_rows = index == 0;
     if (is_rows) {
+        gridBench();
         flexWrap(run.tree, run.texts_table, &sflex, run.viewport);
         incremental(run.tree, run.texts_table, &sdirty, run.viewport);
     }
@@ -545,6 +634,8 @@ pub fn main(init: std.process.Init) !void {
         const n = if (p < pass_names.len) built else frames;
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[n / 2]), us(s[n * 99 / 100]) });
     }
+    std.mem.sort(u64, poll_samples[0..polls], {}, std.sort.asc(u64));
+    try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ "poll", us(poll_samples[polls / 2]), us(poll_samples[polls * 99 / 100]) });
     if (group >= 0) {
         // Means per built frame. Each read is a syscall: its kernel half is not counted, but it
         // evicts some L1 lines, so short passes carry a few dozen extra misses.
@@ -556,6 +647,14 @@ pub fn main(init: std.process.Init) !void {
             for (sums) |v| try w.print(" {d:10.0}", .{@as(f64, @floatFromInt(v)) / @as(f64, @floatFromInt(built))});
             const f: [4]f64 = .{ @floatFromInt(sums[0]), @floatFromInt(sums[1]), @floatFromInt(sums[2]), @floatFromInt(@max(built * run.nodes, 1)) };
             try w.print(" {d:10.2} {d:10.2}\n", .{ f[1] / @max(f[0], 1), f[2] / f[3] });
+        }
+    }
+    // The grid scene runs with the rows scene only.
+    if (is_rows) {
+        try w.print("grid: items={d} frames={d}\n", .{ grid_items, grid_frames });
+        for (grid_pass_names, &grid_samples) |name, *s| {
+            std.mem.sort(u64, s, {}, std.sort.asc(u64));
+            try w.print("{s:<14} {d:9.1} {d:9.1}\n", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
         }
     }
     // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
@@ -576,6 +675,11 @@ pub fn main(init: std.process.Init) !void {
     for (names, samples[0..names.len], 0..) |name, *s, p| {
         const n = if (p < pass_names.len) built else frames;
         try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[n / 2]), us(s[n * 99 / 100]) });
+    }
+    if (is_rows) {
+        for (grid_pass_names, &grid_samples) |name, *s| {
+            try j.print(",\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
+        }
     }
     try j.writeAll("\n}}\n");
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = j.buffered() });

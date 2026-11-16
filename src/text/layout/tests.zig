@@ -198,19 +198,19 @@ test "text-edit's screen-order caret sits on the glyph it moved to over reordere
         p.fixed(text, 10);
         try lines.breakLines(&p.g, text, std.math.inf(f32), &p.l);
         lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, .{});
-        try lines.reorder(&p.l, &p.g, text, s);
+        try lines.reorder(&p.l, &p.g, text, .{}, s);
         const v: moves.View = .{ .l = &p.l, .g = &p.g, .text = text };
         // From the left end, Right moves the drawn caret strictly rightwards, each time onto
         // the glyph moves.visual placed the stop at, up to the right end; Left walks back.
         // (Two offsets at a direction change are one stop, so a step can cross two glyphs.)
         const right: f32 = @floatFromInt(p.g.len * 10);
         var at: u32 = 0;
-        for (0..2 * p.g.len) |_| at = moves.visual(text, at, -1, ms).?;
+        for (0..2 * p.g.len) |_| at = moves.visual(text, at, -1, .auto, ms).?;
         try testing.expectEqual(0, v.x(at));
         var prev: f32 = 0;
         var steps: u32 = 0;
         while (prev < right) : (steps += 1) {
-            at = moves.visual(text, at, 1, ms).?;
+            at = moves.visual(text, at, 1, .auto, ms).?;
             try testing.expect(v.x(at) > prev);
             try expectOnGlyph(&p, text, at);
             prev = v.x(at);
@@ -218,7 +218,7 @@ test "text-edit's screen-order caret sits on the glyph it moved to over reordere
         try testing.expectEqual(right, prev);
         try testing.expect(steps + 2 >= p.g.len);
         while (prev > 0) {
-            at = moves.visual(text, at, -1, ms).?;
+            at = moves.visual(text, at, -1, .auto, ms).?;
             try testing.expect(v.x(at) < prev);
             try expectOnGlyph(&p, text, at);
             prev = v.x(at);

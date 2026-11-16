@@ -209,7 +209,7 @@ pub const Renderer = struct {
     }
 
     pub fn drawText(r: *const Renderer, _: Pass, run: u32) void {
-        r.drawQuads(r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.first[run]) * 4 * quad_shader.stride, r.glyphs.count[run]);
+        r.drawQuads(r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * 4 * quad_shader.stride, r.glyphs.span(run)[1]);
     }
 
     pub fn customScissor(r: *const Renderer, custom: draw_list.CustomDraw) [4]i32 {
