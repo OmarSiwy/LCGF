@@ -732,6 +732,15 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
+    // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
+    // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
+    const api_index = b.addSystemCommand(&.{"python3"});
+    api_index.addFileArg(b.path("docs/api/apiindex.py"));
+    api_index.addFileArg(b.path("src/lcgr.zig"));
+    api_index.has_side_effects = true;
+    const docs_step = b.step("docs", "Generate zig-out/docs/API.md from the sources");
+    docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
