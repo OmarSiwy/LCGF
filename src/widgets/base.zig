@@ -40,7 +40,9 @@
 //! its builder generates, which also carries its parameters). `ComptimeUi` then calls its
 //! `push(ui, n, parent, next, in)` to build the node, which must push one tree row per spec
 //! node of its subtree in row order, and before each frame its optional `step(ui, row, event,
-//! in)` to apply input to `ui.signals`.
+//! in)` to apply input to `ui.signals`. During `step`, once `ui.built` is set, `ui.tables.t`
+//! still holds last frame's laid-out tree to measure, and `ui.keep(row)` keeps what the widget
+//! measured for its `push`.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -281,6 +283,13 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// The widget the last left press went down on (null over nothing), as the runtime's
         /// `Interaction.focus`; custom widgets read it for their keys.
         focus: ?E.Widget = null,
+        /// Four floats per custom widget (`Spec.widget`, in row order) that it keeps from frame
+        /// to frame, such as what its `step` measured in last frame's tree for its `push`.
+        /// Zero until it writes them.
+        kept: [customRows(spec).len][4]f32 = @splat(@splat(0)),
+        /// A frame has been built: from then on, during `step`, `tables.t` is last frame's
+        /// laid-out tree.
+        built: bool = false,
         font: Mono = .{},
 
         const Tables = struct {
@@ -368,6 +377,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             for (0..4) |side| {
                 for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
             }
+            ui.built = true;
             return .{ .draw = &tb.d, .tree = t, .event = event };
         }
 
@@ -417,6 +427,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
         /// them: while a widget is held, only it shows hover.
+        /// The floats the custom widget at spec row `row` keeps (`kept`).
+        pub fn keep(ui: *Self, comptime row: u32) *[4]f32 {
+            const k = comptime std.mem.indexOfScalar(u32, customRows(spec), row).?;
+            return &ui.kept[k];
+        }
+
         pub fn response(ui: *const Self, row: u32, in: *const Input) Response {
             const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
             const held = ui.pointer.pressed == w;
