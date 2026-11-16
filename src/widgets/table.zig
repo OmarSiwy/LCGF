@@ -76,6 +76,119 @@ pub fn handleId(id: Id, cols: usize, k: usize) Id {
     return id.with(@intCast(1 + cols + k));
 }
 
+// ---- look: one function per part, called by both front ends -------------------------------
+
+/// Height of the header row and of every body row: the list box's row height.
+pub fn rowHeight(th: *const Theme) f32 {
+    return list_zig.rowHeight(th);
+}
+
+/// Width of a resize handle at a header's right edge.
+pub const handle_px: f32 = 4;
+/// Narrowest and widest a column can be dragged.
+pub const min_width: f32 = 24;
+pub const max_width: f32 = 400;
+
+pub fn tableStyle(th: *const Theme) Style {
+    return .{ .dir = .y, .fill = th.control_held, .border = 1, .border_color = th.control_hot, .role = .group };
+}
+
+pub fn headerRowStyle(th: *const Theme) Style {
+    return .{ .dir = .x, .fill = th.control };
+}
+
+pub fn headerStyle(th: *const Theme, width: f32) Style {
+    return .{ .dir = .x, .size = .{ .px(width), .px(rowHeight(th)) }, .pad = .{ th.pad, 0, 0, 0 }, .cross = .center, .clip = true };
+}
+
+/// A header's fill by state, indexed by `hovered | held << 1` (`base.stateIndex`).
+pub fn headerFill(th: *const Theme, r: Response) Color {
+    return th.controlFills()[base.stateIndex(r)];
+}
+
+/// The sort mark in a header: a dot before the handle, the accent ascending, the text colour
+/// descending, nothing when the column is not the sort column.
+pub fn markStyle(th: *const Theme, width: f32, sorted: bool, descending: bool) Style {
+    const fills = [4]Color{ .transparent, .transparent, th.accent, th.text };
+    return .{
+        .size = .{ .px(6), .px(6) },
+        .float = true,
+        .offset = .{ width - th.pad - handle_px - 12, (rowHeight(th) - 6) / 2 },
+        .radius = 3,
+        .fill = fills[@as(u2, @intFromBool(descending)) | (@as(u2, @intFromBool(sorted)) << 1)],
+    };
+}
+
+/// The resize handle, flush with the header's right edge; lit while under the pointer or held.
+pub fn handleStyle(th: *const Theme, width: f32, r: Response) Style {
+    const fills = base.StateColors{ .transparent, th.control_hot, th.accent, th.accent };
+    return .{ .size = .{ .px(handle_px), .px(rowHeight(th)) }, .float = true, .offset = .{ width - th.pad - handle_px, 0 }, .fill = fills[base.stateIndex(r)] };
+}
+
+pub fn bodyStyle(th: *const Theme) Style {
+    _ = th;
+    return .{ .dir = .y };
+}
+
+pub fn rowStyle(th: *const Theme) Style {
+    _ = th;
+    return .{ .dir = .x };
+}
+
+/// A body cell; the active one is lit, in the accent while the body has focus.
+pub fn cellStyle(th: *const Theme, width: f32, active: bool, focused: bool) Style {
+    const fills = [4]Color{ .transparent, .transparent, th.control, th.accent };
+    return .{
+        .dir = .x,
+        .size = .{ .px(width), .px(rowHeight(th)) },
+        .pad = .{ th.pad, 0, 0, 0 },
+        .cross = .center,
+        .clip = true,
+        .fill = fills[@as(u2, @intFromBool(focused)) | (@as(u2, @intFromBool(active)) << 1)],
+    };
+}
+
+/// The column at `x`, for a body whose last rect starts at `left`: clamped into the columns.
+pub fn colAt(widths: []const f32, left: f32, x: f32) u32 {
+    var edge = left;
+    for (widths, 0..) |w, k| {
+        edge += w;
+        if (x < edge) return @intCast(k);
+    }
+    return @intCast(widths.len - 1);
+}
+
+/// The body row at `y`, for a body whose last rect starts at `top`: clamped into `rows`.
+pub fn rowAt(th: *const Theme, top: f32, y: f32, rows: u32) u32 {
+    const k = @floor((y - top) / rowHeight(th));
+    return @intFromFloat(std.math.clamp(k, 0, @as(f32, @floatFromInt(rows -| 1))));
+}
+
+/// Rows of a table as both front ends build them, from the table's row `box`: what the
+/// accessibility passes and the tests need to find each part.
+pub const Rows = struct {
+    box: u32,
+    cols: u32,
+    rows: u32,
+    /// A header cell is itself, its label, its sort mark and its handle.
+    pub fn header(r: Rows, k: usize) u32 {
+        return r.box + 2 + 4 * @as(u32, @intCast(k));
+    }
+    pub fn handle(r: Rows, k: usize) u32 {
+        return r.header(k) + 3;
+    }
+    pub fn body(r: Rows) u32 {
+        return r.header(r.cols);
+    }
+    /// Row `i` of the body is itself and two rows (cell, label) per column.
+    pub fn row(r: Rows, i: usize) u32 {
+        return r.body() + 1 + @as(u32, @intCast(i)) * (1 + 2 * r.cols);
+    }
+    pub fn cell(r: Rows, i: usize, k: usize) u32 {
+        return r.row(i) + 1 + 2 * @as(u32, @intCast(k));
+    }
+};
+
 // ---- behaviour: pure functions of the value and what happened -------------------------------
 
 /// The data row shown at each position, for `cells` (row-major, `cols` per row) sorted by
@@ -97,6 +210,59 @@ pub fn order(cells: []const []const u8, cols: usize, sort: u32, descending: bool
 fn before(a: []const u8, b: []const u8, descending: bool) bool {
     const o = std.mem.order(u8, a, b);
     return if (descending) o == .gt else o == .lt;
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A table of `cols` columns: `headers` (one per column) above `cells` (row-major), with `st`
+/// its state and `order_buf` (one entry per row) the caller's scratch for the sort order.
+/// Returns the body's response.
+pub fn table(f: *Frame, th: *const Theme, id: Id, comptime cols: usize, headers: []const []const u8, cells: []const []const u8, st: *State(cols), order_buf: []u32) Response {
+    const rows: u32 = @intCast(cells.len / cols);
+    // Input first: it moves widths and the sort the rows below show. Responses come from last
+    // frame's interaction; `interact` marks the nodes and reports the same responses.
+    var hr: [cols]Response = undefined;
+    var gr: [cols]Response = undefined;
+    for (0..cols) |k| {
+        hr[k] = f.ctx.inter.response(headerId(id, k));
+        gr[k] = f.ctx.inter.response(handleId(id, cols, k));
+    }
+    order(cells, cols, st.sort, st.descending, order_buf[0..rows]);
+
+    const box = f.open(.none, tableStyle(th));
+    _ = f.open(.none, headerRowStyle(th));
+    for (headers, 0..) |s, k| {
+        var hs = headerStyle(th, st.widths[k]);
+        hs.fill = headerFill(th, hr[k]);
+        const h = f.open(headerId(id, k), hs);
+        _ = f.interact(h, .button);
+        _ = base.label(f, th, s);
+        _ = f.leaf(.none, markStyle(th, st.widths[k], st.sort == k, st.descending));
+        var gs = handleStyle(th, st.widths[k], gr[k]);
+        _ = &gs;
+        const g = f.leaf(handleId(id, cols, k), gs);
+        _ = f.interact(g, .any);
+        f.setCursor(.resize_h, gr[k].hovered or gr[k].held);
+        f.close();
+    }
+    f.close();
+    var bs = bodyStyle(th);
+    _ = &bs;
+    const body = f.open(id, bs);
+    const r = f.interact(body, .button);
+    for (order_buf[0..rows], 0..) |data_row, i| {
+        _ = f.open(.none, rowStyle(th));
+        for (0..cols) |k| {
+            _ = f.open(.none, cellStyle(th, st.widths[k], st.row == i and st.col == k, r.focused));
+            _ = base.label(f, th, cells[data_row * cols + k]);
+            f.close();
+        }
+        f.close();
+    }
+    f.close();
+    f.close();
+    _ = box;
+    return r;
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -151,11 +317,190 @@ fn isTable(comptime n: Spec) bool {
     return n.kind == .col and n.bind != null;
 }
 
+/// The comptime front end for a page of tables: rows, columns and labels as in
+/// `base.ComptimeUi`, every column bound to a field a table made by `ct.table`.
+pub fn ComptimeTable(comptime S: type, comptime spec: Spec, comptime th: Theme) type {
+    const E = events.Events(spec);
+    const Sig = signals.Signals(S, spec);
+    inline for (comptime tablesOf(spec)) |n| {
+        const v = ct.fields(n);
+        validate(S, v.state, v.headers, v.cells, v.cols, v.rows);
+    }
+    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+    return struct {
+        const Self = @This();
+        pub const Events = E;
+        pub const Signals = Sig;
+
+        page: Tables = .{},
+        signals: Sig.Runtime = .{},
+        pointer: list_zig.CtPointer(E) = .{},
+        font: Mono = .{},
+        order_buf: [maxRows(spec)]u32 = undefined,
+
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
+
+        fn widgetOf(comptime name: []const u8) E.Widget {
+            return comptime std.meta.stringToEnum(E.Widget, name).?;
+        }
+
+        pub fn frame(ui: *Self, in: *const Input) Output {
+            const event = ui.pointer.step(in);
+
+            const tb = ui.page.begin(in);
+            var next: u32 = 0;
+            ui.push(spec, 0, &next, in);
+            const t = ui.page.end(in);
+            ui.pointer.store(t);
+            return .{ .draw = &tb.d, .tree = t, .event = event };
+        }
+
+        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const tb = &ui.page.tables;
+            const state = &ui.signals.state;
+            next.* += 1;
+            if (n.kind == .label) {
+                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
+                return;
+            }
+            if (comptime !isTable(n)) {
+                const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &n.style);
+                inline for (n.children) |c| ui.push(c, i, next, in);
+                tb.t.seal(i);
+                return;
+            }
+            // A table (`ct.table`): rows as `table` builds them.
+            next.* += comptime flatten.count(n) - 1;
+            const v = comptime ct.fields(n);
+            const id: Id = .hash(v.name);
+            const st = @field(state, v.state);
+            const headers: []const []const u8 = @field(state, v.headers);
+            const cells: []const []const u8 = @field(state, v.cells);
+            const order_buf = ui.order_buf[0..v.rows];
+            order(cells, v.cols, st.sort, st.descending, order_buf);
+            const box = tb.t.push(parent, .none, &tableStyle(&th));
+            const head = tb.t.push(box, .none, &headerRowStyle(&th));
+            inline for (0..v.cols) |k| {
+                const hw = comptime widgetOf(std.fmt.comptimePrint("{s}_h{d}", .{ v.name, k }));
+                const gw = comptime widgetOf(std.fmt.comptimePrint("{s}_r{d}", .{ v.name, k }));
+                var hs = headerStyle(&th, st.widths[k]);
+                hs.fill = headerFill(&th, ui.pointer.response(hw, in));
+                const h = tb.t.push(head, headerId(id, k), &hs);
+                list_zig.pushLabel(tb, h, &.{ .role = .label }, headers[k], &th);
+                _ = tb.t.push(h, .none, &markStyle(&th, st.widths[k], st.sort == k, st.descending));
+                var gs = handleStyle(&th, st.widths[k], ui.pointer.response(gw, in));
+                _ = &gs;
+                _ = tb.t.push(h, handleId(id, v.cols, k), &gs);
+                tb.t.seal(h);
+            }
+            tb.t.seal(head);
+            const focused = ui.pointer.response(comptime widgetOf(v.name), in).focused;
+            var bs = bodyStyle(&th);
+            _ = &bs;
+            const body = tb.t.push(box, id, &bs);
+            for (order_buf, 0..) |data_row, i| {
+                const row = tb.t.push(body, .none, &rowStyle(&th));
+                for (0..v.cols) |k| {
+                    const c = tb.t.push(row, .none, &cellStyle(&th, st.widths[k], st.row == i and st.col == k, focused));
+                    list_zig.pushLabel(tb, c, &.{ .role = .label }, cells[data_row * v.cols + k], &th);
+                    tb.t.seal(c);
+                }
+                tb.t.seal(row);
+            }
+            tb.t.seal(body);
+            tb.t.seal(box);
+        }
+
+        fn field(comptime name: []const u8) Sig.Field {
+            return comptime std.meta.stringToEnum(Sig.Field, name).?;
+        }
+    };
+}
+
+/// The table nodes of `n`'s subtree.
+fn tablesOf(comptime n: Spec) []const Spec {
+    if (isTable(n)) return &.{n};
+    var out: []const Spec = &.{};
+    for (n.children) |c| out = out ++ tablesOf(c);
+    return out;
+}
+
+/// The most rows any table in `n` has (at least 1): the comptime sort order's scratch.
+fn maxRows(comptime n: Spec) usize {
+    var m: usize = 1;
+    for (tablesOf(n)) |t| m = @max(m, ct.fields(t).rows);
+    return m;
+}
+
+// ---- example page -----------------------------------------------------------------------------
+
+const file_headers = [_][]const u8{ "Name", "Kind", "Size" };
+const file_cells = [_][]const u8{
+    "notes.txt", "text",   "12",
+    "photo.png", "image",  "2048",
+    "app.zig",   "source", "730",
+    "build.zig", "source", "95",
+    "logo.svg",  "image",  "5",
+};
+
+/// The example page: a caption and a table of five files in three columns on a panel, in both
+/// front ends, in theme `th`. Its tests and golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
+    return struct {
+        const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
+
+        /// Runtime front end: the application owns the strings, the table state and the
+        /// sort order's scratch.
+        pub const App = struct {
+            table: State(3) = .{},
+            order: [5]u32 = undefined,
+            clicked: bool = false,
+
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = base.label(f, &th, "Files");
+                app.clicked = table(f, &th, .from("files"), 3, &file_headers, &file_cells, &app.table, &app.order).clicked;
+                f.close();
+            }
+        };
+
+        /// Comptime front end: the same page as a spec over a state struct.
+        pub const PageState = struct {
+            title: []const u8 = "Files",
+            headers: []const []const u8 = &file_headers,
+            cells: []const []const u8 = &file_cells,
+            table: State(3) = .{},
+        };
+        pub const spec = spec_zig.col(panel, .{
+            base.ct.label(th, .title),
+            ct.table(th, .files, .table, .headers, .cells, 3, 5),
+        });
+        pub const Ui = ComptimeTable(PageState, spec, th);
+        pub const limits: context.Limits = .{ .nodes = 64, .texts = 32, .customs = 1, .strings = 1024, .depth = 8 };
+        pub const Run = base.Harness(App, Ui, limits);
+    };
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
 const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
+
+var harness: Example(theme).Run = .{};
+
+/// The shown text of body cell (i, k) in `out`'s runtime tree.
+fn cellText(h: anytype, t: *const Tree, r: Rows, i: usize, k: usize) []const u8 {
+    const run = t.c.text[r.cell(i, k) + 1];
+    const tx = &h.ctx.texts[h.ctx.cur];
+    return h.ctx.strings[h.ctx.cur].buf[tx.c.start[run]..][0..tx.c.bytes[run]];
+}
+
+fn rowsOf(t: *const Tree) Rows {
+    // The body carries the table's id; the table and its header row come before it.
+    const body = t.find(.from("files"));
+    return .{ .box = body - 2 - 4 * 3, .cols = 3, .rows = 5 };
+}
 
 test "check: what a comptime table's state must have" {
     const Good = struct { t: State(2) = .{}, h: []const []const u8 = &.{}, c: []const []const u8 = &.{} };
@@ -182,6 +527,44 @@ test "ct.table: headers and handles are widgets, then the body" {
     try testing.expectEqual(5, v.rows);
     // Table, header row, 3 x (header, label, mark, handle), body, 5 x (row + 3 x (cell, label)).
     try testing.expectEqual(2 + 12 + 1 + 35, flatten.count(spec));
+}
+
+test "order: a stable sort of the rows by one column" {
+    var out: [5]u32 = undefined;
+    order(&file_cells, 3, none, false, &out);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 2, 3, 4 }, &out);
+    order(&file_cells, 3, 1, false, &out);
+    try testing.expectEqualSlices(u32, &.{ 1, 4, 2, 3, 0 }, &out);
+    order(&file_cells, 3, 1, true, &out);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 1, 4 }, &out);
+    order(&file_cells, 3, 0, false, &out);
+    try testing.expectEqualSlices(u32, &.{ 2, 3, 4, 0, 1 }, &out);
+}
+
+test "table: both front ends agree, and columns follow their widths" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.table.widths = .{ 60, 120, 80 };
+    h.app.table.sort = 1;
+    h.ui.signals.state.table = h.app.table;
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const r = rowsOf(t);
+    for (0..3) |k| try testing.expectApproxEqAbs(h.app.table.widths[k], t.rect(r.header(k)).w(), 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 120), t.rect(r.cell(4, 1)).w(), 0.5);
+    try testing.expectEqualStrings("photo.png", cellText(h, t, r, 0, 0));
+    // The header under the pointer lights up; the cell at (0, 0) is active.
+    in.pointer = .{ t.rect(r.header(1)).x0 + 10, t.rect(r.header(1)).y0 + 10 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(theme.control_hot.bitsOf(), t.c.look[r.header(1)].fill);
+    try testing.expectEqual(theme.control.bitsOf(), t.c.look[r.header(0)].fill);
+    try testing.expectEqual(theme.control.bitsOf(), t.c.look[r.cell(0, 0)].fill);
+    try testing.expectEqual(@as(u32, 1), colAt(&h.app.table.widths, 16, 16 + 60));
+    try testing.expectEqual(@as(u32, 2), colAt(&h.app.table.widths, 16, 1000));
+    try testing.expectEqual(@as(u32, 0), colAt(&h.app.table.widths, 16, 0));
 }
 
 test {
