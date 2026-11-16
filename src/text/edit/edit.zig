@@ -33,7 +33,7 @@ pub const Keys = struct {
     /// to the text's start and end. Ctrl on Windows and Linux; a macOS host sets `.alt` (and
     /// maps Cmd+Left and Right to Home and End itself).
     word: Input.Mods = .{ .ctrl = true },
-    /// Select all (and, from C0342 on, cut, copy and paste), as `Keyboard.commands` reads them.
+    /// Select all, cut, copy and paste, as `Keyboard.commands` reads them.
     clipboard: keyboard.ClipboardKeys = .{},
 };
 
@@ -72,6 +72,13 @@ pub const Context = struct {
     view: ?moves.View = null,
     /// Clicks and drags place the caret and select; they need `view`.
     pointer: Pointer = .{},
+    /// Where cut, copy and paste go (prototype/ui.zig `Platform.clipboard`): copy and cut set
+    /// `clipboard.set`, paste sets `clipboard.paste`, and the host answers a paste with typed
+    /// text next frame, which replaces the selection then. Null: the three keys do nothing.
+    clipboard: ?*keyboard.Clipboard = null,
+    /// Caller-owned bytes the copied text is put in. `clipboard.set` points into them, so it
+    /// stays valid after a cut and after later edits, until the host reads it after the frame.
+    copy_buf: []u8 = &.{},
 };
 
 /// What one `update` did.
@@ -80,6 +87,9 @@ pub const Result = struct {
     changed: bool = false,
     /// Typed or pasted text did not fit in the buffer; what fitted was inserted.
     full: bool = false,
+    /// A selection to cut or copy was longer than `Context.copy_buf`: it was neither copied nor
+    /// cut.
+    copy_full: bool = false,
 };
 
 pub const Editor = struct {
@@ -140,7 +150,7 @@ pub const Editor = struct {
             }
             if (e.kind == .release) continue;
             const view = if (r.changed) null else cx.view;
-            ed.key(e, view, &r);
+            ed.key(e, view, cx, &r);
         }
         return r;
     }
@@ -163,7 +173,7 @@ pub const Editor = struct {
         }
     }
 
-    fn key(ed: *Editor, e: Input.Event, view: ?moves.View, r: *Result) void {
+    fn key(ed: *Editor, e: Input.Event, view: ?moves.View, cx: Context, r: *Result) void {
         const ks = &ed.keys;
         const t = ed.text();
         const at = ed.caret;
@@ -178,9 +188,25 @@ pub const Editor = struct {
         const some = sel[0] < sel[1];
         const vertical = c == ks.up or c == ks.down;
         if (!vertical) ed.goal = std.math.nan(f32);
-        if (c == ks.clipboard.select_all and @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(ks.clipboard.mods))) {
+        const cmd = @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(ks.clipboard.mods));
+        if (cmd and c == ks.clipboard.select_all) {
             ed.anchor = 0;
             ed.caret = @intCast(t.len);
+            return;
+        }
+        if (cmd and (c == ks.clipboard.copy or c == ks.clipboard.cut)) {
+            const clip = cx.clipboard orelse return;
+            if (!some) return;
+            if (sel[1] - sel[0] > cx.copy_buf.len) {
+                r.copy_full = true;
+                return;
+            }
+            clip.copy(ed.b.copy(sel[0], sel[1], cx.copy_buf));
+            if (c == ks.clipboard.cut) ed.remove(sel[0], sel[1], r);
+            return;
+        }
+        if (cmd and c == ks.clipboard.paste) {
+            if (cx.clipboard) |clip| clip.requestPaste();
             return;
         }
         if (c == ks.backspace) {
@@ -265,14 +291,24 @@ pub const field = Id.from("field");
 /// Replays `src` into `ed` as the focused widget `field`, one `update` per frame. Returns the
 /// results of the frames, OR-ed.
 pub fn replay(ed: *Editor, src: []const u8) !Result {
-    return replayLaidOut(ed, src, null);
+    return replayWith(ed, src, .{});
 }
 
-/// As `replay`, with the text laid out before every frame in a box `width` px wide, each byte
-/// one 10 px glyph and each line 10 px high (ASCII only), and the layout passed as the view.
-/// The editor is one focusable node covering (0, 0) to (1000, 1000), stepped through a real
-/// `Interaction`, so `pointer` and `buttons` lines click, drag and double-click it.
-pub fn replayLaidOut(ed: *Editor, src: []const u8, width: ?f32) !Result {
+/// How `replayWith` runs the editor.
+pub const Replayed = struct {
+    /// Lay the text out before every frame in a box this many px wide, each byte one 10 px
+    /// glyph and each line 10 px high (ASCII only), and pass the layout as the view.
+    width: ?f32 = null,
+    /// Passed as `Context.clipboard` and reset before every frame, as a host does once it has
+    /// read it: after the replay it holds the last frame's requests.
+    clipboard: ?*keyboard.Clipboard = null,
+    copy_buf: []u8 = &.{},
+};
+
+/// As `replay`, run as `opt` says. The editor is one focusable node covering (0, 0) to
+/// (1000, 1000), stepped through a real `Interaction`, so `pointer` and `buttons` lines
+/// click, drag and double-click it.
+pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
     const golden = @import("../layout/golden.zig");
     const lines = @import("../layout/lines.zig");
     const mem = @import("../../core/mem.zig");
@@ -299,8 +335,9 @@ pub fn replayLaidOut(ed: *Editor, src: []const u8, width: ?f32) !Result {
     while (try r.next(buf)) |in| {
         it.step(&tree, in);
         const k = Keyboard.route(&it, &fo, in);
-        var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods) };
-        if (width) |w| {
+        var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods), .clipboard = opt.clipboard, .copy_buf = opt.copy_buf };
+        if (opt.clipboard) |c| c.reset();
+        if (opt.width) |w| {
             const t = ed.text();
             para.fixed(t, 10);
             try lines.breakLines(&para.g, t, w, &para.l);
@@ -310,6 +347,7 @@ pub fn replayLaidOut(ed: *Editor, src: []const u8, width: ?f32) !Result {
         const one = ed.update(&k, field, cx);
         all.changed = all.changed or one.changed;
         all.full = all.full or one.full;
+        all.copy_full = all.copy_full or one.copy_full;
     }
     return all;
 }
@@ -416,30 +454,30 @@ test "replayed input: Up and Down on laid-out lines keep the column across a sho
     // Lines in a 60 px box: "abcde " | "x\n" | "fghij".
     var ed = try Editor.init(&raw, "abcde x\nfghij");
     ed.place(4); // after "abcd", x = 40
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\press 81
-    , 60);
+    , .{ .width = 60 });
     try testing.expectEqual(7, ed.caret); // "x" is short: its end, before the newline
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\press 81
         \\text _
-    , 60);
+    , .{ .width = 60 });
     // Back at x = 40 on the last line, not at x = 10.
     try testing.expectEqualStrings("abcde x\nfghi_j", ed.text());
     // End then Home on a laid-out line; Up past the first line goes to the start.
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\press 82
         \\press 82
         \\press 77
-    , 60);
+    , .{ .width = 60 });
     try testing.expectEqual(5, ed.caret); // before the hanging space
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\press 82
-    , 60);
+    , .{ .width = 60 });
     try testing.expectEqual(0, ed.caret);
 }
 
@@ -493,16 +531,16 @@ test "replayed input: click places the caret, drag and Shift+click select, doubl
     var raw: [64]u8 = undefined;
     // "one two " | "three" in an 80 px box; glyphs are 10 px, lines 10 px.
     var ed = try Editor.init(&raw, "one two three");
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\pointer 21 5
         \\buttons left
         \\frame
         \\buttons
-    , 80);
+    , .{ .width = 80 });
     try testing.expectEqual([2]u32{ 2, 2 }, ed.selection());
     // Press after "t" of "two", drag to after "th" on the second line.
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\pointer 49 4
         \\buttons left
@@ -510,11 +548,11 @@ test "replayed input: click places the caret, drag and Shift+click select, doubl
         \\pointer 20 15
         \\frame
         \\buttons
-    , 80);
+    , .{ .width = 80 });
     try testing.expectEqual(5, ed.anchor);
     try testing.expectEqualStrings("wo th", ed.selected());
     // Shift+click extends from the anchor.
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\mods shift
         \\pointer 0 5
@@ -522,10 +560,10 @@ test "replayed input: click places the caret, drag and Shift+click select, doubl
         \\frame
         \\mods
         \\buttons
-    , 80);
+    , .{ .width = 80 });
     try testing.expectEqualStrings("one t", ed.selected());
     // Two quick clicks on "three" select it.
-    _ = try replayLaidOut(&ed,
+    _ = try replayWith(&ed,
         \\frame
         \\pointer 25 15
         \\buttons left
@@ -535,7 +573,70 @@ test "replayed input: click places the caret, drag and Shift+click select, doubl
         \\buttons left
         \\frame
         \\buttons
-    , 80);
+    , .{ .width = 80 });
     try testing.expectEqualStrings("three", ed.selected());
     try testing.expectEqual(13, ed.caret);
+}
+
+test "replayed input: cut, copy and paste through the clipboard rows" {
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "copy this");
+    var clip: keyboard.Clipboard = .{};
+    var copied: [16]u8 = undefined;
+    const opt: Replayed = .{ .clipboard = &clip, .copy_buf = &copied };
+    // Nothing selected: copy asks for nothing.
+    _ = try replayWith(&ed,
+        \\frame
+        \\press 6 ctrl
+    , opt);
+    try testing.expectEqualStrings("", clip.set);
+    // Select "this", copy it; the text stays.
+    _ = try replayWith(&ed,
+        \\frame
+        \\press 80 ctrl shift
+        \\press 6 ctrl
+    , opt);
+    try testing.expectEqualStrings("this", clip.set);
+    try testing.expectEqualStrings("copy this", ed.text());
+    // Cut "copy " (Shift+Home after collapsing): it leaves the text; the copy survives the edit.
+    _ = try replayWith(&ed,
+        \\frame
+        \\press 80
+        \\press 74 shift
+        \\press 27 ctrl
+        \\text >
+    , opt);
+    try testing.expectEqualStrings("copy ", clip.set);
+    try testing.expectEqualStrings(">this", ed.text());
+    // Paste asks the host; the host types the clipboard next frame, replacing the selection.
+    _ = try replayWith(&ed,
+        \\frame
+        \\press 4 ctrl
+        \\press 25 ctrl
+    , opt);
+    try testing.expect(clip.paste);
+    try testing.expectEqualStrings("", clip.set);
+    _ = try replayWith(&ed,
+        \\frame
+        \\text copy_
+    , opt);
+    try testing.expect(!clip.paste);
+    try testing.expectEqualStrings("copy_", ed.text());
+    // Ctrl+Shift+C is not copy; a selection longer than the copy buffer is not cut.
+    var small: [2]u8 = undefined;
+    const r = try replayWith(&ed,
+        \\frame
+        \\press 4 ctrl
+        \\press 6 ctrl shift
+        \\press 27 ctrl
+    , .{ .clipboard = &clip, .copy_buf = &small });
+    try testing.expect(r.copy_full);
+    try testing.expectEqualStrings("", clip.set);
+    try testing.expectEqualStrings("copy_", ed.text());
+    // Without clipboard rows the keys do nothing.
+    _ = try replay(&ed,
+        \\frame
+        \\press 27 ctrl
+    );
+    try testing.expectEqualStrings("copy_", ed.text());
 }
