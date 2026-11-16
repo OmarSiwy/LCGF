@@ -22,6 +22,7 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
 const Tree = @import("../core/tree.zig").Tree;
+const w = @import("../widgets/base.zig");
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -30,19 +31,31 @@ const Rect = types.Rect;
 pub const id_panel = Id.from("devtools.inspector");
 /// F12, as a USB HID usage id (the scancodes `Input.keys` and key events carry).
 pub const toggle_key: u8 = 0x45;
+pub const id_rects = Id.from("devtools.rects");
+pub const id_clips = Id.from("devtools.clips");
 
 pub const Inspector = struct {
     open: bool = true,
     /// Panel size in logical pixels; it sits `margin` from the bottom-right corner.
-    size: [2]f32 = .{ 300, 300 },
+    size: [2]f32 = .{ 320, 440 },
     margin: f32 = 8,
     text_px: f32 = 12,
     text: Color = .rgb(220, 222, 230),
     dim: Color = .rgb(140, 145, 160),
     panel: Color = .rgba(16, 17, 21, 240),
     border: Color = .rgb(90, 140, 255),
+    /// The panel's own widgets (the checkboxes).
+    theme: w.Theme = .{ .text_px = 12 },
     /// Rows of the tree listing; the rest are cut.
-    max_lines: u32 = 14,
+    max_lines: u32 = 12,
+    /// Outline every application node's layout rect (`Tree.Columns.rect`).
+    show_rects: bool = false,
+    /// Outline the visible part (`Tree.Columns.vis`) of every node its ancestors clip.
+    show_clips: bool = false,
+    rect_color: Color = .rgb(80, 220, 120),
+    clip_color: Color = .rgb(255, 150, 40),
+    /// Laid over the node under the pointer, outlined in `border`.
+    hover_fill: Color = .rgba(90, 140, 255, 60),
 
     /// Row where the inspector's own nodes began last frame: rows below it are the application's.
     own_first: u32 = none,
@@ -60,6 +73,7 @@ pub const Inspector = struct {
         insp.own_first = f.tree().len;
         if (!insp.open) return;
 
+        insp.outlines(f, prev);
         const vp = f.in.viewport;
         const root = f.open(id_panel, .{
             .float = true,
@@ -77,7 +91,28 @@ pub const Inspector = struct {
         _ = f.interact(root, .{ .hover = true, .click = true });
         insp.line(f, insp.text, "Inspector  {d} nodes", .{insp.rows});
         insp.hoveredLine(f, prev);
+        _ = f.open(.none, .{ .dir = .x, .gap = 12 });
+        _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Layout rects");
+        _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clip rects");
+        f.close();
         insp.treeLines(f, prev);
+        f.close();
+    }
+
+    /// Boxes over the application, under the panel: layout rects, clip rects and the hovered
+    /// node, each a floating, bordered leaf at last frame's rect. They take no input.
+    fn outlines(insp: *const Inspector, f: *Frame, prev: *const Tree) void {
+        // A zero-size floating group at the root's origin, so a child's offset is its position.
+        _ = f.open(.none, .{ .float = true });
+        for (0..insp.rows) |k| {
+            const i: u32 = @intCast(k);
+            const r = prev.rect(i);
+            if (insp.show_rects) box(f, r, insp.rect_color, .transparent);
+            const v = visRect(prev, i);
+            const clipped = !std.meta.eql(v, r) and v.w() > 0 and v.h() > 0;
+            if (insp.show_clips and clipped) box(f, v, insp.clip_color, .transparent);
+        }
+        if (insp.hovered != none) box(f, prev.rect(insp.hovered), insp.border, insp.hover_fill);
         f.close();
     }
 
@@ -117,6 +152,15 @@ pub fn under(t: *const Tree, n: u32, p: [2]f32) u32 {
     return found;
 }
 
+/// Row `i`'s layout rect cut down to its inherited clip: what is visible and hit-tested.
+pub fn visRect(t: *const Tree, i: u32) Rect {
+    return .{ .x0 = t.c.vis[0][i], .y0 = t.c.vis[1][i], .x1 = t.c.vis[2][i], .y1 = t.c.vis[3][i] };
+}
+
+fn box(f: *Frame, r: Rect, line: Color, fill: Color) void {
+    _ = f.leaf(.none, .{ .float = true, .offset = .{ r.x0, r.y0 }, .size = .{ .px(r.w()), .px(r.h()) }, .border = 1, .border_color = line, .fill = fill });
+}
+
 /// Parent links to the root: the root is depth 0.
 pub fn depth(t: *const Tree, i: u32) u32 {
     var d: u32 = 0;
@@ -126,7 +170,7 @@ pub fn depth(t: *const Tree, i: u32) u32 {
 }
 
 fn roleName(t: *const Tree, i: u32) []const u8 {
-    return @tagName(@as(types.Role, @enumFromInt(t.c.role[i])));
+    return @tagName(@as(types.Role, @fromBackingInt(@intCast(t.c.role[i]))));
 }
 
 // ---- tests: the inspector inside the example (src/shell/example.zig) -----------------------
@@ -195,13 +239,66 @@ test "inspector runs inside the example: the recording does what it did without 
     try testing.expectEqual(@as(u32, 4), host.app.layers);
     try testing.expectApproxEqAbs(@as(f32, 3), host.app.exposure, 0.01);
     // It inspected the application's rows only: the example's 18 rows with 4 layers (root,
-    // toolbar 8, body, sidebar 7, viewport), and its own panel starts right after them.
+    // toolbar 8, body, sidebar 7, viewport); its own rows (outlines, then the panel) follow.
     try testing.expectEqual(@as(u32, 18), host.insp.rows);
-    try testing.expectEqual(host.insp.own_first, ctx.trees[ctx.cur].find(id_panel));
+    try testing.expectEqual(host.insp.rows, host.insp.own_first);
+    try testing.expect(ctx.trees[ctx.cur].find(id_panel) > host.insp.own_first);
     // Drawn: the panel's border and face in the bottom-right corner, the app's sidebar untouched.
     try testing.expectEqual(host.insp.border, shell.fb.at(fb_w - 8 - 150, fb_h - 9));
     try testing.expectEqual(host.app.theme.panel, shell.fb.at(80, 590));
-    try testing.expectEqual(shell.background, shell.fb.at(400, 300));
+    // The pointer ended over the viewport (160, 50 .. 800, 600): it is outlined.
+    try testing.expectEqual(host.insp.border, shell.fb.at(160, 300));
+}
+
+test "inspector runs inside the example with layout and clip rects drawn" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: ExampleHost = .{ .insp = .{ .show_rects = true, .show_clips = true } };
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    iface.run(&shell, &ctx, &host);
+    try testing.expectEqual(null, shell.err);
+    try testing.expectEqual(@as(u32, 13), host.app.builds);
+    try testing.expectEqual(@as(u32, 1), host.app.resets);
+    try testing.expectEqual(@as(u32, 4), host.app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), host.app.exposure, 0.01);
+    // The Reset button (8, 8 .. 66, 42) is outlined; inside it is its face.
+    try testing.expectEqual(host.insp.rect_color, shell.fb.at(8, 30));
+    try testing.expectEqual(host.app.theme.control, shell.fb.at(10, 30));
+    // The checkboxes in the panel show what is on.
+    const t = &ctx.trees[ctx.cur];
+    try testing.expectEqual(@as(f32, 1), t.c.value[t.find(id_rects)]);
+    try testing.expectEqual(@as(f32, 1), t.c.value[t.find(id_clips)]);
+}
+
+/// A 100 x 100 clipping box holding a 200 x 50 child: the child is cut at x = 100.
+const ClipApp = struct {
+    pub fn build(_: *ClipApp, f: *Frame, _: *const iface.Events) void {
+        _ = f.open(.from("clipper"), .{ .size = .{ .px(100), .px(100) }, .clip = true });
+        _ = f.leaf(.from("wide"), .{ .size = .{ .px(200), .px(50) } });
+        f.close();
+    }
+};
+
+test "inspector: a clipped node shows its layout rect and its visible rect" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: struct {
+        app: ClipApp = .{},
+        insp: Inspector = .{ .show_rects = true, .show_clips = true },
+        pub fn build(h: anytype, f: *Frame, ev: *const iface.Events) void {
+            h.app.build(f, ev);
+            h.insp.build(f);
+        }
+    } = .{};
+    var shell = Fixture.shell("frame\nviewport 800 600\nframe\n");
+    iface.run(&shell, &ctx, &host);
+    try testing.expectEqual(@as(u32, 2), shell.presents);
+    const prev = &ctx.trees[ctx.cur ^ 1];
+    const wide = prev.find(.from("wide"));
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 0, .x1 = 200, .y1 = 50 }, prev.rect(wide));
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 0, .x1 = 100, .y1 = 50 }, visRect(prev, wide));
+    // The layout rect's right edge past the clip, the visible rect's right edge at it.
+    try testing.expectEqual(host.insp.rect_color, shell.fb.at(199, 25));
+    try testing.expectEqual(host.insp.clip_color, shell.fb.at(99, 25));
+    try testing.expectEqual(shell.background, shell.fb.at(150, 75));
 }
 
 test "inspector: names the node under the pointer, takes the pointer, hides on F12" {
