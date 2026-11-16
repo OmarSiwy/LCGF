@@ -513,13 +513,12 @@ fn rowWalk(comptime n: Spec, comptime name: []const u8, comptime next: *u32) ?u3
     return null;
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
-
-/// The test page: a toolbar with the trigger and a label, and the popover's panel with two
-/// labels, in both front ends.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with the trigger and a label, and the popover's panel with two
+/// labels, in both front ends, in theme `th`. The tests and the golden images
+/// (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
@@ -558,6 +557,30 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/popover.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "popover-rest", 0 },
+    .{ "popover-hover", 1 },
+    .{ "popover-open", 3 },
+    .{ "popover-panel", 5 },
+    .{ "popover-closed", 7 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -618,6 +641,46 @@ test "Popover: another theme restyles both front ends alike" {
     const panel = t.find(.from("details_panel"));
     try testing.expectEqual(th.panel.bitsOf(), t.c.look[panel].fill);
     try testing.expectEqual(t.rect(t.find(.from("details"))).y1 + 10, t.rect(panel).y0);
+}
+
+test "Popover: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var open: [12]bool = undefined;
+    var rows: [12]u32 = undefined;
+    var fills: [12]u32 = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.open, h.ui.signals.state.open);
+        open[k] = h.app.open;
+        rows[k] = t.len;
+        fills[k] = t.c.look[t.find(.from("details"))].fill;
+        if (k == 3) {
+            // The rects the replay's comments give.
+            try testing.expectEqual(Rect{ .x0 = 8, .y0 = 8, .x1 = 83, .y1 = 42 }, t.rect(t.find(.from("details"))));
+            try testing.expectEqual(Rect{ .x0 = 8, .y0 = 48, .x1 = 133, .y1 = 105 }, t.rect(t.find(.from("details_panel"))));
+            try testing.expectEqual(Rect{ .x0 = 0, .y0 = 0, .x1 = 800, .y1 = 600 }, t.rect(t.find(.from("details_scrim"))));
+        }
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, true, true, true, true, false, false, false, true, false }, &open);
+    try testing.expectEqualSlices(u32, &.{ 6, 6, 6, 10, 10, 10, 10, 6, 6, 6, 10, 6 }, &rows);
+    const c = Theme.default.controlFills();
+    // Rest, hot, held, then hot on the release frame; under the scrim it is not hot.
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, fills[0..4]);
+    try testing.expectEqual(c[0].bitsOf(), fills[4]);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test "dismiss, toggle, keyPressed: the behaviour as pure functions" {
