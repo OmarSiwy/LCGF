@@ -125,30 +125,49 @@ fn named(comptime n: Spec, comptime want: []const u8) bool {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The backdrop: over the whole viewport, centring the dialog.
+/// What the backdrop lays over the page: black at 55% opacity.
+pub const dim: Color = .rgba(0, 0, 0, 140);
+
+/// The backdrop: over the whole viewport, dimming the page, centring the dialog.
 pub fn backdropStyle(th: *const Theme, viewport: [2]f32) Style {
     _ = th;
-    return .{ .float = true, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .main = .center, .cross = .center };
+    return .{ .float = true, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .main = .center, .cross = .center, .fill = dim };
 }
 
-/// The dialog's panel.
+/// The dialog's panel: panel-coloured with the control outline, twice a button's padding and
+/// corner radius, its parts a double gap apart, at least 260 wide.
 pub fn panelStyle(th: *const Theme) Style {
-    _ = th;
-    return .{};
+    return .{
+        .pad = @splat(th.pad * 2),
+        .gap = th.gap * 2,
+        .min = .{ 260, 0 },
+        .fill = th.panel,
+        .border = 1,
+        .border_color = th.control_hot,
+        .radius = th.radius * 2,
+    };
 }
 
-/// The row of buttons.
+/// The row of buttons: across the dialog, the buttons at its end.
 pub fn rowStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x };
+    return .{ .dir = .x, .size = .{ .fill, .fit }, .gap = th.gap, .main = .end };
 }
 
-/// A button of the dialog: a theme button, by its response; `focused` draws the focus ring.
+/// A button of the dialog: a theme button, filled by its response; the focused one has the
+/// focus ring, a 2 px accent border (by table index, `ring`).
 pub fn buttonStyle(th: *const Theme, r: Response, focused: bool) Style {
-    _ = focused;
     var s = base.buttonStyle(th);
     s.fill = base.buttonFill(th, r);
+    const k = @intFromBool(focused);
+    s.border = ring_width[k];
+    s.border_color = ring(th)[k];
     return s;
+}
+
+/// The focus ring's width and colour, indexed by focus: none, then 2 px of the accent.
+pub const ring_width = [2]f32{ 0, 2 };
+pub fn ring(th: *const Theme) base.OnOff {
+    return .{ .transparent, th.accent };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -255,6 +274,35 @@ test "Dialog: the page agrees in both front ends, closed and open" {
     const p = t.rect(t.find(.from("delete_panel")));
     try testing.expectApproxEqAbs(@as(f32, 200), (p.x0 + p.x1) * 0.5, 1);
     try testing.expectApproxEqAbs(@as(f32, 150), (p.y0 + p.y1) * 0.5, 1);
+}
+
+test "backdropStyle, panelStyle, rowStyle, buttonStyle: the theme's tokens" {
+    const th: Theme = .default;
+    try testing.expectEqual(dim, backdropStyle(&th, .{ 400, 300 }).fill);
+    const p = panelStyle(&th);
+    try testing.expectEqual(th.panel, p.fill);
+    try testing.expectEqual(th.control_hot, p.border_color);
+    try testing.expectEqual([4]f32{ 16, 16, 16, 16 }, p.pad);
+    try testing.expectEqual(types.Align.end, rowStyle(&th).main);
+    const plain = buttonStyle(&th, .{}, false);
+    try testing.expectEqual(@as(f32, 0), plain.border);
+    try testing.expectEqual(th.control, plain.fill);
+    const focused = buttonStyle(&th, .{ .hovered = true }, true);
+    try testing.expectEqual(@as(f32, 2), focused.border);
+    try testing.expectEqual(th.accent, focused.border_color);
+    try testing.expectEqual(th.control_hot, focused.fill);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .accent = .rgb(0, 120, 60), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Dialog: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const t = try setState(&S.h, .{ .open = true, .focus = 1 });
+    try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("delete_panel"))].fill);
+    try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("delete_ok"))].border_color);
 }
 
 test "checkDialog: the state field and the buttons" {
