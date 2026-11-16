@@ -46,6 +46,11 @@ line, `pub const name = @import("dir/name.zig");`. `zig build test` runs every t
 the root, so a file that is not exported is neither compiled nor tested. Adding that line is the
 only edit a lane makes outside its home.
 
+**Adapters are the exception.** Code that calls a platform API or a C library on behalf of a tier
+(system font discovery in `src/text/fallback/`, the HarfBuzz shaping adapter in `src/text/shape/`)
+lives next to the tier-0 code it serves but is built as its own module over `lcgr` and is *not*
+exported from `src/lcgr.zig`, so the core never imports it.
+
 ## How the rule is checked
 
 - Tier 0 files import only `std` and other tier-0 files; review rejects anything else.
