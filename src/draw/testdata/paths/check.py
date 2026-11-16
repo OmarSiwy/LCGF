@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "..", "tools", "golden")
 from golden import compare, write_png  # noqa: E402
 
 # Tolerance in levels of 255 (golden.py's --tol). The two sides sample alike; what remains is
-# how far paths.zig's chords lie from the curve (paths_golden.zig flattens to 1/256 px) and
+# how far paths.zig's chords lie from the curve (paths_golden.zig flattens to 1/1024 px) and
 # rounding.
 TOL = 4
 

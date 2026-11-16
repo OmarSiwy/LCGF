@@ -2,7 +2,8 @@
 //! into columns the caller owns, and the caller sequences them:
 //!
 //! 1. `Path`: verbs (move, line, quadratic, cubic, close) and the points they consume.
-//! 2. `flatten`: the path as polylines, curves cut into chords.
+//! 2. `flatten`: the path as polylines, curves cut into chords. `stroke` turns polylines into
+//!    the outline of a stroke, more polylines, filled like any other.
 //! 3. `bounds`, `fill`, `coverage`: the pixel box of the polylines, then their 8-bit coverage
 //!    under a fill rule, into a `w * h` image the caller places (an atlas, a canvas).
 //!
@@ -281,6 +282,212 @@ const Flattener = struct {
         f.push(c[6], c[7]);
     }
 };
+
+/// How two segments of a stroke meet.
+pub const Join = enum(u8) {
+    /// Outer edges extended until they meet, or `bevel` past `Stroke.miter_limit`.
+    miter,
+    /// The outer corners joined by an arc around the vertex.
+    round,
+    /// The outer corners joined by a straight edge.
+    bevel,
+};
+
+/// How an open contour of a stroke ends.
+pub const Cap = enum(u8) {
+    /// At the end point.
+    butt,
+    /// A half disc past the end point (a whole disc is drawn; the other half is inside).
+    round,
+    /// Half the width past the end point.
+    square,
+};
+
+/// A stroke style. Lengths in px.
+pub const Stroke = struct {
+    width: f32,
+    join: Join = .miter,
+    cap: Cap = .butt,
+    /// Longest miter as a multiple of the width (SVG's stroke-miterlimit): a join whose miter
+    /// is longer becomes a bevel.
+    miter_limit: f32 = 4,
+};
+
+/// Points of a polygon that stays within `tolerance` px of a circle of radius `r`: the sagitta
+/// of a chord over angle 2 pi / n is r (1 - cos(pi / n)).
+pub fn discSteps(r: f32, tolerance: f32) u32 {
+    const c = std.math.clamp(1 - tolerance / @max(r, 1e-6), -1, 1);
+    const n = @ceil(std.math.pi / @max(std.math.acos(c), 1e-6));
+    return @intFromFloat(std.math.clamp(n, 4, max_curve_steps));
+}
+
+/// Rows `stroke` needs for `l` in style `st` at `tolerance`.
+pub fn strokeLen(l: *const Polyline, st: Stroke, tolerance: f32) struct { points: usize, contours: usize } {
+    const disc: usize = discSteps(st.width / 2, tolerance);
+    // A round join is a sector of at most half the disc: its centre, and up to disc / 2 + 1
+    // points on the arc.
+    const join_points: usize = if (st.join == .round) disc / 2 + 2 else 4;
+    const cap_points: usize = switch (st.cap) {
+        .butt => 0,
+        .square => 4,
+        .round => disc,
+    };
+    var points: usize = 0;
+    var contours: usize = 0;
+    var first: usize = 0;
+    for (l.end[0..l.contours], l.closed[0..l.contours]) |end, closed| {
+        const k = shape(end - first, closed);
+        points += 4 * k.segments + join_points * k.joins + @max(cap_points, disc) * k.caps;
+        contours += k.segments + k.joins + k.caps;
+        first = end;
+    }
+    return .{ .points = points, .contours = contours };
+}
+
+/// Pieces of a stroked contour of `m` points. A single point is a dot (only a round cap draws
+/// it); a closed contour needs at least two points.
+fn shape(m: usize, closed: bool) struct { segments: usize, joins: usize, caps: usize } {
+    if (m < 2) return .{ .segments = 0, .joins = 0, .caps = m };
+    if (closed) return .{ .segments = m, .joins = m, .caps = 0 };
+    return .{ .segments = m - 1, .joins = m - 2, .caps = 2 };
+}
+
+/// The outline of `l` stroked in style `st`, into `out` (emptied first; sized by `strokeLen`) as
+/// closed contours to fill under `Rule.nonzero`: one quadrilateral per segment, one piece per
+/// join and per cap, all wound the same way so their union is what fills. Overlap costs
+/// nothing under the nonzero rule, so no piece is clipped against another; round joins and caps
+/// are polygons within `tolerance` px of their circle.
+pub fn stroke(l: *const Polyline, st: Stroke, tolerance: f32, out: *Polyline) void {
+    out.points = 0;
+    out.contours = 0;
+    const hw = st.width / 2;
+    const disc = discSteps(hw, tolerance);
+    var first: usize = 0;
+    for (l.end[0..l.contours], l.closed[0..l.contours]) |end, closed| {
+        defer first = end;
+        const m = end - first;
+        const k = shape(m, closed);
+        const px = l.x[first..end];
+        const py = l.y[first..end];
+        if (m == 1) {
+            if (st.cap == .round) circle(out, px[0], py[0], hw, disc);
+            continue;
+        }
+        for (0..k.segments) |i| {
+            const j = (i + 1) % m;
+            quad(out, px[i], py[i], px[j], py[j], hw);
+        }
+        // Joins at every vertex of a closed contour, at the inner ones of an open one.
+        const j0: usize = @intFromBool(!closed);
+        for (j0..j0 + k.joins) |v| {
+            const a = (v + m - 1) % m;
+            const b = (v + 1) % m;
+            const d1 = unit(px[v] - px[a], py[v] - py[a]);
+            const d2 = unit(px[b] - px[v], py[b] - py[v]);
+            corner(out, px[v], py[v], d1, d2, hw, if (st.join == .miter) st.miter_limit else 0, if (st.join == .round) disc else 0);
+        }
+        if (k.caps == 0) continue;
+        // Outward directions at the two ends.
+        const ds = unit(px[0] - px[1], py[0] - py[1]);
+        const de = unit(px[m - 1] - px[m - 2], py[m - 1] - py[m - 2]);
+        for ([2][4]f32{ .{ px[0], py[0], ds[0], ds[1] }, .{ px[m - 1], py[m - 1], de[0], de[1] } }) |e| {
+            switch (st.cap) {
+                .butt => {},
+                .square => quad(out, e[0], e[1], e[0] + e[2] * hw, e[1] + e[3] * hw, hw),
+                .round => circle(out, e[0], e[1], hw, disc),
+            }
+        }
+    }
+}
+
+fn unit(dx: f32, dy: f32) [2]f32 {
+    const inv = 1 / @max(std.math.hypot(dx, dy), 1e-12);
+    return .{ dx * inv, dy * inv };
+}
+
+/// Appends one closed contour.
+fn piece(out: *Polyline, xs: []const f32, ys: []const f32) void {
+    std.debug.assert(out.points + xs.len <= out.x.len and out.contours < out.end.len);
+    @memcpy(out.x[out.points..][0..xs.len], xs);
+    @memcpy(out.y[out.points..][0..ys.len], ys);
+    out.points += @intCast(xs.len);
+    out.end[out.contours] = out.points;
+    out.closed[out.contours] = true;
+    out.contours += 1;
+}
+
+/// The rectangle of half-width `hw` around segment a-b. Its winding (negative area in x right,
+/// y down) is the one every stroke piece has.
+fn quad(out: *Polyline, ax: f32, ay: f32, bx: f32, by: f32, hw: f32) void {
+    const d = unit(bx - ax, by - ay);
+    const nx = -d[1] * hw;
+    const ny = d[0] * hw;
+    piece(out, &.{ ax + nx, bx + nx, bx - nx, ax - nx }, &.{ ay + ny, by + ny, by - ny, ay - ny });
+}
+
+/// A polygon of `n` points on the circle, angle decreasing so it winds like `quad`.
+fn circle(out: *Polyline, cx: f32, cy: f32, r: f32, n: u32) void {
+    std.debug.assert(out.points + n <= out.x.len and out.contours < out.end.len);
+    const step = -2 * std.math.pi / @as(f32, @floatFromInt(n));
+    for (0..n) |i| {
+        const a = step * @as(f32, @floatFromInt(i));
+        out.x[out.points + i] = cx + r * @cos(a);
+        out.y[out.points + i] = cy + r * @sin(a);
+    }
+    out.points += n;
+    out.end[out.contours] = out.points;
+    out.closed[out.contours] = true;
+    out.contours += 1;
+}
+
+/// A join at `p` from direction `d1` to `d2` (unit vectors): p, the outer corner of the first
+/// segment, then the tip, then the outer corner of the second. With `disc` > 0 the tip is an arc
+/// of the circle the disc polygon approximates, as many of its steps as the turn needs (round);
+/// else it is the miter point when its length is within `limit` widths and the corners'
+/// midpoint otherwise (a bevel; `limit` 0 always bevels), both computed and one selected. The
+/// corner order follows the turn so the piece winds like `quad`.
+fn corner(out: *Polyline, px: f32, py: f32, d1: [2]f32, d2: [2]f32, hw: f32, limit: f32, disc: u32) void {
+    const cross = d1[0] * d2[1] - d1[1] * d2[0];
+    const dot = std.math.clamp(d1[0] * d2[0] + d1[1] * d2[1], -1, 1);
+    // The outer side is away from the turn.
+    const s = simd.selF(cross > 0, -1, 1);
+    const n1 = [2]f32{ -d1[1] * hw * s, d1[0] * hw * s };
+    const n2 = [2]f32{ -d2[1] * hw * s, d2[0] * hw * s };
+    const a = [2]f32{ px + n1[0], py + n1[1] };
+    const b = [2]f32{ px + n2[0], py + n2[1] };
+    const left = s > 0;
+    const p1 = [2]f32{ simd.selF(left, a[0], b[0]), simd.selF(left, a[1], b[1]) };
+    const p3 = [2]f32{ simd.selF(left, b[0], a[0]), simd.selF(left, b[1], a[1]) };
+    if (disc > 0) {
+        // From p1 to p3 the angle around p decreases by the turn, as in `circle`.
+        const turn = std.math.acos(dot);
+        const k: u32 = @intFromFloat(@max(@ceil(turn / (2 * std.math.pi) * @as(f32, @floatFromInt(disc))), 1));
+        std.debug.assert(out.points + k + 2 <= out.x.len and out.contours < out.end.len);
+        const start = std.math.atan2(p1[1] - py, p1[0] - px);
+        const o = out.x[out.points..];
+        const oy = out.y[out.points..];
+        o[0] = px;
+        oy[0] = py;
+        for (0..k + 1) |i| {
+            const ang = start - turn * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(k));
+            o[i + 1] = px + hw * @cos(ang);
+            oy[i + 1] = py + hw * @sin(ang);
+        }
+        out.points += k + 2;
+        out.end[out.contours] = out.points;
+        out.closed[out.contours] = true;
+        out.contours += 1;
+        return;
+    }
+    // Miter length / width = 1 / cos(half the turn) = sqrt(2 / (1 + dot)).
+    const ok = 2 <= limit * limit * (1 + dot);
+    const k = 1 / (1 + dot);
+    const tip = [2]f32{
+        simd.selF(ok, px + (n1[0] + n2[0]) * k, (a[0] + b[0]) / 2),
+        simd.selF(ok, py + (n1[1] + n2[1]) * k, (a[1] + b[1]) / 2),
+    };
+    piece(out, &.{ px, p1[0], tip[0], p3[0] }, &.{ py, p1[1], tip[1], p3[1] });
+}
 
 /// The pixel rectangle an image covers: column `x`, row `y` of its top-left pixel, and its size.
 pub const Box = struct {
@@ -634,4 +841,100 @@ test "fill: rules differ where contours overlap with the same winding" {
     _, const eo = testRender(&l, .even_odd, t.scratch(), &acc, &img);
     try testing.expectEqual(0, eo[1 * 4 + 1]);
     try testing.expectEqual(255, eo[0]);
+}
+
+/// Twice the signed area of each contour of `l` (shoelace).
+fn testAreas(l: *const Polyline, out: []f32) []f32 {
+    var first: usize = 0;
+    for (l.end[0..l.contours], 0..) |end, c| {
+        var a: f32 = 0;
+        for (first..end) |i| {
+            const j = if (i + 1 == end) first else i + 1;
+            a += l.x[i] * l.y[j] - l.x[j] * l.y[i];
+        }
+        out[c] = a;
+        first = end;
+    }
+    return out[0..l.contours];
+}
+
+test "stroke: pieces per segment, join and cap, all wound the same way" {
+    var t: TestBuffers(8, 64) = .{};
+    var p = t.path();
+    p.moveTo(2, 2);
+    p.lineTo(20, 2);
+    p.lineTo(20, 14);
+    p.lineTo(4, 20);
+    var l = t.polyline();
+    flatten(&p, 0.25, &l);
+    var o: TestBuffers(64, 512) = .{};
+    for ([_]Join{ .miter, .round, .bevel }) |join| for ([_]Cap{ .butt, .round, .square }) |cap| {
+        const st: Stroke = .{ .width = 3, .join = join, .cap = cap };
+        var s = o.polyline();
+        const need = strokeLen(&l, st, 0.1);
+        stroke(&l, st, 0.1, &s);
+        try testing.expect(s.points <= need.points and s.contours <= need.contours);
+        // 3 segments, 2 joins, 2 caps unless butt.
+        try testing.expectEqual(@as(u32, if (cap == .butt) 5 else 7), s.contours);
+        var areas: [16]f32 = undefined;
+        for (testAreas(&s, &areas)) |a| try testing.expect(a < 0);
+        if (join == .round) {
+            // The first join turns down at (20, 2): its arc runs from the second segment's outer
+            // corner (21.5, 2) to the first one's (20, 0.5), angle decreasing.
+            const first = s.end[2];
+            const end = s.end[3];
+            try testing.expectApproxEqAbs(21.5, s.x[first + 1], 1e-4);
+            try testing.expectApproxEqAbs(2, s.y[first + 1], 1e-4);
+            try testing.expectApproxEqAbs(20, s.x[end - 1], 1e-4);
+            try testing.expectApproxEqAbs(0.5, s.y[end - 1], 1e-4);
+        }
+    };
+}
+
+test "stroke: a straight stroke fills its rectangle; a closed one gets no caps" {
+    var t: TestBuffers(8, 64) = .{};
+    var p = t.path();
+    p.moveTo(1, 3);
+    p.lineTo(7, 3);
+    var l = t.polyline();
+    flatten(&p, 0.25, &l);
+    var o: TestBuffers(16, 256) = .{};
+    var s = o.polyline();
+    stroke(&l, .{ .width = 2, .cap = .square }, 0.1, &s);
+    var acc: [128]f32 = undefined;
+    var img: [128]u8 = undefined;
+    const b, const px = testRender(&s, .nonzero, o.scratch(), &acc, &img);
+    try testing.expectEqual(Box{ .x = 0, .y = 2, .w = 8, .h = 2 }, b);
+    for (px) |c| try testing.expectEqual(255, c);
+
+    p.clear();
+    p.moveTo(0, 0);
+    p.lineTo(4, 0);
+    p.lineTo(4, 4);
+    p.close();
+    flatten(&p, 0.25, &l);
+    stroke(&l, .{ .width = 1, .cap = .round }, 0.1, &s);
+    try testing.expectEqual(6, s.contours);
+}
+
+test "stroke: a sharp miter past the limit becomes a bevel" {
+    var t: TestBuffers(8, 64) = .{};
+    var p = t.path();
+    // A 20-degree turn back: miter length 1 / sin(10 deg) = 5.8 widths.
+    p.moveTo(0, 0);
+    p.lineTo(20, 0);
+    p.lineTo(20 - 20 * @cos(std.math.degreesToRadians(20.0)), 20 * @sin(std.math.degreesToRadians(20.0)));
+    var l = t.polyline();
+    flatten(&p, 0.25, &l);
+    var o: TestBuffers(16, 256) = .{};
+    var s = o.polyline();
+    var right: [2]f32 = undefined;
+    for ([_]f32{ 10, 4 }, 0..) |limit, k| {
+        stroke(&l, .{ .width = 2, .miter_limit = limit }, 0.1, &s);
+        var hi: f32 = 0;
+        for (s.x[0..s.points]) |x| hi = @max(hi, x);
+        right[k] = hi;
+    }
+    try testing.expectApproxEqAbs(20 + 1.0 / @sin(std.math.degreesToRadians(10.0)) * @cos(std.math.degreesToRadians(10.0)), right[0], 1e-3);
+    try testing.expect(right[1] < 21.01);
 }

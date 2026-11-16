@@ -1,6 +1,8 @@
 # Path scenes for the golden images (src/draw/paths_golden.zig draws them, make.py makes the
 # references). `scene NAME W H` starts a canvas; `fill RULE RRGGBBAA` starts a shape filled
-# under RULE (nonzero, even_odd); then path verbs, SVG letters, absolute coordinates:
+# under RULE (nonzero, even_odd), or `stroke WIDTH JOIN CAP MITER_LIMIT RRGGBBAA` a stroked one
+# (JOIN miter, round, bevel; CAP butt, round, square); then path verbs, SVG letters, absolute
+# coordinates:
 # M x y, L x y, Q cx cy x y, C c0x c0y c1x c1y x y, Z.
 
 scene lines 48 48
@@ -109,3 +111,55 @@ M 20.5 110.5
 C 120 20 0 20 108.5 110.5
 Q 64 70 20.5 110.5
 Z
+
+# One zigzag per join, caps along the bottom; the sharp turn of the last zigzag passes the
+# miter limit and bevels.
+scene joins 96 64
+stroke 5 miter butt 4 ffffffff
+M 6.5 22
+L 18 6.3
+L 29.5 22
+L 41 6.3
+stroke 5 round butt 4 ff9050ff
+M 52.5 22
+L 64 6.3
+L 75.5 22
+L 87 6.3
+stroke 4.5 bevel butt 4 60c0ffff
+M 6.5 30.5
+L 30 34
+L 8 39.25
+stroke 4.5 miter butt 2 c0ff60ff
+M 50.5 30.5
+L 90 34
+L 52 39.25
+stroke 6 miter butt 4 ffffffff
+M 10.5 52
+L 26 52
+stroke 6 miter round 4 ffffffff
+M 40.5 52
+L 56 52
+stroke 6 miter square 4 ffffffff
+M 70.5 52
+L 86 52
+
+# Curves and closed contours: a cubic with round caps, a closed quadratic loop with miters, a
+# translucent rectangle whose stroke overlaps itself, and a dot.
+scene strokes 96 64
+stroke 3.5 round round 4 ff7090ff
+M 6.2 56
+C 20 -10 40 90 58 10.5
+stroke 2.25 miter butt 4 80ffb0ff
+M 64.5 8
+Q 92 8 90 30
+Q 70 34 64.5 8
+Z
+stroke 7 bevel butt 4 ffffff80
+M 60.5 40.5
+L 90.2 40.5
+L 90.2 58.3
+L 60.5 58.3
+Z
+stroke 5 round round 4 ffd040ff
+M 30.3 50.7
+L 30.3 50.7

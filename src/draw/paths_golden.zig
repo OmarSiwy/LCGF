@@ -13,14 +13,16 @@ const paths = lcgr.paths;
 const scenes = @embedFile("testdata/paths/scenes.txt");
 const bg = [3]f32{ 16, 16, 20 };
 /// Chord tolerance in px. Chords cut inside a curve, so the error does not cancel: 1/64 px
-/// moved edge pixels by up to 8 levels, 1/128 px by 5 where two curves share a pixel; at 1/256
-/// px every scene matches within 3 (check.py's TOL is 4).
-const tolerance = 1.0 / 256.0;
+/// moved edge pixels by up to 8 levels, 1/128 px by 5 where two curves share a pixel. A miter
+/// where a curve meets a corner takes the last chord's direction, not the tangent: at 1/256 px
+/// that put one tip 5 levels off. At 1/1024 px every scene matches within 3 (check.py's TOL is 4).
+const tolerance = 1.0 / 1024.0;
 
 const max_px = 128 * 128;
-const max_points = 4096;
+const max_points = 1 << 16;
 
-const Shape = struct { rule: paths.Rule, color: [4]u8 };
+/// A filled shape, or a stroked one when `stroke` is set (filled nonzero).
+const Shape = struct { rule: paths.Rule = .nonzero, stroke: ?paths.Stroke = null, color: [4]u8 };
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -32,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
 
-    const bufs = try gpa.create(paths.TestBuffers(512, max_points));
+    const bufs = try gpa.create(Buffers);
     defer gpa.destroy(bufs);
     var canvas: [max_px][3]f32 = undefined;
     var acc: [max_px + 64]f32 = undefined;
@@ -52,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
         const op = tok.next() orelse "";
         // A new shape, a new scene or the end draws the pending shape; a new scene or the end
         // writes the pending scene.
-        const ends_shape = line == null or std.mem.eql(u8, op, "fill") or std.mem.eql(u8, op, "scene");
+        const ends_shape = line == null or std.mem.eql(u8, op, "fill") or std.mem.eql(u8, op, "stroke") or std.mem.eql(u8, op, "scene");
         if (ends_shape) if (shape) |s| {
             draw(bufs, &path, s, w, h, &canvas, &acc, &img);
             shape = null;
@@ -83,6 +85,15 @@ pub fn main(init: std.process.Init) !void {
             _ = try std.fmt.hexToBytes(&color, tok.next().?);
             shape = .{ .rule = rule, .color = color };
             path.clear();
+        } else if (std.mem.eql(u8, op, "stroke")) {
+            const width = try std.fmt.parseFloat(f32, tok.next().?);
+            const join = std.meta.stringToEnum(paths.Join, tok.next().?) orelse return error.BadJoin;
+            const cap = std.meta.stringToEnum(paths.Cap, tok.next().?) orelse return error.BadCap;
+            const limit = try std.fmt.parseFloat(f32, tok.next().?);
+            var color: [4]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&color, tok.next().?);
+            shape = .{ .stroke = .{ .width = width, .join = join, .cap = cap, .miter_limit = limit }, .color = color };
+            path.clear();
         } else {
             var v: [6]f32 = undefined;
             var n: usize = 0;
@@ -100,11 +111,39 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = out.items });
 }
 
+/// The test columns plus a second polyline for stroke outlines.
+const Buffers = struct {
+    t: paths.TestBuffers(8192, max_points) = .{},
+    ox: [max_points]f32 = undefined,
+    oy: [max_points]f32 = undefined,
+    oend: [8192]u32 = undefined,
+    oclosed: [8192]bool = undefined,
+
+    fn path(b: *Buffers) paths.Path {
+        return b.t.path();
+    }
+    fn polyline(b: *Buffers) paths.Polyline {
+        return b.t.polyline();
+    }
+    fn scratch(b: *Buffers) paths.Scratch {
+        return b.t.scratch();
+    }
+    fn outline(b: *Buffers) paths.Polyline {
+        return .{ .x = &b.ox, .y = &b.oy, .end = &b.oend, .closed = &b.oclosed };
+    }
+};
+
 /// Rasterises `path` and composites it into the canvas: c * a * v + dst * (1 - a * v).
-fn draw(bufs: anytype, path: *const paths.Path, s: Shape, w: u32, h: u32, canvas: [][3]f32, acc: []f32, img: []u8) void {
+fn draw(bufs: *Buffers, path: *const paths.Path, s: Shape, w: u32, h: u32, canvas: [][3]f32, acc: []f32, img: []u8) void {
     var l = bufs.polyline();
-    std.debug.assert(paths.flattenLen(path, tolerance).points <= bufs.lx.len);
+    std.debug.assert(paths.flattenLen(path, tolerance).points <= bufs.t.lx.len);
     paths.flatten(path, tolerance, &l);
+    if (s.stroke) |st| {
+        var o = bufs.outline();
+        std.debug.assert(paths.strokeLen(&l, st, tolerance).points <= o.x.len);
+        paths.stroke(&l, st, tolerance, &o);
+        l = o;
+    }
     const b = paths.bounds(&l);
     std.debug.assert(paths.accLen(b) <= acc.len);
     paths.fill(&l, b, s.rule, bufs.scratch(), acc);
