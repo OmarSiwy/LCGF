@@ -28,6 +28,9 @@ pub const Seat = struct {
     /// Surface under the pointer, and the one with keyboard focus; 0 for none.
     pointer_focus: u32 = 0,
     key_focus: u32 = 0,
+    /// Surface the last finger went down on: every contact goes to its window.
+    /// ponytail: one window takes all fingers; split by surface if touch across windows matters.
+    touch_focus: u32 = 0,
     keymap: xkb.Keymap = .{},
     /// Depressed, latched and locked modifiers, ORed.
     mask: u32 = 0,
@@ -70,21 +73,28 @@ pub const Seat = struct {
         s.ntouches = n;
     }
 
-    /// This poll's input: held state plus what arrived since `begin`.
-    pub fn fill(s: *const Seat, in: *Input) void {
-        in.pointer = s.held.pointer;
-        in.buttons = s.held.buttons;
-        in.mods = s.held.mods;
-        in.keys = s.held.keys;
+    /// Which devices' input goes to the window being filled.
+    pub const Route = struct { pointer: bool, keyboard: bool, touch: bool };
+
+    /// This poll's input for one window: held state plus what arrived since `begin`, of the
+    /// devices routed to it; the others report nothing (no pointer, no keys).
+    pub fn fill(s: *const Seat, in: *Input, to: Route) void {
+        const none: Input = .{};
+        const p = if (to.pointer) &s.held else &none;
+        const k = if (to.keyboard) &s.held else &none;
+        in.pointer = p.pointer;
+        in.buttons = p.buttons;
+        in.mods = k.mods;
+        in.keys = k.keys;
         // The core's wheel is positive up (src/widgets/scroll.zig subtracts it); Wayland's is
         // positive down. A wheel with notches reports them; a touchpad reports pixels.
-        for (0..2) |k| {
-            in.wheel[k] = -@as(f32, @floatFromInt(s.v120[k])) / 120;
-            in.scroll[k] = if (s.v120[k] != 0) 0 else -s.px[k];
+        for (0..2) |a| {
+            in.wheel[a] = if (to.pointer) -@as(f32, @floatFromInt(s.v120[a])) / 120 else 0;
+            in.scroll[a] = if (!to.pointer or s.v120[a] != 0) 0 else -s.px[a];
         }
-        in.text = s.text[0..s.text_len];
-        in.events = s.events[0..s.nevents];
-        in.contacts = s.touches[0..s.ntouches];
+        in.text = if (to.keyboard) s.text[0..s.text_len] else "";
+        in.events = if (to.keyboard) s.events[0..s.nevents] else &.{};
+        in.contacts = if (to.touch) s.touches[0..s.ntouches] else &.{};
     }
 
     pub fn pointerEvent(s: *Seat, opcode: u16, a: *wire.Args) void {
@@ -241,7 +251,7 @@ pub const Seat = struct {
             0 => { // down: serial, time, surface, id, x, y
                 s.serial = a.uint();
                 _ = a.uint();
-                _ = a.uint();
+                s.touch_focus = a.uint();
                 const id = a.uint();
                 const pos: [2]f32 = .{ a.fixed(), a.fixed() };
                 if (s.ntouches == s.touches.len) return;

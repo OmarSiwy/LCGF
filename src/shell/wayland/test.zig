@@ -63,8 +63,16 @@ pub const Fake = struct {
     }
 
     pub fn configure(f: *Fake, c: *const Wayland, width: i32, height: i32) void {
-        f.send(c.toplevel, 0, .{ width, height, wire.Array{ .bytes = &.{} } });
-        f.send(c.xdg_surface, 0, .{f.nextSerial()});
+        f.configureWindow(c, 0, width, height);
+    }
+    pub fn configureWindow(f: *Fake, c: *const Wayland, k: u32, width: i32, height: i32) void {
+        const win = c.windows[k];
+        if (win.popup) {
+            f.send(win.role, 0, .{ @as(i32, 0), @as(i32, 0), width, height });
+        } else {
+            f.send(win.role, 0, .{ width, height, wire.Array{ .bytes = &.{} } });
+        }
+        f.send(win.xdg_surface, 0, .{f.nextSerial()});
         f.flush();
     }
 
@@ -198,7 +206,7 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     try testing.expect(fake.sent(.toplevel, 2) != null); // set_title
     try testing.expect(fake.sent(.surface, 6) != null); // commit
     try testing.expect(fake.sent(.surface, 1) == null); // no buffer before the first configure
-    try testing.expect(!shell.configured);
+    try testing.expect(!shell.windows[0].configured);
 
     // A ping is answered with a pong of the same serial.
     fake.send(shell.globals.get(.xdg_wm_base), 0, .{@as(u32, 77)});
@@ -207,7 +215,7 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     fake.pump(&shell);
     try testing.expectEqual(@as(u32, 77), fake.sent(.wm_base, 3).?.arg0);
     try testing.expectEqual(fake.serial, fake.sent(.xdg_surface, 4).?.arg0); // ack_configure
-    try testing.expect(shell.configured);
+    try testing.expect(shell.windows[0].configured);
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
     try testing.expect(out.status.ok());
     try testing.expectEqual(lcgr.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
@@ -235,7 +243,7 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     try testing.expectEqual(th.panel, fake.pixel(80, 760));
 
     // Close: the shell has no more frames.
-    fake.send(shell.toplevel, 1, .{});
+    fake.send(shell.windows[0].role, 1, .{});
     fake.flush();
     try testing.expectEqual(null, turn(&shell, &ctx, &app, &ev));
     try testing.expectEqual(null, shell.err);
@@ -288,7 +296,7 @@ test "wayland: pointer events replay the example's recording" {
     const p = shell.seat.pointer;
 
     // Click Reset, entering the window over it.
-    fake.send(p, 0, .{ fake.nextSerial(), shell.surface, wire.Fixed.from(37), wire.Fixed.from(25) });
+    fake.send(p, 0, .{ fake.nextSerial(), shell.windows[0].surface, wire.Fixed.from(37), wire.Fixed.from(25) });
     fake.flush();
     _ = turn(&shell, &ctx, &app, &ev).?;
     try testing.expectEqual([2]f32{ 37, 25 }, ev.in.pointer);
@@ -315,7 +323,7 @@ test "wayland: pointer events replay the example's recording" {
     try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
 
     // Leave the window: no pointer, and the frame after settles to idle.
-    fake.send(p, 1, .{ fake.nextSerial(), shell.surface });
+    fake.send(p, 1, .{ fake.nextSerial(), shell.windows[0].surface });
     fake.flush();
     _ = turn(&shell, &ctx, &app, &ev).?;
     try testing.expectEqual([2]f32{ -1, -1 }, ev.in.pointer);
@@ -375,7 +383,7 @@ test "wayland: keys become HID scancodes and the keymap's text, in order" {
     sendKeymap(&fake, k, @embedFile("testdata/de.xkb"));
     // Focus arrives with the A key (evdev 30) already held.
     const held = [_]u32{30};
-    fake.send(k, 1, .{ fake.nextSerial(), shell.surface, wire.Array{ .bytes = std.mem.sliceAsBytes(&held) } });
+    fake.send(k, 1, .{ fake.nextSerial(), shell.windows[0].surface, wire.Array{ .bytes = std.mem.sliceAsBytes(&held) } });
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expect(ev.in.keys.down(0x04));
@@ -416,7 +424,7 @@ test "wayland: keys become HID scancodes and the keymap's text, in order" {
     try testing.expectEqual(@as(usize, 0), ev.in.events.len);
     try testing.expect(ev.in.keys.down(0x19));
     // Losing focus lets go of everything.
-    fake.send(k, 2, .{ fake.nextSerial(), shell.surface });
+    fake.send(k, 2, .{ fake.nextSerial(), shell.windows[0].surface });
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expectEqual(Input.Keys{}, ev.in.keys);
@@ -434,14 +442,14 @@ test "wayland: touch points are contacts, and a quick tap is still seen" {
     fake.flush();
     _ = shell.poll(&ev);
     const t = shell.seat.touch;
-    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.surface, @as(i32, 5), wire.Fixed.from(10), wire.Fixed.from(20) });
+    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.windows[0].surface, @as(i32, 5), wire.Fixed.from(10), wire.Fixed.from(20) });
     fake.send(t, 3, .{});
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expectEqualSlices(Input.Contact, &.{.{ .id = 5, .pos = .{ 10, 20 } }}, ev.in.contacts);
     // A second finger taps (down and up before the poll) while the first moves.
     fake.send(t, 2, .{ @as(u32, 0), @as(i32, 5), wire.Fixed.from(11), wire.Fixed.from(22) });
-    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.surface, @as(i32, 6), wire.Fixed.from(50), wire.Fixed.from(60) });
+    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.windows[0].surface, @as(i32, 6), wire.Fixed.from(50), wire.Fixed.from(60) });
     fake.send(t, 1, .{ fake.nextSerial(), @as(u32, 0), @as(i32, 6) });
     fake.flush();
     _ = shell.poll(&ev);
@@ -465,7 +473,7 @@ test "wayland: fractional scale 1.5 draws 1200 x 900 pixels shown at 800 x 600" 
     _ = shell.poll(&ev);
     fake.pump(&shell);
     const frac = fake.sent(.fractional_manager, 1).?.arg0;
-    try testing.expect(shell.viewport != 0);
+    try testing.expect(shell.windows[0].viewport != 0);
     fake.send(frac, 0, .{@as(u32, 180)}); // preferred_scale: 1.5 * 120
     fake.configure(&shell, 800, 600);
     const out = turn(&shell, &ctx, &app, &ev).?;
@@ -497,7 +505,7 @@ test "wayland: without fractional scaling, the integer buffer scale" {
     var ev: Events = .{};
     fake.start(&shell, &core_globals);
     _ = shell.poll(&ev);
-    fake.send(shell.surface, 2, .{@as(i32, 2)}); // preferred_buffer_scale
+    fake.send(shell.windows[0].surface, 2, .{@as(i32, 2)}); // preferred_buffer_scale
     fake.configure(&shell, 400, 300);
     _ = turn(&shell, &ctx, &app, &ev).?;
     fake.pump(&shell);
@@ -519,11 +527,11 @@ test "wayland: before wl_surface v6, the scale of the output the window entered"
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expectEqual(@as(f32, 1), ev.in.scale); // not on that output yet
-    fake.send(shell.surface, 0, .{out}); // enter
+    fake.send(shell.windows[0].surface, 0, .{out}); // enter
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expectEqual(@as(f32, 3), ev.in.scale);
-    fake.send(shell.surface, 1, .{out}); // leave
+    fake.send(shell.windows[0].surface, 1, .{out}); // leave
     fake.flush();
     _ = shell.poll(&ev);
     try testing.expectEqual(@as(f32, 1), ev.in.scale);
@@ -548,7 +556,7 @@ test "wayland: the cursor the UI asks for, set again after each enter" {
     // Enter over Reset: the button's hand, with the enter's serial.
     const p = shell.seat.pointer;
     const enter = fake.nextSerial();
-    fake.send(p, 0, .{ enter, shell.surface, wire.Fixed.from(37), wire.Fixed.from(25) });
+    fake.send(p, 0, .{ enter, shell.windows[0].surface, wire.Fixed.from(37), wire.Fixed.from(25) });
     fake.flush();
     fake.logged = 0;
     _ = turn(&shell, &ctx, &app, &ev).?;
@@ -564,9 +572,9 @@ test "wayland: the cursor the UI asks for, set again after each enter" {
     try testing.expectEqual(@as(u32, 1), fake.sent(.cursor_device, 1).?.arg1);
 
     // Leave and come back at the same place: same shape, new serial, so it is sent again.
-    fake.send(p, 1, .{ fake.nextSerial(), shell.surface });
+    fake.send(p, 1, .{ fake.nextSerial(), shell.windows[0].surface });
     const again = fake.nextSerial();
-    fake.send(p, 0, .{ again, shell.surface, wire.Fixed.from(400), wire.Fixed.from(400) });
+    fake.send(p, 0, .{ again, shell.windows[0].surface, wire.Fixed.from(400), wire.Fixed.from(400) });
     fake.flush();
     fake.logged = 0;
     _ = shell.poll(&ev);
@@ -704,7 +712,7 @@ test "wayland: the input method follows wants_text, composes, then commits" {
     shell.apply(&.{ .wants_text = true, .ime_rect = field });
     fake.pump(&shell);
     try testing.expect(fake.sent(.text_input, 1) == null);
-    fake.send(ti, 0, .{shell.surface}); // enter
+    fake.send(ti, 0, .{shell.windows[0].surface}); // enter
     fake.flush();
     _ = shell.poll(&ev);
     shell.apply(&.{ .wants_text = true, .ime_rect = field });
@@ -753,7 +761,7 @@ test "wayland: a held key repeats at the compositor's rate, and wait wakes for i
     const k = shell.seat.keyboard;
     sendKeymap(&fake, k, @embedFile("testdata/de.xkb"));
     fake.send(k, 5, .{ @as(i32, 50), @as(i32, 40) }); // repeat_info: 50 per second after 40 ms
-    fake.send(k, 1, .{ fake.nextSerial(), shell.surface, wire.Array{ .bytes = &.{} } });
+    fake.send(k, 1, .{ fake.nextSerial(), shell.windows[0].surface, wire.Array{ .bytes = &.{} } });
     fake.send(k, 3, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 30), @as(u32, 1) }); // press A
     fake.flush();
     _ = shell.poll(&ev);
@@ -813,11 +821,11 @@ test "wayland: display pacing waits for the frame callback, and not forever" {
     _ = shell.poll(&ev);
     fake.configure(&shell, 800, 600);
     _ = turn(&shell, &ctx, &app, &ev).?;
-    try testing.expect(shell.frame_pending);
+    try testing.expect(shell.framePending());
     // The compositor showed the frame: the wait returns as soon as it says so.
     fake.pump(&shell);
     shell.wait(0, .display);
-    try testing.expect(!shell.frame_pending);
+    try testing.expect(!shell.framePending());
     // A hidden window gets no callback: the wait gives up after display_limit.
     fake.hold_frames = true;
     _ = turn(&shell, &ctx, &app, &ev).?;
@@ -825,6 +833,116 @@ test "wayland: display pacing waits for the frame callback, and not forever" {
     const t0 = shell.clock();
     shell.wait(0, .display);
     const slept = shell.clock() - t0;
-    try testing.expect(shell.frame_pending);
+    try testing.expect(shell.framePending());
     try testing.expect(slept >= Wayland.display_limit * 0.9 and slept < 2);
+}
+
+test "wayland: two windows, each with its own size, frames and share of the input" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var evs: [2]Events = .{ .{}, .{} };
+    fake.start(&shell, &seat_globals);
+    _ = shell.pollWindows(evs[0..1]);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 3)});
+    fake.configure(&shell, 800, 600);
+    _ = shell.pollWindows(evs[0..1]);
+    const k = shell.openWindow(.{ .title = "second", .size = .{ 300, 200 } }).?;
+    try testing.expectEqual(@as(u32, 1), k);
+    fake.pump(&shell);
+    try testing.expectEqual(shell.windows[1].role, fake.sent(.toplevel, 2).?.id); // set_title
+    fake.configureWindow(&shell, k, 0, 0); // the client picks: its own 300 x 200
+    try testing.expect(shell.pollWindows(&evs));
+    try testing.expect(shell.windows[1].configured);
+    try testing.expectEqual([2]f32{ 800, 600 }, evs[0].in.viewport);
+    try testing.expectEqual([2]f32{ 300, 200 }, evs[1].in.viewport);
+
+    // The second window draws its own frame into its own buffers.
+    var f = ctx.begin(&evs[1].in);
+    app.build(&f, &evs[1]);
+    const out = f.end(.{});
+    shell.presentWindow(k, &out);
+    fake.pump(&shell);
+    try testing.expectEqual([2]u32{ 300, 200 }, fake.committedSize());
+    try testing.expectEqual(app.theme.panel, fake.pixel(80, 190));
+
+    // The pointer over the second window, keys typed into it: the first sees neither.
+    const p = shell.seat.pointer;
+    fake.send(p, 0, .{ fake.nextSerial(), shell.windows[1].surface, wire.Fixed.from(30), wire.Fixed.from(40) });
+    fake.send(p, 3, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 0x110), @as(u32, 1) });
+    sendKeymap(&fake, shell.seat.keyboard, @embedFile("testdata/de.xkb"));
+    fake.send(shell.seat.keyboard, 1, .{ fake.nextSerial(), shell.windows[1].surface, wire.Array{ .bytes = &.{} } });
+    fake.send(shell.seat.keyboard, 3, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 30), @as(u32, 1) });
+    fake.flush();
+    _ = shell.pollWindows(&evs);
+    try testing.expectEqual([2]f32{ 30, 40 }, evs[1].in.pointer);
+    try testing.expect(evs[1].in.buttons.left);
+    try testing.expectEqualStrings("a", evs[1].in.text);
+    try testing.expectEqual([2]f32{ -1, -1 }, evs[0].in.pointer);
+    try testing.expect(!evs[0].in.buttons.left);
+    try testing.expectEqualStrings("", evs[0].in.text);
+
+    // The compositor closes the second; then the host frees its slot.
+    fake.send(shell.windows[1].role, 1, .{});
+    fake.flush();
+    try testing.expect(shell.pollWindows(&evs));
+    try testing.expect(shell.windows[1].closed);
+    fake.logged = 0;
+    shell.closeWindow(k);
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.dead, 0) != null); // the destructors
+    try testing.expect(!shell.windows[1].open);
+    try testing.expectEqual(@as(?u32, 1), shell.openWindow(.{}));
+}
+
+test "wayland: a popup below its anchor, placed and closed by the compositor" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var evs: [2]Events = .{ .{}, .{} };
+    fake.start(&shell, &seat_globals);
+    _ = shell.pollWindows(evs[0..1]);
+    fake.configure(&shell, 800, 600);
+    _ = shell.pollWindows(evs[0..1]);
+    fake.logged = 0;
+    const anchor: lcgr.types.Rect = .{ .x0 = 8, .y0 = 8, .x1 = 66, .y1 = 42 };
+    const k = shell.openPopup(.{ .parent = 0, .anchor = anchor, .size = .{ 300, 120 } }).?;
+    fake.pump(&shell);
+    // The positioner: size, anchor rect, below-left anchor growing right, then get_popup on
+    // the parent's xdg_surface.
+    const size = fake.sent(.dead, 1).?; // the positioner, destroyed after use
+    try testing.expectEqual([2]u32{ 300, 120 }, [2]u32{ size.arg0, size.arg1 });
+    const rect = fake.sent(.dead, 2).?;
+    try testing.expectEqual([2]u32{ 8, 8 }, [2]u32{ rect.arg0, rect.arg1 });
+    try testing.expectEqual(@as(u32, 6), fake.sent(.dead, 3).?.arg0);
+    const get = fake.sent(.xdg_surface, 2).?;
+    try testing.expectEqual(shell.windows[k].role, get.arg0);
+    try testing.expectEqual(shell.windows[0].xdg_surface, get.arg1);
+
+    // The compositor places it (flipped above, say) at its size.
+    fake.send(shell.windows[k].role, 0, .{ @as(i32, 8), @as(i32, -112), @as(i32, 300), @as(i32, 120) });
+    fake.send(shell.windows[k].xdg_surface, 0, .{fake.nextSerial()});
+    fake.flush();
+    _ = shell.pollWindows(&evs);
+    try testing.expect(shell.windows[k].configured);
+    try testing.expectEqual([2]i32{ 8, -112 }, shell.windows[k].at);
+    try testing.expectEqual([2]f32{ 300, 120 }, evs[1].in.viewport);
+    var f = ctx.begin(&evs[1].in);
+    app.build(&f, &evs[1]);
+    const out = f.end(.{});
+    shell.presentWindow(k, &out);
+    fake.pump(&shell);
+    try testing.expectEqual([2]u32{ 300, 120 }, fake.committedSize());
+
+    // A click outside dismisses it: popup_done.
+    fake.send(shell.windows[k].role, 1, .{});
+    fake.flush();
+    _ = shell.pollWindows(&evs);
+    try testing.expect(shell.windows[k].closed);
+    shell.closeWindow(k);
+    try testing.expect(shell.poll(&evs[0]));
 }

@@ -25,8 +25,8 @@ const op = struct {
 
 pub const Ime = struct {
     text_input: u32 = 0,
-    /// The window has the text input's focus (enter, until leave).
-    focused: bool = false,
+    /// Surface with the text input's focus (enter, until leave); 0 for none.
+    focus: u32 = 0,
     /// What was last sent: enabled, at `rect`.
     enabled: bool = false,
     rect: Rect = .{},
@@ -56,11 +56,11 @@ pub const Ime = struct {
     pub fn event(m: *Ime, w: *Wayland, opcode: u16, a: *wire.Args) void {
         switch (opcode) {
             0 => { // enter: surface. Enabled state does not survive a focus change.
-                m.focused = true;
+                m.focus = a.uint();
                 m.enabled = false;
             },
             1 => { // leave
-                m.focused = false;
+                m.focus = 0;
                 m.enabled = false;
                 m.shown_len = 0;
             },
@@ -93,7 +93,7 @@ pub const Ime = struct {
 
     /// Enables, moves or disables the input method to match the frame's request.
     pub fn apply(m: *Ime, w: *Wayland, wants: bool, rect: Rect) void {
-        if (m.text_input == 0 or !m.focused) return;
+        if (m.text_input == 0 or m.focus == 0) return;
         if (wants == m.enabled and (!wants or std.meta.eql(rect, m.rect))) return;
         if (wants) {
             if (!m.enabled) {

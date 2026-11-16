@@ -15,6 +15,10 @@
 //! next commit, never attach a buffer before the first configure, and answer `xdg_wm_base.ping`
 //! or the compositor marks the window unresponsive.
 //!
+//! One connection holds several windows (`windows`, toplevels and popups): the contract's
+//! calls act on the main window, slot 0, and `pollWindows`, `applyWindow` and
+//! `presentWindow` on any.
+//!
 //! Linux only (sockets, memfd, eventfd). Built as its own module over `lcgr` (`zig build
 //! wayland`), not exported from src/lcgr.zig, like the GL ES back end.
 
@@ -60,6 +64,8 @@ pub const Kind = enum(u8) {
     surface,
     xdg_surface,
     toplevel,
+    popup,
+    positioner,
     seat,
     pointer,
     keyboard,
@@ -117,22 +123,37 @@ const op = struct {
     const pool_create_buffer = 0;
     const pool_destroy = 1;
     const buffer_destroy = 0;
+    const surface_destroy = 0;
     const surface_attach = 1;
     const surface_frame = 3;
     const surface_commit = 6;
     const surface_set_buffer_scale = 8;
     const surface_damage_buffer = 9;
     const viewporter_get_viewport = 1;
+    const viewport_destroy = 0;
     const viewport_set_destination = 2;
+    const fractional_destroy = 0;
     const fractional_get_fractional_scale = 1;
     const cursor_manager_get_pointer = 1;
     const cursor_device_set_shape = 1;
+    const wm_base_create_positioner = 1;
     const wm_base_get_xdg_surface = 2;
     const wm_base_pong = 3;
+    const positioner_destroy = 0;
+    const positioner_set_size = 1;
+    const positioner_set_anchor_rect = 2;
+    const positioner_set_anchor = 3;
+    const positioner_set_gravity = 4;
+    const positioner_set_constraint_adjustment = 5;
+    const xdg_surface_destroy = 0;
     const xdg_surface_get_toplevel = 1;
+    const xdg_surface_get_popup = 2;
     const xdg_surface_ack_configure = 4;
+    const toplevel_destroy = 0;
     const toplevel_set_title = 2;
     const toplevel_set_app_id = 3;
+    const popup_destroy = 0;
+    const popup_grab = 1;
     const seat_get_pointer = 0;
     const seat_get_keyboard = 1;
     const seat_get_touch = 2;
@@ -141,6 +162,65 @@ const op = struct {
 /// `wl_shm` format: 32-bit ARGB, premultiplied, as one little-endian word: `sw`'s `.bgra8`.
 const argb8888 = 0;
 
+/// Windows one connection can hold, toplevels and popups together.
+pub const max_windows = 8;
+
+/// One surface with an xdg role: a toplevel or a popup. Its fields are the compositor's view
+/// of it; the host reads `configured`, `closed`, `size` and `scale`.
+pub const Window = struct {
+    /// The slot holds a window (until `closeWindow`).
+    open: bool = false,
+    surface: u32 = 0,
+    xdg_surface: u32 = 0,
+    /// The xdg_toplevel or xdg_popup.
+    role: u32 = 0,
+    popup: bool = false,
+    /// Set when the compositor scales fractionally (wp_viewporter and wp_fractional_scale_v1).
+    viewport: u32 = 0,
+    fractional: u32 = 0,
+    /// The compositor sends wl_surface.preferred_buffer_scale, so outputs are not consulted.
+    preferred: bool = false,
+    /// Outputs (`Wayland.outputs` rows) the surface is on, one bit each.
+    on: u8 = 0,
+    /// The first configure arrived: `present` may attach buffers.
+    configured: bool = false,
+    /// The compositor closed it (toplevel close, popup_done).
+    closed: bool = false,
+    /// Size from the last role configure not yet acked; 0 lets the client choose.
+    pending: [2]i32 = .{ 0, 0 },
+    /// Size in logical pixels.
+    size: [2]f32 = .{ 0, 0 },
+    /// A popup's position relative to its parent, logical pixels, from its configure.
+    at: [2]i32 = .{ 0, 0 },
+    /// Physical pixels per logical pixel.
+    scale: f32 = 1,
+    shm: Shm = .{},
+    /// A frame was committed and its frame callback (`frame`) has not come yet.
+    frame: u32 = 0,
+    /// Held input of this window, carried from poll to poll.
+    in: Input = .{},
+};
+
+/// How a popup sits next to the rectangle it belongs to (xdg_positioner): below it, growing
+/// right, slid or flipped by the compositor to stay on screen.
+pub const PopupOptions = struct {
+    /// The parent window's slot.
+    parent: u32,
+    /// What the popup is for (a menu button, a combo box), in the parent's logical pixels.
+    anchor: lcgr.types.Rect,
+    size: [2]f32,
+    /// Take the seat's input until the popup closes (a menu). Needs a recent input event.
+    grab: bool = false,
+    /// How the compositor may move it to keep it on screen (xdg_positioner
+    /// constraint_adjustment): slide along x and y, flip above the anchor.
+    adjust: u32 = slide_x | slide_y | flip_y,
+
+    pub const slide_x = 1;
+    pub const slide_y = 2;
+    pub const flip_x = 4;
+    pub const flip_y = 8;
+};
+
 pub const Wayland = struct {
     conn: wire.Conn,
     kinds: [max_objects]Kind = @splat(.free),
@@ -148,29 +228,13 @@ pub const Wayland = struct {
     globals: std.enums.EnumArray(Global, u32) = .initFill(0),
     registry: u32 = 0,
     sync: u32 = 0,
-    surface: u32 = 0,
-    xdg_surface: u32 = 0,
-    toplevel: u32 = 0,
-    /// Set when the compositor scales fractionally (wp_viewporter and wp_fractional_scale_v1).
-    viewport: u32 = 0,
-    /// The compositor sends wl_surface.preferred_buffer_scale, so outputs are not consulted.
-    preferred: bool = false,
-    outputs: [8]struct { id: u32, scale: i32 = 1, on: bool = false } = undefined,
+    /// Slot 0 is the main window, created at start-up; `openWindow` and `openPopup` add more.
+    windows: [max_windows]Window = @splat(.{}),
+    outputs: [8]struct { id: u32, scale: i32 = 1 } = undefined,
     nout: u32 = 0,
-    /// The first configure arrived: `present` may attach buffers.
-    configured: bool = false,
-    /// The compositor asked to close the window, or the connection failed (`err`).
+    /// The connection failed (`err`).
     closed: bool = false,
     err: ?Error = null,
-    /// Size from the last `xdg_toplevel.configure` not yet acked; 0 lets the client choose.
-    pending: [2]i32 = .{ 0, 0 },
-    /// Window size in logical pixels.
-    size: [2]f32,
-    /// Physical pixels per logical pixel.
-    scale: f32 = 1,
-    shm: Shm = .{},
-    /// Held input, carried from frame to frame.
-    in: Input = .{},
     seat: Seat = .{},
     /// Clipboard (data.zig).
     data: Data = .{},
@@ -182,8 +246,6 @@ pub const Wayland = struct {
     cursor_device: u32 = 0,
     /// Clock of `Input.time`: `init` is time 0.
     t0: linux.timespec,
-    /// A frame was committed and its frame callback has not come yet.
-    frame_pending: bool = false,
     /// Wakes `wait` from another thread (`wake`).
     wake_fd: i32,
     woken: std.atomic.Value(bool) = .init(false),
@@ -220,7 +282,6 @@ pub const Wayland = struct {
     pub fn init(fd: i32, options: Options, buf: Buffers) Wayland {
         var w: Wayland = .{
             .conn = .{ .fd = fd },
-            .size = options.size,
             .options = options,
             .glyphs = buf,
             .t0 = monotonic(),
@@ -239,25 +300,40 @@ pub const Wayland = struct {
     /// that has nothing else to do meanwhile.
     pub fn connect(fd: i32, options: Options, buf: Buffers) Error!Wayland {
         var w = init(fd, options, buf);
-        while (!w.configured and !w.closed) {
+        while (!w.windows[0].configured and !w.closed) {
             w.dispatch();
-            if (!w.configured and !w.closed) _ = w.sleep(-1);
+            if (!w.windows[0].configured and !w.closed) _ = w.sleep(-1);
         }
         if (w.err) |e| return e;
         return w;
     }
 
     pub fn deinit(w: *Wayland) void {
-        w.shm.unmap();
+        for (&w.windows) |*win| win.shm.unmap();
         w.data.deinit();
         w.conn.close();
         _ = linux.close(w.wake_fd);
     }
 
-    /// Drains the socket into `ev`. False once the window is closed or the connection failed.
-    /// Events that arrived during a `wait` count toward this poll: per-poll input is cleared
-    /// after it is handed out, not before.
+    /// The main window (slot 0).
+    pub fn main(w: *Wayland) *Window {
+        return &w.windows[0];
+    }
+
+    /// The contract's poll, for the main window: drains the socket into `ev`. False once the
+    /// main window is closed or the connection failed. With more than one window, use
+    /// `pollWindows`, which hands every window its share of one round of events.
     pub fn poll(w: *Wayland, ev: *Events) bool {
+        return w.pollWindows((ev)[0..1]) and !w.windows[0].closed;
+    }
+
+    /// Drains the socket and fills `evs[k]` for window slot `k`. The pointer's events go to the
+    /// window it is over, the keyboard's (and typed, pasted and composed text) to the one with
+    /// keyboard focus, the fingers to the one the last finger went down on; a device with no
+    /// focus reports to the main window. Events that arrived during a `wait` count toward this
+    /// poll: per-poll input is cleared after it is handed out. False once the connection
+    /// failed or every window is closed.
+    pub fn pollWindows(w: *Wayland, evs: []Events) bool {
         w.dispatch();
         w.data.bind(w);
         w.ime.bind(w);
@@ -268,15 +344,27 @@ pub const Wayland = struct {
         _ = w.woken.swap(false, .acquire);
         w.drainWake();
         w.polls += 1;
-        w.in.viewport = w.size;
-        w.in.scale = w.scale;
-        w.in.dt = @floatCast(t - w.in.time);
-        w.in.time = t;
-        w.seat.fill(&w.in);
-        w.seat.begin();
-        ev.in = w.in;
-        ev.composition = w.ime.composition();
-        return !w.closed;
+        const s = &w.seat;
+        for (evs, w.windows[0..evs.len]) |*ev, *win| {
+            const in = &win.in;
+            in.viewport = win.size;
+            in.scale = win.scale;
+            in.dt = @floatCast(t - in.time);
+            in.time = t;
+            const at = win.surface;
+            s.fill(in, .{ .pointer = w.owns(s.pointer_focus, at), .keyboard = w.owns(s.key_focus, at), .touch = w.owns(s.touch_focus, at) });
+            ev.in = in.*;
+            ev.composition = if (w.owns(w.ime.focus, at)) w.ime.composition() else .{};
+        }
+        s.begin();
+        var any = false;
+        for (w.windows) |win| any = any or (win.open and !win.closed);
+        return !w.closed and any;
+    }
+
+    /// Whether events focused on `focus` (a surface, 0 for none) belong to `surface`.
+    fn owns(w: *const Wayland, focus: u32, surface: u32) bool {
+        return focus == surface or (focus == 0 and surface == w.windows[0].surface);
     }
 
     /// Seconds since `init`.
@@ -284,21 +372,28 @@ pub const Wayland = struct {
         return elapsed(w.t0, monotonic());
     }
 
-    /// Applies the frame's cursor through wp_cursor_shape_v1. A shape holds only while the
-    /// pointer stays in the window, so it is sent again after each enter.
+    /// The contract's apply, for the main window.
     pub fn apply(w: *Wayland, p: *const Platform) void {
+        w.applyWindow(0, p);
+    }
+
+    /// Applies window `k`'s frame effects. The cursor (wp_cursor_shape_v1) is set while the
+    /// pointer is over that window, and again after each enter, since a shape only holds until
+    /// the pointer leaves; the input method follows the window with its focus.
+    pub fn applyWindow(w: *Wayland, k: u32, p: *const Platform) void {
         const s = &w.seat;
+        const surface = w.windows[k].surface;
         if (w.cursor_device == 0 and s.pointer != 0 and w.globals.get(.wp_cursor_shape_manager_v1) != 0) {
             w.cursor_device = w.new(.cursor_device);
             w.request(w.globals.get(.wp_cursor_shape_manager_v1), op.cursor_manager_get_pointer, .{ w.cursor_device, s.pointer });
         }
-        if (s.pointer_focus != 0 and (p.cursor != w.cursor or s.enter_serial != w.cursor_serial)) {
+        if (s.pointer_focus != 0 and s.pointer_focus == surface and (p.cursor != w.cursor or s.enter_serial != w.cursor_serial)) {
             w.request(w.cursor_device, op.cursor_device_set_shape, .{ s.enter_serial, cursor_shapes.get(p.cursor) });
             w.cursor = p.cursor;
             w.cursor_serial = s.enter_serial;
         }
         w.data.set(w, p.clipboard);
-        w.ime.apply(w, p.wants_text, p.ime_rect);
+        if (w.ime.focus == surface) w.ime.apply(w, p.wants_text, p.ime_rect);
         w.flush();
     }
 
@@ -312,40 +407,107 @@ pub const Wayland = struct {
         return ok;
     }
 
-    /// Draws the frame into a free shared-memory buffer and commits it. Before the first
-    /// configure there is nothing to draw into yet, so the frame is skipped.
+    /// The contract's present, for the main window.
     pub fn present(w: *Wayland, out: *const Output) void {
-        if (!w.configured or w.closed) return;
-        const px = physical(w.size, w.scale);
-        if (px[0] != w.shm.width or px[1] != w.shm.height) w.resizeBuffers(px) catch |e| return w.fail(e);
-        const slot = for (0..2) |k| {
-            if (!w.shm.busy[k]) break k;
+        w.presentWindow(0, out);
+    }
+
+    /// Draws window `k`'s frame into a free shared-memory buffer and commits it. Before the
+    /// window's first configure there is nothing to draw into yet, so the frame is skipped.
+    pub fn presentWindow(w: *Wayland, k: u32, out: *const Output) void {
+        const win = &w.windows[k];
+        if (!win.configured or win.closed or w.closed) return;
+        const px = physical(win.size, win.scale);
+        if (px[0] != win.shm.width or px[1] != win.shm.height) w.resizeBuffers(win, px) catch |e| return w.fail(e);
+        const slot = for (0..2) |b| {
+            if (!win.shm.busy[b]) break b;
         } else {
             w.dropped += 1;
             return;
         };
-        var fb = w.shm.framebuffer(slot);
+        var fb = win.shm.framebuffer(slot);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, w.scale);
+        w.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, win.scale);
         fb.clear(w.background);
         render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
-        w.shm.busy[slot] = true;
-        w.request(w.surface, op.surface_attach, .{ w.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
+        win.shm.busy[slot] = true;
+        w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
         // Fractional scale draws `px` pixels and has the compositor show them at the logical
         // size; the integer fallback (wl_surface.preferred_buffer_scale) tells it the factor.
-        if (w.viewport != 0) {
-            w.request(w.viewport, op.viewport_set_destination, .{ @as(i32, @intFromFloat(w.size[0])), @as(i32, @intFromFloat(w.size[1])) });
+        if (win.viewport != 0) {
+            w.request(win.viewport, op.viewport_set_destination, .{ @as(i32, @intFromFloat(win.size[0])), @as(i32, @intFromFloat(win.size[1])) });
         } else {
-            w.request(w.surface, op.surface_set_buffer_scale, .{@as(i32, @intFromFloat(w.scale))});
+            w.request(win.surface, op.surface_set_buffer_scale, .{@as(i32, @intFromFloat(win.scale))});
         }
-        w.request(w.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
+        w.request(win.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
         // Ask when this frame is shown: `wait` paces animations to it.
-        w.request(w.surface, op.surface_frame, .{w.new(.frame)});
-        w.frame_pending = true;
-        w.request(w.surface, op.surface_commit, .{});
+        if (win.frame == 0) {
+            win.frame = w.new(.frame);
+            w.request(win.surface, op.surface_frame, .{win.frame});
+        }
+        w.request(win.surface, op.surface_commit, .{});
         w.flush();
         w.presents += 1;
+    }
+
+    /// Opens another toplevel window; its slot, or null when all are taken. It is ready once
+    /// `windows[k].configured`.
+    pub fn openWindow(w: *Wayland, options: Options) ?u32 {
+        const k = w.freeSlot() orelse return null;
+        w.createToplevel(k, options);
+        w.flush();
+        return k;
+    }
+
+    /// Opens a popup (a menu, a combo box's list, a tooltip) next to `o.anchor` in window
+    /// `o.parent`; its slot, or null when all are taken. The compositor places it and may
+    /// close it (`closed`, after popup_done); close popups before their parent, the topmost
+    /// first.
+    pub fn openPopup(w: *Wayland, o: PopupOptions) ?u32 {
+        const parent = &w.windows[o.parent];
+        if (!parent.open) return null;
+        const k = w.freeSlot() orelse return null;
+        const win = w.createSurface(k, o.size);
+        const pos = w.new(.positioner);
+        const wm = w.globals.get(.xdg_wm_base);
+        w.request(wm, op.wm_base_create_positioner, .{pos});
+        w.request(pos, op.positioner_set_size, .{ @as(i32, @intFromFloat(o.size[0])), @as(i32, @intFromFloat(o.size[1])) });
+        const r = o.anchor;
+        w.request(pos, op.positioner_set_anchor_rect, .{ @as(i32, @intFromFloat(r.x0)), @as(i32, @intFromFloat(r.y0)), @as(i32, @intFromFloat(@max(r.w(), 1))), @as(i32, @intFromFloat(@max(r.h(), 1))) });
+        w.request(pos, op.positioner_set_anchor, .{@as(u32, 6)}); // bottom_left
+        w.request(pos, op.positioner_set_gravity, .{@as(u32, 8)}); // bottom_right
+        w.request(pos, op.positioner_set_constraint_adjustment, .{o.adjust});
+        win.role = w.new(.popup);
+        win.popup = true;
+        w.request(win.xdg_surface, op.xdg_surface_get_popup, .{ win.role, parent.xdg_surface, pos });
+        w.destroy(pos, op.positioner_destroy);
+        if (o.grab) w.request(win.role, op.popup_grab, .{ w.globals.get(.wl_seat), w.seat.serial });
+        w.request(win.surface, op.surface_commit, .{});
+        w.flush();
+        return k;
+    }
+
+    /// Destroys window `k` and frees its slot.
+    pub fn closeWindow(w: *Wayland, k: u32) void {
+        const win = &w.windows[k];
+        if (!win.open) return;
+        w.destroy(win.role, if (win.popup) op.popup_destroy else op.toplevel_destroy);
+        w.destroy(win.xdg_surface, op.xdg_surface_destroy);
+        if (win.viewport != 0) w.destroy(win.viewport, op.viewport_destroy);
+        if (win.fractional != 0) w.destroy(win.fractional, op.fractional_destroy);
+        for (win.shm.buffers) |b| if (b != 0) w.destroy(b, op.buffer_destroy);
+        if (win.shm.pool != 0) w.destroy(win.shm.pool, op.pool_destroy);
+        w.destroy(win.surface, op.surface_destroy);
+        win.shm.unmap();
+        win.* = .{};
+        w.flush();
+    }
+
+    fn freeSlot(w: *const Wayland) ?u32 {
+        if (w.closed or !w.windows[0].open) return null;
+        for (w.windows, 0..) |win, k| if (!win.open) return @intCast(k);
+        return null;
     }
 
     /// Sleeps until the compositor sends something, `wake` is called, `seconds` pass, or the
@@ -355,7 +517,7 @@ pub const Wayland = struct {
     pub fn wait(w: *Wayland, seconds: f32, pace: Pace) void {
         w.flush();
         const start = w.clock();
-        const display = pace == .display and w.frame_pending;
+        const display = pace == .display and w.framePending();
         const limit: f64 = if (display) @max(seconds, display_limit) else seconds;
         const until = @min(start + limit, w.seat.repeat_at);
         while (!w.closed and !w.woken.load(.acquire)) {
@@ -366,12 +528,18 @@ pub const Wayland = struct {
             if (!display) return;
             // Pacing: handle what came (input waits for the next poll), stop when the frame is.
             w.dispatch();
-            if (!w.frame_pending) return;
+            if (!w.framePending()) return;
         }
     }
 
     /// The longest a `.display` wait blocks for a frame callback.
     pub const display_limit = 0.1;
+
+    /// Some window committed a frame that the compositor has not shown yet.
+    pub fn framePending(w: *const Wayland) bool {
+        for (w.windows) |win| if (win.frame != 0) return true;
+        return false;
+    }
 
     /// Thread-safe: ends a `wait` in progress and has the next `poll` report a frame.
     pub fn wake(w: *Wayland) void {
@@ -408,6 +576,12 @@ pub const Wayland = struct {
         w.flush();
     }
 
+    /// The window whose `field` is `id`.
+    fn windowBy(w: *Wayland, comptime field: []const u8, id: u32) ?*Window {
+        for (&w.windows) |*win| if (win.open and @field(win, field) == id) return win;
+        return null;
+    }
+
     fn handle(w: *Wayland, m: wire.Msg) void {
         var a = m.args();
         // Objects the compositor created (from 0xff000000) are data offers.
@@ -441,21 +615,35 @@ pub const Wayland = struct {
             },
             .sync => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
-                w.createWindow();
+                inline for (.{ .wl_compositor, .wl_shm, .xdg_wm_base }) |g| {
+                    if (w.globals.get(g) == 0) return w.fail(error.MissingGlobal);
+                }
+                w.createToplevel(0, w.options);
             },
             .wm_base => if (m.opcode == 0) w.request(m.id, op.wm_base_pong, .{a.uint()}),
             .xdg_surface => if (m.opcode == 0) {
+                const win = w.windowBy("xdg_surface", m.id) orelse return;
                 w.request(m.id, op.xdg_surface_ack_configure, .{a.uint()});
-                if (w.pending[0] > 0 and w.pending[1] > 0) w.size = .{ @floatFromInt(w.pending[0]), @floatFromInt(w.pending[1]) };
-                w.configured = true;
+                if (win.pending[0] > 0 and win.pending[1] > 0) win.size = .{ @floatFromInt(win.pending[0]), @floatFromInt(win.pending[1]) };
+                win.configured = true;
             },
-            .toplevel => switch (m.opcode) {
-                0 => w.pending = .{ a.int(), a.int() }, // configure: width, height, states
-                1 => w.closed = true,
-                else => {},
+            .toplevel, .popup => {
+                const win = w.windowBy("role", m.id) orelse return;
+                switch (m.opcode) {
+                    0 => if (kind == .toplevel) { // configure: width, height, states
+                        win.pending = .{ a.int(), a.int() };
+                    } else { // configure: x, y, width, height
+                        win.at = .{ a.int(), a.int() };
+                        win.pending = .{ a.int(), a.int() };
+                    },
+                    1 => win.closed = true, // close, popup_done
+                    else => {},
+                }
             },
             .buffer => if (m.opcode == 0) { // release
-                for (0..2) |k| w.shm.busy[k] = w.shm.busy[k] and w.shm.buffers[k] != m.id;
+                for (&w.windows) |*win| {
+                    for (0..2) |b| win.shm.busy[b] = win.shm.busy[b] and win.shm.buffers[b] != m.id;
+                }
             },
             .seat => if (m.opcode == 0) { // capabilities: pointer 1, keyboard 2, touch 4
                 const caps = a.uint();
@@ -474,35 +662,40 @@ pub const Wayland = struct {
             .pointer => w.seat.pointerEvent(m.opcode, &a),
             .keyboard => w.seat.keyboardEvent(m.opcode, &a, &w.conn),
             .touch => w.seat.touchEvent(m.opcode, &a),
-            // preferred_buffer_scale: the integer scale, used without fractional scaling.
-            .surface => switch (m.opcode) {
-                0, 1 => { // enter, leave: output
-                    const id = a.uint();
-                    for (w.outputs[0..w.nout]) |*o| o.on = if (o.id == id) m.opcode == 0 else o.on;
-                    w.outputScale();
-                },
-                2 => { // preferred_buffer_scale
-                    w.preferred = true;
-                    if (w.viewport == 0) w.scale = @floatFromInt(@max(a.int(), 1));
-                },
-                else => {},
+            .surface => {
+                const win = w.windowBy("surface", m.id) orelse return;
+                switch (m.opcode) {
+                    0, 1 => { // enter, leave: output
+                        const id = a.uint();
+                        for (w.outputs[0..w.nout], 0..) |o, k| {
+                            const bit = @as(u8, 1) << @intCast(k);
+                            if (o.id == id) win.on = if (m.opcode == 0) win.on | bit else win.on & ~bit;
+                        }
+                        w.outputScale(win);
+                    },
+                    2 => { // preferred_buffer_scale: the integer scale, without fractional scaling
+                        win.preferred = true;
+                        if (win.viewport == 0) win.scale = @floatFromInt(@max(a.int(), 1));
+                    },
+                    else => {},
+                }
             },
             .output => if (m.opcode == 3) { // scale
-                const id = m.id;
                 const factor = a.int();
-                for (w.outputs[0..w.nout]) |*o| o.scale = if (o.id == id) @max(factor, 1) else o.scale;
-                w.outputScale();
+                for (w.outputs[0..w.nout]) |*o| o.scale = if (o.id == m.id) @max(factor, 1) else o.scale;
+                for (&w.windows) |*win| if (win.open) w.outputScale(win);
             },
             // preferred_scale: the scale times 120.
             .fractional_scale => if (m.opcode == 0) {
-                w.scale = @as(f32, @floatFromInt(@max(a.uint(), 1))) / 120;
+                const win = w.windowBy("fractional", m.id) orelse return;
+                win.scale = @as(f32, @floatFromInt(@max(a.uint(), 1))) / 120;
             },
             .data_device => w.data.deviceEvent(w, m.opcode, &a),
             .data_source => w.data.sourceEvent(w, m.opcode, &a),
             .text_input => w.ime.event(w, m.opcode, &a),
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
-                w.frame_pending = false;
+                if (w.windowBy("frame", m.id)) |win| win.frame = 0;
             },
             else => {},
         }
@@ -510,43 +703,51 @@ pub const Wayland = struct {
 
     /// Without fractional scaling or wl_surface v6: the largest scale of the outputs the
     /// window is on, as before preferred_buffer_scale existed.
-    fn outputScale(w: *Wayland) void {
-        if (w.viewport != 0 or w.preferred) return;
+    fn outputScale(w: *Wayland, win: *Window) void {
+        if (win.viewport != 0 or win.preferred) return;
         var scale: i32 = 1;
-        for (w.outputs[0..w.nout]) |o| scale = if (o.on) @max(scale, o.scale) else scale;
-        w.scale = @floatFromInt(scale);
+        for (w.outputs[0..w.nout], 0..) |o, k| scale = if (win.on & (@as(u8, 1) << @intCast(k)) != 0) @max(scale, o.scale) else scale;
+        win.scale = @floatFromInt(scale);
     }
 
-    /// After the start-up sync: every global is known, so create the window.
-    fn createWindow(w: *Wayland) void {
-        inline for (.{ .wl_compositor, .wl_shm, .xdg_wm_base }) |g| {
-            if (w.globals.get(g) == 0) return w.fail(error.MissingGlobal);
-        }
-        w.surface = w.new(.surface);
-        w.request(w.globals.get(.wl_compositor), op.compositor_create_surface, .{w.surface});
-        w.xdg_surface = w.new(.xdg_surface);
-        w.request(w.globals.get(.xdg_wm_base), op.wm_base_get_xdg_surface, .{ w.xdg_surface, w.surface });
-        w.toplevel = w.new(.toplevel);
-        w.request(w.xdg_surface, op.xdg_surface_get_toplevel, .{w.toplevel});
-        w.request(w.toplevel, op.toplevel_set_title, .{w.options.title});
-        w.request(w.toplevel, op.toplevel_set_app_id, .{w.options.app_id});
+    /// A surface with an xdg_surface in slot `k`, scaled as the compositor prefers.
+    fn createSurface(w: *Wayland, k: u32, size: [2]f32) *Window {
+        const win = &w.windows[k];
+        win.* = .{ .open = true, .size = size };
+        win.surface = w.new(.surface);
+        w.request(w.globals.get(.wl_compositor), op.compositor_create_surface, .{win.surface});
+        win.xdg_surface = w.new(.xdg_surface);
+        w.request(w.globals.get(.xdg_wm_base), op.wm_base_get_xdg_surface, .{ win.xdg_surface, win.surface });
         if (w.globals.get(.wp_viewporter) != 0 and w.globals.get(.wp_fractional_scale_manager_v1) != 0) {
-            w.viewport = w.new(.viewport);
-            w.request(w.globals.get(.wp_viewporter), op.viewporter_get_viewport, .{ w.viewport, w.surface });
-            const frac = w.new(.fractional_scale);
-            w.request(w.globals.get(.wp_fractional_scale_manager_v1), op.fractional_get_fractional_scale, .{ frac, w.surface });
+            win.viewport = w.new(.viewport);
+            w.request(w.globals.get(.wp_viewporter), op.viewporter_get_viewport, .{ win.viewport, win.surface });
+            win.fractional = w.new(.fractional_scale);
+            w.request(w.globals.get(.wp_fractional_scale_manager_v1), op.fractional_get_fractional_scale, .{ win.fractional, win.surface });
         }
-        w.request(w.surface, op.surface_commit, .{});
+        // A new window on a scaled output starts at that scale, before the compositor says.
+        win.scale = if (k > 0) w.windows[0].scale else 1;
+        return win;
     }
 
-    /// Two buffers of `px` pixels in one new pool, replacing the old ones. A buffer the
-    /// compositor still holds is destroyed anyway: wl_buffer.destroy is allowed at any time and
-    /// the compositor keeps showing its copy until the next commit.
-    fn resizeBuffers(w: *Wayland, px: [2]u32) Error!void {
-        for (w.shm.buffers) |b| if (b != 0) w.destroy(b, op.buffer_destroy);
-        if (w.shm.pool != 0) w.destroy(w.shm.pool, op.pool_destroy);
-        w.shm.unmap();
-        w.shm = .{};
+    /// A toplevel in slot `k`, committed without a buffer: the compositor answers with its
+    /// first configure.
+    fn createToplevel(w: *Wayland, k: u32, options: Options) void {
+        const win = w.createSurface(k, options.size);
+        win.role = w.new(.toplevel);
+        w.request(win.xdg_surface, op.xdg_surface_get_toplevel, .{win.role});
+        w.request(win.role, op.toplevel_set_title, .{options.title});
+        w.request(win.role, op.toplevel_set_app_id, .{options.app_id});
+        w.request(win.surface, op.surface_commit, .{});
+    }
+
+    /// Two buffers of `px` pixels in one new pool, replacing the window's old ones. A buffer
+    /// the compositor still holds is destroyed anyway: wl_buffer.destroy is allowed at any
+    /// time and the compositor keeps showing its copy until the next commit.
+    fn resizeBuffers(w: *Wayland, win: *Window, px: [2]u32) Error!void {
+        for (win.shm.buffers) |b| if (b != 0) w.destroy(b, op.buffer_destroy);
+        if (win.shm.pool != 0) w.destroy(win.shm.pool, op.pool_destroy);
+        win.shm.unmap();
+        win.shm = .{};
         const stride: u32 = @intCast(sw.Framebuffer.len(px[0], 1) * 4);
         const one = std.mem.alignForward(usize, @as(usize, stride) * px[1], 64);
         const fd_rc = linux.memfd_create("lcgr-wayland", linux.MFD.CLOEXEC);
@@ -561,12 +762,12 @@ pub const Wayland = struct {
             _ = linux.close(fd);
             return error.OutOfMemory;
         }
-        w.shm = .{ .map = @as([*]align(4096) u8, @ptrFromInt(addr))[0 .. one * 2], .width = px[0], .height = px[1], .stride = stride, .one = one };
-        w.shm.pool = w.new(.shm_pool);
-        w.request(w.globals.get(.wl_shm), op.shm_create_pool, .{ w.shm.pool, wire.Fd{ .fd = fd }, @as(i32, @intCast(one * 2)) });
-        for (0..2) |k| {
-            w.shm.buffers[k] = w.new(.buffer);
-            w.request(w.shm.pool, op.pool_create_buffer, .{ w.shm.buffers[k], @as(i32, @intCast(one * k)), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])), @as(i32, @intCast(stride)), @as(u32, argb8888) });
+        win.shm = .{ .map = @as([*]align(4096) u8, @ptrFromInt(addr))[0 .. one * 2], .width = px[0], .height = px[1], .stride = stride, .one = one };
+        win.shm.pool = w.new(.shm_pool);
+        w.request(w.globals.get(.wl_shm), op.shm_create_pool, .{ win.shm.pool, wire.Fd{ .fd = fd }, @as(i32, @intCast(one * 2)) });
+        for (0..2) |b| {
+            win.shm.buffers[b] = w.new(.buffer);
+            w.request(win.shm.pool, op.pool_create_buffer, .{ win.shm.buffers[b], @as(i32, @intCast(one * b)), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])), @as(i32, @intCast(stride)), @as(u32, argb8888) });
         }
     }
 
@@ -583,7 +784,7 @@ pub const Wayland = struct {
     /// Sends a destructor request; the id is reused after the compositor's `delete_id`.
     pub fn destroy(w: *Wayland, id: u32, opcode: u16) void {
         w.request(id, opcode, .{});
-        w.kinds[id] = .dead;
+        if (id != 0) w.kinds[id] = .dead;
     }
 
     pub fn request(w: *Wayland, id: u32, opcode: u16, args: anytype) void {
@@ -606,7 +807,7 @@ comptime {
     iface.check(Wayland);
 }
 
-/// The window's buffers in shared memory: two of `width` x `height`, `one` bytes apart.
+/// A window's buffers in shared memory: two of `width` x `height`, `one` bytes apart.
 const Shm = struct {
     map: []align(4096) u8 = &.{},
     pool: u32 = 0,
