@@ -43,6 +43,28 @@ pub fn thumbId(track: Id, index: u32) Id {
 /// Spec (and tree) rows each thumb takes: the thumb's half of the track and its two pieces.
 pub const thumb_rows = 3;
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// `value` with thumb `i` moved to `to`, kept on its side of the other thumb: the low thumb
+/// stops at the high one and the high at the low (APG multi-thumb slider: each thumb's range
+/// ends at the other).
+pub fn move(value: [2]f32, i: u1, to: f32) [2]f32 {
+    var v = value;
+    v[i] = if (i == 0) @min(to, value[1]) else @max(to, value[0]);
+    return v;
+}
+
+/// The values after this frame's input on thumb `i`: while held it follows the pointer at
+/// `along` (0 at the track's left end, 1 at its right, clamped); while focused the slider's
+/// keys move it (`slider.keyed`, steps of the whole range); either way it stays on its side.
+pub fn step(value: [2]f32, i: u1, held: bool, along: f32, focused: bool, lo: f32, hi: f32, in: *const Input) [2]f32 {
+    var v = move(value, i, base.slide(value[i], held, along, lo, hi));
+    if (focused) {
+        if (slider_zig.keyed(v[i], lo, hi, in)) |k| v = move(v, i, k);
+    }
+    return v;
+}
+
 // ---- look -----------------------------------------------------------------------------------
 
 /// The track: as a slider's (`slider.sliderTrack`) but no role of its own; its thumbs carry
@@ -83,8 +105,17 @@ pub fn expose(t: *Tree, track: u32, value: [2]f32) void {
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A range slider named `id` over `value` (low, high), from `lo` at the left end to `hi` at
-/// the right.
+/// the right. A press grabs the nearer thumb (the half of the track it is in), which then
+/// follows the pointer across the whole track; a focused thumb moves by the slider's keys.
 pub fn range(f: *Frame, th: *const Theme, id: Id, value: *[2]f32, lo: f32, hi: f32) Response {
+    // The thumbs' widths follow the values, so input is read before they are built:
+    // `Interaction.response` is what `Frame.interact` returns for the same id this frame.
+    const rect = f.lastRect(id);
+    const along = (f.in.pointer[0] - rect.x0) / @max(rect.w(), 1);
+    for (0..2) |i| {
+        const r = f.ctx.inter.response(thumbId(id, @intCast(i)));
+        value.* = step(value.*, @intCast(i), r.held, along, r.focused, lo, hi, f.in);
+    }
     const track = f.open(id, trackStyle(th));
     const p = parts(th, base.fraction(value[0], lo, hi), base.fraction(value[1], lo, hi));
     var all: u8 = 0;
@@ -214,6 +245,52 @@ test "parts: thumbs together at an end leave no division by zero" {
     for ([_][2]f32{ .{ 0, 0 }, .{ 1, 1 }, .{ 0, 1 } }) |f| {
         const p = parts(&th, f[0], f[1]);
         for (p) |s| for (s.size) |z| try testing.expect(std.math.isFinite(z.v));
+    }
+}
+
+test "move, step: thumbs follow the pointer or the keys and never cross" {
+    const k = base.keys;
+    try testing.expectEqual([2]f32{ 30, 60 }, move(.{ 20, 60 }, 0, 30));
+    try testing.expectEqual([2]f32{ 60, 60 }, move(.{ 20, 60 }, 0, 90));
+    try testing.expectEqual([2]f32{ 20, 20 }, move(.{ 20, 60 }, 1, 5));
+    const none: Input = .{};
+    try testing.expectEqual([2]f32{ 50, 60 }, step(.{ 20, 60 }, 0, true, 0.5, false, 0, 100, &none));
+    try testing.expectEqual([2]f32{ 20, 60 }, step(.{ 20, 60 }, 0, false, 0.5, false, 0, 100, &none));
+    const end = [_]Input.Event{.{ .kind = .press, .code = k.end }};
+    try testing.expectEqual([2]f32{ 60, 60 }, step(.{ 20, 60 }, 0, false, 0, true, 0, 100, &.{ .events = &end }));
+    try testing.expectEqual([2]f32{ 20, 100 }, step(.{ 20, 60 }, 1, false, 0, true, 0, 100, &.{ .events = &end }));
+    const left = [_]Input.Event{.{ .kind = .press, .code = k.left }};
+    try testing.expectEqual([2]f32{ 19, 60 }, step(.{ 20, 60 }, 0, false, 0, true, 0, 100, &.{ .events = &left }));
+}
+
+test "range input: a press grabs the nearer thumb, drags across the track; arrows per thumb, in both front ends" {
+    const h = &band;
+    h.init();
+    const k = base.keys;
+    var in: Input = .{ .viewport = .{ 216, 40 } };
+    _ = try h.frame(&in);
+    const Step = struct { x: f32, left: bool, key: ?u8 = null, band: [2]f32 };
+    const steps = [_]Step{
+        .{ .x = 28, .left = true, .band = .{ 10, 60 } }, // press in the low half: low thumb to 10
+        .{ .x = 108, .left = true, .band = .{ 50, 60 } }, // dragged right
+        .{ .x = 200, .left = true, .band = .{ 60, 60 } }, // past the high thumb: stops at it
+        .{ .x = 200, .left = false, .band = .{ 60, 60 } },
+        .{ .x = 200, .left = false, .key = k.left, .band = .{ 59, 60 } }, // the focused low thumb
+        .{ .x = 188, .left = true, .band = .{ 59, 90 } }, // press in the high half
+        .{ .x = 188, .left = false, .key = k.home, .band = .{ 59, 59 } }, // Home: down to the low thumb
+        .{ .x = 188, .left = false, .key = k.end, .band = .{ 59, 100 } },
+    };
+    for (steps) |st| {
+        in.pointer = .{ st.x, 12 };
+        in.buttons.left = st.left;
+        const e = [_]Input.Event{.{ .kind = .press, .code = st.key orelse 0 }};
+        in.events = if (st.key != null) &e else &.{};
+        const out = try h.frame(&in);
+        for (0..2) |i| {
+            try testing.expectApproxEqAbs(st.band[i], h.app.band[i], 1e-4);
+            try testing.expectEqual(h.app.band[i], h.ui.signals.state.band[i]);
+            try testing.expectEqual(h.app.band[i], out.runtime.tree.c.value[3 + thumb_rows * i]);
+        }
     }
 }
 

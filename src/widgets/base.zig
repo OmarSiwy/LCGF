@@ -320,7 +320,14 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         .slider => if (from_pointer) ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
                         .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
-                        .label, .col, .row, .button, .radio, .range, .range_thumb => {},
+                        .range_thumb => if (from_pointer) {
+                            // Along the whole track, last frame's (the tree still holds it).
+                            const r = ui.tables.t.rect(E.widget_nodes[k] - thumbOffset(n.index));
+                            const along = (in.pointer[0] - r.x0) / @max(r.w(), 1);
+                            const v = range_zig.step(@field(ui.signals.state, n.bind.?), @intCast(n.index), true, along, false, n.lo, n.hi, in);
+                            ui.signals.set(field(n.bind.?), v);
+                        },
+                        .label, .col, .row, .button, .radio, .range => {},
                     }
                 },
             };
@@ -384,6 +391,14 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         const v = slider_zig.keyed(@field(ui.signals.state, n.bind.?), n.lo, n.hi, in) orelse return null;
                         ui.signals.set(field(n.bind.?), v);
                         return @unionInit(E.Event, @tagName(tag), fraction(v, n.lo, n.hi));
+                    },
+                    .range_thumb => {
+                        const n = comptime nodeAt(spec, E.widget_nodes[E.slot(tag)]);
+                        const now = @field(ui.signals.state, n.bind.?);
+                        const v = range_zig.step(now, @intCast(n.index), false, 0, true, n.lo, n.hi, in);
+                        if (std.meta.eql(v, now) and slider_zig.keyed(now[n.index], n.lo, n.hi, in) == null) return null;
+                        ui.signals.set(field(n.bind.?), v);
+                        return @unionInit(E.Event, @tagName(tag), fraction(v[n.index], n.lo, n.hi));
                     },
                     .radio_option => {
                         const k = comptime E.slot(tag);
@@ -519,6 +534,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 /// Spec rows before radio option `index` within its group: earlier options and their parts.
 fn optionRows(comptime index: u32) u32 {
     return index * radio_zig.option_rows;
+}
+
+/// Tree rows from range thumb `index` back to its track: the thumb's spec row plus one (the
+/// root) minus this is the track's tree row.
+fn thumbOffset(comptime index: u32) u32 {
+    return index * range_zig.thumb_rows;
 }
 
 /// Spec nodes in `n`'s subtree that show text.
