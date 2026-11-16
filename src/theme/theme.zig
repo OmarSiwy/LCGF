@@ -166,6 +166,29 @@ pub fn widgets(tok: *const Tokens) base.Theme {
     };
 }
 
+// ---- comptime themes ------------------------------------------------------------------------
+
+/// Theme `tok` at density `d`, folded into constants: the widget theme and the state table are
+/// computed by the compiler and land in read-only data, as the comptime front end's flatten
+/// tables do (prototype/comptime_ui_probe.zig). Nothing is derived per frame; picking a look is
+/// one load from `states`. `theme` is what `ComptimeUi(State, spec, theme)` and the `ct`
+/// builders take.
+pub fn Folded(comptime tok: Tokens, comptime d: Density) type {
+    return struct {
+        pub const tokens: Tokens = dense(tok, d);
+        pub const theme: base.Theme = widgets(&tokens);
+        pub const states: States = controlStates(&tokens);
+
+        /// The look of state `r`: one load from the folded table.
+        pub fn look(r: Response) Look {
+            return states[stateBits(r)];
+        }
+    };
+}
+
+pub const Dark = Folded(dark, .comfortable);
+pub const Light = Folded(light, .comfortable);
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -381,4 +404,21 @@ test "theme switch: densities change the size of controls, not their behaviour" 
     }
     try testing.expectEqual(widths[1] - 2 * (8 - 6), widths[0]);
     try testing.expectEqual(widths[1] + 2 * (10 - 8), widths[2]);
+}
+
+test "Folded: comptime themes are constants" {
+    // Every field is known to the compiler: these run at compile time or not at all.
+    comptime {
+        std.debug.assert(std.meta.eql(Dark.theme, base.Theme.default));
+        std.debug.assert(Light.theme.panel.bitsOf() == light.color(.surface).bitsOf());
+        std.debug.assert(Folded(dark, .compact).theme.pad == 6);
+        std.debug.assert(std.meta.eql(Light.states, controlStates(&light)));
+    }
+    try testing.expectEqual(Light.theme.control_hot, Light.look(.{ .hovered = true }).fill);
+    try testing.expectEqual(Light.theme.accent, Light.look(.{ .focused = true }).border_color);
+}
+
+test "theme switch: between folded themes" {
+    try expectSwitch(Dark.theme, Light.theme);
+    try expectSwitch(Light.theme, Folded(light, .compact).theme);
 }
