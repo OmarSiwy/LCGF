@@ -3,7 +3,8 @@
 //! below, which compares every scene with its golden image.
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: a target
-//! cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
+//! cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas, and the custom
+//! command drawn inline by the host's own pipeline (custom.zig) in the renderer's command list.
 //!
 //!   offscreen  an RGBA8 texture, read back after the frame.
 //!   present    a hidden window's waitable flip-model swapchain through the frame loop
@@ -16,6 +17,7 @@ const com = @import("com.zig");
 const device_mod = @import("device.zig");
 const host = @import("host.zig");
 const frame = @import("frame.zig");
+const custom = @import("custom.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const c = com.c;
 const Device = device_mod.Device;
@@ -37,6 +39,7 @@ pub const Player = struct {
     atlas: *com.Resource,
     gfx: Renderer,
     atlas_handle: lcgr.types.Texture,
+    gradient: custom.Gradient,
     target: host.Target,
     readback: host.Readback,
     window: device_mod.Window,
@@ -55,6 +58,7 @@ pub const Player = struct {
         p.atlas = try host.sampled(&p.d, &p.once, 64, 64, &standInAtlas());
         p.gfx = try Renderer.init(&p.d, .{ .frames = 2 }, p.white);
         p.atlas_handle = p.gfx.addTexture(&p.d, p.atlas);
+        p.gradient = try custom.Gradient.init(p.d.handle, c.DXGI_FORMAT_R8G8B8A8_UNORM);
         p.target = try host.Target.init(&p.d, width, height);
         p.readback = try host.Readback.init(&p.d, width, height);
         if (mode == .present) {
@@ -73,6 +77,7 @@ pub const Player = struct {
         }
         p.readback.deinit();
         p.target.deinit();
+        p.gradient.deinit();
         p.gfx.deinit();
         com.release(p.atlas);
         com.release(p.white);
@@ -115,11 +120,14 @@ pub const Player = struct {
         l.resourceBarrier(&.{transition(target, c.D3D12_RESOURCE_STATE_COPY_SOURCE, c.D3D12_RESOURCE_STATE_RENDER_TARGET)});
     }
 
-    /// The host's loop: UI draws up to each custom command.
+    /// The host's loop: UI draws up to each custom command, the host's own pipeline there, in
+    /// the same command list.
     fn drawCommands(p: *const Player, l: *com.GraphicsCommandList) void {
         const dl = &p.st.draw;
         var i = iface.drawUntilCustom(&p.gfx, l, dl, 0);
-        while (i < dl.cmd_len) : (i = iface.drawUntilCustom(&p.gfx, l, dl, i + 1)) {}
+        while (i < dl.cmd_len) : (i = iface.drawUntilCustom(&p.gfx, l, dl, i + 1)) {
+            p.gradient.draw(l, p.gfx.customScissor(dl.customs[dl.command(i).custom]), p.gfx.extent);
+        }
     }
 };
 
@@ -178,13 +186,13 @@ pub fn expectGoldens(p: *Player, names: []const []const u8) !void {
     }
 }
 
-test "conformance: rects, clip and text match their golden images, offscreen and presented" {
+test "conformance: every scene matches its golden image, offscreen and presented" {
     try testing.expectEqual(conformance.scenes.len, goldens.len);
     for ([_]Mode{ .offscreen, .present }) |mode| {
         var p: Player = undefined;
         try p.init(mode);
         defer p.deinit();
-        try expectGoldens(&p, &.{ "rects", "clip", "text" });
+        try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });
     }
 }
 

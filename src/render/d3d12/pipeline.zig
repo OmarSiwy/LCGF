@@ -83,17 +83,21 @@ pub fn rootSignature(d: *com.Device) Error!*com.RootSignature {
         .RegisterSpace = 1,
         .ShaderVisibility = c.D3D12_SHADER_VISIBILITY_PIXEL,
     };
-    const desc: c.D3D12_ROOT_SIGNATURE_DESC = .{
+    return serialiseRoot(d, &.{
         .NumParameters = params.len,
         .pParameters = &params,
         .NumStaticSamplers = 1,
         .pStaticSamplers = &sampler,
         .Flags = c.D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    };
+    });
+}
+
+/// Any root signature: serialised (version 1.0) and created.
+pub fn serialiseRoot(d: *com.Device, desc: *const c.D3D12_ROOT_SIGNATURE_DESC) Error!*com.RootSignature {
     var blob: ?*com.Blob = null;
     var errors: ?*com.Blob = null;
     defer com.release(errors);
-    const result = c.D3D12SerializeRootSignature(&desc, c.D3D_ROOT_SIGNATURE_VERSION_1, @ptrCast(&blob), @ptrCast(&errors));
+    const result = c.D3D12SerializeRootSignature(desc, c.D3D_ROOT_SIGNATURE_VERSION_1, @ptrCast(&blob), @ptrCast(&errors));
     if (result < 0) if (errors) |e| std.log.warn("d3d12: {s}", .{e.bytes()});
     try com.check(result);
     defer com.release(blob);

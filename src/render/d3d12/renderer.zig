@@ -197,7 +197,13 @@ pub const Renderer = struct {
     }
 
     /// The host's command list, recording, with its render target set (and cleared, if it
-    /// wants) for the pass.
+    /// wants) for the pass. It is the raw ID3D12GraphicsCommandList, not a wrapper: at a custom
+    /// command (`iface.drawUntilCustom` stops there) the host records its own calls into it,
+    /// with its own root signature, pipeline, heaps and root arguments, then hands it back.
+    /// Nothing needs restoring: the next UI draw rebinds every piece of state it uses
+    /// (custom.zig is such a host draw). `customScissor` gives the custom rect in pixels.
+    /// `com.zig` declares the methods this back end calls; a host with its own D3D12 binding
+    /// casts the pointer to its own ID3D12GraphicsCommandList type.
     pub const Pass = *com.GraphicsCommandList;
 
     /// One instanced draw for a run of quads.
@@ -210,6 +216,19 @@ pub const Renderer = struct {
     pub fn drawText(r: *const Renderer, l: Pass, run: u32) void {
         r.bind(l, .solid, r.glyphs.texture, r.glyphsAt(), r.desc.max_glyphs);
         l.drawInstanced(4, r.glyphs.count[run], 0, r.glyphs.first[run]);
+    }
+
+    /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
+    /// physical pixels of the last `prepare`, inside the target. Pixels a quad would cover
+    /// partly are included (floor the start, ceil the end); an empty result has zero area.
+    pub fn customScissor(r: *const Renderer, custom: draw_list.CustomDraw) c.D3D12_RECT {
+        const w: f32 = @floatFromInt(r.extent[0]);
+        const h: f32 = @floatFromInt(r.extent[1]);
+        const x0 = std.math.clamp(@floor(@max(custom.rect[0], custom.clip[0]) * r.scale), 0, w);
+        const y0 = std.math.clamp(@floor(@max(custom.rect[1], custom.clip[1]) * r.scale), 0, h);
+        const x1 = std.math.clamp(@ceil(@min(custom.rect[2], custom.clip[2]) * r.scale), x0, w);
+        const y1 = std.math.clamp(@ceil(@min(custom.rect[3], custom.clip[3]) * r.scale), y0, h);
+        return .{ .left = @intFromFloat(x0), .top = @intFromFloat(y0), .right = @intFromFloat(x1), .bottom = @intFromFloat(y1) };
     }
 
     /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
@@ -291,4 +310,17 @@ test "renderer: texture handles are registration order, clamped past the cap" {
     for (0..Renderer.max_textures + 2) |_| _ = r.addTexture(&d, white);
     try testing.expectEqual(@as(u16, Renderer.max_textures), r.texture_count);
     r.setTexture(&d, @fromBackingInt(200), white); // stale: rewrites the last entry, in bounds
+}
+
+test "renderer: the custom scissor is the rect cut by its clip, in pixels, inside the target" {
+    var r: Renderer = undefined;
+    r.extent = .{ 320, 240 };
+    r.scale = 2;
+    const open: [4]f32 = .{ -1e6, -1e6, 1e6, 1e6 };
+    var sc = r.customScissor(.{ .rect = .{ 8, 8, 152, 112 }, .clip = open, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(c.D3D12_RECT{ .left = 16, .top = 16, .right = 304, .bottom = 224 }, sc);
+    sc = r.customScissor(.{ .rect = .{ -10, 100.25, 400, 300 }, .clip = .{ 0, 0, 150.2, 1e6 }, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(c.D3D12_RECT{ .left = 0, .top = 200, .right = 301, .bottom = 240 }, sc);
+    sc = r.customScissor(.{ .rect = .{ 50, 50, 60, 60 }, .clip = .{ 70, 70, 80, 80 }, .data = 0, .id = 0, .node = 0 });
+    try testing.expectEqual(@as(c_long, 0), (sc.right - sc.left) * (sc.bottom - sc.top));
 }
