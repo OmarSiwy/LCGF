@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const types = @import("../core/types.zig");
+const simd = @import("../core/simd.zig");
 const theme = @import("../theme/theme.zig");
 const base = @import("../widgets/base.zig");
 const Color = types.Color;
@@ -18,6 +19,10 @@ pub const Settings = struct {
     /// text bigger", iOS Dynamic Type, Android font scale). Clamped to `text_scale_min` to
     /// `text_scale_max`; NaN reads as `text_scale_min`. Only text grows: layout fits it.
     text_scale: f32 = 1,
+    /// The platform asks for less motion (`prefers-reduced-motion`, macOS and iOS "Reduce
+    /// motion", Windows "Show animations" off). Transitions finish at once (`progress`); the
+    /// animation system (lane anim, C0724) reads this field.
+    reduced_motion: bool = false,
 };
 
 /// The range `Settings.text_scale` is clamped to: past both ends of what platforms offer
@@ -50,6 +55,15 @@ pub fn tokens(s: *const Settings, tok: *const Tokens) Tokens {
 /// of setting restyles the next frame.
 pub fn widgets(s: *const Settings, tok: *const Tokens) base.Theme {
     return theme.widgets(&tokens(s, tok));
+}
+
+/// How far through a transition of `seconds` the UI is, `elapsed` seconds after it started:
+/// 0 to 1. Under reduced motion every transition is done (1) from its first frame, so the
+/// host stops waking for it; a transition of 0 seconds is done at once either way.
+pub fn progress(s: *const Settings, elapsed: f32, seconds: f32) f32 {
+    const d = seconds * simd.b2f(!s.reduced_motion);
+    const done = simd.b2f(!(d > 0));
+    return base.unit((@max(elapsed, 0) + done) / @max(d, std.math.floatMin(f32)));
 }
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -94,4 +108,17 @@ test "settings: scaled text draws at the scaled size, behaviour unchanged" {
     // script of pointer moves (aimed at last frame's rects) gives the same states.
     try theme.expectSwitch(comptime widgets(&.{}, &theme.dark), comptime widgets(&.{ .text_scale = 2 }, &theme.dark));
     try theme.expectSwitch(comptime widgets(&.{}, &theme.dark), comptime widgets(&.{ .text_scale = 0.75 }, &theme.dark));
+}
+
+test "settings: reduced motion finishes every transition on its first frame" {
+    const calm: Settings = .{ .reduced_motion = true };
+    try testing.expectEqual(@as(f32, 0), progress(&.{}, 0, 0.3));
+    try testing.expectApproxEqAbs(@as(f32, 0.5), progress(&.{}, 0.15, 0.3), 1e-6);
+    try testing.expectEqual(@as(f32, 1), progress(&.{}, 0.3, 0.3));
+    try testing.expectEqual(@as(f32, 1), progress(&.{}, 9, 0.3));
+    try testing.expectEqual(@as(f32, 0), progress(&.{}, -1, 0.3));
+    for ([_]f32{ 0, 0.01, 0.15, 5 }) |t| try testing.expectEqual(@as(f32, 1), progress(&calm, t, 0.3));
+    // A zero-length transition is done at once, with or without the setting.
+    try testing.expectEqual(@as(f32, 1), progress(&.{}, 0, 0));
+    try testing.expectEqual(@as(f32, 1), progress(&calm, 0, 0));
 }
