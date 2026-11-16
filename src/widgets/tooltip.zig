@@ -86,10 +86,18 @@ pub fn Tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The bubble, floating below the target's rect `at` (last frame's), left edges aligned.
+/// The bubble, floating `th.gap` below the target's rect `at` (last frame's), left edges
+/// aligned: a small dark plate (the held-control colour) with the control outline.
 pub fn bubbleStyle(th: *const Theme, at: Rect) Style {
-    _ = th;
-    return .{ .float = true, .offset = .{ at.x0, at.y1 } };
+    return .{
+        .float = true,
+        .offset = .{ at.x0, at.y1 + th.gap },
+        .pad = .{ th.pad, th.gap, th.pad, th.gap },
+        .fill = th.control_held,
+        .border = 1,
+        .border_color = th.control_hot,
+        .radius = th.radius,
+    };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -166,7 +174,34 @@ test "Tooltip: the page agrees in both front ends, hidden and shown" {
     // The bubble hangs below the button.
     const at = t.rect(t.find(.from("save")));
     try testing.expectEqual(at.x0, t.rect(6).x0);
-    try testing.expectEqual(at.y1, t.rect(6).y0);
+    try testing.expectEqual(at.y1 + Theme.default.gap, t.rect(6).y0);
+}
+
+test "bubbleStyle: the theme's tokens, below the target" {
+    const th: Theme = .default;
+    const s = bubbleStyle(&th, .{ .x0 = 10, .y0 = 20, .x1 = 60, .y1 = 40 });
+    try testing.expect(s.float);
+    try testing.expectEqual([2]f32{ 10, 40 + th.gap }, s.offset);
+    try testing.expectEqual(th.control_held, s.fill);
+    try testing.expectEqual(th.control_hot, s.border_color);
+    try testing.expectEqual(th.radius, s.radius);
+    try testing.expectEqual([4]f32{ th.pad, th.gap, th.pad, th.gap }, s.pad);
+}
+
+const light: Theme = .{ .control_held = .rgb(250, 250, 220), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Tooltip: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try S.h.frame(&in);
+    S.h.app.tip.shown = true;
+    S.h.ui.signals.set(.tip, .{ .shown = true });
+    const t = (try S.h.frame(&in)).runtime.tree;
+    try testing.expectEqual(light.control_held.bitsOf(), t.c.look[6].fill);
+    try testing.expectEqual(t.rect(t.find(.from("save"))).y1 + 10, t.rect(6).y0);
 }
 
 test "checkTip: the tip field must be a Tip" {
