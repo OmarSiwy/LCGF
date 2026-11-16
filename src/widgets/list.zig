@@ -181,6 +181,28 @@ pub fn click(sel: u32, clicked: bool, row: u32) u32 {
     return if (clicked) row else sel;
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// The `value` column of a list: the selected row, -1 for none.
+pub fn selectedValue(sel: u32) f32 {
+    return @as(f32, @floatFromInt(sel +% 1)) - 1;
+}
+
+/// Roles of the list's rows, written to the tree's `role` column (they are past `types.Role`):
+/// the list a list box, each option row an option.
+pub fn setRoles(t: *Tree, box: u32, first_option: u32, count: u32) void {
+    t.c.role[box] = @backingInt(a11y.Role.listbox);
+    // Each option is a row and its label: two tree rows.
+    for (0..count) |k| t.c.role[first_option + 2 * k] = @backingInt(a11y.Role.option);
+}
+
+/// The `selected` state of the selected option, for the accessibility bridge. Rows as
+/// `setRoles` took them; run before `a11y.states`.
+pub fn setStates(s: *a11y.Semantics, first_option: u32, count: u32, sel: u32) void {
+    if (sel >= count) return;
+    s.c.state[first_option + 2 * sel] |= a11y.State.bitsOf(.{ .selected = true });
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A list of `items` with `selected.*` the selected row. Clicking a row selects it; while the
@@ -196,6 +218,7 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
     if (r.focused) selected.* = keys(selected.*, items, f.in, &default_keys);
     const t = f.tree();
     t.c.look[box.ix()].border_color = listBorder(th, r.focused).bitsOf();
+    const first = t.len;
     for (items, 0..) |s, k| {
         const row = f.open(.none, optionStyle(th));
         f.setFill(row, optionFill(th, r.hovered and under == k, selected.* == k));
@@ -203,6 +226,8 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
         f.close();
     }
     f.close();
+    t.c.value[box.ix()] = selectedValue(selected.*);
+    setRoles(t, box.ix(), first, n);
     return r;
 }
 
@@ -298,6 +323,7 @@ pub fn ComptimeList(comptime State: type, comptime spec: Spec, comptime th: Them
             const under = rowAt(&th, ui.pointer.rectOf(w).y0, in.pointer[1], count);
             const box = tb.t.push(parent, .hash(n.id.?), &n.style);
             tb.t.c.look[box].border_color = listBorder(&th, r.focused).bitsOf();
+            const first = tb.t.len;
             inline for (n.children, 0..) |o, j| {
                 next.* += 2;
                 var s = o.style;
@@ -307,6 +333,8 @@ pub fn ComptimeList(comptime State: type, comptime spec: Spec, comptime th: Them
                 tb.t.seal(i);
             }
             tb.t.seal(box);
+            tb.t.c.value[box] = selectedValue(sel);
+            setRoles(&tb.t, box, first, count);
         }
 
         fn field(comptime name: []const u8) S.Field {
@@ -517,6 +545,36 @@ const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
 
 var harness: Example(theme).Run = .{};
+
+test "list: roles, value and the selected state for accessibility" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.selected = 2;
+    h.ui.signals.state.selected = 2;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box = t.find(.from("fruit"));
+    try testing.expectEqual(@backingInt(a11y.Role.listbox), t.c.role[box]);
+    for (0..5) |j| try testing.expectEqual(@backingInt(a11y.Role.option), t.c.role[box + 1 + 2 * j]);
+    try testing.expectEqual(@as(f32, 2), t.c.value[box]);
+    try testing.expectEqual(@as(f32, -1), selectedValue(none));
+
+    // The bridge's view: the list box named by nothing, the options by their text, one selected.
+    var sbuf: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    setStates(&sem, box + 1, 5, 2);
+    a11y.names(t, &sem);
+    a11y.states(t, &sem);
+    const selected_bit = a11y.State.bitsOf(.{ .selected = true });
+    for (0..5) |j| try testing.expectEqual(j == 2, sem.c.state[box + 1 + 2 * j] & selected_bit != 0);
+    // An option takes its name from its content: its label's text run ("Cherry").
+    try testing.expectEqual(t.c.text[box + 2 + 2 * 2], sem.c.name[box + 1 + 2 * 2]);
+    try testing.expect(sem.c.name[box + 1 + 2 * 2] != none);
+}
 
 test "check: what a comptime list's state must have" {
     const Good = struct { sel: u32 = none, a: []const u8 = "A", b: []const u8 = "B" };
