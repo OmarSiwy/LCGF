@@ -82,6 +82,47 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The toggle button's example page: B, I and U (pressed) on a toolbar, in both front ends.
+/// Its replay (testdata/toggle.replay) clicks, uses Enter and Space and drags off; its golden
+/// images (tools/widgetgolden/ref/toggle-*.png) show pressed and released faces.
+pub const Page = struct {
+    const th = Theme.default;
+    const bar: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
+
+    pub const App = struct {
+        bold: bool = false,
+        italic: bool = false,
+        underline: bool = true,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("bar"), bar);
+            _ = toggle(f, &th, .from("bold"), &app.bold, "B");
+            _ = toggle(f, &th, .from("italic"), &app.italic, "I");
+            _ = toggle(f, &th, .from("underline"), &app.underline, "U");
+            f.close();
+        }
+    };
+    pub const State = struct {
+        bold: bool = false,
+        bold_text: []const u8 = "B",
+        italic: bool = false,
+        italic_text: []const u8 = "I",
+        underline: bool = true,
+        underline_text: []const u8 = "U",
+    };
+    pub const spec = spec_zig.row(bar, .{
+        ct.toggle(th, .bold, .bold, .bold_text),
+        ct.toggle(th, .italic, .italic, .italic_text),
+        ct.toggle(th, .underline, .underline, .underline_text),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/toggle.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/toggle-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "held", 1 }, .{ "pressed", 2 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -215,6 +256,45 @@ test "toggle a11y: role button, named by its caption, pressed as its value, in b
         // No state bit says "pressed" (a gap of the a11y tree): the value does.
         try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
     }
+}
+
+var page: Page.Run = .{};
+
+test "Page: the toggle replay flips by click, Enter and Space, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var bold: [10]bool = undefined;
+    var italic: [10]bool = undefined;
+    var underline: [10]bool = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        const st = &h.ui.signals.state;
+        try testing.expectEqual(h.app.bold, st.bold);
+        try testing.expectEqual(h.app.italic, st.italic);
+        try testing.expectEqual(h.app.underline, st.underline);
+        bold[k] = h.app.bold;
+        italic[k] = h.app.italic;
+        underline[k] = h.app.underline;
+    }
+    try testing.expectEqual(@as(u32, 10), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, true, false, true, true, true, true, true, true }, &bold);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, false, true, true, true, true }, &italic);
+    const always: [10]bool = @splat(true);
+    try testing.expectEqualSlices(bool, &always, &underline);
+    // The rects the replay's comment gives.
+    const t = &h.ctx.trees[h.ctx.cur];
+    for ([3][]const u8{ "bold", "italic", "underline" }, [3][2]f32{ .{ 12, 36 }, .{ 44, 69 }, .{ 77, 101 } }) |name, x| {
+        const r = t.rect(t.find(.hash(name)));
+        try testing.expectEqual([4]f32{ x[0], 12, x[1], 46 }, [4]f32{ r.x0, r.y0, r.x1, r.y1 });
+    }
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 10);
 }
 
 test {
