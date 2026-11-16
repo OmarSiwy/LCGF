@@ -515,7 +515,7 @@ pub fn build(b: *std.Build) void {
     // and embedded, launched through Gompute's run-time driver loader (build.zig.zon, lazy).
     // Device targets are pinned, not Gompute's `.auto` (which probes the build machine's GPU).
     const gompute_step = b.step("gompute", "Test the Gompute back end: kernels on the CPU, and on CUDA when a driver and card are present");
-    const gompute_play_step = b.step("gompute-play", "Build zig-out/bin/gompute-play (draws a dumped frame with the Gompute back end)");
+    const gompute_play_step = b.step("gompute-play", "Build zig-out/bin/gompute-play (draws a dumped frame with the Gompute back end) and gompute-probe");
     if (b.lazyDependency("gompute", .{ .target = target, .optimize = optimize })) |gompute_dep| {
         if (b.lazyImport(@This(), "gompute")) |gompute_build| {
             const k = gompute_build.addKernels(b, gompute_dep, .{
@@ -544,6 +544,15 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute } },
             }) });
             gompute_play_step.dependOn(&b.addInstallArtifact(gompute_play, .{}).step);
+            // Read-back, memory and frame-time measurements (src/render/gompute/probe.zig).
+            const gompute_probe = b.addExecutable(.{ .name = "gompute-probe", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/render/gompute/probe.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+                .link_libc = true,
+                .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute } },
+            }) });
+            gompute_play_step.dependOn(&b.addInstallArtifact(gompute_probe, .{}).step);
         }
     }
 

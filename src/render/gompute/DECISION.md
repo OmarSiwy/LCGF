@@ -107,3 +107,28 @@ software back end on one CPU core of the same machine:
 | transforms | 800x600, 8 | 90 us | 3,151 us | 35x |
 
 At 160x120 the fixed cost of three launches and a synchronisation (about 25 us) is most of the frame.
+
+## C0421: present by reading back to a CPU framebuffer
+
+Decision: `Device.present(fb)` waits for the queued work and copies the frame into a software back
+end framebuffer (`sw.Framebuffer`), which a shell then presents exactly as it presents the software
+back end's frames. CUDA has no presentation of its own, so this is the route that works with every
+shell and no graphics API. Read-back into pinned memory is the fast case; the framebuffer's
+memory stays the caller's (`raster_k.allocPinned` gives pinned pixels for `sw.Framebuffer.init`).
+
+Measured (`gompute-probe readback`, ci/jobs/gompute-probe.sh, median of 50 read-backs of a
+cleared frame, two runs on a busy machine):
+
+| Size | Bytes | Pageable memory | Pinned memory |
+|---|---|---|---|
+| 800x600 | 1.9 MB | 265 to 367 us (5 to 7 GB/s) | 150 to 296 us (6.5 to 12.8 GB/s) |
+| 1920x1080 | 8.3 MB | 869 to 1,346 us | 634 to 1,263 us (13 GB/s at best) |
+| 3840x2160 | 33.2 MB | 5,128 to 5,592 us | 2,522 to 2,526 us (13.2 GB/s) |
+
+Test `present: CUDA's frame read back into a software framebuffer is the software back end's
+frame` draws the `rects` scene in BGRA8 and compares every pixel with sw's.
+
+At 800x600 a read-back costs about as much as drawing the frame on the GPU (C0420: 68 to 204 us),
+so the whole frame (draw plus read-back, roughly 0.25 to 0.5 ms) is still 2 to 10 times below sw
+on one core for these scenes, but read-back grows with pixels, not with content: at 4K it is 2.5 ms
+per frame before anything is drawn, which a 60 Hz budget can afford once and a 144 Hz one barely.

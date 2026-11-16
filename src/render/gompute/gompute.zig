@@ -20,6 +20,7 @@ const Quad = draw_list.Quad;
 const DrawList = draw_list.DrawList;
 const Frame = kernels.Frame;
 const Image = kernels.Image;
+const sw = lcgr.render_sw;
 
 /// The pass: the frame's quads in paint order, each with its texture, in caller-owned rows.
 pub const Recorder = struct {
@@ -208,6 +209,16 @@ pub fn Device(comptime backend: g.Backend) type {
             try d.px.download(px.ptr, @as(usize, d.cap.stride) * d.cap.height * 4);
         }
 
+        /// Presents by read-back: waits for the queued work and copies the frame into `fb`, a
+        /// software-back-end framebuffer that a shell presents as it presents sw's. CUDA has
+        /// no presentation of its own (CUDA programming guide, graphics interop). `fb` must have
+        /// this device's width, height and stride, and the byte order `draw` was given (`red`).
+        /// Read-back into pinned memory (`raster_k.allocPinned`) is faster; DECISION.md.
+        pub fn present(d: *Self, fb: *sw.Framebuffer) !void {
+            std.debug.assert(fb.width == d.cap.width and fb.height == d.cap.height and fb.stride == d.cap.stride);
+            try d.download(fb.pixels);
+        }
+
         /// Copies `px` (`stride * height`) into the device framebuffer: how a host's inline custom
         /// draw, done on the CPU between `download` and this, gets back under the UI drawn later.
         pub fn upload(d: *Self, px: []const u32) !void {
@@ -227,7 +238,6 @@ pub fn grid(n: usize) g.Dim3 {
 
 const testing = std.testing;
 const conformance = lcgr.render_conformance;
-const sw = lcgr.render_sw;
 
 test "fill: the CPU path and, when present, the CUDA device write the same pixels" {
     var cpu: [1000]u32 = @splat(0);
@@ -384,4 +394,40 @@ test "device: CUDA draws every conformance scene with the CPU path's pixels; HIP
         try dev.download(&gpu);
         try testing.expectEqualSlices(u32, &cpu, &gpu);
     }
+}
+
+test "present: CUDA's frame read back into a software framebuffer is the software back end's frame" {
+    if (comptime !g.available(.cuda)) return;
+    const w = 160;
+    const h = 120;
+    const scene = &conformance.scenes[0];
+    var st: conformance.Storage = .{};
+    st.load(scene);
+
+    var ref_px: [sw.Framebuffer.len(w, h)]u32 = undefined;
+    var ref = sw.Framebuffer.init(&ref_px, w, h, .bgra8);
+    ref.clear(.black);
+    var s: sw.Software = .{};
+    s.prepare({}, &st.draw, st.glyphs(), scene.viewport, 1);
+    iface.render(&s, .{ .fb = &ref, .scissor = ref.all() }, &st.draw);
+
+    const white = [_]Image{.{ .first = 0, .width = 1, .height = 1 }};
+    var dev = Device(.cuda).init(0, .{ .width = w, .height = h, .stride = ref.stride, .quads = 8, .images = 1, .texels = 1 }) catch |err| switch (err) {
+        error.InitFailed, error.NoDevice => return,
+        else => return err,
+    };
+    defer dev.deinit();
+    try dev.setImages(&white, &.{0xffff_ffff});
+    var rq: [8]Quad = undefined;
+    var rt: [8]u32 = undefined;
+    var rec: Recorder = .{ .quads = &rq, .tex = &rt };
+    var gc: Gompute = .{};
+    gc.prepare({}, &st.draw, st.glyphs(), scene.viewport, 1);
+    iface.render(&gc, &rec, &st.draw);
+    var mine_px: [sw.Framebuffer.len(w, h)]u32 = undefined;
+    var mine = sw.Framebuffer.init(&mine_px, w, h, .bgra8);
+    try dev.clear(mine.pack(.black));
+    try dev.draw(&rec, 16, 1); // BGRA8: red at bit 16
+    try dev.present(&mine);
+    for (0..h) |y| for (0..w) |x| try testing.expectEqual(ref.at(@intCast(x), @intCast(y)), mine.at(@intCast(x), @intCast(y)));
 }
