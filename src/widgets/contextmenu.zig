@@ -64,7 +64,7 @@ pub fn checkContext(comptime State: type, comptime def: menu.Def, comptime field
 pub fn ContextMenu(comptime th: Theme, comptime name: @EnumLiteral(), comptime target: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: menu.Def) type {
     const id = @tagName(name);
     const field_name = @tagName(field);
-    _ = target;
+    const target_name = @tagName(target);
     return struct {
         /// The scrim, the list and the submenu, shown while the menu is open, as menu.zig
         /// builds them. Put it last in the page's root so it is drawn above the rest.
@@ -76,9 +76,12 @@ pub fn ContextMenu(comptime th: Theme, comptime name: @EnumLiteral(), comptime t
             return checkContext(State, def, field_name);
         }
 
+        /// The target's rect, the scrim's and the items' responses and the keys, through
+        /// `advance`.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            var hits: menu.Hits = .{ .outside = v.responseOf(partName(id, "scrim")).pressed };
+            inline for (0..comptime def.count()) |k| hits.add(k, v.responseOf(partName(id, def.name(k))));
+            sig.set(field, advance(def, @field(sig.state, field_name), v.last.of(target_name), hits, v.in));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -114,21 +117,57 @@ pub fn listStyle(th: *const Theme, at: [2]f32) Style {
     return s;
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// One frame of a context menu. A press of the secondary button on the target (its rect last
+/// frame) opens the menu with its corner at the pointer, also when it is already open; one
+/// anywhere else closes it. The context-menu key, or Shift+F10 (the APG's keys for it), opens a
+/// closed menu at the target's top-left corner. While it is open it follows `menu.advance`
+/// (a primary press outside it closes it, keys move, choose and close).
+pub fn advance(comptime def: menu.Def, st: ContextState, target: Rect, hits: menu.Hits, in: *const Input) ContextState {
+    var s = st;
+    s.right = in.buttons.right;
+    s.menu.chosen = 0;
+    const p = in.pointer;
+    if (in.buttons.right and !st.right) {
+        const on = p[0] >= target.x0 and p[0] < target.x1 and p[1] >= target.y0 and p[1] < target.y1;
+        s.menu = if (on) .{ .open = true } else .{};
+        s.at = if (on) p else s.at;
+        return s;
+    }
+    if (!s.menu.open) {
+        const k = popover.keys;
+        const key = popover.keyCount(in, k.menu, .{}, false) + popover.keyCount(in, k.f10, .{ .shift = true }, true);
+        if (key != 0) {
+            s.menu = .{ .open = true };
+            s.at = .{ target.x0, target.y0 };
+        }
+        return s;
+    }
+    s.menu = menu.advance(def, s.menu, hits, in.events);
+    return s;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Builds context menu `name` of widget `target` (items `def`, labels `texts` in menu.zig's
 /// one sequence) if it is open. Call it at the root's depth, after the rest of the page, so it
 /// is drawn on top. Returns the item chosen this frame plus one, or 0.
 pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime target: []const u8, comptime def: menu.Def, st: *ContextState, texts: []const []const u8) u8 {
-    _ = target;
     std.debug.assert(texts.len == def.count());
+    // Every response is asked for before anything is built, so the rows show the frame's
+    // final state, as in the comptime front end.
+    const inter = &f.ctx.inter;
+    var hits: menu.Hits = .{ .outside = inter.response(.from(partName(name, "scrim"))).pressed };
+    inline for (0..comptime def.count()) |k| hits.add(k, inter.response(.from(partName(name, def.name(k)))));
+    st.* = advance(def, st.*, f.lastRect(.from(target)), hits, f.in);
     if (!st.menu.open) return st.menu.chosen;
-    _ = f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport));
-    _ = f.open(.from(partName(name, "panel")), listStyle(th, st.at));
+    _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
+    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, st.at)), popover.overlay_sense);
     inline for (0..def.items.len) |k| buildItem(f, th, name, def, st.menu, k, texts[k]);
     f.close();
     if (def.sub_at) |at| if (st.menu.sub) {
-        _ = f.open(.from(partName(name, "sub")), menu.subStyle(th, f.lastRect(.from(partName(name, def.items[at])))));
+        _ = f.interact(f.open(.from(partName(name, "sub")), menu.subStyle(th, f.lastRect(.from(partName(name, def.items[at]))))), popover.overlay_sense);
         inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st.menu, k, texts[k]);
         f.close();
     };
@@ -137,7 +176,7 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime tar
 }
 
 fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, ms: menu.MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.open(.from(partName(name, def.name(k))), menu.itemStyle(th, menu.highlighted(def, ms, k)));
+    _ = f.interact(f.open(.from(partName(name, def.name(k))), menu.itemStyle(th, menu.highlighted(def, ms, k))), popover.overlay_sense);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -244,6 +283,111 @@ test "ContextMenu: another theme restyles both front ends alike" {
     const t = try setState(&S.h, .{ .menu = .{ .open = true, .active = 1 }, .at = .{ 50, 60 } });
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("ctx_panel"))].fill);
     try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("ctx_copy"))].fill);
+}
+
+test "advance: the secondary button and the menu key open it; it then works as a menu" {
+    const target: Rect = .{ .x0 = 10, .y0 = 20, .x1 = 110, .y1 = 120 };
+    const k = popover.keys;
+    var in: Input = .{ .pointer = .{ 50, 60 }, .buttons = .{ .right = true } };
+    var s = advance(edit_menu, .{}, target, .{}, &in);
+    try testing.expect(s.menu.open and s.right);
+    try testing.expectEqual([2]f32{ 50, 60 }, s.at);
+    // Held: not a new press.
+    in.pointer = .{ 70, 80 };
+    s = advance(edit_menu, s, target, .{}, &in);
+    try testing.expectEqual([2]f32{ 50, 60 }, s.at);
+    in.buttons.right = false;
+    s = advance(edit_menu, s, target, .{}, &in);
+    // Pressed again elsewhere on the target: opens there; off the target: closes.
+    in.buttons.right = true;
+    s = advance(edit_menu, s, target, .{}, &in);
+    try testing.expect(s.menu.open);
+    try testing.expectEqual([2]f32{ 70, 80 }, s.at);
+    in.buttons.right = false;
+    s = advance(edit_menu, s, target, .{}, &in);
+    in = .{ .pointer = .{ 300, 300 }, .buttons = .{ .right = true } };
+    s = advance(edit_menu, s, target, .{}, &in);
+    try testing.expect(!s.menu.open);
+    // The menu key and Shift+F10 open at the target's corner; F10 alone does not.
+    const ev = struct {
+        fn of(code: u8, mods: Input.Mods) [1]Input.Event {
+            return .{.{ .kind = .press, .code = code, .mods = mods }};
+        }
+    }.of;
+    var e = ev(k.f10, .{});
+    in = .{ .events = &e };
+    try testing.expect(!advance(edit_menu, .{}, target, .{}, &in).menu.open);
+    e = ev(k.f10, .{ .shift = true });
+    s = advance(edit_menu, .{}, target, .{}, &in);
+    try testing.expect(s.menu.open);
+    try testing.expectEqual([2]f32{ 10, 20 }, s.at);
+    e = ev(k.menu, .{});
+    try testing.expect(advance(edit_menu, .{}, target, .{}, &in).menu.open);
+    // Open, it is a menu: Down, Enter chooses Copy.
+    e = ev(k.down, .{});
+    s = advance(edit_menu, s, target, .{}, &in);
+    e = ev(k.enter, .{});
+    s = advance(edit_menu, s, target, .{}, &in);
+    try testing.expectEqual(@as(u8, 2), s.menu.chosen);
+    try testing.expect(!s.menu.open);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, right: bool = false, key: ?u8 = null };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the context
+/// menu's state equal in both after every step; returns the state after each step.
+fn runScript(comptime n: usize, script: [n]Step) ![n]ContextState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]ContextState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons = .{ .left = st.left, .right = st.right };
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.ctx, h.ui.signals.state.ctx);
+        try testing.expectEqual(h.app.chosen, h.app.ctx.menu.chosen);
+        o.* = h.app.ctx;
+    }
+    return out;
+}
+
+test "ContextMenu: secondary click, pointer and keys in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(10, .{
+        .{ .aim = .{ .at = .{ 100, 80 } }, .right = true }, // on the canvas: open at the pointer
+        .{ .aim = .{ .at = .{ 100, 80 } } },
+        .{ .aim = .{ .part = "ctx_paste" } }, // highlight Paste
+        .{ .aim = .{ .part = "ctx_paste" }, .left = true },
+        .{ .aim = .{ .part = "ctx_paste" } }, // chosen: 3
+        .{ .aim = .{ .at = .{ 390, 290 } }, .key = k.menu }, // the menu key: open at the canvas
+        .{ .aim = .{ .at = .{ 390, 290 } }, .key = k.up }, // wraps to Arrange
+        .{ .aim = .{ .at = .{ 390, 290 } }, .key = k.right }, // its submenu
+        .{ .aim = .{ .at = .{ 390, 290 } }, .left = true }, // press outside: closed
+        .{ .aim = .{ .at = .{ 390, 290 } }, .right = true }, // secondary press off the canvas: stays closed
+    });
+    try testing.expect(s[0].menu.open);
+    try testing.expectEqual([2]f32{ 100, 80 }, s[0].at);
+    try testing.expectEqual(@as(u8, 2), s[2].menu.active);
+    try testing.expectEqual(@as(u8, 3), s[4].menu.chosen);
+    try testing.expect(s[5].menu.open);
+    try testing.expectEqual(@as(u8, 3), s[6].menu.active);
+    try testing.expect(s[7].menu.sub);
+    try testing.expect(!s[8].menu.open and !s[9].menu.open);
 }
 
 test "checkContext: the state field and the items" {
