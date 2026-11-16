@@ -70,3 +70,40 @@ CPU time per frame, median of 15, gompute-play ReleaseFast, on a machine shared 
 The CPU path is a correctness fallback, not a renderer: one scalar thread, every pixel of the
 frame visited, the per-quad setup recomputed per pixel (what a GPU thread does). The software back
 end shades only each quad's box, `simd.lanes` pixels at a time. Where there is no GPU, use sw.
+
+## C0420: launch the kernels on CUDA and HIP
+
+Decision: `Device(backend)` is generic over Gompute's `.cuda` and `.hip`; it owns the device
+buffers it creates (quads, their textures, the image table and texels, the bins, the framebuffer),
+sized once by a `Capacity`, and the host keeps the loop: `clear`, `draw` (upload the recorded quads,
+queue `bin` then `raster`), `download`, `upload`. `init` fails with `error.InitFailed` or
+`error.NoDevice` where there is no driver or card, and the caller takes another path. An inline
+custom draw done on the CPU costs a read-back and an upload between the two GPU segments; the
+`custom` scene checks that route.
+
+HIP is compile-only: the gfx1100 HSACO is built and `Device(.hip)` is analysed by the test, but this
+machine has no AMD card, so nothing ran on HIP.
+
+Measured:
+
+| What | Value |
+|---|---|
+| CUDA against the CPU path, every conformance scene (bin capacity 4) | bit-identical framebuffers (test `device: CUDA draws ...`) |
+| `ci/run.sh gompute-golden`, CPU and CUDA | 26 of 26 golden images, 0 pixels off by more than 2 |
+
+Time per frame on the RTX 4060 (gompute-play ReleaseFast, median of 15, from the clear to the GPU
+being done, including the quad upload and three launches, without the read-back), against the
+software back end on one CPU core of the same machine:
+
+| Scene | Size, quads | CUDA | sw | sw / CUDA |
+|---|---|---|---|---|
+| rects | 160x120, 3 | 29 us | 101 us | 3.5x |
+| text | 160x120, 10 | 40 us | 99 us | 2.5x |
+| custom (read-back and upload in the middle) | 160x120, 2 | 185 us | 227 us | 1.2x |
+| borders | 800x600, 4 | 68 us | 948 us | 14x |
+| opacity | 800x600, 20 | 138 us | 1,810 us | 13x |
+| rounded-clip | 800x600, 7 | 188 us | 1,109 us | 6x |
+| shadows | 800x600, 7 | 204 us | 3,562 us | 17x |
+| transforms | 800x600, 8 | 90 us | 3,151 us | 35x |
+
+At 160x120 the fixed cost of three launches and a synchronisation (about 25 us) is most of the frame.
