@@ -1,0 +1,26 @@
+# Spring slot lookup
+
+The program behind the numbers in commit a2a356d ("Make Anims.slot O(1) in a steady frame"), kept
+so they can be reproduced. `zig build bench -- --scene springs` cannot measure this: tools/bench
+builds its frames with `prototype/ui.zig`. `springs.zig` runs the same scene
+(bench/scenes/springs.zig: a 40 x 25 grid of bars, 1,000 `Frame.animate` calls per frame,
+targets flipping every 30 frames, 3,000 frames) on lcgr's `Context` and prints the median and p99
+of the build only (`begin` to the last `close`; layout and paint are not timed).
+
+| Build | Median build, three alternated runs | p99 |
+|---|---|---|
+| before (3001d5a: `slot` scans every id with `simd.find`) | 155.6, 156.6, 156.6 us | 161.1 to 161.6 us |
+| after (a2a356d: `slot` tries the row after the last one first) | 28.7, 27.8, 28.1 us | 30.6 to 31.6 us |
+
+Zig 0.18.0-dev.1151, ReleaseFast, `-mcpu native` (8 lanes), pinned to one core, Nov 2026.
+
+Build and run from the repository root:
+
+```
+nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgr -Mmain=docs/perf/anim-slot/springs.zig \
+    --dep build_options -Mlcgr=src/lcgr.zig -Mbuild_options=docs/perf/anim-slot/opts.zig -femit-bin=zig-out/springs
+taskset -c 4 zig-out/springs
+```
+
+For "before", extract the old tree (`git archive 3001d5a src | tar -x -C OLD`) and pass
+`-Mlcgr=OLD/src/lcgr.zig` instead; nothing else changes.

@@ -68,6 +68,7 @@ pub const text_query = @import("text/layout/query.zig");
 pub const text_stack = @import("text/layout/stack.zig");
 pub const text_layout_tests = @import("text/layout/tests.zig");
 pub const scheduler = @import("runtime/scheduler.zig");
+pub const reuse = @import("runtime/reuse.zig");
 pub const widgets_base = @import("widgets/base.zig");
 pub const widgets_list = @import("widgets/list.zig");
 pub const widgets_vlist = @import("widgets/vlist.zig");
@@ -89,6 +90,7 @@ pub const widgets_popover = @import("widgets/popover.zig");
 pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const a11y_settings = @import("a11y/settings.zig");
+pub const settings_data = @import("a11y/settings_data.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
 pub const embed = @import("assets/embed.zig");
@@ -107,6 +109,10 @@ pub const fallback_tests = @import("text/fallback/tests.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
 pub const runtime_signals = @import("runtime/signals.zig");
+pub const anims = @import("anim/anims.zig");
+pub const tweens = @import("anim/tweens.zig");
+pub const keyframes = @import("anim/keyframes.zig");
+pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
 
 test {
