@@ -7,6 +7,9 @@
 //!   --idle SECONDS     how long "idle" is (default 0.5): long enough to take a screenshot
 //!   --dump PATH        at the end, write the main window's last frame as committed: width and
 //!                      height (u32, little-endian), then its rows of ARGB words
+//!   --ready PATH       create PATH once the compositor has shown a frame of the main window
+//!                      (its frame callback came back) and nothing is left to draw: a capture
+//!                      taken after that sees the frame `--dump` writes
 //!   --multi            also open a second toplevel and a popup under the Reset button, each
 //!                      running the example with its own context
 
@@ -29,12 +32,14 @@ pub fn main(init: std.process.Init) !void {
     var multi = false;
     var idle_seconds: f32 = 0.5;
     var dump: ?[]const u8 = null;
+    var ready: ?[]const u8 = null;
     var args = init.minimal.args.iterate();
     _ = args.skip();
     while (args.next()) |a| {
         exit_when_idle = exit_when_idle or std.mem.eql(u8, a, "--exit-when-idle");
         multi = multi or std.mem.eql(u8, a, "--multi");
         if (std.mem.eql(u8, a, "--dump")) dump = args.next();
+        if (std.mem.eql(u8, a, "--ready")) ready = args.next();
         if (std.mem.eql(u8, a, "--idle")) idle_seconds = try std.fmt.parseFloat(f32, args.next() orelse "0.5");
     }
 
@@ -77,6 +82,11 @@ pub fn main(init: std.process.Init) !void {
             wake = @min(wake, scheduler.wake(ctx, &evs[k].in));
             pace = @fromBackingInt(@intCast(@max(@backingInt(pace), @backingInt(scheduler.pace(ctx)))));
         }
+        if (!built and shell.presents > 0 and !shell.framePending()) if (ready) |path| {
+            const file = try std.Io.Dir.cwd().createFile(init.io, path, .{});
+            file.close(init.io);
+            ready = null;
+        };
         if (!built and exit_when_idle) {
             const now = shell.clock();
             const since = idle_since orelse now;

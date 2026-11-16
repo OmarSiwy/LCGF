@@ -20,44 +20,59 @@ compositor() { # args: weston options; leaves WAYLAND_DISPLAY and XDG_RUNTIME_DI
 }
 
 # One window, captured while it idles; the frame it committed is dumped beside the capture.
-compositor --renderer=pixman --debug
-timeout 30 "$example" --exit-when-idle --idle 4 --dump "$dir/frame.bin" >"$dir/one.txt" &
-sleep 2
-(cd "$dir" && timeout 10 weston-screenshooter)
+# The kiosk shell has no panel and shows the window fullscreen at (0, 0), so nothing the shell
+# draws lands on it, however late its own client starts under load. The capture waits for the
+# example's --ready (a frame of it was shown) instead of a fixed delay; up to three captures
+# are taken, a few seconds apart, and the check passes on the first that holds the frame.
+compositor --shell=kiosk --renderer=pixman --debug
+timeout 120 "$example" --exit-when-idle --idle 12 --ready "$dir/ready" --dump "$dir/frame.bin" >"$dir/one.txt" &
+for _ in $(seq 600); do [ -e "$dir/ready" ] && break; sleep 0.1; done
+[ -e "$dir/ready" ] || { echo "the example never showed a frame"; exit 1; }
+for shot in 1 2 3; do
+    (cd "$dir" && timeout 20 weston-screenshooter && mv wayland-screenshot-*.png "shot-$shot.png")
+    sleep 2
+done
 wait %2
 cat "$dir/one.txt"
 kill %1; wait %1 2>/dev/null || true
 grep -q "error null" "$dir/one.txt"
 python3 - "$dir" <<'PY'
-import glob, struct, sys
+import struct, sys
 sys.path.insert(0, "tools/golden")
 from golden import read_png
 d = sys.argv[1]
-sw, sh, shot = read_png(glob.glob(d + "/wayland-screenshot-*.png")[0])
 raw = open(d + "/frame.bin", "rb").read()
 fw, fh = struct.unpack("<II", raw[:8])
 def frame(x, y):  # ARGB words, little-endian: B G R A
     i = 8 + (y * fw + x) * 4
     return raw[i + 2], raw[i + 1], raw[i]
+def check(n):
+    global sw, sh, shot
+    sw, sh, shot = read_png(f"{d}/shot-{n}.png")
+    hit = next(((ox, oy) for oy in range(0, 100) for ox in range(0, 100) if fits(ox, oy)), None)
+    if hit is None:
+        print(f"capture {n}: the frame is not in it; its column 80: " + " ".join("%02x%02x%02x" % screen(80, y) for y in range(0, sh, 25)))
+        return False
+    ox, oy = hit
+    # Every pixel of the frame that is on screen must be the frame's.
+    seen = bad = 0
+    for y in range(fh):
+        for x in range(fw):
+            if ox + x < sw and oy + y < sh:
+                seen += 1
+                bad += screen(ox + x, oy + y) != frame(x, y)
+    print(f"capture {n}, {sw}x{sh}: the {fw}x{fh} frame at ({ox}, {oy}), {seen} pixels on screen, {bad} differ")
+    assert seen > fw * fh // 2 and bad == 0, "pixel mismatch"
+    return True
 def screen(x, y):
     i = (y * sw + x) * 4
     return tuple(shot[i:i + 3])
-# Where weston placed the window: the offset at which a few of the frame's pixels line up.
+# Where the window is: the offset at which a few of the frame's pixels line up.
 probes = [(x, y) for x in range(0, min(fw, 400), 37) for y in range(0, min(fh, 300), 29)]
 def fits(ox, oy):
     return all(screen(ox + x, oy + y) == frame(x, y) for x, y in probes if ox + x < sw and oy + y < sh)
-ox, oy = next(((ox, oy) for oy in range(0, 100) for ox in range(0, 100) if fits(ox, oy)), (None, None))
-if ox is None:
-    sys.exit("the frame is not in the screenshot; its column 80: " + " ".join("%02x%02x%02x" % screen(80, y) for y in range(0, sh, 25)))
-# Every pixel of the frame that is on screen must be the frame's.
-seen = bad = 0
-for y in range(fh):
-    for x in range(fw):
-        if ox + x < sw and oy + y < sh:
-            seen += 1
-            bad += screen(ox + x, oy + y) != frame(x, y)
-print(f"screenshot {sw}x{sh}: the {fw}x{fh} frame at ({ox}, {oy}), {seen} pixels on screen, {bad} differ")
-assert seen > fw * fh // 2 and bad == 0
+if not any(check(n) for n in (1, 2, 3)):
+    sys.exit("the frame is in none of the captures")
 PY
 
 # Two toplevels and a popup, at scale 2.
