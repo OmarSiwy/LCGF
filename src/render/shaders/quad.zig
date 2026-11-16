@@ -110,3 +110,50 @@ test "Materials: solid is the stock shader, add hands out indices in order and c
     try std.testing.expectEqual(@as(u16, max_materials - 1), @backingInt(m.add(stripes)));
     try std.testing.expectEqualStrings(stripes, m.source(@fromBackingInt(0xffff)));
 }
+
+test "every variant has one material, one vs and one fs entry point" {
+    for (variants) |v| {
+        try std.testing.expectEqual(1, std.mem.count(u8, v.wgsl, "fn material(in: Frag) -> vec4f"));
+        try std.testing.expectEqual(1, std.mem.count(u8, v.wgsl, "@vertex\nfn vs("));
+        try std.testing.expectEqual(1, std.mem.count(u8, v.wgsl, "@fragment\nfn fs("));
+    }
+}
+
+test "the WGSL Instance struct matches attrs location for location" {
+    const src = @embedFile("quad.wgsl");
+    const start = std.mem.indexOf(u8, src, "struct Instance {").?;
+    const body = src[start..][0..std.mem.indexOfScalar(u8, src[start..], '}').?];
+    var lines = std.mem.tokenizeScalar(u8, body, '\n');
+    _ = lines.next();
+    var n: u32 = 0;
+    while (lines.next()) |line| : (n += 1) {
+        // "    @location(N) name: type,"
+        const t = std.mem.trim(u8, line, " ,");
+        const close = std.mem.indexOfScalar(u8, t, ')').?;
+        const location = try std.fmt.parseInt(u32, t["@location(".len..close], 10);
+        const wgsl_type = t[std.mem.indexOf(u8, t, ": ").? + 2 ..];
+        const a = attrs[n];
+        try std.testing.expectEqual(a.location, location);
+        // The vertex format each WGSL input type accepts.
+        const ok = if (std.mem.eql(u8, wgsl_type, "vec4f"))
+            std.mem.eql(u8, a.format, "float32x4") or std.mem.eql(u8, a.format, "unorm8x4")
+        else if (std.mem.eql(u8, wgsl_type, "vec4u"))
+            std.mem.eql(u8, a.format, "uint32x4")
+        else if (std.mem.eql(u8, wgsl_type, "vec2f"))
+            std.mem.eql(u8, a.format, "float32x2")
+        else
+            std.mem.eql(u8, wgsl_type, "f32") and std.mem.eql(u8, a.format, "float32");
+        try std.testing.expect(ok);
+    }
+    try std.testing.expectEqual(attrs.len, n);
+}
+
+test "the WGSL feature codes match features.Kind" {
+    const Kind = @import("../../draw/features.zig").Kind;
+    const src = @embedFile("quad.wgsl");
+    inline for (.{ "k_linear", "k_radial", "k_shadow", "k_nine", "k_dashed", "k_dotted" }, .{ Kind.linear, Kind.radial, Kind.shadow, Kind.nine_slice, Kind.dashed, Kind.dotted }) |name, kind| {
+        var buf: [64]u8 = undefined;
+        const decl = try std.fmt.bufPrint(&buf, "const {s} = {d}u;", .{ name, @backingInt(kind) });
+        try std.testing.expectEqual(1, std.mem.count(u8, src, decl));
+    }
+}
