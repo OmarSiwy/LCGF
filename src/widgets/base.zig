@@ -427,7 +427,23 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
                     tb.t.seal(i);
                 },
-                .radio, .radio_option => @compileError("the comptime radio group is built from C0552 on"),
+                .radio => {
+                    const g = tb.t.push(parent, .hash(radio_zig.groupName(n.children[0].id.?)), &n.style);
+                    inline for (n.children) |o| {
+                        next.* += 1;
+                        const id = radio_zig.optionId(.hash(radio_zig.groupName(o.id.?)), o.index);
+                        const i = tb.t.push(g, id, &o.style);
+                        next.* += 2;
+                        const ring = tb.t.push(i, .none, &radio_zig.ringStyle(&th));
+                        _ = tb.t.push(ring, .none, &radio_zig.dotStyle(&th, false));
+                        tb.t.seal(ring);
+                        ui.push(o.children[1], i, next, in);
+                        tb.t.seal(i);
+                    }
+                    tb.t.seal(g);
+                    radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
+                },
+                .radio_option => unreachable, // pushed by its group
                 .row, .col, .button => {
                     var s = n.style;
                     // A container with an id is a button (kind `.button` always has one).
