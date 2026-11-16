@@ -1,0 +1,108 @@
+# LCGR performance results
+
+The measured numbers, in one place, with the conditions they were taken under and the commit
+that produced each one. Every number here comes from a tool in docs/CHECKS.md and can be
+reproduced with the command given under it. Where LCGR is not the fastest, this file says so.
+
+Machine for every number below unless a section says otherwise: Intel Core i9-14900HX
+(32 hardware threads), 31 GiB RAM, Linux 7.0.10, Zig 0.18.0-dev.1151+8dfb7a7cc, ReleaseFast,
+benchmark pinned to one CPU. Timings are medians. "Load" is the 1-minute load average during
+the run; above about 8 (a quarter of the CPUs) timings on this machine inflate by up to 40%.
+
+Last measured: 2026-11-16.
+
+## Against other GUI libraries
+
+The same five scenes built in eight libraries, each through its own API, on the CPU, no window
+(bench/vs/, docs/perf/vs.md for what a frame is in each). LCGR at main 3d4f32a (perf-gaps
+branch merged); the other libraries at the versions in docs/perf/vs.md. Quiet run: load 4 to 6,
+pinned, `measure.py --runs 3`.
+
+| Scene | LCGR | Fastest other | Ratio | Gate |
+|---|---|---|---|---|
+| form, per poll | 0.1 us | LVGL 9.6.0, 1.6 us | 0.06x | met |
+| text, per poll | 0.1 us | LVGL 9.6.0, 1.0 us | 0.10x | met |
+| resize, per frame | 17.6 us | Clay 0.14, 29.4 us | 0.60x (0.57x in the gates run) | met |
+| list, per frame | 12.2 us | Dear ImGui 1.93.0, 11.9 us | 1.03x | not met (within run-to-run spread) |
+| springs, per frame | 75.4 us | Dear ImGui 1.93.0, 57.0 us | 1.32x | not met |
+| Resident memory after one idle frame | 1,624 KiB | Clay, 2,076 KiB | 0.78x | met |
+| Time to first frame | 0.47 ms | Clay, 0.45 ms | 1.04x | not met |
+| Idle wake-ups per second | 0 | Clay, ImGui, egui, Iced, Slint, Qt Quick: 0 (LVGL 30) | | met |
+
+form and text are timed per poll in every harness: each library decides for itself whether a
+poll needs work. In these two scenes only the pointer moves; LVGL redraws nothing it does not
+need to, and LCGR since 63e0c92 builds no frame for a pointer move over nodes that sense
+nothing (908 of 3,000 polls built in form, 2 of 3,000 in text). list, springs and resize build
+every frame in every harness.
+
+The resize row is from the gates run of docs/perf/vs.md (load 3 to 5); the other rows from the
+quiet run above.
+
+Reproduce: `nix develop .#vs -c ci/run.sh gates-vs` (builds all eight harnesses and measures
+them in one run; bench/gates/README.md is the published gate table).
+
+### How the gaps closed (perf-gaps branch)
+
+| Gate | Before | After | What changed |
+|---|---|---|---|
+| form against LVGL | 22.6x | 0.06x | 63e0c92: no frame for pointer moves over nodes that sense nothing |
+| text against LVGL | 17.9x | 0.10x | same |
+| Resident memory against Clay | 12,104 KiB, 5.66x | 1,624 KiB, 0.78x | 01c5d19 (harness: no differential check in the idle probe), 411f77f (`Carver.zeroed`: untouched capacity never becomes resident), 3d4f32a (no 256 KB signal stack) |
+| Time to first frame against Clay | 2.90 ms | 0.47 ms | same three commits |
+| Benchmark binary bss | 13.86 MB | 11.81 MB | 661c4e1, 3d4f32a |
+
+Springs is the gap left: its profile is flat (Tree.push 26%, paint 16%, the scene's animation
+15%, level resolve 13%); ImGui places each bar in one pass, LCGR runs its full flex layout over
+every node. docs/perf/vs.md has the breakdown.
+
+## GPU back end: native Vulkan against wgpu-native
+
+The Vulkan back end (src/render/vk) and the wgpu back end over wgpu-native v29, on the same
+driver: Mesa 26.3 lavapipe (LLVM 21.1.8), ReleaseFast, offscreen targets. Commit 351c6c9
+(C0389); identical across three runs to 0.1 MB.
+
+| | LCGR Vulkan | wgpu-native | Difference |
+|---|---|---|---|
+| Resident, device only | 68,908 KiB | 76,004 KiB | 7.1 MB less |
+| Resident, empty 800x600 frame | 74,052 KiB | 81,360 KiB | 7.3 MB less |
+| Resident, after 2,000 scene frames | 92,080 KiB | 105,936 KiB | 13.9 MB less |
+| CPU time per frame | 5.3 to 7.0 us | 34.6 to 44.8 us | about 6x less |
+| Idle wake-ups | 0 | 0 | |
+
+lavapipe itself is about 67 MB of every resident number; the comparison isolates wgpu-native's
+own share. A hardware driver's baseline was not measured (no GPU driver in the dev shell).
+
+Reproduce: `nix develop .#golden -c ci/run.sh vk-probe`.
+
+## Size
+
+| Build | Size | Commit |
+|---|---|---|
+| Layout only, wasm32, ReleaseSmall | 31,509 B (13,422 B gzipped) | 0fff7c1 (C0416) |
+| `hello.wasm`, the smallest web example | 40,450 B | 0fff7c1 |
+| `scenes.wasm`, all four render conformance scenes | 69,943 B | 0fff7c1 |
+| Bare-metal example, Cortex-M7, ReleaseSmall, text / data / bss | 113,126 / 60 / 663,680 B | 60a7d2d (C0500) |
+| Bare-metal example, RV32IMAC, ReleaseSmall, text / data / bss | 203,432 / 60 / 663,680 B | 60a7d2d |
+
+For the wasm layout size, Clay states 15 kB for its own; Clay's wasm was not built here.
+
+Reproduce: `nix develop .#web -c ci/run.sh web-size`, `nix develop -c ci/run.sh baremetal`.
+
+## Exactness
+
+Not speed, but the numbers behind "every back end draws the same frame":
+
+- Every render conformance scene matches its golden image at 0 pixels off on wgpu, Vulkan,
+  GL ES 3, GL ES 2, the software renderer, WebGPU and the 2D canvas in headless Chromium 157,
+  and Direct3D 12 under Wine (vkd3d on lavapipe). Metal is built but has not run on a device.
+- Widget pages: 127 golden frames at 0 pixels off (`ci/run.sh widget-golden`).
+- Bidirectional text: 45,832 lines of Unicode's BidiCharacterTest laid out in the file's
+  visual order with its levels (7d498b9, C0850; `zig build text-conformance`).
+- Accessibility: the Orca screen reader announces the example on Linux (f08db3d, C0739;
+  `ci/run.sh accesskit-linux`).
+
+## Updating this file
+
+Re-measure on a quiet machine (load below 8), pinned, and replace a row only with a newer
+measurement from the same tool. Keep rows that are not met; move a row to "met" only when the
+gates run shows it.
