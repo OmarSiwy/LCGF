@@ -447,8 +447,9 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         m.mark(12);
         const out = f.finish();
         m.mark(13);
-        // Differential check, untimed: the first frame draws what the prototype's first frame draws.
-        if (r.built == 0) try sameDrawList(try prototypeFirst(index), out.draw);
+        // Differential check, untimed: the first frame draws what the prototype's first frame
+        // draws. Not under --idle (one poll), whose memory and start-up are LCGR's alone.
+        if (r.built == 0 and polls > 1) try sameDrawList(try prototypeFirst(index), out.draw);
         r.sink +%= out.draw.cmd_len + out.draw.quad_len;
         r.nodes = t.len;
         r.texts = tx.len;
