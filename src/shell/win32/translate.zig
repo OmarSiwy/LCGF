@@ -233,6 +233,33 @@ pub const Translator = struct {
         t.n_text += @intCast(n);
     }
 
+    /// Clipboard text (`CF_UNICODETEXT`) delivered as typed text, the way `keyboard.Clipboard`
+    /// asks a host to answer a paste: one `.text` event, line ends as `\n`, other control
+    /// characters but tabs left out. A paste that does not fit is dropped whole.
+    pub fn paste(t: *Translator, units: []const u16) void {
+        const at = t.n_text;
+        var it = std.unicode.Utf16LeIterator.init(units);
+        while (it.nextCodepoint() catch null) |cp| {
+            if (cp < 0x20 and cp != '\n' and cp != '\t') continue;
+            if (cp == 0x7f) continue;
+            const n = std.unicode.utf8CodepointSequenceLength(cp) catch continue;
+            if (t.text.len - t.n_text < n) {
+                t.n_text = at;
+                t.dropped += 1;
+                return;
+            }
+            _ = std.unicode.utf8Encode(cp, t.text[t.n_text..][0..n]) catch unreachable;
+            t.n_text += n;
+        }
+        if (t.n_text == at) return;
+        if (t.n_events == t.events.len) {
+            t.n_text = at;
+            t.dropped += 1;
+            return;
+        }
+        t.push(.{ .kind = .text, .mods = t.in.mods, .at = at, .len = t.n_text - at });
+    }
+
     fn push(t: *Translator, e: Input.Event) void {
         if (t.n_events == t.events.len) {
             t.dropped += 1;
@@ -250,6 +277,28 @@ pub const Translator = struct {
         return !t.closed;
     }
 };
+
+/// `utf8` as clipboard text (`CF_UNICODETEXT`): UTF-16 with `\r\n` line ends and a NUL, in
+/// `out`, which needs `clipboardUnits(utf8.len)` units. Null if `utf8` is not valid UTF-8.
+pub fn clipboardText(utf8: []const u8, out: []u16) ?[]u16 {
+    if (!std.unicode.utf8ValidateSlice(utf8)) return null;
+    var n: usize = 0;
+    var lines = std.mem.splitScalar(u8, utf8, '\n');
+    while (lines.next()) |line| {
+        n += std.unicode.utf8ToUtf16Le(out[n..], line) catch unreachable;
+        if (lines.index == null) break;
+        out[n..][0..2].* = .{ '\r', '\n' };
+        n += 2;
+    }
+    out[n] = 0;
+    return out[0 .. n + 1];
+}
+
+/// UTF-16 units `clipboardText` may need for `len` bytes of UTF-8: one per byte at most, two
+/// for a `\n`, and the NUL.
+pub fn clipboardUnits(len: usize) usize {
+    return 2 * len + 1;
+}
 
 /// Recorded window messages, replayed one frame per `next`, so tests drive the translator (and,
 /// on Windows, a real window) with the messages a session produced. UTF-8 text, one line each:
@@ -538,6 +587,31 @@ test "translate: per-monitor DPI scales the viewport and the pointer" {
         try testing.expectEqual(w.viewport, ev.in.viewport);
         try testing.expectEqual(w.pointer, ev.in.pointer);
     }
+}
+
+test "clipboard: pasted text is typed in one event, copied text gets CRLF" {
+    var text: [32]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    t.feed(.{ .msg = @backingInt(Wm.char), .wparam = 'x' });
+    t.paste(std.unicode.utf8ToUtf16LeStringLiteral("one\r\ntwo\t\u{1f600}\x07"));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("xone\ntwo\t\u{1f600}", ev.in.text);
+    try testing.expectEqual(@as(usize, 2), ev.in.events.len);
+    try testing.expectEqualStrings("one\ntwo\t\u{1f600}", ev.in.typed(ev.in.events[1]));
+
+    // Too long for what is left: nothing of it is typed.
+    t.begin();
+    t.paste(std.unicode.utf8ToUtf16LeStringLiteral("0123456789012345678901234567890123456789"));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(u32, 1), t.dropped);
+
+    var out: [clipboardUnits(8)]u16 = undefined;
+    const want = std.unicode.utf8ToUtf16LeStringLiteral("a\r\n\u{e9}\u{1f600}");
+    try testing.expectEqualSlices(u16, want[0 .. want.len + 1], clipboardText("a\n\u{e9}\u{1f600}", &out).?);
+    try testing.expectEqual(null, clipboardText("\xff", &out));
 }
 
 test "translate: a full frame drops what does not fit and counts it" {

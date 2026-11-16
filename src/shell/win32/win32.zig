@@ -91,6 +91,8 @@ const mwmo_inputavailable = 0x0004;
 const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
+const cf_unicodetext = 13;
+const gmem_moveable = 0x0002;
 const wm_setcursor = 0x0020;
 /// WM_SETCURSOR's hit-test code for the client area; the frame's codes keep the system's
 /// resize arrows.
@@ -127,6 +129,16 @@ extern "user32" fn AdjustWindowRectExForDpi(*RECT, style: u32, menu: BOOL, ex_st
 extern "user32" fn SetWindowPos(HWND, after: ?HWND, x: i32, y: i32, w: i32, h: i32, flags: u32) callconv(.winapi) BOOL;
 extern "user32" fn LoadCursorW(instance: ?HINSTANCE, name: usize) callconv(.winapi) ?HANDLE;
 extern "user32" fn SetCursor(?HANDLE) callconv(.winapi) ?HANDLE;
+extern "user32" fn OpenClipboard(?HWND) callconv(.winapi) BOOL;
+extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;
+extern "user32" fn EmptyClipboard() callconv(.winapi) BOOL;
+extern "user32" fn GetClipboardData(format: u32) callconv(.winapi) ?HANDLE;
+extern "user32" fn SetClipboardData(format: u32, data: ?HANDLE) callconv(.winapi) ?HANDLE;
+extern "kernel32" fn GlobalAlloc(flags: u32, bytes: usize) callconv(.winapi) ?HANDLE;
+extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
+extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
+extern "kernel32" fn GlobalSize(HANDLE) callconv(.winapi) usize;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -224,7 +236,11 @@ pub const Win32 = struct {
             _ = TranslateMessage(&m);
             _ = DispatchMessageW(&m);
         }
-        return w.t.frame(ev);
+        const open = w.t.frame(ev);
+        // Cleared after, not before: what arrives between polls (a `paste`, the messages
+        // `apply` causes) belongs to the next frame.
+        w.t.begin();
+        return open;
     }
 
     pub fn apply(w: *Win32, p: *const Platform) void {
@@ -232,7 +248,41 @@ pub const Win32 = struct {
         // Shown now if the pointer is over the client area; WM_SETCURSOR keeps it there.
         if (cursor != w.cursor and w.t.in.pointer[0] >= 0) _ = SetCursor(cursor);
         w.cursor = cursor;
+        if (p.clipboard.len > 0) w.copy(p.clipboard);
         w.applied = p.*;
+    }
+
+    /// Puts UTF-8 text on the clipboard. Called by `apply` for `Platform.clipboard`. Invalid
+    /// UTF-8, or a clipboard another program holds open, leaves the clipboard as it was.
+    pub fn copy(w: *Win32, utf8: []const u8) void {
+        const units = translate.clipboardUnits(utf8.len);
+        const mem_h = GlobalAlloc(gmem_moveable, units * 2) orelse return;
+        const dst: [*]u16 = @ptrCast(@alignCast(GlobalLock(mem_h) orelse {
+            _ = GlobalFree(mem_h);
+            return;
+        }));
+        const ok = translate.clipboardText(utf8, dst[0..units]) != null;
+        _ = GlobalUnlock(mem_h);
+        if (ok and OpenClipboard(w.hwnd) != 0) {
+            _ = EmptyClipboard();
+            // On success the clipboard owns the memory.
+            const owned = SetClipboardData(cf_unicodetext, mem_h) != null;
+            _ = CloseClipboard();
+            if (owned) return;
+        }
+        _ = GlobalFree(mem_h);
+    }
+
+    /// Types the clipboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
+    /// host to: call it after a frame whose widgets requested a paste.
+    pub fn paste(w: *Win32) void {
+        if (OpenClipboard(w.hwnd) == 0) return;
+        defer _ = CloseClipboard();
+        const h = GetClipboardData(cf_unicodetext) orelse return;
+        const src: [*]const u16 = @ptrCast(@alignCast(GlobalLock(h) orelse return));
+        defer _ = GlobalUnlock(h);
+        const cap = GlobalSize(h) / 2;
+        w.t.paste(src[0 .. std.mem.indexOfScalar(u16, src[0..cap], 0) orelse cap]);
     }
 
     /// Draws the frame in software and copies it to the client area.
@@ -396,4 +446,16 @@ test "win32: a real window runs the example from posted messages" {
     try testing.expectEqual(context.Cursor.arrow, w.applied.cursor);
     try testing.expectEqual(LoadCursorW(null, translate.cursor_ids[0]), w.cursor);
     try testing.expect(w.cursor != null);
+}
+
+test "win32: copy then paste round-trips through the system clipboard" {
+    var w: Win32 = undefined;
+    try Fixture.open(&w);
+    defer w.deinit();
+    var ev: Events = .{};
+    _ = w.poll(&ev);
+    w.apply(&.{ .clipboard = "two\nlines \u{e9}" });
+    w.paste();
+    try testing.expect(w.poll(&ev));
+    try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
 }
