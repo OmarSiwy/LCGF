@@ -375,10 +375,10 @@ pub const Editor = struct {
         // Left and Right without Shift collapse a selection to its edge.
         const shown = if (ed.mode.password) null else cx.bidi;
         if (c == ks.left) {
-            const v = if (shown) |b| moves.visual(t, at, -1, cx.direction, b) else null;
+            const v = if (shown) |b| moves.visual(t, at, -1, cx.direction, laid_out, b) else null;
             ed.caret = if (some and !shift and !word) sel[0] else if (word) ed.wordBefore(t, at) else v orelse moves.prevGrapheme(t, at);
         } else if (c == ks.right) {
-            const v = if (shown) |b| moves.visual(t, at, 1, cx.direction, b) else null;
+            const v = if (shown) |b| moves.visual(t, at, 1, cx.direction, laid_out, b) else null;
             ed.caret = if (some and !shift and !word) sel[1] else if (word) ed.wordAfter(t, at) else v orelse moves.nextGrapheme(t, at);
         } else if (c == ks.home) {
             ed.caret = if (word) 0 else if (view) |v| v.home(at) else moves.lineStart(t, at);
