@@ -9,6 +9,8 @@ const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 const none = types.none;
 const Tree = @import("../core/tree.zig").Tree;
+const Texts = @import("../core/texts.zig").Texts;
+const Strings = @import("../core/strings.zig").Strings;
 
 /// What a node is to assistive technology: the roles the WAI-ARIA Authoring Practices patterns
 /// use. One byte, stored in `Tree.Columns.role`. The first eight are `types.Role` with the same
@@ -147,6 +149,10 @@ pub const Semantics = struct {
         first_text: []u32,
         /// Text run that names the node, or `none`.
         name: []u32,
+
+        // ---- scratch of `flatten`
+        /// Export row of the node, or of its nearest exported ancestor, or `none`.
+        ix: []u32,
     };
 
     /// Carves every column from `carver`, `simd.rows(cap)` rows each. With a counting carver
@@ -209,6 +215,103 @@ pub fn states(t: *const Tree, s: *Semantics) void {
         const on = -%@as(u8, @intFromBool(c.value[k] != 0));
         st[k] |= (checkable[c.role[k]] & on) | (st[c.parent[k]] & disabled);
     }
+}
+
+/// The semantic tree as flat arrays, the form a bridge hands to the platform: one row per
+/// node with a role, in tree order (parents before children), parents as export rows.
+/// Presentational nodes (`Role.none`) are left out and their children move up to the nearest
+/// exported ancestor. Names are byte ranges in the frame's `Strings`.
+pub const Export = struct {
+    len: u32 = 0,
+    cap: u32,
+    c: Columns,
+
+    pub const Columns = struct {
+        /// Stable across frames: the node's `Id`, or for an anonymous node one derived from its
+        /// exported parent's id and its position among that parent's exported children.
+        id: []u32,
+        /// Row in the tree.
+        node: []u32,
+        /// Export row of the parent; `none` for the root.
+        parent: []u32,
+        role: []u8,
+        state: []u8,
+        value: []f32,
+        /// The name's bytes in the frame's `Strings`; 0 bytes when the node has no name.
+        name_start: []u32,
+        name_bytes: []u32,
+        /// FNV-1a of the name's bytes, so a later frame compares names without this frame's
+        /// `Strings`.
+        name_hash: []u32,
+        /// Snapped layout rect x0, y0, x1, y1, in logical pixels.
+        rect: [4][]f32,
+        /// Number of exported children.
+        kids: []u32,
+        /// Order-sensitive hash of the children's ids: changes when a child is added, removed
+        /// or moved.
+        kids_hash: []u32,
+    };
+
+    /// Carves every column from `carver`, `simd.rows(cap)` rows each, for a tree of `cap`
+    /// nodes. With a counting carver this sizes the buffer instead.
+    pub fn init(carver: *mem.Carver, cap: u32) Export {
+        std.debug.assert(cap > 0);
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+};
+
+/// Writes the semantic tree of `t` to `out`. Run `names` and `states` first; `tx` and `strings`
+/// are the frame's text runs and bytes the names point into. One forward sweep that writes
+/// every row and advances by 0 or 1; `s.c.ix` maps tree rows to export rows on the way.
+pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semantics, out: *Export) void {
+    std.debug.assert(out.cap >= t.len and s.cap >= t.len);
+    const c = &t.c;
+    const o = &out.c;
+    const ix = s.c.ix;
+    // Row `out.cap` is never a kept row (w < len <= cap). It stands in as the parent of nodes
+    // with no exported parent, so their anonymous ids are numbered like any siblings'.
+    const spare = out.cap;
+    o.id[spare] = 0;
+    o.kids[spare] = 0;
+    o.kids_hash[spare] = 0;
+    const last_run = tx.cap - 1;
+    ix[0] = none; // the root's parent is itself: it reads `none` before writing its own row
+    var w: u32 = 0;
+    for (0..t.len) |k| {
+        const keep = c.role[k] != 0;
+        const par = ix[c.parent[k]];
+        ix[k] = simd.selU(keep, w, par);
+        const pi = @min(par, spare);
+        const counts = keep;
+
+        const tid = c.id[k];
+        const derived = @backingInt(@as(types.Id, @fromBackingInt(o.id[pi])).with(o.kids[pi]));
+        const id = simd.selU(tid != 0, tid, derived);
+        const old_hash = o.kids_hash[pi];
+        o.kids_hash[pi] = simd.selU(counts, (old_hash ^ id) *% 0x0100_0193, old_hash);
+        o.kids[pi] += @intFromBool(counts);
+
+        const run = s.c.name[k];
+        const named = -%@as(u32, @intFromBool(run != none));
+        const rr = @min(run, last_run);
+        const start = tx.c.start[rr] & named;
+        const bytes = tx.c.bytes[rr] & named;
+
+        o.id[w] = id;
+        o.node[w] = @intCast(k);
+        o.parent[w] = par;
+        o.role[w] = c.role[k];
+        o.state[w] = s.c.state[k];
+        o.value[w] = c.value[k];
+        o.name_start[w] = start;
+        o.name_bytes[w] = bytes;
+        o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]);
+        inline for (0..4) |e| o.rect[e][w] = c.rect[e][k];
+        o.kids[w] = 0;
+        o.kids_hash[w] = 0;
+        w += @intFromBool(keep);
+    }
+    out.len = w;
 }
 
 const testing = std.testing;
@@ -391,4 +494,129 @@ test "tree export: states come from the application, checkable values and disabl
     try testing.expectEqual(State{}, got(&s, button));
     try testing.expectEqual(State{}, got(&s, item));
     try testing.expectEqual(State{ .checked = true }, got(&s, on));
+}
+
+/// A whole frame's worth of columns for the export tests: tree, text runs, bytes, the semantic
+/// columns and two exports (this frame's and last frame's).
+fn FrameFixture(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        bytes_buf: [1024]u8 = undefined,
+        t: Tree = undefined,
+        tx: Texts = undefined,
+        str: Strings = undefined,
+        s: Semantics = undefined,
+        out: [2]Export = undefined,
+
+        fn carve(f: ?*Self, carver: *mem.Carver) void {
+            const t = Tree.init(carver, cap);
+            const tx = Texts.init(carver, cap);
+            const s = Semantics.init(carver, cap);
+            const out = [2]Export{ Export.init(carver, cap), Export.init(carver, cap) };
+            if (f) |x| {
+                x.t = t;
+                x.tx = tx;
+                x.s = s;
+                x.out = out;
+                x.str = .{ .buf = &x.bytes_buf };
+            }
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(40_000);
+            var counter: mem.Carver = .{ .buf = null };
+            carve(null, &counter);
+            break :blk counter.off;
+        };
+        fn init(f: *Self) void {
+            var carver: mem.Carver = .{ .buf = &f.buf };
+            carve(f, &carver);
+            f.s.clear();
+        }
+        /// Starts a new frame, as a front end does.
+        fn reset(f: *Self) void {
+            f.t.reset();
+            f.tx.reset();
+            f.str.reset();
+            f.s.clear();
+        }
+        /// A text leaf with role label, as `Frame.text` makes one.
+        fn text(f: *Self, parent: u32, str: []const u8) u32 {
+            const n = f.t.push(parent, .none, &.{ .role = .label });
+            f.t.c.text[n] = f.tx.push(n, f.str.add(str), &.{});
+            f.t.seal(n);
+            return n;
+        }
+        fn run(f: *Self, gen: u1) *Export {
+            names(&f.t, &f.s);
+            states(&f.t, &f.s);
+            flatten(&f.t, &f.tx, f.str.buf[0..f.str.len], &f.s, &f.out[gen]);
+            return &f.out[gen];
+        }
+        fn name(f: *const Self, e: *const Export, r: u32) []const u8 {
+            return f.str.buf[e.c.name_start[r]..][0..e.c.name_bytes[r]];
+        }
+    };
+}
+
+test "tree export: flat arrays in tree order, presentational nodes skipped, parents remapped" {
+    var f: FrameFixture(32) = .{};
+    f.init();
+    const t = &f.t;
+    // root "app" { box { button "save" { label "Save" } }, checkbox "bold" (on) { mark, label "Bold" },
+    //              label "Volume", slider "vol" (0.25, labelled by "Volume") }
+    const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const box = t.push(root, .none, &.{});
+    const save = t.push(box, types.Id.from("save"), &.{ .role = .button });
+    _ = f.text(save, "Save");
+    t.seal(save);
+    t.seal(box);
+    const bold = t.push(root, types.Id.from("bold"), &.{ .role = .checkbox, .value = 1 });
+    t.seal(t.push(bold, .none, &.{}));
+    _ = f.text(bold, "Bold");
+    t.seal(bold);
+    const volume = f.text(root, "Volume");
+    const vol = t.push(root, types.Id.from("vol"), &.{ .role = .slider, .value = 0.25 });
+    t.seal(vol);
+    t.seal(root);
+    try t.check();
+    t.c.rect[2][vol] = 120;
+    f.s.c.labelled_by[vol] = volume;
+
+    const e = f.run(0);
+    const o = &e.c;
+    // Tree rows: 0 root, 1 box, 2 save, 3 "Save", 4 bold, 5 mark, 6 "Bold", 7 "Volume", 8 vol.
+    try testing.expectEqual(7, e.len);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 4, 6, 7, 8 }, o.node[0..7]);
+    try testing.expectEqualSlices(u32, &.{ none, 0, 1, 0, 3, 0, 0 }, o.parent[0..7]);
+    const R = struct {
+        fn b(r: Role) u8 {
+            return @backingInt(r);
+        }
+    };
+    try testing.expectEqualSlices(u8, &.{ R.b(.group), R.b(.button), R.b(.label), R.b(.checkbox), R.b(.label), R.b(.label), R.b(.slider) }, o.role[0..7]);
+    try testing.expectEqualSlices(u32, &.{ 4, 1, 0, 1, 0, 0, 0 }, o.kids[0..7]);
+    try testing.expectEqualStrings("", f.name(e, 0));
+    try testing.expectEqualStrings("Save", f.name(e, 1));
+    try testing.expectEqualStrings("Save", f.name(e, 2));
+    try testing.expectEqualStrings("Bold", f.name(e, 3));
+    try testing.expectEqualStrings("Volume", f.name(e, 5));
+    try testing.expectEqualStrings("Volume", f.name(e, 6));
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Save"), o.name_hash[1]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash(""), o.name_hash[0]);
+    try testing.expectEqual(State{ .checked = true }, @as(State, @bitCast(o.state[3])));
+    try testing.expectEqual(0.25, o.value[6]);
+    try testing.expectEqual(120, o.rect[2][6]);
+    // Ids: the node's own, else derived from the exported parent and the position among its
+    // exported children: "Save" is child 0 of save, "Volume" child 2 of the root.
+    try testing.expectEqual(@backingInt(types.Id.from("app")), o.id[0]);
+    try testing.expectEqual(@backingInt(types.Id.from("save")), o.id[1]);
+    try testing.expectEqual(@backingInt(types.Id.from("save").with(0)), o.id[2]);
+    try testing.expectEqual(@backingInt(types.Id.from("bold").with(0)), o.id[4]);
+    try testing.expectEqual(@backingInt(types.Id.from("app").with(2)), o.id[5]);
+    // Ids are unique, and every parent is an earlier row.
+    for (0..e.len) |a| {
+        for (0..a) |b| try testing.expect(o.id[a] != o.id[b]);
+        try testing.expect(a == 0 or o.parent[a] < a);
+    }
 }

@@ -238,5 +238,10 @@
     "jcc": 4,
     "back": 1,
     "short_fwd": 1
+  },
+  "p_a11y_flatten": {
+    "jcc": 7,
+    "back": 4,
+    "short_fwd": 1
   }
 }
