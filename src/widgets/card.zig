@@ -65,17 +65,14 @@ pub const ct = struct {
     }
 };
 
-// ---- tests --------------------------------------------------------------------------------
+// ---- example page -------------------------------------------------------------------------
 
-const testing = std.testing;
 const context = @import("../runtime/context.zig");
 const Input = @import("../core/input.zig").Input;
-const Tree = @import("../core/tree.zig").Tree;
-const hit = @import("../interact/hit.zig");
-const focus = @import("../interact/focus.zig");
 
-/// A card holding a button and a group box holding a checkbox, in both front ends.
-fn Page(comptime th: Theme) type {
+/// The example page: a card titled "Render" holding a button and a group box "Options" with a
+/// checkbox, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     return struct {
         pub const App = struct {
             wire: bool = false,
@@ -103,6 +100,22 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/card.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/card-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "checked", 7 },
+};
+
+// ---- tests --------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Tree = @import("../core/tree.zig").Tree;
+const hit = @import("../interact/hit.zig");
+const focus = @import("../interact/focus.zig");
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -258,6 +271,40 @@ test "card: role group, named by its title, value 0, no states, in both front en
     sem.c.state[1] = a11y.State.bitsOf(.{ .disabled = true });
     a11y.states(out.runtime.tree, &sem);
     try testing.expectEqual(sem.c.state[1], sem.c.state[out.runtime.tree.find(.from("go"))]);
+}
+
+test "card: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var clicks: [8]bool = undefined;
+    var wire: [8]bool = undefined;
+    var fills: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        clicks[k] = if (out.comptime_.event) |e| e == .go else false;
+        wire[k] = h.ui.signals.state.wire;
+        try testing.expectEqual(h.app.wire, wire[k]);
+        fills[k] = t.c.look[t.find(.from("go"))].fill;
+        // The card keeps its look whatever the pointer does.
+        try testing.expectEqual(Theme.default.panel.bitsOf(), t.c.look[1].fill);
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, true, false, false, false, false }, &clicks);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, false, false, true }, &wire);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf(), c[0].bitsOf() }, fills[0..5]);
+}
+
+test "golden_frames: name frames the card replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {

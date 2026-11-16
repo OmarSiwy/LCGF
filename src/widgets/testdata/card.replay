@@ -1,0 +1,31 @@
+# Recorded input for the card example page (widgets/card.zig, `Page`), at 320 x 200 in the
+# default theme: the card at 0..130 x 0..136, the Go button at 8..41 x 32..65, the group box at
+# 8..122 x 71..128 with the Wireframe checkbox at 16..114 x 103..120 (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: hover Go
+frame
+pointer 24 48
+# 2: hold it
+frame
+buttons left
+# 3: release over it: a click
+frame
+buttons
+# 4: press in the card's padding: nothing takes it
+frame
+pointer 4 4
+buttons left
+# 5: release: nothing
+frame
+buttons
+# 6: press Wireframe inside the group box
+frame
+pointer 60 111
+buttons left
+# 7: release: checked
+frame
+buttons
