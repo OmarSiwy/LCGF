@@ -19,6 +19,7 @@ const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
 const moves = @import("../text/edit/moves.zig");
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -41,7 +42,7 @@ pub fn bindError(comptime State: type, comptime name: []const u8, comptime rows:
 // ---- look -----------------------------------------------------------------------------------
 
 /// The box: as wide as it is given (at least 80), `rows` lines tall, inset, its border the
-/// accent while focused; it clips its lines.
+/// accent while focused; it clips its lines. Role text input (ARIA textbox, multiline).
 pub fn areaStyle(th: *const Theme, rows: u32, focused: bool) Style {
     const border = base.OnOff{ th.control_hot, th.accent };
     const pad = tf.padding(th);
@@ -56,6 +57,7 @@ pub fn areaStyle(th: *const Theme, rows: u32, focused: bool) Style {
         .border = 1,
         .border_color = border[@intFromBool(focused)],
         .clip = true,
+        .role = .text_input,
     };
 }
 
@@ -191,6 +193,13 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
         s.input.request(.{ .x0 = x, .y0 = y, .x1 = x + 1, .y1 = y + lh }, .normal);
     }
 }
+
+// ---- accessibility --------------------------------------------------------------------------
+
+/// The semantics the tree columns cannot carry, for text area `name`: its name is the row
+/// `label` (its caption, `aria-labelledby`; `none` for none). As for the text field
+/// (`textfield.semantics`); a11y/tree.zig has no multiline state to report.
+pub const semantics = tf.semantics;
 
 // ---- runtime front end ----------------------------------------------------------------------
 
@@ -401,6 +410,7 @@ test "textarea: the page agrees in both front ends at rest; rows lines tall" {
     try testing.expectEqual(@as(u32, 3 + 1 + 7), t.len);
     const th = Theme.default;
     try testing.expectApproxEqAbs(3 * tf.lineHeight(&th) + th.pad, t.rect(a).h(), 0.5);
+    try testing.expectEqual(@backingInt(types.Role.text_input), t.c.role[a]);
     // The lines, one leaf each: "one", "two", "".
     const strs = &h.ctx.strings[h.ctx.cur];
     for ([_][]const u8{ "one", "two", "" }, 0..) |want, k| {
@@ -445,6 +455,30 @@ test "textarea look: an inset box rows lines tall; the selection on each line, t
     try testing.expectEqual(th.text.bitsOf(), t.c.look[a + 7].fill);
     try testing.expectApproxEqAbs(t.rect(a + 5).y0, t.rect(a + 7).y0, 0.5);
     try testing.expectApproxEqAbs(t.rect(a + 5).x0 + 3 * adv, t.rect(a + 7).x0, 0.5);
+}
+
+var area_semantics: base.Semantic(16) = .{};
+
+test "textarea a11y: role text input, one node, named by its caption" {
+    const h = &page;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 140 } };
+    const out = try h.frame(&in);
+    const x = &area_semantics;
+    try x.run(h);
+    const t = out.runtime.tree;
+    const a = t.find(.from("notes"));
+    const r = x.row(a).?;
+    try testing.expectEqual(@backingInt(a11y.Role.text_input), x.out[0].c.role[r]);
+    try testing.expectEqual(@backingInt(Id.from("notes")), x.out[0].c.id[r]);
+    for (1..8) |k| try testing.expectEqual(null, x.row(a + @as(u32, @intCast(k))));
+    const check = @import("check.zig");
+    var sb: check.SemBuf = .{};
+    var sem = sb.init();
+    semantics(t, &sem, .from("notes"), a - 1);
+    a11y.names(t, &sem);
+    const ctx = &h.ctx;
+    try testing.expectEqualStrings("Notes", check.nameOf(&sem, out.runtime.texts, ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], a));
 }
 
 fn press(code: u8, mods: Input.Mods) Input.Event {
