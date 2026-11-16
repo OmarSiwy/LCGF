@@ -127,8 +127,7 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
             // Parent side, as coefs gathers it and resolveK reads its Parent row.
             const main = gather(c.main[a], p);
             const grow_inv = gather(c.grow_inv[a], p);
-            const taken = gather(c.fit[a], p) + gather(c.gap_total, p) - gather(c.pct_nat[a], p);
-            const pct_sum = gather(c.pct_sum[a], p);
+            const taken = gather(c.fit[a], p) + gather(c.gap_total, p);
             const pad = gather(c.pad_lo[a], p) + gather(c.pad_hi[a], p);
             // Child side: coefs' Child row.
             const nat = gather(c.nat[a], i);
@@ -142,12 +141,11 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
             const k1 = has_pct * pct + keep * fl * across;
             const k2 = keep * fl * main * grow * grow_inv;
             const cut = (gather(c.shrink, i) * fl) > zero;
-            const room = @select(f32, cut, main * (taken - keep * nat), simd.f(-inf));
-            const room_inner = main * (pct_sum - has_pct * pct);
+            const room = @select(f32, cut, main * (taken - nat), simd.f(-inf));
             // resolveK's step.
             const inner = @max(gather(size, p) - pad, zero);
-            var s = k0 + k1 * inner + k2 * @max(inner - pct_sum * inner - taken, zero);
-            s -= @max(s - @max(inner - (room + room_inner * inner), zero), zero);
+            var s = k0 + k1 * inner + k2 * @max(inner - taken, zero);
+            s -= @max(s - @max(inner - room, zero), zero);
             s = @min(@max(s, gather(c.min[a], i)), gather(c.max[a], i));
             scatter(size, i, s);
             const in_level = simd.iota + simd.u(@intCast(j)) < simd.u(end);

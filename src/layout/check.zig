@@ -59,8 +59,7 @@ fn randomStyle(r: std.Random) types.Style {
     return s;
 }
 
-/// prototype/ui.zig `layout.resolve`: the reference for the K-coefficient form. One change: a
-/// percentage child counts in its parent's `taken` at its share of `inner`, not its `nat`.
+/// prototype/ui.zig `layout.resolve`, verbatim: the reference for the K-coefficient form.
 pub fn resolveRef(t: *Tree, axis: Axis, viewport: f32) void {
     const a = @backingInt(axis);
     if (t.len == 0) return;
@@ -72,8 +71,7 @@ pub fn resolveRef(t: *Tree, axis: Axis, viewport: f32) void {
         const nat = c.nat[a][i];
         const inner = @max(size[p] - c.pad_lo[a][p] - c.pad_hi[a][p], 0);
         const main = c.main[a][p];
-        // Percentage children take their share of inner, not their natural size.
-        const taken = c.fit[a][p] + c.gap_total[p] - c.pct_nat[a][p] + c.pct_sum[a][p] * inner;
+        const taken = c.fit[a][p] + c.gap_total[p];
         const free = @max(inner - taken, 0);
         const share = free * c.grow[a][i] * c.grow_inv[a][p];
         const stretched = nat + b01(c.grow[a][i] > 0) * (inner - nat);
@@ -84,8 +82,7 @@ pub fn resolveRef(t: *Tree, axis: Axis, viewport: f32) void {
         const floating = nat + has_pct * (of_parent - nat);
         const fl = c.flow[i];
         var s = floating + fl * (in_flow - floating);
-        const own = nat + has_pct * (of_parent - nat);
-        const room = @max(inner - main * (taken - own), 0);
+        const room = @max(inner - main * (taken - nat), 0);
         s -= c.shrink[i] * fl * @max(s - room, 0);
         s = @min(@max(s, c.min[a][i]), c.max[a][i]);
         size[i] = s;

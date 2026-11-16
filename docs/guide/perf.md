@@ -72,13 +72,13 @@ function of `Limits`:
 ```zig
 const small = Context.requiredBytes(.{ .nodes = 4096 });
 const large = Context.requiredBytes(.{ .nodes = 8192 });
-try testing.expectEqual(940 * 4096, large - small); // 940 bytes per node
+try testing.expectEqual(924 * 4096, large - small); // 924 bytes per node
 ```
 
 Two tree generations (this frame's, and last frame's for hit testing and reuse) take most of it;
 `docs/perf/bytes.md` breaks the row down. At the default `Limits` (4,096 nodes, 1,024 text runs,
-64 KB of text per frame) the buffer is 4,183,936 bytes; sized for the prototype's example (1,024
-nodes, 256 runs) it is 1,177,984. Size the limits to your UI: a limit hit in a frame is reported
+64 KB of text per frame) the buffer is 4,118,144 bytes; sized for the prototype's example (1,024
+nodes, 256 runs) it is 1,161,344. Size the limits to your UI: a limit hit in a frame is reported
 in `Output.status`, never written past.
 
 `zig build probe` measured **12,368 KiB resident** for the whole benchmark process after one
