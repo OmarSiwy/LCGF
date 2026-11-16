@@ -21,6 +21,7 @@ const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const Spring = @import("../anim/anims.zig").Spring;
+const Ease = @import("../anim/tweens.zig").Ease;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -150,6 +151,20 @@ pub const Frame = struct {
         return a.c.x[i];
     }
 
+    /// A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the
+    /// target changes, a new leg starts from the current value. Returns this frame's value
+    /// (`target` on first use). Keeps the host awake until it lands; a tween not asked for in
+    /// a frame is dropped.
+    pub fn tween(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
+        const ctx = f.ctx;
+        const t = &ctx.tweens;
+        const i = t.slot(id, target);
+        t.retarget(i, target, seconds, ease);
+        t.c.seen[i] = ctx.frame;
+        ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
+        return t.c.x[i];
+    }
+
     // ---- finishing ------------------------------------------------------------
 
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
@@ -183,6 +198,7 @@ pub const Frame = struct {
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
         ctx.anims.sweep(ctx.frame);
+        ctx.tweens.sweep(ctx.frame);
         ctx.signals.dirty = false;
         // The tables flag their own overflow; the frame reports them together.
         ctx.status = .{

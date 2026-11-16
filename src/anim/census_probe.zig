@@ -8,3 +8,6 @@ export fn p_anim(a: *lcgr.anims.Anims, dt: f32) f32 {
 export fn p_sweep(a: *lcgr.anims.Anims, frame: u32) void {
     a.sweep(frame);
 }
+export fn p_tween(t: *lcgr.tweens.Tweens, dt: f32) f32 {
+    return t.step(dt);
+}

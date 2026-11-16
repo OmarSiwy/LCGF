@@ -17,6 +17,7 @@ const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
 const Anims = @import("../anim/anims.zig").Anims;
+const Tweens = @import("../anim/tweens.zig").Tweens;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -27,6 +28,8 @@ pub const Limits = struct {
     strings: u32 = 64 * 1024,
     /// Springs alive at once (`Frame.animate`).
     anims: u32 = 256,
+    /// Tweens alive at once (`Frame.tween`).
+    tweens: u32 = 128,
     signals: u32 = 256,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
@@ -90,6 +93,7 @@ pub const Context = struct {
     draw: DrawList,
     signals: Signals,
     anims: Anims,
+    tweens: Tweens,
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
@@ -100,7 +104,8 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
-    /// How much the springs are still moving; 0 at rest. `begin` sets it from `Anims.step`.
+    /// How much the springs and tweens are still moving; 0 at rest. `begin` sets it from
+    /// `Anims.step` and `Tweens.step`.
     motion: f32 = 0,
     timers: scheduler.Timers,
     /// Set from any thread to ask for a frame; see `scheduler.Wake`.
@@ -118,6 +123,7 @@ pub const Context = struct {
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
             .signals = Signals.init(carver, limits.signals),
             .anims = Anims.init(carver, limits.anims),
+            .tweens = Tweens.init(carver, limits.tweens),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
         };
@@ -160,7 +166,7 @@ pub const Context = struct {
         ctx.frame +%= 1;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
-        ctx.motion = ctx.anims.step(in.dt);
+        ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
@@ -217,6 +223,7 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
     try testing.expectEqual(example_limits.signals, ctx.signals.cap);
     try testing.expectEqual(example_limits.anims, ctx.anims.cap);
+    try testing.expectEqual(example_limits.tweens, ctx.tweens.cap);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
@@ -522,4 +529,34 @@ test "animate: a spring nobody asks for is dropped at the end of the frame" {
     f = ctx.begin(&in);
     try testing.expect(f.animate(types.Id.from("a"), 0, .{}) < 5);
     _ = f.end(.{});
+}
+
+test "tween: wakes the host for its duration, lands, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 64.0 };
+    const id = types.Id.from("fade");
+    var target: f32 = 0;
+    var value: f32 = 0;
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        value = f.tween(id, target, 0.25, .out_cubic);
+        _ = f.end(.{});
+    }
+    try testing.expect(!ctx.needsFrame(&in));
+    target = 1;
+    var frames: u32 = 0;
+    while (frames < 100) : (frames += 1) {
+        var f = ctx.begin(&in);
+        value = f.tween(id, target, 0.25, .out_cubic);
+        const out = f.end(.{});
+        if (out.wake != 0) break;
+    }
+    // The frame that sets the target, then 16 steps of 1/64 s.
+    try testing.expectEqual(@as(u32, 16), frames);
+    try testing.expectEqual(@as(f32, 1), value);
+    try testing.expect(!ctx.needsFrame(&in));
 }
