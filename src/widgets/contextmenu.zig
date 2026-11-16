@@ -205,15 +205,15 @@ fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     f.close();
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
+/// The example's menu: Cut, Copy, Paste and Arrange (a submenu: To front, To back).
+pub const edit_menu: menu.Def = .{ .items = &.{ "cut", "copy", "paste", "arrange" }, .sub_at = 3, .sub = &.{ "front", "back" } };
+pub const edit_texts = [_][]const u8{ "Cut", "Copy", "Paste", "Arrange", "To front", "To back" };
 
-const edit_menu: menu.Def = .{ .items = &.{ "cut", "copy", "paste", "arrange" }, .sub_at = 3, .sub = &.{ "front", "back" } };
-const edit_texts = [_][]const u8{ "Cut", "Copy", "Paste", "Arrange", "To front", "To back" };
-
-/// The test page: a caption, the canvas the menu belongs to, and the menu.
-fn Page(comptime th: Theme) type {
+/// The example page: a caption, the canvas the menu belongs to, and the menu, in both front
+/// ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const canvas_style: Style = .{ .dir = .x, .size = .{ .px(300), .px(160) }, .pad = @splat(th.pad), .radius = th.radius };
         // The scrim floats at its parent's content origin, so the page that holds it is not
@@ -262,6 +262,29 @@ fn Page(comptime th: Theme) type {
     };
 }
 
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/contextmenu.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "contextmenu-open", 1 },
+    .{ "contextmenu-keyed", 5 },
+    .{ "contextmenu-sub", 7 },
+    .{ "contextmenu-key", 10 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
+
 const Default = Page(.default);
 var harness: Default.Run = .{};
 
@@ -307,6 +330,50 @@ test "ContextMenu: another theme restyles both front ends alike" {
     const t = try setState(&S.h, .{ .menu = .{ .open = true, .active = 1 }, .at = .{ 50, 60 } });
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("ctx_panel"))].fill);
     try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("ctx_copy"))].fill);
+}
+
+test "ContextMenu: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var st: [12]ContextState = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.ctx, h.ui.signals.state.ctx);
+        st[k] = h.app.ctx;
+        if (k == 7) {
+            // The rects the replay's comments give.
+            const want = [_]struct { []const u8, Rect }{
+                .{ "canvas", .{ .x0 = 8, .y0 = 34, .x1 = 308, .y1 = 194 } },
+                .{ "ctx_panel", .{ .x0 = 150, .y0 = 100, .x1 = 231, .y1 = 224 } },
+                .{ "ctx_copy", .{ .x0 = 153, .y0 = 133, .x1 = 228, .y1 = 162 } },
+                .{ "ctx_sub", .{ .x0 = 231, .y0 = 189, .x1 = 320, .y1 = 254 } },
+                .{ "ctx_back", .{ .x0 = 234, .y0 = 222, .x1 = 317, .y1 = 251 } },
+            };
+            for (want) |w| try testing.expectEqual(w[1], t.rect(t.find(.hash(w[0]))));
+        }
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expect(!st[0].menu.open and st[1].menu.open);
+    try testing.expectEqual([2]f32{ 150, 100 }, st[1].at);
+    try testing.expectEqual(@as(u8, 1), st[3].menu.active);
+    try testing.expectEqual(@as(u8, 3), st[5].menu.active);
+    try testing.expect(st[6].menu.sub and st[7].menu.sub_active == 1);
+    try testing.expect(!st[9].menu.open and st[9].menu.chosen == 6);
+    try testing.expect(st[10].menu.open);
+    try testing.expectEqual([2]f32{ 8, 34 }, st[10].at);
+    try testing.expect(!st[11].menu.open);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test "advance: the secondary button and the menu key open it; it then works as a menu" {
