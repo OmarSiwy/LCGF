@@ -25,6 +25,22 @@ pub const Desc = struct {
 pub fn quad(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
     const pool = objc.Pool.push();
     defer pool.pop();
+    const pd = try descriptor(device, source, desc);
+    defer objc.release(pd);
+    msg(void, pd, "setVertexDescriptor:", .{instanceLayout()});
+    const color = msg(Id, msg(Id, pd, "colorAttachments", .{}), "objectAtIndexedSubscript:", .{@as(U, 0)});
+    // Premultiplied over: one, one minus source alpha, for colour and alpha.
+    msg(void, color, "setBlendingEnabled:", .{@as(objc.BOOL, true)});
+    msg(void, color, "setSourceRGBBlendFactor:", .{mtl.BlendFactor.one});
+    msg(void, color, "setSourceAlphaBlendFactor:", .{mtl.BlendFactor.one});
+    msg(void, color, "setDestinationRGBBlendFactor:", .{mtl.BlendFactor.one_minus_source_alpha});
+    msg(void, color, "setDestinationAlphaBlendFactor:", .{mtl.BlendFactor.one_minus_source_alpha});
+    return create(device, pd);
+}
+
+/// A pipeline descriptor (caller releases it) with `source`'s `vs` and `fs`, one colour target
+/// of `desc.format`, no blending, no vertex input.
+pub fn descriptor(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
     var err: ?Id = null;
     const library = msg(?Id, device, "newLibraryWithSource:options:error:", .{ objc.string(source), @as(?Id, null), &err }) orelse {
         logError("compiling MSL", err);
@@ -35,23 +51,20 @@ pub fn quad(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
     defer objc.release(vs);
     const fs = msg(?Id, library, "newFunctionWithName:", .{objc.string("fs")}) orelse return error.MissingEntryPoint;
     defer objc.release(fs);
-
     const pd = msg(Id, objc.class("MTLRenderPipelineDescriptor"), "new", .{});
-    defer objc.release(pd);
     msg(void, pd, "setVertexFunction:", .{vs});
     msg(void, pd, "setFragmentFunction:", .{fs});
-    msg(void, pd, "setVertexDescriptor:", .{instanceLayout()});
     msg(void, pd, "setRasterSampleCount:", .{desc.sample_count});
     const color = msg(Id, msg(Id, pd, "colorAttachments", .{}), "objectAtIndexedSubscript:", .{@as(U, 0)});
     msg(void, color, "setPixelFormat:", .{desc.format});
-    // Premultiplied over: one, one minus source alpha, for colour and alpha.
-    msg(void, color, "setBlendingEnabled:", .{@as(objc.BOOL, true)});
-    msg(void, color, "setSourceRGBBlendFactor:", .{mtl.BlendFactor.one});
-    msg(void, color, "setSourceAlphaBlendFactor:", .{mtl.BlendFactor.one});
-    msg(void, color, "setDestinationRGBBlendFactor:", .{mtl.BlendFactor.one_minus_source_alpha});
-    msg(void, color, "setDestinationAlphaBlendFactor:", .{mtl.BlendFactor.one_minus_source_alpha});
+    return pd;
+}
+
+/// The pipeline state for descriptor `pd`. Caller releases it.
+pub fn create(device: Id, pd: Id) Error!Id {
+    var err: ?Id = null;
     return msg(?Id, device, "newRenderPipelineStateWithDescriptor:error:", .{ pd, &err }) orelse {
-        logError("creating the quad pipeline", err);
+        logError("creating a pipeline", err);
         return error.PipelineFailed;
     };
 }

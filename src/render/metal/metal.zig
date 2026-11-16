@@ -12,6 +12,7 @@ pub const msl = @import("msl.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const texture = @import("texture.zig");
 pub const present = @import("present.zig");
+pub const custom = @import("custom.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
 
@@ -26,6 +27,8 @@ test {
     std.testing.refAllDecls(present);
     std.testing.refAllDecls(present.Frames);
     std.testing.refAllDecls(present.DisplayLink);
+    std.testing.refAllDecls(custom);
+    std.testing.refAllDecls(custom.Gradient);
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(Renderer);
     std.testing.refAllDecls(mtl.RenderEncoder);

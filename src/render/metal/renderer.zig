@@ -26,6 +26,7 @@ const mtl = @import("mtl.zig");
 const msl = @import("msl.zig");
 const pipeline = @import("pipeline.zig");
 const texture = @import("texture.zig");
+const custom = @import("custom.zig");
 const types = lcgr.types;
 const draw_list = lcgr.draw_list;
 const quad_shader = lcgr.quad_shader;
@@ -84,8 +85,9 @@ pub fn RendererOver(comptime Encoder: type) type {
         pub const max_textures = 64;
         /// Metal uploads by writing shared memory: nothing to pass.
         pub const Queue = void;
-        /// The render command encoder of the host's pass. At a custom command the host records
-        /// its own draws into it; the next UI draw rebinds every piece of state it uses.
+        /// The render command encoder of the host's pass (`mtl.RenderEncoder.id` is the raw
+        /// MTLRenderCommandEncoder). At a custom command the host records its own draws into it
+        /// (custom.zig); the next UI draw rebinds every piece of state it uses.
         pub const Pass = Encoder;
 
         pub fn init(device: Id, desc: Desc) Error!Self {
@@ -199,6 +201,12 @@ pub fn RendererOver(comptime Encoder: type) type {
         pub fn drawText(r: *const Self, pass: Pass, run: u32) void {
             r.bind(pass, .solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.first[run]) * quad_shader.stride);
             pass.drawQuads(r.glyphs.count[run]);
+        }
+
+        /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
+        /// physical pixels of the last `prepare`, inside the target (custom.zig `scissor`).
+        pub fn customScissor(r: *const Self, c: draw_list.CustomDraw) mtl.ScissorRect {
+            return custom.scissor(r.extent, r.scale, c);
         }
 
         /// Diagonal: the whole list, skipping custom draws.
@@ -372,6 +380,19 @@ test "renderer: a text run samples the glyph atlas, a quad batch its own texture
         else => {},
     };
     try testing.expectEqualSlices(u16, &.{ 0, 1, 1, 0 }, bound[0..n]);
+}
+
+test "renderer: the custom scene's host draw gets its rect as a scissor in the pass's pixels" {
+    var st: conformance.Storage = .{};
+    const scene = &conformance.scenes[3];
+    try testing.expectEqualStrings("custom", scene.name);
+    st.load(scene);
+    var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 1 });
+    r.prepare({}, &st.draw, st.glyphs(), scene.viewport, 2);
+    const i = iface.drawUntilCustom(&r, undefined, &st.draw, 1); // command 1 is the custom one
+    try testing.expectEqual(1, i);
+    try testing.expectEqual(mtl.ScissorRect{ .x = 16, .y = 16, .width = 288, .height = 208 }, r.customScissor(st.draw.customs[st.draw.command(i).custom]));
 }
 
 test "renderer: prepare drops quads past the capacity instead of writing past the buffer" {
