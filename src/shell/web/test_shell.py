@@ -172,11 +172,24 @@ def dpr(page):
     check("dpr 2: a click at CSS (37, 25) presses Reset", state(page)[1] == 1)
 
 
+def cursor(page):
+    """C0477: the cursor the UI asks for is the canvas's CSS cursor: a hand over Reset, the
+    arrow off it."""
+    css = lambda: page.eval("getComputedStyle(document.getElementById('c')).cursor")
+    mouse(page, "mouseMoved", 37, 25)
+    frame(page)
+    over = css()
+    mouse(page, "mouseMoved", 400, 400)
+    frame(page)
+    off = css()
+    check("cursor: pointer over Reset, default off it", (over, off) == ("pointer", "default"), f"{over}, {off}")
+
+
 def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio.
-    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch)), (2, (dpr,))):
+    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor)), (2, (dpr,))):
         b = browser.Browser(scale=scale)
         try:
             page = b.open(server.url + "index.html")

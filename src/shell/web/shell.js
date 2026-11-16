@@ -23,13 +23,20 @@ export function shell(page) {
         shell_schedule(seconds, pace) {
             page.schedule?.(seconds, pace);
         },
+        shell_cursor(c) {
+            page.canvas.style.cursor = cursors[c] ?? "default";
+        },
     });
 }
+
+/// CSS cursors of context.Cursor, in its order: arrow, pointer, text, grab, resize_h, resize_v.
+export const cursors = ["default", "pointer", "text", "grab", "ew-resize", "ns-resize"];
 
 /// Starts forwarding `canvas`'s events to `ui` and running its frames. Returns `page`, with
 /// `frames` (animation frames run) and `stop()`.
 export function attach(ui, canvas, page = {}) {
     const x = ui.exports;
+    page.canvas = canvas;
     let pending = 0; // requestAnimationFrame id, 0 when none is pending
     page.frames = 0;
     const run = (ms) => {

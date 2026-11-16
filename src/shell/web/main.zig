@@ -16,12 +16,16 @@ pub const panic = rweb.js.panic;
 
 const imports = struct {
     extern "lcgr" fn shell_schedule(seconds: f32, pace: u32) void;
+    extern "lcgr" fn shell_cursor(cursor: u32) void;
 };
 
 /// The page, as web.zig's `host`.
 const host = struct {
     pub fn schedule(seconds: f32, pace: Pace) void {
         imports.shell_schedule(seconds, @backingInt(pace));
+    }
+    pub fn cursor(c: context.Cursor) void {
+        imports.shell_cursor(@backingInt(c));
     }
     pub fn present(out: *const Output) void {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });

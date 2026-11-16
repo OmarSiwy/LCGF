@@ -20,6 +20,7 @@
 //! example passes its imports (main.zig), the tests a recording stand-in.
 //!
 //!   fn present(*const Output) void          draw the frame (WebGPU or the 2D canvas)
+//!   fn cursor(Cursor) void                  show this cursor over the canvas (CSS `cursor`)
 //!   fn schedule(seconds: f32, pace: Pace) void
 //!        when the next animation frame is wanted: in `seconds`, never for inf (only after an
 //!        event)
@@ -31,6 +32,7 @@ const scheduler = @import("../../runtime/scheduler.zig");
 const iface = @import("../iface.zig");
 const Events = iface.Events;
 const Platform = context.Platform;
+const Cursor = context.Cursor;
 const Output = context.Output;
 const Pace = scheduler.Pace;
 const none = types.none;
@@ -49,6 +51,8 @@ pub fn Web(comptime host: type) type {
         woken: std.atomic.Value(bool) = .init(false),
         polls: u32 = 0,
         wakes: u32 = 0,
+        /// The cursor the canvas shows, as last applied.
+        cursor: Cursor = .arrow,
         /// The canvas's backing store in device pixels: what `present` draws.
         pixels: [2]u32 = .{ 800, 600 },
         /// This frame's typed bytes, key and text events, and the contacts held (rows stay
@@ -232,7 +236,12 @@ pub fn Web(comptime host: type) type {
             s.gone = @splat(false);
         }
 
-        pub fn apply(_: *Self, _: *const Platform) void {}
+        /// Applies a frame's effects. The cursor: the page's canvas takes the CSS cursor of
+        /// `p.cursor` (shell.js `cursors`), set only when it changes.
+        pub fn apply(s: *Self, p: *const Platform) void {
+            if (p.cursor != s.cursor) host.cursor(p.cursor);
+            s.cursor = p.cursor;
+        }
 
         pub fn present(_: *Self, out: *const Output) void {
             host.present(out);
@@ -262,6 +271,13 @@ const Page = struct {
     var presents: u32 = 0;
     var scheduled: f32 = -1;
     var pace: Pace = .idle;
+    var cursors: [8]Cursor = undefined;
+    var cursor_len: u32 = 0;
+
+    pub fn cursor(c: Cursor) void {
+        cursors[cursor_len] = c;
+        cursor_len += 1;
+    }
 
     pub fn present(_: *const Output) void {
         presents += 1;
@@ -321,6 +337,7 @@ test "web: the example replays through the shell's calls with the headless shell
     var app: example.App = .{};
     var shell: Web(Page) = .{};
     Page.presents = 0;
+    Page.cursor_len = 0;
     const frames = try replay(&shell, &ctx, &app, @embedFile("../testdata/example.replay"));
     // The same results as src/shell/headless.zig "headless: runs the example from a recording".
     try testing.expectEqual(@as(u32, 15), frames);
@@ -330,6 +347,10 @@ test "web: the example replays through the shell's calls with the headless shell
     try testing.expectEqual(@as(u32, 1), app.resets);
     try testing.expectEqual(@as(u32, 4), app.layers);
     try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+    // The cursor changes twice, over Reset and off it again (headless: arrow x3, pointer x6,
+    // arrow x6); the page is told only then.
+    try testing.expectEqualSlices(Cursor, &.{ .pointer, .arrow }, Page.cursors[0..Page.cursor_len]);
+    try testing.expectEqual(Cursor.arrow, shell.cursor);
     // Idle at the end: no frame until the next event.
     try testing.expectEqual(types.inf, Page.scheduled);
     try testing.expectEqual(Pace.idle, Page.pace);
