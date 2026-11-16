@@ -3,6 +3,8 @@
 //!   stacking layers   `paint.emitLayered` paints rows in `overlay.order`'s layer order
 //!   merge across text `mergeAcrossText` moves text and custom ops later, past quads that do
 //!                     not overlap them, so quads on either side join one batch
+//!   depth order       `depthOrder` lists the opaque quads front to back and gives every
+//!                     quad and command a depth, for back ends with a depth buffer
 //!
 //! The tests record how many draw commands (batches) each ordering gives for one scene, the
 //! number a GPU back end pays per frame (docs/TARGETS.md D2).
@@ -92,6 +94,65 @@ pub fn mergeAcrossText(d: *DrawList) void {
     }
     std.debug.assert(w + p == d.op_len);
     paint.encode(d);
+}
+
+/// For a back end with a depth buffer (Qt's scene graph renderer does the same with its opaque
+/// batches). Writes `d.depth`: every op gets a depth from its place in paint order, later ops
+/// nearer (smaller), and `opaques` lists the quads that cover their whole rect with alpha 1,
+/// front to back. The back end then
+///
+///   1. draws the opaque quads in that order with depth test and depth write on, one instanced
+///      draw from a copy of those rows: each pixel is shaded once, by its front-most opaque quad;
+///   2. draws the usual commands back to front with depth test (less) and no depth write, so
+///      everything behind an opaque quad, and the opaque quads themselves, fail early.
+///
+/// A quad counts as opaque when its fill and any border are fully opaque, its opacity is 1, it
+/// uses the stock solid material with plain params on the white texture, and it has square
+/// corners, a square clip and no rotation, scale or skew: then every pixel inside its clipped
+/// rect is covered with alpha 1. Run after paint (and after `mergeAcrossText`, if used).
+pub fn depthOrder(d: *DrawList) void {
+    const quad_kind = @backingInt(DrawList.Kind.quads);
+    const step = 1.0 / @as(f32, @floatFromInt(d.op_len + 1));
+    // Depth per op, by paint order; commands take their first op's depth, so walk the ops and
+    // count commands the way `encode` breaks them.
+    var cmd: u32 = 0;
+    var prev_kind: u8 = 0xff;
+    var prev_key: u32 = 0;
+    for (0..d.op_len) |j| {
+        const kind = d.op.kind[j];
+        const key = d.op.key[j];
+        const z = 1 - @as(f32, @floatFromInt(j + 1)) * step;
+        const brk: u32 = @intFromBool(kind != quad_kind) | @intFromBool(kind != prev_kind) | @intFromBool(key != prev_key);
+        cmd += brk;
+        // Write always, to the spare last row when there is nothing to write: a select that
+        // loads the old value only for itself compiles to a branch (docs/CHECKS.md section 2).
+        const spare_quad: u32 = @intCast(d.depth.quad.len - 1);
+        const spare_cmd: u32 = @intCast(d.depth.cmd.len - 1);
+        d.depth.quad[simd.selU(kind == quad_kind, @min(d.op.ref[j], spare_quad), spare_quad)] = z;
+        d.depth.cmd[simd.selU(brk != 0, cmd - 1, spare_cmd)] = z;
+        prev_kind = kind;
+        prev_key = key;
+    }
+    // Opaque quads, front to back: the ops walked backwards, write always, advance by 0 or 1.
+    var n: u32 = 0;
+    var j = d.op_len;
+    while (j > 0) {
+        j -= 1;
+        const ref = @min(d.op.ref[j], d.quads.len - 1);
+        const q = d.quads[ref];
+        const params: [4]u32 = @bitCast(q.params);
+        // Bitwise ANDs of the conditions: `and` would be a jump per condition.
+        const flat: u1 = @intFromBool(@reduce(.Or, @as(@Vector(4, u32), params)) == 0);
+        const square: u1 = @intFromBool(@reduce(.And, @as(@Vector(4, f32), q.radii) == @as(@Vector(4, f32), @splat(0))));
+        const square_clip: u1 = @intFromBool(@reduce(.And, @as(@Vector(4, f32), q.clip_radii) == @as(@Vector(4, f32), @splat(0))));
+        const upright: u1 = @intFromBool(@reduce(.And, @as(@Vector(4, f32), q.xform[0..4].*) == @Vector(4, f32){ 1, 0, 0, 1 }));
+        const border_ok: u1 = @intFromBool(q.border == 0) | @intFromBool((q.border_color >> 24) == 255);
+        const covers: u1 = @intFromBool(d.op.kind[j] == quad_kind) & @intFromBool(d.op.key[j] == 0) &
+            @intFromBool((q.fill >> 24) == 255) & @intFromBool(q.opacity >= 1) & flat & square & square_clip & upright & border_ok;
+        d.depth.opaques[n] = ref;
+        n += covers;
+    }
+    d.opaque_len = n;
 }
 
 const testing = std.testing;
@@ -285,4 +346,40 @@ test "merge across text: overlapping items keep their order, in row and in layer
     paint.emit(&l.t, &l.tx, &l.cu, strings, &l.d);
     mergeAcrossText(&l.d);
     try testing.expectEqual(Counts{ .quads = 1, .text = 6 }, counts(&l.d));
+}
+
+test "depth order: opaque quads front to back in one draw; batch counts recorded" {
+    var buf: [List.bytes]u8 align(mem.column_align) = undefined;
+    var l: List = .build(&buf);
+    const strings = l.s.buf[0..l.s.len];
+    // Make two quads translucent and round a third: they stay out of the opaque list.
+    l.t.c.look[1].fill = types.Color.rgba(30, 30, 30, 128).bitsOf(); // row 0
+    l.t.c.radii[3] = @splat(4); // row 1
+    paint.emitLayered(&l.t, &l.tx, &l.cu, strings, &l.ly, &l.d);
+    mergeAcrossText(&l.d);
+    depthOrder(&l.d);
+    // 11 quads, 9 opaque, listed nearest first: the menu's items, the menu, then rows 5 to 2
+    // and the root (row 0 is translucent, row 1 rounded).
+    try testing.expectEqual(9, l.d.opaque_len);
+    const op = l.d.depth.opaques[0..l.d.opaque_len];
+    try testing.expectEqualSlices(u32, &.{ 10, 9, 8, 7, 6, 5, 4, 3, 0 }, op);
+    for (op[1..], op[0 .. op.len - 1]) |back, front| try testing.expect(l.d.depth.quad[front] < l.d.depth.quad[back]);
+    // Depths follow paint order: every command is behind the ones after it.
+    for (0..l.d.cmd_len - 1) |k| {
+        const a = l.d.command(@intCast(k));
+        const b = l.d.command(@intCast(k + 1));
+        const za = switch (a) {
+            .quads => |q| l.d.depth.quad[q.first],
+            else => l.d.depth.cmd[k],
+        };
+        const zb = switch (b) {
+            .quads => |q| l.d.depth.quad[q.first],
+            else => l.d.depth.cmd[k + 1],
+        };
+        try testing.expect(zb < za);
+    }
+    // Records: with depth, pass 1 is 1 instanced draw of 9 opaque quads, pass 2 the usual 2
+    // quad batches and 6 text commands; without depth, the 2 + 6 alone. The second pass then
+    // shades only what is in front of the opaque quads.
+    try testing.expectEqual(Counts{ .quads = 2, .text = 6 }, counts(&l.d));
 }
