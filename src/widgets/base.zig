@@ -56,6 +56,7 @@ const events = @import("../comptime/events.zig");
 const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
 const label_zig = @import("label.zig");
+const button_zig = @import("button.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -201,15 +202,7 @@ pub fn fraction(value: f32, lo: f32, hi: f32) f32 {
 
 pub const label = label_zig.label;
 
-pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
-    const node = f.open(id, buttonStyle(th));
-    const r = f.interact(node, .button);
-    f.setFill(node, buttonFill(th, r));
-    f.setCursor(.pointer, r.hovered);
-    _ = label(f, th, str);
-    f.close();
-    return r;
-}
+pub const button = button_zig.button;
 
 pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
     const row = f.open(id, checkboxStyle(th));
@@ -242,12 +235,7 @@ pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32
 pub const ct = struct {
     pub const label = label_zig.ct.label;
 
-    /// A button named `id` showing the string field `text`; its click is its event.
-    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
-        var s = spec_zig.row(buttonStyle(&th), .{ct.label(th, text)});
-        s.id = @tagName(id);
-        return s;
-    }
+    pub const button = button_zig.ct.button;
 
     /// A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
     pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
@@ -331,7 +319,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     switch (comptime E.widget_kinds[k]) {
                         .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
-                        .label, .col, .row => {},
+                        .label, .col, .row, .button => {},
                     }
                 },
             };
@@ -403,9 +391,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
                     tb.t.seal(i);
                 },
-                .row, .col => {
+                .row, .col, .button => {
                     var s = n.style;
-                    // A container with an id is a button.
+                    // A container with an id is a button (kind `.button` always has one).
                     if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
                     const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
                     inline for (n.children) |c| ui.push(c, i, next, in);
@@ -949,10 +937,10 @@ test "label: a text leaf in the theme's size and colour" {
 
 test "ct: spec builders give the comptime front end's widget enum, kinds and focus order" {
     try testing.expectEqual(3, Default.Ui.Events.widget_count);
-    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
+    try testing.expectEqualSlices(spec_zig.Kind, &.{ .button, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
     try testing.expectEqual(void, @FieldType(Default.Ui.Events.Event, "reset"));
     try testing.expectEqual(f32, @FieldType(Default.Ui.Events.Event, "exposure"));
-    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .wire, .exposure }, Default.Ui.Events.focus_order);
+    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .reset, .wire, .exposure }, Default.Ui.Events.focus_order);
 }
 
 test {

@@ -125,7 +125,7 @@ pub fn Events(comptime spec: Spec) type {
         pub fn Payload(comptime kind: Kind) type {
             return switch (kind) {
                 .slider => f32,
-                .checkbox, .label, .col, .row => void,
+                .checkbox, .button, .label, .col, .row => void,
             };
         }
 
@@ -142,7 +142,7 @@ pub fn Events(comptime spec: Spec) type {
         /// Whether keyboard focus stops at a widget of `kind`: the ones that take input.
         pub fn focusable(comptime kind: Kind) bool {
             return switch (kind) {
-                .checkbox, .slider => true,
+                .checkbox, .slider, .button => true,
                 .label, .col, .row => false,
             };
         }

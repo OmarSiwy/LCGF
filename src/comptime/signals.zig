@@ -111,7 +111,7 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
         fn sizedByValue(comptime kind: @import("spec.zig").Kind) bool {
             return switch (kind) {
                 .label => true,
-                .checkbox, .slider, .col, .row => false,
+                .checkbox, .slider, .button, .col, .row => false,
             };
         }
 

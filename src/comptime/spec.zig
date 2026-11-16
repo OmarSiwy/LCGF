@@ -13,7 +13,15 @@ const types = @import("../core/types.zig");
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
-pub const Kind = enum(u8) { col, row, label, checkbox, slider };
+pub const Kind = enum(u8) {
+    col,
+    row,
+    label,
+    checkbox,
+    slider,
+    /// A horizontal container that is clicked as a whole (src/widgets/button.zig).
+    button,
+};
 
 /// One node of the declaration. Exists only at compile time.
 pub const Spec = struct {
