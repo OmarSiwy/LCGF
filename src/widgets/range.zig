@@ -167,6 +167,33 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The range slider's example page: a frequency band (20..200) under its label on a panel, in
+/// both front ends. Its replay (testdata/range.replay) drags each thumb and uses the keys; its
+/// golden images (tools/widgetgolden/ref/range-*.png) show the span moving.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
+
+    pub const App = struct {
+        band: [2]f32 = .{ 60, 140 },
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = base.label(f, &th, "Frequency");
+            _ = range(f, &th, .from("band"), &app.band, 20, 200);
+            f.close();
+        }
+    };
+    pub const State = struct { band_text: []const u8 = "Frequency", band: [2]f32 = .{ 60, 140 } };
+    pub const spec = spec_zig.col(panel, .{ base.ct.label(th, .band_text), ct.range(th, .band, .band, .{ .lo = 20, .hi = 200 }) });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/range.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/range-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "dragged", 2 }, .{ "keys", 6 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -319,6 +346,32 @@ test "range a11y: two sliders, each with its thumb's value, in both front ends" 
     // The track and pieces are presentational: the root and two thumbs.
     try testing.expectEqual(null, x.row(2));
     try testing.expectEqual(@as(u32, 3), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the range replay drags each thumb and steps by keys, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var got: [8][2]f32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.band, h.ui.signals.state.band);
+        got[k] = h.app.band;
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    const want = [8][2]f32{ .{ 60, 140 }, .{ 65, 140 }, .{ 110, 140 }, .{ 110, 140 }, .{ 111.8, 140 }, .{ 111.8, 155 }, .{ 111.8, 200 }, .{ 111.8, 111.8 } };
+    for (want, got) |w, g| for (w, g) |a, b| try testing.expectApproxEqAbs(a, b, 1e-3);
+    const t = &h.ctx.trees[h.ctx.cur];
+    try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 46 }, t.rect(t.find(.from("band"))));
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {

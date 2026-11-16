@@ -33,6 +33,7 @@ const pages = .{
     .{ "switch", lcgr.widgets_switch.Page },
     .{ "toggle", lcgr.widgets_toggle.Page },
     .{ "slider", lcgr.widgets_slider.Page },
+    .{ "range", lcgr.widgets_range.Page },
 };
 
 var glyph_quads: [1024]Quad = undefined;
