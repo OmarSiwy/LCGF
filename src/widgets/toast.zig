@@ -84,7 +84,7 @@ pub fn Toast(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: 
                 return .{ .style = layerStyle(&th, v.in.viewport) };
             if (comptime n.id != null and std.mem.eql(u8, n.id.?, id)) {
                 if (!ts.shown) return null;
-                return .{ .style = toastStyle(&th, ts) };
+                return .{ .style = toastStyle(&th, ts), .role = role };
             }
             return popover.plainPart(th, n, v.response);
         }
@@ -128,6 +128,20 @@ pub fn advance(t: ToastState, trigger: bool, hovered: bool, dt: f32) ToastState 
     return .{ .shown = simd.andB(t.shown, left > 0), .left = left };
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The toast's role: an alert, which assistive technology announces when it appears without
+/// moving focus (APG alert). Its value is 0; it is in the tree only while shown.
+pub const role: a11y.Role = .alert;
+
+/// The semantics of toast `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names`: the alert is named by its message, its only
+/// child (alert does not take its name from content). Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8) void {
+    const k = t.find(.from(name));
+    if (k != types.none) s.c.labelled_by[k] = k + 1;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Builds the layer of toast `name` and, while it is shown, the toast showing `text`. Call it
@@ -138,7 +152,9 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, t: *ToastSta
     t.* = advance(t.*, trigger, f.ctx.inter.response(id).hovered, f.in.dt);
     _ = f.open(.none, layerStyle(th, f.in.viewport));
     if (t.shown) {
-        _ = f.interact(f.open(id, toastStyle(th, t.*)), .{ .hover = true });
+        const n = f.open(id, toastStyle(th, t.*));
+        _ = f.interact(n, .{ .hover = true });
+        f.tree().c.role[n.ix()] = @backingInt(role);
         _ = base.label(f, th, text);
         f.close();
     }
@@ -299,6 +315,27 @@ test "Toast: Save shows it; it pauses under the pointer and goes after its time"
     try testing.expectEqual(@as(f32, 1), s[6].left);
     try testing.expectEqual(@as(f32, 0.5), s[7].left);
     try testing.expectEqual(ToastState{}, s[8]);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Toast: an alert named by its message; the same in both front ends" {
+    const h = &harness;
+    h.init();
+    const t = try setState(h, .{ .shown = true, .left = duration });
+    const cp = &h.ui.tables.t;
+    semantics(t, sem[0].begin(), "saved");
+    semantics(cp, sem[1].begin(), "saved");
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const k = popover.exportRow(e, t.find(.from("saved")));
+    try testing.expectEqual(@backingInt(a11y.Role.alert), e.c.role[k]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Scene saved"), e.c.name_hash[k]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[k]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[k]);
+    // Hidden, it is not in the tree at all.
+    const gone = try setState(h, .{});
+    try testing.expectEqual(types.none, gone.find(.from("saved")));
 }
 
 test "checkToast: the state field" {
