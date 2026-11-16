@@ -6,6 +6,8 @@ end. This file records each step of lane render-gompute with what was measured. 
 number: x86_64 Linux (NixOS), RTX 4060 Laptop GPU (sm_89) with driver 595.71.05, no AMD GPU, Zig
 0.18.0-dev.1151+8dfb7a7cc.
 
+Decision (C0425, last section): keep it as an optional offscreen and heavy-effects back end.
+
 ## C0418: pin a Gompute revision that builds with the project's Zig
 
 Decision: pin Gompute 1.0.0 at commit 37432b2 (branch zig-0.18.0-dev.1151, the owner's PR #9) as
@@ -219,3 +221,45 @@ kind (every tile walks every quad: 3,600 tiles times 9,026 quads here); per-quad
 Laine and Karras do it, is where the remaining gap would be attacked. Not measured: the split of the
 730 us between `bin` and `raster`, and a multithreaded software back end (sw draws tile bands on
 threads, `sw.tile`).
+
+## C0425: the decision
+
+**Keep Gompute, as an optional offscreen and heavy-effects back end; not as a presenting renderer
+and not as a replacement for any graphics back end.** It stays out of lcgr.zig, behind the lazy
+`zig build gompute` steps, and nothing else depends on it.
+
+Why keep it, from the numbers above:
+
+- It is correct, and cheaply so: one kernel source gives bit-identical framebuffers on the CPU
+  and on CUDA (C0420), matches the software back end pixel for pixel on the conformance scenes
+  (C0419), and passes all 26 golden images on both paths. The kernels are the stock shader's
+  math, so every draw feature works.
+- It is fast where the software back end is not: 6 to 7 times sw on one core for the benchmark
+  scene at 1280x720 (C0424), 6 to 35 times on the 800x600 draw-feature scenes, shadows and
+  rounded clips included (C0420). That is what an offscreen or effects pass needs.
+- Its output reaches the screen without the host where Vulkan exports memory: the frame becomes a
+  Vulkan texture in 134 to 164 us at 800x600 and under 1 ms at 4K (C0422), so the "texture" route
+  of iface.zig shows Gompute output as an ordinary node.
+
+Why not more than that:
+
+- The hardware path is faster: the Vulkan back end draws the same frame in 151 to 410 us against
+  Gompute's 730 (1.8 to 4.8 times, inside Laine and Karras's 2 to 8; C0424). A compute rasteriser
+  gives up the fixed-function hardware a GUI uses most, as docs/DESIGN.md expected.
+- It costs a second driver context: +93 MiB of GPU memory and +34 MiB resident against a Vulkan
+  device, and about 0.7 s more start-up when the driver's JIT cache is cold (C0423). An application
+  that does not already use CUDA pays that for nothing a graphics back end cannot do.
+- It cannot present by itself (C0421): the read-back is 0.15 to 0.3 ms at 800x600 but 2.5 ms at 4K,
+  and grows with pixels, not with what is drawn.
+- Two vendors, one verified: HIP builds (gfx1100 HSACO) but has never run; there is no AMD card here.
+
+When to use it: an application that already holds a CUDA context (simulation, ML, video), to
+draw offscreen UI or heavy effects (large blurs, shadows, many gradients) into memory it then shows
+through the Vulkan back end as a texture, or reads back where there is no Vulkan. When not: as the
+renderer of an ordinary window, where Vulkan, Metal, D3D12, GL ES, web or wgpu do it faster and
+smaller, and sw does it with no GPU at all.
+
+Revisit (drop it) if HIP still has not run on hardware when the lane is next touched, or if the
+Gompute pin falls behind the project's Zig again. Improve it, if kept and used: per-quad coarse
+binning (the bin kernel walks every quad per tile), external semaphores instead of host waits
+(C0422), and embedded SASS to remove the cold-cache JIT (C0423).
