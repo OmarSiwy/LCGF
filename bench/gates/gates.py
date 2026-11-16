@@ -8,6 +8,7 @@
     python3 bench/gates/gates.py idle FILE      zero frames and zero wake-ups while idle
     python3 bench/gates/gates.py latency FILE   input-to-photon latency against its budget
     python3 bench/gates/gates.py compile-time       comptime front end compile time against its budget
+    python3 bench/gates/gates.py census         every census probe is in the census object
     python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py --self-test
 
@@ -280,6 +281,18 @@ def check_compile_time(seconds, budgets, load):
     return rows, failed
 
 
+def check_census(src):
+    """Branches in hot loops (docs/CHECKS.md section 2): the census jobs fail when a function of
+    the census object gains a conditional jump over tools/census/baseline*.json, but only for
+    functions in the object. A probe file (src/**/census_probe*.zig) that src/census_probes.zig
+    does not import is never disassembled, so its passes could gain any jump unseen. Returns the
+    probe files missing from the object's root, relative to src."""
+    with open(os.path.join(src, "census_probes.zig")) as f:
+        imported = set(re.findall(r'@import\("([^"]+)"\)', f.read()))
+    probes = sorted(os.path.relpath(p, src) for p in glob.glob(os.path.join(src, "**", "census_probe*.zig"), recursive=True))
+    return [p for p in probes if p not in imported and p != "census_probes.zig"]
+
+
 def frameworks_missing(runs, recorded):
     return [n for n in recorded.get("frameworks", []) if n not in runs]
 
@@ -372,6 +385,13 @@ def self_test():
     assert check_compile_time({"100": 0.2}, {"100": 0.1}, 0)[1] is True
     assert check_compile_time({"100": 0.2}, {"100": 0.1}, 1e9)[1] is False
     assert check_compile_time({"100": 0.1}, {}, 0)[1] is True
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "a"))
+        for p in ("a/census_probe.zig", "a/census_probe_b.zig", "census_probes.zig"):
+            open(os.path.join(d, p), "w").close()
+        with open(os.path.join(d, "census_probes.zig"), "w") as f:
+            f.write('comptime {\n    _ = @import("a/census_probe.zig");\n}\n')
+        assert check_census(d) == ["a/census_probe_b.zig"]
     print("gates self-test ok")
 
 
@@ -380,7 +400,7 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "idle", "latency", "compile-time", "measure-first-frame"])
+    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "idle", "latency", "compile-time", "census", "measure-first-frame"])
     ap.add_argument("path", nargs="?", help="DIR of results, or for size the output of zig build size")
     ap.add_argument("exe", nargs="?", help="for measure-first-frame: the harness")
     ap.add_argument("--record", action="store_true")
@@ -421,6 +441,13 @@ def main():
         note = ", timing not applied" if busy(load) else ""
         print(f"gate latency: median {median} us, budget {rec.get('latency_us')} us, load {load}{note}: " + ("; ".join(bad) or "held"))
         return 1 if bad else 0
+    if a.gate == "census":
+        missing = check_census(os.path.join(os.path.dirname(os.path.dirname(HERE)), "src"))
+        for p in missing:
+            print(f"gate census: src/{p} is not imported by src/census_probes.zig: its passes are not censused")
+        if not missing:
+            print("gate census: every census probe file is in the census object")
+        return 1 if missing else 0
     if a.gate == "compile-time":
         rec = {}
         if os.path.exists(RECORDED):
