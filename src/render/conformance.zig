@@ -3,7 +3,7 @@
 //! own), with two oracles:
 //!
 //!   - `draws`: the instanced draws a back end issues, in order, for back ends that record calls
-//!     (the null back end) or count them.
+//!     (null.zig, checked by the test below) or count them.
 //!   - a golden image, `conformance/<name>.png`, for back ends that produce pixels. They were
 //!     drawn with a real wgpu device on Mesa lavapipe from what `conformance/dump.zig` writes
 //!     (`ci/run.sh conformance`, which compares a fresh render against them with
@@ -200,37 +200,34 @@ pub const Storage = struct {
 
 const testing = std.testing;
 
-/// Test back end that records the draws it was asked for.
-const Recorder = struct {
-    pub const Queue = void;
-    pub const Pass = *Log;
-    const Log = struct { draws: [16]Draw = undefined, len: u32 = 0 };
-    glyphs: iface.Glyphs = .{},
+const null_backend = @import("null.zig");
 
-    pub fn prepare(r: *Recorder, _: void, _: *const DrawList, g: iface.Glyphs, _: [2]f32, _: f32) void {
-        r.glyphs = g;
-    }
-    pub fn drawBatch(_: *const Recorder, l: Pass, b: draw_list.Batch) void {
-        l.draws[l.len] = .{ .source = .quads, .first = b.first, .count = b.count };
-        l.len += 1;
-    }
-    pub fn drawText(r: *const Recorder, l: Pass, run: u32) void {
-        l.draws[l.len] = .{ .source = .glyphs, .first = r.glyphs.first[run], .count = r.glyphs.count[run] };
-        l.len += 1;
-    }
-};
-
-test "conformance: every scene fits the capacities and draws what it declares" {
+test "conformance: the null back end draws every scene as declared" {
     for (&scenes) |*s| {
         try testing.expect(s.quads.len <= max_quads and s.runs.len <= max_runs and s.customs.len <= max_customs);
         var st: Storage = .{};
         st.load(s);
         try testing.expect(st.glyph_len < max_glyphs); // `quads` never hit its last row
-        var gfx: Recorder = .{};
-        gfx.prepare({}, &st.draw, st.glyphs(), s.viewport, 1);
-        var log: Recorder.Log = .{};
+        var calls: [64]null_backend.Call = undefined;
+        var log: null_backend.Log = .{ .calls = &calls };
+        var gfx: null_backend.Null = .{};
+        gfx.prepare(&log, &st.draw, st.glyphs(), s.viewport, 1);
+        log.len = 0;
         iface.render(&gfx, &log, &st.draw);
-        try testing.expectEqualSlices(Draw, s.draws, log.draws[0..log.len]);
+        try testing.expect(log.len <= calls.len);
+        // Each draw reads the instance buffer bound last.
+        var got: [16]Draw = undefined;
+        var n: usize = 0;
+        var source: Source = .quads;
+        for (log.recorded()) |call| switch (call) {
+            .vertex_buffer => |buf| source = if (buf == .glyphs) .glyphs else .quads,
+            .draw => |dr| {
+                got[n] = .{ .source = source, .first = dr.first_instance, .count = dr.instances };
+                n += 1;
+            },
+            else => {},
+        };
+        try testing.expectEqualSlices(Draw, s.draws, got[0..n]);
     }
 }
 

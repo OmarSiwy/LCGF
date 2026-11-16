@@ -49,6 +49,7 @@ pub const shape_cluster = @import("text/shape/cluster.zig");
 pub const shape_cache = @import("text/shape/cache.zig");
 pub const render_iface = @import("render/iface.zig");
 pub const render_conformance = @import("render/conformance.zig");
+pub const render_null = @import("render/null.zig");
 
 test {
     std.testing.refAllDecls(@This());
