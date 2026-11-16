@@ -14,6 +14,7 @@ const spec_zig = @import("spec.zig");
 const flatten = @import("flatten.zig");
 const Spec = spec_zig.Spec;
 const Id = @import("../core/types.zig").Id;
+const mem = @import("../core/mem.zig");
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
 
@@ -352,6 +353,20 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
 
         /// RAM bytes: one `Dynamic`.
         pub const ram_bytes = @sizeOf(Dynamic);
+
+        /// RAM the runtime front end's tree takes for the same UI at a capacity of exactly its
+        /// node count: every column of `Tree.Columns` and `Tree.Extras`, padded and aligned as
+        /// `Tree.init` carves them from the caller's buffer. The comptime UI replaces it with
+        /// `ram_bytes` of RAM and `rodata_bytes` of read-only data.
+        pub const runtime_bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            _ = tree.Tree.init(&counter, n);
+            break :blk counter.off;
+        };
+        /// RAM saved against the runtime tree. Read-only data is not RAM on a microcontroller
+        /// (it stays in flash), so it is not subtracted.
+        pub const ram_saved = runtime_bytes - ram_bytes;
     };
 }
 
@@ -405,7 +420,7 @@ test "Columns.table: every constant table equals the column Tree.push builds at 
     inline for (examples.all) |e| {
         const C = Columns(e.spec, e.options);
         var buf: [1 << 16]u8 align(64) = undefined;
-        var carver: @import("../core/mem.zig").Carver = .{ .buf = &buf };
+        var carver: mem.Carver = .{ .buf = &buf };
         var t = tree.Tree.init(&carver, C.node_count);
         pushAll(&t, e.spec, 0);
         try testing.expect(!t.overflow);
@@ -445,6 +460,19 @@ test "Columns.dropped: a column every node shares is one value, and equals the r
     // No node clips: no child clip in RAM. The badge clips, and keeps it.
     try testing.expect(!@hasField(C.Dynamic, "child_clip"));
     try testing.expect(@hasField(Columns(examples.badge, .{}).Dynamic, "child_clip"));
+}
+
+test "Columns.runtime_bytes: the bytes Tree.init carves for the same node count" {
+    inline for (examples.all) |e| {
+        const C = Columns(e.spec, e.options);
+        var buf: [1 << 16]u8 align(64) = undefined;
+        var carver: mem.Carver = .{ .buf = &buf };
+        _ = tree.Tree.init(&carver, C.node_count);
+        try testing.expectEqual(carver.off, C.runtime_bytes);
+        // Every example needs less RAM, and less RAM and read-only data together.
+        try testing.expect(C.ram_bytes < C.runtime_bytes);
+        try testing.expect(C.ram_bytes + C.rodata_bytes < C.runtime_bytes);
+    }
 }
 
 test "PalettedLook: 28 bytes, 4 fewer than Look" {
