@@ -40,10 +40,10 @@ pub fn bindError(comptime State: type, comptime name: []const u8, comptime rows:
 
 // ---- look -----------------------------------------------------------------------------------
 
-/// The box: as wide as it is given (at least 80), `rows` lines tall; it clips its lines.
-/// Not yet painted.
+/// The box: as wide as it is given (at least 80), `rows` lines tall, inset, its border the
+/// accent while focused; it clips its lines.
 pub fn areaStyle(th: *const Theme, rows: u32, focused: bool) Style {
-    _ = focused;
+    const border = base.OnOff{ th.control_hot, th.accent };
     const pad = tf.padding(th);
     const h = @as(f32, @floatFromInt(rows)) * tf.lineHeight(th) + pad[1] + pad[3];
     return .{
@@ -51,6 +51,10 @@ pub fn areaStyle(th: *const Theme, rows: u32, focused: bool) Style {
         .size = .{ .fill, .px(h) },
         .min = .{ 80, 0 },
         .pad = pad,
+        .radius = th.radius,
+        .fill = th.control_held,
+        .border = 1,
+        .border_color = border[@intFromBool(focused)],
         .clip = true,
     };
 }
@@ -289,6 +293,44 @@ test "textarea: the page agrees in both front ends at rest; rows lines tall" {
         const run = t.c.text[a + 4 + @as(u32, @intCast(k))];
         try testing.expectEqualStrings(want, strs.buf[out.runtime.texts.c.start[run]..][0..out.runtime.texts.c.bytes[run]]);
     }
+}
+
+test "textarea look: an inset box rows lines tall; the selection on each line, the caret on its line" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const a = t.find(.from("notes"));
+    try testing.expectEqual(th.control_held.bitsOf(), t.c.look[a].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[a].border_color);
+    // Lines stacked one line height apart.
+    const lh = tf.lineHeight(&th);
+    try testing.expectApproxEqAbs(t.rect(a + 4).y0 + lh, t.rect(a + 5).y0, 0.5);
+    // Focused, the selection from column 3 of "one" to the end of "two": on line 0 one
+    // advance wide (the newline), on line 1 three; the caret at the end of "two".
+    const box = t.rect(a);
+    in.pointer = .{ box.x1 - 4, box.y0 + th.pad / 2 + 1.5 * lh };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    in.pointer = .{ 0, 0 };
+    for ([2]*Page.Field{ &h.app.notes, &h.ui.signals.state.notes }) |s| {
+        s.ed.anchor = 3;
+        s.ed.caret = 7;
+    }
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    const adv = tf.advance(&th);
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[a].border_color);
+    // Edges snap to whole pixels: within one of the exact width.
+    try testing.expectApproxEqAbs(adv, t.rect(a + 1).w(), 1);
+    try testing.expectApproxEqAbs(3 * adv, t.rect(a + 2).w(), 1);
+    try testing.expectEqual(@as(f32, 0), t.rect(a + 3).w());
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[a + 7].fill);
+    try testing.expectApproxEqAbs(t.rect(a + 5).y0, t.rect(a + 7).y0, 0.5);
+    try testing.expectApproxEqAbs(t.rect(a + 5).x0 + 3 * adv, t.rect(a + 7).x0, 0.5);
 }
 
 test {
