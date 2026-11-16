@@ -126,6 +126,16 @@ pub fn update(th: *const Theme, r: Response, top: f32, options: []const []const 
     scroll.* = wheel(th, scroll.*, delta, n, visible);
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// Roles of the built rows: the list a list box, each built option an option. Only rows on
+/// screen exist, so only they are exported.
+// ponytail: no aria-setsize/posinset, so a screen reader cannot say "row 40 of 10,000"; the
+// export has no column for them yet.
+pub fn setRoles(t: *Tree, box: u32, first_row: u32, len: u32) void {
+    list_zig.setRoles(t, box, first_row, len);
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A virtual list of `options` showing `visible` rows: as `list.list`, plus the wheel scrolls
@@ -142,6 +152,8 @@ pub fn vlist(f: *Frame, th: *const Theme, id: Id, options: []const []const u8, v
     const r = f.interact(box, .button);
     const under = rowAt(th, top, f.in.pointer[1], scroll.*, n);
     const win = window(th, n, visible, scroll.*);
+    const t = f.tree();
+    const first = t.len;
     for (win.first..win.first + win.len) |k| {
         const row = f.open(.none, list_zig.optionStyle(th));
         f.setFill(row, list_zig.optionFill(th, r.hovered and under == k, selected.* == k));
@@ -149,6 +161,8 @@ pub fn vlist(f: *Frame, th: *const Theme, id: Id, options: []const []const u8, v
         f.close();
     }
     f.close();
+    t.c.value[box.ix()] = list_zig.selectedValue(selected.*);
+    setRoles(t, box.ix(), first, win.len);
     return r;
 }
 
@@ -252,6 +266,7 @@ pub fn ComptimeVList(comptime State: type, comptime spec: Spec, comptime th: The
             const box = tb.t.push(parent, .hash(n.id.?), &s);
             const under = rowAt(&th, top, in.pointer[1], scroll, count);
             const win = window(&th, count, v.visible, scroll);
+            const first = tb.t.len;
             const template = n.children[0];
             for (win.first..win.first + win.len) |k| {
                 var o = template.style;
@@ -261,6 +276,8 @@ pub fn ComptimeVList(comptime State: type, comptime spec: Spec, comptime th: The
                 tb.t.seal(i);
             }
             tb.t.seal(box);
+            tb.t.c.value[box] = list_zig.selectedValue(sel);
+            setRoles(&tb.t, box, first, win.len);
         }
 
         fn field(comptime name: []const u8) S.Field {
@@ -330,6 +347,30 @@ var harness: Example(theme).Run = .{};
 /// row and its label).
 fn builtRows(t: *const Tree, box: u32) u32 {
     return (t.c.end[box] - box - 1) / 2;
+}
+
+test "vlist: roles and value; only rows on screen are exported" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.selected = 41;
+    h.app.scroll = 40 * list_zig.rowHeight(&theme);
+    h.ui.signals.state.selected = 41;
+    h.ui.signals.state.scroll = h.app.scroll;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box = t.find(.from("items"));
+    try testing.expectEqual(@backingInt(a11y.Role.listbox), t.c.role[box]);
+    try testing.expectEqual(@as(f32, 41), t.c.value[box]);
+    // Rows 40 to 45 are built (5 visible, one spare); each an option named by its text.
+    try testing.expectEqual(@as(u32, 6), builtRows(t, box));
+    for (0..6) |j| try testing.expectEqual(@backingInt(a11y.Role.option), t.c.role[box + 1 + 2 * j]);
+    // The first built row shows option 40: its label is that option's text.
+    const run = t.c.text[box + 2];
+    const tx = out.runtime.texts;
+    const strings = h.ctx.strings[h.ctx.cur].buf;
+    try testing.expectEqualStrings("Item 40", strings[tx.c.start[run]..][0..tx.c.bytes[run]]);
 }
 
 test "check: what a comptime virtual list's state must have" {
