@@ -202,6 +202,33 @@ pub const Setup = struct {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Scale
+
+/// `Xft.dpi` from the resource database string (the root's RESOURCE_MANAGER property), the DPI
+/// desktops set for scaling; null when it has none.
+pub fn resourceDpi(resources: []const u8) ?f32 {
+    var lines = std.mem.splitScalar(u8, resources, '\n');
+    while (lines.next()) |line| {
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, line[0..colon], " \t"), "Xft.dpi")) continue;
+        const dpi = std.fmt.parseFloat(f32, std.mem.trim(u8, line[colon + 1 ..], " \t\r")) catch return null;
+        return if (dpi > 0) dpi else null;
+    }
+    return null;
+}
+
+/// Physical pixels per logical pixel. `Xft.dpi` is the user's choice and is taken as it is
+/// (96 is 1). Without it, the screen's size in pixels and millimetres (from the setup, then from
+/// RandR's ScreenChangeNotify) gives the DPI, rounded to a quarter step and never below 1, since
+/// many servers report a made-up size close to 96 DPI.
+pub fn scale(xft_dpi: ?f32, width_px: u16, width_mm: u16) f32 {
+    if (xft_dpi) |d| return d / 96;
+    if (width_mm == 0) return 1;
+    const dpi = @as(f32, @floatFromInt(width_px)) * 25.4 / @as(f32, @floatFromInt(width_mm));
+    return @max(1, @round(dpi / 96 * 4) / 4);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Messages from the server
 
 /// Every message is 32 bytes, except replies and generic events, which say how many 4-byte
@@ -285,6 +312,7 @@ pub const op = struct {
     pub const map_window = 8;
     pub const intern_atom = 16;
     pub const change_property = 18;
+    pub const delete_property = 19;
     pub const get_property = 20;
     pub const set_selection_owner = 22;
     pub const convert_selection = 24;
@@ -399,6 +427,47 @@ pub fn getProperty(b: *Buf, window: u32, property: u32, delete: bool, words: u32
     b.int(u32, 0); // AnyPropertyType
     b.int(u32, 0);
     b.int(u32, words);
+}
+
+pub const change_event_mask_size = 16;
+
+/// Replaces this client's event mask on `window` (used on the root, for PropertyNotify).
+pub fn changeEventMask(b: *Buf, window: u32, mask: u32) void {
+    b.head(op.change_window_attributes, 0, change_event_mask_size / 4);
+    b.int(u32, window);
+    b.int(u32, Attr.event_mask);
+    b.int(u32, mask);
+}
+
+pub const delete_property_size = 12;
+
+pub fn deleteProperty(b: *Buf, window: u32, property: u32) void {
+    b.head(op.delete_property, 0, delete_property_size / 4);
+    b.int(u32, window);
+    b.int(u32, property);
+}
+
+pub const randr_select_input_size = 12;
+
+/// RandR SelectInput (minor 4): ScreenChangeNotify events about `window`'s screen, whose code
+/// is the extension's first event.
+pub fn randrSelectInput(b: *Buf, randr: u8, window: u32) void {
+    b.head(randr, 4, randr_select_input_size / 4);
+    b.int(u32, window);
+    b.int(u16, 1); // ScreenChangeNotify
+    b.zeros(2);
+}
+
+pub const randr_set_screen_size_size = 20;
+
+/// RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
+pub fn randrSetScreenSize(b: *Buf, randr: u8, window: u32, w: u16, h: u16, mm_w: u32, mm_h: u32) void {
+    b.head(randr, 7, randr_set_screen_size_size / 4);
+    b.int(u32, window);
+    b.int(u16, w);
+    b.int(u16, h);
+    b.int(u32, mm_w);
+    b.int(u32, mm_h);
 }
 
 pub const send_event_size = 44;
@@ -683,6 +752,10 @@ test "requests: lengths match the bytes written" {
         .{ fake_input_size, fakeInput, .{ 130, 6, 0, 1, 10, 20 } },
         .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
         .{ set_input_focus_size, setInputFocus, .{1} },
+        .{ change_event_mask_size, changeEventMask, .{ 1, 2 } },
+        .{ delete_property_size, deleteProperty, .{ 1, 2 } },
+        .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },
+        .{ randr_set_screen_size_size, randrSetScreenSize, .{ 140, 1, 2, 3, 4, 5 } },
         .{ xkb_use_extension_size, xkbUseExtension, .{130} },
         .{ xkb_per_client_flags_size, xkbDetectableAutoRepeat, .{130} },
     }) |c| {
@@ -709,4 +782,22 @@ test "messageSize: replies and generic events carry their length" {
     // A SendEvent copy (high bit set) is still 32 bytes.
     m[0] = client_message | 0x80;
     try testing.expectEqual(@as(usize, 32), messageSize(&m));
+}
+
+test "resourceDpi: Xft.dpi from the resource string" {
+    try testing.expectEqual(@as(?f32, 192), resourceDpi("Xcursor.size:\t24\nXft.dpi:\t192\nXft.hinting:\t1\n"));
+    try testing.expectEqual(@as(?f32, 120), resourceDpi("Xft.dpi: 120"));
+    try testing.expectEqual(@as(?f32, null), resourceDpi("Xft.dpix:\t192\n*dpi: 3\n"));
+    try testing.expectEqual(@as(?f32, null), resourceDpi("Xft.dpi:\tbig\n"));
+    try testing.expectEqual(@as(?f32, null), resourceDpi(""));
+}
+
+test "scale: Xft.dpi wins, then the screen's physical size in quarter steps" {
+    try testing.expectEqual(@as(f32, 2), scale(192, 1024, 271));
+    try testing.expectEqual(@as(f32, 1.25), scale(120, 0, 0));
+    try testing.expectEqual(@as(f32, 1), scale(null, 1024, 271)); // 96 DPI
+    try testing.expectEqual(@as(f32, 2), scale(null, 3840, 508)); // 192 DPI
+    try testing.expectEqual(@as(f32, 1.5), scale(null, 2880, 508)); // 144 DPI
+    try testing.expectEqual(@as(f32, 1), scale(null, 1024, 400)); // under 96: never below 1
+    try testing.expectEqual(@as(f32, 1), scale(null, 1024, 0));
 }

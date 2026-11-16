@@ -48,6 +48,7 @@ pub const Atoms = struct {
     WM_DELETE_WINDOW: u32 = 0,
     _NET_WM_NAME: u32 = 0,
     UTF8_STRING: u32 = 0,
+    RESOURCE_MANAGER: u32 = 0,
 };
 
 pub const max_windows = 8;
@@ -72,6 +73,15 @@ pub const Connection = struct {
     keymap: keys.Keymap = .{},
     /// A MappingNotify said the keyboard map changed; reloaded at the end of the next `pump`.
     keymap_stale: bool = false,
+    /// Physical pixels per logical pixel for new windows (`wire.scale`), and whether a change
+    /// of Xft.dpi or of the screen asks to read it again at the end of the next `pump`.
+    scale: f32 = 1,
+    scale_stale: bool = false,
+    /// The screen's size for the fallback, from the setup and then RandR.
+    screen_px: u16 = 0,
+    screen_mm: u16 = 0,
+    /// RandR's ScreenChangeNotify event code; 0 without RandR.
+    randr_event: u8 = 0,
     /// Set when the socket failed or closed; every window's `poll` is false after it.
     err: ?Error = null,
 
@@ -107,6 +117,25 @@ pub const Connection = struct {
             const use = try c.reply(c.send(wire.xkb_use_extension_size, wire.xkbUseExtension, .{xkb}));
             if (use[1] != 0) _ = try c.reply(c.send(wire.xkb_per_client_flags_size, wire.xkbDetectableAutoRepeat, .{xkb}));
         } else |_| {}
+
+        // Scale: Xft.dpi changes arrive as PropertyNotify on the root, screen changes from RandR.
+        c.screen_px = c.setup.width_px;
+        c.screen_mm = c.setup.width_mm;
+        _ = c.send(wire.change_event_mask_size, wire.changeEventMask, .{ c.setup.root, wire.Mask.property_change });
+        if (c.extension("RANDR")) |randr| {
+            c.randr_event = (try c.reply(c.send(wire.queryExtensionSize("RANDR"), wire.queryExtension, .{"RANDR"})))[10];
+            _ = c.send(wire.randr_select_input_size, wire.randrSelectInput, .{ randr, c.setup.root });
+        } else |_| {}
+        try c.readScale();
+    }
+
+    fn readScale(c: *Connection) Error!void {
+        const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ c.setup.root, c.atoms.RESOURCE_MANAGER, false, 4096 }));
+        const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
+        c.scale = wire.scale(wire.resourceDpi(r[32..][0..len]), c.screen_px, c.screen_mm);
+        for (c.windows) |slot| {
+            if (slot) |w| w.setScale(c.scale);
+        }
     }
 
     fn loadKeymap(c: *Connection) Error!void {
@@ -236,6 +265,10 @@ pub const Connection = struct {
             if (linux.errno(r) != .SUCCESS or r == 0) break;
             try c.readSome();
         }
+        if (c.scale_stale) {
+            c.scale_stale = false;
+            try c.readScale();
+        }
         if (c.keymap_stale) {
             c.keymap_stale = false;
             try c.loadKeymap();
@@ -259,6 +292,13 @@ pub const Connection = struct {
             return;
         }
         if (kind == wire.mapping_notify and m[4] != 0) c.keymap_stale = true; // keyboard or modifiers
+        if (kind == wire.property_notify and wire.get(u32, m, 4) == c.setup.root and wire.get(u32, m, 8) == c.atoms.RESOURCE_MANAGER) c.scale_stale = true;
+        if (c.randr_event != 0 and kind == c.randr_event) {
+            // ScreenChangeNotify: the root's new size in pixels and millimetres.
+            c.screen_px = wire.get(u16, m, 24);
+            c.screen_mm = wire.get(u16, m, 28);
+            c.scale_stale = true;
+        }
         const target = wire.eventWindow(m);
         for (c.windows) |slot| {
             const w = slot orelse continue;
@@ -381,7 +421,7 @@ pub const Window = struct {
             .fb = .init(buf.pixels, 0, 0, .bgra8),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
-        w.held.viewport = .{ @floatFromInt(width), @floatFromInt(height) };
+        w.setScale(c.scale);
         const a = c.atoms;
         _ = c.send(wire.create_window_size, wire.createWindow, .{ xid, c.setup.root, width, height, events });
         _ = c.send(wire.create_gc_size, wire.createGc, .{ w.gc, xid });
@@ -402,6 +442,16 @@ pub const Window = struct {
         _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.destroy_window, w.id });
         c.flush() catch {};
         w.is_open = false;
+    }
+
+    /// A new scale: the viewport and the held pointer are logical pixels, so both follow.
+    fn setScale(w: *Window, s: f32) void {
+        const in = &w.held;
+        const ratio = w.scale / s;
+        const outside = in.pointer[0] < 0;
+        in.pointer = if (outside) in.pointer else .{ in.pointer[0] * ratio, in.pointer[1] * ratio };
+        w.scale = s;
+        in.viewport = .{ @as(f32, @floatFromInt(w.width)) / s, @as(f32, @floatFromInt(w.height)) / s };
     }
 
     fn handle(w: *Window, m: []const u8) void {
@@ -783,4 +833,60 @@ test "x11: a held key repeats as presses" {
     }
     try testing.expect(es.len >= 5);
     for (ev.in.text) |ch| try testing.expectEqual(@as(u8, 'a'), ch);
+}
+
+/// Pumps until `w.scale` is `want`.
+fn waitScale(w: *Window, want: f32) !void {
+    for (0..2000) |_| {
+        try w.conn.pump();
+        if (w.scale == want) return;
+        w.conn.waitReadable(0.005);
+    }
+    return error.ScaleNeverChanged;
+}
+
+test "x11: the scale follows Xft.dpi and RandR's screen size" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    const xtest = try c.extension("XTEST");
+    // Xvfb sets no Xft.dpi and reports a screen near 96 DPI.
+    try testing.expectEqual(@as(f32, 1), c.scale);
+    var w: Window = undefined;
+    try w.open(c, fb_w, fb_h, "scale", Fixture.buffers);
+    defer w.close();
+    const root = c.setup.root;
+
+    // A desktop sets Xft.dpi 192: every window doubles, its viewport and pointer halve.
+    const res = "Xcursor.size:\t24\nXft.dpi:\t192\n";
+    _ = c.send(wire.changePropertySize(res.len), wire.changeProperty, .{ root, c.atoms.RESOURCE_MANAGER, 31, 8, res }); // type STRING
+    try waitScale(&w, 2);
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.motion_notify, 0, root, 200, 100 });
+    try c.sync();
+    for (0..2000) |_| {
+        try c.pump();
+        if (w.held.pointer[0] == 100) break;
+        c.waitReadable(0.005);
+    }
+    var ev: Events = .{};
+    try testing.expect(w.poll(&ev));
+    try testing.expectEqual(@as(f32, 2), ev.in.scale);
+    try testing.expectEqual([2]f32{ 400, 300 }, ev.in.viewport);
+    try testing.expectEqual([2]f32{ 100, 50 }, ev.in.pointer);
+
+    // Without Xft.dpi the screen's physical size decides; RandR reports changes to it.
+    _ = c.send(wire.delete_property_size, wire.deleteProperty, .{ root, c.atoms.RESOURCE_MANAGER });
+    try waitScale(&w, 1);
+    if (c.randr_event == 0) return error.SkipZigTest;
+    const randr = try c.extension("RANDR");
+    const s = c.setup;
+    // The same pixels over half the millimetres: twice the DPI.
+    _ = c.send(wire.randr_set_screen_size_size, wire.randrSetScreenSize, .{ randr, root, s.width_px, s.height_px, s.width_mm / 2, s.height_mm / 2 });
+    const changed = waitScale(&w, 2);
+    _ = c.send(wire.randr_set_screen_size_size, wire.randrSetScreenSize, .{ randr, root, s.width_px, s.height_px, s.width_mm, s.height_mm });
+    try changed;
+    try waitScale(&w, 1);
+    try testing.expect(w.poll(&ev));
+    try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
 }
