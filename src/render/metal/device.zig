@@ -58,6 +58,9 @@ pub const LayerDesc = struct {
 pub const Layer = struct {
     layer: Id,
     format: mtl.PixelFormat,
+    /// What the layer was last set to: drawable pixels and contents scale.
+    px: [2]u32 = .{ 0, 0 },
+    scale: f32 = 0,
 
     pub fn init(d: *const Device, desc: LayerDesc) Layer {
         const layer = msg(Id, objc.class("CAMetalLayer"), "new", .{});
@@ -68,8 +71,8 @@ pub const Layer = struct {
         msg(void, layer, "setMaximumDrawableCount:", .{desc.drawables});
         // Opaque: the UI's first quad covers the window; skips compositor blending.
         msg(void, layer, "setOpaque:", .{@as(objc.BOOL, true)});
-        const l: Layer = .{ .layer = layer, .format = desc.format };
-        l.resize(desc.size, desc.scale);
+        var l: Layer = .{ .layer = layer, .format = desc.format };
+        _ = l.resize(desc.size, desc.scale);
         return l;
     }
 
@@ -84,11 +87,31 @@ pub const Layer = struct {
         msg(void, view, "setWantsLayer:", .{@as(objc.BOOL, true)});
     }
 
-    /// Sets the drawable size in physical pixels for a view of `size` logical pixels at `scale`.
-    pub fn resize(l: *const Layer, size: [2]f32, scale: f32) void {
+    /// Follows the view: call it each frame (or on the shell's resize and scale events) with the
+    /// view's logical size and backing scale, and pass the same two to the renderer's `prepare`.
+    /// Touches the layer only when the drawable size or the scale changed, since a new drawable
+    /// size reallocates the drawables. Drawables taken after a change have the new size; the
+    /// renderer's viewport and scissor come from the same `drawableSize`, so they match.
+    /// Returns whether anything changed (a moved window between displays changes only `scale`).
+    pub fn resize(l: *Layer, size: [2]f32, scale: f32) bool {
         const px = drawableSize(size, scale);
-        msg(void, l.layer, "setContentsScale:", .{@as(objc.CGFloat, scale)});
-        msg(void, l.layer, "setDrawableSize:", .{objc.CGSize{ .width = @floatFromInt(px[0]), .height = @floatFromInt(px[1]) }});
+        if (!l.changes(px, scale)) return false;
+        if (scale != l.scale) msg(void, l.layer, "setContentsScale:", .{@as(objc.CGFloat, scale)});
+        if (px[0] != l.px[0] or px[1] != l.px[1]) msg(void, l.layer, "setDrawableSize:", .{objc.CGSize{ .width = @floatFromInt(px[0]), .height = @floatFromInt(px[1]) }});
+        l.px = px;
+        l.scale = scale;
+        return true;
+    }
+
+    fn changes(l: *const Layer, px: [2]u32, scale: f32) bool {
+        return px[0] != l.px[0] or px[1] != l.px[1] or scale != l.scale;
+    }
+
+    /// During a live window resize, presenting inside the window's Core Animation transaction
+    /// keeps the content in step with the frame (GPUI turns this on while resizing); use
+    /// `present.Frames.presentInTransaction` while it is on.
+    pub fn setPresentsWithTransaction(l: *const Layer, on: bool) void {
+        msg(void, l.layer, "setPresentsWithTransaction:", .{@as(objc.BOOL, on)});
     }
 };
 
@@ -108,6 +131,14 @@ test "device: drawable size is the view in physical pixels, never empty" {
     try testing.expectEqual([2]u32{ 1201, 1 }, drawableSize(.{ 800.5, 0 }, 1.5));
 }
 
+test "device: the layer is touched only when its pixels or scale change" {
+    var l: Layer = .{ .layer = undefined, .format = .bgra8_unorm, .px = .{ 1600, 1200 }, .scale = 2 };
+    try testing.expect(!l.changes(drawableSize(.{ 800, 600 }, 2), 2));
+    try testing.expect(!l.changes(drawableSize(.{ 800.1, 600 }, 2), 2)); // same pixels after rounding
+    try testing.expect(l.changes(drawableSize(.{ 801, 600 }, 2), 2)); // resized
+    try testing.expect(l.changes(drawableSize(.{ 1600, 1200 }, 1), 1)); // moved to a 1x display: same pixels, new scale
+}
+
 test "device: a device, a queue and a layer on a real Metal implementation" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     try objc.load();
@@ -121,4 +152,8 @@ test "device: a device, a queue and a layer on a real Metal implementation" {
     const size = msg(objc.CGSize, layer.layer, "drawableSize", .{});
     try testing.expectEqual(objc.CGSize{ .width = 320, .height = 240 }, size);
     try testing.expect(std.mem.len(dev.name()) > 0);
+    try testing.expect(!layer.resize(.{ 160, 120 }, 2));
+    try testing.expect(layer.resize(.{ 200, 100 }, 1.5));
+    try testing.expectEqual(objc.CGSize{ .width = 300, .height = 150 }, msg(objc.CGSize, layer.layer, "drawableSize", .{}));
+    try testing.expectEqual(@as(objc.CGFloat, 1.5), msg(objc.CGFloat, layer.layer, "contentsScale", .{}));
 }

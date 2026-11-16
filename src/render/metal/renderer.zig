@@ -161,7 +161,9 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.globals = .{ .viewport = viewport, .scale = scale };
             r.glyphs = glyphs;
             r.scale = scale;
-            r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
+            // The layer's own rounding (device.zig `Layer.resize`), so viewport and scissor match
+            // the drawable after a resize or a scale change.
+            r.extent = dev_mod.drawableSize(viewport, scale);
         }
 
         fn frameBytes(r: *const Self) usize {
@@ -393,6 +395,19 @@ test "renderer: the custom scene's host draw gets its rect as a scissor in the p
     const i = iface.drawUntilCustom(&r, undefined, &st.draw, 1); // command 1 is the custom one
     try testing.expectEqual(1, i);
     try testing.expectEqual(mtl.ScissorRect{ .x = 16, .y = 16, .width = 288, .height = 208 }, r.customScissor(st.draw.customs[st.draw.command(i).custom]));
+}
+
+test "renderer: after a resize or scale change the viewport and scissor match the new drawable" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[0]);
+    var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 1 });
+    for ([_][2]f32{ .{ 160, 120 }, .{ 333.3, 77.7 }, .{ 333.3, 77.7 }, .{ 0, 10 } }, [_]f32{ 1, 1, 1.5, 2 }) |size, scale| {
+        r.prepare({}, &st.draw, .{}, size, scale);
+        try testing.expectEqual(dev_mod.drawableSize(size, scale), r.extent);
+        try testing.expectEqual(scale, r.globals.scale);
+        try testing.expectEqual(size, r.globals.viewport);
+    }
 }
 
 test "renderer: prepare drops quads past the capacity instead of writing past the buffer" {

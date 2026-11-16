@@ -66,6 +66,18 @@ pub const Frames = struct {
         f.in_flight[f.slot] = objc.retain(cmd);
         f.slot = (f.slot + 1) % f.count;
     }
+
+    /// Presents inside the current Core Animation transaction, for a layer with
+    /// `presentsWithTransaction` on (device.zig `setPresentsWithTransaction`, during a live
+    /// resize): commits, waits until the GPU work is scheduled, then presents from the CPU, as
+    /// Apple documents for that mode.
+    pub fn presentInTransaction(f: *Frames, cmd: Id, drawable: Id) void {
+        msg(void, cmd, "commit", .{});
+        msg(void, cmd, "waitUntilScheduled", .{});
+        msg(void, drawable, "present", .{});
+        f.in_flight[f.slot] = objc.retain(cmd);
+        f.slot = (f.slot + 1) % f.count;
+    }
 };
 
 /// The layer's next drawable (autoreleased), or null when none came within a second.
