@@ -113,6 +113,9 @@ pub const widgets_contextmenu = @import("widgets/contextmenu.zig");
 pub const widgets_dialog = @import("widgets/dialog.zig");
 pub const widgets_toast = @import("widgets/toast.zig");
 pub const widgets_select = @import("widgets/select.zig");
+pub const widgets_combobox = @import("widgets/combobox.zig");
+pub const widgets_datepicker = @import("widgets/datepicker.zig");
+pub const widgets_image = @import("widgets/image.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const a11y_settings = @import("a11y/settings.zig");
 pub const settings_data = @import("a11y/settings_data.zig");
@@ -149,6 +152,8 @@ pub const shell_x11_wire = @import("shell/x11/wire.zig");
 pub const shell_x11_keys = @import("shell/x11/keys.zig");
 pub const shell_x11_xim = @import("shell/x11/xim.zig");
 pub const shell_win32_translate = @import("shell/win32/translate.zig");
+pub const shell_ios_translate = @import("shell/ios/translate.zig");
+pub const shell_android_translate = @import("shell/android/translate.zig");
 
 test {
     std.testing.refAllDecls(@This());

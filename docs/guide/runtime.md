@@ -1,0 +1,170 @@
+# The runtime front end
+
+The runtime front end rebuilds the tree every frame from your own data: you call `open`,
+`leaf`, `text` and `close` on a `Frame`, and the layout and paint passes turn it into a
+`DrawList`. Use it for any UI whose shape depends on data; the comptime front end
+(`docs/guide/comptime.md`) is for UIs whose shape is fixed when you compile.
+
+Every code block below is a piece of `docs/guide/runtime.zig`, which `zig build docs` compiles
+and runs. The example is the prototype's `buildUi` (`prototype/example.zig`) on the package.
+
+| File | What it gives you |
+|---|---|
+| `src/runtime/context.zig` (`lcgr.context`) | `Context` (what outlives a frame), `Limits`, `Output`, `Platform`, `Status` |
+| `src/runtime/frame.zig` (`lcgr.frame`) | `Frame`: building, input queries, `end` |
+| `src/runtime/signals.zig` (`lcgr.runtime_signals`) | `Signals`, `Cell`, `Derived`, `Effect` |
+| `src/runtime/reuse.zig` (`lcgr.reuse`) | `Frame.reuse`: skip subtrees whose signals did not change |
+| `src/runtime/scheduler.zig` (`lcgr.scheduler`) | `needsFrame`, `wake`, `Pace`, timers |
+| `src/widgets/` (`lcgr.widgets_*`) | ready widgets, each a function over `Frame` |
+
+## Memory: one buffer, sized by you
+
+Every capacity is a field of `Limits`, and `Context.requiredBytes` gives the bytes they take. It
+runs at compile time, so the buffer can be static:
+
+```zig
+const Context = lcgr.context.Context;
+const limits: lcgr.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+```
+
+`Context.init` carves every column from that buffer and never allocates again; a buffer that is
+too short is `error.BufferTooSmall`. Running out of a limit during a frame is not fatal: nothing
+is written out of bounds, and the frame's `Output.status` says which limit was hit
+(`status.ok()` is true when none was).
+
+```zig
+var ctx = try Context.init(&buffer, limits);
+var app: App = .{ .layers = .init(&ctx.signals, 3) };
+var in: lcgr.input.Input = .{ .viewport = .{ 800, 600 } };
+```
+
+## Building a frame
+
+The UI is a function of your state. Containers are `open` ... `close`; ids are hashed names
+(`Id.from("reset")`, or `.from("reset")` where the type is known), and the widgets in
+`lcgr.widgets_*` are functions that build a few nodes and return what input did to them:
+
+```zig
+const Frame = lcgr.frame.Frame;
+const Id = lcgr.types.Id;
+const w = lcgr.widgets_base;
+
+const App = struct {
+    theme: w.Theme = .default,
+    resets: u32 = 0,
+    wireframe: bool = false,
+    exposure: f32 = 1,
+    layers: lcgr.runtime_signals.Cell(u32),
+    sidebar_builds: u32 = 0,
+
+    fn build(app: *App, f: *Frame) void {
+        const th = &app.theme;
+        _ = f.open(.from("toolbar"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .fill = th.panel });
+        if (w.button(f, th, .from("reset"), "Reset").clicked) app.resets += 1;
+        _ = w.checkbox(f, th, .from("wire"), &app.wireframe, "Wireframe");
+        _ = w.slider(f, th, .from("exposure"), &app.exposure, 0, 4);
+        f.close();
+
+        _ = f.open(.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
+        // Rebuilt only when `layers` changes or the pointer is on one of its widgets.
+        if (!f.reuse(.from("sidebar"), &.{app.layers.signal})) {
+            app.sidebar_builds += 1;
+            _ = f.open(.from("sidebar"), .{ .size = .{ .px(160), .fill }, .pad = @splat(8), .gap = 4 });
+            var name: [24]u8 = undefined;
+            for (0..app.layers.get()) |i| {
+                _ = w.label(f, th, std.fmt.bufPrint(&name, "Layer {d}", .{i}) catch "?");
+            }
+            f.close();
+        }
+        // The UI only reserves this rect; the host draws into it.
+        _ = f.custom(.from("viewport"), .{ .size = .{ .fill, .fill } }, 0);
+        f.close();
+    }
+};
+```
+
+State lives in `App`, not in the widgets: the checkbox writes `app.wireframe` through its
+pointer, and the button's click is a field of the `Response` it returns. Text is copied into the
+frame, so a temporary such as the `bufPrint` result above is fine.
+
+`f.custom` reserves a rectangle that you draw yourself. It comes back in the draw list as a
+`custom` command, in paint order, carrying the `u64` you passed.
+
+## The loop is yours
+
+There is no framework loop and nothing calls you back. Each turn of your loop fills an `Input`
+(a shell does it from window events, or a test does it by hand) and builds a frame only when one
+is needed:
+
+```zig
+if (ctx.needsFrame(&in)) {
+    var f = ctx.begin(&in);
+    app.build(&f);
+    out = f.end(.{}); // measure with the built-in monospace font, lay out, paint
+    frames += 1;
+
+    for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
+        .quads => |batch| _ = batch, // renderer.drawBatch(pass, batch)
+        .text => |run| _ = run, // renderer.drawText(pass, run)
+        .custom => |k| { // your own pipeline, in paint order
+            customs += 1;
+            viewport = out.draw.customs[k].rect;
+        },
+    };
+}
+```
+
+- `begin` steps interaction against last frame's geometry, so a widget's `Response` this frame
+  answers for the rectangles it had last frame.
+- `end` takes a `Mono` font, measures text, runs the layout passes and paints. Its body is a list
+  of public tier-0 calls; copy it to put your own shaper or pass between two of them, and call
+  `finish` to paint.
+- `Output` is data: the draw list, the laid-out tree (also what an accessibility bridge reads),
+  `platform` (cursor, IME rectangle, clipboard request), `wake` (seconds until a frame is due
+  without input: 0 now, `inf` sleep until the next event) and `pace` (why).
+
+After input changes, one settle frame follows; then `needsFrame` is false and `wake` is `inf`, and
+the host can block on its event queue. The test in `docs/guide/runtime.zig` builds two frames
+over three turns of the loop above and checks that.
+
+## Signals and reuse
+
+A `Cell(T)` is a value with a signal. Setting it to a different value bumps the signal and wakes
+the host:
+
+```zig
+app.layers.set(&ctx.signals, 5); // wakes the host: needsFrame is now true
+```
+
+`f.reuse(id, deps)` returns true when the subtree rooted at `id` can be copied from last frame:
+no dependency changed, the pointer is not over it or holding something in it, and nothing in it
+animates. The caller then skips building it. Otherwise it returns false and the caller builds the
+subtree, whose root must carry the same id. In the example the sidebar is built once and then
+copied until `layers` changes. `Derived(T)` and `Effect` in `lcgr.runtime_signals` cover values
+computed from signals and work that is due once per frame in which an input changed.
+
+## A widget of your own
+
+A widget is a function over `Frame`, written with the same calls the built-in widgets use:
+
+```zig
+/// A widget is a function over `Frame`: build its nodes, ask what input did to them.
+fn swatch(f: *Frame, id: Id, color: *lcgr.types.Color, other: lcgr.types.Color) bool {
+    const node = f.leaf(id, .{ .size = .{ .px(24), .px(24) }, .radius = 4, .fill = color.*, .role = .button });
+    const r = f.interact(node, .button);
+    f.setCursor(.pointer, r.hovered);
+    if (r.clicked) color.* = other;
+    return r.clicked;
+}
+```
+
+`interact` needs a node with an id; `Sense` says what it reacts to (`.button` is hover, click and
+focus; `.any` adds drag). Other queries: `drag(id)` for movement while dragged, `heldRect()` for
+the held widget's last rectangle, `lastRect(id)` for any widget's. Animation is asked for the
+same way: `f.animate(id, target, spring)` returns this frame's value of a spring,
+`f.tween` an eased value, `f.timer(id, seconds, mode)` whether a timer fired, and each keeps the
+host awake only while it moves.
+
+The header of `src/widgets/base.zig` lists the five parts every built-in widget has (spec, look,
+behaviour, accessibility, tests), which is a good checklist for your own.

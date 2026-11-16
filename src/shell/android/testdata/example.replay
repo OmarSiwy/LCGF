@@ -1,0 +1,39 @@
+# The Input the translator must give for example.events, frame by frame, in the headless shell's
+# recording format (src/core/input.zig Replay). A lifted contact is one no longer listed.
+frame
+viewport 800 600
+frame
+frame
+frame
+pointer 37 25
+buttons left
+touch 1 37 25
+frame
+buttons
+# The finger lifted: the pointer leaves the frame after its release.
+frame
+pointer -1 -1
+frame
+pointer 54 74
+buttons left
+touch 2 54 74
+frame
+buttons
+frame
+pointer -1 -1
+frame
+pointer 639 25
+buttons left
+touch 3 639 25
+frame
+touch 3 639 25
+touch 4 300 300
+# Cancelled, as Android cancels: the whole gesture, both fingers moved off the view and
+# listed once more, then gone.
+frame
+pointer -1 -1
+buttons
+touch 3 -1 -1
+touch 4 -1 -1
+frame
+frame

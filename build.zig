@@ -740,6 +740,153 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
-    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
+    // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgr and the Metal back end.
+    // UIKit, Core Foundation and Metal are opened at run time; without an iOS SDK nothing links
+    // here, so the example is a static library an app bundle links (ci/run.sh ios).
+    const ios_metal = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    for ([_][]const u8{ "stock", "example" }) |v|
+        ios_metal.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    const ios_example = b.addLibrary(.{ .name = "ios-example", .linkage = .static, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/ios/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = ios_metal } },
+    }) });
+    b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios; --replay runs the input replay test)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
+
+    // The Android shell (src/shell/android/android.zig) and its example, over lcgr and the
+    // Vulkan back end: a shared library a NativeActivity loads. There is no NDK here, so the
+    // Android libraries are linked through stubs: empty shared libraries named libandroid.so,
+    // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` and `pthread_create`,
+    // which the shell always calls, so the linker keeps it), and empty crtbegin_so.o and
+    // crtend_so.o, in a sysroot a build tool lays out with the libc file that points Zig at
+    // it. They only give the library its DT_NEEDED entries; at run time the device's own
+    // libraries answer. Every NDK declaration is written by hand (android.zig).
+    const android_step = b.step("android-build", "Build zig-out/lib/libandroid-example.so, the example in the Android shell (-Dtarget=aarch64-linux-android)");
+    if (target.result.abi.isAndroid()) {
+        const stubs = b.addWriteFiles();
+        const empty_src = stubs.add("empty.zig", "");
+        const libc_src = stubs.add("libc.zig", "export fn abort() void {}\nexport fn pthread_create() void {}\n");
+        const crt = b.addObject(.{ .name = "crt", .root_module = b.createModule(.{ .root_source_file = empty_src, .target = target, .optimize = .ReleaseSmall }) });
+        const sysroot_tool = b.addRunArtifact(b.addExecutable(.{ .name = "android-sysroot", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/sysroot.zig"),
+            .target = b.graph.host,
+        }) }));
+        const sysroot = sysroot_tool.addOutputDirectoryArg("android-sysroot");
+        sysroot_tool.addFileArg(crt.getEmittedBin());
+        for ([_][]const u8{ "c", "m", "dl", "android", "log" }) |name| {
+            const stub = b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = b.createModule(.{
+                .root_source_file = if (std.mem.eql(u8, name, "c")) libc_src else empty_src,
+                .target = target,
+                .optimize = .ReleaseSmall,
+            }) });
+            sysroot_tool.addFileArg(stub.getEmittedBin());
+        }
+        const android_vk = b.createModule(.{
+            .root_source_file = b.path("src/render/vk/vk.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        });
+        android_vk.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+        android_vk.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        const android_example = b.addLibrary(.{ .name = "android-example", .linkage = .dynamic, .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/android/example.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "vk", .module = android_vk } },
+        }) });
+        android_example.setLibCFile(sysroot.path(b, "libc.txt"));
+        android_example.root_module.addLibraryPath(sysroot);
+        for ([_][]const u8{ "dl", "android", "log" }) |name| android_example.root_module.linkSystemLibrary(name, .{ .needed = true, .use_pkg_config = .no });
+        if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+            // Translated for plain Linux on the same CPU: the headers are the same (VKAPI_CALL
+            // differs only on 32-bit ARM); translate-c rejects any ABI version but glibc's.
+            const linux = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu });
+            const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = linux, .optimize = optimize });
+            vk_h.addIncludePath(vulkan_headers.path("include"));
+            vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+            android_vk.addImport("vk_c", vk_h.createModule());
+        }
+        android_step.dependOn(&b.addInstallArtifact(android_example, .{}).step);
+    } else android_step.dependOn(&b.addFail("android-build needs -Dtarget=aarch64-linux-android").step);
+
+    // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
+    // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
+    const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/wayland.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland", "Test the Wayland shell against a fake compositor (ci/run.sh wayland)").dependOn(&b.addRunArtifact(wayland_tests).step);
+    const wayland_example = b.addExecutable(.{ .name = "wayland-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
+
+    // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
+    // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
+    const api_index = b.addSystemCommand(&.{"python3"});
+    api_index.addFileArg(b.path("docs/api/apiindex.py"));
+    api_index.addFileArg(b.path("src/lcgr.zig"));
+    api_index.has_side_effects = true;
+    const docs_step = b.step("docs", "Generate zig-out/docs/API.md and test the guides' examples");
+    docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
+    // The guides (docs/guide/*.md): their examples run as tests, and every zig block they show
+    // must be a piece of those examples (docs/guide/snippets.py).
+    const guide_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("docs/guide/guides.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
+    const snippets = b.addSystemCommand(&.{"python3"});
+    snippets.addFileArg(b.path("docs/guide/snippets.py"));
+    snippets.addDirectoryArg(b.path("docs/guide"));
+    snippets.has_side_effects = true;
+    docs_step.dependOn(&snippets.step);
+    // The compile-error catalogue (docs/guide/errors.md): each case in docs/guide/errors/ must
+    // fail with the message on its `//! expect: ` first line, as in ct-compile-fail above.
+    {
+        const io = b.graph.io;
+        const sub = "docs/guide/errors";
+        var dir = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer dir.close(io);
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = dir.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            b.dependOnFileContents(b.path(b.pathJoin(&.{ sub, entry.name })));
+            const text = dir.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch @panic("cannot read a compile-error case");
+            const tag = "//! expect: ";
+            if (!std.mem.startsWith(u8, text, tag)) std.debug.panic("{s}/{s}: first line is not '{s}<message>'", .{ sub, entry.name, tag });
+            const case = b.addObject(.{ .name = b.dupe(entry.name[0 .. entry.name.len - 4]), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
+            docs_step.dependOn(&case.step);
+        }
+    }
+
+    // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
+    // cannot parse.
+    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }

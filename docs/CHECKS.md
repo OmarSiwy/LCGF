@@ -7,7 +7,7 @@ them by hand from `prototype/`.
 The recorded numbers below were taken with Zig 0.17.1 on x86-64 Linux; the project now uses 0.18.0-dev.1151+8dfb7a7cc (see section 2 for the census on it). Timings came from a shared VM and move by
 about a third between runs: compare runs on one machine, never across machines.
 
-## 1. Tests
+## 1. Tests (the test matrix)
 
 ```
 cd prototype
@@ -27,6 +27,21 @@ line and it is not a failure.
 Lane counts 2 and 16 were checked by editing `simd.lanes` in a scratch copy of `ui.zig` (the std
 width query never returns 16; see `ZIG_0_17_1.md`). All tests passed at both. The first `simd`
 commit should make the lane count a build option so CI can do this without editing a file.
+
+For the package that option exists: `-Dlanes=N` forces the lane count, and each cell of the
+matrix is a CI job, one file in `ci/jobs/` (`nix develop -c ci/run.sh <job>`):
+
+| Job | What it runs |
+|---|---|
+| `debug`, `release-safe`, `release-fast` | `zig build test` in each mode, for the root package and the prototype |
+| `lanes-4`, `lanes-8` | the tests of both at the lane count a CPU gives: `-Dcpu=x86_64` (SSE2, 4) and `-Dcpu=x86_64_v3` (AVX2, 8) |
+| `lanes-2`, `lanes-16` | the root package's tests at a lane count no x86-64 CPU query gives, forced with `-Dlanes=N` |
+| `cross` | `zig build test-build` for aarch64-linux, aarch64-macos, x86_64-windows, wasm32-wasi and riscv64-linux, and the prototype's `cross` |
+| `windows`, `macos` | what only that OS can show, on a GitHub runner of it (header `# runner: windows` or `# runner: macos`; outside `all`) |
+
+A job's header lines choose how it runs: `# shell: <name>` the Nix dev shell (`golden` has
+wgpu-py on lavapipe, Xvfb, weston and Wine), `# all: no` leaves it out of `ci/run.sh all`, and
+`# runner: windows|macos` the GitHub runner (default ubuntu).
 
 ## 2. Branch census
 
@@ -144,6 +159,10 @@ python3 mkindex.py         # rewrites API.md from ui.zig and ui_wgpu.zig
 ```
 
 164 public functions and constants. Regenerate it when the public surface changes.
+
+For the package, `zig build docs` writes `zig-out/docs/API.md` with the same scanner
+(`docs/api/apiindex.py`) over every file `src/lcgr.zig` exports; nothing generated is committed.
+`ci/run.sh docs` runs it.
 
 ## 6. Compiler facts
 

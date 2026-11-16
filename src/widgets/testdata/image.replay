@@ -1,0 +1,24 @@
+# Recorded input for the image example page (widgets/image.zig, `Page`), at 320 x 240 in the
+# default theme: the picture at x 8..72, y 34..82; the covered box at x 8..104, y 90..186; the
+# zoom button at x 8..48, y 194..228. One line per frame says what it does (format:
+# input.Replay).
+# 0: rest
+frame
+viewport 320 240
+dt 0.016
+pointer 300 10
+# 1: the pointer over the covered picture: nothing changes
+frame
+pointer 56 138
+# 2: the pointer over the zoom button: it is hot
+frame
+pointer 28 211
+# 3: press it
+frame
+buttons left
+# 4: release: clicked
+frame
+buttons
+# 5: the pointer leaves
+frame
+pointer 300 10

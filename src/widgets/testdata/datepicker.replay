@@ -1,0 +1,46 @@
+# Recorded input for the date picker example page (widgets/datepicker.zig, `Example`), at
+# 800 x 600 in the default theme, on 2026-11-16: the button at x 41..201, y 8..42; its open
+# dialog at x 41..281, y 48..294; the grid's cells 32 x 28 from (49, 118), cell k at column
+# k % 7 and week k / 7 (December 2026's cell 32, the 31st, at x 177..209, y 230..258). One line
+# per frame says what it does (format: input.Replay). Keys are USB HID: 79 Right, 81 Down,
+# 78 Page Down, 41 Escape.
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 400
+# 1: press the button
+frame
+pointer 121 25
+buttons left
+# 2: release: the dialog opens on November 16th, the value
+frame
+buttons
+# 3: Right: the 17th
+frame
+press 79
+# 4: Down: the 24th
+frame
+press 81
+# 5: Page Down: December 24th
+frame
+press 78
+# 6: the pointer reaches December 31st
+frame
+pointer 193 244
+# 7: press it
+frame
+buttons left
+# 8: release: December 31st chosen, the dialog closes
+frame
+buttons
+# 9: press the button
+frame
+pointer 121 25
+buttons left
+# 10: release: the dialog opens on December 31st
+frame
+buttons
+# 11: Escape: closed, still December 31st
+frame
+press 41
