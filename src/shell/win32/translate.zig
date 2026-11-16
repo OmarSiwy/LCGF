@@ -128,6 +128,14 @@ pub const Translator = struct {
     /// The IME's composition as UTF-8, held until it changes or ends (`compose`).
     preedit: []u8 = &.{},
     composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 } } = .{},
+    /// Paths dropped since the last frame, UTF-8 back to back, and where each ends.
+    names: []u8 = &.{},
+    ends: []u32 = &.{},
+    n_names: u32 = 0,
+    n_files: u32 = 0,
+    /// Files were dropped since the last frame, at `drop_at` (logical pixels).
+    dropped_files: bool = false,
+    drop_at: [2]f32 = .{ -1, -1 },
     /// The frame handed out by `frame`, which its `Events` point into. Kept apart from what
     /// arrives so that, with several windows on one thread, another window's `poll` (which
     /// dispatches this window's messages too) cannot change a frame not yet built.
@@ -135,17 +143,28 @@ pub const Translator = struct {
 
     /// Each buffer is split in two halves: the messages arriving, and the frame handed out.
     /// `preedit` holds twice the longest composition shown; a longer one is cut at a character.
-    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
+    /// `names` and `ends` hold the paths of a drop, as `gestures.Files` lists them.
+    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{}, names: []u8 = &.{}, ends: []u32 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
         const t = buf.text.len / 2;
         const e = buf.events.len / 2;
         const p = buf.preedit.len / 2;
+        const n = buf.names.len / 2;
+        const f = buf.ends.len / 2;
         return .{
             .text = buf.text[0..t],
             .events = buf.events[0..e],
             .preedit = buf.preedit[0..p],
-            .out = .{ .text = buf.text[t..][0..t], .events = buf.events[e..][0..e], .preedit = buf.preedit[p..][0..p] },
+            .names = buf.names[0..n],
+            .ends = buf.ends[0..f],
+            .out = .{
+                .text = buf.text[t..][0..t],
+                .events = buf.events[e..][0..e],
+                .preedit = buf.preedit[p..][0..p],
+                .names = buf.names[n..][0..n],
+                .ends = buf.ends[f..][0..f],
+            },
         };
     }
 
@@ -245,6 +264,31 @@ pub const Translator = struct {
         t.n_text += @intCast(n);
     }
 
+    /// One path of a drop (`DragQueryFileW`), UTF-16. A path that does not fit, or is not
+    /// valid UTF-16, is left out and counted in `dropped`.
+    pub fn dropFile(t: *Translator, path: []const u16) void {
+        var len: usize = 0;
+        var it = std.unicode.Utf16LeIterator.init(path);
+        while (it.nextCodepoint() catch {
+            t.dropped += 1;
+            return;
+        }) |cp| len += std.unicode.utf8CodepointSequenceLength(cp) catch unreachable;
+        if (t.names.len - t.n_names < len or t.n_files == t.ends.len) {
+            t.dropped += 1;
+            return;
+        }
+        t.n_names += @intCast(std.unicode.utf16LeToUtf8(t.names[t.n_names..], path) catch unreachable);
+        t.ends[t.n_files] = t.n_names;
+        t.n_files += 1;
+    }
+
+    /// The drop itself (`WM_DROPFILES`), at `pos` in client pixels (`DragQueryPoint`), after
+    /// its paths. Its frame has `Events.files` with `drop` and `hover` set.
+    pub fn drop(t: *Translator, pos: [2]i32) void {
+        t.dropped_files = true;
+        t.drop_at = .{ @as(f32, @floatFromInt(pos[0])) / t.in.scale, @as(f32, @floatFromInt(pos[1])) / t.in.scale };
+    }
+
     /// The clock, in seconds since the shell started: sets `Input.time`, and `dt` to the time
     /// since the last frame. The scheduler's timers (`scheduler.deadline`) run on it.
     pub fn clock(t: *Translator, seconds: f64) void {
@@ -331,10 +375,26 @@ pub const Translator = struct {
         @memcpy(o.text[0..t.n_text], t.text[0..t.n_text]);
         @memcpy(o.events[0..t.n_events], t.events[0..t.n_events]);
         @memcpy(o.preedit[0..t.composition.len], t.preedit[0..t.composition.len]);
+        @memcpy(o.names[0..t.n_names], t.names[0..t.n_names]);
+        @memcpy(o.ends[0..t.n_files], t.ends[0..t.n_files]);
         ev.in = t.in;
         ev.in.text = o.text[0..t.n_text];
         ev.in.events = o.events[0..t.n_events];
         ev.composition = .{ .text = o.preedit[0..t.composition.len], .range = t.composition.range };
+        // ponytail: WM_DROPFILES says nothing while files are dragged over the window, so
+        // `hover` is only set on the drop frame and drop targets cannot highlight before it.
+        // Over-the-window feedback needs an OLE IDropTarget; add it when a UI asks for it.
+        const dropped = t.dropped_files;
+        ev.files = .{
+            .names = o.names[0..t.n_names],
+            .ends = o.ends[0 .. t.n_files * @intFromBool(dropped)],
+            .pos = t.drop_at,
+            .hover = dropped,
+            .drop = dropped,
+        };
+        t.dropped_files = false;
+        t.n_names = 0;
+        t.n_files = 0;
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
         t.n_text = 0;
@@ -793,6 +853,33 @@ test "windows: two windows on one thread keep their frames apart" {
     // A's late key is in its next frame.
     try testing.expect(a.frame(&ev_a));
     try testing.expectEqualStrings("x", ev_a.in.text);
+}
+
+test "drop: dropped paths reach one frame, at the drop point" {
+    var text: [8]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var names: [64]u8 = undefined;
+    var ends: [4]u32 = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events, .names = &names, .ends = &ends });
+    var ev: Events = .{};
+    const u = std.unicode.utf8ToUtf16LeStringLiteral;
+    t.setDpi(192);
+    t.dropFile(u("C:\\a.txt"));
+    t.dropFile(u("C:\\\u{65e5}.png"));
+    // Too long for what is left of its 32 bytes: left out, the others kept.
+    t.dropFile(u("C:\\0123456789012345678901234567890123456789"));
+    t.drop(.{ 300, 200 });
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(usize, 2), ev.files.count());
+    try testing.expectEqualStrings("C:\\a.txt", ev.files.path(0));
+    try testing.expectEqualStrings("C:\\\u{65e5}.png", ev.files.path(1));
+    try testing.expectEqual([2]f32{ 150, 100 }, ev.files.pos);
+    try testing.expect(ev.files.drop and ev.files.hover);
+    try testing.expectEqual(@as(u32, 1), t.dropped);
+    // The next frame has no files.
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(usize, 0), ev.files.count());
+    try testing.expect(!ev.files.drop and !ev.files.hover);
 }
 
 test "translate: a full frame drops what does not fit and counts it" {

@@ -95,6 +95,7 @@ const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
 const cf_unicodetext = 13;
 const vrefresh = 116;
+const wm_dropfiles = 0x0233;
 const wm_ime_setcontext = 0x0281;
 const wm_ime_startcomposition = 0x010d;
 const wm_ime_endcomposition = 0x010e;
@@ -165,6 +166,10 @@ extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) BOOL;
 extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) BOOL;
 extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
 extern "gdi32" fn GetDeviceCaps(HDC, index: c_int) callconv(.winapi) c_int;
+extern "shell32" fn DragAcceptFiles(HWND, accept: BOOL) callconv(.winapi) void;
+extern "shell32" fn DragQueryFileW(HANDLE, index: u32, file: ?[*]u16, len: u32) callconv(.winapi) u32;
+extern "shell32" fn DragQueryPoint(HANDLE, *POINT) callconv(.winapi) BOOL;
+extern "shell32" fn DragFinish(HANDLE) callconv(.winapi) void;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -217,11 +222,14 @@ pub const Win32 = struct {
     /// to draw (`sw.Framebuffer.len(w, h)`; a larger window is drawn cut off), `glyphs` one quad
     /// per byte of text in a frame, `first` and `count` one row per text run. `text` and
     /// `events` hold two frames' typed text and key events, `preedit` twice the IME's
-    /// composition (`translate.Translator.Buffers`: what arrives, and the frame handed out).
+    /// composition, `names` and `ends` twice the paths of one drop (`translate.Translator.Buffers`:
+    /// what arrives, and the frame handed out).
     pub const Buffers = struct {
         text: []u8,
         events: []lcgr.input.Input.Event,
         preedit: []u8,
+        names: []u8,
+        ends: []u32,
         pixels: []u32,
         glyphs: []Quad,
         first: []u32,
@@ -241,7 +249,7 @@ pub const Win32 = struct {
         w.* = .{
             .hwnd = undefined,
             .instance = instance,
-            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit }),
+            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit, .names = buf.names, .ends = buf.ends }),
             .fb = .init(buf.pixels, 0, 0, .bgra8),
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
@@ -264,6 +272,7 @@ pub const Win32 = struct {
             if (hz > 1) w.hz = @intCast(hz);
             _ = ReleaseDC(w.hwnd, dc);
         }
+        DragAcceptFiles(w.hwnd, 1);
         // No IME until a frame asks for text (`apply`).
         _ = ImmAssociateContextEx(w.hwnd, null, 0);
         if (opt.show) _ = ShowWindow(w.hwnd, sw_show);
@@ -330,6 +339,25 @@ pub const Win32 = struct {
     fn imeString(w: *Win32, himc: HIMC, index: u32) []const u16 {
         const bytes = ImmGetCompositionStringW(himc, index, &w.ime_units, @sizeOf(@TypeOf(w.ime_units)));
         return w.ime_units[0..@intCast(std.math.clamp(@divTrunc(bytes, 2), 0, w.ime_units.len))];
+    }
+
+    /// Files dropped from Explorer (WM_DROPFILES): their paths and the drop point.
+    fn dropFiles(w: *Win32, hdrop: HANDLE) void {
+        defer DragFinish(hdrop);
+        // ponytail: paths up to 1023 units; longer (\\?\ paths past MAX_PATH) are left out.
+        var path: [1024]u16 = undefined;
+        const n = DragQueryFileW(hdrop, 0xffff_ffff, null, 0);
+        for (0..n) |i| {
+            const len = DragQueryFileW(hdrop, @intCast(i), &path, path.len);
+            if (len == 0 or len >= path.len - 1) {
+                w.t.dropped += 1;
+                continue;
+            }
+            w.t.dropFile(path[0..len]);
+        }
+        var pt: POINT = .{ .x = -1, .y = -1 };
+        _ = DragQueryPoint(hdrop, &pt);
+        w.t.drop(.{ pt.x, pt.y });
     }
 
     /// Puts UTF-8 text on the clipboard. Called by `apply` for `Platform.clipboard`. Invalid
@@ -428,6 +456,10 @@ pub const Win32 = struct {
             // The UI draws the composition itself (Events.composition); the IME draws the rest.
             wm_ime_setcontext => return DefWindowProcW(hwnd, msg, wp, lp & ~@as(isize, @bitCast(isc_showuicompositionwindow))),
             wm_ime_startcomposition => return 0,
+            wm_dropfiles => {
+                w.dropFiles(@ptrFromInt(wp));
+                return 0;
+            },
             wm_ime_composition => {
                 w.imeComposition(@bitCast(lp));
                 return 0;
@@ -492,16 +524,20 @@ const Fixture = struct {
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
     var preedit: [64]u8 = undefined;
+    var names: [512]u8 = undefined;
+    var ends: [16]u32 = undefined;
     // A second window's own text, events and composition; pixels and glyphs are shared.
     var text2: [64]u8 = undefined;
     var events2: [16]lcgr.input.Input.Event = undefined;
     var preedit2: [64]u8 = undefined;
+    var names2: [512]u8 = undefined;
+    var ends2: [16]u32 = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [example_limits.texts]u32 = undefined;
     var count: [example_limits.texts]u32 = undefined;
 
     fn open(w: *Win32) !void {
-        try w.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
+        try w.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -582,7 +618,7 @@ test "win32: two windows on one thread get their own messages" {
     try Fixture.open(&a);
     defer a.deinit();
     var b: Win32 = undefined;
-    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .pixels = &Fixture.pixels, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
+    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .names = &Fixture.names2, .ends = &Fixture.ends2, .pixels = &Fixture.pixels, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
     defer b.deinit();
     const char = @backingInt(translate.Wm.char);
     _ = PostMessageW(a.hwnd, char, 'a', 0);
