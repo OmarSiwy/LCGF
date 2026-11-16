@@ -15,6 +15,7 @@ const moves = @import("moves.zig");
 
 const Id = types.Id;
 const Keyboard = keyboard.Keyboard;
+const Interaction = @import("../../interact/interaction.zig").Interaction;
 
 /// The keys the editor reads, as USB HID scancodes (`Input.Keys`).
 pub const Keys = struct {
@@ -32,6 +33,35 @@ pub const Keys = struct {
     /// to the text's start and end. Ctrl on Windows and Linux; a macOS host sets `.alt` (and
     /// maps Cmd+Left and Right to Home and End itself).
     word: Input.Mods = .{ .ctrl = true },
+    /// Select all (and, from C0342 on, cut, copy and paste), as `Keyboard.commands` reads them.
+    clipboard: keyboard.ClipboardKeys = .{},
+};
+
+/// The pointer over the editor this frame, in px from the laid-out paragraph's top left.
+pub const Pointer = struct {
+    at: [2]f32 = .{ 0, 0 },
+    /// The left button went down on the editor: the caret goes there.
+    press: bool = false,
+    /// The button is held since a press on the editor: the caret follows, the anchor stays.
+    held: bool = false,
+    /// A double click on the editor: the word under the pointer is selected.
+    double: bool = false,
+    /// Shift was held: a press extends the selection instead of starting one.
+    shift: bool = false,
+
+    /// The pointer for widget `id` from this frame's `Interaction`, with the paragraph's top
+    /// left at `origin` (logical px, as `Input.pointer`).
+    pub fn of(it: *const Interaction, id: Id, origin: [2]f32, mods: Input.Mods) Pointer {
+        const n = @backingInt(id);
+        const mine = n != 0;
+        return .{
+            .at = .{ it.pointer[0] - origin[0], it.pointer[1] - origin[1] },
+            .press = mine and it.pressed == n,
+            .held = mine and it.active == n,
+            .double = mine and it.double_clicked == n,
+            .shift = mods.shift,
+        };
+    }
 };
 
 /// What `update` reads besides the keyboard.
@@ -40,6 +70,8 @@ pub const Context = struct {
     /// on laid-out lines. Without one (or once an edit this frame has made it stale), those
     /// keys work on the lines between newlines, and Up and Down go to the text's start and end.
     view: ?moves.View = null,
+    /// Clicks and drags place the caret and select; they need `view`.
+    pointer: Pointer = .{},
 };
 
 /// What one `update` did.
@@ -54,6 +86,9 @@ pub const Editor = struct {
     b: Buffer,
     /// Byte offset of the caret, at a grapheme boundary.
     caret: u32 = 0,
+    /// The other end of the selection: the selection is the text between `anchor` and `caret`,
+    /// empty when they are equal. Shift with a move, or a drag, moves only the caret.
+    anchor: u32 = 0,
     /// The x, px, that Up and Down aim for: kept across a run of vertical moves, so a caret
     /// passing a short line returns to its column. NaN when the next vertical move starts one.
     goal: f32 = std.math.nan(f32),
@@ -62,7 +97,24 @@ pub const Editor = struct {
     /// An editor over `buf` holding `initial`, with the caret at its end.
     pub fn init(buf: []u8, initial: []const u8) Buffer.Error!Editor {
         const b = try Buffer.init(buf, initial);
-        return .{ .b = b, .caret = b.len() };
+        return .{ .b = b, .caret = b.len(), .anchor = b.len() };
+    }
+
+    /// The selection as an ordered byte range.
+    pub fn selection(ed: *const Editor) [2]u32 {
+        return .{ @min(ed.anchor, ed.caret), @max(ed.anchor, ed.caret) };
+    }
+
+    /// The selected text, valid until the next edit.
+    pub fn selected(ed: *Editor) []const u8 {
+        const s = ed.selection();
+        return ed.text()[s[0]..s[1]];
+    }
+
+    /// Puts the caret at `at` with nothing selected.
+    pub fn place(ed: *Editor, at: u32) void {
+        ed.caret = at;
+        ed.anchor = at;
     }
 
     /// The text, contiguous, valid until the next edit.
@@ -70,12 +122,15 @@ pub const Editor = struct {
         return ed.b.text();
     }
 
-    /// Applies this frame's input for widget `id` from `k`: typed text is inserted at the
-    /// caret, Backspace and Delete remove the grapheme (with `keys.word`, the word) before and
-    /// after it, Enter inserts a newline, and the arrows, Home and End move the caret. Nothing
-    /// happens unless `id` is focused.
+    /// Applies this frame's input for widget `id` from `k`: typed text replaces the selection
+    /// or is inserted at the caret, Backspace and Delete remove the selection or the grapheme
+    /// (with `keys.word`, the word) before and after the caret, Enter inserts a newline, the
+    /// arrows, Home and End move the caret (with Shift, select), and select-all selects all.
+    /// The pointer is applied first, from `cx.pointer` over `cx.view`. Keys do nothing unless
+    /// `id` is focused; the pointer is the caller's to fill for `id` only.
     pub fn update(ed: *Editor, k: *const Keyboard, id: Id, cx: Context) Result {
         var r: Result = .{};
+        if (cx.view) |v| ed.point(v, cx.pointer);
         var it = k.events(id);
         while (it.next()) |e| {
             if (e.kind == .text) {
@@ -90,27 +145,58 @@ pub const Editor = struct {
         return r;
     }
 
+    /// A press places the caret (with Shift, extends the selection), a held button drags the
+    /// caret, a double click selects the word under the pointer.
+    fn point(ed: *Editor, v: moves.View, p: Pointer) void {
+        if (!(p.press or p.held or p.double)) return;
+        const at = v.hit(p.at[0], p.at[1]);
+        ed.goal = std.math.nan(f32);
+        if (p.double) {
+            const w = moves.wordAt(v.text, at);
+            ed.anchor = w[0];
+            ed.caret = w[1];
+        } else if (p.press) {
+            ed.caret = at;
+            if (!p.shift) ed.anchor = at;
+        } else {
+            ed.caret = at;
+        }
+    }
+
     fn key(ed: *Editor, e: Input.Event, view: ?moves.View, r: *Result) void {
         const ks = &ed.keys;
         const t = ed.text();
         const at = ed.caret;
+        const shift = e.mods.shift;
         // Shift selects (it does not change what a key does); compare the rest exactly.
         var m = e.mods;
         m.shift = false;
-        const word = @as(u8, @bitCast(m)) == @as(u8, @bitCast(ks.word));
+        const mods: u8 = @bitCast(m);
+        const word = mods == @as(u8, @bitCast(ks.word));
         const c = e.code;
+        const sel = ed.selection();
+        const some = sel[0] < sel[1];
         const vertical = c == ks.up or c == ks.down;
         if (!vertical) ed.goal = std.math.nan(f32);
+        if (c == ks.clipboard.select_all and @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(ks.clipboard.mods))) {
+            ed.anchor = 0;
+            ed.caret = @intCast(t.len);
+            return;
+        }
         if (c == ks.backspace) {
-            ed.remove(if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at), at, r);
-        } else if (c == ks.delete) {
-            ed.remove(at, if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at), r);
-        } else if (c == ks.enter or c == ks.keypad_enter) {
-            ed.insert("\n", r);
-        } else if (c == ks.left) {
-            ed.caret = if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
+            if (some) return ed.remove(sel[0], sel[1], r);
+            return ed.remove(if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at), at, r);
+        }
+        if (c == ks.delete) {
+            if (some) return ed.remove(sel[0], sel[1], r);
+            return ed.remove(at, if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at), r);
+        }
+        if (c == ks.enter or c == ks.keypad_enter) return ed.insert("\n", r);
+        // Left and Right without Shift collapse a selection to its edge.
+        if (c == ks.left) {
+            ed.caret = if (some and !shift and !word) sel[0] else if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
         } else if (c == ks.right) {
-            ed.caret = if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at);
+            ed.caret = if (some and !shift and !word) sel[1] else if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at);
         } else if (c == ks.home) {
             ed.caret = if (word) 0 else if (view) |v| v.home(at) else moves.lineStart(t, at);
         } else if (c == ks.end) {
@@ -123,11 +209,13 @@ pub const Editor = struct {
             } else {
                 ed.caret = if (down) @intCast(t.len) else 0;
             }
-        }
+        } else return;
+        // A move without Shift drops the selection; one with Shift keeps the anchor.
+        if (!shift) ed.anchor = ed.caret;
     }
 
-    /// Inserts typed text, leaving out control characters other than newline and tab (Enter
-    /// arrives as a key, and some hosts also type it as "\r").
+    /// Inserts typed text in place of the selection, leaving out control characters other than
+    /// newline and tab (Enter arrives as a key, and some hosts also type it as "\r").
     fn typeText(ed: *Editor, typed: []const u8, r: *Result) void {
         var i: usize = 0;
         while (i < typed.len) {
@@ -142,9 +230,11 @@ pub const Editor = struct {
         return (c >= 0x20 and c != 0x7f) or c == '\n' or c == '\t';
     }
 
-    /// Inserts `bytes` at the caret and moves the caret past them. What does not fit is cut at
-    /// a code point boundary and dropped.
+    /// Inserts `bytes` in place of the selection and moves the caret past them. What does not
+    /// fit is cut at a code point boundary and dropped.
     fn insert(ed: *Editor, bytes: []const u8, r: *Result) void {
+        const sel = ed.selection();
+        if (sel[0] < sel[1]) ed.remove(sel[0], sel[1], r);
         var n: usize = @min(bytes.len, ed.b.free());
         // Back off a cut inside a UTF-8 sequence.
         while (n < bytes.len and n > 0 and bytes[n] & 0xc0 == 0x80) n -= 1;
@@ -152,13 +242,14 @@ pub const Editor = struct {
         if (n == 0) return;
         ed.b.insert(ed.caret, bytes[0..n]) catch unreachable;
         ed.caret += @intCast(n);
+        ed.anchor = ed.caret;
         r.changed = true;
     }
 
-    /// Removes `[from, to)`; the caret goes to `from`.
+    /// Removes `[from, to)`; the caret goes to `from`, with nothing selected.
     fn remove(ed: *Editor, from: u32, to: u32, r: *Result) void {
         ed.b.delete(from, to);
-        ed.caret = from;
+        ed.place(from);
         r.changed = r.changed or from < to;
     }
 };
@@ -166,7 +257,6 @@ pub const Editor = struct {
 // ---------------------------------------------------------------------------------------------
 
 const testing = std.testing;
-const Interaction = @import("../../interact/interaction.zig").Interaction;
 const Focus = @import("../../interact/focus.zig").Focus;
 const Replay = @import("../../core/input.zig").Replay;
 
@@ -180,21 +270,36 @@ pub fn replay(ed: *Editor, src: []const u8) !Result {
 
 /// As `replay`, with the text laid out before every frame in a box `width` px wide, each byte
 /// one 10 px glyph and each line 10 px high (ASCII only), and the layout passed as the view.
+/// The editor is one focusable node covering (0, 0) to (1000, 1000), stepped through a real
+/// `Interaction`, so `pointer` and `buttons` lines click, drag and double-click it.
 pub fn replayLaidOut(ed: *Editor, src: []const u8, width: ?f32) !Result {
     const golden = @import("../layout/golden.zig");
     const lines = @import("../layout/lines.zig");
+    const mem = @import("../../core/mem.zig");
+    const Tree = @import("../../core/tree.zig").Tree;
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var tree = Tree.init(&carver, 2);
+    const root = tree.push(0, .none, &.{});
+    const n = tree.push(root, field, &.{});
+    tree.seal(n);
+    tree.seal(root);
+    tree.c.sense[n] = @bitCast(types.Sense.button);
+    for (tree.c.vis, [4]f32{ 0, 0, 1000, 1000 }) |col, v| col[n] = v;
+
     var para: golden.Para = .{};
     var text_buf: [256]u8 = undefined;
     var events: [64]Input.Event = undefined;
     var contacts: [1]Input.Contact = undefined;
     const buf: Replay.Buffers = .{ .text = &text_buf, .events = &events, .contacts = &contacts };
     var r: Replay = .{ .src = src };
-    const it: Interaction = .{ .focus = @backingInt(field) };
+    var it: Interaction = .{ .focus = @backingInt(field) };
     const fo: Focus = .{};
     var all: Result = .{};
     while (try r.next(buf)) |in| {
+        it.step(&tree, in);
         const k = Keyboard.route(&it, &fo, in);
-        var cx: Context = .{};
+        var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods) };
         if (width) |w| {
             const t = ed.text();
             para.fixed(t, 10);
@@ -229,14 +334,14 @@ test "replayed input: typing, Backspace and Delete by grapheme, Enter" {
 
     var raw2: [32]u8 = undefined;
     var ed2 = try Editor.init(&raw2, "ae\u{301}b");
-    ed2.caret = 4; // after e + combining acute
+    ed2.place(4); // after e + combining acute
     _ = try replay(&ed2,
         \\frame
         \\press 42
     );
     try testing.expectEqualStrings("ab", ed2.text());
     try testing.expectEqual(1, ed2.caret);
-    ed2.caret = 0;
+    ed2.place(0);
     _ = try replay(&ed2,
         \\frame
         \\press 76
@@ -291,7 +396,7 @@ test "replayed input: the caret moves by grapheme, word and line" {
         \\press 76 ctrl
         \\press 77
         \\text !
-        \\press 74 shift
+        \\press 74
         \\text >
     );
     try testing.expectEqualStrings(">one !\nthree", ed.text());
@@ -310,7 +415,7 @@ test "replayed input: Up and Down on laid-out lines keep the column across a sho
     var raw: [64]u8 = undefined;
     // Lines in a 60 px box: "abcde " | "x\n" | "fghij".
     var ed = try Editor.init(&raw, "abcde x\nfghij");
-    ed.caret = 4; // after "abcd", x = 40
+    ed.place(4); // after "abcd", x = 40
     _ = try replayLaidOut(&ed,
         \\frame
         \\press 81
@@ -336,4 +441,101 @@ test "replayed input: Up and Down on laid-out lines keep the column across a sho
         \\press 82
     , 60);
     try testing.expectEqual(0, ed.caret);
+}
+
+test "replayed input: Shift with moves selects, typing and Backspace replace the selection" {
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "hello world");
+    // Shift+Ctrl+Left selects "world"; typing replaces it.
+    _ = try replay(&ed,
+        \\frame
+        \\press 80 shift ctrl
+        \\text there
+    );
+    try testing.expectEqualStrings("hello there", ed.text());
+    // Shift+Home selects back to the start; Left collapses to the selection's start.
+    _ = try replay(&ed,
+        \\frame
+        \\press 80 shift
+        \\press 80 shift
+    );
+    try testing.expectEqualStrings("re", ed.selected());
+    _ = try replay(&ed,
+        \\frame
+        \\press 80
+        \\text _
+    );
+    try testing.expectEqualStrings("hello the_re", ed.text());
+    // Ctrl+A selects all, Backspace deletes it; Ctrl+A on empty text selects nothing.
+    _ = try replay(&ed,
+        \\frame
+        \\press 4 ctrl
+    );
+    try testing.expectEqual([2]u32{ 0, 12 }, ed.selection());
+    _ = try replay(&ed,
+        \\frame
+        \\press 42
+    );
+    try testing.expectEqualStrings("", ed.text());
+    try testing.expectEqual([2]u32{ 0, 0 }, ed.selection());
+    // Shift+End then Delete.
+    var ed2 = try Editor.init(&raw, "ab\ncd");
+    ed2.place(1);
+    _ = try replay(&ed2,
+        \\frame
+        \\press 77 shift
+        \\press 76
+    );
+    try testing.expectEqualStrings("a\ncd", ed2.text());
+}
+
+test "replayed input: click places the caret, drag and Shift+click select, double click a word" {
+    var raw: [64]u8 = undefined;
+    // "one two " | "three" in an 80 px box; glyphs are 10 px, lines 10 px.
+    var ed = try Editor.init(&raw, "one two three");
+    _ = try replayLaidOut(&ed,
+        \\frame
+        \\pointer 21 5
+        \\buttons left
+        \\frame
+        \\buttons
+    , 80);
+    try testing.expectEqual([2]u32{ 2, 2 }, ed.selection());
+    // Press after "t" of "two", drag to after "th" on the second line.
+    _ = try replayLaidOut(&ed,
+        \\frame
+        \\pointer 49 4
+        \\buttons left
+        \\frame
+        \\pointer 20 15
+        \\frame
+        \\buttons
+    , 80);
+    try testing.expectEqual(5, ed.anchor);
+    try testing.expectEqualStrings("wo th", ed.selected());
+    // Shift+click extends from the anchor.
+    _ = try replayLaidOut(&ed,
+        \\frame
+        \\mods shift
+        \\pointer 0 5
+        \\buttons left
+        \\frame
+        \\mods
+        \\buttons
+    , 80);
+    try testing.expectEqualStrings("one t", ed.selected());
+    // Two quick clicks on "three" select it.
+    _ = try replayLaidOut(&ed,
+        \\frame
+        \\pointer 25 15
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\buttons
+    , 80);
+    try testing.expectEqualStrings("three", ed.selected());
+    try testing.expectEqual(13, ed.caret);
 }

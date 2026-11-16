@@ -71,6 +71,18 @@ pub fn prevWord(text: []const u8, at: u32) u32 {
     return best;
 }
 
+/// The word segment holding `at` (a double click): from its start to its end, spaces being a
+/// segment of their own. At the end of the text, the last segment.
+pub fn wordAt(text: []const u8, at: u32) [2]u32 {
+    var it: Words = .{ .text = text };
+    var seg: [2]u32 = .{ 0, 0 };
+    while (it.next()) |e| {
+        seg = .{ seg[1], @intCast(e) };
+        if (e > at) break;
+    }
+    return seg;
+}
+
 /// The start of the line (between newlines) holding `at`.
 pub fn lineStart(text: []const u8, at: u32) u32 {
     const nl = std.mem.lastIndexOfScalar(u8, text[0..at], '\n') orelse return 0;
@@ -112,6 +124,11 @@ pub const View = struct {
         if (k >= v.l.len) return @intCast(v.text.len);
         const line: u32 = @intCast(k);
         return query.hit(v.l, v.g, v.text, goal, v.l.top[line] + v.l.height[line] / 2);
+    }
+
+    /// The stop nearest a click at (`px`, `py`), px from the paragraph's top left.
+    pub fn hit(v: View, px: f32, py: f32) u32 {
+        return query.hit(v.l, v.g, v.text, px, py);
     }
 
     /// The caret's x at `at`, px from the paragraph's left edge.
@@ -181,4 +198,14 @@ test "line stops: between newlines, and on laid-out lines with Up and Down" {
     try testing.expectEqual(8, v.vertical(7, 1, v.x(7)));
     try testing.expectEqual(0, v.vertical(1, -1, v.x(1)));
     try testing.expectEqual(1, v.vertical(4, -1, v.x(4)));
+}
+
+test "wordAt: the segment under a double click" {
+    const text = "one  two";
+    try testing.expectEqual([2]u32{ 0, 3 }, wordAt(text, 0));
+    try testing.expectEqual([2]u32{ 0, 3 }, wordAt(text, 2));
+    try testing.expectEqual([2]u32{ 3, 5 }, wordAt(text, 3));
+    try testing.expectEqual([2]u32{ 5, 8 }, wordAt(text, 7));
+    try testing.expectEqual([2]u32{ 5, 8 }, wordAt(text, 8));
+    try testing.expectEqual([2]u32{ 0, 0 }, wordAt("", 0));
 }
