@@ -100,13 +100,11 @@ pub const Frame = struct {
         return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
     }
 
-    /// Pointer movement this frame while `id` is held; zero otherwise. (`Interaction.drag` is
-    /// the thresholded form, for drags that must not start on a jittery click.)
+    /// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
+    /// pointer has moved `Interaction.drag_threshold` (4 px) from the press, and that frame
+    /// carries the whole movement so far, so a jittery click never drags (`Interaction.drag`).
     pub fn drag(f: *const Frame, id: Id) [2]f32 {
-        const s = &f.ctx.inter;
-        const k = @backingInt(id);
-        const m = simd.b2f(simd.andB(k != 0, s.active == k));
-        return .{ s.delta[0] * m, s.delta[1] * m };
+        return f.ctx.inter.drag(id);
     }
 
     /// Where `id` was laid out last frame. A zero rect if it did not exist. Scans the id
@@ -359,7 +357,14 @@ test "interact, drag, lastRect, heldRect: answers from last frame's geometry" {
     try testing.expectEqual(Rect{ .x0 = 50, .y0 = 0, .x1 = 90, .y1 = 40 }, f.heldRect());
     try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("b")));
 
-    // Held and moved: the movement this frame, for the held widget only.
+    // Held and moved 2 px: under the threshold, not a drag yet.
+    in.pointer = .{ 62, 21 };
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("b")));
+
+    // Held and moved 11 px from the press, past the 4 px threshold: the drag starts with the
+    // movement so far, for the held widget only.
     in.pointer = .{ 70, 25 };
     f = ctx.begin(&in);
     _ = twoButtons(&f);
