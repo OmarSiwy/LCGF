@@ -180,6 +180,7 @@ pub const Context = struct {
         ctx.platform = .{};
         ctx.status = .{};
         ctx.frame +%= 1;
+        ctx.memos.kept_len = 0;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
@@ -384,13 +385,14 @@ const example = struct {
         exposure: f32 = 1,
         wireframe: bool = false,
         glow: f32 = 0,
-        layers: u32 = 3,
+        /// A signal, so the sidebar can be skipped while it does not change.
+        layers: @import("signals.zig").Cell(u32),
+        sidebar_builds: u32 = 0,
     };
 
     const id_glow = types.Id.from("glow");
 
-    /// The prototype's buildUi without its sidebar reuse (`reuse` over a signal, reuse lane),
-    /// which does not change this test's frames.
+    /// The prototype's buildUi.
     fn buildUi(f: *Frame, app: *App) void {
         const th = &app.theme;
         _ = f.open(types.Id.from("toolbar"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel });
@@ -405,11 +407,15 @@ const example = struct {
         f.close();
 
         _ = f.open(types.Id.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
-        _ = f.open(id_sidebar, .{ .size = .{ .px(160), .fill }, .pad = @splat(8), .gap = 4, .fill = th.panel });
-        if (button(f, th, id_add, "Add layer").clicked) app.layers += 1;
-        var name: [24]u8 = undefined;
-        for (0..app.layers) |i| _ = label(f, th, std.fmt.bufPrint(&name, "Layer {d}", .{i}) catch "?");
-        f.close();
+        // Rebuilt only when `layers` changes or the pointer is on one of its widgets.
+        if (!f.reuse(id_sidebar, &.{app.layers.signal})) {
+            app.sidebar_builds += 1;
+            _ = f.open(id_sidebar, .{ .size = .{ .px(160), .fill }, .pad = @splat(8), .gap = 4, .fill = th.panel });
+            if (button(f, th, id_add, "Add layer").clicked) app.layers.set(&f.ctx.signals, app.layers.get() + 1);
+            var name: [24]u8 = undefined;
+            for (0..app.layers.get()) |i| _ = label(f, th, std.fmt.bufPrint(&name, "Layer {d}", .{i}) catch "?");
+            f.close();
+        }
         _ = f.custom(id_viewport, .{ .size = .{ .fill, .fill } }, 0);
         f.close();
     }
@@ -451,7 +457,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     };
     const e = example;
     var ctx = try Context.init(&S.buffer, example_limits);
-    var app: e.App = .{};
+    var app: e.App = .{ .layers = .init(&ctx.signals, 3) };
     var in: Input = .{ .viewport = .{ 800, 600 } };
 
     try testing.expect(ctx.needsFrame(&in));
@@ -502,6 +508,58 @@ test "host loop: layout, draw list, click, drag, idle" {
     _ = e.frame(&ctx, &app, &in);
 }
 
+test "signals: the sidebar is rebuilt only when it has to be" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    const e = example;
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var app: e.App = .{ .layers = .init(&ctx.signals, 3) };
+    var in: Input = .{ .viewport = .{ 800, 600 } };
+
+    var out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 1), app.sidebar_builds);
+    const before = out.tree.rect(out.tree.find(e.id_add));
+
+    // Unchanged dependencies: copied from last frame, same geometry, same text.
+    out = e.frame(&ctx, &app, &in);
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 1), app.sidebar_builds);
+    try testing.expectEqual(before, out.tree.rect(out.tree.find(e.id_add)));
+    try testing.expectEqual(@as(u32, 6), e.render(out.draw).texts);
+
+    // A changed signal wakes the host and rebuilds exactly once.
+    app.layers.set(&ctx.signals, 5);
+    try testing.expect(ctx.needsFrame(&in));
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 2), app.sidebar_builds);
+    try testing.expectEqual(@as(u32, 8), e.render(out.draw).texts);
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 2), app.sidebar_builds);
+
+    // The pointer on a widget inside the subtree forces rebuilds, so the click is seen; "Add
+    // layer" then changes the signal itself.
+    in.pointer = e.center(before);
+    _ = e.frame(&ctx, &app, &in);
+    in.buttons.left = true;
+    _ = e.frame(&ctx, &app, &in);
+    in.buttons.left = false;
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 6), app.layers.get());
+    const builds_while_hovering = app.sidebar_builds;
+    try testing.expect(builds_while_hovering > 2);
+
+    // Pointer leaves: one more rebuild clears the hover colour, then reuse resumes.
+    in.pointer = .{ 700, 500 };
+    _ = e.frame(&ctx, &app, &in);
+    _ = e.frame(&ctx, &app, &in);
+    const settled = app.sidebar_builds;
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(settled, app.sidebar_builds);
+    try testing.expectEqual(@as(u32, 9), e.render(out.draw).texts);
+}
+
 test "springs keep the host awake until they land" {
     const n = comptime Context.requiredBytes(example_limits);
     const S = struct {
@@ -509,7 +567,7 @@ test "springs keep the host awake until they land" {
     };
     const e = example;
     var ctx = try Context.init(&S.buffer, example_limits);
-    var app: e.App = .{ .layers = 1 };
+    var app: e.App = .{ .layers = .init(&ctx.signals, 1) };
     const in: Input = .{ .viewport = .{ 800, 600 } };
 
     _ = e.frame(&ctx, &app, &in);

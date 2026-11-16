@@ -59,6 +59,9 @@ pub const Tweens = struct {
         ease_c: []f32,
         /// Frame this tween was last asked for.
         seen: []u32,
+        /// Tree row that was open when it was last asked for (`Frame.tween`, `Frame.sequence`),
+        /// so `Frame.reuse` can tell the tweens inside a subtree from the rest.
+        node: []u32,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Tweens {
@@ -144,7 +147,7 @@ const testing = std.testing;
 
 fn fixture(comptime cap: u32) Tweens {
     const S = struct {
-        var buffer: [10 * (simd.rows(cap) * 4 + mem.column_align)]u8 align(mem.column_align) = undefined;
+        var buffer: [11 * (simd.rows(cap) * 4 + mem.column_align)]u8 align(mem.column_align) = undefined;
     };
     var carver: mem.Carver = .{ .buf = &S.buffer };
     return .init(&carver, cap);

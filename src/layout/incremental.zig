@@ -168,6 +168,145 @@ pub fn update(t: *Tree, tx: *Texts, d: *Dirty, viewport: [2]f32) void {
     inline for (0..2) |a| @memset(d.c.span[a][0..n], 0);
 }
 
+// ---- kept subtrees ------------------------------------------------------------------------
+//
+// A kept subtree is one whose rows, layout columns included, were copied unchanged from a tree
+// laid out in full (`Frame.reuse`). Its root must be a relayout boundary on both axes (see
+// `keepable`): then the root's size cannot change, so nothing inside it can either, and the
+// passes below lay out the rest of the tree around it. Each pass is the full pass in pieces:
+// the gaps between kept interiors, through layout.zig's span forms, so every row outside the
+// interiors gets exactly the arithmetic a full pass gives it. `kept` lists root rows in
+// ascending order, disjoint. With `kept` empty every pass is its full form.
+
+/// Whether row `r` may be kept: a boundary on both axes with at least one descendant. A
+/// select, no branch.
+pub fn keepable(t: *const Tree, r: u32) bool {
+    const c = &t.c;
+    const fixed = simd.andB(c.min[0][r] >= c.max[0][r], c.min[1][r] >= c.max[1][r]);
+    return simd.andB(fixed, c.end[r] > r + 1);
+}
+
+fn checkKept(t: *const Tree, kept: []const u32) void {
+    var from: u32 = 1;
+    for (kept) |r| {
+        std.debug.assert(r >= from and r < t.len and keepable(t, r));
+        from = t.c.end[r];
+    }
+}
+
+/// `layout.prepare` that leaves the kept rows' scratch (fit, grow_sum, used, cursor) alone: the
+/// passes below do not visit their interiors, so those keep the values they were copied with.
+/// The kept roots keep them too, since they are sums over their interior. `gap_total` is
+/// derived everywhere (SIMD), as `prepare` does.
+pub fn prepareKept(t: *Tree, kept: []const u32) void {
+    checkKept(t, kept);
+    const c = &t.c;
+    const n = simd.padded(t.len);
+    const zero = simd.f(0);
+    var i: usize = 0;
+    while (i < n) : (i += simd.lanes) {
+        const gaps = @max(simd.loadF(c.nkids, i) - simd.f(1), zero);
+        simd.storeF(c.gap_total, i, simd.loadF(c.gap, i) * gaps);
+    }
+    var from: usize = 0;
+    for (kept) |r| {
+        clearScratch(t, from, r);
+        from = c.end[r];
+    }
+    clearScratch(t, from, n);
+}
+
+fn clearScratch(t: *Tree, from: usize, to: usize) void {
+    inline for (0..2) |a| {
+        @memset(t.c.fit[a][from..to], 0);
+        @memset(t.c.grow_sum[a][from..to], 0);
+        @memset(t.c.used[a][from..to], 0);
+    }
+    @memset(t.c.cursor[from..to], 0);
+}
+
+/// `layout.applyText` for the runs outside the kept subtrees (roots included: a root's fit is
+/// its copied total). Runs are in node order, so each gap's runs are one range.
+pub fn applyTextKept(t: *Tree, tx: *const Texts, axis: Axis, kept: []const u32) void {
+    const extents = [2][]const f32{ tx.c.w, tx.c.h };
+    const src = extents[@backingInt(axis)];
+    const dst = t.c.fit[@backingInt(axis)];
+    var k: u32 = 0;
+    for (kept) |r| {
+        const k1 = simd.rank(tx.c.node, tx.len, r);
+        for (tx.c.node[k..k1], src[k..k1]) |node, extent| dst[node] = extent;
+        k = simd.rank(tx.c.node, tx.len, t.c.end[r]);
+    }
+    for (tx.c.node[k..tx.len], src[k..tx.len]) |node, extent| dst[node] = extent;
+}
+
+/// `layout.fit` that does not visit kept interiors: bottom-up, gap by gap. A gap [x, y) after
+/// a kept root is `fitSpan(x - 1, y)`; its first row `x - 1` is the last row of that kept
+/// interior, whose natural size the span recomputes from its copied fit, to the same value.
+pub fn fitKept(t: *Tree, axis: Axis, kept: []const u32) void {
+    if (t.len == 0) return;
+    var hi = t.len;
+    var j = kept.len;
+    while (j > 0) {
+        j -= 1;
+        const e = t.c.end[kept[j]];
+        if (e < hi) layout.fitSpan(t, axis, e - 1, hi);
+        hi = kept[j] + 1;
+    }
+    layout.fitSpan(t, axis, 0, hi);
+}
+
+/// `layout.resolve` that does not visit kept interiors: top-down, gap by gap. A kept root's
+/// size is fixed, so its interior's sizes are the copied ones.
+pub fn resolveKept(t: *Tree, axis: Axis, viewport: f32, kept: []const u32) void {
+    if (t.len == 0) return;
+    t.c.size[@backingInt(axis)][0] = viewport;
+    var first: u32 = 0;
+    for (kept) |r| {
+        layout.resolveSpan(t, axis, first, r + 1);
+        first = t.c.end[r] - 1;
+    }
+    if (first + 1 < t.len) layout.resolveSpan(t, axis, first, t.len);
+}
+
+/// `layout.place` that does not visit the interior of a kept root that did not move. One that
+/// moved is placed again (`placeSpan` over its subtree) rather than shifted: adding the move to
+/// each copied position would round differently from placing it, and the result has to be
+/// what a full pass gives. The one branch per kept subtree is that choice.
+pub fn placeKept(t: *Tree, kept: []const u32) void {
+    if (t.len == 0) return;
+    const c = &t.c;
+    c.pos[0][0] = 0;
+    c.pos[1][0] = 0;
+    var first: u32 = 0;
+    for (kept) |r| {
+        const was = [2]f32{ c.pos[0][r], c.pos[1][r] };
+        layout.placeSpan(t, first, r + 1);
+        const e = c.end[r];
+        if (c.pos[0][r] != was[0] or c.pos[1][r] != was[1]) {
+            @memset(c.cursor[r..e], 0);
+            layout.placeSpan(t, r, e);
+        }
+        first = e - 1;
+    }
+    if (first + 1 < t.len) layout.placeSpan(t, first, t.len);
+}
+
+/// `layout.run` with kept subtrees: every pass in order, each skipping the kept interiors.
+/// `finalize` runs over everything, since clips come down from ancestors.
+pub fn runKept(t: *Tree, tx: *Texts, viewport: [2]f32, kept: []const u32) void {
+    prepareKept(t, kept);
+    applyTextKept(t, tx, .x, kept);
+    fitKept(t, .x, kept);
+    resolveKept(t, .x, viewport[0], kept);
+    layout.textAvail(t, tx);
+    applyTextKept(t, tx, .y, kept);
+    fitKept(t, .y, kept);
+    resolveKept(t, .y, viewport[1], kept);
+    placeKept(t, kept);
+    layout.finalize(t);
+}
+
 const testing = std.testing;
 const check = @import("check.zig");
 const inf = types.inf;
@@ -499,4 +638,120 @@ test "update: no marks, no work" {
     update(&t, &tx, &d, .{ 100, 50 });
     try testing.expectEqual(100, t.c.rect[2][0]);
     try testing.expectEqual(0, d.c.mark[0][0]);
+}
+
+/// Random trees laid out in full, then a "next frame": a copy of the laid-out columns in which
+/// some keepable subtrees are kept, random changes land outside them (and sometimes a new
+/// viewport), and `runKept` lays the copy out. `layout.run` over the same changes is the
+/// reference; every column must agree bit for bit. Returns how many kept roots were placed
+/// again because they moved, and how many stayed put, so the caller can see both paths ran.
+fn keptFrames(seed: u64, trees: u32, changes: u32) ![2]u32 {
+    var raw: [2][1024 * 1024]u8 align(mem.column_align) = undefined;
+    var c0: mem.Carver = .{ .buf = &raw[0] };
+    var c1: mem.Carver = .{ .buf = &raw[1] };
+    var full = Tree.init(&c0, 600);
+    var kept_tree = Tree.init(&c1, 600);
+    var full_tx = Texts.init(&c0, 600);
+    var kept_tx = Texts.init(&c1, 600);
+    var prng: std.Random.DefaultPrng = .init(seed);
+    const r = prng.random();
+    var counts: [2]u32 = .{ 0, 0 };
+    var kept_buf: [600]u32 = undefined;
+    for (0..trees) |_| {
+        const n = 2 + r.uintLessThan(u32, full.cap - 1);
+        check.randomTree(&full, r, n);
+        // More boundaries than random styles give: some nodes px on both axes.
+        for (1..n) |i| {
+            if (r.uintLessThan(u32, 4) != 0) continue;
+            inline for (0..2) |a| {
+                const v: f32 = @floatFromInt(20 + r.uintLessThan(u32, 200));
+                full.c.min[a][i] = v;
+                full.c.max[a][i] = v;
+            }
+        }
+        full_tx.reset();
+        for (0..n) |i| {
+            if (full.c.end[i] != i + 1 or r.uintLessThan(u32, 3) != 0) continue;
+            const node: u32 = @intCast(i);
+            full.c.text[node] = full_tx.push(node, .{}, &.{});
+            full_tx.c.w[full_tx.len - 1] = @floatFromInt(r.uintLessThan(u32, 300));
+            full_tx.c.h[full_tx.len - 1] = @floatFromInt(r.uintLessThan(u32, 40));
+        }
+        var vp: [2]f32 = .{ 1280, 800 };
+        layout.run(&full, &full_tx, vp);
+
+        // Last frame's result, copied whole: what Frame.reuse copies row by row.
+        kept_tree.len = full.len;
+        mem.copyRows(Tree.Columns, &kept_tree.c, 0, &full.c, 0, simd.rows(full.cap));
+        kept_tx.len = full_tx.len;
+        mem.copyRows(Texts.Columns, &kept_tx.c, 0, &full_tx.c, 0, simd.rows(full_tx.cap));
+
+        var kept_len: usize = 0;
+        var i: u32 = 1;
+        while (i < n) {
+            if (keepable(&full, i) and r.boolean()) {
+                kept_buf[kept_len] = i;
+                kept_len += 1;
+                i = full.c.end[i];
+            } else i += 1;
+        }
+        const kept = kept_buf[0..kept_len];
+        var inside: [600]bool = @splat(false);
+        for (kept) |k| @memset(inside[k..full.c.end[k]], true);
+
+        for (0..r.uintAtMost(u32, changes)) |_| {
+            var ch = Change.random(r, n);
+            if (inside[ch.node]) continue;
+            ch.apply(&full, null);
+            ch.apply(&kept_tree, null);
+            if (full_tx.len == 0) continue;
+            const k = r.uintLessThan(u32, full_tx.len);
+            if (inside[full_tx.c.node[k]]) continue;
+            const w: f32 = @floatFromInt(r.uintLessThan(u32, 300));
+            full_tx.c.w[k] = w;
+            kept_tx.c.w[k] = w;
+        }
+        if (r.uintLessThan(u32, 4) == 0) vp[r.int(u1)] = @floatFromInt(400 + r.uintLessThan(u32, 1200));
+
+        var was: [600][2]f32 = undefined;
+        for (kept, 0..) |k, j| was[j] = .{ kept_tree.c.pos[0][k], kept_tree.c.pos[1][k] };
+        layout.run(&full, &full_tx, vp);
+        runKept(&kept_tree, &kept_tx, vp, kept);
+        try expectSameLayout(&full, &kept_tree);
+        try testing.expectEqualSlices(f32, full_tx.c.avail[0..full_tx.len], kept_tx.c.avail[0..kept_tx.len]);
+        inline for (0..2) |a| try testing.expectEqualSlices(f32, full.c.grow_sum[a][0..n], kept_tree.c.grow_sum[a][0..n]);
+        for (kept, 0..) |k, j| {
+            const moved = was[j][0] != full.c.pos[0][k] or was[j][1] != full.c.pos[1][k];
+            counts[@intFromBool(moved)] += 1;
+        }
+    }
+    return counts;
+}
+
+test "runKept: kept subtrees, moved or not, give the columns of a full layout" {
+    var still: u32 = 0;
+    var moved: u32 = 0;
+    for (0..6) |s| {
+        const c = try keptFrames(0x2490 + s, 40, 12);
+        still += c[0];
+        moved += c[1];
+    }
+    // Both paths of placeKept ran, many times (209 and 53 with these seeds).
+    try testing.expect(still > 100 and moved > 40);
+}
+
+test "runKept: with nothing kept it is layout.run" {
+    var raw: [2][256 * 1024]u8 align(mem.column_align) = undefined;
+    var c0: mem.Carver = .{ .buf = &raw[0] };
+    var c1: mem.Carver = .{ .buf = &raw[1] };
+    var a = Tree.init(&c0, 100);
+    var b = Tree.init(&c1, 100);
+    var tx = Texts.init(&c0, 1);
+    var prng0: std.Random.DefaultPrng = .init(0x2499);
+    var prng1: std.Random.DefaultPrng = .init(0x2499);
+    check.randomTree(&a, prng0.random(), 100);
+    check.randomTree(&b, prng1.random(), 100);
+    layout.run(&a, &tx, .{ 640, 480 });
+    runKept(&b, &tx, .{ 640, 480 }, &.{});
+    try expectSameLayout(&a, &b);
 }
