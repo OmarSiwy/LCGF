@@ -139,23 +139,42 @@ fn named(comptime n: Spec, comptime want: []const u8) bool {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The box: a theme button.
+/// The box: a theme button filled by its response, at least 160 wide, its text at the start,
+/// outlined in the accent colour while it has the keyboard (`focusBorders`).
 pub fn inputStyle(th: *const Theme, focused: bool, r: Response) Style {
-    _ = focused;
     var s = base.buttonStyle(th);
     s.fill = base.buttonFill(th, r);
+    s.min = .{ 160, 0 };
+    s.main = .start;
+    s.border = 1;
+    s.border_color = focusBorders(th)[@intFromBool(focused)];
     return s;
 }
 
-/// The list, below the box's rect `at` (last frame's).
-pub fn listStyle(th: *const Theme, at: Rect) Style {
-    return menu.listStyle(th, at);
+/// The box's outline, indexed by focus: the hot control colour, then the accent.
+pub fn focusBorders(th: *const Theme) base.OnOff {
+    return .{ th.control_hot, th.accent };
 }
 
-/// An option row.
+/// The list: menu.zig's list below the box's rect `at` (last frame's), at least as wide as the
+/// box.
+pub fn listStyle(th: *const Theme, at: Rect) Style {
+    var s = menu.listStyle(th, at);
+    s.min = .{ at.w(), 0 };
+    return s;
+}
+
+/// An option row: menu.zig's item, filled from `optionFills` by highlight and choice.
 pub fn optionStyle(th: *const Theme, active: bool, selected: bool) Style {
-    _ = selected;
-    return menu.itemStyle(th, active);
+    var s = menu.itemStyle(th, active);
+    s.fill = optionFills(th)[(@as(u2, @intFromBool(active)) << 1) | @intFromBool(selected)];
+    return s;
+}
+
+/// An option's fill, indexed by `active << 1 | selected`: none, the control colour for the
+/// chosen one, the hot control colour for the highlighted one, chosen or not.
+pub fn optionFills(th: *const Theme) base.StateColors {
+    return .{ .transparent, th.control, th.control_hot, th.control_hot };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -266,6 +285,41 @@ test "Combobox: the page agrees in both front ends, closed and open" {
     try testing.expectEqual(@as(u32, 6 + 2 + 2 * 4), t.len);
     const at = t.rect(t.find(.from("fruit")));
     try testing.expectEqual(at.x0, t.rect(t.find(.from("fruit_panel"))).x0);
+}
+
+test "inputStyle, listStyle, optionStyle: the theme's tokens" {
+    const th: Theme = .default;
+    try testing.expectEqual(th.control_hot, inputStyle(&th, false, .{ .hovered = true }).fill);
+    try testing.expectEqual([2]f32{ 160, 0 }, inputStyle(&th, false, .{}).min);
+    try testing.expectEqual(th.control_hot, inputStyle(&th, false, .{}).border_color);
+    try testing.expectEqual(th.accent, inputStyle(&th, true, .{}).border_color);
+    const l = listStyle(&th, .{ .x0 = 10, .y0 = 0, .x1 = 190, .y1 = 30 });
+    try testing.expectEqual([2]f32{ 180, 0 }, l.min);
+    try testing.expectEqual(th.panel, l.fill);
+    try testing.expectEqual(types.Color.transparent, optionStyle(&th, false, false).fill);
+    try testing.expectEqual(th.control, optionStyle(&th, false, true).fill);
+    try testing.expectEqual(th.control_hot, optionStyle(&th, true, false).fill);
+    try testing.expectEqual(th.control_hot, optionStyle(&th, true, true).fill);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .accent = .rgb(0, 90, 200), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Combobox: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    var st = withText("Ap");
+    st.open = true;
+    st.focused = true;
+    st.selected = 1;
+    st.active = 0;
+    const t = try setState(&S.h, st);
+    try testing.expectEqual(light.control.bitsOf(), t.c.look[t.find(.from("fruit_apricot"))].fill);
+    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("fruit_apple"))].fill);
+    try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("fruit"))].border_color);
+    // The list is at least as wide as the box.
+    try testing.expect(t.rect(t.find(.from("fruit_panel"))).w() >= t.rect(t.find(.from("fruit"))).w());
 }
 
 test "ComboState.setText: cut to the capacity, the caret at the end" {
