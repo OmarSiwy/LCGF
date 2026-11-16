@@ -1756,3 +1756,100 @@ test "x11: wait keeps timers and display pace, and a worker thread wakes it" {
     w.wait(10, .idle);
     try testing.expect(now() - t0 < 1);
 }
+
+/// Sends a window the close request a window manager sends when the user closes it.
+fn requestClose(c: *Connection, w: *const Window) !void {
+    const l = [5]u32{ c.atoms.WM_DELETE_WINDOW, 0, 0, 0, 0 };
+    const msg = wire.clientMessage(w.id, c.atoms.WM_PROTOCOLS, 32, std.mem.asBytes(&l));
+    _ = c.send(wire.send_event_size, wire.sendEvent, .{ w.id, 0, &msg });
+    try c.sync();
+}
+
+/// Runs one frame of `app` in `w` when its input asks for one.
+fn frameOf(w: *Window, ctx: *context.Context, app: *example.App, ev: *Events) !void {
+    try testing.expect(w.poll(ev));
+    if (!ctx.needsFrame(&ev.in)) return;
+    var f = ctx.begin(&ev.in);
+    app.build(&f, ev);
+    const out = f.end(.{});
+    w.apply(&out.platform);
+    w.present(&out);
+}
+
+test "x11: two windows on one connection get their own input and frames" {
+    const display = try testDisplay();
+    const Two = struct {
+        var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
+        var pixels: [sw.Framebuffer.len(fb_w, fb_h)]u32 = undefined;
+    };
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    const xtest = try c.extension("XTEST");
+    const root = c.setup.root;
+    var a: Window = undefined;
+    try a.open(c, 400, 300, "a", Fixture.buffers);
+    var bufs = Fixture.buffers;
+    bufs.pixels = &Two.pixels;
+    var b: Window = undefined;
+    try b.open(c, 400, 300, "b", bufs);
+    defer b.close();
+    // No window manager places them: B goes to the right of A.
+    _ = c.send(wire.move_window_size, wire.moveWindow, .{ b.id, 420, 0 });
+    try c.sync();
+    var ctx_a = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var ctx_b = try context.Context.init(&Two.ctx_buffer, example_limits);
+    var app_a: example.App = .{};
+    var app_b: example.App = .{};
+    var ev_a: Events = .{};
+    var ev_b: Events = .{};
+
+    // The pointer over A, then over B (at B's 50, 60), with a click there.
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.motion_notify, 0, root, 50, 50 });
+    try c.sync();
+    for (0..2000) |_| {
+        try c.pump();
+        if (a.held.pointer[0] == 50) break;
+        c.waitReadable(0.005);
+    } else return error.InputNeverArrived;
+    try frameOf(&a, &ctx_a, &app_a, &ev_a);
+    try frameOf(&b, &ctx_b, &app_b, &ev_b);
+    try testing.expectEqual([2]f32{ 50, 50 }, ev_a.in.pointer);
+    try testing.expectEqual([2]f32{ -1, -1 }, ev_b.in.pointer);
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.motion_notify, 0, root, 470, 60 });
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.button_press, 1, root, 0, 0 });
+    try c.sync();
+    for (0..2000) |_| {
+        try c.pump();
+        if (b.held.buttons.left) break;
+        c.waitReadable(0.005);
+    } else return error.InputNeverArrived;
+    try frameOf(&a, &ctx_a, &app_a, &ev_a);
+    try frameOf(&b, &ctx_b, &app_b, &ev_b);
+    try testing.expectEqual([2]f32{ -1, -1 }, ev_a.in.pointer);
+    try testing.expect(!ev_a.in.buttons.left);
+    try testing.expectEqual([2]f32{ 50, 60 }, ev_b.in.pointer);
+    try testing.expect(ev_b.in.buttons.left);
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.button_release, 1, root, 0, 0 });
+
+    // Each shows its own frame: the sidebar's panel at the bottom left of both.
+    try testing.expectEqual(app_a.theme.panel, try pixel(&a, 80, 290));
+    try testing.expectEqual(app_b.theme.panel, try pixel(&b, 80, 290));
+    try testing.expect(app_a.builds > 0 and app_b.builds > 0);
+
+    // Closing A ends A's frames only.
+    try requestClose(c, &a);
+    try testing.expect(!a.poll(&ev_a));
+    a.close();
+    try frameOf(&b, &ctx_b, &app_b, &ev_b);
+    try testing.expectEqual([2]f32{ 400, 300 }, ev_b.in.viewport);
+    try testing.expectEqual(app_b.theme.panel, try pixel(&b, 80, 290));
+
+    // A connection has room for `max_windows`; A's slot was freed.
+    var more: [max_windows - 1]Window = undefined;
+    for (&more) |*m| try m.open(c, 8, 8, "more", Fixture.buffers);
+    var extra: Window = undefined;
+    try testing.expectError(error.TooManyWindows, extra.open(c, 8, 8, "extra", Fixture.buffers));
+    for (&more) |*m| m.close();
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}

@@ -310,6 +310,7 @@ pub const op = struct {
     pub const change_window_attributes = 2;
     pub const destroy_window = 4;
     pub const map_window = 8;
+    pub const configure_window = 12;
     pub const intern_atom = 16;
     pub const change_property = 18;
     pub const delete_property = 19;
@@ -379,6 +380,18 @@ pub fn changeCursor(b: *Buf, window: u32, cursor: u32) void {
     b.int(u32, window);
     b.int(u32, Attr.cursor);
     b.int(u32, cursor);
+}
+
+pub const move_window_size = 20;
+
+/// ConfigureWindow moving `window` to (x, y) in its parent.
+pub fn moveWindow(b: *Buf, window: u32, x: i16, y: i16) void {
+    b.head(op.configure_window, 0, move_window_size / 4);
+    b.int(u32, window);
+    b.int(u16, 0x3); // x, y
+    b.zeros(2);
+    b.int(i32, x);
+    b.int(i32, y);
 }
 
 pub const window_size = 8;
@@ -864,6 +877,7 @@ test "requests: lengths match the bytes written" {
         .{ fake_input_size, fakeInput, .{ 130, 6, 0, 1, 10, 20 } },
         .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
         .{ set_input_focus_size, setInputFocus, .{1} },
+        .{ move_window_size, moveWindow, .{ 1, 2, 3 } },
         .{ set_selection_owner_size, setSelectionOwner, .{ 1, 2 } },
         .{ get_selection_owner_size, getSelectionOwner, .{1} },
         .{ changePropertySize(3), appendProperty, .{ 1, 2, 3, 8, "abc" } },
