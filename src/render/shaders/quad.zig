@@ -3,6 +3,7 @@
 //! assembled at comptime (`shader`). Data only, so tier 0 may import it; no GPU API here.
 const std = @import("std");
 const Quad = @import("../../draw/draw_list.zig").Quad;
+const Material = @import("../../core/types.zig").Material;
 
 /// The stock material (material.wgsl): fill or gradient times the bound texture, nine-slice uv.
 pub const stock_material = @embedFile("material.wgsl");
@@ -18,11 +19,41 @@ pub fn shader(comptime material_fn: []const u8) [:0]const u8 {
 /// The stock shader: `Style.material = .solid`.
 pub const wgsl = shader(stock_material);
 
+/// An example user material (example_material.wgsl): diagonal stripes.
+pub const example_material = @embedFile("example_material.wgsl");
+
+pub const max_materials = 16;
+
+/// The material table a back end builds its quad pipelines from: entry i is the shader of
+/// `Material` i, and entry 0 is the stock shader (`Material.solid`). Ported from
+/// prototype/ui_wgpu.zig `addMaterial`; this keeps the sources, the back end owns the pipelines.
+pub const Materials = struct {
+    wgsl: [max_materials][:0]const u8 = @splat(wgsl),
+    len: u16 = 1,
+
+    /// A material with your fragment logic; build `material_wgsl` with `shader`. Past `max_materials`
+    /// the last entry is replaced, as the prototype does, rather than writing out of bounds.
+    pub fn add(self: *Materials, material_wgsl: [:0]const u8) Material {
+        // u16: @min with a comptime bound narrows to u4, and i + 1 would overflow at the cap.
+        const i: u16 = @min(self.len, max_materials - 1);
+        self.wgsl[i] = material_wgsl;
+        self.len = i + 1;
+        return @fromBackingInt(i);
+    }
+
+    /// The shader of `m`. A stale handle is clamped to the last entry instead of indexing out of
+    /// bounds, as the prototype's `bind` does.
+    pub fn source(self: *const Materials, m: Material) [:0]const u8 {
+        return self.wgsl[@min(@backingInt(m), self.len - 1)];
+    }
+};
+
 pub const Variant = struct { name: []const u8, wgsl: [:0]const u8 };
 
 /// Every shader the framework ships; ci/jobs/shaders.sh validates each one on a real wgpu device.
 pub const variants = [_]Variant{
     .{ .name = "stock", .wgsl = wgsl },
+    .{ .name = "example", .wgsl = shader(example_material) },
 };
 
 pub const Attr = struct { location: u32, offset: u32, format: []const u8 };
@@ -63,4 +94,19 @@ test "shader source is assembled at comptime" {
     const user = comptime shader("fn material(in: Frag) -> vec4f { return in.fill; }\n");
     try std.testing.expectEqual(1, std.mem.count(u8, user, "fn material(in: Frag)"));
     try std.testing.expect(std.mem.startsWith(u8, user, @embedFile("quad.wgsl")));
+}
+
+test "Materials: solid is the stock shader, add hands out indices in order and clamps" {
+    var m: Materials = .{};
+    try std.testing.expectEqualStrings(wgsl, m.source(.solid));
+    const stripes = comptime shader(example_material);
+    const a = m.add(stripes);
+    try std.testing.expectEqual(@as(u16, 1), @backingInt(a));
+    try std.testing.expectEqualStrings(stripes, m.source(a));
+    // A stale handle draws with the last valid entry.
+    try std.testing.expectEqualStrings(stripes, m.source(@fromBackingInt(9)));
+    for (2..max_materials + 3) |_| _ = m.add(wgsl);
+    try std.testing.expectEqual(max_materials, m.len);
+    try std.testing.expectEqual(@as(u16, max_materials - 1), @backingInt(m.add(stripes)));
+    try std.testing.expectEqualStrings(stripes, m.source(@fromBackingInt(0xffff)));
 }
