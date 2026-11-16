@@ -23,6 +23,7 @@ const Rect = types.Rect;
 const Theme = base.Theme;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -67,7 +68,9 @@ pub fn close(f: *Frame, th: *const Theme, id: Id, offset: f32) void {
     f.close();
     f.close();
     const g = Geometry.of(f.lastRect(id), f.lastRect(id.with(1)));
-    _ = f.open(.none, trackStyle(th));
+    const bar = f.open(.none, trackStyle(th));
+    f.tree().c.role[bar.ix()] = role;
+    f.tree().c.value[bar.ix()] = position(offset, g);
     const thumb = f.leaf(id.with(2), thumbStyle(th, g, offset));
     _ = f.interact(thumb, .{ .hover = true, .click = true, .drag = true });
     f.close();
@@ -84,7 +87,7 @@ pub fn areaStyle(th: *const Theme) Style {
 /// The viewport: fills the area, clips, and shifts its content up by `offset`.
 pub fn viewportStyle(th: *const Theme, offset: f32) Style {
     _ = th;
-    return .{ .dir = .y, .size = .{ .fill, .fill }, .clip = true, .scroll = .{ 0, offset } };
+    return .{ .dir = .y, .size = .{ .fill, .fill }, .clip = true, .scroll = .{ 0, offset }, .role = .group };
 }
 
 /// The content: as wide as the viewport, as tall as what it holds.
@@ -137,6 +140,21 @@ pub fn scrolled(offset: f32, g: Geometry, over: bool, held: bool, dy: f32, focus
         v = simd.selF(down and e.code == k.end, g.limit(), v);
     }
     return clamp(v, g);
+}
+
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees. The roles of src/a11y/tree.zig have no scroll view, so
+/// the viewport is a `group` holding the content, and the bar a `scroll_bar` whose value is
+/// the scroll position, 0 at the top to 1 at the end (`position`). `types.Role` has no
+/// scroll bar, so both front ends write that byte; the harness compares it and the value.
+/// The area has no name of its own: label it with `Semantics.labelled_by` where a page
+/// gives it one. No states.
+pub const role: u8 = @backingInt(a11y.Role.scroll_bar);
+
+/// How far through the content `offset` is, 0 to 1; 0 when the content fits.
+pub fn position(offset: f32, g: Geometry) f32 {
+    return base.unit(clamp(offset, g) / @max(g.limit(), 1e-6));
 }
 
 /// The scroll area as a spec node.
@@ -198,6 +216,8 @@ pub const ct = struct {
                 const kept = ui.keep(@This());
                 const g: Geometry = .{ .view = kept[0], .content = kept[1] };
                 const bar = t.push(area, .none, &n.children[1].style);
+                t.c.role[bar] = role;
+                t.c.value[bar] = position(value, g);
                 _ = t.push(bar, .hash(thumb), &thumbStyle(&th, g, value));
                 next.* += 2;
                 t.seal(bar);
@@ -401,6 +421,33 @@ test "scroll: wheel, thumb drag and paging keys in both front ends" {
     _ = try h.frame(&in);
     try testing.expectEqual(@max(limit - view.h(), 0), h.app.offset);
     try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
+}
+
+test "scroll: viewport group, bar scroll_bar valued by position, in both front ends" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    _ = try h.frame(&in);
+    var out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    try testing.expectEqual(@as(f32, 0), out.runtime.tree.c.value[rows.track]);
+    const limit = out.runtime.tree.rect(rows.content).h() - out.runtime.tree.rect(rows.viewport).h();
+    h.app.offset = limit / 2;
+    h.ui.signals.state.offset = limit / 2;
+    out = try h.frame(&in);
+    for ([2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree }) |t| {
+        var sem = sb.init();
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(a11y.Role.group, @as(a11y.Role, @fromBackingInt(t.c.role[rows.viewport])));
+        try testing.expectEqual(a11y.Role.scroll_bar, @as(a11y.Role, @fromBackingInt(t.c.role[rows.track])));
+        try testing.expectApproxEqAbs(@as(f32, 0.5), t.c.value[rows.track], 1e-5);
+        try testing.expectEqual(types.none, sem.c.name[rows.viewport]);
+        try testing.expectEqual(@as(u8, 0), sem.c.state[rows.track]);
+        try testing.expectEqual(@as(u8, 0), t.c.role[rows.thumb]);
+    }
+    try testing.expectEqual(@as(f32, 0), position(5, .{ .view = 100, .content = 50 }));
 }
 
 test {
