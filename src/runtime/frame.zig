@@ -132,6 +132,7 @@ pub const Frame = struct {
     }
 
     pub const timer = scheduler.timer;
+    pub const reuse = @import("reuse.zig").reuse;
 
     // ---- finishing ------------------------------------------------------------
 
