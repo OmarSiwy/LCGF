@@ -35,6 +35,8 @@ pub const Stack = struct {
     l: lines.Lines,
     /// When set, lines are reordered for display (`lines.reorder`) after placing.
     bidi: ?lines.BidiScratch = null,
+    /// The base direction of every paragraph (`lines.Align.direction`).
+    direction: @import("../unicode/bidi.zig").Direction = .auto,
     /// A run did not fit the scratch: it was measured as empty. Reset by the caller.
     overflow: bool = false,
 
@@ -54,8 +56,9 @@ pub const Stack = struct {
         st.g.len = 0;
         try st.g.append(&st.run, c.px[k] / @as(f32, @floatFromInt(sh.face.units_per_em)), 0, 0);
         try lines.breakLines(&st.g, text, width, &st.l);
-        lines.place(&st.l, &st.g, text, &.{lines.Metrics.of(&sh.face, c.px[k])}, .{ .width = width });
-        if (st.bidi) |s| try lines.reorder(&st.l, &st.g, text, s);
+        const a: lines.Align = .{ .width = width, .direction = st.direction };
+        lines.place(&st.l, &st.g, text, &.{lines.Metrics.of(&sh.face, c.px[k])}, a);
+        if (st.bidi) |s| try lines.reorder(&st.l, &st.g, text, a, s);
     }
 
     /// Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.

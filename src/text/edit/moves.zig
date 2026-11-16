@@ -174,9 +174,9 @@ pub const BidiScratch = struct {
 /// in `dir`, so repeated moves visit places strictly left to right, never stall, and stop at
 /// the line's visual end; past it they go to the next line in the paragraph's direction, or
 /// the previous line against it. Two offsets with one place (at a direction change) are one
-/// stop. Returns null when the line is all left to right (logical moves are the same) or too
-/// long for `s`.
-pub fn visual(text: []const u8, at: u32, dir: i2, s: BidiScratch) ?u32 {
+/// stop. `base` is the paragraph's direction, as given to `lines.reorder`. Returns null when
+/// the line is all left to right (logical moves are the same) or too long for `s`.
+pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, s: BidiScratch) ?u32 {
     const from = lineStart(text, at);
     const to = lineEnd(text, at);
     // Graphemes of the line and their code points.
@@ -202,7 +202,7 @@ pub fn visual(text: []const u8, at: u32, dir: i2, s: BidiScratch) ?u32 {
     const orig = s.orig[0..n];
     bidi.classes(s.cps[0..n], orig);
     const scratch: bidi.Scratch = .{ .cls = s.cls, .next = s.next, .pair = s.pair };
-    const para = bidi.paragraphLevel(orig, scratch);
+    const para = bidi.baseLevel(orig, scratch, base);
     bidi.resolve(orig, s.cps[0..n], para, s.levels, scratch);
     bidi.lineLevels(orig, s.levels[0..n], para);
     var odd = para;
@@ -322,7 +322,7 @@ test "wordAt: the segment under a double click" {
 fn walk(text: []const u8, from: u32, dir: i2, steps: []u32, s: BidiScratch) void {
     var at = from;
     for (steps) |*st| {
-        at = visual(text, at, dir, s) orelse at;
+        at = visual(text, at, dir, .auto, s) orelse at;
         st.* = at;
     }
 }
@@ -350,11 +350,16 @@ test "visual: Right and Left in screen order over mixed directions" {
     walk(rtl, 5, 1, &got2, s);
     try testing.expectEqualSlices(u32, &.{ 6, 7, 4, 2, 0, 0 }, &got2);
     // All left to right: no visual move, the caller moves logically.
-    try testing.expectEqual(null, visual("abc", 1, 1, s));
+    try testing.expectEqual(null, visual("abc", 1, 1, .auto, s));
     // Too long for the scratch: logical too.
-    try testing.expectEqual(null, visual("\u{5D0}bcdefghijklmnopqrstu", 0, 1, s));
+    try testing.expectEqual(null, visual("\u{5D0}bcdefghijklmnopqrstu", 0, 1, .auto, s));
     // Past the visual end of a line: on to the next line, or back to the previous one.
     const two = "a\u{5D0}\nb";
-    try testing.expectEqual(4, visual(two, 1, 1, s).?);
-    try testing.expectEqual(0, visual(two, 3, -1, s).?);
+    try testing.expectEqual(4, visual(two, 1, 1, .auto, s).?);
+    try testing.expectEqual(0, visual(two, 3, -1, .auto, s).?);
+    // A given direction: "abc" in a right-to-left paragraph is all left to right but its
+    // line ends are swapped, so Right from the end goes on to the previous line.
+    try testing.expectEqual(null, visual("abc", 1, 1, .ltr, s));
+    try testing.expectEqual(2, visual("abc", 1, 1, .rtl, s).?);
+    try testing.expectEqual(1, visual("a\nbc", 4, 1, .rtl, s).?);
 }

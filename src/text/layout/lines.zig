@@ -98,11 +98,13 @@ pub const Lines = struct {
 /// 1 for the end (the factors of `types.Align`). With `justify`, every line but the last and
 /// those ended by a newline fills the box: its free width is shared equally among the spaces
 /// inside its ink, and `factor` applies only to the lines left alone (CSS `text-align-last`
-/// is start; set `factor` for another).
+/// is start; set `factor` for another). `direction` is each bidi paragraph's base direction,
+/// read by `reorder`.
 pub const Align = struct {
     width: f32 = 0,
     factor: f32 = 0,
     justify: bool = false,
+    direction: bidi.Direction = .auto,
 };
 
 /// Vertical metrics of a font at a size, px: ascender above the baseline, descender below it
@@ -318,12 +320,12 @@ pub const BidiScratch = struct {
 /// Call after `place`: resolves the bidi levels of the text (UAX #9 to L1, per line), writes
 /// `Glyphs.level`, and rewrites `Glyphs.x` so each line's glyphs sit in display order (L2).
 /// A bidi paragraph is a run of lines up to one ended by a mandatory break (`Lines.hard`),
-/// its direction taken from its first strong character. The ink keeps its place and width;
+/// its direction `a.direction` (pass the `Align` given to `place`). The ink keeps its place and width;
 /// the hanging glyphs after it sit past its end in the paragraph's direction (left of the
 /// ink, at negative x, in a right-to-left paragraph). Lines without right-to-left text keep
 /// the x `place` gave them. `error.NoSpace` when a paragraph or line is longer than `s`; the
 /// lines before it are reordered.
-pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, s: BidiScratch) error{NoSpace}!void {
+pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScratch) error{NoSpace}!void {
     var k: u32 = 0;
     while (k < lines.len) {
         var last = k;
@@ -341,7 +343,7 @@ pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, s: BidiScratch
         const orig = s.orig[0..n];
         bidi.classes(s.cps[0..n], orig);
         const scratch: bidi.Scratch = .{ .cls = s.cls, .next = s.next, .pair = s.pair };
-        const para = bidi.paragraphLevel(orig, scratch);
+        const para = bidi.baseLevel(orig, scratch, a.direction);
         bidi.resolve(orig, s.cps[0..n], para, s.levels, scratch);
         var c: u32 = 0; // the open line's first code point
         while (k <= last) : (k += 1) {
@@ -489,7 +491,7 @@ test "reorder: right-to-left runs and paragraphs in display order, spaces hang a
     t.fixed(mixed, 10);
     try breakLines(&t.g, mixed, 1000, &t.l);
     place(&t.l, &t.g, mixed, &.{m}, .{});
-    try reorder(&t.l, &t.g, mixed, s);
+    try reorder(&t.l, &t.g, mixed, .{}, s);
     try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30, 60, 50, 40 }, t.g.x[0..7]);
     try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 1, 1, 1 }, t.g.level[0..7]);
     // A right-to-left paragraph over two lines: "אב cd " | "ג": the Latin word keeps its
@@ -499,17 +501,30 @@ test "reorder: right-to-left runs and paragraphs in display order, spaces hang a
     try breakLines(&t.g, rtl, 50, &t.l);
     try testing.expectEqual(2, t.l.len);
     place(&t.l, &t.g, rtl, &.{m}, .{});
-    try reorder(&t.l, &t.g, rtl, s);
+    try reorder(&t.l, &t.g, rtl, .{}, s);
     try testing.expectEqualSlices(f32, &.{ 40, 30, 20, 0, 10, -10, 0 }, t.g.x[0..7]);
     try testing.expectEqualSlices(u8, &.{ 1, 1, 1, 2, 2, 1, 1 }, t.g.level[0..7]);
     // Left to right only: the x of `place`. Too long for the scratch: NoSpace.
     t.fixed("ab cd", 10);
     try breakLines(&t.g, "ab cd", 1000, &t.l);
     place(&t.l, &t.g, "ab cd", &.{m}, .{});
-    try reorder(&t.l, &t.g, "ab cd", s);
+    try reorder(&t.l, &t.g, "ab cd", .{}, s);
     try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 30, 40 }, t.g.x[0..5]);
     const small = carver.columns(BidiScratch, 4);
-    try testing.expectError(error.NoSpace, reorder(&t.l, &t.g, "ab cd", small));
+    try testing.expectError(error.NoSpace, reorder(&t.l, &t.g, "ab cd", .{}, small));
+    // A given direction overrides the text's: the mixed line as a right-to-left paragraph
+    // shows "גבא abc", and Latin text in one keeps its order at level 2.
+    t.fixed(mixed, 10);
+    try breakLines(&t.g, mixed, 1000, &t.l);
+    place(&t.l, &t.g, mixed, &.{m}, .{});
+    try reorder(&t.l, &t.g, mixed, .{ .direction = .rtl }, s);
+    try testing.expectEqualSlices(f32, &.{ 40, 50, 60, 30, 20, 10, 0 }, t.g.x[0..7]);
+    try testing.expectEqualSlices(u8, &.{ 2, 2, 2, 1, 1, 1, 1 }, t.g.level[0..7]);
+    t.fixed(rtl, 10);
+    try breakLines(&t.g, rtl, 1000, &t.l);
+    place(&t.l, &t.g, rtl, &.{m}, .{});
+    try reorder(&t.l, &t.g, rtl, .{ .direction = .ltr }, s);
+    try testing.expectEqualSlices(f32, &.{ 10, 0, 20, 30, 40, 50, 60 }, t.g.x[0..7]);
 }
 
 test "golden: aligned and justified paragraphs match the reference" {
