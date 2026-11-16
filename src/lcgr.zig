@@ -55,6 +55,7 @@ pub const render_iface = @import("render/iface.zig");
 pub const render_conformance = @import("render/conformance.zig");
 pub const quad_shader = @import("render/shaders/quad.zig");
 pub const render_null = @import("render/null.zig");
+pub const png = @import("assets/png.zig");
 
 test {
     std.testing.refAllDecls(@This());
