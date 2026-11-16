@@ -428,7 +428,6 @@ pub fn build(b: *std.Build) void {
     // The wgpu-native major to build against: one archive per major and host target in
     // build.zig.zon, fetched only when picked, so plain builds download none. The binding
     // compiles against the picked release's own translated header.
-    const WgpuNative = enum { v27, v29 };
     const wgpu_version = b.option(WgpuNative, "wgpu-native", "wgpu-native major for the wgpu steps (v27, v29)");
     const wgpu_host = b.fmt("{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
     const wgpu_targets = [_][]const u8{ "linux_x86_64", "linux_aarch64", "macos_x86_64", "macos_aarch64", "windows_x86_64" };
@@ -448,8 +447,9 @@ pub fn build(b: *std.Build) void {
         const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
         wgpu_h.addIncludePath(wgpu_native.path("include"));
         const wgpu_c = wgpu_h.createModule();
-        wgpu_native_mod.addImport("wgpu_c", wgpu_c);
-        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module, vk_probe_wgpu.root_module }) |m| {
+        vk_probe_wgpu.root_module.addImport("wgpu_c", wgpu_c);
+        // wgpu_native_mod carries its own link inputs, for vk-probe-wgpu and lcgr_render.
+        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module, wgpu_native_mod }) |m| {
             m.addImport("wgpu_c", wgpu_c);
             m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
             switch (target.result.os.tag) {
@@ -510,6 +510,26 @@ pub fn build(b: *std.Build) void {
         vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
+
+    // The render back end an application builds against (src/render/select.zig): one, chosen
+    // at compile time, no dispatch. `auto` is the target's own API.
+    const render = switch (b.option(RenderOption, "render", "Render back end of the lcgr_render module (default auto: the target's own API)") orelse .auto) {
+        .auto => autoRender(target.result),
+        inline else => |k| @field(Render, @tagName(k)),
+    };
+    const render_options = b.addOptions();
+    render_options.addOption(Render, "render", render);
+    const lcgr_render = b.addModule("lcgr_render", .{
+        .root_source_file = b.path("src/render/select.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    lcgr_render.addOptions("render_options", render_options);
+    if (renderBackend(b, render, target, optimize, lcgr, wgpu_native_mod)) |m| lcgr_render.addImport("render_backend", m);
+    const render_check = b.addObject(.{ .name = "render-select", .root_module = lcgr_render });
+    b.step("render", "Compile the lcgr_render module for -Drender and -Dtarget (src/render/select.zig)").dependOn(&render_check.step);
+    if (render == .wgpu and !wgpu_supported) render_check.step.dependOn(&b.addFail("-Drender=wgpu needs -Dwgpu-native=v27 or v29 on a target with an archive").step);
 
     // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
@@ -908,4 +928,72 @@ pub fn build(b: *std.Build) void {
     // cannot parse.
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
+}
+
+const WgpuNative = enum { v27, v29 };
+const Render = enum { sw, vk, metal, d3d12, gles, web, wgpu };
+const RenderOption = enum { auto, sw, vk, metal, d3d12, gles, web, wgpu };
+
+/// The target's own API, what `-Drender=auto` picks.
+fn autoRender(t: std.Target) Render {
+    if (t.cpu.arch.isWasm()) return .web;
+    return switch (t.os.tag) {
+        .macos, .ios => .metal,
+        .windows => .d3d12,
+        .freestanding => .sw,
+        else => .vk,
+    };
+}
+
+/// The module of render back end `kind` for `target`, with the generated sources it embeds
+/// (src/render/shaders/gen/) and its C headers translated. Null for sw, which is part of lcgr.
+/// `wgpu` is the given module (it needs the -Dwgpu-native archive).
+fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, lcgr: *std.Build.Module, wgpu: *std.Build.Module) ?*std.Build.Module {
+    const root = switch (kind) {
+        .sw => return null,
+        .wgpu => return wgpu,
+        .vk => "src/render/vk/vk.zig",
+        .metal => "src/render/metal/metal.zig",
+        .d3d12 => "src/render/d3d12/d3d12.zig",
+        .gles => "src/render/gles/gles.zig",
+        .web => "src/render/web/web.zig",
+    };
+    const m = b.createModule(.{
+        .root_source_file = b.path(root),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = kind != .web,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    const shader = struct {
+        fn add(mb: *std.Build, mod: *std.Build.Module, comptime name: []const u8, comptime file: []const u8) void {
+            for ([_][]const u8{ "stock", "example" }) |v|
+                mod.addAnonymousImport(mb.fmt("{s}_" ++ name, .{v}), .{ .root_source_file = mb.path(mb.fmt("src/render/shaders/gen/{s}." ++ file, .{v})) });
+        }
+    };
+    switch (kind) {
+        .vk => {
+            shader.add(b, m, "spv", "spv");
+            if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+                // Android translates as plain Linux on the same CPU: the headers are the same, and
+                // translate-c rejects any ABI version but glibc's.
+                const t = if (target.result.abi.isAndroid()) b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu }) else target;
+                const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = t, .optimize = optimize });
+                vk_h.addIncludePath(vulkan_headers.path("include"));
+                vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+                m.addImport("vk_c", vk_h.createModule());
+            }
+        },
+        .metal => shader.add(b, m, "metal", "metal"),
+        .gles => for ([_][]const u8{ "vert", "frag" }) |stage| for ([_][]const u8{ "stock", "example" }) |v|
+            m.addAnonymousImport(b.fmt("{s}_{s}", .{ v, stage }), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.{s}", .{ v, stage })) }),
+        .d3d12 => {
+            shader.add(b, m, "hlsl", "hlsl");
+            const d3d12_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c.h"), .target = target, .optimize = optimize, .link_libc = true });
+            m.addImport("d3d12_c", d3d12_h.createModule());
+            for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
+        },
+        .sw, .wgpu, .web => {},
+    }
+    return m;
 }
