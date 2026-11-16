@@ -61,17 +61,33 @@ const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Response = types.Response;
 
+/// Design tokens: every colour and size a widget uses comes from here, so restyling is one
+/// value. Plain data with defaults, usable at compile time (the `ct` builders take a comptime
+/// `Theme`). The defaults are the prototype's dark theme.
 pub const Theme = struct {
+    /// Label text.
     text: Color = Color.rgb(230, 230, 235),
+    /// Label text size, logical pixels.
     text_px: f32 = 14,
+    /// Background of panels and toolbars that hold widgets.
     panel: Color = Color.rgb(30, 31, 36),
+    /// A control at rest: button face, slider track, unchecked box.
     control: Color = Color.rgb(58, 60, 70),
+    /// A control under the pointer; also the checkbox outline.
     control_hot: Color = Color.rgb(74, 77, 90),
+    /// A control held down.
     control_held: Color = Color.rgb(44, 46, 54),
+    /// What is on: a checked box, the filled part of a slider.
     accent: Color = Color.rgb(90, 140, 255),
+    /// Corner radius of buttons.
     radius: f32 = 4,
+    /// Padding inside buttons.
     pad: f32 = 8,
+    /// Space between a checkbox's box and its caption.
     gap: f32 = 6,
+
+    /// The default tokens.
+    pub const default: Theme = .{};
 };
 
 inline fn unit(x: f32) f32 {
@@ -397,47 +413,49 @@ const testing = std.testing;
 const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
 var rt_buffer: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
 
-const theme: Theme = .{};
+const theme: Theme = .default;
 
-/// The prototype example's toolbar, in the runtime front end.
-const RtApp = struct {
-    resets: u32 = 0,
-    wireframe: bool = false,
-    exposure: f32 = 0.25,
-    clicked: bool = false,
+/// The prototype example's toolbar in both front ends, in theme `th`.
+fn Toolbar(comptime th: Theme) type {
+    return struct {
+        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
-    fn build(app: *RtApp, f: *Frame) void {
-        const th = &theme;
-        _ = f.open(.from("toolbar"), toolbar_style);
-        app.clicked = button(f, th, .from("reset"), "Reset").clicked;
-        app.resets += @intFromBool(app.clicked);
-        _ = checkbox(f, th, .from("wire"), &app.wireframe, "Wireframe");
-        _ = slider(f, th, .from("exposure"), &app.exposure, 0, 1);
-        _ = label(f, th, "Layer 0");
-        f.close();
-    }
-};
-const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = theme.panel };
+        /// Runtime front end: the application owns the values.
+        const RtApp = struct {
+            resets: u32 = 0,
+            wireframe: bool = false,
+            exposure: f32 = 0.25,
+            clicked: bool = false,
 
-/// The same toolbar, in the comptime front end.
-const CtState = struct {
-    reset_text: []const u8 = "Reset",
-    wireframe: bool = false,
-    wire_text: []const u8 = "Wireframe",
-    exposure: f32 = 0.25,
-    layer: []const u8 = "Layer 0",
-};
-const ct_toolbar = blk: {
-    var s = spec_zig.row(toolbar_style, .{
-        ct.button(theme, .reset, .reset_text),
-        ct.checkbox(theme, .wire, .wireframe, .wire_text),
-        ct.slider(theme, .exposure, .exposure),
-        ct.label(theme, .layer),
-    });
-    s.id = null;
-    break :blk s;
-};
-const CtUi = ComptimeUi(CtState, ct_toolbar, theme);
+            fn build(app: *@This(), f: *Frame) void {
+                _ = f.open(.from("toolbar"), toolbar_style);
+                app.clicked = button(f, &th, .from("reset"), "Reset").clicked;
+                app.resets += @intFromBool(app.clicked);
+                _ = checkbox(f, &th, .from("wire"), &app.wireframe, "Wireframe");
+                _ = slider(f, &th, .from("exposure"), &app.exposure, 0, 1);
+                _ = label(f, &th, "Layer 0");
+                f.close();
+            }
+        };
+
+        /// Comptime front end: the same toolbar as a spec over a state struct.
+        const CtState = struct {
+            reset_text: []const u8 = "Reset",
+            wireframe: bool = false,
+            wire_text: []const u8 = "Wireframe",
+            exposure: f32 = 0.25,
+            layer: []const u8 = "Layer 0",
+        };
+        const spec = spec_zig.row(toolbar_style, .{
+            ct.button(th, .reset, .reset_text),
+            ct.checkbox(th, .wire, .wireframe, .wire_text),
+            ct.slider(th, .exposure, .exposure),
+            ct.label(th, .layer),
+        });
+        const CtUi = ComptimeUi(CtState, spec, th);
+    };
+}
+const Default = Toolbar(theme);
 
 fn center(r: types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
@@ -453,9 +471,16 @@ fn expectSameDraw(a: *const DrawList, b: *const DrawList) !void {
 }
 
 test "reference widgets: the same input gives the same draw list in both front ends" {
+    try expectFrontEndsAgree(theme);
+}
+
+/// Replays 12 frames of clicks and drags through both front ends in theme `th` and requires the
+/// same draw list, semantics and state after every frame.
+fn expectFrontEndsAgree(comptime th: Theme) !void {
+    const T = Toolbar(th);
     var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: RtApp = .{};
-    var ui: CtUi = .{};
+    var app: T.RtApp = .{};
+    var ui: T.CtUi = .{};
     var in: Input = .{ .viewport = .{ 400, 100 } };
 
     const Step = struct { target: ?[]const u8, along: f32 = 0.5, left: bool };
@@ -511,9 +536,50 @@ test "reference widgets: the same input gives the same draw list in both front e
     try testing.expectEqual(@as(f32, 0), app.exposure);
 }
 
+test "Theme: the default tokens are the prototype's dark theme" {
+    const d = Theme.default;
+    try testing.expectEqual(Theme{}, d);
+    try testing.expectEqual(Color.rgb(230, 230, 235), d.text);
+    try testing.expectEqual(@as(f32, 14), d.text_px);
+    try testing.expectEqual(Color.rgb(30, 31, 36), d.panel);
+    try testing.expectEqual(Color.rgb(58, 60, 70), d.control);
+    try testing.expectEqual(Color.rgb(74, 77, 90), d.control_hot);
+    try testing.expectEqual(Color.rgb(44, 46, 54), d.control_held);
+    try testing.expectEqual(Color.rgb(90, 140, 255), d.accent);
+    try testing.expectEqual([3]f32{ 4, 8, 6 }, [3]f32{ d.radius, d.pad, d.gap });
+}
+
+test "Theme: other tokens restyle both front ends alike" {
+    try expectFrontEndsAgree(.{
+        .text = .rgb(20, 20, 20),
+        .text_px = 18,
+        .panel = .rgb(240, 240, 240),
+        .control = .rgb(200, 200, 205),
+        .control_hot = .rgb(180, 180, 190),
+        .control_held = .rgb(160, 160, 170),
+        .accent = .rgb(0, 120, 60),
+        .radius = 0,
+        .pad = 12,
+        .gap = 10,
+    });
+    // The tokens reach the widgets: a bigger pad makes a bigger button.
+    var ctx = try context.Context.init(&rt_buffer, limits);
+    const in: Input = .{ .viewport = .{ 400, 100 } };
+    var widths: [2]f32 = undefined;
+    for (&widths, [2]f32{ 8, 16 }) |*w, pad| {
+        var th: Theme = .default;
+        th.pad = pad;
+        var f = ctx.begin(&in);
+        _ = button(&f, &th, .from("b"), "Go");
+        const out = f.end(.{});
+        w.* = out.tree.rect(out.tree.find(.from("b"))).w();
+    }
+    try testing.expectEqual(widths[0] + 16, widths[1]);
+}
+
 test "button: hover and hold pick the fill by table index; click on release over it" {
     var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: RtApp = .{};
+    var app: Default.RtApp = .{};
     var in: Input = .{ .viewport = .{ 400, 100 } };
     var f = ctx.begin(&in);
     app.build(&f);
@@ -548,7 +614,7 @@ test "button: hover and hold pick the fill by table index; click on release over
 
 test "checkbox, slider: value columns and the slider's held-rect mapping" {
     var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: RtApp = .{};
+    var app: Default.RtApp = .{};
     var in: Input = .{ .viewport = .{ 400, 100 } };
     var f = ctx.begin(&in);
     app.build(&f);
@@ -606,11 +672,11 @@ test "label: a text leaf in the theme's size and colour" {
 }
 
 test "ct: spec builders give the comptime front end's widget enum, kinds and focus order" {
-    try testing.expectEqual(3, CtUi.Events.widget_count);
-    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &CtUi.Events.widget_kinds);
-    try testing.expectEqual(void, @FieldType(CtUi.Events.Event, "reset"));
-    try testing.expectEqual(f32, @FieldType(CtUi.Events.Event, "exposure"));
-    try testing.expectEqualSlices(CtUi.Events.Widget, &.{ .wire, .exposure }, CtUi.Events.focus_order);
+    try testing.expectEqual(3, Default.CtUi.Events.widget_count);
+    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.CtUi.Events.widget_kinds);
+    try testing.expectEqual(void, @FieldType(Default.CtUi.Events.Event, "reset"));
+    try testing.expectEqual(f32, @FieldType(Default.CtUi.Events.Event, "exposure"));
+    try testing.expectEqualSlices(Default.CtUi.Events.Widget, &.{ .wire, .exposure }, Default.CtUi.Events.focus_order);
 }
 
 test {
