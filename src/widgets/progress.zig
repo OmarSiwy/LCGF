@@ -224,6 +224,27 @@ test "progress: both front ends agree; the bar is the value's share of the track
     try testing.expectEqual(@as(f32, 1), barStyle(&theme, 9).size[0].v);
 }
 
+test "progress: takes no input; hit testing and the focus order skip it" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    var out = try h.frame(&in);
+    const r = out.runtime.tree.rect(tracks[0]);
+    in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    in.buttons.left = true;
+    out = try h.frame(&in);
+    // Nothing on the page senses the pointer: the hit test finds no node over the bar.
+    try testing.expectEqual(none, hit.at(out.runtime.tree, in.pointer[0], in.pointer[1], .any));
+    try testing.expectEqual(@as(u8, 0), out.runtime.tree.c.sense[tracks[0]]);
+    // A press on it focuses nothing, in either front end.
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try testing.expectEqual(0, @TypeOf(h.ui).Events.focus_order.len);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.clicked);
+    try testing.expectEqual(@as(f32, 0.4), h.app.download);
+}
+
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
