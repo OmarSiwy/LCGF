@@ -1,0 +1,35 @@
+# src/shell/testdata/example.replay as the AppKit events a user's session produces: the same
+# frames, so the translator must give the same Input for each (translate.zig). Locations are
+# window coordinates in points, origin at the bottom left of the 800 x 600 content: y is
+# 600 minus the recording's.
+frame
+resize 800 600
+# Unchanged: the settle frame, then a frame with nothing to build.
+frame
+frame
+# Click Reset (8,8 .. 66,42).
+frame
+moved 37 575
+frame
+left_down 37 575
+frame
+left_up 37 575
+# Click Add layer (8,58 .. 100,91).
+frame
+moved 54 526
+frame
+left_down 54 526
+frame
+left_up 54 526
+# Hold the exposure slider (180 .. 792) at 75% of its track.
+frame
+moved 639 575
+frame
+left_down 639 575
+frame
+left_up 639 575
+# Leave everything; settle, then idle.
+frame
+moved 400 200
+frame
+frame

@@ -130,6 +130,15 @@ const methods = .{
     .{ "acceptsFirstResponder", &acceptsFirstResponder, "c@:" },
     .{ "windowDidResize:", &windowDidResize, "v@:@" },
     .{ "windowShouldClose:", &windowShouldClose, "c@:@" },
+    .{ "windowDidResignKey:", &windowDidResignKey, "v@:@" },
+    .{ "insertText:", &insertText, "v@:@" },
+    .{ "doCommandBySelector:", &doCommandBySelector, "v@::" },
+} ++ events: {
+    // Every mouse, key and scroll event goes to `onEvent`.
+    const names = .{ "mouseDown:", "mouseUp:", "rightMouseDown:", "rightMouseUp:", "otherMouseDown:", "otherMouseUp:", "mouseMoved:", "mouseDragged:", "rightMouseDragged:", "otherMouseDragged:", "mouseEntered:", "mouseExited:", "scrollWheel:", "keyDown:", "keyUp:", "flagsChanged:" };
+    var t: [names.len]struct { [:0]const u8, *const anyopaque, [:0]const u8 } = undefined;
+    for (names, 0..) |n, i| t[i] = .{ n, &onEvent, "v@:@" };
+    break :events t;
 };
 
 fn registerView() Error!void {
@@ -157,6 +166,51 @@ fn windowDidResize(view: Id, _: Sel, _: Id) callconv(.c) void {
     shellOf(view).t.resize(.{ b.size.width, b.size.height });
 }
 
+/// Reads an NSEvent into `translate.Event`, asking only for the fields its type has (AppKit
+/// raises for `keyCode` on a mouse event), and hands it to the translator. A key press also
+/// goes through `interpretKeyEvents:`, which calls `insertText:` with the text it types.
+fn onEvent(view: Id, _: Sel, e: Id) callconv(.c) void {
+    const kind: translate.Kind = @fromBackingInt(@intCast(@as(u32, @truncate(msg(U, e, "type", .{})))));
+    var ev: translate.Event = .{ .kind = kind, .flags = msg(U, e, "modifierFlags", .{}) };
+    switch (kind) {
+        .key_down, .key_up, .flags_changed => ev.code = msg(u16, e, "keyCode", .{}),
+        .scroll => {
+            ev.delta = .{ msg(f64, e, "scrollingDeltaX", .{}), msg(f64, e, "scrollingDeltaY", .{}) };
+            ev.precise = msg(bool, e, "hasPreciseScrollingDeltas", .{});
+        },
+        else => {
+            const p = msg(NSPoint, e, "locationInWindow", .{});
+            ev.at = .{ p.x, p.y };
+            if (kind == .other_down or kind == .other_up or kind == .other_dragged) ev.code = @truncate(@as(U, @bitCast(msg(isize, e, "buttonNumber", .{}))));
+        },
+    }
+    if (kind == .key_down) ev.repeat = msg(bool, e, "isARepeat", .{});
+    const m = shellOf(view);
+    m.t.feed(.{ .event = ev });
+    if (kind == .key_down) msg(void, view, "interpretKeyEvents:", .{msg(Id, objc.class("NSArray"), "arrayWithObject:", .{e})});
+}
+
+/// Text a key typed. `text` is an NSString, or an NSAttributedString from an input method.
+fn insertText(view: Id, _: Sel, text: Id) callconv(.c) void {
+    shellOf(view).t.feed(.{ .insert = utf8(text) });
+}
+
+/// Keys that edit rather than type (arrows, Return, Delete) arrive here from
+/// `interpretKeyEvents:`; their key events already reached the UI, so nothing is done (and
+/// NSResponder's beep is not sounded).
+fn doCommandBySelector(_: Id, _: Sel, _: Sel) callconv(.c) void {}
+
+fn windowDidResignKey(view: Id, _: Sel, _: Id) callconv(.c) void {
+    shellOf(view).t.feed(.resign);
+}
+
+/// The UTF-8 of an NSString or NSAttributedString, valid while the autorelease pool lasts.
+fn utf8(s: Id) []const u8 {
+    const str = if (msg(bool, s, "isKindOfClass:", .{objc.class("NSAttributedString")})) msg(Id, s, "string", .{}) else s;
+    const p = msg(?[*:0]const u8, str, "UTF8String", .{}) orelse return "";
+    return std.mem.span(p);
+}
+
 /// The close button or Cmd+W: the user's request. The host decides, so the window stays open
 /// until `deinit`; `poll` returns false from now on.
 fn windowShouldClose(view: Id, _: Sel, _: Id) callconv(.c) bool {
@@ -170,6 +224,10 @@ const ns_event_mask_any: u64 = std.math.maxInt(u64);
 const ns_event_type_application_defined = 15;
 /// The subtype of the NSEvent `wake` posts.
 const wake_subtype = 0x6c63; // "lc"
+const ns_event_type_key_up = 11;
+/// NSTrackingArea options: entered and exited, moves, always (not only in the key window), and
+/// the rectangle follows the view's visible rectangle.
+const ns_tracking = 0x01 | 0x02 | 0x80 | 0x200;
 
 // ---- The shell ------------------------------------------------------------------------------
 
@@ -196,9 +254,11 @@ pub const Macos = struct {
         show: bool = true,
     };
 
-    /// Caller-owned storage: `glyphs` one quad per byte of text in a frame (at most the
+    /// Caller-owned storage: `text` and `events` one frame's typed text and key events, `glyphs` one quad per byte of text in a frame (at most the
     /// renderer's 32768), `first` and `count` one row per text run.
     pub const Buffers = struct {
+        text: []u8,
+        events: []lcgr.input.Input.Event,
         glyphs: []Quad,
         first: []u32,
         count: []u32,
@@ -225,6 +285,7 @@ pub const Macos = struct {
             .layer = .init(&dev, .{ .size = size, .scale = 1 }),
             .gfx = gfx,
             .frames = .init(dev.queue, gfx.desc.frames_in_flight),
+            .t = .init(.{ .text = buf.text, .events = buf.events }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
         rt.object_setIvar(view, shell_ivar, m);
@@ -234,6 +295,10 @@ pub const Macos = struct {
         msg(void, window, "setContentView:", .{view});
         msg(void, window, "setDelegate:", .{view});
         _ = msg(bool, window, "makeFirstResponder:", .{view});
+        msg(void, window, "setAcceptsMouseMovedEvents:", .{true});
+        const area = msg(Id, msg(Id, objc.class("NSTrackingArea"), "alloc", .{}), "initWithRect:options:owner:userInfo:", .{ NSRect{}, @as(U, ns_tracking), view, @as(?Id, null) });
+        msg(void, view, "addTrackingArea:", .{area});
+        objc.release(area);
         m.layer.attach(view);
         if (opt.show) {
             msg(void, window, "center", .{});
@@ -265,6 +330,11 @@ pub const Macos = struct {
         while (msg(?Id, a, "nextEventMatchingMask:untilDate:inMode:dequeue:", .{ ns_event_mask_any, past, default_mode, true })) |e| {
             // `wake`'s event only ends a wait.
             if (msg(U, e, "type", .{}) == ns_event_type_application_defined and msg(i16, e, "subtype", .{}) == wake_subtype) continue;
+            // NSApp does not pass on a key release while Command is held; the window does.
+            if (msg(U, e, "type", .{}) == ns_event_type_key_up) {
+                if (msg(?Id, e, "window", .{})) |w| msg(void, w, "sendEvent:", .{e});
+                continue;
+            }
             msg(void, a, "sendEvent:", .{e});
         }
         return m.t.frame(ev);
@@ -326,14 +396,18 @@ comptime {
 // ---- Tests: on macOS only (`zig build macos`) -----------------------------------------------
 
 const testing = std.testing;
+const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 
 const Fixture = struct {
+    var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(lcgr.mem.column_align) = undefined;
+    var text: [64]u8 = undefined;
+    var events: [16]lcgr.input.Input.Event = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [256]u32 = undefined;
     var count: [256]u32 = undefined;
 
     fn open(m: *Macos) !void {
-        try m.init(.{ .show = false }, .{ .glyphs = &glyphs, .first = &first, .count = &count });
+        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -359,4 +433,60 @@ test "macos: wake ends a wait with no timeout" {
     m.wait(std.math.inf(f32), .idle);
     var ev: Events = .{};
     try testing.expect(m.poll(&ev));
+}
+
+/// Posts a recorded frame's NSEvents to the application and polls: what the view receives is
+/// what a user's input would give it. Window-level records (resize, close, typed text) are fed
+/// to the translator directly, as the delegate methods would.
+fn mouse(k: translate.Kind) bool {
+    return switch (k) {
+        .key_down, .key_up, .flags_changed, .scroll => false,
+        else => true,
+    };
+}
+
+fn replayFrame(m: *Macos, r: *translate.Replay, ev: *Events) !?bool {
+    var buf: [32]translate.Record = undefined;
+    const records = (try r.next(&buf)) orelse return null;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const number = msg(isize, m.window, "windowNumber", .{});
+    for (records) |rec| switch (rec) {
+        // ponytail: mouse events only, which is what the example's recording holds; key and
+        // scroll events need constructors with more arguments and are fed directly.
+        .event => |e| if (mouse(e.kind)) {
+            const ns = msg(?Id, objc.class("NSEvent"), "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:", .{
+                @as(U, @backingInt(e.kind)), NSPoint{ .x = e.at[0], .y = e.at[1] }, @as(U, e.flags), @as(f64, 0), number, @as(?Id, null), @as(isize, 0), @as(isize, 1), @as(f32, 1),
+            }) orelse return error.NoEvent;
+            msg(void, app(), "postEvent:atStart:", .{ ns, false });
+        } else m.t.feed(rec),
+        else => m.t.feed(rec),
+    };
+    return m.poll(ev);
+}
+
+test "macos: a real window runs the example from posted events" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var app_: lcgr.shell_example.App = .{};
+    var r: translate.Replay = .{ .src = @embedFile("testdata/example.events") };
+    var ev: Events = .{};
+    var frames: u32 = 0;
+    while (try replayFrame(&m, &r, &ev)) |open| : (frames += 1) {
+        try testing.expect(open);
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        app_.build(&f, &ev);
+        const out = f.end(.{});
+        m.apply(&out.platform);
+        m.present(&out);
+    }
+    // The headless shell's results (src/shell/headless.zig).
+    try testing.expectEqual(@as(u32, 15), frames);
+    try testing.expectEqual(@as(u32, 13), app_.builds);
+    try testing.expectEqual(@as(u32, 1), app_.resets);
+    try testing.expectEqual(@as(u32, 4), app_.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app_.exposure, 0.01);
 }
