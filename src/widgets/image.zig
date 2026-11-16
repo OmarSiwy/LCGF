@@ -162,8 +162,8 @@ const testing = std.testing;
 
 /// The example page: a caption over a picture at its size, the same picture covering a box,
 /// and a button holding it as a thumbnail, in both front ends, in theme `th`. The picture is
-/// a quarter of texture 1, which the golden image renderer (tools/golden/gpu.py) fills with
-/// its stand-in atlas; an application uploads its own pixels there.
+/// the top-left quarter of texture 1, a 128 x 96 picture that the golden dumper
+/// (tools/widgetgolden/dump.zig) uploads; an application uploads its own pixels there.
 pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {

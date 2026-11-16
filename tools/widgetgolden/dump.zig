@@ -3,7 +3,12 @@
 //! if they draw differently), and writes the named frame as tools/golden/gpu.py draws it, into
 //! a directory:
 //!
-//!     zig build widget-dump -- <frame> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
+//!     zig build widget-dump -- <frame> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt,
+//!                                                 tex<id>.rgba for each texture in `textures`
+//!
+//! The pages' textures are uploaded here, as an application would: each one the frame samples
+//! is written as RGBA8 rows with a `texture <id> <w> <h> <file>` line in cmds.txt, and gpu.py
+//! binds it in place of its stand-in atlas, so the images show the texture's pixels.
 //!
 //! Frame names are a page's prefix plus one of its `golden_frames` (`rest`, `card-rest`): one
 //! line per page in `pages` below. ci/jobs/widget-golden.sh renders each one and compares it
@@ -62,6 +67,64 @@ const pages = .{
     .{ "textarea-", lcgr.widgets_textarea.Page, lcgr.widgets_textarea.Page.replay, lcgr.widgets_textarea.Page.golden_frames },
     .{ "textfield-", lcgr.widgets_textfield.Page, lcgr.widgets_textfield.Page.replay, lcgr.widgets_textfield.Page.golden_frames },
 };
+/// A texture a page samples, RGBA8 (`Color` bits, premultiplied), row by row.
+const Texture = struct { id: u16, w: u32, h: u32, pixels: []const u32 };
+
+/// Texture 1: the image page's picture (widgets_image Page `photo`, its top-left 64 x 48
+/// quarter): sky, sun and a hill. The other quarters are magenta, so a wrong uv rect shows.
+/// Texture 2: the icon page's 40 x 24 coverage atlas, white where covered: a 16 px document at
+/// 0, 0 and a 24 px "save" arrow into a tray at 16, 0.
+const textures = [_]Texture{ photo(), icons() };
+
+fn photo() Texture {
+    const tw = 128;
+    const th = 96;
+    const px = comptime blk: {
+        @setEvalBranchQuota(400_000);
+        var out: [tw * th]u32 = undefined;
+        for (0..th) |y| for (0..tw) |x| {
+            const c: lcgr.types.Color = if (x >= 64 or y >= 48)
+                .rgb(255, 0, 255)
+            else if ((@as(i32, x) - 46) * (@as(i32, x) - 46) + (@as(i32, y) - 12) * (@as(i32, y) - 12) < 50)
+                .rgb(255, 214, 90)
+            else if (y > 28 + @abs(@as(i32, @intCast(x)) - 22) / 5)
+                .rgb(40, 120 + @as(u8, @intCast(y)), 60)
+            else
+                .rgb(80 + @as(u8, @intCast(y * 2)), 150 + @as(u8, @intCast(y)), 235);
+            out[y * tw + x] = c.bitsOf();
+        };
+        break :blk out;
+    };
+    return .{ .id = 1, .w = tw, .h = th, .pixels = &px };
+}
+
+fn icons() Texture {
+    const tw = 40;
+    const th = 24;
+    const px = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var out: [tw * th]u32 = @splat(0);
+        for (0..th) |yu| for (0..tw) |xu| {
+            const x: i32 = @intCast(xu);
+            const y: i32 = @intCast(yu);
+            // 16 px: a page with its top-right corner folded, and three lines of text.
+            const page = x >= 3 and x <= 12 and y >= 1 and y <= 14 and x + 14 - y <= 22 and
+                (x == 3 or x == 12 or y == 1 or y == 14 or x + 14 - y == 22 or
+                    (x >= 5 and x <= 10 and (y == 5 or y == 8 or y == 11)));
+            // 24 px, from x 16: an arrow down into a tray.
+            const lx = x - 16;
+            const stem = lx >= 11 and lx <= 12 and y >= 2 and y <= 11;
+            const head = y >= 9 and y <= 15 and @abs(lx * 2 - 23) <= 2 * (15 - y) + 1;
+            const tray = (y >= 19 and y <= 20 and lx >= 3 and lx <= 20) or
+                (y >= 14 and y <= 20 and (lx == 3 or lx == 4 or lx == 19 or lx == 20));
+            const on = if (x < 16) page else stem or head or tray;
+            out[yu * tw + xu] = if (on) 0xffff_ffff else 0;
+        };
+        break :blk out;
+    };
+    return .{ .id = 2, .w = tw, .h = th, .pixels = &px };
+}
+
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;
 var first: [256]u32 = undefined;
@@ -119,5 +182,17 @@ fn dump(comptime Page: type, replay_src: []const u8, target: u32, io: std.Io, ou
         .text => |k| try wr.print("text {d} {d}\n", .{ first[k], count[k] }),
         .custom => return error.PageHasCustom,
     };
+    for (textures) |tex| {
+        var used = false;
+        for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
+            .quads => |b| used = used or @backingInt(b.texture) == tex.id,
+            else => {},
+        };
+        if (!used) continue;
+        var name_buf: [16]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "tex{d}.rgba", .{tex.id});
+        try dir.writeFile(io, .{ .sub_path = name, .data = std.mem.sliceAsBytes(tex.pixels) });
+        try wr.print("texture {d} {d} {d} {s}\n", .{ tex.id, tex.w, tex.h, name });
+    }
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = wr.buffered() });
 }
