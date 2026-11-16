@@ -26,6 +26,8 @@ const Style = types.Style;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const a11y = @import("../a11y/tree.zig");
+/// `semantics`, for `Page.semantics`, whose name hides it.
+const rangeOf = semantics;
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -209,6 +211,18 @@ pub const Page = struct {
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+
+    /// The page's accessibility beyond the tree, for either front end's tree `t`: each slider
+    /// labelled by the caption above it, and its range.
+    pub fn semantics(t: *const Tree, s: *a11y.Semantics) void {
+        const ends = [2][2]f32{ .{ 0, 100 }, .{ -12, 12 } };
+        for ([2]Id{ .from("volume"), .from("gain") }, ends) |id, e| {
+            const r = t.find(id);
+            if (r == types.none) continue;
+            s.c.labelled_by[r] = r - 1; // the caption is the row before
+            rangeOf(t, s, id, e[0], e[1]);
+        }
+    }
     pub const replay = @embedFile("testdata/slider.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/slider-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 1 }, .{ "keys", 6 } };
@@ -392,6 +406,26 @@ test "slider a11y: its ends and key step as the exported range, in both front en
 }
 
 var page: Page.Run = .{};
+var page_semantics: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+
+test "Page a11y: each slider named by its caption, with its range, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &page;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 320, 240 } });
+    const trees = [2]*const Tree{ &h.ctx.trees[h.ctx.cur], &h.ui.tables.t };
+    for (trees, &page_semantics) |t, *x| Page.semantics(t, x.begin());
+    const strs = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const e = page_semantics[0].finish(trees[0], &h.ctx.texts[h.ctx.cur], strs[0]);
+    const c = page_semantics[1].finish(trees[1], &h.ui.tables.tx, strs[1]);
+    try testing.expect(popover.sameSemantics(e, c));
+    for ([2]Id{ .from("volume"), .from("gain") }, [2][]const u8{ "Volume", "Gain" }, [2]f32{ 100, 12 }) |id, want, hi| {
+        const r = popover.exportRow(e, trees[0].find(id));
+        try testing.expectEqualStrings(want, strs[0][e.c.name_start[r]..][0..e.c.name_bytes[r]]);
+        try testing.expectEqualStrings(want, strs[1][c.c.name_start[r]..][0..c.c.name_bytes[r]]);
+        try testing.expectEqual(hi, e.c.range[1][r]);
+    }
+}
 
 test "Page: the slider replay drags and steps by keys, in both front ends" {
     const Replay = @import("../core/input.zig").Replay;

@@ -155,9 +155,18 @@ pub fn expose(t: *Tree, i: u32, value: f32) void {
     t.c.value[i] = value;
 }
 
-/// The semantics the tree columns cannot carry: the field's name is the row `label` (its
-/// caption, `aria-labelledby`), as for the text field.
-pub const semantics = tf.semantics;
+/// The semantics the tree columns cannot carry, for the field `name` in `t`: its name is the
+/// row `label` (its caption, `aria-labelledby`), as for the text field, and its range is
+/// `range` (`aria-valuemin`, `aria-valuemax`, and the step a screen reader's increment moves
+/// by, as Up and Down do). A field not in `t` is skipped; `label` may be `none`.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32, range: Range) void {
+    tf.semantics(t, s, name, label);
+    const f = t.find(name);
+    if (f == types.none) return;
+    s.c.range[0][f] = range.lo;
+    s.c.range[1][f] = range.hi;
+    s.c.range[2][f] = range.step;
+}
 
 // ---- runtime front end ----------------------------------------------------------------------
 
@@ -373,7 +382,7 @@ test "number look: a text field's box showing the value, the caret at its end wh
 
 var number_semantics: base.Semantic(16) = .{};
 
-test "number a11y: role spin button valued by its value, named by its caption" {
+test "number a11y: role spin button valued by its value, named by its caption, with its range" {
     const h = &page;
     h.init();
     const in: Input = .{ .viewport = .{ 320, 140 } };
@@ -393,11 +402,29 @@ test "number a11y: role spin button valued by its value, named by its caption" {
     var sb: check.SemBuf = .{};
     var sem = sb.init();
     const q = t.find(.from("qty"));
-    semantics(t, &sem, .from("qty"), q - 1);
+    semantics(t, &sem, .from("qty"), q - 1, Page.quantity);
     a11y.names(t, &sem);
     const ctx = &h.ctx;
     try testing.expectEqualStrings("Quantity", check.nameOf(&sem, out.runtime.texts, ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], q));
+
+    // The range, the same in both front ends.
+    const popover = @import("popover.zig");
+    const trees = [2]*const Tree{ t, &h.ui.tables.t };
+    for (trees, &number_ranges) |tr, *y| {
+        const sm = y.begin();
+        semantics(tr, sm, .from("qty"), q - 1, Page.quantity);
+        semantics(tr, sm, .from("scale"), tr.find(.from("scale")) - 1, Page.scale);
+    }
+    const e = number_ranges[0].finish(trees[0], out.runtime.texts, ctx.strings[ctx.cur].buf);
+    const c = number_ranges[1].finish(trees[1], &h.ui.tables.tx, h.ui.tables.strings.buf);
+    try testing.expect(popover.sameSemantics(e, c));
+    for ([2][]const u8{ "qty", "scale" }, [2][3]f32{ .{ 0, 10, 1 }, .{ -1, 1, 0.25 } }) |id, want| {
+        const r = popover.exportRow(e, t.find(.hash(id)));
+        try testing.expectEqual(want, [3]f32{ e.c.range[0][r], e.c.range[1][r], e.c.range[2][r] });
+    }
 }
+
+var number_ranges: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
 
 test "number input: steps by keys and wheel, typing taken on Enter, a step or blur" {
     const h = &page;

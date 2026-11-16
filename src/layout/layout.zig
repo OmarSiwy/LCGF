@@ -10,6 +10,10 @@
 //!   applyText/fit/resolve(.y)   the same three for heights
 //!   place              forward  positions on both axes
 //!   finalize           SIMD + forward   pixel snap, clip, visibility
+//!
+//! The passes take the tree as `anytype`: a `*Tree`, or any value with the same `len`, `c` and
+//! `x` fields whose columns index like slices (the comptime front end passes pointers to arrays,
+//! read-only tables for the columns a pass only reads; src/comptime/layout.zig).
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -26,7 +30,7 @@ const b01 = simd.b2f;
 const inf = types.inf;
 
 /// SIMD. Clears per-frame scratch and derives `gap_total`.
-pub fn prepare(t: *Tree) void {
+pub fn prepare(t: anytype) void {
     const c = &t.c;
     const n = simd.padded(t.len);
     const zero = simd.f(0);
@@ -46,7 +50,7 @@ pub fn prepare(t: *Tree) void {
 }
 
 /// Scatters measured text extents into their leaf nodes for one axis.
-pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
+pub fn applyText(t: anytype, tx: *const Texts, axis: Axis) void {
     const a = @backingInt(axis);
     const extents = [2][]const f32{ tx.c.w, tx.c.h };
     const src = extents[a];
@@ -55,7 +59,7 @@ pub fn applyText(t: *Tree, tx: *const Texts, axis: Axis) void {
 }
 
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
-pub fn fit(t: *Tree, axis: Axis) void {
+pub fn fit(t: anytype, axis: Axis) void {
     if (t.len == 0) return;
     fitOf(t, {}, axis, 0, t.len);
 }
@@ -79,13 +83,13 @@ pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
 /// value there is final once all its children are folded, and is rewritten again by any later
 /// call whose vectors cover it. The test "fitSpan, resolveSpan: pieces from any cut rows equal
 /// the whole pass" pins this.
-pub fn fitSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+pub fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
     fitOf(t, {}, axis, first, last);
 }
 
 /// One body for every form: with `fx` void every flex term is compiled out, so `fit` keeps the
 /// prototype's code; `first`/`last` select a subtree for incremental layout.
-inline fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
+inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
@@ -165,7 +169,7 @@ inline fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
 /// Top-down: final size of every node on one axis. One forward sweep.
 /// Free space is shared out once by `grow` weight; a child stopped by its
 /// `max` leaves its remainder unused instead of triggering another round.
-pub fn resolve(t: *Tree, axis: Axis, viewport: f32) void {
+pub fn resolve(t: anytype, axis: Axis, viewport: f32) void {
     if (t.len == 0) return;
     t.c.size[@backingInt(axis)][0] = viewport;
     resolveOf(t, {}, axis, 0, t.len);
@@ -187,11 +191,11 @@ pub fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void {
 /// resolved twice in a frame, since each adds to its parent's `used`. Incremental layout
 /// passes a whole subtree, `last = end[first]`; grid.zig resolves consecutive pieces
 /// [from - 1, to) from the top. Same test as `fitSpan`.
-pub fn resolveSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
+pub fn resolveSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
     resolveOf(t, {}, axis, first, last);
 }
 
-inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
+inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
@@ -267,7 +271,7 @@ inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) vo
 
 /// Gathers the width layout gave each text run. Call after `resolve(.x)`;
 /// the caller then rewrites `h` for runs that wrap.
-pub fn textAvail(t: *const Tree, tx: *Texts) void {
+pub fn textAvail(t: anytype, tx: *Texts) void {
     const c = &t.c;
     for (tx.c.node[0..tx.len], tx.c.avail[0..tx.len]) |node, *avail| {
         avail.* = c.size[0][node] - c.pad_lo[0][node] - c.pad_hi[0][node];
@@ -275,7 +279,7 @@ pub fn textAvail(t: *const Tree, tx: *Texts) void {
 }
 
 /// Top-down: position of every node on both axes. One forward sweep.
-pub fn place(t: *Tree) void {
+pub fn place(t: anytype) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
@@ -293,11 +297,11 @@ pub fn placeFlex(t: *Tree, fx: *const Flex) void {
 /// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
 /// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
 /// rows must be cleared first, as `prepare` does for the whole tree.
-pub fn placeSpan(t: *Tree, first: u32, last: u32) void {
+pub fn placeSpan(t: anytype, first: u32, last: u32) void {
     placeOf(t, {}, first, last);
 }
 
-fn placeOf(t: *Tree, fx: anytype, first: u32, last: u32) void {
+fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
@@ -345,7 +349,7 @@ fn placeOf(t: *Tree, fx: anytype, first: u32, last: u32) void {
 
 /// Pixel-snapped rects (SIMD), then clip rects and visibility (one forward
 /// sweep with a 4-lane op per node).
-pub fn finalize(t: *Tree) void {
+pub fn finalize(t: anytype) void {
     if (t.len == 0) return;
     finalizeSpan(t, 0, t.len);
     // Padding rows must never be hit.
@@ -355,7 +359,7 @@ pub fn finalize(t: *Tree) void {
 /// `finalize` over the subtree [first, last), `last = end[first]` (incremental layout). The
 /// snap covers the whole vectors around the span: a rect depends on its own row alone, so
 /// neighbouring rows get the value they already hold.
-pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
+pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     std.debug.assert(first < last and last <= t.len);
     const c = &t.c;
     const n = simd.padded(last);
@@ -405,7 +409,7 @@ pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
 
 /// Diagonal: every pass in order, for text that does not wrap (or whose
 /// `w`/`h` the caller has already settled). `Frame.end` is this plus wrapping.
-pub fn run(t: *Tree, tx: *Texts, viewport: [2]f32) void {
+pub fn run(t: anytype, tx: *Texts, viewport: [2]f32) void {
     prepare(t);
     applyText(t, tx, .x);
     fit(t, .x);

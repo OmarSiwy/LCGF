@@ -11,6 +11,7 @@ const none = types.none;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Strings = @import("../core/strings.zig").Strings;
+const Span = @import("../core/strings.zig").Span;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 
 /// What a node is to assistive technology: the roles the WAI-ARIA Authoring Practices patterns
@@ -83,14 +84,28 @@ pub const Role = enum(u8) {
     content_info,
     form,
     search,
-    // ---- live regions (a status bar): `status` is a polite live region; politeness is
-    //      implied by the role, as ARIA's status implies aria-live="polite"
+    // ---- live regions (a status bar): `status` is a polite live region (`live`)
     status,
     // ---- added after the patterns above, so their bytes stay put
     /// A button that stays down until pressed again: ARIA's button with `aria-pressed`. Its
     /// value is the pressed state, as a checkbox's is its checked state (`checkable`).
     toggle_button,
+    /// A clipped viewport whose content scrolls (AccessKit's ScrollView; ARIA has none and
+    /// leaves it a group).
+    scroll_view,
 };
+
+/// The name of the role in a raw role byte, as in `Role` (`"tab"`, `"toggle_button"`), or
+/// `"unknown"` for a byte no role has. For tools that print a tree's role column: the column
+/// holds every `Role`, past `types.Role`'s eight, so reading it as `types.Role` is invalid.
+pub fn roleName(byte: u8) []const u8 {
+    const table = comptime blk: {
+        var m: [256][]const u8 = @splat("unknown");
+        for (@typeInfo(Role).@"enum".field_names, @typeInfo(Role).@"enum".field_values) |name, v| m[v] = name;
+        break :blk m;
+    };
+    return table[byte];
+}
 
 comptime {
     // `types.Role` is a prefix of `Role`, value for value.
@@ -111,6 +126,20 @@ pub const from_content: [256]u32 = blk: {
         .tree_item,     .row,    .cell,      .column_header,      .row_header,      .tooltip,
         .toggle_button,
     }) |r| m[@backingInt(r)] = 0xffff_ffff;
+    break :blk m;
+};
+
+/// How a live region's changes are announced (`aria-live`).
+pub const Live = enum(u8) { off, polite, assertive };
+
+/// The politeness each role implies, as ARIA's roles do: `status` polite, `alert` assertive,
+/// off for the rest. Indexed by the raw role byte.
+// ponytail: by role only; add a per-node `aria-live` input to `Semantics` when a widget needs
+// a politeness its role does not imply.
+pub const live: [256]Live = blk: {
+    var m: [256]Live = @splat(.off);
+    m[@backingInt(Role.status)] = .polite;
+    m[@backingInt(Role.alert)] = .assertive;
     break :blk m;
 };
 
@@ -161,6 +190,10 @@ pub const Semantics = struct {
         // ---- inputs, cleared by `clear` each frame
         /// Row of the node whose text names this one (`aria-labelledby`), or `none`.
         labelled_by: []u32,
+        /// A name that is shown nowhere (`aria-label`): bytes the application added to the
+        /// frame's `Strings`, `.{}` for none. `labelled_by` wins over it, as ARIA has it; it
+        /// wins over the node's content and own text.
+        label: []Span,
         /// `State` bits the application sets; `states` adds what follows from the tree.
         state: []u8,
         /// The value's range, as `aria-valuemin`, `aria-valuemax` and the step a screen
@@ -188,6 +221,7 @@ pub const Semantics = struct {
     /// Resets the inputs for a new frame: no node is labelled by another.
     pub fn clear(s: *Semantics) void {
         @memset(s.c.labelled_by, none);
+        @memset(s.c.label, .{});
         @memset(s.c.state, 0);
         inline for (s.c.range) |col| @memset(col, 0);
     }
@@ -247,7 +281,8 @@ pub fn states(t: *const Tree, s: *Semantics) void {
 /// The semantic tree as flat arrays, the form a bridge hands to the platform: one row per
 /// node with a role, in tree order (parents before children), parents as export rows.
 /// Presentational nodes (`Role.none`) are left out and their children move up to the nearest
-/// exported ancestor. Names are byte ranges in the frame's `Strings`.
+/// exported ancestor. Names are byte ranges in the frame's `Strings`: the named text run's, or
+/// the node's `label`.
 pub const Export = struct {
     len: u32 = 0,
     cap: u32,
@@ -321,10 +356,17 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         o.kids[pi] += @intFromBool(counts);
 
         const run = s.c.name[k];
-        const named = -%@as(u32, @intFromBool(run != none));
         const rr = @min(run, last_run);
-        const start = tx.c.start[rr] & named;
-        const bytes = tx.c.bytes[rr] & named;
+        // The name's span: the node's `label` when set and it is not labelled by another
+        // node, else its run's, else empty. Selected by address, then loaded: masks and
+        // selects over the loaded spans compiled to a branch around the run's loads.
+        const lab = &s.c.label[k];
+        const own = simd.andB(lab.bytes != 0, s.c.labelled_by[k] == none);
+        const empty: Span = .{};
+        const from_run = [2]*const Span{ &empty, &.{ .start = tx.c.start[rr], .bytes = tx.c.bytes[rr] } };
+        const span = ([2]*const Span{ from_run[@intFromBool(run != none)], lab })[@intFromBool(own)].*;
+        const start = span.start;
+        const bytes = span.bytes;
 
         o.id[w] = id;
         o.node[w] = @intCast(k);
@@ -520,6 +562,14 @@ fn TreeFixture(comptime cap: u32) type {
     };
 }
 
+test "roleName: every role byte names its role; others are unknown" {
+    try testing.expectEqualStrings("none", roleName(0));
+    try testing.expectEqualStrings("button", roleName(@backingInt(Role.button)));
+    try testing.expectEqualStrings("toggle_button", roleName(@backingInt(Role.toggle_button)));
+    try testing.expectEqualStrings("scroll_view", roleName(@backingInt(Role.scroll_view)));
+    try testing.expectEqualStrings("unknown", roleName(255));
+}
+
 test "tree export: every role fits the tree's role column and the core roles keep their values" {
     try testing.expectEqual(1, @sizeOf(Role));
     try testing.expectEqual(@as(u8, 0), @backingInt(Role.none));
@@ -541,6 +591,14 @@ test "tree export: every role fits the tree's role column and the core roles kee
         t.c.role[box] = v;
         try testing.expectEqual(v, @backingInt(@as(Role, @fromBackingInt(t.c.role[box]))));
     }
+}
+
+test "tree export: a live region's politeness follows its role" {
+    try testing.expectEqual(Live.polite, live[@backingInt(Role.status)]);
+    try testing.expectEqual(Live.assertive, live[@backingInt(Role.alert)]);
+    try testing.expectEqual(Live.off, live[@backingInt(Role.group)]);
+    try testing.expectEqual(Live.off, live[@backingInt(Role.scroll_view)]);
+    try testing.expectEqual(Live.off, live[255]);
 }
 
 test "tree export: names come from labels, from content for the roles that take it, else own text" {
@@ -1005,6 +1063,37 @@ test "tree export: a range is exported, sent again when it moves, and steps acti
     steps(&more, e);
     try testing.expectEqual(1, more[1].value);
     try testing.expectEqual(0.5, setValue(&more, .from("vol"), 3));
+}
+
+test "tree export: a label names a node with no text, unless it is labelled by another" {
+    var f: FrameFixture(16) = .{};
+    f.init();
+    const t = &f.t;
+    // root { label "Volume", slider vol (labelled by "Volume", and a label: labelled_by wins),
+    //        radio group "quality" (a label only), button "ok" { "OK" } (a label over content) }
+    const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const volume = f.text(root, "Volume");
+    const vol = t.push(root, types.Id.from("vol"), &.{ .role = .slider });
+    t.seal(vol);
+    const group = t.push(root, types.Id.from("quality"), &.{});
+    t.c.role[group] = @backingInt(Role.radio_group);
+    t.seal(group);
+    const ok = t.push(root, types.Id.from("ok"), &.{ .role = .button });
+    _ = f.text(ok, "OK");
+    t.seal(ok);
+    t.seal(root);
+    f.s.c.labelled_by[vol] = volume;
+    f.s.c.label[vol] = f.str.add("Loudness");
+    f.s.c.label[group] = f.str.add("Quality");
+    f.s.c.label[ok] = f.str.add("Accept");
+    const e = f.run(0);
+    try testing.expectEqualStrings("Volume", f.name(e, 2));
+    try testing.expectEqualStrings("Quality", f.name(e, 3));
+    try testing.expectEqualStrings("Accept", f.name(e, 4));
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Quality"), e.c.name_hash[3]);
+    // The button's text leaf keeps its own.
+    try testing.expectEqualStrings("OK", f.name(e, 5));
+    try testing.expectEqualStrings("", f.name(e, 0));
 }
 
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {

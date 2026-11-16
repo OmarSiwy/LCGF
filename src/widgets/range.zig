@@ -32,6 +32,9 @@ const Tree = @import("../core/tree.zig").Tree;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const a11y = @import("../a11y/tree.zig");
+const Strings = @import("../core/strings.zig").Strings;
+/// `semantics`, for `Page.semantics`, whose name hides it.
+const rangeOf = semantics;
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -257,6 +260,17 @@ pub const Page = struct {
     pub const spec = spec_zig.col(panel, .{ base.ct.label(th, .band_text), ct.range(th, .band, .band, .{ .lo = 20, .hi = 200 }) });
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+
+    /// The page's accessibility beyond the tree, for either front end's tree `t` over the band
+    /// `values`, whose names go to the frame's strings `str`: each thumb's range, and a name
+    /// for each (`Semantics.label`), as one caption cannot tell the two apart.
+    pub fn semantics(t: *const Tree, s: *a11y.Semantics, str: *Strings, values: [2]f32) void {
+        rangeOf(t, s, .from("band"), values, 20, 200);
+        for ([2][]const u8{ "Lowest frequency", "Highest frequency" }, 0..) |name, i| {
+            const r = t.find(thumbId(.from("band"), @intCast(i)));
+            if (r != types.none) s.c.label[r] = str.add(name);
+        }
+    }
     pub const replay = @embedFile("testdata/range.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/range-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "dragged", 2 }, .{ "keys", 6 } };
@@ -433,6 +447,27 @@ test "range a11y: each thumb's range ends at the other thumb, in both front ends
 }
 
 var page: Page.Run = .{};
+var page_semantics: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+
+test "Page a11y: each thumb named and ranged, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &page;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 320, 240 } });
+    const trees = [2]*const Tree{ &h.ctx.trees[h.ctx.cur], &h.ui.tables.t };
+    Page.semantics(trees[0], page_semantics[0].begin(), &h.ctx.strings[h.ctx.cur], h.app.band);
+    Page.semantics(trees[1], page_semantics[1].begin(), &h.ui.tables.strings, h.ui.signals.state.band);
+    const strs = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const e = page_semantics[0].finish(trees[0], &h.ctx.texts[h.ctx.cur], strs[0]);
+    const c = page_semantics[1].finish(trees[1], &h.ui.tables.tx, strs[1]);
+    try testing.expect(popover.sameSemantics(e, c));
+    for ([2][]const u8{ "Lowest frequency", "Highest frequency" }, [2][2]f32{ .{ 20, 140 }, .{ 60, 200 } }, 0..) |want, ends, i| {
+        const r = popover.exportRow(e, trees[0].find(thumbId(.from("band"), @intCast(i))));
+        try testing.expectEqualStrings(want, strs[0][e.c.name_start[r]..][0..e.c.name_bytes[r]]);
+        try testing.expectEqualStrings(want, strs[1][c.c.name_start[r]..][0..c.c.name_bytes[r]]);
+        try testing.expectEqual(ends, [2]f32{ e.c.range[0][r], e.c.range[1][r] });
+    }
+}
 
 test "Page: the range replay drags each thumb and steps by keys, in both front ends" {
     const Replay = @import("../core/input.zig").Replay;
