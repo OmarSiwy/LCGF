@@ -112,9 +112,13 @@ fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
         const p = parent[i];
         var contrib = nat * flow[i];
         if (flexed) contrib += fx.margin(a, i) * flow[i];
-        const sum = fit_[p] + contrib;
-        const mx = @max(fit_[p], contrib);
-        var folded = mx + main[p] * (sum - mx);
+        // fit_[p] is the loop-carried value (every sibling folds into it): sum and max side by
+        // side, then a select by the stacking direction, rather than max, sub, mul, add in a row.
+        // `<` and a select is one maxss; @max would add a NaN fix-up (docs/perf/chains.md).
+        const fp = fit_[p];
+        const sum = fp + contrib;
+        const mx = simd.selF(fp < contrib, contrib, fp);
+        var folded = simd.selF(main[p] != 0, sum, mx);
         if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded);
         fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
@@ -344,16 +348,21 @@ pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
     const clips_ = c.clips;
     const visible = c.visible;
     const border = c.border;
+    // The root is its own parent: it reads its own row before writing it, so that row starts as
+    // "no clip". This replaces a per-row `i == 0` select on the chain below.
+    if (first == 0) child_clip[0] = everything;
     for (first..last) |i| {
         const r = V4{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] } * sign;
-        const is_root: @Vector(4, bool) = @splat(i == 0);
-        const inherited = @select(f32, is_root, everything, @as(V4, child_clip[parent[i]]));
+        // child_clip[i] feeds the next row whose parent is i, so the path from this load to
+        // that store is the pass's latency chain: keep it to one max. The clip-or-not select
+        // is on the other operand, off the chain (docs/perf/chains.md).
+        const inherited: V4 = child_clip[parent[i]];
         const v = @max(r, inherited);
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
-        const inner = @max(inherited, r + @as(V4, @splat(border[i])));
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        child_clip[i] = @select(f32, clips, inner, inherited);
+        const inner = @select(f32, clips, r + @as(V4, @splat(border[i])), everything);
+        child_clip[i] = @max(inherited, inner);
         const out = v * sign;
         vis[0][i] = out[0];
         vis[1][i] = out[1];
