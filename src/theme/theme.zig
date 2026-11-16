@@ -89,6 +89,23 @@ pub const dark: Tokens = .{};
 /// The same sizes in `light_palette`.
 pub const light: Tokens = .{ .palette = light_palette };
 
+/// How tightly controls pack: a factor on the space scale. Text sizes and radii stay, so a
+/// denser theme fits more controls without smaller type.
+pub const Density = enum(u8) { compact, comfortable, spacious };
+
+const density_factor = [3]f32{ 0.75, 1, 1.25 };
+
+/// `tok` at density `d`: each space step scaled and rounded to whole pixels, so edges stay on
+/// the pixel grid. `comfortable` is `tok` unchanged.
+pub fn dense(tok: Tokens, d: Density) Tokens {
+    var out = tok;
+    const k: @Vector(step_count, f32) = @splat(density_factor[@backingInt(d)]);
+    const v: @Vector(step_count, f32) = tok.space;
+    const r: @Vector(step_count, f32) = @round(v * k);
+    out.space = r;
+    return out;
+}
+
 // ---- state styles -----------------------------------------------------------------------
 
 /// What an interaction state changes on a control: its face and its outline.
@@ -153,6 +170,8 @@ pub fn widgets(tok: *const Tokens) base.Theme {
 
 const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
+const mem = @import("../core/mem.zig");
+const context = @import("../runtime/context.zig");
 
 /// The theme switch test: the reference page (`widgets_base.Reference`) driven in theme `a` and
 /// in theme `b` by the same script of hovers, clicks and drags, each aimed at last frame's rect
@@ -331,4 +350,35 @@ test "light, dark: text is readable on every surface it sits on" {
 test "theme switch: dark to light and back" {
     try expectSwitch(comptime widgets(&dark), comptime widgets(&light));
     try expectSwitch(comptime widgets(&light), comptime widgets(&dark));
+}
+
+test "dense: space scales and rounds, everything else stays" {
+    try testing.expectEqual(dark, dense(dark, .comfortable));
+    try testing.expectEqual(Scale{ 2, 3, 5, 6, 9 }, dense(dark, .compact).space);
+    try testing.expectEqual(Scale{ 3, 5, 8, 10, 15 }, dense(dark, .spacious).space);
+    const c = dense(light, .compact);
+    try testing.expectEqual(light.palette, c.palette);
+    try testing.expectEqual(light.text_size, c.text_size);
+    try testing.expectEqual(light.radius, c.radius);
+}
+
+var density_buffer: [context.Context.requiredBytes(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 4 })]u8 align(mem.column_align) = undefined;
+
+test "theme switch: densities change the size of controls, not their behaviour" {
+    inline for (.{ Density.compact, Density.spacious }) |d| {
+        try expectSwitch(comptime widgets(&dark), comptime widgets(&dense(dark, d)));
+    }
+    // A button is its caption plus the `lg` pad on each side.
+    var ctx = try context.Context.init(&density_buffer, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 4 });
+    const in: Input = .{ .viewport = .{ 400, 100 } };
+    var widths: [3]f32 = undefined;
+    for (&widths, [3]Density{ .compact, .comfortable, .spacious }) |*w, d| {
+        const th = widgets(&dense(dark, d));
+        var f = ctx.begin(&in);
+        _ = base.button(&f, &th, .from("b"), "Go");
+        const out = f.end(.{});
+        w.* = out.tree.rect(out.tree.find(.from("b"))).w();
+    }
+    try testing.expectEqual(widths[1] - 2 * (8 - 6), widths[0]);
+    try testing.expectEqual(widths[1] + 2 * (10 - 8), widths[2]);
 }
