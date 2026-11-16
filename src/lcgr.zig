@@ -73,6 +73,7 @@ pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
+pub const shell_headless = @import("shell/headless.zig");
 
 test {
     std.testing.refAllDecls(@This());
