@@ -27,9 +27,9 @@ const host = struct {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });
         const glyphs: lcgr.render_iface.Glyphs = .{ .quads = glyph_quads[0..n], .first = &glyph_first, .count = &glyph_count };
         const scale = shell.in.scale;
-        // The framebuffer is the canvas's pixel size, up to what `pixels` holds.
-        const w: u32 = @min(@as(u32, @intFromFloat(@round(@max(shell.in.viewport[0] * scale, 1)))), max_w);
-        const h: u32 = @min(@as(u32, @intFromFloat(@round(@max(shell.in.viewport[1] * scale, 1)))), @as(u32, @intCast(pixels.len / sw.Framebuffer.len(w, 1))));
+        // The framebuffer is the canvas's backing store, up to what `pixels` holds.
+        const w = @max(@min(shell.pixels[0], max_w), 1);
+        const h = @max(@min(shell.pixels[1], @as(u32, @intCast(pixels.len / sw.Framebuffer.len(w, 1)))), 1);
         var c: rweb.canvas.Canvas = .init(&pixels, w, h);
         c.gfx.prepare({}, out.draw, glyphs, shell.in.viewport, scale);
         c.fb.clear(background);
@@ -76,8 +76,8 @@ export fn lcgr_frame(ms: f64) void {
     shell.wait(scheduler.wake(&ctx, &ev.in), scheduler.pace(&ctx));
 }
 
-export fn lcgr_resize(css_w: f32, css_h: f32, dpr: f32) void {
-    shell.resize(css_w, css_h, dpr);
+export fn lcgr_resize(css_w: f32, css_h: f32, dpr: f32, px_w: u32, px_h: u32) void {
+    shell.resize(css_w, css_h, dpr, px_w, px_h);
 }
 export fn lcgr_pointer(x: f32, y: f32) void {
     shell.pointer(x, y);
@@ -171,8 +171,8 @@ export fn lcgr_seen(i: u32) i32 {
 }
 
 /// The example's state, for the tests: builds, resets, layers, exposure * 1000, the theme's
-/// panel colour (RGBA bytes, little-endian), polls.
+/// panel colour (RGBA bytes, little-endian), polls, scale * 1000, backing store width, height.
 export fn lcgr_example_state(i: u32) u32 {
-    const s = [_]u32{ app.builds, app.resets, app.layers, @intFromFloat(@round(app.exposure * 1000)), app.theme.panel.bitsOf(), shell.polls };
+    const s = [_]u32{ app.builds, app.resets, app.layers, @intFromFloat(@round(app.exposure * 1000)), app.theme.panel.bitsOf(), shell.polls, @intFromFloat(@round(shell.in.scale * 1000)), shell.pixels[0], shell.pixels[1] };
     return s[@min(i, s.len - 1)];
 }

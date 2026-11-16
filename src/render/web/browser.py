@@ -32,7 +32,7 @@ from golden import write_png  # noqa: E402
 
 FLAGS = [
     "--headless=new", "--no-sandbox", "--no-first-run", "--disable-gpu-sandbox",
-    "--enable-unsafe-webgpu", "--enable-features=Vulkan", "--force-device-scale-factor=1",
+    "--enable-unsafe-webgpu", "--enable-features=Vulkan",
     "--window-size=800,600", "--hide-scrollbars", "--mute-audio",
 ]
 
@@ -62,8 +62,10 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 class Browser:
-    def __init__(self, extra_flags=(), webgpu=True):
-        """`webgpu=False` leaves out --enable-unsafe-webgpu: Linux Chromium then gives no adapter."""
+    def __init__(self, extra_flags=(), webgpu=True, scale=1):
+        """`webgpu=False` leaves out --enable-unsafe-webgpu: Linux Chromium then gives no adapter.
+        `scale` is the device pixel ratio: a real one, set at launch (an emulated one through
+        `Page.metrics` fires no resize observers or media queries here)."""
         exe = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
         if not exe:
             raise Error("no chromium on PATH (nix develop .#web)")
@@ -76,7 +78,7 @@ class Browser:
             os.dup2(from_chrome, 4)
 
         self.proc = subprocess.Popen(
-            [exe, *(f for f in FLAGS if webgpu or f != "--enable-unsafe-webgpu"), *extra_flags, "--remote-debugging-pipe", f"--user-data-dir={self.profile}", "about:blank"],
+            [exe, *(f for f in FLAGS if webgpu or f != "--enable-unsafe-webgpu"), f"--force-device-scale-factor={scale}", *extra_flags, "--remote-debugging-pipe", f"--user-data-dir={self.profile}", "about:blank"],
             pass_fds=(3, 4), preexec_fn=fds, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.close(to_chrome)
         os.close(from_chrome)

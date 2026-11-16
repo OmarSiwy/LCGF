@@ -49,6 +49,8 @@ pub fn Web(comptime host: type) type {
         woken: std.atomic.Value(bool) = .init(false),
         polls: u32 = 0,
         wakes: u32 = 0,
+        /// The canvas's backing store in device pixels: what `present` draws.
+        pixels: [2]u32 = .{ 800, 600 },
         /// This frame's typed bytes, key and text events, and the contacts held (rows stay
         /// until lifted). Full buffers drop what does not fit, counted in `dropped`.
         text: [max_text]u8 = undefined,
@@ -69,10 +71,15 @@ pub fn Web(comptime host: type) type {
         /// `wheel`'s `mode`, the DOM's WheelEvent.deltaMode.
         pub const WheelMode = enum(u32) { pixel, line, page };
 
-        /// The canvas's size in CSS pixels (logical) and the device pixel ratio.
-        pub fn resize(s: *Self, css_w: f32, css_h: f32, dpr: f32) void {
+        /// The canvas's size in CSS pixels (logical, `Input.viewport`), the device pixel ratio
+        /// (`Input.scale`) and its backing store in device pixels (`pixels`). The browser
+        /// reports the device pixels exactly (ResizeObserver's devicePixelContentBoxSize); they
+        /// can differ from css * dpr by a pixel, and the frame is drawn at the exact size so it
+        /// maps one to one onto the screen.
+        pub fn resize(s: *Self, css_w: f32, css_h: f32, dpr: f32, px_w: u32, px_h: u32) void {
             s.in.viewport = .{ css_w, css_h };
             s.in.scale = dpr;
+            s.pixels = .{ px_w, px_h };
         }
 
         /// The pointer moved to (x, y), CSS pixels from the canvas's top left.
@@ -297,7 +304,7 @@ pub fn replay(shell: anytype, ctx: *context.Context, app: *example.App, recordin
     var prev: Input = .{};
     var frames: u32 = 0;
     while (try r.next(.{ .text = &text, .events = &events, .contacts = &contacts })) |in| : (frames += 1) {
-        if (!std.meta.eql(in.viewport, prev.viewport) or in.scale != prev.scale) shell.resize(in.viewport[0], in.viewport[1], in.scale);
+        if (!std.meta.eql(in.viewport, prev.viewport) or in.scale != prev.scale) shell.resize(in.viewport[0], in.viewport[1], in.scale, @intFromFloat(@round(in.viewport[0] * in.scale)), @intFromFloat(@round(in.viewport[1] * in.scale)));
         if (!std.meta.eql(in.pointer, prev.pointer)) shell.pointer(in.pointer[0], in.pointer[1]);
         const dom = [_]u32{ 0, 2, 1 }; // left, right, middle
         inline for (.{ "left", "right", "middle" }, dom) |name, b| {

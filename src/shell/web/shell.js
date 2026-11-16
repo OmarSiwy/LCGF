@@ -45,16 +45,41 @@ export function attach(ui, canvas, page = {}) {
         if (seconds !== Infinity) frame(); // idle (Infinity): the next event asks
     };
 
-    // The canvas fills its CSS box, one canvas pixel per CSS pixel.
+    // The canvas fills its CSS box; its backing store is that box in device pixels, so the
+    // frame maps one to one onto the screen at any devicePixelRatio. ResizeObserver reports
+    // the device-pixel size exactly where the browser knows it (Chromium, Firefox), and fires
+    // again when the ratio changes (zoom, a move to another monitor); elsewhere css * dpr is
+    // rounded, and a resolution media query catches ratio changes.
+    let device = null; // [w, h] from devicePixelContentBoxSize, when the browser gives it
     const resize = () => {
         const r = canvas.getBoundingClientRect();
-        canvas.width = Math.round(r.width);
-        canvas.height = Math.round(r.height);
-        x.lcgr_resize(r.width, r.height, 1);
+        const dpr = window.devicePixelRatio || 1;
+        const [w, h] = device ?? [Math.round(r.width * dpr), Math.round(r.height * dpr)];
+        if (canvas.width !== w || canvas.height !== h) [canvas.width, canvas.height] = [w, h];
+        x.lcgr_resize(r.width, r.height, dpr, w, h);
         frame();
     };
-    const observer = new ResizeObserver(resize);
-    observer.observe(canvas);
+    const observer = new ResizeObserver(([entry]) => {
+        const d = entry.devicePixelContentBoxSize?.[0];
+        device = d ? [d.inlineSize, d.blockSize] : null;
+        resize();
+    });
+    try {
+        observer.observe(canvas, { box: "device-pixel-content-box" });
+    } catch {
+        observer.observe(canvas); // no device-pixel box: css * dpr
+    }
+    let ratio = null;
+    const watchRatio = () => {
+        ratio?.removeEventListener("change", onRatio);
+        ratio = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        ratio.addEventListener("change", onRatio);
+    };
+    const onRatio = () => {
+        watchRatio();
+        resize();
+    };
+    watchRatio();
     resize();
 
     const listeners = [];
@@ -70,6 +95,7 @@ export function attach(ui, canvas, page = {}) {
     });
     page.stop = () => {
         observer.disconnect();
+        ratio.removeEventListener("change", onRatio);
         for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);
         cancelAnimationFrame(pending);
     };

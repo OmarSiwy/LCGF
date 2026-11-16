@@ -24,8 +24,9 @@ def check(name, ok, detail=""):
 
 
 def state(page):
-    """builds, resets, layers, exposure * 1000, panel colour, polls (main.zig)."""
-    return page.eval("[0,1,2,3,4,5].map(i => window.lcgr.ui.exports.lcgr_example_state(i) >>> 0)")
+    """builds, resets, layers, exposure * 1000, panel colour, polls, scale * 1000, backing store
+    width and height (main.zig)."""
+    return page.eval("[...Array(9).keys()].map(i => window.lcgr.ui.exports.lcgr_example_state(i) >>> 0)")
 
 
 def settle(page):
@@ -54,7 +55,7 @@ def attach(page):
     """C0474: the example runs on the canvas from animation frames, and goes idle."""
     page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
     frames = settle(page)
-    builds, _, _, _, panel, polls = state(page)
+    builds, _, _, _, panel, polls = state(page)[:6]
     check("attach: frames ran and the example was built", frames > 0 and builds > 0, f"{frames} frames, {builds} builds, {polls} polls")
     check("attach: the sidebar shows the theme's panel colour", pixel(page, 80, 590) == rgba(panel), list(pixel(page, 80, 590)))
     check("attach: the custom viewport is left to the host (black)", pixel(page, 400, 300) == bytes([0, 0, 0, 255]))
@@ -90,7 +91,7 @@ def replay(page):
                     mouse(page, "mousePressed" if down else "mouseReleased", *pointer, down)
         frame(page)
     settle(page)
-    builds, resets, layers, exposure, _, _ = state(page)
+    builds, resets, layers, exposure = state(page)[:4]
     check("replay: one reset, four layers, exposure 3, as headless", (resets, layers, round(exposure / 10)) == (1, 4, 300), f"resets {resets}, layers {layers}, exposure {exposure / 1000}, {builds} builds")
 
 
@@ -142,14 +143,44 @@ def touch(page):
     check("touch: lifted", seen(page)[0][7] == 0)
 
 
+def dpr(page):
+    """C0476, in a browser at devicePixelRatio 2: the frame is drawn at twice the pixels, maps one
+    to one onto the screen, and still lines up with the CSS layout and the pointer."""
+    page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
+    settle(page)
+    st = state(page)
+    check("dpr 2: scale 2, backing store 1600 x 1200", st[6:9] == [2000, 1600, 1200], st[6:9])
+    check("dpr 2: canvas element is 1600 x 1200", page.eval("[document.getElementById('c').width, document.getElementById('c').height]") == [1600, 1200])
+    check("dpr 2: the sidebar shows the panel colour", pixel(page, 80, 590) == rgba(st[4]), list(pixel(page, 80, 590)))
+    # The screen shows the canvas's pixels unscaled: a screenshot of the toolbar's top left
+    # (100 x 60 CSS pixels, 200 x 120 device pixels: button, text) equals the canvas's own.
+    shot = page.send("Page.captureScreenshot", {"format": "png", "clip": {"x": 0, "y": 0, "width": 100, "height": 60, "scale": 1}})
+    path = Path("zig-out/web-shell-dpr.png")
+    path.write_bytes(base64.b64decode(shot["data"]))
+    w, h, screen = golden.read_png(path)
+    canvas = bytes(page.eval("""(() => { const c = document.getElementById('c'), t = document.createElement('canvas');
+        t.width = 200; t.height = 120; const x = t.getContext('2d'); x.drawImage(c, 0, 0);
+        return Array.from(x.getImageData(0, 0, 200, 120).data); })()"""))
+    check("dpr 2: screen pixels are the canvas's device pixels, unscaled", (w, h) == (200, 120) and screen == canvas, f"{w} x {h}, {sum(a != b for a, b in zip(screen, canvas))} bytes differ")
+    # The Reset button at its CSS position (8,8 .. 66,42) still takes the click.
+    mouse(page, "mouseMoved", 37, 25)
+    frame(page)
+    mouse(page, "mousePressed", 37, 25, True)
+    frame(page)
+    mouse(page, "mouseReleased", 37, 25)
+    settle(page)
+    check("dpr 2: a click at CSS (37, 25) presses Reset", state(page)[1] == 1)
+
+
 def main(argv):
     server = browser.Server(argv[1])
-    b = browser.Browser()
-    try:
-        # Each group on a fresh page, so the replay starts from the example's first frame.
-        for tests in ((attach,), (replay, keys, wheel, touch)):
+    # Each group on a fresh page (the replay starts from the example's first frame), in a
+    # browser at the group's device pixel ratio.
+    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch)), (2, (dpr,))):
+        b = browser.Browser(scale=scale)
+        try:
             page = b.open(server.url + "index.html")
-            page.metrics(800, 600)
+            page.metrics(800, 600, scale)
             for test in tests:
                 try:
                     test(page)
@@ -157,9 +188,9 @@ def main(argv):
                     check(test.__name__, False, e)
             errors = page.errors()
             check("no uncaught errors", not errors, errors)
-    finally:
-        b.close()
-        server.close()
+        finally:
+            b.close()
+    server.close()
     return 1 if failed else 0
 
 
