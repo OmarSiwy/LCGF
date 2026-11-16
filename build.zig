@@ -228,6 +228,14 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    // Draws the render conformance scenes as PNGs (src/render/wgpu/play.zig).
+    const wgpu_play = b.addExecutable(.{ .name = "wgpu-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
     // One archive per host target in build.zig.zon; other targets have no wgpu step.
     const wgpu_dep = b.fmt("wgpu_native_{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
     const wgpu_targets = [_][]const u8{ "wgpu_native_linux_x86_64", "wgpu_native_linux_aarch64", "wgpu_native_macos_x86_64", "wgpu_native_macos_aarch64", "wgpu_native_windows_x86_64" };
@@ -237,17 +245,20 @@ pub fn build(b: *std.Build) void {
     if (if (wgpu_supported) b.lazyDependency(wgpu_dep, .{}) else null) |wgpu_native| {
         const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
         wgpu_h.addIncludePath(wgpu_native.path("include"));
-        const m = wgpu_tests.root_module;
-        m.addImport("wgpu_c", wgpu_h.createModule());
-        m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
-        switch (target.result.os.tag) {
-            .macos => for ([_][]const u8{ "Metal", "QuartzCore", "Foundation" }) |f| m.linkFramework(f, .{}),
-            .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
-            // Rust panics unwind: libunwind is Zig's own, built for the target.
-            else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+        const wgpu_c = wgpu_h.createModule();
+        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module }) |m| {
+            m.addImport("wgpu_c", wgpu_c);
+            m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
+            switch (target.result.os.tag) {
+                .macos => for ([_][]const u8{ "Metal", "QuartzCore", "Foundation" }) |f| m.linkFramework(f, .{}),
+                .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+                // Rust panics unwind: libunwind is Zig's own, built for the target.
+                else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            }
         }
     }
     b.step("wgpu", "Test the wgpu-native back end on a real adapter (ci/run.sh wgpu)").dependOn(&b.addRunArtifact(wgpu_tests).step);
+    b.step("wgpu-play", "Build zig-out/bin/wgpu-play (draws the render conformance scenes with wgpu-native)").dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

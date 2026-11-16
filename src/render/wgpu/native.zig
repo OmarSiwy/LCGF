@@ -15,6 +15,9 @@ pub const c = @import("wgpu_c");
 pub const host = @import("host.zig");
 const wgpu = lcgr.render_wgpu;
 
+/// The wgpu back end over wgpu-native.
+pub const Renderer = wgpu.Renderer(@This());
+
 pub const Device = *const Context;
 pub const Queue = c.WGPUQueue;
 pub const RenderPass = c.WGPURenderPassEncoder;
@@ -29,6 +32,7 @@ pub const Context = struct {
     device: c.WGPUDevice,
     globals_layout: c.WGPUBindGroupLayout,
     texture_layout: c.WGPUBindGroupLayout,
+    pipeline_layout: c.WGPUPipelineLayout,
 
     pub fn init(device: c.WGPUDevice) Context {
         const globals_entry: c.WGPUBindGroupLayoutEntry = .{
@@ -48,14 +52,20 @@ pub const Context = struct {
                 .sampler = .{ .type = c.WGPUSamplerBindingType_Filtering },
             },
         };
+        const groups = [_]c.WGPUBindGroupLayout{
+            c.wgpuDeviceCreateBindGroupLayout(device, &.{ .entryCount = 1, .entries = &globals_entry }),
+            c.wgpuDeviceCreateBindGroupLayout(device, &.{ .entryCount = texture_entries.len, .entries = &texture_entries }),
+        };
         return .{
             .device = device,
-            .globals_layout = c.wgpuDeviceCreateBindGroupLayout(device, &.{ .entryCount = 1, .entries = &globals_entry }),
-            .texture_layout = c.wgpuDeviceCreateBindGroupLayout(device, &.{ .entryCount = texture_entries.len, .entries = &texture_entries }),
+            .globals_layout = groups[0],
+            .texture_layout = groups[1],
+            .pipeline_layout = c.wgpuDeviceCreatePipelineLayout(device, &.{ .bindGroupLayoutCount = groups.len, .bindGroupLayouts = &groups }),
         };
     }
 
     pub fn deinit(ctx: *Context) void {
+        c.wgpuPipelineLayoutRelease(ctx.pipeline_layout);
         c.wgpuBindGroupLayoutRelease(ctx.globals_layout);
         c.wgpuBindGroupLayoutRelease(ctx.texture_layout);
     }
@@ -78,6 +88,49 @@ pub fn writeBuffer(q: Queue, b: Buffer, offset: u64, bytes: []const u8) void {
     // An empty write is a no-op that wgpu still validates; skip it (an empty frame, no text).
     if (bytes.len == 0) return;
     c.wgpuQueueWriteBuffer(q, b, offset, bytes.ptr, bytes.len);
+}
+
+/// The quad pipeline of wgpu.zig `Binding`: triangle strip, no depth, premultiplied-alpha
+/// blending, one vertex buffer stepped per instance with `desc.attrs`, and the shared layouts.
+pub fn createPipeline(d: Device, desc: *const Renderer.PipelineDesc) Pipeline {
+    const source: c.WGPUShaderSourceWGSL = .{ .chain = .{ .sType = c.WGPUSType_ShaderSourceWGSL }, .code = host.sv(desc.wgsl) };
+    const module = c.wgpuDeviceCreateShaderModule(d.device, &.{ .nextInChain = @constCast(&source.chain) });
+    defer c.wgpuShaderModuleRelease(module);
+
+    var attrs: [16]c.WGPUVertexAttribute = undefined;
+    std.debug.assert(desc.attrs.len <= attrs.len);
+    for (desc.attrs, attrs[0..desc.attrs.len]) |a, *o| o.* = .{
+        .format = switch (a.format) {
+            .float32 => c.WGPUVertexFormat_Float32,
+            .float32x2 => c.WGPUVertexFormat_Float32x2,
+            .float32x4 => c.WGPUVertexFormat_Float32x4,
+            .uint32x4 => c.WGPUVertexFormat_Uint32x4,
+            .unorm8x4 => c.WGPUVertexFormat_Unorm8x4,
+        },
+        .offset = a.offset,
+        .shaderLocation = a.location,
+    };
+    const instances: c.WGPUVertexBufferLayout = .{
+        .stepMode = c.WGPUVertexStepMode_Instance,
+        .arrayStride = desc.instance_stride,
+        .attributeCount = desc.attrs.len,
+        .attributes = &attrs,
+    };
+    const premultiplied: c.WGPUBlendComponent = .{
+        .operation = c.WGPUBlendOperation_Add,
+        .srcFactor = c.WGPUBlendFactor_One,
+        .dstFactor = c.WGPUBlendFactor_OneMinusSrcAlpha,
+    };
+    const blend: c.WGPUBlendState = .{ .color = premultiplied, .alpha = premultiplied };
+    const color: c.WGPUColorTargetState = .{ .format = desc.format, .blend = &blend, .writeMask = c.WGPUColorWriteMask_All };
+    const fragment: c.WGPUFragmentState = .{ .module = module, .entryPoint = host.sv(desc.fragment_entry), .targetCount = 1, .targets = &color };
+    return c.wgpuDeviceCreateRenderPipeline(d.device, &.{
+        .layout = d.pipeline_layout,
+        .vertex = .{ .module = module, .entryPoint = host.sv(desc.vertex_entry), .bufferCount = 1, .buffers = &instances },
+        .primitive = .{ .topology = c.WGPUPrimitiveTopology_TriangleStrip },
+        .multisample = .{ .count = desc.sample_count, .mask = 0xffff_ffff },
+        .fragment = &fragment,
+    });
 }
 
 pub fn globalsBindGroup(d: Device, b: Buffer) BindGroup {
@@ -145,4 +198,17 @@ test "native: buffers and bind groups are created against the shared layouts" {
     const vertices = createBuffer(&ctx, 4 * wgpu.quad_stride, .vertex);
     defer destroyBuffer(vertices);
     writeBuffer(h.queue, vertices, 0, &.{});
+}
+
+test "native: every shader variant builds a quad pipeline with the documented layouts" {
+    var h = try host.Host.init();
+    defer h.deinit();
+    var ctx = Context.init(h.device);
+    defer ctx.deinit();
+    // A validation error panics through the host's uncaptured-error callback.
+    for (lcgr.quad_shader.variants) |v| {
+        const pipe = createPipeline(&ctx, &.{ .wgsl = v.wgsl, .format = c.WGPUTextureFormat_BGRA8Unorm, .sample_count = 1 });
+        defer c.wgpuRenderPipelineRelease(pipe);
+        try testing.expect(pipe != null);
+    }
 }

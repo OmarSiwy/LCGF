@@ -142,6 +142,46 @@ pub const Target = struct {
     }
 };
 
+/// A sampled texture uploaded from caller pixels: `width * height` RGBA8 pixels, rows packed.
+pub const Image = struct {
+    texture: c.WGPUTexture,
+    view: c.WGPUTextureView,
+
+    pub fn init(h: *const Host, width: u32, height: u32, rgba: []const u8) Image {
+        std.debug.assert(rgba.len == @as(usize, width) * height * 4);
+        const size: c.WGPUExtent3D = .{ .width = width, .height = height, .depthOrArrayLayers = 1 };
+        const texture = c.wgpuDeviceCreateTexture(h.device, &.{
+            .usage = c.WGPUTextureUsage_TextureBinding | c.WGPUTextureUsage_CopyDst,
+            .dimension = c.WGPUTextureDimension_2D,
+            .size = size,
+            .format = c.WGPUTextureFormat_RGBA8Unorm,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+        });
+        c.wgpuQueueWriteTexture(h.queue, &.{ .texture = texture, .aspect = c.WGPUTextureAspect_All }, rgba.ptr, rgba.len, &.{ .bytesPerRow = width * 4, .rowsPerImage = height }, &size);
+        return .{ .texture = texture, .view = c.wgpuTextureCreateView(texture, null) };
+    }
+
+    pub fn deinit(img: *Image) void {
+        c.wgpuTextureViewRelease(img.view);
+        c.wgpuTextureRelease(img.texture);
+    }
+};
+
+/// Nearest-texel sampling, clamped: what the golden images were drawn with.
+pub fn nearestSampler(h: *const Host) c.WGPUSampler {
+    return c.wgpuDeviceCreateSampler(h.device, &.{
+        .addressModeU = c.WGPUAddressMode_ClampToEdge,
+        .addressModeV = c.WGPUAddressMode_ClampToEdge,
+        .addressModeW = c.WGPUAddressMode_ClampToEdge,
+        .magFilter = c.WGPUFilterMode_Nearest,
+        .minFilter = c.WGPUFilterMode_Nearest,
+        .mipmapFilter = c.WGPUMipmapFilterMode_Nearest,
+        .lodMaxClamp = 32,
+        .maxAnisotropy = 1,
+    });
+}
+
 /// Begins a pass over `view` that clears it to `clear` (straight RGBA, 0 to 1).
 pub fn beginPass(encoder: c.WGPUCommandEncoder, view: c.WGPUTextureView, clear: [4]f64) c.WGPURenderPassEncoder {
     const attachment: c.WGPURenderPassColorAttachment = .{
