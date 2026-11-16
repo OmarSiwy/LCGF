@@ -14,6 +14,7 @@ pub const host = @import("host.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const frame = @import("frame.zig");
 pub const scenes = @import("scenes.zig");
 
 test {
@@ -23,5 +24,6 @@ test {
     std.testing.refAllDecls(host);
     std.testing.refAllDecls(pipeline);
     std.testing.refAllDecls(renderer);
+    std.testing.refAllDecls(frame);
     std.testing.refAllDecls(scenes);
 }

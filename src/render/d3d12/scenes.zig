@@ -6,12 +6,16 @@
 //! cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
 //!
 //!   offscreen  an RGBA8 texture, read back after the frame.
+//!   present    a hidden window's waitable flip-model swapchain through the frame loop
+//!              (frame.zig: latency wait, slot fence, present), the back buffer copied out
+//!              just before it is presented: the pixels a window shows.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
 const com = @import("com.zig");
 const device_mod = @import("device.zig");
 const host = @import("host.zig");
+const frame = @import("frame.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const c = com.c;
 const Device = device_mod.Device;
@@ -19,7 +23,7 @@ const transition = device_mod.transition;
 const conformance = lcgr.render_conformance;
 const iface = lcgr.render_iface;
 
-pub const Mode = enum { offscreen };
+pub const Mode = enum { offscreen, present };
 
 /// Every scene's size.
 pub const width = 160;
@@ -35,6 +39,9 @@ pub const Player = struct {
     atlas_handle: lcgr.types.Texture,
     target: host.Target,
     readback: host.Readback,
+    window: device_mod.Window,
+    chain: device_mod.Swapchain,
+    frames: frame.Frames,
     st: conformance.Storage,
 
     /// Fills `p` in place (`st` holds the draw list's memory and must not move).
@@ -50,10 +57,20 @@ pub const Player = struct {
         p.atlas_handle = p.gfx.addTexture(&p.d, p.atlas);
         p.target = try host.Target.init(&p.d, width, height);
         p.readback = try host.Readback.init(&p.d, width, height);
+        if (mode == .present) {
+            p.window = try .init(width, height, false);
+            p.chain = try .init(&p.d, p.window.hwnd, .{ .width = width, .height = height, .flags = frame.flags });
+            p.frames = try .init(&p.d, &p.chain, 2);
+        }
     }
 
     pub fn deinit(p: *Player) void {
         p.d.waitIdle() catch {};
+        if (p.mode == .present) {
+            p.frames.deinit();
+            p.chain.deinit();
+            p.window.deinit();
+        }
         p.readback.deinit();
         p.target.deinit();
         p.gfx.deinit();
@@ -69,16 +86,33 @@ pub const Player = struct {
         p.st.load(s);
         var glyphs = p.st.glyphs();
         glyphs.texture = p.atlas_handle;
-        p.gfx.prepare(0, &p.st.draw, glyphs, s.viewport, 1);
-        const l = try p.once.begin();
-        l.omSetRenderTarget(p.target.rtv());
-        l.clearRenderTargetView(p.target.rtv(), .{ 0, 0, 0, 1 });
-        p.drawCommands(l);
-        l.resourceBarrier(&.{transition(p.target.texture, c.D3D12_RESOURCE_STATE_RENDER_TARGET, c.D3D12_RESOURCE_STATE_COPY_SOURCE)});
-        p.readback.copy(l, p.target.texture);
-        l.resourceBarrier(&.{transition(p.target.texture, c.D3D12_RESOURCE_STATE_COPY_SOURCE, c.D3D12_RESOURCE_STATE_RENDER_TARGET)});
-        try p.once.submit(&p.d);
+        switch (p.mode) {
+            .offscreen => {
+                p.gfx.prepare(0, &p.st.draw, glyphs, s.viewport, 1);
+                const l = try p.once.begin();
+                p.drawFrame(l, p.target.texture, p.target.rtv());
+                try p.once.submit(&p.d);
+            },
+            .present => {
+                const f = try p.frames.begin(&p.d, &p.chain);
+                p.gfx.prepare(f.slot, &p.st.draw, glyphs, s.viewport, 1);
+                p.drawFrame(f.list, f.buffer, f.rtv);
+                try p.frames.present(&p.d, &p.chain, f, 0);
+                try p.d.waitIdle();
+            },
+        }
         try p.readback.read(px);
+    }
+
+    /// Clear, the scene, and a copy of the target into the read-back buffer, leaving the
+    /// target in RENDER_TARGET as it found it.
+    fn drawFrame(p: *Player, l: *com.GraphicsCommandList, target: *com.Resource, rtv: c.D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        l.omSetRenderTarget(rtv);
+        l.clearRenderTargetView(rtv, .{ 0, 0, 0, 1 });
+        p.drawCommands(l);
+        l.resourceBarrier(&.{transition(target, c.D3D12_RESOURCE_STATE_RENDER_TARGET, c.D3D12_RESOURCE_STATE_COPY_SOURCE)});
+        p.readback.copy(l, target);
+        l.resourceBarrier(&.{transition(target, c.D3D12_RESOURCE_STATE_COPY_SOURCE, c.D3D12_RESOURCE_STATE_RENDER_TARGET)});
     }
 
     /// The host's loop: UI draws up to each custom command.
@@ -144,12 +178,14 @@ pub fn expectGoldens(p: *Player, names: []const []const u8) !void {
     }
 }
 
-test "conformance: rects, clip and text match their golden images, offscreen" {
+test "conformance: rects, clip and text match their golden images, offscreen and presented" {
     try testing.expectEqual(conformance.scenes.len, goldens.len);
-    var p: Player = undefined;
-    try p.init(.offscreen);
-    defer p.deinit();
-    try expectGoldens(&p, &.{ "rects", "clip", "text" });
+    for ([_]Mode{ .offscreen, .present }) |mode| {
+        var p: Player = undefined;
+        try p.init(mode);
+        defer p.deinit();
+        try expectGoldens(&p, &.{ "rects", "clip", "text" });
+    }
 }
 
 test "pixelsOff counts pixels with any channel more than 2 away" {
