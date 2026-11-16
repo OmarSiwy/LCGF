@@ -144,6 +144,34 @@ test "icon: one quad of the icon's texture rect, tinted with the text colour; an
     try testing.expectEqual(types.Color.rgb(20, 20, 20).bitsOf(), lo.runtime.tree.c.look[rows.small].fill);
 }
 
+test "icon: takes no input; a press on it goes to what holds it; tab order skips it" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    // Press and release on the standalone icon: nothing held, nothing focused.
+    var r = out.runtime.tree.rect(rows.small);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    try testing.expectEqual(@as(?Default.Ui.Events.Widget, null), h.ui.pointer.pressed);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    // Press and release on the icon inside the button: the button is clicked, in both.
+    r = out.runtime.tree.rect(rows.large);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.saves);
+    try testing.expect(out.comptime_.event != null and out.comptime_.event.? == .save);
+    try check.expectInert(out.runtime.tree, &.{ rows.small, rows.large });
+}
+
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
