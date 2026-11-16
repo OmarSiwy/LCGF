@@ -24,6 +24,16 @@ const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
 
+/// Layout scratch columns whose every row the spec fixes, so the comptime front end keeps them
+/// as read-only tables instead of having `prepare` derive them each frame: `gap_total`, the gap
+/// times the in-flow child count less one. (`nkids`, the child count, is a constant column
+/// already.) `grow_sum` and its reciprocal `grow_inv` are constant too, but `fit` accumulates
+/// and writes them in the same loop as the sizes, and the tier-0 pass has no form that reads
+/// them instead.
+fn isPrecomputed(comptime name: []const u8) bool {
+    return std.mem.eql(u8, name, "gap_total");
+}
+
 /// A read-only array of `rows` copies of `v`. Generic instantiation memoizes it, so every dropped
 /// column with the same type and value shares one table.
 fn splat(comptime T: type, comptime rows: usize, comptime v: T) *const [rows]T {
@@ -59,10 +69,12 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
     const R = simd.rows(n);
     const info = @typeInfo(RuntimeColumns).@"struct";
     for (C.class) |c| if (c != .dynamic) break else @compileError("every column is dynamic (a custom widget builds its rows at run time): lay it out with the runtime tree");
-    // Columns a frame writes: the dynamic ones, and `sense` (finalize clears its padding rows).
+    // Columns a frame writes: the dynamic ones but those precomputed below, and `sense`
+    // (finalize clears its padding rows).
     const writes = blk: {
         var w: [info.field_names.len]bool = undefined;
-        for (info.field_names, C.class, &w) |name, c, *x| x.* = c == .dynamic or std.mem.eql(u8, name, "sense");
+        for (info.field_names, C.class, &w) |name, c, *x|
+            x.* = (c == .dynamic and !isPrecomputed(name)) or std.mem.eql(u8, name, "sense");
         break :blk w;
     };
     return struct {
@@ -115,6 +127,7 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
         /// The read-only rows of a constant column, as the view's field holds them.
         fn table(comptime name: []const u8) @FieldType(ViewColumns, name) {
             @setEvalBranchQuota(100_000);
+            if (comptime isPrecomputed(name)) return &gap_total;
             const FT = @FieldType(RuntimeColumns, name);
             if (C.isDropped(name)) {
                 const u = C.uniform(name);
@@ -140,6 +153,25 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
             };
         }
 
+        /// `prepare`'s gap totals, computed while compiling with its formula.
+        pub const gap_total: [R]f32 = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [R]f32 = @splat(0);
+            for (0..n) |i| out[i] = C.pushed.c.gap[i] * @max(C.pushed.c.nkids[i] - 1, 0);
+            break :blk out;
+        };
+
+        /// `prepare` without what is precomputed: clears the accumulators `fit`, `resolve` and
+        /// `place` add into.
+        fn clear(scratch: *Scratch) void {
+            inline for (0..2) |a| {
+                scratch.fit[a] = @splat(0);
+                scratch.grow_sum[a] = @splat(0);
+                scratch.used[a] = @splat(0);
+            }
+            scratch.cursor = @splat(0);
+        }
+
         /// Lays the UI out in a `viewport`-sized area: `layout.run`'s pass sequence without text
         /// (labels measure zero until text measurement reaches the comptime front end), then the
         /// kept outputs into `ram`.
@@ -155,7 +187,7 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
-            layout.prepare(&v);
+            clear(scratch);
             layout.fit(&v, .x);
             layout.resolve(&v, .x, viewport[0]);
             layout.fit(&v, .y);
@@ -168,12 +200,14 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
         pub fn keep(scratch: *const Scratch, ram: *C.Dynamic) void {
             @setEvalBranchQuota(100_000);
             inline for (@typeInfo(C.Dynamic).@"struct".field_names) |name| {
-                if (comptime std.mem.eql(u8, name, "value")) continue; // state writes it, not layout
-                const src = &@field(scratch, name);
-                const dst = &@field(ram.*, name);
-                if (comptime @typeInfo(@FieldType(RuntimeColumns, name)) == .array) {
-                    inline for (0..dst.len) |k| convert(&dst[k], src[k][0..n]);
-                } else convert(dst, src[0..n]);
+                // `value` is state's, not layout's; precomputed columns are not in `scratch`.
+                if (comptime !std.mem.eql(u8, name, "value") and @hasField(Scratch, name)) {
+                    const src = &@field(scratch, name);
+                    const dst = &@field(ram.*, name);
+                    if (comptime @typeInfo(@FieldType(RuntimeColumns, name)) == .array) {
+                        inline for (0..dst.len) |k| convert(&dst[k], src[k][0..n]);
+                    } else convert(dst, src[0..n]);
+                }
             }
         }
 
@@ -407,6 +441,19 @@ test "Layout: subtrees that do not depend on the viewport are laid out while com
     // Folded results equal the runtime layout in any viewport, however small.
     inline for (.{ [2]f32{ 1, 1 }, [2]f32{ 5000, 20 }, [2]f32{ 123.5, 77.25 } }) |vp|
         try expectSameLayout(examples.all[0], vp);
+}
+
+test "Plain.gap_total: equals what prepare computes for the runtime tree" {
+    inline for (.{ examples.mixer, examples.settings, examples.static_card }) |sp| {
+        const P = Plain(sp, .{});
+        var buf: [1 << 17]u8 align(64) = undefined;
+        var carver: mem.Carver = .{ .buf = &buf };
+        var t = tree.Tree.init(&carver, P.Cols.node_count);
+        pushAll(&t, sp, 0);
+        layout.prepare(&t);
+        try testing.expectEqualSlices(f32, t.c.gap_total[0..P.Cols.node_count], P.gap_total[0..P.Cols.node_count]);
+        try testing.expect(!@hasField(P.Scratch, "gap_total"));
+    }
 }
 
 test "Layout.run: equals the runtime layout of the same UI" {
