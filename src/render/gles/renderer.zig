@@ -106,6 +106,23 @@ pub const Renderer = struct {
         return @fromBackingInt(i);
     }
 
+    /// Texture in: makes a GL ES texture usable as `Style.texture`. The texture and its
+    /// filtering (texture parameters; the renderer binds no sampler object) stay yours, alive
+    /// while a frame may sample it. Handles are indices in registration order; `Texture.white`
+    /// is 0. Past `max_textures` the last entry is rewritten, as the prototype does.
+    pub fn addTexture(r: *Renderer, texture: gl.Uint) types.Texture {
+        const i: u16 = @min(r.texture_count, max_textures - 1);
+        r.textures[i] = texture;
+        r.texture_count = i + 1;
+        return @fromBackingInt(i);
+    }
+
+    /// Points an existing handle at another texture (a target recreated at a new size, an atlas
+    /// that grew); nodes keep their `Style.texture`. A stale handle clamps to the last entry.
+    pub fn setTexture(r: *Renderer, handle: types.Texture, texture: gl.Uint) void {
+        r.textures[@min(@backingInt(handle), r.texture_count - 1)] = texture;
+    }
+
     /// Uploads the frame: the globals and both instance arrays. Quads past `max_quads` (glyphs
     /// past `max_glyphs`) are dropped, as the other back ends do.
     pub fn prepare(r: *Renderer, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
@@ -228,4 +245,18 @@ test "renderer: a draw after the host's own state still lands where it should" {
     h.readback(160, 120, &px);
     try h.check();
     try testing.expectEqualSlices(u8, &.{ 30, 31, 36, 255 }, px[(60 * 160 + 80) * 4 ..][0..4]);
+}
+
+test "renderer: textures register in order, clamp past the cap and can be re-pointed" {
+    var r: Renderer = .{ .f = undefined, .f3 = undefined, .desc = .{} };
+    r.textures[0] = 7;
+    r.texture_count = 1;
+    try testing.expectEqual(@as(u16, 1), @backingInt(r.addTexture(11)));
+    r.setTexture(@fromBackingInt(1), 12);
+    try testing.expectEqual(@as(gl.Uint, 12), r.textures[1]);
+    for (0..Renderer.max_textures + 3) |_| _ = r.addTexture(13);
+    try testing.expectEqual(@as(u16, Renderer.max_textures), r.texture_count);
+    r.setTexture(@fromBackingInt(0xffff), 14); // stale: the last entry
+    try testing.expectEqual(@as(gl.Uint, 14), r.textures[Renderer.max_textures - 1]);
+    try testing.expectEqual(@as(gl.Uint, 7), r.textures[0]);
 }

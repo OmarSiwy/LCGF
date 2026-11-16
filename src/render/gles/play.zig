@@ -32,6 +32,9 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("gles-play: {s}, {s}\n", .{ h.gl.glGetString(gl.RENDERER).?, h.gl.glGetString(gl.VERSION).? });
     var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
     defer gfx.deinit();
+    const atlas = h.texture(64, 64, &standInAtlas());
+    defer h.deleteTexture(atlas);
+    const atlas_handle = gfx.addTexture(atlas);
 
     for (&conformance.scenes) |*s| {
         st.load(s);
@@ -39,7 +42,9 @@ pub fn main(init: std.process.Init) !void {
         const ht: u32 = @intFromFloat(s.viewport[1]);
         var target = try host.Target.init(&h, w, ht);
         defer target.deinit(&h);
-        gfx.prepare({}, &st.draw, st.glyphs(), s.viewport, 1);
+        var glyphs = st.glyphs();
+        glyphs.texture = atlas_handle;
+        gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
         target.begin(&h, .{ 0, 0, 0, 1 });
         gfx.render({}, &st.draw);
         const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
@@ -48,6 +53,21 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, w, ht, px) });
     }
+}
+
+/// render.py's stand-in glyph atlas: 16x16 cells of 4x4 texels, every printable byte a 2x3
+/// block of opaque white.
+fn standInAtlas() [64 * 64 * 4]u8 {
+    var px: [64 * 64 * 4]u8 = @splat(0);
+    for (33..127) |byte| {
+        const cx = byte & 15;
+        const cy = byte >> 4;
+        for (1..4) |y| for (1..3) |x| {
+            const o = ((cy * 4 + y) * 64 + cx * 4 + x) * 4;
+            px[o..][0..4].* = @splat(0xff);
+        };
+    }
+    return px;
 }
 
 /// RGBA rows as a PNG (filter byte 0 before each row).
