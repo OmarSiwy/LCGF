@@ -34,6 +34,10 @@ pub const Renderer = switch (kind) {
 pub const Pass = Renderer.Pass;
 /// What `prepare` uploads through: a frame slot, a queue, or `void`.
 pub const Queue = Renderer.Queue;
+/// Device, renderer and per-window swapchain for an application that brings none: sw, vk
+/// and metal have one (moved from the shells that use them); naming it for another back end is
+/// a compile error.
+pub const Setup = backend.Setup;
 
 comptime {
     lcgr.render_iface.check(Renderer);

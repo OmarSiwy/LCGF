@@ -338,52 +338,7 @@ const PFN_vkCreateAndroidSurfaceKHR = ?*const fn (c.VkInstance, *const VkAndroid
 const instance_extensions = [_][*:0]const u8{ "VK_KHR_surface", "VK_KHR_android_surface" };
 
 /// The device and what is drawn with: made once, kept while windows come and go.
-const Gpu = struct {
-    lib: vk.loader.Library,
-    instance: vk.loader.Instance,
-    device: vk.device.Device,
-    once: vk.host.Once,
-    sampler: c.VkSampler,
-    white: vk.device.Image,
-    gfx: vk.Renderer,
-    format: c.VkFormat,
-
-    /// Fills `g` in place (the renderer keeps a pointer to its device). `surface` picks a
-    /// device that can present to it.
-    fn init(g: *Gpu, surface_window: *ANativeWindow) !c.VkSurfaceKHR {
-        g.lib = try vk.loader.Library.open();
-        errdefer g.lib.close();
-        g.instance = try vk.loader.Instance.init(&g.lib, .{ .app_name = "lcgr-android", .extensions = &instance_extensions });
-        errdefer g.instance.deinit();
-        const surface = try createSurface(&g.instance, surface_window);
-        errdefer vk.swapchain.destroySurface(&g.instance, surface);
-        g.device = try vk.device.Device.init(&g.instance, try vk.device.pick(&g.instance, surface), true);
-        errdefer g.device.deinit();
-        const d = &g.device;
-        g.once = try vk.host.Once.init(d);
-        g.sampler = try vk.host.nearestSampler(d);
-        var h: vk.host.Host = .{ .lib = g.lib, .instance = g.instance, .device = g.device, .once = g.once };
-        g.white = try h.sampled(1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
-        // The swapchain's format: Android offers RGBA8 (and often BGRA8) for windows.
-        var probe = try vk.swapchain.Swapchain.init(&g.instance, d, surface, .{ .width = 1, .height = 1 }, null);
-        g.format = probe.format;
-        probe.deinit(d);
-        g.gfx = try vk.Renderer.init(d, .{ .format = g.format, .frames = 2 }, g.white.view, g.sampler);
-        return surface;
-    }
-
-    fn deinit(g: *Gpu) void {
-        const d = &g.device;
-        _ = d.fns.vkDeviceWaitIdle.?(d.handle);
-        g.gfx.deinit(d);
-        d.destroyImage(&g.white);
-        d.fns.vkDestroySampler.?(d.handle, g.sampler, null);
-        g.once.deinit(d);
-        g.device.deinit();
-        g.instance.deinit();
-        g.lib.close();
-    }
-};
+const Gpu = vk.Setup;
 
 fn createSurface(instance: *const vk.loader.Instance, window: *ANativeWindow) !c.VkSurfaceKHR {
     const create = instance.proc(PFN_vkCreateAndroidSurfaceKHR, "vkCreateAndroidSurfaceKHR") orelse return error.MissingExtension;
@@ -392,12 +347,10 @@ fn createSurface(instance: *const vk.loader.Instance, window: *ANativeWindow) !c
     return surface;
 }
 
-/// The window's surface, swapchain and frames: made when a window arrives, gone with it.
+/// The window and its surface, swapchain and frames: made when a window arrives, gone with it.
 const Target = struct {
     window: *ANativeWindow,
-    surface: c.VkSurfaceKHR,
-    chain: vk.swapchain.Swapchain,
-    frames: vk.frame.Frames,
+    out: vk.setup.Window,
 };
 
 /// Clipboard text crossing to and from Java: UTF-16 units and its UTF-8.
@@ -578,22 +531,16 @@ pub const Android = struct {
         const surface = if (s.gpu) |*g| try createSurface(&g.instance, window) else blk: {
             s.gpu = @as(Gpu, undefined);
             errdefer s.gpu = null;
-            break :blk try s.gpu.?.init(window);
+            break :blk try s.gpu.?.init("lcgr-android", &instance_extensions, window, createSurface);
         };
         const g = &s.gpu.?;
         errdefer vk.swapchain.destroySurface(&g.instance, surface);
-        var chain = try vk.swapchain.Swapchain.init(&g.instance, &g.device, surface, extent(s.t.window), null);
-        errdefer chain.deinit(&g.device);
-        s.target = .{ .window = window, .surface = surface, .chain = chain, .frames = try .init(&g.device, 2) };
+        s.target = .{ .window = window, .out = try .init(g, surface, extent(s.t.window)) };
     }
 
     fn dropTarget(s: *Android) void {
         const tg = &(s.target orelse return);
-        const g = &s.gpu.?;
-        _ = g.device.fns.vkDeviceWaitIdle.?(g.device.handle);
-        tg.frames.deinit(&g.device);
-        tg.chain.deinit(&g.device);
-        vk.swapchain.destroySurface(&g.instance, tg.surface);
+        tg.out.deinit(&s.gpu.?);
         ANativeWindow_release(tg.window);
         s.target = null;
     }
@@ -788,24 +735,16 @@ pub const Android = struct {
     }
 
     fn draw(s: *Android, tg: *Target, g: *Gpu, out: *const Output) !void {
-        const d = &g.device;
-        const want = extent(s.t.window);
-        if (want.width != tg.chain.extent.width or want.height != tg.chain.extent.height) s.rebuild(tg, g);
-        const f = try tg.frames.begin(d, &tg.chain);
         const in = &s.t.m.in;
         const gl = s.glyphs;
         const n = s.font.quads(out.draw, gl.glyphs, .{ .first = gl.first, .count = gl.count });
-        g.gfx.prepare(f.slot, out.draw, .{ .quads = gl.glyphs[0..n], .first = gl.first, .count = gl.count }, in.viewport, in.scale);
         const bg = s.background;
-        vk.pass.begin(d, f.cmd, .{ .image = f.image, .view = f.view, .extent = tg.chain.extent, .clear = .{ unit(bg.r), unit(bg.g), unit(bg.b), 1 } });
-        g.gfx.render(f.cmd, out.draw);
-        vk.pass.end(d, f.cmd, .{ .image = f.image, .layout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR });
-        if (try tg.frames.present(d, &tg.chain, f) == .suboptimal) s.rebuild(tg, g);
+        try tg.out.draw(g, out.draw, .{ .quads = gl.glyphs[0..n], .first = gl.first, .count = gl.count }, in.viewport, in.scale, .{ unit(bg.r), unit(bg.g), unit(bg.b), 1 }, extent(s.t.window));
         s.presents += 1;
     }
 
     fn rebuild(s: *Android, tg: *Target, g: *Gpu) void {
-        tg.frames.resize(&g.device, &tg.chain, &g.instance, tg.surface, extent(s.t.window)) catch |e| logError("swapchain: {t}", .{e});
+        tg.out.rebuild(g, extent(s.t.window)) catch |e| logError("swapchain: {t}", .{e});
     }
 
     fn unit(v: u8) f32 {

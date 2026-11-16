@@ -782,15 +782,7 @@ pub fn build(b: *std.Build) void {
     // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgr and the Metal back end.
     // UIKit, Core Foundation and Metal are opened at run time; without an iOS SDK nothing links
     // here, so the example is a static library an app bundle links (ci/run.sh ios).
-    const ios_metal = b.createModule(.{
-        .root_source_file = b.path("src/render/metal/metal.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
-    });
-    for ([_][]const u8{ "stock", "example" }) |v|
-        ios_metal.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    const ios_metal = renderBackend(b, .metal, target, optimize, lcgr, wgpu_native_mod).?;
     const ios_example = b.addLibrary(.{ .name = "ios-example", .linkage = .static, .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/ios/example.zig"),
         .target = target,
@@ -828,15 +820,7 @@ pub fn build(b: *std.Build) void {
             }) });
             sysroot_tool.addFileArg(stub.getEmittedBin());
         }
-        const android_vk = b.createModule(.{
-            .root_source_file = b.path("src/render/vk/vk.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
-        });
-        android_vk.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
-        android_vk.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        const android_vk = renderBackend(b, .vk, target, optimize, lcgr, wgpu_native_mod).?;
         const android_example = b.addLibrary(.{ .name = "android-example", .linkage = .dynamic, .root_module = b.createModule(.{
             .root_source_file = b.path("src/shell/android/example.zig"),
             .target = target,
@@ -847,15 +831,6 @@ pub fn build(b: *std.Build) void {
         android_example.setLibCFile(sysroot.path(b, "libc.txt"));
         android_example.root_module.addLibraryPath(sysroot);
         for ([_][]const u8{ "dl", "android", "log" }) |name| android_example.root_module.linkSystemLibrary(name, .{ .needed = true, .use_pkg_config = .no });
-        if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
-            // Translated for plain Linux on the same CPU: the headers are the same (VKAPI_CALL
-            // differs only on 32-bit ARM); translate-c rejects any ABI version but glibc's.
-            const linux = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu });
-            const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = linux, .optimize = optimize });
-            vk_h.addIncludePath(vulkan_headers.path("include"));
-            vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
-            android_vk.addImport("vk_c", vk_h.createModule());
-        }
         android_step.dependOn(&b.addInstallArtifact(android_example, .{}).step);
     } else android_step.dependOn(&b.addFail("android-build needs -Dtarget=aarch64-linux-android").step);
 
@@ -975,8 +950,9 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
         .vk => {
             shader.add(b, m, "spv", "spv");
             if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
-                // Android translates as plain Linux on the same CPU: the headers are the same, and
-                // translate-c rejects any ABI version but glibc's.
+                // Android translates as plain Linux on the same CPU: the headers are the same
+                // (VKAPI_CALL differs only on 32-bit ARM); translate-c rejects any ABI version
+                // but glibc's.
                 const t = if (target.result.abi.isAndroid()) b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .linux, .abi = .gnu }) else target;
                 const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = t, .optimize = optimize });
                 vk_h.addIncludePath(vulkan_headers.path("include"));

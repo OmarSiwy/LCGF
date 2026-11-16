@@ -19,7 +19,6 @@ const lcgr = @import("lcgr");
 const translate = lcgr.shell_win32_translate;
 const iface = lcgr.shell_iface;
 const sw = lcgr.render_sw;
-const render = lcgr.render_iface;
 const context = lcgr.context;
 const Quad = lcgr.draw_list.Quad;
 const Mono = lcgr.protocol.Mono;
@@ -194,7 +193,7 @@ pub const Win32 = struct {
     fb: sw.Framebuffer,
     /// Capacity of the caller's pixel buffer: the largest client area drawn, in pixels.
     pixels: []u32,
-    gfx: sw.Software = .{},
+    gfx: sw.Setup = .{},
     font: Mono = .{},
     glyphs: GlyphBuffers,
     /// What `present` clears to before drawing.
@@ -447,9 +446,7 @@ pub const Win32 = struct {
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, w.t.in.scale);
-        w.fb.clear(w.background);
-        render.render(&w.gfx, .{ .fb = &w.fb, .scissor = w.fb.all() }, out.draw);
+        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.t.in.scale);
         const dc = GetDC(w.hwnd) orelse return;
         w.blit(dc);
         _ = ReleaseDC(w.hwnd, dc);

@@ -171,6 +171,19 @@ comptime {
     iface.check(Software);
 }
 
+/// What a shell that draws in software keeps, and its frame: clear the framebuffer and draw the
+/// whole list into it. Moved from the X11, Win32 and Wayland shells, which each repeated it;
+/// the shell owns the pixels and shows them (PutImage, SetDIBitsToDevice, a wl_shm buffer).
+pub const Setup = struct {
+    gfx: Software = .{},
+
+    pub fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void {
+        s.gfx.prepare({}, list, glyphs, .{ 0, 0 }, scale);
+        fb.clear(background);
+        iface.render(&s.gfx, .{ .fb = fb, .scissor = fb.all() }, list);
+    }
+};
+
 /// Tile `k` of `n`: a band of whole rows. Bands share no pixel, so `n` threads may each draw one
 /// (`Software.redraw` with the band as scissor) into the same framebuffer at once.
 pub fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32 {
