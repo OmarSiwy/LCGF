@@ -921,6 +921,42 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // The examples (examples/): their smoke tests, and each one in an X11 window
+    // (examples/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
+    const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
+    const examples_host = b.createModule(.{ .root_source_file = b.path("examples/host.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/examples.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } },
+    }) });
+    examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
+    const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    for ([_][]const u8{ "hello", "counter", "form", "list", "dashboard", "viewport", "texture" }) |name| {
+        const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } } });
+        const exe = b.addExecutable(.{ .name = b.fmt("example-{s}", .{name}), .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "x11", .module = examples_x11 }, .{ .name = "host", .module = examples_host }, .{ .name = "example", .module = app } },
+        }) });
+        examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
+    }
+    // The microcontroller demo (examples/mcu.zig) also links for a Cortex-M7 with no OS.
+    const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
+    const m7_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = m7, .optimize = .ReleaseSmall });
+    m7_lcgr.addOptions("build_options", options);
+    m7_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const mcu_exe = b.addExecutable(.{ .name = "example-mcu-cortex-m7", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/mcu.zig"),
+        .target = m7,
+        .optimize = .ReleaseSmall,
+        .imports = &.{.{ .name = "lcgr", .module = m7_lcgr }},
+    }) });
+    mcu_exe.entry = .{ .symbol_name = "_start" };
+    examples_step.dependOn(&b.addInstallArtifact(mcu_exe, .{ .dest_dir = .{ .override = .{ .custom = "mcu" } } }).step);
+
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
