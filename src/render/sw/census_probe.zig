@@ -9,15 +9,15 @@ export fn p_sw_fill(fb: *sw.Framebuffer, box: *const [4]u32, c: u32) void {
     fb.fill(box.*, @bitCast(c));
 }
 /// The shading loop of each feature: the per-pixel work, with no branch on pixel data.
-fn shade(comptime kind: lcgr.features.Kind, t: *const sw.Target, q: *const lcgr.draw_list.Quad, scale: f32) void {
-    @call(.always_inline, sw.shade, .{ kind, t.*, q, scale });
+fn shade(comptime kind: lcgr.features.Kind, t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    @call(.always_inline, sw.shade, .{ kind, t.*, q, img.*, scale });
 }
-export fn p_sw_solid(t: *const sw.Target, q: *const lcgr.draw_list.Quad, scale: f32) void {
-    shade(.solid, t, q, scale);
+export fn p_sw_solid(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.solid, t, q, img, scale);
 }
-export fn p_sw_dashed(t: *const sw.Target, q: *const lcgr.draw_list.Quad, scale: f32) void {
-    shade(.dashed, t, q, scale);
+export fn p_sw_dashed(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.dashed, t, q, img, scale);
 }
-export fn p_sw_dotted(t: *const sw.Target, q: *const lcgr.draw_list.Quad, scale: f32) void {
-    shade(.dotted, t, q, scale);
+export fn p_sw_dotted(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.dotted, t, q, img, scale);
 }

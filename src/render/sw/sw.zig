@@ -91,6 +91,17 @@ pub const Framebuffer = struct {
     }
 };
 
+/// A texture: `width` x `height` RGBA8 texels (`Color` bits), sampled nearest with clamped
+/// coordinates, as the GPU back ends' samplers do.
+pub const Image = struct {
+    pixels: []const u32,
+    width: u32,
+    height: u32,
+
+    /// Texture 0 (`types.Texture.white`): put it at row 0 of `Software.images`.
+    pub const white: Image = .{ .pixels = &.{0xffff_ffff}, .width = 1, .height = 1 };
+};
+
 /// Where draws land: the framebuffer and a scissor rect in pixels (x0, y0, x1, y1). Pixels outside
 /// the scissor are never written, which is what splits a frame into damage rects and tiles.
 pub const Target = struct {
@@ -105,6 +116,8 @@ pub const Software = struct {
     /// The frame's quads and glyphs, borrowed from the caller until the frame is drawn.
     quads: []const Quad = &.{},
     glyphs: iface.Glyphs = .{},
+    /// Indexed by `types.Texture`; row 0 is `Image.white`.
+    images: []const Image = &.{Image.white},
     /// Physical pixels per logical pixel.
     scale: f32 = 1,
 
@@ -116,22 +129,24 @@ pub const Software = struct {
     }
 
     pub fn drawBatch(s: *const Software, t: Target, batch: draw_list.Batch) void {
-        s.drawQuads(t, s.quads[batch.first..][0..batch.count]);
+        s.drawQuads(t, s.quads[batch.first..][0..batch.count], Image.white);
     }
 
-    /// Glyphs need the atlas texture: not drawn yet.
-    pub fn drawText(_: *const Software, _: Target, _: u32) void {}
+    pub fn drawText(s: *const Software, t: Target, run: u32) void {
+        const g = s.glyphs;
+        s.drawQuads(t, g.quads[g.first[run]..][0..g.count[run]], s.images[@backingInt(g.texture)]);
+    }
 
-    fn drawQuads(s: *const Software, t: Target, quads: []const Quad) void {
+    fn drawQuads(s: *const Software, t: Target, quads: []const Quad, img: Image) void {
         for (quads) |*q| {
-            if (opaqueRect(q, s.scale)) {
+            if (opaqueRect(q, img, s.scale)) {
                 t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
                 continue;
             }
             // One loop per feature; unknown codes draw as solid, as the shader's selects do.
             const code: u32 = @bitCast(q.params[0]);
             switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
-                inline else => |kind| shade(kind, t, q, s.scale),
+                inline else => |kind| shade(kind, t, q, img, s.scale),
             }
         }
     }
@@ -153,15 +168,15 @@ inline fn spanMask(x: u32, x0: u32, x1: u32) B {
     return (xs >= simd.u(x0)) & (xs < simd.u(x1));
 }
 
-/// True when `q` covers whole pixels with one opaque colour: no feature, transform,
+/// True when `q` covers whole pixels with one opaque colour: no feature, texture, transform,
 /// rounding, border or translucency, and edges on pixel boundaries. Its pixels are then the
 /// colour itself, exactly as the shader would write them, and need no shading or blending.
-fn opaqueRect(q: *const Quad, scale: f32) bool {
+fn opaqueRect(q: *const Quad, img: Image, scale: f32) bool {
     const r: @Vector(4, f32) = q.rect;
     const s: @Vector(4, f32) = r * @as(@Vector(4, f32), @splat(scale));
     const zero: @Vector(4, f32) = @splat(0);
     const xform: [6]f32 = q.xform;
-    return @as(u32, @bitCast(q.params[0])) == 0 and
+    return @as(u32, @bitCast(q.params[0])) == 0 and img.pixels.ptr == Image.white.pixels.ptr and
         std.mem.eql(f32, &xform, &.{ 1, 0, 0, 1, 0, 0 }) and
         @reduce(.And, @as(@Vector(4, f32), q.radii) <= zero) and @reduce(.And, @as(@Vector(4, f32), q.clip_radii) <= zero) and
         q.border < 0.001 and q.opacity == 1 and (q.fill >> 24) == 255 and @reduce(.And, @floor(s) == s);
@@ -213,6 +228,18 @@ inline fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F {
     return len2(@max(qx, simd.f(0)), @max(qy, simd.f(0))) + @min(@max(qx, qy), simd.f(0)) - r;
 }
 
+/// Nearest texel at (u, v), coordinates clamped to the edge; returns r, g, b, a in 0..1.
+inline fn sample(img: Image, u: F, v: F) [4]F {
+    const wf: f32 = @floatFromInt(img.width);
+    const hf: f32 = @floatFromInt(img.height);
+    const tx: U = @intFromFloat(@min(@max(@floor(u * simd.f(wf)), simd.f(0)), simd.f(wf - 1)));
+    const ty: U = @intFromFloat(@min(@max(@floor(v * simd.f(hf)), simd.f(0)), simd.f(hf - 1)));
+    const idx = ty * simd.u(img.width) + tx;
+    var texel: U = undefined;
+    inline for (0..W) |l| texel[l] = img.pixels[idx[l]];
+    return unpack(texel, 0);
+}
+
 inline fn unpack(p: U, red: u5) [4]F {
     const m = simd.u(255);
     const k = simd.f(1.0 / 255.0);
@@ -231,7 +258,7 @@ inline fn pack(c: [4]F, red: u5) U {
 }
 
 /// Shades `q` into `t` with the stock material's `kind` loop: quad.wgsl `vs` and `fs` per pixel.
-pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32) void {
+pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;
@@ -250,6 +277,9 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32
     const edge = rgba(q.border_color);
     const border = q.border;
     const has_border: f32 = @floatFromInt(@intFromBool(border >= 0.001));
+    const uv = q.uv;
+    const inv_w = 1 / @max(x1 - x0, 1e-6);
+    const inv_h = 1 / @max(y1 - y0, 1e-6);
     // Dashed and dotted borders.
     const dash: f32 = if (kind == .dotted) border else @bitCast(p[1]);
     const period = @max(dash + @as(f32, @bitCast(p[2])), 1e-3);
@@ -295,9 +325,17 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32
             }
             const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
 
+            // Material: the fill times the texture.
+            const tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * (qx - simd.f(x0)) * simd.f(inv_w);
+            const tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * (qy - simd.f(y0)) * simd.f(inv_h);
+            const base: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
             var color: [4]F = undefined;
             const cover = shape;
-            inline for (0..4) |i| color[i] = simd.f(fill[i]) + (simd.f(edge[i]) - simd.f(fill[i])) * on_border;
+            const tex = sample(img, tu, tv);
+            inline for (0..4) |i| {
+                const m = base[i] * tex[i];
+                color[i] = m + (simd.f(edge[i]) - m) * on_border;
+            }
 
             // Clip as coverage: the rect as a step, its rounded corners as a distance field.
             const inside = (sx >= simd.f(clip[0])) & (sx <= simd.f(clip[2])) & (sy >= simd.f(clip[1])) & (sy <= simd.f(clip[3]));
@@ -356,7 +394,7 @@ test "opaque rects: filled exactly, cut by the clip's pixel centres and the scis
     fb.clear(.black);
     var q = testQuad(.{ 2, 1, 14, 7 }, .rgb(200, 100, 50));
     q.clip = .{ 3.4, 0, 12.5, 6 };
-    try testing.expect(opaqueRect(&q, 1));
+    try testing.expect(opaqueRect(&q, Image.white, 1));
     const s: Software = .{ .quads = &.{q} };
     s.drawBatch(.{ .fb = &fb, .scissor = .{ 0, 0, 16, 5 } }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
     // Centres 3.5 .. 12.5 are inside the clip (its edges are inclusive), rows 1 .. 4 inside the scissor.
@@ -373,11 +411,11 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     const t: Target = .{ .fb = &fb, .scissor = fb.all() };
     // Half-transparent red over blue: (255 * 0.5, 0, 200 * 0.5).
     var q = testQuad(.{ 0, 0, 8, 4 }, .rgba(255, 0, 0, 128));
-    shade(.solid, t, &q, 1);
+    shade(.solid, t, &q, Image.white, 1);
     const got = fb.at(3, 2);
     try testing.expect(@abs(@as(i32, got.r) - 128) <= 1 and got.g == 0 and @abs(@as(i32, got.b) - 99) <= 1 and got.a == 255);
     // The general loop writes what the fast path writes for an opaque rect.
     q.fill = Color.rgb(9, 99, 199).bitsOf();
-    shade(.solid, t, &q, 1);
+    shade(.solid, t, &q, Image.white, 1);
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
 }

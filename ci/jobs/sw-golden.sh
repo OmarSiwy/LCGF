@@ -9,7 +9,7 @@
 zig build conformance-dump sw-play
 out=zig-out/sw; rm -rf "$out"
 zig-out/bin/conformance-dump "$out/conformance"
-for n in rects custom clip; do
+for n in rects custom clip text; do
     s=$out/conformance/$n
     zig-out/bin/sw-play "$s" "$s/sw.png"
     python3 tools/golden/golden.py "$s/sw.png" "src/render/conformance/$n.png"

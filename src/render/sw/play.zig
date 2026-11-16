@@ -4,7 +4,8 @@
 //!     sw-play DIR OUT.png [RRGGBB]
 //!
 //! DIR is what conformance-dump or draw-dump wrote (quads.bin, glyphs.bin, cmds.txt). The
-//! drawing mirrors src/render/conformance/render.py and tools/golden/gpu.py: the same host gradient for custom commands, the size from
+//! drawing mirrors src/render/conformance/render.py and tools/golden/gpu.py: the same stand-in
+//! glyph atlas as texture 1, the same host gradient for custom commands, the size from
 //! cmds.txt (800x600 without a `size` line) and the clear colour from the argument (black).
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -45,10 +46,16 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // Stand-in atlas, 16x16 cells of 4x4 texels: every printable byte is a small block.
+    var atlas: [64 * 64]u32 = @splat(0);
+    for (33..127) |byte| for (1..4) |y| for (1..3) |x| {
+        atlas[((byte >> 4) * 4 + y) * 64 + (byte & 15) * 4 + x] = 0xffff_ffff;
+    };
     const atlas_tex: lcgr.types.Texture = @fromBackingInt(1);
     const s: sw.Software = .{
         .quads = quads,
         .glyphs = .{ .quads = glyph_quads, .first = first.items, .count = count.items, .texture = atlas_tex },
+        .images = &.{ sw.Image.white, .{ .pixels = &atlas, .width = 64, .height = 64 } },
     };
 
     const px = try gpa.alloc(u32, sw.Framebuffer.len(w, h));
