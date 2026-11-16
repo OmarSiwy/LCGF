@@ -56,7 +56,9 @@ pub fn removeStyle(th: *const Theme, r: Response) Style {
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A chip showing `str`, with a remove button named `removeId(id)` and captioned `remove`
-/// when that is not null. The response is the remove button's (empty without one).
+/// when that is not null. The response is the remove button's (empty without one); its
+/// `clicked` asks the application to remove the chip, set when the button fires as any
+/// button does (`button.activated`: a click, or Enter or Space while it has focus).
 pub fn chip(f: *Frame, th: *const Theme, id: Id, str: []const u8, remove: ?[]const u8) Response {
     _ = f.open(.none, chipStyle(th));
     _ = label_zig.label(f, th, str);
@@ -64,6 +66,7 @@ pub fn chip(f: *Frame, th: *const Theme, id: Id, str: []const u8, remove: ?[]con
     if (remove) |caption| {
         const b = f.open(removeId(id), removeStyle(th, .{}));
         r = f.interact(b, .button);
+        r.clicked = button_zig.activated(r.clicked, r.focused, f.in);
         f.setFill(b, button_zig.buttonFill(th, r));
         f.setCursor(.pointer, r.hovered);
         _ = label_zig.label(f, th, caption);
@@ -169,6 +172,45 @@ test "chip look: a rounded pill around its caption and its remove button, in bot
     in.pointer = .{ (rm.x0 + rm.x1) * 0.5, (rm.y0 + rm.y1) * 0.5 };
     out = try h.frame(&in);
     try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[4].fill);
+}
+
+test "chip input: the remove button asks for removal on click, Enter and Space; the chip takes nothing, in both front ends" {
+    const h = &two;
+    h.init();
+    const k = base.keys;
+    var in: Input = .{ .viewport = .{ 240, 60 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const rm = t.rect(4);
+    const body = t.rect(3);
+    const plain = t.rect(6);
+    const at = struct {
+        fn mid(r: types.Rect) [2]f32 {
+            return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        }
+    }.mid;
+    const enter = [_]Input.Event{.{ .kind = .press, .code = k.enter }};
+    const sup = [_]Input.Event{.{ .kind = .release, .code = k.space }};
+    const Step = struct { at: [2]f32, left: bool = false, events: []const Input.Event = &.{}, removed: bool };
+    const steps = [_]Step{
+        .{ .at = at(body), .left = true, .removed = false }, // the caption: nothing
+        .{ .at = at(body), .removed = false },
+        .{ .at = at(plain), .left = true, .removed = false }, // the plain chip: nothing
+        .{ .at = at(plain), .removed = false },
+        .{ .at = at(rm), .left = true, .removed = false },
+        .{ .at = at(rm), .removed = true }, // click
+        .{ .at = at(rm), .events = &enter, .removed = true },
+        .{ .at = at(rm), .events = &sup, .removed = true },
+        .{ .at = at(rm), .removed = false },
+    };
+    for (steps) |st| {
+        in.pointer = st.at;
+        in.buttons.left = st.left;
+        in.events = st.events;
+        const o = try h.frame(&in);
+        try testing.expectEqual(st.removed, h.app.removed);
+        try testing.expectEqual(st.removed, if (o.comptime_.event) |e| e == .@"rust.remove" else false);
+    }
 }
 
 test {
