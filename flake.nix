@@ -50,8 +50,17 @@
         devShells.golden = pkgs.mkShell {
           inputsFrom = [ devShells.default ];
           packages = [ (pkgs.python3.withPackages (ps: [ ps.wgpu ])) ];
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.vulkan-loader
+            pkgs.libglvnd
+          ];
           VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
+          # EGL and GL ES (lane render-gles): libglvnd's libEGL / libGLESv2 dispatching to Mesa,
+          # forced onto llvmpipe so a machine with a GPU draws the same pixels.
+          __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
+          LIBGL_ALWAYS_SOFTWARE = "1";
+          GALLIUM_DRIVER = "llvmpipe";
+          EGL_LOG_LEVEL = "fatal";
         };
         # Hardware counters for the benchmark (lane optimise, docs/perf/cache.md): perf stat
         # over a whole run; `zig build bench -- --counters` counts per pass itself.
