@@ -126,8 +126,9 @@ What carries over [I]:
   the new piece, and it costs one add (question 2).
 - **Silence by default is what gets ignored.** Clay's default handler is empty and warns once;
   issue #102 is a user finding the cap the hard way. LCGR's `Output.status` has the same shape:
-  data the host may never read. The owner's decision to print by default in every mode answers
-  this.
+  data the host may never read. The owner chose quiet by default, turned on with
+  `-Dlcgr-usage=auto|always` in every mode; a limit that is hit still sets `Output.status`, and
+  with the report on, it names the limit and the setter to raise.
 - **Name the knob.** Clay's messages name the setter. The report ends with a paste-ready
   `Limits` literal for the same reason.
 - **Attribute exactly, or not at all.** LLM's rule (every byte in exactly one category, the
@@ -416,7 +417,7 @@ changes with `build`.
 | `src/runtime/frame.zig:63-68` (`close`) | never pops the root | `open = @max(open, 2) - 1` |
 | `src/runtime/frame.zig:263-283` (`finish`) | `status` from the bools, after the sweeps | before the sweeps: build `want: Counts` with an `inline for` over `Limit` and an exhaustive `switch` (`.nodes => t.len + t.lost`, ..., `.depth => ctx.open_peak`); `given` from `limits`; fold; `status` from the mask |
 | `src/shell/iface.zig:107-120` (`run`) | returns | after the loop, `usage.report(shell, ctx)` (below) |
-| `build.zig:10-11` | `lanes` option | `options.addOption(UsageMode, "usage", b.option(UsageMode, "lcgr-usage", "Print the usage report when run returns: auto (default), always, never") orelse .auto)` |
+| `build.zig:10-11` | `lanes` option | `options.addOption(UsageMode, "usage", b.option(UsageMode, "lcgr-usage", "Print the usage report when run returns: never (default), auto, always") orelse .never)` |
 
 `want` for each limit: nodes, texts, customs, flips: `len + lost` of this frame's table. strings:
 `len + lost` (bytes). anims, tweens, timers, memos: `len + lost` before the sweep. signals:
@@ -495,7 +496,9 @@ that never animates uses 0% of `anims` forever [M]. Two readings that do what it
 - **per limit, used ones only:** print when a limit was hit, or a limit with `peak > 0` is under
   25%.
 
-This is the owner's decision; the design takes the first until told. Default mode: `auto`.
+Decided: **bytes**. The owner left the choice to the lead, who took the recommended reading. The
+owner also decided the report is **quiet by default**: `-Dlcgr-usage=never` is the default, and
+`auto` or `always` turn it on in every build mode, ReleaseFast and ReleaseSmall included.
 
 ### Tests to write
 
