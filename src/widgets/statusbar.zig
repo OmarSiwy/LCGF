@@ -127,6 +127,27 @@ test "statusbar: on the panel colour, texts inset and spaced; any theme alike" {
     try testing.expectEqual(lt.rect(rows.bar).x0 + 12, lt.rect(rows.text[0]).x0);
 }
 
+test "statusbar: takes no input; hit testing and the tab order skip it" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    // Press and release on the first text: nothing held, nothing focused.
+    const r = out.runtime.tree.rect(rows.text[0]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    try testing.expectEqual(@as(?Default.Ui.Events.Widget, null), h.ui.pointer.pressed);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try check.expectInert(out.runtime.tree, &.{ rows.bar, rows.text[0], rows.text[1] });
+    // Only the Save button is a widget in the comptime front end.
+    try testing.expectEqual(1, Default.Ui.Events.widget_count);
+}
+
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
