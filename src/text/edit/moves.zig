@@ -13,6 +13,7 @@ const property = @import("../unicode/property.zig");
 const utf8 = @import("../unicode/utf8.zig");
 const lines = @import("../layout/lines.zig");
 const query = @import("../layout/query.zig");
+const types = @import("../../core/types.zig");
 
 /// The grapheme boundary after `at`, or `text.len` at the end.
 pub fn nextGrapheme(text: []const u8, at: u32) u32 {
@@ -129,6 +130,13 @@ pub const View = struct {
     /// The stop nearest a click at (`px`, `py`), px from the paragraph's top left.
     pub fn hit(v: View, px: f32, py: f32) u32 {
         return query.hit(v.l, v.g, v.text, px, py);
+    }
+
+    /// A caret at `at` as a 1 px wide rectangle the height of its line, px from the
+    /// paragraph's top left.
+    pub fn caretRect(v: View, at: u32) types.Rect {
+        const c = query.caret(v.l, v.g, v.text, at);
+        return .{ .x0 = c.x, .y0 = c.top, .x1 = c.x + 1, .y1 = c.top + c.height };
     }
 
     /// The caret's x at `at`, px from the paragraph's left edge.

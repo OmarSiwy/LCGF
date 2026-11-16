@@ -83,6 +83,11 @@ pub const Context = struct {
     /// Caller-owned bytes the copied text is put in. `clipboard.set` points into them, so it
     /// stays valid after a cut and after later edits, until the host reads it after the frame.
     copy_buf: []u8 = &.{},
+    /// What the input method is composing for this widget: `Keyboard.composition(id, ...)`,
+    /// so it is empty unless the widget is focused, and its range is clamped. Its text is
+    /// shown at the caret as a preedit range of the buffer until the IME commits it (as typed
+    /// text, which ends the composition) or drops it.
+    composition: keyboard.Composition = .{},
 };
 
 /// What one `update` did.
@@ -112,6 +117,12 @@ pub const Editor = struct {
     /// What the last edit was, so that a run of typing or of deleting is one undo step. Any
     /// other key, a click, undo and redo end the run.
     run: Run = .none,
+    /// The IME's preedit text in the buffer, as a byte range (empty when not composing). It is
+    /// in `text()` so layout shows it, and taken out again at the start of every `update`, so
+    /// edits, undo and the history never see it.
+    preedit: [2]u32 = .{ 0, 0 },
+    /// The part of the preedit the IME highlights, as a byte range of the buffer.
+    preedit_sel: [2]u32 = .{ 0, 0 },
 
     pub const Run = enum(u8) { none, typing, deleting };
 
@@ -130,6 +141,29 @@ pub const Editor = struct {
     pub fn selected(ed: *Editor) []const u8 {
         const s = ed.selection();
         return ed.text()[s[0]..s[1]];
+    }
+
+    pub fn composing(ed: *const Editor) bool {
+        return ed.preedit[0] < ed.preedit[1];
+    }
+
+    /// Where the caret is drawn: the end of the IME's highlight while composing, else `caret`.
+    pub fn shownCaret(ed: *const Editor) u32 {
+        return if (ed.composing()) ed.preedit_sel[1] else ed.caret;
+    }
+
+    /// Asks the host for text input (prototype/ui.zig `Platform.wants_text`, `ime_rect`), with
+    /// the IME's window placed at the caret, or at the start of the preedit while composing
+    /// so the window does not follow every keystroke. `v` is the layout of `text()`, drawn
+    /// with its top left at `origin`, logical px.
+    pub fn requestInput(ed: *const Editor, out: *keyboard.TextInput, v: moves.View, origin: [2]f32) void {
+        const at = if (ed.composing()) ed.preedit[0] else ed.caret;
+        var rect = v.caretRect(at);
+        rect.x0 += origin[0];
+        rect.x1 += origin[0];
+        rect.y0 += origin[1];
+        rect.y1 += origin[1];
+        out.request(rect, .normal);
     }
 
     /// Puts the caret at `at` with nothing selected.
@@ -151,7 +185,17 @@ pub const Editor = struct {
     /// `id` is focused; the pointer is the caller's to fill for `id` only.
     pub fn update(ed: *Editor, k: *const Keyboard, id: Id, cx: Context) Result {
         var r: Result = .{};
-        if (cx.view) |v| ed.point(v, cx.pointer);
+        // Last frame's preedit leaves first; the layout of the text with it is then stale.
+        const was = ed.composing();
+        if (was) {
+            ed.b.delete(ed.preedit[0], ed.preedit[1]);
+            ed.place(ed.preedit[0]);
+            ed.preedit = .{ 0, 0 };
+            ed.preedit_sel = .{ 0, 0 };
+            r.changed = true;
+        }
+        const fresh = if (was) null else cx.view;
+        if (fresh) |v| ed.point(v, cx.pointer);
         var it = k.events(id);
         while (it.next()) |e| {
             if (e.kind == .text) {
@@ -160,10 +204,29 @@ pub const Editor = struct {
                 continue;
             }
             if (e.kind == .release) continue;
-            const view = if (r.changed) null else cx.view;
+            const view = if (r.changed) null else fresh;
             ed.key(e, view, cx, &r);
         }
+        ed.compose(cx.composition, &r);
         return r;
+    }
+
+    /// Shows `c` at the caret as the preedit, in place of the selection (whose removal is
+    /// recorded, the preedit is not). A preedit that does not fit is cut at a code point.
+    fn compose(ed: *Editor, c: keyboard.Composition, r: *Result) void {
+        if (c.text.len == 0) return;
+        const sel = ed.selection();
+        if (sel[0] < sel[1]) ed.remove(sel[0], sel[1], false, r);
+        ed.run = .none;
+        var n: u32 = @intCast(@min(c.text.len, ed.b.free()));
+        while (n < c.text.len and n > 0 and c.text[n] & 0xc0 == 0x80) n -= 1;
+        r.full = r.full or n < c.text.len;
+        if (n == 0) return;
+        const at = ed.caret;
+        ed.b.insert(at, c.text[0..n]) catch unreachable;
+        ed.preedit = .{ at, at + n };
+        ed.preedit_sel = .{ at + @min(c.range[0], n), at + @min(c.range[1], n) };
+        r.changed = true;
     }
 
     /// A press places the caret (with Shift, extends the selection), a held button drags the
@@ -342,6 +405,8 @@ pub const Replayed = struct {
     /// read it: after the replay it holds the last frame's requests.
     clipboard: ?*keyboard.Clipboard = null,
     copy_buf: []u8 = &.{},
+    /// The IME's composition in each frame, by frame number; none past the end.
+    compositions: []const keyboard.Composition = &.{},
 };
 
 /// As `replay`, run as `opt` says. The editor is one focusable node covering (0, 0) to
@@ -371,11 +436,13 @@ pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
     var it: Interaction = .{ .focus = @backingInt(field) };
     const fo: Focus = .{};
     var all: Result = .{};
-    while (try r.next(buf)) |in| {
+    var frame: usize = 0;
+    while (try r.next(buf)) |in| : (frame += 1) {
         it.step(&tree, in);
         const k = Keyboard.route(&it, &fo, in);
         var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods), .clipboard = opt.clipboard, .copy_buf = opt.copy_buf };
         if (opt.clipboard) |c| c.reset();
+        if (frame < opt.compositions.len) cx.composition = k.composition(field, &opt.compositions[frame]);
         if (opt.width) |w| {
             const t = ed.text();
             para.fixed(t, 10);
@@ -749,4 +816,73 @@ test "replayed input: undo and redo whole runs of typing and deleting" {
         \\frame
         \\press 29 ctrl
     )).changed);
+}
+
+test "replayed input: IME composition shows a preedit range; the commit is one undo step" {
+    const mem = @import("../../core/mem.zig");
+    var cols: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &cols };
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "aXb");
+    ed.history = History.init(&carver, 16, 64);
+    ed.anchor = 1;
+    ed.caret = 2; // "X" selected
+    // Composing "ni", then "nihon" with "hon" highlighted, then the IME commits.
+    const comps = [_]keyboard.Composition{
+        .{ .text = "ni", .range = .{ 2, 2 } },
+        .{ .text = "nihon", .range = .{ 2, 5 } },
+        .{},
+    };
+    _ = try replayWith(&ed,
+        \\frame
+    , .{ .compositions = comps[0..1] });
+    try testing.expectEqualStrings("anib", ed.text());
+    try testing.expectEqual([2]u32{ 1, 3 }, ed.preedit);
+    try testing.expectEqual(3, ed.shownCaret());
+    var out: keyboard.TextInput = .{};
+    var rect_x: f32 = 0;
+    {
+        const golden = @import("../layout/golden.zig");
+        const lines = @import("../layout/lines.zig");
+        var para: golden.Para = .{};
+        const t = ed.text();
+        para.fixed(t, 10);
+        try lines.breakLines(&para.g, t, 1000, &para.l);
+        lines.place(&para.l, &para.g, t, &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = 1000 });
+        ed.requestInput(&out, .{ .l = &para.l, .g = &para.g, .text = t }, .{ 100, 50 });
+        rect_x = out.rect.x0;
+    }
+    try testing.expect(out.wants_text);
+    try testing.expectEqual(@as(f32, 110), rect_x); // at the preedit's start, after "a"
+    try testing.expectEqual(@as(f32, 60), out.rect.y1);
+    _ = try replayWith(&ed,
+        \\frame
+    , .{ .compositions = comps[1..2] });
+    try testing.expectEqualStrings("anihonb", ed.text());
+    try testing.expectEqual([2]u32{ 3, 6 }, ed.preedit_sel);
+    _ = try replayWith(&ed,
+        \\frame
+        \\text 日本
+    , .{ .compositions = comps[2..3] });
+    try testing.expectEqualStrings("a日本b", ed.text());
+    try testing.expect(!ed.composing());
+    try testing.expectEqual(7, ed.caret);
+    // One undo takes the commit out, the next puts the "X" back: the preedit never was a step.
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("ab", ed.text());
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("aXb", ed.text());
+    try testing.expectEqualStrings("X", ed.selected());
+    // A composition the IME drops leaves only the removal of the selection it replaced.
+    _ = try replayWith(&ed,
+        \\frame
+        \\frame
+    , .{ .compositions = comps[0..1] });
+    try testing.expectEqualStrings("ab", ed.text());
 }
