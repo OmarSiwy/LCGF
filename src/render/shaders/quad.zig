@@ -18,6 +18,13 @@ pub fn shader(comptime material_fn: []const u8) [:0]const u8 {
 /// The stock shader: `Style.material = .solid`.
 pub const wgsl = shader(stock_material);
 
+pub const Variant = struct { name: []const u8, wgsl: [:0]const u8 };
+
+/// Every shader the framework ships; ci/jobs/shaders.sh validates each one on a real wgpu device.
+pub const variants = [_]Variant{
+    .{ .name = "stock", .wgsl = wgsl },
+};
+
 pub const Attr = struct { location: u32, offset: u32, format: []const u8 };
 
 /// Instance attributes of `Quad` for `wgsl`. `xform` is split: a, b, c, d then tx, ty.
