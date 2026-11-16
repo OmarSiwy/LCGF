@@ -24,8 +24,9 @@ The rules, as text layout implements them:
   than the box, its clusters are dropped from the end until its ink plus an ellipsis fits, and
   the ellipsis is drawn after the ink. The cut line is never justified. Text that does not wrap
   is broken at an infinite width.
-- Lines stack from the top: each is as tall as the tallest span on it (ascender - descender +
-  line gap) and its baseline is the tallest ascender below its top. Baselines snap to whole
+- Lines stack from the top: a line's baseline is the largest ascender of the spans on it
+  below its top, and below that the largest descender plus line gap (an empty line takes the
+  span of the glyph before it). Each span is shaped on its own. Baselines snap to whole
   pixels (round half up), x stays fractional.
 """
 import math
@@ -53,6 +54,7 @@ SCENES = {
     "justify": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), justify=True),
     "clamp": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 56), max_lines=2),
     "single": dict(text="Type office fluff into a lovely file", px=16, box=(4, 2, 150), size=(160, 28), wrap=False, max_lines=1),
+    "rich": dict(text="Small words, BIG words and small again, all in one paragraph.", px=16, box=(4, 2, 200), size=(208, 124), spans=[(13, 28), (22, 16)]),
     "narrow": dict(text="Pneumonoultramicroscopic words\nbreak hard.", px=16, box=(3, 1, 90), size=(96, 92)),
 }
 
@@ -207,7 +209,7 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
     img = bytearray(W * H)
     top = by
     for ln in lines:
-        on = glyphs[ln["first"]:ln["end"]] or [Glyph(0, 0, 0, 0, 0, px)]
+        on = glyphs[ln["first"]:ln["end"]] or glyphs[max(ln["first"] - 1, 0):ln["first"]] or [Glyph(0, 0, 0, 0, 0, px)]
         tall = max(g.px for g in on) / upem
         base = top + asc * tall
         ink = glyphs[ln["first"]:ln["ink"]]

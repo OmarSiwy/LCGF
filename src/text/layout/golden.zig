@@ -14,6 +14,7 @@ const lines_ = @import("lines.zig");
 const shape = @import("../shape/shape.zig");
 const raster = @import("../raster/raster.zig");
 const opentype = @import("../font/opentype.zig");
+const spans_ = @import("spans.zig");
 
 const Glyphs = lines_.Glyphs;
 const Lines = lines_.Lines;
@@ -28,6 +29,7 @@ pub const Para = struct {
     x_offset: [256]f32 = undefined,
     y_offset: [256]f32 = undefined,
     x: [256]f32 = undefined,
+    span: [256]u32 = undefined,
     first: [32]u32 = undefined,
     end: [32]u32 = undefined,
     ink: [32]u32 = undefined,
@@ -39,14 +41,20 @@ pub const Para = struct {
     baseline: [32]f32 = undefined,
     height: [32]f32 = undefined,
     extra: [32]f32 = undefined,
+    s_start: [8]u32 = undefined,
+    s_font: [8]u16 = undefined,
+    s_px: [8]f32 = undefined,
+    s_color: [8]u32 = undefined,
     ellipsis_glyph: u16 = 0,
     g: Glyphs = undefined,
     l: Lines = undefined,
+    s: spans_.Spans = undefined,
 
-    /// Points `g` and `l` at the arrays. `Para` must not move afterwards.
+    /// Points `g`, `l` and `s` at the arrays. `Para` must not move afterwards.
     pub fn bind(p: *Para) void {
-        p.g = .{ .glyph = &p.glyph, .cluster = &p.cluster, .advance = &p.advance, .x_offset = &p.x_offset, .y_offset = &p.y_offset, .x = &p.x };
+        p.g = .{ .glyph = &p.glyph, .cluster = &p.cluster, .advance = &p.advance, .x_offset = &p.x_offset, .y_offset = &p.y_offset, .span = &p.span, .x = &p.x };
         p.l = .{ .first = &p.first, .end = &p.end, .ink = &p.ink, .start = &p.start, .width = &p.width, .hard = &p.hard, .x = &p.lx, .top = &p.top, .baseline = &p.baseline, .height = &p.height, .extra = &p.extra };
+        p.s = .{ .start = &p.s_start, .font = &p.s_font, .px = &p.s_px, .color = &p.s_color };
     }
 
     /// One glyph per byte of ASCII `text`, each `adv` px wide.
@@ -58,18 +66,17 @@ pub const Para = struct {
             p.advance[k] = adv;
             p.x_offset[k] = 0;
             p.y_offset[k] = 0;
+            p.span[k] = 0;
             p.x[k] = 0;
         }
         p.g.len = @intCast(text.len);
     }
 
-    /// `text` shaped with the built-in shaper at `px`.
-    pub fn shaped(p: *Para, shaper: *const shape.Shaper, text: []const u8, px: f32) !void {
-        p.bind();
+    /// `text` shaped with the built-in shaper, in the spans already pushed to `s`.
+    pub fn shaped(p: *Para, shapers: []const shape.Shaper, text: []const u8) !void {
         var cols: RunCols = .{};
         var run = cols.run();
-        try shaper.shape(text, &run, .{});
-        try p.g.append(&run, px / @as(f32, @floatFromInt(shaper.face.units_per_em)), 0);
+        try spans_.shape(shapers, text, &p.s, &run, &p.g);
     }
 };
 
@@ -86,7 +93,10 @@ pub const RunCols = struct {
     }
 };
 
-pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single };
+pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single, rich };
+
+/// A span after the first (which starts at 0 at the scene's `px`).
+const SpanSpec = struct { start: u32, px: f32 };
 
 const Spec = struct {
     text: []const u8,
@@ -99,6 +109,7 @@ const Spec = struct {
     /// Text that does not wrap is broken at an infinite width.
     wrap: bool = true,
     max_lines: u32 = std.math.maxInt(u32),
+    spans: []const SpanSpec = &.{},
 };
 
 const para = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it.";
@@ -111,19 +122,24 @@ fn spec(s: Scene) Spec {
         .justify => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .justify = true },
         .clamp => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 56 }, .max_lines = 2 },
         .single => .{ .text = "Type office fluff into a lovely file", .px = 16, .box = .{ 4, 2, 150 }, .size = .{ 160, 28 }, .wrap = false, .max_lines = 1 },
+        .rich => .{ .text = "Small words, BIG words and small again, all in one paragraph.", .px = 16, .box = .{ 4, 2, 200 }, .size = .{ 208, 124 }, .spans = &.{ .{ .start = 13, .px = 28 }, .{ .start = 22, .px = 16 } } },
         .narrow => .{ .text = "Pneumonoultramicroscopic words\nbreak hard.", .px = 16, .box = .{ 3, 1, 90 }, .size = .{ 96, 92 } },
     };
 }
 
 const max_w = 208;
-const max_h = 120;
+const max_h = 128;
 
 /// Lays scene `s` out, draws it and compares it with its reference picture.
 pub fn expectScene(s: Scene) !void {
     const sp = spec(s);
-    const shaper: shape.Shaper = .init(try opentype.Face.parse(font, 0));
+    const shapers = [_]shape.Shaper{.init(try opentype.Face.parse(font, 0))};
+    const shaper = &shapers[0];
     var p: Para = .{};
-    try p.shaped(&shaper, sp.text, sp.px);
+    p.bind();
+    _ = try p.s.push(0, 0, sp.px, 0);
+    for (sp.spans) |x| _ = try p.s.push(x.start, 0, x.px, 0);
+    try p.shaped(&shapers, sp.text);
     try lines_.breakLines(&p.g, sp.text, if (sp.wrap) sp.box[2] else std.math.inf(f32), &p.l);
     // The ellipsis, shaped like any text.
     var ecols: RunCols = .{};
@@ -133,30 +149,33 @@ pub fn expectScene(s: Scene) !void {
     p.ellipsis_glyph = erun.glyph[0];
     const ellipsis_w = @as(f32, @floatFromInt(erun.advance[0])) * sp.px / @as(f32, @floatFromInt(shaper.face.units_per_em));
     lines_.ellipsize(&p.l, &p.g, sp.text, sp.box[2], sp.max_lines, ellipsis_w);
-    lines_.place(&p.l, &p.g, sp.text, .of(&shaper.face, sp.px), .{ .width = sp.box[2], .factor = sp.factor, .justify = sp.justify });
+    var m: [8]lines_.Metrics = undefined;
+    spans_.metrics(&shapers, &p.s, &m);
+    lines_.place(&p.l, &p.g, sp.text, m[0..p.s.len], .{ .width = sp.box[2], .factor = sp.factor, .justify = sp.justify });
 
     var img: [max_w * max_h]u8 = @splat(0);
     const w = sp.size[0];
     const h = sp.size[1];
     // Every line is in the picture.
     try std.testing.expect(sp.box[1] + lines_.stackHeight(&p.l) <= @as(f32, @floatFromInt(h)));
-    try draw(&shaper.face, &p, sp.px, .{ sp.box[0], sp.box[1] }, img[0 .. w * h], w);
+    try draw(&shaper.face, &p, .{ sp.box[0], sp.box[1] }, img[0 .. w * h], w);
     try compare(s, img[0 .. w * h], w, h);
 }
 
-/// Composites every inked glyph of `p` (laid out at `px`) at `origin` + its position, by
-/// maximum coverage. Baselines snap to whole pixels (round half up), pen x stays fractional.
-pub fn draw(face: *const opentype.Face, p: *const Para, px: f32, origin: [2]f32, img: []u8, w: u32) !void {
-    const scale = px / @as(f32, @floatFromInt(face.units_per_em));
+/// Composites every inked glyph of `p` at `origin` + its position, by maximum coverage, each at
+/// its span's size; the ellipsis at the first span's. Baselines snap to whole pixels (round
+/// half up), pen x stays fractional.
+pub fn draw(face: *const opentype.Face, p: *const Para, origin: [2]f32, img: []u8, w: u32) !void {
+    const em: f32 = @floatFromInt(face.units_per_em);
     for (0..p.l.len) |k| {
         const base: i32 = @intFromFloat(@floor(origin[1] + p.l.baseline[k] + 0.5));
         const left = origin[0] + p.l.x[k];
         for (p.l.first[k]..p.l.ink[k]) |i| {
             try std.testing.expectEqual(0, p.g.y_offset[i]);
-            try glyphAt(face, p.g.glyph[i], scale, left + p.g.x[i] + p.g.x_offset[i], base, img, w);
+            try glyphAt(face, p.g.glyph[i], p.s.px[p.g.span[i]] / em, left + p.g.x[i] + p.g.x_offset[i], base, img, w);
         }
         if (k == p.l.len - 1 and p.l.ellipsis > 0)
-            try glyphAt(face, p.ellipsis_glyph, scale, left + p.l.width[k] - p.l.ellipsis, base, img, w);
+            try glyphAt(face, p.ellipsis_glyph, p.s.px[0] / em, left + p.l.width[k] - p.l.ellipsis, base, img, w);
     }
 }
 

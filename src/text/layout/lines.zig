@@ -36,13 +36,15 @@ pub const Glyphs = struct {
     /// Where the glyph is drawn relative to its pen position, px, y up.
     x_offset: []f32,
     y_offset: []f32,
-    /// Written by `place`: the pen x of the glyph, px from the paragraph's left edge.
+    /// The span (style run, src/text/layout/spans.zig) the glyph was shaped in; 0 for plain text.
+    span: []u32,
+    /// Written by `place`: the pen x of the glyph, px from the line's left edge.
     x: []f32,
     len: u32 = 0,
 
-    /// Appends a shaped run at `scale` px per font unit (px / units_per_em). `base` is the byte
-    /// offset of the run's text in the paragraph's text.
-    pub fn append(g: *Glyphs, run: *const shape.Run, scale: f32, base: u32) error{NoSpace}!void {
+    /// Appends a shaped run at `scale` px per font unit (px / units_per_em), shaped in span
+    /// `span`. `base` is the byte offset of the run's text in the paragraph's text.
+    pub fn append(g: *Glyphs, run: *const shape.Run, scale: f32, base: u32, span: u32) error{NoSpace}!void {
         if (g.glyph.len - g.len < run.len) return error.NoSpace;
         for (0..run.len) |k| {
             const at = g.len + k;
@@ -51,6 +53,7 @@ pub const Glyphs = struct {
             g.advance[at] = @as(f32, @floatFromInt(run.advance[k])) * scale;
             g.x_offset[at] = @as(f32, @floatFromInt(run.x_offset[k])) * scale;
             g.y_offset[at] = @as(f32, @floatFromInt(run.y_offset[k])) * scale;
+            g.span[at] = span;
             g.x[at] = 0;
         }
         g.len += run.len;
@@ -245,26 +248,43 @@ fn endsInBreak(text: []const u8) bool {
     };
 }
 
-/// Stacks the lines from the paragraph's top, every line `m.height()` tall with its baseline
-/// `m.ascent` below its top, aligns each in `a`, and writes each glyph's pen x from the line's
-/// left edge. Per line the mode is a coefficient: `j` is 1.0 for a justified line, so the
-/// offset and the extra space are products, not branches.
-pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, m: Metrics, a: Align) void {
+/// Stacks the lines from the paragraph's top, aligns each in `a`, and writes each glyph's pen
+/// x from the line's left edge. `metrics` has one row per span (`Glyphs.span`; one row for
+/// plain text). A line's baseline is the largest ascent of the spans on it below its top, and
+/// below that the largest descent plus gap; an empty line takes the span of the glyph before
+/// it. Per line the mode is a coefficient: `j` is 1.0 for a justified line, so the offset and
+/// the extra space are products, not branches.
+pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metrics, a: Align) void {
+    std.debug.assert(metrics.len > 0);
     const justify: f32 = @floatFromInt(@intFromBool(a.justify));
     var top: f32 = 0;
     for (0..lines.len) |k| {
+        const first = lines.first[k];
+        const before = if (first > 0) g.span[first - 1] else 0;
+        var ascent = metrics[before].ascent;
+        var below = metrics[before].descent + metrics[before].gap;
+        // A line with glyphs: the spans of its glyphs only.
+        if (lines.end[k] > first) {
+            ascent = 0;
+            below = 0;
+        }
         var spaces: f32 = 0;
-        for (lines.first[k]..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
+        for (first..lines.end[k]) |i| {
+            const m = metrics[g.span[i]];
+            ascent = @max(ascent, m.ascent);
+            below = @max(below, m.descent + m.gap);
+        }
+        for (first..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
         const free = a.width - lines.width[k];
         const j = justify * (1 - lines.hard[k]) * @min(spaces, 1);
         lines.extra[k] = j * free / @max(spaces, 1);
         lines.x[k] = (1 - j) * free * a.factor;
         lines.top[k] = top;
-        lines.baseline[k] = top + m.ascent;
-        lines.height[k] = m.height();
-        top += m.height();
+        lines.baseline[k] = top + ascent;
+        lines.height[k] = ascent + below;
+        top += ascent + below;
         var pen: f32 = 0;
-        for (lines.first[k]..lines.end[k]) |i| {
+        for (first..lines.end[k]) |i| {
             g.x[i] = pen;
             pen += g.advance[i] + lines.extra[k] * space01(text, g.cluster[i]);
         }
@@ -346,15 +366,15 @@ test "place: alignment is an offset, justification widens inner spaces" {
     // "aa b " | "cc d\n" | "ee"
     try testing.expectEqual(3, t.l.len);
     const m: Metrics = .{ .ascent = 8, .descent = 2 };
-    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 0.5 });
+    place(&t.l, &t.g, text, &.{m}, .{ .width = 60, .factor = 0.5 });
     try testing.expectEqualSlices(f32, &.{ 10, 10, 20 }, t.l.x[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 10, 20 }, t.l.top[0..3]);
     try testing.expectEqualSlices(f32, &.{ 8, 18, 28 }, t.l.baseline[0..3]);
-    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 1 });
+    place(&t.l, &t.g, text, &.{m}, .{ .width = 60, .factor = 1 });
     try testing.expectEqualSlices(f32, &.{ 20, 20, 40 }, t.l.x[0..3]);
     // Justified: line 0 has one inner space (the trailing one hangs) and 20 px free. Line 1
     // ends at a newline and line 2 is the last: aligned as usual.
-    place(&t.l, &t.g, text, m, .{ .width = 60, .factor = 1, .justify = true });
+    place(&t.l, &t.g, text, &.{m}, .{ .width = 60, .factor = 1, .justify = true });
     try testing.expectEqualSlices(f32, &.{ 20, 0, 0 }, t.l.extra[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 20, 40 }, t.l.x[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 50 }, t.g.x[0..4]);
@@ -399,6 +419,10 @@ test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
 test "golden: clamped and truncated paragraphs match the reference" {
     try golden.expectScene(.clamp);
     try golden.expectScene(.single);
+}
+
+test "golden: rich text matches the reference" {
+    try golden.expectScene(.rich);
 }
 
 test "golden: shaped paragraphs wrap like the reference" {
