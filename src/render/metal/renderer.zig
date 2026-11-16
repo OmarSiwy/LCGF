@@ -11,8 +11,10 @@
 //!              texture and sampler you register stays yours.
 //!
 //! The instance buffer is shared storage the CPU writes in `prepare` and the GPU reads when
-//! the command buffer runs: the host must not call `prepare` again before the GPU has finished
-//! the previous frame (wait on its command buffer). A draw that starts at quad `first` points
+//! the command buffer runs, so it holds `frames_in_flight` frames and each `prepare` writes the
+//! next one. The host keeps at most that many frames in flight: `present.Frames` with the same
+//! count waits for a slot's previous frame before it is reused (call `prepare` once per frame,
+//! after `Frames.begin`). A draw that starts at quad `first` points
 //! the vertex buffer `first * stride` bytes in, so no base instance is needed; the globals go in
 //! with setVertexBytes / setFragmentBytes on every draw.
 
@@ -42,6 +44,8 @@ pub const Desc = struct {
     sample_count: U = 1,
     max_quads: u32 = 16 * 1024,
     max_glyphs: u32 = 32 * 1024,
+    /// Frames the GPU may still be reading while the CPU prepares the next (GPUI uses 3).
+    frames_in_flight: u32 = 3,
 };
 
 pub const Error = pipeline.Error || texture.Error || error{BufferFailed};
@@ -68,6 +72,9 @@ pub fn RendererOver(comptime Encoder: type) type {
         textures: [max_textures]Id = undefined,
         samplers: [max_textures]Id = undefined,
         texture_count: u16 = 0,
+        /// Byte offset of the frame the last `prepare` wrote, and the slot the next one writes.
+        base: usize = 0,
+        next: u32 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: [2]u32 = .{ 0, 0 },
         scale: f32 = 1,
@@ -85,7 +92,7 @@ pub fn RendererOver(comptime Encoder: type) type {
             var r: Self = .{ .device = device, .desc = desc };
             errdefer r.deinit();
             _ = try r.addMaterial(msl.stock); // Material.solid
-            const bytes: U = (@as(U, desc.max_quads) + desc.max_glyphs) * quad_shader.stride;
+            const bytes: U = r.frameBytes() * desc.frames_in_flight;
             const buf = objc.msg(?Id, device, "newBufferWithLength:options:", .{ bytes, mtl.resource_shared_write_combined }) orelse return error.BufferFailed;
             r.instances = buf;
             r.contents = objc.msg([*]u8, buf, "contents", .{});
@@ -141,9 +148,11 @@ pub fn RendererOver(comptime Encoder: type) type {
         /// draws will pass. Quads past `max_quads` (glyphs past `max_glyphs`) are dropped, as
         /// the other back ends do.
         pub fn prepare(r: *Self, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            r.base = r.next * r.frameBytes();
+            r.next = (r.next + 1) % r.desc.frames_in_flight;
             const quad_bytes = draw.quadBytes();
             const qn = @min(quad_bytes.len, @as(usize, r.desc.max_quads) * quad_shader.stride);
-            @memcpy(r.contents[0..qn], quad_bytes[0..qn]);
+            @memcpy(r.contents[r.base..][0..qn], quad_bytes[0..qn]);
             const glyph_bytes = std.mem.sliceAsBytes(glyphs.quads);
             const gn = @min(glyph_bytes.len, @as(usize, r.desc.max_glyphs) * quad_shader.stride);
             @memcpy(r.contents[r.glyphsAt()..][0..gn], glyph_bytes[0..gn]);
@@ -153,8 +162,12 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
         }
 
+        fn frameBytes(r: *const Self) usize {
+            return (@as(usize, r.desc.max_quads) + r.desc.max_glyphs) * quad_shader.stride;
+        }
+
         fn glyphsAt(r: *const Self) usize {
-            return @as(usize, r.desc.max_quads) * quad_shader.stride;
+            return r.base + @as(usize, r.desc.max_quads) * quad_shader.stride;
         }
 
         /// Full state, every draw (iface.zig, "Full state rebinding"): pipeline, instances at
@@ -178,7 +191,7 @@ pub fn RendererOver(comptime Encoder: type) type {
 
         /// One instanced draw for a run of quads.
         pub fn drawBatch(r: *const Self, pass: Pass, batch: draw_list.Batch) void {
-            r.bind(pass, batch.material, batch.texture, @as(usize, batch.first) * quad_shader.stride);
+            r.bind(pass, batch.material, batch.texture, r.base + @as(usize, batch.first) * quad_shader.stride);
             pass.drawQuads(batch.count);
         }
 
@@ -208,6 +221,8 @@ const conformance = lcgr.render_conformance;
 /// terms (so conformance's checks apply) and notes a draw issued without the full state.
 pub const Recorder = struct {
     log: *null_backend.Log,
+    /// The frame's quads and glyphs in the instance buffer.
+    base: usize = 0,
     glyphs_at: usize,
     /// Bits of the state set since the host last drew; a draw needs all of them.
     set: u16 = all,
@@ -236,7 +251,7 @@ pub const Recorder = struct {
         std.debug.assert(index == msl.instance_buffer);
         rec.set |= 2;
         const glyphs = offset >= rec.glyphs_at;
-        rec.first = @intCast((offset - if (glyphs) rec.glyphs_at else 0) / quad_shader.stride);
+        rec.first = @intCast((offset - if (glyphs) rec.glyphs_at else rec.base) / quad_shader.stride);
         rec.log.push(.{ .vertex_buffer = if (glyphs) .glyphs else .quads });
     }
     pub fn setVertexBytes(rec: *Recorder, bytes: []const u8, _: U) void {
@@ -283,7 +298,7 @@ pub fn recording(memory: []u8, desc: Desc) RendererOver(*Recorder) {
 }
 
 test "renderer: every conformance scene issues its draws, each with the full state" {
-    const desc: Desc = .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs };
+    const desc: Desc = .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 1 };
     var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
     for (&conformance.scenes) |*s| {
         var st: conformance.Storage = .{};
@@ -296,7 +311,7 @@ test "renderer: every conformance scene issues its draws, each with the full sta
 
         var calls: [96]null_backend.Call = undefined;
         var log: null_backend.Log = .{ .calls = &calls };
-        var rec: Recorder = .{ .log = &log, .glyphs_at = r.glyphsAt() };
+        var rec: Recorder = .{ .log = &log, .base = r.base, .glyphs_at = r.glyphsAt() };
         var i = iface.drawUntilCustom(&r, &rec, &st.draw, 0);
         while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&r, &rec, &st.draw, i + 1)) rec.host();
         try testing.expect(log.len <= calls.len);
@@ -319,7 +334,7 @@ test "renderer: every conformance scene issues its draws, each with the full sta
 
 test "renderer: textures register in order with their samplers, clamp past the cap, re-point" {
     var memory: [quad_shader.stride]u8 = undefined;
-    var r = recording(&memory, .{ .max_quads = 1, .max_glyphs = 0 });
+    var r = recording(&memory, .{ .max_quads = 1, .max_glyphs = 0, .frames_in_flight = 1 });
     const linear = Recorder.fake(4);
     const atlas = r.addTexture(Recorder.fake(2 * Recorder.texture_base), linear);
     try testing.expectEqual(@as(u16, 1), @backingInt(atlas));
@@ -339,13 +354,13 @@ test "renderer: a text run samples the glyph atlas, a quad batch its own texture
     var st: conformance.Storage = .{};
     st.load(&conformance.scenes[2]); // text: batch | text | text | batch
     var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
-    var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs });
+    var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 1 });
     var glyphs = st.glyphs();
     glyphs.texture = r.addTexture(Recorder.fake(2 * Recorder.texture_base), null);
     r.prepare({}, &st.draw, glyphs, .{ 160, 120 }, 1);
     var calls: [64]null_backend.Call = undefined;
     var log: null_backend.Log = .{ .calls = &calls };
-    var rec: Recorder = .{ .log = &log, .glyphs_at = r.glyphsAt() };
+    var rec: Recorder = .{ .log = &log, .base = r.base, .glyphs_at = r.glyphsAt() };
     r.render(&rec, &st.draw);
     var bound: [4]u16 = undefined;
     var n: usize = 0;
@@ -363,11 +378,35 @@ test "renderer: prepare drops quads past the capacity instead of writing past th
     var st: conformance.Storage = .{};
     st.load(&conformance.scenes[0]); // rects: 3 quads
     var memory: [2 * quad_shader.stride + 4]u8 = @splat(0xaa);
-    var r = recording(memory[0 .. 2 * quad_shader.stride], .{ .max_quads = 2, .max_glyphs = 0 });
+    var r = recording(memory[0 .. 2 * quad_shader.stride], .{ .max_quads = 2, .max_glyphs = 0, .frames_in_flight = 1 });
     r.prepare({}, &st.draw, .{}, .{ 80, 60 }, 2);
     try testing.expectEqualSlices(u8, st.draw.quadBytes()[0 .. 2 * quad_shader.stride], memory[0 .. 2 * quad_shader.stride]);
     try testing.expectEqualSlices(u8, &.{ 0xaa, 0xaa, 0xaa, 0xaa }, memory[2 * quad_shader.stride ..]);
     try testing.expectEqual([2]u32{ 160, 120 }, r.extent);
+}
+
+test "renderer: each prepare writes the next frame slot, and draws read the slot just written" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[2]); // text
+    const desc: Desc = .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 3 };
+    var memory: [3 * (conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, desc);
+    const frame = r.frameBytes();
+    for ([_]usize{ 0, 1, 2, 0 }) |slot| {
+        r.prepare({}, &st.draw, st.glyphs(), .{ 160, 120 }, 1);
+        try testing.expectEqual(slot * frame, r.base);
+        try testing.expectEqualSlices(u8, st.draw.quadBytes(), memory[slot * frame ..][0..st.draw.quadBytes().len]);
+        var calls: [64]null_backend.Call = undefined;
+        var log: null_backend.Log = .{ .calls = &calls };
+        var rec: Recorder = .{ .log = &log, .base = slot * frame, .glyphs_at = r.glyphsAt() };
+        r.render(&rec, &st.draw);
+        var n: usize = 0;
+        for (log.recorded()) |call| if (call == .draw) {
+            try testing.expectEqual(conformance.scenes[2].draws[n].first, call.draw.first_instance);
+            n += 1;
+        };
+        try testing.expectEqual(4, n);
+    }
 }
 
 test "renderer: quad pipelines compile from the committed MSL on a real device" {

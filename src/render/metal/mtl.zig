@@ -87,3 +87,7 @@ pub const texture_usage_render_target: U = 4;
 pub const Origin = extern struct { x: U = 0, y: U = 0, z: U = 0 };
 pub const Size = extern struct { width: U, height: U, depth: U = 1 };
 pub const Region = extern struct { origin: Origin = .{}, size: Size };
+
+pub const LoadAction = enum(U) { dont_care = 0, load = 1, clear = 2 };
+pub const StoreAction = enum(U) { dont_care = 0, store = 1 };
+pub const ClearColor = extern struct { r: f64, g: f64, b: f64, a: f64 };
