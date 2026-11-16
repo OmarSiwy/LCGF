@@ -341,6 +341,7 @@ pub const Style = struct {
     border_color: Color = .transparent,
     border: f32 = 0,
     radius: f32 = 0,
+    /// Sampled under `fill`, which tints it; with no fill (alpha 0) the tint is white.
     texture: Texture = .white,
     material: Material = .solid,
     /// Passed through to the material's shader.
