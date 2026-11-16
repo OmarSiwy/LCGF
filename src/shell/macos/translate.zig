@@ -60,6 +60,9 @@ pub const Record = union(enum) {
     insert: []const u8,
     /// windowDidResize: the content view's size, in points.
     resize: [2]f64,
+    /// viewDidChangeBackingProperties: the window's `backingScaleFactor`, physical pixels per
+    /// point (2 on Retina displays). It changes when the window moves to another display.
+    scale: f64,
     /// windowDidResignKey: the window lost the keyboard.
     resign,
     /// windowShouldClose: the user asked to close the window.
@@ -131,6 +134,7 @@ pub const Translator = struct {
             .event => |e| t.event(e),
             .insert => |s| t.insert(s),
             .resize => |s| t.resize(s),
+            .scale => |s| t.setScale(s),
             // Keys released while another window had the keyboard never send keyUp.
             .resign => {
                 t.in.keys = .{};
@@ -143,6 +147,12 @@ pub const Translator = struct {
     /// The content view's size in points, which is the viewport in logical pixels.
     pub fn resize(t: *Translator, size: [2]f64) void {
         t.in.viewport = .{ @floatCast(size[0]), @floatCast(size[1]) };
+    }
+
+    /// Physical pixels per logical pixel. Points are logical pixels, so the viewport and the
+    /// pointer keep their values: only the drawable's pixels change (device.zig `drawableSize`).
+    pub fn setScale(t: *Translator, s: f64) void {
+        t.in.scale = @floatCast(@max(s, 0.25));
     }
 
     /// Reads one NSEvent.
@@ -268,6 +278,7 @@ pub const Translator = struct {
 ///     # comment              blank lines and comments anywhere
 ///     frame                  starts a frame; the records below it arrive before its poll
 ///     resize 800 600         content size in points
+///     scale 2                backing scale factor
 ///     resign                 the window lost the keyboard
 ///     close                  the close button
 ///     insert héllo           insertText:, the rest of the line
@@ -313,6 +324,7 @@ pub const Replay = struct {
         const name = it.next().?;
         const rec: Record = if (std.meta.stringToEnum(std.meta.Tag(Record), name)) |tag| switch (tag) {
             .resize => .{ .resize = .{ try num(&it), try num(&it) } },
+            .scale => .{ .scale = try num(&it) },
             .resign => .resign,
             .close => .close,
             .insert => return .{ .insert = l[@min(l.len, "insert ".len)..] },
@@ -580,4 +592,41 @@ test "keys: every virtual key code names a distinct key" {
     try testing.expectEqual(@as(u8, 0x29), hid[0x35]);
     try testing.expectEqual(@as(u8, 0xe3), hid[0x37]);
     try testing.expectEqual(@as(u8, 0x52), hid[0x7e]);
+}
+
+test "scale: a move to a Retina display changes the scale, not the viewport or the pointer" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\resize 800 600
+        \\scale 2
+        \\moved 100 550
+        \\frame
+        \\# Dragged to a 1x display: same points, half the pixels.
+        \\scale 1
+        \\frame
+        \\# A scaled display mode of 1.5 and a resize there.
+        \\scale 1.5
+        \\resize 640 480
+        \\moved 100 430
+    };
+    var buf: [4]Record = undefined;
+    var t: Translator = .{};
+    var ev: Events = .{};
+    const want = [_]struct { scale: f32, viewport: [2]f32 }{
+        .{ .scale = 2, .viewport = .{ 800, 600 } },
+        .{ .scale = 1, .viewport = .{ 800, 600 } },
+        .{ .scale = 1.5, .viewport = .{ 640, 480 } },
+    };
+    for (want) |w| {
+        for ((try r.next(&buf)).?) |m| t.feed(m);
+        _ = t.frame(&ev);
+        try testing.expectEqual(w.scale, ev.in.scale);
+        try testing.expectEqual(w.viewport, ev.in.viewport);
+        try testing.expectEqual([2]f32{ 100, 50 }, ev.in.pointer);
+    }
+    // A stamp sees the change, so the frame is rebuilt at the new scale.
+    var a: Translator = .{};
+    var b: Translator = .{};
+    b.setScale(2);
+    try testing.expect(a.in.stamp() != b.in.stamp());
 }

@@ -131,6 +131,7 @@ const methods = .{
     .{ "windowDidResize:", &windowDidResize, "v@:@" },
     .{ "windowShouldClose:", &windowShouldClose, "c@:@" },
     .{ "windowDidResignKey:", &windowDidResignKey, "v@:@" },
+    .{ "viewDidChangeBackingProperties", &viewDidChangeBackingProperties, "v@:" },
     .{ "insertText:", &insertText, "v@:@" },
     .{ "doCommandBySelector:", &doCommandBySelector, "v@::" },
 } ++ events: {
@@ -199,6 +200,13 @@ fn insertText(view: Id, _: Sel, text: Id) callconv(.c) void {
 /// `interpretKeyEvents:`; their key events already reached the UI, so nothing is done (and
 /// NSResponder's beep is not sounded).
 fn doCommandBySelector(_: Id, _: Sel, _: Sel) callconv(.c) void {}
+
+/// The window moved to a display of another scale, or that display's scale changed. The next
+/// `present` resizes the layer's drawables (device.zig `Layer.resize`).
+fn viewDidChangeBackingProperties(view: Id, _: Sel) callconv(.c) void {
+    const m = shellOf(view);
+    m.t.feed(.{ .scale = msg(f64, m.window, "backingScaleFactor", .{}) });
+}
 
 fn windowDidResignKey(view: Id, _: Sel, _: Id) callconv(.c) void {
     shellOf(view).t.feed(.resign);
@@ -300,6 +308,8 @@ pub const Macos = struct {
         msg(void, view, "addTrackingArea:", .{area});
         objc.release(area);
         m.layer.attach(view);
+        // The window has a display now; its scale may not be 1.
+        m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
         if (opt.show) {
             msg(void, window, "center", .{});
             msg(void, window, "makeKeyAndOrderFront:", .{@as(?Id, null)});
@@ -423,6 +433,19 @@ test "macos: a real window reports its size, a resize and the close button" {
     try testing.expectEqual([2]f32{ 640, 480 }, ev.in.viewport);
     msg(void, m.window, "performClose:", .{@as(?Id, null)});
     try testing.expect(!m.poll(&ev));
+}
+
+test "macos: the backing scale is the window's, and follows a change" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    var ev: Events = .{};
+    _ = m.poll(&ev);
+    try testing.expectEqual(@as(f32, @floatCast(msg(f64, m.window, "backingScaleFactor", .{}))), ev.in.scale);
+    // AppKit sends this when the window changes display; the view rereads the scale.
+    msg(void, m.view, "viewDidChangeBackingProperties", .{});
+    _ = m.poll(&ev);
+    try testing.expectEqual(@as(f32, @floatCast(msg(f64, m.window, "backingScaleFactor", .{}))), ev.in.scale);
 }
 
 test "macos: wake ends a wait with no timeout" {
