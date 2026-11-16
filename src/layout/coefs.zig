@@ -124,7 +124,7 @@ pub fn coefs(t: *const Tree, k: *Coefs, axis: Axis) void {
         const pct = simd.loadF(c.pct[a], i);
         const fl = simd.loadF(c.flow, i);
         // The same algebra as layout.resolve, one vector of children at a time.
-        const has_pct = @select(f32, pct > zero, one, zero);
+        const has_pct = @select(f32, pct >= zero, one, zero);
         const keep = one - has_pct;
         const across = (one - main) * @select(f32, grow > zero, one, zero);
         const k0 = nat * keep * (one - fl * across);

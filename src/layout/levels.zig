@@ -134,7 +134,7 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
             const grow = gather(c.grow[a], i);
             const pct = gather(c.pct[a], i);
             const fl = gather(c.flow, i);
-            const has_pct = @select(f32, pct > zero, one, zero);
+            const has_pct = @select(f32, pct >= zero, one, zero);
             const keep = one - has_pct;
             const across = (one - main) * @select(f32, grow > zero, one, zero);
             const k0 = nat * keep * (one - fl * across);

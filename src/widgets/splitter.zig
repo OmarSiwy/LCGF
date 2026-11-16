@@ -68,16 +68,9 @@ pub fn containerStyle(th: *const Theme, axis: Axis) Style {
 /// The first pane: `split` of the container along `axis`, the full container across.
 pub fn firstStyle(th: *const Theme, axis: Axis, split: f32) Style {
     _ = th;
-    const share = shareFloor(base.unit(split));
+    const share = base.unit(split);
     const sizes = [2][2]types.Size{ .{ .pct(share), .fill }, .{ .fill, .pct(share) } };
     return .{ .dir = .y, .size = sizes[@backingInt(axis)], .clip = true };
-}
-
-/// Layout reads `Size.pct(0)` as "no percentage" and gives the pane its content's size
-/// (layout.resolve: `has_pct = pct > 0`), so a share of 0 is sent as 1e-6, which snaps to
-/// 0 px.
-fn shareFloor(share: f32) f32 {
-    return @max(share, 1e-6);
 }
 
 /// The handle: `handle_px` along `axis`, the full container across, with rounded ends.
@@ -101,7 +94,7 @@ pub const cursors = [2]@import("../runtime/context.zig").Cursor{ .resize_h, .res
 /// it exactly whatever their contents (a grower would start from its content's size).
 pub fn secondStyle(th: *const Theme, axis: Axis, split: f32) Style {
     _ = th;
-    const rest = shareFloor(1 - base.unit(split));
+    const rest = 1 - base.unit(split);
     const sizes = [2][2]types.Size{ .{ .pct(rest), .fill }, .{ .fill, .pct(rest) } };
     return .{ .dir = axis, .size = sizes[@backingInt(axis)] };
 }
