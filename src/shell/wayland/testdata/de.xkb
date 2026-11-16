@@ -1,0 +1,49 @@
+// An excerpt of the German keymap as libxkbcommon 1.13 compiles it (xkbcli compile-keymap
+// --layout de, xkeyboard-config 2.47): the shape a compositor sends in wl_keyboard.keymap.
+xkb_keymap {
+xkb_keycodes "evdev_aliases(qwertz)" {
+	minimum = 8;
+	maximum = 709;
+	<ESC>                = 9;
+	<AE01>               = 10;
+	<AE11>               = 20;
+	<BKSP>               = 22;
+	<AD06>               = 29;
+	<RTRN>               = 36;
+	<AC01>               = 38;
+	<AC10>               = 47;
+	<TLDE>               = 49;
+	<LFSH>               = 50;
+	<SPCE>               = 65;
+	<KP7>                = 79;
+	<RALT>               = 108;
+	alias <ALGR>         = <RALT>;
+	alias <LatA>         = <AC01>;
+};
+xkb_types "complete" {
+	virtual_modifiers NumLock,Alt,LevelThree,Super,LevelFive,Meta,Hyper=0x4000,ScrollLock=0x8000;
+
+};
+xkb_symbols "pc_de_inet(evdev)" {
+	name[1]="German";
+	key <ESC>                {	[          Escape ] };
+	key <AE01>               {	[               1,          exclam,     onesuperior,      exclamdown ] };
+	key <AE11>               {
+		type= "FOUR_LEVEL_PLUS_LOCK",
+		symbols[1]= [          ssharp,        question,       backslash,    questiondown,           U1E9E ]
+	};
+	key <BKSP>               {	[       BackSpace,       BackSpace ] };
+	key <AD06>               {	[               z,               Z,       leftarrow,             yen ] };
+	key <RTRN>               {	[          Return ] };
+	key <AC01>               {	[               a,               A,              ae,              AE ] };
+	key <AC10>               {	[      odiaeresis,      Odiaeresis, dead_doubleacute,   dead_belowdot ] };
+	key <TLDE>               {	[ dead_circumflex,          degree,           U2032,           U2033 ] };
+	key <LFSH>               {	[         Shift_L ] };
+	key <SPCE>               {	[           space ] };
+	key <KP7>                {	[         KP_Home,            KP_7 ] };
+	key <RALT>               {
+		type= "ONE_LEVEL",
+		symbols[1]= [ ISO_Level3_Shift ]
+	};
+};
+};
