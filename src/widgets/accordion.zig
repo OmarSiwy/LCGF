@@ -20,6 +20,9 @@ const Style = types.Style;
 const Id = types.Id;
 const Response = types.Response;
 const Theme = base.Theme;
+const simd = @import("../core/simd.zig");
+const a11y = @import("../a11y/tree.zig");
+const Tree = @import("../core/tree.zig").Tree;
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -36,7 +39,9 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const
     _ = f.leaf(.none, indicatorStyle(th, expanded.*));
     _ = base.label(f, th, title);
     f.close();
-    _ = f.open(.none, panelStyle(th, expanded.*));
+    f.tree().c.value[head.ix()] = simd.b2f(expanded.*);
+    const panel = f.open(.none, panelStyle(th, expanded.*));
+    f.tree().c.role[panel.ix()] = region;
     return r;
 }
 
@@ -49,7 +54,7 @@ pub fn close(f: *Frame) void {
 /// A section spans its parent's width: the header above, the panel below.
 pub fn sectionStyle(th: *const Theme) Style {
     _ = th;
-    return .{ .dir = .y, .size = .{ .fill, .fit } };
+    return .{ .dir = .y, .size = .{ .fill, .fit }, .role = .group };
 }
 
 /// The header: a row across the section holding the indicator and the title, padded and
@@ -92,6 +97,26 @@ pub fn expand(expanded: bool, clicked: bool, focused: bool, in: *const Input) bo
     return base.toggle(expanded, (@intFromBool(clicked) + presses) & 1 == 1);
 }
 
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees of a section (WAI-ARIA APG accordion pattern): the section
+/// is a `group`, its header a `button` named by its title (from content) whose value is 1
+/// while expanded, and the panel a `region`. `types.Role` has no region, so both front ends
+/// write that byte to the role column.
+pub const region: u8 = @backingInt(a11y.Role.region);
+
+/// Fills the caller's semantic columns for the section at tree row `row`, from the tree:
+/// the header is expandable, and expanded while its value is 1; the panel and the section
+/// are labelled by the header. Call after the frame, for either front end.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, row: u32) void {
+    const head = row + 1;
+    const panel = row + 4;
+    const open_ = -%@as(u8, @intFromBool(t.c.value[head] != 0));
+    s.c.state[head] |= a11y.State.bitsOf(.{ .expandable = true }) | (a11y.State.bitsOf(.{ .expanded = true }) & open_);
+    s.c.labelled_by[panel] = head;
+    s.c.labelled_by[row] = head;
+}
+
 /// The accordion's sections as spec nodes.
 pub const ct = struct {
     /// A section whose header is the widget `id`, titled by the string field `title`, showing
@@ -127,12 +152,14 @@ pub const ct = struct {
                 const sec = t.push(parent, .none, &n.style);
                 var hs = n.children[0].style;
                 hs.fill = base.buttonFill(&th, ui.response(next.* + 1, in));
+                hs.value = simd.b2f(open_);
                 const head = t.push(sec, .hash(id), &hs);
                 _ = t.push(head, .none, &indicatorStyle(&th, open_));
                 next.* += 3;
                 ui.push(n.children[0].children[1], head, next, in);
                 t.seal(head);
                 const panel = t.push(sec, .none, &panelStyle(&th, open_));
+                t.c.role[panel] = region;
                 next.* += 1;
                 inline for (n.children[1].children) |c| ui.push(c, panel, next, in);
                 t.seal(panel);
@@ -302,6 +329,42 @@ test "expand: clicks and focused presses toggle; unfocused presses do not" {
     try testing.expect(!expand(false, false, true, &in));
     try testing.expect(expand(false, true, true, &in));
     try testing.expect(!expand(false, false, false, &in));
+}
+
+test "accordion: group, header button named by its title with expanded state, panel region" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const Case = struct { name: []const u8, title: []const u8, open: bool };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        const cases = [_]Case{ .{ .name = "general", .title = "General", .open = true }, .{ .name = "advanced", .title = "Advanced", .open = false } };
+        for (cases) |c| semantics(t, &sem, t.find(.hash(c.name)) - 1);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        for (cases) |c| {
+            const head = t.find(.hash(c.name));
+            const sec = head - 1;
+            const panel = head + 3;
+            try testing.expectEqual(a11y.Role.group, @as(a11y.Role, @fromBackingInt(t.c.role[sec])));
+            try testing.expectEqual(a11y.Role.button, @as(a11y.Role, @fromBackingInt(t.c.role[head])));
+            try testing.expectEqual(a11y.Role.region, @as(a11y.Role, @fromBackingInt(t.c.role[panel])));
+            try testing.expectEqualStrings(c.title, check.nameOf(&sem, tx, str, head));
+            try testing.expectEqualStrings(c.title, check.nameOf(&sem, tx, str, panel));
+            try testing.expectEqualStrings(c.title, check.nameOf(&sem, tx, str, sec));
+            try testing.expectEqual(simd.b2f(c.open), t.c.value[head]);
+            const st: a11y.State = @bitCast(sem.c.state[head]);
+            try testing.expect(st.expandable);
+            try testing.expectEqual(c.open, st.expanded);
+            try testing.expect(!st.checked);
+        }
+    }
 }
 
 test {
