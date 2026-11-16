@@ -120,7 +120,7 @@ pub const Region = struct {
 };
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
-const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32 };
+const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border: f32, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32 };
 
 /// Writes, for every node of `t`, a hash of what painting it reads: its rect, its visible
 /// (clipped) rect, its look, and the text run or custom draw it owns. Two frames that paint a
@@ -133,6 +133,7 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
             .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
+            .border = c.border[i],
             .uv = c.uv[i],
             .radii = c.radii[i],
             .alpha = c.alpha[i],
@@ -679,7 +680,7 @@ test "damage: random edits over many frames, every changed node's old and new re
         // Reference: a node needs repainting when anything paint reads from it differs.
         for (0..sc.t.len) |i| {
             const same = std.meta.eql(sc.t.rect(@intCast(i)), last.t.rect(@intCast(i))) and
-                std.meta.eql(sc.t.c.look[i], last.t.c.look[i]) and
+                std.meta.eql(sc.t.c.look[i], last.t.c.look[i]) and sc.t.c.border[i] == last.t.c.border[i] and
                 sc.hash[i] == last.hash[i];
             if (!same) {
                 try testing.expectEqual(1, tr.dm.dirty[i]);

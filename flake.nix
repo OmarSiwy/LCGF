@@ -53,6 +53,12 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
           VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
         };
+        # Hardware counters for the benchmark (lane optimise, docs/perf/cache.md): perf stat
+        # over a whole run; `zig build bench -- --counters` counts per pass itself.
+        devShells.bench = pkgs.mkShell {
+          inputsFrom = [ devShells.default ];
+          packages = [ pkgs.perf ];
+        };
         # Shader translation and validation (lane shaders): the golden shell plus naga-cli,
         # spirv-val and glslangValidator.
         devShells.shaders = pkgs.mkShell {

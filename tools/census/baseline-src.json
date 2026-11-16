@@ -44,6 +44,11 @@
     "jcc": 5,
     "short_fwd": 1
   },
+  "p_apply_text_kept": {
+    "back": 8,
+    "jcc": 23,
+    "short_fwd": 4
+  },
   "p_atlas_evict": {
     "back": 1,
     "jcc": 4,
@@ -234,6 +239,11 @@
     "jcc": 2,
     "short_fwd": 0
   },
+  "p_prepare_kept": {
+    "back": 3,
+    "jcc": 9,
+    "short_fwd": 1
+  },
   "p_raster_coverage": {
     "back": 1,
     "jcc": 4,
@@ -253,6 +263,11 @@
     "back": 1,
     "jcc": 3,
     "short_fwd": 0
+  },
+  "p_reuse": {
+    "back": 15,
+    "jcc": 39,
+    "short_fwd": 6
   },
   "p_sdf_distances": {
     "back": 9,
@@ -329,6 +344,11 @@
     "jcc": 0,
     "short_fwd": 0
   },
+  "p_tree_push_row": {
+    "back": 0,
+    "jcc": 0,
+    "short_fwd": 0
+  },
   "p_tween": {
     "back": 1,
     "jcc": 2,
@@ -343,20 +363,5 @@
     "back": 1,
     "jcc": 3,
     "short_fwd": 0
-  },
-  "p_reuse": {
-    "back": 15,
-    "jcc": 39,
-    "short_fwd": 6
-  },
-  "p_prepare_kept": {
-    "back": 3,
-    "jcc": 9,
-    "short_fwd": 1
-  },
-  "p_apply_text_kept": {
-    "back": 8,
-    "jcc": 23,
-    "short_fwd": 4
   }
 }

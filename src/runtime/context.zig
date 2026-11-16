@@ -128,9 +128,11 @@ pub const Context = struct {
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
     fn build(carver: *mem.Carver, limits: Limits) Context {
+        // The generations are never laid out at once, so they share layout scratch.
+        const first = Tree.init(carver, limits.nodes);
         return .{
             .limits = limits,
-            .trees = .{ Tree.init(carver, limits.nodes), Tree.init(carver, limits.nodes) },
+            .trees = .{ first, Tree.initSharing(carver, limits.nodes, &first) },
             .texts = .{ Texts.init(carver, limits.texts), Texts.init(carver, limits.texts) },
             .customs = .{ Customs.init(carver, limits.customs), Customs.init(carver, limits.customs) },
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
@@ -220,6 +222,16 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     more = example_limits;
     more.depth += 16;
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
+}
+
+test "requiredBytes: 874 bytes per node of capacity (docs/perf/bytes.md)" {
+    // Two tree generations of 376 bytes a row less the 48 bytes of layout scratch they share,
+    // plus 170 bytes of draw list. A change here is a change to the recorded footprint.
+    var a = example_limits;
+    a.nodes = 4096;
+    var b = a;
+    b.nodes = 8192;
+    try testing.expectEqual(874 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {
