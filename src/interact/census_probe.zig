@@ -16,3 +16,6 @@ export fn p_hit_layered(t: *const Tree, ly: *const lcgr.overlay.Layers, x: f32, 
 export fn p_focus_seek(t: *const Tree, cur: u32, back: bool) u32 {
     return lcgr.focus.seek(t, t.c.sense, 8, 0, t.len, cur, back);
 }
+export fn p_focus_scan(t: *const Tree, sc: *lcgr.focus.Scopes) void {
+    lcgr.focus.scan(t, sc);
+}

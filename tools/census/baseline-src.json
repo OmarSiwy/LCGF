@@ -59,6 +59,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_focus_scan": {
+    "back": 1,
+    "jcc": 3,
+    "short_fwd": 0
+  },
   "p_focus_seek": {
     "back": 1,
     "jcc": 3,

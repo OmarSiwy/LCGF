@@ -11,6 +11,7 @@ const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
 const Interaction = @import("interaction.zig").Interaction;
+const mem = @import("../core/mem.zig");
 const Rect = types.Rect;
 const none = types.none;
 
@@ -21,7 +22,71 @@ const W = simd.lanes;
 /// host with other codes sets its own.
 pub const Keymap = struct {
     tab: u8 = 0x2b,
+    right: u8 = 0x4f,
+    left: u8 = 0x50,
+    down: u8 = 0x51,
+    up: u8 = 0x52,
+    home: u8 = 0x4a,
+    end: u8 = 0x4d,
 };
+
+/// The focus scope column set: which nodes group their focusable descendants (a toolbar, a
+/// radio group, a listbox, a tab list), and what `scan` derives from that. One row per node of
+/// the tree it is scanned with; the caller keeps it with that tree (last frame's, for `step`).
+pub const Scopes = struct {
+    c: Columns,
+
+    /// `kind` bits.
+    pub const group: u8 = 1;
+
+    pub const Columns = struct {
+        /// Set by the caller: `group` for a node whose focusable descendants are one composite
+        /// widget (WAI-ARIA APG): Tab enters and leaves it as one stop, arrows move inside.
+        kind: []u8,
+        /// Written by `scan`: the row of the nearest group above the node, or `none`.
+        group: []u32,
+        /// Written by `scan`, at group rows: the group's first focusable row, or `none`.
+        lead: []u32,
+        /// Written by `scan`: 1 for a Tab stop, a focusable row that is in no group or is its
+        /// group's lead.
+        stop: []u8,
+    };
+
+    /// One row per node of a tree of capacity `cap`, plus the spare rows every column has.
+    pub fn init(carver: *mem.Carver, cap: u32) Scopes {
+        std.debug.assert(cap > 0);
+        return .{ .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+    /// Clears every `kind`, for the next frame.
+    pub fn reset(sc: *Scopes) void {
+        @memset(sc.c.kind, 0);
+    }
+};
+
+/// Fills `group`, `lead` and `stop` from `kind`, `parent`, `sense` and `id`. One forward sweep
+/// (a child needs its parent's group), run once the tree is built. Rows outside groups write
+/// their lead to a spare row, so the sweep has no branch on the group.
+pub fn scan(t: *const Tree, sc: *Scopes) void {
+    if (t.len == 0) return;
+    const c = &sc.c;
+    const parent = t.c.parent;
+    const spare: u32 = @intCast(simd.padded(t.cap));
+    const focusable: u8 = @bitCast(types.Sense{ .focus = true });
+    c.group[0] = none;
+    c.lead[0] = none;
+    c.stop[0] = @intFromBool(simd.andB((t.c.sense[0] & focusable) != 0, t.c.id[0] != 0));
+    for (1..t.len) |i| {
+        const p = parent[i];
+        const g = pick(u32, (c.kind[p] & Scopes.group) != 0, p, c.group[p]);
+        c.group[i] = g;
+        c.lead[i] = none;
+        const able = simd.andB((t.c.sense[i] & focusable) != 0, t.c.id[i] != 0);
+        const slot = @min(g, spare);
+        // `i` when able, else all ones: rows rise, so the first able row stays the minimum.
+        c.lead[slot] = @min(c.lead[slot], @as(u32, @intCast(i)) | -%@as(u32, @intFromBool(!able)));
+        c.stop[i] = @intFromBool(simd.andB(able, simd.orB(g == none, c.lead[slot] == i)));
+    }
+}
 
 /// Keyboard-focus state carried from frame to frame. Plain data; the caller owns it and calls
 /// `step` once per frame, after `Interaction.step`.
@@ -40,18 +105,44 @@ pub const Focus = struct {
     /// that senses focus in row order (tree order, as the web's tab order with no tabindex),
     /// Shift+Tab to the previous one; both wrap. Rows with id 0 cannot hold focus and are
     /// skipped. Key repeats move again.
-    pub fn step(s: *Focus, it: *Interaction, prev: *const Tree, in: *const Input) void {
+    ///
+    /// Inside a group (`Scopes`, scanned on `prev`) the group is one Tab stop: Tab enters it at
+    /// its first focusable row and leaves it from any row. Arrows move between the group's
+    /// focusable rows (Right and Down forward, Left and Up back, wrapping) and Home and End go
+    /// to its first and last, as the WAI-ARIA APG keyboard interface asks of composite widgets.
+    /// Outside a group, arrows and Home/End leave focus alone for the focused widget to use.
+    pub fn step(s: *Focus, it: *Interaction, prev: *const Tree, sc: *const Scopes, in: *const Input) void {
         const press = simd.andB(in.buttons.left, !s.left);
         const focusable: u8 = @bitCast(types.Sense{ .focus = true });
+        const k = s.keys;
+        const c = &sc.c;
+        const last = prev.cap - 1;
         var key = false;
         for (in.events) |e| {
             const down = simd.orB(e.kind == .press, e.kind == .repeat);
             key = simd.orB(key, e.kind == .press);
-            const tab = simd.andB(down, e.code == s.keys.tab);
             const cur = simd.find(prev.c.id, prev.len, it.focus);
-            const next = seek(prev, prev.c.sense, focusable, 0, prev.len, cur, e.mods.shift);
-            const id = prev.c.id[@min(next, prev.cap - 1)];
-            it.focus = simd.selU(simd.andB(tab, next != none), id, it.focus);
+            const row = @min(cur, last);
+            const g = pick(u32, cur != none, c.group[row], none);
+            const gr = @min(g, last);
+            const in_group = g != none;
+            // Tab: from inside a group, as if from its lead, so Shift+Tab leaves it too.
+            const from_tab = pick(u32, in_group, c.lead[gr], cur);
+            const to_tab = seek(prev, c.stop, 1, 0, prev.len, from_tab, e.mods.shift);
+            // Arrows: the group's rows [g + 1, end[g]); an empty range outside a group.
+            const lo = g +% 1;
+            const hi = pick(u32, in_group, prev.c.end[gr], 0);
+            const fwd = simd.orB(e.code == k.right, e.code == k.down);
+            const back = simd.orB(e.code == k.left, e.code == k.up);
+            const home = e.code == k.home;
+            const end = e.code == k.end;
+            // Home is "forward from just before the range", End "back from just after it".
+            const from_arrow = pick(u32, home, g, pick(u32, end, hi, cur));
+            const to_arrow = seek(prev, prev.c.sense, focusable, lo, hi, from_arrow, simd.orB(back, end));
+            const arrow = simd.orB(simd.orB(fwd, back), simd.orB(home, end));
+            const next = pick(u32, e.code == k.tab, to_tab, pick(u32, arrow, to_arrow, none));
+            const id = prev.c.id[@min(next, last)];
+            it.focus = pick(u32, simd.andB(down, next != none), id, it.focus);
         }
         // A key after a press shows the ring; a press after a key hides it.
         s.visible = simd.andB(simd.orB(s.visible, key), !press);
@@ -98,8 +189,16 @@ pub fn seek(t: *const Tree, col: []const u8, mask: u8, lo: u32, hi: u32, cur: u3
     return (base +% @reduce(.Min, best) *% sign) | -%@as(u32, @intFromBool(!found));
 }
 
+/// `c ? a : b` as a cmov, as `pick` in interaction.zig (Zig 0.18 re-branches mask selects on
+/// loaded operands; docs/CHECKS.md).
+inline fn pick(comptime T: type, c: bool, a: T, b: T) T {
+    return if (c) blk: {
+        @branchHint(.unpredictable);
+        break :blk a;
+    } else b;
+}
+
 const testing = std.testing;
-const mem = @import("../core/mem.zig");
 const Replay = @import("../core/input.zig").Replay;
 const Sense = types.Sense;
 const Id = types.Id;
@@ -108,6 +207,7 @@ const Id = types.Id;
 const Form = struct {
     raw: [64 * 1024]u8 align(mem.column_align) = undefined,
     t: Tree = undefined,
+    sc: Scopes = undefined,
 
     const ids = [_]Id{ Id.from("name"), Id.from("red"), Id.from("blue"), Id.from("ok"), Id.from("cancel") };
 
@@ -117,6 +217,7 @@ const Form = struct {
         var carver: mem.Carver = .{ .buf = &f.raw };
         f.t = Tree.init(&carver, 16);
         var tx = Texts.init(&carver, 1);
+        f.sc = Scopes.init(&carver, 16);
         const t = &f.t;
         const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(200) }, .gap = 10 });
         for (ids) |id| {
@@ -137,7 +238,9 @@ const Walk = struct {
     ring: [16]Rect = undefined,
     n: usize = 0,
 
-    fn run(w: *Walk, t: *const Tree, src: []const u8) !void {
+    /// Scans `sc` on `t` first, as the front end does after building the tree.
+    fn run(w: *Walk, t: *const Tree, sc: *Scopes, src: []const u8) !void {
+        scan(t, sc);
         var text: [16]u8 = undefined;
         var events: [8]Input.Event = undefined;
         var contacts: [1]Input.Contact = undefined;
@@ -145,7 +248,7 @@ const Walk = struct {
         var r: Replay = .{ .src = src };
         while (try r.next(buf)) |in| : (w.n += 1) {
             w.it.step(t, in);
-            w.fo.step(&w.it, t, in);
+            w.fo.step(&w.it, t, sc, in);
             w.focus[w.n] = w.it.focus;
             w.ring[w.n] = w.fo.ring(&w.it, t);
         }
@@ -164,7 +267,7 @@ test "walkthrough: the ring shows for keys, hides for the pointer, follows focus
     // hides it; a key shows it again on "ok"; a click on nothing focusable clears focus (as
     // `Interaction.step` does) and the ring with it.
     w.it.focus = bi(Form.ids[0]);
-    try w.run(&f.t,
+    try w.run(&f.t, &f.sc,
         \\frame
         \\frame
         \\press 4
@@ -214,7 +317,7 @@ test "walkthrough: Tab and Shift+Tab move through the form in tree order and wra
     var w: Walk = .{};
     // 43 is Tab (HID). Nothing focused: Tab goes to the first stop. Two Tabs in one frame
     // move twice; a repeat moves again; another key (44, Space) does not move.
-    try w.run(&f.t,
+    try w.run(&f.t, &f.sc,
         \\frame
         \\press 43
         \\frame
@@ -270,4 +373,107 @@ test "seek: wraps both ways, skips inert and anonymous rows, none when nothing q
     t.c.id[2] = 0;
     try testing.expectEqual(none, seek(t, t.c.sense, m, 2, 4, 2, false));
     try testing.expectEqual(none, seek(t, t.c.sense, m, 0, 0, none, true));
+}
+
+/// root { name, colours (group) { red, blue, green }, ok }, all named; the group node is inert.
+const Radios = struct {
+    raw: [64 * 1024]u8 align(mem.column_align) = undefined,
+    t: Tree = undefined,
+    sc: Scopes = undefined,
+
+    const name = Id.from("name");
+    const colours = Id.from("colours");
+    const red = Id.from("red");
+    const blue = Id.from("blue");
+    const green = Id.from("green");
+    const ok = Id.from("ok");
+
+    fn build(f: *Radios) void {
+        var carver: mem.Carver = .{ .buf = &f.raw };
+        f.t = Tree.init(&carver, 16);
+        f.sc = Scopes.init(&carver, 16);
+        const t = &f.t;
+        const root = t.push(0, .none, &.{});
+        f.leaf(root, name);
+        const group = t.push(root, colours, &.{ .dir = .x });
+        f.sc.c.kind[group] = Scopes.group;
+        for ([_]Id{ red, blue, green }) |id| f.leaf(group, id);
+        t.seal(group);
+        f.leaf(root, ok);
+        t.seal(root);
+    }
+    fn leaf(f: *Radios, parent: u32, id: Id) void {
+        const n = f.t.push(parent, id, &.{ .size = .{ .px(40), .px(20) } });
+        f.t.seal(n);
+        f.t.c.sense[n] = @bitCast(Sense.button);
+    }
+};
+
+test "walkthrough: a radio group is one Tab stop; arrows, Home and End move inside it" {
+    var f: Radios = .{};
+    f.build();
+    var w: Walk = .{};
+    // HID: 43 Tab, 79 Right, 80 Left, 81 Down, 82 Up, 74 Home, 77 End.
+    try w.run(&f.t, &f.sc,
+        \\# name; arrows outside a group do nothing
+        \\frame
+        \\press 43
+        \\press 79
+        \\# into the group at its first item, then along it and around
+        \\frame
+        \\press 43
+        \\frame
+        \\press 79
+        \\frame
+        \\press 81
+        \\frame
+        \\press 79
+        \\frame
+        \\press 80
+        \\frame
+        \\press 82
+        \\frame
+        \\press 77
+        \\frame
+        \\press 74
+        \\# out of the group from blue, forward and back
+        \\frame
+        \\press 79
+        \\press 43
+        \\frame
+        \\press 43 shift
+        \\frame
+        \\press 79
+        \\press 43 shift
+        \\# from name: through the group in one stop
+        \\frame
+        \\press 43
+        \\press 43
+    );
+    const R = Radios;
+    try testing.expectEqualSlices(u32, &.{
+        bi(R.name),  bi(R.red),  bi(R.blue),  bi(R.green), bi(R.red),
+        bi(R.green), bi(R.blue), bi(R.green), bi(R.red),   bi(R.ok),
+        bi(R.red),   bi(R.name), bi(R.ok),
+    }, w.focus[0..w.n]);
+}
+
+test "scan: groups, leads and Tab stops, with nested and inert rows" {
+    var f: Radios = .{};
+    f.build();
+    const c = &f.sc.c;
+    // Rows: 0 root, 1 name, 2 colours, 3 red, 4 blue, 5 green, 6 ok.
+    scan(&f.t, &f.sc);
+    try testing.expectEqualSlices(u32, &.{ none, none, none, 2, 2, 2, none }, c.group[0..7]);
+    try testing.expectEqual(3, c.lead[2]);
+    try testing.expectEqualSlices(u8, &.{ 0, 1, 0, 1, 0, 0, 1 }, c.stop[0..7]);
+    // red stops sensing focus: blue leads. Making the root a group puts everyone in it; the
+    // inner group's lead stays a stop, a group nested in a group.
+    f.t.c.sense[3] = 0;
+    c.kind[0] = Scopes.group;
+    scan(&f.t, &f.sc);
+    try testing.expectEqualSlices(u32, &.{ none, 0, 0, 2, 2, 2, 0 }, c.group[0..7]);
+    try testing.expectEqual(1, c.lead[0]);
+    try testing.expectEqual(4, c.lead[2]);
+    try testing.expectEqualSlices(u8, &.{ 0, 1, 0, 0, 1, 0, 0 }, c.stop[0..7]);
 }
