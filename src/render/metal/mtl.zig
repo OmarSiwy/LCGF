@@ -91,3 +91,6 @@ pub const Region = extern struct { origin: Origin = .{}, size: Size };
 pub const LoadAction = enum(U) { dont_care = 0, load = 1, clear = 2 };
 pub const StoreAction = enum(U) { dont_care = 0, store = 1 };
 pub const ClearColor = extern struct { r: f64, g: f64, b: f64, a: f64 };
+/// MTLStorageMode.managed: a CPU copy kept in sync by a blit `synchronizeResource:`; readable
+/// render targets on every Mac (shared textures are Apple silicon only).
+pub const storage_mode_managed: U = 1;
