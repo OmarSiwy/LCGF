@@ -27,6 +27,7 @@ const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
 const incremental = @import("../layout/incremental.zig");
+const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
 
@@ -234,12 +235,16 @@ pub const Frame = struct {
         incremental.prepareKept(t, kept);
         incremental.applyTextKept(t, tx, .x, kept);
         incremental.fitKept(t, .x, kept);
-        incremental.resolveKept(t, .x, f.in.viewport[0], kept);
+        // Nothing kept, the usual frame: resolve level by level, the same sizes bit for bit
+        // and a third cheaper than the row-by-row sweep (docs/perf/port-perf.md).
+        const lv = &f.ctx.levels;
+        if (kept.len == 0) levels.build(t, lv);
+        resolve(t, lv, .x, f.in.viewport[0], kept);
         layout.textAvail(t, tx);
         font.wrap(tx);
         incremental.applyTextKept(t, tx, .y, kept);
         incremental.fitKept(t, .y, kept);
-        incremental.resolveKept(t, .y, f.in.viewport[1], kept);
+        resolve(t, lv, .y, f.in.viewport[1], kept);
         incremental.placeKept(t, kept);
         // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
@@ -279,6 +284,12 @@ pub const Frame = struct {
         };
     }
 };
+
+/// `incremental.resolveKept`, or `levels.resolve` (`lv` built) when nothing is kept. One
+/// branch per frame.
+pub fn resolve(t: *Tree, lv: *const levels.Levels, axis: types.Axis, viewport: f32, kept: []const u32) void {
+    if (kept.len == 0) levels.resolve(t, lv, axis, viewport) else incremental.resolveKept(t, axis, viewport, kept);
+}
 
 /// Rect of row `i` of `t`, or a zero rect for `none`. The read is clamped into bounds and the
 /// result scaled by 0 or 1, so there is no branch.
