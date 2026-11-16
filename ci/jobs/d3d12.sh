@@ -12,4 +12,12 @@ export WINEPREFIX="${WINEPREFIX:-$PWD/zig-out/wineprefix}" WINEDEBUG="${WINEDEBU
 export WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe="
 export VK_ICD_FILENAMES="${LVP_ICD:-/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json}"
 unset LD_LIBRARY_PATH
-"${WINE:-wine}" zig-out/bin/d3d12-test.exe 2>&1 | grep -v -e '^libEGL' -e '^pci id' -e '^MESA' -e '^$'
+quiet() { grep -v -e '^libEGL' -e '^pci id' -e '^MESA' -e '^$' || true; }
+"${WINE:-wine}" zig-out/bin/d3d12-test.exe 2>&1 | quiet
+for mode in offscreen present; do
+    out=zig-out/d3d12/$mode; rm -rf "$out"
+    "${WINE:-wine}" zig-out/bin/d3d12-play.exe "$out" "$mode" 2>&1 | quiet
+    for ref in src/render/conformance/*.png; do
+        python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref"
+    done
+done

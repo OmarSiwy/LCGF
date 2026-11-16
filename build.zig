@@ -500,7 +500,15 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
     }) });
-    for ([_]*std.Build.Module{d3d12_tests.root_module}) |m| {
+    // Draws the render conformance scenes as PNGs (src/render/d3d12/play.zig).
+    const d3d12_play = b.addExecutable(.{ .name = "d3d12-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/d3d12/play.zig"),
+        .target = win,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+    }) });
+    for ([_]*std.Build.Module{ d3d12_tests.root_module, d3d12_play.root_module }) |m| {
         for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
         // The committed HLSL of the shipped shaders (src/render/shaders/gen/, from naga).
         for ([_][]const u8{ "stock", "example" }) |v|
@@ -508,7 +516,9 @@ pub fn build(b: *std.Build) void {
         for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
             m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
     }
-    b.step("d3d12", "Build zig-out/bin/d3d12-test.exe, the Direct3D 12 back end's tests (ci/run.sh d3d12 runs it under Wine)").dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
+    const d3d12_step = b.step("d3d12", "Build zig-out/bin/d3d12-test.exe (the Direct3D 12 back end's tests) and d3d12-play.exe (draws the render conformance scenes); ci/run.sh d3d12 runs them under Wine");
+    d3d12_step.dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
+    d3d12_step.dependOn(&b.addInstallArtifact(d3d12_play, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
