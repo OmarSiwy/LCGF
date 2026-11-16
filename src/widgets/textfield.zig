@@ -638,7 +638,7 @@ test "textfield a11y: role text input named by its caption; text and caret prese
     }
 }
 
-var field_content: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+var field_content: [2]@import("popover.zig").Semantic(64) = .{ .{}, .{} };
 
 test "textfield a11y: its text and placeholder, in both front ends" {
     const popover = @import("popover.zig");
