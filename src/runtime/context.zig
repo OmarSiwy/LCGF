@@ -16,6 +16,7 @@ const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
+const Memos = @import("reuse.zig").Memos;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -29,6 +30,8 @@ pub const Limits = struct {
     depth: u32 = 64,
     /// Timers armed by `Frame.timer`.
     timers: u32 = 32,
+    /// Subtrees remembered by `Frame.reuse`.
+    memos: u32 = 128,
 };
 
 /// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
@@ -102,6 +105,8 @@ pub const Context = struct {
     timers: scheduler.Timers,
     /// Set from any thread to ask for a frame; see `scheduler.Wake`.
     waker: scheduler.Wake = .{},
+    /// Where each reusable subtree was built and from which signal versions (`Frame.reuse`).
+    memos: Memos,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -116,6 +121,7 @@ pub const Context = struct {
             .signals = Signals.init(carver, limits.signals),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
+            .memos = Memos.init(carver, limits.memos),
         };
     }
 
@@ -214,6 +220,8 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
     try testing.expectEqual(example_limits.signals, ctx.signals.cap);
+    try testing.expectEqual(example_limits.memos, ctx.memos.cap);
+    try testing.expect(@intFromPtr(ctx.memos.c.stamp.ptr + ctx.memos.c.stamp.len) <= hi);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
