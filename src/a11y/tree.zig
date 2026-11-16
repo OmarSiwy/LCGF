@@ -11,6 +11,7 @@ const none = types.none;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Strings = @import("../core/strings.zig").Strings;
+const Interaction = @import("../interact/interaction.zig").Interaction;
 
 /// What a node is to assistive technology: the roles the WAI-ARIA Authoring Practices patterns
 /// use. One byte, stored in `Tree.Columns.role`. The first eight are `types.Role` with the same
@@ -192,13 +193,9 @@ pub fn names(t: *const Tree, s: *Semantics) void {
         const content = from_content[c.role[k]];
         const self = (first[k] & content) | (c.text[k] & ~content);
         const lb = s.c.labelled_by[k];
-        // A mask, or an address select, between `self` and `first[lb]` compiles to a branch
-        // around the load on Zig 0.18; the unpredictable hint keeps it a cmov (docs/CHECKS.md).
+        // A mask or an address select here compiles to a branch around the load (`pick`).
         const via = first[@min(lb, last)];
-        s.c.name[k] = if (lb != none) blk: {
-            @branchHint(.unpredictable);
-            break :blk via;
-        } else self;
+        s.c.name[k] = pick(u32, lb != none, via, self);
     }
 }
 
@@ -362,6 +359,70 @@ pub fn diff(cur: *const Export, prev: *const Export, ch: *Changes) void {
         w = simd.emit(u32, ch.removed, w, b.id[r], gone);
     }
     ch.removed_len = w;
+}
+
+/// A request from assistive technology, as data: the bridge turns each platform action
+/// (AccessKit `ActionRequest`) into one row and the host passes the slice in with the frame's
+/// input. Nothing is called back; the frame reads the rows like any other input.
+pub const Action = extern struct {
+    kind: Kind,
+    _pad: [3]u8 = @splat(0),
+    /// Export id of the node (`Export.Columns.id`), which is the widget's `Id`.
+    target: u32,
+    /// For `set_value`: the new value, in the node's own units (as `Tree.Columns.value`).
+    value: f32 = 0,
+
+    pub const Kind = enum(u8) {
+        /// The default action: a click on the node.
+        press,
+        /// Move keyboard focus to the node.
+        focus,
+        /// Set the node's value (a slider, a spin button).
+        set_value,
+    };
+};
+
+/// Applies this frame's actions to the interaction state as the user's own input would:
+/// `press` makes the target this frame's click and `focus` gives it focus, so widgets that read
+/// `Interaction.response` act on them with no code of their own. Run after `Interaction.step`
+/// and `Focus.step`, before building the frame. A later action on the same field wins.
+pub fn apply(it: *Interaction, actions: []const Action) void {
+    // The last row of each kind, as a max over 1-based row numbers (0: none). A running
+    // select on the target was vectorized into a find-last that branches on the kinds.
+    var press: u32 = 0;
+    var focus: u32 = 0;
+    std.debug.assert(actions.len < none);
+    for (actions, 1..) |a, k| {
+        const row: u32 = @intCast(k);
+        press = @max(press, row & -%@as(u32, @intFromBool(a.kind == .press)));
+        focus = @max(focus, row & -%@as(u32, @intFromBool(a.kind == .focus)));
+    }
+    // Rows are read through a clamped index, then the address is selected (see `pick`).
+    if (actions.len == 0) return;
+    const keep = [2]*const u32{ &it.clicked, &actions[@max(press, 1) - 1].target };
+    const move = [2]*const u32{ &it.focus, &actions[@max(focus, 1) - 1].target };
+    it.clicked = keep[@intFromBool(press != 0)].*;
+    it.focus = move[@intFromBool(focus != 0)].*;
+}
+
+/// The value assistive technology set for `id` this frame, or `current` when none did. The last
+/// `set_value` for `id` wins. A widget calls it where it reads its value:
+/// `value.* = a11y.setValue(actions, id, value.*)`.
+pub fn setValue(actions: []const Action, id: types.Id, current: f32) f32 {
+    // Selected as bits: x86 has no cmov for floats.
+    var v: u32 = @bitCast(current);
+    for (actions) |a| v = pick(u32, simd.andB(a.kind == .set_value, a.target == @backingInt(id)), @bitCast(a.value), v);
+    return @bitCast(v);
+}
+
+/// `c ? a : b` as a cmov. Zig 0.18's LLVM turns a select whose operand is loaded only for it
+/// into a branch around the load, through `simd.selU` masks and address selects alike; the
+/// `.unpredictable` hint keeps it a select (as `pick` in src/interact/interaction.zig).
+inline fn pick(comptime T: type, c: bool, a: T, b: T) T {
+    return if (c) blk: {
+        @branchHint(.unpredictable);
+        break :blk a;
+    } else b;
 }
 
 const testing = std.testing;
@@ -758,4 +819,62 @@ test "tree export: diff against last frame emits only the rows that changed and 
     diff(e, &f.out[gen ^ 1], &f.ch);
     try testing.expectEqualSlices(u32, &.{@backingInt(types.Id.from("app"))}, updated(e, &f.ch, &buf));
     try testing.expectEqualSlices(u32, &.{@backingInt(types.Id.from("extra"))}, f.ch.removed[0..f.ch.removed_len]);
+}
+
+test "tree export: actions from assistive technology arrive as input the widgets already read" {
+    var f: FrameFixture(32) = .{};
+    f.init();
+    const save = types.Id.from("save");
+    const bold = types.Id.from("bold");
+    const vol = types.Id.from("vol");
+    var it: Interaction = .{};
+    var checked = false;
+    var volume: f32 = 0.25;
+    // One frame of a checkbox and a slider, written as the core's widgets are: they read the
+    // interaction state and their value, and know nothing of actions beyond `setValue`.
+    const Ui = struct {
+        fn frame(fx: *FrameFixture(32), in: *const Interaction, acts: []const Action, on: *bool, v: *f32) *Export {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const b = t.push(root, types.Id.from("bold"), &.{ .role = .checkbox });
+            on.* = on.* != in.response(types.Id.from("bold")).clicked;
+            t.c.value[b] = simd.b2f(on.*);
+            _ = fx.text(b, "Bold");
+            t.seal(b);
+            const s = t.push(root, types.Id.from("vol"), &.{ .role = .slider });
+            v.* = setValue(acts, types.Id.from("vol"), v.*);
+            t.c.value[s] = v.*;
+            t.seal(s);
+            t.seal(root);
+            return fx.run(0);
+        }
+    };
+
+    // The bridge read the export and the screen reader asked to press "Bold", focus the slider
+    // and set it to 0.75, then to 0.5 (the last one wins); a press on another id does nothing here.
+    const acts = [_]Action{
+        .{ .kind = .press, .target = @backingInt(bold) },
+        .{ .kind = .focus, .target = @backingInt(vol) },
+        .{ .kind = .set_value, .target = @backingInt(vol), .value = 0.75 },
+        .{ .kind = .set_value, .target = @backingInt(vol), .value = 0.5 },
+        .{ .kind = .set_value, .target = @backingInt(save), .value = 9 },
+    };
+    apply(&it, &acts);
+    try testing.expect(it.response(bold).clicked);
+    try testing.expect(it.response(vol).focused);
+    try testing.expect(!it.response(vol).clicked);
+    const e = Ui.frame(&f, &it, &acts, &checked, &volume);
+    try testing.expect(checked);
+    try testing.expectEqual(0.5, volume);
+    // The export shows the result: the checkbox checked, the slider at 0.5.
+    try testing.expectEqual(State{ .checked = true }, @as(State, @bitCast(e.c.state[1])));
+    try testing.expectEqual(0.5, e.c.value[3]);
+
+    // Next frame, no actions: the click does not repeat and the value stays.
+    it = .{ .focus = it.focus };
+    _ = Ui.frame(&f, &it, &.{}, &checked, &volume);
+    try testing.expect(checked);
+    try testing.expectEqual(0.5, volume);
+    try testing.expectEqual(0.25, setValue(&.{}, vol, 0.25));
 }

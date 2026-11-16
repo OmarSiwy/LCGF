@@ -248,5 +248,15 @@
     "jcc": 8,
     "back": 4,
     "short_fwd": 0
+  },
+  "p_a11y_apply": {
+    "jcc": 9,
+    "back": 3,
+    "short_fwd": 2
+  },
+  "p_a11y_set_value": {
+    "jcc": 5,
+    "back": 2,
+    "short_fwd": 1
   }
 }

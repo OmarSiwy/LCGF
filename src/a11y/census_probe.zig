@@ -16,3 +16,9 @@ export fn p_a11y_flatten(t: *const Tree, tx: *const lcgr.texts.Texts, bytes: [*]
 export fn p_a11y_diff(cur: *const a11y.Export, prev: *const a11y.Export, ch: *a11y.Changes) void {
     a11y.diff(cur, prev, ch);
 }
+export fn p_a11y_apply(it: *lcgr.interaction.Interaction, acts: [*]const a11y.Action, n: usize) void {
+    a11y.apply(it, acts[0..n]);
+}
+export fn p_a11y_set_value(acts: [*]const a11y.Action, n: usize, id: u32, v: f32) f32 {
+    return a11y.setValue(acts[0..n], @fromBackingInt(@intCast(id)), v);
+}
