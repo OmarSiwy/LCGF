@@ -10,6 +10,7 @@
 # Header lines a job may have:
 #   # shell: <name>   the flake dev shell it needs (default: default)
 #   # all: no         left out of `all` (slow, or needs another shell)
+#   # runner: <os>    the GitHub runner: windows or macos (default: ubuntu)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,7 +37,8 @@ all)
 --matrix)
     sep=""; printf '['
     for j in $(names); do
-        s=$(header "$j" shell); printf '%s{"job":"%s","shell":"%s"}' "$sep" "$j" "${s:-default}"; sep=,
+        s=$(header "$j" shell); r=$(header "$j" runner)
+        printf '%s{"job":"%s","shell":"%s","runner":"%s-latest"}' "$sep" "$j" "${s:-default}" "${r:-ubuntu}"; sep=,
     done
     printf ']\n' ;;
 *) job "$1" ;;
