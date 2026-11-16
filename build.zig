@@ -510,6 +510,35 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The bare-metal example (src/shell/baremetal/firmware.zig), a module of its own over lcgr:
+    // its test runs it here, and it is built as a freestanding executable for two
+    // microcontrollers (ci/run.sh baremetal).
+    const baremetal_step = b.step("baremetal", "Run the bare-metal example and build it for Cortex-M7 and RV32IMAC");
+    const firmware_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    baremetal_step.dependOn(&b.addRunArtifact(firmware_test).step);
+    for ([_]struct { []const u8, std.Target.Query }{
+        .{ "cortex-m7", .{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } } },
+        .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } }, // RV32IMAC
+    }) |mcu| {
+        const mcu_target = b.resolveTargetQuery(mcu[1]);
+        const mcu_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
+        mcu_lcgr.addOptions("build_options", options);
+        mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const firmware = b.addExecutable(.{ .name = b.fmt("firmware-{s}", .{mcu[0]}), .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
+            .target = mcu_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
+        }) });
+        firmware.entry = .{ .symbol_name = "_start" };
+        baremetal_step.dependOn(&b.addInstallArtifact(firmware, .{}).step);
+    }
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }

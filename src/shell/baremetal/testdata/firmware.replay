@@ -1,0 +1,31 @@
+# The bare-metal example's recording (src/shell/baremetal/firmware.zig), at 320 x 240.
+# The simulator board reads the left button as the touch panel, the wheel as the encoder's
+# detents and the middle button as the encoder's push button (input.zig `sample`).
+frame
+frame
+# Tap Reset (8,8 .. 66,42).
+frame
+pointer 37 25
+buttons left
+frame
+buttons
+# Tap Add layer (8,58 .. 100,91) twice.
+frame
+pointer 54 74
+buttons left
+frame
+buttons
+frame
+buttons left
+frame
+buttons
+# Turn the encoder one detent, then push it: Tab and Enter. The example's buttons
+# (widgets/base.zig) read no keys, so nothing changes; shell.zig's tests show Enter
+# firing widgets/button.zig.
+frame
+wheel 0 1
+frame
+buttons middle
+frame
+buttons
+frame
