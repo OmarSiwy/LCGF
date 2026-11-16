@@ -231,8 +231,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// A 200 x 100 scroll area over a column of six labels and a checkbox.
-fn Page(comptime th: Theme) type {
+/// The example page: a 200 x 100 scroll area over a column of six labels and a checkbox, in
+/// both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const frame_style: Style = .{ .dir = .y, .size = .{ .px(200), .px(100) }, .fill = th.panel };
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {
@@ -274,6 +275,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 12, .customs = 1, .strings = 256, .depth = 10 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/scroll.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/scroll-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "wheel", 2 },
+    .{ "end", 9 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -448,6 +459,32 @@ test "scroll: viewport group, bar scroll_bar valued by position, in both front e
         try testing.expectEqual(@as(u8, 0), t.c.role[rows.thumb]);
     }
     try testing.expectEqual(@as(f32, 0), position(5, .{ .view = 100, .content = 50 }));
+}
+
+test "scroll: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var offsets: [12]f32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        offsets[k] = h.app.offset;
+        try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    const drag = 40 + 10 * 187.0 / 100.0;
+    const want = [12]f32{ 0, 0, 40, 40, 40, drag, drag, drag, drag, 87, 0, 40 };
+    for (want, offsets) |w, got| try testing.expectApproxEqAbs(w, got, 1e-3);
+}
+
+test "golden_frames: name frames the scroll replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test {
