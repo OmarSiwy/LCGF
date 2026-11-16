@@ -13,6 +13,7 @@ const std = @import("std");
 const lcgr = @import("lcgr");
 pub const c = @import("wgpu_c");
 pub const host = @import("host.zig");
+pub const surface = @import("surface.zig");
 const wgpu = lcgr.render_wgpu;
 
 /// The wgpu back end over wgpu-native.
@@ -165,6 +166,29 @@ pub fn draw(p: RenderPass, vertices: u32, instances: u32, first_vertex: u32, fir
 
 const testing = std.testing;
 
+test {
+    testing.refAllDecls(@This());
+}
+
+/// Draws `scene` into a fresh `width` x `height` target (viewport the same, scale 1) and reads
+/// it back; the caller frees the pixels.
+fn drawScene(h: *const host.Host, gfx: *Renderer, scene: *const lcgr.render_conformance.Scene, width: u32, height: u32) ![]u8 {
+    var st: lcgr.render_conformance.Storage = .{};
+    st.load(scene);
+    var target = host.Target.init(h, width, height, c.WGPUTextureFormat_RGBA8Unorm);
+    defer target.deinit();
+    gfx.prepare(h.queue, &st.draw, st.glyphs(), .{ @floatFromInt(width), @floatFromInt(height) }, 1);
+    const encoder = c.wgpuDeviceCreateCommandEncoder(h.device, null);
+    const pass = host.beginPass(encoder, target.view, .{ 0, 0, 0, 1 });
+    gfx.render(pass, &st.draw);
+    host.endPass(pass);
+    h.submit(encoder);
+    const px = try testing.allocator.alloc(u8, @as(usize, width) * height * 4);
+    errdefer testing.allocator.free(px);
+    try h.readback(&target, px);
+    return px;
+}
+
 test "native: a pass clears the target and the pixels read back" {
     var h = try host.Host.init();
     defer h.deinit();
@@ -211,4 +235,33 @@ test "native: every shader variant builds a quad pipeline with the documented la
         defer c.wgpuRenderPipelineRelease(pipe);
         try testing.expect(pipe != null);
     }
+}
+
+test "native: a resize changes only the viewport; the same renderer draws every size" {
+    var h = try host.Host.init();
+    defer h.deinit();
+    var ctx = Context.init(h.device);
+    defer ctx.deinit();
+    const sampler = host.nearestSampler(&h);
+    defer c.wgpuSamplerRelease(sampler);
+    var white = host.Image.init(&h, 1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
+    defer white.deinit();
+    var gfx = Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm }, white.view, sampler);
+    defer gfx.deinit();
+    const scene = &lcgr.render_conformance.scenes[0]; // rects, 160 x 120, drawn from (0, 0)
+
+    const before = try drawScene(&h, &gfx, scene, 160, 120);
+    defer testing.allocator.free(before);
+    // Larger: the scene's pixels are unchanged, the new area is the clear colour.
+    const grown = try drawScene(&h, &gfx, scene, 200, 150);
+    defer testing.allocator.free(grown);
+    for (0..150) |y| for (0..200) |x| {
+        const got = grown[(y * 200 + x) * 4 ..][0..4];
+        const want: []const u8 = if (x < 160 and y < 120) before[(y * 160 + x) * 4 ..][0..4] else &.{ 0, 0, 0, 255 };
+        try testing.expectEqualSlices(u8, want, got);
+    };
+    // Back to the first size: the same picture again.
+    const after = try drawScene(&h, &gfx, scene, 160, 120);
+    defer testing.allocator.free(after);
+    try testing.expectEqualSlices(u8, before, after);
 }
