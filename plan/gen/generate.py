@@ -277,11 +277,16 @@ lane("P03", "ct-layout", ["ct-columns", "ct-signals", "layout-core-done"], U("la
     ("comptime: run the generic layout passes over array columns", dict(ref=U("layout.fit, layout.resolve"))),
     ("comptime: fold layout of viewport-independent subtrees at compile time", {}),
     ("comptime: precompute gap totals, child counts and reciprocals", dict(ref=U("layout.prepare, layout.fit: grow_inv"))),
-    ("comptime: skip passes a UI cannot need (no grow, no wrap, no text)", {}),
-    ("comptime: generate a partial layout routine per dirty mask", dict(ref=M("C2"))),
     ("comptime: unroll sweeps for small trees and measure code size", dict(done="decision recorded: table-driven or unrolled, by node count")),
     ("comptime: add equivalence tests against the runtime front end", {}),
     ("comptime: add layout benchmark for static UIs", dict(key="ct-layout-done")),
+])
+# Moved out of ct-layout: with no text in the comptime front end there was no pass to skip and
+# no state field that feeds layout (lane ct-a's report on C0163 and C0164). Both need text first.
+lane("P03", "ct-layout-text", ["ct-layout", "text-protocol-done"], U("layout") + "; " + K("tables"), "C2", "results equal the runtime layout; the skipped passes and partial routines measured", [
+    ("comptime: measure label text through the text protocol in the comptime front end", {}),
+    ("comptime: skip passes a UI cannot need (no grow, no wrap, no text)", {}),
+    ("comptime: generate a partial layout routine per dirty mask", dict(ref=M("C2"))),
 ])
 lane("P03", "ct-paint", ["ct-layout", "draw-core"], U("paint.emit, DrawList"), "D2", "draw list equals the runtime front end's", [
     ("comptime: emit static quad templates as read-only data", dict(ref=U("Quad"))),
