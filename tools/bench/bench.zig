@@ -13,6 +13,9 @@
 //! src/ tables, laid out and painted there by lcgr's tier-0 passes, and copied back for the
 //! prototype's untimed `Frame.finish`.
 //!
+//! A second scene times the grid passes (src/layout/grid.zig): one grid of 16 columns and 250
+//! rows holding 4,000 auto-placed items, laid out `grid_frames` times.
+//!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --core=prototype  the same with the prototype front end
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
@@ -120,6 +123,67 @@ fn protoExtras(st: *Tree, pt: *const ui.Tree) void {
 fn copyRows(to: anytype, from: anytype, len: u32) void {
     const n = @min(lcgr.simd.rows(len), to.len);
     @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
+}
+
+const grid_frames = 1000;
+const grid_items = 4000;
+const grid_cols = 16;
+const grid_rows = grid_items / grid_cols;
+const grid_pass_names = [_][]const u8{ "grid.place", "grid.fit.x", "grid.resolve.x", "grid.fit.y", "grid.resolve.y" };
+var grid_samples: [grid_pass_names.len][grid_frames]u64 = undefined;
+const grid_cap: lcgr.grid.Grids.Capacity = .{ .grids = 1, .tracks = grid_cols + grid_rows, .items = grid_items, .cells = grid_items };
+const grid_bytes = blk: {
+    @setEvalBranchQuota(20_000);
+    var counter: lcgr.mem.Carver = .{ .buf = null };
+    _ = Tree.init(&counter, grid_items + 2);
+    _ = Texts.init(&counter, 1);
+    _ = lcgr.grid.Grids.init(&counter, grid_cap);
+    break :blk counter.off;
+};
+var grid_buffer: [grid_bytes]u8 align(lcgr.mem.column_align) = undefined;
+
+/// Times the grid passes on a 4,000-item grid: columns cycle through fixed, fit and fraction
+/// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
+fn gridBench() void {
+    var carver: lcgr.mem.Carver = .{ .buf = &grid_buffer };
+    var t = Tree.init(&carver, grid_items + 2);
+    var tx = Texts.init(&carver, 1);
+    var gs = lcgr.grid.Grids.init(&carver, grid_cap);
+    const root = t.push(0, .none, &.{ .size = .{ .px(1280), .fit } });
+    const g = t.push(root, .none, &.{ .size = .{ .fill, .fit } });
+    var cols: [grid_cols]lcgr.grid.Track = undefined;
+    const kinds = [4]lcgr.grid.Track{ .px(40), .fit, .fr(1), .fr(2) };
+    for (&cols, 0..) |*c, i| c.* = kinds[i % 4];
+    const rows_: [grid_rows]lcgr.grid.Track = @splat(.fit);
+    const k = gs.grid(g, &cols, &rows_);
+    gs.gaps(k, .{ 4, 2 });
+    for (0..grid_items) |i| {
+        const w: f32 = @floatFromInt(10 + i % 7);
+        const n = t.push(g, .none, &.{ .float = true, .min = .{ w, 12 } });
+        t.seal(n);
+        _ = gs.autoItem(k, n);
+    }
+    t.seal(g);
+    t.seal(root);
+    for (0..grid_frames) |f| {
+        var m: [grid_pass_names.len + 1]u64 = undefined;
+        m[0] = now();
+        lcgr.grid.autoPlace(&gs);
+        m[1] = now();
+        lcgr.layout.prepare(&t);
+        lcgr.layout.applyText(&t, &tx, .x);
+        lcgr.grid.fit(&t, &gs, .x);
+        m[2] = now();
+        lcgr.grid.resolve(&t, &gs, .x, 1280);
+        m[3] = now();
+        lcgr.layout.applyText(&t, &tx, .y);
+        lcgr.grid.fit(&t, &gs, .y);
+        m[4] = now();
+        lcgr.grid.resolve(&t, &gs, .y, 8000);
+        m[5] = now();
+        lcgr.layout.place(&t);
+        for (0..grid_pass_names.len) |p| grid_samples[p][f] = m[p + 1] - m[p];
+    }
 }
 
 fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
@@ -533,6 +597,7 @@ pub fn main(init: std.process.Init) !void {
     // The incremental and flex passes are measured on the rows scene only, on the last frame's tree.
     const is_rows = index == 0;
     if (is_rows) {
+        gridBench();
         flexWrap(run.tree, run.texts_table, &sflex, run.viewport);
         incremental(run.tree, run.texts_table, &sdirty, run.viewport);
     }
@@ -558,6 +623,14 @@ pub fn main(init: std.process.Init) !void {
             try w.print(" {d:10.2} {d:10.2}\n", .{ f[1] / @max(f[0], 1), f[2] / f[3] });
         }
     }
+    // The grid scene runs with the rows scene only.
+    if (is_rows) {
+        try w.print("grid: items={d} frames={d}\n", .{ grid_items, grid_frames });
+        for (grid_pass_names, &grid_samples) |name, *s| {
+            std.mem.sort(u64, s, {}, std.sort.asc(u64));
+            try w.print("{s:<14} {d:9.1} {d:9.1}\n", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
+        }
+    }
     // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
     // in paint order, after merging across text, and the opaque quads a depth back end draws
     // first in one call.
@@ -576,6 +649,11 @@ pub fn main(init: std.process.Init) !void {
     for (names, samples[0..names.len], 0..) |name, *s, p| {
         const n = if (p < pass_names.len) built else frames;
         try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[n / 2]), us(s[n * 99 / 100]) });
+    }
+    if (is_rows) {
+        for (grid_pass_names, &grid_samples) |name, *s| {
+            try j.print(",\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ name, us(s[grid_frames / 2]), us(s[grid_frames * 99 / 100]) });
+        }
     }
     try j.writeAll("\n}}\n");
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = j.buffered() });

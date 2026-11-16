@@ -64,17 +64,26 @@ pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
     fitOf(t, fx, axis, 0, t.len);
 }
 
-/// `fit` over rows [first, last): a whole subtree, `last = end[first]` (incremental layout).
-/// Rows after `first` fold into their parents as in `fit`; row `first` gets its natural size
-/// and is not folded into its own parent. `fit` and `grow_sum` of the rows must be cleared and
-/// their text extents applied first, as `prepare` and `applyText` do for the whole tree.
+/// `fit` over rows [first, last), any `first < last <= len`. Rows after `first` fold into their
+/// parents as in `fit`, last row first; row `first` gets its natural size and is not folded
+/// into its own parent. `fit` and `grow_sum` of the rows must be cleared and their text extents
+/// applied first, as `prepare` and `applyText` do for the whole tree.
+///
+/// What the range must satisfy: every descendant at or past `last` of a row in (first, last)
+/// is already folded, and no row is folded twice in a frame. Two callers meet that:
+/// incremental layout passes a whole subtree, `last = end[first]`; grid.zig sweeps the tree in
+/// pieces from the end, [node, to) then [.., node + 1), so a piece's `first` is folded by the
+/// next piece. `grow_inv` is rewritten over the whole vectors around [first, last); a row's
+/// value there is final once all its children are folded, and is rewritten again by any later
+/// call whose vectors cover it. The test "fitSpan, resolveSpan: pieces from any cut rows equal
+/// the whole pass" pins this.
 pub fn fitSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
     fitOf(t, {}, axis, first, last);
 }
 
 /// One body for every form: with `fx` void every flex term is compiled out, so `fit` keeps the
 /// prototype's code; `first`/`last` select a subtree for incremental layout.
-fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
+inline fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
@@ -161,14 +170,20 @@ pub fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void {
     resolveOf(t, fx, axis, 0, t.len);
 }
 
-/// `resolve` over the subtree [first, last), `last = end[first]` (incremental layout): every row
-/// after `first` from its parent, with `first`'s own size taken as given. `used` of the rows
-/// must be cleared first, as `prepare` does for the whole tree.
+/// `resolve` over rows [first, last), any `first < last <= len`: every row after `first` from
+/// its parent, in row order, with `first`'s own size taken as given and only read. `used` of
+/// the rows' parents must be cleared first, as `prepare` does for the whole tree.
+///
+/// What the range must satisfy: the parent of every row in (first, last) is already sized
+/// (it is `first`, an earlier row of the range, or sized by an earlier call), and no row is
+/// resolved twice in a frame, since each adds to its parent's `used`. Incremental layout
+/// passes a whole subtree, `last = end[first]`; grid.zig resolves consecutive pieces
+/// [from - 1, to) from the top. Same test as `fitSpan`.
 pub fn resolveSpan(t: *Tree, axis: Axis, first: u32, last: u32) void {
     resolveOf(t, {}, axis, first, last);
 }
 
-fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
+inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
@@ -754,4 +769,50 @@ test "tier 0 alone: no Context, caller sequences the passes" {
     try testing.expectEqual(a, hit.at(&t, 50, 20, .any));
     try testing.expectEqual(body, hit.at(&t, 50, 100, .any));
     try testing.expectEqual(types.none, hit.at(&t, 200, 20, .any));
+}
+
+test "fitSpan, resolveSpan: pieces from any cut rows equal the whole pass" {
+    // Every set of cut rows in 1..6 of the tier-0 scene: fit in pieces from the end as grid
+    // does, [cut, to) then [.., cut + 1); resolve in pieces from the top, [from - 1, to).
+    var raw_a: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var raw_b: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var whole = Scene.init(&raw_a);
+    sized(&whole);
+    const n = whole.t.len;
+    for (0..64) |mask| {
+        var parts = Scene.init(&raw_b);
+        const t = &parts.t;
+        prepare(t);
+        inline for (.{ Axis.x, Axis.y }, .{ 400, 300 }) |axis, viewport| {
+            const a = @backingInt(axis);
+            if (axis == .y) {
+                textAvail(t, &parts.tx);
+                parts.tx.c.w[0] = 100;
+                parts.tx.c.h[0] = 24;
+            }
+            applyText(t, &parts.tx, axis);
+            var to: u32 = n;
+            var row: u32 = n - 1;
+            while (row >= 1) : (row -= 1) {
+                if ((mask >> @intCast(row - 1)) & 1 == 0) continue;
+                fitSpan(t, axis, row, to);
+                to = row + 1;
+            }
+            fitSpan(t, axis, 0, to);
+            try expectCol(whole.t.c.fit[a][0..n], t.c.fit[a]);
+            try expectCol(whole.t.c.nat[a][0..n], t.c.nat[a]);
+            try expectCol(whole.t.c.grow_inv[a][0..simd.padded(n)], t.c.grow_inv[a]);
+
+            t.c.size[a][0] = viewport;
+            var from: u32 = 1;
+            for (1..n) |cut| {
+                if ((mask >> @intCast(cut - 1)) & 1 == 0) continue;
+                resolveSpan(t, axis, from - 1, @intCast(cut));
+                from = @intCast(cut);
+            }
+            resolveSpan(t, axis, from - 1, n);
+            try expectCol(whole.t.c.size[a][0..n], t.c.size[a]);
+            try expectCol(whole.t.c.used[a][0..n], t.c.used[a]);
+        }
+    }
 }

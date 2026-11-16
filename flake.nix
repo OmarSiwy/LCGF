@@ -51,6 +51,8 @@
           inputsFrom = [ devShells.default ];
           packages = [
             (pkgs.python3.withPackages (ps: [ ps.wgpu ]))
+            # A headless X server for the X11 shell's tests (ci/run.sh x11).
+            pkgs.xvfb
             # A compositor with no display or input devices, for the Wayland shell's example
             # (lane shell-wayland, ci/run.sh wayland-weston). A CI tool; the shell links nothing.
             pkgs.weston
@@ -66,6 +68,15 @@
           LIBGL_ALWAYS_SOFTWARE = "1";
           GALLIUM_DRIVER = "llvmpipe";
           EGL_LOG_LEVEL = "fatal";
+        };
+        # The web back end and shell in a real browser (lanes render-web, shell-web): headless
+        # Chromium with WebGPU on its bundled SwiftShader (the vulkan-loader from the golden
+        # shell lets Chromium find it). Driven over the DevTools pipe by src/render/web/browser.py;
+        # CI only (ci/jobs/web.sh, `# shell: web`).
+        devShells.web = pkgs.mkShell {
+          inputsFrom = [ devShells.golden ];
+          packages = [ pkgs.chromium ];
+          inherit (devShells.golden) LD_LIBRARY_PATH VK_ICD_FILENAMES;
         };
         # Hardware counters for the benchmark (lane optimise, docs/perf/cache.md): perf stat
         # over a whole run; `zig build bench -- --counters` counts per pass itself.
