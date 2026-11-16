@@ -297,7 +297,7 @@
   "p_reuse": {
     "jcc": 49,
     "back": 19,
-    "short_fwd": 10
+    "short_fwd": 11
   },
   "p_sdf_distances": {
     "back": 9,
