@@ -357,11 +357,14 @@ const example = struct {
         resets: u32 = 0,
         exposure: f32 = 1,
         wireframe: bool = false,
+        glow: f32 = 0,
         layers: u32 = 3,
     };
 
-    /// The prototype's buildUi without its spring (`animate`, anim lane) and its sidebar reuse
-    /// (`reuse` over a signal, reuse lane): neither changes this test's frames.
+    const id_glow = types.Id.from("glow");
+
+    /// The prototype's buildUi without its sidebar reuse (`reuse` over a signal, reuse lane),
+    /// which does not change this test's frames.
     fn buildUi(f: *Frame, app: *App) void {
         const th = &app.theme;
         _ = f.open(types.Id.from("toolbar"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel });
@@ -371,6 +374,8 @@ const example = struct {
         }
         _ = checkbox(f, th, id_wire, &app.wireframe, "Wireframe");
         _ = slider(f, th, id_exposure, &app.exposure, 0, 4);
+        // A spring: eases toward its target and keeps the host awake until it lands.
+        app.glow = f.animate(id_glow, simd.b2f(app.wireframe), .{});
         f.close();
 
         _ = f.open(types.Id.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
@@ -469,4 +474,52 @@ test "host loop: layout, draw list, click, drag, idle" {
     try testing.expectEqual(@as(f32, 3), out.tree.c.value[out.tree.find(e.id_exposure)]);
     in.buttons.left = false;
     _ = e.frame(&ctx, &app, &in);
+}
+
+test "springs keep the host awake until they land" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    const e = example;
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var app: e.App = .{ .layers = 1 };
+    const in: Input = .{ .viewport = .{ 800, 600 } };
+
+    _ = e.frame(&ctx, &app, &in);
+    _ = e.frame(&ctx, &app, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    app.wireframe = true; // the glow spring now has a new target
+    var frames: u32 = 0;
+    var out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(f32, 0), out.wake);
+    while (out.wake == 0 and frames < 600) : (frames += 1) out = e.frame(&ctx, &app, &in);
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(@as(f32, 1), app.glow);
+    try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "animate: a spring nobody asks for is dropped at the end of the frame" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var f = ctx.begin(&in);
+    try testing.expectEqual(@as(f32, 5), f.animate(types.Id.from("a"), 5, .{}));
+    _ = f.animate(types.Id.from("b"), 1, .{});
+    _ = f.end(.{});
+    try testing.expectEqual(@as(u32, 2), ctx.anims.len);
+    f = ctx.begin(&in);
+    // Retargeted: still at 5 this frame, moving from the next step on.
+    try testing.expectEqual(@as(f32, 5), f.animate(types.Id.from("a"), 0, .{}));
+    try testing.expect(ctx.motion > 0);
+    _ = f.end(.{});
+    try testing.expectEqual(@as(u32, 1), ctx.anims.len);
+    f = ctx.begin(&in);
+    try testing.expect(f.animate(types.Id.from("a"), 0, .{}) < 5);
+    _ = f.end(.{});
 }

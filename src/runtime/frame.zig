@@ -20,6 +20,7 @@ const none = types.none;
 const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
+const Spring = @import("../anim/anims.zig").Spring;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -132,6 +133,22 @@ pub const Frame = struct {
     }
 
     pub const timer = scheduler.timer;
+
+    /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
+    /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,
+    /// `needsFrame` true) until it lands; a spring not asked for in a frame is dropped.
+    pub fn animate(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
+        const ctx = f.ctx;
+        const a = &ctx.anims;
+        const i = a.slot(id, target);
+        a.c.target[i] = target;
+        a.c.stiffness[i] = spring.stiffness;
+        a.c.damping[i] = spring.damping;
+        a.c.seen[i] = ctx.frame;
+        // A new target moves the spring from next frame's step on; wake for it now.
+        ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
+        return a.c.x[i];
+    }
 
     // ---- finishing ------------------------------------------------------------
 
