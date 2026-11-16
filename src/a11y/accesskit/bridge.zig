@@ -20,6 +20,13 @@ const Export = a11y.Export;
 const Role = a11y.Role;
 const scheduler = lcgr.scheduler;
 
+/// The platform adapters: each takes the bridge and the shell's window.
+pub const windows = @import("windows.zig");
+
+test {
+    _ = windows;
+}
+
 /// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
 pub const root_id: c.NodeId = 1 << 32;
 
