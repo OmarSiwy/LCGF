@@ -105,13 +105,102 @@ pub fn caretAt(t: []const u8, at: u32, scroll: u32, rows: u32, th: *const Theme)
     };
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// The caret `dir` lines (-1 up, +1 down) from `at`, in the column `goal` (in bytes, the column
+/// a run of vertical moves started from), at the nearest grapheme boundary; the text's start
+/// or end past the first or last line.
+pub fn vertical(t: []const u8, at: u32, dir: i2, goal: f32) u32 {
+    const line = @as(i64, lineOf(t, at)) + dir;
+    if (line < 0) return 0;
+    const l = lineAt(t, @intCast(line)) orelse return @intCast(t.len);
+    return l[0] + tf.stopNear(t[l[0]..l[1]], goal);
+}
+
+/// The first line shown after the caret moved to line `line`: as little scrolling as keeps it
+/// among the `rows` lines shown, never past the last line.
+pub fn revealLine(scroll: u32, line: u32, rows: u32, lines: u32) u32 {
+    const in_view = @max(@min(scroll, line), (line + 1) -| rows);
+    return @min(in_view, lines -| rows);
+}
+
+/// Applies a frame's input to text area `s` (a `*Text(cap)`) named `id` showing `rows` lines,
+/// laid out last frame at `last`: as `textfield.behave` (pointer, keys, typed text, IME), with
+/// Enter inserting a newline, Up and Down moving between lines in their column, and the wheel
+/// scrolling by lines while the pointer is over it. The view follows the caret when the caret
+/// or the text changed.
+pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, rows: u32, in: *const Input) void {
+    const ed = s.editor();
+    ed.mode.single_line = false;
+    s.clipboard.reset();
+    s.input.reset();
+    const adv = tf.advance(th);
+    const lh = tf.lineHeight(th);
+    const pad = tf.padding(th);
+    const origin = [2]f32{ last.x0 + pad[0], last.y0 + pad[1] };
+    var scroll: u32 = @intFromFloat(s.scroll);
+    const before = ed.caret;
+    if (r.held) {
+        const t = ed.text();
+        const lines = lineOf(t, @intCast(t.len)) + 1;
+        const row = @max(@floor((in.pointer[1] - origin[1]) / lh), 0);
+        const line = @min(@as(u32, @intFromFloat(@min(row, 1e6))) + scroll, lines - 1);
+        const l = lineAt(t, line).?;
+        const at = l[0] + tf.stopNear(t[l[0]..l[1]], (in.pointer[0] - origin[0]) / adv);
+        ed.caret = at;
+        if (!s.held and !in.mods.shift) ed.anchor = at;
+        ed.goal = std.math.nan(f32);
+        ed.run = .none;
+    }
+    s.held = r.held;
+    const cx: edit.Context = .{ .clipboard = &s.clipboard, .copy_buf = &s.copied };
+    var res: edit.Result = .{};
+    // Up and Down move here (the editor has no layout to move on); every other event goes to
+    // the editor alone and in order, so typing around them lands where it should.
+    for (in.events, 0..) |e, i| {
+        if (!r.focused or i >= 64) break;
+        const plain = @as(u8, @bitCast(e.mods)) & 0xe == 0;
+        const down = (e.kind == .press or e.kind == .repeat) and plain;
+        const dir: i2 = if (down and e.code == keys.up) -1 else if (down and e.code == keys.down) 1 else 0;
+        if (dir == 0) {
+            tf.orResult(&res, tf.feed(ed, in, id, i, cx));
+            continue;
+        }
+        if (std.math.isNan(ed.goal)) ed.goal = @floatFromInt(ed.caret - moves.lineStart(ed.text(), ed.caret));
+        ed.caret = vertical(ed.text(), ed.caret, dir, ed.goal);
+        if (!e.mods.shift) ed.anchor = ed.caret;
+        ed.run = .none;
+    }
+    const k = tf.keyboardOf(in, id, r.focused);
+    var last_cx = cx;
+    last_cx.composition = k.composition(id, &s.ime);
+    tf.orResult(&res, tf.feed(ed, in, id, null, last_cx));
+    s.result = res;
+    const t = ed.text();
+    const lines = lineOf(t, @intCast(t.len)) + 1;
+    const max: u32 = lines -| rows;
+    const wheel: i64 = @intFromFloat(@round(in.wheel[1] * @as(f32, @floatFromInt(@intFromBool(r.hovered)))));
+    scroll = @intCast(std.math.clamp(@as(i64, scroll) - wheel, 0, max));
+    const caret = ed.shownCaret();
+    if (caret != before or res.changed) scroll = revealLine(scroll, lineOf(t, caret), rows, lines);
+    s.scroll = @floatFromInt(scroll);
+    if (r.focused) {
+        const c = caretAt(t, caret, scroll, rows, th);
+        const x = origin[0] + c.x;
+        const y = origin[1] + c.y;
+        s.input.request(.{ .x0 = x, .y0 = y, .x1 = x + 1, .y1 = y + lh }, .normal);
+    }
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its
 /// comptime twin, if any), the placeholder `hint` on its first line while empty. Returns its
-/// response.
+/// response; what the input did is `s.result`.
 pub fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response {
     const r0 = f.ctx.inter.response(id);
+    behave(s, th, id, r0, f.lastRect(id), rows, f.in);
+    tf.platform(f, s);
     const node = f.open(id, areaStyle(th, rows, r0.focused));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -161,7 +250,8 @@ fn view(s: anytype, th: *const Theme, rows: u32, focused: bool) View {
 
 pub const ct = struct {
     /// A text area named `id` over the `Text(cap)` field `bind`, showing `rows` lines and the
-    /// string field `hint` while empty.
+    /// string field `hint` while empty. Its events carry the `edit.Result` of a frame that
+    /// changed the text.
     pub fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: @EnumLiteral()) Spec {
         const sel: [rows]Spec = @splat(.{ .kind = .col });
         const lines: [rows]Spec = @splat(.{ .kind = .label });
@@ -175,10 +265,11 @@ pub const ct = struct {
 };
 
 /// The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder
-/// field `hint` (`Spec.widget`): the same rows as `textarea`.
+/// field `hint` (`Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
 pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: []const u8) type {
     return struct {
         pub const focusable = true;
+        pub const Payload = edit.Result;
 
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             return textarea_zig.bindError(State, field, rows) orelse base.fieldError(State, "textarea placeholder", hint, []const u8);
@@ -205,6 +296,16 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             }
             _ = t.push(i, .none, &tf.caretStyle(th, v.caret.x, v.caret.y, v.caret.shown and focused));
             t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            const last: Rect = if (ui.built) ui.tables.t.rect(row + 1) else .{};
+            const s = &@field(ui.signals.state, bind);
+            behave(s, &Ui.theme, .hash(name), r, last, rows, in);
+            if (!s.result.changed) return null;
+            return @unionInit(Ui.Events.Event, name, s.result);
         }
     };
 }
@@ -261,6 +362,19 @@ test "lineAt, lineOf: lines between newlines" {
     try testing.expectEqual([2]u32{ 4, 8 }, lineAt(t, 2).?);
     try testing.expectEqual(null, lineAt(t, 3));
     try testing.expectEqual(@as(u32, 2), lineOf(t, 6));
+}
+
+test "vertical, revealLine: Up and Down in a column, and the view following the caret" {
+    const t = "ab\n\ncdef";
+    // Down from column 1 of line 0: the empty line, then column 1 of "cdef".
+    try testing.expectEqual(@as(u32, 3), vertical(t, 1, 1, 1));
+    try testing.expectEqual(@as(u32, 5), vertical(t, 3, 1, 1));
+    try testing.expectEqual(@as(u32, 0), vertical(t, 1, -1, 1));
+    try testing.expectEqual(@as(u32, 8), vertical(t, 6, 1, 2));
+    try testing.expectEqual(@as(u32, 0), revealLine(0, 2, 3, 10));
+    try testing.expectEqual(@as(u32, 1), revealLine(0, 3, 3, 10));
+    try testing.expectEqual(@as(u32, 2), revealLine(5, 2, 3, 10));
+    try testing.expectEqual(@as(u32, 7), revealLine(9, 9, 3, 10));
 }
 
 var page: Page.Run = .{};
@@ -331,6 +445,64 @@ test "textarea look: an inset box rows lines tall; the selection on each line, t
     try testing.expectEqual(th.text.bitsOf(), t.c.look[a + 7].fill);
     try testing.expectApproxEqAbs(t.rect(a + 5).y0, t.rect(a + 7).y0, 0.5);
     try testing.expectApproxEqAbs(t.rect(a + 5).x0 + 3 * adv, t.rect(a + 7).x0, 0.5);
+}
+
+fn press(code: u8, mods: Input.Mods) Input.Event {
+    return .{ .kind = .press, .code = code, .mods = mods };
+}
+
+test "textarea input: Enter, Up and Down in their column, scrolling to the caret and by wheel" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try both(h, &in);
+    const t = out.runtime.tree;
+    const area = t.rect(t.find(.from("notes")));
+    const th = Theme.default;
+    const adv = tf.advance(&th);
+    const lh = tf.lineHeight(&th);
+    // Press on line 1 after "tw".
+    in.pointer = .{ area.x0 + th.pad + 2 * adv, area.y0 + th.pad / 2 + 1.5 * lh };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(u32, 6), h.app.notes.ed.caret);
+    // Up: column 2 of "one"; Down twice: back, then past the last line to the end.
+    for ([_]struct { code: u8, caret: u32 }{ .{ .code = keys.up, .caret = 2 }, .{ .code = keys.down, .caret = 6 }, .{ .code = keys.down, .caret = 7 } }) |st| {
+        const ev = [_]Input.Event{press(st.code, .{})};
+        in.events = &ev;
+        _ = try both(h, &in);
+        try testing.expectEqual(st.caret, h.app.notes.ed.caret);
+    }
+    // Typing around Enter keeps the order: "a", Enter, "b", Enter, "c", Enter, "d".
+    var txt = "abcd".*;
+    const ev = [_]Input.Event{
+        .{ .kind = .text, .at = 0, .len = 1 }, press(0x28, .{}), .{ .kind = .text, .at = 1, .len = 1 }, press(0x28, .{}),
+        .{ .kind = .text, .at = 2, .len = 1 }, press(0x28, .{}), .{ .kind = .text, .at = 3, .len = 1 },
+    };
+    in.text = &txt;
+    in.events = &ev;
+    out = try both(h, &in);
+    try testing.expectEqualStrings("one\ntwoa\nb\nc\nd", h.app.notes.text());
+    // Five lines, three shown: scrolled so the caret's line is the last shown.
+    try testing.expectEqual(@as(f32, 2), h.app.notes.scroll);
+    try testing.expect(out.runtime.platform.wants_text);
+    // The wheel scrolls back up (positive is up), clamped at the top.
+    in.text = "";
+    in.events = &.{};
+    in.wheel = .{ 0, 5 };
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 0), h.app.notes.scroll);
+    in.wheel = .{ 0, -1 };
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 1), h.app.notes.scroll);
+    // Shift+Up selects up a line.
+    in.wheel = .{ 0, 0 };
+    const sel = [_]Input.Event{press(keys.up, .{ .shift = true })};
+    in.events = &sel;
+    _ = try both(h, &in);
+    try testing.expectEqual([2]u32{ 12, 14 }, h.app.notes.ed.selection());
 }
 
 test {

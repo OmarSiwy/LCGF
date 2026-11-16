@@ -262,6 +262,30 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in:
     }
 }
 
+/// This frame's keys for field `id`: all of them while it is focused, none otherwise.
+pub fn keyboardOf(in: *const Input, id: Id, focused: bool) keyboard.Keyboard {
+    return .{ .in = in, .target = if (focused) @backingInt(id) else 0, .taken = 0 };
+}
+
+/// `Editor.update` for focused field `id` with only event `only` of `in` delivered (none for
+/// null), for a widget that handles some keys itself and passes the rest on in order. Only
+/// the first 64 events are seen (`Keyboard.taken` is 64 bits).
+pub fn feed(ed: *edit.Editor, in: *const Input, id: Id, only: ?usize, cx: edit.Context) edit.Result {
+    var first = in.*;
+    first.events = in.events[0..@min(in.events.len, 64)];
+    const taken: u64 = if (only) |i| ~(@as(u64, 1) << @intCast(i)) else ~@as(u64, 0);
+    const k: keyboard.Keyboard = .{ .in = &first, .target = @backingInt(id), .taken = taken };
+    return ed.update(&k, id, cx);
+}
+
+/// `into` with what `r` did added.
+pub fn orResult(into: *edit.Result, r: edit.Result) void {
+    into.changed = into.changed or r.changed;
+    into.full = into.full or r.full;
+    into.copy_full = into.copy_full or r.copy_full;
+    into.submitted = into.submitted or r.submitted;
+}
+
 // ---- accessibility --------------------------------------------------------------------------
 
 /// The semantics the tree columns cannot carry, for field `name` in either front end's tree:
