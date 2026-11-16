@@ -345,8 +345,18 @@
     "short_fwd": 0
   },
   "p_reuse": {
-    "back": 11,
-    "jcc": 27,
-    "short_fwd": 5
+    "back": 15,
+    "jcc": 39,
+    "short_fwd": 6
+  },
+  "p_prepare_kept": {
+    "back": 3,
+    "jcc": 9,
+    "short_fwd": 1
+  },
+  "p_apply_text_kept": {
+    "back": 8,
+    "jcc": 23,
+    "short_fwd": 4
   }
 }
