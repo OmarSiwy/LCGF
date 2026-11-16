@@ -162,3 +162,33 @@ Against the read-back of C0421 (pinned memory): equal at 800x600 (150 to 296 us)
 cheaper at 1080p (634 to 1,263 us) and about 3 times at 4K (2,522 us). About 100 us of each
 hand-over is the submit-and-wait round trip, not the copy; a frame that the Vulkan back end goes
 on to draw anyway would put the copy in its own command buffer and pay none of it.
+
+## C0423: measure context memory and start-up against Vulkan
+
+Measured on the RTX 4060, both back ends ReleaseFast on the same GPU (Vulkan through the NVIDIA
+driver, not lavapipe), `ci/run.sh gompute-startup`. Start-up is the wall time from spawning the
+probe to its ready line, median of 5, three sessions; GPU memory is what nvidia-smi attributes to the
+process.
+
+| | Gompute (CUDA) | Vulkan back end | Gompute - Vulkan |
+|---|---|---|---|
+| Driver and context only: start-up | 169 to 252 ms | 175 to 186 ms | about the same |
+| Driver and context only: resident memory | 95.5 MiB | 61.9 MiB | +33.6 MiB |
+| Driver and context only: GPU memory | 96 MiB | 3 MiB | +93 MiB |
+| Empty 800x600 frame: start-up | 206 to 225 ms | 173 to 214 ms | 0 to +50 ms |
+| Empty 800x600 frame: resident memory | 97.5 MiB | 76.5 MiB | +21 MiB |
+| Empty 800x600 frame: GPU memory | 104 MiB | 8 MiB | +96 MiB |
+| Idle wake-ups after the empty frame (probe.py, 2 s) | 31.5 to 81.5 /s | 134 to 135 /s | both nonzero: driver threads |
+| Driver and context, PTX JIT cache disabled (`CUDA_CACHE_DISABLE=1`) | 789 to 929 ms, 136.8 MiB resident | | |
+
+What these say: a CUDA context costs about 93 MiB of GPU memory before any buffer (the driver's
+own per-context reservations; not broken down here), 30 times what a Vulkan device costs, and 34 MiB more resident host memory. Start-up is the same order
+as Vulkan's (both are dominated by loading the NVIDIA driver) as long as the driver's JIT cache
+already holds the kernels: the PTX is built for sm_75 and JIT-compiled for this sm_89 card on first
+use, about 0.7 s more when the cache is cold. Embedding SASS for the target cards (Gompute's
+`.sass = true`, which needs `ptxas` at build time) would remove that, at the cost of a toolkit
+dependency in the build.
+
+For an application that already runs Vulkan, enabling Gompute adds a second driver context: the
++93 MiB of GPU memory and +34 MiB resident are the price of the back end on top of the Vulkan one,
+which is the comparison the decision (C0425) has to weigh against what the kernels buy.
