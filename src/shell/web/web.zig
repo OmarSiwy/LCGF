@@ -33,6 +33,7 @@ const Events = iface.Events;
 const Platform = context.Platform;
 const Output = context.Output;
 const Pace = scheduler.Pace;
+const none = types.none;
 
 pub fn Web(comptime host: type) type {
     return struct {
@@ -48,6 +49,25 @@ pub fn Web(comptime host: type) type {
         woken: std.atomic.Value(bool) = .init(false),
         polls: u32 = 0,
         wakes: u32 = 0,
+        /// This frame's typed bytes, key and text events, and the contacts held (rows stay
+        /// until lifted). Full buffers drop what does not fit, counted in `dropped`.
+        text: [max_text]u8 = undefined,
+        text_len: u32 = 0,
+        events: [max_events]Input.Event = undefined,
+        event_len: u32 = 0,
+        contacts: [max_contacts]Input.Contact = undefined,
+        contact_len: u32 = 0,
+        /// Per `contacts` row: `lift` marked it (`lifting`); the next `poll` reports it once
+        /// more and marks it `gone`; the poll after that removes it, once its frame is over.
+        lifting: [max_contacts]bool = @splat(false),
+        gone: [max_contacts]bool = @splat(false),
+        dropped: u32 = 0,
+
+        pub const max_text = 256;
+        pub const max_events = 64;
+        pub const max_contacts = 16;
+        /// `wheel`'s `mode`, the DOM's WheelEvent.deltaMode.
+        pub const WheelMode = enum(u32) { pixel, line, page };
 
         /// The canvas's size in CSS pixels (logical) and the device pixel ratio.
         pub fn resize(s: *Self, css_w: f32, css_h: f32, dpr: f32) void {
@@ -77,6 +97,88 @@ pub fn Web(comptime host: type) type {
             s.in.buttons = @bitCast(if (down) held | bit else held & ~bit);
         }
 
+        /// Modifier keys held, from any event's shiftKey, ctrlKey, altKey and metaKey.
+        pub fn mods(s: *Self, m: Input.Mods) void {
+            s.in.mods = m;
+        }
+
+        /// A key went down (`.press`, `.repeat`) or up (`.release`). `code` is a USB HID usage
+        /// (shell.js maps KeyboardEvent.code), the default the core's key maps use.
+        pub fn key(s: *Self, kind: Input.Event.Kind, code: u8, m: Input.Mods) void {
+            s.mods(m);
+            const bit = @as(u64, 1) << @as(u6, @truncate(code));
+            const word = &s.in.keys.bits[code >> 6];
+            word.* = if (kind == .release) word.* & ~bit else word.* | bit;
+            s.event(.{ .kind = kind, .code = code, .mods = m });
+        }
+
+        /// The canvas lost focus: keys held now will never see their key-up, so none is held.
+        pub fn blur(s: *Self) void {
+            s.in.keys = .{};
+            s.in.mods = .{};
+        }
+
+        /// Text typed (UTF-8), one `.text` event.
+        pub fn typed(s: *Self, bytes: []const u8, m: Input.Mods) void {
+            if (bytes.len > max_text - s.text_len or s.event_len == max_events) {
+                s.dropped += 1;
+                return;
+            }
+            @memcpy(s.text[s.text_len..][0..bytes.len], bytes);
+            s.event(.{ .kind = .text, .mods = m, .at = s.text_len, .len = @intCast(bytes.len) });
+            s.text_len += @intCast(bytes.len);
+        }
+
+        fn event(s: *Self, e: Input.Event) void {
+            if (s.event_len == max_events) {
+                s.dropped += 1;
+                return;
+            }
+            s.events[s.event_len] = e;
+            s.event_len += 1;
+        }
+
+        /// A wheel event's deltas. Pixel deltas (touchpads, and most mice in Chromium) become
+        /// `Input.scroll`; line and page deltas become `Input.wheel` notches, a page counted as
+        /// one. The DOM's y grows downwards, the core's wheel upwards, so the sign flips.
+        pub fn wheel(s: *Self, dx: f32, dy: f32, mode: WheelMode) void {
+            const d: [2]f32 = .{ -dx, -dy };
+            if (mode == .pixel) {
+                s.in.scroll = .{ s.in.scroll[0] + d[0], s.in.scroll[1] + d[1] };
+            } else {
+                s.in.wheel = .{ s.in.wheel[0] + d[0], s.in.wheel[1] + d[1] };
+            }
+        }
+
+        /// A finger or pen (PointerEvent with pointerType touch or pen) went down, moved or
+        /// hovers: its row is added or updated. `tilt` is in radians.
+        pub fn contact(s: *Self, c: Input.Contact) void {
+            const at = s.find(c.id);
+            if (at == none and s.contact_len == max_contacts) {
+                s.dropped += 1;
+                return;
+            }
+            const row = if (at == none) s.contact_len else at;
+            s.contacts[row] = c;
+            s.contact_len += @intFromBool(at == none);
+            s.lifting[row] = false;
+            s.gone[row] = false;
+        }
+
+        /// Contact `id` lifted or was cancelled: reported with `down = false` in the next frame,
+        /// then removed.
+        pub fn lift(s: *Self, id: u32) void {
+            const at = s.find(id);
+            if (at == none) return;
+            s.contacts[at].down = false;
+            s.lifting[at] = true;
+        }
+
+        fn find(s: *const Self, id: u32) u32 {
+            for (s.contacts[0..s.contact_len], 0..) |c, i| if (c.id == id) return @intCast(i);
+            return none;
+        }
+
         /// The animation frame's timestamp, seconds. Call before `poll`.
         pub fn time(s: *Self, seconds: f64) void {
             s.in.dt = if (s.last < 0) 1.0 / 60.0 else @floatCast(@max(seconds - s.last, 0));
@@ -93,8 +195,34 @@ pub fn Web(comptime host: type) type {
             if (!s.open) return false;
             s.wakes += @intFromBool(s.woken.swap(false, .acq_rel));
             s.polls += 1;
+            s.dropGone();
             ev.in = s.in;
+            ev.in.text = s.text[0..s.text_len];
+            ev.in.events = s.events[0..s.event_len];
+            ev.in.contacts = s.contacts[0..s.contact_len];
+            // The slices stay valid until the next event or poll: the page delivers no event
+            // while a frame runs. What belongs to one frame starts again empty.
+            s.text_len = 0;
+            s.event_len = 0;
+            s.in.wheel = .{ 0, 0 };
+            s.in.scroll = .{ 0, 0 };
+            s.gone = s.lifting;
+            s.lifting = @splat(false);
+            // A lifted contact leaves the input at the next poll: make sure there is one.
+            if (std.mem.indexOfScalar(bool, &s.gone, true) != null) host.schedule(0, .once);
             return true;
+        }
+
+        /// Removes the rows the previous poll reported lifted; the others keep their order.
+        fn dropGone(s: *Self) void {
+            var n: u32 = 0;
+            for (0..s.contact_len) |i| {
+                s.contacts[n] = s.contacts[i];
+                s.lifting[n] = s.lifting[i];
+                n += @intFromBool(!s.gone[i]);
+            }
+            s.contact_len = n;
+            s.gone = @splat(false);
         }
 
         pub fn apply(_: *Self, _: *const Platform) void {}
@@ -215,4 +343,50 @@ test "web: buttons follow DOM numbering; time sets dt; close ends the frames" {
     try testing.expect(shell.poll(&ev));
     shell.close();
     try testing.expect(!shell.poll(&ev));
+}
+
+test "web: keys, text, wheel and contacts become one frame's Input, then reset" {
+    var shell: Web(Page) = .{};
+    var ev: Events = .{};
+    const ctrl: Input.Mods = .{ .ctrl = true };
+    shell.key(.press, 0x04, .{}); // KeyA
+    shell.typed("a", .{});
+    shell.key(.press, 0xe0, ctrl); // ControlLeft
+    shell.key(.repeat, 0x04, ctrl);
+    shell.wheel(0, 100, .pixel); // a Chromium mouse notch: down by 100 px
+    shell.wheel(0, 3, .line);
+    shell.contact(.{ .id = 7, .pos = .{ 10, 20 } });
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqualStrings("a", ev.in.text);
+    try testing.expectEqual(@as(usize, 4), ev.in.events.len);
+    try testing.expectEqual(Input.Event.Kind.text, ev.in.events[1].kind);
+    try testing.expectEqualStrings("a", ev.in.typed(ev.in.events[1]));
+    try testing.expectEqual(Input.Event.Kind.repeat, ev.in.events[3].kind);
+    try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe0) and ev.in.mods.ctrl);
+    try testing.expectEqual([2]f32{ 0, -100 }, ev.in.scroll);
+    try testing.expectEqual([2]f32{ 0, -3 }, ev.in.wheel);
+    try testing.expectEqual(@as(u32, 0), ev.in.contact(7));
+
+    // Next frame: held keys stay, the per-frame state is gone; the finger moves, then lifts.
+    shell.key(.release, 0x04, ctrl);
+    shell.contact(.{ .id = 7, .pos = .{ 15, 25 } });
+    shell.contact(.{ .id = 8, .pos = .{ 50, 50 } });
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(usize, 1), ev.in.events.len);
+    try testing.expect(!ev.in.keys.down(0x04) and ev.in.keys.down(0xe0));
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.wheel);
+    try testing.expectEqual([2]f32{ 15, 25 }, ev.in.contacts[ev.in.contact(7)].pos);
+    shell.lift(7);
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqual(@as(usize, 2), ev.in.contacts.len);
+    try testing.expect(!ev.in.contacts[ev.in.contact(7)].down);
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqual(@as(usize, 1), ev.in.contacts.len);
+    try testing.expectEqual(none, ev.in.contact(7));
+    try testing.expectEqual([2]f32{ 50, 50 }, ev.in.contacts[ev.in.contact(8)].pos);
+
+    // Full buffers drop instead of overflowing.
+    for (0..Web(Page).max_events + 3) |_| shell.key(.press, 0x05, .{});
+    try testing.expectEqual(@as(u32, 3), shell.dropped);
 }

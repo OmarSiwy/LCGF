@@ -65,6 +65,7 @@ export fn lcgr_init() bool {
 export fn lcgr_frame(ms: f64) void {
     shell.time(ms / 1000);
     if (!shell.poll(&ev)) return;
+    see(&ev.in);
     if (ctx.needsFrame(&ev.in)) {
         var f = ctx.begin(&ev.in);
         app.build(&f, &ev);
@@ -89,6 +90,84 @@ export fn lcgr_button(b: u32, down: bool) void {
 }
 export fn lcgr_close() void {
     shell.close();
+}
+export fn lcgr_blur() void {
+    shell.blur();
+}
+export fn lcgr_mods(m: u32) void {
+    shell.mods(@bitCast(@as(u8, @truncate(m))));
+}
+/// `kind`: 0 press, 1 release, 2 repeat (Input.Event.Kind).
+export fn lcgr_key(kind: u32, code: u32, m: u32) void {
+    shell.key(@fromBackingInt(@intCast(kind)), @truncate(code), @bitCast(@as(u8, @truncate(m))));
+}
+/// Where the page encodes typed text before `lcgr_typed`.
+export fn lcgr_text_buffer() [*]u8 {
+    return &staging;
+}
+export fn lcgr_text_capacity() u32 {
+    return staging.len;
+}
+export fn lcgr_typed(len: u32, m: u32) void {
+    shell.typed(staging[0..@min(len, staging.len)], @bitCast(@as(u8, @truncate(m))));
+}
+export fn lcgr_wheel(dx: f32, dy: f32, mode: u32) void {
+    shell.wheel(dx, dy, @fromBackingInt(@intCast(@min(mode, 2))));
+}
+/// `kind`: 0 touch, 1 pen, 2 eraser (Input.Contact.Kind).
+export fn lcgr_contact(id: u32, kind: u32, down: bool, x: f32, y: f32, pressure: f32, tilt_x: f32, tilt_y: f32) void {
+    shell.contact(.{ .id = id, .kind = @fromBackingInt(@intCast(@min(kind, 2))), .down = down, .pos = .{ x, y }, .pressure = pressure, .tilt = .{ tilt_x, tilt_y } });
+}
+export fn lcgr_lift(id: u32) void {
+    shell.lift(id);
+}
+
+var staging: [256]u8 = undefined;
+
+/// What the frames saw, for the tests (test_shell.py): totals since the page loaded.
+const Seen = struct {
+    presses: u32 = 0,
+    releases: u32 = 0,
+    last_code: u32 = 0,
+    last_mods: u32 = 0,
+    text: [64]u8 = @splat(0),
+    text_len: u32 = 0,
+    wheel_y: f32 = 0,
+    scroll_y: f32 = 0,
+    contacts: u32 = 0,
+    contact_x: f32 = 0,
+    keys_held: u32 = 0,
+};
+var seen: Seen = .{};
+
+fn see(in: *const lcgr.input.Input) void {
+    for (in.events) |e| {
+        seen.presses += @intFromBool(e.kind == .press);
+        seen.releases += @intFromBool(e.kind == .release);
+        if (e.kind != .text) {
+            seen.last_code = e.code;
+            seen.last_mods = @as(u8, @bitCast(e.mods));
+        }
+        const t = in.typed(e);
+        const n = @min(t.len, seen.text.len - seen.text_len);
+        @memcpy(seen.text[seen.text_len..][0..n], t[0..n]);
+        seen.text_len += @intCast(n);
+    }
+    seen.wheel_y += in.wheel[1];
+    seen.scroll_y += in.scroll[1];
+    seen.contacts = @intCast(in.contacts.len);
+    if (in.contacts.len > 0) seen.contact_x = in.contacts[0].pos[0];
+    var held: u32 = 0;
+    for (in.keys.bits) |w| held += @popCount(w);
+    seen.keys_held = held;
+}
+
+/// `seen`'s fields in order (floats times 1000), and the text as bytes from field 100.
+export fn lcgr_seen(i: u32) i32 {
+    const s = seen;
+    const v = [_]i32{ @intCast(s.presses), @intCast(s.releases), @intCast(s.last_code), @intCast(s.last_mods), @intCast(s.text_len), @intFromFloat(s.wheel_y * 1000), @intFromFloat(s.scroll_y * 1000), @intCast(s.contacts), @intFromFloat(s.contact_x * 1000), @intCast(s.keys_held) };
+    if (i >= 100) return s.text[@min(i - 100, s.text.len - 1)];
+    return v[@min(i, v.len - 1)];
 }
 
 /// The example's state, for the tests: builds, resets, layers, exposure * 1000, the theme's
