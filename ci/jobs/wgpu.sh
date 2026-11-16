@@ -6,6 +6,6 @@
 zig build wgpu wgpu-play --summary all
 out=zig-out/wgpu; rm -rf "$out"
 zig-out/bin/wgpu-play "$out"
-for n in rects clip; do
+for n in rects clip text; do
     python3 tools/golden/golden.py "$out/$n.png" "src/render/conformance/$n.png"
 done

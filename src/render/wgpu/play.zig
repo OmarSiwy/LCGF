@@ -5,7 +5,7 @@
 //!     wgpu-play OUT      ->  OUT/<scene>.png
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
-//! target cleared to black, nearest sampling, scale 1.
+//! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
 const std = @import("std");
 const lcgr = @import("lcgr");
 const native = @import("native.zig");
@@ -37,6 +37,16 @@ pub fn main(init: std.process.Init) !void {
     var gfx = native.Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm }, white.view, sampler);
     defer gfx.deinit();
 
+    // The goldens' stand-in glyph atlas (render.py): 16x16 cells of 4x4 texels, every printable
+    // byte a 2x3 block. Packed into a coverage atlas and uploaded like a real one.
+    var atlas_px: [64 * 64]u8 = undefined;
+    var sky: [3][64]u32 = undefined;
+    var atlas = lcgr.raster_atlas.Atlas.init(64, 64, &atlas_px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
+    for (33..127) |byte| atlas.put(.{ .x = @intCast((byte & 15) * 4 + 1), .y = @intCast((byte >> 4) * 4 + 1), .w = 2, .h = 3 }, &@as([6]u8, @splat(255)));
+    var atlas_tex = native.glyphs.GlyphTexture.init(h.device, 64, 64);
+    defer atlas_tex.deinit();
+    const atlas_handle = gfx.addTexture(&ctx, atlas_tex.view, sampler);
+
     for (&conformance.scenes) |*s| {
         st.load(s);
         const w: u32 = @intFromFloat(s.viewport[0]);
@@ -44,7 +54,10 @@ pub fn main(init: std.process.Init) !void {
         var target = host.Target.init(&h, w, ht, c.WGPUTextureFormat_RGBA8Unorm);
         defer target.deinit();
 
-        gfx.prepare(h.queue, &st.draw, st.glyphs(), s.viewport, 1);
+        _ = atlas_tex.upload(h.queue, &atlas);
+        var glyphs = st.glyphs();
+        glyphs.texture = atlas_handle;
+        gfx.prepare(h.queue, &st.draw, glyphs, s.viewport, 1);
         const encoder = c.wgpuDeviceCreateCommandEncoder(h.device, null);
         const pass = host.beginPass(encoder, target.view, .{ 0, 0, 0, 1 });
         gfx.render(pass, &st.draw);

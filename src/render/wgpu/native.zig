@@ -14,6 +14,7 @@ const lcgr = @import("lcgr");
 pub const c = @import("wgpu_c");
 pub const host = @import("host.zig");
 pub const surface = @import("surface.zig");
+pub const glyphs = @import("glyphs.zig");
 const wgpu = lcgr.render_wgpu;
 
 /// The wgpu back end over wgpu-native.
@@ -325,4 +326,19 @@ test "native: registered textures are sampled by handle, and setTexture swaps on
             try testing.expectEqualSlices(u8, want[((y / 2) * 2 + x / 2) * 4 ..][0..4], px[(y * 4 + x) * 4 ..][0..4]);
         };
     }
+}
+
+test "native: the glyph texture uploads only what the atlas changed" {
+    var h = try host.Host.init();
+    defer h.deinit();
+    var px: [32 * 16]u8 = undefined;
+    var sky: [3][32]u32 = undefined;
+    var atlas = lcgr.raster_atlas.Atlas.init(32, 16, &px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
+    var tex = glyphs.GlyphTexture.init(h.device, 32, 16);
+    defer tex.deinit();
+    try testing.expectEqual(@as(u32, 32 * 16), tex.upload(h.queue, &atlas)); // cleared: all of it
+    try testing.expectEqual(@as(u32, 0), tex.upload(h.queue, &atlas));
+    const r = atlas.pack(5, 7).?;
+    atlas.put(r, &@as([35]u8, @splat(200)));
+    try testing.expectEqual(@as(u32, 5 * 7), tex.upload(h.queue, &atlas));
 }
