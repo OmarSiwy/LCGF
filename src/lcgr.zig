@@ -75,6 +75,7 @@ pub const widgets_checkbox = @import("widgets/checkbox.zig");
 pub const widgets_radio = @import("widgets/radio.zig");
 pub const widgets_switch = @import("widgets/switch.zig");
 pub const widgets_toggle = @import("widgets/toggle.zig");
+pub const widgets_slider = @import("widgets/slider.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");

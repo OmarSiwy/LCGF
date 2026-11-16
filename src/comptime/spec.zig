@@ -44,6 +44,9 @@ pub const Spec = struct {
     children: []const Spec = &.{},
     /// Which of several a node is, for widgets made of numbered parts: a radio option's value.
     index: u32 = 0,
+    /// The range of a value widget (a slider): its value runs `lo` to `hi`.
+    lo: f32 = 0,
+    hi: f32 = 1,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a

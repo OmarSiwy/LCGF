@@ -61,6 +61,7 @@ const checkbox_zig = @import("checkbox.zig");
 const radio_zig = @import("radio.zig");
 const switch_zig = @import("switch.zig");
 const toggle_zig = @import("toggle.zig");
+const slider_zig = @import("slider.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -181,6 +182,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
                 .radio, .radio_option => radio_zig.bindError(State, name),
                 .@"switch" => switch_zig.bindError(State, name),
                 .toggle => toggle_zig.bindError(State, name),
+                .slider => slider_zig.bindError(State, name),
                 else => null,
             };
             if (err) |msg| @compileError(msg);
@@ -234,23 +236,12 @@ pub const button = button_zig.button;
 
 pub const checkbox = checkbox_zig.checkbox;
 
-pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response {
-    const track = f.open(id, sliderTrack(th));
-    const r = f.interact(track, .{ .hover = true, .click = true, .drag = true, .focus = true });
-    // `heldRect` is this slider's last rect exactly when `r.held` is set.
-    const rect = f.heldRect();
-    value.* = slide(value.*, r.held, (f.in.pointer[0] - rect.x0) / @max(rect.w(), 1), lo, hi);
-    _ = f.leaf(.none, sliderThumb(th, fraction(value.*, lo, hi)));
-    f.close();
-    f.tree().c.value[track.ix()] = value.*;
-    return r;
-}
+pub const slider = slider_zig.slider;
 
 // ---- comptime front end ---------------------------------------------------------------------
 
 /// The reference widgets as spec nodes. Ids and bound state fields are enum literals; the
 /// state struct of `ComptimeUi` must have them, with the types noted (a compile error if not).
-/// A comptime slider's value runs 0 to 1, the range of its `Event` payload.
 pub const ct = struct {
     pub const label = label_zig.ct.label;
 
@@ -258,14 +249,7 @@ pub const ct = struct {
 
     pub const checkbox = checkbox_zig.ct.checkbox;
 
-    /// A slider named `id` setting the f32 field `bind`, 0 to 1.
-    pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
-        var s = spec_zig.row(sliderTrack(&th), .{Spec{ .kind = .col }});
-        s.kind = .slider;
-        s.id = @tagName(id);
-        s.bind = @tagName(bind);
-        return s;
-    }
+    pub const slider = slider_zig.ct.slider;
 };
 
 /// The comptime front end running the reference widgets of `spec`: state in `Signals`, input
@@ -335,7 +319,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     const n = comptime nodeAt(spec, E.widget_nodes[k]);
                     switch (comptime E.widget_kinds[k]) {
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
-                        .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
+                        .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
                         .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
                         .label, .col, .row, .button, .radio => {},
@@ -444,7 +428,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     s.value = value;
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
+                    _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, n.lo, n.hi)));
                     tb.t.seal(i);
                 },
                 .radio => {
@@ -703,7 +687,7 @@ pub fn Reference(comptime th: Theme) type {
         pub const spec = spec_zig.row(toolbar_style, .{
             ct.button(th, .reset, .reset_text),
             ct.checkbox(th, .wire, .wireframe, .wire_text),
-            ct.slider(th, .exposure, .exposure),
+            ct.slider(th, .exposure, .exposure, .{}),
             ct.label(th, .layer),
         });
         pub const Ui = ComptimeUi(State, spec, th);
