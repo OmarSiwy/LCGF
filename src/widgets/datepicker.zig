@@ -28,6 +28,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const date = @import("../i18n/date.zig");
+const keys = @import("keys.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -280,6 +281,93 @@ pub fn within(r: Rect, p: [2]f32) bool {
     return p[0] >= r.x0 and p[0] < r.x1 and p[1] >= r.y0 and p[1] < r.y1;
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// What the pointer did to a date picker this frame.
+pub const Hits = struct {
+    /// The button was clicked.
+    toggle: bool = false,
+    /// The left button is down.
+    down: bool = false,
+    /// What the pointer is over in last frame's dialog (`targetAt`).
+    target: u8 = no_target,
+};
+
+/// `press` after a press outside the open dialog closed it, so the click it ends on the button
+/// does not open it again.
+const dismissed: u8 = 0xfe;
+
+/// One frame of a date picker (APG date picker dialog). The button's click opens the dialog on
+/// the chosen date; a press outside it closes it. In the dialog, a click (press and release on
+/// the same part) on a day chooses it and closes the dialog, on the month buttons shows the
+/// previous or next month. While it is open, keys move the focused day: Left and Right by a
+/// day, Up and Down by a week, Home and End to the week's first and last day, Page Up and Page
+/// Down by a month (with Shift, a year), each shown in its month's grid; Enter or Space choose
+/// it and close; Escape closes. Keys are read in order.
+pub fn advance(st: DateState, hits: Hits, evs: []const Input.Event) DateState {
+    var s = st;
+    const press = hits.down and !st.down;
+    const release = !hits.down and st.down;
+    s.down = hits.down;
+    s.hover = hits.target;
+    const was = st.press;
+    if (press) {
+        s.press = hits.target;
+        if (st.open and hits.target == no_target) {
+            s.open = false;
+            s.press = dismissed;
+        }
+    }
+    if (hits.toggle and was != dismissed) {
+        s.open = !st.open;
+        s.focus = s.value;
+    }
+    if (release) {
+        if (s.open and was == hits.target and was < Target.dialog) s = activate(s, was);
+        s.press = no_target;
+    }
+    for (evs) |e| {
+        if (!s.open) break;
+        if (e.kind != .press and e.kind != .repeat) continue;
+        const years: i32 = if (e.mods.shift) 12 else 1;
+        const wd: i32 = weekday(s.focus);
+        switch (e.code) {
+            keys.right => s.focus += 1,
+            keys.left => s.focus -= 1,
+            keys.down => s.focus += 7,
+            keys.up => s.focus -= 7,
+            keys.home => s.focus -= wd,
+            keys.end => s.focus += 6 - wd,
+            keys.page_up => s.focus = addMonths(s.focus, -years),
+            keys.page_down => s.focus = addMonths(s.focus, years),
+            keys.enter, keys.space => {
+                s.value = s.focus;
+                s.open = false;
+            },
+            popover.keys.escape => s.open = false,
+            else => {},
+        }
+    }
+    if (!s.open) s.hover = no_target;
+    return s;
+}
+
+/// Clicking target `t` of the open dialog: a day is chosen (and focused) and the dialog closes;
+/// the month buttons show the previous or next month.
+fn activate(st: DateState, t: u8) DateState {
+    var s = st;
+    switch (t) {
+        Target.prev => s.focus = addMonths(s.focus, -1),
+        Target.next => s.focus = addMonths(s.focus, 1),
+        else => {
+            s.value = gridStart(s.focus) + @as(i32, t);
+            s.focus = s.value;
+            s.open = false;
+        },
+    }
+    return s;
+}
+
 // ---- comptime front end -------------------------------------------------------------------------
 
 /// Date picker `name` bound to the `DateState` field `field`: its spec builders, custom widgets
@@ -321,12 +409,18 @@ pub fn Datepicker(comptime name: @EnumLiteral(), comptime field: @EnumLiteral())
         };
 
         pub const Layer = struct {
+            /// The button's click, the pointer over last frame's tree and the keys, through
+            /// `advance`; and the button's rect, kept for `push`.
             pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
-                _ = .{ row, event };
-                // The button's rect for `push`, from last frame's tree.
-                const at: Rect = if (ui.built) rectIn(&ui.tables.t, .from(id)) else .{};
+                _ = row;
+                const U = @TypeOf(ui.*);
+                const me = @field(U.Events.Widget, id);
+                const clicked = if (event) |e| std.meta.activeTag(e) == me else false;
+                const t = &ui.tables.t;
+                const at: Rect = if (ui.built) rectIn(t, .from(id)) else .{};
                 ui.keep(Layer).* = .{ at.x0, at.y0, at.x1, at.y1 };
-                _ = in;
+                const hits: Hits = .{ .toggle = clicked, .down = in.buttons.left, .target = if (ui.built) targetAt(t, id, in.pointer) else no_target };
+                ui.signals.set(comptime U.field(field_name), advance(@field(ui.signals.state, field_name), hits, in.events));
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -438,7 +532,10 @@ pub fn dayColors(th: *const Theme) base.OnOff {
 
 /// The button of date picker `name`, in the page's flow, showing the chosen date.
 pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, st: *DateState) Response {
+    // Input is applied before anything is built, from last frame's tree, as in the comptime
+    // front end.
     const r = f.ctx.inter.response(.from(name));
+    st.* = advance(st.*, .{ .toggle = r.clicked, .down = f.in.buttons.left, .target = targetAt(f.prevTree(), name, f.in.pointer) }, f.in.events);
     var b: FrameBuilder = .{ .f = f };
     _ = f.interact(@fromBackingInt(buildButton(&b, th, name, st.*, r)), .button);
     return r;
@@ -571,13 +668,118 @@ test "Datepicker: another theme restyles both front ends alike" {
     var st: DateState = .on(today);
     st.open = true;
     st.focus = today + 1;
-    st.hover = 3;
     const t = try setState(&S.h, st);
     // November 2026: cell k is the (k + 1)th.
     try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("due_d15"))].fill);
     try testing.expectEqual(light.text.bitsOf(), t.c.look[t.find(.from("due_d16"))].border_color);
-    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("due_d3"))].fill);
+    try testing.expectEqual(types.Color.transparent.bitsOf(), t.c.look[t.find(.from("due_d3"))].fill); // the pointer is not over it
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("due_dialog"))].fill);
+}
+
+fn ev(comptime codes: []const u8) [codes.len]Input.Event {
+    var out: [codes.len]Input.Event = undefined;
+    for (&out, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+    return out;
+}
+
+test "advance: the button opens on the value; keys move by day, week, month and year; Enter chooses" {
+    var s = advance(.on(today), .{ .toggle = true }, &.{});
+    try testing.expect(s.open and s.focus == today);
+    s = advance(s, .{}, &ev(&.{ keys.right, keys.down })); // Tuesday the 24th
+    try testing.expectEqual(today + 8, s.focus);
+    s = advance(s, .{}, &ev(&.{ keys.home, keys.left, keys.up })); // Sunday 22nd, Saturday 21st, 14th
+    try testing.expectEqual(daysFromCivil(2026, 11, 14), s.focus);
+    s = advance(s, .{}, &ev(&.{keys.end}));
+    try testing.expectEqual(daysFromCivil(2026, 11, 14), s.focus); // already Saturday
+    s = advance(s, .{}, &ev(&.{ keys.page_down, keys.page_down, keys.page_down })); // 2027-02-14
+    try testing.expectEqual(daysFromCivil(2027, 2, 14), s.focus);
+    const shift_up = [1]Input.Event{.{ .kind = .press, .code = keys.page_up, .mods = .{ .shift = true } }};
+    s = advance(s, .{}, &shift_up);
+    try testing.expectEqual(daysFromCivil(2026, 2, 14), s.focus);
+    s = advance(s, .{}, &ev(&.{keys.enter}));
+    try testing.expect(!s.open and s.value == daysFromCivil(2026, 2, 14));
+    s = advance(s, .{}, &ev(&.{keys.right})); // closed: keys do nothing
+    try testing.expectEqual(daysFromCivil(2026, 2, 14), s.focus);
+    s = advance(s, .{ .toggle = true }, &ev(&.{ keys.right, popover.keys.escape }));
+    try testing.expect(!s.open and s.value == daysFromCivil(2026, 2, 14));
+}
+
+test "advance: clicks choose a day or move a month; a press outside closes and does not reopen" {
+    var s = advance(.on(today), .{ .toggle = true }, &.{});
+    s = advance(s, .{ .down = true, .target = Target.next }, &.{});
+    s = advance(s, .{ .target = Target.next }, &.{});
+    try testing.expectEqual(daysFromCivil(2026, 12, 16), s.focus);
+    // December 2026's grid starts on Sunday November 29th: cell 5 is December 4th.
+    s = advance(s, .{ .down = true, .target = 5 }, &.{});
+    try testing.expectEqual(@as(u8, 5), s.hover);
+    s = advance(s, .{ .target = 6 }, &.{}); // released elsewhere: no click
+    try testing.expect(s.open);
+    s = advance(s, .{ .down = true, .target = 5 }, &.{});
+    s = advance(s, .{ .target = 5 }, &.{});
+    try testing.expect(!s.open and s.value == daysFromCivil(2026, 12, 4));
+    s = advance(s, .{ .toggle = true }, &.{});
+    s = advance(s, .{ .down = true }, &.{}); // on the button: outside the dialog
+    try testing.expect(!s.open);
+    s = advance(s, .{ .toggle = true }, &.{}); // the click ends on the button
+    try testing.expect(!s.open);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the picker's
+/// state equal in both after every step; returns the state after each.
+fn runScript(comptime n: usize, script: [n]Step) ![n]DateState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var e: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]DateState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            e[0] = .{ .kind = .press, .code = k };
+            in.events = &e;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.due, h.ui.signals.state.due);
+        o.* = h.app.due;
+    }
+    return out;
+}
+
+test "Datepicker: open, keys, month buttons, clicks and Escape in both front ends" {
+    const s = try runScript(12, .{
+        .{ .aim = .{ .part = "due" }, .left = true },
+        .{ .aim = .{ .part = "due" } }, // open on the 16th
+        .{ .aim = .{ .part = "due" }, .key = keys.down }, // the 23rd
+        .{ .aim = .{ .part = "due" }, .key = keys.page_down }, // December 23rd
+        .{ .aim = .{ .part = "due_prev" } },
+        .{ .aim = .{ .part = "due_prev" }, .left = true },
+        .{ .aim = .{ .part = "due_prev" } }, // November 23rd
+        .{ .aim = .{ .part = "due_d9" } }, // hover the 10th
+        .{ .aim = .{ .part = "due_d9" }, .left = true },
+        .{ .aim = .{ .part = "due_d9" } }, // chosen
+        .{ .aim = .{ .part = "due" }, .key = keys.enter }, // closed: nothing
+        .{ .aim = .{ .at = .{ 390, 290 } }, .left = true },
+    });
+    try testing.expect(s[1].open and s[1].focus == today);
+    try testing.expectEqual(today + 7, s[2].focus);
+    try testing.expectEqual(daysFromCivil(2026, 12, 23), s[3].focus);
+    try testing.expectEqual(Target.prev, s[4].hover);
+    try testing.expectEqual(today + 7, s[6].focus);
+    try testing.expectEqual(@as(u8, 9), s[7].hover);
+    try testing.expect(!s[9].open and s[9].value == daysFromCivil(2026, 11, 10));
+    try testing.expect(!s[10].open and !s[11].open);
 }
 
 test "checkDatepicker: the state field" {
