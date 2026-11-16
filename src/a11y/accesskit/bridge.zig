@@ -94,6 +94,8 @@ pub const roles: [256]c.Role = blk: {
         .form => .form,
         .search => .search,
         .status => .status,
+        // AccessKit's toggle button is a button with `toggled` (`offers`).
+        .toggle_button => .button,
     };
     break :blk m;
 };
@@ -104,7 +106,7 @@ const Offers = bitpack struct(u8) {
     focus: bool = false,
     /// A numeric value: sent as the node's value, settable.
     value: bool = false,
-    /// A checked state: sent as toggled, true or false.
+    /// A checked or pressed state: sent as toggled, true, false or mixed.
     toggle: bool = false,
     _: u4 = 0,
 };
@@ -113,7 +115,7 @@ const offers: [256]Offers = blk: {
     var m: [256]Offers = @splat(.{});
     const press: Offers = .{ .click = true, .focus = true };
     for ([_]Role{ .button, .link, .tab, .menu_item, .option, .tree_item, .combobox }) |r| m[@backingInt(r)] = press;
-    for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
+    for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio, .toggle_button }) |r|
         m[@backingInt(r)] = .{ .click = true, .focus = true, .toggle = true };
     for ([_]Role{ .slider, .spin_button, .scroll_bar }) |r| m[@backingInt(r)] = .{ .focus = true, .value = true };
     m[@backingInt(Role.text_input)] = .{ .focus = true };
@@ -265,7 +267,11 @@ pub const Bridge = struct {
         if (e.name_bytes[r] != 0) named(n, b.strings[e.name_start[r]..].ptr, e.name_bytes[r]);
         const st: a11y.State = @bitCast(e.state[r]);
         const of = offers[role];
-        if (of.toggle) c.accesskit_node_set_toggled(n, if (st.checked) .true else .false);
+        // `checked` or `pressed`, as the role has it; a mixed node is neither.
+        if (of.toggle) c.accesskit_node_set_toggled(n, if (st.mixed) .mixed else if (st.checked or st.pressed) .true else .false);
+        // ponytail: one kind of current, a page (what a breadcrumb has). Widen the bit to a
+        // kind when a step or date picker needs to say so.
+        if (st.current) c.accesskit_node_set_aria_current(n, .page);
         if (st.expandable) c.accesskit_node_set_expanded(n, st.expanded);
         if (st.selected) c.accesskit_node_set_selected(n, true);
         if (st.disabled) c.accesskit_node_set_disabled(n);
@@ -590,6 +596,36 @@ test "accesskit: later frames send only the rows that changed, and the window wh
     u = Bridge.factory(&f.b).?;
     try testing.expectEqual(1 + f.out[f.gen].len, (try pushedIds(u, &ids)).len);
     c.accesskit_tree_update_free(u);
+}
+
+test "accesskit: mixed, pressed and current go out as AccessKit's toggled and aria_current" {
+    var f: Fixture(32) = .{};
+    f.init();
+    f.reset();
+    const t = &f.t;
+    const root = t.push(0, .none, &.{});
+    const all = t.push(root, .from("all"), &.{ .role = .checkbox, .value = 0.5 });
+    _ = f.text(all, "All");
+    t.seal(all);
+    const bold = t.push(root, .from("bold"), &.{ .value = 1 });
+    t.c.role[bold] = @backingInt(Role.toggle_button);
+    _ = f.text(bold, "B");
+    t.seal(bold);
+    const page = f.text(root, "Widgets");
+    t.seal(root);
+    f.s.c.state[page] = a11y.State.bitsOf(.{ .current = true });
+    f.end(0);
+    _ = Bridge.activate(&f.b);
+    const u = Bridge.factory(&f.b).?;
+    defer c.accesskit_tree_update_free(u);
+    var buf: [8192]u8 = undefined;
+    const d = debugText(u, &buf);
+    try expectHas(d, "toggled: Mixed");
+    try expectHas(d, "toggled: True");
+    try expectHas(d, "aria_current: Page");
+    // The toggle button is AccessKit's button: one CheckBox (All), one Button (B).
+    try testing.expectEqual(1, std.mem.count(u8, d, "role: CheckBox"));
+    try testing.expectEqual(1, std.mem.count(u8, d, "role: Button"));
 }
 
 /// The bridge's side of a host loop, over a `Context`: the semantic columns, this and last
