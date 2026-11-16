@@ -35,6 +35,7 @@ pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
 pub const validate = @import("comptime/validate.zig");
 pub const columns = @import("comptime/columns.zig");
+pub const ct_layout = @import("comptime/layout.zig");
 pub const ct_examples = @import("comptime/examples.zig");
 pub const signals = @import("comptime/signals.zig");
 pub const events = @import("comptime/events.zig");
