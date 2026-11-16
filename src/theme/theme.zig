@@ -99,6 +99,14 @@ pub const dark: Tokens = .{};
 /// The same sizes in `light_palette`.
 pub const light: Tokens = .{ .palette = light_palette };
 
+/// The tokens that follow the platform's appearance (`Input.appearance`): `dark` or `light`,
+/// with the system's accent for checked boxes, slider fills and focus when it gives one.
+pub fn forAppearance(a: @import("../core/input.zig").Input.Appearance) Tokens {
+    var tok = if (a.dark) dark else light;
+    if (a.accent.a != 0) tok.palette[@backingInt(Role.accent)] = a.accent;
+    return tok;
+}
+
 /// How tightly controls pack: a factor on the space scale. Text sizes and radii stay, so a
 /// denser theme fits more controls without smaller type.
 pub const Density = enum(u8) { compact, comfortable, spacious };

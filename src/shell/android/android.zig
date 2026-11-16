@@ -506,18 +506,6 @@ pub const Android = struct {
         _ = __android_log_write(log_info, "lcgr", line);
     }
 
-    /// True once after the activity returned from the background: build a frame (post the
-    /// context's waker), since frames built while it was away were not shown.
-    pub fn resumed(s: *Android) bool {
-        return s.t.takeResumed();
-    }
-
-    /// The safe area as root padding (`Style.pad`): what the status bar, the navigation bar
-    /// and display cutouts cover, as far as the content rect says.
-    pub fn safeArea(s: *const Android) [4]f32 {
-        return s.t.safe();
-    }
-
     fn makeTarget(s: *Android, window: *ANativeWindow) void {
         ANativeWindow_acquire(window);
         s.makeTargetOrLog(window) catch |e| {
@@ -650,11 +638,14 @@ pub const Android = struct {
         return true;
     }
 
-    /// Applies a frame's effects: text the frame copies goes to the system clipboard; while a
-    /// widget wants text the soft keyboard is up (`ANativeActivity_showSoftInput`, which may
-    /// be called from any thread). `ime_rect` is not used: placing the IME needs a Java view.
+    /// Applies a frame's effects: text the frame copies goes to the system clipboard, and a
+    /// paste reads it; while a widget wants text the soft keyboard is up
+    /// (`ANativeActivity_showSoftInput`, which may be called from any thread). `ime_rect`,
+    /// `purpose` and `surrounding` are not used: placing the IME, choosing the keyboard
+    /// (`EditorInfo.inputType`) and giving it the text (`InputConnection`) need a Java view.
     pub fn apply(s: *Android, p: *const Platform) void {
         if (p.clipboard.len > 0) s.copy(p.clipboard);
+        if (p.paste) s.paste();
         if (p.wants_text == s.keyboard) return;
         s.keyboard = p.wants_text;
         lock();
@@ -686,10 +677,9 @@ pub const Android = struct {
         _ = e.callVoid(cm, set, &.{jni.obj(clip)});
     }
 
-    /// Types the clipboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
-    /// host to: call it after a frame whose widgets requested a paste. Android 10+ gives the
+    /// Types the clipboard's text into the next frame (`Platform.paste`). Android 10+ gives the
     /// clipboard only to the app in focus; otherwise nothing is typed.
-    pub fn paste(s: *Android) void {
+    fn paste(s: *Android) void {
         const e = s.env orelse return;
         const activity = activityObject() orelse return;
         e.pushFrame(8);

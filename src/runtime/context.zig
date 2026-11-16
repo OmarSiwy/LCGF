@@ -69,9 +69,22 @@ pub const Platform = struct {
     /// Show the on-screen keyboard / enable IME, anchored at `ime_rect`.
     wants_text: bool = false,
     ime_rect: types.Rect = .{},
+    /// What the focused field takes, so the keyboard lays out for it (digits, an email's @)
+    /// and a password gets no IME and no suggestions. Read with `wants_text`.
+    purpose: Purpose = .normal,
+    /// The focused field's text around the caret, and the caret or selection in it as byte
+    /// offsets (equal for a caret), so the IME and autocorrect see what is being edited. Empty
+    /// when the field does not say. Valid until the next `begin`.
+    surrounding: []const u8 = "",
+    selection: [2]u32 = .{ 0, 0 },
     /// Non-empty when the UI asks to set the clipboard. Valid until the next `begin`.
     clipboard: []const u8 = "",
+    /// The UI asks for the clipboard's text (`keyboard.Clipboard.paste`). The shell types it
+    /// into a later frame, a `.text` event and `Input.text`, for the widget focused then.
+    paste: bool = false,
 };
+
+pub const Purpose = @import("../interact/keyboard.zig").Purpose;
 
 /// What a frame produced. Every field is data the host reads; nothing calls back.
 pub const Output = struct {

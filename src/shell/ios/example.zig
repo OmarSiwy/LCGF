@@ -42,21 +42,14 @@ fn run() void {
     var app: lcgr.shell_example.App = .{};
     shell.background = app.theme.panel;
     // iface.run's loop, with the root padded by the safe area; the panel colour behind it
-    // fills the corners and the strip under the home indicator.
+    // fills the corners and the strip under the home indicator. A change of the safe area,
+    // or a return from the background (`Input.redraw`), is input: it builds a frame.
     var ev: lcgr.shell_iface.Events = .{};
-    var safe = shell.safeArea();
     while (shell.poll(&ev)) {
-        // Not Input: a change of the safe area alone (the status bar hidden), or a return from
-        // the background (frames built there were not shown), asks for a frame.
-        if (shell.resumed()) ctx.waker.post();
-        if (!std.meta.eql(shell.safeArea(), safe)) {
-            safe = shell.safeArea();
-            ctx.waker.post();
-        }
         if (ctx.needsFrame(&ev.in)) {
             var f = ctx.begin(&ev.in);
             // The recording's taps are at the example's 800 x 600 layout, unpadded.
-            _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = if (replay) @splat(0) else safe });
+            _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = if (replay) @splat(0) else ev.in.safe_area });
             app.build(&f, &ev);
             f.close();
             const out = f.end(.{});

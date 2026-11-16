@@ -138,7 +138,7 @@ pub const Translator = struct {
     /// The activity's lifecycle (`onStart`, `onResume`, `onPause`, `onStop`) as the mobile
     /// model's state: resumed is active, started or paused is visible but not in front
     /// (inactive), stopped is the background. Coming back from the background asks for a
-    /// frame (`takeResumed`).
+    /// frame (`Input.redraw`).
     pub fn lifecycle(t: *Translator, event: Lifecycle) void {
         t.m.lifecycle(switch (event) {
             .resume_ => .active,
@@ -160,11 +160,6 @@ pub const Translator = struct {
         return t.has_window and t.m.visible();
     }
 
-    /// True once after the activity returned from the background; see the mobile translator.
-    pub fn takeResumed(t: *Translator) bool {
-        return t.m.takeResumed();
-    }
-
     /// The screen's density (`AConfiguration_getDensity`, dots per inch): 160 is one physical
     /// pixel per logical one (Android's dp), 420 is 2.625. 0 (ACONFIGURATION_DENSITY_DEFAULT)
     /// and 0xffff (none) count as 160.
@@ -180,18 +175,14 @@ pub const Translator = struct {
         t.update();
     }
 
-    /// Viewport and safe area from the window, the density and the content rect.
+    /// Viewport and safe area (`Input.safe_area`) from the window, the density and the
+    /// content rect.
     fn update(t: *Translator) void {
         const s = t.m.in.scale;
         const w = t.window;
         t.m.resize(w[0] / s, w[1] / s);
         const r = t.content orelse [4]f32{ 0, 0, w[0], w[1] };
         t.m.setInsets(@max(r[1], 0) / s, @max(r[0], 0) / s, @max(w[1] - r[3], 0) / s, @max(w[0] - r[2], 0) / s);
-    }
-
-    /// The safe area as root padding (`Style.pad`'s order), logical pixels.
-    pub fn safe(t: *const Translator) [4]f32 {
-        return t.m.safe;
     }
 
     /// A motion event. Fingers, styluses and erasers are touches in the mobile model (the
@@ -635,20 +626,20 @@ test "translate: density scales the window, the content rect insets it" {
     _ = t.frame(&ev);
     try testing.expectEqual(@as(f32, 2.625), ev.in.scale);
     try testing.expectEqual([2]f32{ 1080.0 / 2.625, 2400.0 / 2.625 }, ev.in.viewport);
-    try testing.expectEqual([4]f32{ 0, 24, 0, 24 }, t.safe());
+    try testing.expectEqual([4]f32{ 0, 24, 0, 24 }, ev.in.safe_area);
     try testing.expectEqual([2]f32{ 200, 400 }, ev.in.pointer);
     try testing.expectEqual(Input.Contact{ .id = 1, .pos = .{ 200, 400 } }, ev.in.contacts[0]);
 
     try testing.expect(try r.next(&t));
     _ = t.frame(&ev);
     try testing.expectEqual([2]f32{ 2400.0 / 2.625, 1080.0 / 2.625 }, ev.in.viewport);
-    try testing.expectEqual([4]f32{ 40, 0, 0, 24 }, t.safe());
+    try testing.expectEqual([4]f32{ 40, 0, 0, 24 }, ev.in.safe_area);
     // Without a content rect the whole window is the app's; an unknown density is 160.
     var u: Translator = .{};
     u.setDensity(0);
     u.resize(800, 600);
     try testing.expectEqual(@as(f32, 1), u.m.in.scale);
-    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.safe());
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.m.in.safe_area);
 }
 
 test "translate: clipboard text crosses UTF-16 both ways and is pasted as typed text" {
@@ -769,7 +760,7 @@ test "translate: pause, stop, a lost surface and the way back" {
         try testing.expect(t.frame(&ev));
         try testing.expectEqual(w.visible, t.visible());
         try testing.expectEqual(w.shift, ev.in.keys.down(0xe1));
-        try testing.expectEqual(w.resumed, t.takeResumed());
+        try testing.expectEqual(w.resumed, ev.in.redraw);
         try testing.expectEqual(w.state, t.m.state);
     }
     try testing.expectEqual([2]f32{ 2400, 1080 }, ev.in.viewport);
