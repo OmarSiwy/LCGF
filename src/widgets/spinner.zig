@@ -289,6 +289,27 @@ test "spinner: both front ends agree; the head is brightest and fades behind" {
     for (0..dots) |k| try testing.expectEqual(@as(u32, 0), t.c.look[node_row + 1 + k].fill >> 24);
 }
 
+test "spinner: takes no input; hit testing and the focus order skip it" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    var out = try h.frame(&in);
+    const r = out.runtime.tree.rect(node_row);
+    in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    in.buttons.left = true;
+    out = try h.frame(&in);
+    try testing.expectEqual(none, hit.at(out.runtime.tree, in.pointer[0], in.pointer[1], .any));
+    for (0..1 + dots) |k| try testing.expectEqual(@as(u8, 0), out.runtime.tree.c.sense[node_row + k]);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try testing.expectEqual(0, @TypeOf(h.ui).Events.focus_order.len);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.clicked);
+    try testing.expect(h.app.busy);
+    // While busy, the runtime front end asks the host back for the next step.
+    try testing.expect(out.runtime.wake <= 1.0 / @as(f32, steps_per_second) + 1e-6);
+}
+
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
