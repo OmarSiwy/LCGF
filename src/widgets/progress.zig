@@ -44,6 +44,30 @@ pub fn validate(comptime State: type, comptime value: []const u8) void {
     if (comptime check(State, value)) |msg| @compileError(msg);
 }
 
+// ---- look: one function per part, called by both front ends -------------------------------
+
+/// The track: the full width it is given (at least 80 px), 8 px tall, rounded.
+pub fn trackStyle(th: *const Theme) Style {
+    return .{ .dir = .x, .size = .{ .fill, .px(8) }, .min = .{ 80, 0 }, .radius = 4, .fill = th.control, .role = .group };
+}
+
+/// The filled part: `value` of the track's width, clamped to 0..1, in the accent.
+pub fn barStyle(th: *const Theme, value: f32) Style {
+    return .{ .size = .{ .pct(base.unit(value)), .fill }, .radius = 4, .fill = th.accent };
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A progress bar showing `value` (0 to 1). Anonymous and insensitive: it takes no input.
+pub fn progress(f: *Frame, th: *const Theme, value: f32) Node {
+    var s = trackStyle(th);
+    _ = &s;
+    const track = f.open(.none, s);
+    _ = f.leaf(.none, barStyle(th, value));
+    f.close();
+    return track;
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
@@ -62,11 +86,112 @@ fn isProgress(comptime n: Spec) bool {
     return n.kind == .row and n.bind != null;
 }
 
+/// The comptime front end for a page of progress bars: rows, columns and labels as in
+/// `base.ComptimeUi`, every row bound to a field a progress bar made by `ct.progress`. The page
+/// has no widgets, so there is no input to step.
+pub fn ComptimeProgress(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
+    const E = events.Events(spec);
+    const S = signals.Signals(State, spec);
+    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+    comptime checkAll(State, spec);
+    return struct {
+        const Self = @This();
+        pub const Events = E;
+        pub const Signals = S;
+
+        page: Tables = .{},
+        signals: S.Runtime = .{},
+        font: Mono = .{},
+
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
+
+        pub fn frame(ui: *Self, in: *const Input) Output {
+            const tb = ui.page.begin(in);
+            ui.push(spec, 0);
+            const t = ui.page.end(in);
+            return .{ .draw = &tb.d, .tree = t, .event = null };
+        }
+
+        fn push(ui: *Self, comptime n: Spec, parent: u32) void {
+            const tb = &ui.page.tables;
+            const state = &ui.signals.state;
+            if (n.kind == .label) {
+                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
+                return;
+            }
+            if (comptime !isProgress(n)) {
+                const i = tb.t.push(parent, .none, &n.style);
+                inline for (n.children) |c| ui.push(c, i);
+                tb.t.seal(i);
+                return;
+            }
+            const value: f32 = @field(state, n.bind.?);
+            var s = trackStyle(&th);
+            _ = &s;
+            const track = tb.t.push(parent, .none, &s);
+            _ = tb.t.push(track, .none, &barStyle(&th, value));
+            tb.t.seal(track);
+        }
+    };
+}
+
+fn checkAll(comptime State: type, comptime n: Spec) void {
+    if (isProgress(n)) validate(State, n.bind.?);
+    for (n.children) |c| checkAll(State, c);
+}
+
+// ---- example page -----------------------------------------------------------------------------
+
+/// The example page: two captioned progress bars on a panel (a download 40% done, an install
+/// finished), in both front ends, in theme `th`. Its tests and golden images run it.
+pub fn Example(comptime th: Theme) type {
+    return struct {
+        const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
+
+        /// Runtime front end: the application owns the fractions.
+        pub const App = struct {
+            download: f32 = 0.4,
+            install: f32 = 1,
+
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = base.label(f, &th, "Download");
+                _ = progress(f, &th, app.download);
+                _ = base.label(f, &th, "Install");
+                _ = progress(f, &th, app.install);
+                f.close();
+            }
+        };
+
+        /// Comptime front end: the same page as a spec over a state struct.
+        pub const State = struct {
+            download_text: []const u8 = "Download",
+            download: f32 = 0.4,
+            install_text: []const u8 = "Install",
+            install: f32 = 1,
+        };
+        pub const spec = spec_zig.col(panel, .{
+            base.ct.label(th, .download_text),
+            ct.progress(th, .download),
+            base.ct.label(th, .install_text),
+            ct.progress(th, .install),
+        });
+        pub const Ui = ComptimeProgress(State, spec, th);
+        pub const limits: context.Limits = .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 };
+        pub const Run = base.Harness(App, Ui, limits);
+    };
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
 const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
+
+var harness: Example(theme).Run = .{};
+
+/// Rows of the example page's two tracks: panel, caption, track, bar, caption, track, bar.
+const tracks = [2]u32{ 3, 6 };
 
 test "check: what a comptime progress bar's state must have" {
     const Good = struct { v: f32 = 0 };
@@ -83,6 +208,20 @@ test "ct.progress: a track and its bar, bound to the value, and not a widget" {
     try testing.expectEqual(0, E.focus_order.len);
     try testing.expectEqualStrings("done", spec.children[0].bind.?);
     try testing.expectEqual(5, flatten.count(spec));
+}
+
+test "progress: both front ends agree; the bar is the value's share of the track" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    try testing.expectApproxEqAbs(0.4 * t.rect(tracks[0]).w(), t.rect(tracks[0] + 1).w(), 0.5);
+    try testing.expectApproxEqAbs(t.rect(tracks[1]).w(), t.rect(tracks[1] + 1).w(), 0.5);
+    try testing.expectEqual(theme.accent.bitsOf(), t.c.look[tracks[0] + 1].fill);
+    try testing.expectEqual(theme.control.bitsOf(), t.c.look[tracks[0]].fill);
+    try testing.expectEqual(@as(f32, 0), barStyle(&theme, -2).size[0].v);
+    try testing.expectEqual(@as(f32, 1), barStyle(&theme, 9).size[0].v);
 }
 
 test {
