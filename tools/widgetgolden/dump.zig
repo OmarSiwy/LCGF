@@ -23,6 +23,7 @@ const pages = .{
     .{ "separator-", lcgr.widgets_separator.Page(.default), lcgr.widgets_separator.replay, lcgr.widgets_separator.golden_frames },
     .{ "spacer-", lcgr.widgets_spacer.Page(.default), lcgr.widgets_spacer.replay, lcgr.widgets_spacer.golden_frames },
     .{ "accordion-", lcgr.widgets_accordion.Page(.default), lcgr.widgets_accordion.replay, lcgr.widgets_accordion.golden_frames },
+    .{ "tabs-", lcgr.widgets_tabs.Page(.default), lcgr.widgets_tabs.replay, lcgr.widgets_tabs.golden_frames },
     .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
     .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
     .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },

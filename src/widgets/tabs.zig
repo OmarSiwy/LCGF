@@ -254,8 +254,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// Three tabs: General (a checkbox), View (a slider), About (a label).
-fn Page(comptime th: Theme) type {
+/// The example page: three tabs, General (a checkbox), View (a slider) and About (a label),
+/// in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .size = .{ .px(260), .fit }, .pad = @splat(8) };
     return struct {
         pub const ids = [_]Id{ .from("general"), .from("view"), .from("about") };
@@ -298,6 +299,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 48, .texts = 12, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/tabs.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/tabs-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "view", 3 },
+    .{ "about", 4 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -461,6 +472,37 @@ test "tabs: tab list with the selection as value, tabs named and selected, panel
             try testing.expectEqual(k == 1, st.selected);
         }
     }
+}
+
+test "tabs: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var selected: [8]u32 = undefined;
+    var fills: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        selected[k] = h.app.selected;
+        try testing.expectEqual(h.app.selected, h.ui.signals.state.selected);
+        fills[k] = out.runtime.tree.c.look[rows.tab[1]].fill;
+        // Only the selected panel has height.
+        for (rows.panel, 0..) |p, j| try testing.expectEqual(j == h.app.selected, out.runtime.tree.rect(p).h() > 0);
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 2, 0, 2, 1 }, &selected);
+    const th = Theme.default;
+    const c = th.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), th.panel.bitsOf(), c[1].bitsOf() }, fills[0..5]);
+}
+
+test "golden_frames: name frames the tabs replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {
