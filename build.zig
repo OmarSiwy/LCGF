@@ -141,6 +141,18 @@ pub fn build(b: *std.Build) void {
             vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
         }
     }
+    const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
+    vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("imgui", .{})) |imgui| {
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-imgui", "vs-imgui-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libcpp = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/imgui/main.cpp"), .flags = &.{"-std=c++17"} });
+            exe.root_module.addCSourceFiles(.{ .root = imgui.path(""), .files = &.{ "imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp", "imgui_tables.cpp", "backends/imgui_impl_null.cpp" }, .flags = &.{"-std=c++17"} });
+            exe.root_module.addIncludePath(imgui.path(""));
+            exe.root_module.addIncludePath(imgui.path("backends"));
+            vs_imgui.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
 
     // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
     const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
