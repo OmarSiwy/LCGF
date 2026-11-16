@@ -279,6 +279,26 @@ pub fn build(b: *std.Build) void {
         wgpu_play_step.dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
     }
 
+    // The Vulkan back end (src/render/vk/vk.zig): a module of its own over lcgr. Khronos
+    // Vulkan-Headers (build.zig.zon, lazy) translated with VK_NO_PROTOTYPES; the loader is the
+    // platform's libvulkan, opened at run time, so nothing Vulkan is linked.
+    const vk_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/vk/vk.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
+    if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
+        const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
+        vk_h.addIncludePath(vulkan_headers.path("include"));
+        vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
+        const vk_c = vk_h.createModule();
+        for ([_]*std.Build.Module{vk_tests.root_module}) |m| m.addImport("vk_c", vk_c);
+        vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
+    }
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }

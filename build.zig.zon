@@ -64,6 +64,14 @@
             .hash = "N-V-__8AAAbdBgPG_GCWLhyX5luKipfZab5bSXgeOCm3czTm",
             .lazy = true,
         },
+        // Khronos Vulkan-Headers: vulkan_core.h, translated by build.zig for the Vulkan back end
+        // (src/render/vk/). Headers only; the loader is the platform's libvulkan, opened at run
+        // time. Fetched only for the vk steps.
+        .vulkan_headers = .{
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz",
+            .hash = "N-V-__8AABJ5QgLfX-rcpaOGlg1YXcabW-m5cl5HEKkRsi3f",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
