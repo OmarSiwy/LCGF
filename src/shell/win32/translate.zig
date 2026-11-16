@@ -13,7 +13,23 @@ const Events = @import("../iface.zig").Events;
 /// The window messages the translator reads, by their winuser.h values.
 pub const Wm = enum(u32) {
     size = 0x0005,
+    killfocus = 0x0008,
     close = 0x0010,
+    keydown = 0x0100,
+    keyup = 0x0101,
+    char = 0x0102,
+    syskeydown = 0x0104,
+    syskeyup = 0x0105,
+    mousemove = 0x0200,
+    lbuttondown = 0x0201,
+    lbuttonup = 0x0202,
+    rbuttondown = 0x0204,
+    rbuttonup = 0x0205,
+    mbuttondown = 0x0207,
+    mbuttonup = 0x0208,
+    mousewheel = 0x020a,
+    mousehwheel = 0x020e,
+    mouseleave = 0x02a3,
     _,
 };
 
@@ -34,20 +50,70 @@ fn words(lp: isize) [2]i32 {
 
 /// `WM_SIZE`'s wParam when the window was minimized: the client is 0 x 0 and nothing is shown.
 const size_minimized = 1;
+/// Mouse buttons held, in a mouse message's wParam (`MK_LBUTTON`, `MK_RBUTTON`, `MK_MBUTTON`).
+const mk_left = 0x0001;
+const mk_right = 0x0002;
+const mk_middle = 0x0010;
+/// One notch of a mouse wheel (`WHEEL_DELTA`).
+const wheel_delta = 120;
+
+/// USB HID usage (the scancodes of `Input.Keys`, src/interact/keyboard.zig) of each PC scancode
+/// a key message carries in lParam bits 16 to 23, indexed by `extended << 7 | scancode`. 0: no
+/// key. From the USB HID Usage Tables' PS/2 set 1 column, as Windows reports set 1.
+pub const hid: [256]u8 = table: {
+    var t: [256]u8 = @splat(0);
+    // Letters, digits and punctuation in scancode order, from 0x01 (Escape).
+    const plain = [_]u8{
+        0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b, // Esc 1..0 - = Backspace Tab
+        0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, 0x28, 0xe0, // Q..P [ ] Enter LCtrl
+        0x04, 0x16, 0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f, 0x33, 0x34, 0x35, 0xe1, 0x31, // A..L ; ' ` LShift \
+        0x1d, 0x1b, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xe5, 0x55, 0xe2, 0x2c, 0x39, // Z..M , . / RShift KP* LAlt Space Caps
+        0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x53, 0x47, // F1..F10 NumLock ScrollLock
+        0x5f, 0x60, 0x61, 0x56, 0x5c, 0x5d, 0x5e, 0x57, 0x59, 0x5a, 0x5b, 0x62, 0x63, // keypad 7 8 9 - 4 5 6 + 1 2 3 0 .
+    };
+    for (plain, 1..) |u, sc| t[sc] = u;
+    t[0x56] = 0x64; // the key between left Shift and Z on ISO keyboards
+    t[0x57] = 0x44; // F11
+    t[0x58] = 0x45; // F12
+    // Extended (0xE0-prefixed) keys.
+    const ext = [_][2]u8{
+        .{ 0x1c, 0x58 }, .{ 0x1d, 0xe4 }, .{ 0x35, 0x54 }, .{ 0x37, 0x46 }, .{ 0x38, 0xe6 }, // KP Enter, RCtrl, KP /, PrintScreen, RAlt
+        .{ 0x45, 0x53 }, .{ 0x47, 0x4a }, .{ 0x48, 0x52 }, .{ 0x49, 0x4b }, .{ 0x4b, 0x50 }, // NumLock, Home, Up, PageUp, Left
+        .{ 0x4d, 0x4f }, .{ 0x4f, 0x4d }, .{ 0x50, 0x51 }, .{ 0x51, 0x4e }, .{ 0x52, 0x49 }, // Right, End, Down, PageDown, Insert
+        .{ 0x53, 0x4c }, .{ 0x5b, 0xe3 }, .{ 0x5c, 0xe7 }, .{ 0x5d, 0x65 }, // Delete, LWin, RWin, Menu
+    };
+    for (ext) |e| t[0x80 | e[0]] = e[1];
+    break :table t;
+};
 
 pub const Translator = struct {
-    /// Held state, kept from message to message: viewport, pointer, buttons, keys.
+    /// Held state, kept from message to message: viewport, pointer, buttons, keys, mods. The
+    /// per-frame part (wheel, text, events) collects the messages since `begin`.
     in: Input = .{},
     /// `WM_CLOSE` arrived: the user asked to close the window.
     closed: bool = false,
+    /// Caller-owned storage for one frame's typed text and key events.
+    text: []u8 = &.{},
+    events: []Input.Event = &.{},
+    n_text: u32 = 0,
+    n_events: u32 = 0,
+    /// Key events and characters that did not fit the buffers, since `init`.
+    dropped: u32 = 0,
+    /// A UTF-16 high surrogate from `WM_CHAR`, waiting for its low half in the next one.
+    high: u16 = 0,
+
+    pub const Buffers = struct { text: []u8, events: []Input.Event };
+
+    pub fn init(buf: Buffers) Translator {
+        return .{ .text = buf.text, .events = buf.events };
+    }
 
     /// Clears the per-frame state, before the messages of the next frame.
     pub fn begin(t: *Translator) void {
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
-        t.in.text = "";
-        t.in.events = &.{};
-        t.in.contacts = &.{};
+        t.n_text = 0;
+        t.n_events = 0;
     }
 
     /// Reads one message. Messages the translator does not know are ignored.
@@ -60,13 +126,94 @@ pub const Translator = struct {
                 t.in.viewport = .{ @floatFromInt(s[0]), @floatFromInt(s[1]) };
             },
             .close => t.closed = true,
+            // Keys released while another window had the focus never send WM_KEYUP.
+            .killfocus => {
+                t.in.keys = .{};
+                t.in.mods = .{};
+            },
+            .keydown, .syskeydown => t.key(m.lparam, true),
+            .keyup, .syskeyup => t.key(m.lparam, false),
+            .char => t.char(@truncate(m.wparam)),
+            .mousemove, .lbuttondown, .lbuttonup, .rbuttondown, .rbuttonup, .mbuttondown, .mbuttonup => {
+                const p = words(m.lparam);
+                t.in.pointer = .{ @floatFromInt(p[0]), @floatFromInt(p[1]) };
+                t.in.buttons = .{ .left = m.wparam & mk_left != 0, .right = m.wparam & mk_right != 0, .middle = m.wparam & mk_middle != 0 };
+            },
+            // Positive: the wheel turned away from the user, which scrolls toward the start
+            // (`Input.wheel`). Tilting right scrolls toward the end, so it is negated. lParam is
+            // in screen coordinates; the pointer comes from the mouse moves.
+            .mousewheel => t.in.wheel[1] += notches(m.wparam),
+            .mousehwheel => t.in.wheel[0] -= notches(m.wparam),
+            .mouseleave => t.in.pointer = .{ -1, -1 },
             _ => {},
         }
+    }
+
+    fn notches(wp: usize) f32 {
+        const delta: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
+        return @as(f32, @floatFromInt(delta)) / wheel_delta;
+    }
+
+    /// A key message: lParam has the scancode (bits 16 to 23), the extended flag (24) and
+    /// whether the key was already down (30), which makes a press a repeat.
+    fn key(t: *Translator, lp: isize, down: bool) void {
+        const bits: usize = @bitCast(lp);
+        const code = hid[((bits >> 17) & 0x80) | ((bits >> 16) & 0x7f)];
+        if (code == 0) return;
+        const k = &t.in.keys.bits[code >> 6];
+        const bit = @as(u64, 1) << @as(u6, @truncate(code));
+        k.* = if (down) k.* | bit else k.* & ~bit;
+        // Modifiers from the held keys: HID 0xE0 to 0xE7 are left Ctrl, Shift, Alt, GUI, then right.
+        const mod: u8 = @truncate(t.in.keys.bits[3] >> 32);
+        t.in.mods = .{ .ctrl = mod & 0x11 != 0, .shift = mod & 0x22 != 0, .alt = mod & 0x44 != 0, .cmd = mod & 0x88 != 0 };
+        const kind: Input.Event.Kind = if (!down) .release else if ((bits >> 30) & 1 != 0) .repeat else .press;
+        t.push(.{ .kind = kind, .mods = t.in.mods, .code = code });
+    }
+
+    /// A UTF-16 unit of typed text. Control characters (Backspace, Tab, Enter, Ctrl+letter) are
+    /// not text; their key events carry them.
+    fn char(t: *Translator, unit: u16) void {
+        if (std.unicode.utf16IsHighSurrogate(unit)) {
+            t.high = unit;
+            return;
+        }
+        const high = t.high;
+        t.high = 0;
+        const cp: u21 = if (std.unicode.utf16IsLowSurrogate(unit))
+            std.unicode.utf16DecodeSurrogatePair(&.{ high, unit }) catch return
+        else
+            unit;
+        if (cp < 0x20 or cp == 0x7f) return;
+        t.typeCodepoint(cp);
+    }
+
+    /// Appends `cp` to the frame's text as one `.text` event.
+    fn typeCodepoint(t: *Translator, cp: u21) void {
+        var utf8: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(cp, &utf8) catch return;
+        if (t.text.len - t.n_text < n or t.n_events == t.events.len) {
+            t.dropped += 1;
+            return;
+        }
+        @memcpy(t.text[t.n_text..][0..n], utf8[0..n]);
+        t.push(.{ .kind = .text, .mods = t.in.mods, .at = t.n_text, .len = @intCast(n) });
+        t.n_text += @intCast(n);
+    }
+
+    fn push(t: *Translator, e: Input.Event) void {
+        if (t.n_events == t.events.len) {
+            t.dropped += 1;
+            return;
+        }
+        t.events[t.n_events] = e;
+        t.n_events += 1;
     }
 
     /// This frame's events. False once the window was closed.
     pub fn frame(t: *const Translator, ev: *Events) bool {
         ev.in = t.in;
+        ev.in.text = t.text[0..t.n_text];
+        ev.in.events = t.events[0..t.n_events];
         return !t.closed;
     }
 };
@@ -191,4 +338,142 @@ test "replay: errors name the line, unknown messages are refused" {
     try testing.expectError(error.Syntax, r.next(&buf));
     r = .{ .src = "frame\nsize 0 0\nclose 0 0\n" };
     try testing.expectError(error.BufferFull, r.next(&buf));
+}
+
+const context = @import("../../runtime/context.zig");
+const mem = @import("../../core/mem.zig");
+const InputReplay = @import("../../core/input.zig").Replay;
+const example = @import("../example.zig");
+
+const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
+var example_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
+
+test "translate: the example's messages give the headless recording's input and run the example" {
+    // The same session twice: as window messages (testdata/example.msgs) and as the Input the
+    // headless shell replays (src/shell/testdata/example.replay). Frame by frame, the
+    // translator must give what the recording holds.
+    var msgs: Replay = .{ .src = @embedFile("testdata/example.msgs") };
+    var want: InputReplay = .{ .src = @embedFile("../testdata/example.replay") };
+    var text: [64]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var want_text: [64]u8 = undefined;
+    var want_events: [16]Input.Event = undefined;
+    var contacts: [4]Input.Contact = undefined;
+    var buf: [16]Msg = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ctx = try context.Context.init(&example_buffer, example_limits);
+    var app: example.App = .{};
+    var ev: Events = .{};
+    var frames: u32 = 0;
+    while (try msgs.next(&buf)) |frame_msgs| : (frames += 1) {
+        t.begin();
+        for (frame_msgs) |m| t.feed(m);
+        try testing.expect(t.frame(&ev));
+        const in = (try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts })).?;
+        try testing.expectEqual(in.stamp(), ev.in.stamp());
+        try testing.expectEqual(in.pointer, ev.in.pointer);
+        try testing.expectEqual(in.buttons, ev.in.buttons);
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        app.build(&f, &ev);
+        _ = f.end(.{});
+    }
+    try testing.expectEqual(null, try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts }));
+    try testing.expectEqual(@as(u32, 15), frames);
+    // The headless shell's results (src/shell/headless.zig).
+    try testing.expectEqual(@as(u32, 13), app.builds);
+    try testing.expectEqual(@as(u32, 1), app.resets);
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+}
+
+test "translate: keys, typed text, wheel and leaving the window" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\# Shift down, then A (scancode 0x1e) pressed, held (repeat) and typed twice.
+        \\keydown 0x10 0x002a0001
+        \\keydown 0x41 0x001e0001
+        \\char 0x41 0x001e0001
+        \\keydown 0x41 0x401e0001
+        \\char 0x41 0x401e0001
+        \\# e acute, then U+1F600 as a surrogate pair.
+        \\char 0xe9 0
+        \\char 0xd83d 0
+        \\char 0xde00 0
+        \\mousewheel 0xff100000 100:100
+        \\mousehwheel 0x003c0000 100:100
+        \\frame
+        \\# Shift and A up; right Ctrl (extended 0x1d) + C: a press with ctrl, no text for 0x03.
+        \\keyup 0x41 0xc01e0001
+        \\keyup 0x10 0xc02a0001
+        \\keydown 0x11 0x011d0001
+        \\keydown 0x43 0x002e0001
+        \\char 0x03 0x002e0001
+        \\# Left arrow is extended 0x4b; without the flag it is keypad 4.
+        \\keydown 0x25 0x014b0001
+        \\keydown 0x64 0x004b0001
+        \\mousemove 0 10:-3
+        \\frame
+        \\killfocus 0 0
+        \\mouseleave 0 0
+    };
+    var text: [16]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var buf: [16]Msg = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+
+    t.begin();
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    const shift: Input.Mods = .{ .shift = true };
+    try testing.expectEqualStrings("AA\u{e9}\u{1f600}", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .press, .code = 0xe1, .mods = shift },
+        .{ .kind = .press, .code = 0x04, .mods = shift },
+        .{ .kind = .text, .at = 0, .len = 1, .mods = shift },
+        .{ .kind = .repeat, .code = 0x04, .mods = shift },
+        .{ .kind = .text, .at = 1, .len = 1, .mods = shift },
+        .{ .kind = .text, .at = 2, .len = 2, .mods = shift },
+        .{ .kind = .text, .at = 4, .len = 4, .mods = shift },
+    }, ev.in.events);
+    try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe1));
+    try testing.expectEqual([2]f32{ -0.5, -2 }, ev.in.wheel);
+
+    t.begin();
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    const ctrl: Input.Mods = .{ .ctrl = true };
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .release, .code = 0x04, .mods = shift },
+        .{ .kind = .release, .code = 0xe1 },
+        .{ .kind = .press, .code = 0xe4, .mods = ctrl },
+        .{ .kind = .press, .code = 0x06, .mods = ctrl },
+        .{ .kind = .press, .code = 0x50, .mods = ctrl },
+        .{ .kind = .press, .code = 0x5c, .mods = ctrl },
+    }, ev.in.events);
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.wheel);
+    try testing.expectEqual([2]f32{ 10, -3 }, ev.in.pointer);
+    try testing.expectEqual(ctrl, ev.in.mods);
+
+    // Focus lost: held keys are let go; the pointer left.
+    t.begin();
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expectEqual(Input.Keys{}, ev.in.keys);
+    try testing.expectEqual(Input.Mods{}, ev.in.mods);
+    try testing.expectEqual([2]f32{ -1, -1 }, ev.in.pointer);
+}
+
+test "translate: a full frame drops what does not fit and counts it" {
+    var text: [2]u8 = undefined;
+    var events: [2]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    t.begin();
+    for ("abc") |c| t.feed(.{ .msg = @backingInt(Wm.char), .wparam = c });
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("ab", ev.in.text);
+    try testing.expectEqual(@as(u32, 1), t.dropped);
 }

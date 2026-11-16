@@ -73,6 +73,7 @@ const BITMAPINFOHEADER = extern struct {
     clr_used: u32 = 0,
     clr_important: u32 = 0,
 };
+const TRACKMOUSEEVENT = extern struct { size: u32 = @sizeOf(TRACKMOUSEEVENT), flags: u32, hwnd: HWND, hover_time: u32 = 0 };
 const PAINTSTRUCT = extern struct { hdc: ?HDC, erase: BOOL, paint: RECT, restore: BOOL, inc_update: BOOL, reserved: [32]u8 };
 
 const ws_overlappedwindow: u32 = 0x00cf_0000;
@@ -89,6 +90,7 @@ const qs_allinput = 0x04ff;
 const mwmo_inputavailable = 0x0004;
 const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
+const tme_leave = 0x0002;
 
 extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
 extern "user32" fn RegisterClassExW(*const WNDCLASSEXW) callconv(.winapi) u16;
@@ -109,6 +111,9 @@ extern "user32" fn GetDC(?HWND) callconv(.winapi) ?HDC;
 extern "user32" fn ReleaseDC(?HWND, HDC) callconv(.winapi) c_int;
 extern "user32" fn BeginPaint(HWND, *PAINTSTRUCT) callconv(.winapi) ?HDC;
 extern "user32" fn EndPaint(HWND, *const PAINTSTRUCT) callconv(.winapi) BOOL;
+extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
+extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
+extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 extern "gdi32" fn SetDIBitsToDevice(HDC, x: i32, y: i32, w: u32, h: u32, sx: i32, sy: i32, start: u32, lines: u32, bits: *const anyopaque, info: *const BITMAPINFOHEADER, usage: u32) callconv(.winapi) c_int;
 
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("lcgr.win32");
@@ -129,6 +134,8 @@ pub const Win32 = struct {
     background: Color = .rgb(0, 0, 0),
     /// The effects of the last frame, as `apply` received them.
     applied: Platform = .{},
+    /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
+    tracking: bool = false,
 
     pub const Options = struct {
         /// UTF-16, as the window title is shown.
@@ -141,8 +148,11 @@ pub const Win32 = struct {
 
     /// Caller-owned storage, as for the headless shell: `pixels` holds the largest client area
     /// to draw (`sw.Framebuffer.len(w, h)`; a larger window is drawn cut off), `glyphs` one quad
-    /// per byte of text in a frame, `first` and `count` one row per text run.
+    /// per byte of text in a frame, `first` and `count` one row per text run. `text` and
+    /// `events` hold one frame's typed text and key events (`translate.Translator.Buffers`).
     pub const Buffers = struct {
+        text: []u8,
+        events: []lcgr.input.Input.Event,
         pixels: []u32,
         glyphs: []Quad,
         first: []u32,
@@ -160,6 +170,7 @@ pub const Win32 = struct {
         w.* = .{
             .hwnd = undefined,
             .instance = instance,
+            .t = .init(.{ .text = buf.text, .events = buf.events }),
             .fb = .init(buf.pixels, 0, 0, .bgra8),
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
@@ -249,14 +260,30 @@ pub const Win32 = struct {
             },
             // The frame covers the whole client area: no erase, no flicker.
             wm_erasebkgnd => return 1,
+            wm(.mousemove) => if (!w.tracking) {
+                var tme: TRACKMOUSEEVENT = .{ .flags = tme_leave, .hwnd = hwnd };
+                w.tracking = TrackMouseEvent(&tme) != 0;
+            },
+            wm(.mouseleave) => w.tracking = false,
+            // A drag that leaves the window keeps sending it moves until every button is up.
+            wm(.lbuttondown), wm(.rbuttondown), wm(.mbuttondown) => _ = SetCapture(hwnd),
+            wm(.lbuttonup), wm(.rbuttonup), wm(.mbuttonup) => if (wp & mk_any == 0) {
+                _ = ReleaseCapture();
+            },
             else => {},
         }
         w.t.feed(.{ .msg = msg, .wparam = wp, .lparam = lp });
         // WM_CLOSE is the user's request; the host decides, so the window stays until deinit.
-        if (msg == @backingInt(translate.Wm.close)) return 0;
+        if (msg == wm(.close)) return 0;
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
 };
+
+fn wm(comptime m: translate.Wm) u32 {
+    return @backingInt(m);
+}
+/// MK_LBUTTON, MK_RBUTTON, MK_MBUTTON: some mouse button is still held.
+const mk_any = 0x0013;
 
 /// The window rectangle for a client rectangle, with the frame of `ws_overlappedwindow`.
 fn adjust(r: *RECT) void {
@@ -278,12 +305,14 @@ const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 const Fixture = struct {
     var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
     var pixels: [sw.Framebuffer.len(1024, 768)]u32 = undefined;
+    var text: [64]u8 = undefined;
+    var events: [16]lcgr.input.Input.Event = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [example_limits.texts]u32 = undefined;
     var count: [example_limits.texts]u32 = undefined;
 
     fn open(w: *Win32) !void {
-        try w.init(.{ .show = false }, .{ .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
+        try w.init(.{ .show = false }, .{ .text = &text, .events = &events, .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -300,21 +329,28 @@ test "win32: a real window runs the example from posted messages" {
     var w: Win32 = undefined;
     try Fixture.open(&w);
     defer w.deinit();
+    // The real cursor is not over this hidden window: asking for WM_MOUSELEAVE would report
+    // the recorded pointer gone.
+    w.tracking = true;
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var app: example.App = .{};
-    var r: translate.Replay = .{ .src =
-        \\frame
-        \\size 0 800:600
-        \\frame
-        \\close 0 0
-    };
+    var r: translate.Replay = .{ .src = @embedFile("testdata/example.msgs") };
     var ev: Events = .{};
-    try testing.expect((try replayFrame(&w, &r, &ev)).?);
-    try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
-    var f = ctx.begin(&ev.in);
-    app.build(&f, &ev);
-    const out = f.end(.{});
-    w.apply(&out.platform);
-    w.present(&out);
-    try testing.expect(!(try replayFrame(&w, &r, &ev)).?);
+    var frames: u32 = 0;
+    while (try replayFrame(&w, &r, &ev)) |open| : (frames += 1) {
+        try testing.expect(open);
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        app.build(&f, &ev);
+        const out = f.end(.{});
+        w.apply(&out.platform);
+        w.present(&out);
+    }
+    // The headless shell's results (src/shell/headless.zig).
+    try testing.expectEqual(@as(u32, 15), frames);
+    try testing.expectEqual(@as(u32, 13), app.builds);
+    try testing.expectEqual(@as(u32, 1), app.resets);
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+    try testing.expectEqual(app.theme.panel, w.fb.at(80, 590));
 }
