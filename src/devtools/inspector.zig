@@ -27,6 +27,7 @@ const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
 const batches = @import("batches.zig");
 const changes = @import("changes.zig");
+const Recorder = @import("record.zig").Recorder;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const none = types.none;
 const Id = types.Id;
@@ -39,6 +40,7 @@ pub const toggle_key: u8 = 0x45;
 pub const id_rects = Id.from("devtools.rects");
 pub const id_clips = Id.from("devtools.clips");
 pub const id_overdraw = Id.from("devtools.overdraw");
+pub const id_record = Id.from("devtools.record");
 
 pub const Inspector = struct {
     open: bool = true,
@@ -63,6 +65,11 @@ pub const Inspector = struct {
     overdraw_fill: Color = .rgba(255, 40, 40, 50),
     /// Batches listed; the rest are counted.
     batch_lines: u32 = 4,
+    /// Where a session is recorded, in the caller's buffer (`Recorder.init`); null: no
+    /// recording, and no "Rec" checkbox.
+    recorder: ?Recorder = null,
+    /// Append each frame's input to `recorder`.
+    recording: bool = false,
     /// Signals whose version moved since last frame's build.
     signals: changes.SignalWatch = .{},
     /// This frame's `Frame.reuse` decisions; the application asks through `insp.reuses.reuse`.
@@ -103,6 +110,7 @@ pub const Inspector = struct {
         insp.hovered = under(prev, insp.rows, f.in.pointer);
         insp.own_first = f.tree().len;
         insp.signals.diff(&f.ctx.signals);
+        if (insp.recorder) |*r| if (insp.recording) r.frame(f.in);
         defer insp.reuses.clear();
         if (!insp.open) return;
 
@@ -128,7 +136,9 @@ pub const Inspector = struct {
         _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Rects");
         _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clips");
         _ = w.checkbox(f, &insp.theme, id_overdraw, &insp.show_overdraw, "Overdraw");
+        if (insp.recorder != null) _ = w.checkbox(f, &insp.theme, id_record, &insp.recording, "Rec");
         f.close();
+        if (insp.recorder) |*r| insp.line(f, insp.dim, "rec: {d} frames, {d} bytes{s}", .{ r.frames, r.len, if (r.full) " (full)" else "" });
         insp.drawLines(f, &f.ctx.draw);
         insp.changeLines(f);
         insp.logLines(f);
@@ -625,4 +635,44 @@ test "inspector runs inside the example and shows signal changes and reuse decis
     }
     try testing.expectEqual(@as(u32, 1), signal_frames);
     try testing.expect(shows(&last.?, "4 layers"));
+}
+
+test "inspector runs inside the example, records the session, and the recording replays it" {
+    const Run = struct {
+        host: ExampleHost = .{},
+        polls: u32 = 0,
+        fb_hash: u64 = 0,
+
+        fn go(run: *@This(), recording: []const u8, into: []u8) !void {
+            var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+            run.host.insp.recorder = .init(into);
+            run.host.insp.recording = true;
+            var shell = Fixture.shell(recording);
+            iface.run(&shell, &ctx, &run.host);
+            try testing.expectEqual(null, shell.err);
+            run.polls = shell.polls;
+            run.fb_hash = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(shell.fb.pixels));
+        }
+    };
+    var first_text: [4096]u8 = undefined;
+    var second_text: [4096]u8 = undefined;
+    var first: Run = .{};
+    try first.go(@embedFile("../shell/testdata/example.replay"), &first_text);
+    const recorded = first.host.insp.recorder.?;
+    try testing.expect(!recorded.full);
+    // Built frames are recorded; the two idle polls built nothing.
+    try testing.expectEqual(@as(u32, 13), recorded.frames);
+
+    var second: Run = .{};
+    try second.go(recorded.text(), &second_text);
+    // The replay rebuilds every recorded frame and ends where the session ended.
+    try testing.expectEqual(@as(u32, 13), second.polls);
+    try testing.expectEqual(@as(u32, 13), second.host.app.builds);
+    try testing.expectEqual(first.host.app.resets, second.host.app.resets);
+    try testing.expectEqual(first.host.app.layers, second.host.app.layers);
+    try testing.expectEqual(first.host.app.exposure, second.host.app.exposure);
+    try testing.expectEqual(first.host.insp.log.count, second.host.insp.log.count);
+    // Recording the replay gives the same recording, and the same picture.
+    try testing.expectEqualStrings(recorded.text(), second.host.insp.recorder.?.text());
+    try testing.expectEqual(first.fb_hash, second.fb_hash);
 }

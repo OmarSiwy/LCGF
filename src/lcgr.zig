@@ -121,6 +121,7 @@ pub const devtools_timing = @import("devtools/timing.zig");
 pub const devtools_log = @import("devtools/log.zig");
 pub const devtools_batches = @import("devtools/batches.zig");
 pub const devtools_changes = @import("devtools/changes.zig");
+pub const devtools_record = @import("devtools/record.zig");
 
 test {
     std.testing.refAllDecls(@This());
