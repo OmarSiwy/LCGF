@@ -1,4 +1,34 @@
 {
+  "p_a11y_apply": {
+    "back": 3,
+    "jcc": 9,
+    "short_fwd": 2
+  },
+  "p_a11y_diff": {
+    "back": 4,
+    "jcc": 8,
+    "short_fwd": 0
+  },
+  "p_a11y_flatten": {
+    "back": 4,
+    "jcc": 7,
+    "short_fwd": 1
+  },
+  "p_a11y_names": {
+    "back": 3,
+    "jcc": 9,
+    "short_fwd": 1
+  },
+  "p_a11y_set_value": {
+    "back": 2,
+    "jcc": 5,
+    "short_fwd": 1
+  },
+  "p_a11y_states": {
+    "back": 1,
+    "jcc": 4,
+    "short_fwd": 1
+  },
   "p_anchor": {
     "back": 9,
     "jcc": 20,
@@ -43,6 +73,21 @@
     "back": 7,
     "jcc": 15,
     "short_fwd": 1
+  },
+  "p_depth_order": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_drop_step": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_files_route": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
   },
   "p_finalize": {
     "back": 2,
@@ -89,6 +134,26 @@
     "jcc": 2,
     "short_fwd": 0
   },
+  "p_inherit_clip": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
+  "p_inherit_opacity": {
+    "back": 2,
+    "jcc": 6,
+    "short_fwd": 0
+  },
+  "p_inherit_transform": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
+  "p_kinetic_step": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
   "p_levels_build": {
     "back": 5,
     "jcc": 13,
@@ -99,12 +164,22 @@
     "jcc": 5,
     "short_fwd": 0
   },
+  "p_merge_across_text": {
+    "back": 6,
+    "jcc": 12,
+    "short_fwd": 2
+  },
   "p_order": {
     "back": 7,
     "jcc": 17,
     "short_fwd": 5
   },
   "p_paint": {
+    "back": 4,
+    "jcc": 8,
+    "short_fwd": 0
+  },
+  "p_paint_layered": {
     "back": 4,
     "jcc": 8,
     "short_fwd": 0
@@ -174,9 +249,54 @@
     "jcc": 15,
     "short_fwd": 2
   },
+  "p_shortcut_fire": {
+    "back": 2,
+    "jcc": 6,
+    "short_fwd": 1
+  },
   "p_step": {
     "back": 2,
     "jcc": 6,
+    "short_fwd": 0
+  },
+  "p_sw_dashed": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_dotted": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_fill": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_linear": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_nine_slice": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_radial": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_shadow": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_solid": {
+    "back": 2,
+    "jcc": 4,
     "short_fwd": 0
   },
   "p_text_avail": {
@@ -194,39 +314,14 @@
     "jcc": 0,
     "short_fwd": 0
   },
+  "p_wheel_route": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
   "p_wrap": {
     "back": 1,
     "jcc": 3,
-    "short_fwd": 0
-  },
-  "p_inherit_opacity": {
-    "jcc": 6,
-    "back": 2,
-    "short_fwd": 0
-  },
-  "p_inherit_transform": {
-    "jcc": 2,
-    "back": 1,
-    "short_fwd": 0
-  },
-  "p_inherit_clip": {
-    "jcc": 2,
-    "back": 1,
-    "short_fwd": 0
-  },
-  "p_paint_layered": {
-    "jcc": 8,
-    "back": 4,
-    "short_fwd": 0
-  },
-  "p_merge_across_text": {
-    "jcc": 12,
-    "back": 6,
-    "short_fwd": 2
-  },
-  "p_depth_order": {
-    "jcc": 4,
-    "back": 2,
     "short_fwd": 0
   }
 }

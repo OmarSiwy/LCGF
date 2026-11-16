@@ -4,7 +4,7 @@
 // The built-in visual features live here, chosen per instance by `params.x` (src/draw/features.zig
 // writes the params), so quads with different features still share one pipeline and one batch.
 // `params` is read as four u32 bit patterns: features store colours and packed values in it.
-// A user material replaces `material`; its params are its own.
+// A user material replaces the stock `material`; its params are its own.
 
 struct Globals { viewport: vec2f, scale: f32, pad: f32 }
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -41,6 +41,12 @@ struct Frag {
     @location(10) @interpolate(flat) border: f32,
     @location(11) @interpolate(flat) opacity: f32,
     @location(12) @interpolate(flat) clip_radii: vec4f,
+    // Maps the pixel centre (`position.xy`, physical pixels) to the offset from the rect's top
+    // left in logical pixels: m.xy * x + m.zw * y + off. Discrete decisions (nearest texel, the
+    // border side, the dash period) use it instead of `local`: pixel centres are exact on every
+    // GPU and on the CPU, interpolated varyings are not, so ties fall the same way everywhere.
+    @location(13) @interpolate(flat) to_rect: vec4f,
+    @location(14) @interpolate(flat) to_rect_off: vec2f,
 }
 
 @vertex
@@ -68,6 +74,10 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Instance) -> Frag {
     out.clip = inst.clip;
     out.params = inst.params;
     out.uv_rect = inst.uv;
+    let a = inst.xform_abcd;
+    let k = 1.0 / ((a.x * a.w - a.y * a.z) * globals.scale);
+    out.to_rect = vec4f(a.w * k, -a.y * k, -a.z * k, a.x * k);
+    out.to_rect_off = -(out.to_rect.xy * (inst.xform_t.x * globals.scale) + out.to_rect.zw * (inst.xform_t.y * globals.scale)) - inst.rect.xy;
     return out;
 }
 
@@ -82,6 +92,38 @@ fn corner_radius(p: vec2f, half: vec2f, radii: vec4f) -> f32 {
 fn rounded_box(p: vec2f, half: vec2f, r: f32) -> f32 {
     let q = abs(p) - half + vec2f(r);
     return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// The pixel centre's offset from the rect's top left, in logical pixels, from exact inputs only.
+fn rect_pos(in: Frag) -> vec2f {
+    return in.to_rect.xy * in.position.x + in.to_rect.zw * in.position.y + in.to_rect_off;
+}
+
+// floor(num / den) for den > 0, settled by products instead of the rounded quotient, so an exact
+// multiple gives the same answer on every GPU (WGSL division is only accurate to 2.5 ULP).
+fn floor_div(num: f32, den: f32) -> f32 {
+    let q = floor(num / den);
+    return q + select(0.0, 1.0, (q + 1.0) * den <= num) - select(0.0, 1.0, q * den > num);
+}
+
+// Nearest sampling decided here: the uv of the centre of the texel that the uv rect puts at pos
+// (one axis; size = rect size, n = texels), clamped to the edge. A pixel centre exactly on a
+// texel edge takes the texel after it. The whole texels of the uv origin are added after the
+// division: an atlas cell starts on a texel, so the products stay small and exact.
+fn texel_centre(pos: f32, size: f32, uv0: f32, uv1: f32, n: f32) -> f32 {
+    let s = max(size, 1e-6);
+    let a = uv0 * n;
+    let whole = floor(a);
+    let k = whole + floor_div((a - whole) * s + (uv1 - uv0) * n * pos, s);
+    return (clamp(k, 0.0, n - 1.0) + 0.5) / n;
+}
+
+fn nearest_uv(in: Frag) -> vec2f {
+    let pos = rect_pos(in);
+    let n = vec2f(textureDimensions(tex));
+    let size = in.half * 2.0;
+    return vec2f(texel_centre(pos.x, size.x, in.uv_rect.x, in.uv_rect.z, n.x),
+                 texel_centre(pos.y, size.y, in.uv_rect.y, in.uv_rect.w, n.y));
 }
 
 // Feature codes in params.x, as in src/draw/features.zig `Kind`.
@@ -144,28 +186,27 @@ fn nine_uv(in: Frag) -> vec2f {
 
 // Dashed and dotted borders: how much of the border is drawn at this pixel, 0 to 1, with one
 // pixel of antialiasing. Position along the border is measured on the nearest side from its
-// top or left end. params.y = dash length, params.z = gap, in pixels.
+// top or left end; on a diagonal, where both sides are as near, the top or bottom side wins.
+// params.y = dash length, params.z = gap, in pixels.
 //   dashed: dashes of params.y with gaps of params.z
 //   dotted: round dots as wide as the border, params.z apart
 fn border_pattern(in: Frag) -> f32 {
-    let edge = in.half - abs(in.local);
+    let pos = rect_pos(in);
+    let edge = in.half - abs(pos - in.half);
     let along_y = edge.x < edge.y;
-    let s = select(in.local.x + in.half.x, in.local.y + in.half.y, along_y);
+    let s = select(pos.x, pos.y, along_y);
     let across = min(edge.x, edge.y);
     let dash = select(bitcast<f32>(in.params.y), in.border, in.params.x == k_dotted);
     let period = max(dash + bitcast<f32>(in.params.z), 1e-3);
-    let at = s - floor(s / period) * period;
+    let at = s - floor_div(s, period) * period;
     let dashed = clamp((min(at, dash - at) + 0.5) * globals.scale, 0.0, 1.0);
     let r = in.border * 0.5;
     let dotted = clamp(0.5 - (length(vec2f(at - r, across - r)) - r) * globals.scale, 0.0, 1.0);
     return select(select(1.0, dashed, in.params.x == k_dashed), dotted, in.params.x == k_dotted);
 }
 
-// The stock material: the fill (or its gradient) times the bound texture.
-fn material(in: Frag) -> vec4f {
-    let uv = select(in.uv, nine_uv(in), in.params.x == k_nine);
-    return gradient(in) * textureSample(tex, samp, uv);
-}
+// The material function is not here: quad.zig `shader` appends one (WGSL resolves
+// module-scope names in any order), the stock one from material.wgsl or a user's.
 
 @fragment
 fn fs(in: Frag) -> @location(0) vec4f {

@@ -14,6 +14,7 @@ const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
+const scheduler = @import("scheduler.zig");
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -24,6 +25,8 @@ pub const Limits = struct {
     strings: u32 = 64 * 1024,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
+    /// Timers armed by `Frame.timer`.
+    timers: u32 = 32,
 };
 
 /// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
@@ -64,6 +67,8 @@ pub const Output = struct {
     /// Seconds until another frame is needed without new input: 0 = now, inf = sleep until
     /// the next event.
     wake: f32,
+    /// Why `wake` is what it is, so the host can choose how to wait for the next frame.
+    pace: scheduler.Pace,
 };
 
 /// Everything that outlives a frame. Holds no pointers the caller did not hand it: all storage
@@ -88,6 +93,15 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
+    /// How much the springs are still moving; 0 at rest. The anim lane's step writes it
+    /// (C0716-C0719); until then nothing moves.
+    motion: f32 = 0,
+    /// Data behind a signal changed since the last frame. The signals lane's bump sets it
+    /// (C0238); `Frame.finish` clears it.
+    dirty: bool = false,
+    timers: scheduler.Timers,
+    /// Set from any thread to ask for a frame; see `scheduler.Wake`.
+    waker: scheduler.Wake = .{},
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -100,6 +114,7 @@ pub const Context = struct {
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
             .stack = carver.slice(u32, limits.depth),
+            .timers = scheduler.Timers.init(carver, limits.timers),
         };
     }
 
@@ -119,14 +134,15 @@ pub const Context = struct {
         return build(&carver, limits);
     }
 
+    pub const needsFrame = scheduler.needsFrame;
+
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
-        // One extra frame after any input change, so state that this frame's events modify is
-        // visible without waiting for the next event.
-        const stamp = in.stamp();
-        ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
-        ctx.last_stamp = stamp;
+        scheduler.settle(ctx, in);
+        // Cleared before the app drains its mailboxes, so a result posted after this point
+        // wakes the next frame instead of being missed.
+        _ = ctx.waker.flag.swap(false, .acq_rel);
 
         ctx.cur ^= 1;
         const t = &ctx.trees[ctx.cur];
@@ -139,7 +155,9 @@ pub const Context = struct {
         ctx.frame +%= 1;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
-        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719).
+        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719), as
+        // `ctx.motion = ctx.anims.step(in.dt)`; with no springs nothing moves.
+        ctx.motion = 0;
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
@@ -400,7 +418,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     var app: e.App = .{};
     var in: Input = .{ .viewport = .{ 800, 600 } };
 
-    // (`ctx.needsFrame` is the scheduler lane's, C0251; `wake` below is the same answer.)
+    try testing.expect(ctx.needsFrame(&in));
     var out = e.frame(&ctx, &app, &in);
     try testing.expect(out.status.ok());
 
@@ -423,6 +441,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     try testing.expectEqual(@as(f32, 0), out.wake);
     out = e.frame(&ctx, &app, &in);
     try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
 
     // Click: press and release over the button, found by last frame's geometry.
     in.pointer = e.center(out.tree.rect(out.tree.find(e.id_reset)));

@@ -19,3 +19,18 @@ export fn p_focus_seek(t: *const Tree, cur: u32, back: bool) u32 {
 export fn p_focus_scan(t: *const Tree, sc: *lcgr.focus.Scopes) void {
     lcgr.focus.scan(t, sc);
 }
+export fn p_shortcut_fire(sh: *const lcgr.keyboard.Shortcuts, k: *lcgr.keyboard.Keyboard, out: [*]u16) u32 {
+    return lcgr.keyboard.fire(sh, k, out[0..16]);
+}
+export fn p_wheel_route(t: *const Tree, sc: *const lcgr.gestures.Scrollables, in: *const Input, out: *lcgr.gestures.Wheel) void {
+    out.* = lcgr.gestures.route(t, sc, in, 16);
+}
+export fn p_kinetic_step(k: *lcgr.gestures.Kinetic, dt: f32) f32 {
+    return k.step(dt);
+}
+export fn p_drop_step(d: *lcgr.gestures.DragDrop, it: *const lcgr.interaction.Interaction, prev: *const Tree, tg: *const lcgr.gestures.Targets, in: *const Input) void {
+    d.step(it, prev, tg, in);
+}
+export fn p_files_route(fs: *const lcgr.gestures.Files, prev: *const Tree, tg: *const lcgr.gestures.Targets, out: *lcgr.gestures.FileDrop) void {
+    out.* = fs.route(prev, tg, 4);
+}

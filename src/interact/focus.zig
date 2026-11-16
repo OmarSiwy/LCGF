@@ -118,6 +118,9 @@ pub const Focus = struct {
     layers: [max_layers]u32 = @splat(0),
     saved: [max_layers]u32 = @splat(0),
     depth: u32 = 0,
+    /// Bit `e` is set when `in.events[e]` moved focus this step, so it is not also delivered
+    /// to a widget (`keyboard.route`). Events past the 64th are never marked.
+    taken: u64 = 0,
 
     pub const max_layers = 8;
 
@@ -163,7 +166,8 @@ pub const Focus = struct {
             it.focus = pick(u32, simd.andB(trapped, out), id, it.focus);
         }
         var key = false;
-        for (in.events) |e| {
+        s.taken = 0;
+        for (in.events, 0..) |e, ei| {
             const down = simd.orB(e.kind == .press, e.kind == .repeat);
             key = simd.orB(key, e.kind == .press);
             const cur = simd.find(prev.c.id, prev.len, it.focus);
@@ -187,7 +191,10 @@ pub const Focus = struct {
             const arrow = simd.orB(simd.orB(fwd, back), simd.orB(home, end));
             const next = pick(u32, e.code == k.tab, to_tab, pick(u32, arrow, to_arrow, none));
             const id = prev.c.id[@min(next, last)];
-            it.focus = pick(u32, simd.andB(down, next != none), id, it.focus);
+            const move = simd.andB(down, next != none);
+            it.focus = pick(u32, move, id, it.focus);
+            const bit = @as(u64, @intFromBool(simd.andB(move, ei < 64))) << @intCast(ei & 63);
+            s.taken |= bit;
         }
         // A key after a press shows the ring; a press after a key hides it.
         s.visible = simd.andB(simd.orB(s.visible, key), !press);

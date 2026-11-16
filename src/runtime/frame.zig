@@ -22,6 +22,7 @@ const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
+const scheduler = @import("scheduler.zig");
 
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
@@ -100,13 +101,11 @@ pub const Frame = struct {
         return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
     }
 
-    /// Pointer movement this frame while `id` is held; zero otherwise. (`Interaction.drag` is
-    /// the thresholded form, for drags that must not start on a jittery click.)
+    /// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
+    /// pointer has moved `Interaction.drag_threshold` (4 px) from the press, and that frame
+    /// carries the whole movement so far, so a jittery click never drags (`Interaction.drag`).
     pub fn drag(f: *const Frame, id: Id) [2]f32 {
-        const s = &f.ctx.inter;
-        const k = @backingInt(id);
-        const m = simd.b2f(simd.andB(k != 0, s.active == k));
-        return .{ s.delta[0] * m, s.delta[1] * m };
+        return f.ctx.inter.drag(id);
     }
 
     /// Where `id` was laid out last frame. A zero rect if it did not exist. Scans the id
@@ -131,6 +130,8 @@ pub const Frame = struct {
         const p = &f.ctx.platform;
         p.cursor = @fromBackingInt(@as(u8, @truncate(simd.selU(when, @backingInt(cursor), @backingInt(p.cursor)))));
     }
+
+    pub const timer = scheduler.timer;
 
     // ---- finishing ------------------------------------------------------------
 
@@ -172,28 +173,19 @@ pub const Frame = struct {
             .strings = strings.overflow,
             .depth = ctx.status.depth,
         };
+        ctx.dirty = false;
+        ctx.timers.sweep(ctx.frame);
         return .{
             .draw = &ctx.draw,
             .tree = t,
             .texts = tx,
             .platform = ctx.platform,
             .status = ctx.status,
-            .wake = wake(ctx, f.in),
+            .wake = scheduler.wake(ctx, f.in),
+            .pace = scheduler.pace(ctx),
         };
     }
 };
-
-/// Seconds until a frame is due with no new input: 0 while a settle frame is owed, else the
-/// nearest pending timer of the interaction step (a held press reaching `long_time`, the hot
-/// widget reaching `hover_delay`), else inf. A timer that has fired is no longer pending.
-fn wake(ctx: *const Context, in: *const Input) f32 {
-    const s = &ctx.inter;
-    const held: f32 = @floatCast(in.time - @as(f64, @bitCast(s.press_at)));
-    const resting: f32 = @floatCast(in.time - @as(f64, @bitCast(s.hot_at)));
-    const long_due = simd.selF(simd.andB(s.active != 0, !s.long_fired), @max(s.long_time - held, 0), types.inf);
-    const hover_due = simd.selF(simd.andB(s.hot != 0, s.hover_intent == 0), @max(s.hover_delay - resting, 0), types.inf);
-    return @min(simd.selF(ctx.settle > 0, 0, types.inf), @min(long_due, hover_due));
-}
 
 /// Rect of row `i` of `t`, or a zero rect for `none`. The read is clamped into bounds and the
 /// result scaled by 0 or 1, so there is no branch.
@@ -359,7 +351,14 @@ test "interact, drag, lastRect, heldRect: answers from last frame's geometry" {
     try testing.expectEqual(Rect{ .x0 = 50, .y0 = 0, .x1 = 90, .y1 = 40 }, f.heldRect());
     try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("b")));
 
-    // Held and moved: the movement this frame, for the held widget only.
+    // Held and moved 2 px: under the threshold, not a drag yet.
+    in.pointer = .{ 62, 21 };
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("b")));
+
+    // Held and moved 11 px from the press, past the 4 px threshold: the drag starts with the
+    // movement so far, for the held widget only.
     in.pointer = .{ 70, 25 };
     f = ctx.begin(&in);
     _ = twoButtons(&f);
