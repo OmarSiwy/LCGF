@@ -87,13 +87,16 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
     const k1 = simd.rank(ptx.c.node, ptx.len, b);
     const c0 = simd.rank(pcu.c.node, pcu.len, a);
     const c1 = simd.rank(pcu.c.node, pcu.len, b);
+    // The extras rows too (row 0, the defaults, has node 0 and is never in a reused range).
+    const x0 = simd.rank(prev.x.node, prev.xlen, a);
+    const x1 = simd.rank(prev.x.node, prev.xlen, b);
 
     const same_inputs = andB(!is_new, m.c.stamp[slot] == stamp);
     const from_last_frame = andB(m.c.frame[slot] +% 1 == ctx.frame, andB(a < prev.len, prev.c.id[a] == k));
     // Unsigned range tests: (x - a) < count  <=>  a <= x < b.
     const touched = orB((ctx.inter.hot_node -% a) < count, (ctx.inter.active_node -% a) < count);
     // Written as "need <= room" so a stale, oversized `count` cannot overflow.
-    const fits = andB(count <= t.cap - t.len, andB(
+    const fits = andB(andB(count <= t.cap - t.len, (x1 -% x0) <= t.cap + 1 - t.xlen), andB(
         (k1 -% k0) <= f.texts().cap - f.texts().len,
         (c1 -% c0) <= ctx.customs[ctx.cur].cap - ctx.customs[ctx.cur].len,
     ));
@@ -111,14 +114,18 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
 
     // The one coarse branch: copying and rebuilding are different work.
     if (!ok) return false;
-    copySubtree(f, a, b, k0, k1, c0, c1);
+    copySubtree(f, a, b, .{ k0, k1 }, .{ c0, c1 }, .{ x0, x1 });
     return true;
 }
 
-/// Appends last frame's rows [a, b) of the tree, [k0, k1) of the texts and [c0, c1) of the
-/// customs to this frame's tables, under the open node, and moves every link by how far its
-/// target moved (SIMD over the copied rows). The bytes of each text run are copied into this frame's strings.
-fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) void {
+/// Appends last frame's rows [a, b) of the tree, `ks` of the texts, `cs` of the customs and
+/// `xs` of the tree's extras to this frame's tables, under the open node, and moves every link
+/// by how far its target moved (SIMD over the copied rows). The bytes of each text run are
+/// copied into this frame's strings.
+fn copySubtree(f: *Frame, a: u32, b: u32, ks: [2]u32, cs: [2]u32, xs: [2]u32) void {
+    const k0, const k1 = ks;
+    const c0, const c1 = cs;
+    const x0, const x1 = xs;
     const ctx = f.ctx;
     const t = f.tree();
     const tx = f.texts();
@@ -139,6 +146,14 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     const custom_shift = simd.u(cu.len -% c0);
     const shift = simd.u(delta);
     const nil = simd.u(none);
+    const parent = ctx.stack[ctx.depth - 1];
+    // Extras links: a row of the copied range moves with it; anything else (row 0 or an
+    // ancestor's row last frame) becomes the new parent's scope.
+    const extra_shift = simd.u(t.xlen -% x0);
+    const extra_from = simd.u(x0);
+    const extra_count = simd.u(x1 - x0);
+    const up_scope = simd.u(t.c.scope[parent]);
+    const zero = simd.u(0);
     var i: usize = n;
     while (i < n + count) : (i += simd.lanes) {
         simd.storeU(t.c.parent, i, simd.loadU(t.c.parent, i) +% shift);
@@ -147,8 +162,11 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
         simd.storeU(t.c.text, i, @select(u32, ti != nil, ti +% text_shift, ti));
         const ci = simd.loadU(t.c.custom, i);
         simd.storeU(t.c.custom, i, @select(u32, ci != nil, ci +% custom_shift, ci));
+        const xi = simd.loadU(t.c.extra, i);
+        simd.storeU(t.c.extra, i, @select(u32, xi != zero, xi +% extra_shift, zero));
+        const si = simd.loadU(t.c.scope, i);
+        simd.storeU(t.c.scope, i, @select(u32, (si -% extra_from) < extra_count, si +% extra_shift, up_scope));
     }
-    const parent = ctx.stack[ctx.depth - 1];
     t.c.parent[n] = parent;
     t.c.nkids[parent] += t.c.flow[n];
     t.len = n + count;
@@ -168,6 +186,11 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     mem.copyRows(Customs.Columns, &cu.c, cu.len, &pcu.c, c0, cn);
     for (cu.len..cu.len + cn) |r| cu.c.node[r] +%= delta;
     cu.len += cn;
+
+    const xn = x1 - x0;
+    mem.copyRows(Tree.Extras, &t.x, t.xlen, &prev.x, x0, xn);
+    for (t.xlen..t.xlen + xn) |r| t.x.node[r] +%= delta;
+    t.xlen += xn;
 
     keepAlive(ctx, a, count, delta);
 
@@ -506,4 +529,49 @@ test "reuse: no room for the copy means a rebuild, never an overflow" {
     const out = s.frame(&ctx, &in);
     try testing.expectEqual(@as(u32, 2), s.builds);
     try testing.expect(out.status.nodes);
+}
+
+/// A faded body around a lead of `lead` bordered leaves and a reusable panel holding a faded,
+/// turned item and a rounded, clipping box: every kind of extras row and scope link.
+fn extrasFrame(ctx: *Context, in: *const Input, lead: u32, sig: Signal, builds: *u32) Output {
+    var f = ctx.begin(in);
+    _ = f.open(.from("body"), .{ .dir = .x, .size = .{ .fill, .fill }, .opacity = 0.5 });
+    for (0..lead) |_| _ = f.leaf(.none, .{ .size = .{ .px(10), .px(10) }, .border = 1, .fill = hot });
+    if (!f.reuse(id_panel, &.{sig})) {
+        builds.* += 1;
+        // The panel and its first leaf have no row: they take the body's scope.
+        _ = f.open(id_panel, .{ .size = .{ .px(100), .px(80) }, .fill = cold });
+        _ = f.leaf(.none, .{ .size = .{ .px(20), .px(20) }, .fill = cold });
+        _ = f.leaf(.none, .{ .size = .{ .px(20), .px(20) }, .opacity = 0.5, .transform = .{ 0, 1, -1, 0, 0, 0 }, .fill = hot });
+        _ = f.open(.none, .{ .size = .{ .px(40), .px(40) }, .clip = true, .radius = 6, .border = 2, .fill = cold });
+        _ = f.leaf(.none, .{ .size = .{ .px(60), .px(60) }, .fill = hot });
+        f.close();
+        f.close();
+    }
+    _ = f.leaf(.none, .{ .size = .{ .px(10), .px(10) }, .fill = hot });
+    f.close();
+    return f.end(.{});
+}
+
+test "reuse: a copied subtree keeps its extras rows and inherits from its new place" {
+    const limits: @import("context.zig").Limits = .{ .nodes = 32, .texts = 4, .customs = 2, .strings = 64, .signals = 2, .memos = 2, .depth = 8 };
+    const Fx = Fixture(limits);
+    var ctx = try Fx.context();
+    const sig = ctx.signals.create();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    var builds: u32 = 0;
+    _ = extrasFrame(&ctx, &in, 0, sig, &builds);
+    // The copy lands one row and one extras row later than it was built.
+    const out = extrasFrame(&ctx, &in, 1, sig, &builds);
+    try testing.expectEqual(@as(u32, 1), builds);
+
+    // The same frame built from scratch in a second context.
+    const Gx = struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    };
+    var fresh = try Context.init(&Gx.buffer, limits);
+    var fresh_builds: u32 = 0;
+    const want = extrasFrame(&fresh, &in, 1, fresh.signals.create(), &fresh_builds);
+    try testing.expectEqual(want.draw.quad_len, out.draw.quad_len);
+    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(want.draw.quads[0..want.draw.quad_len]), std.mem.sliceAsBytes(out.draw.quads[0..out.draw.quad_len]));
 }

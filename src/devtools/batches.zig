@@ -27,7 +27,7 @@ pub fn quadsOf(t: *const Tree, rows: u32) u32 {
     var q: u32 = 0;
     for (0..rows) |i| {
         const look = t.c.look[i];
-        q += @intFromBool(t.c.visible[i] != 0 and ((look.fill | look.border_color) >> 24) != 0 and t.c.alpha[i] > 0);
+        q += @intFromBool(t.c.visible[i] != 0 and ((look.fill | look.border_color) >> 24) != 0 and @import("lcgr").inherit.alphaOf(t, @intCast(i)) > 0);
     }
     return q;
 }

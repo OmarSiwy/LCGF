@@ -51,6 +51,7 @@
 //! stops on it (`Events.focus_order`). And `pub const Payload: type` (default void): what its
 //! `Event` carries; a widget with a payload reports its events from `step`, not on a click.
 //! A focusable node that its owner pushes itself has `.widget = FocusStop`.
+//! `ctResponse` gives a step what `Frame.interact` gives a runtime widget.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -77,6 +78,7 @@ const Color = types.Color;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Response = types.Response;
+const a11y = @import("../a11y/tree.zig");
 
 /// Design tokens: every colour and size a widget uses comes from here, so restyling is one
 /// value. Plain data with defaults, usable at compile time (the `ct` builders take a comptime
@@ -136,6 +138,49 @@ pub inline fn unit(x: f32) f32 {
 /// response do not move it.
 pub inline fn stateIndex(r: Response) u2 {
     return @as(u2, @intFromBool(r.hovered)) | (@as(u2, @intFromBool(r.held)) << 1);
+}
+
+/// Why `State`'s field `name` cannot be bound by a `widget` that needs a `T`, or null when it
+/// can: the message `ComptimeUi` stops compilation with. Each widget's `bindError` calls it.
+pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime name: []const u8, comptime T: type) ?[]const u8 {
+    comptime {
+        if (!@hasField(State, name)) return widget ++ " '" ++ name ++ "': the state has no such field";
+        const FT = @FieldType(State, name);
+        if (FT == T) return null;
+        return widget ++ " '" ++ name ++ "' needs a " ++ @typeName(T) ++ " field, not " ++ @typeName(FT);
+    }
+}
+
+/// A compile error for the first node in `n`'s subtree whose binding its widget cannot take:
+/// a label needs a string; a custom widget (`Spec.widget`) says by its optional `bindError`,
+/// and its subtree is its own (it may bind its nodes differently), so it is not walked.
+fn checkBindings(comptime State: type, comptime n: Spec) void {
+    comptime {
+        if (n.bind) |name| {
+            const err: ?[]const u8 = if (n.widget) |W_|
+                (if (@hasDecl(W_, "bindError")) W_.bindError(State, name) else null)
+            else if (n.kind == .label)
+                fieldError(State, "label", name, []const u8)
+            else
+                null;
+            if (err) |msg| @compileError(msg);
+        }
+        if (n.widget != null) return;
+        for (n.children) |c| checkBindings(State, c);
+    }
+}
+
+/// What a custom widget at spec row `row` of comptime front end `ui` got this frame, as the
+/// runtime front end's `Frame.interact` reports it: hover and held (`response`), clicked
+/// (this frame's pointer `event` is on it) and focused (`ui.focus`). For `W.step` and
+/// `W.push`, which feed it to the same behaviour functions the runtime widget calls.
+pub fn ctResponse(ui: anytype, comptime row: u32, event: anytype, in: *const Input) Response {
+    const E = @TypeOf(ui.*).Events;
+    const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
+    var r = ui.response(row, in);
+    r.clicked = if (event) |e| std.meta.activeTag(e) == w else false;
+    r.focused = ui.focus == w;
+    return r;
 }
 
 /// The `Spec.widget` of a node inside a custom widget that is a focus stop of its own (a radio
@@ -282,6 +327,7 @@ pub const ct = struct {
 /// and calls `frame` once per frame, as with `Context`. Labels are measured with `Mono`.
 pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
     const flatten = @import("../comptime/flatten.zig");
+    comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
     // One root row (the runtime front end's) above the spec's rows.
@@ -575,6 +621,74 @@ pub fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Lim
                 !std.mem.eql(u8, a.c.role[0..a.len], b.c.role[0..b.len]) or
                 !std.mem.eql(f32, a.c.value[0..a.len], b.c.value[0..b.len])) return error.FrontEndsDiffer;
             return .{ .runtime = rt, .comptime_ = cp };
+        }
+    };
+}
+
+/// What assistive technology sees of both front ends' current frame in a `Harness`: each
+/// tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would. For
+/// widget tests of role, name, value and states; `cap` is at least either tree's capacity.
+pub fn Semantic(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        /// Runtime front end, then comptime front end.
+        out: [2]a11y.Export = undefined,
+        strings: [2][]const u8 = .{ "", "" },
+
+        const Parts = struct { s: [2]a11y.Semantics, out: [2]a11y.Export };
+        fn carve(carver: *mem.Carver) Parts {
+            const s = [2]a11y.Semantics{ .init(carver, cap), .init(carver, cap) };
+            return .{ .s = s, .out = .{ .init(carver, cap), .init(carver, cap) } };
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            _ = carve(&counter);
+            break :blk counter.off;
+        };
+
+        /// Exports the frame harness `h` built last. `error.FrontEndsDiffer` when the two
+        /// semantic trees differ in shape, id, role, state, value or name.
+        pub fn run(x: *Self, h: anytype) error{FrontEndsDiffer}!void {
+            var carver: mem.Carver = .{ .buf = &x.buf };
+            var p = carve(&carver);
+            const ctx = &h.ctx;
+            const tb = &h.ui.tables;
+            const trees = [2]*const Tree{ &ctx.trees[ctx.cur], &tb.t };
+            const txs = [2]*const Texts{ &ctx.texts[ctx.cur], &tb.tx };
+            x.strings = .{ ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], tb.strings.buf[0..tb.strings.len] };
+            for (0..2) |k| {
+                std.debug.assert(trees[k].len <= cap);
+                p.s[k].clear();
+                a11y.names(trees[k], &p.s[k]);
+                a11y.states(trees[k], &p.s[k]);
+                a11y.flatten(trees[k], txs[k], x.strings[k], &p.s[k], &p.out[k]);
+            }
+            x.out = p.out;
+            const a = &x.out[0];
+            const b = &x.out[1];
+            if (a.len != b.len) return error.FrontEndsDiffer;
+            for (0..a.len) |r| {
+                if (a.c.id[r] != b.c.id[r] or a.c.parent[r] != b.c.parent[r] or a.c.role[r] != b.c.role[r] or
+                    a.c.state[r] != b.c.state[r] or a.c.value[r] != b.c.value[r] or
+                    !std.mem.eql(u8, x.name(0, @intCast(r)), x.name(1, @intCast(r)))) return error.FrontEndsDiffer;
+            }
+        }
+
+        /// The accessible name of export row `r` of front end `side` (0 runtime, 1 comptime).
+        pub fn name(x: *const Self, side: u1, r: u32) []const u8 {
+            const o = &x.out[side].c;
+            return x.strings[side][o.name_start[r]..][0..o.name_bytes[r]];
+        }
+
+        /// The export row of tree row `node` (the runtime front end's numbering, which the
+        /// comptime one shares), or null when the node is not exported.
+        pub fn row(x: *const Self, node: u32) ?u32 {
+            const o = &x.out[0];
+            for (0..o.len) |r| if (o.c.node[r] == node) return @intCast(r);
+            return null;
         }
     };
 }

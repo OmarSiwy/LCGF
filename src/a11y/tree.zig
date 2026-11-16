@@ -83,6 +83,9 @@ pub const Role = enum(u8) {
     content_info,
     form,
     search,
+    // ---- live regions (a status bar): `status` is a polite live region; politeness is
+    //      implied by the role, as ARIA's status implies aria-live="polite"
+    status,
 };
 
 comptime {

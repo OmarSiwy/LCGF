@@ -1,0 +1,39 @@
+# Recorded input for the chip page (widgets/chip.zig, `Page`), at 320 x 80 in the default
+# theme: Zig, Rust and Draft on a panel; the remove buttons at x 53..70 and 131..148, y 16..34, and Zig's
+# caption at x 22..47. One line per frame below (format: input.Replay). Scancodes: Enter 40.
+# 0: rest
+frame
+viewport 320 80
+dt 0.016
+pointer 300 70
+# 1: hover Zig's remove button
+frame
+pointer 61 25
+# 2: hold it (it takes focus)
+frame
+buttons left
+# 3: release over it: Zig's removal asked
+frame
+buttons
+# 4: Enter on the focused remove button: asked again
+frame
+pointer 300 70
+press 40
+# 5: press Zig's caption: the chip takes nothing, and focus goes
+frame
+pointer 34 24
+buttons left
+# 6: release; Enter now does nothing
+frame
+buttons
+press 40
+# 7: press Rust's remove button, drag off, release: nothing asked
+frame
+pointer 139 25
+buttons left
+# 8: dragged off
+frame
+pointer 300 70
+# 9: released off it
+frame
+buttons

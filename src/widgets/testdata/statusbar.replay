@@ -1,0 +1,26 @@
+# Recorded input for the status bar example page (widgets/statusbar.zig, `Page`), at 320 x 200
+# in the default theme: the Save button at 8..58 x 8..42, the status bar at 0..320 x 171..200
+# with "Ready" at 8..50 and "Ln 4, Col 12" at 66..167 (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 100
+# 1: press on the status text: nothing takes it
+frame
+pointer 29 185
+buttons left
+# 2: release: nothing
+frame
+buttons
+# 3: hover Save
+frame
+pointer 33 25
+# 4: press it
+frame
+buttons left
+# 5: release over it: saved; the application sets the status text to "Saved"
+frame
+buttons
+# 6: the bar shows "Saved"
+frame

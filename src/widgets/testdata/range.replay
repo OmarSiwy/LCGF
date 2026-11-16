@@ -1,0 +1,32 @@
+# Recorded input for the range slider page (widgets/range.zig, `Page`), at 320 x 120 in the
+# default theme: the Frequency track (20..200, at 60 and 140) at x 12..308, y 38..46. One line
+# per frame below (format: input.Replay). Scancodes: Right 79, Home 74, End 77.
+# 0: rest: 60 to 140
+frame
+viewport 320 120
+dt 0.016
+pointer 300 110
+# 1: press at a quarter, in the low thumb's half: low 65
+frame
+pointer 86 42
+buttons left
+# 2: drag to the middle: low 110
+frame
+pointer 160 42
+# 3: release
+frame
+buttons
+# 4: Right on the focused low thumb: 111.8
+frame
+press 79
+# 5: press at three quarters, in the high thumb's half: high 155
+frame
+pointer 234 42
+buttons left
+# 6: release, then End: high 200
+frame
+buttons
+press 77
+# 7: Home on the high thumb: down to the low one, 111.8
+frame
+press 74

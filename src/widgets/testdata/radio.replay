@@ -1,0 +1,34 @@
+# Recorded input for the radio group page (widgets/radio.zig, `Page`), at 320 x 120 in the
+# default theme: Low, Medium (selected) and High, rings at x 12..28, options at y 12..30,
+# 36..53 and 59..77. One line per frame below (format: input.Replay). Scancodes: Right 79,
+# Left 80, Down 81, Up 82, Space 44.
+# 0: rest: Medium selected
+frame
+viewport 320 120
+dt 0.016
+pointer 300 110
+# 1: press High (it takes focus)
+frame
+pointer 20 68
+buttons left
+# 2: release: High selected
+frame
+buttons
+# 3: Down wraps to Low, focus follows
+frame
+pointer 300 110
+press 81
+# 4: Right: Medium
+frame
+press 79
+# 5: Up then Left in one frame: Medium -> Low -> High (wraps)
+frame
+press 82
+press 80
+# 6: a press on the panel takes focus away
+frame
+buttons left
+# 7: Down does nothing now
+frame
+buttons
+press 81

@@ -1,0 +1,45 @@
+# Recorded input for the checkbox page (widgets/checkbox.zig, `Page`), at 320 x 120 in the
+# default theme: "All" (tri-state, starts mixed) at y 12..30, "Wireframe" at y 38..55 and
+# "Shadows" (on) at y 63..81, each box at x 12..28. One line per frame below (format:
+# input.Replay). Scancodes: Space 44, Enter 40.
+# 0: rest: All mixed, Wireframe off, Shadows on
+frame
+viewport 320 120
+dt 0.016
+pointer 300 110
+# 1: press All
+frame
+pointer 20 21
+buttons left
+# 2: release: mixed -> on
+frame
+buttons
+# 3: Space up on the focused All: on -> off
+frame
+release 44
+# 4: press Wireframe
+frame
+pointer 40 47
+buttons left
+# 5: release: on
+frame
+buttons
+# 6: Enter does nothing to a checkbox
+frame
+press 40
+# 7: Space down: nothing yet
+frame
+press 44
+# 8: Space up: Wireframe off
+frame
+release 44
+# 9: press Shadows, drag off, release: no toggle
+frame
+pointer 40 73
+buttons left
+# 10: dragged off
+frame
+pointer 300 110
+# 11: released off it
+frame
+buttons

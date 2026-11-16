@@ -347,7 +347,8 @@ pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
     const child_clip = c.child_clip;
     const clips_ = c.clips;
     const visible = c.visible;
-    const border = c.border;
+    const extra = c.extra;
+    const border = t.x.border;
     // The root is its own parent: it reads its own row before writing it, so that row starts as
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
     if (first == 0) child_clip[0] = everything;
@@ -361,7 +362,7 @@ pub fn finalizeSpan(t: *Tree, first: u32, last: u32) void {
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        const inner = @select(f32, clips, r + @as(V4, @splat(border[i])), everything);
+        const inner = @select(f32, clips, r + @as(V4, @splat(border[extra[i]])), everything);
         child_clip[i] = @max(inherited, inner);
         const out = v * sign;
         vis[0][i] = out[0];
@@ -645,7 +646,8 @@ test "finalize: a clipping parent insets by its border and hides what lies outsi
     const c = &s.t.c;
     sized(&s);
     c.clips[Scene.col] = 1;
-    c.border[Scene.col] = 2;
+    s.t.x.border[1] = 2; // col's own extras row
+    c.extra[Scene.col] = 1;
     c.offset[0][Scene.para] = 150; // para's 100 px start past col's right edge
     place(&s.t);
     c.pos[0][Scene.body] += 0.4; // sub-pixel positions round to whole pixels

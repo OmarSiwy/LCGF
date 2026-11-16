@@ -13,18 +13,22 @@ const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const DrawList = @import("draw_list.zig").DrawList;
 const Layers = @import("../layout/overlay.zig").Layers;
+const inherit = @import("inherit.zig");
+const radiiOf = @import("../core/tree.zig").radiiOf;
 const none = types.none;
 
 /// Tree and side lists in, draw list out. `strings` is the storage `TextRun.start` indexes.
-/// Nodes paint in row order.
-pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void {
+/// Nodes paint in row order. Runs `inherit.all` first: over the few `Extras` rows only.
+pub fn emit(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void {
+    inherit.all(t);
     paintIn(t, tx, cu, strings, false, &.{}, d);
 }
 
 /// `emit` with nodes painted in stacking-layer order: `ly.c.order` as written by
 /// `overlay.order`, so a raised node and its subtree draw over every row of a lower layer.
 /// Each node still clips to its parent's clip.
-pub fn emitLayered(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, ly: *const Layers, d: *DrawList) void {
+pub fn emitLayered(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, ly: *const Layers, d: *DrawList) void {
+    inherit.all(t);
     paintIn(t, tx, cu, strings, true, ly.c.order[0..t.len], d);
 }
 
@@ -43,6 +47,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     const parent = c.parent;
     const child_clip = c.child_clip;
     const looks = c.look;
+    const x = &t.x;
     var q: u32 = 0;
     var o: u32 = 0;
     for (0..t.len) |k| {
@@ -50,21 +55,25 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
         const vis: u32 = c.visible[i];
         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
         const look = &looks[i];
+        // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).
+        const own = c.extra[i];
+        const scope = c.scope[i];
+        const alpha = x.alpha[scope];
         quads[q] = .{
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
             .params = look.params,
-            .uv = c.uv[i],
+            .uv = x.uv[own],
             .fill = look.fill,
             .border_color = look.border_color,
-            .radii = c.radii[i],
-            .border = c.border[i],
-            .opacity = c.alpha[i],
-            .xform = c.world[i],
-            .clip_radii = c.clip_radii[parent[i]],
+            .radii = radiiOf(x.radii[own], look.radius),
+            .border = x.border[own],
+            .opacity = alpha,
+            .xform = x.world[scope],
+            .clip_radii = x.clip_radii[c.scope[parent[i]]],
         };
         // Painted when either colour has alpha and the node is not fully transparent.
-        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(c.alpha[i] > 0);
+        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(alpha > 0);
         op_kind[o] = @backingInt(DrawList.Kind.quads);
         op_key[o] = (@as(u32, look.texture) << 16) | look.material;
         op_ref[o] = q;
@@ -96,7 +105,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .start = tx.c.start[k],
             .bytes = tx.c.bytes[k],
             .px = tx.c.px[k],
-            .color = fade(tx.c.color[k], c.alpha[n]),
+            .color = fade(tx.c.color[k], x.alpha[c.scope[n]]),
             .font = tx.c.font[k],
         };
     }

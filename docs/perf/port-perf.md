@@ -83,3 +83,75 @@ The prototype path times `paint.emit` alone and runs its own `finish`, with the 
 (prototype: in the before run / in the after run.) src/prototype for layout went from 1.13 to
 1.00 on rows and 1.15 to 1.02 on form. Build moves only with noise (+5 us on rows between these
 two runs, inside the run-to-run spread of the probe table).
+
+## Build, second step: the paint extras as a side table
+
+The eight paint columns above (108 bytes per node, mostly defaults) are gone from `Tree.Columns`.
+In their place:
+
+- `Tree.Extras`, a side table on the tree: one row per node whose style has a non-default
+  `border`, `uv`, `radii`, `opacity` or `transform`, or `clip` (a clipping node's rounded clip
+  is its own), appended by `push` in node order. Row 0 holds the defaults. Its columns: the
+  node, the five style extras, and `alpha`, `world`, `clip_radii`, which `draw.inherit` writes.
+- Two u32 link columns: `extra` (the node's own row, or 0) and `scope` (the row whose inherited
+  opacity and transform the node takes: its own, else its parent's `scope`). A node without a
+  row inherits exactly its scope row's values: opacity 1 and the identity transform change
+  nothing, and only a clipping node changes the clip it hands down.
+- `draw.inherit` sweeps the extras rows only, and `paint.emit` (and `emitLayered`) runs it
+  first, so every paint is after inherit. Readers: paint, `layout.finalize` (border),
+  `damage.hashNodes`, devtools `quadsOf`; `Frame.reuse` copies a subtree's extras rows and
+  rebases both links (a scope that pointed outside the copy becomes the new parent's).
+
+`push` computes whether the style has an extra with one 4-lane mask and one reduce (a 6-lane
+compare of the transform lowered to a lane-by-lane extract, 25 instructions), then writes the row
+behind one branch, taken by the few nodes that have one. With `noalias` on the style the loads of
+the extras move inside that branch. Measured (rows build, pinned, three alternated runs each, us):
+
+| variant | build |
+|---|---:|
+| before (eight columns per node) | 160-163 |
+| side table, every node's extras written to a spare row, no branch | 165-167 |
+| the same, folded mask, `noalias` | 156-158 |
+| side table, extras behind one branch, `noalias` (adopted) | 147-150 |
+| that, plus `Frame.open`/`leaf` inlined (styles fold at the call site; not adopted: code size at every call site) | 139-142 |
+| probe: no extras at all (lower bound) | 131-134 |
+
+The branch is the census change in `p_tree_push`/`p_tree_push_row` (jcc 0 -> 1). The rest of
+the census changes are loops: `p_paint`/`p_paint_layered` inline the three inherit sweeps (jcc
+8 -> 14, back 4 -> 6, one loop guard), `p_inherit_opacity`'s loop unrolls differently (one
+remainder test), `p_reuse` copies and rebases the extras rows (jcc 39 -> 49). No new jump tests a
+column value.
+
+Bytes per node of capacity (the context.zig pin): 890 -> 914. Each tree generation is 276 bytes
+a row (376 - 108 + 8) plus a 112-byte extras row per node of capacity; the extras table is sized
+for every node to have a row, so it saves nothing yet. A smaller limit on extras rows (most
+frames use a few) would make it a saving; that needs an overflow report, not done here.
+
+Results are the same: the bench's first-frame draw list equals the prototype's in all seven
+scenes; `ci/run.sh all` (sw-golden included) and the golden, widget-golden, draw-golden,
+conformance, wgpu and vk jobs pass at 0 px. One behaviour change: `Frame.end`'s paint now runs
+`inherit`, so nested opacity, transforms and rounded clips apply in the runtime front end, where
+before only a caller who ran `inherit` by hand got them; no golden scene depended on the old way.
+
+Alternated, pinned to CPU 12, five rounds, program docs/perf/bench-src/alt2.py, before =
+f03e7cf, after = this commit. The machine was loaded (load average 10 on 32 CPUs, every number
+about 40% above the quiet runs above), so read the ratios:
+
+| scene | pass | prototype | src before | src after | after/prototype |
+|---|---|---:|---:|---:|---:|
+| rows | build | 175.8 | 237.1 | 204.2 | 1.16 |
+| rows | paint | 53.7 | 55.2 | 55.1 | 1.03 |
+| rows | frame | 396.9 | 467.9 | 433.0 | 1.09 |
+| form | build | 8.3 | 10.9 | 9.6 | 1.16 |
+| form | paint | 2.8 | 2.8 | 3.0 | 1.05 |
+| list | build | 6.5 | 8.3 | 7.8 | 1.19 |
+| list | paint | 2.2 | 2.2 | 2.1 | 0.93 |
+| text | build | 10.2 | 13.4 | 12.2 | 1.20 |
+| text | paint | 2.8 | 2.8 | 2.8 | 1.02 |
+| springs | paint | 15.3 | 18.5 | 17.6 | 1.15 |
+
+Rows build went from 1.35 to 1.16 times the prototype's. What is left: the two link columns and
+the extras test (about 30 instructions a node next to the no-extras probe), and the template
+`push` builds on the stack (`p_tree_push` 276 instructions against the prototype's ~200).
+Inlining `push` into `Frame.open` folds the test away for literal styles (another ~8 us on rows)
+at the cost of code at every call site.
