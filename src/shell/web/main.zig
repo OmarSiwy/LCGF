@@ -81,12 +81,34 @@ export fn lcgr_frame(ms: f64) void {
     if (ctx.needsFrame(&ev.in)) {
         var f = ctx.begin(&ev.in);
         app.build(&f, &ev);
+        if (test_blink > 0 and f.timer(.from("test-blink"), test_blink, .repeat)) blinks += 1;
         const out = f.end(font);
         shell.apply(&withTestTextInput(out.platform));
         shell.present(&out);
     }
     shell.wait(scheduler.wake(&ctx, &ev.in), scheduler.pace(&ctx));
 }
+
+/// Something outside the UI finished (a fetch, a message from a worker) and posted its result
+/// for the next frame: the same two calls as a worker thread makes natively (src/shell/iface.zig
+/// `wake`). The page has one thread, so this is called from its own event loop.
+export fn lcgr_wake() void {
+    ctx.waker.post();
+    shell.wake();
+}
+
+/// For the tests: a repeating timer of `seconds` (0: none), as a caret blink would ask for, and
+/// how often it fired.
+export fn lcgr_test_blink(seconds: f32) void {
+    test_blink = seconds;
+    shell.wake(); // a frame to arm it
+    ctx.waker.post();
+}
+export fn lcgr_test_blinks() u32 {
+    return blinks;
+}
+var test_blink: f32 = 0;
+var blinks: u32 = 0;
 
 export fn lcgr_resize(css_w: f32, css_h: f32, dpr: f32, px_w: u32, px_h: u32) void {
     shell.resize(css_w, css_h, dpr, px_w, px_h);

@@ -14,8 +14,9 @@
 // `scroll`, key events `Input.keys` and `events` with USB HID codes, typed characters `text`.
 //
 // The module runs one frame per animation frame it asked for (`lcgr_frame`), and asks for the
-// next one itself (`shell_schedule`): the next animation frame while anything is pending, and
-// none while idle, so an idle page costs nothing. A resize asks for a frame.
+// next one itself (`shell_schedule`): at once while something moves, after a timer for a
+// deadline, and not at all while idle, so an idle page costs nothing. Every forwarded event and
+// a resize ask for a frame; `lcgr_wake` (main.zig) asks from outside the UI.
 
 /// The imports web.zig's host needs. `page` is filled by `attach`.
 export function shell(page) {
@@ -58,8 +59,16 @@ export function attach(ui, canvas, page = {}) {
         if (!pending) pending = requestAnimationFrame(run);
     };
     page.frame = frame;
+    // The module's `wait`: the next animation frame now (something moves or a frame is owed),
+    // after a timer (a deadline: a caret blink, a tooltip delay), or none (idle: the next event
+    // asks). A newer request replaces the timer; an event in between just runs a frame early.
+    let timer = 0;
     page.schedule = (seconds) => {
-        if (seconds !== Infinity) frame(); // idle (Infinity): the next event asks
+        clearTimeout(timer);
+        timer = 0;
+        if (seconds === Infinity) return;
+        if (seconds <= 0) frame();
+        else timer = setTimeout(frame, seconds * 1000);
     };
 
     // The canvas fills its CSS box; its backing store is that box in device pixels, so the
@@ -116,6 +125,7 @@ export function attach(ui, canvas, page = {}) {
         ratio.removeEventListener("change", onRatio);
         for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);
         cancelAnimationFrame(pending);
+        clearTimeout(timer);
     };
     frame();
     return page;

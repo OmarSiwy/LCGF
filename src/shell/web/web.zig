@@ -277,13 +277,17 @@ pub fn Web(comptime host: type) type {
             host.present(out);
         }
 
-        /// Asks the page for the next animation frame, unless `seconds` is inf (idle: the next
-        /// event asks for one). Never blocks: a page's script may not.
+        /// Asks the page for the next animation frame: in `seconds` (shell.js: a timer, or at
+        /// once for 0), never for inf (idle: the next event asks for one). Never blocks: a page's
+        /// script may not.
         pub fn wait(_: *Self, seconds: f32, pace: Pace) void {
             host.schedule(seconds, pace);
         }
 
-        /// The next `poll` gives a frame even with no event, and the page runs one soon.
+        /// The next `poll` gives a frame even with no event, and the page runs one soon. The
+        /// flag is atomic so the contract's "any thread" holds; a page has one thread (wasm
+        /// threads need cross-origin isolation), so the caller is its own event loop: a fetch or
+        /// a worker's message that posted a result (main.zig `lcgr_wake`).
         pub fn wake(s: *Self) void {
             s.woken.store(true, .release);
             host.schedule(0, .once);
@@ -295,6 +299,7 @@ const testing = std.testing;
 const mem = @import("../../core/mem.zig");
 const Replay = @import("../../core/input.zig").Replay;
 const example = @import("../example.zig");
+const Frame = @import("../../runtime/frame.zig").Frame;
 
 /// The page, recorded: what the shell asked of it.
 const Page = struct {
@@ -499,4 +504,44 @@ test "web: text input follows the frames; the composition rides with the input u
     shell.apply(&.{});
     try testing.expectEqual(@as(u32, 2), Page.ime_calls);
     try testing.expect(!Page.ime_on);
+}
+
+/// The example with a repeating timer, as a caret blink asks for one.
+const Blink = struct {
+    app: example.App = .{},
+    fires: u32 = 0,
+    pub fn build(b: *Blink, f: *Frame, ev: *const Events) void {
+        b.app.build(f, ev);
+        if (f.timer(.from("blink"), 0.5, .repeat)) b.fires += 1;
+    }
+};
+
+test "web: a deadline asks the page for a frame after a timer, and a wake for one at once" {
+    var ctx = try context.Context.init(&example_buffer, example_limits);
+    var app: Blink = .{};
+    var shell: Web(Page) = .{};
+    var ev: Events = .{};
+    var t: f64 = 0;
+    // Frames at the times the page runs them: the first two settle, then the timer paces.
+    for (0..6) |_| {
+        shell.time(t);
+        try testing.expect(shell.poll(&ev));
+        if (ctx.needsFrame(&ev.in)) {
+            var f = ctx.begin(&ev.in);
+            app.build(&f, &ev);
+            const out = f.end(.{});
+            shell.apply(&out.platform);
+        }
+        shell.wait(scheduler.wake(&ctx, &ev.in), scheduler.pace(&ctx));
+        t += @max(Page.scheduled, 1.0 / 60.0);
+    }
+    try testing.expectEqual(Pace.timer, Page.pace);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), Page.scheduled, 0.02);
+    try testing.expect(app.fires >= 2);
+
+    // A wake: a frame at once, and the next poll reports it.
+    shell.wake();
+    try testing.expectEqual(@as(f32, 0), Page.scheduled);
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqual(@as(u32, 1), shell.wakes);
 }

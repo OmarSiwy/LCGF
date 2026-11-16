@@ -237,11 +237,33 @@ def ime(page):
     check("ime: off again, the canvas has focus", focus == "CANVAS", focus)
 
 
+def timers(page):
+    """C0480: a 0.25 s repeating timer runs about four frames a second, not one per display
+    refresh; once nobody asks for it the page is idle again. A wake from outside the UI (a
+    timeout here, a fetch or a worker's message in an app) runs exactly one frame."""
+    mouse(page, "mouseMoved", 400, 400)  # away from every widget: no hover deadline
+    settle(page)
+    page.eval("window.lcgr.ui.exports.lcgr_test_blink(0.25)")
+    f0 = page.eval("window.lcgr.page.frames")
+    page.eval("new Promise(r => setTimeout(r, 2000))")
+    frames = page.eval("window.lcgr.page.frames") - f0
+    blinks = page.eval("window.lcgr.ui.exports.lcgr_test_blinks()")
+    check("timers: 2 s of a 0.25 s timer: about 8 fires, about as many frames", 6 <= blinks <= 9 and frames <= 2 * blinks + 4, f"{blinks} fires, {frames} frames")
+    page.eval("window.lcgr.ui.exports.lcgr_test_blink(0)")
+    f1 = settle(page)
+    page.eval("new Promise(r => setTimeout(r, 600))")
+    check("timers: stopped, idle again", page.eval("window.lcgr.page.frames") == f1)
+    builds = state(page)[0]
+    page.eval("new Promise(r => setTimeout(() => { window.lcgr.ui.exports.lcgr_wake(); r(); }, 50))")
+    f2 = settle(page)
+    check("wake: one woken frame, built, then idle", (f2 - f1, state(page)[0] - builds) == (1, 1), f"{f2 - f1} frames, {state(page)[0] - builds} builds")
+
+
 def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio.
-    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard, ime)), (2, (dpr,))):
+    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard, ime, timers)), (2, (dpr,))):
         b = browser.Browser(scale=scale)
         try:
             page = b.open(server.url + "index.html")
