@@ -11,6 +11,7 @@ const Input = @import("../core/input.zig").Input;
 const Context = @import("context.zig").Context;
 const Limits = @import("context.zig").Limits;
 const Frame = @import("frame.zig").Frame;
+const Output = @import("context.zig").Output;
 const Id = types.Id;
 const none = types.none;
 
@@ -25,11 +26,11 @@ pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     return simd.orB(simd.orB(changed, woken), simd.orB(pending, due));
 }
 
-/// Seconds until a frame is due with no new input: 0 while a settle frame is owed or a spring
-/// moves, else the time left to `deadline`, else inf (sleep until the next event).
+/// Seconds until a frame is due with no new input: 0 while a settle frame is owed, a spring
+/// moves or a `Wake` was posted during the frame, else the time left to `deadline`, else inf (sleep until the next event).
 pub fn wake(ctx: *const Context, in: *const Input) f32 {
     const left: f32 = @floatCast(@max(deadline(ctx) - in.time, 0));
-    const awake = simd.orB(ctx.motion > 0, ctx.settle > 0);
+    const awake = simd.orB(simd.orB(ctx.motion > 0, ctx.settle > 0), ctx.waker.flag.load(.acquire));
     return simd.selF(awake, 0, left);
 }
 
@@ -44,6 +45,29 @@ pub fn deadline(ctx: *const Context) f64 {
     const long_due = selD(simd.andB(s.active != 0, !s.long_fired), long_at, inf);
     const hover_due = selD(simd.andB(s.hot != 0, s.hover_intent == 0), hover_at, inf);
     return @min(ctx.timers.earliest(), @min(long_due, hover_due));
+}
+
+/// How the host should wait for the next frame. `Output.wake` gives the time; this gives the
+/// reason, which a host needs to choose between blocking on events, a timed sleep and pacing to
+/// the display (and, with a render thread, whether that thread has to keep presenting).
+pub const Pace = enum(u8) {
+    /// Nothing pending: block until the next event.
+    idle,
+    /// A deadline is pending: block until the next event or `wake` seconds, whichever is first.
+    timer,
+    /// One more frame right away (a settle frame, a posted `Wake`), then re-check. No need to
+    /// sync it to the display.
+    once,
+    /// Something animates: run frames at the display's refresh rate until the pace drops.
+    display,
+};
+
+/// The pace of the frame just built; the strongest reason wins.
+pub fn pace(ctx: *const Context) Pace {
+    const timed: u8 = @intFromBool(deadline(ctx) != inf);
+    const once: u8 = @intFromBool(simd.orB(ctx.settle > 0, ctx.waker.flag.load(.acquire)));
+    const moving: u8 = @intFromBool(ctx.motion > 0);
+    return @fromBackingInt(@intCast(@max(moving * 3, @max(once * 2, timed))));
 }
 
 const inf = std.math.inf(f64);
@@ -413,6 +437,42 @@ test "Mailbox and Wake: a worker thread's results arrive in order and wake the h
     if (ctx.needsFrame(&in)) _ = frame(&ctx, &in);
     try testing.expect(!ctx.needsFrame(&in));
     try testing.expectEqual(@as(?u64, null), box.pop());
+}
+
+test "pace: idle, timer, once and display, strongest reason first" {
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 } };
+    const S = struct {
+        fn run(c: *Context, input: *const Input, with_timer: bool, motion: f32) Output {
+            var f = c.begin(input);
+            if (with_timer) _ = f.timer(.from("t"), 1);
+            c.motion = motion;
+            return f.end(.{});
+        }
+    };
+    // First frame: a settle frame is owed.
+    try testing.expectEqual(Pace.once, S.run(&ctx, &in, false, 0).pace);
+    var out = S.run(&ctx, &in, false, 0);
+    try testing.expectEqual(Pace.idle, out.pace);
+    try testing.expectEqual(types.inf, out.wake);
+    out = S.run(&ctx, &in, true, 0);
+    try testing.expectEqual(Pace.timer, out.pace);
+    try testing.expectEqual(@as(f32, 1), out.wake);
+    // A spring outranks the timer; wake is 0 for both once and display.
+    out = S.run(&ctx, &in, true, 0.5);
+    try testing.expectEqual(Pace.display, out.pace);
+    try testing.expectEqual(@as(f32, 0), out.wake);
+    // A wake posted during the frame asks for one more, now.
+    var f = ctx.begin(&in);
+    ctx.waker.post();
+    out = f.end(.{});
+    try testing.expectEqual(Pace.once, out.pace);
+    try testing.expectEqual(@as(f32, 0), out.wake);
+    try testing.expectEqual(Pace.idle, S.run(&ctx, &in, false, 0).pace);
+    in.pointer = .{ 1, 1 };
+    // Input changed while a spring moves: still display.
+    try testing.expectEqual(Pace.display, S.run(&ctx, &in, false, 0.5).pace);
 }
 
 /// What an event-driven host did over `ticks` turns of its loop with no new input: frames it

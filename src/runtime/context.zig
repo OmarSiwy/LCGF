@@ -67,6 +67,8 @@ pub const Output = struct {
     /// Seconds until another frame is needed without new input: 0 = now, inf = sleep until
     /// the next event.
     wake: f32,
+    /// Why `wake` is what it is, so the host can choose how to wait for the next frame.
+    pace: scheduler.Pace,
 };
 
 /// Everything that outlives a frame. Holds no pointers the caller did not hand it: all storage
@@ -153,7 +155,9 @@ pub const Context = struct {
         ctx.frame +%= 1;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
-        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719).
+        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719), as
+        // `ctx.motion = ctx.anims.step(in.dt)`; with no springs nothing moves.
+        ctx.motion = 0;
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;

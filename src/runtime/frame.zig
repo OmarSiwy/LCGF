@@ -184,6 +184,7 @@ pub const Frame = struct {
             .platform = ctx.platform,
             .status = ctx.status,
             .wake = scheduler.wake(ctx, f.in),
+            .pace = scheduler.pace(ctx),
         };
     }
 };
