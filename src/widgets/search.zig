@@ -267,6 +267,9 @@ pub const Page = struct {
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
+    pub const replay = @embedFile("testdata/search.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/search-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "hover", 4 }, .{ "cleared", 6 } };
 };
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -433,6 +436,32 @@ test "search input: Enter submits, Escape clears, the clear button clears and re
     in.events = typed[0..1];
     _ = try both(h, &in);
     try testing.expectEqualStrings("zig", h.app.find.text());
+}
+
+test "Page: the search replay types, submits, clears by Escape and by the button, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [32]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    const want = [_][]const u8{ "", "", "widgets", "", "lanes", "lanes", "", "", "zig" };
+    const searches = [_]u32{ 0, 0, 1, 1, 1, 1, 1, 1, 1 };
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try both(h, in);
+        try testing.expectEqualStrings(want[k], h.app.find.text());
+        try testing.expectEqual(searches[k], h.app.searches);
+        // Focused throughout once pressed, the clear button's press and release included.
+        try testing.expectEqual(k >= 1 and k != 5, out.runtime.platform.wants_text);
+    }
+    try testing.expectEqual(@as(u32, 9), h.frames);
+    const t = &h.ctx.trees[h.ctx.cur];
+    // The rects the replay's comment gives.
+    try testing.expectEqual(Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 63 }, t.rect(t.find(.from("find")) - 1));
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 9);
 }
 
 test {

@@ -54,6 +54,7 @@ const pages = .{
     .{ "", lcgr.widgets_dialog.golden, lcgr.widgets_dialog.golden.src, lcgr.widgets_dialog.golden.frames },
     .{ "", lcgr.widgets_toast.golden, lcgr.widgets_toast.golden.src, lcgr.widgets_toast.golden.frames },
     .{ "", lcgr.widgets_select.golden, lcgr.widgets_select.golden.src, lcgr.widgets_select.golden.frames },
+    .{ "search-", lcgr.widgets_search.Page, lcgr.widgets_search.Page.replay, lcgr.widgets_search.Page.golden_frames },
     .{ "number-", lcgr.widgets_number.Page, lcgr.widgets_number.Page.replay, lcgr.widgets_number.Page.golden_frames },
     .{ "textarea-", lcgr.widgets_textarea.Page, lcgr.widgets_textarea.Page.replay, lcgr.widgets_textarea.Page.golden_frames },
     .{ "textfield-", lcgr.widgets_textfield.Page, lcgr.widgets_textfield.Page.replay, lcgr.widgets_textfield.Page.golden_frames },
