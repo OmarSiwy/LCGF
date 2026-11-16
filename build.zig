@@ -218,6 +218,7 @@ pub fn build(b: *std.Build) void {
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
+<<<<<<< HEAD
     // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
     // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
     const fallback_system = b.addTest(.{ .root_module = b.createModule(.{
@@ -232,6 +233,27 @@ pub fn build(b: *std.Build) void {
     fallback_run.has_side_effects = true;
     b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&fallback_run.step);
     b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
+=======
+    // The i18n tables against CLDR 49 JSON (lazy: fetched only for this step). Test-only, so a
+    // module of its own over lcgr; the tables themselves stay hand-written and tier 0.
+    const i18n_cldr = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/i18n/cldr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    if (b.lazyDependency("cldr_core", .{})) |core| {
+        i18n_cldr.root_module.addAnonymousImport("plurals.json", .{ .root_source_file = core.path("supplemental/plurals.json") });
+        i18n_cldr.root_module.addAnonymousImport("numberingSystems.json", .{ .root_source_file = core.path("supplemental/numberingSystems.json") });
+    }
+    for ([_][]const u8{ "en", "de", "fr", "ru", "pl", "ja", "ar" }) |l| {
+        if (b.lazyDependency("cldr_numbers", .{})) |numbers|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("numbers-{s}.json", .{l}), .{ .root_source_file = numbers.path(b.fmt("main/{s}/numbers.json", .{l})) });
+        if (b.lazyDependency("cldr_dates", .{})) |dates|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("gregorian-{s}.json", .{l}), .{ .root_source_file = dates.path(b.fmt("main/{s}/ca-gregorian.json", .{l})) });
+    }
+    b.step("i18n-cldr", "Check the i18n locale tables against CLDR 49").dependOn(&b.addRunArtifact(i18n_cldr).step);
+>>>>>>> plan/i18n
 
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
     const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
