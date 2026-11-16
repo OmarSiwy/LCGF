@@ -78,7 +78,7 @@ pub fn Tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
             if (comptime n.kind == .col and n.bind != null and std.mem.eql(u8, n.bind.?, tip_name)) {
                 if (!@field(st, tip_name).shown) return null;
-                return .{ .style = bubbleStyle(&th, v.last.of(@tagName(target))) };
+                return .{ .style = bubbleStyle(&th, v.last.of(@tagName(target))), .role = role };
             }
             return popover.plainPart(th, n, v.response);
         }
@@ -112,6 +112,13 @@ pub fn advance(tip: Tip, hovered: bool, dt: f32, escape: bool) Tip {
     return .{ .rested = rested, .dismissed = dismissed, .shown = simd.andB(simd.andB(hovered, !dismissed), rested >= delay) };
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The bubble's role. A tooltip takes its name from its content (`a11y.from_content`), so it
+/// reads as its text; its value is 0 and it has no states. The bubble exists only while it is
+/// shown, so its presence in the tree is its visibility.
+pub const role: a11y.Role = .tooltip;
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Steps `tip` by one frame from the target's response `r`.
@@ -123,7 +130,8 @@ pub fn update(f: *const Frame, tip: *Tip, r: Response) void {
 /// root's depth, after the rest of the page, so it is drawn on top.
 pub fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8) void {
     if (!tip.shown) return;
-    _ = f.open(.none, bubbleStyle(th, f.lastRect(.from(target))));
+    const b = f.open(.none, bubbleStyle(th, f.lastRect(.from(target))));
+    f.tree().c.role[b.ix()] = @backingInt(role);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -271,6 +279,29 @@ test "Tooltip: shows after resting on the target, hides on leaving and on Escape
         .{ .on = false, .shown = false },
         .{ .on = true, .shown = false },
     });
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Tooltip: the bubble is a tooltip named by its text, the same in both front ends" {
+    const h = &harness;
+    _ = try showTip(h);
+    const in: Input = .{ .viewport = .{ 400, 300 }, .dt = delay, .pointer = h.ctx.inter.pointer };
+    const pair = try h.frame(&in);
+    try testing.expect(h.app.tip.shown);
+    const rt = pair.runtime;
+    const cp = pair.comptime_;
+    _ = sem[0].begin();
+    _ = sem[1].begin();
+    const e = sem[0].finish(rt.tree, rt.texts, h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp.tree, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    // The bubble and its label are the last two rows.
+    const k = popover.exportRow(e, rt.tree.len - 2);
+    try testing.expectEqual(@backingInt(a11y.Role.tooltip), e.c.role[k]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Save the scene (Ctrl+S)"), e.c.name_hash[k]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[k]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[k]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Save"), e.c.name_hash[popover.exportRow(e, rt.tree.find(.from("save")))]);
 }
 
 test "checkTip: the tip field must be a Tip" {
