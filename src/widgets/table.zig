@@ -212,6 +212,51 @@ fn before(a: []const u8, b: []const u8, descending: bool) bool {
     return if (descending) o == .gt else o == .lt;
 }
 
+/// A click on header `k`: sort by it ascending, or flip the direction if it already sorts.
+pub fn sortBy(st: anytype, k: u32) void {
+    st.descending = st.sort == k and !st.descending;
+    st.sort = k;
+}
+
+/// Column `k`'s width while its handle is held: the pointer's distance from the header's left
+/// edge `x0`, clamped. The press itself moves the edge to the pointer, by at most
+/// `handle_px`.
+pub fn resize(width: f32, held: bool, x0: f32, x: f32) f32 {
+    return if (held) std.math.clamp(x - x0, min_width, max_width) else width;
+}
+
+/// The active cell after this frame's key events (press and repeat), clamped at the edges:
+/// arrows move by one, Home and End go to the first and last column of the row.
+pub fn keys(st: anytype, rows: u32, in: *const Input) void {
+    const km = &list_zig.default_keys;
+    const last_col: u32 = @intCast(st.widths.len - 1);
+    for (in.events) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        if (e.code == km.down) st.row = @min(st.row + 1, rows - 1);
+        if (e.code == km.up) st.row -|= 1;
+        if (e.code == km.right) st.col = @min(st.col + 1, last_col);
+        if (e.code == km.left) st.col -|= 1;
+        if (e.code == km.home) st.col = 0;
+        if (e.code == km.end) st.col = last_col;
+    }
+}
+
+/// One frame of input for a table: header clicks sort, held handles resize, a body click sets
+/// the active cell, keys move it while the body is focused. `headers[k]` and `handles[k]` are
+/// the responses of header and handle `k`, `header_x0[k]` its header's last left edge, `body`
+/// the body's response and `body_rect` its last rect.
+pub fn update(st: anytype, th: *const Theme, rows: u32, headers: []const Response, handles: []const Response, header_x0: []const f32, body: Response, body_rect: types.Rect, in: *const Input) void {
+    for (headers, handles, header_x0, 0..) |h, g, x0, k| {
+        if (h.clicked) sortBy(st, @intCast(k));
+        st.widths[k] = resize(st.widths[k], g.held, x0, in.pointer[0]);
+    }
+    if (body.clicked) {
+        st.row = rowAt(th, body_rect.y0, in.pointer[1], rows);
+        st.col = colAt(&st.widths, body_rect.x0, in.pointer[0]);
+    }
+    if (body.focused) keys(st, rows, in);
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A table of `cols` columns: `headers` (one per column) above `cells` (row-major), with `st`
@@ -223,10 +268,14 @@ pub fn table(f: *Frame, th: *const Theme, id: Id, comptime cols: usize, headers:
     // frame's interaction; `interact` marks the nodes and reports the same responses.
     var hr: [cols]Response = undefined;
     var gr: [cols]Response = undefined;
+    var x0: [cols]f32 = undefined;
     for (0..cols) |k| {
         hr[k] = f.ctx.inter.response(headerId(id, k));
         gr[k] = f.ctx.inter.response(handleId(id, cols, k));
+        x0[k] = f.lastRect(headerId(id, k)).x0;
     }
+    const br = f.ctx.inter.response(id);
+    update(st, th, rows, &hr, &gr, &x0, br, f.lastRect(id), f.in);
     order(cells, cols, st.sort, st.descending, order_buf[0..rows]);
 
     const box = f.open(.none, tableStyle(th));
@@ -346,6 +395,26 @@ pub fn ComptimeTable(comptime S: type, comptime spec: Spec, comptime th: Theme) 
 
         pub fn frame(ui: *Self, in: *const Input) Output {
             const event = ui.pointer.step(in);
+            inline for (comptime tablesOf(spec)) |n| {
+                const v = comptime ct.fields(n);
+                var hr: [v.cols]Response = undefined;
+                var gr: [v.cols]Response = undefined;
+                var x0: [v.cols]f32 = undefined;
+                inline for (0..v.cols) |k| {
+                    const hw = comptime widgetOf(std.fmt.comptimePrint("{s}_h{d}", .{ v.name, k }));
+                    const gw = comptime widgetOf(std.fmt.comptimePrint("{s}_r{d}", .{ v.name, k }));
+                    hr[k] = ui.pointer.response(hw, in);
+                    hr[k].clicked = if (event) |e| e == hw else false;
+                    gr[k] = ui.pointer.response(gw, in);
+                    x0[k] = ui.pointer.rectOf(hw).x0;
+                }
+                const bw = comptime widgetOf(v.name);
+                var br = ui.pointer.response(bw, in);
+                br.clicked = if (event) |e| e == bw else false;
+                var st = @field(ui.signals.state, v.state);
+                update(&st, &th, v.rows, &hr, &gr, &x0, br, ui.pointer.rectOf(bw), in);
+                ui.signals.set(comptime field(v.state), st);
+            }
 
             const tb = ui.page.begin(in);
             var next: u32 = 0;
@@ -539,6 +608,35 @@ test "order: a stable sort of the rows by one column" {
     try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 1, 4 }, &out);
     order(&file_cells, 3, 0, false, &out);
     try testing.expectEqualSlices(u32, &.{ 2, 3, 4, 0, 1 }, &out);
+}
+
+test "sortBy, resize, keys: the behaviour as pure functions" {
+    var st: State(3) = .{};
+    sortBy(&st, 1);
+    try testing.expectEqual(@as(u32, 1), st.sort);
+    try testing.expect(!st.descending);
+    sortBy(&st, 1);
+    try testing.expect(st.descending);
+    sortBy(&st, 2);
+    try testing.expectEqual(@as(u32, 2), st.sort);
+    try testing.expect(!st.descending);
+    try testing.expectEqual(@as(f32, 50), resize(50, false, 0, 300));
+    try testing.expectEqual(@as(f32, 120), resize(50, true, 30, 150));
+    try testing.expectEqual(min_width, resize(50, true, 30, 31));
+    try testing.expectEqual(max_width, resize(50, true, 30, 1e6));
+    const km = list_zig.default_keys;
+    const presses = [_]Input.Event{
+        .{ .kind = .press, .code = km.down },    .{ .kind = .repeat, .code = km.down }, .{ .kind = .press, .code = km.right },
+        .{ .kind = .release, .code = km.right }, .{ .kind = .press, .code = km.down },  .{ .kind = .press, .code = km.end },
+    };
+    st = .{};
+    keys(&st, 3, &.{ .events = &presses });
+    try testing.expectEqual(@as(u32, 2), st.row);
+    try testing.expectEqual(@as(u32, 2), st.col);
+    const back = [_]Input.Event{ .{ .kind = .press, .code = km.up }, .{ .kind = .press, .code = km.home }, .{ .kind = .press, .code = km.left } };
+    keys(&st, 3, &.{ .events = &back });
+    try testing.expectEqual(@as(u32, 1), st.row);
+    try testing.expectEqual(@as(u32, 0), st.col);
 }
 
 test "table: both front ends agree, and columns follow their widths" {
