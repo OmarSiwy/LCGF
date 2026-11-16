@@ -1,0 +1,29 @@
+# The iOS shell's example session (src/shell/ios/testdata/example.uikit) as a NativeActivity
+# reports it: motion events listing every pointer down. At scale 1 the pixels are the points.
+frame
+window 800 600
+frame
+frame
+# Tap Reset.
+frame
+motion down 0 1,finger,37,25
+frame
+motion up 0 1,finger,37,25
+frame
+# Tap Add layer quicker than a frame.
+frame
+motion down 0 2,finger,54,74
+motion up 0 2,finger,54,74
+frame
+frame
+# Hold the slider; a second finger lands elsewhere.
+frame
+motion down 0 3,finger,639,25
+frame
+motion move 0 3,finger,639,25
+motion pointer_down/1 0 3,finger,639,25 4,finger,300,300
+frame
+# The system takes the gesture: every pointer of it is cancelled.
+motion cancel 0 3,finger,639,25 4,finger,300,300
+frame
+frame
