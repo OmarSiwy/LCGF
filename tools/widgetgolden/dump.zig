@@ -30,6 +30,7 @@ const pages = .{
     .{ "button", lcgr.widgets_button.Page },
     .{ "checkbox", lcgr.widgets_checkbox.Page },
     .{ "radio", lcgr.widgets_radio.Page },
+    .{ "switch", lcgr.widgets_switch.Page },
 };
 
 var glyph_quads: [1024]Quad = undefined;

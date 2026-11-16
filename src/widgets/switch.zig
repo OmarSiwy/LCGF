@@ -104,6 +104,47 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The switch's example page: VSync, HDR (on) and Bloom on a panel, in both front ends. Its
+/// replay (testdata/switch.replay) clicks and uses Space; its golden images
+/// (tools/widgetgolden/ref/switch-*.png) show the knobs moving.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
+
+    pub const App = struct {
+        vsync: bool = false,
+        hdr: bool = true,
+        bloom: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = @"switch"(f, &th, .from("vsync"), &app.vsync, "VSync");
+            _ = @"switch"(f, &th, .from("hdr"), &app.hdr, "HDR");
+            _ = @"switch"(f, &th, .from("bloom"), &app.bloom, "Bloom");
+            f.close();
+        }
+    };
+    pub const State = struct {
+        vsync: bool = false,
+        vsync_text: []const u8 = "VSync",
+        hdr: bool = true,
+        hdr_text: []const u8 = "HDR",
+        bloom: bool = false,
+        bloom_text: []const u8 = "Bloom",
+    };
+    pub const spec = spec_zig.col(panel, .{
+        ct.@"switch"(th, .vsync, .vsync, .vsync_text),
+        ct.@"switch"(th, .hdr, .hdr, .hdr_text),
+        ct.@"switch"(th, .bloom, .bloom, .bloom_text),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/switch.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/switch-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "flipped", 6 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -241,6 +282,46 @@ test "switch a11y: role switch, named by its caption, on as value and checked, i
     }
     // Track and knob are presentational: the root, two switches, two captions.
     try testing.expectEqual(@as(u32, 5), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the switch replay flips by click and Space, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var vsync: [12]bool = undefined;
+    var hdr: [12]bool = undefined;
+    var bloom: [12]bool = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        const st = &h.ui.signals.state;
+        try testing.expectEqual(h.app.vsync, st.vsync);
+        try testing.expectEqual(h.app.hdr, st.hdr);
+        try testing.expectEqual(h.app.bloom, st.bloom);
+        vsync[k] = h.app.vsync;
+        hdr[k] = h.app.hdr;
+        bloom[k] = h.app.bloom;
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, true, false, false, false, false, false, false, false, false, false }, &vsync);
+    try testing.expectEqualSlices(bool, &.{ true, true, true, true, true, true, false, false, true, true, true, true }, &hdr);
+    const never: [12]bool = @splat(false);
+    try testing.expectEqualSlices(bool, &never, &bloom);
+    // The rects the replay's comment gives.
+    const t = &h.ctx.trees[h.ctx.cur];
+    for ([3][]const u8{ "vsync", "hdr", "bloom" }, [3]f32{ 12, 38, 64 }) |name, y| {
+        const row = t.find(.hash(name));
+        try testing.expectEqual([2]f32{ y, y + 18 }, [2]f32{ t.rect(row).y0, t.rect(row).y1 });
+        try testing.expectEqual([2]f32{ 12, 44 }, [2]f32{ t.rect(row + 1).x0, t.rect(row + 1).x1 });
+    }
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test {

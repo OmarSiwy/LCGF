@@ -1,0 +1,44 @@
+# Recorded input for the switch page (widgets/switch.zig, `Page`), at 320 x 120 in the default
+# theme: VSync (off) at y 12..30, HDR (on) at y 38..56 and Bloom (off) at y 64..82, tracks at
+# x 12..44. One line per frame below (format: input.Replay). Scancodes: Space 44, Enter 40.
+# 0: rest
+frame
+viewport 320 120
+dt 0.016
+pointer 300 110
+# 1: press VSync
+frame
+pointer 28 21
+buttons left
+# 2: release: on
+frame
+buttons
+# 3: Space up on the focused VSync: off
+frame
+release 44
+# 4: Enter does nothing
+frame
+press 40
+# 5: press HDR
+frame
+pointer 28 47
+buttons left
+# 6: release: off
+frame
+buttons
+# 7: Space down: nothing yet
+frame
+press 44
+# 8: Space up: HDR on
+frame
+release 44
+# 9: press Bloom, drag off, release: no flip
+frame
+pointer 28 73
+buttons left
+# 10: dragged off
+frame
+pointer 300 110
+# 11: released off it
+frame
+buttons
