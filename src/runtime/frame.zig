@@ -137,6 +137,7 @@ pub const Frame = struct {
     }
 
     pub const timer = scheduler.timer;
+    pub const reuse = @import("reuse.zig").reuse;
 
     /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
     /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,
