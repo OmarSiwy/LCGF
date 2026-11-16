@@ -164,6 +164,10 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
     app.view_class = defineClass("UIView", "LcgrView", &.{
         .{ .sel = "layerClass", .imp = &viewLayerClass, .types = "#@:", .meta = true },
         .{ .sel = "layoutSubviews", .imp = &viewLayout, .types = "v@:" },
+        .{ .sel = "touchesBegan:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
+        .{ .sel = "touchesMoved:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
+        .{ .sel = "touchesEnded:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
+        .{ .sel = "touchesCancelled:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
     });
     _ = defineClass("UIResponder", "LcgrAppDelegate", &.{
         .{ .sel = "application:didFinishLaunchingWithOptions:", .imp = &appLaunched, .types = "B@:@@" },
@@ -186,11 +190,20 @@ fn viewLayout(self: Id, _: Sel) callconv(.c) void {
     if (app.shell) |s| s.layout();
 }
 
+/// Every touch callback: each UITouch of the set says its own phase.
+fn viewTouches(self: Id, _: Sel, touches: Id, _: ?Id) callconv(.c) void {
+    const s = app.shell orelse return;
+    const all = msg(Id, touches, "allObjects", .{});
+    const n = msg(objc.NSUInteger, all, "count", .{});
+    for (0..n) |i| s.touch(self, msg(Id, all, "objectAtIndex:", .{@as(objc.NSUInteger, i)}));
+}
+
 fn appLaunched(self: Id, _: Sel, _: Id, _: ?Id) callconv(.c) bool {
     const screen = msg(Id, objc.class("UIScreen"), "mainScreen", .{});
     const bounds = msg(CGRect, screen, "bounds", .{});
     const window = msg(Id, msg(Id, objc.class("UIWindow"), "alloc", .{}), "initWithFrame:", .{bounds});
     const view = msg(Id, msg(Id, app.view_class, "alloc", .{}), "initWithFrame:", .{bounds});
+    msg(void, view, "setMultipleTouchEnabled:", .{@as(objc.BOOL, true)});
     const vc = msg(Id, objc.class("UIViewController"), "new", .{});
     msg(void, vc, "setView:", .{view});
     msg(void, window, "setRootViewController:", .{vc});
@@ -228,6 +241,9 @@ pub const Ios = struct {
     hz: f32 = 60,
     polls: u32 = 0,
     presents: u32 = 0,
+    /// The UITouch object behind each translator id (id = row + 1), null for a free row. UIKit
+    /// keeps a touch's object from began to ended.
+    touches: [translate.max_contacts]?Id = @splat(null),
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame; `first` and `count`
     /// one row per text run.
@@ -280,6 +296,33 @@ pub const Ios = struct {
         s.t.resize(@floatCast(b.size.width), @floatCast(b.size.height));
     }
 
+    fn touch(s: *Ios, view: Id, ui: Id) void {
+        const phase: translate.Phase = @fromBackingInt(@intCast(@as(u8, @intCast(@min(msg(objc.NSInteger, ui, "phase", .{}), 4)))));
+        const kind: translate.Kind = @fromBackingInt(@intCast(@as(u8, @intCast(@min(msg(objc.NSInteger, ui, "type", .{}), 3)))));
+        const row = for (s.touches, 0..) |o, i| {
+            if (o == ui) break i;
+        } else for (s.touches, 0..) |o, i| {
+            if (o == null) break i;
+        } else return; // more touches than rows: the translator would drop it too
+        s.touches[row] = if (phase == .ended or phase == .cancelled) null else ui;
+        const at = msg(CGPoint, ui, "locationInView:", .{view});
+        const max_force = msg(CGFloat, ui, "maximumPossibleForce", .{});
+        var c: translate.Touch = .{
+            .id = @intCast(row + 1),
+            .phase = phase,
+            .pos = .{ @floatCast(at.x), @floatCast(at.y) },
+            .kind = kind,
+            .pressure = if (max_force > 0) @floatCast(msg(CGFloat, ui, "force", .{}) / max_force) else 1,
+        };
+        if (kind == .pencil) {
+            // Tilt from the normal is 90 degrees less the altitude, split along the azimuth.
+            const lean = std.math.pi / 2.0 - msg(CGFloat, ui, "altitudeAngle", .{});
+            const az = msg(CGFloat, ui, "azimuthAngleInView:", .{view});
+            c.tilt = .{ @floatCast(lean * @cos(az)), @floatCast(lean * @sin(az)) };
+        }
+        s.t.touch(c);
+    }
+
     /// Runs the events UIKit has pending, without blocking, then gives the frame.
     pub fn poll(s: *Ios, ev: *Events) bool {
         while (fns.CFRunLoopRunInMode(default_mode, 0, true) == run_handled_source) {}
@@ -314,9 +357,10 @@ pub const Ios = struct {
     }
 
     /// Runs the run loop until an event is handled or `seconds` pass; `.display` waits one
-    /// refresh. Returns at once after a `wake`.
+    /// refresh. Returns at once after a `wake`, or when the translator owes a frame (a tap's
+    /// release).
     pub fn wait(s: *Ios, seconds: f32, pace: Pace) void {
-        if (s.woken.load(.acquire)) return;
+        if (s.woken.load(.acquire) or s.t.pending()) return;
         const secs: f64 = if (pace == .display) 1 / s.hz else seconds;
         if (!(secs > 0)) return;
         _ = fns.CFRunLoopRunInMode(default_mode, @min(secs, 1e9), true);
