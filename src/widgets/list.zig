@@ -6,25 +6,16 @@
 //! no selection). Every option row has the same height (`rowHeight`), so the row under the
 //! pointer is index arithmetic on the list's last rect, not a hit test per row.
 //!
-//! The comptime side (`ct.list`, `ComptimeList`) also carries the shared comptime page this
-//! file's sibling widgets (vlist, table, tree, progress, spinner, colorpicker) build on:
-//! `CtFrame`, the comptime front end's tables and `Frame.end`'s pass sequence, and
-//! `CtPointer`, hover, hold and focus exactly as the runtime front end's `Interaction` reports
-//! them.
+//! In the comptime front end `ct.list` builds itself through `Spec.widget` in
+//! `base.ComptimeUi`. This file also carries the small helpers its sibling widgets (vlist,
+//! table, tree, progress, spinner, colorpicker) use there: `ctResponse` (hover, hold and focus
+//! as `Frame.interact` reports them), `ctClicked`, `ctRect`, `widgetRow` and `pushLabel`.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
-const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
 const Tree = @import("../core/tree.zig").Tree;
-const Texts = @import("../core/texts.zig").Texts;
-const Customs = @import("../core/customs.zig").Customs;
-const Strings = @import("../core/strings.zig").Strings;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const paint = @import("../draw/paint.zig");
-const layout = @import("../layout/layout.zig");
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -236,15 +227,24 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
 pub const ct = struct {
     /// A list named `id` selecting into the u32 field `selected`, one option per string field
     /// in `items` (a tuple of enum literals): `ct.list(th, .fruit, .selected, .{ .apple, .pear })`.
+    /// It builds itself in `base.ComptimeUi` (`Spec.widget`).
     pub fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime selected: @EnumLiteral(), comptime items: anytype) Spec {
         var opts: [items.len]Spec = undefined;
         for (&opts, items) |*o, item| o.* = spec_zig.row(optionStyle(&th), .{base.ct.label(th, item)});
         var s = spec_zig.col(listStyle(&th), opts);
         s.id = @tagName(id);
         s.bind = @tagName(selected);
+        s.widget = ListWidget(@tagName(selected), &fieldNames(items));
         return s;
     }
 };
+
+/// The names of a tuple of enum literals.
+fn fieldNames(comptime items: anytype) [items.len][]const u8 {
+    var out: [items.len][]const u8 = undefined;
+    for (&out, items) |*o, item| o.* = @tagName(item);
+    return out;
+}
 
 /// The option fields of the list node `n` (built by `ct.list`): each option row's label binding.
 pub fn itemFields(comptime n: Spec) [n.children.len][]const u8 {
@@ -253,169 +253,77 @@ pub fn itemFields(comptime n: Spec) [n.children.len][]const u8 {
     return out;
 }
 
-/// The comptime front end for a page of lists: rows, columns and labels as in `base.ComptimeUi`,
-/// and every node with an id a list made by `ct.list`. State in `Signals`, input through
-/// `Events`; look and behaviour through the functions above.
-pub fn ComptimeList(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const S = signals.Signals(State, spec);
-    inline for (E.widget_nodes) |row| {
-        const n = nodeAt(spec, row);
-        validate(State, n.bind.?, &itemFields(n));
-    }
-    const Tables = CtFrame(flatten.count(spec) + 1, @max(labelCount(spec), 1));
+/// A list in `base.ComptimeUi`, for a list bound to `selected` with option fields `fields`:
+/// `step` applies the click and keys to the selection, `push` builds the rows `list` builds.
+fn ListWidget(comptime selected: []const u8, comptime fields: []const []const u8) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = S;
-
-        page: Tables = .{},
-        signals: S.Runtime = .{},
-        pointer: CtPointer(E) = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = ui.pointer.step(in);
-            const state = &ui.signals.state;
-            inline for (0..E.widget_count) |k| {
-                const n = comptime nodeAt(spec, E.widget_nodes[k]);
-                const w = comptime E.widget(k);
-                const fields = comptime itemFields(n);
-                var items: [fields.len][]const u8 = undefined;
-                inline for (&items, fields) |*s, f| s.* = @field(state, f);
-                const clicked = if (event) |e| e == w else false;
-                var sel: u32 = @field(state, n.bind.?);
-                sel = click(sel, clicked, rowAt(&th, ui.pointer.rects.c[1][k], in.pointer[1], fields.len));
-                if (ui.pointer.focus == w) sel = keys(sel, &items, in, &default_keys);
-                ui.signals.set(comptime field(n.bind.?), sel);
-            }
-
-            const tb = ui.page.begin(in);
-            var next: u32 = 0;
-            ui.push(spec, 0, &next, in);
-            const t = ui.page.end(in);
-            ui.pointer.store(t);
-            return .{ .draw = &tb.d, .tree = t, .event = event };
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            comptime validate(@TypeOf(ui.signals.state), selected, fields);
+            var items: [fields.len][]const u8 = undefined;
+            inline for (&items, fields) |*s, f| s.* = @field(ui.signals.state, f);
+            var sel: u32 = @field(ui.signals.state, selected);
+            sel = click(sel, ctClicked(ui, row, event), rowAt(&Ui.theme, ctRect(ui, row).y0, in.pointer[1], fields.len));
+            if (ctResponse(ui, row, in).focused) sel = keys(sel, &items, in, &default_keys);
+            ui.signals.set(comptime Ui.field(selected), sel);
         }
 
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const tb = &ui.page.tables;
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const row = comptime widgetRow(@TypeOf(ui.*), n.id.?);
+            const tb = &ui.tables;
             const state = &ui.signals.state;
-            const row = next.*;
-            next.* += 1;
-            if (n.kind == .label) {
-                pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (n.id == null) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, next, in);
-                tb.t.seal(i);
-                return;
-            }
-            // A list (`ct.list`).
-            const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
-            const r = ui.pointer.response(w, in);
+            next.* += comptime flatten.count(n);
+            const r = ctResponse(ui, row, in);
             const count: u32 = n.children.len;
-            const sel: u32 = @field(state, n.bind.?);
-            const under = rowAt(&th, ui.pointer.rectOf(w).y0, in.pointer[1], count);
+            const sel: u32 = @field(state, selected);
+            const under = rowAt(th, ctRect(ui, row).y0, in.pointer[1], count);
             const box = tb.t.push(parent, .hash(n.id.?), &n.style);
-            tb.t.c.look[box].border_color = listBorder(&th, r.focused).bitsOf();
+            tb.t.c.look[box].border_color = listBorder(th, r.focused).bitsOf();
             const first = tb.t.len;
             inline for (n.children, 0..) |o, j| {
-                next.* += 2;
                 var s = o.style;
-                s.fill = optionFill(&th, r.hovered and under == j, sel == j);
+                s.fill = optionFill(th, r.hovered and under == j, sel == j);
                 const i = tb.t.push(box, .none, &s);
-                pushLabel(tb, i, &o.children[0].style, @field(state, o.children[0].bind.?), &th);
+                pushLabel(tb, i, &o.children[0].style, @field(state, o.children[0].bind.?), th);
                 tb.t.seal(i);
             }
             tb.t.seal(box);
             tb.t.c.value[box] = selectedValue(sel);
             setRoles(&tb.t, box, first, count);
         }
-
-        fn field(comptime name: []const u8) S.Field {
-            return comptime std.meta.stringToEnum(S.Field, name).?;
-        }
     };
 }
 
-// ---- shared comptime page: used by this file's sibling widgets too ---------------------------
+// ---- comptime helpers: shared by this file's sibling widgets ---------------------------------
 
-/// The tables of a comptime page with exactly `rows` tree rows (the root included) and `runs`
-/// text runs, carved from a buffer inside the value, and `Frame.end`'s pass sequence over them.
-/// `begin` opens the runtime front end's root; push the page under row 0, then `end`.
-pub fn CtFrame(comptime rows: u32, comptime runs: u32) type {
-    return struct {
-        const Self = @This();
-        buf: [bytes]u8 align(mem.column_align) = undefined,
-        tables: Tables = undefined,
-        font: Mono = .{},
+/// Hover, held and focus of the widget at spec row `row` of a `base.ComptimeUi` page, as
+/// `Frame.interact` returns them (`ComptimeUi.response` plus its `focus`).
+pub fn ctResponse(ui: anytype, comptime row: u32, in: *const Input) Response {
+    const E = @TypeOf(ui.*).Events;
+    var r = ui.response(row, in);
+    r.focused = ui.focus == @as(E.Widget, @fromBackingInt(@as(E.Index, row)));
+    return r;
+}
 
-        pub const Tables = struct {
-            t: Tree,
-            tx: Texts,
-            cu: Customs,
-            strings: Strings,
-            d: DrawList,
+/// Whether this frame's event is a click on the widget at spec row `row`.
+pub fn ctClicked(ui: anytype, comptime row: u32, event: anytype) bool {
+    const E = @TypeOf(ui.*).Events;
+    const w: E.Widget = @fromBackingInt(@as(E.Index, row));
+    return if (event) |e| e == w else false;
+}
 
-            fn carve(carver: *mem.Carver) Tables {
-                return .{
-                    .t = Tree.init(carver, rows),
-                    .tx = Texts.init(carver, runs),
-                    .cu = Customs.init(carver, 1),
-                    .strings = .{ .buf = carver.slice(u8, string_bytes) },
-                    .d = DrawList.init(carver, rows, runs, 1),
-                };
-            }
-        };
-        const string_bytes = 64 * runs;
-        const bytes = blk: {
-            @setEvalBranchQuota(20_000);
-            var counter: mem.Carver = .{ .buf = null };
-            _ = Tables.carve(&counter);
-            break :blk counter.off;
-        };
+/// Last frame's rect of the widget at spec row `row`.
+pub fn ctRect(ui: anytype, comptime row: u32) types.Rect {
+    const E = @TypeOf(ui.*).Events;
+    const k = comptime E.slot(@fromBackingInt(@as(E.Index, row)));
+    const c = &ui.rects.c;
+    return .{ .x0 = c[0][k], .y0 = c[1][k], .x1 = c[2][k], .y1 = c[3][k] };
+}
 
-        /// Carves the tables (the value may have moved since last frame), clears them and pushes
-        /// the root `Context.begin` pushes.
-        pub fn begin(p: *Self, in: *const Input) *Tables {
-            var carver: mem.Carver = .{ .buf = &p.buf };
-            p.tables = Tables.carve(&carver);
-            const tb = &p.tables;
-            tb.t.reset();
-            tb.tx.reset();
-            tb.cu.reset();
-            tb.strings.reset();
-            _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
-            return tb;
-        }
-
-        /// Seals the root, lays out and paints: `Frame.end`'s passes, in its order.
-        pub fn end(p: *Self, in: *const Input) *const Tree {
-            const tb = &p.tables;
-            const t = &tb.t;
-            const tx = &tb.tx;
-            t.seal(0);
-            p.font.measure(tx);
-            layout.prepare(t);
-            layout.applyText(t, tx, .x);
-            layout.fit(t, .x);
-            layout.resolve(t, .x, in.viewport[0]);
-            layout.textAvail(t, tx);
-            p.font.wrap(tx);
-            layout.applyText(t, tx, .y);
-            layout.fit(t, .y);
-            layout.resolve(t, .y, in.viewport[1]);
-            layout.place(t);
-            layout.finalize(t);
-            paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
-            return t;
-        }
-    };
+/// The spec row of the widget named `id` on page `Ui`: its `Widget` tag's value.
+pub fn widgetRow(comptime Ui: type, comptime id: []const u8) u32 {
+    return @backingInt(@field(Ui.Events.Widget, id));
 }
 
 /// A text leaf as `base.label` makes it: `style` (a label's), the string, the theme's text.
@@ -423,55 +331,6 @@ pub fn pushLabel(tb: anytype, parent: u32, style: *const Style, str: []const u8,
     const i = tb.t.push(parent, .none, style);
     const span = tb.strings.add(str);
     tb.t.c.text[i] = tb.tx.push(i, span, &base.labelText(th));
-}
-
-/// Pointer and focus for the widgets of `E` as the runtime front end's `Interaction` reports
-/// them: a click on release over the widget pressed, capture while held (only the held widget
-/// shows hover), and focus moved by every press (to the widget under it, or to nothing). Every
-/// widget of a page built on this senses focus. Judged against last frame's rects (`store`).
-pub fn CtPointer(comptime E: type) type {
-    return struct {
-        const Self = @This();
-        pointer: E.Pointer = .{},
-        /// Last frame's widget rects.
-        rects: E.Rects = .{},
-        focus: ?E.Widget = null,
-
-        /// This frame's click, from `Events.pointer`; moves focus on a press.
-        pub fn step(p: *Self, in: *const Input) ?E.Event {
-            const press = in.buttons.left and !p.pointer.down;
-            if (press) p.focus = E.at(&p.rects, in.pointer[0], in.pointer[1]);
-            return E.pointer(&p.pointer, &p.rects, in);
-        }
-
-        /// Hover, held and focus for `w`, as `Frame.interact` returns them.
-        pub fn response(p: *const Self, w: E.Widget, in: *const Input) Response {
-            const held = p.pointer.pressed == w;
-            const owned = p.pointer.pressed == null or held;
-            const under = E.at(&p.rects, in.pointer[0], in.pointer[1]) == w;
-            return .{ .hovered = under and owned, .held = held, .focused = p.focus == w };
-        }
-
-        /// Last frame's rect of `w`.
-        pub fn rectOf(p: *const Self, w: E.Widget) types.Rect {
-            const k = slotOf(w);
-            return .{ .x0 = p.rects.c[0][k], .y0 = p.rects.c[1][k], .x1 = p.rects.c[2][k], .y1 = p.rects.c[3][k] };
-        }
-
-        /// Keeps this frame's widget rects for the next frame's input. `t` is the page's tree:
-        /// spec row r is tree row r + 1, under the root.
-        pub fn store(p: *Self, t: *const Tree) void {
-            p.rects = .{};
-            for (0..4) |side| {
-                for (E.widget_nodes, 0..) |node, k| p.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
-            }
-        }
-
-        fn slotOf(w: E.Widget) usize {
-            inline for (0..E.widget_count) |k| if (E.widget(k) == w) return k;
-            unreachable;
-        }
-    };
 }
 
 /// Spec nodes in `n`'s subtree that show text.
@@ -532,7 +391,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .title),
             ct.list(th, .fruit, .selected, .{ .apple, .banana, .cherry, .damson, .elder }),
         });
-        pub const Ui = ComptimeList(State, spec, th);
+        pub const Ui = base.ComptimeUi(State, spec, th);
         pub const limits: context.Limits = .{ .nodes = 32, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };

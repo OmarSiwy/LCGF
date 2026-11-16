@@ -12,8 +12,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -257,6 +255,7 @@ pub const ct = struct {
         var s = spec_zig.col(.{}, rows);
         s.id = @tagName(id);
         s.bind = @tagName(state);
+        s.widget = TreeWidget(@tagName(state), @tagName(labels), @tagName(depths), n);
         return s;
     }
 
@@ -266,94 +265,49 @@ pub const ct = struct {
     }
 };
 
-/// The comptime front end for a page of tree views: rows, columns and labels as in
-/// `base.ComptimeUi`, every node with an id a tree view made by `ct.tree`.
-pub fn ComptimeTree(comptime S: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const Sig = signals.Signals(S, spec);
-    inline for (E.widget_nodes) |row| {
-        const v = ct.fields(list_zig.nodeAt(spec, row));
-        validate(S, v.state, v.labels, v.depths, v.n);
-    }
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+/// A tree view in `base.ComptimeUi`, for the fields and item count `ct.tree` was given:
+/// `step` applies the click and keys to the tree state, `push` builds the visible items' rows
+/// as `tree` does.
+fn TreeWidget(comptime state: []const u8, comptime labels: []const u8, comptime depths: []const u8, comptime n_items: u32) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = Sig;
-
-        page: Tables = .{},
-        signals: Sig.Runtime = .{},
-        pointer: list_zig.CtPointer(E) = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = ui.pointer.step(in);
-            inline for (0..E.widget_count) |k| {
-                const v = comptime ct.fields(list_zig.nodeAt(spec, E.widget_nodes[k]));
-                const w = comptime E.widget(k);
-                var r = ui.pointer.response(w, in);
-                r.clicked = if (event) |e| e == w else false;
-                var st = @field(ui.signals.state, v.state);
-                var scratch: [v.n]u32 = undefined;
-                update(&st, &th, @field(ui.signals.state, v.depths), r, ui.pointer.rectOf(w), in, &scratch);
-                ui.signals.set(comptime field(v.state), st);
-            }
-
-            const tb = ui.page.begin(in);
-            var next: u32 = 0;
-            ui.push(spec, 0, &next, in);
-            const t = ui.page.end(in);
-            ui.pointer.store(t);
-            return .{ .draw = &tb.d, .tree = t, .event = event };
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            comptime validate(@TypeOf(ui.signals.state), state, labels, depths, n_items);
+            var r = list_zig.ctResponse(ui, row, in);
+            r.clicked = list_zig.ctClicked(ui, row, event);
+            var st = @field(ui.signals.state, state);
+            var scratch: [n_items]u32 = undefined;
+            update(&st, &Ui.theme, @field(ui.signals.state, depths), r, list_zig.ctRect(ui, row), in, &scratch);
+            ui.signals.set(comptime Ui.field(state), st);
         }
 
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const tb = &ui.page.tables;
-            const state = &ui.signals.state;
-            const row = next.*;
-            next.* += 1;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (n.id == null) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, next, in);
-                tb.t.seal(i);
-                return;
-            }
-            // A tree view (`ct.tree`): rows for the visible items.
-            next.* += 3 * n.children.len;
-            const v = comptime ct.fields(n);
-            const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
-            const r = ui.pointer.response(w, in);
-            const st = @field(state, v.state);
-            const labels: []const []const u8 = @field(state, v.labels);
-            const depths: []const u8 = @field(state, v.depths);
-            var scratch: [v.n]u32 = undefined;
-            const len = visibleItems(depths, &st.expanded, &scratch);
-            const rect = ui.pointer.rectOf(w);
-            var s = treeStyle(&th);
-            s.border_color = list_zig.listBorder(&th, r.focused);
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const row = comptime list_zig.widgetRow(@TypeOf(ui.*), n.id.?);
+            const tb = &ui.tables;
+            next.* += comptime flatten.count(n);
+            const r = list_zig.ctResponse(ui, row, in);
+            const st = @field(ui.signals.state, state);
+            const ls: []const []const u8 = @field(ui.signals.state, labels);
+            const ds: []const u8 = @field(ui.signals.state, depths);
+            var scratch: [n_items]u32 = undefined;
+            const len = visibleItems(ds, &st.expanded, &scratch);
+            const rect = list_zig.ctRect(ui, row);
+            var s = treeStyle(th);
+            s.border_color = list_zig.listBorder(th, r.focused);
             s.value = @floatFromInt(st.selected);
             const box = tb.t.push(parent, .hash(n.id.?), &s);
-            const under = rowAt(&th, rect.y0, in.pointer[1], len);
+            const under = rowAt(th, rect.y0, in.pointer[1], len);
             for (scratch[0..len], 0..) |item, k| {
-                var o = rowStyle(&th, depths[item]);
-                o.fill = list_zig.optionFill(&th, r.hovered and under == k, st.selected == item);
+                var o = rowStyle(th, ds[item]);
+                o.fill = list_zig.optionFill(th, r.hovered and under == k, st.selected == item);
                 const i = tb.t.push(box, .none, &o);
-                _ = tb.t.push(i, .none, &markStyle(&th, hasChildren(depths, item), st.expanded[item]));
-                list_zig.pushLabel(tb, i, &.{ .role = .label }, labels[item], &th);
+                _ = tb.t.push(i, .none, &markStyle(th, hasChildren(ds, item), st.expanded[item]));
+                list_zig.pushLabel(tb, i, &.{ .role = .label }, ls[item], th);
                 tb.t.seal(i);
             }
             tb.t.seal(box);
             setRoles(&tb.t, box, len);
-        }
-
-        fn field(comptime name: []const u8) Sig.Field {
-            return comptime std.meta.stringToEnum(Sig.Field, name).?;
         }
     };
 }
@@ -395,7 +349,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .title),
             ct.tree(th, .outline, .outline, .labels, .depths, 8),
         });
-        pub const Ui = ComptimeTree(PageState, spec, th);
+        pub const Ui = base.ComptimeUi(PageState, spec, th);
         pub const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };
@@ -420,7 +374,6 @@ const testing = std.testing;
 const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
 
-const test_labels = [_][]const u8{ "src", "core", "tree.zig", "types.zig", "widgets", "list.zig", "docs", "DESIGN.md" };
 const test_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
 
 var harness: Example(theme).Run = .{};

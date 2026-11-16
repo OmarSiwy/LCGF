@@ -11,8 +11,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -22,7 +20,6 @@ const flatten = @import("../comptime/flatten.zig");
 const a11y = @import("../a11y/tree.zig");
 const hit = @import("../interact/hit.zig");
 const base = @import("base.zig");
-const list_zig = @import("list.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -136,69 +133,30 @@ pub const ct = struct {
         const ring: [dots]Spec = @splat(.{ .kind = .col });
         var s = spec_zig.col(.{}, ring);
         s.bind = @tagName(busy);
+        s.widget = SpinnerWidget(@tagName(busy));
         return s;
     }
 };
 
-/// Whether spec node `n` is a spinner made by `ct.spinner`: a column bound to a field.
-fn isSpinner(comptime n: Spec) bool {
-    return n.kind == .col and n.bind != null;
-}
-
-/// The comptime front end for a page of spinners: rows, columns and labels as in
-/// `base.ComptimeUi`, every column bound to a field a spinner made by `ct.spinner`. The page
-/// has no widgets, so there is no input to step.
-pub fn ComptimeSpinner(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const S = signals.Signals(State, spec);
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
-    comptime checkAll(State, spec);
+/// A spinner in `base.ComptimeUi`, turning while the field `busy` is set: `push` builds the
+/// rows `spinner` builds. It takes no input, so it has no `step`.
+fn SpinnerWidget(comptime busy: []const u8) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = S;
-
-        page: Tables = .{},
-        signals: S.Runtime = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const tb = ui.page.begin(in);
-            ui.push(spec, 0, in);
-            const t = ui.page.end(in);
-            return .{ .draw = &tb.d, .tree = t, .event = null };
-        }
-
-        fn push(ui: *Self, comptime n: Spec, parent: u32, in: *const Input) void {
-            const tb = &ui.page.tables;
-            const state = &ui.signals.state;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (comptime !isSpinner(n)) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, in);
-                tb.t.seal(i);
-                return;
-            }
-            const busy: bool = @field(state, n.bind.?);
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            comptime validate(@TypeOf(ui.signals.state), busy);
+            const th = &@TypeOf(ui.*).theme;
+            const tb = &ui.tables;
+            next.* += comptime flatten.count(n);
+            const on: bool = @field(ui.signals.state, busy);
             const head = phase(in.time);
-            var s = spinnerStyle(&th);
-            s.value = spinnerValue(busy);
+            var s = spinnerStyle(th);
+            s.value = spinnerValue(on);
             const node = tb.t.push(parent, .none, &s);
-            for (0..dots) |k| _ = tb.t.push(node, .none, &dotStyle(&th, @intCast(k), head, busy));
+            for (0..dots) |k| _ = tb.t.push(node, .none, &dotStyle(th, @intCast(k), head, on));
             tb.t.seal(node);
             setRole(&tb.t, node);
         }
     };
-}
-
-fn checkAll(comptime State: type, comptime n: Spec) void {
-    if (isSpinner(n)) validate(State, n.bind.?);
-    for (n.children) |c| checkAll(State, c);
 }
 
 // ---- example page -----------------------------------------------------------------------------
@@ -230,7 +188,7 @@ pub fn Example(comptime th: Theme) type {
             ct.spinner(th, .busy),
             base.ct.label(th, .caption),
         });
-        pub const Ui = ComptimeSpinner(State, spec, th);
+        pub const Ui = base.ComptimeUi(State, spec, th);
         pub const limits: context.Limits = .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };
