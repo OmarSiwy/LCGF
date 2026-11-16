@@ -41,7 +41,6 @@ const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const objc = metal.objc;
 const text_input = @import("text_input.zig");
-const present_ = metal.present;
 const Id = objc.Id;
 const Sel = objc.Sel;
 const msg = objc.msg;
@@ -301,10 +300,7 @@ fn appRun(_: Id, _: Sel) callconv(.c) void {
 pub const Ios = struct {
     t: translate.Translator = .{},
     view: Id,
-    dev: metal.device.Device,
-    layer: metal.device.Layer,
-    gfx: metal.Renderer,
-    frames: present_.Frames,
+    gpu: metal.Setup,
     font: Mono = .{},
     glyphs: Buffers,
     /// What `present` clears to before drawing.
@@ -345,16 +341,9 @@ pub const Ios = struct {
     /// the shell must not move afterwards (UIKit's callbacks point at it).
     pub fn init(s: *Ios, buf: Buffers) Error!void {
         const view = app.view orelse return error.NoView;
-        var dev = try metal.device.Device.init();
-        errdefer dev.deinit();
-        // The view's own layer is the CAMetalLayer (`layerClass`); configure it as Layer.init would.
-        const layer = msg(Id, view, "layer", .{});
-        msg(void, layer, "setDevice:", .{dev.device});
-        msg(void, layer, "setPixelFormat:", .{metal.mtl.PixelFormat.bgra8_unorm});
-        msg(void, layer, "setFramebufferOnly:", .{@as(objc.BOOL, true)});
-        msg(void, layer, "setOpaque:", .{@as(objc.BOOL, true)});
-        var gfx = try metal.Renderer.init(dev.device, .{});
-        errdefer gfx.deinit();
+        // The view's own layer is the CAMetalLayer (`layerClass`).
+        var gpu = try metal.Setup.init(msg(Id, view, "layer", .{}));
+        errdefer gpu.deinit();
         var ctx: CFRunLoopSourceContext = .{ .perform = &performWake };
         const run_loop = fns.CFRunLoopGetMain();
         const source = fns.CFRunLoopSourceCreate(null, 0, &ctx) orelse return error.RunLoop;
@@ -363,10 +352,7 @@ pub const Ios = struct {
         s.* = .{
             .t = .init(.{ .text = buf.text, .events = buf.events }),
             .view = view,
-            .dev = dev,
-            .layer = .{ .layer = layer, .format = .bgra8_unorm },
-            .gfx = gfx,
-            .frames = .init(dev.queue, gfx.desc.frames_in_flight),
+            .gpu = gpu,
             .glyphs = buf,
             .source = source,
             .run_loop = run_loop,
@@ -378,9 +364,7 @@ pub const Ios = struct {
 
     pub fn deinit(s: *Ios) void {
         app.shell = null;
-        s.frames.deinit();
-        s.gfx.deinit();
-        s.dev.deinit();
+        s.gpu.deinit();
     }
 
     /// Reads the view's bounds, scale and safe area into the translator.
@@ -491,18 +475,10 @@ pub const Ios = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const in = &s.t.in;
-        _ = s.layer.resize(in.viewport, in.scale);
-        const cmd = s.frames.begin();
         const g = s.glyphs;
         const n = s.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        s.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, in.viewport, in.scale);
-        const drawable = present_.nextDrawable(s.layer.layer) orelse return;
         const c = s.background;
-        const pass = present_.beginPass(cmd, present_.drawableTexture(drawable), .{ unit(c.r), unit(c.g), unit(c.b), 1 });
-        s.gfx.render(pass, out.draw);
-        present_.endPass(pass);
-        s.frames.present(cmd, drawable, null);
-        s.presents += 1;
+        if (s.gpu.draw(out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, in.viewport, in.scale, .{ unit(c.r), unit(c.g), unit(c.b), 1 })) s.presents += 1;
     }
 
     fn unit(v: u8) f64 {

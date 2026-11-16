@@ -25,7 +25,6 @@ const Platform = context.Platform;
 const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const sw = lcgr.render_sw;
-const render = lcgr.render_iface;
 const Quad = lcgr.draw_list.Quad;
 const Mono = lcgr.protocol.Mono;
 const Color = lcgr.types.Color;
@@ -656,7 +655,7 @@ pub const Window = struct {
     t0: f64,
     pixels: []u32,
     fb: sw.Framebuffer,
-    gfx: sw.Software = .{},
+    gfx: sw.Setup = .{},
     font: Mono = .{},
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
@@ -1059,9 +1058,7 @@ pub const Window = struct {
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, w.scale);
-        w.fb.clear(w.background);
-        render.render(&w.gfx, .{ .fb = &w.fb, .scissor = w.fb.all() }, out.draw);
+        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.scale);
         w.send() catch {};
         w.presented = true;
         w.last_present = now();

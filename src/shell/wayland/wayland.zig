@@ -39,7 +39,6 @@ const Pace = lcgr.scheduler.Pace;
 const Input = lcgr.input.Input;
 const Quad = lcgr.draw_list.Quad;
 const Mono = lcgr.protocol.Mono;
-const render = lcgr.render_iface;
 const sw = lcgr.render_sw;
 const Color = lcgr.types.Color;
 
@@ -267,7 +266,7 @@ pub const Wayland = struct {
     wake_fd: i32,
     woken: std.atomic.Value(bool) = .init(false),
     options: Options,
-    gfx: sw.Software = .{},
+    gfx: sw.Setup = .{},
     font: Mono = .{},
     glyphs: Buffers,
     /// What `present` clears to before drawing.
@@ -449,9 +448,7 @@ pub const Wayland = struct {
         var fb = win.shm.framebuffer(slot);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, win.scale);
-        fb.clear(w.background);
-        render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
+        w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, w.background, win.scale);
         win.shm.busy[slot] = true;
         win.shown = @intCast(slot);
         w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
