@@ -30,3 +30,43 @@ Measured:
 One build fix was needed on our side: a kernel's per-thread function takes `g.GlobalPtr(T)`
 (a plain `[*]T` on the host, a global-address-space pointer on the device) instead of a slice
 made with `@addrSpaceCast`, which LLVM 23 rejected on nvptx64 ("Invalid cast" in bitcode).
+
+## C0419: express the tile rasteriser as kernels that also run on the CPU
+
+Decision: two kernels, `bin` (one thread per 16x16 tile: the indices of the quads whose pixel box
+meets the tile, in paint order) and `raster` (one thread per pixel: its tile's quads shaded and
+blended over the pixel in order), Laine and Karras's binning and fine rasterisation without the
+triangle stages a GUI does not need. Each is a plain Zig function in kernels.zig; the CPU path
+(`rasterCpu`) calls it once per tile and once per pixel, the device entry points once per thread.
+The per-pixel shading is sw.zig `shade`'s loop body for one lane, expression for expression, with
+Gompute's device math (`g.math.exp`, `sin`, `cos`) where the GPU has no libm.
+
+The back end meets the render contract by recording: `drawBatch` and `drawText` append quads and
+their texture to a caller-owned `Recorder` (the pass); the host rasterises at each custom command
+and at the end, so paint order holds across its own draws. Bins have a fixed capacity; a full bin
+makes its pixels walk every quad of the frame instead (slower, never wrong), and the test runs every
+scene at a capacity of 2 (overflows) and 16 (does not).
+
+Measured:
+
+| What | Value |
+|---|---|
+| Conformance scenes, CPU path vs software back end | identical pixels (test `raster: every conformance scene ...`, capacities 2 and 16) |
+| `ci/run.sh gompute-golden` | 13 of 13 golden images (4 conformance, 9 draw-feature: borders, corners, gradients, images, nine-slice, opacity, rounded-clip, shadows, transforms), 0 pixels off by more than 2 |
+| PTX / HSACO compile of the rasteriser | 0.67 s / 2 s |
+
+CPU time per frame, median of 15, gompute-play ReleaseFast, on a machine shared with other builds
+(numbers move by about 30% between runs):
+
+| Scene | Size, quads | CPU path | sw | CPU path / sw |
+|---|---|---|---|---|
+| rects | 160x120, 3 | 3,107 us | 254 us | 12x |
+| text | 160x120, 10 | 2,829 us | 91 us | 31x |
+| borders | 800x600, 4 | 11,432 us | 2,262 us | 5x |
+| opacity | 800x600, 20 | 20,153 us | 1,678 us | 12x |
+| rounded-clip | 800x600, 7 | 41,586 us | 1,031 us | 40x |
+| shadows | 800x600, 7 | 58,383 us | 3,429 us | 17x |
+
+The CPU path is a correctness fallback, not a renderer: one scalar thread, every pixel of the
+frame visited, the per-quad setup recomputed per pixel (what a GPU thread does). The software back
+end shades only each quad's box, `simd.lanes` pixels at a time. Where there is no GPU, use sw.
