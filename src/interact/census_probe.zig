@@ -22,3 +22,6 @@ export fn p_focus_scan(t: *const Tree, sc: *lcgr.focus.Scopes) void {
 export fn p_shortcut_fire(sh: *const lcgr.keyboard.Shortcuts, k: *lcgr.keyboard.Keyboard, out: [*]u16) u32 {
     return lcgr.keyboard.fire(sh, k, out[0..16]);
 }
+export fn p_wheel_route(t: *const Tree, sc: *const lcgr.gestures.Scrollables, in: *const Input, out: *lcgr.gestures.Wheel) void {
+    out.* = lcgr.gestures.route(t, sc, in, 16);
+}

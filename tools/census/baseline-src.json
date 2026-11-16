@@ -229,6 +229,11 @@
     "jcc": 0,
     "short_fwd": 0
   },
+  "p_wheel_route": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
   "p_wrap": {
     "back": 1,
     "jcc": 3,
