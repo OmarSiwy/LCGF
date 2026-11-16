@@ -136,12 +136,11 @@ pub fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *cons
     f.close();
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
-
-/// The test page: a toolbar with a button and a label, and the button's tooltip.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with a button and a label, and the button's tooltip, in both
+/// front ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
@@ -176,6 +175,28 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/tooltip.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "tooltip-resting", 2 },
+    .{ "tooltip-shown", 3 },
+    .{ "tooltip-dismissed", 9 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -225,6 +246,40 @@ test "Tooltip: another theme restyles both front ends alike" {
     const t = try showTip(&S.h);
     try testing.expectEqual(light.control_held.bitsOf(), t.c.look[6].fill);
     try testing.expectEqual(t.rect(t.find(.from("save"))).y1 + 10, t.rect(6).y0);
+}
+
+test "Tooltip: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var shown: [12]bool = undefined;
+    var rows: [12]u32 = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.tip, h.ui.signals.state.tip);
+        shown[k] = h.app.tip.shown;
+        rows[k] = t.len;
+        if (k == 3) {
+            // The rects the replay's comments give.
+            try testing.expectEqual(Rect{ .x0 = 8, .y0 = 8, .x1 = 58, .y1 = 42 }, t.rect(t.find(.from("save"))));
+            try testing.expectEqual(Rect{ .x0 = 8, .y0 = 48, .x1 = 217, .y1 = 78 }, t.rect(t.len - 2));
+        }
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, true, true, false, false, false, true, false, false, false }, &shown);
+    try testing.expectEqualSlices(u32, &.{ 6, 6, 6, 8, 8, 6, 6, 6, 8, 6, 6, 6 }, &rows);
+    try testing.expect(h.app.tip.rested == 0 and !h.app.tip.dismissed);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test "advance: the timer, the delay and Escape" {

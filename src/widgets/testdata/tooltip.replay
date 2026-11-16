@@ -1,0 +1,36 @@
+# Recorded input for the tooltip example page (widgets/tooltip.zig, `Example`), at 800 x 600 in
+# the default theme, 0.2 s per frame: the button "Save" at x 8..58, y 8..42; its tooltip, once
+# shown, at x 8..217, y 48..78. The delay is 0.5 s. One line per frame says what it does
+# (format: input.Replay). Key 41 is Escape (USB HID).
+# 0: rest
+frame
+viewport 800 600
+dt 0.2
+pointer 400 300
+# 1: rest on the button: 0.2 s
+frame
+pointer 33 25
+# 2: 0.4 s
+frame
+# 3: 0.6 s: shown
+frame
+# 4: still shown
+frame
+# 5: leave: hidden
+frame
+pointer 400 300
+# 6: back on the button: 0.2 s
+frame
+pointer 33 25
+# 7: 0.4 s
+frame
+# 8: 0.6 s: shown
+frame
+# 9: Escape: hidden
+frame
+press 41
+# 10: still on the button: stays hidden
+frame
+# 11: leave
+frame
+pointer 400 300

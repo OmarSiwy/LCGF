@@ -25,6 +25,7 @@ const pages = .{
         pub const frames = w.golden_frames;
     },
     lcgr.widgets_popover.golden,
+    lcgr.widgets_tooltip.golden,
 };
 
 var glyph_quads: [1024]Quad = undefined;
