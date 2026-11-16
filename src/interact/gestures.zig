@@ -8,6 +8,7 @@ const types = @import("../core/types.zig");
 const mem = @import("../core/mem.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
+const Interaction = @import("interaction.zig").Interaction;
 const none = types.none;
 
 const W = simd.lanes;
@@ -268,6 +269,98 @@ pub const Pinch = struct {
     }
 };
 
+/// Drop targets: which kinds of dragged payload each node accepts. One row per node of the tree
+/// it describes; the caller keeps it with that tree (last frame's, for `DragDrop.step`).
+pub const Targets = struct {
+    c: Columns,
+
+    pub const Columns = struct {
+        /// Set by the caller: a bit set of the application's payload kinds the node accepts;
+        /// 0 for none.
+        accept: []u32,
+    };
+
+    pub fn init(carver: *mem.Carver, cap: u32) Targets {
+        std.debug.assert(cap > 0);
+        return .{ .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+    pub fn reset(tg: *Targets) void {
+        @memset(tg.c.accept, 0);
+    }
+};
+
+/// Drag and drop inside the application, on top of `Interaction`'s drag: the application
+/// starts it (`begin`) when a widget it wants to drag shows up in `Interaction.dragging`, with a
+/// payload kind; `step` then follows the pointer to the topmost node that accepts that kind,
+/// and on release reports the drop. The payload itself stays with the application.
+pub const DragDrop = struct {
+    /// Id being dragged, or 0.
+    source: u32 = 0,
+    /// The payload's kind bits, as given to `begin`.
+    kind: u32 = 0,
+    /// Id of the accepting node under the pointer, or 0; for drop highlighting.
+    over: u32 = 0,
+    /// Its row in the tree `step` read, or `none`.
+    over_node: u32 = none,
+    /// Id the payload was dropped on this frame, or 0. A release elsewhere drops nothing.
+    dropped: u32 = 0,
+    /// The kind of what was dropped this frame (`kind` at the drop), or 0.
+    dropped_kind: u32 = 0,
+
+    /// Starts dragging `source` (an id) with payload `kind`. Ignored while another drag runs.
+    pub fn begin(d: *DragDrop, source: types.Id, kind: u32) void {
+        const idle = d.source == 0;
+        d.source = simd.selU(idle, @backingInt(source), d.source);
+        d.kind = simd.selU(idle, kind, d.kind);
+    }
+    /// Drops nothing and ends the drag (Escape, say).
+    pub fn cancel(d: *DragDrop) void {
+        d.source = 0;
+        d.kind = 0;
+        d.over = 0;
+        d.over_node = none;
+    }
+
+    /// Advances by one frame, after `it.step(prev, in)`. The source and its subtree are never
+    /// their own target. The drag ends on the frame `it` releases the source, with `dropped`
+    /// set, or when `it` stops dragging it for any other reason.
+    pub fn step(d: *DragDrop, it: *const Interaction, prev: *const Tree, tg: *const Targets, in: *const Input) void {
+        const c = &prev.c;
+        const src = prev.find(@fromBackingInt(d.source));
+        const src_lo = simd.selU(src != none, src, 0);
+        // Address select, then load (a select on the loaded `end` became a branch).
+        const end_at = [2]*const u32{ &zero_id, &c.end[@min(src, prev.cap - 1)] };
+        const src_hi = end_at[@intFromBool(src != none)].*;
+        const px = simd.f(in.pointer[0]);
+        const py = simd.f(in.pointer[1]);
+        const kind = simd.u(d.kind);
+        var best = simd.u(none);
+        const n = simd.padded(prev.len);
+        var i: usize = 0;
+        while (i < n) : (i += W) {
+            const inside = (px >= simd.loadF(c.vis[0], i)) & (px < simd.loadF(c.vis[2], i)) &
+                (py >= simd.loadF(c.vis[1], i)) & (py < simd.loadF(c.vis[3], i));
+            const r = simd.iota + simd.u(@intCast(i));
+            const own = (r >= simd.u(src_lo)) & (r < simd.u(src_hi));
+            const take = inside & ((simd.loadU(tg.c.accept, i) & kind) != simd.u(0)) & !own;
+            best = @select(u32, take, r, best);
+        }
+        // Latest row wins, as in `route`. With no drag `kind` is 0 and nothing accepts it.
+        const node = @reduce(.Max, best +% simd.u(1)) -% 1;
+        const id_at = [2]*const u32{ &zero_id, &c.id[@min(node, prev.cap - 1)] };
+        const over = id_at[@intFromBool(node != none)].*;
+        const active = d.source != 0;
+        const released = simd.andB(active, it.released == d.source);
+        d.dropped = simd.selU(released, over, 0);
+        d.dropped_kind = simd.selU(simd.andB(released, over != 0), d.kind, 0);
+        const going = simd.andB(active, simd.andB(!released, it.dragging == d.source));
+        d.over = simd.selU(going, over, 0);
+        d.over_node = simd.selU(going, node, none);
+        d.source = simd.selU(going, d.source, 0);
+        d.kind = simd.selU(going, d.kind, 0);
+    }
+};
+
 /// What `route` reads as the id when an axis has no target.
 const zero_id: u32 = 0;
 
@@ -478,4 +571,121 @@ test "Pinch: Ctrl+wheel zooms about the pointer; a plain wheel does not" {
     try testing.expectApproxEqAbs(@as(f32, 1.0 / 1.1), p.scale, 1e-5);
     p.step(&.{ .wheel = .{ 0, 3 } });
     try testing.expectEqual(1, p.scale);
+}
+
+/// root 300 x 100, across: a list of two cards (40 x 40 each, stacked), a "files" bin and a
+/// "trash" bin (80 x 80 each).
+const Board = struct {
+    raw: [64 * 1024]u8 align(mem.column_align) = undefined,
+    t: Tree = undefined,
+    tg: Targets = undefined,
+
+    const card = 1;
+    const folder = 2;
+
+    fn build(f: *Board) void {
+        const layout = @import("../layout/layout.zig");
+        const Texts = @import("../core/texts.zig").Texts;
+        var carver: mem.Carver = .{ .buf = &f.raw };
+        f.t = Tree.init(&carver, 16);
+        var tx = Texts.init(&carver, 1);
+        f.tg = Targets.init(&carver, 16);
+        const t = &f.t;
+        const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(300), .px(100) }, .gap = 10 });
+        const list = t.push(root, types.Id.from("list"), &.{});
+        // The list accepts cards too: dropping a card back onto the list (not onto itself).
+        f.tg.c.accept[list] = card;
+        for ([_]types.Id{ types.Id.from("c1"), types.Id.from("c2") }) |id| {
+            const n = t.push(list, id, &.{ .size = .{ .px(40), .px(40) } });
+            t.seal(n);
+            t.c.sense[n] = @bitCast(types.Sense.any);
+        }
+        t.seal(list);
+        const files = t.push(root, types.Id.from("files"), &.{ .size = .{ .px(80), .px(80) } });
+        t.seal(files);
+        f.tg.c.accept[files] = card | folder;
+        const trash = t.push(root, types.Id.from("trash"), &.{ .size = .{ .px(80), .px(80) } });
+        t.seal(trash);
+        f.tg.c.accept[trash] = folder;
+        t.seal(root);
+        layout.run(t, &tx, .{ 300, 100 });
+    }
+};
+
+test "DragDrop: a card dragged over the bins highlights the one that accepts it and drops there" {
+    var f: Board = .{};
+    f.build();
+    const Replay = @import("../core/input.zig").Replay;
+    var text: [8]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    // Cards at x 0..40 (c1 y 0..40, c2 y 40..80); files at 50..130, trash at 140..220.
+    var r: Replay = .{ .src =
+        \\frame
+        \\pointer 20 20
+        \\buttons left
+        \\# still on c1 itself, then on c2 (the list accepts cards; c2 does not)
+        \\frame
+        \\pointer 20 30
+        \\frame
+        \\pointer 20 60
+        \\# trash does not take cards; files does
+        \\frame
+        \\pointer 180 50
+        \\frame
+        \\pointer 90 50
+        \\frame
+        \\buttons
+        \\frame
+        \\pointer 100 50
+    };
+    var it: Interaction = .{};
+    var dd: DragDrop = .{};
+    var over: [8]u32 = undefined;
+    var dropped: [8]u32 = undefined;
+    var n: usize = 0;
+    while (try r.next(buf)) |in| : (n += 1) {
+        it.step(&f.t, in);
+        // The app drags cards: when one starts dragging, it begins a drop with kind `card`.
+        if (it.dragging != 0 and dd.source == 0 and it.pressed == 0) dd.begin(@fromBackingInt(it.dragging), Board.card);
+        dd.step(&it, &f.t, &f.tg, in);
+        over[n] = dd.over;
+        dropped[n] = dd.dropped;
+    }
+    const list = @backingInt(types.Id.from("list"));
+    const files = @backingInt(types.Id.from("files"));
+    try testing.expectEqual(7, n);
+    // Frame 1 starts the drag (moved 10 > 4) over c1 itself: c1 is never its own target, so
+    // the list around it is. Frame 2 is over c2, which accepts nothing: the list again.
+    try testing.expectEqualSlices(u32, &.{ 0, list, list, 0, files, 0, 0 }, over[0..n]);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0, 0, files, 0 }, dropped[0..n]);
+    try testing.expectEqual(0, dd.source);
+}
+
+test "DragDrop: release on nothing drops nothing; cancel ends it; one drag at a time" {
+    var f: Board = .{};
+    f.build();
+    var it: Interaction = .{ .dragging = @backingInt(types.Id.from("c1")) };
+    var dd: DragDrop = .{};
+    dd.begin(types.Id.from("c1"), Board.folder);
+    dd.begin(types.Id.from("c2"), Board.card);
+    try testing.expectEqual(@backingInt(types.Id.from("c1")), dd.source);
+    try testing.expectEqual(Board.folder, dd.kind);
+    // A folder over files and over trash: both accept it.
+    dd.step(&it, &f.t, &f.tg, &.{ .pointer = .{ 180, 50 } });
+    try testing.expectEqual(@backingInt(types.Id.from("trash")), dd.over);
+    // Released in the gap between the bins.
+    it.released = it.dragging;
+    dd.step(&it, &f.t, &f.tg, &.{ .pointer = .{ 135, 50 } });
+    try testing.expectEqual(0, dd.dropped);
+    try testing.expectEqual(0, dd.dropped_kind);
+    try testing.expectEqual(0, dd.source);
+    // Cancel.
+    it.released = 0;
+    dd.begin(types.Id.from("c1"), Board.card);
+    dd.cancel();
+    dd.step(&it, &f.t, &f.tg, &.{ .pointer = .{ 90, 50 } });
+    try testing.expectEqual(0, dd.over);
+    try testing.expectEqual(0, dd.source);
 }

@@ -28,3 +28,6 @@ export fn p_wheel_route(t: *const Tree, sc: *const lcgr.gestures.Scrollables, in
 export fn p_kinetic_step(k: *lcgr.gestures.Kinetic, dt: f32) f32 {
     return k.step(dt);
 }
+export fn p_drop_step(d: *lcgr.gestures.DragDrop, it: *const lcgr.interaction.Interaction, prev: *const Tree, tg: *const lcgr.gestures.Targets, in: *const Input) void {
+    d.step(it, prev, tg, in);
+}
