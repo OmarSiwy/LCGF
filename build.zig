@@ -496,6 +496,7 @@ pub fn build(b: *std.Build) void {
     }) });
     const accesskit_step = b.step("accesskit", "Test the AccessKit bridge against AccessKit's C library (ci/run.sh accesskit)");
     const accesskit_build_step = b.step("accesskit-build", "Compile and link the AccessKit bridge tests without running them");
+    const accesskit_smoke_step = b.step("accesskit-smoke", "Build zig-out/bin/accesskit-smoke (the example on AT-SPI, Linux)");
     const ak_os = target.result.os.tag;
     const ak_arch: ?[]const u8 = switch (target.result.cpu.arch) {
         .x86_64 => "x86_64",
@@ -522,6 +523,20 @@ pub fn build(b: *std.Build) void {
             .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
             // Rust panics unwind: libunwind is Zig's own, built for the target.
             else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+        }
+        if (ak_os == .linux) {
+            // The example on AT-SPI with no window, for the screen-reader smoke test
+            // (src/a11y/accesskit/smoke.zig, ci/jobs/accesskit-linux.sh).
+            const smoke = b.addExecutable(.{ .name = "accesskit-smoke", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/a11y/accesskit/smoke.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            smoke.root_module.addObjectFile(ak.path(ak_lib.?));
+            for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| smoke.root_module.linkSystemLibrary(l, .{});
+            accesskit_smoke_step.dependOn(&b.addInstallArtifact(smoke, .{}).step);
         }
         accesskit_step.dependOn(&b.addRunArtifact(accesskit_tests).step);
         accesskit_build_step.dependOn(&accesskit_tests.step);

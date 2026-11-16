@@ -23,10 +23,12 @@ const scheduler = lcgr.scheduler;
 /// The platform adapters: each takes the bridge and the shell's window.
 pub const windows = @import("windows.zig");
 pub const macos = @import("macos.zig");
+pub const unix = @import("unix.zig");
 
 test {
     _ = windows;
     _ = macos;
+    _ = unix;
 }
 
 /// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
@@ -141,6 +143,8 @@ pub const Bridge = struct {
     focus: u32 = 0,
     /// The top-level rows' `kids_hash` the window was last sent with.
     top_hash: u32 = 0,
+    /// Updates sent: nonzero once assistive technology is connected and has the tree.
+    sent: u32 = 0,
     // ---- requests from assistive technology
     /// Queued by the action handler on AccessKit's threads, drained by the UI with `drain`.
     queue: scheduler.Mailbox(a11y.Action),
@@ -326,6 +330,7 @@ pub const Bridge = struct {
     /// AccessKit's tree update factory, called by the adapter's update on the UI thread.
     pub fn factory(userdata: ?*anyopaque) callconv(.c) ?*c.TreeUpdate {
         const b: *Bridge = @ptrCast(@alignCast(userdata.?));
+        b.sent +%= 1;
         return if (b.full.swap(false, .acq_rel)) b.fullUpdate() else b.changesUpdate();
     }
 };
