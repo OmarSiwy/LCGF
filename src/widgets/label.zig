@@ -85,7 +85,7 @@ pub const Page = struct {
     };
     pub const spec = spec_zig.col(panel, .{ ct.label(th, .title), ct.label(th, .layer), ct.label(th, .exposure) });
     pub const Ui = base.ComptimeUi(State, spec, th);
-    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/label.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/label-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 2 } };
@@ -125,7 +125,7 @@ fn Pair(comptime th: Theme) type {
         };
         pub const State = struct { title: []const u8 = "Title", layer: []const u8 = "Layer 0" };
         pub const Ui = base.ComptimeUi(State, spec_zig.col(col, .{ ct.label(th, .title), ct.label(th, .layer) }), th);
-        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
 
@@ -181,7 +181,7 @@ const Between = struct {
     };
     pub const State = struct { a: bool = false, a_text: []const u8 = "A", text: []const u8 = "between", b: bool = false, b_text: []const u8 = "B" };
     pub const Ui = base.ComptimeUi(State, spec_zig.row(row, .{ base.ct.checkbox(th, .a, .a, .a_text), ct.label(th, .text), base.ct.checkbox(th, .b, .b, .b_text) }), th);
-    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
 };
 
 var between: Between.Run = .{};
@@ -194,8 +194,8 @@ test "label input: hit testing passes through it, Tab skips it, and a click on i
     var in: Input = .{ .viewport = .{ 300, 60 } };
     var out = try h.frame(&in);
     const t = out.runtime.tree;
-    // Rows: root, row, box a (2, 3, 4), the label (5), box b (6, 7, 8).
-    const text_row: u32 = 5;
+    // Rows: root, row, checkbox a (row, box, dash, caption: 2 to 5), the label (6), checkbox b.
+    const text_row: u32 = 6;
     try testing.expectEqual(@as(u32, 0), t.c.sense[text_row]);
     const r = t.rect(text_row);
     const mid = [2]f32{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };

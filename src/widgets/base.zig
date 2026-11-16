@@ -189,13 +189,8 @@ pub const labelText = label_zig.labelText;
 pub const buttonStyle = button_zig.buttonStyle;
 pub const buttonFill = button_zig.buttonFill;
 
-pub fn checkboxStyle(th: *const Theme) Style {
-    return .{ .dir = .x, .gap = th.gap, .cross = .center, .role = .checkbox };
-}
-
-pub fn checkboxBox(th: *const Theme, value: bool) Style {
-    return .{ .size = .{ .px(16), .px(16) }, .radius = 3, .fill = th.marks()[@intFromBool(value)], .border = 1, .border_color = th.control_hot };
-}
+pub const checkboxStyle = checkbox_zig.checkboxStyle;
+pub const checkboxBox = checkbox_zig.checkboxBox;
 
 pub fn sliderTrack(th: *const Theme) Style {
     return .{ .dir = .x, .size = .{ .fill, .px(8) }, .min = .{ 40, 0 }, .radius = 4, .fill = th.control, .role = .slider };
@@ -413,7 +408,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     s.value = value.value();
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &checkboxBox(&th, value == .on));
+                    const box = tb.t.push(i, .none, &checkboxBox(&th, value));
+                    next.* += 1;
+                    _ = tb.t.push(box, .none, &checkbox_zig.checkboxDash(&th, value));
+                    tb.t.seal(box);
                     ui.push(n.children[1], i, next, in);
                     tb.t.seal(i);
                 },
@@ -870,7 +868,7 @@ test "StateColors, OnOff: the theme's tables, indexed by state and value" {
     }
     // Other bits of the response do not move the index.
     try testing.expectEqual(th.control, buttonFill(&th, .{ .pressed = true, .released = true, .clicked = true, .focused = true }));
-    for ([2]bool{ false, true }, th.marks()) |v, c| try testing.expectEqual(c, checkboxBox(&th, v).fill);
+    for ([2]bool{ false, true }, th.marks()) |v, c| try testing.expectEqual(c, checkboxBox(&th, .of(v)).fill);
     // A comptime theme gives comptime tables: they can live in read-only data.
     const fills = comptime Theme.default.controlFills();
     try testing.expectEqual(th.control_hot, fills[1]);

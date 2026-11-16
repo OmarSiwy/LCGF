@@ -97,7 +97,7 @@ pub const Page = struct {
     pub const State = struct { reset_text: []const u8 = "Reset", apply_text: []const u8 = "Apply" };
     pub const spec = spec_zig.row(panel, .{ ct.button(th, .reset, .reset_text), ct.button(th, .apply, .apply_text) });
     pub const Ui = base.ComptimeUi(State, spec, th);
-    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/button.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/button-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } };
@@ -142,7 +142,7 @@ fn One(comptime th: Theme) type {
         };
         pub const State = struct { go_text: []const u8 = "Go" };
         pub const Ui = base.ComptimeUi(State, spec_zig.row(row, .{ct.button(th, .go, .go_text)}), th);
-        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
 
