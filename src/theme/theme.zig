@@ -12,6 +12,7 @@ const types = @import("../core/types.zig");
 const base = @import("../widgets/base.zig");
 const simd = @import("../core/simd.zig");
 const DrawList = @import("../draw/draw_list.zig").DrawList;
+const spec_zig = @import("../comptime/spec.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Mono = @import("../text/protocol.zig").Mono;
@@ -172,6 +173,18 @@ pub fn widgets(tok: *const Tokens) base.Theme {
         .pad = tok.spaceAt(.lg),
         .gap = tok.spaceAt(.md),
     };
+}
+
+// ---- per-widget overrides ---------------------------------------------------------------------
+
+/// `th` with the fields of `patch` replaced: `override(th, .{ .accent = red, .pad = 12 })`. Pass
+/// the result to one widget to restyle that widget alone; the theme is a value, so an override
+/// is a copy, with nothing registered and nothing to undo. A field `base.Theme` lacks is a
+/// compile error.
+pub fn override(th: base.Theme, patch: anytype) base.Theme {
+    var out = th;
+    inline for (@typeInfo(@TypeOf(patch)).@"struct".field_names) |name| @field(out, name) = @field(patch, name);
+    return out;
 }
 
 // ---- comptime themes ------------------------------------------------------------------------
@@ -664,4 +677,57 @@ test "theme switch: text colour and size inherit down the tree" {
         const note = d.runs[3].rect;
         try testing.expect(title[3] - title[1] > note[3] - note[1]);
     }
+}
+
+/// One button in the theme, one with an override, in both front ends.
+fn OverridePage(comptime th: base.Theme, comptime patch: anytype) type {
+    const odd = override(th, patch);
+    return struct {
+        pub const App = struct {
+            pub fn build(_: *App, f: *Frame) void {
+                _ = f.open(.from("row"), .{ .dir = .x, .gap = 8 });
+                _ = base.button(f, &th, .from("a"), "Same");
+                _ = base.button(f, &odd, .from("b"), "Same");
+                f.close();
+            }
+        };
+        pub const State = struct { a_text: []const u8 = "Same", b_text: []const u8 = "Same" };
+        pub const spec = spec_zig.row(.{ .gap = 8 }, .{ base.ct.button(th, .a, .a_text), base.ct.button(odd, .b, .b_text) });
+        pub const Run = base.Harness(App, base.ComptimeUi(State, spec, th), .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 4 });
+    };
+}
+
+test "theme switch: an override restyles one widget, in both front ends" {
+    inline for (.{ Dark.theme, Light.theme }) |th| {
+        const P = OverridePage(th, .{ .pad = 14, .radius = 0 });
+        const S = struct {
+            var h: P.Run = .{};
+        };
+        S.h.init();
+        const in: Input = .{ .viewport = .{ 400, 100 } };
+        const out = try S.h.frame(&in); // both front ends agree
+        const t = out.runtime.tree;
+        const a = t.rect(t.find(.from("a")));
+        const b = t.rect(t.find(.from("b")));
+        // Same caption; only b's pad (14 instead of 8) and radius (0) changed.
+        // Edges snap to whole pixels, so widths agree to within one.
+        try testing.expectApproxEqAbs(a.w() + 2 * 6, b.w(), 1);
+        try testing.expectEqual(a.h() + 2 * 6, b.h());
+        try testing.expectEqual(th.radius, t.c.look[t.find(.from("a"))].radius);
+        try testing.expectEqual(@as(f32, 0), t.c.look[t.find(.from("b"))].radius);
+    }
+    // Colours too, in the runtime front end (its widgets take the whole theme per call).
+    var ctx = try context.Context.init(&inherit_buffer, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 6 });
+    const in: Input = .{ .viewport = .{ 400, 100 } };
+    const red = override(Dark.theme, .{ .control = Color.rgb(200, 0, 0), .text = Color.rgb(1, 2, 3) });
+    var f = ctx.begin(&in);
+    _ = base.button(&f, &Dark.theme, .from("a"), "A");
+    _ = base.button(&f, &red, .from("b"), "B");
+    const out = f.end(.{});
+    const t = out.tree;
+    try testing.expectEqual(Dark.theme.control.bitsOf(), t.c.look[t.find(.from("a"))].fill);
+    try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), t.c.look[t.find(.from("b"))].fill);
+    try testing.expectEqual(Dark.theme.text.bitsOf(), out.draw.runs[0].color);
+    try testing.expectEqual(Color.rgb(1, 2, 3).bitsOf(), out.draw.runs[1].color);
+    try testing.expectEqual(Dark.theme, override(Dark.theme, .{}));
 }
