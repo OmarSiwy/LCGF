@@ -257,6 +257,24 @@ inline fn nineAxis(pos: F, size: f32, lo: f32, hi: f32, src_lo: f32, src_hi: f32
     return @select(f32, pos < simd.f(lo), start, @select(f32, pos > simd.f(size - hi), end, mid));
 }
 
+/// The shader's `floor_div`: floor(num / den) for den > 0, settled by products.
+inline fn floorDiv(num: F, den: F) F {
+    const q = @floor(num / den);
+    const one = simd.f(1);
+    const up: F = @floatFromInt(@intFromBool((q + one) * den <= num));
+    const down: F = @floatFromInt(@intFromBool(q * den > num));
+    return q + up - down;
+}
+
+/// The shader's `texel_centre`: the uv of the nearest texel's centre along one axis.
+inline fn texelCentre(pos: F, size: f32, uv0: f32, uv1: f32, n: f32) F {
+    const s = @max(size, 1e-6);
+    const a = uv0 * n;
+    const whole = @floor(a);
+    const k = simd.f(whole) + floorDiv(simd.f((a - whole) * s) + simd.f((uv1 - uv0) * n) * pos, simd.f(s));
+    return (@min(@max(k, simd.f(0)), simd.f(n - 1)) + simd.f(0.5)) / simd.f(n);
+}
+
 /// Nearest texel at (u, v), coordinates clamped to the edge; returns r, g, b, a in 0..1.
 inline fn sample(img: Image, u: F, v: F) [4]F {
     const wf: f32 = @floatFromInt(img.width);
@@ -304,6 +322,11 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
     // in the node's own space, which is what the interpolated `local` and `uv` are.
     const a, const b, const c, const d, const tx, const ty = q.xform;
     const inv = 1 / (a * d - b * c);
+    // The shader's `to_rect`: pixel centre (physical) to the offset from the rect's top left.
+    const k_rect = 1 / ((a * d - b * c) * scale);
+    const mr = [4]f32{ d * k_rect, -b * k_rect, -c * k_rect, a * k_rect };
+    const off_x = -(mr[0] * (tx * scale) + mr[2] * (ty * scale)) - x0;
+    const off_y = -(mr[1] * (tx * scale) + mr[3] * (ty * scale)) - y0;
     var lo: @Vector(2, f32) = @splat(std.math.inf(f32));
     var hi: @Vector(2, f32) = @splat(-std.math.inf(f32));
     for ([_][2]f32{ g0, .{ g1[0], g0[1] }, .{ g0[0], g1[1] }, g1 }) |corner| {
@@ -325,8 +348,8 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
     const border = q.border;
     const has_border: f32 = @floatFromInt(@intFromBool(border >= 0.001));
     const uv = q.uv;
-    const inv_w = 1 / @max(x1 - x0, 1e-6);
-    const inv_h = 1 / @max(y1 - y0, 1e-6);
+    const tex_w: f32 = @floatFromInt(img.width);
+    const tex_h: f32 = @floatFromInt(img.height);
     // Linear gradient: direction and the reach to the corners it meets.
     const angle: f32 = @bitCast(p[2]);
     const dir_x = @cos(angle);
@@ -354,10 +377,15 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
     const inv_scale = 1 / scale;
     for (box[1]..box[3]) |y| {
         const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
-        const sy = simd.f((@as(f32, @floatFromInt(y)) + 0.5) * inv_scale);
+        const fy = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
+        const sy = fy * simd.f(inv_scale);
         var x = std.mem.alignBackward(u32, box[0], W);
         while (x < box[2]) : (x += W) {
-            const sx = (@as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5)) * simd.f(inv_scale);
+            const fx = @as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5);
+            const sx = fx * simd.f(inv_scale);
+            // The shader's `rect_pos`, from exact inputs only.
+            const px = simd.f(mr[0]) * fx + simd.f(mr[2]) * fy + simd.f(off_x);
+            const py = simd.f(mr[1]) * fx + simd.f(mr[3]) * fy + simd.f(off_y);
             // The point in the quad's own space; pixels whose centre is outside the drawn
             // geometry get no fragment.
             const ox = sx - simd.f(tx);
@@ -376,11 +404,11 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             // Border pattern: how much of the border is drawn here.
             var pattern = simd.f(1);
             if (kind == .dashed or kind == .dotted) {
-                const ex = simd.f(hx) - @abs(lx);
-                const ey = simd.f(hy) - @abs(ly);
-                const s = @select(f32, ex < ey, ly + simd.f(hy), lx + simd.f(hx));
+                const ex = simd.f(hx) - @abs(px - simd.f(hx));
+                const ey = simd.f(hy) - @abs(py - simd.f(hy));
+                const s = @select(f32, ex < ey, py, px);
                 const across = @min(ex, ey);
-                const at = s - @floor(s / simd.f(period)) * simd.f(period);
+                const at = s - floorDiv(s, simd.f(period)) * simd.f(period);
                 pattern = if (kind == .dashed)
                     sat((@min(at, simd.f(dash) - at) + simd.f(0.5)) * simd.f(scale))
                 else
@@ -389,8 +417,8 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
 
             // Material: the fill or its gradient, times the texture.
-            var tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * (qx - simd.f(x0)) * simd.f(inv_w);
-            var tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * (qy - simd.f(y0)) * simd.f(inv_h);
+            var tu = texelCentre(px, 2 * hx, uv[0], uv[2], tex_w);
+            var tv = texelCentre(py, 2 * hy, uv[1], uv[3], tex_h);
             if (kind == .nine_slice) {
                 const fu = nineAxis(lx + simd.f(hx), 2 * hx, dst[0], dst[2], src[0], src[2]);
                 const fv = nineAxis(ly + simd.f(hy), 2 * hy, dst[1], dst[3], src[1], src[3]);

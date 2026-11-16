@@ -11,7 +11,7 @@ pub const stock_material = @embedFile("material.wgsl");
 /// The full quad shader around `material_fn`, a WGSL `fn material(in: Frag) -> vec4f`.
 /// `in.params` carries `Style.params`; `in.local` is the pixel offset from the quad's centre and
 /// `in.half` its half size, both in logical pixels. quad.wgsl's helpers (`gradient`, `nine_uv`,
-/// `rounded_box`, `tex`, `samp`, `globals`) are in scope.
+/// `nearest_uv`, `rounded_box`, `tex`, `samp`, `globals`) are in scope.
 pub fn shader(comptime material_fn: []const u8) [:0]const u8 {
     return @embedFile("quad.wgsl") ++ material_fn;
 }
@@ -54,6 +54,9 @@ pub const Variant = struct { name: []const u8, wgsl: [:0]const u8 };
 pub const variants = [_]Variant{
     .{ .name = "stock", .wgsl = wgsl },
     .{ .name = "example", .wgsl = shader(example_material) },
+    // The theme lane's example material (src/theme/sheen.wgsl), embedded by path so render code
+    // does not import the theme module.
+    .{ .name = "sheen", .wgsl = shader(@embedFile("../../theme/sheen.wgsl")) },
 };
 
 pub const Attr = struct { location: u32, offset: u32, format: []const u8 };

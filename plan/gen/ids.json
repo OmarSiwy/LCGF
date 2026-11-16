@@ -567,6 +567,7 @@
 "text-layout\ttext: add text layout tests": "C0333",
 "text-layout\ttext: break shaped runs into lines": "C0327",
 "text-layout\ttext: plug the full stack into the measure / wrap protocol": "C0332",
+"text-layout\ttext: reorder each line's glyphs by bidi level for display": "C0850",
 "text-protocol\ttext: add Mono.measure with SIMD": "C0292",
 "text-protocol\ttext: add Mono.quads for a byte-indexed atlas": "C0294",
 "text-protocol\ttext: add Mono.wrap with SIMD": "C0293",

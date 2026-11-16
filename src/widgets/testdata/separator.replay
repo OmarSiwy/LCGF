@@ -1,0 +1,22 @@
+# Recorded input for the separator example page (widgets/separator.zig, `Page`), at 320 x 200
+# in the default theme: the horizontal rule at 8..192 x 34..35, the vertical one at 50..51 x
+# 68..86 (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: press on the horizontal rule
+frame
+pointer 100 34
+buttons left
+# 2: release: nothing
+frame
+buttons
+# 3: press on the vertical rule
+frame
+pointer 50 77
+buttons left
+# 4: release: nothing
+frame
+buttons

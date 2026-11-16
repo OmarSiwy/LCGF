@@ -1,0 +1,46 @@
+# Recorded input for the colour picker example (widgets/colorpicker.zig, `Example`), at 320 x 240
+# in the default theme: the area at x 16..176, y 42..162 (as laid out, snapped to whole pixels), the
+# hue track at y 168..180 and the opacity track at y 186..198, both across x 16..176. Keys are USB HID usage ids: 79
+# Right, 82 Up, 77 End.
+# 0: rest
+frame
+viewport 320 240
+dt 0.016
+pointer 300 225
+# 1: over the area, a quarter across and a quarter down
+frame
+pointer 56 72
+# 2: press: saturation 0.25, value 0.75
+frame
+buttons left
+# 3: drag past the bottom right corner: saturation 1, value 0
+frame
+pointer 200 200
+# 4: release; the area keeps focus
+frame
+buttons
+# 5: Up twice: value 0.02
+frame
+press 82
+press 82
+# 6: press the hue track at its middle: hue 0.5
+frame
+pointer 96 174
+buttons left
+# 7: release
+frame
+buttons
+# 8: End: hue 1
+frame
+press 77
+# 9: press the opacity track
+frame
+pointer 100 192
+buttons left
+# 10: drag off its left end: opacity 0
+frame
+pointer 0 192
+# 11: release, then Right: opacity 0.01
+frame
+buttons
+press 79

@@ -12,6 +12,83 @@
             // Only `zig build harfbuzz` needs it.
             .lazy = true,
         },
+        // wgpu-native, one release archive per major and host target; fetched only for the
+        // version `-Dwgpu-native` picks (src/render/wgpu/, ci/run.sh wgpu).
+        .wgpu_native_v29_linux_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-linux-x86_64-release.zip",
+            .hash = "N-V-__8AAAVLrgM9jWFLs7n4rHyodpjIYxtBBE1No8nK0pRz",
+            .lazy = true,
+        },
+        .wgpu_native_v29_linux_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-linux-aarch64-release.zip",
+            .hash = "N-V-__8AACvXrAO11f5LA-Qfgm2C0XyWNhS_0N30HTL-Y5pQ",
+            .lazy = true,
+        },
+        .wgpu_native_v29_macos_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-macos-x86_64-release.zip",
+            .hash = "N-V-__8AAFWheQIu8DV1xiTixrDsCJ0xr7-Ssy-XhEIkgx5u",
+            .lazy = true,
+        },
+        .wgpu_native_v29_macos_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-macos-aarch64-release.zip",
+            .hash = "N-V-__8AAAUNfQJBPHGd3KMhFvl4WLpzHDx9rFkwSf2rFVhr",
+            .lazy = true,
+        },
+        .wgpu_native_v29_windows_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-windows-x86_64-gnu-release.zip",
+            .hash = "N-V-__8AAIV6GgPzrhI9UgYVJuTvVgZIm4n3bPc6dMAOpPYl",
+            .lazy = true,
+        },
+        .wgpu_native_v27_linux_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-linux-x86_64-release.zip",
+            .hash = "N-V-__8AAFaxzwMLGqi40Z0MHLd-0zSAmSfFRKyYqbVthzGv",
+            .lazy = true,
+        },
+        .wgpu_native_v27_linux_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-linux-aarch64-release.zip",
+            .hash = "N-V-__8AAHCUzgO0Olq9GH85aAwI3wBk9tKWwm5kS7pMj0bj",
+            .lazy = true,
+        },
+        .wgpu_native_v27_macos_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-macos-x86_64-release.zip",
+            .hash = "N-V-__8AAHKAeAKl8zoz6qBN8wqdJV_iyjSjoa7WnF-LBG-1",
+            .lazy = true,
+        },
+        .wgpu_native_v27_macos_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-macos-aarch64-release.zip",
+            .hash = "N-V-__8AAFrwdALczQGx7UyaZHPULiPwNNY3jid-iCfW3pWn",
+            .lazy = true,
+        },
+        .wgpu_native_v27_windows_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-windows-x86_64-gnu-release.zip",
+            .hash = "N-V-__8AAAbdBgPG_GCWLhyX5luKipfZab5bSXgeOCm3czTm",
+            .lazy = true,
+        },
+        // Khronos Vulkan-Headers: vulkan_core.h, translated by build.zig for the Vulkan back end
+        // (src/render/vk/). Headers only; the loader is the platform's libvulkan, opened at run
+        // time. Fetched only for the vk steps.
+        .vulkan_headers = .{
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz",
+            .hash = "N-V-__8AABJ5QgLfX-rcpaOGlg1YXcabW-m5cl5HEKkRsi3f",
+            .lazy = true,
+        },
+        // CLDR 49 JSON (unicode-org/cldr-json, npm packages): only `zig build i18n-cldr` needs it,
+        // as the oracle for the hand-written tables in src/i18n/.
+        .cldr_core = .{
+            .url = "https://registry.npmjs.org/cldr-core/-/cldr-core-49.0.0.tgz",
+            .hash = "N-V-__8AAILYNQD4kL2E2hqrJ1h2FbwM0fnSlI-7zBwMevxn",
+            .lazy = true,
+        },
+        .cldr_numbers = .{
+            .url = "https://registry.npmjs.org/cldr-numbers-full/-/cldr-numbers-full-49.0.0.tgz",
+            .hash = "N-V-__8AAGP0OALJBJRQDwByYTt8ByM1lunMVUxlNqas7MGB",
+            .lazy = true,
+        },
+        .cldr_dates = .{
+            .url = "https://registry.npmjs.org/cldr-dates-full/-/cldr-dates-full-49.0.0.tgz",
+            .hash = "N-V-__8AAJ90OgUNPX1VM8Liw8V38VPsQOhantYPA5Y98dZH",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
