@@ -7,7 +7,8 @@
 //!   You:       device, queue, layer or target texture, command buffer, render pass and its
 //!              encoder, synchronisation and presentation.
 //!   Renderer:  the quad pipeline states, one shared instance buffer, the 1x1 white texture
-//!              behind `Texture.white` and its sampler.
+//!              behind `Texture.white` and the nearest sampler textures get by default. Every
+//!              texture and sampler you register stays yours.
 //!
 //! The instance buffer is shared storage the CPU writes in `prepare` and the GPU reads when
 //! the command buffer runs: the host must not call `prepare` again before the GPU has finished
@@ -63,12 +64,17 @@ pub fn RendererOver(comptime Encoder: type) type {
         contents: [*]u8 = undefined,
         white: ?Id = null,
         sampler: ?Id = null,
+        /// Registered textures and the sampler each is drawn with; entry 0 is `white`.
+        textures: [max_textures]Id = undefined,
+        samplers: [max_textures]Id = undefined,
+        texture_count: u16 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: [2]u32 = .{ 0, 0 },
         scale: f32 = 1,
         globals: Globals = .{ .viewport = .{ 0, 0 }, .scale = 1 },
         glyphs: Glyphs = .{},
 
+        pub const max_textures = 64;
         /// Metal uploads by writing shared memory: nothing to pass.
         pub const Queue = void;
         /// The render command encoder of the host's pass. At a custom command the host records
@@ -85,12 +91,14 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.contents = objc.msg([*]u8, buf, "contents", .{});
             r.white = try texture.rgba8(device, 1, 1, &.{ 255, 255, 255, 255 });
             r.sampler = try texture.sampler(device, .nearest);
+            _ = r.addTexture(r.white.?, null); // Texture.white
             return r;
         }
 
         pub fn deinit(r: *Self) void {
             for (r.pipelines[0..r.material_count]) |p| objc.release(p);
             r.material_count = 0;
+            r.texture_count = 0;
             inline for (.{ "instances", "white", "sampler" }) |name| {
                 if (@field(r, name)) |o| objc.release(o);
                 @field(r, name) = null;
@@ -107,6 +115,26 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.pipelines[i] = p;
             r.material_count = i + 1;
             return @fromBackingInt(i);
+        }
+
+        /// Texture in: makes an MTLTexture usable as `Style.texture` (or as the glyph atlas,
+        /// `Glyphs.texture`), drawn with `sampler`, or the renderer's nearest, clamped one when
+        /// null. Both stay yours, alive while a frame may sample them. Handles are indices in
+        /// registration order; `Texture.white` is 0. Past `max_textures` the last entry is
+        /// rewritten, as the prototype does.
+        pub fn addTexture(r: *Self, tex: Id, sampler: ?Id) types.Texture {
+            const i: u16 = @min(r.texture_count, max_textures - 1);
+            r.textures[i] = tex;
+            r.samplers[i] = sampler orelse r.sampler.?;
+            r.texture_count = i + 1;
+            return @fromBackingInt(i);
+        }
+
+        /// Points an existing handle at another texture (a target recreated at a new size, an
+        /// atlas that grew), keeping its sampler; nodes keep their `Style.texture`. A stale
+        /// handle clamps to the last entry.
+        pub fn setTexture(r: *Self, handle: types.Texture, tex: Id) void {
+            r.textures[@min(@backingInt(handle), r.texture_count - 1)] = tex;
         }
 
         /// Uploads the frame: both instance arrays into the shared buffer, and the globals the
@@ -133,14 +161,14 @@ pub fn RendererOver(comptime Encoder: type) type {
         /// `at` bytes, globals for both stages, texture, sampler, viewport, scissor, culling.
         /// Handles are clamped rather than checked: a stale handle draws with the last entry.
         fn bind(r: *const Self, pass: Pass, material: types.Material, tex: types.Texture, at: usize) void {
-            _ = tex; // ponytail: every texture is `white` until addTexture (next commit)
+            const t = @min(@backingInt(tex), r.texture_count - 1);
             const g = std.mem.asBytes(&r.globals);
             pass.setPipeline(r.pipelines[@min(@backingInt(material), r.material_count - 1)]);
             pass.setVertexBuffer(r.instances.?, at, msl.instance_buffer);
             pass.setVertexBytes(g, msl.globals_buffer);
             pass.setFragmentBytes(g, msl.globals_buffer);
-            pass.setFragmentTexture(r.white.?, 0);
-            pass.setFragmentSampler(r.sampler.?, 0);
+            pass.setFragmentTexture(r.textures[t], 0);
+            pass.setFragmentSampler(r.samplers[t], 0);
             const w: f64 = @floatFromInt(r.extent[0]);
             const h: f64 = @floatFromInt(r.extent[1]);
             pass.setViewport(.{ .x = 0, .y = 0, .width = w, .height = h });
@@ -250,6 +278,7 @@ pub fn recording(memory: []u8, desc: Desc) RendererOver(*Recorder) {
     r.instances = Recorder.fake(2);
     r.white = Recorder.fake(Recorder.texture_base);
     r.sampler = Recorder.fake(3);
+    _ = r.addTexture(r.white.?, null);
     return r;
 }
 
@@ -288,6 +317,48 @@ test "renderer: every conformance scene issues its draws, each with the full sta
     }
 }
 
+test "renderer: textures register in order with their samplers, clamp past the cap, re-point" {
+    var memory: [quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, .{ .max_quads = 1, .max_glyphs = 0 });
+    const linear = Recorder.fake(4);
+    const atlas = r.addTexture(Recorder.fake(2 * Recorder.texture_base), linear);
+    try testing.expectEqual(@as(u16, 1), @backingInt(atlas));
+    try testing.expectEqual(linear, r.samplers[1]);
+    try testing.expectEqual(r.sampler.?, r.samplers[0]);
+    r.setTexture(atlas, Recorder.fake(3 * Recorder.texture_base));
+    try testing.expectEqual(Recorder.fake(3 * Recorder.texture_base), r.textures[1]);
+    try testing.expectEqual(linear, r.samplers[1]);
+    for (0..RendererOver(*Recorder).max_textures + 3) |_| _ = r.addTexture(Recorder.fake(5 * Recorder.texture_base), null);
+    try testing.expectEqual(@as(u16, RendererOver(*Recorder).max_textures), r.texture_count);
+    r.setTexture(@fromBackingInt(0xffff), Recorder.fake(6 * Recorder.texture_base)); // stale: the last entry
+    try testing.expectEqual(Recorder.fake(6 * Recorder.texture_base), r.textures[RendererOver(*Recorder).max_textures - 1]);
+    try testing.expectEqual(r.white.?, r.textures[0]);
+}
+
+test "renderer: a text run samples the glyph atlas, a quad batch its own texture" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[2]); // text: batch | text | text | batch
+    var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs });
+    var glyphs = st.glyphs();
+    glyphs.texture = r.addTexture(Recorder.fake(2 * Recorder.texture_base), null);
+    r.prepare({}, &st.draw, glyphs, .{ 160, 120 }, 1);
+    var calls: [64]null_backend.Call = undefined;
+    var log: null_backend.Log = .{ .calls = &calls };
+    var rec: Recorder = .{ .log = &log, .glyphs_at = r.glyphsAt() };
+    r.render(&rec, &st.draw);
+    var bound: [4]u16 = undefined;
+    var n: usize = 0;
+    for (log.recorded()) |call| switch (call) {
+        .group => |g| if (g.index == 1) {
+            bound[n] = @backingInt(g.texture);
+            n += 1;
+        },
+        else => {},
+    };
+    try testing.expectEqualSlices(u16, &.{ 0, 1, 1, 0 }, bound[0..n]);
+}
+
 test "renderer: prepare drops quads past the capacity instead of writing past the buffer" {
     var st: conformance.Storage = .{};
     st.load(&conformance.scenes[0]); // rects: 3 quads
@@ -313,4 +384,11 @@ test "renderer: quad pipelines compile from the committed MSL on a real device" 
     for (0..max_materials + 2) |_| _ = try r.addMaterial(msl.example);
     try testing.expectEqual(@as(u16, max_materials), r.material_count);
     try testing.expectError(error.ShaderCompile, r.addMaterial("not msl"));
+    const px: [2 * 2 * 4]u8 = @splat(0x80);
+    const t = try texture.rgba8(dev.device, 2, 2, &px);
+    defer objc.release(t);
+    const s = try texture.sampler(dev.device, .linear);
+    defer objc.release(s);
+    try testing.expectEqual(@as(u16, 1), @backingInt(r.addTexture(t, s)));
+    try testing.expectEqual(@as(U, 2), objc.msg(U, t, "width", .{}));
 }
