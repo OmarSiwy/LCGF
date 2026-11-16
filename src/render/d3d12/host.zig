@@ -78,3 +78,57 @@ pub const Readback = struct {
         for (0..r.height) |y| @memcpy(px[y * row ..][0..row], p[y * r.pitch ..][0..row]);
     }
 };
+
+/// An RGBA8 texture filled with `rgba` (tight rows) through an upload buffer, left in
+/// PIXEL_SHADER_RESOURCE for sampling. Waits for the copy.
+pub fn sampled(d: *Device, once: *Once, width: u32, height: u32, rgba: []const u8) Error!*com.Resource {
+    std.debug.assert(rgba.len == @as(usize, width) * height * 4);
+    const tex = try d.createTexture(width, height, c.DXGI_FORMAT_R8G8B8A8_UNORM, false, c.D3D12_RESOURCE_STATE_COPY_DEST);
+    errdefer com.release(tex);
+    const desc = tex.getDesc();
+    var footprint: c.D3D12_PLACED_SUBRESOURCE_FOOTPRINT = undefined;
+    var total: u64 = 0;
+    d.handle.getCopyableFootprints(&desc, &footprint, &total);
+    const staging = try d.createBuffer(total, c.D3D12_HEAP_TYPE_UPLOAD);
+    defer com.release(staging);
+    const p = try staging.map(false);
+    const row = width * 4;
+    for (0..height) |y| @memcpy(p[@intCast(footprint.Offset + y * footprint.Footprint.RowPitch)..][0..row], rgba[y * row ..][0..row]);
+    staging.unmap();
+    const l = try once.begin();
+    var dst: c.D3D12_TEXTURE_COPY_LOCATION = std.mem.zeroes(c.D3D12_TEXTURE_COPY_LOCATION);
+    dst.pResource = @ptrCast(@alignCast(tex));
+    dst.Type = c.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    var src: c.D3D12_TEXTURE_COPY_LOCATION = std.mem.zeroes(c.D3D12_TEXTURE_COPY_LOCATION);
+    src.pResource = @ptrCast(@alignCast(staging));
+    src.Type = c.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.unnamed_0.PlacedFootprint = footprint;
+    l.copyTextureRegion(&dst, &src);
+    l.resourceBarrier(&.{device_mod.transition(tex, c.D3D12_RESOURCE_STATE_COPY_DEST, c.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)});
+    try once.submit(d);
+    return tex;
+}
+
+/// An offscreen RGBA8 render target and its RTV, in RENDER_TARGET between `begin` and the
+/// host's transition out.
+pub const Target = struct {
+    texture: *com.Resource,
+    heap: *com.DescriptorHeap,
+
+    pub fn init(d: *const Device, width: u32, height: u32) Error!Target {
+        const texture = try d.createTexture(width, height, c.DXGI_FORMAT_R8G8B8A8_UNORM, true, c.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        errdefer com.release(texture);
+        const heap = try d.handle.createDescriptorHeap(&.{ .Type = c.D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 1, .Flags = c.D3D12_DESCRIPTOR_HEAP_FLAG_NONE, .NodeMask = 0 });
+        d.handle.createRenderTargetView(texture, null, heap.cpuStart());
+        return .{ .texture = texture, .heap = heap };
+    }
+
+    pub fn deinit(t: *Target) void {
+        com.release(t.heap);
+        com.release(t.texture);
+    }
+
+    pub fn rtv(t: *const Target) c.D3D12_CPU_DESCRIPTOR_HANDLE {
+        return t.heap.cpuStart();
+    }
+};

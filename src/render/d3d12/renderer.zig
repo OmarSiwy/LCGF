@@ -5,7 +5,8 @@
 //! WHO OWNS WHAT
 //!   You:       device, queue, swapchain, command allocators and lists, fences, every texture
 //!              you draw into or sample, and the frame loop (frame.zig is one).
-//!   Renderer:  the root signature, the quad pipelines, and the upload ring below.
+//!   Renderer:  the root signature, the quad pipelines, the upload ring and the texture
+//!              descriptor heap below.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -58,14 +59,26 @@ pub const Renderer = struct {
     extent: [2]u32 = .{ 0, 0 },
     scale: f32 = 1,
     glyphs: Glyphs = .{},
+    /// Shader-visible CBV/SRV/UAV heap: descriptor i is the SRV of `Texture` i. Set on the
+    /// command list by every draw (a list can have one such heap bound at a time, so a host
+    /// that binds its own heap at a custom draw loses nothing: the next UI draw sets this one).
+    textures: *com.DescriptorHeap,
+    srv_stride: u32,
+    texture_count: u16 = 0,
 
-    pub fn init(d: *const Device, desc: Desc) Error!Renderer {
+    pub const max_textures = 64;
+
+    /// `white` is a 1x1 opaque white RGBA8 texture in PIXEL_SHADER_RESOURCE; it becomes
+    /// `Texture.white`.
+    pub fn init(d: *const Device, desc: Desc, white: *com.Resource) Error!Renderer {
         const root = try pipeline.rootSignature(d.handle);
         errdefer com.release(root);
         const slot_bytes = std.mem.alignForward(u64, globals_slot + (@as(u64, desc.max_quads) + desc.max_glyphs) * quad_shader.stride, globals_slot);
         const ring = try d.createBuffer(slot_bytes * desc.frames, c.D3D12_HEAP_TYPE_UPLOAD);
         errdefer com.release(ring);
         const p = try ring.map(false);
+        const heap = try d.handle.createDescriptorHeap(&.{ .Type = c.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = max_textures, .Flags = c.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, .NodeMask = 0 });
+        errdefer com.release(heap);
         var r: Renderer = .{
             .desc = desc,
             .root = root,
@@ -73,9 +86,12 @@ pub const Renderer = struct {
             .mapped = p[0..@intCast(slot_bytes * desc.frames)],
             .ring_address = ring.getGPUVirtualAddress(),
             .slot_bytes = slot_bytes,
+            .textures = heap,
+            .srv_stride = d.handle.getDescriptorHandleIncrementSize(c.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
         };
         errdefer r.deinit();
         _ = try r.addMaterial(d, pipeline.stock_hlsl); // Material.solid
+        _ = r.addTexture(d, white); // Texture.white
         return r;
     }
 
@@ -83,6 +99,7 @@ pub const Renderer = struct {
     pub fn deinit(r: *Renderer) void {
         for (r.pipelines[0..r.material_count]) |p| com.release(p);
         r.material_count = 0;
+        com.release(r.textures);
         r.ring.unmap();
         com.release(r.ring);
         com.release(r.root);
@@ -99,6 +116,52 @@ pub const Renderer = struct {
         r.pipelines[i] = p;
         r.material_count = i + 1;
         return @fromBackingInt(i);
+    }
+
+    /// Texture in: makes a 2D texture (in PIXEL_SHADER_RESOURCE, one mip) usable as
+    /// `Style.texture`. The texture stays yours, alive while a frame may sample it. Handles are
+    /// indices in registration order; `Texture.white` is 0. Past `max_textures` the last entry
+    /// is rewritten, as the prototype does; the GPU must be done with frames that sampled it
+    /// (a descriptor in a shader-visible heap is read when the GPU executes, not when recorded).
+    pub fn addTexture(r: *Renderer, d: *const Device, texture: *com.Resource) types.Texture {
+        const i: u16 = @min(r.texture_count, max_textures - 1);
+        writeTexture(r, d, i, texture);
+        r.texture_count = i + 1;
+        return @fromBackingInt(i);
+    }
+
+    /// Points an existing handle at another texture (a target recreated at a new size, an atlas
+    /// that grew); nodes keep their `Style.texture`. Same rule as `addTexture`. A stale handle
+    /// clamps to the last entry.
+    pub fn setTexture(r: *Renderer, d: *const Device, texture: types.Texture, res: *com.Resource) void {
+        writeTexture(r, d, @min(@backingInt(texture), r.texture_count - 1), res);
+    }
+
+    fn writeTexture(r: *const Renderer, d: *const Device, i: u16, res: *com.Resource) void {
+        var srv: c.D3D12_SHADER_RESOURCE_VIEW_DESC = std.mem.zeroes(c.D3D12_SHADER_RESOURCE_VIEW_DESC);
+        srv.Format = res.getDesc().Format;
+        srv.ViewDimension = c.D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = c.D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.unnamed_0.Texture2D = .{ .MostDetailedMip = 0, .MipLevels = 1, .PlaneSlice = 0, .ResourceMinLODClamp = 0 };
+        d.handle.createShaderResourceView(res, &srv, device_mod.cpuAt(r.textures.cpuStart(), r.srv_stride, i));
+    }
+
+    /// Full state, every draw (iface.zig, "Full state rebinding"): root signature, descriptor
+    /// heap, pipeline, globals, texture table, topology, the instance buffer at this frame's
+    /// slot, viewport and scissor. The render target is the host's: it set it when it began
+    /// the pass. Handles are clamped rather than checked: a stale handle draws with the last
+    /// valid entry.
+    fn bind(r: *const Renderer, l: *com.GraphicsCommandList, material: types.Material, texture: types.Texture, at: u64, count: u64) void {
+        l.setGraphicsRootSignature(r.root);
+        l.setDescriptorHeaps(&.{r.textures});
+        l.setPipelineState(r.pipelines[@min(@backingInt(material), r.material_count - 1)]);
+        l.setGraphicsRootConstantBufferView(pipeline.root_globals, r.ring_address + r.base);
+        const t: u64 = @min(@backingInt(texture), r.texture_count - 1);
+        l.setGraphicsRootDescriptorTable(pipeline.root_texture, .{ .ptr = r.textures.gpuStart().ptr + t * r.srv_stride });
+        l.iaSetPrimitiveTopology(c.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        l.iaSetVertexBuffer(.{ .BufferLocation = r.ring_address + r.base + at, .SizeInBytes = @intCast(count * quad_shader.stride), .StrideInBytes = quad_shader.stride });
+        l.rsSetViewport(.{ .TopLeftX = 0, .TopLeftY = 0, .Width = @floatFromInt(r.extent[0]), .Height = @floatFromInt(r.extent[1]), .MinDepth = 0, .MaxDepth = 1 });
+        l.rsSetScissorRect(.{ .left = 0, .top = 0, .right = @intCast(r.extent[0]), .bottom = @intCast(r.extent[1]) });
     }
 
     /// Offsets inside a slot.
@@ -132,15 +195,46 @@ pub const Renderer = struct {
         r.scale = scale;
         r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
     }
+
+    /// The host's command list, recording, with its render target set (and cleared, if it
+    /// wants) for the pass.
+    pub const Pass = *com.GraphicsCommandList;
+
+    /// One instanced draw for a run of quads.
+    pub fn drawBatch(r: *const Renderer, l: Pass, batch: draw_list.Batch) void {
+        r.bind(l, batch.material, batch.texture, r.quadsAt(), r.desc.max_quads);
+        l.drawInstanced(4, batch.count, 0, batch.first);
+    }
+
+    /// One instanced draw for a text run's glyphs.
+    pub fn drawText(r: *const Renderer, l: Pass, run: u32) void {
+        r.bind(l, .solid, r.glyphs.texture, r.glyphsAt(), r.desc.max_glyphs);
+        l.drawInstanced(4, r.glyphs.count[run], 0, r.glyphs.first[run]);
+    }
+
+    /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
+    /// `iface.drawUntilCustom` and draw each one yourself.
+    pub fn render(r: *const Renderer, l: Pass, draw: *const DrawList) void {
+        iface.render(r, l, draw);
+    }
 };
+
+comptime {
+    iface.check(Renderer);
+}
 
 const testing = std.testing;
 const conformance = lcgr.render_conformance;
+const host = @import("host.zig");
 
 test "renderer: prepare writes each frame into its own slot of the mapped upload heap" {
     var d = try Device.init(.{ .adapter = .warp });
     defer d.deinit();
-    var r = try Renderer.init(&d, .{ .max_quads = 4, .max_glyphs = 4, .frames = 2 });
+    var once = try host.Once.init(&d);
+    defer once.deinit();
+    const white = try host.sampled(&d, &once, 1, 1, &.{ 255, 255, 255, 255 });
+    defer com.release(white);
+    var r = try Renderer.init(&d, .{ .max_quads = 4, .max_glyphs = 4, .frames = 2 }, white);
     defer r.deinit();
     try testing.expectEqual(@as(u64, 0), r.slot_bytes % globals_slot);
     try testing.expectEqual(r.slot_bytes * 2, r.mapped.len);
@@ -170,11 +264,31 @@ test "renderer: prepare writes each frame into its own slot of the mapped upload
 test "renderer: materials build, and past the cap the last entry is replaced" {
     var d = try Device.init(.{ .adapter = .warp });
     defer d.deinit();
-    var r = try Renderer.init(&d, .{ .max_quads = 4, .max_glyphs = 4 });
+    var once = try host.Once.init(&d);
+    defer once.deinit();
+    const white = try host.sampled(&d, &once, 1, 1, &.{ 255, 255, 255, 255 });
+    defer com.release(white);
+    var r = try Renderer.init(&d, .{ .max_quads = 4, .max_glyphs = 4 }, white);
     defer r.deinit();
     try testing.expectEqual(@as(u16, 1), r.material_count);
     const example = try r.addMaterial(&d, pipeline.example_hlsl);
     try testing.expectEqual(@as(u16, 1), @backingInt(example));
     for (0..max_materials + 1) |_| _ = try r.addMaterial(&d, pipeline.example_hlsl);
     try testing.expectEqual(@as(u16, max_materials), r.material_count);
+}
+
+test "renderer: texture handles are registration order, clamped past the cap" {
+    var d = try Device.init(.{ .adapter = .warp });
+    defer d.deinit();
+    var once = try host.Once.init(&d);
+    defer once.deinit();
+    const white = try host.sampled(&d, &once, 1, 1, &.{ 255, 255, 255, 255 });
+    defer com.release(white);
+    var r = try Renderer.init(&d, .{ .max_quads = 4, .max_glyphs = 4 }, white);
+    defer r.deinit();
+    try testing.expectEqual(@as(u16, 1), r.texture_count);
+    try testing.expectEqual(@as(u16, 1), @backingInt(r.addTexture(&d, white)));
+    for (0..Renderer.max_textures + 2) |_| _ = r.addTexture(&d, white);
+    try testing.expectEqual(@as(u16, Renderer.max_textures), r.texture_count);
+    r.setTexture(&d, @fromBackingInt(200), white); // stale: rewrites the last entry, in bounds
 }

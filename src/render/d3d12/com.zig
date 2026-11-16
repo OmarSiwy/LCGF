@@ -84,8 +84,9 @@ pub const Factory = opaque {
     pub fn enumAdapters1(f: *Factory, i: u32, out: *?*Adapter) HRESULT {
         return method(f, Slot.EnumAdapters1, fn (*Factory, u32, *?*Adapter) callconv(.c) HRESULT)(f, i, out);
     }
-    pub fn enumWarpAdapter(f: *Factory, out: *?*Adapter) Error!void {
-        try check(method(f, Slot.EnumWarpAdapter, fn (*Factory, *const GUID, *?*Adapter) callconv(.c) HRESULT)(f, &Adapter.iid, out));
+    /// E_NOTIMPL where there is no WARP (Wine).
+    pub fn enumWarpAdapter(f: *Factory, out: *?*Adapter) HRESULT {
+        return method(f, Slot.EnumWarpAdapter, fn (*Factory, *const GUID, *?*Adapter) callconv(.c) HRESULT)(f, &Adapter.iid, out);
     }
     pub fn createSwapChainForHwnd(f: *Factory, queue: *CommandQueue, hwnd: c.HWND, desc: *const c.DXGI_SWAP_CHAIN_DESC1, out: *?*SwapChain) Error!void {
         try check(method(f, Slot.CreateSwapChainForHwnd, fn (*Factory, *CommandQueue, c.HWND, *const c.DXGI_SWAP_CHAIN_DESC1, ?*const anyopaque, ?*anyopaque, *?*SwapChain) callconv(.c) HRESULT)(f, queue, hwnd, desc, null, null, out));

@@ -45,9 +45,9 @@ pub const Device = struct {
         var adapter: ?*com.Adapter = null;
         var warp = false;
         if (desc.adapter == .warp) {
-            if (factory.enumWarpAdapter(&adapter)) |_| {
-                warp = true;
-            } else |err| if (err != error.Unsupported) return err;
+            const result = factory.enumWarpAdapter(&adapter);
+            if (result != com.E_NOTIMPL) try com.check(result);
+            warp = adapter != null;
         }
         if (adapter == null) try com.check(factory.enumAdapters1(0, &adapter));
         errdefer com.release(adapter);
