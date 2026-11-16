@@ -150,6 +150,30 @@ pub const SwapchainFns = struct {
     vkQueuePresentKHR: c.PFN_vkQueuePresentKHR,
 };
 
+pub const Buffer = struct {
+    handle: c.VkBuffer = null,
+    memory: c.VkDeviceMemory = null,
+    size: u64,
+    /// The whole buffer, when it was created mapped.
+    mapped: []u8 = &.{},
+};
+
+pub const ImageDesc = struct {
+    width: u32,
+    height: u32,
+    format: c.VkFormat = c.VK_FORMAT_R8G8B8A8_UNORM,
+    usage: c.VkImageUsageFlags,
+    samples: c.VkSampleCountFlagBits = c.VK_SAMPLE_COUNT_1_BIT,
+};
+
+pub const Image = struct {
+    handle: c.VkImage = null,
+    memory: c.VkDeviceMemory = null,
+    view: c.VkImageView = null,
+    format: c.VkFormat,
+    extent: c.VkExtent2D,
+};
+
 pub const Device = struct {
     handle: c.VkDevice,
     physical: c.VkPhysicalDevice,
@@ -217,6 +241,89 @@ pub const Device = struct {
             if (allowed and d.memory.memoryTypes[i].propertyFlags & flags == flags) return @intCast(i);
         }
         return null;
+    }
+
+    /// A buffer with its own memory: host-visible, coherent and mapped for the life of the
+    /// buffer when `mapped`, device-local otherwise. One allocation per buffer: a back end has a
+    /// handful (the ring, staging), so a sub-allocator would cost more code than it saves.
+    pub fn createBuffer(d: *const Device, size: u64, usage: c.VkBufferUsageFlags, mapped: bool) Error!Buffer {
+        var b: Buffer = .{ .size = size };
+        try check(d.fns.vkCreateBuffer.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = size,
+            .usage = usage,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+        }, null, &b.handle));
+        errdefer d.fns.vkDestroyBuffer.?(d.handle, b.handle, null);
+        var req: c.VkMemoryRequirements = undefined;
+        d.fns.vkGetBufferMemoryRequirements.?(d.handle, b.handle, &req);
+        const host: c.VkMemoryPropertyFlags = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        const flags: c.VkMemoryPropertyFlags = if (mapped) host else c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        b.memory = try d.allocate(req, flags);
+        errdefer d.fns.vkFreeMemory.?(d.handle, b.memory, null);
+        try check(d.fns.vkBindBufferMemory.?(d.handle, b.handle, b.memory, 0));
+        if (mapped) {
+            var ptr: ?*anyopaque = null;
+            try check(d.fns.vkMapMemory.?(d.handle, b.memory, 0, size, 0, &ptr));
+            b.mapped = @as([*]u8, @ptrCast(ptr))[0..@intCast(size)];
+        }
+        return b;
+    }
+
+    pub fn destroyBuffer(d: *const Device, b: *Buffer) void {
+        d.fns.vkDestroyBuffer.?(d.handle, b.handle, null);
+        d.fns.vkFreeMemory.?(d.handle, b.memory, null); // unmaps
+        b.* = .{ .size = 0 };
+    }
+
+    /// A 2D image in device-local memory, with a view over its single level and layer.
+    pub fn createImage(d: *const Device, desc: ImageDesc) Error!Image {
+        var img: Image = .{ .format = desc.format, .extent = .{ .width = desc.width, .height = desc.height } };
+        try check(d.fns.vkCreateImage.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = c.VK_IMAGE_TYPE_2D,
+            .format = desc.format,
+            .extent = .{ .width = desc.width, .height = desc.height, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = desc.samples,
+            .tiling = c.VK_IMAGE_TILING_OPTIMAL,
+            .usage = desc.usage,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        }, null, &img.handle));
+        errdefer d.fns.vkDestroyImage.?(d.handle, img.handle, null);
+        var req: c.VkMemoryRequirements = undefined;
+        d.fns.vkGetImageMemoryRequirements.?(d.handle, img.handle, &req);
+        img.memory = try d.allocate(req, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        errdefer d.fns.vkFreeMemory.?(d.handle, img.memory, null);
+        try check(d.fns.vkBindImageMemory.?(d.handle, img.handle, img.memory, 0));
+        try check(d.fns.vkCreateImageView.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = img.handle,
+            .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+            .format = desc.format,
+            .subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1 },
+        }, null, &img.view));
+        return img;
+    }
+
+    pub fn destroyImage(d: *const Device, img: *Image) void {
+        d.fns.vkDestroyImageView.?(d.handle, img.view, null);
+        d.fns.vkDestroyImage.?(d.handle, img.handle, null);
+        d.fns.vkFreeMemory.?(d.handle, img.memory, null);
+        img.handle = null;
+    }
+
+    fn allocate(d: *const Device, req: c.VkMemoryRequirements, flags: c.VkMemoryPropertyFlags) Error!c.VkDeviceMemory {
+        const index = d.memoryType(req.memoryTypeBits, flags) orelse return error.OutOfMemory;
+        var memory: c.VkDeviceMemory = null;
+        try check(d.fns.vkAllocateMemory.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = req.size,
+            .memoryTypeIndex = index,
+        }, null, &memory));
+        return memory;
     }
 
     /// The device name from its properties ("llvmpipe (LLVM ...)" on lavapipe).
