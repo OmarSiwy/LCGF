@@ -483,6 +483,19 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgr. libobjc,
+    // Metal and QuartzCore are the platform's, opened at run time, so nothing is linked and it
+    // cross-compiles from Linux (ci/run.sh metal).
+    const metal_tests = b.addTest(.{ .name = "metal-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
+    b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
