@@ -351,6 +351,9 @@ pub const Page = struct {
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 8, .customs = 1, .strings = 512, .depth = 8 });
+    pub const replay = @embedFile("testdata/textarea.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/textarea-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 3 }, .{ "scrolled", 5 }, .{ "selected", 7 } };
 };
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -537,6 +540,41 @@ test "textarea input: Enter, Up and Down in their column, scrolling to the caret
     in.events = &sel;
     _ = try both(h, &in);
     try testing.expectEqual([2]u32{ 12, 14 }, h.app.notes.ed.selection());
+}
+
+test "Page: the text area replay types lines, moves, scrolls and selects, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [32]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    const Want = struct { text: []const u8, sel: [2]u32, scroll: f32 };
+    const want = [_]Want{
+        .{ .text = "one\ntwo", .sel = .{ 7, 7 }, .scroll = 0 },
+        .{ .text = "one\ntwo", .sel = .{ 7, 7 }, .scroll = 0 },
+        .{ .text = "one\ntwo", .sel = .{ 7, 7 }, .scroll = 0 },
+        .{ .text = "one\ntwo\nthree", .sel = .{ 13, 13 }, .scroll = 0 },
+        .{ .text = "one\ntwo\nthree", .sel = .{ 7, 7 }, .scroll = 0 },
+        .{ .text = "one\ntwo\nthree\nfour", .sel = .{ 18, 18 }, .scroll = 1 },
+        .{ .text = "one\ntwo\nthree\nfour", .sel = .{ 18, 18 }, .scroll = 0 },
+        .{ .text = "one\ntwo\nthree\nfour", .sel = .{ 3, 18 }, .scroll = 0 },
+        .{ .text = "one", .sel = .{ 3, 3 }, .scroll = 0 },
+    };
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try both(h, in);
+        try testing.expectEqualStrings(want[k].text, h.app.notes.text());
+        try testing.expectEqual(want[k].sel, h.app.notes.ed.selection());
+        try testing.expectEqual(want[k].scroll, h.app.notes.scroll);
+    }
+    try testing.expectEqual(@as(u32, 9), h.frames);
+    const t = &h.ctx.trees[h.ctx.cur];
+    // The rect the replay's comment gives.
+    try testing.expectEqual(Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 98 }, t.rect(t.find(.from("notes"))));
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 9);
 }
 
 test {
