@@ -106,10 +106,11 @@ pub fn secondStyle(th: *const Theme, axis: Axis, split: f32) Style {
     return .{ .dir = axis, .size = sizes[@backingInt(axis)] };
 }
 
-/// The body of the second pane: what the handle leaves of it.
+/// The body of the second pane: what the handle leaves of it. It shrinks below its content
+/// (a grower starts from its content's size), so a nearly closed pane shows nothing.
 pub fn bodyStyle(th: *const Theme) Style {
     _ = th;
-    return .{ .dir = .y, .size = .{ .fill, .fill }, .clip = true };
+    return .{ .dir = .y, .size = .{ .fill, .fill }, .clip = true, .shrink = true };
 }
 
 // ---- behaviour ----------------------------------------------------------------------------
@@ -220,8 +221,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// A side-by-side splitter at 30%: a label on the left, a checkbox on the right.
-fn Page(comptime th: Theme) type {
+/// The example page: a side-by-side splitter at 30%, a label on the left and a checkbox on
+/// the right, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const area: Style = .{ .dir = .y, .size = .{ .px(300), .px(120) }, .pad = @splat(8) };
     return struct {
         pub const App = struct {
@@ -248,6 +250,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/splitter.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/splitter-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "dragged", 3 },
+    .{ "end", 6 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -388,6 +400,36 @@ test "splitter: handle is a focusable separator valued by the split, named by th
     // Focusable: it senses focus, so Tab stops on it.
     const focusable: u8 = @bitCast(types.Sense{ .focus = true });
     try testing.expect(out.runtime.tree.c.sense[rows.handle] & focusable != 0);
+}
+
+test "splitter: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var split: [8]f32 = undefined;
+    var fills: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        split[k] = h.app.split;
+        try testing.expectEqual(h.app.split, h.ui.signals.state.split);
+        fills[k] = out.runtime.tree.c.look[rows.handle].fill;
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    // The press puts the split under the pointer, the middle of the handle: 88 / 284.
+    const want = [8]f32{ 0.3, 0.3, 88.0 / 284.0, 0.5, 0.5, 0.55, 1, 0 };
+    for (want, split) |w, got| try testing.expectApproxEqAbs(w, got, 1e-5);
+    const th = Theme.default;
+    try testing.expectEqualSlices(u32, &.{ th.control.bitsOf(), th.control_hot.bitsOf(), th.accent.bitsOf(), th.accent.bitsOf(), th.control_hot.bitsOf() }, fills[0..5]);
+}
+
+test "golden_frames: name frames the splitter replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {
