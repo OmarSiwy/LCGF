@@ -10,6 +10,7 @@ const types = @import("../core/types.zig");
 const none = types.none;
 const Id = types.Id;
 const Frame = @import("frame.zig").Frame;
+const Context = @import("context.zig").Context;
 const Signal = @import("signals.zig").Signal;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
@@ -51,8 +52,11 @@ pub const Memos = struct {
 ///     }
 ///
 /// A subtree is rebuilt when a dependency changed, when the pointer is over it or holding
-/// something in it, and while any spring is moving. Reuse skips building (the caller's code and
-/// the column writes); layout and paint still run over the copied rows.
+/// something in it, and while a spring or tween asked for inside it (after its `open`) is
+/// moving; animations elsewhere do not stop the copy. A copy keeps its animations alive, so a
+/// spring at rest inside it still starts from where it is when the subtree is next built.
+/// Reuse skips building (the caller's code and the column writes); layout and paint still run
+/// over the copied rows.
 pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
     const ctx = f.ctx;
     const m = &ctx.memos;
@@ -88,15 +92,17 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
         (k1 -% k0) <= f.texts().cap - f.texts().len,
         (c1 -% c0) <= ctx.customs[ctx.cur].cap - ctx.customs[ctx.cur].len,
     ));
-    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), ctx.motion == 0));
+    const busy = moving(ctx, a, count);
+    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), !busy));
 
     // The subtree starts at the next row whether it is copied or rebuilt.
     m.c.id[slot] = k;
     m.c.node[slot] = t.len;
     m.c.frame[slot] = ctx.frame;
-    // A rebuild caused by the pointer is followed by one more, so hover and press visuals are
-    // not frozen into the copy: the stored stamp cannot match the next frame's.
-    m.c.stamp[slot] = stamp ^ @intFromBool(touched);
+    // A rebuild caused by the pointer or by a moving animation is followed by one more, so
+    // hover and press visuals, and an animation's next-to-last value, are not frozen into the
+    // copy: the stored stamp cannot match the next frame's.
+    m.c.stamp[slot] = stamp ^ @intFromBool(orB(touched, busy));
 
     // The one coarse branch: copying and rebuilding are different work.
     if (!ok) return false;
@@ -156,6 +162,54 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     mem.copyRows(Customs.Columns, &cu.c, cu.len, &pcu.c, c0, cn);
     for (cu.len..cu.len + cn) |r| cu.c.node[r] +%= delta;
     cu.len += cn;
+
+    keepAlive(ctx, a, count, delta);
+}
+
+/// SIMD. Whether a spring or tween asked for last frame from inside last frame's rows
+/// [a, a + count) is still moving. A spring at rest sits exactly on its target with no
+/// velocity (`Anims.step` snaps it there); a tween is moving until its leg's time is up.
+fn moving(ctx: *const Context, a: u32, count: u32) bool {
+    const last = simd.u(ctx.frame -% 1);
+    const lo = simd.u(a);
+    const n = simd.u(count);
+    var any: simd.B = @splat(false);
+    const an = &ctx.anims.c;
+    var i: usize = 0;
+    while (i < simd.padded(ctx.anims.len)) : (i += simd.lanes) {
+        const inside = (simd.loadU(an.seen, i) == last) & ((simd.loadU(an.node, i) -% lo) < n);
+        const busy = (simd.loadF(an.x, i) != simd.loadF(an.target, i)) | (simd.loadF(an.v, i) != simd.f(0));
+        any |= inside & busy;
+    }
+    const tw = &ctx.tweens.c;
+    i = 0;
+    while (i < simd.padded(ctx.tweens.len)) : (i += simd.lanes) {
+        const inside = (simd.loadU(tw.seen, i) == last) & ((simd.loadU(tw.node, i) -% lo) < n);
+        any |= inside & (simd.loadF(tw.elapsed, i) < simd.loadF(tw.duration, i));
+    }
+    return @reduce(.Or, any);
+}
+
+/// SIMD. Marks the springs and tweens of a copied subtree as asked for this frame, at their
+/// copied rows, as building it would have: `sweep` keeps them, and the next build finds them
+/// where they were instead of starting a new one at its target.
+fn keepAlive(ctx: *Context, a: u32, count: u32, delta: u32) void {
+    const last = simd.u(ctx.frame -% 1);
+    const now = simd.u(ctx.frame);
+    const lo = simd.u(a);
+    const n = simd.u(count);
+    const shift = simd.u(delta);
+    inline for (.{ &ctx.anims, &ctx.tweens }) |table| {
+        const c = &table.c;
+        var i: usize = 0;
+        while (i < simd.padded(table.len)) : (i += simd.lanes) {
+            const seen = simd.loadU(c.seen, i);
+            const node = simd.loadU(c.node, i);
+            const inside = (seen == last) & ((node -% lo) < n);
+            simd.storeU(c.seen, i, @select(u32, inside, now, seen));
+            simd.storeU(c.node, i, @select(u32, inside, node +% shift, node));
+        }
+    }
 }
 
 const testing = std.testing;
@@ -176,7 +230,6 @@ test "Memos.init: padded columns carved from the caller's buffer, empty" {
     try testing.expectEqual(carver.off, counter.off);
 }
 
-const Context = @import("context.zig").Context;
 const Input = @import("../core/input.zig").Input;
 const Output = @import("context.zig").Output;
 
@@ -202,14 +255,20 @@ const Scene = struct {
     items: u32 = 2,
     sig: Signal,
     builds: u32 = 0,
+    /// Target of a spring outside the panel, and of one inside it; the inner one's last value.
+    outer: f32 = 0,
+    inner: f32 = 0,
+    inner_x: f32 = 0,
 
     fn frame(s: *Scene, ctx: *Context, in: *const Input) Output {
         var f = ctx.begin(in);
+        _ = f.animate(.from("outer"), s.outer, .{});
         _ = f.open(.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
         for (0..s.lead) |_| _ = f.leaf(.none, .{ .size = .{ .px(10), .px(10) } });
         if (!f.reuse(id_panel, &.{s.sig})) {
             s.builds += 1;
             _ = f.open(id_panel, .{ .size = .{ .px(100), .fill }, .pad = @splat(4), .gap = 2 });
+            s.inner_x = f.animate(.from("inner"), s.inner, .{});
             const item = f.leaf(id_item, .{ .size = .{ .fill, .px(20) } });
             const r = f.interact(item, .button);
             f.setFill(item, if (r.hovered) hot else cold);
@@ -335,6 +394,50 @@ test "reuse: after the pointer leaves, one more rebuild clears the hover, then r
     for (0..3) |_| out = s.frame(&ctx, &in);
     try testing.expectEqual(hovering + 1, s.builds);
     try testing.expectEqual(cold.bitsOf(), out.tree.c.look[out.tree.find(id_item)].fill);
+}
+
+test "reuse: springs moving outside the subtree do not stop the copy" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 16, .customs = 4, .strings = 512, .signals = 4, .memos = 4, .depth = 8 });
+    var ctx = try Fx.context();
+    var s: Scene = .{ .sig = ctx.signals.create() };
+    const in: Input = .{ .viewport = .{ 400, 300 }, .dt = 1.0 / 60.0 };
+    _ = s.frame(&ctx, &in);
+    s.outer = 100;
+    var frames: u32 = 0;
+    var out = s.frame(&ctx, &in);
+    while (out.wake == 0 and frames < 600) : (frames += 1) out = s.frame(&ctx, &in);
+    // The outer spring moved for many frames; the panel was built once.
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(@as(u32, 1), s.builds);
+    try testing.expectEqual(@as(u32, 2), ctx.anims.len);
+}
+
+test "reuse: a spring moving inside the subtree rebuilds it until it lands, then survives copies" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 16, .customs = 4, .strings = 512, .signals = 4, .memos = 4, .depth = 8 });
+    var ctx = try Fx.context();
+    var s: Scene = .{ .sig = ctx.signals.create() };
+    const in: Input = .{ .viewport = .{ 400, 300 }, .dt = 1.0 / 60.0 };
+    _ = s.frame(&ctx, &in);
+    // The inner target is read by the build, so it changes with the signal.
+    s.inner = 50;
+    ctx.signals.touch(s.sig);
+    var frames: u32 = 0;
+    var out = s.frame(&ctx, &in);
+    while (out.wake == 0 and frames < 600) : (frames += 1) out = s.frame(&ctx, &in);
+    try testing.expectEqual(@as(f32, 50), s.inner_x);
+    // Every frame of the movement rebuilt the panel: its spring's value is fresh each frame.
+    try testing.expect(s.builds > frames);
+    const settled = s.builds;
+    for (0..5) |_| _ = s.frame(&ctx, &in);
+    try testing.expectEqual(settled, s.builds);
+    // Copies kept the resting spring: a new target eases from 50, not jumps to it.
+    try testing.expectEqual(@as(u32, 2), ctx.anims.len);
+    s.inner = 0;
+    ctx.signals.touch(s.sig);
+    _ = s.frame(&ctx, &in);
+    try testing.expectEqual(@as(f32, 50), s.inner_x);
+    _ = s.frame(&ctx, &in);
+    try testing.expect(s.inner_x > 0 and s.inner_x < 50);
 }
 
 test "reuse: no room for the copy means a rebuild, never an overflow" {

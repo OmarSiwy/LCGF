@@ -31,6 +31,9 @@ pub const Anims = struct {
         damping: []f32,
         /// Frame this spring was last asked for.
         seen: []u32,
+        /// Tree row that was open when it was last asked for (`Frame.animate`), so
+        /// `Frame.reuse` can tell the springs inside a subtree from the rest.
+        node: []u32,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Anims {
@@ -104,7 +107,7 @@ const testing = std.testing;
 /// Anims over a static buffer, for tests.
 fn fixture(comptime cap: u32) Anims {
     const S = struct {
-        var buffer: [7 * (simd.rows(cap) * 4 + mem.column_align)]u8 align(mem.column_align) = undefined;
+        var buffer: [8 * (simd.rows(cap) * 4 + mem.column_align)]u8 align(mem.column_align) = undefined;
     };
     var carver: mem.Carver = .{ .buf = &S.buffer };
     return .init(&carver, cap);

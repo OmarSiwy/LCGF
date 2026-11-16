@@ -345,8 +345,8 @@
     "short_fwd": 0
   },
   "p_reuse": {
-    "back": 11,
-    "jcc": 27,
-    "short_fwd": 5
+    "back": 15,
+    "jcc": 39,
+    "short_fwd": 6
   }
 }

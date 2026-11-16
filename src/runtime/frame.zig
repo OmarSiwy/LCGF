@@ -150,6 +150,7 @@ pub const Frame = struct {
         a.c.stiffness[i] = spring.stiffness;
         a.c.damping[i] = spring.damping;
         a.c.seen[i] = ctx.frame;
+        a.c.node[i] = ctx.stack[ctx.depth - 1];
         if (ctx.reduced_motion) a.land(i);
         // A new target moves the spring from next frame's step on; wake for it now.
         ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
@@ -176,6 +177,7 @@ pub const Frame = struct {
         const i = t.slot(id, 0);
         t.retarget(i, total, total, .linear);
         t.c.seen[i] = ctx.frame;
+        t.c.node[i] = ctx.stack[ctx.depth - 1];
         if (ctx.reduced_motion) t.land(i);
         ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
         return keyframes.sample(keys, t.c.elapsed[i]);
@@ -209,6 +211,7 @@ pub const Frame = struct {
         const i = t.slot(id, target);
         t.retarget(i, target, seconds, ease);
         t.c.seen[i] = ctx.frame;
+        t.c.node[i] = ctx.stack[ctx.depth - 1];
         if (ctx.reduced_motion) t.land(i);
         ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
         return t.c.x[i];
