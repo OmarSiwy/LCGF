@@ -201,8 +201,8 @@ pub fn RendererOver(comptime Encoder: type) type {
 
         /// One instanced draw for a text run's glyphs.
         pub fn drawText(r: *const Self, pass: Pass, run: u32) void {
-            r.bind(pass, .solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.first[run]) * quad_shader.stride);
-            pass.drawQuads(r.glyphs.count[run]);
+            r.bind(pass, .solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * quad_shader.stride);
+            pass.drawQuads(r.glyphs.span(run)[1]);
         }
 
         /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the

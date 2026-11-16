@@ -9,6 +9,9 @@ const types = @import("../core/types.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
 const w = @import("../widgets/base.zig");
 const Events = @import("iface.zig").Events;
+const Tree = @import("../core/tree.zig").Tree;
+const a11y = @import("../a11y/tree.zig");
+const slider = @import("../widgets/slider.zig");
 
 pub const id_reset = types.Id.from("reset");
 pub const id_wire = types.Id.from("wireframe");
@@ -16,6 +19,9 @@ pub const id_exposure = types.Id.from("exposure");
 pub const id_sidebar = types.Id.from("sidebar");
 pub const id_add = types.Id.from("add-layer");
 pub const id_viewport = types.Id.from("viewport");
+
+const exposure_lo = 0;
+const exposure_hi = 4;
 
 pub const App = struct {
     theme: w.Theme = .default,
@@ -36,7 +42,7 @@ pub const App = struct {
             app.exposure = 1;
         }
         _ = w.checkbox(f, th, id_wire, &app.wireframe, "Wireframe");
-        _ = w.slider(f, th, id_exposure, &app.exposure, 0, 4);
+        _ = w.slider(f, th, id_exposure, &app.exposure, exposure_lo, exposure_hi);
         f.close();
 
         _ = f.open(.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
@@ -48,6 +54,12 @@ pub const App = struct {
         // The 3D view. The UI only reserves the rect; the host draws into it.
         _ = f.custom(id_viewport, .{ .size = .{ .fill, .fill } }, 0);
         f.close();
+    }
+
+    /// What the tree `build` made does not say to assistive technology: the exposure slider's
+    /// range. A host with an accessibility bridge calls it after each built frame.
+    pub fn semantics(_: *const App, t: *const Tree, s: *a11y.Semantics) void {
+        slider.semantics(t, s, id_exposure, exposure_lo, exposure_hi);
     }
 };
 

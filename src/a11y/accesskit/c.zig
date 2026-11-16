@@ -134,6 +134,9 @@ pub extern fn accesskit_node_set_expanded(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_selected(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_disabled(node: *Node) void;
 pub extern fn accesskit_node_set_live(node: *Node, value: Live) void;
+pub extern fn accesskit_node_set_min_numeric_value(node: *Node, value: f64) void;
+pub extern fn accesskit_node_set_max_numeric_value(node: *Node, value: f64) void;
+pub extern fn accesskit_node_set_numeric_value_step(node: *Node, value: f64) void;
 
 pub extern fn accesskit_tree_info_new(root: NodeId) *TreeInfo;
 pub extern fn accesskit_tree_info_set_toolkit_name_with_length(tree: *TreeInfo, name: [*]const u8, length: usize) void;

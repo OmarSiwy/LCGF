@@ -1,0 +1,40 @@
+# Recorded input for the number field page (widgets/number.zig, `Page`), at 320 x 140 in the
+# default theme: Quantity (0 to 10 by 1, at 3) at x 12..308, y 38..63, and Scale (-1 to 1 by
+# 0.25, at 0.5) at x 12..308, y 97..122. One line per frame below (format: input.Replay).
+# Scancodes: Up 82, Page Up 75, Enter 40.
+# 0: rest
+frame
+viewport 320 140
+dt 0.016
+pointer 300 135
+# 1: press Quantity: focused
+frame
+pointer 200 50
+buttons left
+# 2: release
+frame
+buttons
+# 3: Up twice: 5
+frame
+press 82
+press 82
+# 4: Page Up: clamped to 10
+frame
+press 75
+# 5: type 2 after it: "102", not taken yet
+frame
+text 2
+# 6: Ctrl+A selects it, 2 replaces it, Enter takes it: 2
+frame
+press 4 ctrl
+text 2
+press 40
+# 7: the pointer over Scale
+frame
+pointer 200 110
+# 8: the wheel up three notches over Scale: clamped to 1
+frame
+wheel 0 3
+# 9: and down a notch: 0.75
+frame
+wheel 0 -1
