@@ -63,3 +63,88 @@ export async function load(url, ...parts) {
     ui.exports = instance.exports;
     return ui;
 }
+
+/// WebGPU for webgpu.zig: the binding functions of the wgpu renderer, over a table of handles.
+/// After `load`, `ui.gpu.put(obj)` registers a host object (device, queue, pass, texture view,
+/// sampler) and returns its handle; `ui.gpu.get(h)` reads one back; `ui.gpu.release(h)` frees
+/// the slot. Handle 0 is never used.
+export function webgpu(ui) {
+    const objs = [null];
+    const free = [];
+    const gpu = (ui.gpu = {
+        put(o) {
+            const h = free.length ? free.pop() : objs.length;
+            objs[h] = o;
+            return h;
+        },
+        get: (h) => objs[h],
+        release(h) {
+            objs[h]?.destroy?.();
+            objs[h] = null;
+            free.push(h);
+        },
+    });
+    // Same order as webgpu.zig `TextureFormat` and wgpu.zig `AttrFormat`, `BufferUse`.
+    const formats = ["rgba8unorm", "bgra8unorm"];
+    const attr_formats = ["float32", "float32x2", "float32x4", "uint32x4", "unorm8x4"];
+    // A function, so a page without WebGPU can still link this part (GPUBufferUsage is undefined).
+    const uses = (use) => (use ? GPUBufferUsage.UNIFORM : GPUBufferUsage.VERTEX) | GPUBufferUsage.COPY_DST;
+    // One pair of bind group layouts per device, shared by every pipeline (wgpu.zig `Binding`).
+    const layouts = new Map();
+    function layoutsOf(device) {
+        let l = layouts.get(device);
+        if (l) return l;
+        const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT;
+        const globals = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: VF, buffer: { type: "uniform" } }] });
+        const texture = device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+            ],
+        });
+        l = { globals, texture, pipeline: device.createPipelineLayout({ bindGroupLayouts: [globals, texture] }) };
+        layouts.set(device, l);
+        return l;
+    }
+    const blend = { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" };
+    return {
+        gpu_create_buffer(d, size, use) {
+            return gpu.put(objs[d].createBuffer({ size, usage: uses(use) }));
+        },
+        gpu_release: gpu.release,
+        gpu_write_buffer(q, b, offset, ptr, len) {
+            objs[q].writeBuffer(objs[b], offset, ui.exports.memory.buffer, ptr, len);
+        },
+        gpu_create_pipeline(d, wgsl, wgsl_len, vs, vs_len, fs, fs_len, format, samples, stride, attrs, attrs_len) {
+            const device = objs[d];
+            const module = device.createShaderModule({ code: ui.str(wgsl, wgsl_len) });
+            const rows = ui.u32(attrs, attrs_len * 3);
+            const attributes = [];
+            for (let i = 0; i < attrs_len; i++)
+                attributes.push({ shaderLocation: rows[i * 3], offset: rows[i * 3 + 1], format: attr_formats[rows[i * 3 + 2]] });
+            return gpu.put(device.createRenderPipeline({
+                layout: layoutsOf(device).pipeline,
+                vertex: { module, entryPoint: ui.str(vs, vs_len), buffers: [{ arrayStride: stride, stepMode: "instance", attributes }] },
+                primitive: { topology: "triangle-strip" },
+                fragment: { module, entryPoint: ui.str(fs, fs_len), targets: [{ format: formats[format], blend: { color: blend, alpha: blend } }] },
+                multisample: { count: samples },
+            }));
+        },
+        gpu_globals_group(d, b) {
+            const device = objs[d];
+            return gpu.put(device.createBindGroup({ layout: layoutsOf(device).globals, entries: [{ binding: 0, resource: { buffer: objs[b] } }] }));
+        },
+        gpu_texture_group(d, v, s) {
+            const device = objs[d];
+            return gpu.put(device.createBindGroup({
+                layout: layoutsOf(device).texture,
+                entries: [{ binding: 0, resource: objs[v] }, { binding: 1, resource: objs[s] }],
+            }));
+        },
+        gpu_set_pipeline: (p, pipe) => objs[p].setPipeline(objs[pipe]),
+        gpu_set_bind_group: (p, i, g) => objs[p].setBindGroup(i, objs[g]),
+        gpu_set_vertex_buffer: (p, slot, b, offset, size) => objs[p].setVertexBuffer(slot, objs[b], offset, Math.min(size, objs[b].size - offset)),
+        gpu_draw: (p, v, n, fv, fi) => objs[p].draw(v, n, fv, fi),
+    };
+}
+
