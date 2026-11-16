@@ -18,6 +18,12 @@ const spec_zig = @import("../comptime/spec.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
+const Style = types.Style;
+const Color = types.Color;
+const Response = types.Response;
+const Tree = @import("../core/tree.zig").Tree;
+const Frame = @import("../runtime/frame.zig").Frame;
+const Input = @import("../core/input.zig").Input;
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -37,6 +43,63 @@ pub fn thumbId(track: Id, index: u32) Id {
 /// Spec (and tree) rows each thumb takes: the thumb's half of the track and its two pieces.
 pub const thumb_rows = 3;
 
+// ---- look -----------------------------------------------------------------------------------
+
+/// The track: as a slider's (`slider.sliderTrack`) but no role of its own; its thumbs carry
+/// the semantics.
+pub fn trackStyle(th: *const Theme) Style {
+    var s = slider_zig.sliderTrack(th);
+    s.role = .none;
+    return s;
+}
+
+/// The styles of the rows under the track, in row order, for thumbs at fractions `f0 <= f1`
+/// of the track: low half (to the midpoint between the thumbs), its outside piece, its part
+/// of the span; high half, its part of the span, its outside piece. The span is the accent;
+/// the outside pieces are transparent, so the track shows through.
+pub fn parts(th: *const Theme, f0: f32, f1: f32) [2 * thumb_rows]Style {
+    const mid = (f0 + f1) * 0.5;
+    // The floors keep an empty half from dividing by zero; its pieces are then empty too.
+    const low = f0 / @max(mid, 1e-6);
+    const high = (f1 - mid) / @max(1 - mid, 1e-6);
+    // Every width a fraction of its parent: a grow child inside a fraction-sized parent takes
+    // the track's room, not the half's.
+    return .{
+        .{ .dir = .x, .size = .{ .pct(mid), .fill } },
+        .{ .size = .{ .pct(low), .fill } },
+        .{ .size = .{ .pct(1 - low), .fill }, .fill = th.accent },
+        .{ .dir = .x, .size = .{ .pct(1 - mid), .fill } },
+        .{ .size = .{ .pct(high), .fill }, .fill = th.accent },
+        .{ .size = .{ .pct(1 - high), .fill } },
+    };
+}
+
+/// Writes the thumbs' value columns: each thumb's half holds its value. Both front ends call
+/// it after building the track at tree row `track`.
+pub fn expose(t: *Tree, track: u32, value: [2]f32) void {
+    for (0..2) |i| t.c.value[track + 1 + thumb_rows * i] = value[i];
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A range slider named `id` over `value` (low, high), from `lo` at the left end to `hi` at
+/// the right.
+pub fn range(f: *Frame, th: *const Theme, id: Id, value: *[2]f32, lo: f32, hi: f32) Response {
+    const track = f.open(id, trackStyle(th));
+    const p = parts(th, base.fraction(value[0], lo, hi), base.fraction(value[1], lo, hi));
+    var all: u8 = 0;
+    for (0..2) |i| {
+        const half = f.open(thumbId(id, @intCast(i)), p[thumb_rows * i]);
+        all |= @bitCast(f.interact(half, .{ .hover = true, .click = true, .drag = true, .focus = true }));
+        _ = f.leaf(.none, p[thumb_rows * i + 1]);
+        _ = f.leaf(.none, p[thumb_rows * i + 2]);
+        f.close();
+    }
+    f.close();
+    expose(f.tree(), track.ix(), value.*);
+    return @bitCast(all);
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
@@ -45,7 +108,6 @@ pub const ct = struct {
     /// `<id>.0` and `<id>.1`; their `f32` events carry the pointer along the thumb's half.
     /// Equal or reversed ends are a compile error.
     pub fn range(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime r: slider_zig.Range) Spec {
-        _ = th;
         if (!(r.lo < r.hi)) @compileError(std.fmt.comptimePrint("range slider '{s}': lo ({d}) must be below hi ({d})", .{ @tagName(id), r.lo, r.hi }));
         // Each half holds two pieces (what lies outside the span, and the span's part).
         const pieces = [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
@@ -60,7 +122,7 @@ pub const ct = struct {
             .children = &pieces,
         };
         const final = thumbs;
-        return .{ .kind = .range, .id = null, .bind = @tagName(bind), .lo = r.lo, .hi = r.hi, .children = &final };
+        return .{ .kind = .range, .bind = @tagName(bind), .lo = r.lo, .hi = r.hi, .style = trackStyle(&th), .children = &final };
     }
 
     /// The track's name from a thumb's comptime name `<id>.<index>`.
@@ -101,6 +163,58 @@ test "thumbId: the two thumbs and the track have distinct ids" {
     const t = Id.from("band");
     try testing.expect(thumbId(t, 0) != thumbId(t, 1));
     try testing.expect(thumbId(t, 0) != t and thumbId(t, 1) != t);
+}
+
+/// A band over 0..100 in both front ends, in theme `th`: the tests' page until the example
+/// page (C0565).
+fn Band(comptime th: Theme) type {
+    return struct {
+        const row: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8) };
+        pub const App = struct {
+            band: [2]f32 = .{ 20, 60 },
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.from("row"), row);
+                _ = range(f, &th, .from("band"), &app.band, 0, 100);
+                f.close();
+            }
+        };
+        pub const State = struct { band: [2]f32 = .{ 20, 60 } };
+        pub const Ui = base.ComptimeUi(State, spec_zig.row(row, .{ct.range(th, .band, .band, .{ .hi = 100 })}), th);
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    };
+}
+
+var band: Band(.default).Run = .{};
+
+test "range look: the track split at the thumbs' midpoint, the span between them in the accent, in both front ends" {
+    const h = &band;
+    h.init();
+    const th = Theme.default;
+    const in: Input = .{ .viewport = .{ 216, 40 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    // Rows: root, row, track (2), low half (3) and its pieces, high half (6) and its pieces.
+    const track = t.rect(2);
+    try testing.expectEqual(types.Rect{ .x0 = 8, .y0 = 8, .x1 = 208, .y1 = 16 }, track);
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[2].fill);
+    // Thumbs at 20 and 60 of 0..100: x 48 and 128; the halves meet at 88.
+    try testing.expectEqual([2]f32{ 8, 88 }, [2]f32{ t.rect(3).x0, t.rect(3).x1 });
+    try testing.expectEqual([2]f32{ 88, 208 }, [2]f32{ t.rect(6).x0, t.rect(6).x1 });
+    try testing.expectEqual([2]f32{ 48, 88 }, [2]f32{ t.rect(5).x0, t.rect(5).x1 });
+    try testing.expectEqual([2]f32{ 88, 128 }, [2]f32{ t.rect(7).x0, t.rect(7).x1 });
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[5].fill);
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[7].fill);
+    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[4].fill);
+    // Quads: the track and the span's two parts.
+    try testing.expectEqual(@as(u32, 3), out.runtime.draw.quad_len);
+}
+
+test "parts: thumbs together at an end leave no division by zero" {
+    const th = Theme.default;
+    for ([_][2]f32{ .{ 0, 0 }, .{ 1, 1 }, .{ 0, 1 } }) |f| {
+        const p = parts(&th, f[0], f[1]);
+        for (p) |s| for (s.size) |z| try testing.expect(std.math.isFinite(z.v));
+    }
 }
 
 test {

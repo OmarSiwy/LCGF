@@ -453,7 +453,22 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
                 },
                 .radio_option => unreachable, // pushed by its group
-                .range, .range_thumb => @compileError("the comptime range slider is built from C0562 on"),
+                .range => {
+                    const value: [2]f32 = @field(state, n.bind.?);
+                    const name = comptime range_zig.ct.trackName(n.children[0].id.?);
+                    const track = tb.t.push(parent, .hash(name), &n.style);
+                    const p = range_zig.parts(&th, fraction(value[0], n.lo, n.hi), fraction(value[1], n.lo, n.hi));
+                    for (0..2) |k| {
+                        const half = tb.t.push(track, range_zig.thumbId(.hash(name), @intCast(k)), &p[range_zig.thumb_rows * k]);
+                        _ = tb.t.push(half, .none, &p[range_zig.thumb_rows * k + 1]);
+                        _ = tb.t.push(half, .none, &p[range_zig.thumb_rows * k + 2]);
+                        tb.t.seal(half);
+                    }
+                    next.* += 2 * range_zig.thumb_rows;
+                    tb.t.seal(track);
+                    range_zig.expose(&tb.t, track, value);
+                },
+                .range_thumb => unreachable, // pushed by its track
                 .toggle => {
                     const value: bool = @field(state, n.bind.?);
                     var s = n.style;
