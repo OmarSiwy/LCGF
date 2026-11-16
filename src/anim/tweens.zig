@@ -27,6 +27,13 @@ comptime {
     std.debug.assert(ease_table.len == @typeInfo(Ease).@"enum".field_names.len);
 }
 
+/// How a style property moves to a new value (`Frame.transition`), after Iced 0.14's
+/// `Animation` (`quick`, `easing`): a duration and a curve. The default is a short smoothstep.
+pub const Transition = struct {
+    seconds: f32 = 0.15,
+    ease: Ease = .in_out,
+};
+
 pub const Tweens = struct {
     len: u32 = 0,
     cap: u32,

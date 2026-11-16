@@ -22,6 +22,7 @@ const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
+const Transition = @import("../anim/tweens.zig").Transition;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -149,6 +150,24 @@ pub const Frame = struct {
         // A new target moves the spring from next frame's step on; wake for it now.
         ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
         return a.c.x[i];
+    }
+
+    /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
+    /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    pub fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color {
+        const want = [4]u8{ target.r, target.g, target.b, target.a };
+        var got: [4]u8 = undefined;
+        for (want, &got, 0..) |w, *g, k| {
+            const v = f.tween(id.with(@intCast(k)), @floatFromInt(w), tr.seconds, tr.ease);
+            g.* = @intFromFloat(@min(@max(@round(v), 0), 255));
+        }
+        return .rgba(got[0], got[1], got[2], got[3]);
+    }
+
+    /// `setFill` with a transition: a fill that changes between frames (hover, press, theme)
+    /// fades to the new colour along `tr`. `id` keys the transition; use the widget's id.
+    pub fn setFillAnimated(f: *Frame, node: Node, id: Id, color: Color, tr: Transition) void {
+        f.setFill(node, f.transition(id, color, tr));
     }
 
     /// A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the

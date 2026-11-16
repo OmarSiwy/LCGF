@@ -560,3 +560,43 @@ test "tween: wakes the host for its duration, lands, then the host sleeps" {
     try testing.expectEqual(@as(f32, 1), value);
     try testing.expect(!ctx.needsFrame(&in));
 }
+
+test "transition: a fill change on hover fades over its duration, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var in: Input = .{ .viewport = .{ 200, 100 }, .pointer = .{ 150, 50 }, .dt = 1.0 / 64.0 };
+    const idle = types.Color.rgb(0, 0, 0);
+    const hot = types.Color.rgb(200, 100, 40);
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input) types.Color {
+            var f = c.begin(i);
+            const node = f.leaf(types.Id.from("btn"), .{ .size = .{ .px(100), .px(100) } });
+            const r = f.interact(node, .button);
+            const want = if (r.hovered) types.Color.rgb(200, 100, 40) else types.Color.rgb(0, 0, 0);
+            f.setFillAnimated(node, types.Id.from("btn"), want, .{ .seconds = 0.125, .ease = .linear });
+            const fill: types.Color = @bitCast(f.tree().c.look[node.ix()].fill);
+            _ = f.end(.{});
+            return fill;
+        }
+    };
+    // Start-up with the pointer away: the first fill is the target itself, no fade.
+    try testing.expectEqual(idle, Ui.frame(&ctx, &in));
+    _ = Ui.frame(&ctx, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    in.pointer = .{ 50, 50 }; // onto the button
+    var last = Ui.frame(&ctx, &in); // hover is known this frame: the leg starts
+    var frames: u32 = 0;
+    while (ctx.needsFrame(&in) and frames < 100) : (frames += 1) {
+        const c = Ui.frame(&ctx, &in);
+        try testing.expect(c.r >= last.r and c.g >= last.g and c.b >= last.b);
+        last = c;
+    }
+    try testing.expectEqual(hot, last);
+    // 0.125 s at 64 Hz is 8 steps, plus the settle frame after the pointer moved.
+    try testing.expect(frames >= 8 and frames <= 10);
+    try testing.expect(!ctx.needsFrame(&in));
+}
