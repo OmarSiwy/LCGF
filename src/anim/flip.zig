@@ -67,7 +67,7 @@ pub fn apply(t: *Tree, prev: *const Tree, fl: *Flips, an: *Anims, frame: u32) f3
             const target = pos[a][n];
             const key = id.with(a);
             const known = simd.find(an.c.id, an.len, @backingInt(key));
-            const i = an.slot(key, target);
+            const i = an.slotScan(key, target);
             // A spring new this frame for a node shown last frame starts at the shown rect.
             // Select the row to write, not the value (a value select re-branches on Zig 0.18;
             // docs/CHECKS.md): otherwise the rect goes to the spare row no pass reads.
