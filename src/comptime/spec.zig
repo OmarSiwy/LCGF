@@ -31,6 +31,9 @@ pub const Spec = struct {
     /// calls instead of building the node as its kind (src/widgets/base.zig, `ComptimeUi`).
     /// Null for plain nodes. Being a type, it keeps `Spec` a compile-time-only value.
     widget: ?type = null,
+    /// Accessible name: what a screen reader says for this node. Interactive widgets need one
+    /// (validate.zig); set it with `named`.
+    name: ?[]const u8 = null,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -69,6 +72,13 @@ pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec
 /// A slider named `id`, showing and setting the f32 field `bind`: `slider(.volume, .volume)`.
 pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
     return .{ .kind = .slider, .id = @tagName(id), .bind = @tagName(bind) };
+}
+
+/// `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
+pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
+    var out = s;
+    out.name = name;
+    return out;
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -190,6 +200,17 @@ test "label, checkbox, slider: the probe's mixer gives the probe's tables, masks
     try std.testing.expectEqual(3, comptime nodeOf(probe_mixer, "mute"));
     try std.testing.expectEqual(4, comptime nodeOf(probe_mixer, "volume"));
     try std.testing.expectEqual(7, comptime nodeOf(probe_mixer, "pan"));
+}
+
+test "named: sets the accessible name and nothing else" {
+    const s = comptime named(slider(.volume, .volume), "Volume");
+    try std.testing.expectEqualStrings("Volume", s.name.?);
+    const plain = comptime slider(.volume, .volume);
+    try std.testing.expectEqual(null, plain.name);
+    try std.testing.expectEqual(plain.kind, s.kind);
+    try std.testing.expectEqualStrings(plain.id.?, s.id.?);
+    try std.testing.expectEqualStrings(plain.bind.?, s.bind.?);
+    try std.testing.expectEqual(plain.style, s.style);
 }
 
 test "label, checkbox, slider: leaves carry kind, id and binding, no children" {
