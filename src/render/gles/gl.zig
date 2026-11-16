@@ -62,6 +62,7 @@ pub const DITHER: Enum = 0x0BD0;
 pub const ONE: Enum = 1;
 pub const ONE_MINUS_SRC_ALPHA: Enum = 0x0303;
 pub const FUNC_ADD: Enum = 0x8006;
+pub const MAX_VERTEX_ATTRIBS: Enum = 0x8869;
 
 /// GL ES functions, named as in GL.
 pub const Fns = struct {
@@ -101,6 +102,8 @@ pub const Fns = struct {
     glGetUniformLocation: *const fn (Uint, [*:0]const u8) callconv(.c) Int,
     glUniform1i: *const fn (Int, Int) callconv(.c) void,
     glUniform4f: *const fn (Int, Float, Float, Float, Float) callconv(.c) void,
+    glUniform2f: *const fn (Int, Float, Float) callconv(.c) void,
+    glGetIntegerv: *const fn (Enum, *Int) callconv(.c) void,
     glGenBuffers: *const fn (Sizei, [*]Uint) callconv(.c) void,
     glDeleteBuffers: *const fn (Sizei, [*]const Uint) callconv(.c) void,
     glBindBuffer: *const fn (Enum, Uint) callconv(.c) void,

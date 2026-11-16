@@ -2,10 +2,13 @@
 # all: no
 # The GL ES back end (src/render/gles/) on Mesa llvmpipe: its tests run on a real GL ES driver
 # through the platform's EGL (libglvnd dispatching to Mesa, surfaceless, in this shell), and
-# gles-play draws the render conformance scenes, each compared with its golden image.
+# gles-play draws the render conformance scenes with the instanced GL ES 3 renderer and the
+# GL ES 2 path, each compared with its golden image.
 zig build gles gles-play --summary all
-out=zig-out/gles; rm -rf "$out"
-zig-out/bin/gles-play "$out"
-for s in rects clip text; do
-    python3 tools/golden/golden.py "$out/$s.png" "src/render/conformance/$s.png"
+for mode in es3 es2; do
+    out=zig-out/gles/$mode; rm -rf "$out"
+    zig-out/bin/gles-play "$out" "$mode"
+    for s in rects clip text; do
+        python3 tools/golden/golden.py "$out/$s.png" "src/render/conformance/$s.png"
+    done
 done

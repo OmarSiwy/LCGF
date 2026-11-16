@@ -1,7 +1,10 @@
 //! Draws every render conformance scene (src/render/conformance.zig) with the GL ES back end
 //! and writes each as a PNG, for comparison with the golden images (ci/jobs/gles.sh):
 //!
-//!     gles-play OUT      ->  OUT/<scene>.png
+//!     gles-play OUT [es3|es2]      ->  OUT/<scene>.png
+//!
+//! es3 (default) is the instanced renderer on a GL ES 3 context, es2 the path without instancing
+//! (es2.zig) on a GL ES 2 context.
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
@@ -21,31 +24,41 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(gpa);
     _ = args.next();
     const out_path = args.next() orelse return error.MissingOutputDir;
+    const es2 = std.mem.eql(u8, args.next() orelse "es3", "es2");
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, out_path);
     var out = try cwd.openDir(io, out_path, .{});
     defer out.close(io);
 
     var h: host.Host = undefined;
-    try h.init(.{ .major = 3 });
+    try h.init(.{ .major = if (es2) 2 else 3 });
     defer h.deinit();
     std.debug.print("gles-play: {s}, {s}\n", .{ h.gl.glGetString(gl.RENDERER).?, h.gl.glGetString(gl.VERSION).? });
-    var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
-    defer gfx.deinit();
     const atlas = h.texture(64, 64, &standInAtlas());
     defer h.deleteTexture(atlas);
-    const atlas_handle = gfx.addTexture(atlas);
+    if (es2) {
+        const scratch = try gpa.alignedAlloc(u8, .of(lcgr.draw_list.Quad), gles.es2.scratchBytes(.{}));
+        var gfx = try gles.es2.Renderer.init(&h.gl, .{}, scratch);
+        defer gfx.deinit();
+        try drawScenes(io, gpa, out, &h, &gfx, gfx.addTexture(atlas, 64, 64));
+    } else {
+        var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
+        defer gfx.deinit();
+        try drawScenes(io, gpa, out, &h, &gfx, gfx.addTexture(atlas));
+    }
+}
 
+fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, atlas: lcgr.types.Texture) !void {
     for (&conformance.scenes) |*s| {
         st.load(s);
         const w: u32 = @intFromFloat(s.viewport[0]);
         const ht: u32 = @intFromFloat(s.viewport[1]);
-        var target = try host.Target.init(&h, w, ht);
-        defer target.deinit(&h);
+        var target = try host.Target.init(h, w, ht);
+        defer target.deinit(h);
         var glyphs = st.glyphs();
-        glyphs.texture = atlas_handle;
+        glyphs.texture = atlas;
         gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
-        target.begin(&h, .{ 0, 0, 0, 1 });
+        target.begin(h, .{ 0, 0, 0, 1 });
         gfx.render({}, &st.draw);
         const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
         h.readback(w, ht, px);
