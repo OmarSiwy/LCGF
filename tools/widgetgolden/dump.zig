@@ -34,6 +34,7 @@ const pages = .{
     .{ "toggle", lcgr.widgets_toggle.Page },
     .{ "slider", lcgr.widgets_slider.Page },
     .{ "range", lcgr.widgets_range.Page },
+    .{ "chip", lcgr.widgets_chip.Page },
 };
 
 var glyph_quads: [1024]Quad = undefined;

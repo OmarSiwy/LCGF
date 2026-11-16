@@ -99,6 +99,45 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The chip's example page: removable chips Zig and Rust and a plain Draft on a panel, in both
+/// front ends. The application counts the removals it is asked for (a comptime spec cannot
+/// drop a node; a runtime application would stop building the chip). Its replay
+/// (testdata/chip.replay) clicks and uses the keys; its golden images
+/// (tools/widgetgolden/ref/chip-*.png) show the remove button at rest, hovered and held.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
+
+    pub const App = struct {
+        removed: [2]u32 = .{ 0, 0 },
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            app.removed[0] += @intFromBool(chip(f, &th, .from("zig"), "Zig", "x").clicked);
+            app.removed[1] += @intFromBool(chip(f, &th, .from("rust"), "Rust", "x").clicked);
+            _ = chip(f, &th, .from("draft"), "Draft", null);
+            f.close();
+        }
+    };
+    pub const State = struct {
+        zig_text: []const u8 = "Zig",
+        rust_text: []const u8 = "Rust",
+        draft_text: []const u8 = "Draft",
+        remove_text: []const u8 = "x",
+    };
+    pub const spec = spec_zig.row(panel, .{
+        ct.chip(th, .zig, .zig_text, .remove_text),
+        ct.chip(th, .rust, .rust_text, .remove_text),
+        ct.chip(th, .draft, .draft_text, null),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/chip.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/chip-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -239,6 +278,35 @@ test "chip a11y: static text, and a button named by its caption when removable, 
         try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
     }
     try testing.expectEqual(@backingInt(removeId(.from("rust"))), x.out[0].c.id[x.row(4).?]);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the chip replay asks for removal by click and keys only on remove buttons, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var asked: [2]u32 = .{ 0, 0 };
+    while (try replay.next(buf)) |in| {
+        const out = try h.frame(in);
+        if (out.comptime_.event) |e| switch (e) {
+            .@"zig.remove" => asked[0] += 1,
+            .@"rust.remove" => asked[1] += 1,
+        };
+        try testing.expectEqual(h.app.removed, asked);
+    }
+    const t = &h.ctx.trees[h.ctx.cur];
+    // The rects the replay's comment gives.
+    try testing.expectEqual(types.Rect{ .x0 = 53, .y0 = 16, .x1 = 70, .y1 = 34 }, t.rect(t.find(removeId(.from("zig")))));
+    try testing.expectEqual(types.Rect{ .x0 = 131, .y0 = 16, .x1 = 148, .y1 = 34 }, t.rect(t.find(removeId(.from("rust")))));
+    try testing.expectEqual([2]f32{ 22, 47 }, [2]f32{ t.rect(3).x0, t.rect(3).x1 });
+    try testing.expectEqual([2]u32{ 2, 0 }, h.app.removed);
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < h.frames);
 }
 
 test {
