@@ -20,6 +20,10 @@ pub const Anims = struct {
     len: u32 = 0,
     cap: u32,
     c: Columns,
+    /// The row `slot` tries first: the one after the row it last returned, from row 0 after
+    /// each `sweep`. A frame asks for its springs in the same order every frame and `sweep`
+    /// keeps that order, so in a steady UI every `slot` is one compare instead of a scan.
+    next: u32 = 0,
 
     /// `simd.rows(cap)` rows each. Rows past `len` are kept zero (inert for `step`).
     pub const Columns = struct {
@@ -37,12 +41,28 @@ pub const Anims = struct {
         return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
     }
 
-    /// Row for `id`, created resting at `initial` on first use. SIMD lookup. Past `cap` new ids
-    /// share the last row.
+    /// Row for `id`, created resting at `initial` on first use. Past `cap` new ids share the
+    /// last row. O(1) when `id` sits at the row after the previous call's (see `next`), else a
+    /// SIMD scan of the ids: one coarse, well-predicted branch per call, none per row.
     pub fn slot(a: *Anims, id: Id, initial: f32) u32 {
-        const c = &a.c;
         const k = @backingInt(id);
-        const found = simd.find(c.id, a.len, k);
+        const guess = @min(a.next, a.len -| 1);
+        const hit = simd.andB(guess < a.len, a.c.id[guess] == k);
+        const i = a.place(k, initial, if (hit) guess else simd.find(a.c.id, a.len, k));
+        a.next = i + 1;
+        return i;
+    }
+
+    /// `slot` by a SIMD scan only, with no branch on the ids: for callers that look springs up
+    /// inside a per-row loop (`flip.apply`), where the branch census applies.
+    pub fn slotScan(a: *Anims, id: Id, initial: f32) u32 {
+        const k = @backingInt(id);
+        return a.place(k, initial, simd.find(a.c.id, a.len, k));
+    }
+
+    /// The row for id `k`, given where it was `found` (or `none`): creates it if new.
+    inline fn place(a: *Anims, k: u32, initial: f32, found: u32) u32 {
+        const c = &a.c;
         const is_new = found == none;
         const i = simd.selU(is_new, @min(a.len, a.cap - 1), found);
         a.len = @min(a.len + @intFromBool(is_new), a.cap);
@@ -96,6 +116,7 @@ pub const Anims = struct {
     /// for kept rows, and the rows freed at the end are zeroed so `step` sees them inert.
     pub fn sweep(a: *Anims, frame: u32) void {
         a.len = simd.compact(a.c, a.len, a.c.seen, frame);
+        a.next = 0;
     }
 };
 
@@ -235,4 +256,27 @@ test "sweep: keeps the springs seen this frame, in order, and zeroes the rest" {
     a.sweep(8);
     try testing.expectEqual(@as(u32, 0), a.len);
     try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
+}
+
+test "slot: the row after the last one is tried first; any order still finds the right row" {
+    var a = fixture(8);
+    var rows: [6]u32 = undefined;
+    for (&rows, 0..) |*r, k| r.* = a.slot(Id.from("s").with(@intCast(k)), @floatFromInt(k));
+    for (rows, 0..) |r, k| a.c.seen[r] = @intCast(k); // mark them apart for the checks below
+    a.sweep(0); // keeps row 0 only; next restarts at 0
+    try testing.expectEqual(@as(u32, 1), a.len);
+    for (&rows, 0..) |*r, k| r.* = a.slot(Id.from("s").with(@intCast(k)), @floatFromInt(10 + k));
+    // Same order as before: s0 found at row 0 with its old value, the rest recreated after it.
+    try testing.expectEqual(@as(f32, 0), a.c.x[rows[0]]);
+    for (rows[1..], 1..) |r, k| try testing.expectEqual(@as(f32, @floatFromInt(10 + k)), a.c.x[r]);
+    // Out of order and repeated: every lookup still returns the id's own row.
+    const order = [_]u32{ 5, 1, 1, 0, 4, 2, 3, 5 };
+    for (order) |k| {
+        const r = a.slot(Id.from("s").with(k), 99);
+        try testing.expectEqual(rows[k], r);
+        try testing.expectEqual(@backingInt(Id.from("s").with(k)), a.c.id[r]);
+    }
+    try testing.expectEqual(@as(u32, 6), a.len);
+    // The same lookups by scan agree.
+    for (0..6) |k| try testing.expectEqual(rows[k], a.slotScan(Id.from("s").with(@intCast(k)), 0));
 }
