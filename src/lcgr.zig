@@ -108,6 +108,10 @@ pub const fallback_tests = @import("text/fallback/tests.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
 pub const runtime_signals = @import("runtime/signals.zig");
+pub const anims = @import("anim/anims.zig");
+pub const tweens = @import("anim/tweens.zig");
+pub const keyframes = @import("anim/keyframes.zig");
+pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
 
 test {
