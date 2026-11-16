@@ -191,6 +191,29 @@ test "label input: hit testing passes through it, Tab skips it, and a click on i
     try testing.expectEqual(@as(u32, 0), h.ctx.inter.clicked);
 }
 
+var label_semantics: base.Semantic(16) = .{};
+
+test "label a11y: role label, named by its own text, no value, no states, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &pair_default;
+    h.init();
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    _ = try h.frame(&in);
+    const x = &label_semantics;
+    try x.run(h);
+    for ([2]u32{ 2, 3 }, [2][]const u8{ "Title", "Layer 0" }) |node, want| {
+        const r = x.row(node).?;
+        try testing.expectEqual(@backingInt(a11y.Role.label), x.out[0].c.role[r]);
+        try testing.expectEqualStrings(want, x.name(0, r));
+        try testing.expectEqualStrings(want, x.name(1, r));
+        try testing.expectEqual(@as(f32, 0), x.out[0].c.value[r]);
+        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    }
+    // The column is presentational: the labels hang off the root.
+    try testing.expectEqual(null, x.row(1));
+    try testing.expectEqual(@as(u32, 3), x.out[0].len);
+}
+
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);

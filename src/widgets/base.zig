@@ -56,6 +56,7 @@ const events = @import("../comptime/events.zig");
 const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
 const label_zig = @import("label.zig");
+const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
 const Color = types.Color;
@@ -508,6 +509,74 @@ pub fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Lim
                 !std.mem.eql(u8, a.c.role[0..a.len], b.c.role[0..b.len]) or
                 !std.mem.eql(f32, a.c.value[0..a.len], b.c.value[0..b.len])) return error.FrontEndsDiffer;
             return .{ .runtime = rt, .comptime_ = cp };
+        }
+    };
+}
+
+/// What assistive technology sees of both front ends' current frame in a `Harness`: each
+/// tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would. For
+/// widget tests of role, name, value and states; `cap` is at least either tree's capacity.
+pub fn Semantic(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        /// Runtime front end, then comptime front end.
+        out: [2]a11y.Export = undefined,
+        strings: [2][]const u8 = .{ "", "" },
+
+        const Parts = struct { s: [2]a11y.Semantics, out: [2]a11y.Export };
+        fn carve(carver: *mem.Carver) Parts {
+            const s = [2]a11y.Semantics{ .init(carver, cap), .init(carver, cap) };
+            return .{ .s = s, .out = .{ .init(carver, cap), .init(carver, cap) } };
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            _ = carve(&counter);
+            break :blk counter.off;
+        };
+
+        /// Exports the frame harness `h` built last. `error.FrontEndsDiffer` when the two
+        /// semantic trees differ in shape, id, role, state, value or name.
+        pub fn run(x: *Self, h: anytype) error{FrontEndsDiffer}!void {
+            var carver: mem.Carver = .{ .buf = &x.buf };
+            var p = carve(&carver);
+            const ctx = &h.ctx;
+            const tb = &h.ui.tables;
+            const trees = [2]*const Tree{ &ctx.trees[ctx.cur], &tb.t };
+            const txs = [2]*const Texts{ &ctx.texts[ctx.cur], &tb.tx };
+            x.strings = .{ ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], tb.strings.buf[0..tb.strings.len] };
+            for (0..2) |k| {
+                std.debug.assert(trees[k].len <= cap);
+                p.s[k].clear();
+                a11y.names(trees[k], &p.s[k]);
+                a11y.states(trees[k], &p.s[k]);
+                a11y.flatten(trees[k], txs[k], x.strings[k], &p.s[k], &p.out[k]);
+            }
+            x.out = p.out;
+            const a = &x.out[0];
+            const b = &x.out[1];
+            if (a.len != b.len) return error.FrontEndsDiffer;
+            for (0..a.len) |r| {
+                if (a.c.id[r] != b.c.id[r] or a.c.parent[r] != b.c.parent[r] or a.c.role[r] != b.c.role[r] or
+                    a.c.state[r] != b.c.state[r] or a.c.value[r] != b.c.value[r] or
+                    !std.mem.eql(u8, x.name(0, @intCast(r)), x.name(1, @intCast(r)))) return error.FrontEndsDiffer;
+            }
+        }
+
+        /// The accessible name of export row `r` of front end `side` (0 runtime, 1 comptime).
+        pub fn name(x: *const Self, side: u1, r: u32) []const u8 {
+            const o = &x.out[side].c;
+            return x.strings[side][o.name_start[r]..][0..o.name_bytes[r]];
+        }
+
+        /// The export row of tree row `node` (the runtime front end's numbering, which the
+        /// comptime one shares), or null when the node is not exported.
+        pub fn row(x: *const Self, node: u32) ?u32 {
+            const o = &x.out[0];
+            for (0..o.len) |r| if (o.c.node[r] == node) return @intCast(r);
+            return null;
         }
     };
 }
