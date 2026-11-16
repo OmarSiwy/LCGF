@@ -96,6 +96,12 @@ const tme_leave = 0x0002;
 const cf_unicodetext = 13;
 const vrefresh = 116;
 const wm_dropfiles = 0x0233;
+const wm_settingchange = 0x001a;
+const wm_dwmcolorizationcolorchanged = 0x0320;
+const hkey_current_user: usize = 0x8000_0001;
+const rrf_rt_reg_dword = 0x0010;
+/// DWMWA_USE_IMMERSIVE_DARK_MODE (Windows 10 20H1 and later): a dark title bar.
+const dwmwa_use_immersive_dark_mode = 20;
 const wm_ime_setcontext = 0x0281;
 const wm_ime_startcomposition = 0x010d;
 const wm_ime_endcomposition = 0x010e;
@@ -170,6 +176,8 @@ extern "shell32" fn DragAcceptFiles(HWND, accept: BOOL) callconv(.winapi) void;
 extern "shell32" fn DragQueryFileW(HANDLE, index: u32, file: ?[*]u16, len: u32) callconv(.winapi) u32;
 extern "shell32" fn DragQueryPoint(HANDLE, *POINT) callconv(.winapi) BOOL;
 extern "shell32" fn DragFinish(HANDLE) callconv(.winapi) void;
+extern "advapi32" fn RegGetValueW(key: usize, sub_key: [*:0]const u16, value: [*:0]const u16, flags: u32, kind: ?*u32, data: ?*anyopaque, bytes: ?*u32) callconv(.winapi) i32;
+extern "dwmapi" fn DwmSetWindowAttribute(HWND, attribute: u32, value: *const anyopaque, size: u32) callconv(.winapi) i32;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -206,6 +214,10 @@ pub const Win32 = struct {
     ticks: i64 = 1,
     /// The display's refresh rate, for `.display` pacing.
     hz: u32 = 60,
+    /// The system's light or dark mode and accent, read at `init` and again when Windows says
+    /// they changed. `appearanceChanged` hands a change to the host once.
+    appearance: translate.Appearance = .{},
+    appearance_changed: bool = false,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
@@ -273,6 +285,8 @@ pub const Win32 = struct {
             _ = ReleaseDC(w.hwnd, dc);
         }
         DragAcceptFiles(w.hwnd, 1);
+        w.appearance = readAppearance();
+        w.titleBar();
         // No IME until a frame asks for text (`apply`).
         _ = ImmAssociateContextEx(w.hwnd, null, 0);
         if (opt.show) _ = ShowWindow(w.hwnd, sw_show);
@@ -339,6 +353,36 @@ pub const Win32 = struct {
     fn imeString(w: *Win32, himc: HIMC, index: u32) []const u16 {
         const bytes = ImmGetCompositionStringW(himc, index, &w.ime_units, @sizeOf(@TypeOf(w.ime_units)));
         return w.ime_units[0..@intCast(std.math.clamp(@divTrunc(bytes, 2), 0, w.ime_units.len))];
+    }
+
+    /// The new appearance once after the system's changed, else null. The host restyles and
+    /// asks for a frame, since nothing in `Input` changed:
+    ///
+    ///     if (shell.appearanceChanged()) |a| {
+    ///         app.theme = lcgr.theme.widgets(&a.tokens());
+    ///         ctx.waker.post();
+    ///     }
+    pub fn appearanceChanged(w: *Win32) ?translate.Appearance {
+        if (!w.appearance_changed) return null;
+        w.appearance_changed = false;
+        return w.appearance;
+    }
+
+    /// Rereads the appearance; a change is kept for `appearanceChanged`.
+    fn settingsChanged(w: *Win32) void {
+        const a = readAppearance();
+        if (std.meta.eql(a, w.appearance)) return;
+        w.appearance = a;
+        w.appearance_changed = true;
+        w.titleBar();
+        // Wake a `wait` in progress so the host sees the change now.
+        w.wake();
+    }
+
+    /// The title bar follows dark mode (ignored before Windows 10 20H1).
+    fn titleBar(w: *Win32) void {
+        const on: BOOL = @intFromBool(w.appearance.dark);
+        _ = DwmSetWindowAttribute(w.hwnd, dwmwa_use_immersive_dark_mode, &on, @sizeOf(BOOL));
     }
 
     /// Files dropped from Explorer (WM_DROPFILES): their paths and the drop point.
@@ -456,6 +500,10 @@ pub const Win32 = struct {
             // The UI draws the composition itself (Events.composition); the IME draws the rest.
             wm_ime_setcontext => return DefWindowProcW(hwnd, msg, wp, lp & ~@as(isize, @bitCast(isc_showuicompositionwindow))),
             wm_ime_startcomposition => return 0,
+            // Settings sends WM_SETTINGCHANGE ("ImmersiveColorSet") for light and dark mode, DWM
+            // its own message for the accent. Rereading two values is cheaper than reading
+            // the string, so every setting change rereads them.
+            wm_settingchange, wm_dwmcolorizationcolorchanged => w.settingsChanged(),
             wm_dropfiles => {
                 w.dropFiles(@ptrFromInt(wp));
                 return 0;
@@ -500,6 +548,22 @@ pub const Win32 = struct {
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
 };
+
+/// The appearance from the registry values `translate.Appearance.fromRegistry` reads.
+fn readAppearance() translate.Appearance {
+    const u = std.unicode.utf8ToUtf16LeStringLiteral;
+    return .fromRegistry(
+        regDword(u("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"), u("AppsUseLightTheme")),
+        regDword(u("Software\\Microsoft\\Windows\\DWM"), u("AccentColor")),
+    );
+}
+
+fn regDword(key: [*:0]const u16, value: [*:0]const u16) ?u32 {
+    var v: u32 = 0;
+    var size: u32 = @sizeOf(u32);
+    if (RegGetValueW(hkey_current_user, key, value, rrf_rt_reg_dword, null, &v, &size) != 0) return null;
+    return v;
+}
 
 fn wm(comptime m: translate.Wm) u32 {
     return @backingInt(m);
@@ -633,6 +697,26 @@ test "win32: two windows on one thread get their own messages" {
     try testing.expectEqualStrings("b", ev_b.in.text);
     try testing.expect(a.poll(&ev_a));
     try testing.expectEqualStrings("x", ev_a.in.text);
+}
+
+test "win32: the appearance is read from the registry and follows a setting change" {
+    var w: Win32 = undefined;
+    try Fixture.open(&w);
+    defer w.deinit();
+    // Whatever this machine is set to, it is what the registry says, and no change is pending.
+    try testing.expectEqual(readAppearance(), w.appearance);
+    try testing.expectEqual(null, w.appearanceChanged());
+    // A setting change that changed nothing hands nothing to the host.
+    _ = PostMessageW(w.hwnd, wm_settingchange, 0, 0);
+    var ev: Events = .{};
+    _ = w.poll(&ev);
+    try testing.expectEqual(null, w.appearanceChanged());
+    // A changed one is handed over once.
+    w.appearance.dark = !w.appearance.dark;
+    _ = PostMessageW(w.hwnd, wm_settingchange, 0, 0);
+    _ = w.poll(&ev);
+    try testing.expectEqual(readAppearance(), w.appearanceChanged().?);
+    try testing.expectEqual(null, w.appearanceChanged());
 }
 
 test "win32: copy then paste round-trips through the system clipboard" {
