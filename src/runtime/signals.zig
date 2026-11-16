@@ -16,12 +16,16 @@ pub const Signals = struct {
     version: []u32,
     len: u32 = 0,
     cap: u32,
+    /// Bumps made inside an open transaction, added to `version` by the outermost `commit`.
+    staged: []u32,
+    /// Open transactions (`begin` without its `commit`).
+    depth: u32 = 0,
     /// Something changed since the last frame. The frame's `finish` clears it; the scheduler
     /// reads it to decide whether a frame is needed.
     dirty: bool = false,
 
     pub fn init(carver: *mem.Carver, cap: u32) Signals {
-        return .{ .cap = cap, .version = carver.slice(u32, simd.rows(cap)) };
+        return .{ .cap = cap, .version = carver.slice(u32, simd.rows(cap)), .staged = carver.slice(u32, simd.rows(cap)) };
     }
 
     /// A new signal at version 0. Past `cap` every new signal shares the last row: they report
@@ -34,9 +38,37 @@ pub const Signals = struct {
 
     /// Records that the data behind `sig` changed (or did not: `changed` is folded in
     /// arithmetically, so callers need no `if`).
+    /// Inside a transaction the bump is staged: versions, and so every stamp, stay as they were
+    /// until the outermost `commit`.
     pub fn bump(s: *Signals, sig: Signal, changed: bool) void {
-        s.version[@backingInt(sig)] +%= @intFromBool(changed);
-        s.dirty = simd.orB(s.dirty, changed);
+        const open = s.depth != 0;
+        const col = if (open) s.staged else s.version;
+        col[@backingInt(sig)] +%= @intFromBool(changed);
+        s.dirty = simd.orB(s.dirty, simd.andB(changed, !open));
+    }
+
+    /// Opens a transaction: changes until the matching `commit` become visible together, as one
+    /// update. Transactions nest; only the outermost commit publishes.
+    pub fn begin(s: *Signals) void {
+        s.depth += 1;
+    }
+
+    /// Closes a transaction. The outermost one adds every staged bump to its version (SIMD over
+    /// the padded column) and marks dirty if any signal changed. A signal changed several times
+    /// in one transaction moves its stamp once, so a reader recomputes once.
+    pub fn commit(s: *Signals) void {
+        s.depth -|= 1;
+        if (s.depth != 0) return;
+        var any: simd.U = @splat(0);
+        const n = simd.padded(s.len);
+        var i: usize = 0;
+        while (i < n) : (i += simd.lanes) {
+            const add = simd.loadU(s.staged, i);
+            simd.storeU(s.version, i, simd.loadU(s.version, i) +% add);
+            simd.storeU(s.staged, i, @splat(0));
+            any |= add;
+        }
+        s.dirty = simd.orB(s.dirty, @reduce(.Or, any) != 0);
     }
 
     /// `bump` for data that is known to have changed.
@@ -122,7 +154,7 @@ const testing = std.testing;
 /// Signals over a static buffer, for tests.
 fn fixture(comptime cap: u32) Signals {
     const S = struct {
-        var buffer: [simd.rows(cap) * 4 + mem.column_align]u8 align(mem.column_align) = undefined;
+        var buffer: [2 * (simd.rows(cap) * 4 + mem.column_align)]u8 align(mem.column_align) = undefined;
     };
     var carver: mem.Carver = .{ .buf = &S.buffer };
     return .init(&carver, cap);
@@ -245,4 +277,46 @@ test "Derived: recomputed once per input change; downstream sees only real chang
     Step.run(&s, &a, &b, &sum, &sign, &computes);
     try testing.expect(!sign.get());
     try testing.expectEqual(sign_version + 1, s.version[@backingInt(sign.signal())]);
+}
+
+test "begin, commit: changes inside a transaction appear together, once" {
+    var s = fixture(4);
+    var a: Cell(u32) = .init(&s, 0);
+    var b: Cell(u32) = .init(&s, 0);
+    const deps = [_]Signal{ a.signal, b.signal };
+    var sum: Derived(u32) = .init(&s, &deps, 0);
+
+    s.begin();
+    a.set(&s, 1);
+    a.set(&s, 2);
+    s.begin(); // nested: only the outer commit publishes
+    b.set(&s, 5);
+    s.commit();
+    // Nothing visible yet: no stamp moved, nothing to recompute, no frame requested.
+    try testing.expect(!sum.stale(&s, &deps));
+    try testing.expect(!s.dirty);
+    s.commit();
+
+    try testing.expect(s.dirty);
+    try testing.expect(sum.stale(&s, &deps));
+    sum.set(&s, &deps, a.get() + b.get());
+    try testing.expectEqual(@as(u32, 7), sum.get());
+    try testing.expect(!sum.stale(&s, &deps));
+    try testing.expectEqual(@as(u32, 2), s.version[@backingInt(a.signal)]);
+    try testing.expectEqual(@as(u32, 1), s.version[@backingInt(b.signal)]);
+    for (s.staged) |v| try testing.expectEqual(@as(u32, 0), v);
+}
+
+test "commit: a transaction without changes requests nothing; unbalanced commits are harmless" {
+    var s = fixture(2);
+    var a: Cell(u32) = .init(&s, 1);
+    s.begin();
+    a.set(&s, 1);
+    s.commit();
+    try testing.expect(!s.dirty);
+    s.commit();
+    try testing.expectEqual(@as(u32, 0), s.depth);
+    a.set(&s, 2);
+    try testing.expect(s.dirty);
+    try testing.expectEqual(@as(u32, 1), s.version[@backingInt(a.signal)]);
 }
