@@ -19,6 +19,7 @@ const Response = types.Response;
 const Style = types.Style;
 const Color = types.Color;
 const Input = @import("../core/input.zig").Input;
+const simd = @import("../core/simd.zig");
 
 // ---- look -----------------------------------------------------------------------------------
 
@@ -32,13 +33,24 @@ pub fn buttonFill(th: *const Theme, r: Response) Color {
     return th.controlFills()[base.stateIndex(r)];
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// Whether the button fires this frame: clicked, or focused and Enter went down or Space came
+/// up (the WAI-ARIA APG button pattern; Space on release, as native buttons do, so holding it
+/// does not repeat).
+pub fn activated(clicked: bool, focused: bool, in: *const Input) bool {
+    const keyed = base.keyCount(in, base.keys.enter, .press) + base.keyCount(in, base.keys.space, .release) != 0;
+    return simd.orB(clicked, simd.andB(focused, keyed));
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A button named `id` showing `str`; `clicked` is set the frame the left button goes up over
-/// it after going down on it.
+/// A button named `id` showing `str`; `clicked` is set the frame it fires (`activated`): the
+/// left button goes up over it after going down on it, or, while it has focus, Enter or Space.
 pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
     const node = f.open(id, buttonStyle(th));
-    const r = f.interact(node, .button);
+    var r = f.interact(node, .button);
+    r.clicked = activated(r.clicked, r.focused, f.in);
     f.setFill(node, buttonFill(th, r));
     f.setCursor(.pointer, r.hovered);
     _ = label_zig.label(f, th, str);
@@ -146,6 +158,67 @@ test "button look: other theme tokens restyle both front ends alike" {
     try testing.expectApproxEqAbs(@as(f32, 2 * 4 + 2 * 8.4), t.rect(2).w(), 0.5);
     try testing.expectEqual(@as(f32, 0), t.c.look[2].radius);
     try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), t.c.look[2].fill);
+}
+
+test "activated: a click, or Enter down or Space up while focused; nothing with a modifier" {
+    const ev = struct {
+        fn in(list: []const Input.Event) Input {
+            return .{ .events = list };
+        }
+    };
+    const none: Input = .{};
+    try testing.expect(activated(true, false, &none));
+    try testing.expect(!activated(false, true, &none));
+    const enter = ev.in(&.{.{ .kind = .press, .code = base.keys.enter }});
+    try testing.expect(activated(false, true, &enter));
+    try testing.expect(!activated(false, false, &enter));
+    const space_down = ev.in(&.{.{ .kind = .press, .code = base.keys.space }});
+    try testing.expect(!activated(false, true, &space_down));
+    const space_up = ev.in(&.{.{ .kind = .release, .code = base.keys.space }});
+    try testing.expect(activated(false, true, &space_up));
+    const ctrl_enter = ev.in(&.{.{ .kind = .press, .code = base.keys.enter, .mods = .{ .ctrl = true } }});
+    try testing.expect(!activated(false, true, &ctrl_enter));
+}
+
+test "button input: click, then Enter and Space while focused, fire in both front ends" {
+    const h = &one;
+    h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    var out = try h.frame(&in);
+    const face = out.runtime.tree.rect(2);
+    in.pointer = .{ (face.x0 + face.x1) * 0.5, (face.y0 + face.y1) * 0.5 };
+    const Step = struct { left: bool = false, events: []const Input.Event = &.{}, fires: bool };
+    const enter: Input.Event = .{ .kind = .press, .code = base.keys.enter };
+    const space_down: Input.Event = .{ .kind = .press, .code = base.keys.space };
+    const space_up: Input.Event = .{ .kind = .release, .code = base.keys.space };
+    const steps = [_]Step{
+        .{ .fires = false }, // hover
+        .{ .left = true, .fires = false }, // press: focus
+        .{ .fires = true }, // release over it: click
+        .{ .events = &.{enter}, .fires = true },
+        .{ .events = &.{space_down}, .fires = false },
+        .{ .events = &.{space_up}, .fires = true },
+        .{ .events = &.{.{ .kind = .press, .code = base.keys.enter, .mods = .{ .shift = true } }}, .fires = false },
+    };
+    for (steps) |st| {
+        in.buttons.left = st.left;
+        in.events = st.events;
+        out = try h.frame(&in);
+        try testing.expectEqual(st.fires, h.app.clicked);
+        try testing.expectEqual(st.fires, out.comptime_.event != null);
+    }
+    // A press elsewhere takes focus away: Enter does nothing.
+    in.pointer = .{ 190, 55 };
+    in.buttons.left = true;
+    in.events = &.{};
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    in.events = &.{enter};
+    out = try h.frame(&in);
+    try testing.expect(!h.app.clicked);
+    try testing.expectEqual(null, out.comptime_.event);
+    try testing.expectEqual(null, h.ui.focus);
 }
 
 test {

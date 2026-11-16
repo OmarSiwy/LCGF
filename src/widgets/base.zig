@@ -125,6 +125,36 @@ pub inline fn stateIndex(r: Response) u2 {
     return @as(u2, @intFromBool(r.hovered)) | (@as(u2, @intFromBool(r.held)) << 1);
 }
 
+/// Scancodes of the keys widgets answer to: USB HID usage ids, as `focus.Keymap`'s defaults
+/// (what SDL and the web's `KeyboardEvent.code` map to).
+// ponytail: one fixed table; take a `Keys` per widget call once a host with other codes exists.
+pub const keys = struct {
+    pub const enter: u8 = 0x28;
+    pub const space: u8 = 0x2c;
+    pub const right: u8 = 0x4f;
+    pub const left: u8 = 0x50;
+    pub const down: u8 = 0x51;
+    pub const up: u8 = 0x52;
+    pub const home: u8 = 0x4a;
+    pub const end: u8 = 0x4d;
+    pub const page_up: u8 = 0x4b;
+    pub const page_down: u8 = 0x4e;
+    pub const delete: u8 = 0x4c;
+    pub const backspace: u8 = 0x2a;
+};
+
+/// How many of this frame's key events are `kind` (`.press` counts auto-repeat too) for key
+/// `code` with no modifier held. Widgets read their keys this way while focused.
+pub fn keyCount(in: *const Input, code: u8, kind: Input.Event.Kind) u32 {
+    var n: u32 = 0;
+    for (in.events) |e| {
+        const k = simd.orB(e.kind == kind, simd.andB(kind == .press, e.kind == .repeat));
+        const plain = @as(u8, @bitCast(e.mods)) & 0xf == 0;
+        n += @intFromBool(simd.andB(simd.andB(k, e.code == code), plain));
+    }
+    return n;
+}
+
 /// Why `State`'s field `name` cannot be bound by a `widget` that needs a `T`, or null when it
 /// can: the message `ComptimeUi` stops compilation with. Each widget's `bindError` calls it.
 pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime name: []const u8, comptime T: type) ?[]const u8 {
@@ -272,6 +302,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pointer: E.Pointer = .{},
         /// Last frame's widget rects, which this frame's input is judged against.
         rects: E.Rects = .{},
+        /// The focused widget: a press on a focusable widget focuses it, a press anywhere
+        /// else clears it, as `Interaction` does for nodes that sense focus. Keys go to it.
+        focus: ?E.Widget = null,
         font: Mono = .{},
 
         const Tables = struct {
@@ -305,7 +338,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// then builds, lays out and paints the frame. A button's click is returned as `event`
         /// for the caller to act on; checkboxes and sliders have already written their field.
         pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = E.pointer(&ui.pointer, &ui.rects, in);
+            if (in.buttons.left and !ui.pointer.down) ui.focus = focusAt(&ui.rects, in);
+            var event = E.pointer(&ui.pointer, &ui.rects, in);
+            if (event == null) event = ui.keyEvent(in);
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);
@@ -353,6 +388,26 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
             }
             return .{ .draw = &tb.d, .tree = t, .event = event };
+        }
+
+        /// The focusable widget under the pointer, or null.
+        fn focusAt(r: *const E.Rects, in: *const Input) ?E.Widget {
+            const w = E.at(r, in.pointer[0], in.pointer[1]) orelse return null;
+            return switch (w) {
+                inline else => |tag| if (comptime E.focusable(E.widget_kinds[E.slot(tag)])) tag else null,
+            };
+        }
+
+        /// The event this frame's keys make on the focused widget, or null.
+        fn keyEvent(ui: *const Self, in: *const Input) ?E.Event {
+            const w = ui.focus orelse return null;
+            switch (w) {
+                inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
+                    .button => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    else => {},
+                },
+            }
+            return null;
         }
 
         /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
