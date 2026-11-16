@@ -600,3 +600,33 @@ test "transition: a fill change on hover fades over its duration, then the host 
     try testing.expect(frames >= 8 and frames <= 10);
     try testing.expect(!ctx.needsFrame(&in));
 }
+
+test "sequence: plays its keys once on the frame clock, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 64.0 };
+    const keys = [_]@import("../anim/keyframes.zig").Key{
+        .{ .at = 0, .value = 0 },
+        .{ .at = 0.125, .value = 1, .ease = .out_quad },
+        .{ .at = 0.25, .value = 0, .ease = .in_quad },
+    };
+    const id = types.Id.from("pulse");
+    var seen: [32]f32 = undefined;
+    var frames: usize = 0;
+    while (frames < seen.len) : (frames += 1) {
+        var f = ctx.begin(&in);
+        seen[frames] = f.sequence(id, &keys);
+        if (f.end(.{}).wake != 0) break;
+    }
+    // Frame 1 is at t = 0; each later frame is 1/64 s on; t = 0.25 lands on frame 17.
+    try testing.expectEqual(@as(usize, 16), frames);
+    try testing.expectEqual(@as(f32, 0), seen[0]);
+    try testing.expectApproxEqAbs(@as(f32, 1), seen[8], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0), seen[16], 1e-5);
+    for (1..8) |k| try testing.expect(seen[k] > seen[k - 1]);
+    for (9..17) |k| try testing.expect(seen[k] < seen[k - 1]);
+    try testing.expect(!ctx.needsFrame(&in));
+}

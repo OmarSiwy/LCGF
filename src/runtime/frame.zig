@@ -23,6 +23,7 @@ const Mono = @import("../text/protocol.zig").Mono;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const Transition = @import("../anim/tweens.zig").Transition;
+const keyframes = @import("../anim/keyframes.zig");
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -150,6 +151,21 @@ pub const Frame = struct {
         // A new target moves the spring from next frame's step on; wake for it now.
         ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
         return a.c.x[i];
+    }
+
+    /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
+    /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
+    /// key; stop asking for one frame and the next ask plays it again from the start.
+    pub fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32 {
+        const ctx = f.ctx;
+        const t = &ctx.tweens;
+        const total = keyframes.duration(keys);
+        // A new row rests at 0, so the first retarget starts the clock's only leg.
+        const i = t.slot(id, 0);
+        t.retarget(i, total, total, .linear);
+        t.c.seen[i] = ctx.frame;
+        ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
+        return keyframes.sample(keys, t.c.elapsed[i]);
     }
 
     /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
