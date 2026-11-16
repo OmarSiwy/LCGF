@@ -38,6 +38,9 @@ pub const Tweens = struct {
     len: u32 = 0,
     cap: u32,
     c: Columns,
+    /// The row `slot` tries first: the one after the row it last returned, from row 0 after
+    /// each `sweep` (as `Anims.next`). In a steady UI every `slot` is one compare, not a scan.
+    next: u32 = 0,
 
     /// `simd.rows(cap)` rows each. Rows past `len` are kept zero (inert for `step`).
     pub const Columns = struct {
@@ -63,11 +66,14 @@ pub const Tweens = struct {
     }
 
     /// Row for `id`, created resting at `initial` on first use. Past `cap` new ids share the
-    /// last row.
+    /// last row. O(1) when `id` sits at the row after the previous call's (see `next`), else a
+    /// SIMD scan of the ids: one coarse, well-predicted branch per call, none per row.
     pub fn slot(t: *Tweens, id: Id, initial: f32) u32 {
         const c = &t.c;
         const k = @backingInt(id);
-        const found = simd.find(c.id, t.len, k);
+        const guess = @min(t.next, t.len -| 1);
+        const hit = simd.andB(guess < t.len, c.id[guess] == k);
+        const found = if (hit) guess else simd.find(c.id, t.len, k);
         const is_new = found == none;
         const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
         t.len = @min(t.len + @intFromBool(is_new), t.cap);
@@ -77,6 +83,7 @@ pub const Tweens = struct {
         c.from[i] = simd.selF(is_new, initial, c.from[i]);
         c.elapsed[i] = simd.selF(is_new, 0, c.elapsed[i]);
         c.duration[i] = simd.selF(is_new, 0, c.duration[i]);
+        t.next = i + 1;
         return i;
     }
 
@@ -129,6 +136,7 @@ pub const Tweens = struct {
     /// Drops tweens nobody asked for in frame `frame`, by stream compaction (`simd.compact`).
     pub fn sweep(t: *Tweens, frame: u32) void {
         t.len = simd.compact(t.c, t.len, t.c.seen, frame);
+        t.next = 0;
     }
 };
 
@@ -215,4 +223,22 @@ test "step: every row and curve as the scalar reference, across vectors and padd
     for (n..simd.padded(n)) |r| try testing.expectEqual(@as(f32, 0), t.c.x[r]);
     t.sweep(2);
     try testing.expectEqual(@as(u32, 0), t.len);
+}
+
+test "slot: the row after the last one is tried first; any order still finds the right row" {
+    var t = fixture(8);
+    var rows: [5]u32 = undefined;
+    for (&rows, 0..) |*r, k| r.* = t.slot(Id.from("t").with(@intCast(k)), @floatFromInt(k));
+    for (rows, 0..) |r, k| t.c.seen[r] = @intCast(k);
+    t.sweep(0); // keeps t0 only; next restarts at 0
+    for (&rows, 0..) |*r, k| r.* = t.slot(Id.from("t").with(@intCast(k)), @floatFromInt(10 + k));
+    try testing.expectEqual(@as(f32, 0), t.c.x[rows[0]]);
+    for (rows[1..], 1..) |r, k| try testing.expectEqual(@as(f32, @floatFromInt(10 + k)), t.c.x[r]);
+    const order = [_]u32{ 4, 1, 1, 0, 3, 2, 4 };
+    for (order) |k| {
+        const r = t.slot(Id.from("t").with(k), 99);
+        try testing.expectEqual(rows[k], r);
+        try testing.expectEqual(@backingInt(Id.from("t").with(k)), t.c.id[r]);
+    }
+    try testing.expectEqual(@as(u32, 5), t.len);
 }
