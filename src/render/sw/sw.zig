@@ -129,7 +129,7 @@ pub const Software = struct {
     }
 
     pub fn drawBatch(s: *const Software, t: Target, batch: draw_list.Batch) void {
-        s.drawQuads(t, s.quads[batch.first..][0..batch.count], Image.white);
+        s.drawQuads(t, s.quads[batch.first..][0..batch.count], s.images[@backingInt(batch.texture)]);
     }
 
     pub fn drawText(s: *const Software, t: Target, run: u32) void {
@@ -228,6 +228,14 @@ inline fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F {
     return len2(@max(qx, simd.f(0)), @max(qy, simd.f(0))) + @min(@max(qx, qy), simd.f(0)) - r;
 }
 
+/// The shader's `nine_axis`.
+inline fn nineAxis(pos: F, size: f32, lo: f32, hi: f32, src_lo: f32, src_hi: f32) F {
+    const start = pos / simd.f(@max(lo, 1e-6)) * simd.f(src_lo);
+    const end = simd.f(1) - (simd.f(size) - pos) / simd.f(@max(hi, 1e-6)) * simd.f(src_hi);
+    const mid = simd.f(src_lo) + (pos - simd.f(lo)) / simd.f(@max(size - lo - hi, 1e-6)) * simd.f(1 - src_lo - src_hi);
+    return @select(f32, pos < simd.f(lo), start, @select(f32, pos > simd.f(size - hi), end, mid));
+}
+
 /// Nearest texel at (u, v), coordinates clamped to the edge; returns r, g, b, a in 0..1.
 inline fn sample(img: Image, u: F, v: F) [4]F {
     const wf: f32 = @floatFromInt(img.width);
@@ -280,6 +288,9 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
     const uv = q.uv;
     const inv_w = 1 / @max(x1 - x0, 1e-6);
     const inv_h = 1 / @max(y1 - y0, 1e-6);
+    // Nine-slice insets.
+    const dst: [4]f32 = rgba(p[1]) * @as(@Vector(4, f32), @splat(255));
+    const src = [4]f32{ unorm16(p[2]), unorm16(p[2] >> 16), unorm16(p[3]), unorm16(p[3] >> 16) };
     // Dashed and dotted borders.
     const dash: f32 = if (kind == .dotted) border else @bitCast(p[1]);
     const period = @max(dash + @as(f32, @bitCast(p[2])), 1e-3);
@@ -326,8 +337,14 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
 
             // Material: the fill times the texture.
-            const tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * (qx - simd.f(x0)) * simd.f(inv_w);
-            const tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * (qy - simd.f(y0)) * simd.f(inv_h);
+            var tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * (qx - simd.f(x0)) * simd.f(inv_w);
+            var tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * (qy - simd.f(y0)) * simd.f(inv_h);
+            if (kind == .nine_slice) {
+                const fu = nineAxis(lx + simd.f(hx), 2 * hx, dst[0], dst[2], src[0], src[2]);
+                const fv = nineAxis(ly + simd.f(hy), 2 * hy, dst[1], dst[3], src[1], src[3]);
+                tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * fu;
+                tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * fv;
+            }
             const base: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
             var color: [4]F = undefined;
             const cover = shape;
@@ -355,6 +372,10 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             row[x..][0..W].* = @select(u32, spanMask(x, box[0], box[2]), pack(out, red), old);
         }
     }
+}
+
+fn unorm16(v: u32) f32 {
+    return @as(f32, @floatFromInt(v & 0xffff)) / 65535;
 }
 
 const testing = std.testing;

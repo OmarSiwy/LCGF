@@ -214,6 +214,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_sw_nine_slice": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
   "p_sw_solid": {
     "back": 2,
     "jcc": 4,
