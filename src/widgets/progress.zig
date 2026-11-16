@@ -202,6 +202,17 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/progress.replay");
+    pub const golden_frames = .{
+        .{ "progress-rest", 0 },
+        .{ "progress-pressed", 2 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -212,6 +223,31 @@ var harness: Example(theme).Run = .{};
 
 /// Rows of the example page's two tracks: panel, caption, track, bar, caption, track, bar.
 const tracks = [2]u32{ 3, 6 };
+
+test "progress: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var first: ?[]const u8 = null;
+    var quads: [2048]u8 = undefined;
+    while (try replay.next(buf)) |in| {
+        const out = try h.frame(in);
+        // Pressing, dragging over and releasing on the bars changes nothing: every frame draws
+        // the same quads, and the application's values are untouched.
+        const q = out.runtime.draw.quadBytes();
+        if (first) |f| try testing.expectEqualSlices(u8, f, q) else {
+            @memcpy(quads[0..q.len], q);
+            first = quads[0..q.len];
+        }
+        try testing.expectEqual(@as(f32, 0.4), h.app.download);
+        try testing.expectEqual(@as(f32, 0.4), h.ui.signals.state.download);
+    }
+    try testing.expectEqual(@as(u32, 5), h.frames);
+}
 
 test "progress: role, value and a name from its caption" {
     const h = &harness;
