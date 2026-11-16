@@ -20,6 +20,8 @@ const Id = types.Id;
 const Theme = base.Theme;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
+const a11y = @import("../a11y/tree.zig");
+const Tree = @import("../core/tree.zig").Tree;
 
 /// How thick the handle is across the split, logical pixels.
 pub const handle_px: f32 = 6;
@@ -43,6 +45,8 @@ pub fn handle(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: f32) void 
     _ = f.open(.none, secondStyle(th, axis, split));
     const hd = f.leaf(id.with(1), handleStyle(th, axis));
     const r = f.interact(hd, .any);
+    f.tree().c.role[hd.ix()] = role;
+    f.tree().c.value[hd.ix()] = split;
     f.setFill(hd, handleFill(th, r));
     f.setCursor(cursors[@backingInt(axis)], r.hovered or r.held);
     _ = f.open(.none, bodyStyle(th));
@@ -140,6 +144,22 @@ pub fn resize(split: f32, held: bool, at: f32, focused: bool, in: *const Input) 
     return base.unit(v);
 }
 
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees (WAI-ARIA APG window splitter pattern): the handle is a
+/// focusable `separator` whose value is the split, 0 to 1 (a bridge scales it to
+/// aria-valuenow's 0..100), labelled by the first pane. `types.Role` has no separator, so
+/// both front ends write the byte; the harness compares it and the value.
+pub const role: u8 = @backingInt(a11y.Role.separator);
+
+/// Fills the caller's semantic columns for the splitter whose container is tree row `row`:
+/// the handle is named by the first pane's text. Call after the frame, for either front end.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, row: u32) void {
+    const first = row + 1;
+    const hd = t.c.end[first] + 1; // the second pane starts after the first; the handle leads it
+    s.c.labelled_by[hd] = first;
+}
+
 /// The splitter as a spec node.
 pub const ct = struct {
     /// A splitter along `axis` over the f32 field `split`, its handle the widget `id`, its
@@ -182,7 +202,9 @@ pub const ct = struct {
                 const rest = t.push(box, .none, &secondStyle(&th, axis, value));
                 var hs = n.children[1].children[0].style;
                 hs.fill = handleFill(&th, ui.response(next.* + 1, in));
-                _ = t.push(rest, .hash(id), &hs);
+                hs.value = value;
+                const hd = t.push(rest, .hash(id), &hs);
+                t.c.role[hd] = role;
                 const b = t.push(rest, .none, &n.children[1].children[1].style);
                 next.* += 3;
                 inline for (n.children[1].children[1].children) |c| ui.push(c, b, next, in);
@@ -341,6 +363,31 @@ test "splitter: dragging and arrow keys move the split in both front ends" {
     try testing.expectEqual(@as(f32, 0), h.app.split);
     try testing.expectEqual(@as(f32, 0), h.ui.signals.state.split);
     try testing.expectEqual(@as(f32, 0), out.runtime.tree.rect(rows.first).w());
+}
+
+test "splitter: handle is a focusable separator valued by the split, named by the first pane" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        semantics(t, &sem, rows.box);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(a11y.Role.separator, @as(a11y.Role, @fromBackingInt(t.c.role[rows.handle])));
+        try testing.expectApproxEqAbs(@as(f32, 0.3), t.c.value[rows.handle], 1e-6);
+        try testing.expectEqualStrings("Files", check.nameOf(&sem, tx, str, rows.handle));
+        try testing.expectEqual(@as(u8, 0), sem.c.state[rows.handle]);
+    }
+    // Focusable: it senses focus, so Tab stops on it.
+    const focusable: u8 = @bitCast(types.Sense{ .focus = true });
+    try testing.expect(out.runtime.tree.c.sense[rows.handle] & focusable != 0);
 }
 
 test {
