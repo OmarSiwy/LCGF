@@ -165,6 +165,7 @@ pub const Frame = struct {
         t.seal(0);
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        ctx.signals.dirty = false;
         // The tables flag their own overflow; the frame reports them together.
         ctx.status = .{
             .nodes = t.overflow,
@@ -173,7 +174,6 @@ pub const Frame = struct {
             .strings = strings.overflow,
             .depth = ctx.status.depth,
         };
-        ctx.dirty = false;
         ctx.timers.sweep(ctx.frame);
         return .{
             .draw = &ctx.draw,
@@ -459,6 +459,18 @@ test "running out of rows is reported, not fatal" {
     f = ctx.begin(&in);
     _ = f.text("ok", .{});
     try testing.expect(f.end(.{}).status.ok());
+}
+
+test "finish: a signal changed before the frame is consumed by it" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .signals = 2, .depth = 4 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    const sig = ctx.signals.create();
+    ctx.signals.touch(sig);
+    var f = ctx.begin(&in);
+    try testing.expect(ctx.signals.dirty);
+    _ = f.end(.{});
+    try testing.expect(!ctx.signals.dirty);
 }
 
 test "setCursor: the last request that holds wins; the next frame starts at arrow" {
