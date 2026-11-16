@@ -39,6 +39,7 @@ pub const paint = @import("draw/paint.zig");
 pub const damage = @import("draw/damage.zig");
 pub const features = @import("draw/features.zig");
 pub const inherit = @import("draw/inherit.zig");
+pub const order = @import("draw/order.zig");
 pub const unicode_line = @import("text/unicode/line.zig");
 pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");

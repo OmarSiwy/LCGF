@@ -22,3 +22,12 @@ export fn p_inherit_transform(t: *Tree) void {
 export fn p_inherit_clip(t: *Tree) void {
     lcgr.inherit.clip(t);
 }
+export fn p_paint_layered(t: *const Tree, tx: *const Texts, cu: *const Customs, ly: *const lcgr.overlay.Layers, d: *DrawList) void {
+    lcgr.paint.emitLayered(t, tx, cu, "", ly, d);
+}
+export fn p_merge_across_text(d: *DrawList) void {
+    lcgr.order.mergeAcrossText(d);
+}
+export fn p_depth_order(d: *DrawList) void {
+    lcgr.order.depthOrder(d);
+}

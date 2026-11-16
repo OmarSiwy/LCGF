@@ -85,10 +85,15 @@ pub const DrawList = struct {
     cmd: CmdColumns,
     cmd_len: u32 = 0,
     op: OpColumns,
+    op_len: u32 = 0,
     /// What changed since the last frame (`damage.cull` sets it): a renderer that keeps last
     /// frame's pixels redraws only inside these rects and may leave the rest. `everything`
     /// unless the frame was culled.
     damage: Region = .everything,
+    /// For back ends with a depth buffer, written by `order.depthOrder`: opaque quads to draw
+    /// first, front to back, and the depth of everything. Empty until that pass runs.
+    depth: Depth = .{ .quad = &.{}, .cmd = &.{}, .opaques = &.{} },
+    opaque_len: u32 = 0,
 
     pub const Kind = enum(u8) { quads, text, custom };
     /// `key` is texture << 16 | material for quad batches, 0 otherwise. `first` indexes `quads`,
@@ -97,6 +102,10 @@ pub const DrawList = struct {
     /// Paint's intermediate stream: one op per painted quad, text run or custom draw, in paint
     /// order, before quads with equal keys merge into commands.
     pub const OpColumns = struct { kind: []u8, key: []u32, ref: []u32 };
+    /// `quad[i]` is quad i's depth and `cmd[k]` that of text or custom command k, in (0, 1),
+    /// smaller in front (later in paint order). `opaques` lists the quads that cover their
+    /// whole rect with alpha 1, front to back.
+    pub const Depth = struct { quad: []f32, cmd: []f32, opaques: []u32 };
 
     pub fn init(carver: *mem.Carver, nodes: u32, texts: u32, customs: u32) DrawList {
         // One spare row everywhere: emitters write first and advance after.
@@ -107,6 +116,7 @@ pub const DrawList = struct {
             .customs = carver.slice(CustomDraw, customs + 1),
             .cmd = carver.columns(CmdColumns, ops),
             .op = carver.columns(OpColumns, ops),
+            .depth = .{ .quad = carver.slice(f32, nodes + 1), .cmd = carver.slice(f32, ops), .opaques = carver.slice(u32, nodes + 1) },
         };
     }
 
