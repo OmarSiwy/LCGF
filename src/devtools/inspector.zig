@@ -24,6 +24,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const Tree = @import("../core/tree.zig").Tree;
 const w = @import("../widgets/base.zig");
 const timing = @import("timing.zig");
+const EventLog = @import("log.zig").EventLog;
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -59,6 +60,10 @@ pub const Inspector = struct {
     hover_fill: Color = .rgba(90, 140, 255, 60),
     /// Per-pass times of a frame, set by the host (`timing.end`); shown when not all zero.
     timings: timing.Timings = .{},
+    /// What reached the UI, newest last on screen.
+    log: EventLog = .{},
+    /// Lines of the log shown.
+    log_lines: u32 = 6,
     /// A pass as long as the longest gets a bar this wide.
     bar_px: f32 = 120,
 
@@ -74,6 +79,7 @@ pub const Inspector = struct {
         for (f.in.events) |e| insp.open = insp.open != (e.kind == .press and e.code == toggle_key);
         const prev = f.prevTree();
         insp.rows = @min(insp.own_first, prev.len);
+        insp.log.record(f.ctx.frame, f.in, &f.ctx.inter, prev);
         insp.hovered = under(prev, insp.rows, f.in.pointer);
         insp.own_first = f.tree().len;
         if (!insp.open) return;
@@ -100,9 +106,16 @@ pub const Inspector = struct {
         _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Layout rects");
         _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clip rects");
         f.close();
+        insp.logLines(f);
         insp.timingLines(f);
         insp.treeLines(f, prev);
         f.close();
+    }
+
+    fn logLines(insp: *const Inspector, f: *Frame) void {
+        const n = @min(insp.log.kept(), insp.log_lines);
+        insp.line(f, insp.text, "events ({d})", .{insp.log.count});
+        for (0..n) |k| insp.line(f, insp.dim, "{s}", .{insp.log.newest(@intCast(n - 1 - k))});
     }
 
     /// One line per pass: its name, its time, and a bar scaled to the longest pass.
@@ -418,4 +431,42 @@ test "inspector runs inside the example with per-pass times shown" {
     try testing.expect(shows(&out, "frame "));
     inline for (@typeInfo(timing.Pass).@"enum".field_names) |name| try testing.expect(shows(&out, name ++ " "));
     try testing.expect(out.status.ok());
+}
+
+test "inspector runs inside the example and logs what reached it" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: ExampleHost = .{};
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    iface.run(&shell, &ctx, &host);
+    try testing.expectEqual(@as(u32, 1), host.app.resets);
+    try testing.expectEqual(@as(u32, 4), host.app.layers);
+    // Frames are numbered as built: the two idle polls built nothing and are not in the log.
+    const log = &host.insp.log;
+    var all: [EventLog.cap * (EventLog.width + 1)]u8 = undefined;
+    var n: usize = 0;
+    var k = log.kept();
+    while (k > 0) {
+        k -= 1;
+        const l = log.newest(k);
+        @memcpy(all[n..][0..l.len], l);
+        all[n + l.len] = '\n';
+        n += l.len + 1;
+    }
+    try testing.expectEqualStrings(
+        \\1 viewport 800x600
+        \\3 hover #2 button
+        \\4 press left at 37,25
+        \\5 release left at 37,25
+        \\5 click #2 button
+        \\6 hover #11 button
+        \\7 press left at 54,74
+        \\8 release left at 54,74
+        \\8 click #11 button
+        \\9 hover #7 slider
+        \\10 press left at 639,25
+        \\11 release left at 639,25
+        \\11 click #7 slider
+        \\12 hover nothing
+        \\
+    , all[0..n]);
 }
