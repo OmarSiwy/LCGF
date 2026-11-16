@@ -42,7 +42,15 @@
 //! node of its subtree in row order, and before each frame its optional `step(ui, row, event,
 //! in)` to apply input to `ui.signals`. During `step`, once `ui.built` is set, `ui.tables.t`
 //! still holds last frame's laid-out tree to measure, and `ui.keep(W)` keeps what the widget
-//! measured for its `push`.
+//! measured for its `push`. A `step` may return `@TypeOf(event)` instead of `void`: an event
+//! of its own (a key that activated the widget), which the frame reports when the pointer
+//! made none.
+//!
+//! A node with an id is a widget (`Events.Widget`). When it also has a `Spec.widget` `W`, `W`
+//! may declare `pub const focusable: bool` (default false): whether a press focuses it and Tab
+//! stops on it (`Events.focus_order`). And `pub const Payload: type` (default void): what its
+//! `Event` carries; a widget with a payload reports its events from `step`, not on a click.
+//! A focusable node that its owner pushes itself has `.widget = FocusStop`.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -129,6 +137,18 @@ pub inline fn unit(x: f32) f32 {
 pub inline fn stateIndex(r: Response) u2 {
     return @as(u2, @intFromBool(r.hovered)) | (@as(u2, @intFromBool(r.held)) << 1);
 }
+
+/// The `Spec.widget` of a node inside a custom widget that is a focus stop of its own (a radio
+/// option, a range slider's thumb, a chip's remove button): its owner pushes and steps it, so
+/// it only says `focusable`.
+pub const FocusStop = struct {
+    pub const focusable = true;
+
+    pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+        _ = .{ ui, n, parent, next, in };
+        unreachable; // pushed by the widget that owns it
+    }
+};
 
 // ---- look: one function per part, called by both front ends -------------------------------
 
@@ -270,6 +290,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     return struct {
         const Self = @This();
         pub const Events = E;
+
         pub const Signals = S;
         /// The theme the page was built with, for widgets that build their own rows.
         pub const theme = th;
@@ -280,8 +301,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pointer: E.Pointer = .{},
         /// Last frame's widget rects, which this frame's input is judged against.
         rects: E.Rects = .{},
-        /// The widget the last left press went down on (null over nothing), as the runtime's
-        /// `Interaction.focus`; custom widgets read it for their keys.
+        /// The focused widget: set by every left press to the widget under it, and cleared by
+        /// a press over no widget. Unlike `Interaction.focus`, a press on a widget that is not
+        /// focusable also focuses it (the widgets on main read their keys this way). Custom
+        /// widgets read it for their keys, and a `step` may move it (arrow keys inside a
+        /// composite widget). `focusable` decides the Tab order (`Events.focus_order`).
         focus: ?E.Widget = null,
         /// Four floats per custom widget (`Spec.widget`, in row order) that it keeps from frame
         /// to frame, such as what its `step` measured in last frame's tree for its `push`.
@@ -324,7 +348,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// for the caller to act on; checkboxes and sliders have already written their field.
         pub fn frame(ui: *Self, in: *const Input) Output {
             const press = in.buttons.left and !ui.pointer.down;
-            const event = E.pointer(&ui.pointer, &ui.rects, in);
+            var event = E.pointer(&ui.pointer, &ui.rects, in);
             if (press) ui.focus = ui.pointer.pressed;
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
@@ -340,7 +364,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             // Custom widgets (`Spec.widget`) apply this frame's input to their state.
             inline for (comptime customRows(spec)) |row| {
                 const W_ = comptime nodeAt(spec, row).widget.?;
-                if (comptime @hasDecl(W_, "step")) W_.step(ui, row, event, in);
+                // A step may return an event of its own (a key that activates the widget),
+                // which the frame reports when the pointer made none.
+                if (comptime @hasDecl(W_, "step")) {
+                    const got = W_.step(ui, row, event, in);
+                    if (@TypeOf(got) == ?E.Event) event = event orelse got;
+                }
             }
 
             var carver: mem.Carver = .{ .buf = &ui.buf };
@@ -922,6 +951,65 @@ test "ct: spec builders give the comptime front end's widget enum, kinds and foc
     try testing.expectEqual(void, @FieldType(Default.Ui.Events.Event, "reset"));
     try testing.expectEqual(f32, @FieldType(Default.Ui.Events.Event, "exposure"));
     try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .wire, .exposure }, Default.Ui.Events.focus_order);
+}
+
+/// A custom widget declaring all three optional parts of the `Spec.widget` contract: it is
+/// focusable, its events carry a `u32`, and its `step` reports one (the number of Enter
+/// presses) while it has focus.
+const Knob = struct {
+    pub const focusable = true;
+    pub const Payload = u32;
+
+    pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+        _ = row;
+        const E = @TypeOf(ui.*).Events;
+        var presses: u32 = 0;
+        for (in.events) |e| presses += @intFromBool(e.kind == .press and e.code == 0x28);
+        if (ui.focus != E.Widget.knob or presses == 0) return null;
+        return @unionInit(E.Event, "knob", presses);
+    }
+
+    pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+        _ = in;
+        _ = ui.tables.t.push(parent, .hash(n.id.?), &n.style);
+        next.* += 1;
+    }
+};
+
+test "Spec.widget: a custom widget's focusable, Payload and step event, end to end" {
+    const knob: Spec = comptime .{ .kind = .col, .id = "knob", .style = .{ .size = .{ .px(40), .px(20) } }, .widget = Knob };
+    const page = comptime spec_zig.row(.{}, .{ knob, ct.checkbox(theme, .wire, .wire, .wire_text) });
+    const Ui = ComptimeUi(struct { wire: bool = false, wire_text: []const u8 = "Wire" }, page, theme);
+    const E = Ui.Events;
+    try testing.expectEqual(u32, @FieldType(E.Event, "knob"));
+    try testing.expectEqualSlices(E.Widget, &.{ .knob, .wire }, E.focus_order);
+    const S = struct {
+        var ui: Ui = .{};
+    };
+    const ui = &S.ui;
+    var in: Input = .{ .viewport = .{ 200, 100 } };
+    _ = ui.frame(&in);
+    // A click on the knob focuses it but is not an event: its events carry a payload.
+    in.pointer = .{ 10, 10 };
+    in.buttons.left = true;
+    try testing.expectEqual(@as(?E.Event, null), ui.frame(&in).event);
+    try testing.expectEqual(@as(?E.Widget, .knob), ui.focus);
+    in.buttons.left = false;
+    try testing.expectEqual(@as(?E.Event, null), ui.frame(&in).event);
+    // Enter twice while it has focus: its step reports an event carrying 2.
+    const keys2 = [2]Input.Event{ .{ .kind = .press, .code = 0x28 }, .{ .kind = .press, .code = 0x28 } };
+    in.events = &keys2;
+    const out = ui.frame(&in);
+    try testing.expectEqual(@as(u32, 2), out.event.?.knob);
+    // A press over nothing clears focus; Enter then reports nothing.
+    in.events = &.{};
+    in.pointer = .{ 190, 90 };
+    in.buttons.left = true;
+    _ = ui.frame(&in);
+    in.buttons.left = false;
+    try testing.expectEqual(@as(?E.Widget, null), ui.focus);
+    in.events = &keys2;
+    try testing.expectEqual(@as(?E.Event, null), ui.frame(&in).event);
 }
 
 test {
