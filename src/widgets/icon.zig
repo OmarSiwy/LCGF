@@ -68,14 +68,16 @@ const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
 
 /// The example page: a 16 px icon before a label, and a 24 px icon inside a button, in both
-/// front ends, in theme `th`. The icons use the white texture (a solid square), the stand-in
-/// before an application atlas: the golden image renderer has no icon atlas.
+/// front ends, in theme `th`. Both icons are cells of texture 2, a 40 x 24 coverage atlas (the
+/// 16 px icon at 0, 0, the 24 px one at 16, 0), which the golden dumper
+/// (tools/widgetgolden/dump.zig) uploads; an application places its own icons there.
 pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     const line: Style = .{ .dir = .x, .gap = th.gap, .cross = .center };
     return struct {
-        pub const small: Icon = .{ .size = .{ 16, 16 } };
-        pub const large: Icon = .{ .size = .{ 24, 24 } };
+        pub const atlas: types.Texture = @fromBackingInt(2);
+        pub const small: Icon = .{ .texture = atlas, .uv = .{ 0, 0, 16.0 / 40.0, 16.0 / 24.0 }, .size = .{ 16, 16 } };
+        pub const large: Icon = .{ .texture = atlas, .uv = .{ 16.0 / 40.0, 0, 1, 1 }, .size = .{ 24, 24 } };
         pub const App = struct {
             saves: u32 = 0,
             pub fn build(app: *App, f: *Frame) void {

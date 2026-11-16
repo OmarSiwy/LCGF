@@ -5,7 +5,10 @@ check eight of them and write the frame as a PNG for tools/golden/golden.py.
     python3 tools/golden/gpu.py DIR OUT.png
 
 DIR holds what a dump tool wrote (prototype/dump.zig today): quad.wgsl, quads.bin, glyphs.bin,
-cmds.txt. Ported from prototype/render.py; the drawing and the checks are unchanged.
+cmds.txt, and the textures the frame samples: a `texture ID W H FILE` line in cmds.txt per
+RGBA8 file in DIR, bound as texture ID. Texture 0 is white; an id with no file, and every text
+run, gets the stand-in glyph atlas below. Ported from prototype/render.py; the drawing and the
+checks are unchanged.
 """
 import struct, sys
 from pathlib import Path
@@ -77,6 +80,10 @@ for byte in range(33, 127):
             o = ((cy * 4 + y) * 64 + cx * 4 + x) * 4
             atlas[o:o + 4] = b"\xff\xff\xff\xff"
 atlas_group = tex_group(64, 64, bytes(atlas))
+groups = {0: white}
+for l in lines:
+    if l[0] == "texture":
+        groups[int(l[1])] = tex_group(int(l[2]), int(l[3]), (d / l[4]).read_bytes())
 
 target = device.create_texture(size=(W, H, 1), format="rgba8unorm",
                                usage=wgpu.TextureUsage.RENDER_ATTACHMENT | wgpu.TextureUsage.COPY_SRC)
@@ -87,7 +94,7 @@ def bind(buf, group):                       # what Renderer.bind does
     rp.set_pipeline(pipeline); rp.set_bind_group(0, g0); rp.set_bind_group(1, group); rp.set_vertex_buffer(0, buf)
 for l in lines:
     if l[0] == "quads":
-        bind(quad_buf, white if l[3] == "0" else atlas_group); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1  # texture 0 is white, any other the stand-in atlas
+        bind(quad_buf, groups.get(int(l[3]), atlas_group)); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1
     elif l[0] == "text":
         bind(glyph_buf, atlas_group); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1
     elif l[0] == "custom":                 # inline custom draw: host pipeline, left in whatever state

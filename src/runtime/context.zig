@@ -199,13 +199,28 @@ pub const Context = struct {
     /// `init` over a buffer that is all zero bytes (a static buffer never used before, fresh
     /// `mmap` memory): it is not cleared, so capacity the frames never reach stays untouched and
     /// costs no resident memory. A reused buffer needs `init`.
+    ///
+    /// The contract: every byte of `buffer[0..requiredBytes(limits)]` is zero. A static buffer
+    /// must be declared `= @splat(0)`, which is bss in every build mode; `= undefined` is 0xAA
+    /// in Debug (in .data), and the context would start from garbage. Debug builds check the
+    /// first and last page and panic when either is not zero.
     pub fn initZeroed(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context {
-        if (buffer.len < requiredBytes(limits)) return error.BufferTooSmall;
+        const n = requiredBytes(limits);
+        if (buffer.len < n) return error.BufferTooSmall;
+        if (@import("builtin").mode == .debug and !looksZeroed(buffer[0..n]))
+            @panic("Context.initZeroed: the buffer is not all zero bytes; declare a static buffer `= @splat(0)`, or use `init`");
         var carver: mem.Carver = .{ .buf = buffer, .zeroed = true };
         return build(&carver, limits);
     }
 
     pub const needsFrame = scheduler.needsFrame;
+
+    /// `initZeroed`'s Debug check: the first and last page of `b` are zero bytes. Two pages, so
+    /// the check makes no other page resident.
+    fn looksZeroed(b: []const u8) bool {
+        const page = @min(4096, b.len);
+        return std.mem.allEqual(u8, b[0..page], 0) and std.mem.allEqual(u8, b[b.len - page ..], 0);
+    }
 
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
@@ -942,4 +957,23 @@ test "reduced motion: every animation shows its end state in the frame it change
     try testing.expectEqual(@as(f32, 1), s.spring);
     try testing.expectEqual(@as(f32, 50), s.y);
     try testing.expectEqual(@as(f32, 0), s.out.wake);
+}
+
+test "initZeroed: Debug checks the buffer's first and last page are zero" {
+    var buf: [3 * 4096]u8 = @splat(0);
+    try testing.expect(Context.looksZeroed(&buf));
+    // What a static `= undefined` buffer holds in Debug: 0xAA everywhere.
+    @memset(&buf, 0xaa);
+    try testing.expect(!Context.looksZeroed(&buf));
+    @memset(&buf, 0);
+    buf[buf.len - 1] = 1;
+    try testing.expect(!Context.looksZeroed(&buf));
+    // Smaller than a page: the whole buffer is checked.
+    try testing.expect(Context.looksZeroed(buf[0..100]));
+    // A static buffer declared `= @splat(0)` passes the check and carves.
+    const small: Limits = .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 16, .depth = 4 };
+    const S = struct {
+        var zeroed: [Context.requiredBytes(small)]u8 align(mem.column_align) = @splat(0);
+    };
+    _ = try Context.initZeroed(&S.zeroed, small);
 }

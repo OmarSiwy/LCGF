@@ -374,11 +374,15 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
 
         /// `push` from a style already turned into its row (`Template.from`, once per style
         /// rather than once per node): the row is copied as it is, one store per column.
-        pub fn pushRow(t: *Self, parent: Index, id: Id, row: *const Template) Index {
+        pub fn pushRow(t: *Self, parent_in: Index, id: Id, row: *const Template) Index {
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
             t.len = i + 1;
+            // Full, the last row is rewritten, and a child of the node open there would be its
+            // own parent. Every pass relies on parent < row (levels.build read a stale depth
+            // and indexed past its table), so the parent is clamped to the row before.
+            const parent: Index = @min(parent_in, i -| 1);
 
             c.id[i] = @backingInt(id);
             c.parent[i] = parent;
