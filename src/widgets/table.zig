@@ -585,6 +585,19 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/table.replay");
+    pub const golden_frames = .{
+        .{ "table-rest", 0 },
+        .{ "table-sorted", 5 },
+        .{ "table-cell", 9 },
+        .{ "table-resized", 11 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -604,6 +617,40 @@ fn rowsOf(t: *const Tree) Rows {
     // The body carries the table's id; the table and its header row come before it.
     const body = t.find(.from("files"));
     return .{ .box = body - 2 - 4 * 3, .cols = 3, .rows = 5 };
+}
+
+test "table: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var first: [13]u32 = undefined;
+    var cell: [13][2]u32 = undefined;
+    var width0: [13]f32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        try testing.expectEqual(h.app.table, h.ui.signals.state.table);
+        const t = out.runtime.tree;
+        // The first row shown, by its data row, and its text, which the strings hold only
+        // until the next frame but one.
+        first[k] = h.app.order[0];
+        try testing.expectEqualStrings(file_cells[3 * first[k]], cellText(h, t, rowsOf(t), 0, 0));
+        cell[k] = .{ h.app.table.row, h.app.table.col };
+        width0[k] = h.app.table.widths[0];
+    }
+    try testing.expectEqual(@as(u32, 13), h.frames);
+    // Sorted by Kind ascending (image first) at frame 3, descending (text first) at 5.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 1, 0, 0 }, first[0..7]);
+    try testing.expectEqual([2]u32{ 2, 0 }, cell[7]);
+    try testing.expectEqual([2]u32{ 2, 1 }, cell[8]);
+    try testing.expectEqual([2]u32{ 3, 1 }, cell[9]);
+    try testing.expectEqualSlices(f32, &.{ 96, 96, 96, 96, 96, 96, 96, 96, 96, 96, 94, 134, 134 }, &width0);
+    try testing.expect(h.app.table.descending);
+    try testing.expectEqual(@as(u32, 1), h.app.table.sort);
 }
 
 test "table: roles, values and the active cell's state" {
