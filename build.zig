@@ -112,6 +112,14 @@ pub fn build(b: *std.Build) void {
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
     b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
+    // Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
+    const gates_latency = b.addRunArtifact(b.addExecutable(.{ .name = "gates-latency", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/gates/latency.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) }));
+    b.step("gates-latency", "Print input-to-photon latency of the example, headless (bench/gates/)").dependOn(&gates_latency.step);
 
     // Section sizes per example, built ReleaseSmall. Linux (ELF64) only. Until examples/ exists the
     // examples are the prototype's frame dumper and the benchmark.
@@ -731,6 +739,23 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
+
+    // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
+    // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
+    const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/wayland.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland", "Test the Wayland shell against a fake compositor (ci/run.sh wayland)").dependOn(&b.addRunArtifact(wayland_tests).step);
+    const wayland_example = b.addExecutable(.{ .name = "wayland-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
 
     // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
     // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
