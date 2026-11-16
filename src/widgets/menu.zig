@@ -27,6 +27,8 @@ const Rect = types.Rect;
 const Style = types.Style;
 const Response = types.Response;
 const Part = popover.Part;
+const Tree = @import("../core/tree.zig").Tree;
+const none = types.none;
 const partName = popover.partName;
 
 // ---- spec: what the menu takes and keeps -----------------------------------------------------
@@ -130,12 +132,12 @@ pub fn Menu(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @E
                 if (!ms.open) return null;
                 return .{ .style = popover.scrimStyle(v.in.viewport) };
             }
-            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)) };
+            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)), .role = .menu };
             if (comptime named(n, partName(id, "sub"))) {
                 if (!ms.sub) return null;
-                return .{ .style = subStyle(&th, v.last.of(partName(id, def.items[def.sub_at.?]))) };
+                return .{ .style = subStyle(&th, v.last.of(partName(id, def.items[def.sub_at.?]))), .role = .menu };
             }
-            if (comptime itemOf(def, id, n)) |k| return .{ .style = itemStyle(&th, highlighted(def, ms, k)) };
+            if (comptime itemOf(def, id, n)) |k| return .{ .style = itemStyle(&th, highlighted(def, ms, k)), .role = .menu_item };
             return popover.plainPart(th, n, v.response);
         }
     };
@@ -289,6 +291,32 @@ fn choose(sub_at: u8, st: MenuState, k: u8) MenuState {
     return s;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The semantics of menu `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`. The roles are in the columns:
+/// the lists are `menu`, the items `menu_item` (named by their text, value 0), the trigger a
+/// button. Here: the trigger is expandable, expanded while the list is in `t`
+/// (`aria-expanded`), and names the list (`aria-labelledby`); the submenu's item likewise for
+/// the submenu; the highlighted item is `selected`. Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: Def, st: MenuState) void {
+    expands(t, s, .from(name), .from(partName(name, "panel")));
+    if (def.sub_at) |at| expands(t, s, .from(partName(name, def.items[at])), .from(partName(name, "sub")));
+    inline for (0..comptime def.count()) |k| {
+        const row = t.find(.from(partName(name, def.name(k))));
+        if (row != none and highlighted(def, st, k)) s.c.state[row] |= a11y.State.bitsOf(.{ .selected = true });
+    }
+}
+
+/// `opener` is expandable, expanded while `popup` is in `t`, and names it.
+fn expands(t: *const Tree, s: *a11y.Semantics, opener: Id, popup: Id) void {
+    const o = t.find(opener);
+    if (o == none) return;
+    const p = t.find(popup);
+    s.c.state[o] |= a11y.State.bitsOf(.{ .expandable = true, .expanded = p != none });
+    if (p != none) s.c.labelled_by[p] = o;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The trigger: a button named `name` showing `text`.
@@ -309,11 +337,15 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     st.* = advance(def, st.*, hits, f.in.events);
     if (!st.open) return st.chosen;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
-    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
+    const list = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    _ = f.interact(list, popover.overlay_sense);
+    f.tree().c.role[list.ix()] = @backingInt(a11y.Role.menu);
     inline for (0..def.items.len) |k| buildItem(f, th, name, def, st, k, texts[k]);
     f.close();
     if (def.sub_at) |at| if (st.sub) {
-        _ = f.interact(f.open(.from(partName(name, "sub")), subStyle(th, f.lastRect(.from(partName(name, def.items[at]))))), popover.overlay_sense);
+        const sub = f.open(.from(partName(name, "sub")), subStyle(th, f.lastRect(.from(partName(name, def.items[at])))));
+        _ = f.interact(sub, popover.overlay_sense);
+        f.tree().c.role[sub.ix()] = @backingInt(a11y.Role.menu);
         inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st, k, texts[k]);
         f.close();
     };
@@ -322,7 +354,9 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
 }
 
 fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *const MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.interact(f.open(.from(partName(name, def.name(k))), itemStyle(th, highlighted(def, st.*, k))), popover.overlay_sense);
+    const row = f.open(.from(partName(name, def.name(k))), itemStyle(th, highlighted(def, st.*, k)));
+    _ = f.interact(row, popover.overlay_sense);
+    f.tree().c.role[row.ix()] = @backingInt(a11y.Role.menu_item);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -530,6 +564,47 @@ test "Menu: pointer and keys in both front ends" {
     try testing.expectEqual(MenuState{ .chosen = 6 }, s[7]);
     try testing.expect(s[9].open and !s[10].open);
     try testing.expectEqual(MenuState{}, s[11]);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Menu: lists are menus named by their openers, items menu items; the same in both front ends" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try h.frame(&in);
+    const st: MenuState = .{ .open = true, .sub = true, .active = 2, .sub_active = 1 };
+    h.app.menu = st;
+    h.ui.signals.set(.menu, st);
+    _ = try h.frame(&in);
+    const pair = try h.frame(&in);
+    const rt = pair.runtime;
+    const cp = pair.comptime_;
+    semantics(rt.tree, sem[0].begin(), "file", file_menu, h.app.menu);
+    semantics(cp.tree, sem[1].begin(), "file", file_menu, h.ui.signals.state.menu);
+    const e = sem[0].finish(rt.tree, rt.texts, h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp.tree, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, t: *const Tree, comptime id: []const u8) u32 {
+            return popover.exportRow(x, t.find(.from(id)));
+        }
+    }.of;
+    const t = rt.tree;
+    const H = std.hash.Fnv1a_32;
+    try testing.expectEqual(@backingInt(a11y.Role.menu), e.c.role[row(e, t, "file_panel")]);
+    try testing.expectEqual(H.hash("File"), e.c.name_hash[row(e, t, "file_panel")]);
+    try testing.expectEqual(@backingInt(a11y.Role.menu), e.c.role[row(e, t, "file_sub")]);
+    try testing.expectEqual(H.hash("Recent"), e.c.name_hash[row(e, t, "file_sub")]);
+    try testing.expectEqual(@backingInt(a11y.Role.menu_item), e.c.role[row(e, t, "file_quit")]);
+    try testing.expectEqual(H.hash("Quit"), e.c.name_hash[row(e, t, "file_quit")]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[row(e, t, "file_quit")]);
+    const open_state = a11y.State.bitsOf(.{ .expandable = true, .expanded = true });
+    try testing.expectEqual(open_state, e.c.state[row(e, t, "file")]);
+    try testing.expectEqual(open_state | a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "file_recent")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "file_scene2")]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[row(e, t, "file_scene1")]);
+    // The list has its four items as children.
+    try testing.expectEqual(@as(u32, 4), e.c.kids[row(e, t, "file_panel")]);
 }
 
 test "checkMenu: the state field, the item fields and the submenu" {
