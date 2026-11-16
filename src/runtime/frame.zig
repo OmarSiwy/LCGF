@@ -18,6 +18,7 @@ const Response = types.Response;
 const Color = types.Color;
 const none = types.none;
 const Output = @import("context.zig").Output;
+const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
@@ -125,6 +126,12 @@ pub const Frame = struct {
         f.tree().c.look[node.ix()].fill = color.bitsOf();
     }
 
+    /// Requests `cursor` if `when` holds. The last request in a frame wins.
+    pub fn setCursor(f: *Frame, cursor: Cursor, when: bool) void {
+        const p = &f.ctx.platform;
+        p.cursor = @fromBackingInt(@as(u8, @truncate(simd.selU(when, @backingInt(cursor), @backingInt(p.cursor)))));
+    }
+
     // ---- finishing ------------------------------------------------------------
 
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
@@ -155,15 +162,38 @@ pub const Frame = struct {
         const tx = f.texts();
         const strings = &ctx.strings[ctx.cur];
         t.seal(0);
-        paint.emit(t, tx, &ctx.customs[ctx.cur], strings.buf[0..strings.len], &ctx.draw);
+        const cu = &ctx.customs[ctx.cur];
+        paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        // The tables flag their own overflow; the frame reports them together.
+        ctx.status = .{
+            .nodes = t.overflow,
+            .texts = tx.overflow,
+            .customs = cu.overflow,
+            .strings = strings.overflow,
+            .depth = ctx.status.depth,
+        };
         return .{
             .draw = &ctx.draw,
             .tree = t,
             .texts = tx,
-            .wake = simd.selF(ctx.settle > 0, 0, types.inf),
+            .platform = ctx.platform,
+            .status = ctx.status,
+            .wake = wake(ctx, f.in),
         };
     }
 };
+
+/// Seconds until a frame is due with no new input: 0 while a settle frame is owed, else the
+/// nearest pending timer of the interaction step (a held press reaching `long_time`, the hot
+/// widget reaching `hover_delay`), else inf. A timer that has fired is no longer pending.
+fn wake(ctx: *const Context, in: *const Input) f32 {
+    const s = &ctx.inter;
+    const held: f32 = @floatCast(in.time - @as(f64, @bitCast(s.press_at)));
+    const resting: f32 = @floatCast(in.time - @as(f64, @bitCast(s.hot_at)));
+    const long_due = simd.selF(simd.andB(s.active != 0, !s.long_fired), @max(s.long_time - held, 0), types.inf);
+    const hover_due = simd.selF(simd.andB(s.hot != 0, s.hover_intent == 0), @max(s.hover_delay - resting, 0), types.inf);
+    return @min(simd.selF(ctx.settle > 0, 0, types.inf), @min(long_due, hover_due));
+}
 
 /// Rect of row `i` of `t`, or a zero rect for `none`. The read is clamped into bounds and the
 /// result scaled by 0 or 1, so there is no branch.
@@ -404,4 +434,90 @@ test "end: the tier-0 pass sequence, then paint; equal to running layout and fin
     try testing.expectEqual(@as(u32, 3), again.draw.cmd_len);
     // Nothing changed and nothing moves: sleep until the next event.
     try testing.expectEqual(types.inf, again.wake);
+}
+
+test "running out of rows is reported, not fatal" {
+    const tiny: @import("context.zig").Limits = .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 16, .depth = 3 };
+    const Fx = Fixture(tiny);
+    var ctx = try Fx.context();
+    try testing.expectError(error.BufferTooSmall, Context.init(Fx.buffer[0..64], tiny));
+
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    for (0..40) |i| {
+        _ = f.open(Id.from("n").with(@intCast(i)), .{ .pad = @splat(1) });
+        _ = f.text("a long label that will not fit", .{});
+    }
+    for (0..40) |_| f.close();
+    _ = f.custom(.from("c1"), .{}, 0);
+    _ = f.custom(.from("c2"), .{}, 0);
+    const out = f.end(.{});
+    try testing.expect(out.status.nodes and out.status.texts and out.status.customs and out.status.strings and out.status.depth);
+    try testing.expect(!out.status.ok());
+    try testing.expect(out.tree.len <= tiny.nodes);
+
+    // A frame that fits is clean again.
+    f = ctx.begin(&in);
+    _ = f.text("ok", .{});
+    try testing.expect(f.end(.{}).status.ok());
+}
+
+test "setCursor: the last request that holds wins; the next frame starts at arrow" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .depth = 4 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    f.setCursor(.pointer, true);
+    f.setCursor(.grab, false);
+    try testing.expectEqual(Cursor.pointer, f.end(.{}).platform.cursor);
+    f = ctx.begin(&in);
+    f.setCursor(.text, true);
+    f.setCursor(.resize_h, true);
+    try testing.expectEqual(Cursor.resize_h, f.end(.{}).platform.cursor);
+    f = ctx.begin(&in);
+    try testing.expectEqual(Cursor.arrow, f.end(.{}).platform.cursor);
+}
+
+test "wake: long press and hover intent wake the host when they fall due, once" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 4 });
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 200, 100 } };
+    var f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    _ = f.finish();
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual(types.inf, f.finish().wake);
+
+    // Pointer comes to rest on "a" at t = 1: hover intent is due at 1.5.
+    in.pointer = .{ 20, 20 };
+    in.time = 1;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual(@as(f32, 0), f.finish().wake); // settle frame
+    in.time = 1.2;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectApproxEqAbs(@as(f32, 0.3), f.finish().wake, 1e-4);
+    in.time = 1.5;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual(@backingInt(Id.from("a")), ctx.inter.hover_intent);
+    try testing.expectEqual(types.inf, f.finish().wake);
+
+    // Press at t = 2: the long press is due at 2.5, then nothing is pending.
+    in.buttons.left = true;
+    in.time = 2;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual(@as(f32, 0), f.finish().wake);
+    in.time = 2.1;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectApproxEqAbs(@as(f32, 0.4), f.finish().wake, 1e-4);
+    in.time = 2.6;
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual(@backingInt(Id.from("a")), ctx.inter.long_pressed);
+    try testing.expectEqual(types.inf, f.finish().wake);
 }

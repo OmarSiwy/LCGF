@@ -41,12 +41,26 @@ pub const Status = bitpack struct(u8) {
     }
 };
 
+pub const Cursor = enum(u8) { arrow, pointer, text, grab, resize_h, resize_v };
+
+/// Effects the host should apply, returned as data instead of called back.
+pub const Platform = struct {
+    cursor: Cursor = .arrow,
+    /// Show the on-screen keyboard / enable IME, anchored at `ime_rect`.
+    wants_text: bool = false,
+    ime_rect: types.Rect = .{},
+    /// Non-empty when the UI asks to set the clipboard. Valid until the next `begin`.
+    clipboard: []const u8 = "",
+};
+
 /// What a frame produced. Every field is data the host reads; nothing calls back.
 pub const Output = struct {
     draw: *const DrawList,
     /// Final geometry and semantics (`role`, `value`) for accessibility bridges and tests.
     tree: *const Tree,
     texts: *const Texts,
+    platform: Platform,
+    status: Status,
     /// Seconds until another frame is needed without new input: 0 = now, inf = sleep until
     /// the next event.
     wake: f32,
@@ -68,6 +82,7 @@ pub const Context = struct {
     stack: []u32,
     depth: u32 = 0,
     inter: Interaction = .{},
+    platform: Platform = .{},
     status: Status = .{},
     frame: u32 = 0,
     /// Frames still owed after the last input change.
@@ -119,6 +134,7 @@ pub const Context = struct {
         ctx.texts[ctx.cur].reset();
         ctx.customs[ctx.cur].reset();
         ctx.strings[ctx.cur].reset();
+        ctx.platform = .{};
         ctx.status = .{};
         ctx.frame +%= 1;
 
