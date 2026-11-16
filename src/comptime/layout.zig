@@ -224,6 +224,17 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             scratch.cursor = @splat(0);
         }
 
+        /// Which optional passes this UI runs, decided while compiling. `text`: measure and
+        /// applyText, for a UI with labels. `wrap`: textAvail and the font's wrap, for a UI with
+        /// a run that may wrap; labels use the default `TextStyle`, which does not, so no
+        /// comptime UI wraps yet. Grow, percentages and shrink have no pass of their own: `fit`
+        /// and `resolve` carry their terms in the loops every UI needs, so there is no grow pass
+        /// to skip (C0161 folds the subtrees without them instead).
+        pub const needs = struct {
+            pub const text = label_count > 0;
+            pub const wrap = text and (TextStyle{}).wrap;
+        };
+
         /// The label text runs over `scratch`, as the text protocol (src/text/protocol.zig)
         /// reads and writes them: run k is label k, with the default `TextStyle` and the bytes of
         /// `spans[k]`, as `Frame.text` would push it.
@@ -263,14 +274,15 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
             var tx = texts(scratch, spans);
-            font.measure(&tx);
+            // Passes the UI cannot need are not compiled in (`needs`).
+            if (needs.text) font.measure(&tx);
             clear(scratch);
-            layout.applyText(&v, &tx, .x);
+            if (needs.text) layout.applyText(&v, &tx, .x);
             layout.fit(&v, .x);
             layout.resolve(&v, .x, viewport[0]);
-            layout.textAvail(&v, &tx);
-            font.wrap(&tx);
-            layout.applyText(&v, &tx, .y);
+            if (needs.wrap) layout.textAvail(&v, &tx);
+            if (needs.wrap) font.wrap(&tx);
+            if (needs.text) layout.applyText(&v, &tx, .y);
             layout.fit(&v, .y);
             layout.resolve(&v, .y, viewport[1]);
             layout.place(&v);
@@ -571,6 +583,17 @@ test "Layout: subtrees that do not depend on the viewport are laid out while com
     // Folded results equal the runtime layout in any viewport, however small.
     inline for (.{ [2]f32{ 1, 1 }, [2]f32{ 5000, 20 }, [2]f32{ 123.5, 77.25 } }) |vp|
         try expectSameLayout(examples.all[0], vp);
+}
+
+test "Plain.needs: text passes only for a UI with labels, wrap for none yet" {
+    try testing.expect(Plain(examples.mixer, .{}).needs.text);
+    try testing.expect(!Plain(examples.mixer, .{}).needs.wrap);
+    const s = spec_zig;
+    const bars = comptime s.row(.{}, .{ s.col(.{ .size = .{ .px(10), .px(10) } }, .{}), s.col(.{ .size = .{ .fill, .px(4) } }, .{}) });
+    const B = Plain(bars, .{});
+    try testing.expect(!B.needs.text and !B.needs.wrap);
+    // Without its text passes it still equals the runtime layout.
+    try expectSameLayout(.{ .name = "bars", .State = struct {}, .spec = bars }, .{ 300, 50 });
 }
 
 test "Plain.gap_total: equals what prepare computes for the runtime tree" {

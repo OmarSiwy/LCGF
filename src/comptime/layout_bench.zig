@@ -36,11 +36,21 @@ fn list(comptime k: usize) lcgr.spec.Spec {
     return s.col(.{ .pad = @splat(4), .gap = 2 }, kids);
 }
 
+/// `list` without text: each row two bars. 3k + 1 nodes, no labels.
+fn bars(comptime k: usize) lcgr.spec.Spec {
+    @setEvalBranchQuota(1000 + 200 * k);
+    const s = lcgr.spec;
+    var kids: [k]s.Spec = undefined;
+    for (&kids) |*r| r.* = s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.col(.{ .size = .{ .px(40), .px(8) } }, .{}), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) });
+    return s.col(.{ .pad = @splat(4), .gap = 2 }, kids);
+}
+
 const List = struct { x: f32 = 0 };
 /// The examples, then two longer static lists.
 const uis = examples.all ++ [_]examples.Example{
     .{ .name = "list-49", .State = List, .spec = list(16) },
     .{ .name = "list-193", .State = List, .spec = list(64) },
+    .{ .name = "bars-49", .State = List, .spec = bars(16) },
 };
 
 fn median(xs: *[batches]u64) u64 {
