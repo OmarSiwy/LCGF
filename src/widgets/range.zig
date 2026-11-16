@@ -9,6 +9,11 @@
 //! and a focus stop, named `<id>.0` and `<id>.1` in the comptime `Widget` enum, `id.with(0)`
 //! and `id.with(1)` at run time): the half of the track nearer that thumb, split at the
 //! midpoint between them, so a press grabs the nearer thumb.
+//!
+//! Accessibility: each thumb is a slider (its half has role slider), its value the thumb's
+//! value; the track and the pieces are presentational. As for the slider, the range ends and
+//! a name (`aria-valuemin`/`max`, a label) are not in the exported tree: a11y/tree.zig has
+//! no columns for them and the application labels a thumb with `Semantics.labelled_by`.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -76,7 +81,7 @@ pub fn trackStyle(th: *const Theme) Style {
 }
 
 /// The styles of the rows under the track, in row order, for thumbs at fractions `f0 <= f1`
-/// of the track: low half (to the midpoint between the thumbs), its outside piece, its part
+/// of the track: low half (to the midpoint between the thumbs; role slider, as each thumb is), its outside piece, its part
 /// of the span; high half, its part of the span, its outside piece. The span is the accent;
 /// the outside pieces are transparent, so the track shows through.
 pub fn parts(th: *const Theme, f0: f32, f1: f32) [2 * thumb_rows]Style {
@@ -87,10 +92,10 @@ pub fn parts(th: *const Theme, f0: f32, f1: f32) [2 * thumb_rows]Style {
     // Every width a fraction of its parent: a grow child inside a fraction-sized parent takes
     // the track's room, not the half's.
     return .{
-        .{ .dir = .x, .size = .{ .pct(mid), .fill } },
+        .{ .dir = .x, .size = .{ .pct(mid), .fill }, .role = .slider },
         .{ .size = .{ .pct(low), .fill } },
         .{ .size = .{ .pct(1 - low), .fill }, .fill = th.accent },
-        .{ .dir = .x, .size = .{ .pct(1 - mid), .fill } },
+        .{ .dir = .x, .size = .{ .pct(1 - mid), .fill }, .role = .slider },
         .{ .size = .{ .pct(high), .fill }, .fill = th.accent },
         .{ .size = .{ .pct(1 - high), .fill } },
     };
@@ -292,6 +297,28 @@ test "range input: a press grabs the nearer thumb, drags across the track; arrow
             try testing.expectEqual(h.app.band[i], out.runtime.tree.c.value[3 + thumb_rows * i]);
         }
     }
+}
+
+var range_semantics: base.Semantic(16) = .{};
+
+test "range a11y: two sliders, each with its thumb's value, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &band;
+    h.init();
+    const in: Input = .{ .viewport = .{ 216, 40 } };
+    _ = try h.frame(&in);
+    const x = &range_semantics;
+    try x.run(h);
+    for (0..2, [2]f32{ 20, 60 }) |i, v| {
+        const r = x.row(3 + thumb_rows * @as(u32, @intCast(i))).?;
+        try testing.expectEqual(@backingInt(a11y.Role.slider), x.out[0].c.role[r]);
+        try testing.expectEqual(@backingInt(thumbId(.from("band"), @intCast(i))), x.out[0].c.id[r]);
+        try testing.expectEqual(v, x.out[0].c.value[r]);
+        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    }
+    // The track and pieces are presentational: the root and two thumbs.
+    try testing.expectEqual(null, x.row(2));
+    try testing.expectEqual(@as(u32, 3), x.out[0].len);
 }
 
 test {
