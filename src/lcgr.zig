@@ -100,3 +100,6 @@ pub const shell_example = @import("shell/example.zig");
 test {
     std.testing.refAllDecls(@This());
 }
+pub const i18n_catalogue = @import("i18n/catalogue.zig");
+pub const i18n_plural = @import("i18n/plural.zig");
+pub const i18n_number = @import("i18n/number.zig");
