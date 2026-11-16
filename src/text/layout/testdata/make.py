@@ -26,7 +26,12 @@ The rules, as text layout implements them:
   is broken at an infinite width.
 - Lines stack from the top: a line's baseline is the largest ascender of the spans on it
   below its top, and below that the largest descender plus line gap (an empty line takes the
-  span of the glyph before it). Each span is shaped on its own. Baselines snap to whole
+  span of the glyph before it). Each span is shaped on its own.
+- With carets, a caret bar is drawn for every byte offset: on the last line starting at or
+  before it, at the last stop at or before it. Stops are grapheme boundaries; a cluster of
+  several graphemes (a ligature) shares its width (advances plus justification) equally. A
+  line ending in a space or newline does not offer its end. The bar is one pixel wide, its
+  coverage split between two columns, from the line's top for its height (rows round half up). Baselines snap to whole
   pixels (round half up), x stays fractional.
 """
 import math
@@ -55,6 +60,7 @@ SCENES = {
     "clamp": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 56), max_lines=2),
     "single": dict(text="Type office fluff into a lovely file", px=16, box=(4, 2, 150), size=(160, 28), wrap=False, max_lines=1),
     "rich": dict(text="Small words, BIG words and small again, all in one paragraph.", px=16, box=(4, 2, 200), size=(208, 124), spans=[(13, 28), (22, 16)]),
+    "carets": dict(text="An office fluff\nflows on, justified to the end of the box.", px=18, box=(4, 2, 200), size=(208, 84), justify=True, carets=True),
     "narrow": dict(text="Pneumonoultramicroscopic words\nbreak hard.", px=16, box=(3, 1, 90), size=(96, 92)),
 }
 
@@ -208,6 +214,7 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
     lines, ell_w = ellipsize(lines, glyphs, raw, bw, scene.get("max_lines"), ell.advance)
     img = bytearray(W * H)
     top = by
+    placed = []
     for ln in lines:
         on = glyphs[ln["first"]:ln["end"]] or glyphs[max(ln["first"] - 1, 0):ln["first"]] or [Glyph(0, 0, 0, 0, 0, px)]
         tall = max(g.px for g in on) / upem
@@ -223,8 +230,61 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
             x += g.advance + (extra if is_space(raw, g) else 0)
         if ln is lines[-1] and ell_w:
             draw(img, W, H, face, ell, x, y)
-        top += (asc - desc + gap) * tall
+        lx = bx + (0 if justified else (bw - ln["width"]) * scene.get("align", 0))
+        height = (asc - desc + gap) * tall
+        placed.append((ln, lx, extra, top, height))
+        top += height
+    if scene.get("carets"):
+        for i in range(len(raw) + 1):
+            x, t, h = caret(placed, glyphs, raw, i)
+            bar(img, W, H, x, t, h)
     return img
+
+
+def caret(placed, glyphs, raw, index):
+    """Caret x, line top and height for byte offset `index`."""
+    def start(ln):
+        return glyphs[ln["first"]].cluster if ln["first"] < len(glyphs) else len(raw)
+
+    def byte_at(i):
+        return glyphs[i].cluster if i < len(glyphs) else len(raw)
+
+    k = max(sum(1 for p in placed if start(p[0]) <= index), 1) - 1
+    ln, lx, extra, top, height = placed[k]
+    stops = []
+    x, i = lx, ln["first"]
+    while i < ln["end"]:
+        cs = glyphs[i].cluster
+        cw = 0
+        while i < ln["end"] and glyphs[i].cluster == cs:
+            cw += glyphs[i].advance + (extra if is_space(raw, glyphs[i]) else 0)
+            i += 1
+        ce = byte_at(i)
+        chars = raw[cs:ce].decode("utf-8")  # ASCII scenes: one grapheme per character
+        off = cs
+        for j, ch in enumerate(chars):
+            stops.append((off, x + cw * j / len(chars)))
+            off += len(ch.encode("utf-8"))
+        x += cw
+    if k == len(placed) - 1 or ln["end"] == ln["ink"]:
+        stops.append((byte_at(ln["end"]), x))
+    best = lx
+    for off, sx in stops:
+        if off > index:
+            break
+        best = sx
+    return best, top, height
+
+
+def bar(img, W, H, x, top, height):
+    col = math.floor(x)
+    f = x - col
+    cov = [round(255 * (1 - f)), round(255 * f)]
+    for r in range(math.floor(top + 0.5), min(math.floor(top + height + 0.5), H)):
+        for d in range(2):
+            c = col + d
+            if 0 <= c < W:
+                img[r * W + c] = max(img[r * W + c], cov[d])
 
 
 def draw(img, W, H, face, g, pen, base):

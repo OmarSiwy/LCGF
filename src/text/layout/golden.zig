@@ -15,6 +15,7 @@ const shape = @import("../shape/shape.zig");
 const raster = @import("../raster/raster.zig");
 const opentype = @import("../font/opentype.zig");
 const spans_ = @import("spans.zig");
+const query = @import("query.zig");
 
 const Glyphs = lines_.Glyphs;
 const Lines = lines_.Lines;
@@ -93,7 +94,7 @@ pub const RunCols = struct {
     }
 };
 
-pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single, rich };
+pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single, rich, carets };
 
 /// A span after the first (which starts at 0 at the scene's `px`).
 const SpanSpec = struct { start: u32, px: f32 };
@@ -110,6 +111,8 @@ const Spec = struct {
     wrap: bool = true,
     max_lines: u32 = std.math.maxInt(u32),
     spans: []const SpanSpec = &.{},
+    /// Draw a caret bar at every byte offset (query.caret).
+    carets: bool = false,
 };
 
 const para = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it.";
@@ -123,6 +126,7 @@ fn spec(s: Scene) Spec {
         .clamp => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 56 }, .max_lines = 2 },
         .single => .{ .text = "Type office fluff into a lovely file", .px = 16, .box = .{ 4, 2, 150 }, .size = .{ 160, 28 }, .wrap = false, .max_lines = 1 },
         .rich => .{ .text = "Small words, BIG words and small again, all in one paragraph.", .px = 16, .box = .{ 4, 2, 200 }, .size = .{ 208, 124 }, .spans = &.{ .{ .start = 13, .px = 28 }, .{ .start = 22, .px = 16 } } },
+        .carets => .{ .text = "An office fluff\nflows on, justified to the end of the box.", .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 84 }, .justify = true, .carets = true },
         .narrow => .{ .text = "Pneumonoultramicroscopic words\nbreak hard.", .px = 16, .box = .{ 3, 1, 90 }, .size = .{ 96, 92 } },
     };
 }
@@ -159,6 +163,10 @@ pub fn expectScene(s: Scene) !void {
     // Every line is in the picture.
     try std.testing.expect(sp.box[1] + lines_.stackHeight(&p.l) <= @as(f32, @floatFromInt(h)));
     try draw(&shaper.face, &p, .{ sp.box[0], sp.box[1] }, img[0 .. w * h], w);
+    if (sp.carets) for (0..sp.text.len + 1) |i| {
+        const c = query.caret(&p.l, &p.g, sp.text, @intCast(i));
+        bar(img[0 .. w * h], w, sp.box[0] + c.x, sp.box[1] + c.top, c.height);
+    };
     try compare(s, img[0 .. w * h], w, h);
 }
 
@@ -198,6 +206,22 @@ fn glyphAt(face: *const opentype.Face, id: u16, scale: f32, x: f32, base: i32, i
         if (ix < 0 or iy < 0 or ix >= w or iy >= h) continue;
         const at = @as(usize, @intCast(iy)) * w + @as(usize, @intCast(ix));
         img[at] = @max(img[at], cov[r * b.w + c]);
+    };
+}
+
+/// A one pixel wide caret bar at fractional `x`, its coverage split between two columns, from
+/// row `top` down `height` px (both rounded half up).
+fn bar(img: []u8, w: u32, x: f32, top: f32, height: f32) void {
+    const col: i32 = @intFromFloat(@floor(x));
+    const f = x - @floor(x);
+    const cov = [2]u8{ @intFromFloat(@round(255 * (1 - f))), @intFromFloat(@round(255 * f)) };
+    const r0: usize = @intFromFloat(@floor(top + 0.5));
+    const r1: usize = @intFromFloat(@floor(top + height + 0.5));
+    for (r0..@min(r1, img.len / w)) |r| for (0..2) |d| {
+        const c = col + @as(i32, @intCast(d));
+        if (c < 0 or c >= w) continue;
+        const at = r * w + @as(usize, @intCast(c));
+        img[at] = @max(img[at], cov[d]);
     };
 }
 
