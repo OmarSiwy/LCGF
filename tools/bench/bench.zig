@@ -73,11 +73,11 @@ const src_bytes = blk: {
     _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     break :blk counter.off;
 };
-var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
+var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
 
 const Context = lcgr.context.Context;
 const ctx_limits: lcgr.context.Limits = .{ .nodes = limits.nodes, .texts = limits.texts, .strings = limits.strings, .anims = limits.anims };
-var ctx_buffer: [Context.requiredBytes(ctx_limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [Context.requiredBytes(ctx_limits)]u8 align(lcgr.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
 /// same name in `to`. The column sets have the same names and row sizes, except `look`, which
