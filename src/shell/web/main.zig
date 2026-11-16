@@ -18,6 +18,7 @@ const imports = struct {
     extern "lcgr" fn shell_schedule(seconds: f32, pace: u32) void;
     extern "lcgr" fn shell_cursor(cursor: u32) void;
     extern "lcgr" fn shell_clipboard(ptr: [*]const u8, len: usize) void;
+    extern "lcgr" fn shell_ime(on: bool, x0: f32, y0: f32, x1: f32, y1: f32) void;
 };
 
 /// The page, as web.zig's `host`.
@@ -30,6 +31,9 @@ const host = struct {
     }
     pub fn clipboard(text: []const u8) void {
         imports.shell_clipboard(text.ptr, text.len);
+    }
+    pub fn ime(on: bool, r: lcgr.types.Rect) void {
+        imports.shell_ime(on, r.x0, r.y0, r.x1, r.y1);
     }
     pub fn present(out: *const Output) void {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });
@@ -73,12 +77,12 @@ export fn lcgr_init() bool {
 export fn lcgr_frame(ms: f64) void {
     shell.time(ms / 1000);
     if (!shell.poll(&ev)) return;
-    see(&ev.in);
+    see(&ev);
     if (ctx.needsFrame(&ev.in)) {
         var f = ctx.begin(&ev.in);
         app.build(&f, &ev);
         const out = f.end(font);
-        shell.apply(&out.platform);
+        shell.apply(&withTestTextInput(out.platform));
         shell.present(&out);
     }
     shell.wait(scheduler.wake(&ctx, &ev.in), scheduler.pace(&ctx));
@@ -132,6 +136,29 @@ export fn lcgr_lift(id: u32) void {
 
 var staging: [256]u8 = undefined;
 
+/// The IME's composition, encoded in the staging buffer; `a`..`b` the highlighted byte range.
+export fn lcgr_compose(len: u32, a: u32, b: u32) void {
+    shell.compose(staging[0..@min(len, staging.len)], .{ a, b });
+}
+
+/// For the tests: from now on every frame asks for text input at (x0, y0, x1, y1), as a
+/// focused text field would (the example has none); `on` false stops it. Applied at once.
+export fn lcgr_test_ime(on: bool, x0: f32, y0: f32, x1: f32, y1: f32) void {
+    test_text_input = if (on) .{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 } else null;
+    shell.apply(&withTestTextInput(.{ .cursor = shell.cursor }));
+}
+
+var test_text_input: ?lcgr.types.Rect = null;
+
+fn withTestTextInput(p: context.Platform) context.Platform {
+    var q = p;
+    if (test_text_input) |r| {
+        q.wants_text = true;
+        q.ime_rect = r;
+    }
+    return q;
+}
+
 /// For the tests: a frame's effects asking to copy `text` (the example itself copies nothing).
 export fn lcgr_test_copy(len: u32) void {
     shell.apply(&.{ .clipboard = staging[0..@min(len, staging.len)] });
@@ -150,10 +177,14 @@ const Seen = struct {
     contacts: u32 = 0,
     contact_x: f32 = 0,
     keys_held: u32 = 0,
+    composition: [64]u8 = @splat(0),
+    composition_len: u32 = 0,
+    range: [2]u32 = .{ 0, 0 },
 };
 var seen: Seen = .{};
 
-fn see(in: *const lcgr.input.Input) void {
+fn see(frame_ev: *const lcgr.shell_iface.Events) void {
+    const in = &frame_ev.in;
     for (in.events) |e| {
         seen.presses += @intFromBool(e.kind == .press);
         seen.releases += @intFromBool(e.kind == .release);
@@ -173,12 +204,18 @@ fn see(in: *const lcgr.input.Input) void {
     var held: u32 = 0;
     for (in.keys.bits) |w| held += @popCount(w);
     seen.keys_held = held;
+    const c = frame_ev.composition;
+    seen.composition_len = @intCast(@min(c.text.len, seen.composition.len));
+    @memcpy(seen.composition[0..seen.composition_len], c.text[0..seen.composition_len]);
+    seen.range = c.range;
 }
 
-/// `seen`'s fields in order (floats times 1000), and the text as bytes from field 100.
+/// `seen`'s fields in order (floats times 1000), the text as bytes from field 100, the
+/// composition's from 200.
 export fn lcgr_seen(i: u32) i32 {
     const s = seen;
-    const v = [_]i32{ @intCast(s.presses), @intCast(s.releases), @intCast(s.last_code), @intCast(s.last_mods), @intCast(s.text_len), @intFromFloat(s.wheel_y * 1000), @intFromFloat(s.scroll_y * 1000), @intCast(s.contacts), @intFromFloat(s.contact_x * 1000), @intCast(s.keys_held) };
+    const v = [_]i32{ @intCast(s.presses), @intCast(s.releases), @intCast(s.last_code), @intCast(s.last_mods), @intCast(s.text_len), @intFromFloat(s.wheel_y * 1000), @intFromFloat(s.scroll_y * 1000), @intCast(s.contacts), @intFromFloat(s.contact_x * 1000), @intCast(s.keys_held), @intCast(s.composition_len), @intCast(s.range[0]), @intCast(s.range[1]) };
+    if (i >= 200) return s.composition[@min(i - 200, s.composition.len - 1)];
     if (i >= 100) return s.text[@min(i - 100, s.text.len - 1)];
     return v[@min(i, v.len - 1)];
 }

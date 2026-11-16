@@ -97,8 +97,9 @@ def replay(page):
 
 def seen(page):
     """presses, releases, last code, last mods, text length, wheel y, scroll y (x1000),
-    contacts, contact x (x1000), keys held; and the text typed (main.zig `lcgr_seen`)."""
-    v = page.eval("[...Array(10).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(i))")
+    contacts, contact x (x1000), keys held, composition length, its range; and the text typed
+    (main.zig `lcgr_seen`)."""
+    v = page.eval("[...Array(13).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(i))")
     text = bytes(page.eval(f"[...Array({v[4]}).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(100 + i))")).decode()
     return v, text
 
@@ -208,11 +209,39 @@ def clipboard(page):
     check("clipboard: Ctrl+V types the clipboard's text", after[len(before):] == "pasted \u2713", repr(after[len(before):]))
 
 
+def ime(page):
+    """C0479: while a widget wants text, a hidden textarea at the caret has focus; the IME's
+    composition reaches the frame with its range, and its commit arrives as typed text."""
+    mouse(page, "mousePressed", 400, 300, True)  # focus the canvas
+    mouse(page, "mouseReleased", 400, 300)
+    page.eval("window.lcgr.ui.exports.lcgr_test_ime(true, 200, 100, 201, 118)")
+    where = page.eval("(() => { const i = window.lcgr.page.input; return [document.activeElement === i, i.style.left, i.style.top, i.style.height]; })()")
+    check("ime: the hidden input has focus at the caret", where == [True, "200px", "100px", "18px"], where)
+    before = seen(page)[1]
+    page.send("Input.imeSetComposition", {"text": "\u306b\u307b", "selectionStart": 1, "selectionEnd": 2})
+    frame(page)
+    v = seen(page)[0]
+    comp = bytes(page.eval(f"[...Array({v[10]}).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(200 + i))")).decode()
+    check("ime: composing \u306b\u307b, second character highlighted", (comp, v[11], v[12]) == ("\u306b\u307b", 3, 6), f"{comp!r} {v[11]}..{v[12]}")
+    page.send("Input.insertText", {"text": "\u65e5\u672c"})
+    frame(page)
+    v, text = seen(page)
+    check("ime: commit types \u65e5\u672c and ends the composition", (text[len(before):], v[10]) == ("\u65e5\u672c", 0), f"{text[len(before):]!r}, composition {v[10]} bytes")
+    page.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "x", "code": "KeyX", "text": "x", "windowsVirtualKeyCode": 88})
+    page.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "x", "code": "KeyX", "windowsVirtualKeyCode": 88})
+    frame(page)
+    v, text = seen(page)
+    check("ime: a plain key in the text input is typed once, its key event kept", text[len(before):] == "\u65e5\u672cx" and v[2] == 0x1b, f"{text[len(before):]!r}, last code {v[2]:#x}")
+    page.eval("window.lcgr.ui.exports.lcgr_test_ime(false, 0, 0, 0, 0)")
+    focus = page.eval("document.activeElement.tagName")
+    check("ime: off again, the canvas has focus", focus == "CANVAS", focus)
+
+
 def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio.
-    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard)), (2, (dpr,))):
+    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard, ime)), (2, (dpr,))):
         b = browser.Browser(scale=scale)
         try:
             page = b.open(server.url + "index.html")

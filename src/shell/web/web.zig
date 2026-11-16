@@ -22,6 +22,7 @@
 //!   fn present(*const Output) void          draw the frame (WebGPU or the 2D canvas)
 //!   fn cursor(Cursor) void                  show this cursor over the canvas (CSS `cursor`)
 //!   fn clipboard([]const u8) void           put this text on the clipboard
+//!   fn ime(wants: bool, rect: Rect) void    text input on (at `rect`, CSS pixels) or off
 //!
 //! Pasting needs no call: the browser's paste event (Ctrl+V or Cmd+V, or the page's menu)
 //! hands shell.js the clipboard's text, which arrives as typed text (`typed`), the way the core
@@ -38,6 +39,7 @@ const iface = @import("../iface.zig");
 const Events = iface.Events;
 const Platform = context.Platform;
 const Cursor = context.Cursor;
+const Composition = @import("../../interact/keyboard.zig").Composition;
 const Output = context.Output;
 const Pace = scheduler.Pace;
 const none = types.none;
@@ -58,6 +60,11 @@ pub fn Web(comptime host: type) type {
         wakes: u32 = 0,
         /// The cursor the canvas shows, as last applied.
         cursor: Cursor = .arrow,
+        /// Text input as last applied: whether the hidden input has focus, and where.
+        ime: struct { wants: bool = false, rect: types.Rect = .{} } = .{},
+        /// What the IME is composing (held until it commits or cancels), UTF-8.
+        composing: [max_text]u8 = undefined,
+        composition: Composition = .{},
         /// The canvas's backing store in device pixels: what `present` draws.
         pixels: [2]u32 = .{ 800, 600 },
         /// This frame's typed bytes, key and text events, and the contacts held (rows stay
@@ -126,6 +133,14 @@ pub fn Web(comptime host: type) type {
             const word = &s.in.keys.bits[code >> 6];
             word.* = if (kind == .release) word.* & ~bit else word.* | bit;
             s.event(.{ .kind = kind, .code = code, .mods = m });
+        }
+
+        /// The IME's composition changed: `bytes` (empty when it ended), with the highlighted
+        /// clause or caret at byte range `range`. Committed text arrives through `typed`.
+        pub fn compose(s: *Self, bytes: []const u8, range: [2]u32) void {
+            const n = @min(bytes.len, max_text);
+            @memcpy(s.composing[0..n], bytes[0..n]);
+            s.composition = .{ .text = s.composing[0..n], .range = range };
         }
 
         /// The canvas lost focus: keys held now will never see their key-up, so none is held.
@@ -216,6 +231,7 @@ pub fn Web(comptime host: type) type {
             ev.in.text = s.text[0..s.text_len];
             ev.in.events = s.events[0..s.event_len];
             ev.in.contacts = s.contacts[0..s.contact_len];
+            ev.composition = s.composition;
             // The slices stay valid until the next event or poll: the page delivers no event
             // while a frame runs. What belongs to one frame starts again empty.
             s.text_len = 0;
@@ -249,6 +265,12 @@ pub fn Web(comptime host: type) type {
             if (p.cursor != s.cursor) host.cursor(p.cursor);
             s.cursor = p.cursor;
             if (p.clipboard.len > 0) host.clipboard(p.clipboard);
+            // Text input: shell.js focuses a hidden <textarea> at `ime_rect` while a widget
+            // wants text, so the IME's candidate window and the on-screen keyboard come up next
+            // to the caret; it hands focus back to the canvas when none does.
+            const want: @TypeOf(s.ime) = .{ .wants = p.wants_text, .rect = if (p.wants_text) p.ime_rect else .{} };
+            if (!std.meta.eql(want, s.ime)) host.ime(want.wants, want.rect);
+            s.ime = want;
         }
 
         pub fn present(_: *Self, out: *const Output) void {
@@ -292,6 +314,14 @@ const Page = struct {
     pub fn clipboard(text: []const u8) void {
         copied = text;
         copies += 1;
+    }
+    var ime_calls: u32 = 0;
+    var ime_on: bool = false;
+    var ime_rect: types.Rect = .{};
+    pub fn ime(wants: bool, rect: types.Rect) void {
+        ime_calls += 1;
+        ime_on = wants;
+        ime_rect = rect;
     }
 
     pub fn present(_: *const Output) void {
@@ -441,4 +471,32 @@ test "web: a frame's copy reaches the page once; frames without one copy nothing
     try testing.expectEqualStrings("copied text", Page.copied);
     shell.apply(&.{});
     try testing.expectEqual(@as(u32, 1), Page.copies);
+}
+
+test "web: text input follows the frames; the composition rides with the input until it ends" {
+    var shell: Web(Page) = .{};
+    var ev: Events = .{};
+    Page.ime_calls = 0;
+    const caret: types.Rect = .{ .x0 = 100, .y0 = 40, .x1 = 101, .y1 = 58 };
+    shell.apply(&.{ .wants_text = true, .ime_rect = caret });
+    shell.apply(&.{ .wants_text = true, .ime_rect = caret });
+    try testing.expectEqual(@as(u32, 1), Page.ime_calls);
+    try testing.expect(Page.ime_on);
+    try testing.expectEqual(caret, Page.ime_rect);
+
+    shell.compose("nihon", .{ 2, 5 });
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqualStrings("nihon", ev.composition.text);
+    try testing.expectEqual([2]u32{ 2, 5 }, ev.composition.range);
+    try testing.expect(shell.poll(&ev)); // still composing next frame
+    try testing.expectEqualStrings("nihon", ev.composition.text);
+    shell.compose("", .{ 0, 0 });
+    shell.typed("\u{65e5}\u{672c}", .{});
+    try testing.expect(shell.poll(&ev));
+    try testing.expectEqualStrings("", ev.composition.text);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.in.text);
+
+    shell.apply(&.{});
+    try testing.expectEqual(@as(u32, 2), Page.ime_calls);
+    try testing.expect(!Page.ime_on);
 }

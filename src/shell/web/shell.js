@@ -26,6 +26,9 @@ export function shell(page) {
         shell_cursor(c) {
             page.canvas.style.cursor = cursors[c] ?? "default";
         },
+        shell_ime(on, x0, y0, x1, y1) {
+            page.ime(on, x0, y0, x1, y1);
+        },
         shell_clipboard(ptr, len) {
             // Decoded now: the bytes are only valid during the call. writeText is asynchronous
             // and may be refused (no focus, no permission); the copy is then lost, as in a
@@ -102,13 +105,14 @@ export function attach(ui, canvas, page = {}) {
         listeners.push([target, type, fn, opts]);
     };
     page.on = on;
-    forward(ui, canvas, on, frame);
+    forward(ui, canvas, on, frame, page);
     on(window, "pagehide", () => {
         x.lcgr_close();
         page.stop();
     });
     page.stop = () => {
         observer.disconnect();
+        page.input.remove();
         ratio.removeEventListener("change", onRatio);
         for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);
         cancelAnimationFrame(pending);
@@ -146,7 +150,7 @@ export const mods = (e) => (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKe
 
 /// Forwards `canvas`'s DOM events to the module, each followed by a request for a frame.
 /// `on(target, type, fn, options)` adds a listener that `stop` removes; `frame` asks for one.
-function forward(ui, canvas, on, frame) {
+function forward(ui, canvas, on, frame, page) {
     const x = ui.exports;
     const at = (e) => {
         const r = canvas.getBoundingClientRect();
@@ -203,31 +207,82 @@ function forward(ui, canvas, on, frame) {
         const n = ui.put(s, x.lcgr_text_buffer(), x.lcgr_text_capacity());
         x.lcgr_typed(n, m);
     };
-    on(canvas, "keydown", (e) => {
-        const code = hid[e.code] ?? 0;
-        x.lcgr_key(e.repeat ? 2 : 0, code, mods(e));
-        // A printable character without Ctrl or Cmd is typed text.
-        if ([...e.key].length === 1 && !e.ctrlKey && !e.metaKey) typed(e.key, mods(e));
+    // Text input and the IME go through a hidden <textarea>: while a widget wants text
+    // (`shell_ime`), it has focus at the caret's rect, so the IME's candidate window and the
+    // on-screen keyboard come up there, and its input and composition events carry the text.
+    // Keys reach the shell from whichever of the two has focus.
+    const input = document.createElement("textarea");
+    for (const [k, v] of [["autocomplete", "off"], ["autocorrect", "off"], ["autocapitalize", "off"], ["spellcheck", "false"], ["tabindex", "-1"]]) input.setAttribute(k, v);
+    Object.assign(input.style, { position: "fixed", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", pointerEvents: "none", width: "1px", height: "1px", left: "0", top: "0" });
+    canvas.after(input);
+    page.input = input;
+    const bytes = (s) => new TextEncoder().encode(s).length;
+    page.ime = (on, x0, y0, x1, y1) => {
+        if (!on) {
+            if (document.activeElement === input) canvas.focus({ preventScroll: true });
+            return;
+        }
+        const r = canvas.getBoundingClientRect();
+        const h = Math.max(y1 - y0, 1);
+        Object.assign(input.style, { left: `${r.left + x0}px`, top: `${r.top + y0}px`, width: `${Math.max(x1 - x0, 1)}px`, height: `${h}px`, fontSize: `${h}px` });
+        input.focus({ preventScroll: true });
+    };
+    const keydown = (e) => {
+        if (e.isComposing || e.keyCode === 229) return; // the IME's own keys
+        x.lcgr_key(e.repeat ? 2 : 0, hid[e.code] ?? 0, mods(e));
+        const printable = [...e.key].length === 1 && !e.ctrlKey && !e.metaKey;
+        // On the canvas, a printable key without Ctrl or Cmd is typed text; in the text input
+        // the input event brings it (and the IME may change it), so it is let through.
+        if (printable && e.target === canvas) typed(e.key, mods(e));
         // Keep Tab, arrows, Space and Backspace from moving focus or scrolling the page;
         // shortcuts with Ctrl or Cmd (copy, paste, reload) stay the browser's.
-        if (!e.ctrlKey && !e.metaKey) e.preventDefault();
+        if (!e.ctrlKey && !e.metaKey && !(printable && e.target === input)) e.preventDefault();
         frame();
-    });
+    };
+    const keyup = (e) => {
+        x.lcgr_key(1, hid[e.code] ?? 0, mods(e));
+        frame();
+    };
     // Paste: the browser hands the text over in the paste event (Ctrl+V or Cmd+V, which are
     // left to the browser above, or the context menu); it arrives as typed text.
-    on(canvas, "paste", (e) => {
+    const paste = (e) => {
         const text = e.clipboardData?.getData("text/plain");
         if (text) typed(text, 0);
         e.preventDefault();
         frame();
-    });
-    on(canvas, "keyup", (e) => {
-        x.lcgr_key(1, hid[e.code] ?? 0, mods(e));
+    };
+    // Keys held when focus leaves both never see their keyup: release them.
+    const focusout = (e) => {
+        if (e.relatedTarget === canvas || e.relatedTarget === input) return;
+        x.lcgr_blur();
+        frame();
+    };
+    for (const t of [canvas, input]) {
+        on(t, "keydown", keydown);
+        on(t, "keyup", keyup);
+        on(t, "paste", paste);
+        on(t, "focusout", focusout);
+    }
+    // While composing, the textarea holds the composition and its selection marks the
+    // converted clause (or the caret): both go to the shell, the range in UTF-8 bytes. On commit
+    // the composition ends and its text is typed; plain input (no IME) is typed as it comes.
+    const compose = () => {
+        const v = input.value;
+        const n = ui.put(v, x.lcgr_text_buffer(), x.lcgr_text_capacity());
+        x.lcgr_compose(n, Math.min(bytes(v.slice(0, input.selectionStart)), n), Math.min(bytes(v.slice(0, input.selectionEnd)), n));
+        frame();
+    };
+    on(input, "compositionstart", () => (input.value = ""));
+    on(input, "input", (e) => {
+        if (e.isComposing || e.inputType === "insertCompositionText") return compose();
+        if (e.data) typed(e.data, 0);
+        input.value = "";
         frame();
     });
-    // Keys held when the canvas loses focus never see their keyup: release them.
-    on(canvas, "blur", () => {
-        x.lcgr_blur();
+    on(input, "compositionend", (e) => {
+        x.lcgr_compose(0, 0, 0);
+        if (e.data) typed(e.data, 0);
+        input.value = "";
         frame();
     });
 }
