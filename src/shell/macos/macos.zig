@@ -69,6 +69,10 @@ var pasteboard_string: Id = undefined;
 /// NSPasteboardTypeFileURL, and the reading option that keeps only file URLs.
 var pasteboard_file_url: Id = undefined;
 var file_urls_only: Id = undefined;
+/// NSAppearanceNameAqua and NSAppearanceNameDarkAqua; NSSystemColorsDidChangeNotification.
+var appearance_aqua: Id = undefined;
+var appearance_dark: Id = undefined;
+var system_colors_changed: Id = undefined;
 var launched = false;
 /// The user chose Quit: every window's `poll` returns false from now on.
 var quit = false;
@@ -95,7 +99,7 @@ fn launch() Error!void {
     const kit = std.c.dlopen(appkit, .{ .NOW = true }) orelse return error.NoLibrary;
     const pb: *const Id = @ptrCast(@alignCast(std.c.dlsym(kit, "NSPasteboardTypeString") orelse return error.MissingFunction));
     pasteboard_string = pb.*;
-    inline for (.{ .{ &pasteboard_file_url, "NSPasteboardTypeFileURL" }, .{ &file_urls_only, "NSPasteboardURLReadingFileURLsOnlyKey" } }) |g| {
+    inline for (.{ .{ &pasteboard_file_url, "NSPasteboardTypeFileURL" }, .{ &file_urls_only, "NSPasteboardURLReadingFileURLsOnlyKey" }, .{ &appearance_aqua, "NSAppearanceNameAqua" }, .{ &appearance_dark, "NSAppearanceNameDarkAqua" }, .{ &system_colors_changed, "NSSystemColorsDidChangeNotification" } }) |g| {
         const p: *const Id = @ptrCast(@alignCast(std.c.dlsym(kit, g[1]) orelse return error.MissingFunction));
         g[0].* = p.*;
     }
@@ -154,6 +158,8 @@ const methods = .{
     .{ "draggingUpdated:", &draggingUpdated, "Q@:@" },
     .{ "draggingExited:", &draggingExited, "v@:@" },
     .{ "performDragOperation:", &performDragOperation, "c@:@" },
+    .{ "viewDidChangeEffectiveAppearance", &appearanceDidChange, "v@:" },
+    .{ "systemColorsDidChange:", &systemColorsDidChange, "v@:@" },
     .{ "viewDidChangeBackingProperties", &viewDidChangeBackingProperties, "v@:" },
     .{ "insertText:", &insertText, "v@:@" },
     // NSTextInputClient: the input method's view of the text.
@@ -351,6 +357,31 @@ fn cursorUpdate(view: Id, _: Sel, _: Id) callconv(.c) void {
     msg(void, m.cursors[@backingInt(m.applied.cursor)], "set", .{});
 }
 
+/// Light or dark changed: the view's effective appearance follows the system's.
+fn appearanceDidChange(view: Id, _: Sel) callconv(.c) void {
+    shellOf(view).settingsChanged();
+}
+
+/// NSSystemColorsDidChangeNotification: the accent colour changed.
+fn systemColorsDidChange(view: Id, _: Sel, _: Id) callconv(.c) void {
+    shellOf(view).settingsChanged();
+}
+
+/// The appearance AppKit shows now.
+fn readAppearance() translate.Appearance {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const look = msg(Id, app(), "effectiveAppearance", .{});
+    const names = msg(Id, msg(Id, objc.class("NSArray"), "arrayWithObject:", .{appearance_aqua}), "arrayByAddingObject:", .{appearance_dark});
+    const best = msg(?Id, look, "bestMatchFromAppearancesWithNames:", .{names});
+    const dark = if (best) |b| msg(bool, b, "isEqualToString:", .{appearance_dark}) else false;
+    const color_class = objc.class("NSColor");
+    if (!msg(bool, color_class, "respondsToSelector:", .{objc.sel("controlAccentColor")})) return .fromSystem(dark, null);
+    const srgb = msg(Id, objc.class("NSColorSpace"), "sRGBColorSpace", .{});
+    const c = msg(?Id, msg(Id, color_class, "controlAccentColor", .{}), "colorUsingColorSpace:", .{srgb}) orelse return .fromSystem(dark, null);
+    return .fromSystem(dark, .{ msg(f64, c, "redComponent", .{}), msg(f64, c, "greenComponent", .{}), msg(f64, c, "blueComponent", .{}) });
+}
+
 /// NSDragOperationCopy: the pointer shows a plus.
 const drag_copy: U = 1;
 
@@ -439,6 +470,10 @@ pub const Macos = struct {
     /// The system cursors, by `Platform.cursor` (`translate.cursor_names`); shared objects
     /// AppKit owns.
     cursors: [translate.cursor_names.len]Id = undefined,
+    /// The system's light or dark mode and accent, read at `init` and again when AppKit says
+    /// they changed. `appearanceChanged` hands a change to the host once.
+    appearance: translate.Appearance = .{},
+    appearance_changed: bool = false,
     /// CACurrentMediaTime at `init`: `Input.time` is counted from there.
     start: f64 = 0,
 
@@ -507,6 +542,9 @@ pub const Macos = struct {
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
         m.start = metal.present.mediaTime();
+        m.appearance = readAppearance();
+        const center = msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+        msg(void, center, "addObserver:selector:name:object:", .{ view, objc.sel("systemColorsDidChange:"), system_colors_changed, @as(?Id, null) });
         if (opt.show) {
             msg(void, window, "center", .{});
             msg(void, window, "makeKeyAndOrderFront:", .{@as(?Id, null)});
@@ -518,6 +556,7 @@ pub const Macos = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         m.frames.deinit();
+        msg(void, msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "removeObserver:", .{m.view});
         msg(void, m.window, "setDelegate:", .{@as(?Id, null)});
         msg(void, m.window, "close", .{});
         objc.release(m.window);
@@ -595,6 +634,29 @@ pub const Macos = struct {
         const pb = msg(Id, objc.class("NSPasteboard"), "generalPasteboard", .{});
         const s = msg(?Id, pb, "stringForType:", .{pasteboard_string}) orelse return;
         m.t.paste(utf8(s));
+    }
+
+    /// The new appearance once after the system's changed, else null. The host restyles and
+    /// asks for a frame, since nothing in `Input` changed:
+    ///
+    ///     if (shell.appearanceChanged()) |a| {
+    ///         app.theme = lcgr.theme.widgets(&a.tokens());
+    ///         ctx.waker.post();
+    ///     }
+    pub fn appearanceChanged(m: *Macos) ?translate.Appearance {
+        if (!m.appearance_changed) return null;
+        m.appearance_changed = false;
+        return m.appearance;
+    }
+
+    /// Rereads the appearance; a change is kept for `appearanceChanged`.
+    fn settingsChanged(m: *Macos) void {
+        const a = readAppearance();
+        if (std.meta.eql(a, m.appearance)) return;
+        m.appearance = a;
+        m.appearance_changed = true;
+        // Wake a `wait` in progress so the host sees the change now.
+        m.wake();
     }
 
     /// Draws the frame with Metal into the view's layer and presents it.
@@ -717,6 +779,23 @@ test "macos: copy then paste round-trips through the general pasteboard" {
     m.paste();
     try testing.expect(m.poll(&ev));
     try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
+}
+
+test "macos: the appearance is AppKit's and follows a change" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    // Whatever this machine is set to, it is what AppKit says, and no change is pending.
+    try testing.expectEqual(readAppearance(), m.appearance);
+    try testing.expectEqual(null, m.appearanceChanged());
+    // A notification that changed nothing hands nothing to the host.
+    msg(void, m.view, "viewDidChangeEffectiveAppearance", .{});
+    try testing.expectEqual(null, m.appearanceChanged());
+    // A changed one is handed over once.
+    m.appearance.dark = !m.appearance.dark;
+    msg(void, msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "postNotificationName:object:", .{ system_colors_changed, @as(?Id, null) });
+    try testing.expectEqual(readAppearance(), m.appearanceChanged().?);
+    try testing.expectEqual(null, m.appearanceChanged());
 }
 
 test "macos: the view accepts file drags from Finder" {

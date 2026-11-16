@@ -14,6 +14,8 @@ const Events = @import("../iface.zig").Events;
 const Cursor = @import("../../runtime/context.zig").Cursor;
 const Rect = @import("../../core/types.zig").Rect;
 const Pace = @import("../../runtime/scheduler.zig").Pace;
+const Color = @import("../../core/types.zig").Color;
+const theme = @import("../../theme/theme.zig");
 
 /// The NSEvent types the translator reads, by their `NSEventType` values.
 pub const Kind = enum(u32) {
@@ -843,6 +845,31 @@ test "clipboard: pasted text is typed in one event, with its line ends" {
     try testing.expectEqual(@as(u32, 1), t.dropped);
 }
 
+/// The system's light or dark appearance and accent colour, as System Settings > Appearance
+/// sets them.
+pub const Appearance = struct {
+    dark: bool = false,
+    /// Null when the system has none to give (before macOS 10.14); the theme's own stays.
+    accent: ?Color = null,
+
+    /// From what the shell reads: whether NSApp's effective appearance is closer to Dark Aqua
+    /// than to Aqua, and `controlAccentColor` in sRGB, components 0 to 1.
+    pub fn fromSystem(dark: bool, accent: ?[3]f64) Appearance {
+        const a = accent orelse return .{ .dark = dark };
+        var c: [3]u8 = undefined;
+        for (&c, a) |*o, v| o.* = @intFromFloat(@round(std.math.clamp(v, 0, 1) * 255));
+        return .{ .dark = dark, .accent = .rgb(c[0], c[1], c[2]) };
+    }
+
+    /// The theme tokens that follow it: `theme.dark` or `theme.light`, with the system's
+    /// accent for checked boxes, slider fills and focus.
+    pub fn tokens(a: Appearance) theme.Tokens {
+        var tok = if (a.dark) theme.dark else theme.light;
+        if (a.accent) |c| tok.palette[@backingInt(theme.Role.accent)] = c;
+        return tok;
+    }
+};
+
 /// One item of the menu bar the shell builds: its title, the action AppKit sends up the
 /// responder chain, its key equivalent with Command (and Option when `option`). An empty title
 /// is a separator; `named` titles end with the application's name ("Quit Example").
@@ -1071,4 +1098,20 @@ test "drop: files hover as they are dragged, and their paths reach the drop fram
 
     t.dropFile("\xff");
     try testing.expectEqual(@as(u32, 2), t.dropped);
+}
+
+test "appearance: dark mode and the accent colour become theme tokens" {
+    // Dark, with the default blue accent (sRGB 0, 0.478, 1).
+    const dark = Appearance.fromSystem(true, .{ 0, 0.478, 1 });
+    try testing.expect(dark.dark);
+    try testing.expectEqual(Color.rgb(0, 122, 255), dark.accent.?);
+    const tok = dark.tokens();
+    try testing.expectEqual(theme.dark_palette[0], tok.palette[0]);
+    try testing.expectEqual(Color.rgb(0, 122, 255), tok.color(.accent));
+    // Light; no accent keeps the theme's. Out-of-gamut components are clamped.
+    const light = Appearance.fromSystem(false, null);
+    try testing.expectEqual(theme.light_palette, light.tokens().palette);
+    try testing.expectEqual(Color.rgb(255, 0, 128), Appearance.fromSystem(false, .{ 1.2, -0.1, 0.5 }).accent.?);
+    // The widget theme switches with it.
+    try testing.expect(!std.meta.eql(theme.widgets(&dark.tokens()).panel, theme.widgets(&light.tokens()).panel));
 }
