@@ -3,4 +3,5 @@
 test {
     _ = @import("comptime.zig");
     _ = @import("runtime.zig");
+    _ = @import("custom.zig");
 }
