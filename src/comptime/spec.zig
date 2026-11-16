@@ -21,6 +21,10 @@ pub const Kind = enum(u8) {
     slider,
     /// A horizontal container that is clicked as a whole (src/widgets/button.zig).
     button,
+    /// A group of `radio_option`s choosing one value of its bound field (src/widgets/radio.zig).
+    radio,
+    /// One choice of a `radio` group; `index` is the value it selects.
+    radio_option,
 };
 
 /// One node of the declaration. Exists only at compile time.
@@ -34,6 +38,8 @@ pub const Spec = struct {
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     children: []const Spec = &.{},
+    /// Which of several a node is, for widgets made of numbered parts: a radio option's value.
+    index: u32 = 0,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a

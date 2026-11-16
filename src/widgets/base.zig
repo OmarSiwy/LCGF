@@ -58,6 +58,7 @@ const Spec = spec_zig.Spec;
 const label_zig = @import("label.zig");
 const button_zig = @import("button.zig");
 const checkbox_zig = @import("checkbox.zig");
+const radio_zig = @import("radio.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -174,6 +175,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
             const err: ?[]const u8 = switch (n.kind) {
                 .label => label_zig.bindError(State, name),
                 .checkbox => checkbox_zig.bindError(State, name),
+                .radio, .radio_option => radio_zig.bindError(State, name),
                 else => null,
             };
             if (err) |msg| @compileError(msg);
@@ -329,7 +331,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     switch (comptime E.widget_kinds[k]) {
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
-                        .label, .col, .row, .button => {},
+                        .label, .col, .row, .button, .radio, .radio_option => {},
                     }
                 },
             };
@@ -425,6 +427,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
                     tb.t.seal(i);
                 },
+                .radio, .radio_option => @compileError("the comptime radio group is built from C0552 on"),
                 .row, .col, .button => {
                     var s = n.style;
                     // A container with an id is a button (kind `.button` always has one).
