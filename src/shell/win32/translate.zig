@@ -11,6 +11,7 @@ const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
 const Cursor = @import("../../runtime/context.zig").Cursor;
 const Rect = @import("../../core/types.zig").Rect;
+const Pace = @import("../../runtime/scheduler.zig").Pace;
 
 /// The window messages the translator reads, by their winuser.h values.
 pub const Wm = enum(u32) {
@@ -238,6 +239,13 @@ pub const Translator = struct {
         t.n_text += @intCast(n);
     }
 
+    /// The clock, in seconds since the shell started: sets `Input.time`, and `dt` to the time
+    /// since the last frame. The scheduler's timers (`scheduler.deadline`) run on it.
+    pub fn clock(t: *Translator, seconds: f64) void {
+        t.in.dt = @floatCast(@max(seconds - t.in.time, 0));
+        t.in.time = seconds;
+    }
+
     /// The IME's composition string (`ImmGetCompositionStringW` with `GCS_COMPSTR`), its
     /// attributes (`GCS_COMPATTR`, one byte per UTF-16 unit) and the caret (`GCS_CURSORPOS`,
     /// in UTF-16 units), as `Events.composition`: UTF-8, with the range the IME converts
@@ -318,6 +326,21 @@ pub const Translator = struct {
         return !t.closed;
     }
 };
+
+/// `INFINITE`: a wait with no timeout.
+pub const infinite: u32 = 0xffff_ffff;
+
+/// Milliseconds `wait` blocks for (`MsgWaitForMultipleObjectsEx`), for a wait of `seconds`
+/// (`scheduler.wake`) at `pace` on a display refreshing `hz` times a second. Rounded up, so
+/// a timer is not woken a millisecond early and then spun on. `.display` waits one refresh,
+/// so an animation runs at the display's rate rather than as fast as the CPU allows.
+pub fn waitMs(seconds: f32, pace: Pace, hz: u32) u32 {
+    if (pace == .display) return (1000 + @max(hz, 1) - 1) / @max(hz, 1);
+    if (!(seconds > 0)) return 0;
+    // Past 4e6 s (46 days) the milliseconds would not fit below `infinite`.
+    if (seconds >= 4e6) return infinite;
+    return @intFromFloat(@ceil(seconds * 1000));
+}
 
 /// `GCS_COMPATTR` values of the clause being converted.
 const attr_target_converted = 1;
@@ -713,6 +736,27 @@ test "ime: a composition is shown, converted, then committed as typed text" {
     try testing.expectEqualStrings("\u{65e5}", ev.composition.text);
 
     try testing.expectEqual([4]i32{ 15, 30, 61, 91 }, physicalRect(.{ .x0 = 10.4, .y0 = 20, .x1 = 40.2, .y1 = 60.5 }, 1.5));
+}
+
+test "timers: the clock and the wait for each pace" {
+    var t: Translator = .{};
+    var ev: Events = .{};
+    t.clock(0.5);
+    t.clock(0.52);
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(f64, 0.52), ev.in.time);
+    try testing.expectApproxEqAbs(@as(f32, 0.02), ev.in.dt, 1e-6);
+
+    const inf = std.math.inf(f32);
+    try testing.expectEqual(infinite, waitMs(inf, .idle, 60));
+    try testing.expectEqual(@as(u32, 0), waitMs(0, .once, 60));
+    try testing.expectEqual(@as(u32, 0), waitMs(std.math.nan(f32), .timer, 60));
+    // A hover delay of 0.4 s, and a timer 1.5 ms away: never early.
+    try testing.expectEqual(@as(u32, 400), waitMs(0.4, .timer, 60));
+    try testing.expectEqual(@as(u32, 2), waitMs(0.0015, .timer, 60));
+    // Animating: one refresh, whatever `scheduler.wake` said.
+    try testing.expectEqual(@as(u32, 17), waitMs(0, .display, 60));
+    try testing.expectEqual(@as(u32, 7), waitMs(0, .display, 144));
 }
 
 test "translate: a full frame drops what does not fit and counts it" {

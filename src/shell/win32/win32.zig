@@ -91,10 +91,10 @@ const wm_nccreate = 0x0081;
 const wm_wake = 0x8000; // WM_APP
 const qs_allinput = 0x04ff;
 const mwmo_inputavailable = 0x0004;
-const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
 const cf_unicodetext = 13;
+const vrefresh = 116;
 const wm_ime_setcontext = 0x0281;
 const wm_ime_startcomposition = 0x010d;
 const wm_ime_endcomposition = 0x010e;
@@ -161,6 +161,10 @@ extern "imm32" fn ImmGetCompositionStringW(HIMC, index: u32, buf: ?*anyopaque, b
 extern "imm32" fn ImmSetCompositionWindow(HIMC, *const COMPOSITIONFORM) callconv(.winapi) BOOL;
 extern "imm32" fn ImmSetCandidateWindow(HIMC, *const CANDIDATEFORM) callconv(.winapi) BOOL;
 extern "imm32" fn ImmAssociateContextEx(HWND, ?HIMC, flags: u32) callconv(.winapi) BOOL;
+extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) BOOL;
+extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) BOOL;
+extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
+extern "gdi32" fn GetDeviceCaps(HDC, index: c_int) callconv(.winapi) c_int;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -192,6 +196,11 @@ pub const Win32 = struct {
     /// their attributes. ponytail: 256 units; a longer composition is cut.
     ime_units: [256]u16 = undefined,
     ime_attrs: [256]u8 = undefined,
+    /// The performance counter at `init` and its ticks per second: `Input.time` is counted from there.
+    start: i64 = 0,
+    ticks: i64 = 1,
+    /// The display's refresh rate, for `.display` pacing.
+    hz: u32 = 60,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
@@ -247,6 +256,14 @@ pub const Win32 = struct {
         var r: RECT = .{ .right = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[0])) * w.t.in.scale)), .bottom = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[1])) * w.t.in.scale)) };
         _ = AdjustWindowRectExForDpi(&r, ws_overlappedwindow, 0, 0, dpi);
         _ = SetWindowPos(w.hwnd, null, 0, 0, r.right - r.left, r.bottom - r.top, swp_nomove | swp_nozorder | swp_noactivate);
+        _ = QueryPerformanceFrequency(&w.ticks);
+        _ = QueryPerformanceCounter(&w.start);
+        if (GetDC(w.hwnd)) |dc| {
+            // 0 and 1 mean "the hardware's default".
+            const hz = GetDeviceCaps(dc, vrefresh);
+            if (hz > 1) w.hz = @intCast(hz);
+            _ = ReleaseDC(w.hwnd, dc);
+        }
         // No IME until a frame asks for text (`apply`).
         _ = ImmAssociateContextEx(w.hwnd, null, 0);
         if (opt.show) _ = ShowWindow(w.hwnd, sw_show);
@@ -266,6 +283,9 @@ pub const Win32 = struct {
             _ = TranslateMessage(&m);
             _ = DispatchMessageW(&m);
         }
+        var now: i64 = 0;
+        _ = QueryPerformanceCounter(&now);
+        w.t.clock(@as(f64, @floatFromInt(now - w.start)) / @as(f64, @floatFromInt(@max(w.ticks, 1))));
         const open = w.t.frame(ev);
         // Cleared after, not before: what arrives between polls (a `paste`, the messages
         // `apply` causes) belongs to the next frame.
@@ -373,10 +393,16 @@ pub const Win32 = struct {
         _ = SetDIBitsToDevice(dc, 0, 0, w.fb.width, w.fb.height, 0, 0, 0, w.fb.height, w.fb.pixels.ptr, &info, dib_rgb_colors);
     }
 
-    /// Blocks until the next message or `seconds` pass (`inf`: until the next message).
-    pub fn wait(_: *Win32, seconds: f32, _: Pace) void {
-        if (!(seconds > 0)) return;
-        const ms: u32 = if (seconds >= 4e6) infinite else @intFromFloat(@ceil(seconds * 1000));
+    /// Blocks until the next message or `seconds` pass (`inf`: until the next message); while
+    /// animating (`.display`), one refresh (`translate.waitMs`).
+    ///
+    /// ponytail: while the user drags or resizes the window, Windows runs its own modal loop
+    /// inside DispatchMessageW, so `poll` returns only when they let go and the window shows
+    /// the last frame meanwhile. Live resizing needs the host to build frames from WM_TIMER
+    /// in that loop (as GPUI does), which breaks "the host owns the loop"; add it if asked.
+    pub fn wait(w: *Win32, seconds: f32, pace: Pace) void {
+        const ms = translate.waitMs(seconds, pace, w.hz);
+        if (ms == 0) return;
         _ = MsgWaitForMultipleObjectsEx(0, null, ms, qs_allinput, mwmo_inputavailable);
     }
 
@@ -521,6 +547,33 @@ test "win32: a real window runs the example from posted messages" {
     try testing.expectEqual(context.Cursor.arrow, w.applied.cursor);
     try testing.expectEqual(LoadCursorW(null, translate.cursor_ids[0]), w.cursor);
     try testing.expect(w.cursor != null);
+}
+
+fn job(w: *Win32) void {
+    // Long enough that the test thread is asleep in `wait` first.
+    Sleep(50);
+    w.wake();
+}
+
+test "win32: a worker thread ends a wait, and the clock runs" {
+    var w: Win32 = undefined;
+    try Fixture.open(&w);
+    defer w.deinit();
+    var ev: Events = .{};
+    _ = w.poll(&ev);
+    const t0 = ev.in.time;
+    const worker = try std.Thread.spawn(.{}, job, .{&w});
+    var c0: i64 = 0;
+    _ = QueryPerformanceCounter(&c0);
+    w.wait(std.math.inf(f32), .idle);
+    var c1: i64 = 0;
+    _ = QueryPerformanceCounter(&c1);
+    worker.join();
+    // Woken, not timed out (there is no timeout): well under 5 s.
+    try testing.expect(c1 - c0 < 5 * w.ticks);
+    try testing.expect(w.poll(&ev));
+    try testing.expect(ev.in.time > t0);
+    try testing.expect(ev.in.dt > 0);
 }
 
 test "win32: copy then paste round-trips through the system clipboard" {
