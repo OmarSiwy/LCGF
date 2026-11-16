@@ -284,15 +284,16 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     return st.result;
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
+/// The example's dialog: Cancel and Delete.
+pub const confirm: Def = .{ .buttons = &.{ "cancel", "ok" } };
+pub const confirm_texts = [_][]const u8{ "Cancel", "Delete" };
 
-const confirm: Def = .{ .buttons = &.{ "cancel", "ok" } };
-const confirm_texts = [_][]const u8{ "Cancel", "Delete" };
-
-/// The test page: a toolbar with the button that opens the dialog and a label, and the dialog.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with the button that opens the dialog and a label, and the
+/// dialog, in both front ends, in theme `th`. The tests and the golden images
+/// (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
         const page_style: Style = .{ .size = .{ .fill, .fill } };
@@ -331,6 +332,29 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/dialog.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "dialog-open", 2 },
+    .{ "dialog-tab", 3 },
+    .{ "dialog-pressed", 8 },
+    .{ "dialog-closed", 9 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -386,6 +410,48 @@ test "Dialog: another theme restyles both front ends alike" {
     const t = try setState(&S.h, .{ .open = true, .focus = 1 });
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("delete_panel"))].fill);
     try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("delete_ok"))].border_color);
+}
+
+test "Dialog: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var st: [13]DialogState = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.dialog, h.ui.signals.state.dialog);
+        st[k] = h.app.dialog;
+        if (k == 2) {
+            // The rects the replay's comments give.
+            const want = [_]struct { []const u8, Rect }{
+                .{ "delete", .{ .x0 = 8, .y0 = 8, .x1 = 125, .y1 = 42 } },
+                .{ "delete_panel", .{ .x0 = 270, .y0 = 238, .x1 = 530, .y1 = 362 } },
+                .{ "delete_cancel", .{ .x0 = 375, .y0 = 313, .x1 = 442, .y1 = 346 } },
+                .{ "delete_ok", .{ .x0 = 448, .y0 = 313, .x1 = 514, .y1 = 346 } },
+            };
+            for (want) |w| try testing.expectEqual(w[1], t.rect(t.find(.hash(w[0]))));
+        }
+    }
+    try testing.expectEqual(@as(u32, 13), h.frames);
+    const open = [_]bool{ false, false, true, true, true, true, true, true, true, false, false, true, false };
+    const focus_ = [_]u8{ 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0 };
+    for (st, open, focus_) |s, o, f| {
+        try testing.expectEqual(o, s.open);
+        try testing.expectEqual(f, s.focus);
+    }
+    try testing.expectEqual(@as(u8, 2), st[9].result);
+    try testing.expectEqual(@as(u8, 0), st[12].result);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 13);
 }
 
 test "advance: opens on the first button, traps Tab, chooses, Escape closes" {
