@@ -4,4 +4,5 @@ test {
     _ = @import("hello.zig");
     _ = @import("counter.zig");
     _ = @import("form.zig");
+    _ = @import("list.zig");
 }
