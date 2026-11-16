@@ -12,6 +12,10 @@ const paths = lcgr.paths;
 
 const scenes = @embedFile("testdata/paths/scenes.txt");
 const bg = [3]f32{ 16, 16, 20 };
+/// Chord tolerance in px. Chords cut inside a curve, so the error does not cancel: 1/64 px
+/// moved edge pixels by up to 8 levels, 1/128 px by 5 where two curves share a pixel; at 1/256
+/// px every scene matches within 3 (check.py's TOL is 4).
+const tolerance = 1.0 / 256.0;
 
 const max_px = 128 * 128;
 const max_points = 4096;
@@ -99,8 +103,8 @@ pub fn main(init: std.process.Init) !void {
 /// Rasterises `path` and composites it into the canvas: c * a * v + dst * (1 - a * v).
 fn draw(bufs: anytype, path: *const paths.Path, s: Shape, w: u32, h: u32, canvas: [][3]f32, acc: []f32, img: []u8) void {
     var l = bufs.polyline();
-    std.debug.assert(paths.flattenLen(path).points <= bufs.lx.len);
-    paths.flatten(path, &l);
+    std.debug.assert(paths.flattenLen(path, tolerance).points <= bufs.lx.len);
+    paths.flatten(path, tolerance, &l);
     const b = paths.bounds(&l);
     std.debug.assert(paths.accLen(b) <= acc.len);
     paths.fill(&l, b, s.rule, bufs.scratch(), acc);

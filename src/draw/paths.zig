@@ -102,34 +102,69 @@ pub const Polyline = struct {
     contours: u32 = 0,
 };
 
-/// Chords per curve. ponytail: a fixed count; flattening to a tolerance replaces it.
-const curve_steps = 64;
+/// Chords per curve at most, whatever the tolerance: bounds the work and the rows per curve.
+pub const max_curve_steps = 1024;
 
-/// Rows `flatten` needs for `p`: an upper bound on the points (plus the vector slack) and the
-/// contours.
-pub fn flattenLen(p: *const Path) struct { points: usize, contours: usize } {
+/// Chords that keep a curve within `tolerance` px of its polyline, cut at equal steps in t:
+/// a chord over a step h of t is at most |B''| h^2 / 8 from the curve. A quadratic has
+/// B'' = 2 (p0 - 2 p1 + p2); a cubic's |B''| is at most 6 max(|p0 - 2 p1 + p2|, |p1 - 2 p2 + p3|).
+/// `c` is p0..p3 as x, y pairs; a quadratic passes its control twice (p1 = p2).
+pub fn curveSteps(c: [8]f32, comptime quadratic: bool, tolerance: f32) u32 {
+    const d0 = std.math.hypot(c[0] - 2 * c[2] + c[4], c[1] - 2 * c[3] + c[5]);
+    const d1 = std.math.hypot(c[2] - 2 * c[4] + c[6], c[3] - 2 * c[5] + c[7]);
+    const d2 = if (quadratic) 2 * std.math.hypot(c[0] - 2 * c[2] + c[6], c[1] - 2 * c[3] + c[7]) else 6 * @max(d0, d1);
+    const n = @ceil(@sqrt(d2 / (8 * tolerance)));
+    return @intFromFloat(std.math.clamp(n, 1, max_curve_steps));
+}
+
+/// Rows `flatten` needs for `p` at `tolerance`: an upper bound on the points (plus the vector
+/// slack) and the contours.
+pub fn flattenLen(p: *const Path, tolerance: f32) struct { points: usize, contours: usize } {
     var points: usize = simd.lanes;
     var contours: usize = 0;
+    // The pen, as `flatten` moves it: curves need their start point.
+    var cx: f32 = 0;
+    var cy: f32 = 0;
+    var sx: f32 = 0;
+    var sy: f32 = 0;
+    var at: usize = 0;
     for (p.verb[0..p.verbs]) |v| {
+        const px = p.x[at..];
+        const py = p.y[at..];
         // A drawing verb after a close opens a contour of its own and repeats its first point.
         points += switch (v) {
             .move => 1,
             .line => 2,
-            .quad, .cubic => curve_steps + 1,
+            .quad => 1 + curveSteps(.{ cx, cy, px[0], py[0], px[0], py[0], px[1], py[1] }, true, tolerance),
+            .cubic => 1 + curveSteps(.{ cx, cy, px[0], py[0], px[1], py[1], px[2], py[2] }, false, tolerance),
             .close => 0,
         };
         contours += @intFromBool(v != .close);
+        const used: usize = switch (v) {
+            .move, .line => 1,
+            .quad => 2,
+            .cubic => 3,
+            .close => 0,
+        };
+        if (v == .move) {
+            sx = px[0];
+            sy = py[0];
+        }
+        cx = if (used == 0) sx else px[used - 1];
+        cy = if (used == 0) sy else py[used - 1];
+        at += used;
     }
     return .{ .points = points, .contours = contours };
 }
 
-/// The polylines of `p`, curves cut into chords, into `out` (emptied first; sized by
-/// `flattenLen`). A point equal to the one before it is dropped, so no chord has zero length,
+/// The polylines of `p`, curves cut into chords that stay within `tolerance` px of them, into
+/// `out` (emptied first; sized by `flattenLen` with the same tolerance). A point equal to the one before it is dropped, so no chord has zero length,
 /// and a closed contour does not repeat its first point at the end.
-pub fn flatten(p: *const Path, out: *Polyline) void {
+pub fn flatten(p: *const Path, tolerance: f32, out: *Polyline) void {
+    std.debug.assert(tolerance > 0);
     out.points = 0;
     out.contours = 0;
-    var f: Flattener = .{ .out = out };
+    var f: Flattener = .{ .out = out, .tolerance = tolerance };
     var at: usize = 0;
     for (p.verb[0..p.verbs]) |v| {
         const px = p.x[at..];
@@ -165,6 +200,7 @@ pub fn flatten(p: *const Path, out: *Polyline) void {
 
 const Flattener = struct {
     out: *Polyline,
+    tolerance: f32,
     /// First point of the open contour, in `out`.
     first: u32 = 0,
     open: bool = false,
@@ -217,11 +253,11 @@ const Flattener = struct {
     }
 
     /// A cubic Bezier (a quadratic one is passed as a cubic whose two controls are its one:
-    /// `quadratic` evaluates it as a quadratic), cut into `n` chords of equal steps in t. The
+    /// `quadratic` evaluates it as a quadratic), cut into `curveSteps` chords of equal steps in t. The
     /// inner points are evaluated a vector of t values at a time and written whole, the count
     /// advancing by the ones that are real; the end point goes through `push`.
-    fn curve(f: *Flattener, c: [8]f32, quadratic: bool) void {
-        const n: u32 = curve_steps;
+    fn curve(f: *Flattener, c: [8]f32, comptime quadratic: bool) void {
+        const n = curveSteps(c, quadratic, f.tolerance);
         const o = f.out;
         const F = simd.F;
         const inv: F = @splat(1 / @as(f32, @floatFromInt(n)));
@@ -438,24 +474,91 @@ test "builder: verbs consume their points; flatten keeps lines and cuts curves" 
     try testing.expectEqual(5, p.verbs);
     try testing.expectEqual(1 + 1 + 2 + 3, p.points);
     try testing.expectEqualSlices(Verb, &.{ .move, .line, .quad, .close, .cubic }, p.verb[0..5]);
-    try testing.expect(flattenLen(&p).points <= t.lx.len);
+    const tol = 1.0 / 64.0;
+    try testing.expect(flattenLen(&p, tol).points <= t.lx.len);
+    // |B''| / (8 tol): quad 2 |(-4, -4)| * 8 = 90.5, cubic 6 |(1, 1)| * 8 = 67.9.
+    const quad_steps = curveSteps(.{ 5, 1, 5, 5, 5, 5, 1, 5 }, true, tol);
+    const cubic_steps = curveSteps(.{ 1, 1, 0, 0, 0, 0, 1, 1 }, false, tol);
+    try testing.expectEqual(10, quad_steps);
+    try testing.expectEqual(9, cubic_steps);
 
     var l = t.polyline();
-    flatten(&p, &l);
-    // Contour 0: start, line end, 32 chords of the quad. Contour 1 restarts at (1, 1) after the
-    // close: the start, 31 inner points of the cubic and its end, back at the start (an open
+    flatten(&p, tol, &l);
+    // Contour 0: start, line end, the chords of the quad. Contour 1 restarts at (1, 1) after the
+    // close: the start, the inner points of the cubic and its end, back at the start (an open
     // contour keeps it).
     try testing.expectEqual(2, l.contours);
-    try testing.expectEqual(2 + curve_steps, l.end[0]);
+    try testing.expectEqual(2 + quad_steps, l.end[0]);
     try testing.expect(l.closed[0] and !l.closed[1]);
     try testing.expectEqual(1, l.x[l.end[0] - 1]);
     try testing.expectEqual(5, l.y[l.end[0] - 1]);
     try testing.expectEqual(1, l.x[l.end[0]]);
     try testing.expectEqual(1, l.y[l.end[0]]);
-    try testing.expectEqual(l.end[0] + 1 + curve_steps, l.end[1]);
+    try testing.expectEqual(l.end[0] + 1 + cubic_steps, l.end[1]);
     // The quad's midpoint at t = 1/2: (5 + 2 * 5 + 1) / 4, (1 + 2 * 5 + 5) / 4.
-    try testing.expectApproxEqAbs(4, l.x[1 + curve_steps / 2], 1e-5);
-    try testing.expectApproxEqAbs(4, l.y[1 + curve_steps / 2], 1e-5);
+    try testing.expectApproxEqAbs(4, l.x[1 + quad_steps / 2], 1e-5);
+    try testing.expectApproxEqAbs(4, l.y[1 + quad_steps / 2], 1e-5);
+}
+
+test "flatten: every chord stays within the tolerance, and fewer chords for a looser one" {
+    const curves = [_][8]f32{
+        .{ 0, 0, 30, -40, 70, 90, 100, 10 },
+        .{ 5, 5, 200, 5, 5, 200, 150, 150 },
+        .{ 0, 0, 1, 2, 2, 1, 3, 3 },
+        .{ 10, 10, 60, 10, 60, 10, 60, 60 },
+    };
+    var t: TestBuffers(8, 2048) = .{};
+    var last_count: u32 = std.math.maxInt(u32);
+    for ([_]f32{ 1.0 / 128.0, 1.0 / 16.0, 0.25, 1 }) |tol| {
+        var count: u32 = 0;
+        for (curves, 0..) |c, ci| {
+            const quadratic = ci == 3; // c[2..4] == c[4..6]: its control twice
+            var p = t.path();
+            p.moveTo(c[0], c[1]);
+            if (quadratic) p.quadTo(c[2], c[3], c[6], c[7]) else p.cubicTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+            var l = t.polyline();
+            try testing.expect(flattenLen(&p, tol).points <= t.lx.len);
+            flatten(&p, tol, &l);
+            const n = l.points - 1;
+            count += n;
+            // Each chord k joins t = k / n and (k + 1) / n; sample the curve between them.
+            for (0..n) |k| {
+                const ax = l.x[k];
+                const ay = l.y[k];
+                const dx = l.x[k + 1] - ax;
+                const dy = l.y[k + 1] - ay;
+                for (1..16) |j| {
+                    const u = (@as(f32, @floatFromInt(k)) + @as(f32, @floatFromInt(j)) / 16) / @as(f32, @floatFromInt(n));
+                    const s = 1 - u;
+                    const b = if (quadratic)
+                        [4]f32{ s * s, 2 * s * u, 0, u * u }
+                    else
+                        [4]f32{ s * s * s, 3 * s * s * u, 3 * s * u * u, u * u * u };
+                    const x = b[0] * c[0] + b[1] * c[2] + b[2] * c[4] + b[3] * c[6];
+                    const y = b[0] * c[1] + b[1] * c[3] + b[2] * c[5] + b[3] * c[7];
+                    const along = std.math.clamp(((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy), 0, 1);
+                    const dist = std.math.hypot(x - ax - along * dx, y - ay - along * dy);
+                    try testing.expect(dist <= tol * 1.01 + 1e-4);
+                }
+            }
+        }
+        try testing.expect(count < last_count);
+        last_count = count;
+    }
+}
+
+test "flatten: a straight or point-like curve is one chord" {
+    try testing.expectEqual(1, curveSteps(.{ 0, 0, 1, 1, 2, 2, 3, 3 }, false, 0.01));
+    try testing.expectEqual(1, curveSteps(.{ 4, 4, 4, 4, 4, 4, 4, 4 }, false, 0.01));
+    try testing.expectEqual(max_curve_steps, curveSteps(.{ 0, 0, 1e6, 0, -1e6, 0, 0, 0 }, false, 0.01));
+    var t: TestBuffers(8, 64) = .{};
+    var p = t.path();
+    p.moveTo(4, 4);
+    p.cubicTo(4, 4, 4, 4, 4, 4);
+    p.lineTo(8, 4);
+    var l = t.polyline();
+    flatten(&p, 0.25, &l);
+    try testing.expectEqual(2, l.points);
 }
 
 test "flatten: repeated points are dropped, a closing point equal to the first too" {
@@ -468,7 +571,7 @@ test "flatten: repeated points are dropped, a closing point equal to the first t
     p.lineTo(0, 0);
     p.close();
     var l = t.polyline();
-    flatten(&p, &l);
+    flatten(&p, 0.25, &l);
     try testing.expectEqual(1, l.contours);
     try testing.expectEqual(3, l.end[0]);
     try testing.expectEqualSlices(f32, &.{ 0, 4, 4 }, l.x[0..3]);
@@ -483,7 +586,7 @@ test "fill: a pixel-aligned square is full inside and empty outside" {
     p.lineTo(1, 3);
     p.close();
     var l = t.polyline();
-    flatten(&p, &l);
+    flatten(&p, 0.25, &l);
     var acc: [64]f32 = undefined;
     var img: [64]u8 = undefined;
     const b, const px = testRender(&l, .nonzero, t.scratch(), &acc, &img);
@@ -503,7 +606,7 @@ test "fill: a half-pixel edge covers half, either winding direction" {
         }
         p.close();
         var l = t.polyline();
-        flatten(&p, &l);
+        flatten(&p, 0.25, &l);
         var acc: [64]f32 = undefined;
         var img: [64]u8 = undefined;
         _, const px = testRender(&l, .nonzero, t.scratch(), &acc, &img);
@@ -523,7 +626,7 @@ test "fill: rules differ where contours overlap with the same winding" {
         p.close();
     }
     var l = t.polyline();
-    flatten(&p, &l);
+    flatten(&p, 0.25, &l);
     var acc: [64]f32 = undefined;
     var img: [64]u8 = undefined;
     _, const nz = testRender(&l, .nonzero, t.scratch(), &acc, &img);
