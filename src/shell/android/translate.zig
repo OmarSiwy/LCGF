@@ -224,6 +224,18 @@ pub const Translator = struct {
         return true;
     }
 
+    /// Clipboard text (`ClipData.Item.coerceToText`, a Java String's UTF-16) typed into the
+    /// next frame, as `keyboard.Clipboard.paste` asks a host to answer a paste (the mobile
+    /// translator's `paste`). `scratch` holds its UTF-8; text that does not fit, or is not
+    /// valid UTF-16, is dropped whole.
+    pub fn paste(t: *Translator, units: []const u16, scratch: []u8) void {
+        const utf8 = utf16ToUtf8(units, scratch) orelse {
+            t.m.dropped += 1;
+            return;
+        };
+        t.m.paste(utf8);
+    }
+
     /// The activity is being destroyed for good (`onDestroy`): no more frames.
     pub fn destroy(t: *Translator) void {
         t.m.terminate();
@@ -234,6 +246,25 @@ pub const Translator = struct {
         return t.m.frame(ev);
     }
 };
+
+/// `units` (UTF-16) as UTF-8 in `out`, or null if it is not valid UTF-16 or does not fit.
+pub fn utf16ToUtf8(units: []const u16, out: []u8) ?[]u8 {
+    var n: usize = 0;
+    var it = std.unicode.Utf16LeIterator.init(units);
+    while (it.nextCodepoint() catch return null) |cp| {
+        const len = std.unicode.utf8CodepointSequenceLength(cp) catch return null;
+        if (out.len - n < len) return null;
+        n += std.unicode.utf8Encode(cp, out[n..]) catch return null;
+    }
+    return out[0..n];
+}
+
+/// `utf8` as UTF-16 for a Java String (`ClipData.newPlainText`) in `out`, which needs as many
+/// units as `utf8` has bytes; null if it is not valid UTF-8 or does not fit.
+pub fn utf8ToUtf16(utf8: []const u8, out: []u16) ?[]u16 {
+    if (!std.unicode.utf8ValidateSlice(utf8) or out.len < utf8.len) return null;
+    return out[0 .. std.unicode.utf8ToUtf16Le(out, utf8) catch return null];
+}
 
 /// Recorded NativeActivity events, replayed one frame per `next` into a translator, so tests
 /// drive it with what a session produced. UTF-8 text, one line each:
@@ -248,6 +279,7 @@ pub const Translator = struct {
 ///                            the button state, then each pointer as id,tool,x,y[,pressure]
 ///     wheel 0 -1             a mouse wheel: AXIS_HSCROLL, AXIS_VSCROLL
 ///     key down 29 0 0        a key event: action, keycode, meta state, repeat count
+///     paste two words        the clipboard's text, the rest of the line (`\n` for a line end)
 ///     destroy                onDestroy
 pub const Replay = struct {
     src: []const u8,
@@ -257,7 +289,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { window, density, content, motion, wheel, key, destroy };
+    const Line = enum { window, density, content, motion, wheel, key, paste, destroy };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -275,6 +307,16 @@ pub const Replay = struct {
             switch (std.meta.stringToEnum(Line, w.next().?) orelse return error.Syntax) {
                 .window => t.resize(try num(&w), try num(&w)),
                 .destroy => t.destroy(),
+                .paste => {
+                    var line: [256]u8 = undefined;
+                    var units: [256]u16 = undefined;
+                    var scratch: [256]u8 = undefined;
+                    const rest = w.rest();
+                    const n = std.mem.replace(u8, rest[0..@min(rest.len, line.len)], "\\n", "\n", &line);
+                    const u = utf8ToUtf16(line[0 .. @min(rest.len, line.len) - n], &units) orelse return error.Syntax;
+                    t.paste(u, &scratch);
+                    continue;
+                },
                 .density => t.setDensity(try int(w.next() orelse return error.Syntax)),
                 .content => t.setContent(try num(&w), try num(&w), try num(&w), try num(&w)),
                 .motion => {
@@ -521,4 +563,34 @@ test "translate: density scales the window, the content rect insets it" {
     u.resize(800, 600);
     try testing.expectEqual(@as(f32, 1), u.m.in.scale);
     try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.safe());
+}
+
+test "translate: clipboard text crosses UTF-16 both ways and is pasted as typed text" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\paste two\nlines 😀
+    };
+    var text: [64]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("two\nlines \u{1f600}", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{.{ .kind = .text, .at = 0, .len = 14 }}, ev.in.events);
+
+    // Copy: UTF-8 to a Java String's UTF-16 (a surrogate pair for the emoji), and back.
+    var units: [16]u16 = undefined;
+    var back: [16]u8 = undefined;
+    const u = utf8ToUtf16("\u{e9}\u{1f600}", &units).?;
+    try testing.expectEqualSlices(u16, &.{ 0xe9, 0xd83d, 0xde00 }, u);
+    try testing.expectEqualStrings("\u{e9}\u{1f600}", utf16ToUtf8(u, &back).?);
+    // Invalid either way, or too long for the buffer: nothing.
+    try testing.expectEqual(null, utf8ToUtf16("\xff", &units));
+    try testing.expectEqual(null, utf16ToUtf8(&.{0xd83d}, &back));
+    try testing.expectEqual(null, utf16ToUtf8(u, back[0..4]));
+    t.paste(&.{0xd83d}, &back);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(u32, 1), t.m.dropped);
 }

@@ -40,6 +40,7 @@ const Platform = context.Platform;
 const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const c = vk.c;
+const jni = @import("jni.zig");
 
 comptime {
     if (!builtin.abi.isAndroid()) @compileError("src/shell/android is the Android shell; build it with -Dtarget=aarch64-linux-android");
@@ -364,6 +365,12 @@ const Target = struct {
     frames: vk.frame.Frames,
 };
 
+/// Clipboard text crossing to and from Java: UTF-16 units and its UTF-8.
+// ponytail: static, one shell per process; clipboard text over 32768 units is not copied
+// or pasted.
+var clip_units: [32768]u16 = undefined;
+var clip_utf8: [3 * 32768]u8 = undefined;
+
 /// Most pointers read from one motion event.
 const translate_max = 16;
 
@@ -387,6 +394,10 @@ pub const Android = struct {
     hz: f32 = 60,
     polls: u32 = 0,
     presents: u32 = 0,
+    /// This thread's JNI environment (attached in `init`), for the framework's Java classes:
+    /// the clipboard, the soft keyboard. Null if the VM refused the thread.
+    env: ?jni.Env = null,
+    vm: ?*anyopaque = null,
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame (`first` and `count`
     /// one row per text run); `text` and `events` hold typed text, half arriving, half shown.
@@ -402,6 +413,21 @@ pub const Android = struct {
         shared.running = true;
         unlock();
         s.* = .{ .t = .init(.{ .text = buf.text, .events = buf.events }), .looper = looper, .glyphs = buf };
+        lock();
+        const a = shared.activity;
+        unlock();
+        if (a) |activity| {
+            s.vm = activity.vm;
+            s.env = jni.attach(activity.vm);
+        }
+    }
+
+    /// The current activity's Java object (Android may have recreated it), for calls that need
+    /// a Context.
+    fn activityObject() ?jni.Object {
+        lock();
+        defer unlock();
+        return @ptrCast(@alignCast((shared.activity orelse return null).clazz));
     }
 
     pub fn deinit(s: *Android) void {
@@ -413,6 +439,8 @@ pub const Android = struct {
         if (s.gpu) |*g| g.deinit();
         s.gpu = null;
         if (s.queue) |q| AInputQueue_detachLooper(q);
+        if (s.env != null) jni.detach(s.vm.?);
+        s.env = null;
     }
 
     /// Applies what the main thread posted: a new or lost window, input queue, size.
@@ -552,7 +580,53 @@ pub const Android = struct {
         }
     }
 
-    pub fn apply(_: *Android, _: *const Platform) void {}
+    /// Applies a frame's effects: text the frame copies goes to the system clipboard.
+    pub fn apply(s: *Android, p: *const Platform) void {
+        if (p.clipboard.len > 0) s.copy(p.clipboard);
+    }
+
+    /// The ClipboardManager: `activity.getSystemService("clipboard")`, a local reference.
+    fn clipboardManager(e: jni.Env, activity: jni.Object) ?jni.Object {
+        const get = e.method(e.findClass("android/content/Context") orelse return null, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;") orelse return null;
+        return e.callObject(activity, get, &.{jni.obj(e.ascii("clipboard"))});
+    }
+
+    /// Puts UTF-8 text on the clipboard: `ClipData.newPlainText("", text)`, then
+    /// `setPrimaryClip`. Invalid UTF-8, or more than `clip_units` units, is not copied.
+    pub fn copy(s: *Android, utf8: []const u8) void {
+        const e = s.env orelse return;
+        const activity = activityObject() orelse return;
+        const units = translate.utf8ToUtf16(utf8, &clip_units) orelse return logError("copy: {d} bytes not copied", .{utf8.len});
+        e.pushFrame(8);
+        defer e.popFrame();
+        const cm = clipboardManager(e, activity) orelse return;
+        const clip_data = e.findClass("android/content/ClipData") orelse return;
+        const plain = e.staticMethod(clip_data, "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;") orelse return;
+        const clip = e.callStaticObject(clip_data, plain, &.{ jni.obj(e.ascii("")), jni.obj(e.string(units)) }) orelse return;
+        const set = e.method(e.objectClass(cm), "setPrimaryClip", "(Landroid/content/ClipData;)V") orelse return;
+        _ = e.callVoid(cm, set, &.{jni.obj(clip)});
+    }
+
+    /// Types the clipboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
+    /// host to: call it after a frame whose widgets requested a paste. Android 10+ gives the
+    /// clipboard only to the app in focus; otherwise nothing is typed.
+    pub fn paste(s: *Android) void {
+        const e = s.env orelse return;
+        const activity = activityObject() orelse return;
+        e.pushFrame(8);
+        defer e.popFrame();
+        const cm = clipboardManager(e, activity) orelse return;
+        const get = e.method(e.objectClass(cm), "getPrimaryClip", "()Landroid/content/ClipData;") orelse return;
+        const clip = e.callObject(cm, get, &.{}) orelse return;
+        const item_at = e.method(e.objectClass(clip), "getItemAt", "(I)Landroid/content/ClipData$Item;") orelse return;
+        const item = e.callObject(clip, item_at, &.{.{ .i = 0 }}) orelse return;
+        const coerce = e.method(e.objectClass(item), "coerceToText", "(Landroid/content/Context;)Ljava/lang/CharSequence;") orelse return;
+        const chars = e.callObject(item, coerce, &.{jni.obj(activity)}) orelse return;
+        const to_string = e.method(e.objectClass(chars), "toString", "()Ljava/lang/String;") orelse return;
+        const str = e.callObject(chars, to_string, &.{}) orelse return;
+        const units = e.units(str, &clip_units) orelse return logError("paste: clipboard text too long", .{});
+        s.t.paste(units, &clip_utf8);
+    }
 
     /// Draws the frame into the next swapchain image and presents it. A changed or lost
     /// swapchain (rotation, resize) is rebuilt at the window's size for the next frame.
