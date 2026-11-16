@@ -137,6 +137,8 @@ pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
 pub const shell_baremetal_flush = @import("shell/baremetal/flush.zig");
 pub const shell_baremetal_input = @import("shell/baremetal/input.zig");
+pub const shell_baremetal_tick = @import("shell/baremetal/tick.zig");
+pub const shell_baremetal_shell = @import("shell/baremetal/shell.zig");
 
 test {
     std.testing.refAllDecls(@This());
