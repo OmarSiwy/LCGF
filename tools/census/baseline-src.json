@@ -204,6 +204,16 @@
     "back": 2,
     "short_fwd": 0
   },
+  "p_sw_dotted": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_dashed": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
   "p_sw_solid": {
     "back": 2,
     "jcc": 4,

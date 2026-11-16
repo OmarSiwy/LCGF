@@ -1,9 +1,13 @@
 //! The software back end: draws a `DrawList` into a caller-owned framebuffer on the CPU, with the
 //! semantics of the stock quad shader (src/render/shaders/quad.wgsl) so its pixels match the GPU
-//! back ends' golden images. No GPU, no allocation, no OS.
+//! back ends' golden images (`ci/run.sh sw-golden`). No GPU, no allocation, no OS.
 //!
-//! Quads that are not opaque rects are shaded per pixel and blended premultiplied "over" (Porter
-//! and Duff 1984: out = src + dst * (1 - src.a)), `simd.lanes` pixels of one row at a time.
+//! Each quad is shaded over the pixels of its bounding box, `simd.lanes` pixels of one row at a
+//! time, with the shader's math as vector expressions: rounded-box distance, border, clip and
+//! rounded clip as coverage, the per-quad feature of `params.x`, then premultiplied "over"
+//! blending (Porter and Duff 1984: out = src + dst * (1 - src.a)). Per pixel there is no branch;
+//! per quad there is one, picking the loop compiled for its feature (what a GPU back end does
+//! with one pipeline and a uniform branch).
 //!
 //! Framebuffer rows are padded to whole vectors, so every span is whole vectors with a mask for
 //! the pixels outside the quad or the scissor; there is no scalar tail.
@@ -12,6 +16,7 @@ const std = @import("std");
 const simd = @import("../../core/simd.zig");
 const types = @import("../../core/types.zig");
 const draw_list = @import("../../draw/draw_list.zig");
+const features = @import("../../draw/features.zig");
 const iface = @import("../iface.zig");
 const Color = types.Color;
 const Quad = draw_list.Quad;
@@ -123,7 +128,11 @@ pub const Software = struct {
                 t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
                 continue;
             }
-            shade(t, q, s.scale);
+            // One loop per feature; unknown codes draw as solid, as the shader's selects do.
+            const code: u32 = @bitCast(q.params[0]);
+            switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
+                inline else => |kind| shade(kind, t, q, s.scale),
+            }
         }
     }
 };
@@ -216,8 +225,9 @@ inline fn pack(c: [4]F, red: u5) U {
     return (out[0] << @splat(red)) | (out[1] << @splat(8)) | (out[2] << @splat(16 - red)) | (out[3] << @splat(24));
 }
 
-/// Shades `q` into `t`: quad.wgsl `vs` and `fs` per pixel.
-pub fn shade(t: Target, q: *const Quad, scale: f32) void {
+/// Shades `q` into `t` with the stock material's `kind` loop: quad.wgsl `vs` and `fs` per pixel.
+pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32) void {
+    const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;
     const hy = (y1 - y0) * 0.5;
@@ -226,6 +236,12 @@ pub fn shade(t: Target, q: *const Quad, scale: f32) void {
     const box = clampBox(toPixels(.{ x0 * scale, y0 * scale, x1 * scale + 1, y1 * scale + 1 }), t.scissor);
 
     const fill = rgba(q.fill);
+    const edge = rgba(q.border_color);
+    const border = q.border;
+    const has_border: f32 = @floatFromInt(@intFromBool(border >= 0.001));
+    // Dashed and dotted borders.
+    const dash: f32 = if (kind == .dotted) border else @bitCast(p[1]);
+    const period = @max(dash + @as(f32, @bitCast(p[2])), 1e-3);
 
     const red = t.fb.red();
     const inv_scale = 1 / scale;
@@ -245,9 +261,26 @@ pub fn shade(t: Target, q: *const Quad, scale: f32) void {
             const r = cornerRadius(lx, ly, hx, hy, q.radii);
             const dist = roundedBox(lx, ly, hx, hy, r) * simd.f(scale);
             const shape = sat(simd.f(0.5) - dist);
+            const inner = sat(simd.f(0.5) - (dist + simd.f(border * scale)));
 
-            const color: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
+            // Border pattern: how much of the border is drawn here.
+            var pattern = simd.f(1);
+            if (kind == .dashed or kind == .dotted) {
+                const ex = simd.f(hx) - @abs(lx);
+                const ey = simd.f(hy) - @abs(ly);
+                const s = @select(f32, ex < ey, ly + simd.f(hy), lx + simd.f(hx));
+                const across = @min(ex, ey);
+                const at = s - @floor(s / simd.f(period)) * simd.f(period);
+                pattern = if (kind == .dashed)
+                    sat((@min(at, simd.f(dash) - at) + simd.f(0.5)) * simd.f(scale))
+                else
+                    sat(simd.f(0.5) - (len2(at - simd.f(border * 0.5), across - simd.f(border * 0.5)) - simd.f(border * 0.5)) * simd.f(scale));
+            }
+            const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
+
+            var color: [4]F = undefined;
             const cover = shape;
+            inline for (0..4) |i| color[i] = simd.f(fill[i]) + (simd.f(edge[i]) - simd.f(fill[i])) * on_border;
 
             const alpha = @select(f32, geo, cover * simd.f(q.opacity), simd.f(0));
 
@@ -316,11 +349,11 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     const t: Target = .{ .fb = &fb, .scissor = fb.all() };
     // Half-transparent red over blue: (255 * 0.5, 0, 200 * 0.5).
     var q = testQuad(.{ 0, 0, 8, 4 }, .rgba(255, 0, 0, 128));
-    shade(t, &q, 1);
+    shade(.solid, t, &q, 1);
     const got = fb.at(3, 2);
     try testing.expect(@abs(@as(i32, got.r) - 128) <= 1 and got.g == 0 and @abs(@as(i32, got.b) - 99) <= 1 and got.a == 255);
     // The general loop writes what the fast path writes for an opaque rect.
     q.fill = Color.rgb(9, 99, 199).bitsOf();
-    shade(t, &q, 1);
+    shade(.solid, t, &q, 1);
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
 }
