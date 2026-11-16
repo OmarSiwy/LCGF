@@ -25,6 +25,7 @@ pub const levels = @import("layout/levels.zig");
 pub const incremental = @import("layout/incremental.zig");
 pub const interaction = @import("interact/interaction.zig");
 pub const focus = @import("interact/focus.zig");
+pub const keyboard = @import("interact/keyboard.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
