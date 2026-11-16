@@ -171,7 +171,7 @@ pub const Flex = struct {
         var weight: f32 = 0;
         var j = first_child;
         while (j < stop) : (j = c.end[j]) {
-            const g = c.grow[a][j] * c.flow[j] * b01(c.pct[a][j] <= 0);
+            const g = c.grow[a][j] * c.flow[j] * b01(c.pct[a][j] < 0);
             const first = c.nat[a][j] + per_weight * g;
             left += @max(first - c.max[a][j], 0);
             weight += g * b01(first < c.max[a][j]);

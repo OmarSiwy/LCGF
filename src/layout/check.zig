@@ -76,7 +76,7 @@ pub fn resolveRef(t: *Tree, axis: Axis, viewport: f32) void {
         const share = free * c.grow[a][i] * c.grow_inv[a][p];
         const stretched = nat + b01(c.grow[a][i] > 0) * (inner - nat);
         const flowed = stretched + main * (nat + share - stretched);
-        const has_pct = b01(c.pct[a][i] > 0);
+        const has_pct = b01(c.pct[a][i] >= 0);
         const of_parent = c.pct[a][i] * inner;
         const in_flow = flowed + has_pct * (of_parent - flowed);
         const floating = nat + has_pct * (of_parent - nat);
