@@ -171,6 +171,12 @@ comptime {
     iface.check(Software);
 }
 
+/// Tile `k` of `n`: a band of whole rows. Bands share no pixel, so `n` threads may each draw one
+/// (`Software.redraw` with the band as scissor) into the same framebuffer at once.
+pub fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32 {
+    return .{ 0, fb.height * k / n, fb.width, fb.height * (k + 1) / n };
+}
+
 fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
     const lo = @max(a[0], b[0]);
     const top = @max(a[1], b[1]);
@@ -490,4 +496,27 @@ test "redraw: only the damage rects change, cleared to the background first" {
     try testing.expectEqual(Color.rgb(1, 2, 3), fb.at(30, 15));
     try testing.expectEqual(Color.rgb(30, 31, 36), fb.at(10, 10)); // the panel, outside the card
     try testing.expectEqual(Color.rgb(90, 140, 255), fb.at(29, 29)); // the card, inside its border
+}
+
+fn drawBand(s: *const Software, fb: *Framebuffer, draw: *const DrawList, k: u32, n: u32) void {
+    s.redraw(fb, tile(fb, k, n), draw, .black);
+}
+
+test "tiles: bands drawn on separate threads give the single-threaded frame" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    var one: Frame(160, 120) = .{};
+    var four: Frame(160, 120) = .{};
+    for (&conformance.scenes) |*scene| {
+        var st: conformance.Storage = .{};
+        st.load(scene);
+        var s: Software = .{};
+        s.prepare({}, &st.draw, st.glyphs(), scene.viewport, 1);
+        var a = one.fb(.rgba8);
+        var b = four.fb(.rgba8);
+        s.redraw(&a, a.all(), &st.draw, .black);
+        var threads: [4]std.Thread = undefined;
+        for (&threads, 0..) |*th, k| th.* = try std.Thread.spawn(.{}, drawBand, .{ &s, &b, &st.draw, @as(u32, @intCast(k)), 4 });
+        for (threads) |th| th.join();
+        for (0..120) |y| try testing.expectEqualSlices(u32, a.pixels[y * a.stride ..][0..160], b.pixels[y * b.stride ..][0..160]);
+    }
 }
