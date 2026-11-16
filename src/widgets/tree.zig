@@ -97,6 +97,72 @@ pub fn positionOf(visible: []const u32, item: u32) u32 {
     return none;
 }
 
+// ---- look: one function per part, called by both front ends -------------------------------
+
+/// Indent per level of depth.
+pub const indent_px: f32 = 16;
+/// Size of the disclosure mark in front of a parent's label.
+pub const mark_px: f32 = 8;
+
+pub fn treeStyle(th: *const Theme) Style {
+    var s = list_zig.listStyle(th);
+    s.min = .{ 160, 0 };
+    return s;
+}
+
+/// An item's row: the list box's option row, indented by its depth.
+pub fn rowStyle(th: *const Theme, depth: u8) Style {
+    var s = list_zig.optionStyle(th);
+    s.pad[0] = th.pad + @as(f32, @floatFromInt(depth)) * indent_px;
+    s.gap = th.gap;
+    return s;
+}
+
+/// The disclosure mark: a dot, the accent when expanded, the hot control colour when collapsed,
+/// nothing for an item without children.
+pub fn markStyle(th: *const Theme, parent: bool, expanded: bool) Style {
+    const fills = [4]Color{ .transparent, .transparent, th.control_hot, th.accent };
+    return .{ .size = .{ .px(mark_px), .px(mark_px) }, .radius = mark_px / 2, .fill = fills[@as(u2, @intFromBool(expanded)) | (@as(u2, @intFromBool(parent)) << 1)] };
+}
+
+/// The visible position at height `y`, for a tree view whose last rect starts at `top`, clamped
+/// into the `count` visible rows.
+pub fn rowAt(th: *const Theme, top: f32, y: f32, count: u32) u32 {
+    return list_zig.rowAt(th, top, y, count);
+}
+
+/// Whether `x` is on item `depth`'s disclosure mark (or before it), for a tree view whose last
+/// rect starts at `left`: a click there toggles instead of only selecting.
+pub fn onMark(th: *const Theme, left: f32, x: f32, depth: u8) bool {
+    return x < left + list_zig.inset(th) + th.pad + @as(f32, @floatFromInt(depth)) * indent_px + mark_px + th.gap / 2;
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A tree view of `n` items, `labels` and `depths` in depth-first order, with `st` its state.
+pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []const []const u8, depths: []const u8, st: *State(n)) Response {
+    var scratch: [n]u32 = undefined;
+    // The input changes which rows exist, so the response is read before the tree view is
+    // opened; `interact` then marks it and reports the same response.
+    const rect = f.lastRect(id);
+    const pre = f.ctx.inter.response(id);
+    const len = visibleItems(depths, &st.expanded, &scratch);
+    var s = treeStyle(th);
+    s.border_color = list_zig.listBorder(th, pre.focused);
+    const box = f.open(id, s);
+    const r = f.interact(box, .button);
+    const under = rowAt(th, rect.y0, f.in.pointer[1], len);
+    for (scratch[0..len], 0..) |item, k| {
+        const row = f.open(.none, rowStyle(th, depths[item]));
+        f.setFill(row, list_zig.optionFill(th, r.hovered and under == k, st.selected == item));
+        _ = f.leaf(.none, markStyle(th, hasChildren(depths, item), st.expanded[item]));
+        _ = base.label(f, th, labels[item]);
+        f.close();
+    }
+    f.close();
+    return r;
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
@@ -122,6 +188,129 @@ pub const ct = struct {
     }
 };
 
+/// The comptime front end for a page of tree views: rows, columns and labels as in
+/// `base.ComptimeUi`, every node with an id a tree view made by `ct.tree`.
+pub fn ComptimeTree(comptime S: type, comptime spec: Spec, comptime th: Theme) type {
+    const E = events.Events(spec);
+    const Sig = signals.Signals(S, spec);
+    inline for (E.widget_nodes) |row| {
+        const v = ct.fields(list_zig.nodeAt(spec, row));
+        validate(S, v.state, v.labels, v.depths, v.n);
+    }
+    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+    return struct {
+        const Self = @This();
+        pub const Events = E;
+        pub const Signals = Sig;
+
+        page: Tables = .{},
+        signals: Sig.Runtime = .{},
+        pointer: list_zig.CtPointer(E) = .{},
+        font: Mono = .{},
+
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
+
+        pub fn frame(ui: *Self, in: *const Input) Output {
+            const event = ui.pointer.step(in);
+
+            const tb = ui.page.begin(in);
+            var next: u32 = 0;
+            ui.push(spec, 0, &next, in);
+            const t = ui.page.end(in);
+            ui.pointer.store(t);
+            return .{ .draw = &tb.d, .tree = t, .event = event };
+        }
+
+        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const tb = &ui.page.tables;
+            const state = &ui.signals.state;
+            const row = next.*;
+            next.* += 1;
+            if (n.kind == .label) {
+                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
+                return;
+            }
+            if (n.id == null) {
+                const i = tb.t.push(parent, .none, &n.style);
+                inline for (n.children) |c| ui.push(c, i, next, in);
+                tb.t.seal(i);
+                return;
+            }
+            // A tree view (`ct.tree`): rows for the visible items.
+            next.* += 3 * n.children.len;
+            const v = comptime ct.fields(n);
+            const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
+            const r = ui.pointer.response(w, in);
+            const st = @field(state, v.state);
+            const labels: []const []const u8 = @field(state, v.labels);
+            const depths: []const u8 = @field(state, v.depths);
+            var scratch: [v.n]u32 = undefined;
+            const len = visibleItems(depths, &st.expanded, &scratch);
+            const rect = ui.pointer.rectOf(w);
+            var s = treeStyle(&th);
+            s.border_color = list_zig.listBorder(&th, r.focused);
+            const box = tb.t.push(parent, .hash(n.id.?), &s);
+            const under = rowAt(&th, rect.y0, in.pointer[1], len);
+            for (scratch[0..len], 0..) |item, k| {
+                var o = rowStyle(&th, depths[item]);
+                o.fill = list_zig.optionFill(&th, r.hovered and under == k, st.selected == item);
+                const i = tb.t.push(box, .none, &o);
+                _ = tb.t.push(i, .none, &markStyle(&th, hasChildren(depths, item), st.expanded[item]));
+                list_zig.pushLabel(tb, i, &.{ .role = .label }, labels[item], &th);
+                tb.t.seal(i);
+            }
+            tb.t.seal(box);
+        }
+
+        fn field(comptime name: []const u8) Sig.Field {
+            return comptime std.meta.stringToEnum(Sig.Field, name).?;
+        }
+    };
+}
+
+// ---- example page -----------------------------------------------------------------------------
+
+const outline_labels = [_][]const u8{ "src", "core", "tree.zig", "types.zig", "widgets", "list.zig", "docs", "DESIGN.md" };
+const outline_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
+const outline_start: State(8) = .{ .expanded = .{ true, false, false, false, false, false, false, false } };
+
+/// The example page: a caption and a tree view of eight items (two top-level folders, `src`
+/// expanded) on a panel, in both front ends, in theme `th`. Its tests and golden images
+/// (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
+    return struct {
+        const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
+
+        /// Runtime front end: the application owns the items and the tree state.
+        pub const App = struct {
+            outline: State(8) = outline_start,
+            clicked: bool = false,
+
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = base.label(f, &th, "Project");
+                app.clicked = tree(f, &th, .from("outline"), 8, &outline_labels, &outline_depths, &app.outline).clicked;
+                f.close();
+            }
+        };
+
+        /// Comptime front end: the same page as a spec over a state struct.
+        pub const PageState = struct {
+            title: []const u8 = "Project",
+            labels: []const []const u8 = &outline_labels,
+            depths: []const u8 = &outline_depths,
+            outline: State(8) = outline_start,
+        };
+        pub const spec = spec_zig.col(panel, .{
+            base.ct.label(th, .title),
+            ct.tree(th, .outline, .outline, .labels, .depths, 8),
+        });
+        pub const Ui = ComptimeTree(PageState, spec, th);
+        pub const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
+        pub const Run = base.Harness(App, Ui, limits);
+    };
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -130,6 +319,8 @@ const Replay = @import("../core/input.zig").Replay;
 
 const test_labels = [_][]const u8{ "src", "core", "tree.zig", "types.zig", "widgets", "list.zig", "docs", "DESIGN.md" };
 const test_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
+
+var harness: Example(theme).Run = .{};
 
 test "check: what a comptime tree view's state must have" {
     const Good = struct { st: State(3) = .{}, l: []const []const u8 = &.{}, d: []const u8 = &.{} };
@@ -174,6 +365,30 @@ test "visibleItems, parentOf, hasChildren: the outline's structure" {
     try testing.expect(!hasChildren(&test_depths, 7));
     try testing.expectEqual(@as(u32, 1), positionOf(&.{ 0, 6 }, 6));
     try testing.expectEqual(none, positionOf(&.{ 0, 6 }, 3));
+}
+
+test "tree: both front ends agree; rows indent by depth" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const box = t.find(.from("outline"));
+    // src, core, widgets, docs: core's label one indent further right than src's.
+    try testing.expectEqual(@as(u32, 4), (t.c.end[box] - box - 1) / 3);
+    try testing.expectApproxEqAbs(indent_px, t.rect(box + 6).x0 - t.rect(box + 3).x0, 0.5);
+    // Expanded parents show the accent mark, collapsed ones the hot control colour.
+    try testing.expectEqual(theme.accent.bitsOf(), t.c.look[box + 2].fill);
+    try testing.expectEqual(theme.control_hot.bitsOf(), t.c.look[box + 5].fill);
+    // Hover the third row.
+    const r = t.rect(box);
+    in.pointer = .{ r.x0 + 100, r.y0 + list_zig.inset(&theme) + list_zig.rowHeight(&theme) * 2.5 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(theme.control.bitsOf(), t.c.look[box + 7].fill);
+    try testing.expectEqual(theme.accent.bitsOf(), t.c.look[box + 1].fill);
+    try testing.expect(onMark(&theme, 16, 16 + 2 + 8 + 4, 0));
+    try testing.expect(!onMark(&theme, 16, 16 + 2 + 8 + 20, 0));
 }
 
 test {
