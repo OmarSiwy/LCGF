@@ -19,6 +19,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -145,6 +146,19 @@ pub fn behave(s: *Number, th: *const Theme, id: Id, r: Response, last: Rect, ran
     return s.value != before;
 }
 
+// ---- accessibility --------------------------------------------------------------------------
+
+/// Marks row `i` of tree `t` a spin button (ARIA spinbutton) holding `value` in the value
+/// column, which is where the accessibility bridge reads them.
+pub fn expose(t: *Tree, i: u32, value: f32) void {
+    t.c.role[i] = @backingInt(a11y.Role.spin_button);
+    t.c.value[i] = value;
+}
+
+/// The semantics the tree columns cannot carry: the field's name is the row `label` (its
+/// caption, `aria-labelledby`), as for the text field.
+pub const semantics = tf.semantics;
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A number field named `id` over `s`, running `range`. Returns its response; whether the
@@ -161,6 +175,7 @@ pub fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Res
     _ = f.textStyled(v.str, tf.textStyle(th, false), .{});
     _ = f.leaf(.none, tf.caretStyle(th, v.caret, 0, r0.focused));
     f.close();
+    expose(f.tree(), node.ix(), s.value);
     return r;
 }
 
@@ -207,6 +222,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             tf.pushText(ui, i, v.str, tf.textStyle(th, false));
             _ = t.push(i, .none, &tf.caretStyle(th, v.caret, 0, focused));
             t.seal(i);
+            expose(t, i, s.value);
         }
 
         pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
@@ -323,6 +339,9 @@ test "number: the page agrees in both front ends; the text shows the value" {
     try testing.expectEqual(@as(u32, 12), t.len);
     try testing.expectEqualStrings("3", h.app.qty.text.text());
     try testing.expectEqualStrings("0.5", h.app.scale.text.text());
+    const q = t.find(.from("qty"));
+    try testing.expectEqual(@backingInt(a11y.Role.spin_button), t.c.role[q]);
+    try testing.expectEqual(@as(f32, 3), t.c.value[q]);
 }
 
 test "number look: a text field's box showing the value, the caret at its end while focused" {
@@ -349,6 +368,34 @@ test "number look: a text field's box showing the value, the caret at its end wh
     try testing.expectApproxEqAbs(box.x0 + th.pad + tf.advance(&th), t.rect(q + 3).x0, 0.5);
 }
 
+var number_semantics: base.Semantic(16) = .{};
+
+test "number a11y: role spin button valued by its value, named by its caption" {
+    const h = &page;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 140 } };
+    const out = try h.frame(&in);
+    const x = &number_semantics;
+    try x.run(h);
+    const t = out.runtime.tree;
+    inline for (.{ .{ "qty", 3 }, .{ "scale", 0.5 } }) |w| {
+        const n = t.find(.from(w[0]));
+        const r = x.row(n).?;
+        try testing.expectEqual(@backingInt(a11y.Role.spin_button), x.out[0].c.role[r]);
+        try testing.expectEqual(@as(f32, w[1]), x.out[0].c.value[r]);
+        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+        for (1..4) |k| try testing.expectEqual(null, x.row(n + @as(u32, @intCast(k))));
+    }
+    const check = @import("check.zig");
+    var sb: check.SemBuf = .{};
+    var sem = sb.init();
+    const q = t.find(.from("qty"));
+    semantics(t, &sem, .from("qty"), q - 1);
+    a11y.names(t, &sem);
+    const ctx = &h.ctx;
+    try testing.expectEqualStrings("Quantity", check.nameOf(&sem, out.runtime.texts, ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], q));
+}
+
 test "number input: steps by keys and wheel, typing taken on Enter, a step or blur" {
     const h = &page;
     h.init();
@@ -366,6 +413,7 @@ test "number input: steps by keys and wheel, typing taken on Enter, a step or bl
         in.events = &ev;
         out = try both(h, &in);
         try testing.expectEqual(st.v, h.app.qty.value);
+        try testing.expectEqual(st.v, out.runtime.tree.c.value[t.find(.from("qty"))]);
         try testing.expectEqual(@as(?Page.Ui.Events.Event, .{ .qty = st.v }), out.comptime_.event);
     }
     // Select all, type 7, Enter: taken.
