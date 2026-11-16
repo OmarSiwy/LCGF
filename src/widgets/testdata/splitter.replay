@@ -1,0 +1,29 @@
+# Recorded input for the splitter example page (widgets/splitter.zig, `Page`), at 320 x 200 in
+# the default theme: the container at 8..292 x 8..112, split at 30% with the handle at
+# 93..99. Keys are USB HID codes: 79 Right, 74 Home, 77 End (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: hover the handle
+frame
+pointer 96 60
+# 2: press it: it takes focus
+frame
+buttons left
+# 3: drag to the middle of the container: split 0.5
+frame
+pointer 150 60
+# 4: release
+frame
+buttons
+# 5: Right: 0.55
+frame
+press 79
+# 6: End: 1, the second pane shrinks to the handle
+frame
+press 77
+# 7: Home: 0, the first pane disappears
+frame
+press 74

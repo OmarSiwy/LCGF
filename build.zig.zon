@@ -89,6 +89,23 @@
             .hash = "N-V-__8AAJ90OgUNPX1VM8Liw8V38VPsQOhantYPA5Y98dZH",
             .lazy = true,
         },
+        // Competitor harnesses (bench/vs/, docs/perf/vs.md): comparison only, never linked into
+        // the product. Each is fetched only for its own `zig build vs-NAME` step.
+        .clay = .{
+            .url = "https://github.com/nicbarker/clay/archive/refs/tags/v0.14.tar.gz",
+            .hash = "N-V-__8AALPgZwA7tLqRlkCCL7OrkEhj4xZ3y_0FxgR42t0W",
+            .lazy = true,
+        },
+        .imgui = .{
+            .url = "https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0.tar.gz",
+            .hash = "N-V-__8AAEVjfgCU7hthaWtlDkNjFB4HE1XYqFl6UO7oqXwD",
+            .lazy = true,
+        },
+        .lvgl = .{
+            .url = "https://github.com/lvgl/lvgl/archive/refs/tags/v9.6.0.tar.gz",
+            .hash = "N-V-__8AAEV6mgvY3hT-LmCZsLpBhxSxreIJQ6gb0JVt4I6q",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",

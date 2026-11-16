@@ -16,23 +16,25 @@
 //!   fn apply(*S, *const Platform) void
 //!        Applies a frame's platform effects: the cursor shape, showing the on-screen keyboard or
 //!        IME at `ime_rect`, setting the clipboard. Called once per built frame, after `end`.
+//!   fn present(*S, *const Output) void
+//!        Shows the frame: draws `out.draw` with the shell's back end and presents it. A host that
+//!        renders itself (its own GPU pass, custom draws) skips this and uses `out.draw` directly.
+//!   fn wait(*S, seconds: f32, pace: Pace) void
+//!        Blocks until the next platform event or `seconds` pass, whichever is first (`inf`:
+//!        until the next event). `pace` says why (`scheduler.Pace`): `.display` asks the shell to
+//!        pace to the display's refresh instead of returning at once.
 //!
-//! One frame through the contract, which is all a host loop is:
-//!
-//!     while (shell.poll(&ev)) {
-//!         if (!ctx.needsFrame(&ev.in)) continue; // and sleep, see `Output.wake`
-//!         var f = ctx.begin(&ev.in);
-//!         app.build(&f, &ev);
-//!         const out = f.end(.{});
-//!         shell.apply(&out.platform);
-//!         // render out.draw with any back end (src/render/iface.zig)
-//!     }
+//! `run` is the whole host loop over these four calls, for the common case.
 
 const std = @import("std");
 const Input = @import("../core/input.zig").Input;
 const keyboard = @import("../interact/keyboard.zig");
 const gestures = @import("../interact/gestures.zig");
-const Platform = @import("../runtime/context.zig").Platform;
+const context = @import("../runtime/context.zig");
+const scheduler = @import("../runtime/scheduler.zig");
+const Platform = context.Platform;
+const Output = context.Output;
+const Pace = scheduler.Pace;
 
 /// Everything a shell reports for one frame. `Input` is what the core reads; the IME's
 /// composition and dragged files ride next to it, since only the widgets that ask for them read
@@ -46,7 +48,7 @@ pub const Events = struct {
 };
 
 /// The declarations `check` requires of a shell.
-pub const required = [_][]const u8{ "poll", "apply" };
+pub const required = [_][]const u8{ "poll", "apply", "present", "wait" };
 
 /// Compile error unless `S` declares everything in `required`.
 pub fn check(comptime S: type) void {
@@ -55,10 +57,29 @@ pub fn check(comptime S: type) void {
     }
 }
 
+/// Diagonal: the host loop for the common case. Polls, builds a frame only when one is needed
+/// (`needsFrame`), applies and presents it, then sleeps as long as the scheduler allows. Returns
+/// when the shell has no more frames. `app` is anything with `fn build(*App, *Frame, *const
+/// Events) void`. Each line is one public call: copy the body to put your own work, shaper or
+/// renderer into the loop.
+pub fn run(shell: anytype, ctx: *context.Context, app: anytype) void {
+    comptime check(@TypeOf(shell.*));
+    var ev: Events = .{};
+    while (shell.poll(&ev)) {
+        if (ctx.needsFrame(&ev.in)) {
+            var f = ctx.begin(&ev.in);
+            app.build(&f, &ev);
+            const out = f.end(.{});
+            shell.apply(&out.platform);
+            shell.present(&out);
+        }
+        shell.wait(scheduler.wake(ctx, &ev.in), scheduler.pace(ctx));
+    }
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
-const context = @import("../runtime/context.zig");
 const example = @import("example.zig");
 
 /// Smallest shell that meets the contract: the test is the platform. It sets `next` before each
@@ -77,13 +98,15 @@ const Manual = struct {
         m.applied = p.*;
         m.applies += 1;
     }
+    pub fn present(_: *Manual, _: *const Output) void {}
+    pub fn wait(_: *Manual, _: f32, _: Pace) void {}
 };
 
 comptime {
     check(Manual);
 }
 
-/// One turn of the loop in the header, for the tests: false when the shell is done.
+/// One turn of `run` without the wait, for the tests: null when the shell is done or no frame was needed.
 fn turn(shell: anytype, ctx: *context.Context, app: *example.App, ev: *Events) ?context.Output {
     if (!shell.poll(ev)) return null;
     if (!ctx.needsFrame(&ev.in)) return null;

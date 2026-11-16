@@ -90,15 +90,20 @@ pub fn build(b: *std.Build) void {
     widget_dump.addPassthruArgs();
     b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
 
-    // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
-    // the rest moves to src/ as it is ported.
+    // tools/bench times lcgr's runtime front end ("lcgr"); `--core=prototype` builds frames with the
+    // prototype core ("ui") and lays them out and paints them with lcgr, as before.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
     const bench_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = bench_core }} });
+    // The same scenes against lcgr's runtime front end (the default; tools/bench/src_ui.zig). A
+    // file belongs to one module per compilation, so this module roots a copy of bench/scenes/.
+    const src_scenes_root = b.addWriteFiles().addCopyDirectory(b.path("bench/scenes"), "scenes", .{}).path(b, "scenes.zig");
+    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }} });
+    const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes } },
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes }, .{ .name = "src_scenes", .module = bench_src_scenes } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -119,18 +124,66 @@ pub fn build(b: *std.Build) void {
     const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgr_small.addOptions("build_options", options);
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
+    const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_small }} });
+    const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
+    // The reference row of docs/perf/vs.md: the benchmark itself, fast and small (bench/vs/measure.py).
+    const vs_lcgr = b.step("vs-lcgr", "Install the benchmark as the LCGR row of the comparison (bench/vs/)");
+    vs_lcgr.dependOn(&b.addInstallArtifact(bench, .{ .dest_sub_path = "vs-lcgr" }).step);
+    vs_lcgr.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes } },
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
+        if (std.mem.eql(u8, ex[0], "bench")) vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "vs-lcgr-small" }).step);
     }
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
+
+    // Competitor harnesses (bench/vs/, docs/perf/vs.md, ci/jobs/vs-*.sh): `zig build vs-NAME`
+    // installs zig-out/bin/vs-NAME (ReleaseFast, timed), vs-NAME-small (ReleaseSmall, sized) and
+    // the size tool. Each framework is a lazy dependency, fetched only for its own step.
+    const vs_clay = b.step("vs-clay", "Build the Clay comparison harness (bench/vs/clay/)");
+    vs_clay.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("clay", .{})) |clay| {
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-clay", "vs-clay-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/main.c"), .flags = &.{"-std=gnu99"} });
+            exe.root_module.addIncludePath(clay.path(""));
+            vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
+    const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
+    vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("imgui", .{})) |imgui| {
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-imgui", "vs-imgui-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libcpp = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/imgui/main.cpp"), .flags = &.{"-std=c++17"} });
+            exe.root_module.addCSourceFiles(.{ .root = imgui.path(""), .files = &.{ "imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp", "imgui_tables.cpp", "backends/imgui_impl_null.cpp" }, .flags = &.{"-std=c++17"} });
+            exe.root_module.addIncludePath(imgui.path(""));
+            exe.root_module.addIncludePath(imgui.path("backends"));
+            vs_imgui.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
+    const vs_lvgl = b.step("vs-lvgl", "Build the LVGL comparison harness (bench/vs/lvgl/)");
+    vs_lvgl.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("lvgl", .{})) |lvgl| {
+        // LVGL's defaults (LV_CONF_SKIP, no lv_conf.h) plus: 32-bit colour, Montserrat 20 for the
+        // headings, and the C library's malloc instead of LVGL's fixed 64 KiB pool.
+        const flags: []const []const u8 = &.{ "-std=gnu99", "-DLV_CONF_SKIP", "-DLV_COLOR_DEPTH=32", "-DLV_FONT_MONTSERRAT_20=1", "-DLV_USE_STDLIB_MALLOC=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_STRING=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_SPRINTF=LV_STDLIB_CLIB" };
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lvgl", "vs-lvgl-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/lvgl/main.c"), .flags = flags });
+            exe.root_module.addCSourceFiles(.{ .root = lvgl.path(""), .files = &@import("bench/vs/lvgl/sources.zig").files, .flags = flags });
+            exe.root_module.addIncludePath(lvgl.path("include"));
+            exe.root_module.addIncludePath(lvgl.path("src"));
+            vs_lvgl.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
 
     // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
     const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
@@ -226,6 +279,17 @@ pub fn build(b: *std.Build) void {
         harfbuzz.root_module.linkLibrary(hb_lib);
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
+
+    // Developer tools (src/devtools/): outside the tiers (timing reads the host's std.Io clock),
+    // so a module of its own over lcgr, never imported by it.
+    const devtools = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/devtools/devtools.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    devtools.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
+    b.step("devtools", "Test the inspector and developer tools (ci/run.sh devtools)").dependOn(&b.addRunArtifact(devtools).step);
 
     // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
     // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
