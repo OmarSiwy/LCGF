@@ -24,7 +24,7 @@ const linux = std.os.linux;
 const rows = 330;
 const frames = 3000;
 
-const limits: ui.Limits = .{ .nodes = 4096, .texts = 2048, .strings = 128 * 1024 };
+const limits: ui.Limits = .{ .nodes = 4096, .texts = 2048, .strings = 128 * 1024, .anims = 1024 };
 var buffer: [ui.Context.requiredBytes(limits)]u8 align(ui.mem.column_align) = undefined;
 
 /// Frame passes first, then the layout passes that make up `layout`.
