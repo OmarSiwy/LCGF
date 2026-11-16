@@ -17,8 +17,9 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 | LCGR | `tools/bench/bench.zig`: begin + hit test, build, layout, paint into the draw list | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
 | Clay 0.14 | `Clay_BeginLayout`, declarations, `Clay_EndLayout` (layout and render commands) | the same monospace measure, word wrap by Clay | Clay has no widgets or animation: they are built from elements, springs are the prototype's step |
 | Dear ImGui 1.93.0 | input, `NewFrame`, ImGui's own widgets, `Render` (vertex and index buffers), null back end | default font (ProggyClean) at 14 and 20 px, every glyph laid out into vertices | springs are the prototype's step (no animation API) |
+| LVGL 9.6.0 | retained: objects made once; per frame the changes (pointer read, list rows recycled, bar widths, resolution), then `lv_refr_now`: layout and software redraw of the invalidated areas into a 32-bit partial buffer | Montserrat 14 and 20 px, rasterised | includes rasterisation; LVGL's own `layout` line (changes + `lv_obj_update_layout`) is given below |
 
-None of these rows rasterises. Draw output per frame differs in kind (LCGR quads and text runs, Clay
+None of these rows rasterises except LVGL. Draw output per frame differs in kind (LCGR quads and text runs, Clay
 render commands, ImGui vertices), so the `out=` counts in the harness output are not comparable
 across rows.
 
@@ -26,24 +27,26 @@ across rows.
 
 Each column was measured in its own `ci/run.sh vs-<name>` run, beside an LCGR row of that run;
 the LCGR column here is from the Clay run (load 3.2 to 4.2 on 32 CPUs). LCGR in the ImGui run
-(load 4.5 to 5.0): form 14.8, list 11.2, text 16.4, springs 201.2, resize 16.4 (medians).
+(load 4.5 to 5.0): form 14.8, list 11.2, text 16.4, springs 201.2, resize 16.4; in the LVGL run
+(load 4.4 to 5.2): 14.4, 11.1, 16.5, 200.1, 16.4 (medians). For LVGL the timings cover every poll,
+and the idle row counts the polls that redrew anything.
 
-| Scene | LCGR | Clay | Dear ImGui |
-|---|---|---|---|
-| form | 16.7 / 19.6 | 28.0 / 39.3 | 15.8 / 23.2 |
-| list | 12.3 / 15.0 | 21.7 / 27.0 | 11.1 / 19.5 |
-| text | 17.6 / 20.2 | 29.8 / 33.1 | 89.9 / 164.4 |
-| springs | 219.8 / 226.5 | 112.3 / 161.4 | 52.8 / 90.4 |
-| resize | 17.6 / 26.1 | 29.4 / 36.7 | 92.9 / 151.8 |
-| idle: frames built of 3,000 polls | 2 | 3,000 | 3,000 |
+| Scene | LCGR | Clay | Dear ImGui | LVGL (layout only) |
+|---|---|---|---|---|
+| form | 16.7 / 19.6 | 28.0 / 39.3 | 15.8 / 23.2 | 0.9 / 1.2 (0.8) |
+| list | 12.3 / 15.0 | 21.7 / 27.0 | 11.1 / 19.5 | 795.9 / 905.7 (421) |
+| text | 17.6 / 20.2 | 29.8 / 33.1 | 89.9 / 164.4 | 1.0 / 1.9 (0.9) |
+| springs | 219.8 / 226.5 | 112.3 / 161.4 | 52.8 / 90.4 | 3,248.9 / 3,386.0 (2,472) |
+| resize | 17.6 / 26.1 | 29.4 / 36.7 | 92.9 / 151.8 | 1,970.1 / 3,514.8 (1,039) |
+| idle: frames built of 3,000 polls | 2 | 3,000 | 3,000 | 1 |
 
 ## Memory, idle and size
 
-| | LCGR | Clay | Dear ImGui |
-|---|---|---|---|
-| Resident after one idle frame | 8,048 KiB | 2,096 KiB | 3,844 KiB |
-| Idle wake-ups per second | 0 | 0 | 0 |
-| Loaded bytes (ReleaseSmall) + bss | 220,643 + 7,557,108 | 99,105 + 101,392 | 757,100 + 61,448 |
+| | LCGR | Clay | Dear ImGui | LVGL |
+|---|---|---|---|---|
+| Resident after one idle frame | 8,048 KiB | 2,096 KiB | 3,844 KiB | 3,540 KiB |
+| Idle wake-ups per second | 0 | 0 | 0 | 30 |
+| Loaded bytes (ReleaseSmall) + bss | 220,643 + 7,557,108 | 99,105 + 101,392 | 757,100 + 61,448 | 659,062 + 1,022,184 |
 
 ## What these numbers do and do not say
 
@@ -63,6 +66,17 @@ the LCGR column here is from the Clay run (load 3.2 to 4.2 on 32 CPUs). LCGR in 
   Neither shapes text or emits glyph quads. ImGui lays out real glyph advances and writes four
   vertices per glyph (12,984 vertices in the text scene), work LCGR leaves to its renderer: that is
   most of ImGui's text and resize time.
+- LVGL is retained and redraws only what changed. In the form and text scenes the moving pointer
+  changes no style (the default theme has no hover styles), so a poll costs about a microsecond and
+  nothing is drawn after the first frame. Where everything changes (list scrolled 997 px a frame,
+  1,000 bar widths, a resize) it relayouts and re-rasterises the window, and its time is mostly
+  software rendering plus a layout that is 30 to 100 times slower than LCGR's whole frame. Its idle
+  host loop (`lv_timer_handler`, then sleep until the next timer) wakes 30 times a second for the
+  display refresh and input read timers (LV_DEF_REFR_PERIOD 33 ms). Its bss is the 1/10-screen draw
+  buffer (970 KiB) the harness gives it. Springs: 1,882 of 3,000 frames redrew; the rest had
+  no bar width change after rounding to whole pixels.
+- LVGL's list recycles 36 row objects and sets each one's text, position and background colour
+  every frame (local style), as an LVGL list over 100,000 rows has to.
 - Form: ImGui's text fields are `InputText` widgets; LCGR's form scene draws a bordered box with a
   label (no editing state), so ImGui does a little more there.
 - Clay culls render commands outside the window (73 of the text scene's elements); LCGR paints
