@@ -121,6 +121,12 @@ pub fn tints(th: *const Theme) base.OnOff {
     return .{ .white, th.control };
 }
 
+// ---- behaviour: none ---------------------------------------------------------------------------
+
+// An image takes no input: its node senses nothing (no `Frame.interact`, no id), so the hit
+// test passes through it to what holds it, and focus and Tab never stop on it. A clickable
+// picture is a button holding an image.
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Shows `pic` as one leaf.
@@ -149,20 +155,34 @@ fn Page(comptime th: Theme) type {
     return struct {
         pub const photo: Image = .{ .texture = @fromBackingInt(1), .uv = .{ 0, 0, 0.5, 0.5 }, .size = .{ 64, 48 } };
         pub const boxed: Options = .{ .box = .{ 96, 96 }, .fit = .cover };
+        pub const thumb: Options = .{ .box = .{ 24, 24 } };
         pub const App = struct {
+            zooms: u32 = 0,
             pub fn build(app: *App, f: *Frame) void {
-                _ = app;
                 _ = f.open(.none, column);
                 _ = base.label(f, &th, "Photo");
                 _ = image(f, &th, photo, .{});
                 _ = image(f, &th, photo, boxed);
+                const b = f.open(.from("zoom"), base.buttonStyle(&th));
+                const r = f.interact(b, .button);
+                f.setFill(b, base.buttonFill(&th, r));
+                _ = image(f, &th, photo, thumb);
+                f.close();
+                app.zooms += @intFromBool(r.clicked);
                 f.close();
             }
         };
         pub const State = struct {
             caption: []const u8 = "Photo",
         };
-        pub const spec = spec_zig.col(column, .{ base.ct.label(th, .caption), ct.image(th, photo, .{}), ct.image(th, photo, boxed) });
+        pub const spec = spec_zig.col(column, .{
+            base.ct.label(th, .caption), ct.image(th, photo, .{}), ct.image(th, photo, boxed),
+            blk: {
+                var b = spec_zig.row(base.buttonStyle(&th), .{ct.image(th, photo, thumb)});
+                b.id = "zoom";
+                break :blk b;
+            },
+        });
         pub const Ui = base.ComptimeUi(State, spec, th);
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
@@ -171,10 +191,13 @@ fn Page(comptime th: Theme) type {
 const Default = Page(.default);
 var harness: Default.Run = .{};
 
-/// Tree rows: root 0, column 1, caption 2, the picture 3, the boxed picture 4.
+/// Tree rows: root 0, column 1, caption 2, the picture 3, the boxed picture 4, the button 5
+/// holding the thumbnail 6.
 const rows = struct {
     const natural = 3;
     const boxed = 4;
+    const button = 5;
+    const thumb = 6;
 };
 
 test "image: both front ends build one leaf per picture, at its size or the box's" {
@@ -183,7 +206,7 @@ test "image: both front ends build one leaf per picture, at its size or the box'
     const in: Input = .{ .viewport = .{ 320, 240 } };
     const out = try h.frame(&in);
     const t = out.runtime.tree;
-    try testing.expectEqual(@as(u32, 5), t.len);
+    try testing.expectEqual(@as(u32, 7), t.len);
     try testing.expectEqual(@as(f32, 64), t.rect(rows.natural).w());
     try testing.expectEqual(@as(f32, 48), t.rect(rows.natural).h());
     try testing.expectEqual(@as(f32, 96), t.rect(rows.boxed).w());
@@ -235,6 +258,38 @@ test "image: another theme restyles both front ends alike" {
     const out = try S.h.frame(&in);
     try testing.expectEqual(@as(f32, 0), out.comptime_.tree.c.look[rows.natural].radius);
     try testing.expectEqual(types.Color.white.bitsOf(), out.runtime.tree.c.look[rows.boxed].fill);
+}
+
+test "image: takes no input; a press on it goes to what holds it; tab order skips it" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    var out = try h.frame(&in);
+    for ([2]u32{ rows.natural, rows.boxed }) |row| {
+        const r = out.runtime.tree.rect(row);
+        in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        in.buttons.left = true;
+        _ = try h.frame(&in);
+        try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+        try testing.expectEqual(@as(?Default.Ui.Events.Widget, null), h.ui.pointer.pressed);
+        in.buttons.left = false;
+        out = try h.frame(&in);
+        try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+        try testing.expectEqual(@as(u32, 0), h.ctx.inter.hot);
+        try testing.expect(out.comptime_.event == null);
+    }
+    // Press and release on the thumbnail inside the button: the button is clicked, in both.
+    const tr = out.runtime.tree.rect(rows.thumb);
+    in.pointer = .{ (tr.x0 + tr.x1) * 0.5, (tr.y0 + tr.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.zooms);
+    try testing.expect(out.comptime_.event != null and out.comptime_.event.? == .zoom);
+    try check.expectInert(out.runtime.tree, &.{ rows.natural, rows.boxed, rows.thumb });
+    try check.expectInert(out.comptime_.tree, &.{ rows.natural, rows.boxed, rows.thumb });
 }
 
 test "checkImage: a size, a texture rect and a box" {
