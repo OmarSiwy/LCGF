@@ -129,6 +129,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
+    // The software renderer drawing a dumped frame as a PNG (src/render/sw/play.zig, ci/run.sh sw-golden).
+    const sw_play = b.addExecutable(.{ .name = "sw-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/sw/play.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) });
+    b.step("sw-play", "Build zig-out/bin/sw-play (draws a dumped frame in software)").dependOn(&b.addInstallArtifact(sw_play, .{}).step);
 
     // Every shader variant as files for a real GPU to validate (src/render/shaders/, ci/run.sh shaders).
     const shaders_dump = b.addExecutable(.{ .name = "shaders-dump", .root_module = b.createModule(.{
