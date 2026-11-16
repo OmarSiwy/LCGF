@@ -50,7 +50,7 @@ pub const settings = blk: {
 
 /// A status badge for a 96x64 display: a title and a level, on a microcontroller.
 pub const Badge = struct { name: []const u8 = "Ada", level: f32 = 0.3 };
-pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap = 2, .fill = .rgb(255, 255, 255) }, .{
+pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap = 2, .fill = .rgb(255, 255, 255), .clip = true }, .{
     s.label(.name),
     s.named(s.slider(.level, .level), "Level"),
 });
