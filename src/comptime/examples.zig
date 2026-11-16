@@ -4,7 +4,8 @@
 const s = @import("spec.zig");
 const Spec = s.Spec;
 
-pub const Example = struct { name: []const u8, State: type, spec: Spec };
+pub const Example = struct { name: []const u8, State: type, spec: Spec, options: Options = .{} };
+const Options = @import("validate.zig").Options;
 
 /// The probe's mixer (prototype/comptime_ui_probe.zig), with accessible names.
 pub const Mixer = struct { title: []const u8 = "Mixer", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
@@ -47,6 +48,13 @@ pub const settings = blk: {
     break :blk s.col(.{ .size = .{ .px(320), .px(240) }, .pad = @splat(4), .gap = 2, .fill = .rgb(0, 0, 0) }, rows);
 };
 
+/// A status badge for a 96x64 display: a title and a level, on a microcontroller.
+pub const Badge = struct { name: []const u8 = "Ada", level: f32 = 0.3 };
+pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap = 2, .fill = .rgb(255, 255, 255) }, .{
+    s.label(.name),
+    s.named(s.slider(.level, .level), "Level"),
+});
+
 /// A row whose middle node is a custom widget that builds its own rows.
 pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
@@ -54,10 +62,11 @@ pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = 
 pub const all = [_]Example{
     .{ .name = "mixer", .State = Mixer, .spec = mixer },
     .{ .name = "card", .State = Card, .spec = static_card },
-    .{ .name = "settings", .State = Settings, .spec = settings },
+    .{ .name = "settings", .State = Settings, .spec = settings, .options = .{ .viewport = .{ 320, 240 } } },
+    .{ .name = "badge", .State = Badge, .spec = badge, .options = .{ .viewport = .{ 96, 64 } } },
     .{ .name = "custom", .State = Custom, .spec = custom },
 };
 
 test "examples: every example passes validation" {
-    inline for (all) |e| comptime @import("validate.zig").check(e.State, e.spec, .{});
+    inline for (all) |e| comptime @import("validate.zig").check(e.State, e.spec, e.options);
 }
