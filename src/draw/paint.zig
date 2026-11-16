@@ -113,9 +113,16 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     }
     d.custom_len = cu.len;
     d.strings = strings;
+    d.op_len = o;
+    encode(d);
+}
 
-    // 3. Ops -> commands by run-length encoding. Consecutive quads with the
-    //    same texture and material merge; text and custom ops stand alone.
+/// Sweep 3 alone: `d.op[0..op_len]` -> commands by run-length encoding. Consecutive quads with
+/// the same texture and material merge; text and custom ops stand alone. Consecutive quad ops
+/// must reference consecutive quads, as sweep 1 writes them. For passes that reorder ops
+/// (`order.mergeAcrossText`) and then encode again.
+pub fn encode(d: *DrawList) void {
+    const o = d.op_len;
     var n: u32 = 0;
     var prev_kind: u8 = 0xff;
     var prev_key: u32 = 0;

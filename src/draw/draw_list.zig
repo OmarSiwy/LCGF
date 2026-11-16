@@ -85,6 +85,7 @@ pub const DrawList = struct {
     cmd: CmdColumns,
     cmd_len: u32 = 0,
     op: OpColumns,
+    op_len: u32 = 0,
     /// What changed since the last frame (`damage.cull` sets it): a renderer that keeps last
     /// frame's pixels redraws only inside these rects and may leave the rest. `everything`
     /// unless the frame was culled.

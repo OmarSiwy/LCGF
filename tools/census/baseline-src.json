@@ -178,5 +178,10 @@
     "jcc": 8,
     "back": 4,
     "short_fwd": 0
+  },
+  "p_merge_across_text": {
+    "jcc": 12,
+    "back": 6,
+    "short_fwd": 2
   }
 }
