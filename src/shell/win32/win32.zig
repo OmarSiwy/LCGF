@@ -91,6 +91,12 @@ const mwmo_inputavailable = 0x0004;
 const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
+/// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703): the system scales nothing,
+/// sends WM_DPICHANGED, and the client area is in physical pixels.
+const dpi_per_monitor_v2: isize = -4;
+const swp_nozorder = 0x0004;
+const swp_noactivate = 0x0010;
+const swp_nomove = 0x0002;
 
 extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
 extern "user32" fn RegisterClassExW(*const WNDCLASSEXW) callconv(.winapi) u16;
@@ -111,6 +117,10 @@ extern "user32" fn GetDC(?HWND) callconv(.winapi) ?HDC;
 extern "user32" fn ReleaseDC(?HWND, HDC) callconv(.winapi) c_int;
 extern "user32" fn BeginPaint(HWND, *PAINTSTRUCT) callconv(.winapi) ?HDC;
 extern "user32" fn EndPaint(HWND, *const PAINTSTRUCT) callconv(.winapi) BOOL;
+extern "user32" fn SetProcessDpiAwarenessContext(context: isize) callconv(.winapi) BOOL;
+extern "user32" fn GetDpiForWindow(HWND) callconv(.winapi) u32;
+extern "user32" fn AdjustWindowRectExForDpi(*RECT, style: u32, menu: BOOL, ex_style: u32, dpi: u32) callconv(.winapi) BOOL;
+extern "user32" fn SetWindowPos(HWND, after: ?HWND, x: i32, y: i32, w: i32, h: i32, flags: u32) callconv(.winapi) BOOL;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -140,7 +150,7 @@ pub const Win32 = struct {
     pub const Options = struct {
         /// UTF-16, as the window title is shown.
         title: [*:0]const u16 = std.unicode.utf8ToUtf16LeStringLiteral("LCGR"),
-        /// Client size in pixels.
+        /// Client size in logical pixels; the window is this times the monitor's scale.
         size: [2]u32 = .{ 800, 600 },
         /// False for a window that stays hidden (tests).
         show: bool = true,
@@ -164,6 +174,8 @@ pub const Win32 = struct {
 
     /// Opens the window. `w` is where the shell lives from now on: the window procedure finds it there.
     pub fn init(w: *Win32, opt: Options, buf: Buffers) Error!void {
+        // Fails when the process already has an awareness (a manifest, an earlier window).
+        _ = SetProcessDpiAwarenessContext(dpi_per_monitor_v2);
         const instance = GetModuleHandleW(null);
         // Fails when the class is already registered, which is fine; CreateWindowExW says if not.
         _ = RegisterClassExW(&.{ .wndproc = wndProc, .instance = instance, .class_name = class_name });
@@ -175,11 +187,14 @@ pub const Win32 = struct {
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
-        w.t.in.viewport = .{ @floatFromInt(opt.size[0]), @floatFromInt(opt.size[1]) };
-        // The client size asked for; the frame around it is added by the system.
-        var r: RECT = .{ .right = @intCast(opt.size[0]), .bottom = @intCast(opt.size[1]) };
-        adjust(&r);
-        w.hwnd = CreateWindowExW(0, class_name, opt.title, ws_overlappedwindow, cw_usedefault, cw_usedefault, r.right - r.left, r.bottom - r.top, null, null, instance, w) orelse return error.CreateWindow;
+        w.hwnd = CreateWindowExW(0, class_name, opt.title, ws_overlappedwindow, cw_usedefault, cw_usedefault, cw_usedefault, cw_usedefault, null, null, instance, w) orelse return error.CreateWindow;
+        // Now that the window has a monitor, size it: the logical size at that monitor's
+        // scale, plus the frame at that DPI. Its WM_SIZE sets the viewport.
+        const dpi = GetDpiForWindow(w.hwnd);
+        w.t.setDpi(dpi);
+        var r: RECT = .{ .right = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[0])) * w.t.in.scale)), .bottom = @intFromFloat(@round(@as(f32, @floatFromInt(opt.size[1])) * w.t.in.scale)) };
+        _ = AdjustWindowRectExForDpi(&r, ws_overlappedwindow, 0, 0, dpi);
+        _ = SetWindowPos(w.hwnd, null, 0, 0, r.right - r.left, r.bottom - r.top, swp_nomove | swp_nozorder | swp_noactivate);
         if (opt.show) _ = ShowWindow(w.hwnd, sw_show);
     }
 
@@ -265,6 +280,13 @@ pub const Win32 = struct {
                 w.tracking = TrackMouseEvent(&tme) != 0;
             },
             wm(.mouseleave) => w.tracking = false,
+            wm(.dpichanged) => {
+                // Scale first, then take the size Windows suggests for the new DPI.
+                w.t.feed(.{ .msg = msg, .wparam = wp, .lparam = lp });
+                const r: *const RECT = @ptrFromInt(@as(usize, @bitCast(lp)));
+                _ = SetWindowPos(hwnd, null, r.left, r.top, r.right - r.left, r.bottom - r.top, swp_nozorder | swp_noactivate);
+                return 0;
+            },
             // A drag that leaves the window keeps sending it moves until every button is up.
             wm(.lbuttondown), wm(.rbuttondown), wm(.mbuttondown) => _ = SetCapture(hwnd),
             wm(.lbuttonup), wm(.rbuttonup), wm(.mbuttonup) => if (wp & mk_any == 0) {
@@ -284,12 +306,6 @@ fn wm(comptime m: translate.Wm) u32 {
 }
 /// MK_LBUTTON, MK_RBUTTON, MK_MBUTTON: some mouse button is still held.
 const mk_any = 0x0013;
-
-/// The window rectangle for a client rectangle, with the frame of `ws_overlappedwindow`.
-fn adjust(r: *RECT) void {
-    _ = AdjustWindowRectEx(r, ws_overlappedwindow, 0, 0);
-}
-extern "user32" fn AdjustWindowRectEx(*RECT, style: u32, menu: BOOL, ex_style: u32) callconv(.winapi) BOOL;
 
 comptime {
     iface.check(Win32);
@@ -332,6 +348,8 @@ test "win32: a real window runs the example from posted messages" {
     // The real cursor is not over this hidden window: asking for WM_MOUSELEAVE would report
     // the recorded pointer gone.
     w.tracking = true;
+    // The recording is at 100%, whatever the test machine's monitor is.
+    w.t.setDpi(96);
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var app: example.App = .{};
     var r: translate.Replay = .{ .src = @embedFile("testdata/example.msgs") };

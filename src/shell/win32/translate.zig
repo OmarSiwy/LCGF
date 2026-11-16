@@ -30,6 +30,7 @@ pub const Wm = enum(u32) {
     mousewheel = 0x020a,
     mousehwheel = 0x020e,
     mouseleave = 0x02a3,
+    dpichanged = 0x02e0,
     _,
 };
 
@@ -54,6 +55,8 @@ const size_minimized = 1;
 const mk_left = 0x0001;
 const mk_right = 0x0002;
 const mk_middle = 0x0010;
+/// The DPI at which one logical pixel is one physical pixel (`USER_DEFAULT_SCREEN_DPI`).
+pub const dpi_default = 96;
 /// One notch of a mouse wheel (`WHEEL_DELTA`).
 const wheel_delta = 120;
 
@@ -87,9 +90,12 @@ pub const hid: [256]u8 = table: {
 };
 
 pub const Translator = struct {
-    /// Held state, kept from message to message: viewport, pointer, buttons, keys, mods. The
-    /// per-frame part (wheel, text, events) collects the messages since `begin`.
+    /// Held state, kept from message to message: viewport, scale, pointer, buttons, keys, mods.
+    /// The per-frame part (wheel, text, events) collects the messages since `begin`.
     in: Input = .{},
+    /// The client area in physical pixels, from `WM_SIZE`; `in.viewport` is it in logical
+    /// pixels, at `in.scale`.
+    client: [2]f32 = .{ 800, 600 },
     /// `WM_CLOSE` arrived: the user asked to close the window.
     closed: bool = false,
     /// Caller-owned storage for one frame's typed text and key events.
@@ -123,8 +129,12 @@ pub const Translator = struct {
                 // A minimized window keeps the size it had, so the UI does not lay out for 0 x 0.
                 if (m.wparam == size_minimized) return;
                 const s = words(m.lparam);
-                t.in.viewport = .{ @floatFromInt(s[0]), @floatFromInt(s[1]) };
+                t.client = .{ @floatFromInt(s[0]), @floatFromInt(s[1]) };
+                t.in.viewport = .{ t.client[0] / t.in.scale, t.client[1] / t.in.scale };
             },
+            // The window moved to a monitor of another DPI, or that monitor's scale changed.
+            // The shell resizes the window to the suggested rectangle, whose WM_SIZE follows.
+            .dpichanged => t.setDpi(@as(u16, @truncate(m.wparam))),
             .close => t.closed = true,
             // Keys released while another window had the focus never send WM_KEYUP.
             .killfocus => {
@@ -136,7 +146,7 @@ pub const Translator = struct {
             .char => t.char(@truncate(m.wparam)),
             .mousemove, .lbuttondown, .lbuttonup, .rbuttondown, .rbuttonup, .mbuttondown, .mbuttonup => {
                 const p = words(m.lparam);
-                t.in.pointer = .{ @floatFromInt(p[0]), @floatFromInt(p[1]) };
+                t.in.pointer = .{ @as(f32, @floatFromInt(p[0])) / t.in.scale, @as(f32, @floatFromInt(p[1])) / t.in.scale };
                 t.in.buttons = .{ .left = m.wparam & mk_left != 0, .right = m.wparam & mk_right != 0, .middle = m.wparam & mk_middle != 0 };
             },
             // Positive: the wheel turned away from the user, which scrolls toward the start
@@ -147,6 +157,14 @@ pub const Translator = struct {
             .mouseleave => t.in.pointer = .{ -1, -1 },
             _ => {},
         }
+    }
+
+    /// Physical pixels per logical pixel from the window's DPI (`GetDpiForWindow`,
+    /// `WM_DPICHANGED`): 1 at 96, 1.5 at 144, 2 at 192. The client keeps its physical size
+    /// until the next `WM_SIZE`.
+    pub fn setDpi(t: *Translator, dpi: u32) void {
+        t.in.scale = @as(f32, @floatFromInt(@max(dpi, 1))) / dpi_default;
+        t.in.viewport = .{ t.client[0] / t.in.scale, t.client[1] / t.in.scale };
     }
 
     fn notches(wp: usize) f32 {
@@ -464,6 +482,39 @@ test "translate: keys, typed text, wheel and leaving the window" {
     try testing.expectEqual(Input.Keys{}, ev.in.keys);
     try testing.expectEqual(Input.Mods{}, ev.in.mods);
     try testing.expectEqual([2]f32{ -1, -1 }, ev.in.pointer);
+}
+
+test "translate: per-monitor DPI scales the viewport and the pointer" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\# Opened on a 200% monitor: the 800 x 600 client is 1600 x 1200 physical pixels.
+        \\dpichanged 192 0
+        \\size 0 1600:1200
+        \\mousemove 0 200:100
+        \\frame
+        \\# Dragged to a 150% monitor: the scale changes, then the suggested size arrives.
+        \\dpichanged 144 0
+        \\frame
+        \\size 0 1200:900
+        \\mousemove 0 300:150
+    };
+    var buf: [4]Msg = undefined;
+    var t: Translator = .{};
+    var ev: Events = .{};
+    const want = [_]struct { scale: f32, viewport: [2]f32, pointer: [2]f32 }{
+        .{ .scale = 2, .viewport = .{ 800, 600 }, .pointer = .{ 100, 50 } },
+        // Between the two messages the old physical size is shown at the new scale.
+        .{ .scale = 1.5, .viewport = .{ 1600.0 / 1.5, 1200.0 / 1.5 }, .pointer = .{ 100, 50 } },
+        .{ .scale = 1.5, .viewport = .{ 800, 600 }, .pointer = .{ 200, 100 } },
+    };
+    for (want) |w| {
+        t.begin();
+        for ((try r.next(&buf)).?) |m| t.feed(m);
+        _ = t.frame(&ev);
+        try testing.expectEqual(w.scale, ev.in.scale);
+        try testing.expectEqual(w.viewport, ev.in.viewport);
+        try testing.expectEqual(w.pointer, ev.in.pointer);
+    }
 }
 
 test "translate: a full frame drops what does not fit and counts it" {
