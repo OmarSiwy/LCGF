@@ -192,3 +192,30 @@ dependency in the build.
 For an application that already runs Vulkan, enabling Gompute adds a second driver context: the
 +93 MiB of GPU memory and +34 MiB resident are the price of the back end on top of the Vulkan one,
 which is the comparison the decision (C0425) has to weigh against what the kernels buy.
+
+## C0424: measure frame time against the software and Vulkan back ends
+
+The benchmark scene of docs/CHECKS.md section 3 (bench/scenes/rows.zig, 330 rows; its first frame
+laid out for a 1280x720 window: 116 quads, 1,320 text runs, 8,910 glyph quads, 152 commands), drawn
+by each back end from the same draw list, ReleaseFast, median of 300 frames after 20 warm-up
+frames, three runs (`gompute-bench-frame`, ci/jobs/gompute-vk.sh):
+
+| Back end | Per frame | Against Vulkan |
+|---|---|---|
+| sw, one CPU core (clear, then draw) | 4,714 to 5,132 us | 12 to 34x |
+| Gompute on CUDA (record, clear, upload, bin, raster, GPU done) | 730 to 733 us | 1.8 to 4.8x |
+| Gompute on CUDA, with read-back into pinned memory | 830 to 835 us | 2 to 5.5x |
+| Vulkan back end on the same GPU (prepare, record, submit, GPU done) | 151 to 410 us | 1x |
+
+The Vulkan numbers move with the laptop GPU's clocks between runs (151 us in one, 404 to 410 in the
+two after); Gompute's did not move (why was not measured). On the four 160x120 conformance scenes the order is reversed: Gompute
+29 to 40 us per frame (C0420) against 45 to 52 us for the Vulkan back end (vk-probe `scenes` on
+the NVIDIA driver), where both are launch and submission overhead.
+
+Read against Laine and Karras (a compute rasteriser within 2 to 8 times of the hardware), the
+tile rasteriser lands at 1.8 to 4.8 times the hardware path on a real GUI frame, inside their range,
+and 6 to 7 times faster than the software back end on one core. The binning kernel is the simple
+kind (every tile walks every quad: 3,600 tiles times 9,026 quads here); per-quad coarse binning, as
+Laine and Karras do it, is where the remaining gap would be attacked. Not measured: the split of the
+730 us between `bin` and `raster`, and a multithreaded software back end (sw draws tile bands on
+threads, `sw.tile`).

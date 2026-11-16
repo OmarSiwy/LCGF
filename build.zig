@@ -581,6 +581,19 @@ pub fn build(b: *std.Build) void {
                     }),
                 });
                 gompute_vk_step.dependOn(&b.addInstallArtifact(gompute_vk_probe, .{}).step);
+                // Frame time of the benchmark scene against sw and vk (src/render/gompute/bench_frame.zig),
+                // over lcgr_fast like tools/bench, so the Vulkan back end gets a module of its own.
+                const vk_fast = b.createModule(.{ .root_source_file = b.path("src/render/vk/vk.zig"), .target = target, .optimize = .ReleaseFast, .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "vk_c", .module = vk_h.createModule() } } });
+                vk_fast.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+                vk_fast.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+                const gompute_bench = b.addExecutable(.{ .name = "gompute-bench-frame", .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/render/gompute/bench_frame.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                    .link_libc = true,
+                    .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute }, .{ .name = "vk", .module = vk_fast }, .{ .name = "src_scenes", .module = bench_src_scenes } },
+                }) });
+                gompute_vk_step.dependOn(&b.addInstallArtifact(gompute_bench, .{}).step);
             }
         }
     }
