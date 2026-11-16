@@ -9,6 +9,7 @@ const types = @import("lcgr").types;
 const Input = @import("lcgr").input.Input;
 const Interaction = @import("lcgr").interaction.Interaction;
 const Tree = @import("lcgr").tree.Tree;
+const a11y = @import("lcgr").a11y_tree;
 
 pub const EventLog = struct {
     /// Lines kept; older ones are overwritten.
@@ -79,7 +80,7 @@ pub const EventLog = struct {
         if (id == 0) return log.add("{d} {s} nothing", .{ frame, verb });
         const i = t.find(@fromBackingInt(@intCast(id)));
         if (i == types.none) return log.add("{d} {s} a node gone since", .{ frame, verb });
-        log.add("{d} {s} #{d} {s}", .{ frame, verb, i, @tagName(@as(types.Role, @fromBackingInt(@intCast(t.c.role[i])))) });
+        log.add("{d} {s} #{d} {s}", .{ frame, verb, i, a11y.roleName(t.c.role[i]) });
     }
 };
 

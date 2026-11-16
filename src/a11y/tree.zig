@@ -95,6 +95,18 @@ pub const Role = enum(u8) {
     scroll_view,
 };
 
+/// The name of the role in a raw role byte, as in `Role` (`"tab"`, `"toggle_button"`), or
+/// `"unknown"` for a byte no role has. For tools that print a tree's role column: the column
+/// holds every `Role`, past `types.Role`'s eight, so reading it as `types.Role` is invalid.
+pub fn roleName(byte: u8) []const u8 {
+    const table = comptime blk: {
+        var m: [256][]const u8 = @splat("unknown");
+        for (@typeInfo(Role).@"enum".field_names, @typeInfo(Role).@"enum".field_values) |name, v| m[v] = name;
+        break :blk m;
+    };
+    return table[byte];
+}
+
 comptime {
     // `types.Role` is a prefix of `Role`, value for value.
     const core = @typeInfo(types.Role).@"enum";
@@ -548,6 +560,14 @@ fn TreeFixture(comptime cap: u32) type {
             return Tree.init(&carver, cap);
         }
     };
+}
+
+test "roleName: every role byte names its role; others are unknown" {
+    try testing.expectEqualStrings("none", roleName(0));
+    try testing.expectEqualStrings("button", roleName(@backingInt(Role.button)));
+    try testing.expectEqualStrings("toggle_button", roleName(@backingInt(Role.toggle_button)));
+    try testing.expectEqualStrings("scroll_view", roleName(@backingInt(Role.scroll_view)));
+    try testing.expectEqualStrings("unknown", roleName(255));
 }
 
 test "tree export: every role fits the tree's role column and the core roles keep their values" {
