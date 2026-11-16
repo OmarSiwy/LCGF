@@ -9,6 +9,8 @@ pub const egl = @import("egl.zig");
 pub const gl = @import("gl.zig");
 pub const host = @import("host.zig");
 pub const program = @import("program.zig");
+pub const renderer = @import("renderer.zig");
+pub const Renderer = renderer.Renderer;
 
 test {
     std.testing.refAllDecls(@This());
@@ -16,4 +18,5 @@ test {
     std.testing.refAllDecls(gl);
     std.testing.refAllDecls(host);
     std.testing.refAllDecls(program);
+    std.testing.refAllDecls(renderer);
 }
