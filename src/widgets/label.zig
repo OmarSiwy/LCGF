@@ -1,6 +1,9 @@
 //! Label: static text in the theme's size and colour. It shows a string and takes no input.
 //! Tier 2, written against the public API of tiers 0 and 1 (the recipe in base.zig).
 //!
+//! Input: none. A label has no id and senses nothing, so hit testing passes through it to
+//! what is under it, Tab never stops on it, and in the comptime front end it is no `Widget`.
+//!
 //! State: the string, owned by the application. The runtime front end takes it as `str`; the
 //! comptime front end binds a `[]const u8` field of the state struct, checked while compiling.
 
@@ -128,6 +131,64 @@ test "label look: other theme tokens restyle both front ends alike" {
     const out = try S.h.frame(&in);
     try testing.expectEqual(@as(f32, 20), out.runtime.texts.c.px[0]);
     try testing.expectApproxEqAbs(@as(f32, 5 * 20 * 0.6), out.runtime.tree.rect(2).w(), 0.5);
+}
+
+/// A label between two checkboxes, in both front ends.
+const Between = struct {
+    const th = Theme.default;
+    const row: Style = .{ .dir = .x, .gap = 8, .cross = .center };
+    pub const App = struct {
+        a: bool = false,
+        b: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("row"), row);
+            _ = base.checkbox(f, &th, .from("a"), &app.a, "A");
+            _ = label(f, &th, "between");
+            _ = base.checkbox(f, &th, .from("b"), &app.b, "B");
+            f.close();
+        }
+    };
+    pub const State = struct { a: bool = false, a_text: []const u8 = "A", text: []const u8 = "between", b: bool = false, b_text: []const u8 = "B" };
+    pub const Ui = base.ComptimeUi(State, spec_zig.row(row, .{ base.ct.checkbox(th, .a, .a, .a_text), ct.label(th, .text), base.ct.checkbox(th, .b, .b, .b_text) }), th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+};
+
+var between: Between.Run = .{};
+
+test "label input: hit testing passes through it, Tab skips it, and a click on it changes nothing" {
+    const hit = @import("../interact/hit.zig");
+    const focus = @import("../interact/focus.zig");
+    const h = &between;
+    h.init();
+    var in: Input = .{ .viewport = .{ 300, 60 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    // Rows: root, row, box a (2, 3, 4), the label (5), box b (6, 7, 8).
+    const text_row: u32 = 5;
+    try testing.expectEqual(@as(u32, 0), t.c.sense[text_row]);
+    const r = t.rect(text_row);
+    const mid = [2]f32{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    try testing.expectEqual(types.none, hit.at(t, mid[0], mid[1], .any));
+    try testing.expectEqual(null, Between.Ui.Events.at(&h.ui.rects, mid[0], mid[1]));
+    // Tab order: a then b, in both front ends.
+    const stop: u8 = @bitCast(types.Sense{ .focus = true });
+    const a = t.find(.from("a"));
+    const b = t.find(.from("b"));
+    try testing.expectEqual(a, focus.seek(t, t.c.sense, stop, 0, t.len, types.none, false));
+    try testing.expectEqual(b, focus.seek(t, t.c.sense, stop, 0, t.len, a, false));
+    try testing.expectEqualSlices(Between.Ui.Events.Widget, &.{ .a, .b }, Between.Ui.Events.focus_order);
+    // Press and release on the label: nothing toggles, nothing takes focus or reports a click.
+    in.pointer = mid;
+    _ = try h.frame(&in);
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expect(!h.app.a and !h.app.b);
+    try testing.expect(!h.ui.signals.state.a and !h.ui.signals.state.b);
+    try testing.expectEqual(null, out.comptime_.event);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.clicked);
 }
 
 test {
