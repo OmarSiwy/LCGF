@@ -344,6 +344,8 @@ pub const Macos = struct {
     /// The system cursors, by `Platform.cursor` (`translate.cursor_names`); shared objects
     /// AppKit owns.
     cursors: [translate.cursor_names.len]Id = undefined,
+    /// CACurrentMediaTime at `init`: `Input.time` is counted from there.
+    start: f64 = 0,
 
     pub const Options = struct {
         title: [:0]const u8 = "LCGR",
@@ -404,6 +406,7 @@ pub const Macos = struct {
         m.layer.attach(view);
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
+        m.start = metal.present.mediaTime();
         if (opt.show) {
             msg(void, window, "center", .{});
             msg(void, window, "makeKeyAndOrderFront:", .{@as(?Id, null)});
@@ -441,7 +444,17 @@ pub const Macos = struct {
             }
             msg(void, a, "sendEvent:", .{e});
         }
+        m.t.clock(metal.present.mediaTime() - m.start);
         return m.t.frame(ev);
+    }
+
+    /// The refresh rate of the window's display (`maximumFramesPerSecond`, macOS 12); 60 when
+    /// AppKit does not say.
+    fn hz(m: *const Macos) f64 {
+        const screen = msg(?Id, m.window, "screen", .{}) orelse return 60;
+        if (!msg(bool, screen, "respondsToSelector:", .{objc.sel("maximumFramesPerSecond")})) return 60;
+        const f = msg(isize, screen, "maximumFramesPerSecond", .{});
+        return if (f > 0) @floatFromInt(f) else 60;
     }
 
     pub fn apply(m: *Macos, p: *const Platform) void {
@@ -502,16 +515,23 @@ pub const Macos = struct {
         m.frames.present(cmd, drawable, null);
     }
 
-    /// Blocks until the next event or `seconds` pass (`inf`: until the next event). The event
-    /// stays queued for the next `poll`.
-    pub fn wait(_: *Macos, seconds: f32, _: Pace) void {
-        if (!(seconds > 0)) return;
+    /// Blocks until the next event or `seconds` pass (`inf`: until the next event); while
+    /// animating (`.display`), one refresh (`translate.waitSeconds`). The event stays queued
+    /// for the next `poll`.
+    ///
+    /// ponytail: while the user drags or resizes the window, AppKit runs its own tracking loop
+    /// inside `sendEvent:`, so `poll` returns when they let go and the window shows the last
+    /// frame meanwhile. Live resizing needs frames built from inside that loop (GPUI draws
+    /// from the display link there), which breaks "the host owns the loop"; add it if asked.
+    pub fn wait(m: *Macos, seconds: f32, pace: Pace) void {
+        const s = translate.waitSeconds(seconds, pace, m.hz());
+        if (s != null and !(s.? > 0)) return;
         const pool = objc.Pool.push();
         defer pool.pop();
-        const date = if (std.math.isInf(seconds))
-            msg(Id, objc.class("NSDate"), "distantFuture", .{})
+        const date = if (s) |secs|
+            msg(Id, objc.class("NSDate"), "dateWithTimeIntervalSinceNow:", .{secs})
         else
-            msg(Id, objc.class("NSDate"), "dateWithTimeIntervalSinceNow:", .{@as(f64, seconds)});
+            msg(Id, objc.class("NSDate"), "distantFuture", .{});
         _ = msg(?Id, app(), "nextEventMatchingMask:untilDate:inMode:dequeue:", .{ ns_event_mask_any, date, default_mode, false });
     }
 
@@ -613,14 +633,34 @@ test "macos: the view is a text input client that composes and commits" {
     try testing.expectEqual(NSSize{ .width = 30, .height = 40 }, r.size);
 }
 
-test "macos: wake ends a wait with no timeout" {
+fn job(m: *Macos) void {
+    // Long enough that the test thread is asleep in `wait` first.
+    var ts: std.c.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+    _ = std.c.nanosleep(&ts, null);
+    m.wake();
+}
+
+test "macos: a worker thread ends a wait, and the clock runs" {
     var m: Macos = undefined;
     try Fixture.open(&m);
     defer m.deinit();
-    m.wake();
-    m.wait(std.math.inf(f32), .idle);
     var ev: Events = .{};
+    _ = m.poll(&ev);
+    const t0 = ev.in.time;
+    const worker = try std.Thread.spawn(.{}, job, .{&m});
+    const c0 = metal.present.mediaTime();
+    m.wait(std.math.inf(f32), .idle);
+    const c1 = metal.present.mediaTime();
+    worker.join();
+    // Woken, not timed out (there is no timeout): well under 5 s.
+    try testing.expect(c1 - c0 < 5);
     try testing.expect(m.poll(&ev));
+    try testing.expect(ev.in.time > t0);
+    try testing.expect(ev.in.dt > 0);
+    // A timer's wait ends by itself.
+    const c2 = metal.present.mediaTime();
+    m.wait(0.02, .timer);
+    try testing.expect(metal.present.mediaTime() - c2 >= 0.015);
 }
 
 /// Posts a recorded frame's NSEvents to the application and polls: what the view receives is

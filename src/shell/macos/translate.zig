@@ -13,6 +13,7 @@ const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
 const Cursor = @import("../../runtime/context.zig").Cursor;
 const Rect = @import("../../core/types.zig").Rect;
+const Pace = @import("../../runtime/scheduler.zig").Pace;
 
 /// The NSEvent types the translator reads, by their `NSEventType` values.
 pub const Kind = enum(u32) {
@@ -259,6 +260,13 @@ pub const Translator = struct {
         if (units <= lo) range[0] = n;
         if (units <= hi) range[1] = n;
         t.composition = .{ .len = n, .range = range, .units = units };
+    }
+
+    /// The clock, in seconds since the shell started: sets `Input.time`, and `dt` to the time
+    /// since the last frame. The scheduler's timers (`scheduler.deadline`) run on it.
+    pub fn clock(t: *Translator, seconds: f64) void {
+        t.in.dt = @floatCast(@max(seconds - t.in.time, 0));
+        t.in.time = seconds;
     }
 
     /// The composition is being shown (`hasMarkedText`).
@@ -737,6 +745,17 @@ test "clipboard: pasted text is typed in one event, with its line ends" {
     try testing.expectEqual(@as(u32, 1), t.dropped);
 }
 
+/// Seconds `wait` blocks for (the `untilDate:` of `nextEventMatchingMask:`), for a wait of
+/// `seconds` (`scheduler.wake`) at `pace` on a display refreshing `hz` times a second; null
+/// waits for the next event however long it takes (`distantFuture`). `.display` waits one
+/// refresh, so an animation runs at the display's rate rather than as fast as the CPU allows.
+pub fn waitSeconds(seconds: f32, pace: Pace, hz: f64) ?f64 {
+    if (pace == .display) return 1 / @max(hz, 1);
+    if (!(seconds > 0)) return 0;
+    if (std.math.isInf(seconds)) return null;
+    return seconds;
+}
+
 /// `r` (logical pixels, origin top left) as an NSRect in window coordinates (origin bottom
 /// left) of content `height` points tall: x, y, width, height. The input method puts its
 /// candidate window below it (`firstRectForCharacterRange:actualRange:`).
@@ -812,4 +831,28 @@ test "ime: compositions replay from a recording" {
     _ = t.frame(&ev);
     try testing.expectEqualStrings("", ev.composition.text);
     try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.in.text);
+}
+
+test "timers: the clock and the wait for each pace" {
+    var t: Translator = .{};
+    var ev: Events = .{};
+    t.clock(0.5);
+    t.clock(0.52);
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(f64, 0.52), ev.in.time);
+    try testing.expectApproxEqAbs(@as(f32, 0.02), ev.in.dt, 1e-6);
+    // A clock read twice in one tick never runs backwards.
+    t.clock(0.51);
+    try testing.expectEqual(@as(f32, 0), t.in.dt);
+
+    const inf = std.math.inf(f32);
+    try testing.expectEqual(null, waitSeconds(inf, .idle, 60));
+    try testing.expectEqual(@as(?f64, 0), waitSeconds(0, .once, 60));
+    try testing.expectEqual(@as(?f64, 0), waitSeconds(std.math.nan(f32), .timer, 60));
+    // A hover delay of 0.4 s: the date is that far away; AppKit's clock has no rounding to do.
+    try testing.expectApproxEqAbs(@as(f64, 0.4), waitSeconds(0.4, .timer, 60).?, 1e-6);
+    // Animating: one refresh, whatever `scheduler.wake` said; ProMotion displays run at 120.
+    try testing.expectApproxEqAbs(@as(f64, 1.0 / 60.0), waitSeconds(0, .display, 60).?, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 1.0 / 120.0), waitSeconds(inf, .display, 120).?, 1e-12);
+    try testing.expectEqual(@as(?f64, 1), waitSeconds(0, .display, 0));
 }
