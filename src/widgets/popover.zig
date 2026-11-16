@@ -137,10 +137,19 @@ pub fn scrimStyle(viewport: [2]f32) Style {
     return .{ .float = true, .size = .{ .px(viewport[0]), .px(viewport[1]) } };
 }
 
-/// The panel, floating below the trigger's rect `at` (last frame's).
+/// The panel, floating `th.gap` below the trigger's rect `at` (last frame's), left edges
+/// aligned: a panel-coloured column with the control outline, padded like a button.
 pub fn panelStyle(th: *const Theme, at: Rect) Style {
-    _ = th;
-    return .{ .float = true, .offset = .{ at.x0, at.y1 } };
+    return .{
+        .float = true,
+        .offset = .{ at.x0, at.y1 + th.gap },
+        .pad = @splat(th.pad),
+        .gap = th.gap,
+        .fill = th.panel,
+        .border = 1,
+        .border_color = th.control_hot,
+        .radius = th.radius,
+    };
 }
 
 /// The style of a row no overlay hook claims: a label as specified, a container with an id
@@ -438,7 +447,45 @@ test "Popover: the page agrees in both front ends, closed and open" {
     const at = t.rect(t.find(.from("details")));
     const panel = t.rect(t.find(.from("details_panel")));
     try testing.expectEqual(at.x0, panel.x0);
-    try testing.expectEqual(at.y1, panel.y0);
+    try testing.expectEqual(at.y1 + Theme.default.gap, panel.y0);
+}
+
+test "panelStyle: the theme's tokens, below the trigger" {
+    const th: Theme = .default;
+    const s = panelStyle(&th, .{ .x0 = 10, .y0 = 20, .x1 = 60, .y1 = 40 });
+    try testing.expect(s.float);
+    try testing.expectEqual([2]f32{ 10, 40 + th.gap }, s.offset);
+    try testing.expectEqual(th.panel, s.fill);
+    try testing.expectEqual(th.control_hot, s.border_color);
+    try testing.expectEqual(@as(f32, 1), s.border);
+    try testing.expectEqual(th.radius, s.radius);
+    try testing.expectEqual([4]f32{ th.pad, th.pad, th.pad, th.pad }, s.pad);
+    // The scrim is invisible and covers the viewport.
+    const sc = scrimStyle(.{ 400, 300 });
+    try testing.expect(sc.float);
+    try testing.expectEqual(types.Color.transparent, sc.fill);
+    try testing.expectEqual([2]types.Size{ .px(400), .px(300) }, sc.size);
+}
+
+/// Other tokens, for the restyling tests.
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Popover: another theme restyles both front ends alike" {
+    const th = light;
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try S.h.frame(&in);
+    S.h.app.open = true;
+    S.h.ui.signals.set(.open, true);
+    _ = try S.h.frame(&in);
+    const out = try S.h.frame(&in);
+    const t = out.runtime.tree;
+    const panel = t.find(.from("details_panel"));
+    try testing.expectEqual(th.panel.bitsOf(), t.c.look[panel].fill);
+    try testing.expectEqual(t.rect(t.find(.from("details"))).y1 + 10, t.rect(panel).y0);
 }
 
 test "check: a popover's open field must be a bool" {
