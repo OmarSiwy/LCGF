@@ -93,6 +93,7 @@ pub const text_moves = @import("text/edit/moves.zig");
 pub const text_edit = @import("text/edit/edit.zig");
 pub const text_history = @import("text/edit/history.zig");
 pub const text_edit_tests = @import("text/edit/tests.zig");
+pub const fallback = @import("text/fallback/fallback.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
 
