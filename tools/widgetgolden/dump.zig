@@ -55,6 +55,7 @@ const pages = .{
     .{ "", lcgr.widgets_toast.golden, lcgr.widgets_toast.golden.src, lcgr.widgets_toast.golden.frames },
     .{ "", lcgr.widgets_select.golden, lcgr.widgets_select.golden.src, lcgr.widgets_select.golden.frames },
     .{ "", lcgr.widgets_combobox.golden, lcgr.widgets_combobox.golden.src, lcgr.widgets_combobox.golden.frames },
+    .{ "", lcgr.widgets_datepicker.golden, lcgr.widgets_datepicker.golden.src, lcgr.widgets_datepicker.golden.frames },
 };
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;

@@ -587,15 +587,15 @@ pub fn dialog(f: *Frame, th: *const Theme, comptime name: []const u8, st: *const
     buildDialog(&b, th, name, st.*, f.lastRect(.from(name)));
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
+/// The example's first value: 2026-11-16, a Monday.
+pub const today: i32 = 20773;
 
-/// 2026-11-16, a Monday.
-const today: i32 = 20773;
-
-/// The test page: a toolbar with a caption and the date picker, and the date picker's dialog.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with a caption and the date picker, and the date picker's
+/// dialog, in both front ends, in theme `th`. The tests and the golden images
+/// (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
         const page_style: Style = .{ .size = .{ .fill, .fill } };
@@ -628,6 +628,30 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/datepicker.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "datepicker-open", 2 },
+    .{ "datepicker-keyed", 4 },
+    .{ "datepicker-month", 5 },
+    .{ "datepicker-hover", 6 },
+    .{ "datepicker-chosen", 8 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -712,6 +736,51 @@ test "Datepicker: another theme restyles both front ends alike" {
     try testing.expectEqual(light.text.bitsOf(), t.c.look[t.find(.from("due_d16"))].border_color);
     try testing.expectEqual(types.Color.transparent.bitsOf(), t.c.look[t.find(.from("due_d3"))].fill); // the pointer is not over it
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("due_dialog"))].fill);
+}
+
+test "Datepicker: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var st: [12]DateState = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.due, h.ui.signals.state.due);
+        st[k] = h.app.due;
+        if (k == 2) {
+            // The rects the replay's comments give.
+            const want = [_]struct { []const u8, Rect }{
+                .{ "due", .{ .x0 = 41, .y0 = 8, .x1 = 201, .y1 = 42 } },
+                .{ "due_dialog", .{ .x0 = 41, .y0 = 48, .x1 = 281, .y1 = 294 } },
+                .{ "due_d0", .{ .x0 = 49, .y0 = 118, .x1 = 81, .y1 = 146 } },
+                .{ "due_d32", .{ .x0 = 177, .y0 = 230, .x1 = 209, .y1 = 258 } },
+            };
+            for (want) |w| try testing.expectEqual(w[1], t.rect(t.find(.hash(w[0]))));
+        }
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    const open = [_]bool{ false, false, true, true, true, true, true, true, false, false, true, false };
+    const d = daysFromCivil;
+    const focus = [_]i32{ today, today, today, today + 1, today + 8, d(2026, 12, 24), d(2026, 12, 24), d(2026, 12, 24), d(2026, 12, 31), d(2026, 12, 31), d(2026, 12, 31), d(2026, 12, 31) };
+    for (st, open, focus) |s, o, f| {
+        try testing.expectEqual(o, s.open);
+        try testing.expectEqual(f, s.focus);
+    }
+    try testing.expectEqual(today, st[7].value);
+    try testing.expectEqual(d(2026, 12, 31), st[8].value);
+    try testing.expectEqual(@as(u8, 32), st[6].hover);
+    try testing.expectEqual(d(2026, 12, 31), st[11].value);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 fn ev(comptime codes: []const u8) [codes.len]Input.Event {
