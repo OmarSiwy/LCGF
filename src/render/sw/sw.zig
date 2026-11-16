@@ -110,63 +110,84 @@ pub const Target = struct {
     scissor: [4]u32,
 };
 
-pub const Software = struct {
-    pub const Queue = void;
-    pub const Pass = Target;
+/// The back end with every feature of the stock material compiled in.
+pub const Software = SoftwareOf(all_kinds);
 
-    /// The frame's quads and glyphs, borrowed from the caller until the frame is drawn.
-    quads: []const Quad = &.{},
-    glyphs: iface.Glyphs = .{},
-    /// Indexed by `types.Texture`; row 0 is `Image.white`.
-    images: []const Image = &.{Image.white},
-    /// Physical pixels per logical pixel.
-    scale: f32 = 1,
+/// Every `features.Kind`, in declaration order.
+pub const all_kinds: []const features.Kind = std.enums.values(features.Kind);
 
-    /// Nothing to upload: the back end reads the caller's rows in place.
-    pub fn prepare(s: *Software, _: void, draw: *const DrawList, glyphs: iface.Glyphs, _: [2]f32, scale: f32) void {
-        s.quads = draw.quads[0..draw.quad_len];
-        s.glyphs = glyphs;
-        s.scale = scale;
-    }
+/// Colour of a quad whose feature this build left out: drawn over its covered pixels, opaque, so
+/// a missing feature shows instead of turning into another one.
+pub const missing_kind: Color = .rgb(255, 0, 255);
 
-    pub fn drawBatch(s: *const Software, t: Target, batch: draw_list.Batch) void {
-        s.drawQuads(t, s.quads[batch.first..][0..batch.count], s.images[@backingInt(batch.texture)]);
-    }
+/// The back end compiled for the feature kinds in `kinds` only (`solid` must be one). Each kind
+/// is its own shading loop (`shade`), and a loop no kind selects is not compiled: a build that
+/// draws only solid quads leaves out the gradients' `sin`/`cos`, the shadow's `exp`, nine-slice
+/// and the border patterns. A quad of a kind left out is filled with `missing_kind`.
+pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
+    comptime std.debug.assert(std.mem.indexOfScalar(features.Kind, kinds, .solid) != null);
+    return struct {
+        const Self = @This();
+        pub const Queue = void;
+        pub const Pass = Target;
 
-    pub fn drawText(s: *const Software, t: Target, run: u32) void {
-        const g = s.glyphs;
-        const r = g.span(run);
-        s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
-    }
+        /// The frame's quads and glyphs, borrowed from the caller until the frame is drawn.
+        quads: []const Quad = &.{},
+        glyphs: iface.Glyphs = .{},
+        /// Indexed by `types.Texture`; row 0 is `Image.white`.
+        images: []const Image = &.{Image.white},
+        /// Physical pixels per logical pixel.
+        scale: f32 = 1,
 
-    fn drawQuads(s: *const Software, t: Target, quads: []const Quad, img: Image) void {
-        for (quads) |*q| {
-            if (opaqueRect(q, img, s.scale)) {
-                t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
-                continue;
-            }
-            // One loop per feature; unknown codes draw as solid, as the shader's selects do.
-            const code: u32 = @bitCast(q.params[0]);
-            switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
-                inline else => |kind| shade(kind, t, q, img, s.scale),
+        /// Nothing to upload: the back end reads the caller's rows in place.
+        pub fn prepare(s: *Self, _: void, draw: *const DrawList, glyphs: iface.Glyphs, _: [2]f32, scale: f32) void {
+            s.quads = draw.quads[0..draw.quad_len];
+            s.glyphs = glyphs;
+            s.scale = scale;
+        }
+
+        pub fn drawBatch(s: *const Self, t: Target, batch: draw_list.Batch) void {
+            s.drawQuads(t, s.quads[batch.first..][0..batch.count], s.images[@backingInt(batch.texture)]);
+        }
+
+        pub fn drawText(s: *const Self, t: Target, run: u32) void {
+            const g = s.glyphs;
+            const r = g.span(run);
+            s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
+        }
+
+        fn drawQuads(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
+            for (quads) |*q| {
+                if (opaqueRect(q, img, s.scale)) {
+                    t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
+                    continue;
+                }
+                // One loop per feature; unknown codes draw as solid, as the shader's selects do.
+                const code: u32 = @bitCast(q.params[0]);
+                switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
+                    inline else => |kind| if (comptime std.mem.indexOfScalar(features.Kind, kinds, kind) != null)
+                        shade(kind, t, q, img, s.scale)
+                    else
+                        t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), missing_kind),
+                }
             }
         }
-    }
 
-    /// Clears every damage rect of `draw` inside `scissor` to `background` and draws the whole
-    /// list into it, leaving last frame's pixels everywhere else (`DrawList.damage`). Custom
-    /// commands are skipped: a host with custom draws runs its own `iface.drawUntilCustom` loop
-    /// per rect. Rects may overlap; a pixel in two is cleared and drawn twice, with the same result.
-    pub fn redraw(s: *const Software, fb: *Framebuffer, scissor: [4]u32, draw: *const DrawList, background: Color) void {
-        for (0..damage.max_rects) |k| {
-            const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ fb.width, fb.height }, s.scale);
-            const box = clampBox(.{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, scissor);
-            if (box[0] >= box[2] or box[1] >= box[3]) continue;
-            fb.fill(box, background);
-            iface.render(s, .{ .fb = fb, .scissor = box }, draw);
+        /// Clears every damage rect of `draw` inside `scissor` to `background` and draws the whole
+        /// list into it, leaving last frame's pixels everywhere else (`DrawList.damage`). Custom
+        /// commands are skipped: a host with custom draws runs its own `iface.drawUntilCustom` loop
+        /// per rect. Rects may overlap; a pixel in two is cleared and drawn twice, with the same result.
+        pub fn redraw(s: *const Self, fb: *Framebuffer, scissor: [4]u32, draw: *const DrawList, background: Color) void {
+            for (0..damage.max_rects) |k| {
+                const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ fb.width, fb.height }, s.scale);
+                const box = clampBox(.{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, scissor);
+                if (box[0] >= box[2] or box[1] >= box[3]) continue;
+                fb.fill(box, background);
+                iface.render(s, .{ .fb = fb, .scissor = box }, draw);
+            }
         }
-    }
-};
+    };
+}
 
 comptime {
     iface.check(Software);
@@ -522,6 +543,27 @@ test "framebuffer: RGBA8 and BGRA8 byte order, rows padded to whole vectors" {
         const want: [4]u8 = if (format == .rgba8) .{ 10, 20, 30, 40 } else .{ 30, 20, 10, 40 };
         try testing.expectEqual(want, bytes);
     }
+}
+
+test "SoftwareOf: a kind left out of the build draws as missing_kind, the others as before" {
+    var f: Frame(16, 4) = .{};
+    var g: Frame(16, 4) = .{};
+    var fb = f.fb(.rgba8);
+    var ref = g.fb(.rgba8);
+    var quads = [_]Quad{ testQuad(.{ 0, 0, 8, 4 }, .rgb(10, 20, 30)), testQuad(.{ 8, 0, 16, 4 }, .rgb(10, 20, 30)) };
+    quads[0].radii = @splat(2); // solid, shaded: rounded corners
+    quads[1].params = features.linear(.rgb(200, 0, 0), 0);
+    const slim: SoftwareOf(&.{.solid}) = .{ .quads = &quads };
+    const full: Software = .{ .quads = &quads };
+    fb.clear(.black);
+    ref.clear(.black);
+    const batch: draw_list.Batch = .{ .first = 0, .count = 2, .texture = .white, .material = .solid };
+    slim.drawBatch(.{ .fb = &fb, .scissor = fb.all() }, batch);
+    full.drawBatch(.{ .fb = &ref, .scissor = ref.all() }, batch);
+    for (0..4) |y| for (0..16) |x| {
+        const want = if (x < 8) ref.at(@intCast(x), @intCast(y)) else missing_kind;
+        try testing.expectEqual(want, fb.at(@intCast(x), @intCast(y)));
+    };
 }
 
 test "opaque rects: filled exactly, cut by the clip's pixel centres and the scissor" {

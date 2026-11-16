@@ -42,6 +42,12 @@ pub fn checkBoard(comptime Board: type) void {
 }
 
 pub fn Baremetal(comptime Board: type) type {
+    return BaremetalOf(Board, sw.all_kinds);
+}
+
+/// The shell drawing with only the feature kinds in `kinds` compiled in (`sw.SoftwareOf`): a
+/// microcontroller build lists the kinds its UI uses and leaves the other shading loops out.
+pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../draw/features.zig").Kind) type {
     comptime checkBoard(Board);
     return struct {
         const Self = @This();
@@ -51,7 +57,7 @@ pub fn Baremetal(comptime Board: type) type {
         display: flushing.Display,
         /// Physical pixels per logical pixel.
         scale: f32,
-        gfx: sw.Software = .{},
+        gfx: sw.SoftwareOf(kinds) = .{},
         font: Mono = .{},
         glyphs: Buffers,
         reader: input.Reader = .{},

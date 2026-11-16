@@ -71,11 +71,11 @@ pub const Display = struct {
     }
 };
 
-/// Draws `draw` with `gfx` (already `prepare`d for this frame) and flushes it to `board`, band by
-/// band and damage rect by damage rect: each area is cleared to `background`, drawn with every
+/// Draws `draw` with `gfx`, a `*const sw.SoftwareOf(kinds)` already `prepare`d for this frame,
+/// and flushes it to `board`, band by band and damage rect by damage rect: each area is cleared to `background`, drawn with every
 /// command but the custom ones (the host draws those), and flushed. `scale` is physical pixels
 /// per logical pixel. Returns the number of areas flushed.
-pub fn flush(d: *const Display, gfx: *const sw.Software, draw: *const DrawList, background: Color, board: anytype) u32 {
+pub fn flush(d: *const Display, gfx: anytype, draw: *const DrawList, background: Color, board: anytype) u32 {
     var areas: u32 = 0;
     var y0: u32 = 0;
     while (y0 < d.height) : (y0 += d.rows) {
