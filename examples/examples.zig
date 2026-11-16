@@ -8,4 +8,5 @@ test {
     _ = @import("dashboard.zig");
     _ = @import("viewport.zig");
     _ = @import("texture.zig");
+    _ = @import("mcu.zig");
 }

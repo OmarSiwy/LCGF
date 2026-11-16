@@ -926,6 +926,19 @@ pub fn build(b: *std.Build) void {
         }) });
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
+    // The microcontroller demo (examples/mcu.zig) also links for a Cortex-M7 with no OS.
+    const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
+    const m7_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = m7, .optimize = .ReleaseSmall });
+    m7_lcgr.addOptions("build_options", options);
+    m7_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const mcu_exe = b.addExecutable(.{ .name = "example-mcu-cortex-m7", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/mcu.zig"),
+        .target = m7,
+        .optimize = .ReleaseSmall,
+        .imports = &.{.{ .name = "lcgr", .module = m7_lcgr }},
+    }) });
+    mcu_exe.entry = .{ .symbol_name = "_start" };
+    examples_step.dependOn(&b.addInstallArtifact(mcu_exe, .{ .dest_dir = .{ .override = .{ .custom = "mcu" } } }).step);
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
