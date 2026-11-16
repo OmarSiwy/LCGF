@@ -1,0 +1,38 @@
+{
+ "frame": {
+  "form": {
+   "held": false,
+   "ratio": 22.571,
+   "best": "lvgl"
+  },
+  "list": {
+   "held": false,
+   "ratio": 1.127,
+   "best": "imgui"
+  },
+  "text": {
+   "held": false,
+   "ratio": 17.9,
+   "best": "lvgl"
+  },
+  "springs": {
+   "held": false,
+   "ratio": 1.42,
+   "best": "imgui"
+  },
+  "resize": {
+   "held": true,
+   "ratio": 0.571,
+   "best": "clay"
+  }
+ },
+ "frameworks": [
+  "clay",
+  "egui",
+  "iced",
+  "imgui",
+  "lvgl",
+  "qtquick",
+  "slint"
+ ]
+}
