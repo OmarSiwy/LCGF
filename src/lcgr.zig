@@ -89,6 +89,7 @@ pub const widgets_keys = @import("widgets/keys.zig");
 pub const widgets_splitter = @import("widgets/splitter.zig");
 pub const widgets_scroll = @import("widgets/scroll.zig");
 pub const widgets_toolbar = @import("widgets/toolbar.zig");
+pub const widgets_statusbar = @import("widgets/statusbar.zig");
 pub const widgets_popover = @import("widgets/popover.zig");
 pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
