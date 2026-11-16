@@ -169,18 +169,17 @@ fn textRow(comptime id: [:0]const u8, comptime field: [:0]const u8) Spec {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The bar.
+/// The bar: a panel-coloured strip across the page, half a gap of padding around its buttons.
 pub fn barStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x };
+    return .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(th.gap * 0.5), .cross = .center, .fill = th.panel };
 }
 
-/// A button of the bar.
+/// A button of the bar: padded like a menu item, filled while its menu is open or the pointer
+/// is on it (`menu.itemFills`, indexed by either).
 pub fn buttonStyle(th: *const Theme, open: bool, hovered: bool) Style {
-    _ = th;
-    _ = open;
-    _ = hovered;
-    return .{ .dir = .x };
+    var s = menu.itemStyle(th, open or hovered);
+    s.size = .{ .fit, .fit };
+    return s;
 }
 
 /// The layer the lists float in: out of flow, at the page's origin.
@@ -302,6 +301,30 @@ test "MenuBar: the page agrees in both front ends, closed and with each menu ope
     t = try setBar(h, .{ .open = 1, .menu = .{ .open = true } });
     try testing.expectEqual(@as(u32, 9 + 1 + 4), t.len);
     try testing.expectEqual(t.rect(t.find(.from("main_edit"))).x0, t.rect(t.find(.from("main_edit_panel"))).x0);
+}
+
+test "barStyle, buttonStyle: the theme's tokens" {
+    const th: Theme = .default;
+    try testing.expectEqual(th.panel, barStyle(&th).fill);
+    try testing.expectEqual([4]f32{ 3, 3, 3, 3 }, barStyle(&th).pad);
+    try testing.expectEqual(types.Color.transparent, buttonStyle(&th, false, false).fill);
+    try testing.expectEqual(th.control_hot, buttonStyle(&th, true, false).fill);
+    try testing.expectEqual(th.control_hot, buttonStyle(&th, false, true).fill);
+    try testing.expectEqual([4]f32{ th.pad, th.gap, th.pad, th.gap }, buttonStyle(&th, false, false).pad);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "MenuBar: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const t = try setBar(&S.h, .{ .open = 1, .menu = .{ .open = true } });
+    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("main_edit"))].fill);
+    try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("main_bar"))].fill);
+    // The list hangs th.gap below its button.
+    try testing.expectEqual(t.rect(t.find(.from("main_edit"))).y1 + 10, t.rect(t.find(.from("main_edit_panel"))).y0);
 }
 
 test "checkBar: the state field, one menu per button, the label fields" {
