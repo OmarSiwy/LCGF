@@ -149,6 +149,32 @@ pub fn Derived(comptime T: type) type {
     };
 }
 
+/// A reaction to signals that the caller runs (saving a file, sending a message), at most once
+/// per frame. No callback is stored: `due` says whether to run it now and the caller runs it,
+/// in its own code, in its own order:
+///
+///     if (save.due(&ctx.signals, &.{ volume.signal, muted.signal }, ctx.frame)) writeSettings();
+///
+/// It is due on first use, then whenever an input changed since it last ran. Changes made after
+/// it ran in a frame wait for the next frame, so a burst of changes runs it once.
+pub const Effect = struct {
+    /// `Signals.stamp` of the inputs when it last ran.
+    stamp: u64 = 0,
+    /// Frame it last ran in.
+    frame: u32 = @import("../core/types.zig").none,
+
+    /// True when the effect should run now; then it counts as run in `frame`.
+    pub fn due(e: *Effect, signals: *const Signals, deps: []const Signal, frame: u32) bool {
+        const now = signals.stamp(deps);
+        const run = simd.andB(now != e.stamp, frame != e.frame);
+        if (run) {
+            e.stamp = now;
+            e.frame = frame;
+        }
+        return run;
+    }
+};
+
 const testing = std.testing;
 
 /// Signals over a static buffer, for tests.
@@ -319,4 +345,30 @@ test "commit: a transaction without changes requests nothing; unbalanced commits
     a.set(&s, 2);
     try testing.expect(s.dirty);
     try testing.expectEqual(@as(u32, 1), s.version[@backingInt(a.signal)]);
+}
+
+test "Effect: due on first use, then once per frame in which an input changed" {
+    var s = fixture(4);
+    var a: Cell(u32) = .init(&s, 0);
+    var other: Cell(u32) = .init(&s, 0);
+    var save: Effect = .{};
+    const deps = [_]Signal{a.signal};
+
+    try testing.expect(save.due(&s, &deps, 1));
+    try testing.expect(!save.due(&s, &deps, 1));
+    try testing.expect(!save.due(&s, &deps, 2));
+
+    // A burst inside one frame: the effect runs once and sees the latest value.
+    a.set(&s, 1);
+    try testing.expect(save.due(&s, &deps, 3));
+    a.set(&s, 2);
+    a.set(&s, 3);
+    try testing.expect(!save.due(&s, &deps, 3));
+    // The changes after it ran are not lost: they run it next frame.
+    try testing.expect(save.due(&s, &deps, 4));
+    try testing.expect(!save.due(&s, &deps, 5));
+
+    // Signals it does not read never make it due.
+    other.set(&s, 9);
+    try testing.expect(!save.due(&s, &deps, 6));
 }
