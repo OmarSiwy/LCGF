@@ -20,6 +20,10 @@ const Spec = spec_zig.Spec;
 /// child of the root's second child). Positions count from 0, as in `children[i]`.
 pub fn check(comptime State: type, comptime spec: Spec, comptime options: Options) void {
     comptime {
+        // Formatting each node's path is the costly part; ids are compared pairwise (O(ids^2),
+        // a UI has tens of ids). The tests below pass a 501-node and a 101-node, 61-deep spec.
+        const n = @import("flatten.zig").count(spec);
+        @setEvalBranchQuota(1000 + branches_per_node * n + 4 * n * n);
         if (@typeInfo(State) != .@"struct") @compileError("state must be a struct, not " ++ @typeName(State));
         var ids: []const Named = &.{};
         walk(State, spec, options, @tagName(spec.kind), &ids);
@@ -43,6 +47,10 @@ pub const Options = struct {
     viewport: ?[2]f32 = null,
 };
 
+/// Comptime backward branches `check` may spend per node, besides the pairwise id compare.
+/// The default quota (1,000 in all) ran out on a 32-node spec.
+const branches_per_node = 1000;
+
 /// A widget id seen so far and the path of the node that has it.
 const Named = struct { id: [:0]const u8, path: []const u8 };
 
@@ -62,8 +70,6 @@ fn hasField(comptime State: type, comptime name: []const u8) bool {
 }
 
 fn walk(comptime State: type, comptime s: Spec, comptime options: Options, comptime path: []const u8, comptime ids: *[]const Named) void {
-    // ponytail: ids are compared pairwise, O(ids^2) comptime work; a UI has tens of ids.
-    @setEvalBranchQuota(1000 + 10 * ids.len * ids.len);
     const at = path ++ ": ";
     if (s.id) |name| {
         for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
@@ -178,6 +184,26 @@ test "minSize: sums along the axis, takes the largest across, adds pad and gap" 
         col(.{ .min = .{ 6, 0 } }, .{}),
     });
     try std.testing.expectEqual([2]f32{ 1 + 10 + 5 + 30 + 5 + 6 + 3, 2 + 20 + 4 }, comptime minSize(s, "row"));
+}
+
+/// `n` named sliders in a row, each with its own id and field `x`.
+fn manySliders(comptime n: comptime_int) Spec {
+    @setEvalBranchQuota(1000 + 500 * n);
+    var kids: [n]Spec = undefined;
+    for (&kids, 0..) |*k, i| k.* = .{ .kind = .slider, .id = std.fmt.comptimePrint("s{d}", .{i}), .bind = "volume", .name = "Level" };
+    return row(.{ .size = .{ .px(10), .px(10) }, .clip = true }, kids);
+}
+
+const many_500 = manySliders(500);
+
+test "check: a 501-node spec with 500 ids validates without the caller raising a quota" {
+    comptime check(Mixer, many_500, .{ .viewport = .{ 10, 10 } });
+    // Deep: long paths cost more to format.
+    comptime check(Mixer, blk: {
+        var deep = manySliders(40);
+        for (0..60) |_| deep = col(.{}, .{deep});
+        break :blk deep;
+    }, .{});
 }
 
 test "check: require_names = false lets unnamed widgets through" {
