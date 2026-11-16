@@ -192,8 +192,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// A trail Home › Docs › Widgets above a checkbox.
-fn Page(comptime th: Theme) type {
+/// The example page: a trail Home › Docs › Widgets above a checkbox, in both front ends, in
+/// theme `th`.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {
         pub const ids = [_]Id{ .from("home"), .from("docs") };
@@ -223,6 +224,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/breadcrumb.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/breadcrumb-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "hover", 1 },
+    .{ "held", 2 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -366,6 +377,34 @@ test "breadcrumb: navigation holding links named by their titles, in both front 
         try testing.expectEqualStrings("Widgets", check.nameOf(&sem, tx, str, rows.current));
         try testing.expectEqual(a11y.Role.none, @as(a11y.Role, @fromBackingInt(t.c.role[rows.divider[0]])));
     }
+}
+
+test "breadcrumb: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var activated: [8]u32 = undefined;
+    var fills: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        activated[k] = h.app.activated;
+        try testing.expectEqual(h.app.activated, h.ui.signals.state.activated);
+        fills[k] = out.runtime.tree.c.look[rows.link[0]].fill;
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(u32, &.{ none, none, none, 0, none, 0, none, none }, &activated);
+    const th = Theme.default;
+    try testing.expectEqualSlices(u32, &.{ types.Color.transparent.bitsOf(), th.control_hot.bitsOf(), th.control_held.bitsOf(), th.control_hot.bitsOf() }, fills[0..4]);
+}
+
+test "golden_frames: name frames the breadcrumb replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {
