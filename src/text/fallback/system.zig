@@ -19,6 +19,7 @@ pub const Found = struct { path: []const u8, index: u32, name: []const u8 = "" }
 pub const Discovery = switch (builtin.os.tag) {
     .windows => @import("directwrite.zig").Discovery,
     .macos => @import("coretext.zig").Discovery,
+    .linux => @import("fontconfig.zig").Discovery,
     else => @compileError("no system font discovery for this OS"),
 };
 
@@ -46,7 +47,7 @@ test "a mixed-script sample renders with system fonts" {
     for (letters, 0..) |cp, k| {
         var buf: [4096]u8 = undefined;
         const found = (try d.find(cp, &buf)) orelse return error.NoSystemFont;
-        std.debug.print("U+{X:0>4}: {s} #{}\n", .{ cp, found.path, found.index });
+        std.debug.print("U+{X:0>4} {s} {}\n", .{ cp, found.path, found.index });
         files[k] = try std.Io.Dir.cwd().readFileAlloc(io, found.path, gpa, .limited(64 << 20));
         loaded += 1;
         const index = if (found.name.len > 0) (try lcgr.fallback.faceByName(files[k], found.name)) orelse return error.NoSuchFace else found.index;

@@ -225,7 +225,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = target.result.os.tag != .windows,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
-    b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&b.addRunArtifact(fallback_system).step);
+    const fallback_run = b.addRunArtifact(fallback_system);
+    // Its result depends on the installed fonts, which the cache cannot see.
+    fallback_run.has_side_effects = true;
+    b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&fallback_run.step);
     b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
 
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
