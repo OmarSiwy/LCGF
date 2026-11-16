@@ -204,6 +204,11 @@
     "back": 2,
     "short_fwd": 0
   },
+  "p_sw_solid": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
   "p_sw_fill": {
     "back": 2,
     "jcc": 4,

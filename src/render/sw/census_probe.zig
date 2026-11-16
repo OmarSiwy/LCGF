@@ -8,3 +8,7 @@ const sw = lcgr.render_sw;
 export fn p_sw_fill(fb: *sw.Framebuffer, box: *const [4]u32, c: u32) void {
     fb.fill(box.*, @bitCast(c));
 }
+/// The shading loop: the per-pixel work, with no branch on pixel data.
+export fn p_sw_solid(t: *const sw.Target, q: *const lcgr.draw_list.Quad, scale: f32) void {
+    @call(.always_inline, sw.shade, .{ t.*, q, scale });
+}

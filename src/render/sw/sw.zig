@@ -2,6 +2,9 @@
 //! semantics of the stock quad shader (src/render/shaders/quad.wgsl) so its pixels match the GPU
 //! back ends' golden images. No GPU, no allocation, no OS.
 //!
+//! Quads that are not opaque rects are shaded per pixel and blended premultiplied "over" (Porter
+//! and Duff 1984: out = src + dst * (1 - src.a)), `simd.lanes` pixels of one row at a time.
+//!
 //! Framebuffer rows are padded to whole vectors, so every span is whole vectors with a mask for
 //! the pixels outside the quad or the scissor; there is no scalar tail.
 
@@ -15,6 +18,7 @@ const Quad = draw_list.Quad;
 const DrawList = draw_list.DrawList;
 
 const W = simd.lanes;
+const F = simd.F;
 const U = simd.U;
 const B = simd.B;
 
@@ -115,8 +119,11 @@ pub const Software = struct {
 
     fn drawQuads(s: *const Software, t: Target, quads: []const Quad) void {
         for (quads) |*q| {
-            // Other quads need blending: not drawn yet.
-            if (opaqueRect(q, s.scale)) t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
+            if (opaqueRect(q, s.scale)) {
+                t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
+                continue;
+            }
+            shade(t, q, s.scale);
         }
     }
 };
@@ -164,6 +171,68 @@ fn toPixels(box: [4]f32) [4]u32 {
     return p;
 }
 
+fn rgba(c: u32) [4]f32 {
+    const v: @Vector(4, f32) = @floatFromInt(@as(@Vector(4, u8), @bitCast(c)));
+    return v / @as(@Vector(4, f32), @splat(255));
+}
+
+inline fn sat(x: F) F {
+    return @min(@max(x, simd.f(0)), simd.f(1));
+}
+
+inline fn unpack(p: U, red: u5) [4]F {
+    const m = simd.u(255);
+    const k = simd.f(1.0 / 255.0);
+    return .{
+        @as(F, @floatFromInt((p >> @splat(red)) & m)) * k,
+        @as(F, @floatFromInt((p >> @splat(8)) & m)) * k,
+        @as(F, @floatFromInt((p >> @splat(16 - red)) & m)) * k,
+        @as(F, @floatFromInt((p >> @splat(24)) & m)) * k,
+    };
+}
+
+inline fn pack(c: [4]F, red: u5) U {
+    var out: [4]U = undefined;
+    inline for (0..4) |i| out[i] = @intFromFloat(@round(sat(c[i]) * simd.f(255)));
+    return (out[0] << @splat(red)) | (out[1] << @splat(8)) | (out[2] << @splat(16 - red)) | (out[3] << @splat(24));
+}
+
+/// Shades `q` into `t`: quad.wgsl `vs` and `fs` per pixel.
+pub fn shade(t: Target, q: *const Quad, scale: f32) void {
+    const x0, const y0, const x1, const y1 = q.rect;
+    const box = clampBox(toPixels(.{ x0 * scale, y0 * scale, x1 * scale + 1, y1 * scale + 1 }), t.scissor);
+
+    const fill = rgba(q.fill);
+
+    const red = t.fb.red();
+    const inv_scale = 1 / scale;
+    for (box[1]..box[3]) |y| {
+        const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
+        const sy = simd.f((@as(f32, @floatFromInt(y)) + 0.5) * inv_scale);
+        var x = std.mem.alignBackward(u32, box[0], W);
+        while (x < box[2]) : (x += W) {
+            const sx = (@as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5)) * simd.f(inv_scale);
+            // Pixels whose centre is outside the quad get no fragment.
+            const qx = sx;
+            const qy = sy;
+            const geo = (qx >= simd.f(x0)) & (qx < simd.f(x1)) & (qy >= simd.f(y0)) & (qy < simd.f(y1));
+
+            const color: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
+
+            const alpha = @select(f32, geo, simd.f(q.opacity), simd.f(0));
+
+            // Premultiplied source over the framebuffer.
+            const old: U = row[x..][0..W].*;
+            const dst_px = unpack(old, red);
+            const sa = color[3] * alpha;
+            var out: [4]F = undefined;
+            inline for (0..3) |i| out[i] = color[i] * sa + dst_px[i] * (simd.f(1) - sa);
+            out[3] = sa + dst_px[3] * (simd.f(1) - sa);
+            row[x..][0..W].* = @select(u32, spanMask(x, box[0], box[2]), pack(out, red), old);
+        }
+    }
+}
+
 const testing = std.testing;
 
 fn Frame(comptime w: u32, comptime h: u32) type {
@@ -208,4 +277,20 @@ test "opaque rects: filled exactly, cut by the scissor" {
         const in = x >= 2 and x < 14 and y >= 1 and y < 5;
         try testing.expectEqual(if (in) Color.rgb(200, 100, 50) else Color.black, fb.at(@intCast(x), @intCast(y)));
     };
+}
+
+test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
+    var f: Frame(8, 4) = .{};
+    var fb = f.fb(.bgra8);
+    fb.clear(.rgb(0, 0, 200));
+    const t: Target = .{ .fb = &fb, .scissor = fb.all() };
+    // Half-transparent red over blue: (255 * 0.5, 0, 200 * 0.5).
+    var q = testQuad(.{ 0, 0, 8, 4 }, .rgba(255, 0, 0, 128));
+    shade(t, &q, 1);
+    const got = fb.at(3, 2);
+    try testing.expect(@abs(@as(i32, got.r) - 128) <= 1 and got.g == 0 and @abs(@as(i32, got.b) - 99) <= 1 and got.a == 255);
+    // The general loop writes what the fast path writes for an opaque rect.
+    q.fill = Color.rgb(9, 99, 199).bitsOf();
+    shade(t, &q, 1);
+    for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
 }
