@@ -18,6 +18,7 @@ const mem = lcgr.mem;
 const none = lcgr.types.none;
 const Export = a11y.Export;
 const Role = a11y.Role;
+const scheduler = lcgr.scheduler;
 
 /// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
 pub const root_id: c.NodeId = 1 << 32;
@@ -131,12 +132,39 @@ pub const Bridge = struct {
     focus: u32 = 0,
     /// The top-level rows' `kids_hash` the window was last sent with.
     top_hash: u32 = 0,
+    // ---- requests from assistive technology
+    /// Queued by the action handler on AccessKit's threads, drained by the UI with `drain`.
+    queue: scheduler.Mailbox(a11y.Action),
+    /// Held while pushing: the Mailbox takes one producer, and UI Automation may call the
+    /// handler from several threads.
+    pushing: std.atomic.Value(bool) = .init(false),
+    /// Posted with each request and on activation, so `needsFrame` says yes.
+    waker: ?*scheduler.Wake = null,
+    /// Interrupts the shell's wait (`shell.wake`, thread-safe), so the frame comes now.
+    wake: ?Wake = null,
+
+    pub const Wake = struct { ctx: ?*anyopaque, f: *const fn (?*anyopaque) void };
+
+    /// Requests a frame from any thread.
+    fn askFrame(b: *Bridge) void {
+        if (b.waker) |w| w.post();
+        if (b.wake) |w| w.f(w.ctx);
+    }
 
     /// Carves the children scratch for exports of up to `cap` rows. With a counting carver this
     /// sizes the buffer instead.
     pub fn init(carver: *mem.Carver, cap: u32, title: []const u8) Bridge {
-        return .{ .title = title, .first = carver.slice(u32, cap + 1), .kids = carver.slice(c.NodeId, cap) };
+        return .{
+            .title = title,
+            .first = carver.slice(u32, cap + 1),
+            .kids = carver.slice(c.NodeId, cap),
+            // Not `Mailbox.init`: a counting carver hands out empty slices.
+            .queue = .{ .buf = carver.slice(a11y.Action, queue_len) },
+        };
     }
+
+    /// Requests a frame may receive; more in one frame are dropped (a user acts far slower).
+    pub const queue_len = 64;
 
     /// Stores this frame's export and its changes (`a11y.diff` against the previous frame's) for
     /// the next update, and groups each row's children. `strings` are the frame's bytes the names
@@ -232,11 +260,9 @@ pub const Bridge = struct {
         if (of.focus) c.accesskit_node_add_action(n, .focus);
         if (st.disabled) return n;
         if (of.click) c.accesskit_node_add_action(n, .click);
-        if (of.value and of.focus) {
-            c.accesskit_node_add_action(n, .set_value);
-            c.accesskit_node_add_action(n, .increment);
-            c.accesskit_node_add_action(n, .decrement);
-        }
+        // ponytail: no increment or decrement; the export has no range to step in. Add a
+        // step column to `a11y.Export` if a screen reader's arrow keys must move sliders.
+        if (of.value and of.focus) c.accesskit_node_add_action(n, .set_value);
         return n;
     }
 
@@ -246,7 +272,46 @@ pub const Bridge = struct {
     pub fn activate(userdata: ?*anyopaque) callconv(.c) ?*c.TreeUpdate {
         const b: *Bridge = @ptrCast(@alignCast(userdata.?));
         b.full.store(true, .release);
+        b.askFrame();
         return null;
+    }
+
+    /// AccessKit's action handler (`userdata` is the bridge), on any thread: queues the request
+    /// as an `a11y.Action` row and asks for a frame. Owns `request` and frees it.
+    pub fn act(request: *c.ActionRequest, userdata: ?*anyopaque) callconv(.c) void {
+        const b: *Bridge = @ptrCast(@alignCast(userdata.?));
+        b.queueRequest(request);
+        c.accesskit_action_request_free(request);
+    }
+
+    /// Converts one request and queues it: click is a press, focus a focus, a numeric
+    /// set_value sets the value. Others, and requests for the window, are dropped.
+    pub fn queueRequest(b: *Bridge, request: *const c.ActionRequest) void {
+        const kind: a11y.Action.Kind = switch (request.action) {
+            .click => .press,
+            .focus => .focus,
+            .set_value => .set_value,
+            else => return,
+        };
+        if (request.target_node > std.math.maxInt(u32)) return;
+        var row: a11y.Action = .{ .kind = kind, .target = @intCast(request.target_node) };
+        if (kind == .set_value) {
+            const d = &request.data;
+            if (!d.has_value or d.value.tag != .numeric_value) return;
+            row.value = @floatCast(d.value.u.numeric_value);
+        }
+        while (b.pushing.swap(true, .acquire)) std.atomic.spinLoopHint();
+        _ = b.queue.push(row);
+        b.pushing.store(false, .release);
+        b.askFrame();
+    }
+
+    /// On the UI thread, before building the frame: the requests queued since the last call,
+    /// copied to `out`, for `a11y.apply` and `a11y.setValue`.
+    pub fn drain(b: *Bridge, out: []a11y.Action) []a11y.Action {
+        var n: usize = 0;
+        while (n < out.len) : (n += 1) out[n] = b.queue.pop() orelse break;
+        return out[0..n];
     }
 
     /// AccessKit's tree update factory, called by the adapter's update on the UI thread.
@@ -474,4 +539,138 @@ test "accesskit: later frames send only the rows that changed, and the window wh
     u = Bridge.factory(&f.b).?;
     try testing.expectEqual(1 + f.out[f.gen].len, (try pushedIds(u, &ids)).len);
     c.accesskit_tree_update_free(u);
+}
+
+/// The bridge's side of a host loop, over a `Context`: the semantic columns, this and last
+/// frame's export, and the changes between them. `frame` runs the tier-0 passes on a built
+/// frame and hands the result to the bridge.
+pub fn Host(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        s: a11y.Semantics = undefined,
+        out: [2]Export = undefined,
+        ch: a11y.Changes = undefined,
+        b: Bridge = undefined,
+        gen: u1 = 0,
+
+        fn carve(h: ?*Self, carver: *mem.Carver, title: []const u8) void {
+            const s = a11y.Semantics.init(carver, cap);
+            const out = [2]Export{ Export.init(carver, cap), Export.init(carver, cap) };
+            const ch = a11y.Changes.init(carver, cap);
+            const b = Bridge.init(carver, cap, title);
+            if (h) |x| {
+                x.s = s;
+                x.out = out;
+                x.ch = ch;
+                x.b = b;
+            }
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            carve(null, &counter, "");
+            break :blk counter.off;
+        };
+        /// `ctx`'s waker is posted with each request; `wake` interrupts the shell's wait.
+        pub fn init(h: *Self, title: []const u8, ctx: *lcgr.context.Context, wake: ?Bridge.Wake) void {
+            var carver: mem.Carver = .{ .buf = &h.buf };
+            carve(h, &carver, title);
+            h.b.waker = &ctx.waker;
+            h.b.wake = wake;
+        }
+        /// After `Frame.end`: exports the frame `ctx` just built and stores it in the bridge.
+        /// Semantic inputs (`labelled_by`, application states) are set on `h.s` while building
+        /// and cleared here for the next frame.
+        pub fn frame(h: *Self, ctx: *const lcgr.context.Context, out: *const lcgr.context.Output) void {
+            std.debug.assert(out.tree.len <= cap);
+            const str = &ctx.strings[ctx.cur];
+            h.gen +%= 1;
+            a11y.names(out.tree, &h.s);
+            a11y.states(out.tree, &h.s);
+            a11y.flatten(out.tree, out.texts, str.buf[0..str.len], &h.s, &h.out[h.gen]);
+            a11y.diff(&h.out[h.gen], &h.out[h.gen ^ 1], &h.ch);
+            h.b.frame(&h.out[h.gen], &h.ch, str.buf[0..str.len], ctx.inter.focus);
+            h.s.clear();
+        }
+    };
+}
+
+test "accesskit: action requests reach the example as the user's own input" {
+    const example = lcgr.shell_example;
+    const Context = lcgr.context.Context;
+    const limits: lcgr.context.Limits = .{ .nodes = 256, .texts = 64 };
+    const S = struct {
+        var ctx_buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+        var host: Host(256) = .{};
+        var woken: u32 = 0;
+        fn wake(_: ?*anyopaque) void {
+            woken += 1;
+        }
+    };
+    var ctx = try Context.init(&S.ctx_buffer, limits);
+    const h = &S.host;
+    h.init("Example", &ctx, .{ .ctx = null, .f = S.wake });
+    var app: example.App = .{};
+    var ev: lcgr.shell_iface.Events = .{};
+    ev.in.viewport = .{ 800, 600 };
+    var acts_buf: [Bridge.queue_len]a11y.Action = undefined;
+
+    const Step = struct {
+        fn run(cx: *Context, ap: *example.App, e: *lcgr.shell_iface.Events, hh: *Host(256), buf: []a11y.Action) void {
+            const acts = hh.b.drain(buf);
+            var f = cx.begin(&e.in);
+            a11y.apply(&cx.inter, acts);
+            ap.build(&f, e);
+            const out = f.end(.{});
+            hh.frame(cx, &out);
+        }
+    };
+    Step.run(&ctx, &app, &ev, h, &acts_buf);
+    // A screen reader connects: it gets the whole example once a frame is built.
+    _ = Bridge.activate(&h.b);
+    try testing.expect(ctx.needsFrame(&ev.in));
+    try testing.expectEqual(1, S.woken);
+    Step.run(&ctx, &app, &ev, h, &acts_buf);
+    const u = Bridge.factory(&h.b).?;
+    var buf: [16384]u8 = undefined;
+    const d = debugText(u, &buf);
+    try expectHas(d, "label: \"Reset\"");
+    try expectHas(d, "label: \"Add layer\"");
+    try expectHas(d, "label: \"Layer 2\"");
+    c.accesskit_tree_update_free(u);
+
+    // "Press Reset", "focus Exposure", "set Exposure to 3", and a scroll the bridge does not
+    // take, as AccessKit hands them over.
+    const id_reset = @backingInt(example.id_reset);
+    const id_exp = @backingInt(example.id_exposure);
+    var req: c.ActionRequest = .{ .action = .click, .target_tree = @splat(0), .target_node = id_reset, .data = .{ .has_value = false, .value = undefined } };
+    h.b.queueRequest(&req);
+    req.action = .focus;
+    req.target_node = id_exp;
+    h.b.queueRequest(&req);
+    req.action = .set_value;
+    req.data = .{ .has_value = true, .value = .{ .tag = .numeric_value, .u = .{ .numeric_value = 3 } } };
+    h.b.queueRequest(&req);
+    req.action = @fromBackingInt(@intCast(11)); // scroll_down
+    h.b.queueRequest(&req);
+    try testing.expectEqual(4, S.woken);
+    try testing.expect(ctx.needsFrame(&ev.in));
+
+    app.exposure = 2;
+    const acts = h.b.drain(&acts_buf);
+    try testing.expectEqual(3, acts.len);
+    try testing.expectEqual(a11y.Action.Kind.set_value, acts[2].kind);
+    try testing.expectEqual(3, a11y.setValue(acts, example.id_exposure, app.exposure));
+    // Put back for the frame, which drains them itself.
+    for (acts) |a| _ = h.b.queue.push(a);
+    Step.run(&ctx, &app, &ev, h, &acts_buf);
+    try testing.expectEqual(1, app.resets);
+    try testing.expectEqual(1, app.exposure); // Reset's click set it back
+    try testing.expectEqual(id_exp, ctx.inter.focus);
+    // The next update moves the screen reader's focus to Exposure.
+    const next = Bridge.factory(&h.b).?;
+    var idbuf: [32]u8 = undefined;
+    try expectHas(debugText(next, &buf), try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{id_exp}));
+    c.accesskit_tree_update_free(next);
 }
