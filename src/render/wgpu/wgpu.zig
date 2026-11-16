@@ -73,13 +73,14 @@ pub const Glyphs = iface.Glyphs;
 ///                                          group 1 = texture_2d<f32> + filtering sampler (fragment).
 ///   fn globalsBindGroup(Device, Buffer) BindGroup
 ///   fn textureBindGroup(Device, TextureView, Sampler) BindGroup
+///   fn releaseBindGroup(BindGroup) void
 ///   fn setPipeline(RenderPass, Pipeline) void
 ///   fn setBindGroup(RenderPass, index: u32, BindGroup) void
 ///   fn setVertexBuffer(RenderPass, slot: u32, Buffer, offset: u64, size: u64) void
 ///   fn draw(RenderPass, vertices: u32, instances: u32, first_vertex: u32, first_instance: u32) void
 pub const Binding = struct {
     pub const types = [_][]const u8{ "Device", "Queue", "RenderPass", "Buffer", "Pipeline", "BindGroup", "TextureView", "Sampler", "TextureFormat" };
-    pub const functions = [_][]const u8{ "createBuffer", "destroyBuffer", "writeBuffer", "createPipeline", "globalsBindGroup", "textureBindGroup", "setPipeline", "setBindGroup", "setVertexBuffer", "draw" };
+    pub const functions = [_][]const u8{ "createBuffer", "destroyBuffer", "writeBuffer", "createPipeline", "globalsBindGroup", "textureBindGroup", "releaseBindGroup", "setPipeline", "setBindGroup", "setVertexBuffer", "draw" };
 };
 
 pub fn Renderer(comptime gpu: type) type {
@@ -147,15 +148,30 @@ pub fn Renderer(comptime gpu: type) type {
             gpu.destroyBuffer(self.quads);
             gpu.destroyBuffer(self.glyph_quads);
             gpu.destroyBuffer(self.globals);
+            gpu.releaseBindGroup(self.globals_group);
+            for (self.textures[0..self.texture_count]) |g| gpu.releaseBindGroup(g);
         }
 
         /// Texture in: makes a view usable as `Style.texture`. The view can be anything you
-        /// rendered or loaded; the renderer only samples it.
+        /// rendered or loaded; the renderer only samples it, and keeps only a bind group: the
+        /// texture and view stay yours, alive while a frame may sample them. Handles are
+        /// indices in registration order; `Texture.white` is 0. Past `max_textures` the last
+        /// entry is replaced, as the prototype does.
         pub fn addTexture(self: *Self, device: gpu.Device, view: gpu.TextureView, sampler: gpu.Sampler) types.Texture {
             const i: u16 = @min(self.texture_count, max_textures - 1);
+            if (i < self.texture_count) gpu.releaseBindGroup(self.textures[i]);
             self.textures[i] = gpu.textureBindGroup(device, view, sampler);
             self.texture_count = i + 1;
             return @fromBackingInt(i);
+        }
+
+        /// Points an existing handle at another view: a render target recreated at a new size,
+        /// an atlas that grew. Nodes keep their `Style.texture`. A stale handle clamps to the
+        /// last entry, as in `bind`.
+        pub fn setTexture(self: *Self, device: gpu.Device, texture: types.Texture, view: gpu.TextureView, sampler: gpu.Sampler) void {
+            const i = @min(@backingInt(texture), self.texture_count - 1);
+            gpu.releaseBindGroup(self.textures[i]);
+            self.textures[i] = gpu.textureBindGroup(device, view, sampler);
         }
 
         /// A quad pipeline with your fragment logic. Build `wgsl` with `quad_shader.shader`.
@@ -271,6 +287,9 @@ const Mock = struct {
         _ = s;
         return d.handle();
     }
+    pub fn releaseBindGroup(g: BindGroup) void {
+        _ = g;
+    }
     pub fn setPipeline(p: RenderPass, pipe: Pipeline) void {
         p.push(.{ .pipeline = pipe });
     }
@@ -372,6 +391,20 @@ test "renderer: stale handles clamp to the last registered entry" {
     try testing.expectEqual(gfx.textures[0], log.calls[2].group.group);
     for (0..Renderer(Mock).max_textures + 2) |_| _ = gfx.addTexture(&log, 3, 2);
     try testing.expectEqual(@as(u16, Renderer(Mock).max_textures), gfx.texture_count);
+}
+
+test "renderer: setTexture keeps the handle and rebinds it to the new view" {
+    var log: Mock.Log = .{};
+    var gfx = Renderer(Mock).init(&log, .{ .format = .bgra8unorm }, 1, 2);
+    defer gfx.deinit();
+    const t = gfx.addTexture(&log, 7, 2);
+    const old = gfx.textures[1];
+    gfx.setTexture(&log, t, 8, 2);
+    try testing.expectEqual(@as(u16, 2), gfx.texture_count);
+    try testing.expect(gfx.textures[1] != old);
+    log.len = 0;
+    gfx.drawBatch(&log, .{ .first = 0, .count = 1, .texture = t, .material = .solid });
+    try testing.expectEqual(gfx.textures[1], log.calls[2].group.group);
 }
 
 test "quad_attrs follow the shader's layout of Quad" {

@@ -144,6 +144,10 @@ pub fn textureBindGroup(d: Device, v: TextureView, s: Sampler) BindGroup {
     return c.wgpuDeviceCreateBindGroup(d.device, &.{ .layout = d.texture_layout, .entryCount = entries.len, .entries = &entries });
 }
 
+pub fn releaseBindGroup(g: BindGroup) void {
+    c.wgpuBindGroupRelease(g);
+}
+
 pub fn setPipeline(p: RenderPass, pipe: Pipeline) void {
     c.wgpuRenderPassEncoderSetPipeline(p, pipe);
 }
@@ -264,4 +268,61 @@ test "native: a resize changes only the viewport; the same renderer draws every 
     const after = try drawScene(&h, &gfx, scene, 160, 120);
     defer testing.allocator.free(after);
     try testing.expectEqualSlices(u8, before, after);
+}
+
+test "native: registered textures are sampled by handle, and setTexture swaps one in place" {
+    var h = try host.Host.init();
+    defer h.deinit();
+    var ctx = Context.init(h.device);
+    defer ctx.deinit();
+    const sampler = host.nearestSampler(&h);
+    defer c.wgpuSamplerRelease(sampler);
+    var white = host.Image.init(&h, 1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
+    defer white.deinit();
+    var gfx = Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm }, white.view, sampler);
+    defer gfx.deinit();
+    // 2x2 texels: red, green / blue, grey.
+    const checker_px = [_]u8{ 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 255 };
+    var checker = host.Image.init(&h, 2, 2, &checker_px);
+    defer checker.deinit();
+    var flipped_px: [16]u8 = undefined;
+    for (0..4) |i| @memcpy(flipped_px[i * 4 ..][0..4], checker_px[(3 - i) * 4 ..][0..4]);
+    var flipped = host.Image.init(&h, 2, 2, &flipped_px);
+    defer flipped.deinit();
+    const t = gfx.addTexture(&ctx, checker.view, sampler);
+    try testing.expectEqual(@as(u16, 1), @backingInt(t));
+
+    // One 4x4 quad, white fill, showing texture t: each texel covers 2x2 pixels.
+    const bytes = comptime blk: {
+        var counter: lcgr.mem.Carver = .{ .buf = null };
+        _ = lcgr.draw_list.DrawList.init(&counter, 1, 1, 1);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(lcgr.mem.column_align) = undefined;
+    var carver: lcgr.mem.Carver = .{ .buf = &buf };
+    var d = lcgr.draw_list.DrawList.init(&carver, 1, 1, 1);
+    d.quads[0] = .{ .rect = .{ 0, 0, 4, 4 }, .clip = .{ -1e6, -1e6, 1e6, 1e6 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = lcgr.types.Color.white.bitsOf(), .border_color = 0, .border = 0, .opacity = 1 };
+    d.quad_len = 1;
+    d.cmd.kind[0] = @backingInt(lcgr.draw_list.DrawList.Kind.quads);
+    d.cmd.first[0] = 0;
+    d.cmd.count[0] = 1;
+    d.cmd.key[0] = @as(u32, @backingInt(t)) << 16;
+    d.cmd_len = 1;
+
+    for ([_]*const [16]u8{ &checker_px, &flipped_px }, 0..) |want, round| {
+        if (round == 1) gfx.setTexture(&ctx, t, flipped.view, sampler);
+        var target = host.Target.init(&h, 4, 4, c.WGPUTextureFormat_RGBA8Unorm);
+        defer target.deinit();
+        gfx.prepare(h.queue, &d, .{}, .{ 4, 4 }, 1);
+        const encoder = c.wgpuDeviceCreateCommandEncoder(h.device, null);
+        const pass = host.beginPass(encoder, target.view, .{ 0, 0, 0, 1 });
+        gfx.render(pass, &d);
+        host.endPass(pass);
+        h.submit(encoder);
+        var px: [4 * 4 * 4]u8 = undefined;
+        try h.readback(&target, &px);
+        for (0..4) |y| for (0..4) |x| {
+            try testing.expectEqualSlices(u8, want[((y / 2) * 2 + x / 2) * 4 ..][0..4], px[(y * 4 + x) * 4 ..][0..4]);
+        };
+    }
 }
