@@ -12,11 +12,13 @@
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
+//!   zig build bench -- --scene NAME    run another scene of bench/scenes/ (frame passes only)
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
 //!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
 const ui = @import("ui");
 const lcgr = @import("lcgr");
+const scenes = @import("scenes");
 const linux = std.os.linux;
 
 const rows = 330;
@@ -160,6 +162,15 @@ fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f3
         }
     }
 }
+/// The scene above: 330 rows of label, two buttons, checkbox, slider and accent leaf.
+const rows_scene: scenes.Scene = .{ .name = "rows", .frames = frames, .input = rowsInput, .build = build };
+const all_scenes = [_]scenes.Scene{rows_scene} ++ scenes.list;
+
+fn rowsInput(in: *ui.Input, k: u32) void {
+    in.viewport = .{ 1280, 8000 };
+    in.pointer = .{ @floatFromInt(100 + (k * 7) % 900), @floatFromInt(50 + (k * 13) % 7000) };
+}
+
 var values: [rows]f32 = @splat(0.5);
 var checks: [rows]bool = @splat(false);
 
@@ -194,17 +205,23 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     var json_path: ?[]const u8 = null;
     var idle = false;
+    var scene = rows_scene;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--idle")) {
             idle = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
             json_path = args.next() orelse return error.MissingPath;
+        } else if (std.mem.eql(u8, arg, "--scene")) {
+            const name = args.next() orelse return error.MissingScene;
+            scene = for (all_scenes) |s| {
+                if (std.mem.eql(u8, s.name, name)) break s;
+            } else return error.UnknownScene;
         } else return error.UnknownArgument;
     }
 
     var ctx = try ui.Context.init(&buffer, limits);
     const th: ui.Theme = .{};
-    var in: ui.Input = .{ .viewport = .{ 1280, 8000 } };
+    var in: ui.Input = .{};
     const font: lcgr.protocol.Mono = .{};
     var carver: lcgr.mem.Carver = .{ .buf = &src_buffer };
     var st = Tree.init(&carver, limits.nodes);
@@ -218,13 +235,16 @@ pub fn main(init: std.process.Init) !void {
     var sink: u64 = 0;
     var nodes: usize = 0;
     var texts: usize = 0;
-    for (0..if (idle) 1 else frames) |k| {
-        in.pointer = .{ @floatFromInt(100 + (k * 7) % 900), @floatFromInt(50 + (k * 13) % 7000) };
+    const polls: u32 = if (idle) 1 else scene.frames;
+    var built: usize = 0;
+    for (0..polls) |k| {
+        scene.input(&in, @intCast(k));
+        if (scene.idle and !ctx.needsFrame(&in)) continue;
         var m: [16]u64 = undefined;
         m[0] = now();
         var f = ctx.begin(&in); // includes the SIMD hit test and spring step
         m[1] = now();
-        build(&f, &th);
+        scene.build(&f, &th);
         m[2] = now();
         const pt = f.tree();
         const ptx = f.texts();
@@ -277,16 +297,18 @@ pub fn main(init: std.process.Init) !void {
         copyColumns(&ptx.c, &stx.c, ptx.len);
         const out = f.finish();
         // Differential check, untimed: the ported paint must emit the prototype's draw list.
-        if (k == 0) try sameDrawList(out.draw, &sd);
+        if (built == 0) try sameDrawList(out.draw, &sd);
         sink +%= sd.cmd_len + sd.quad_len;
         nodes = t.len;
         texts = tx.len;
-        samples[0][k] = m[1] - m[0];
-        samples[1][k] = m[2] - m[1];
-        samples[2][k] = m[12] - m[3];
-        samples[3][k] = m[13] - m[12];
-        samples[4][k] = samples[0][k] + samples[1][k] + samples[2][k] + samples[3][k];
-        for (5..pass_names.len, 3..) |p, j| samples[p][k] = m[j + 1] - m[j];
+        const b = built;
+        samples[0][b] = m[1] - m[0];
+        samples[1][b] = m[2] - m[1];
+        samples[2][b] = m[12] - m[3];
+        samples[3][b] = m[13] - m[12];
+        samples[4][b] = samples[0][b] + samples[1][b] + samples[2][b] + samples[3][b];
+        for (5..pass_names.len, 3..) |p, j| samples[p][b] = m[j + 1] - m[j];
+        built += 1;
     }
 
     var buf: [4096]u8 = undefined;
@@ -300,13 +322,20 @@ pub fn main(init: std.process.Init) !void {
         while (linux.read(0, &byte, 1) > 0) {}
         return;
     }
-    flexWrap(&st, &stx, &sflex, in.viewport);
-    incremental(&st, &stx, &sdirty, in.viewport);
-    try w.print("nodes={d} texts={d} frames={d} lanes={d} bytes={d} sink={d}\n", .{ nodes, texts, frames, ui.simd.lanes, buffer.len, sink });
+    // The incremental and flex passes are measured on the rows scene only.
+    const is_rows = scene.build == rows_scene.build;
+    if (is_rows) {
+        flexWrap(&st, &stx, &sflex, in.viewport);
+        incremental(&st, &stx, &sdirty, in.viewport);
+    }
+    const names: []const []const u8 = if (is_rows) &all_names else &pass_names;
+    // incremental and flexWrap fill all `frames` samples, the frame loop `built` of them.
+    for (samples[0..names.len], 0..) |*s, p| std.mem.sort(u64, s[0..if (p < pass_names.len) built else frames], {}, std.sort.asc(u64));
+    try w.print("scene={s} nodes={d} texts={d} frames={d} polls={d} lanes={d} bytes={d} sink={d}\n", .{ scene.name, nodes, texts, built, polls, ui.simd.lanes, buffer.len, sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
-    for (all_names, &samples) |name, *s| {
-        std.mem.sort(u64, s, {}, std.sort.asc(u64));
-        try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
+    for (names, samples[0..names.len], 0..) |name, *s, p| {
+        const n = if (p < pass_names.len) built else frames;
+        try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[n / 2]), us(s[n * 99 / 100]) });
     }
     // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
     // in paint order, after merging across text, and the opaque quads a depth back end draws
@@ -321,9 +350,10 @@ pub fn main(init: std.process.Init) !void {
     const path = json_path orelse return;
     var json_buf: [4096]u8 = undefined;
     var j = std.Io.Writer.fixed(&json_buf);
-    try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ nodes, texts, frames, ui.simd.lanes });
-    for (all_names, &samples, 0..) |name, *s, p| {
-        try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
+    try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ nodes, texts, built, ui.simd.lanes });
+    for (names, samples[0..names.len], 0..) |name, *s, p| {
+        const n = if (p < pass_names.len) built else frames;
+        try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[n / 2]), us(s[n * 99 / 100]) });
     }
     try j.writeAll("\n}}\n");
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = j.buffered() });
