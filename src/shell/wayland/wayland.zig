@@ -23,6 +23,7 @@ const builtin = @import("builtin");
 const lcgr = @import("lcgr");
 const wire = @import("wire.zig");
 const Seat = @import("input.zig").Seat;
+const Data = @import("data.zig").Data;
 const linux = std.os.linux;
 const iface = lcgr.shell_iface;
 const Events = iface.Events;
@@ -69,10 +70,13 @@ pub const Kind = enum(u8) {
     output,
     cursor_manager,
     cursor_device,
+    data_manager,
+    data_device,
+    data_source,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1 };
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager };
 const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_compositor = 6,
     .wl_shm = 1,
@@ -81,6 +85,7 @@ const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wp_viewporter = 1,
     .wp_fractional_scale_manager_v1 = 1,
     .wp_cursor_shape_manager_v1 = 1,
+    .wl_data_device_manager = 3,
 });
 const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_compositor = .compositor,
@@ -90,6 +95,7 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wp_viewporter = .viewporter,
     .wp_fractional_scale_manager_v1 = .fractional_manager,
     .wp_cursor_shape_manager_v1 = .cursor_manager,
+    .wl_data_device_manager = .data_manager,
 });
 
 /// `wp_cursor_shape_device_v1` shapes (cursor-shape-v1.xml) by `Cursor`: default, pointer,
@@ -161,6 +167,8 @@ pub const Wayland = struct {
     /// Held input, carried from frame to frame.
     in: Input = .{},
     seat: Seat = .{},
+    /// Clipboard (data.zig).
+    data: Data = .{},
     /// The cursor last set, and the pointer enter it was set for.
     cursor: context.Cursor = .arrow,
     cursor_serial: u32 = 0,
@@ -231,6 +239,7 @@ pub const Wayland = struct {
 
     pub fn deinit(w: *Wayland) void {
         w.shm.unmap();
+        w.data.deinit();
         w.conn.close();
         _ = linux.close(w.wake_fd);
     }
@@ -238,6 +247,9 @@ pub const Wayland = struct {
     /// Drains the socket into `ev`. False once the window is closed or the connection failed.
     pub fn poll(w: *Wayland, ev: *Events) bool {
         w.dispatch();
+        w.data.bind(w);
+        w.data.readPaste(w);
+        w.flush();
         _ = w.woken.swap(false, .acquire);
         w.drainWake();
         w.polls += 1;
@@ -266,7 +278,18 @@ pub const Wayland = struct {
             w.cursor = p.cursor;
             w.cursor_serial = s.enter_serial;
         }
+        w.data.set(w, p.clipboard);
         w.flush();
+    }
+
+    /// Asks for the clipboard's text, which arrives as typed text (`Input.text` and a `.text`
+    /// event) in a later poll. The host calls it when a widget asks to paste
+    /// (`keyboard.Clipboard.paste`): `Platform` carries no paste request. False when the
+    /// clipboard holds no text.
+    pub fn paste(w: *Wayland) bool {
+        const ok = w.data.paste(w);
+        w.flush();
+        return ok;
     }
 
     /// Draws the frame into a free shared-memory buffer and commits it. Before the first
@@ -319,9 +342,11 @@ pub const Wayland = struct {
     }
 
     fn sleep(w: *Wayland, ms: i32) void {
-        var fds = [2]linux.pollfd{
+        var fds = [3]linux.pollfd{
             .{ .fd = w.conn.fd, .events = linux.POLL.IN, .revents = 0 },
             .{ .fd = w.wake_fd, .events = linux.POLL.IN, .revents = 0 },
+            // A paste in progress (poll ignores -1).
+            .{ .fd = w.data.paste_fd, .events = linux.POLL.IN, .revents = 0 },
         };
         _ = linux.poll(&fds, fds.len, ms);
     }
@@ -344,7 +369,9 @@ pub const Wayland = struct {
 
     fn handle(w: *Wayland, m: wire.Msg) void {
         var a = m.args();
-        const kind: Kind = if (m.id < max_objects) w.kinds[m.id] else .free;
+        // Objects the compositor created (from 0xff000000) are data offers.
+        if (m.id >= max_objects) return w.data.offerEvent(m.id, m.opcode, &a);
+        const kind = w.kinds[m.id];
         switch (kind) {
             .display => switch (m.opcode) {
                 0 => w.fail(error.Protocol), // error: object, code, message
@@ -429,6 +456,8 @@ pub const Wayland = struct {
             .fractional_scale => if (m.opcode == 0) {
                 w.scale = @as(f32, @floatFromInt(@max(a.uint(), 1))) / 120;
             },
+            .data_device => w.data.deviceEvent(w, m.opcode, &a),
+            .data_source => w.data.sourceEvent(w, m.opcode, &a),
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
             },
@@ -499,7 +528,7 @@ pub const Wayland = struct {
     }
 
     /// A new client object id of `kind`: the lowest free one.
-    fn new(w: *Wayland, kind: Kind) u32 {
+    pub fn new(w: *Wayland, kind: Kind) u32 {
         for (w.kinds[2..], 2..) |k, id| if (k == .free) {
             w.kinds[id] = kind;
             return @intCast(id);
@@ -509,12 +538,12 @@ pub const Wayland = struct {
     }
 
     /// Sends a destructor request; the id is reused after the compositor's `delete_id`.
-    fn destroy(w: *Wayland, id: u32, opcode: u16) void {
+    pub fn destroy(w: *Wayland, id: u32, opcode: u16) void {
         w.request(id, opcode, .{});
         w.kinds[id] = .dead;
     }
 
-    fn request(w: *Wayland, id: u32, opcode: u16, args: anytype) void {
+    pub fn request(w: *Wayland, id: u32, opcode: u16, args: anytype) void {
         if (w.closed or id == 0) return;
         w.conn.send(id, opcode, args) catch w.fail(error.Disconnected);
     }

@@ -36,7 +36,8 @@ pub const Seat = struct {
     /// them (positive is down and right).
     v120: [2]i32 = .{ 0, 0 },
     px: [2]f32 = .{ 0, 0 },
-    text: [256]u8 = undefined,
+    /// Typed text of one poll: keys, and a paste or an input method's commit.
+    text: [64 * 1024 + 256]u8 = undefined,
     text_len: u32 = 0,
     events: [64]Input.Event = undefined,
     nevents: u32 = 0,

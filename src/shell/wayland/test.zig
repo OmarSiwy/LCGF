@@ -30,6 +30,8 @@ pub const Fake = struct {
     committed: u32 = 0,
     log: [512]Request = undefined,
     logged: usize = 0,
+    /// The descriptor of the client's last wl_data_offer.receive, for the test to write into.
+    received: i32 = -1,
 
     const Buffer = struct { id: u32 = 0, offset: u32 = 0, width: u32 = 0, height: u32 = 0, stride: u32 = 0 };
 
@@ -75,6 +77,7 @@ pub const Fake = struct {
             if (f.logged < f.log.len) f.log[f.logged] = .{ .kind = kind, .id = m.id, .opcode = m.opcode, .arg0 = arg0, .arg1 = arg1 };
             f.logged += 1;
             a = m.args();
+            if (m.id >= 0xff00_0000 and m.opcode == 1) f.received = f.conn.takeFd();
             switch (kind) {
                 .shm => if (m.opcode == 0) {
                     _ = a.uint();
@@ -567,4 +570,110 @@ test "wayland: the cursor the UI asks for, set again after each enter" {
     shell.apply(&.{ .cursor = .arrow });
     fake.pump(&shell);
     try testing.expect(fake.sent(.cursor_device, 1) == null);
+}
+
+/// Reads all of pipe `fd` (blocking) into `buf`.
+fn readAll(fd: i32, buf: []u8) []u8 {
+    var n: usize = 0;
+    while (n < buf.len) {
+        const rc = linux.read(fd, buf[n..].ptr, buf.len - n);
+        if (rc == 0 or linux.errno(rc) != .SUCCESS) break;
+        n += rc;
+    }
+    return buf[0..n];
+}
+
+test "wayland: copy offers the UI's text, paste types the selection's" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"wl_data_device_manager"}));
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 3)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    try testing.expect(shell.data.device != 0);
+    try testing.expectEqual(shell.globals.get(.wl_seat), fake.sent(.data_manager, 1).?.arg1); // get_data_device
+
+    // Copy, after a click (the selection needs an input serial).
+    const click = fake.nextSerial();
+    fake.send(shell.seat.pointer, 3, .{ click, @as(u32, 0), @as(u32, 0x110), @as(u32, 1) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    shell.apply(&.{ .clipboard = "hello" });
+    fake.pump(&shell);
+    const source = fake.sent(.data_manager, 0).?.arg0;
+    try testing.expectEqual(Request{ .kind = .data_device, .id = shell.data.device, .opcode = 1, .arg0 = source, .arg1 = click }, fake.sent(.data_device, 1).?);
+    try testing.expect(fake.sent(.data_source, 0) != null); // offer
+    // The same text next frame is not offered again.
+    fake.logged = 0;
+    shell.apply(&.{ .clipboard = "hello" });
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.data_manager, 0) == null);
+
+    // Another client pastes: the compositor asks for the text through a pipe.
+    var p: [2]i32 = undefined;
+    _ = linux.pipe2(&p, .{ .CLOEXEC = true });
+    fake.send(source, 1, .{ @as([]const u8, "text/plain;charset=utf-8"), wire.Fd{ .fd = p[1] } });
+    fake.flush();
+    _ = shell.poll(&ev);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("hello", readAll(p[0], &buf));
+    _ = linux.close(p[0]);
+
+    // Another client copies: an offer, its types, then the selection.
+    const offer: u32 = 0xff00_0001;
+    fake.send(shell.data.device, 0, .{offer});
+    fake.send(offer, 0, .{@as([]const u8, "text/html")});
+    fake.send(offer, 0, .{@as([]const u8, "text/plain;charset=utf-8")});
+    fake.send(shell.data.device, 5, .{offer});
+    fake.send(source, 2, .{}); // cancelled: ours is no longer the selection
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual(offer, shell.data.selection);
+    try testing.expectEqual(@as(u32, 0), shell.data.source);
+    try testing.expectEqual(@as(u8, 1), shell.data.offer(offer).?.mimes);
+
+    // Paste: receive into a pipe; the text is typed in the poll that reads its end.
+    try testing.expect(shell.paste());
+    fake.pump(&shell);
+    try testing.expect(fake.received >= 0);
+    _ = linux.write(fake.received, "w\xc3\xb6rld", 6);
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("", ev.in.text); // not finished yet
+    _ = linux.close(fake.received);
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("w\xc3\xb6rld", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{.{ .kind = .text, .at = 0, .len = 6 }}, ev.in.events);
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+
+    // Pasting this client's own copy does not deadlock: the read waits across polls.
+    shell.apply(&.{ .clipboard = "self" });
+    fake.pump(&shell);
+    const own = fake.sent(.data_manager, 0).?.arg0;
+    fake.send(shell.data.device, 0, .{offer + 1});
+    fake.send(offer + 1, 0, .{@as([]const u8, "UTF8_STRING")});
+    fake.send(shell.data.device, 5, .{offer + 1});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expect(shell.paste());
+    fake.pump(&shell);
+    // The compositor forwards the receive to the source: this client.
+    fake.send(own, 1, .{ @as([]const u8, "UTF8_STRING"), wire.Fd{ .fd = fake.received } });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("self", ev.in.text);
+}
+
+test "wayland: nothing to paste" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"wl_data_device_manager"}));
+    var ev: Events = .{};
+    _ = shell.poll(&ev);
+    try testing.expect(!shell.paste());
 }
