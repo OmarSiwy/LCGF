@@ -26,6 +26,7 @@ const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
 const Rect = types.Rect;
+const Color = types.Color;
 const Response = types.Response;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
@@ -133,35 +134,50 @@ pub fn padding(th: *const Theme) [4]f32 {
     return .{ th.pad, th.pad / 2, th.pad, th.pad / 2 };
 }
 
-/// The box: as wide as it is given (at least 80), one line tall; it clips its text, scrolled
-/// by `scroll` px. Not yet painted.
+/// The box: as wide as it is given (at least 80), one line tall, inset (`control_held`), its
+/// border the accent while focused; it clips its text, scrolled by `scroll` px.
 pub fn fieldStyle(th: *const Theme, focused: bool, scroll: f32) Style {
-    _ = focused;
+    const border = base.OnOff{ th.control_hot, th.accent };
     return .{
         .dir = .x,
         .size = .{ .fill, .fit },
         .min = .{ 80, 0 },
         .pad = padding(th),
+        .radius = th.radius,
+        .fill = th.control_held,
+        .border = 1,
+        .border_color = border[@intFromBool(focused)],
         .clip = true,
         .scroll = .{ scroll, 0 },
     };
 }
 
-/// The text, or the placeholder (`hint`) when the field is empty.
+/// The placeholder's colour: the text colour at half strength.
+pub fn hintColor(th: *const Theme) Color {
+    return .rgba(th.text.r, th.text.g, th.text.b, 128);
+}
+
+/// The text, or the placeholder (`hint`) in its colour when the field is empty.
 pub fn textStyle(th: *const Theme, hint: bool) TextStyle {
-    _ = hint;
-    return .{ .px = th.text_px, .color = th.text };
+    const colors = base.OnOff{ th.text, hintColor(th) };
+    return .{ .px = th.text_px, .color = colors[@intFromBool(hint)] };
+}
+
+/// The selection's colour: the accent at less than half strength.
+pub fn selectionColor(th: *const Theme) Color {
+    return .rgba(th.accent.r, th.accent.g, th.accent.b, 96);
 }
 
 /// The selection behind the text, from x `sel[0]` to `sel[1]` px, one line tall.
 pub fn selectionStyle(th: *const Theme, sel: [2]f32, top: f32) Style {
-    return .{ .float = true, .offset = .{ sel[0], top }, .size = .{ .px(sel[1] - sel[0]), .px(lineHeight(th)) } };
+    return .{ .float = true, .offset = .{ sel[0], top }, .size = .{ .px(sel[1] - sel[0]), .px(lineHeight(th)) }, .fill = selectionColor(th) };
 }
 
-/// The caret: 1 px wide at x `x`, one line tall.
+/// The caret: 1 px wide at x `x`, one line tall, in the text colour while focused and
+/// invisible otherwise (it keeps its row, so both front ends have the same rows either way).
 pub fn caretStyle(th: *const Theme, x: f32, top: f32, focused: bool) Style {
-    _ = focused;
-    return .{ .float = true, .offset = .{ x, top }, .size = .{ .px(1), .px(lineHeight(th)) } };
+    const colors = base.OnOff{ .transparent, th.text };
+    return .{ .float = true, .offset = .{ x, top }, .size = .{ .px(1), .px(lineHeight(th)) }, .fill = colors[@intFromBool(focused)] };
 }
 
 /// What a single-line field shows this frame: its text or placeholder, and where the caret and
@@ -343,6 +359,44 @@ test "textfield: the page agrees in both front ends at rest" {
     const t = out.runtime.tree;
     // panel, two captions, two fields of four rows each.
     try testing.expectEqual(@as(u32, 1 + 1 + 2 + 8), t.len);
+}
+
+test "textfield look: an inset box one line tall, the placeholder dimmed, the caret only while focused" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const f = t.find(.from("name"));
+    const box = t.rect(f);
+    // Laid out to whole pixels.
+    try testing.expectApproxEqAbs(lineHeight(&th) + th.pad, box.h(), 0.5);
+    try testing.expectEqual(@as(f32, 320 - 24), box.w());
+    try testing.expectEqual(th.control_held.bitsOf(), t.c.look[f].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[f].border_color);
+    // The placeholder, in the hint colour; City's text in the text colour.
+    const tx = out.runtime.texts;
+    try testing.expectEqual(hintColor(&th).bitsOf(), tx.c.color[t.c.text[f + 2]]);
+    const c = t.find(.from("city"));
+    try testing.expectEqual(th.text.bitsOf(), tx.c.color[t.c.text[c + 2]]);
+    try testing.expectApproxEqAbs(4 * advance(&th), t.rect(c + 2).w(), 0.5);
+    // The caret is there but clear; no selection.
+    try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[f + 3].fill);
+    try testing.expectEqual(@as(f32, 0), t.rect(f + 1).w());
+    // Focused: the accent border, and the caret drawn at the editor's caret.
+    in.pointer = .{ box.x0 + 4, (t.rect(c).y0 + t.rect(c).y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    in.pointer = .{ 0, 0 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[c].border_color);
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[c + 3].fill);
+    const at: f32 = @floatFromInt(h.app.city.ed.caret);
+    try testing.expectApproxEqAbs(t.rect(c).x0 + th.pad + at * advance(&th), t.rect(c + 3).x0, 0.5);
+    try testing.expectEqual(@as(f32, 1), t.rect(c + 3).w());
 }
 
 test {
