@@ -137,6 +137,60 @@ pub fn onMark(th: *const Theme, left: f32, x: f32, depth: u8) bool {
     return x < left + list_zig.inset(th) + th.pad + @as(f32, @floatFromInt(depth)) * indent_px + mark_px + th.gap / 2;
 }
 
+// ---- behaviour: pure functions of the value and what happened -------------------------------
+
+/// The state after one key (WAI-ARIA APG tree view): Down and Up move among the visible items,
+/// Home and End to the first and last; Right expands a collapsed parent, or moves into an
+/// expanded one's first child; Left collapses an expanded parent, or moves to the parent.
+pub fn step(st: anytype, depths: []const u8, visible: []const u32, code: u8) void {
+    const km = &list_zig.default_keys;
+    const sel = st.selected;
+    const pos = positionOf(visible, sel);
+    // The selection is always visible (only it collapses, and a click selects what it
+    // toggles), but a state set from outside may hide it: then keys do nothing.
+    if (pos == none) return;
+    const last: u32 = @intCast(visible.len - 1);
+    const parent = hasChildren(depths, sel);
+    if (code == km.down) st.selected = visible[@min(pos + 1, last)];
+    if (code == km.up) st.selected = visible[pos -| 1];
+    if (code == km.home) st.selected = visible[0];
+    if (code == km.end) st.selected = visible[last];
+    if (code == km.right) {
+        if (parent and st.expanded[sel]) st.selected = sel + 1;
+        st.expanded[sel] = st.expanded[sel] or parent;
+    }
+    if (code == km.left) {
+        const up = parentOf(depths, sel);
+        if (!(parent and st.expanded[sel]) and up != none) st.selected = up;
+        st.expanded[sel] = false;
+    }
+}
+
+/// A click on visible row `pos`: selects its item, and toggles it when the click is on its
+/// disclosure mark.
+pub fn click(st: anytype, depths: []const u8, visible: []const u32, pos: u32, on_mark: bool) void {
+    const item = visible[pos];
+    st.selected = item;
+    st.expanded[item] = st.expanded[item] != (on_mark and hasChildren(depths, item));
+}
+
+/// One frame of input: a click, then this frame's keys while focused (press and repeat). The
+/// visible items are recomputed after each change; `scratch` holds them (one entry per item).
+pub fn update(st: anytype, th: *const Theme, depths: []const u8, r: Response, rect: types.Rect, in: *const Input, scratch: []u32) void {
+    var len = visibleItems(depths, &st.expanded, scratch);
+    if (r.clicked) {
+        const pos = rowAt(th, rect.y0, in.pointer[1], len);
+        click(st, depths, scratch[0..len], pos, onMark(th, rect.x0, in.pointer[0], depths[scratch[pos]]));
+        len = visibleItems(depths, &st.expanded, scratch);
+    }
+    if (!r.focused) return;
+    for (in.events) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        step(st, depths, scratch[0..len], e.code);
+        len = visibleItems(depths, &st.expanded, scratch);
+    }
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A tree view of `n` items, `labels` and `depths` in depth-first order, with `st` its state.
@@ -146,6 +200,7 @@ pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []co
     // opened; `interact` then marks it and reports the same response.
     const rect = f.lastRect(id);
     const pre = f.ctx.inter.response(id);
+    update(st, th, depths, pre, rect, f.in, &scratch);
     const len = visibleItems(depths, &st.expanded, &scratch);
     var s = treeStyle(th);
     s.border_color = list_zig.listBorder(th, pre.focused);
@@ -212,6 +267,16 @@ pub fn ComptimeTree(comptime S: type, comptime spec: Spec, comptime th: Theme) t
 
         pub fn frame(ui: *Self, in: *const Input) Output {
             const event = ui.pointer.step(in);
+            inline for (0..E.widget_count) |k| {
+                const v = comptime ct.fields(list_zig.nodeAt(spec, E.widget_nodes[k]));
+                const w = comptime E.widget(k);
+                var r = ui.pointer.response(w, in);
+                r.clicked = if (event) |e| e == w else false;
+                var st = @field(ui.signals.state, v.state);
+                var scratch: [v.n]u32 = undefined;
+                update(&st, &th, @field(ui.signals.state, v.depths), r, ui.pointer.rectOf(w), in, &scratch);
+                ui.signals.set(comptime field(v.state), st);
+            }
 
             const tb = ui.page.begin(in);
             var next: u32 = 0;
@@ -365,6 +430,54 @@ test "visibleItems, parentOf, hasChildren: the outline's structure" {
     try testing.expect(!hasChildren(&test_depths, 7));
     try testing.expectEqual(@as(u32, 1), positionOf(&.{ 0, 6 }, 6));
     try testing.expectEqual(none, positionOf(&.{ 0, 6 }, 3));
+}
+
+test "step, click: the behaviour as pure functions" {
+    const km = list_zig.default_keys;
+    var st: State(8) = .{};
+    var out: [8]u32 = undefined;
+    const Key = struct {
+        fn press(s: *State(8), o: *[8]u32, code: u8) void {
+            step(s, &test_depths, o[0..visibleItems(&test_depths, &s.expanded, o)], code);
+        }
+    };
+    Key.press(&st, &out, km.right); // expand src
+    try testing.expect(st.expanded[0]);
+    try testing.expectEqual(@as(u32, 0), st.selected);
+    Key.press(&st, &out, km.right); // into core
+    try testing.expectEqual(@as(u32, 1), st.selected);
+    Key.press(&st, &out, km.right); // expand core
+    Key.press(&st, &out, km.end);
+    try testing.expectEqual(@as(u32, 6), st.selected);
+    Key.press(&st, &out, km.up);
+    try testing.expectEqual(@as(u32, 4), st.selected);
+    Key.press(&st, &out, km.right); // expand widgets
+    Key.press(&st, &out, km.right); // into list.zig
+    try testing.expectEqual(@as(u32, 5), st.selected);
+    Key.press(&st, &out, km.right); // a leaf: nothing
+    try testing.expectEqual(@as(u32, 5), st.selected);
+    try testing.expect(!st.expanded[5]);
+    Key.press(&st, &out, km.left); // to widgets
+    try testing.expectEqual(@as(u32, 4), st.selected);
+    Key.press(&st, &out, km.left); // collapse widgets
+    try testing.expect(!st.expanded[4]);
+    Key.press(&st, &out, km.left); // to src
+    try testing.expectEqual(@as(u32, 0), st.selected);
+    Key.press(&st, &out, km.home);
+    Key.press(&st, &out, km.up);
+    try testing.expectEqual(@as(u32, 0), st.selected);
+    Key.press(&st, &out, km.left); // collapse src; at depth 0 there is no parent
+    try testing.expectEqual(@as(u32, 0), st.selected);
+    try testing.expect(!st.expanded[0]);
+    // Clicks: on the mark toggles a parent, elsewhere only selects; a leaf never toggles.
+    const vis = [_]u32{ 0, 6 };
+    click(&st, &test_depths, &vis, 1, false);
+    try testing.expectEqual(@as(u32, 6), st.selected);
+    try testing.expect(!st.expanded[6]);
+    click(&st, &test_depths, &vis, 1, true);
+    try testing.expect(st.expanded[6]);
+    click(&st, &test_depths, &.{7}, 0, true);
+    try testing.expect(!st.expanded[7]);
 }
 
 test "tree: both front ends agree; rows indent by depth" {
