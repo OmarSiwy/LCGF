@@ -9,22 +9,37 @@ const std = @import("std");
 const spec_zig = @import("spec.zig");
 const Spec = spec_zig.Spec;
 
-/// Fails compilation with a message naming the first broken rule. Rules: widget ids are unique.
-pub fn check(comptime spec: Spec) void {
+/// Fails compilation with a message naming the first broken rule of `spec` over the state
+/// struct `State`. Rules: widget ids are unique; a slider binds an f32 field and a checkbox a
+/// bool field.
+pub fn check(comptime State: type, comptime spec: Spec) void {
     comptime {
         var ids: []const [:0]const u8 = &.{};
-        walk(spec, &ids);
+        walk(State, spec, &ids);
     }
 }
 
-fn walk(comptime s: Spec, comptime ids: *[]const [:0]const u8) void {
+/// The state type a widget kind's binding needs; null for kinds that show any field.
+fn bindType(comptime kind: spec_zig.Kind) ?type {
+    return switch (kind) {
+        .slider => f32,
+        .checkbox => bool,
+        .col, .row, .label => null,
+    };
+}
+
+fn walk(comptime State: type, comptime s: Spec, comptime ids: *[]const [:0]const u8) void {
     // ponytail: ids are compared pairwise, O(ids^2) comptime work; a UI has tens of ids.
     @setEvalBranchQuota(1000 + 10 * ids.len * ids.len);
     if (s.id) |name| {
         for (ids.*) |seen| if (std.mem.eql(u8, seen, name)) @compileError("duplicate widget id '" ++ name ++ "'");
         ids.* = ids.* ++ [_][:0]const u8{name};
     }
-    for (s.children) |c| walk(c, ids);
+    if (s.bind) |field| if (bindType(s.kind)) |T| {
+        const FT = @FieldType(State, field);
+        if (FT != T) @compileError(@tagName(s.kind) ++ " '" ++ field ++ "' needs " ++ (if (T == f32) "an " else "a ") ++ @typeName(T) ++ " field, not " ++ @typeName(FT));
+    };
+    for (s.children) |c| walk(State, c, ids);
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -35,7 +50,9 @@ const label = spec_zig.label;
 const checkbox = spec_zig.checkbox;
 const slider = spec_zig.slider;
 
-/// The probe's usage spec.
+/// The probe's state struct and usage spec.
+const Mixer = struct { title: []const u8 = "Mixer", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
+
 const mixer = col(.{ .pad = @splat(8), .gap = 4 }, .{
     label(.title),
     row(.{ .gap = 8 }, .{ checkbox(.mute, .muted), slider(.volume, .volume) }),
@@ -43,7 +60,9 @@ const mixer = col(.{ .pad = @splat(8), .gap = 4 }, .{
 });
 
 test "check: the probe's mixer breaks no rule" {
-    comptime check(mixer);
+    comptime check(Mixer, mixer);
     // Two labels bound to one field are not a duplicate: only ids must be unique.
-    comptime check(col(.{}, .{ label(.title), label(.title) }));
+    comptime check(Mixer, col(.{}, .{ label(.title), label(.title) }));
+    // A label shows a field of any type.
+    comptime check(Mixer, col(.{}, .{ label(.volume), label(.muted) }));
 }
