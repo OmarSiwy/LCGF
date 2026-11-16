@@ -29,11 +29,13 @@ pub fn androidMain() void {
     var ctx = context.Context.init(&ctx_buffer, limits) catch return;
     var app: lcgr.shell_example.App = .{};
     shell.background = app.theme.panel;
-    // iface.run's loop, with the root padded by the safe area (a change of it alone, which is
-    // not Input, asks for a frame); the panel colour behind it fills the bars' strips.
+    // iface.run's loop, with the root padded by the safe area; a change of it, or a return
+    // from the background, is not Input, so it asks for a frame. The panel colour behind
+    // fills the bars' strips.
     var ev: lcgr.shell_iface.Events = .{};
     var safe = shell.safeArea();
     while (shell.poll(&ev)) {
+        if (shell.resumed()) ctx.waker.post();
         if (!std.meta.eql(shell.safeArea(), safe)) {
             safe = shell.safeArea();
             ctx.waker.post();

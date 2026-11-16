@@ -58,6 +58,9 @@ pub const Motion = struct {
     scroll: [2]f32 = .{ 0, 0 },
 };
 
+/// The activity lifecycle callbacks that change what the app may do.
+pub const Lifecycle = enum { start, resume_, pause, stop };
+
 /// The density at which one logical pixel is one physical pixel (ACONFIGURATION_DENSITY_MEDIUM).
 pub const density_default = 160;
 
@@ -108,6 +111,9 @@ pub const Translator = struct {
     /// The part of the window the system bars and cutouts leave the app
     /// (`onContentRectChanged`), physical pixels: left, top, right, bottom. Null: the whole window.
     content: ?[4]f32 = null,
+    /// A native window exists to draw into (between `onNativeWindowCreated` and
+    /// `onNativeWindowDestroyed`).
+    has_window: bool = false,
 
     pub const Buffers = mobile.Translator.Buffers;
 
@@ -119,7 +125,44 @@ pub const Translator = struct {
     /// `onNativeWindowResized`): `w` x `h` physical pixels.
     pub fn resize(t: *Translator, w: f32, h: f32) void {
         t.window = .{ w, h };
+        t.has_window = true;
         t.update();
+    }
+
+    /// The native window is gone (`onNativeWindowDestroyed`): the surface with it. Frames are
+    /// not shown until the next window; its size arrives with it.
+    pub fn windowLost(t: *Translator) void {
+        t.has_window = false;
+    }
+
+    /// The activity's lifecycle (`onStart`, `onResume`, `onPause`, `onStop`) as the mobile
+    /// model's state: resumed is active, started or paused is visible but not in front
+    /// (inactive), stopped is the background. Coming back from the background asks for a
+    /// frame (`takeResumed`).
+    pub fn lifecycle(t: *Translator, event: Lifecycle) void {
+        t.m.lifecycle(switch (event) {
+            .resume_ => .active,
+            .start, .pause => .inactive,
+            .stop => .background,
+        });
+    }
+
+    /// The window gained or lost input focus (`onWindowFocusChanged`): without it, held keys
+    /// and modifiers are let go, since their key-ups go elsewhere.
+    pub fn focus(t: *Translator, focused: bool) void {
+        if (focused) return;
+        t.m.in.keys = .{};
+        t.m.in.mods = .{};
+    }
+
+    /// Whether a frame can be shown: a window exists and the activity is not stopped.
+    pub fn visible(t: *const Translator) bool {
+        return t.has_window and t.m.visible();
+    }
+
+    /// True once after the activity returned from the background; see the mobile translator.
+    pub fn takeResumed(t: *Translator) bool {
+        return t.m.takeResumed();
     }
 
     /// The screen's density (`AConfiguration_getDensity`, dots per inch): 160 is one physical
@@ -295,6 +338,9 @@ pub fn utf8ToUtf16(utf8: []const u8, out: []u16) ?[]u16 {
 ///     # comment              blank lines and comments anywhere
 ///     frame                  starts a frame; the events below it arrive before its poll
 ///     window 1080 2400       the native window's size, physical pixels
+///     window_lost            onNativeWindowDestroyed
+///     start, resume, pause, stop   the activity's lifecycle callbacks
+///     focus 0                onWindowFocusChanged
 ///     density 420            the configuration's density, dpi
 ///     content 0 63 1080 2337 the content rect: left, top, right, bottom, window pixels
 ///     motion down 0 1,finger,37,25
@@ -314,7 +360,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { window, density, content, motion, wheel, key, characters, paste, destroy };
+    const Line = enum { window, window_lost, start, @"resume", pause, stop, focus, density, content, motion, wheel, key, characters, paste, destroy };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -332,6 +378,12 @@ pub const Replay = struct {
             switch (std.meta.stringToEnum(Line, w.next().?) orelse return error.Syntax) {
                 .window => t.resize(try num(&w), try num(&w)),
                 .destroy => t.destroy(),
+                .window_lost => t.windowLost(),
+                .start => t.lifecycle(.start),
+                .@"resume" => t.lifecycle(.resume_),
+                .pause => t.lifecycle(.pause),
+                .stop => t.lifecycle(.stop),
+                .focus => t.focus(try int(w.next() orelse return error.Syntax) != 0),
                 .paste => {
                     var line: [256]u8 = undefined;
                     var units: [256]u16 = undefined;
@@ -678,4 +730,53 @@ test "translate: the soft keyboard's keys type their characters, whole text arri
     // Nothing to compose: a NativeActivity's input connection keeps the IME's composition to
     // itself, so the frame's composition is empty.
     try testing.expectEqualStrings("", ev.composition.text);
+}
+
+test "translate: pause, stop, a lost surface and the way back" {
+    // Started and resumed with a window; a key held when the notification shade takes focus;
+    // paused, stopped (home), the surface destroyed; then back: started, a new window,
+    // resumed. Rotation recreating the window works the same way.
+    var r: Replay = .{ .src =
+        \\frame
+        \\start
+        \\window 1080 2400
+        \\resume
+        \\key down 59 1 0
+        \\frame
+        \\focus 0
+        \\pause
+        \\frame
+        \\stop
+        \\window_lost
+        \\frame
+        \\start
+        \\window 2400 1080
+        \\resume
+        \\focus 1
+    };
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    const want = [_]struct { visible: bool, shift: bool, resumed: bool, state: mobile.State }{
+        .{ .visible = true, .shift = true, .resumed = false, .state = .active },
+        .{ .visible = true, .shift = false, .resumed = false, .state = .inactive },
+        .{ .visible = false, .shift = false, .resumed = false, .state = .background },
+        .{ .visible = true, .shift = false, .resumed = true, .state = .active },
+    };
+    for (want) |w| {
+        try testing.expect(try r.next(&t));
+        try testing.expect(t.frame(&ev));
+        try testing.expectEqual(w.visible, t.visible());
+        try testing.expectEqual(w.shift, ev.in.keys.down(0xe1));
+        try testing.expectEqual(w.resumed, t.takeResumed());
+        try testing.expectEqual(w.state, t.m.state);
+    }
+    try testing.expectEqual([2]f32{ 2400, 1080 }, ev.in.viewport);
+    // A stopped activity with a window still shows nothing; a resumed one without, nothing.
+    t.lifecycle(.stop);
+    try testing.expect(!t.visible());
+    t.lifecycle(.resume_);
+    t.windowLost();
+    try testing.expect(!t.visible());
 }

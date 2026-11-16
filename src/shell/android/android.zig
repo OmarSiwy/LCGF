@@ -164,6 +164,9 @@ const Shared = struct {
     destroyed: bool = false,
     /// The content rect (`onContentRectChanged`), window pixels; null before the first.
     content: ?ARect = null,
+    /// Lifecycle callbacks and focus changes in the order they came, since the last sync.
+    life: [16]Life = undefined,
+    n_life: u32 = 0,
     /// The shell's thread's looper, for `ALooper_wake`; null until its thread runs.
     looper: ?*ALooper = null,
     /// The host loop is running (a shell exists to apply changes).
@@ -209,6 +212,40 @@ fn setResized(s: *Shared) void {
 }
 fn setDestroyed(s: *Shared) void {
     s.destroyed = true;
+}
+/// A lifecycle callback or a focus change, queued for the shell's thread in order (a stop and
+/// a start between two polls must both be seen).
+const Life = union(enum) { lifecycle: translate.Lifecycle, focus: bool };
+var pending_life: Life = undefined;
+fn pushLife(s: *Shared) void {
+    // ponytail: more than 16 between two polls drops the oldest; the last ones decide the state.
+    if (s.n_life == s.life.len) {
+        std.mem.copyForwards(Life, s.life[0 .. s.life.len - 1], s.life[1..]);
+        s.n_life -= 1;
+    }
+    s.life[s.n_life] = pending_life;
+    s.n_life += 1;
+}
+fn onLife(event: Life) void {
+    lock();
+    pending_life = event;
+    unlock();
+    post(pushLife, false);
+}
+fn onStart(_: Act) callconv(.c) void {
+    onLife(.{ .lifecycle = .start });
+}
+fn onResume(_: Act) callconv(.c) void {
+    onLife(.{ .lifecycle = .resume_ });
+}
+fn onPause(_: Act) callconv(.c) void {
+    onLife(.{ .lifecycle = .pause });
+}
+fn onStop(_: Act) callconv(.c) void {
+    onLife(.{ .lifecycle = .stop });
+}
+fn onWindowFocusChanged(_: Act, focused: c_int) callconv(.c) void {
+    onLife(.{ .focus = focused != 0 });
 }
 var pending_content: ARect = undefined;
 fn setContent(s: *Shared) void {
@@ -259,6 +296,11 @@ pub export fn ANativeActivity_onCreate(activity: Act, _: ?*anyopaque, _: usize) 
     cb.onInputQueueDestroyed = &onInputQueueDestroyed;
     cb.onDestroy = &onDestroy;
     cb.onContentRectChanged = &onContentRectChanged;
+    cb.onStart = &onStart;
+    cb.onResume = &onResume;
+    cb.onPause = &onPause;
+    cb.onStop = &onStop;
+    cb.onWindowFocusChanged = &onWindowFocusChanged;
     cb.onConfigurationChanged = &onConfigurationChanged;
     lock();
     shared.activity = activity;
@@ -403,6 +445,8 @@ pub const Android = struct {
     /// the clipboard, the soft keyboard. Null if the VM refused the thread.
     env: ?jni.Env = null,
     vm: ?*anyopaque = null,
+    /// Surfaces or devices made again after a loss.
+    recovered: u32 = 0,
     /// The soft keyboard was asked up.
     keyboard: bool = false,
 
@@ -467,9 +511,14 @@ pub const Android = struct {
         const window = if (s.target) |tg| tg.window else null;
         if (shared.window != window) {
             s.dropTarget();
-            if (shared.window) |w| s.makeTarget(w);
+            if (shared.window) |w| s.makeTarget(w) else s.t.windowLost();
         }
         if (shared.destroyed) s.t.destroy();
+        for (shared.life[0..shared.n_life]) |l| switch (l) {
+            .lifecycle => |e| s.t.lifecycle(e),
+            .focus => |f| s.t.focus(f),
+        };
+        shared.n_life = 0;
         if (shared.activity) |a| s.t.setDensity(density(a));
         if (shared.content) |r| s.t.setContent(@floatFromInt(r.left), @floatFromInt(r.top), @floatFromInt(r.right), @floatFromInt(r.bottom));
         shared.resized = false;
@@ -485,6 +534,12 @@ pub const Android = struct {
         defer AConfiguration_delete(config);
         AConfiguration_fromAssetManager(config, assets);
         return @intCast(@max(AConfiguration_getDensity(config), 0));
+    }
+
+    /// True once after the activity returned from the background: build a frame (post the
+    /// context's waker), since frames built while it was away were not shown.
+    pub fn resumed(s: *Android) bool {
+        return s.t.takeResumed();
     }
 
     /// The safe area as root padding (`Style.pad`): what the status bar, the navigation bar
@@ -680,10 +735,26 @@ pub const Android = struct {
     /// Draws the frame into the next swapchain image and presents it. A changed or lost
     /// swapchain (rotation, resize) is rebuilt at the window's size for the next frame.
     pub fn present(s: *Android, out: *const Output) void {
+        // Stopped, or between windows: nothing is on screen, and the surface may be gone.
+        if (!s.t.visible()) return;
         const tg = &(s.target orelse return);
         const g = &s.gpu.?;
         s.draw(tg, g, out) catch |e| switch (e) {
             error.OutOfDate => s.rebuild(tg, g),
+            // The surface or the whole device is gone (a GPU reset, a driver update): make them
+            // again over the same window, the device too when it was lost. The next frame draws.
+            error.SurfaceLost, error.DeviceLost => {
+                const window = tg.window;
+                ANativeWindow_acquire(window);
+                defer ANativeWindow_release(window);
+                s.dropTarget();
+                if (e == error.DeviceLost) {
+                    g.deinit();
+                    s.gpu = null;
+                }
+                s.makeTarget(window);
+                s.recovered += 1;
+            },
             else => logError("present: {t}", .{e}),
         };
     }
@@ -717,7 +788,8 @@ pub const Android = struct {
     /// `.display` waits one refresh (FIFO presentation paces it too).
     pub fn wait(s: *Android, seconds: f32, pace: Pace) void {
         if (s.woken.load(.acquire) or s.t.m.pending()) return;
-        const secs = if (pace == .display) 1 / s.hz else seconds;
+        // Nothing is shown while stopped or without a window: timers and animations wait.
+        const secs = if (!s.t.visible()) std.math.inf(f32) else if (pace == .display) 1 / s.hz else seconds;
         if (!(secs > 0)) return;
         // Past ~24 days the milliseconds would not fit: wait without a timeout.
         const ms: c_int = if (secs >= 2e6) -1 else @intFromFloat(@ceil(secs * 1000));
