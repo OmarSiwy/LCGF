@@ -94,7 +94,9 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
     m.c.id[slot] = k;
     m.c.node[slot] = t.len;
     m.c.frame[slot] = ctx.frame;
-    m.c.stamp[slot] = stamp;
+    // A rebuild caused by the pointer is followed by one more, so hover and press visuals are
+    // not frozen into the copy: the stored stamp cannot match the next frame's.
+    m.c.stamp[slot] = stamp ^ @intFromBool(touched);
 
     // The one coarse branch: copying and rebuilding are different work.
     if (!ok) return false;
@@ -190,6 +192,8 @@ fn Fixture(comptime limits: @import("context.zig").Limits) type {
 
 const id_panel = Id.from("panel");
 const id_item = Id.from("item");
+const hot = types.Color.rgb(200, 0, 0);
+const cold = types.Color.rgb(0, 0, 200);
 
 /// `lead` anonymous leaves, then a reusable panel holding a hoverable item, `items` labels and
 /// a custom draw, then a trailing label. `builds` counts the frames that built the panel.
@@ -207,7 +211,8 @@ const Scene = struct {
             s.builds += 1;
             _ = f.open(id_panel, .{ .size = .{ .px(100), .fill }, .pad = @splat(4), .gap = 2 });
             const item = f.leaf(id_item, .{ .size = .{ .fill, .px(20) } });
-            _ = f.interact(item, .button);
+            const r = f.interact(item, .button);
+            f.setFill(item, if (r.hovered) hot else cold);
             var name: [16]u8 = undefined;
             for (0..s.items) |i| _ = f.text(std.fmt.bufPrint(&name, "row {d}", .{i}) catch "?", .{ .px = 10 });
             _ = f.custom(.from("swatch"), .{ .size = .{ .px(8), .px(8) } }, 9);
@@ -306,6 +311,30 @@ test "reuse: the pointer over the subtree forces a rebuild" {
     try testing.expectEqual(@as(u32, 2), s.builds);
     out = s.frame(&ctx, &in);
     try testing.expectEqual(@as(u32, 3), s.builds);
+}
+
+test "reuse: after the pointer leaves, one more rebuild clears the hover, then reuse resumes" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 16, .customs = 4, .strings = 512, .signals = 4, .memos = 4, .depth = 8 });
+    var ctx = try Fx.context();
+    var s: Scene = .{ .sig = ctx.signals.create() };
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var out = s.frame(&ctx, &in);
+    const r = out.tree.rect(out.tree.find(id_item));
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    _ = s.frame(&ctx, &in);
+    out = s.frame(&ctx, &in);
+    try testing.expectEqual(hot.bitsOf(), out.tree.c.look[out.tree.find(id_item)].fill);
+    const hovering = s.builds;
+
+    in.pointer = .{ 390, 290 };
+    // Nothing in the subtree is touched now, but the copy would carry the hover colour: the
+    // memo of a touched build never matches, so this frame rebuilds once.
+    out = s.frame(&ctx, &in);
+    try testing.expectEqual(hovering + 1, s.builds);
+    try testing.expectEqual(cold.bitsOf(), out.tree.c.look[out.tree.find(id_item)].fill);
+    for (0..3) |_| out = s.frame(&ctx, &in);
+    try testing.expectEqual(hovering + 1, s.builds);
+    try testing.expectEqual(cold.bitsOf(), out.tree.c.look[out.tree.find(id_item)].fill);
 }
 
 test "reuse: no room for the copy means a rebuild, never an overflow" {
