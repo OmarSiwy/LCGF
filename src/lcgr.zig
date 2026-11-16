@@ -69,6 +69,13 @@ pub const text_stack = @import("text/layout/stack.zig");
 pub const text_layout_tests = @import("text/layout/tests.zig");
 pub const scheduler = @import("runtime/scheduler.zig");
 pub const widgets_base = @import("widgets/base.zig");
+pub const widgets_list = @import("widgets/list.zig");
+pub const widgets_vlist = @import("widgets/vlist.zig");
+pub const widgets_table = @import("widgets/table.zig");
+pub const widgets_tree = @import("widgets/tree.zig");
+pub const widgets_progress = @import("widgets/progress.zig");
+pub const widgets_spinner = @import("widgets/spinner.zig");
+pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
 pub const widgets_card = @import("widgets/card.zig");
 pub const widgets_separator = @import("widgets/separator.zig");
 pub const widgets_check = @import("widgets/check.zig");
@@ -87,6 +94,8 @@ pub const text_moves = @import("text/edit/moves.zig");
 pub const text_edit = @import("text/edit/edit.zig");
 pub const text_history = @import("text/edit/history.zig");
 pub const text_edit_tests = @import("text/edit/tests.zig");
+pub const shell_iface = @import("shell/iface.zig");
+pub const shell_example = @import("shell/example.zig");
 
 test {
     std.testing.refAllDecls(@This());

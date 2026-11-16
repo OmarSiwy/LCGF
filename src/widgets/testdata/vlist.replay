@@ -1,0 +1,41 @@
+# Recorded input for the virtual list example (widgets/vlist.zig, `Example`), at 320 x 240 in the
+# default theme: 200 options, five 30 px rows on screen, the list at x 16..136 and y 41.5..195.5.
+# Keys are USB HID usage ids: 82 Up, 74 Home, 77 End. A wheel notch is one row (30 px).
+# 0: rest
+frame
+viewport 320 240
+dt 0.016
+pointer 300 220
+# 1: hover the second row
+frame
+pointer 60 88
+# 2: two notches down: rows from Item 2
+frame
+wheel 0 2
+# 3: half a notch more: Item 2 half scrolled out
+frame
+wheel 0 0.5
+# 4: press the row under the pointer (Item 3)
+frame
+buttons left
+# 5: release: Item 3 selected (already whole on screen: no scroll), the list focused
+frame
+buttons
+# 6: End: Item 199, scrolled to the bottom
+frame
+press 77
+# 7: Up: Item 198
+frame
+press 82
+# 8: type i: the next option starting with i, Item 199
+frame
+text i
+# 9: Home: Item 0, scrolled to the top
+frame
+press 74
+# 10: wheel up past the top: stays at 0
+frame
+wheel 0 -3
+# 11: wheel far down: clamped to the last row at the bottom
+frame
+wheel 0 1000
