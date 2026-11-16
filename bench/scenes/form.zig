@@ -18,8 +18,8 @@ fn input(in: *ui.Input, k: u32) void {
     in.pointer = .{ @floatFromInt(20 + (k * 7) % 760), @floatFromInt(20 + (k * 13) % 560) };
 }
 
-/// Root, form, title and separator (4), 21 fields of 9 nodes, a footer of 7: 200 nodes.
-fn build(f: *ui.Frame, th: *const ui.Theme) void {
+/// Shared with the idle scene. Root, form, title and separator (4), 21 fields of 9 nodes, a footer of 7: 200 nodes.
+pub fn build(f: *ui.Frame, th: *const ui.Theme) void {
     const base = ui.Id.from("form");
     _ = f.open(base, .{ .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 4, .fill = th.panel });
     _ = f.text("Account settings", .{ .px = 20, .color = th.text });

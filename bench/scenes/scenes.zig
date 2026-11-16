@@ -20,4 +20,5 @@ pub const list = [_]Scene{
     @import("text.zig").scene,
     @import("springs.zig").scene,
     @import("resize.zig").scene,
+    @import("idle.zig").scene,
 };

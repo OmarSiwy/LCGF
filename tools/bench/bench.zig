@@ -310,6 +310,8 @@ pub fn main(init: std.process.Init) !void {
         for (5..pass_names.len, 3..) |p, j| samples[p][b] = m[j + 1] - m[j];
         built += 1;
     }
+    // Target D5: with input that never changes, only the first frame and its settle frame are built.
+    if (scene.idle and built > 2) return error.WorkWhileIdle;
 
     var buf: [4096]u8 = undefined;
     var out = std.Io.File.stdout().writerStreaming(init.io, &buf);
