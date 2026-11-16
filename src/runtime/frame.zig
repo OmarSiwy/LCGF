@@ -6,6 +6,11 @@ const Context = @import("context.zig").Context;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
+const types = @import("../core/types.zig");
+const simd = @import("../core/simd.zig");
+const Id = types.Id;
+const Node = types.Node;
+const Style = types.Style;
 
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
@@ -21,4 +26,102 @@ pub const Frame = struct {
     pub fn prevTree(f: *const Frame) *const Tree {
         return &f.ctx.trees[f.ctx.cur ^ 1];
     }
+
+    // ---- building -----------------------------------------------------------
+
+    /// Starts a node. Everything created until the matching `close` is its child.
+    pub fn open(f: *Frame, id: Id, style: Style) Node {
+        const ctx = f.ctx;
+        const i = f.tree().push(ctx.stack[ctx.depth - 1], id, &style);
+        // Too deep: the deepest slot is reused, so the stack is never written out of bounds.
+        const d = @min(ctx.depth, ctx.limits.depth - 1);
+        ctx.status.depth = simd.orB(ctx.status.depth, ctx.depth >= ctx.limits.depth);
+        ctx.stack[d] = i;
+        ctx.depth = d + 1;
+        return @fromBackingInt(i);
+    }
+
+    pub fn close(f: *Frame) void {
+        const ctx = f.ctx;
+        // Never pops the root, even if calls are unbalanced.
+        const d = @max(ctx.depth, 2) - 1;
+        f.tree().seal(ctx.stack[d]);
+        ctx.depth = d;
+    }
+
+    /// A node with no children. Same as `open` then `close`.
+    pub fn leaf(f: *Frame, id: Id, style: Style) Node {
+        const n = f.open(id, style);
+        f.close();
+        return n;
+    }
 };
+
+const std = @import("std");
+const testing = std.testing;
+const mem = @import("../core/mem.zig");
+
+/// A context over a static buffer, for tests.
+fn Fixture(comptime limits: @import("context.zig").Limits) type {
+    return struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+        fn context() !Context {
+            return Context.init(&buffer, limits);
+        }
+    };
+}
+
+test "open, close, leaf: children nest under the open node, in depth-first rows" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 4, .customs = 2, .strings = 64, .depth = 8 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    const a = f.open(.from("a"), .{});
+    const a1 = f.leaf(.from("a1"), .{});
+    const a2 = f.open(.from("a2"), .{});
+    const a21 = f.leaf(.none, .{});
+    f.close();
+    f.close();
+    const b = f.leaf(.from("b"), .{});
+    const t = f.tree();
+    try testing.expectEqual(@as(u32, 6), t.len);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 1, 3, 0 }, t.c.parent[0..6]);
+    try testing.expectEqual(@as(u32, 5), t.c.end[a.ix()]);
+    try testing.expectEqual(a1.ix() + 1, t.c.end[a1.ix()]);
+    try testing.expectEqual(@as(u32, 5), t.c.end[a2.ix()]);
+    try testing.expectEqual(a21.ix() + 1, t.c.end[a21.ix()]);
+    try testing.expectEqual(@as(u32, 6), t.c.end[b.ix()]);
+    try testing.expectEqual(@as(f32, 2), t.c.nkids[0]);
+    try testing.expectEqual(b.ix(), t.find(.from("b")));
+    try testing.expectEqual(@as(u32, 1), ctx.depth);
+    try testing.expect(ctx.status.ok());
+}
+
+test "close: unbalanced calls never pop the root" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .depth = 4 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    f.close();
+    f.close();
+    try testing.expectEqual(@as(u32, 1), ctx.depth);
+    const n = f.leaf(.none, .{});
+    try testing.expectEqual(@as(u32, 0), f.tree().c.parent[n.ix()]);
+}
+
+test "open: nesting past the depth limit is reported, not written out of bounds" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 1, .customs = 1, .strings = 16, .depth = 3 });
+    var ctx = try Fx.context();
+    const in: Input = .{};
+    var f = ctx.begin(&in);
+    for (0..2) |_| _ = f.open(.none, .{});
+    try testing.expect(!ctx.status.depth);
+    for (0..5) |_| _ = f.open(.none, .{});
+    try testing.expect(ctx.status.depth);
+    try testing.expectEqual(@as(u32, 3), ctx.depth);
+    for (0..10) |_| f.close();
+    try testing.expectEqual(@as(u32, 1), ctx.depth);
+    // The next frame starts clean.
+    _ = ctx.begin(&in);
+    try testing.expect(ctx.status.ok());
+}

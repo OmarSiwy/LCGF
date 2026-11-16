@@ -26,6 +26,21 @@ pub const Limits = struct {
     depth: u32 = 64,
 };
 
+/// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
+/// is simply incomplete and says so here.
+pub const Status = bitpack struct(u8) {
+    nodes: bool = false,
+    texts: bool = false,
+    customs: bool = false,
+    strings: bool = false,
+    depth: bool = false,
+    _: u3 = 0,
+
+    pub fn ok(s: Status) bool {
+        return @as(u8, @bitCast(s)) == 0;
+    }
+};
+
 /// Everything that outlives a frame. Holds no pointers the caller did not hand it: all storage
 /// is carved from the buffer passed to `init`.
 pub const Context = struct {
@@ -42,6 +57,7 @@ pub const Context = struct {
     stack: []u32,
     depth: u32 = 0,
     inter: Interaction = .{},
+    status: Status = .{},
     frame: u32 = 0,
     /// Frames still owed after the last input change.
     settle: u32 = 0,
@@ -92,6 +108,7 @@ pub const Context = struct {
         ctx.texts[ctx.cur].reset();
         ctx.customs[ctx.cur].reset();
         ctx.strings[ctx.cur].reset();
+        ctx.status = .{};
         ctx.frame +%= 1;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
