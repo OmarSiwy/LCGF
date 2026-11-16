@@ -59,6 +59,30 @@ export fn p_anchor(t: *Tree, an: *const lcgr.overlay.Anchors) void {
 export fn p_order(t: *const Tree, ly: *lcgr.overlay.Layers) void {
     lcgr.overlay.order(t, ly);
 }
+export fn p_extent(t: *const Tree, out: *const [2][]f32) void {
+    lcgr.scroll.extent(t, out.*);
+}
+export fn p_clamp(t: *Tree, ext: *const [2][]const f32) void {
+    lcgr.scroll.clamp(t, ext.*);
+}
+export fn p_stick(t: *Tree, st: *const lcgr.scroll.Sticky) void {
+    lcgr.scroll.stick(t, st);
+}
+export fn p_grid_fit(t: *Tree, gs: *lcgr.grid.Grids) void {
+    lcgr.grid.fit(t, gs, .x);
+}
+export fn p_grid_resolve(t: *Tree, gs: *lcgr.grid.Grids) void {
+    lcgr.grid.resolve(t, gs, .x, 800);
+}
+export fn p_direction(t: *const Tree, r: *lcgr.rtl.Rtl) void {
+    lcgr.rtl.direction(t, r);
+}
+export fn p_start_end(t: *Tree, r: *const lcgr.rtl.Rtl) void {
+    lcgr.rtl.startEnd(t, r);
+}
+export fn p_mirror(t: *Tree, r: *lcgr.rtl.Rtl) void {
+    lcgr.rtl.mirror(t, r);
+}
 export fn p_fit_flex(t: *Tree, fx: *const lcgr.flex.Flex) void {
     lcgr.layout.fitFlex(t, fx, .y);
 }
