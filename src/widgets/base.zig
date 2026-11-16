@@ -154,14 +154,8 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
 
 pub const labelText = label_zig.labelText;
 
-pub fn buttonStyle(th: *const Theme) Style {
-    return .{ .dir = .x, .pad = @splat(th.pad), .radius = th.radius, .main = .center, .cross = .center, .role = .button };
-}
-
-/// State selects the colour by table index.
-pub fn buttonFill(th: *const Theme, r: Response) Color {
-    return th.controlFills()[stateIndex(r)];
-}
+pub const buttonStyle = button_zig.buttonStyle;
+pub const buttonFill = button_zig.buttonFill;
 
 pub fn checkboxStyle(th: *const Theme) Style {
     return .{ .dir = .x, .gap = th.gap, .cross = .center, .role = .checkbox };
