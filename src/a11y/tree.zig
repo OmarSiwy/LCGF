@@ -93,6 +93,8 @@ pub const Role = enum(u8) {
     /// A clipped viewport whose content scrolls (AccessKit's ScrollView; ARIA has none and
     /// leaves it a group).
     scroll_view,
+    /// A text input for a search query (ARIA's searchbox; AccessKit's SearchInput).
+    search_box,
 };
 
 /// The name of the role in a raw role byte, as in `Role` (`"tab"`, `"toggle_button"`), or

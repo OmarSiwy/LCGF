@@ -103,6 +103,7 @@ pub const roles: [256]c.Role = blk: {
         // AccessKit's toggle button is a button with `toggled` (`offers`).
         .toggle_button => .button,
         .scroll_view => .scroll_view,
+        .search_box => .search_input,
     };
     break :blk m;
 };
@@ -125,7 +126,7 @@ const offers: [256]Offers = blk: {
     for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio, .toggle_button }) |r|
         m[@backingInt(r)] = .{ .click = true, .focus = true, .toggle = true };
     for ([_]Role{ .slider, .spin_button, .scroll_bar }) |r| m[@backingInt(r)] = .{ .focus = true, .value = true };
-    m[@backingInt(Role.text_input)] = .{ .focus = true };
+    for ([_]Role{ .text_input, .search_box }) |r| m[@backingInt(r)] = .{ .focus = true };
     // Shown, not set.
     for ([_]Role{ .meter, .progress_bar }) |r| m[@backingInt(r)] = .{ .value = true };
     break :blk m;
@@ -711,6 +712,9 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     t.seal(name);
     const city = t.push(root, .from("city"), &.{ .role = .text_input });
     t.seal(city);
+    const find = t.push(root, .from("find"), &.{});
+    t.c.role[find] = @backingInt(Role.search_box);
+    t.seal(find);
     t.seal(root);
     a11y.setText(&f.s, name, &f.str, "", "Your name");
     a11y.setText(&f.s, city, &f.str, "Oslo", "");
@@ -724,6 +728,7 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     try expectHas(d, "value: \"Oslo\"");
     try testing.expectEqual(1, std.mem.count(u8, d, "placeholder"));
     // Oslo's text as a run under it, which a screen reader reads; the empty field has none.
+    try expectHas(d, "role: SearchInput");
     try expectHas(d, "TextRun");
     try expectHas(d, "character_lengths: [1, 1, 1, 1]");
     try testing.expectEqual(1, std.mem.count(u8, d, "TextRun"));

@@ -27,6 +27,7 @@ pub const Role = enum(u8) {
     check_box = 15,
     radio_button = 16,
     text_input = 17,
+    search_input = 32,
     button = 18,
     row_header = 21,
     column_header = 22,

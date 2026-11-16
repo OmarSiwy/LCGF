@@ -108,11 +108,13 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, clear_clicked: 
 
 // ---- accessibility --------------------------------------------------------------------------
 
-/// Roles of the box (a search landmark around the field) and of the clear button (a button
-/// while shown, presentational otherwise), written to rows `box` and `button` of `t`.
+/// Roles of the box (a search landmark around the field), of the field (a search box, its
+/// first child) and of the clear button (a button while shown, presentational otherwise),
+/// written to rows `box`, `box + 1` and `button` of `t`.
 pub fn expose(t: *Tree, box: u32, button: u32, shown: bool) void {
     const roles = [2]a11y.Role{ .none, .button };
     t.c.role[box] = @backingInt(a11y.Role.search);
+    t.c.role[box + 1] = @backingInt(a11y.Role.search_box);
     t.c.role[button] = @backingInt(roles[@intFromBool(shown)]);
 }
 
@@ -315,7 +317,7 @@ test "search: the page agrees in both front ends; the clear button only shows wi
     // root, panel, caption, box, field and its three rows, button and its caption.
     try testing.expectEqual(@as(u32, 10), t.len);
     try testing.expectEqual(@backingInt(a11y.Role.search), t.c.role[f - 1]);
-    try testing.expectEqual(@backingInt(a11y.Role.text_input), t.c.role[f]);
+    try testing.expectEqual(@backingInt(a11y.Role.search_box), t.c.role[f]);
     const b = t.find(clearId(.from("find")));
     try testing.expectEqual(@as(u8, 0), t.c.role[b]);
     try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[b].fill);
@@ -360,7 +362,7 @@ test "search look: one inset box around the field and the button; the button lig
 
 var search_semantics: base.Semantic(16) = .{};
 
-test "search a11y: a search landmark holding the text input and, with text, a Clear button" {
+test "search a11y: a search landmark holding the search box and, with text, a Clear button" {
     const h = &page;
     h.init();
     var in: Input = .{ .viewport = .{ 320, 100 } };
@@ -377,7 +379,7 @@ test "search a11y: a search landmark holding the text input and, with text, a Cl
     const box = x.row(f - 1).?;
     try testing.expectEqual(@backingInt(a11y.Role.search), x.out[0].c.role[box]);
     const r = x.row(f).?;
-    try testing.expectEqual(@backingInt(a11y.Role.text_input), x.out[0].c.role[r]);
+    try testing.expectEqual(@backingInt(a11y.Role.search_box), x.out[0].c.role[r]);
     try testing.expectEqual(box, x.out[0].c.parent[r]);
     const br = x.row(b).?;
     try testing.expectEqual(@backingInt(a11y.Role.button), x.out[0].c.role[br]);

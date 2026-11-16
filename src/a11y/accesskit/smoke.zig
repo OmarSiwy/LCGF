@@ -4,11 +4,11 @@
 //!
 //!     accesskit-smoke SECONDS
 //!
-//! Below the example it adds a text field, Title, holding "Untitled", so the screen reader has
-//! a field's text to read.
+//! Below the example it adds a text field, Title, holding "Untitled", and a search field,
+//! Find, holding "zig", so the screen reader has a field's text to read and a search box.
 //!
 //! Runs for SECONDS. A second after a screen reader connects, it starts moving keyboard focus
-//! round Reset, Wireframe, Exposure and Title (as Tab would), one a second, so the screen
+//! round Reset, Wireframe, Exposure, Title and Find (as Tab would), one a second, so the screen
 //! reader announces each. Prints `ready` when the adapter exists, `connected` when the first update
 //! went out, then a line whenever the application's state changes (`resets=1`,
 //! `wireframe=true`, `focus=exposure`), so a test can drive it from the screen reader's side and
@@ -22,7 +22,10 @@ const example = lcgr.shell_example;
 const Context = lcgr.context.Context;
 const tf = lcgr.widgets_textfield;
 
+const search = lcgr.widgets_search;
+
 const id_title = lcgr.types.Id.from("title");
+const id_find = lcgr.types.Id.from("find");
 
 const limits: lcgr.context.Limits = .{ .nodes = 1024, .texts = 256 };
 var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
@@ -41,6 +44,7 @@ pub fn main(init: std.process.Init) !void {
     host.init("LCGR example", &ctx, null);
     var app: example.App = .{};
     var title: tf.Text(32) = .init("Untitled");
+    var find: tf.Text(32) = .init("zig");
     var ev: lcgr.shell_iface.Events = .{};
     ev.in.viewport = .{ 800, 600 };
 
@@ -50,8 +54,8 @@ pub fn main(init: std.process.Init) !void {
     try w.writeAll("ready\n");
     try w.flush();
 
-    const tour = [_]lcgr.types.Id{ example.id_reset, example.id_wire, example.id_exposure, id_title };
-    const names = [_][]const u8{ "reset", "wireframe", "exposure", "title" };
+    const tour = [_]lcgr.types.Id{ example.id_reset, example.id_wire, example.id_exposure, id_title, id_find };
+    const names = [_][]const u8{ "reset", "wireframe", "exposure", "title", "find" };
     var acts_buf: [bridge.Bridge.queue_len + 1]a11y.Action = undefined;
     var seen: example.App = app;
     var seen_focus: u32 = 0;
@@ -79,10 +83,14 @@ pub fn main(init: std.process.Init) !void {
             app.build(&f, &ev);
             const caption = lcgr.widgets_base.label(&f, &app.theme, "Title");
             _ = tf.textfield(&f, &app.theme, id_title, &title, "Document title");
+            const find_caption = lcgr.widgets_base.label(&f, &app.theme, "Find");
+            _ = search.search(&f, &app.theme, id_find, &find, "Search");
             const out = f.end(.{});
             app.semantics(out.tree, &host.s, &ctx.strings[ctx.cur]);
             tf.semantics(out.tree, &host.s, id_title, caption.ix());
             tf.textValue(out.tree, &host.s, &ctx.strings[ctx.cur], id_title, &title, "Document title");
+            search.semantics(out.tree, &host.s, id_find, find_caption.ix());
+            search.textValue(out.tree, &host.s, &ctx.strings[ctx.cur], id_find, &find, "Search");
             host.frame(&ctx, &out);
             ak.update(&host.b);
         }

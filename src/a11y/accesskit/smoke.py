@@ -129,7 +129,7 @@ print("ok   actions: AT-SPI clicks on Reset and Wireframe ran in the example")
 # 3. Orca, while the example moves focus round Reset, Wireframe and Exposure.
 orca_log = os.path.join(out, "orca.log")
 start(["orca", "--debug", "--debug-file=" + orca_log], "orca.out")
-expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled"]
+expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled", "'Find entry zig"]
 spoken = []
 
 
@@ -143,6 +143,6 @@ def heard():
 wait_for(heard, lambda: "Orca to announce %s (it said %r)" % (expected, spoken), seconds=20)
 for s in spoken:
     print("     orca: " + s.split("{")[0])
-print("ok   orca announced the window, Reset, Wireframe (checked), the Exposure slider at a quarter of its range and the Title field's text")
+print("ok   orca announced the window, Reset, Wireframe (checked), the Exposure slider at a quarter of its range, and the Title and Find fields' text")
 for p in procs:
     p.kill()
