@@ -597,7 +597,6 @@ pub const Tree = struct {
         }
         const fl = b01(!s.float);
         c.gap[i] = s.gap;
-        c.nkids[i] = 0;
         c.flow[i] = fl;
         c.shrink[i] = b01(s.shrink);
         c.align_main[i] = Align.factor[@backingInt(s.main)];
@@ -620,8 +619,10 @@ pub const Tree = struct {
         c.value[i] = s.value;
         c.text[i] = none;
         c.custom[i] = none;
-        // The root is its own parent and must not count itself.
-        c.nkids[parent] += fl * b01(i != 0);
+        // Count in the parent, then clear the own count: the root is its own parent, so this
+        // removes its self-count without an `i != 0` test (Zig 0.18 branched on it).
+        c.nkids[parent] += fl;
+        c.nkids[i] = 0;
         return i;
     }
 

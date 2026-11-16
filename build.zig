@@ -1,14 +1,6 @@
 //! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
-//!   zig build                      compile the library module
-//!   zig build test                 run every test reachable from src/lcgr.zig
-//!   zig build test -Dcpu=x86_64_v3 same, with 8 SIMD lanes on x86-64
-//!   zig build test -Dlanes=16      same, with the SIMD lane count forced (simd.lanes)
-//!   zig build test-build           compile the tests only, e.g. with -Dtarget=aarch64-linux
-//!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
-//!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
-//!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
-//!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
+//! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -32,8 +24,10 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
     }) }));
     const ucd_tables = ucd_gen.addOutputFileArg("unicode_tables.zig");
-    for ([_][]const u8{ "GraphemeBreakProperty", "emoji-data", "DerivedCoreProperties", "WordBreakProperty", "LineBreak", "EastAsianWidth", "DerivedGeneralCategory", "DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
-        ucd_gen.addFileArg(b.path(b.fmt("src/text/unicode/data/{s}.txt", .{f})));
+    // The Unicode Character Database 16.0.0, a build.zig.zon dependency (UCD.zip, pinned hash).
+    const ucd = b.dependency("ucd", .{});
+    for ([_][]const u8{ "auxiliary/GraphemeBreakProperty", "emoji/emoji-data", "DerivedCoreProperties", "auxiliary/WordBreakProperty", "LineBreak", "EastAsianWidth", "extracted/DerivedGeneralCategory", "extracted/DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
+        ucd_gen.addFileArg(ucd.path(b.fmt("{s}.txt", .{f})));
     lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
 
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
@@ -51,18 +45,41 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    for ([_][]const u8{ "auxiliary/GraphemeBreakTest", "auxiliary/WordBreakTest", "auxiliary/LineBreakTest", "BidiTest", "BidiCharacterTest", "Scripts" }) |f|
+        conformance.root_module.addAnonymousImport(b.fmt("{s}.txt", .{std.fs.path.basename(f)}), .{ .root_source_file = ucd.path(b.fmt("{s}.txt", .{f})) });
     b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
 
     // The package root built ReleaseFast, for the branch census and the benchmark.
     const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
     lcgr_fast.addOptions("build_options", options);
     const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/layout/census_probe.zig"),
+        .root_source_file = b.path("src/census_probes.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
     }) });
     b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+
+    // tools/drawgolden: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
+    const draw_dump_mod = b.createModule(.{
+        .root_source_file = b.path("tools/drawgolden/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
+    draw_dump.addPassthruArgs();
+    b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
+
+    // tools/widgetgolden: dumps a reference-widget frame for tools/golden/gpu.py (ci/run.sh widget-golden).
+    const widget_dump = b.addRunArtifact(b.addExecutable(.{ .name = "widget-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/widgetgolden/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) }));
+    widget_dump.addPassthruArgs();
+    b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
 
     // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
     // the rest moves to src/ as it is ported.
@@ -104,6 +121,32 @@ pub fn build(b: *std.Build) void {
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
 
+    // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
+    const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/conformance/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
+    // The software renderer drawing a dumped frame as a PNG (src/render/sw/play.zig, ci/run.sh sw-golden).
+    const sw_play = b.addExecutable(.{ .name = "sw-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/sw/play.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) });
+    b.step("sw-play", "Build zig-out/bin/sw-play (draws a dumped frame in software)").dependOn(&b.addInstallArtifact(sw_play, .{}).step);
+
+    // Every shader variant as files for a real GPU to validate (src/render/shaders/, ci/run.sh shaders).
+    const shaders_dump = b.addExecutable(.{ .name = "shaders-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/shaders/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("shaders-dump", "Build zig-out/bin/shaders-dump (writes every shader variant)").dependOn(&b.addInstallArtifact(shaders_dump, .{}).step);
+
     // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
     const fuzz_mod = b.createModule(.{
         .root_source_file = b.path("tools/fuzz/fuzz.zig"),
@@ -126,6 +169,115 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Object exporting the comptime setter (ci/jobs/ct-setter.sh checks it is a store and an OR).
+    const ct_setter = b.addObject(.{ .name = "ct_setter", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/setter_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("ct-setter", "Build the object the setter-shape check reads").dependOn(&b.addInstallFile(ct_setter.getEmittedBin(), "ct_setter.o").step);
+    // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
+    const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/font/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    font_fuzz.addPassthruArgs();
+    b.step("font-fuzz", "Fuzz the font parser: -- [seconds] [seed] [first]").dependOn(&font_fuzz.step);
+    // PNG decoder fuzzing (src/assets/png_fuzz.zig): seeded mutation loop for a set time.
+    const png_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "png-fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/assets/png_fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) }));
+    png_fuzz.addPassthruArgs();
+    b.step("png-fuzz", "Fuzz the PNG decoder: -- [seconds] [seed] [first]").dependOn(&png_fuzz.step);
+
+    // The optional HarfBuzz adapter: outside the tiers (it links a C library), so a module of
+    // its own over lcgr, never imported by it.
+    const harfbuzz = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/shape/harfbuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // HarfBuzz 13.2.1 from build.zig.zon (lazy: fetched only for this step), compiled from its
+    // single-file amalgamation; no system library.
+    if (b.lazyDependency("harfbuzz", .{})) |hb| {
+        const hb_lib = b.addLibrary(.{ .name = "harfbuzz", .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = true,
+        }) });
+        hb_lib.root_module.addCSourceFile(.{ .file = hb.path("src/harfbuzz.cc"), .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DHB_NO_MT" } });
+        harfbuzz.root_module.linkLibrary(hb_lib);
+    }
+    b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
+
+    // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
+    const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/draw/paths_golden.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) }));
+    paths_golden.addPassthruArgs();
+    b.step("paths-golden", "Draw the path scenes for the golden check: -- OUT.bin").dependOn(&paths_golden.step);
+
+    // The wgpu-native back end (src/render/wgpu/native.zig): outside the tiers, a module of its
+    // own over lcgr. wgpu-native's release archive for the target (build.zig.zon, lazy), its
+    // headers translated here (@cImport is gone), its static library linked.
+    const wgpu_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/native.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // Draws the render conformance scenes as PNGs (src/render/wgpu/play.zig).
+    const wgpu_play = b.addExecutable(.{ .name = "wgpu-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // The wgpu-native major to build against: one archive per major and host target in
+    // build.zig.zon, fetched only when picked, so plain builds download none. The binding
+    // compiles against the picked release's own translated header.
+    const WgpuNative = enum { v27, v29 };
+    const wgpu_version = b.option(WgpuNative, "wgpu-native", "wgpu-native major for the wgpu steps (v27, v29)");
+    const wgpu_host = b.fmt("{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
+    const wgpu_targets = [_][]const u8{ "linux_x86_64", "linux_aarch64", "macos_x86_64", "macos_aarch64", "windows_x86_64" };
+    const wgpu_supported = wgpu_version != null and for (wgpu_targets) |t| {
+        if (std.mem.eql(u8, t, wgpu_host)) break true;
+    } else false;
+    const wgpu_step = b.step("wgpu", "Test the wgpu-native back end on a real adapter, -Dwgpu-native=v29 (ci/run.sh wgpu)");
+    const wgpu_play_step = b.step("wgpu-play", "Build zig-out/bin/wgpu-play (draws the render conformance scenes with wgpu-native)");
+    if (!wgpu_supported) {
+        const fail = b.addFail(if (wgpu_version == null) "the wgpu steps need -Dwgpu-native=v27 or v29" else "wgpu-native has no archive for this target in build.zig.zon");
+        wgpu_step.dependOn(&fail.step);
+        wgpu_play_step.dependOn(&fail.step);
+    }
+    if (if (wgpu_supported) b.lazyDependency(b.fmt("wgpu_native_{s}_{s}", .{ @tagName(wgpu_version.?), wgpu_host }), .{}) else null) |wgpu_native| {
+        const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
+        wgpu_h.addIncludePath(wgpu_native.path("include"));
+        const wgpu_c = wgpu_h.createModule();
+        for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module }) |m| {
+            m.addImport("wgpu_c", wgpu_c);
+            m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
+            switch (target.result.os.tag) {
+                .macos => for ([_][]const u8{ "Metal", "QuartzCore", "Foundation" }) |f| m.linkFramework(f, .{}),
+                .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+                // Rust panics unwind: libunwind is Zig's own, built for the target.
+                else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            }
+        }
+        wgpu_step.dependOn(&b.addRunArtifact(wgpu_tests).step);
+        wgpu_play_step.dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
+    }
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

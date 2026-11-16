@@ -12,7 +12,7 @@
 //!
 //! A grid item is a child of the grid node pushed with `Style.float = true`, so the flow passes
 //! leave it alone; the grid owns its size and its `offset` (the cell's place in the grid). The
-//! layout passes are run in pieces around grid rows (`layout.fitRows`, `layout.resolveRows`):
+//! layout passes are run in pieces around grid rows (`layout.fitSpan`, `layout.resolveSpan`):
 //! a grid's tracks need its items' natural sizes before the grid is folded into its parent, and
 //! its items need the grid's final size before their own children are resolved.
 
@@ -336,8 +336,9 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
     while (k > 0) {
         k -= 1;
         const node = gs.g.node[k];
-        layout.fitRows(t, axis, @max(node + 1, 1), to);
-        to = @max(node + 1, 1);
+        // Folds rows (node, to); `node` itself is folded by the next piece, after its fit is set.
+        layout.fitSpan(t, axis, node, to);
+        to = node + 1;
         const first = gs.g.first[a][k];
         @memset(gs.tr.content[first..][0..gs.g.count[a][k]], 0);
         var it = gs.g.first_item[k];
@@ -353,8 +354,7 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
     }
-    layout.fitRows(t, axis, 1, to);
-    layout.fitRoot(t, axis);
+    layout.fitSpan(t, axis, 0, to);
 }
 
 /// `layout.resolve` for a tree with grids. Rows are resolved in order, in pieces: after a grid
@@ -375,7 +375,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
         if (grid_row == none and item_row == none) break;
         if (item_row <= grid_row) {
             // An item that is also a grid is sized as an item first.
-            layout.resolveRows(t, axis, from, item_row);
+            resolveRows(t, axis, from, item_row);
             const min = c.min[a][item_row];
             const max = c.max[a][item_row];
             const cell = gs.it.cell_size[a][r];
@@ -387,7 +387,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             from = item_row + 1;
             r += 1;
         } else {
-            layout.resolveRows(t, axis, from, grid_row + 1);
+            resolveRows(t, axis, from, grid_row + 1);
             from = grid_row + 1;
             const node = gs.g.node[k];
             _ = sizeTracks(gs, k, a, c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node]);
@@ -402,7 +402,14 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             k += 1;
         }
     }
-    layout.resolveRows(t, axis, from, t.len);
+    resolveRows(t, axis, from, t.len);
+}
+
+/// `layout.resolve`'s sweep over rows [from, to), `from` >= 1 and `from` <= `to`: the parents
+/// of those rows are sized already. `resolveSpan` resolves the rows after its `first`, and
+/// reads nothing of `first` itself but as a parent.
+inline fn resolveRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
+    layout.resolveSpan(t, axis, from - 1, to);
 }
 
 /// Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.

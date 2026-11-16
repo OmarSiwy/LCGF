@@ -4,8 +4,7 @@
 //!   gen <out.zig> GraphemeBreakProperty emoji-data DerivedCoreProperties WordBreakProperty
 //!       LineBreak EastAsianWidth DerivedGeneralCategory DerivedBidiClass BidiBrackets Scripts
 //!
-//! Every table is one value per code point, emitted run-length encoded: `<name>_start` holds the
-//! first code point of each run, `<name>_value` its value.
+//! Every table is one value per code point, emitted as a three-stage table (see `emit`).
 
 const std = @import("std");
 const property = @import("property.zig");
@@ -74,11 +73,11 @@ pub fn main(init: std.process.Init) !void {
     try w.writeAll("pub const Script = enum(u8) {");
     for (names.items) |s| try w.print(" {s},", .{s});
     try w.writeAll(" };\n");
-    try emit(w, "grapheme", u8, grapheme);
-    try emit(w, "word", u8, word);
-    try emit(w, "line", u16, line);
-    try emit(w, "bidi", u8, bidi);
-    try emit(w, "script", u8, script);
+    try emit(gpa, w, "grapheme", u8, grapheme);
+    try emit(gpa, w, "word", u8, word);
+    try emit(gpa, w, "line", u16, line);
+    try emit(gpa, w, "bidi", u8, bidi);
+    try emit(gpa, w, "script", u8, script);
 
     var bit = Lines{ .text = brackets };
     var bcp: std.ArrayList(u8) = .empty;
@@ -167,10 +166,69 @@ const Lines = struct {
     }
 };
 
-fn emit(w: *std.Io.Writer, comptime name: []const u8, comptime T: type, values: []const T) !void {
-    try w.print("pub const {s}_start = [_]u21{{", .{name});
-    for (values, 0..) |v, cp| if (cp == 0 or v != values[cp - 1]) try w.print("0x{X},", .{cp});
-    try w.print("}};\npub const {s}_value = [_]{s}{{", .{ name, @typeName(T) });
-    for (values, 0..) |v, cp| if (cp == 0 or v != values[cp - 1]) try w.print("{d},", .{v});
+/// Three-stage table. `<name>_stage3` holds the distinct leaf blocks of 2^leaf values,
+/// `<name>_stage2` the distinct middle blocks of 2^mid leaf numbers, and `<name>_stage1` one
+/// middle-block number per 2^(mid + leaf) code points. Both shifts are searched from 3 to 8 for
+/// the fewest bytes; a comment records the size against the run-length form.
+fn emit(gpa: std.mem.Allocator, w: *std.Io.Writer, comptime name: []const u8, comptime T: type, values: []const T) !void {
+    var runs: usize = 0;
+    for (values, 0..) |v, cp| runs += @intFromBool(cp == 0 or v != values[cp - 1]);
+    const run_bytes = runs * (@sizeOf(u21) + @sizeOf(T));
+
+    var best = [2]u5{ 0, 0 };
+    var best_bytes: usize = std.math.maxInt(usize);
+    for (3..9) |leaf| {
+        const leaves = try split(gpa, T, values, @intCast(leaf));
+        for (3..9) |mid| {
+            const mids = try split(gpa, u32, leaves.index, @intCast(mid));
+            const bytes = mids.index.len * indexBytes(mids.distinct) + (mids.distinct << @intCast(mid)) * indexBytes(leaves.distinct) +
+                (leaves.distinct << @intCast(leaf)) * @sizeOf(T);
+            if (bytes < best_bytes) {
+                best_bytes = bytes;
+                best = .{ @intCast(mid), @intCast(leaf) };
+            }
+        }
+    }
+    const mid, const leaf = best;
+    const leaves = try split(gpa, T, values, leaf);
+    const mids = try split(gpa, u32, leaves.index, mid);
+    try w.print("// {s}: {d} bytes in three stages (mid {d}, leaf {d}); run-length form {d}\n", .{ name, best_bytes, mid, leaf, run_bytes });
+    try w.print("pub const {s}_mid = {d};\npub const {s}_leaf = {d};\n", .{ name, mid, name, leaf });
+    try w.print("pub const {s}_stage1 = [_]u{d}{{", .{ name, indexBytes(mids.distinct) * 8 });
+    for (mids.index) |b| try w.print("{d},", .{b});
+    try w.print("}};\npub const {s}_stage2 = [_]u{d}{{", .{ name, indexBytes(leaves.distinct) * 8 });
+    for (mids.first[0..mids.distinct]) |b| {
+        for (leaves.index[b << mid ..][0 .. @as(usize, 1) << mid]) |v| try w.print("{d},", .{v});
+    }
+    try w.print("}};\npub const {s}_stage3 = [_]{s}{{", .{ name, @typeName(T) });
+    for (leaves.first[0..leaves.distinct]) |b| {
+        for (values[b << leaf ..][0 .. @as(usize, 1) << leaf]) |v| try w.print("{d},", .{v});
+    }
     try w.writeAll("};\n");
+}
+
+fn indexBytes(distinct: usize) usize {
+    return if (distinct <= 256) 1 else 2;
+}
+
+const Blocks = struct { index: []u32, first: []usize, distinct: usize };
+
+/// Splits `values` into blocks of 2^shift and numbers the distinct ones in order of first use.
+fn split(gpa: std.mem.Allocator, comptime T: type, values: []const T, shift: u5) !Blocks {
+    const size: usize = @as(usize, 1) << shift;
+    const n = values.len / size;
+    var seen: std.StringHashMapUnmanaged(u32) = .empty;
+    const out: Blocks = .{ .index = try gpa.alloc(u32, n), .first = try gpa.alloc(usize, n), .distinct = 0 };
+    var distinct: usize = 0;
+    for (0..n) |b| {
+        const key = std.mem.sliceAsBytes(values[b * size ..][0..size]);
+        const gop = try seen.getOrPut(gpa, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = @intCast(distinct);
+            out.first[distinct] = b;
+            distinct += 1;
+        }
+        out.index[b] = gop.value_ptr.*;
+    }
+    return .{ .index = out.index, .first = out.first, .distinct = distinct };
 }

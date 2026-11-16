@@ -87,7 +87,7 @@ def bind(buf, group):                       # what Renderer.bind does
     rp.set_pipeline(pipeline); rp.set_bind_group(0, g0); rp.set_bind_group(1, group); rp.set_vertex_buffer(0, buf)
 for l in lines:
     if l[0] == "quads":
-        bind(quad_buf, white); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1
+        bind(quad_buf, white if l[3] == "0" else atlas_group); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1  # texture 0 is white, any other the stand-in atlas
     elif l[0] == "text":
         bind(glyph_buf, atlas_group); rp.draw(4, int(l[2]), 0, int(l[1])); draws += 1
     elif l[0] == "custom":                 # inline custom draw: host pipeline, left in whatever state
@@ -101,6 +101,7 @@ def at(x, y): return tuple(px[(y * W + x) * 4:(y * W + x) * 4 + 3])
 
 write_png(out_png, W, H, px)
 
+if not any(l[0] == "reset" for l in lines): sys.exit(0)  # not the prototype scene: no fixed pixel checks
 reset = [float(v) for v in [l for l in lines if l[0] == "reset"][0][1:]]
 checks = {
     "toolbar panel":            (at(400, 4), (30, 31, 36)),

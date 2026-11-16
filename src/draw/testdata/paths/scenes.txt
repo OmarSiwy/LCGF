@@ -1,0 +1,174 @@
+# Path scenes for the golden images (src/draw/paths_golden.zig draws them, make.py makes the
+# references). `scene NAME W H` starts a canvas; `fill RULE RRGGBBAA` starts a shape filled
+# under RULE (nonzero, even_odd), or `stroke WIDTH JOIN CAP MITER_LIMIT RRGGBBAA` a stroked one
+# (JOIN miter, round, bevel; CAP butt, round, square); then path verbs, SVG letters, absolute
+# coordinates. `tvg NAME X Y SCALE` draws every command of the TinyVG file NAME.tvg (tvg.py
+# describes and encodes it) at X, Y, SCALE px per display unit.
+#
+# M x y, L x y, Q cx cy x y, C c0x c0y c1x c1y x y, Z.
+
+scene lines 48 48
+fill nonzero ffffffff
+M 3.3 4.1
+L 21.7 6.2
+L 9.4 22.8
+Z
+fill nonzero ff8040ff
+M 33.5 18.6
+L 41.494 43.203
+L 20.566 27.997
+L 46.434 27.997
+L 25.506 43.203
+Z
+fill even_odd 60c0ffc0
+M 14.2 23.4
+L 20.842 43.842
+L 3.453 31.208
+L 24.947 31.208
+L 7.558 43.842
+Z
+
+scene quads 48 48
+fill nonzero ffffffff
+M 6.2 40.5
+Q 8 6 41.3 7.4
+Q 38 41 6.2 40.5
+Z
+fill nonzero 202020ff
+M 14.5 30.25
+Q 24 24 33 15.5
+Q 20 18 14.5 30.25
+Z
+
+scene cubics 48 48
+fill nonzero ff4060ff
+M 24 41.3
+C 4 28 6.5 8 24 16.5
+C 41.5 8 44 28 24 41.3
+Z
+fill nonzero ffffff80
+M 2.5 45.5
+C 15 30 33 60 45.5 2.5
+L 45.5 45.5
+Z
+
+scene rules 64 32
+fill nonzero ffffffff
+M 20.9 16.2
+C 20.9 21.391 16.691 25.6 11.5 25.6
+C 6.309 25.6 2.1 21.391 2.1 16.2
+C 2.1 11.009 6.309 6.8 11.5 6.8
+C 16.691 6.8 20.9 11.009 20.9 16.2
+Z
+M 28.4 15.7
+C 28.4 20.174 24.774 23.8 20.3 23.8
+C 15.826 23.8 12.2 20.174 12.2 15.7
+C 12.2 11.226 15.826 7.6 20.3 7.6
+C 24.774 7.6 28.4 11.226 28.4 15.7
+Z
+fill even_odd ffffffff
+M 52.9 16.2
+C 52.9 21.391 48.691 25.6 43.5 25.6
+C 38.309 25.6 34.1 21.391 34.1 16.2
+C 34.1 11.009 38.309 6.8 43.5 6.8
+C 48.691 6.8 52.9 11.009 52.9 16.2
+Z
+M 60.4 15.7
+C 60.4 20.174 56.774 23.8 52.3 23.8
+C 47.826 23.8 44.2 20.174 44.2 15.7
+C 44.2 11.226 47.826 7.6 52.3 7.6
+C 56.774 7.6 60.4 11.226 60.4 15.7
+Z
+
+# Curves at many sizes: chords per curve follow the curvature at a fixed tolerance.
+scene tolerance 128 128
+fill nonzero e0e0ffff
+M 122.5 63.7
+C 122.5 95.843 96.443 121.9 64.3 121.9
+C 32.157 121.9 6.1 95.843 6.1 63.7
+C 6.1 31.557 32.157 5.5 64.3 5.5
+C 96.443 5.5 122.5 31.557 122.5 63.7
+Z
+M 104.9 63.7
+C 104.9 41.277 86.723 23.1 64.3 23.1
+C 41.877 23.1 23.7 41.277 23.7 63.7
+C 23.7 86.123 41.877 104.3 64.3 104.3
+C 86.723 104.3 104.9 86.123 104.9 63.7
+Z
+fill nonzero ffa040ff
+M 70.4 63.7
+C 70.4 67.069 67.669 69.8 64.3 69.8
+C 60.931 69.8 58.2 67.069 58.2 63.7
+C 58.2 60.331 60.931 57.6 64.3 57.6
+C 67.669 57.6 70.4 60.331 70.4 63.7
+Z
+M 32.5 30.4
+C 32.5 31.67 31.47 32.7 30.2 32.7
+C 28.93 32.7 27.9 31.67 27.9 30.4
+C 27.9 29.13 28.93 28.1 30.2 28.1
+C 31.47 28.1 32.5 29.13 32.5 30.4
+Z
+fill nonzero 60ff90c0
+M 20.5 110.5
+C 120 20 0 20 108.5 110.5
+Q 64 70 20.5 110.5
+Z
+
+# One zigzag per join, caps along the bottom; the sharp turn of the last zigzag passes the
+# miter limit and bevels.
+scene joins 96 64
+stroke 5 miter butt 4 ffffffff
+M 6.5 22
+L 18 6.3
+L 29.5 22
+L 41 6.3
+stroke 5 round butt 4 ff9050ff
+M 52.5 22
+L 64 6.3
+L 75.5 22
+L 87 6.3
+stroke 4.5 bevel butt 4 60c0ffff
+M 6.5 30.5
+L 30 34
+L 8 39.25
+stroke 4.5 miter butt 2 c0ff60ff
+M 50.5 30.5
+L 90 34
+L 52 39.25
+stroke 6 miter butt 4 ffffffff
+M 10.5 52
+L 26 52
+stroke 6 miter round 4 ffffffff
+M 40.5 52
+L 56 52
+stroke 6 miter square 4 ffffffff
+M 70.5 52
+L 86 52
+
+# Curves and closed contours: a cubic with round caps, a closed quadratic loop with miters, a
+# translucent rectangle whose stroke overlaps itself, and a dot.
+scene strokes 96 64
+stroke 3.5 round round 4 ff7090ff
+M 6.2 56
+C 20 -10 40 90 58 10.5
+stroke 2.25 miter butt 4 80ffb0ff
+M 64.5 8
+Q 92 8 90 30
+Q 70 34 64.5 8
+Z
+stroke 7 bevel butt 4 ffffff80
+M 60.5 40.5
+L 90.2 40.5
+L 90.2 58.3
+L 60.5 58.3
+Z
+stroke 5 round round 4 ffd040ff
+M 30.3 50.7
+L 30.3 50.7
+
+# TinyVG icons (tvg.py): every command and style, three unit sizes and colour encodings.
+scene icons 112 64
+tvg icon_all 2 2 2.5
+tvg icon_565 66 2 2.5
+tvg icon_f32 66 44 1.25
+tvg icon_565 90 44 1
