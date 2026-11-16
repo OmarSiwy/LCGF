@@ -22,6 +22,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const lcgr = @import("lcgr");
 const wire = @import("wire.zig");
+const Seat = @import("input.zig").Seat;
 const linux = std.os.linux;
 const iface = lcgr.shell_iface;
 const Events = iface.Events;
@@ -57,11 +58,16 @@ pub const Kind = enum(u8) {
     surface,
     xdg_surface,
     toplevel,
+    seat,
+    pointer,
+    keyboard,
+    touch,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base };
-const global_versions = std.enums.EnumArray(Global, u32).init(.{ .wl_compositor = 4, .wl_shm = 1, .xdg_wm_base = 2 });
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat };
+const global_versions = std.enums.EnumArray(Global, u32).init(.{ .wl_compositor = 4, .wl_shm = 1, .xdg_wm_base = 2, .wl_seat = 8 });
+const global_kinds = std.enums.EnumArray(Global, Kind).init(.{ .wl_compositor = .compositor, .wl_shm = .shm, .xdg_wm_base = .wm_base, .wl_seat = .seat });
 
 /// Opcodes used, from wayland.xml and xdg-shell.xml.
 const op = struct {
@@ -83,6 +89,9 @@ const op = struct {
     const xdg_surface_ack_configure = 4;
     const toplevel_set_title = 2;
     const toplevel_set_app_id = 3;
+    const seat_get_pointer = 0;
+    const seat_get_keyboard = 1;
+    const seat_get_touch = 2;
 };
 
 /// `wl_shm` format: 32-bit ARGB, premultiplied, as one little-endian word: `sw`'s `.bgra8`.
@@ -112,6 +121,9 @@ pub const Wayland = struct {
     shm: Shm = .{},
     /// Held input, carried from frame to frame.
     in: Input = .{},
+    seat: Seat = .{},
+    /// Clock of `Input.time`: the first poll is time 0.
+    t0: ?linux.timespec = null,
     /// Wakes `wait` from another thread (`wake`).
     wake_fd: i32,
     woken: std.atomic.Value(bool) = .init(false),
@@ -188,6 +200,12 @@ pub const Wayland = struct {
         w.polls += 1;
         w.in.viewport = w.size;
         w.in.scale = w.scale;
+        const now = monotonic();
+        const t = elapsed(w.t0 orelse now, now);
+        if (w.t0 == null) w.t0 = now;
+        w.in.dt = @floatCast(t - w.in.time);
+        w.in.time = t;
+        w.seat.fill(&w.in);
         ev.in = w.in;
         return !w.closed;
     }
@@ -251,6 +269,7 @@ pub const Wayland = struct {
 
     /// Reads and handles everything the compositor has sent, then sends what that produced.
     pub fn dispatch(w: *Wayland) void {
+        w.seat.begin();
         while (!w.closed) {
             const more = w.conn.fill() catch |e| return w.fail(if (e == error.Overflow) error.Protocol else error.Disconnected);
             while (w.conn.next()) |m| w.handle(m);
@@ -276,8 +295,7 @@ pub const Wayland = struct {
                 const interface = a.string();
                 const version = a.uint();
                 const g = std.meta.stringToEnum(Global, interface) orelse return;
-                const kinds = std.enums.EnumArray(Global, Kind).init(.{ .wl_compositor = .compositor, .wl_shm = .shm, .xdg_wm_base = .wm_base });
-                const id = w.new(kinds.get(g));
+                const id = w.new(global_kinds.get(g));
                 w.request(w.registry, op.registry_bind, .{ name, interface, @min(version, global_versions.get(g)), id });
                 w.globals.set(g, id);
             },
@@ -299,6 +317,23 @@ pub const Wayland = struct {
             .buffer => if (m.opcode == 0) { // release
                 for (0..2) |k| w.shm.busy[k] = w.shm.busy[k] and w.shm.buffers[k] != m.id;
             },
+            .seat => if (m.opcode == 0) { // capabilities: pointer 1, keyboard 2, touch 4
+                const caps = a.uint();
+                const want = [3]struct { u32, *u32, Kind, u16 }{
+                    .{ 1, &w.seat.pointer, .pointer, op.seat_get_pointer },
+                    .{ 2, &w.seat.keyboard, .keyboard, op.seat_get_keyboard },
+                    .{ 4, &w.seat.touch, .touch, op.seat_get_touch },
+                };
+                // ponytail: a device that goes away keeps its object; release it if a seat
+                // that loses and regains devices ever matters.
+                for (want) |d| if (caps & d[0] != 0 and d[1].* == 0) {
+                    d[1].* = w.new(d[2]);
+                    w.request(m.id, d[3], .{d[1].*});
+                };
+            },
+            .pointer => w.seat.pointerEvent(m.opcode, &a),
+            .keyboard => w.seat.keyboardEvent(m.opcode, &a, &w.conn),
+            .touch => w.seat.touchEvent(m.opcode, &a),
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
             },
@@ -411,11 +446,22 @@ const Shm = struct {
     }
 };
 
+fn monotonic() linux.timespec {
+    var ts: linux.timespec = undefined;
+    _ = linux.clock_gettime(.MONOTONIC, &ts);
+    return ts;
+}
+
+fn elapsed(from: linux.timespec, to: linux.timespec) f64 {
+    return @as(f64, @floatFromInt(to.sec - from.sec)) + @as(f64, @floatFromInt(to.nsec - from.nsec)) / std.time.ns_per_s;
+}
+
 fn physical(size: [2]f32, scale: f32) [2]u32 {
     return .{ @intFromFloat(@max(@round(size[0] * scale), 1)), @intFromFloat(@max(@round(size[1] * scale), 1)) };
 }
 
 test {
     _ = wire;
+    _ = @import("xkb.zig");
     _ = @import("test.zig");
 }

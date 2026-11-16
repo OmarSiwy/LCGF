@@ -16,6 +16,7 @@ const iface = lcgr.shell_iface;
 const Events = iface.Events;
 const example = lcgr.shell_example;
 const Color = lcgr.types.Color;
+const Input = lcgr.input.Input;
 
 /// A request the client sent, for assertions.
 pub const Request = struct { kind: wl.Kind, id: u32, opcode: u16, arg0: u32, arg1: u32 };
@@ -246,4 +247,198 @@ test "wayland: the compositor hanging up ends the shell" {
     var ev: Events = .{};
     try testing.expect(!shell.poll(&ev));
     try testing.expectEqual(error.Disconnected, shell.err.?);
+}
+
+pub const seat_globals = core_globals ++ [_][]const u8{"wl_seat"};
+
+/// A configured window with a pointer, keyboard and touch screen, after its first frame.
+fn opened(shell: *Wayland, fake: *Fake, ctx: *context.Context, app: *example.App, ev: *Events) !void {
+    fake.start(shell, &seat_globals);
+    try testing.expect(shell.poll(ev));
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 7)});
+    fake.configure(shell, 800, 600);
+    _ = turn(shell, ctx, app, ev);
+    fake.pump(shell);
+    try testing.expect(shell.seat.pointer != 0 and shell.seat.keyboard != 0 and shell.seat.touch != 0);
+}
+
+const btn_left: u32 = 0x110;
+
+test "wayland: pointer events replay the example's recording" {
+    // src/shell/testdata/example.replay as a compositor sends it: enter, motion, buttons.
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    try opened(&shell, &fake, &ctx, &app, &ev);
+    while (turn(&shell, &ctx, &app, &ev) != null) {} // settle
+    const p = shell.seat.pointer;
+
+    // Click Reset, entering the window over it.
+    fake.send(p, 0, .{ fake.nextSerial(), shell.surface, wire.Fixed.from(37), wire.Fixed.from(25) });
+    fake.flush();
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    try testing.expectEqual([2]f32{ 37, 25 }, ev.in.pointer);
+    for ([_]u32{ 1, 0 }) |state| {
+        fake.send(p, 3, .{ fake.nextSerial(), @as(u32, 0), btn_left, state });
+        fake.flush();
+        _ = turn(&shell, &ctx, &app, &ev).?;
+    }
+    try testing.expectEqual(@as(u32, 1), app.resets);
+
+    // Click Add layer, then hold the exposure slider at 75% of its track.
+    for ([_][2]f32{ .{ 54, 74 }, .{ 639, 25 } }) |at| {
+        fake.send(p, 2, .{ @as(u32, 0), wire.Fixed.from(at[0]), wire.Fixed.from(at[1]) });
+        fake.flush();
+        _ = turn(&shell, &ctx, &app, &ev).?;
+        for ([_]u32{ 1, 0 }) |state| {
+            fake.send(p, 3, .{ fake.nextSerial(), @as(u32, 0), btn_left, state });
+            fake.flush();
+            _ = turn(&shell, &ctx, &app, &ev).?;
+            try testing.expectEqual(state == 1, ev.in.buttons.left);
+        }
+    }
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+
+    // Leave the window: no pointer, and the frame after settles to idle.
+    fake.send(p, 1, .{ fake.nextSerial(), shell.surface });
+    fake.flush();
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    try testing.expectEqual([2]f32{ -1, -1 }, ev.in.pointer);
+    _ = turn(&shell, &ctx, &app, &ev);
+    try testing.expectEqual(null, turn(&shell, &ctx, &app, &ev));
+}
+
+test "wayland: wheel notches and touchpad pixels, signed as the core reads them" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    fake.start(&shell, &seat_globals);
+    var ev: Events = .{};
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 1)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    const p = shell.seat.pointer;
+    // One notch down (value120 = 120, with its 15 px axis event): the core's wheel is -1.
+    fake.send(p, 4, .{ @as(u32, 0), @as(u32, 0), wire.Fixed.from(15) });
+    fake.send(p, 9, .{ @as(u32, 0), @as(i32, 120) });
+    fake.send(p, 5, .{});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual([2]f32{ 0, -1 }, ev.in.wheel);
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.scroll);
+    // A touchpad: pixels only, 12.5 to the right and 3 up.
+    fake.send(p, 4, .{ @as(u32, 0), @as(u32, 1), wire.Fixed.from(12.5) });
+    fake.send(p, 4, .{ @as(u32, 0), @as(u32, 0), wire.Fixed.from(-3) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.wheel);
+    try testing.expectEqual([2]f32{ -12.5, 3 }, ev.in.scroll);
+    // Per poll: nothing new, nothing reported.
+    _ = shell.poll(&ev);
+    try testing.expectEqual([2]f32{ 0, 0 }, ev.in.scroll);
+}
+
+/// Sends `wl_keyboard.keymap` with `text` in a memfd, as a compositor does.
+fn sendKeymap(fake: *Fake, keyboard: u32, text: []const u8) void {
+    const fd: i32 = @intCast(linux.memfd_create("keymap", linux.MFD.CLOEXEC));
+    _ = linux.write(fd, text.ptr, text.len);
+    fake.send(keyboard, 0, .{ @as(u32, 1), wire.Fd{ .fd = fd }, @as(u32, @intCast(text.len)) });
+}
+
+test "wayland: keys become HID scancodes and the keymap's text, in order" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    fake.start(&shell, &seat_globals);
+    var ev: Events = .{};
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 2)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    const k = shell.seat.keyboard;
+    sendKeymap(&fake, k, @embedFile("testdata/de.xkb"));
+    // Focus arrives with the A key (evdev 30) already held.
+    const held = [_]u32{30};
+    fake.send(k, 1, .{ fake.nextSerial(), shell.surface, wire.Array{ .bytes = std.mem.sliceAsBytes(&held) } });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expect(ev.in.keys.down(0x04));
+
+    // Release A; Shift+Z (German layout: evdev 21); ö; then Ctrl+V types nothing.
+    const key = struct {
+        fn send(f: *Fake, kb: u32, code: u32, state: u32) void {
+            f.send(kb, 3, .{ f.nextSerial(), @as(u32, 0), code, state });
+        }
+    }.send;
+    key(&fake, k, 30, 0);
+    fake.send(k, 4, .{ fake.nextSerial(), @as(u32, 1), @as(u32, 0), @as(u32, 0), @as(u32, 0) });
+    key(&fake, k, 21, 1);
+    key(&fake, k, 21, 0);
+    fake.send(k, 4, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 0), @as(u32, 0), @as(u32, 0) });
+    key(&fake, k, 39, 1);
+    fake.send(k, 4, .{ fake.nextSerial(), @as(u32, 4), @as(u32, 0), @as(u32, 0), @as(u32, 0) });
+    key(&fake, k, 47, 1);
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("Z\xc3\xb6", ev.in.text);
+    const E = Input.Event;
+    const shift: Input.Mods = .{ .shift = true };
+    const ctrl: Input.Mods = .{ .ctrl = true };
+    try testing.expectEqualSlices(E, &.{
+        .{ .kind = .release, .code = 0x04 },
+        .{ .kind = .press, .code = 0x1c, .mods = shift }, // HID Y: the key's US label
+        .{ .kind = .text, .mods = shift, .at = 0, .len = 1 },
+        .{ .kind = .release, .code = 0x1c, .mods = shift },
+        .{ .kind = .press, .code = 0x33 },
+        .{ .kind = .text, .at = 1, .len = 2 },
+        .{ .kind = .press, .code = 0x19, .mods = ctrl },
+    }, ev.in.events);
+    try testing.expect(ev.in.keys.down(0x33) and ev.in.keys.down(0x19) and !ev.in.keys.down(0x04));
+    try testing.expectEqual(ctrl, ev.in.mods);
+    // Per poll: the text and events are gone, held keys stay.
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(usize, 0), ev.in.events.len);
+    try testing.expect(ev.in.keys.down(0x19));
+    // Losing focus lets go of everything.
+    fake.send(k, 2, .{ fake.nextSerial(), shell.surface });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual(Input.Keys{}, ev.in.keys);
+    try testing.expectEqual(Input.Mods{}, ev.in.mods);
+}
+
+test "wayland: touch points are contacts, and a quick tap is still seen" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    fake.start(&shell, &seat_globals);
+    var ev: Events = .{};
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 4)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    const t = shell.seat.touch;
+    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.surface, @as(i32, 5), wire.Fixed.from(10), wire.Fixed.from(20) });
+    fake.send(t, 3, .{});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualSlices(Input.Contact, &.{.{ .id = 5, .pos = .{ 10, 20 } }}, ev.in.contacts);
+    // A second finger taps (down and up before the poll) while the first moves.
+    fake.send(t, 2, .{ @as(u32, 0), @as(i32, 5), wire.Fixed.from(11), wire.Fixed.from(22) });
+    fake.send(t, 0, .{ fake.nextSerial(), @as(u32, 0), shell.surface, @as(i32, 6), wire.Fixed.from(50), wire.Fixed.from(60) });
+    fake.send(t, 1, .{ fake.nextSerial(), @as(u32, 0), @as(i32, 6) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualSlices(Input.Contact, &.{
+        .{ .id = 5, .pos = .{ 11, 22 } },
+        .{ .id = 6, .down = false, .pos = .{ 50, 60 } },
+    }, ev.in.contacts);
+    // The lifted finger is gone the poll after.
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(usize, 1), ev.in.contacts.len);
 }
