@@ -75,13 +75,30 @@ buffer per buffer write, GPU memory blocks, reference counts), wgpu-core's pass 
 and cleanup 24%, tracking and validation code 17%, extra driver calls 14%, back-end dispatch
 3.7%, the C layer and locks 3.1%.
 
-Resident memory, not yet in LCGR's favour everywhere:
-- wgpu as LCGR's wgpu host creates it today (every back end) starts its GL back end too, even
-  when it draws with Vulkan: +49 MB on lavapipe and +85 MB on NVIDIA over native Vulkan. A
-  Vulkan-only wgpu instance is +3.3 MB at start-up and +13 MB after drawing.
-- On NVIDIA, after drawing, native Vulkan is 5.8 MB larger than wgpu: its default capacities
-  map 13 MB more host-visible memory. Sizing that is open work; until then, do not claim lower
-  memory than wgpu on hardware.
+Resident memory after the render-select fixes (commits e524dbb, 97974a9): the wgpu host's
+instance is Vulkan-only (Metal on Apple), and the Vulkan back end's default ring is sized to a
+frame of the default `Limits` (4096 quads, 16K glyphs: 5.6 MB host-visible instead of 13 MB).
+`tools/bench/probe.py`, ReleaseFast, golden shell, one batch, MB = 1000 KiB; device only /
+empty 800x600 frame / after the scenes drawn 2000 times:
+
+| Driver | Vulkan, before | Vulkan, after | wgpu, before | wgpu, after |
+|---|---|---|---|---|
+| lavapipe (Mesa 26.3.0) | 74.0 / 79.3 / 98.8 | 74.0 / 79.3 / 98.8 | 122.2 / 128.0 / 154.1 | 76.6 / 85.3 / 111.5 |
+| NVIDIA RTX 4060, 595.71.05 | 69.3 / 84.5 / 84.4 | 69.3 / 76.8 / 76.8 | 154.1 / 155.6 / 156.4 | 73.0 / 77.2 / 77.9 |
+
+- The Vulkan-only instance takes 46 MB off wgpu at start-up on lavapipe and 81 MB on NVIDIA:
+  its GL back end no longer loads an EGL driver it never uses. CPU per frame did not change
+  (five runs each, load 3.7: lavapipe 23.0-24.6 against 21.9-24.8 us, NVIDIA 14.7-29.1 against
+  14.8-21.4 us).
+- On NVIDIA, native Vulkan is now 0.4 MB smaller than wgpu at an empty frame and 1.1 MB after
+  drawing; before the ring was sized it was 7 MB larger. The margin is small: the NVIDIA
+  driver's own share moved by up to 2 MB between batches of the same binary, and by 11 MB
+  between batches hours apart, so compare within a batch. On lavapipe the ring's untouched
+  pages were never resident, so nothing changed there; Vulkan stays 12.7 MB under wgpu after
+  drawing (wgpu's GPU memory blocks are host memory on lavapipe).
+- The CPU column above was not re-timed after these commits: the machine stayed above load 8
+  (other builds), where timing is unreliable. Neither commit touches the per-frame CPU path
+  except wgpu's instance, timed above.
 
 Reproduce: `nix develop .#golden -c ci/run.sh vk-probe` (lavapipe); the NVIDIA runs are
 described in docs/research/render-select.md.
