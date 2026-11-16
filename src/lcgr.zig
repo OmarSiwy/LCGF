@@ -79,6 +79,7 @@ pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
 pub const widgets_card = @import("widgets/card.zig");
 pub const widgets_separator = @import("widgets/separator.zig");
 pub const theme = @import("theme/theme.zig");
+pub const theme_tests = @import("theme/tests.zig");
 pub const widgets_check = @import("widgets/check.zig");
 pub const widgets_spacer = @import("widgets/spacer.zig");
 pub const widgets_accordion = @import("widgets/accordion.zig");
@@ -103,6 +104,7 @@ pub const fallback = @import("text/fallback/fallback.zig");
 pub const fallback_tests = @import("text/fallback/tests.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
+pub const runtime_signals = @import("runtime/signals.zig");
 pub const shell_headless = @import("shell/headless.zig");
 
 test {
@@ -111,3 +113,6 @@ test {
 pub const i18n_catalogue = @import("i18n/catalogue.zig");
 pub const i18n_plural = @import("i18n/plural.zig");
 pub const i18n_number = @import("i18n/number.zig");
+pub const i18n_date = @import("i18n/date.zig");
+pub const i18n_bundle = @import("i18n/bundle.zig");
+pub const i18n_pseudo = @import("i18n/pseudo.zig");

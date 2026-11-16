@@ -15,6 +15,7 @@ const Input = @import("../core/input.zig").Input;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
+const Signals = @import("signals.zig").Signals;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -23,6 +24,7 @@ pub const Limits = struct {
     customs: u32 = 64,
     /// Bytes of text per frame.
     strings: u32 = 64 * 1024,
+    signals: u32 = 256,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
     /// Timers armed by `Frame.timer`.
@@ -83,6 +85,7 @@ pub const Context = struct {
     strings: [2]Strings,
     cur: u1 = 0,
     draw: DrawList,
+    signals: Signals,
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
@@ -96,9 +99,6 @@ pub const Context = struct {
     /// How much the springs are still moving; 0 at rest. The anim lane's step writes it
     /// (C0716-C0719); until then nothing moves.
     motion: f32 = 0,
-    /// Data behind a signal changed since the last frame. The signals lane's bump sets it
-    /// (C0238); `Frame.finish` clears it.
-    dirty: bool = false,
     timers: scheduler.Timers,
     /// Set from any thread to ask for a frame; see `scheduler.Wake`.
     waker: scheduler.Wake = .{},
@@ -113,6 +113,7 @@ pub const Context = struct {
             .customs = .{ Customs.init(carver, limits.customs), Customs.init(carver, limits.customs) },
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
+            .signals = Signals.init(carver, limits.signals),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
         };
@@ -212,6 +213,7 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     for (ctx.customs) |cu| try testing.expectEqual(example_limits.customs, cu.cap);
     for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
+    try testing.expectEqual(example_limits.signals, ctx.signals.cap);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
