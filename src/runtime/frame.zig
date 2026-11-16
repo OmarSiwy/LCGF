@@ -17,6 +17,10 @@ const Sense = types.Sense;
 const Response = types.Response;
 const Color = types.Color;
 const none = types.none;
+const Output = @import("context.zig").Output;
+const Mono = @import("../text/protocol.zig").Mono;
+const layout = @import("../layout/layout.zig");
+const paint = @import("../draw/paint.zig");
 
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
@@ -119,6 +123,45 @@ pub const Frame = struct {
 
     pub fn setFill(f: *Frame, node: Node, color: Color) void {
         f.tree().c.look[node.ix()].fill = color.bitsOf();
+    }
+
+    // ---- finishing ------------------------------------------------------------
+
+    /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
+    /// copy this body to put your own shaper, or your own pass, between any two of them.
+    pub fn end(f: *Frame, font: Mono) Output {
+        const t = f.tree();
+        const tx = f.texts();
+        t.seal(0);
+        font.measure(tx);
+        layout.prepare(t);
+        layout.applyText(t, tx, .x);
+        layout.fit(t, .x);
+        layout.resolve(t, .x, f.in.viewport[0]);
+        layout.textAvail(t, tx);
+        font.wrap(tx);
+        layout.applyText(t, tx, .y);
+        layout.fit(t, .y);
+        layout.resolve(t, .y, f.in.viewport[1]);
+        layout.place(t);
+        layout.finalize(t);
+        return f.finish();
+    }
+
+    /// Paint and bookkeeping only, for callers who ran layout themselves.
+    pub fn finish(f: *Frame) Output {
+        const ctx = f.ctx;
+        const t = f.tree();
+        const tx = f.texts();
+        const strings = &ctx.strings[ctx.cur];
+        t.seal(0);
+        paint.emit(t, tx, &ctx.customs[ctx.cur], strings.buf[0..strings.len], &ctx.draw);
+        return .{
+            .draw = &ctx.draw,
+            .tree = t,
+            .texts = tx,
+            .wake = simd.selF(ctx.settle > 0, 0, types.inf),
+        };
     }
 };
 
@@ -247,7 +290,6 @@ test "custom: links the leaf to a row carrying its id and data" {
 
 /// Two 40 x 40 buttons, "a" at x 0..40 and "b" at 50..90, laid out by hand (Frame.end comes later).
 fn twoButtons(f: *Frame) [2]Response {
-    const layout = @import("../layout/layout.zig");
     _ = f.open(.none, .{ .dir = .x, .gap = 10 });
     const a = f.leaf(.from("a"), .{ .size = .{ .px(40), .px(40) } });
     const ra = f.interact(a, .button);
@@ -300,4 +342,66 @@ test "interact, drag, lastRect, heldRect: answers from last frame's geometry" {
     r = twoButtons(&f);
     try testing.expect(r[1].released and r[1].clicked);
     try testing.expectEqual(Rect{}, f.heldRect());
+}
+
+test "end: the tier-0 pass sequence, then paint; equal to running layout and finish by hand" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 2, .strings = 64, .depth = 4 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+
+    var f = ctx.begin(&in);
+    _ = f.open(.from("bar"), .{ .dir = .x, .size = .{ .fill, .px(40) }, .pad = @splat(10), .gap = 4, .fill = .rgb(9, 9, 9) });
+    // 24 bytes at 10 px, 0.5 em each: 120 px wrapping into 100: two lines of 12 px.
+    _ = f.open(.none, .{ .size = .{ .px(100), .fit } });
+    const para = f.text("twenty-four characters!!", .{ .px = 10, .wrap = true });
+    f.close();
+    f.close();
+    const view = f.custom(.from("view"), .{ .size = .{ .fill, .fill } }, 7);
+    // Unbalanced on purpose: end seals the root anyway.
+    _ = f.open(.none, .{});
+    const out = f.end(.{ .advance = 0.5, .line = 1.2 });
+
+    const t = out.tree;
+    try testing.expectEqual(f.tree(), t);
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 0, .x1 = 400, .y1 = 40 }, t.rect(t.find(.from("bar"))));
+    try testing.expectEqual(Rect{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 34 }, t.rect(para.ix()));
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 40, .x1 = 400, .y1 = 300 }, t.rect(view.ix()));
+    try testing.expectEqual(t.len, t.c.end[0]);
+    // Paint: the bar's quad, the run, the custom draw with its rect, in that order.
+    const d = out.draw;
+    try testing.expectEqual(@as(u32, 1), d.quad_len);
+    try testing.expectEqual(@as(u32, 1), d.run_len);
+    try testing.expectEqual(@as(u32, 1), d.custom_len);
+    try testing.expectEqual([4]f32{ 0, 40, 400, 300 }, d.customs[0].rect);
+    try testing.expectEqual(@as(u32, 3), d.cmd_len);
+    // The first frame after an input change owes one more.
+    try testing.expectEqual(@as(f32, 0), out.wake);
+
+    // Same input again: rebuilt by hand with the passes run by the caller, then finish.
+    f = ctx.begin(&in);
+    _ = f.open(.from("bar"), .{ .dir = .x, .size = .{ .fill, .px(40) }, .pad = @splat(10), .gap = 4, .fill = .rgb(9, 9, 9) });
+    _ = f.open(.none, .{ .size = .{ .px(100), .fit } });
+    _ = f.text("twenty-four characters!!", .{ .px = 10, .wrap = true });
+    f.close();
+    f.close();
+    _ = f.custom(.from("view"), .{ .size = .{ .fill, .fill } }, 7);
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    font.measure(f.texts());
+    f.tree().seal(0);
+    layout.prepare(f.tree());
+    layout.applyText(f.tree(), f.texts(), .x);
+    layout.fit(f.tree(), .x);
+    layout.resolve(f.tree(), .x, 400);
+    layout.textAvail(f.tree(), f.texts());
+    font.wrap(f.texts());
+    layout.applyText(f.tree(), f.texts(), .y);
+    layout.fit(f.tree(), .y);
+    layout.resolve(f.tree(), .y, 300);
+    layout.place(f.tree());
+    layout.finalize(f.tree());
+    const again = f.finish();
+    try testing.expectEqual(Rect{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 34 }, again.tree.rect(para.ix()));
+    try testing.expectEqual(@as(u32, 3), again.draw.cmd_len);
+    // Nothing changed and nothing moves: sleep until the next event.
+    try testing.expectEqual(types.inf, again.wake);
 }

@@ -41,6 +41,17 @@ pub const Status = bitpack struct(u8) {
     }
 };
 
+/// What a frame produced. Every field is data the host reads; nothing calls back.
+pub const Output = struct {
+    draw: *const DrawList,
+    /// Final geometry and semantics (`role`, `value`) for accessibility bridges and tests.
+    tree: *const Tree,
+    texts: *const Texts,
+    /// Seconds until another frame is needed without new input: 0 = now, inf = sleep until
+    /// the next event.
+    wake: f32,
+};
+
 /// Everything that outlives a frame. Holds no pointers the caller did not hand it: all storage
 /// is carved from the buffer passed to `init`.
 pub const Context = struct {
