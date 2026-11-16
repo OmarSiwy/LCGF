@@ -68,6 +68,16 @@ pub const PalettedLook = extern struct {
     border_color: u8,
 };
 
+fn collectStrings(comptime s: Spec, comptime all: *[]const []const u8) void {
+    if (s.name) |x| all.* = all.* ++ [_][]const u8{x};
+    if (s.id) |x| all.* = all.* ++ [_][]const u8{x};
+    for (s.children) |c| collectStrings(c, all);
+}
+
+fn longerFirst(_: void, a: []const u8, b: []const u8) bool {
+    return a.len > b.len;
+}
+
 /// The row type of a column with `n` rows: `[]T` becomes `[n]T`, `[k][]T` becomes `[k][n]T`.
 fn Rows(comptime FT: type, comptime n: comptime_int) type {
     return switch (@typeInfo(FT)) {
@@ -206,6 +216,56 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             return class[std.meta.fieldIndex(RuntimeColumns, name) orelse @compileError("no column '" ++ name ++ "'")];
         }
 
+        /// Every accessible name (`Spec.name`) and widget id (`Spec.id`) of the UI in one
+        /// read-only byte table, each stored once: a string equal to, or contained in, one
+        /// already in the table points into it (longest strings are placed first). Labels show
+        /// state at run time, so their text is not here.
+        pub const strings: []const u8 = blk: {
+            @setEvalBranchQuota(10_000 + 2_000 * n);
+            var all: []const []const u8 = &.{};
+            collectStrings(spec, &all);
+            // Longest first, so a shorter string can land inside one already placed.
+            var sorted: [all.len][]const u8 = all[0..all.len].*;
+            std.mem.sort([]const u8, &sorted, {}, longerFirst);
+            var out: []const u8 = &.{};
+            for (sorted) |str| if (std.mem.indexOf(u8, out, str) == null) {
+                out = out ++ str;
+            };
+            break :blk out;
+        };
+        /// The string table as an array, the form that lands in read-only data.
+        pub const string_table: [strings.len]u8 = strings[0..strings.len].*;
+        /// The smallest of u8, u16 and u32 that holds every offset into `strings` and its end.
+        pub const Offset = if (strings.len <= 0xff) u8 else if (strings.len <= 0xffff) u16 else u32;
+        /// Bytes `start..start + bytes` of `strings`, as `Strings.Span` in the runtime front end.
+        pub const Span = struct { start: Offset = 0, bytes: Offset = 0 };
+
+        /// Row i: node i's accessible name in `strings`; empty for a node without one.
+        pub const name_span: [n]Span = spans(.name);
+        /// Row i: node i's widget id in `strings`; empty for a node without one.
+        pub const id_span: [n]Span = spans(.id);
+
+        fn spans(comptime which: enum { name, id }) [n]Span {
+            @setEvalBranchQuota(10_000 + 2_000 * n);
+            var out: [n]Span = undefined;
+            var next: usize = 0;
+            spanWalk(spec, which == .name, &next, &out);
+            return out;
+        }
+
+        fn spanWalk(comptime s: Spec, comptime names_: bool, comptime next: *usize, comptime out: *[n]Span) void {
+            const str: ?[]const u8 = if (names_) s.name else s.id;
+            out[next.*] = if (str) |x| .{ .start = std.mem.indexOf(u8, strings, x).?, .bytes = x.len } else .{};
+            next.* += 1;
+            for (s.children) |c| spanWalk(c, names_, next, out);
+        }
+
+        /// Node i's accessible name, or "".
+        pub fn accessibleName(i: usize) []const u8 {
+            const sp = name_span[i];
+            return string_table[sp.start..][0..sp.bytes];
+        }
+
         /// Read-only bytes: the constant tables (`table`).
         pub const rodata_bytes = blk: {
             var b = 0;
@@ -213,6 +273,8 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
                 if (c == .constant) b += @sizeOf(TableRows(name));
             }
             if (paletted) b += @sizeOf(@TypeOf(palette_table));
+            // A UI without strings needs no spans: every one is empty.
+            if (strings.len > 0) b += @sizeOf(@TypeOf(string_table)) + @sizeOf(@TypeOf(name_span)) + @sizeOf(@TypeOf(id_span));
             break :blk b;
         };
         /// The dynamic columns: one field per dynamic column of `Tree.Columns`, of the same name,
@@ -305,11 +367,12 @@ test "Columns: every column is classified, and the two classes hold the runtime 
         var row: usize = 0;
         inline for (@typeInfo(RuntimeColumns).@"struct".field_types) |FT| row += rowBytes(FT);
         // Equal up to the padding @sizeOf adds to Dynamic's end, the bytes integer coordinates
-        // save in `rect` and `vis`, and what the palette saves in `look`.
+        // save in `rect` and `vis`, and what the palette saves in `look`, plus the strings.
         const palette_saved = if (C.paletted) C.node_count * 4 - 4 * C.palette.len else 0;
+        const strings = if (C.strings.len > 0) C.strings.len + 2 * C.node_count * @sizeOf(C.Span) else 0;
         const saved = 2 * 4 * C.node_count * (4 - @sizeOf(C.Coordinate)) + palette_saved;
-        try testing.expect(C.rodata_bytes + C.ram_bytes + saved >= C.node_count * row);
-        try testing.expect(C.rodata_bytes + C.ram_bytes + saved < C.node_count * row + 16);
+        try testing.expect(C.rodata_bytes + C.ram_bytes + saved >= C.node_count * row + strings);
+        try testing.expect(C.rodata_bytes + C.ram_bytes + saved < C.node_count * row + strings + 16);
         try testing.expectEqual(@typeInfo(RuntimeColumns).@"struct".field_names.len, C.class.len);
     }
 }
@@ -354,6 +417,38 @@ test "Columns.palette: more than 256 colours keep full looks" {
     try testing.expect(!Columns(rainbow_256, .{}).paletted);
     try testing.expect(Columns(rainbow_255, .{}).paletted);
     try testing.expectEqual(256, Columns(rainbow_255, .{}).palette.len);
+}
+
+test "Columns.strings: names and ids stored once, shared when one contains another" {
+    const C = Columns(examples.mixer, .{});
+    // "Volume" holds the id "volume"? No: case differs. "Mute"/"mute", "Pan"/"pan" too: six
+    // strings, and none inside another.
+    try testing.expectEqual(u8, C.Offset);
+    try testing.expectEqual("Volume".len + "volume".len + "Mute".len + "mute".len + "Pan".len + "pan".len, C.strings.len);
+    try testing.expectEqualStrings("Volume", C.accessibleName(4));
+    try testing.expectEqualStrings("Mute", C.accessibleName(3));
+    try testing.expectEqualStrings("", C.accessibleName(0));
+    try testing.expectEqualStrings("pan", C.string_table[C.id_span[7].start..][0..C.id_span[7].bytes]);
+    // The settings page names each control after its id: one copy of each.
+    const S = Columns(examples.settings, .{ .viewport = .{ 320, 240 } });
+    var total: usize = 0;
+    inline for (@typeInfo(examples.Settings).@"struct".field_names[1..]) |f| total += f.len;
+    try testing.expect(S.strings.len <= total);
+    for (0..S.node_count) |i| {
+        const id = S.string_table[S.id_span[i].start..][0..S.id_span[i].bytes];
+        try testing.expectEqualStrings(id, S.accessibleName(i));
+    }
+}
+
+test "Columns.strings: a string inside a longer one points into it" {
+    const sp = spec_zig;
+    const s = comptime sp.row(.{}, .{ sp.named(sp.slider(.vol, .x), "Master volume"), sp.named(sp.slider(.v, .x), "volume") });
+    const C = Columns(s, .{});
+    // "volume", the id "vol" and the id "v" all lie inside "Master volume".
+    try testing.expectEqualStrings("Master volume", C.strings);
+    try testing.expectEqualStrings("volume", C.accessibleName(2));
+    try testing.expectEqual(7, C.name_span[2].start);
+    try testing.expectEqual(7, C.id_span[1].start);
 }
 
 test "Coord: the smallest signed integer that holds the viewport, f32 without one" {
