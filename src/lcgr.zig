@@ -148,6 +148,7 @@ pub const shell_web = @import("shell/web/web.zig");
 pub const shell_x11_wire = @import("shell/x11/wire.zig");
 pub const shell_x11_keys = @import("shell/x11/keys.zig");
 pub const shell_x11_xim = @import("shell/x11/xim.zig");
+pub const shell_win32_translate = @import("shell/win32/translate.zig");
 
 test {
     std.testing.refAllDecls(@This());

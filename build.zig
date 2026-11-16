@@ -520,6 +520,10 @@ pub fn build(b: *std.Build) void {
     // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
     const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/x11/x11.zig"),
+    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgr. user32, gdi32
+    // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
+    const win32_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/win32.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
@@ -694,11 +698,17 @@ pub fn build(b: *std.Build) void {
     // The example application in an X11 window (src/shell/x11/example.zig).
     const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/x11/example.zig"),
+    b.step("win32", "Test the Win32 shell on Windows").dependOn(&b.addRunArtifact(win32_tests).step);
+    b.step("win32-build", "Compile the Win32 shell's tests without running them (ci/run.sh win32)").dependOn(&win32_tests.step);
+    // The shells' example in a Win32 window (src/shell/win32/example.zig).
+    const win32_example = b.addExecutable(.{ .name = "win32-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/example.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
+    b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
