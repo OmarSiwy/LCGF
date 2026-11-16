@@ -58,6 +58,7 @@ pub const render_null = @import("render/null.zig");
 pub const png = @import("assets/png.zig");
 pub const embed = @import("assets/embed.zig");
 pub const image_jobs = @import("assets/image_jobs.zig");
+pub const image_atlas = @import("assets/image_atlas.zig");
 
 test {
     std.testing.refAllDecls(@This());
