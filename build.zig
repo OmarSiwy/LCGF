@@ -295,7 +295,12 @@ pub fn build(b: *std.Build) void {
         vk_h.addIncludePath(vulkan_headers.path("include"));
         vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
         const vk_c = vk_h.createModule();
-        for ([_]*std.Build.Module{vk_tests.root_module}) |m| m.addImport("vk_c", vk_c);
+        for ([_]*std.Build.Module{vk_tests.root_module}) |m| {
+            m.addImport("vk_c", vk_c);
+            // The committed SPIR-V of the shipped shaders (src/render/shaders/gen/, from naga).
+            m.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+            m.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
+        }
         vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
     }
 

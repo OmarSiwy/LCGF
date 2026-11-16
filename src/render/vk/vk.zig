@@ -14,6 +14,7 @@ pub const device = @import("device.zig");
 pub const swapchain = @import("swapchain.zig");
 pub const pass = @import("pass.zig");
 pub const host = @import("host.zig");
+pub const renderer = @import("renderer.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -22,4 +23,5 @@ test {
     std.testing.refAllDecls(swapchain);
     std.testing.refAllDecls(pass);
     std.testing.refAllDecls(host);
+    std.testing.refAllDecls(renderer);
 }
