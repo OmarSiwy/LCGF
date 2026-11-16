@@ -8,6 +8,7 @@ const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
 const Interaction = @import("interaction.zig").Interaction;
 const Focus = @import("focus.zig").Focus;
+const mem = @import("../core/mem.zig");
 const Id = types.Id;
 
 /// This frame's keyboard input, addressed to one widget. Plain data over the caller's `Input`;
@@ -80,6 +81,71 @@ pub const Keyboard = struct {
     }
 };
 
+/// The shortcut table: one row per key combination the application binds to an action of
+/// its own (Ctrl+S to save, F5 to run). Caller-owned columns; rows stay until `reset`.
+pub const Shortcuts = struct {
+    len: u32 = 0,
+    cap: u32,
+    /// `add` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+    overflow: bool = false,
+    c: Columns,
+
+    pub const Columns = struct {
+        /// Scancode, as for `Input.Keys`.
+        code: []u8,
+        /// `Input.Mods` as its byte: these modifiers exactly, no more and no fewer.
+        mods: []u8,
+        /// The application's number for what the shortcut does.
+        action: []u16,
+    };
+
+    pub fn init(carver: *mem.Carver, cap: u32) Shortcuts {
+        std.debug.assert(cap > 0);
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+    }
+    pub fn reset(sh: *Shortcuts) void {
+        sh.len = 0;
+        sh.overflow = false;
+    }
+    /// Binds `code` with exactly `mods` to `action`. Returns the row.
+    pub fn add(sh: *Shortcuts, code: u8, mods: Input.Mods, action: u16) u32 {
+        const k = @min(sh.len, sh.cap - 1);
+        sh.overflow = simd.orB(sh.overflow, sh.len >= sh.cap);
+        sh.len = k + 1;
+        sh.c.code[k] = code;
+        sh.c.mods[k] = @bitCast(mods);
+        sh.c.action[k] = action;
+        return k;
+    }
+};
+
+/// Writes to `out`, in event order, the action of every row of `sh` whose key went down (or
+/// repeated) this frame with exactly its modifiers, and returns how many. Run before widgets
+/// read `k`: an event that fires a shortcut is marked taken, so the focused widget does not
+/// also get it. Events focus already used do not fire. Several rows bound to one combination
+/// all fire. At most `out.len - 1` actions are kept (the filter writes one row past the last
+/// kept one); later ones are dropped.
+pub fn fire(sh: *const Shortcuts, k: *Keyboard, out: []u16) u32 {
+    std.debug.assert(out.len > 0);
+    const last: u32 = @intCast(out.len - 1);
+    const c = &sh.c;
+    var w: u32 = 0;
+    for (k.in.events, 0..) |e, ei| {
+        const live = simd.andB(simd.orB(e.kind == .press, e.kind == .repeat), !k.isTaken(@intCast(ei)));
+        const mods: u8 = @bitCast(e.mods);
+        var any = false;
+        for (c.code[0..sh.len], c.mods[0..sh.len], c.action[0..sh.len]) |code, m, action| {
+            const hit = simd.andB(live, simd.andB(code == e.code, m == mods));
+            // Clamp the write, not the count: a clamped count became a branch (census).
+            out[@min(w, last)] = action;
+            w += @intFromBool(hit);
+            any = simd.orB(any, hit);
+        }
+        k.taken |= @as(u64, @intFromBool(simd.andB(any, ei < 64))) << @intCast(ei & 63);
+    }
+    return @min(w, last);
+}
+
 const testing = std.testing;
 
 const field = Id.from("field");
@@ -121,7 +187,6 @@ test "route: only the focused widget gets keys, held keys and text" {
 
 test "route: a Tab that moved focus is not delivered; other keys reach the new focus" {
     const Tree = @import("../core/tree.zig").Tree;
-    const mem = @import("../core/mem.zig");
     const Scopes = @import("focus.zig").Scopes;
     const scan = @import("focus.zig").scan;
     var raw: [32 * 1024]u8 align(mem.column_align) = undefined;
@@ -163,4 +228,67 @@ test "route: a Tab that moved focus is not delivered; other keys reach the new f
     it.focus = @backingInt(field);
     fo.step(&it, &t, &sc, &in);
     try testing.expectEqual(@as(u64, 0), fo.taken);
+}
+
+test "fire: exact modifiers, event order, repeats, and the widget does not see what fired" {
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var sh = Shortcuts.init(&carver, 4);
+    const save: u16 = 1;
+    const save_as: u16 = 2;
+    const run: u16 = 3;
+    // HID: 22 S, 62 F5.
+    _ = sh.add(22, .{ .ctrl = true }, save);
+    _ = sh.add(22, .{ .ctrl = true, .shift = true }, save_as);
+    _ = sh.add(62, .{}, run);
+    const queue = [_]Input.Event{
+        .{ .kind = .press, .code = 22, .mods = .{ .ctrl = true, .shift = true } },
+        .{ .kind = .press, .code = 22 }, // plain "s": typed, not a shortcut
+        .{ .kind = .press, .code = 62 },
+        .{ .kind = .repeat, .code = 62 },
+        .{ .kind = .release, .code = 62 },
+        .{ .kind = .press, .code = 22, .mods = .{ .ctrl = true } },
+        .{ .kind = .press, .code = 22, .mods = .{ .ctrl = true, .alt = true } },
+    };
+    const in: Input = .{ .events = &queue };
+    const it: Interaction = .{ .focus = @backingInt(field) };
+    const fo: Focus = .{};
+    var k = Keyboard.route(&it, &fo, &in);
+    var out: [8]u16 = undefined;
+    const n = fire(&sh, &k, &out);
+    try testing.expectEqualSlices(u16, &.{ save_as, run, run, save }, out[0..n]);
+    // The field gets the plain "s", the release and Ctrl+Alt+S, which nothing bound.
+    var codes: [8]u8 = undefined;
+    var m: usize = 0;
+    var e = k.events(field);
+    while (e.next()) |ev| : (m += 1) codes[m] = ev.code;
+    try testing.expectEqualSlices(u8, &.{ 22, 62, 22 }, codes[0..m]);
+    // Firing again on the same frame finds everything taken.
+    try testing.expectEqual(0, fire(&sh, &k, &out));
+    // A small `out` keeps what fits and drops the rest.
+    var k2 = Keyboard.route(&it, &fo, &in);
+    var small: [3]u16 = undefined;
+    try testing.expectEqual(2, fire(&sh, &k2, &small));
+    try testing.expectEqualSlices(u16, &.{ save_as, run }, small[0..2]);
+}
+
+test "fire: nothing bound fires nothing; overflow keeps the table in bounds" {
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var sh = Shortcuts.init(&carver, 1);
+    const queue = [_]Input.Event{.{ .kind = .press, .code = 4 }};
+    const in: Input = .{ .events = &queue };
+    const it: Interaction = .{};
+    const fo: Focus = .{};
+    var k = Keyboard.route(&it, &fo, &in);
+    var out: [4]u16 = undefined;
+    try testing.expectEqual(0, fire(&sh, &k, &out));
+    _ = sh.add(5, .{}, 1);
+    try testing.expect(!sh.overflow);
+    try testing.expectEqual(0, sh.add(4, .{}, 9));
+    try testing.expect(sh.overflow);
+    try testing.expectEqual(1, fire(&sh, &k, &out));
+    try testing.expectEqual(9, out[0]);
+    sh.reset();
+    try testing.expectEqual(0, sh.len);
 }
