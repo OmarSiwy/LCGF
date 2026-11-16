@@ -167,10 +167,15 @@ fn opaqueRect(q: *const Quad, scale: f32) bool {
         q.border < 0.001 and q.opacity == 1 and (q.fill >> 24) == 255 and @reduce(.And, @floor(s) == s);
 }
 
-/// Pixels whose centres lie in `q.rect`.
+/// Pixels whose centres lie in `q.rect` and inside `q.clip` (the shader's `step` tests).
 fn coveredPixels(q: *const Quad, scale: f32) [4]u32 {
-    const rect = @as(@Vector(4, f32), q.rect) * @as(@Vector(4, f32), @splat(scale));
-    return toPixels(rect);
+    const s: @Vector(4, f32) = @splat(scale);
+    const rect = @as(@Vector(4, f32), q.rect) * s;
+    const clip = @as(@Vector(4, f32), q.clip) * s - @as(@Vector(4, f32), @splat(0.5));
+    // A centre x + 0.5 is in the clip when ceil(c0 - 0.5) <= x <= floor(c1 - 0.5).
+    const lo = @max(rect, @ceil(clip));
+    const hi = @min(rect, @floor(clip) + @as(@Vector(4, f32), @splat(1)));
+    return toPixels(.{ lo[0], lo[1], hi[2], hi[3] });
 }
 
 /// Logical box (x0, y0, x1, y1) in pixels, floored and clamped to [0, 2^24].
@@ -233,7 +238,13 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32
     const hy = (y1 - y0) * 0.5;
     const cx = (x0 + x1) * 0.5;
     const cy = (y0 + y1) * 0.5;
-    const box = clampBox(toPixels(.{ x0 * scale, y0 * scale, x1 * scale + 1, y1 * scale + 1 }), t.scissor);
+    const clip = q.clip;
+    const box = clampBox(toPixels(.{
+        @max(x0, clip[0]) * scale,
+        @max(y0, clip[1]) * scale,
+        @min(x1, clip[2]) * scale + 1,
+        @min(y1, clip[3]) * scale + 1,
+    }), t.scissor);
 
     const fill = rgba(q.fill);
     const edge = rgba(q.border_color);
@@ -242,6 +253,12 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32
     // Dashed and dotted borders.
     const dash: f32 = if (kind == .dotted) border else @bitCast(p[1]);
     const period = @max(dash + @as(f32, @bitCast(p[2])), 1e-3);
+    // Clip, and its rounded corners when it has any.
+    const ccx = (clip[0] + clip[2]) * 0.5;
+    const ccy = (clip[1] + clip[3]) * 0.5;
+    const chx = (clip[2] - clip[0]) * 0.5;
+    const chy = (clip[3] - clip[1]) * 0.5;
+    const rounded_clip: B = @splat(@reduce(.Or, @as(@Vector(4, f32), q.clip_radii) > @as(@Vector(4, f32), @splat(0))));
 
     const red = t.fb.red();
     const inv_scale = 1 / scale;
@@ -282,7 +299,13 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, scale: f32
             const cover = shape;
             inline for (0..4) |i| color[i] = simd.f(fill[i]) + (simd.f(edge[i]) - simd.f(fill[i])) * on_border;
 
-            const alpha = @select(f32, geo, cover * simd.f(q.opacity), simd.f(0));
+            // Clip as coverage: the rect as a step, its rounded corners as a distance field.
+            const inside = (sx >= simd.f(clip[0])) & (sx <= simd.f(clip[2])) & (sy >= simd.f(clip[1])) & (sy <= simd.f(clip[3]));
+            const tcx = sx - simd.f(ccx);
+            const tcy = sy - simd.f(ccy);
+            const clip_d = roundedBox(tcx, tcy, chx, chy, cornerRadius(tcx, tcy, chx, chy, q.clip_radii)) * simd.f(scale);
+            const rounded = @select(f32, rounded_clip, sat(simd.f(0.5) - clip_d), simd.f(1));
+            const alpha = @select(f32, inside & geo, cover * rounded * simd.f(q.opacity), simd.f(0));
 
             // Premultiplied source over the framebuffer.
             const old: U = row[x..][0..W].*;
@@ -327,17 +350,18 @@ test "framebuffer: RGBA8 and BGRA8 byte order, rows padded to whole vectors" {
     }
 }
 
-test "opaque rects: filled exactly, cut by the scissor" {
+test "opaque rects: filled exactly, cut by the clip's pixel centres and the scissor" {
     var f: Frame(16, 8) = .{};
     var fb = f.fb(.rgba8);
     fb.clear(.black);
     var q = testQuad(.{ 2, 1, 14, 7 }, .rgb(200, 100, 50));
+    q.clip = .{ 3.4, 0, 12.5, 6 };
     try testing.expect(opaqueRect(&q, 1));
     const s: Software = .{ .quads = &.{q} };
     s.drawBatch(.{ .fb = &fb, .scissor = .{ 0, 0, 16, 5 } }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
-    // Rows 1 .. 4 are inside the scissor.
+    // Centres 3.5 .. 12.5 are inside the clip (its edges are inclusive), rows 1 .. 4 inside the scissor.
     for (0..8) |y| for (0..16) |x| {
-        const in = x >= 2 and x < 14 and y >= 1 and y < 5;
+        const in = x >= 3 and x <= 12 and y >= 1 and y < 5;
         try testing.expectEqual(if (in) Color.rgb(200, 100, 50) else Color.black, fb.at(@intCast(x), @intCast(y)));
     };
 }
