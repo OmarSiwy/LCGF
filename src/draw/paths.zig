@@ -5,7 +5,11 @@
 //! 2. `flatten`: the path as polylines, curves cut into chords. `stroke` turns polylines into
 //!    the outline of a stroke, more polylines, filled like any other.
 //! 3. `bounds`, `fill`, `coverage`: the pixel box of the polylines, then their 8-bit coverage
-//!    under a fill rule, into a `w * h` image the caller places (an atlas, a canvas).
+//!    under a fill rule, into a `w * h` image.
+//! 4. `place`, `emit`: the image packed into a coverage atlas, and one quad in the draw list
+//!    that samples it in the path's colour. A path is rasterised once and drawn every frame
+//!    by its quad, batched with the other quads of the same texture; re-rasterise when the
+//!    path or its scale changes.
 //!
 //! Coverage is exact along x and sampled along y: each pixel row is cut into `sub_rows` lines,
 //! each line's spans are found from its edge crossings under the fill rule, and the exact length
@@ -20,6 +24,13 @@
 const std = @import("std");
 const simd = @import("../core/simd.zig");
 const raster = @import("../text/raster/raster.zig");
+const types = @import("../core/types.zig");
+const draw_list = @import("draw_list.zig");
+const DrawList = draw_list.DrawList;
+
+/// The 8-bit coverage atlas path images are packed into: the glyph atlas's type
+/// (src/text/raster/atlas.zig), a texture of its own or shared with glyphs.
+pub const Atlas = @import("../text/raster/atlas.zig").Atlas;
 
 /// What one path step does, and how many points it consumes from `Path.x` / `Path.y`.
 pub const Verb = enum(u8) {
@@ -635,6 +646,60 @@ fn sortCrossings(xs: []f32, ds: []i32) void {
 /// prefix sum, |sum| clamped to 1, times 255.
 pub const coverage = raster.coverage;
 
+/// Packs the coverage image `img` of box `b` into `atlas` and copies it there. Returns where,
+/// or null when the atlas is full (evict or clear, re-place, retry). An empty box takes no
+/// room and returns an empty rectangle. A pixel of gap is kept right and below, so bilinear
+/// sampling at a non-integer scale reads no neighbour.
+pub fn place(atlas: *Atlas, b: Box, img: []const u8) ?Atlas.Rect {
+    if (b.w == 0 or b.h == 0) return .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    const r = atlas.pack(b.w + 1, b.h + 1) orelse return null;
+    const used: Atlas.Rect = .{ .x = r.x, .y = r.y, .w = b.w, .h = b.h };
+    atlas.put(used, img);
+    return used;
+}
+
+/// No clip: a quad's clip rectangle that contains everything.
+pub const no_clip = [4]f32{ -types.inf, -types.inf, types.inf, types.inf };
+
+/// Appends the quad that draws a placed path image: rectangle `b`, sampling `uv` (from
+/// `atlas.uv(rect)`) of `texture`, the host's texture of the atlas, in `color` (straight alpha),
+/// clipped to `clip` (x0, y0, x1, y1; `no_clip` for none). The stock material multiplies the
+/// fill by the texture sample, so the host binds the coverage as a white texture with coverage
+/// in alpha. The quad joins the last command when that is a run of quads with the same texture
+/// and material that ends where it starts, else opens a command. `d` needs a spare quad and
+/// command row (size `DrawList.init` with the paths counted as nodes).
+pub fn emit(d: *DrawList, b: Box, uv: [4]f32, texture: types.Texture, color: types.Color, clip: [4]f32) void {
+    std.debug.assert(d.quad_len < d.quads.len and d.cmd_len < d.cmd.kind.len);
+    const q = d.quad_len;
+    const x: f32 = @floatFromInt(b.x);
+    const y: f32 = @floatFromInt(b.y);
+    d.quads[q] = .{
+        .rect = .{ x, y, x + @as(f32, @floatFromInt(b.w)), y + @as(f32, @floatFromInt(b.h)) },
+        .clip = clip,
+        .params = .{ 0, 0, 0, 0 },
+        .uv = uv,
+        .fill = color.bitsOf(),
+        .border_color = 0,
+        .radius = 0,
+        .border = 0,
+    };
+    d.quad_len += 1;
+    const key = (@as(u32, @backingInt(texture)) << 16) | @backingInt(types.Material.solid);
+    const last = d.cmd_len -% 1;
+    const joins = d.cmd_len > 0 and d.cmd.kind[last] == @backingInt(DrawList.Kind.quads) and
+        d.cmd.key[last] == key and d.cmd.first[last] + d.cmd.count[last] == q;
+    if (joins) {
+        d.cmd.count[last] += 1;
+        return;
+    }
+    const c = d.cmd_len;
+    d.cmd.kind[c] = @backingInt(DrawList.Kind.quads);
+    d.cmd.first[c] = q;
+    d.cmd.count[c] = 1;
+    d.cmd.key[c] = key;
+    d.cmd_len += 1;
+}
+
 /// Columns for a test path, its polylines and the fill scratch.
 pub fn TestBuffers(comptime verbs: usize, comptime points: usize) type {
     return struct {
@@ -937,4 +1002,53 @@ test "stroke: a sharp miter past the limit becomes a bevel" {
     }
     try testing.expectApproxEqAbs(20 + 1.0 / @sin(std.math.degreesToRadians(10.0)) * @cos(std.math.degreesToRadians(10.0)), right[0], 1e-3);
     try testing.expect(right[1] < 21.01);
+}
+
+test "place and emit: a path image goes into the atlas and one batched quad per path" {
+    const mem = @import("../core/mem.zig");
+    var t: TestBuffers(8, 64) = .{};
+    var p = t.path();
+    p.moveTo(2.5, 1);
+    p.lineTo(6, 1);
+    p.lineTo(6, 4);
+    p.close();
+    var l = t.polyline();
+    flatten(&p, 0.25, &l);
+    var acc: [128]f32 = undefined;
+    var img: [128]u8 = undefined;
+    const b, const px = testRender(&l, .nonzero, t.scratch(), &acc, &img);
+
+    var pixels: [16 * 16]u8 = undefined;
+    var sx: [16]u32 = undefined;
+    var sy: [16]u32 = undefined;
+    var sw: [16]u32 = undefined;
+    var atlas: Atlas = .init(16, 16, &pixels, .{ .x = &sx, .y = &sy, .w = &sw });
+    const r0 = place(&atlas, b, px).?;
+    const r1 = place(&atlas, b, px).?;
+    try testing.expectEqual(b.w, r0.w);
+    // The second image sits past the first one's gap.
+    try testing.expect(r1.x >= r0.x + b.w + 1 or r1.y >= r0.y + b.h + 1);
+    for (0..b.h) |row| try testing.expectEqualSlices(u8, px[row * b.w ..][0..b.w], atlas.pixels[(r1.y + row) * 16 + r1.x ..][0..b.w]);
+    try testing.expectEqual(Atlas.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 }, place(&atlas, .{}, px).?);
+    try testing.expectEqual(null, place(&atlas, .{ .w = 15, .h = 15 }, &.{}));
+
+    const bytes = comptime blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 4, 0, 0);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, 4, 0, 0);
+    const tex: types.Texture = @fromBackingInt(3);
+    emit(&d, b, atlas.uv(r0), tex, .rgb(255, 0, 0), no_clip);
+    emit(&d, b, atlas.uv(r1), tex, .rgb(0, 255, 0), no_clip);
+    emit(&d, b, atlas.uv(r1), .white, .rgb(0, 0, 255), no_clip);
+    try testing.expectEqual(3, d.quad_len);
+    try testing.expectEqual(2, d.cmd_len);
+    try testing.expectEqual(draw_list.Cmd{ .quads = .{ .first = 0, .count = 2, .texture = tex, .material = .solid } }, d.command(0));
+    try testing.expectEqual(draw_list.Cmd{ .quads = .{ .first = 2, .count = 1, .texture = .white, .material = .solid } }, d.command(1));
+    try testing.expectEqual([4]f32{ 2, 1, 6, 4 }, d.quads[0].rect);
+    try testing.expectEqual(atlas.uv(r1), d.quads[1].uv);
+    try testing.expectEqual(types.Color.rgb(0, 255, 0).bitsOf(), d.quads[1].fill);
 }

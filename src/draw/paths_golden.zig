@@ -4,8 +4,11 @@
 //!
 //!   zig build paths-golden -- OUT.bin
 //!
-//! A tool, not part of the package: not exported from src/lcgr.zig. Shapes are composited in
-//! order over an opaque background the way make.py specifies.
+//! A tool, not part of the package: not exported from src/lcgr.zig. Each shape is rasterised,
+//! placed in a coverage atlas and emitted as a quad into a draw list (paths.place, paths.emit);
+//! at the end of a scene `composite` draws the list's quads in command order the way the stock
+//! quad material does (fill times the atlas sample, nearest texel, premultiplied over), which is
+//! the compositing make.py specifies.
 const std = @import("std");
 const lcgr = @import("lcgr");
 const paths = lcgr.paths;
@@ -19,6 +22,8 @@ const bg = [3]f32{ 16, 16, 20 };
 const tolerance = 1.0 / 1024.0;
 
 const max_px = 128 * 128;
+const atlas_side = 512;
+const max_shapes = 64;
 const max_points = 1 << 16;
 
 /// A filled shape, or a stroked one when `stroke` is set (filled nonzero).
@@ -37,6 +42,9 @@ pub fn main(init: std.process.Init) !void {
     const bufs = try gpa.create(Buffers);
     defer gpa.destroy(bufs);
     var canvas: [max_px][3]f32 = undefined;
+    const frame = try gpa.create(Frame);
+    defer gpa.destroy(frame);
+    frame.init();
     var acc: [max_px + 64]f32 = undefined;
     var img: [max_px + 64]u8 = undefined;
 
@@ -56,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
         // writes the pending scene.
         const ends_shape = line == null or std.mem.eql(u8, op, "fill") or std.mem.eql(u8, op, "stroke") or std.mem.eql(u8, op, "scene");
         if (ends_shape) if (shape) |s| {
-            draw(bufs, &path, s, w, h, &canvas, &acc, &img);
+            draw(bufs, &path, s, frame, &acc, &img);
             shape = null;
         };
         if ((line == null or std.mem.eql(u8, op, "scene")) and w != 0) {
@@ -66,6 +74,7 @@ pub fn main(init: std.process.Init) !void {
             std.mem.writeInt(u32, hdr[0..4], w, .little);
             std.mem.writeInt(u32, hdr[4..8], h, .little);
             try out.appendSlice(gpa, &hdr);
+            composite(frame, w, h, &canvas);
             for (canvas[0 .. w * h]) |px| {
                 for (px) |c| try out.append(gpa, @intFromFloat(@round(c)));
                 try out.append(gpa, 255);
@@ -79,6 +88,7 @@ pub fn main(init: std.process.Init) !void {
             h = try std.fmt.parseInt(u32, tok.next().?, 10);
             std.debug.assert(w * h <= max_px);
             for (canvas[0 .. w * h]) |*px| px.* = bg;
+            frame.reset();
         } else if (std.mem.eql(u8, op, "fill")) {
             const rule = std.meta.stringToEnum(paths.Rule, tok.next().?) orelse return error.BadRule;
             var color: [4]u8 = undefined;
@@ -133,8 +143,36 @@ const Buffers = struct {
     }
 };
 
-/// Rasterises `path` and composites it into the canvas: c * a * v + dst * (1 - a * v).
-fn draw(bufs: *Buffers, path: *const paths.Path, s: Shape, w: u32, h: u32, canvas: [][3]f32, acc: []f32, img: []u8) void {
+/// One scene's atlas and draw list.
+const Frame = struct {
+    pixels: [atlas_side * atlas_side]u8,
+    sky: [3][atlas_side]u32,
+    atlas: paths.Atlas,
+    buf: [bytes]u8 align(lcgr.mem.column_align),
+    list: lcgr.draw_list.DrawList,
+
+    const texture: lcgr.types.Texture = @fromBackingInt(1);
+    const bytes = blk: {
+        var counter: lcgr.mem.Carver = .{ .buf = null };
+        _ = lcgr.draw_list.DrawList.init(&counter, max_shapes, 0, 0);
+        break :blk counter.off;
+    };
+
+    fn init(f: *Frame) void {
+        f.atlas = .init(atlas_side, atlas_side, &f.pixels, .{ .x = &f.sky[0], .y = &f.sky[1], .w = &f.sky[2] });
+        var carver: lcgr.mem.Carver = .{ .buf = &f.buf };
+        f.list = .init(&carver, max_shapes, 0, 0);
+    }
+
+    fn reset(f: *Frame) void {
+        f.atlas.clear();
+        f.list.quad_len = 0;
+        f.list.cmd_len = 0;
+    }
+};
+
+/// Rasterises `path`, places its coverage in the atlas and emits its quad.
+fn draw(bufs: *Buffers, path: *const paths.Path, s: Shape, frame: *Frame, acc: []f32, img: []u8) void {
     var l = bufs.polyline();
     std.debug.assert(paths.flattenLen(path, tolerance).points <= bufs.t.lx.len);
     paths.flatten(path, tolerance, &l);
@@ -148,13 +186,41 @@ fn draw(bufs: *Buffers, path: *const paths.Path, s: Shape, w: u32, h: u32, canva
     std.debug.assert(paths.accLen(b) <= acc.len);
     paths.fill(&l, b, s.rule, bufs.scratch(), acc);
     paths.coverage(acc, img, @as(usize, b.w) * b.h);
-    const alpha = @as(f32, @floatFromInt(s.color[3])) / 255;
-    for (0..b.h) |r| for (0..b.w) |c| {
-        const x = b.x + @as(i32, @intCast(c));
-        const y = b.y + @as(i32, @intCast(r));
-        if (x < 0 or y < 0 or x >= w or y >= h) continue;
-        const a = alpha * @as(f32, @floatFromInt(img[r * b.w + c])) / 255;
-        const px = &canvas[@as(usize, @intCast(y)) * w + @as(usize, @intCast(x))];
-        for (px, 0..) |*ch, k| ch.* = @as(f32, @floatFromInt(s.color[k])) * a + ch.* * (1 - a);
-    };
+    const r = paths.place(&frame.atlas, b, img).?;
+    const color: lcgr.types.Color = .rgba(s.color[0], s.color[1], s.color[2], s.color[3]);
+    paths.emit(&frame.list, b, frame.atlas.uv(r), Frame.texture, color, paths.no_clip);
+}
+
+/// Draws the frame's commands into the canvas: per quad pixel, coverage v from the nearest
+/// atlas texel of its uv, then c * a * v + dst * (1 - a * v).
+fn composite(frame: *const Frame, w: u32, h: u32, canvas: [][3]f32) void {
+    const d = &frame.list;
+    const side: f32 = atlas_side;
+    for (0..d.cmd_len) |ci| {
+        const batch = d.command(@intCast(ci)).quads;
+        std.debug.assert(batch.texture == Frame.texture);
+        for (d.quads[batch.first..][0..batch.count]) |q| {
+            const fill: lcgr.types.Color = @bitCast(q.fill);
+            const rgb = [3]f32{ @floatFromInt(fill.r), @floatFromInt(fill.g), @floatFromInt(fill.b) };
+            const alpha = @as(f32, @floatFromInt(fill.a)) / 255;
+            const x0: i32 = @intFromFloat(q.rect[0]);
+            const y0: i32 = @intFromFloat(q.rect[1]);
+            const x1: i32 = @intFromFloat(q.rect[2]);
+            const y1: i32 = @intFromFloat(q.rect[3]);
+            var y = @max(y0, 0);
+            while (y < @min(y1, @as(i32, @intCast(h)))) : (y += 1) {
+                var x = @max(x0, 0);
+                while (x < @min(x1, @as(i32, @intCast(w)))) : (x += 1) {
+                    // Pixel centre to texture coordinate, nearest texel.
+                    const fx = (@as(f32, @floatFromInt(x - x0)) + 0.5) / (q.rect[2] - q.rect[0]);
+                    const fy = (@as(f32, @floatFromInt(y - y0)) + 0.5) / (q.rect[3] - q.rect[1]);
+                    const tx: usize = @intFromFloat(@floor((q.uv[0] + fx * (q.uv[2] - q.uv[0])) * side));
+                    const ty: usize = @intFromFloat(@floor((q.uv[1] + fy * (q.uv[3] - q.uv[1])) * side));
+                    const a = alpha * @as(f32, @floatFromInt(frame.atlas.pixels[ty * atlas_side + tx])) / 255;
+                    const px = &canvas[@as(usize, @intCast(y)) * w + @as(usize, @intCast(x))];
+                    for (px, rgb) |*ch, c| ch.* = c * a + ch.* * (1 - a);
+                }
+            }
+        }
+    }
 }
