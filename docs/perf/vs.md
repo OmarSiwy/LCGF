@@ -14,7 +14,7 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 
 | Row | Frame timed | Text | Notes |
 |---|---|---|---|
-| LCGR | `tools/bench/bench.zig`: every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes (its `poll` line); rows, list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
+| LCGR | `bench/vs/lcgr/main.zig`: harness.h's driver in Zig, a static binary without libc; every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes; list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
 | Clay 0.14 | `Clay_BeginLayout`, declarations, `Clay_EndLayout` (layout and render commands) | the same monospace measure, word wrap by Clay | Clay has no widgets or animation: they are built from elements, springs are the prototype's step |
 | Dear ImGui 1.93.0 | input, `NewFrame`, ImGui's own widgets, `Render` (vertex and index buffers), null back end | default font (ProggyClean) at 14 and 20 px, every glyph laid out into vertices | springs are the prototype's step (no animation API) |
 | egui 0.37.0 | `Context::run_ui` (input, egui's own widgets, layout, shapes) and `Context::tessellate` (meshes), no eframe, no window | default fonts at 14 and 20 px, every glyph tessellated into vertices | springs are the prototype's step (egui's animation helpers are tweens) |
@@ -186,6 +186,26 @@ puts each bar at its cursor in one pass and writes four vertices; LCGR runs the 
 layout over every node and paints from the laid-out columns. Closing x1.32 needs fewer
 passes or fewer columns written per node, which is a layout and tree design change, not a fix
 in this branch.
+
+## The LCGR row's harness, and capacity
+
+Until the perf-gaps branch the LCGR row was the per-pass benchmark (`tools/bench`): it carried
+the prototype core, the differential check against it, static buffers for 4,096 nodes and
+std's formatting, so its size (280 KB loaded, 11.8 MB bss) said little about LCGR.
+`bench/vs/lcgr/main.zig` now does what the Clay harness does and nothing else: harness.h's
+driver, LCGR's frame, its context in a mapped buffer as Clay's arena is malloced.
+
+Fair in both directions, two more changes:
+
+- Capacity per scene (harness.h `vs_capacity`): every harness that sizes its tables does so
+  for the scene, LCGR's node count rounded up to a power of two, at least 256 (Clay's max
+  element count, LCGR's limits). A fixed capacity favours whichever library touches less of
+  what it does not use: at 4,096 LCGR's first frame touches one page per column (684 KiB
+  resident), at 256 it is 388 KiB; Clay moves less (448 -> 376 KiB, static).
+- The LCGR row has no libc. Clay's resident memory and start-up are measured on
+  `vs-clay-static`, built static against musl (`measure.py --startup`), so neither row pays for
+  a dynamic C library; its frame times stay on the glibc build (musl's snprintf and memcpy made
+  its text frame 31 -> 48 us), and its size on the dynamic build (libc not in its bytes).
 
 ## What could not be measured fairly here
 

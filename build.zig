@@ -134,10 +134,23 @@ pub fn build(b: *std.Build) void {
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
     const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
-    // The reference row of docs/perf/vs.md: the benchmark itself, fast and small (bench/vs/measure.py).
-    const vs_lcgr = b.step("vs-lcgr", "Install the benchmark as the LCGR row of the comparison (bench/vs/)");
-    vs_lcgr.dependOn(&b.addInstallArtifact(bench, .{ .dest_sub_path = "vs-lcgr" }).step);
+    // The reference row of docs/perf/vs.md: bench/vs/lcgr/, harness.h's driver over LCGR's
+    // frame, fast and small (bench/vs/measure.py).
+    const vs_lcgr = b.step("vs-lcgr", "Build the LCGR row of the comparison (bench/vs/lcgr/)");
     vs_lcgr.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgr", "vs-lcgr-small" }) |mode, name| {
+        const core = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = mode });
+        core.addOptions("build_options", options);
+        const ui_mod = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = core }} });
+        const scenes_mod = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
+        const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/vs/lcgr/main.zig"),
+            .target = target,
+            .optimize = mode,
+            .imports = &.{ .{ .name = "lcgr", .module = core }, .{ .name = "scenes", .module = scenes_mod } },
+        }) });
+        vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{}).step);
+    }
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
@@ -146,7 +159,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
-        if (std.mem.eql(u8, ex[0], "bench")) vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "vs-lcgr-small" }).step);
     }
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
@@ -158,8 +170,15 @@ pub fn build(b: *std.Build) void {
     const vs_clay = b.step("vs-clay", "Build the Clay comparison harness (bench/vs/clay/)");
     vs_clay.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     if (b.lazyDependency("clay", .{})) |clay| {
-        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-clay", "vs-clay-small" }) |mode, name| {
-            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+        // vs-clay links glibc dynamically (Clay's fastest frames; libc's code is not in its
+        // loaded bytes); vs-clay-static is static against musl, for resident memory and start-up
+        // beside the LCGR row, a static binary without libc: neither then pays for a dynamic C
+        // library's loading and pages (bench/vs/measure.py --startup).
+        var musl = target.query;
+        musl.abi = .musl;
+        const static = b.resolveTargetQuery(musl);
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall, .ReleaseFast }, [_][]const u8{ "vs-clay", "vs-clay-small", "vs-clay-static" }, [_]bool{ false, false, true }) |mode, name, is_static| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = if (is_static) static else target, .optimize = mode, .link_libc = true }) });
             exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/main.c"), .flags = &.{"-std=gnu99"} });
             exe.root_module.addIncludePath(clay.path(""));
             vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
