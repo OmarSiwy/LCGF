@@ -2,7 +2,9 @@
 # references). `scene NAME W H` starts a canvas; `fill RULE RRGGBBAA` starts a shape filled
 # under RULE (nonzero, even_odd), or `stroke WIDTH JOIN CAP MITER_LIMIT RRGGBBAA` a stroked one
 # (JOIN miter, round, bevel; CAP butt, round, square); then path verbs, SVG letters, absolute
-# coordinates:
+# coordinates. `tvg NAME X Y SCALE` draws every command of the TinyVG file NAME.tvg (tvg.py
+# describes and encodes it) at X, Y, SCALE px per display unit.
+#
 # M x y, L x y, Q cx cy x y, C c0x c0y c1x c1y x y, Z.
 
 scene lines 48 48
@@ -163,3 +165,10 @@ Z
 stroke 5 round round 4 ffd040ff
 M 30.3 50.7
 L 30.3 50.7
+
+# TinyVG icons (tvg.py): every command and style, three unit sizes and colour encodings.
+scene icons 112 64
+tvg icon_all 2 2 2.5
+tvg icon_565 66 2 2.5
+tvg icon_f32 66 44 1.25
+tvg icon_565 90 44 1

@@ -1,4 +1,5 @@
-"""Rebuilds the reference images of the path scenes (scenes.txt) as PNGs next to this file.
+"""Rebuilds the reference images of the path scenes (scenes.txt) as PNGs next to this file, and
+the TinyVG icons of tvg.py as .tvg files.
 
     python3 src/draw/testdata/paths/make.py
 
@@ -18,6 +19,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "..", "tools", "golden"))
 from golden import write_png  # noqa: E402
+import tvg  # noqa: E402
 
 SUB = 16
 STEPS = 1024
@@ -36,6 +38,8 @@ def parse(text):
             scenes.append((a[0], int(a[1]), int(a[2]), []))
         elif op == "fill":
             scenes[-1][3].append({"kind": "fill", "rule": a[0], "color": bytes.fromhex(a[1]), "path": []})
+        elif op == "tvg":
+            scenes[-1][3].extend(tvg.shapes(a[0], float(a[1]), float(a[2]), float(a[3])))
         elif op == "stroke":
             scenes[-1][3].append({"kind": "stroke", "width": float(a[0]), "join": a[1], "cap": a[2],
                                   "limit": float(a[3]), "color": bytes.fromhex(a[4]), "path": []})
@@ -210,6 +214,10 @@ def render(w, h, shapes):
 
 
 def main():
+    for name, icon in tvg.ICONS.items():
+        with open(os.path.join(HERE, name + ".tvg"), "wb") as f:
+            f.write(tvg.encode(icon))
+        print("wrote", name + ".tvg")
     with open(os.path.join(HERE, "scenes.txt")) as f:
         scenes = parse(f.read())
     for name, w, h, shapes in scenes:

@@ -14,6 +14,12 @@ const lcgr = @import("lcgr");
 const paths = lcgr.paths;
 
 const scenes = @embedFile("testdata/paths/scenes.txt");
+/// The TinyVG files scenes.txt names (testdata/paths/tvg.py writes them).
+const tvg_files = [_]struct { []const u8, []const u8 }{
+    .{ "icon_all", @embedFile("testdata/paths/icon_all.tvg") },
+    .{ "icon_565", @embedFile("testdata/paths/icon_565.tvg") },
+    .{ "icon_f32", @embedFile("testdata/paths/icon_f32.tvg") },
+};
 const bg = [3]f32{ 16, 16, 20 };
 /// Chord tolerance in px. Chords cut inside a curve, so the error does not cancel: 1/64 px
 /// moved edge pixels by up to 8 levels, 1/128 px by 5 where two curves share a pixel. A miter
@@ -95,6 +101,19 @@ pub fn main(init: std.process.Init) !void {
             _ = try std.fmt.hexToBytes(&color, tok.next().?);
             shape = .{ .rule = rule, .color = color };
             path.clear();
+        } else if (std.mem.eql(u8, op, "tvg")) {
+            const file = tok.next().?;
+            const data = for (tvg_files) |f| {
+                if (std.mem.eql(u8, f[0], file)) break f[1];
+            } else return error.UnknownTvgFile;
+            var v: [3]f32 = undefined;
+            for (&v) |*x| x.* = try std.fmt.parseFloat(f32, tok.next().?);
+            var image = try lcgr.tinyvg.parse(data);
+            while (try image.next(v[2], v[0], v[1], &path)) |item| {
+                if (item.fill) |c| draw(bufs, &path, .{ .rule = item.rule, .color = rgba(c) }, frame, &acc, &img);
+                if (item.line) |c| draw(bufs, &path, .{ .stroke = item.stroke(), .color = rgba(c) }, frame, &acc, &img);
+            }
+            path.clear();
         } else if (std.mem.eql(u8, op, "stroke")) {
             const width = try std.fmt.parseFloat(f32, tok.next().?);
             const join = std.meta.stringToEnum(paths.Join, tok.next().?) orelse return error.BadJoin;
@@ -142,6 +161,10 @@ const Buffers = struct {
         return .{ .x = &b.ox, .y = &b.oy, .end = &b.oend, .closed = &b.oclosed };
     }
 };
+
+fn rgba(c: lcgr.types.Color) [4]u8 {
+    return .{ c.r, c.g, c.b, c.a };
+}
 
 /// One scene's atlas and draw list.
 const Frame = struct {

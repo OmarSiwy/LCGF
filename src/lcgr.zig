@@ -37,6 +37,7 @@ pub const unicode_word = @import("text/unicode/word.zig");
 pub const paint = @import("draw/paint.zig");
 pub const damage = @import("draw/damage.zig");
 pub const paths = @import("draw/paths.zig");
+pub const tinyvg = @import("draw/tinyvg.zig");
 pub const unicode_line = @import("text/unicode/line.zig");
 pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");
