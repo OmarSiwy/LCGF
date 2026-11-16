@@ -70,6 +70,17 @@ pub const Keyboard = struct {
         return hit;
     }
 
+    /// The clipboard commands `id` was given this frame: empty unless it is focused. Read from
+    /// key presses (and repeats) with exactly `map.mods`; the widget then fills `Clipboard`.
+    pub fn commands(k: *const Keyboard, id: Id, map: ClipboardKeys) Commands {
+        return .{
+            .select_all = k.pressed(id, map.select_all, map.mods),
+            .copy = k.pressed(id, map.copy, map.mods),
+            .cut = k.pressed(id, map.cut, map.mods),
+            .paste = k.pressed(id, map.paste, map.mods),
+        };
+    }
+
     /// `id` is focused and key `code` is held this frame (`Input.keys`).
     pub fn down(k: *const Keyboard, id: Id, code: u8) bool {
         return simd.andB(k.mine(id), k.in.keys.down(code));
@@ -78,6 +89,51 @@ pub const Keyboard = struct {
     /// The UTF-8 typed this frame (`Input.text`) if `id` is focused, else empty.
     pub fn text(k: *const Keyboard, id: Id) []const u8 {
         return k.in.text[0 .. k.in.text.len * @intFromBool(k.mine(id))];
+    }
+};
+
+/// The clipboard commands a focused widget can be given. A bit set: several in one frame
+/// (Ctrl+A then Ctrl+C) are all reported, and the widget applies them in this bit order.
+pub const Commands = bitpack struct(u8) {
+    select_all: bool = false,
+    copy: bool = false,
+    cut: bool = false,
+    paste: bool = false,
+    _: u4 = 0,
+};
+
+/// Keys of the clipboard commands. USB HID scancodes with Ctrl, the Windows and Linux
+/// convention; a macOS host sets `mods` to `.{ .cmd = true }`.
+pub const ClipboardKeys = struct {
+    mods: Input.Mods = .{ .ctrl = true },
+    select_all: u8 = 0x04,
+    copy: u8 = 0x06,
+    cut: u8 = 0x1b,
+    paste: u8 = 0x19,
+};
+
+/// Clipboard requests to the host, as platform output (prototype/ui.zig `Platform.clipboard`):
+/// filled by widgets during the frame, applied by the host after it. No callback and no
+/// clipboard access in the core.
+pub const Clipboard = struct {
+    /// Non-empty when the UI asks the host to put this UTF-8 on the clipboard. The bytes are
+    /// the caller's and must stay valid until the host has read them, after the frame.
+    set: []const u8 = "",
+    /// The UI asks for the clipboard's text. The host delivers it as typed text (an
+    /// `Input.text` and a `.text` event) in the next frame, to the widget focused then.
+    paste: bool = false,
+
+    /// Clears the requests, for the next frame.
+    pub fn reset(o: *Clipboard) void {
+        o.* = .{};
+    }
+    /// Copy and cut: put `text` on the clipboard.
+    pub fn copy(o: *Clipboard, text: []const u8) void {
+        o.set = text;
+    }
+    /// Paste: ask the host for the clipboard's text.
+    pub fn requestPaste(o: *Clipboard) void {
+        o.paste = true;
     }
 };
 
@@ -291,4 +347,41 @@ test "fire: nothing bound fires nothing; overflow keeps the table in bounds" {
     try testing.expectEqual(9, out[0]);
     sh.reset();
     try testing.expectEqual(0, sh.len);
+}
+
+test "commands: Ctrl+A, C, X, V reach the focused widget, which answers through Clipboard" {
+    // A text field holding "hello" with "ell" selected, as a widget would keep it.
+    const value = "hello";
+    const sel = [2]usize{ 1, 4 };
+    const queue = [_]Input.Event{
+        .{ .kind = .press, .code = 0x06, .mods = .{ .ctrl = true } },
+        .{ .kind = .press, .code = 0x19, .mods = .{ .ctrl = true } },
+        .{ .kind = .press, .code = 0x1b, .mods = .{ .ctrl = true, .shift = true } }, // not cut
+        .{ .kind = .press, .code = 0x04 }, // a plain "a"
+    };
+    const in: Input = .{ .events = &queue };
+    const it: Interaction = .{ .focus = @backingInt(field) };
+    const fo: Focus = .{};
+    const k = Keyboard.route(&it, &fo, &in);
+    const map: ClipboardKeys = .{};
+    const cmd = k.commands(field, map);
+    try testing.expectEqual(Commands{ .copy = true, .paste = true }, cmd);
+    try testing.expectEqual(Commands{}, k.commands(other, map));
+
+    var clip: Clipboard = .{};
+    if (cmd.copy) clip.copy(value[sel[0]..sel[1]]);
+    if (cmd.paste) clip.requestPaste();
+    try testing.expectEqualStrings("ell", clip.set);
+    try testing.expect(clip.paste);
+    clip.reset();
+    try testing.expectEqualStrings("", clip.set);
+    try testing.expect(!clip.paste);
+
+    // A macOS host binds Cmd: Ctrl+C is then not copy.
+    const mac: ClipboardKeys = .{ .mods = .{ .cmd = true } };
+    try testing.expectEqual(Commands{}, k.commands(field, mac));
+    const cmd_a = [_]Input.Event{.{ .kind = .press, .code = 0x04, .mods = .{ .cmd = true } }};
+    const in2: Input = .{ .events = &cmd_a };
+    const k2 = Keyboard.route(&it, &fo, &in2);
+    try testing.expectEqual(Commands{ .select_all = true }, k2.commands(field, mac));
 }
