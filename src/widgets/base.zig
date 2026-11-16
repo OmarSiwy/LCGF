@@ -335,7 +335,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
-                        .label, .col, .row, .button, .radio, .@"switch" => {},
+                        .@"switch" => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
+                        .label, .col, .row, .button, .radio => {},
                     }
                 },
             };
@@ -392,7 +393,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             switch (w) {
                 inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
                     .button => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
-                    .checkbox => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    .checkbox, .@"switch" => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     .radio_option => {
                         const k = comptime E.slot(tag);
                         const o = comptime nodeAt(spec, E.widget_nodes[k]);

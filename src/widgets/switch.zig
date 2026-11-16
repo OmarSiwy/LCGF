@@ -12,6 +12,7 @@
 const std = @import("std");
 const base = @import("base.zig");
 const label_zig = @import("label.zig");
+const checkbox_zig = @import("checkbox.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const Spec = spec_zig.Spec;
@@ -57,10 +58,13 @@ pub fn knobStyle(th: *const Theme) Style {
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A switch named `id` over `value`, captioned by `str`.
+/// A switch named `id` over `value`, captioned by `str`. A click, or Space while it has
+/// focus, flips it (WAI-ARIA APG switch pattern; `checkbox.toggled`) and sets `clicked`.
 pub fn @"switch"(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
     const row = f.open(id, switchStyle(th));
-    const r = f.interact(row, .button);
+    var r = f.interact(row, .button);
+    r.clicked = checkbox_zig.toggled(r.clicked, r.focused, f.in);
+    value.* = base.toggle(value.*, r.clicked);
     _ = f.open(.none, trackStyle(th, value.*));
     _ = f.leaf(.none, knobStyle(th));
     f.close();
@@ -165,6 +169,42 @@ test "switch look: theme tokens reach both front ends" {
     try testing.expectEqual(Color.rgb(3, 4, 5).bitsOf(), t.c.look[7].fill);
     try testing.expectEqual(Color.rgb(6, 7, 8).bitsOf(), t.c.look[4].fill);
     try testing.expectEqual(t.rect(3).x1 + 1, t.rect(5).x0);
+}
+
+test "switch input: click and Space flip it, Enter and Space down do not, in both front ends" {
+    const h = &two;
+    h.init();
+    const k = base.keys;
+    var in: Input = .{ .viewport = .{ 200, 100 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const vs = t.rect(t.find(.from("vsync")));
+    const hd = t.rect(t.find(.from("hdr")));
+    const up = [_]Input.Event{.{ .kind = .release, .code = k.space }};
+    const down = [_]Input.Event{.{ .kind = .press, .code = k.space }};
+    const enter = [_]Input.Event{.{ .kind = .press, .code = k.enter }};
+    const Step = struct { at: types.Rect, left: bool = false, events: []const Input.Event = &.{}, vsync: bool, hdr: bool };
+    const steps = [_]Step{
+        .{ .at = vs, .left = true, .vsync = false, .hdr = true },
+        .{ .at = vs, .vsync = true, .hdr = true }, // click
+        .{ .at = vs, .events = &down, .vsync = true, .hdr = true },
+        .{ .at = vs, .events = &up, .vsync = false, .hdr = true }, // Space
+        .{ .at = vs, .events = &enter, .vsync = false, .hdr = true },
+        .{ .at = hd, .left = true, .vsync = false, .hdr = true },
+        .{ .at = hd, .vsync = false, .hdr = false }, // click the other
+        .{ .at = hd, .events = &up, .vsync = false, .hdr = true },
+    };
+    for (steps) |st| {
+        in.pointer = .{ (st.at.x0 + st.at.x1) * 0.5, (st.at.y0 + st.at.y1) * 0.5 };
+        in.buttons.left = st.left;
+        in.events = st.events;
+        out = try h.frame(&in);
+        try testing.expectEqual(st.vsync, h.app.vsync);
+        try testing.expectEqual(st.hdr, h.app.hdr);
+        try testing.expectEqual(st.vsync, h.ui.signals.state.vsync);
+        try testing.expectEqual(st.hdr, h.ui.signals.state.hdr);
+        try testing.expectEqual(simd.b2f(st.vsync), out.runtime.tree.c.value[2]);
+    }
 }
 
 test {
