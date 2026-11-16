@@ -270,14 +270,25 @@ pub const Bridge = struct {
         if (st.selected) c.accesskit_node_set_selected(n, true);
         if (st.disabled) c.accesskit_node_set_disabled(n);
         if (of.value) c.accesskit_node_set_numeric_value(n, e.value[r]);
+        const lo = e.range[0][r];
+        const hi = e.range[1][r];
+        const step = e.range[2][r];
+        if (of.value and hi > lo) {
+            c.accesskit_node_set_min_numeric_value(n, lo);
+            c.accesskit_node_set_max_numeric_value(n, hi);
+        }
+        if (of.value and step > 0) c.accesskit_node_set_numeric_value_step(n, step);
         if (role == @backingInt(Role.status)) c.accesskit_node_set_live(n, .polite);
         // A disabled control takes focus (to be read) but does nothing.
         if (of.focus) c.accesskit_node_add_action(n, .focus);
         if (st.disabled) return n;
         if (of.click) c.accesskit_node_add_action(n, .click);
-        // ponytail: no increment or decrement; the export has no range to step in. Add a
-        // step column to `a11y.Export` if a screen reader's arrow keys must move sliders.
         if (of.value and of.focus) c.accesskit_node_add_action(n, .set_value);
+        // `drain` turns them into set_value rows by this step (`a11y.steps`).
+        if (of.value and of.focus and step > 0) {
+            c.accesskit_node_add_action(n, .increment);
+            c.accesskit_node_add_action(n, .decrement);
+        }
         return n;
     }
 
@@ -300,12 +311,15 @@ pub const Bridge = struct {
     }
 
     /// Converts one request and queues it: click is a press, focus a focus, a numeric
-    /// set_value sets the value. Others, and requests for the window, are dropped.
+    /// set_value sets the value, increment and decrement step it (`drain` resolves them).
+    /// Others, and requests for the window, are dropped.
     pub fn queueRequest(b: *Bridge, request: *const c.ActionRequest) void {
         const kind: a11y.Action.Kind = switch (request.action) {
             .click => .press,
             .focus => .focus,
             .set_value => .set_value,
+            .increment => .increment,
+            .decrement => .decrement,
             else => return,
         };
         if (request.target_node > std.math.maxInt(u32)) return;
@@ -322,10 +336,12 @@ pub const Bridge = struct {
     }
 
     /// On the UI thread, before building the frame: the requests queued since the last call,
-    /// copied to `out`, for `a11y.apply` and `a11y.setValue`.
+    /// copied to `out`, for `a11y.apply` and `a11y.setValue`. Increments and decrements become
+    /// set_value rows, stepped from the last frame's export (`a11y.steps`).
     pub fn drain(b: *Bridge, out: []a11y.Action) []a11y.Action {
         var n: usize = 0;
         while (n < out.len) : (n += 1) out[n] = b.queue.pop() orelse break;
+        if (b.cur) |cur| a11y.steps(out[0..n], cur);
         return out[0..n];
     }
 
@@ -428,6 +444,9 @@ pub fn buildToolbar(f: anytype, wire: bool, exposure: f32) void {
     t.seal(bar);
     t.seal(root);
     f.s.c.labelled_by[sl] = lab;
+    f.s.c.range[0][sl] = 0;
+    f.s.c.range[1][sl] = 4;
+    f.s.c.range[2][sl] = 0.25;
 }
 
 /// AccessKit's debug form of `u`, freed.
@@ -472,11 +491,27 @@ test "accesskit: the whole tree goes out after activation, rooted at the window"
     try expectHas(d, "Slider");
     try expectHas(d, "\"Exposure\"");
     try expectHas(d, "numeric_value: 1.5");
+    try expectHas(d, "min_numeric_value: 0.0");
+    try expectHas(d, "max_numeric_value: 4.0");
+    try expectHas(d, "numeric_value_step: 0.25");
     try expectHas(d, "Click");
     try expectHas(d, "SetValue");
+    try expectHas(d, "Increment");
+    try expectHas(d, "Decrement");
     try expectHas(d, "\"lcgr\"");
     var idbuf: [32]u8 = undefined;
     try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{@backingInt(lcgr.types.Id.from("reset"))}));
+
+    // A screen reader's increment and decrement arrive as set_value rows a step from the value.
+    var req: c.ActionRequest = .{ .action = .increment, .target_tree = @splat(0), .target_node = idOf("exposure"), .data = .{ .has_value = false, .value = undefined } };
+    f.b.queueRequest(&req);
+    f.b.queueRequest(&req);
+    req.action = .decrement;
+    f.b.queueRequest(&req);
+    var acts: [4]a11y.Action = undefined;
+    const got = f.b.drain(&acts);
+    try testing.expectEqual(3, got.len);
+    for (got, [_]f32{ 1.75, 2, 1.75 }) |a, v| try testing.expectEqual(a11y.Action{ .kind = .set_value, .target = @intCast(idOf("exposure")), .value = v }, a);
 }
 
 /// Node ids pushed in `u`, in order, read from its debug form.
@@ -639,6 +674,7 @@ test "accesskit: action requests reach the example as the user's own input" {
             a11y.apply(&cx.inter, acts);
             ap.build(&f, e);
             const out = f.end(.{});
+            ap.semantics(out.tree, &hh.s);
             hh.frame(cx, &out);
         }
     };
@@ -654,6 +690,8 @@ test "accesskit: action requests reach the example as the user's own input" {
     try expectHas(d, "label: \"Reset\"");
     try expectHas(d, "label: \"Add layer\"");
     try expectHas(d, "value: \"Layer 2\""); // static text: AccessKit reads a label's value
+    try expectHas(d, "max_numeric_value: 4.0"); // the example's semantics: Exposure's range
+    try expectHas(d, "Increment");
     c.accesskit_tree_update_free(u);
 
     // "Press Reset", "focus Exposure", "set Exposure to 3", and a scroll the bridge does not

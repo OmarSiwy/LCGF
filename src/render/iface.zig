@@ -67,6 +67,14 @@ pub const Glyphs = struct {
     count: []const u32 = &.{},
     /// The glyph atlas, as the back end registered it.
     texture: types.Texture = .white,
+
+    /// Run `k`'s quads as `{ first, count }`; `{ 0, 0 }` for a run past `first`, so a frame with
+    /// text runs and empty `Glyphs` (no shaper yet) draws its quads and no text. Every back end's
+    /// `drawText` reads the run through this.
+    pub fn span(g: Glyphs, k: u32) [2]u32 {
+        if (k >= g.first.len) return .{ 0, 0 };
+        return .{ g.first[k], g.count[k] };
+    }
 };
 
 /// The declarations `check` requires of a back end.
@@ -125,7 +133,8 @@ const Tally = struct {
         l.len += 1;
     }
     pub fn drawText(t: *const Tally, l: Pass, run: u32) void {
-        l.rows[l.len] = .{ 1, t.glyphs.first[run], t.glyphs.count[run] };
+        const g = t.glyphs.span(run);
+        l.rows[l.len] = .{ 1, g[0], g[1] };
         l.len += 1;
     }
 };

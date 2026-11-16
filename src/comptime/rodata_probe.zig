@@ -31,6 +31,20 @@ export fn ro_level_start(i: u32) u8 {
     return F.level_start[i % F.level_start.len];
 }
 
+// Constant style columns (lcgr.columns): the same check for tables built from Tree.push rows.
+const C = lcgr.columns.Columns(lcgr.ct_examples.mixer, .{});
+export fn ro_col_pad(i: u32) f32 {
+    return C.table("pad_lo")[i % 2][i % C.node_count];
+}
+export fn ro_col_gap(i: u32) f32 {
+    return C.table("gap")[i % C.node_count];
+}
+// A column whose rows are all equal folds to a constant, so each table read here varies.
+const Card = lcgr.columns.Columns(lcgr.ct_examples.static_card, .{});
+export fn ro_col_look(i: u32) u32 {
+    return Card.table("look")[i % Card.node_count].fill;
+}
+
 var ram_copy: [F.node_count]F.Index = F.end;
 export fn rw_control(i: u32) u8 {
     ram_copy[i % F.node_count] +%= 1;

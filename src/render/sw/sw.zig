@@ -135,7 +135,8 @@ pub const Software = struct {
 
     pub fn drawText(s: *const Software, t: Target, run: u32) void {
         const g = s.glyphs;
-        s.drawQuads(t, g.quads[g.first[run]..][0..g.count[run]], s.images[@backingInt(g.texture)]);
+        const r = g.span(run);
+        s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
     }
 
     fn drawQuads(s: *const Software, t: Target, quads: []const Quad, img: Image) void {
@@ -577,6 +578,23 @@ test "redraw: only the damage rects change, cleared to the background first" {
 
 fn drawBand(s: *const Software, fb: *Framebuffer, draw: *const DrawList, k: u32, n: u32) void {
     s.redraw(fb, tile(fb, k, n), draw, .black);
+}
+
+test "drawText: a frame with text runs and no glyphs draws its quads and no text" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[2]);
+    try testing.expectEqualStrings("text", conformance.scenes[2].name);
+    var f: Frame(160, 120) = .{};
+    var fb = f.fb(.rgba8);
+    fb.clear(.black);
+    var s: Software = .{};
+    s.prepare({}, &st.draw, .{}, .{ 160, 120 }, 1);
+    iface.render(&s, .{ .fb = &fb, .scissor = fb.all() }, &st.draw);
+    // The panel and the bar, and no glyph over either.
+    for (0..120) |y| for (0..160) |x| {
+        const want: Color = if (y >= 90) .rgb(90, 140, 255) else .rgb(30, 31, 36);
+        try testing.expectEqual(want, fb.at(@intCast(x), @intCast(y)));
+    };
 }
 
 test "tiles: bands drawn on separate threads give the single-threaded frame" {

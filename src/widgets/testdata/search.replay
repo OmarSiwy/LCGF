@@ -1,0 +1,37 @@
+# Recorded input for the search field page (widgets/search.zig, `Page`), at 320 x 100 in the
+# default theme: the box at x 12..308, y 38..63, its Clear button at its right end (shown
+# while there is text). One line per frame below (format: input.Replay). Scancodes: Enter 40,
+# Escape 41.
+# 0: rest
+frame
+viewport 320 100
+dt 0.016
+pointer 300 95
+# 1: press the field: focused
+frame
+pointer 100 50
+buttons left
+# 2: release, type and Enter: a search
+frame
+buttons
+text widgets
+press 40
+# 3: Escape clears
+frame
+press 41
+# 4: type again; the pointer over the Clear button
+frame
+text lanes
+pointer 275 50
+# 5: press Clear: the field loses focus while it is held
+frame
+buttons left
+# 6: release over it: cleared, and the field focused again
+frame
+buttons
+# 7: the pointer leaves
+frame
+pointer 300 95
+# 8: typing goes on in the field
+frame
+text zig

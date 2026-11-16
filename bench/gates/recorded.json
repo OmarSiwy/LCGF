@@ -1,78 +1,78 @@
 {
  "frame": {
   "form": {
-   "held": false,
-   "ratio": 22.571,
+   "held": true,
+   "ratio": 0.143,
    "best": "lvgl",
    "values": {
-    "clay": 30.2,
-    "egui": 415.9,
-    "iced": 58.8,
+    "clay": 28.6,
+    "egui": 215.9,
+    "iced": 21.3,
     "imgui": 15.7,
-    "lcgr": 15.8,
+    "lcgr": 0.1,
     "lvgl": 0.7,
-    "qtquick": 133.7,
-    "slint": 88.8
+    "qtquick": 116.4,
+    "slint": 46.2
    }
   },
   "list": {
    "held": false,
-   "ratio": 1.127,
+   "ratio": 1.055,
    "best": "imgui",
    "values": {
-    "clay": 25.4,
-    "egui": 428.2,
-    "iced": 396.9,
+    "clay": 23.6,
+    "egui": 236.1,
+    "iced": 217.1,
     "imgui": 11.0,
-    "lcgr": 12.4,
-    "lvgl": 794.9,
-    "qtquick": 232.8,
-    "slint": 4081.6
+    "lcgr": 11.6,
+    "lvgl": 798.7,
+    "qtquick": 206.2,
+    "slint": 2234.4
    }
   },
   "text": {
-   "held": false,
-   "ratio": 17.9,
+   "held": true,
+   "ratio": 0.1,
    "best": "lvgl",
    "values": {
-    "clay": 30.7,
-    "egui": 234.1,
-    "iced": 40.2,
-    "imgui": 89.1,
-    "lcgr": 17.9,
+    "clay": 34.2,
+    "egui": 129.3,
+    "iced": 20.0,
+    "imgui": 89.4,
+    "lcgr": 0.1,
     "lvgl": 1.0,
-    "qtquick": 227.4,
-    "slint": 46.3
+    "qtquick": 215.2,
+    "slint": 31.6
    }
   },
   "springs": {
    "held": false,
-   "ratio": 1.42,
+   "ratio": 1.418,
    "best": "imgui",
    "values": {
-    "clay": 115.3,
-    "egui": 449.9,
-    "iced": 310.1,
-    "imgui": 53.1,
-    "lcgr": 75.4,
-    "lvgl": 3251.6,
-    "qtquick": 18107.9,
-    "slint": 11022.8
+    "clay": 121.0,
+    "egui": 316.9,
+    "iced": 161.1,
+    "imgui": 52.6,
+    "lcgr": 74.6,
+    "lvgl": 3253.4,
+    "qtquick": 12267.4,
+    "slint": 5285.2
    }
   },
   "resize": {
    "held": true,
-   "ratio": 0.571,
+   "ratio": 0.487,
    "best": "clay",
    "values": {
-    "clay": 30.8,
-    "egui": 524.1,
-    "iced": 259.9,
-    "imgui": 94.3,
-    "lcgr": 17.6,
-    "lvgl": 2100.7,
-    "qtquick": 603.7,
-    "slint": 6428.9
+    "clay": 34.3,
+    "egui": 282.6,
+    "iced": 142.2,
+    "imgui": 90.7,
+    "lcgr": 16.7,
+    "lvgl": 1967.7,
+    "qtquick": 322.7,
+    "slint": 2623.2
    }
   }
  },
@@ -88,17 +88,17 @@
  "rss": {
   "idle": {
    "held": false,
-   "ratio": 5.656,
+   "ratio": 1.038,
    "best": "clay",
    "values": {
-    "clay": 2140,
+    "clay": 420,
     "egui": 6632,
-    "iced": 6024,
-    "imgui": 3800,
-    "lcgr": 12104,
-    "lvgl": 3488,
-    "qtquick": 70180,
-    "slint": 14976
+    "iced": 6152,
+    "imgui": 3904,
+    "lcgr": 436,
+    "lvgl": 3496,
+    "qtquick": 70712,
+    "slint": 15008
    }
   }
  },
@@ -115,17 +115,17 @@
  "first-frame": {
   "idle": {
    "held": false,
-   "ratio": 7.101,
+   "ratio": 1.026,
    "best": "clay",
    "values": {
-    "clay": 0.6652149895671755,
-    "egui": 3.5766840155702084,
-    "iced": 12.107885995646939,
-    "imgui": 1.8510299851186574,
-    "lcgr": 4.72363899461925,
-    "lvgl": 6.021186010912061,
-    "qtquick": 81.08037197962403,
-    "slint": 36.30304499529302
+    "clay": 0.30996400164440274,
+    "egui": 2.435469999909401,
+    "iced": 9.01317098760046,
+    "imgui": 0.9327020088676363,
+    "lcgr": 0.3179130144417286,
+    "lvgl": 2.911218994995579,
+    "qtquick": 60.7227600121405,
+    "slint": 26.63601000676863
    }
   }
  },

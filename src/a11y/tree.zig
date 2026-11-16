@@ -147,6 +147,10 @@ pub const Semantics = struct {
         labelled_by: []u32,
         /// `State` bits the application sets; `states` adds what follows from the tree.
         state: []u8,
+        /// The value's range, as `aria-valuemin`, `aria-valuemax` and the step a screen
+        /// reader's increment and decrement move by, in the value's units. `hi <= lo` is no
+        /// range (the cleared 0, 0); `step` 0 is none.
+        range: [3][]f32,
 
         // ---- outputs of `names`
         /// First text run (row in `Texts`) in the node's subtree, or `none`.
@@ -169,6 +173,7 @@ pub const Semantics = struct {
     pub fn clear(s: *Semantics) void {
         @memset(s.c.labelled_by, none);
         @memset(s.c.state, 0);
+        inline for (s.c.range) |col| @memset(col, 0);
     }
 };
 
@@ -237,6 +242,8 @@ pub const Export = struct {
         role: []u8,
         state: []u8,
         value: []f32,
+        /// `Semantics.Columns.range`: lo, hi, step.
+        range: [3][]f32,
         /// The name's bytes in the frame's `Strings`; 0 bytes when the node has no name.
         name_start: []u32,
         name_bytes: []u32,
@@ -303,6 +310,7 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         o.role[w] = c.role[k];
         o.state[w] = s.c.state[k];
         o.value[w] = c.value[k];
+        inline for (0..3) |e| o.range[e][w] = s.c.range[e][k];
         o.name_start[w] = start;
         o.name_bytes[w] = bytes;
         o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]);
@@ -332,7 +340,7 @@ pub const Changes = struct {
 };
 
 /// Compares this frame's export with last frame's by id. A row is updated when it is new or
-/// any of its role, state, value, name, rect, parent or child list differ; a child added or
+/// any of its role, state, value, range, name, rect, parent or child list differ; a child added or
 /// removed changes its parent's `kids_hash`, so the parent is sent with its new child list.
 /// Each row is written to the output and the cursor advances by 0 or 1.
 pub fn diff(cur: *const Export, prev: *const Export, ch: *Changes) void {
@@ -353,6 +361,8 @@ pub fn diff(cur: *const Export, prev: *const Export, ch: *Changes) void {
         same = simd.andB(same, a.id[@min(a.parent[r], cur.cap)] == b.id[@min(b.parent[q], prev.cap)]);
         inline for (0..4) |e|
             same = simd.andB(same, @as(u32, @bitCast(a.rect[e][r])) == @as(u32, @bitCast(b.rect[e][q])));
+        inline for (0..3) |e|
+            same = simd.andB(same, @as(u32, @bitCast(a.range[e][r])) == @as(u32, @bitCast(b.range[e][q])));
         w = simd.emit(u32, ch.updated, w, @intCast(r), !same);
     }
     ch.updated_len = w;
@@ -382,6 +392,10 @@ pub const Action = extern struct {
         focus,
         /// Set the node's value (a slider, a spin button).
         set_value,
+        /// Move the value up or down by its range's step. `steps` turns these into
+        /// `set_value` rows; until then `apply` and `setValue` skip them.
+        increment,
+        decrement,
     };
 };
 
@@ -416,6 +430,23 @@ pub fn setValue(actions: []const Action, id: types.Id, current: f32) f32 {
     var v: u32 = @bitCast(current);
     for (actions) |a| v = pick(u32, simd.andB(a.kind == .set_value, a.target == @backingInt(id)), @bitCast(a.value), v);
     return @bitCast(v);
+}
+
+/// Turns each `increment` and `decrement` row into the `set_value` it means: the value before
+/// it (last frame's export `e`, or an earlier row's `set_value` for the same node) moved by the
+/// node's step and kept in its range. Rows for a node not in `e`, or with no step, are left
+/// as they are, which `apply` and `setValue` skip. Run it before `setValue` reads the rows (a
+/// bridge does, as it drains them).
+pub fn steps(actions: []Action, e: *const Export) void {
+    for (actions, 0..) |*a, k| {
+        const up = a.kind == .increment;
+        if (!up and a.kind != .decrement) continue;
+        const r = simd.find(e.c.id, e.len, a.target);
+        if (r == none or !(e.c.range[2][r] > 0)) continue;
+        const v = setValue(actions[0..k], @fromBackingInt(a.target), e.c.value[r]);
+        const d = if (up) e.c.range[2][r] else -e.c.range[2][r];
+        a.* = .{ .kind = .set_value, .target = a.target, .value = std.math.clamp(v + d, e.c.range[0][r], @max(e.c.range[0][r], e.c.range[1][r])) };
+    }
 }
 
 /// `c ? a : b` as a cmov. Zig 0.18's LLVM turns a select whose operand is loaded only for it
@@ -880,6 +911,64 @@ test "tree export: actions from assistive technology arrive as input the widgets
     try testing.expect(checked);
     try testing.expectEqual(0.5, volume);
     try testing.expectEqual(0.25, setValue(&.{}, vol, 0.25));
+}
+
+test "tree export: a range is exported, sent again when it moves, and steps actions within it" {
+    var f: FrameFixture(16) = .{};
+    f.init();
+    const Scene = struct {
+        fn build(fx: *FrameFixture(16), gen: u1, hi: f32) *Export {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const vol = t.push(root, types.Id.from("vol"), &.{ .role = .slider, .value = 3 });
+            t.seal(vol);
+            t.seal(root);
+            fx.s.c.range[0][vol] = 0;
+            fx.s.c.range[1][vol] = hi;
+            fx.s.c.range[2][vol] = 1;
+            return fx.run(gen);
+        }
+    };
+    const e = Scene.build(&f, 0, 4);
+    try testing.expectEqual([3]f32{ 0, 4, 1 }, [3]f32{ e.c.range[0][1], e.c.range[1][1], e.c.range[2][1] });
+    // The group has none.
+    try testing.expectEqual([3]f32{ 0, 0, 0 }, [3]f32{ e.c.range[0][0], e.c.range[1][0], e.c.range[2][0] });
+    // The same range: nothing to send. A new top: the slider again.
+    diff(Scene.build(&f, 1, 4), e, &f.ch);
+    try testing.expectEqual(0, f.ch.updated_len);
+    const wider = Scene.build(&f, 1, 8);
+    diff(wider, e, &f.ch);
+    try testing.expectEqualSlices(u32, &.{1}, f.ch.updated[0..f.ch.updated_len]);
+
+    // An increment steps up; past the top it stops there. A node that is not exported is
+    // left alone, and `apply` skips it.
+    const vol = @backingInt(types.Id.from("vol"));
+    var acts = [_]Action{
+        .{ .kind = .increment, .target = vol },
+        .{ .kind = .increment, .target = @backingInt(types.Id.from("gone")) },
+    };
+    steps(&acts, e);
+    try testing.expectEqual(Action{ .kind = .set_value, .target = vol, .value = 4 }, acts[0]);
+    try testing.expectEqual(Action.Kind.increment, acts[1].kind);
+    var it: Interaction = .{};
+    apply(&it, acts[1..]);
+    try testing.expectEqual(0, it.clicked);
+    try testing.expectEqual(0, it.focus);
+    // Several in one frame step from each other: up, up (held at 4), down.
+    var more = [_]Action{
+        .{ .kind = .increment, .target = vol },
+        .{ .kind = .increment, .target = vol },
+        .{ .kind = .decrement, .target = vol },
+    };
+    steps(&more, e);
+    try testing.expectEqual(3, setValue(&more, .from("vol"), 3));
+    try testing.expectEqual(4, more[1].value);
+    // Down twice, then a set_value, which wins.
+    more = .{ .{ .kind = .decrement, .target = vol }, .{ .kind = .decrement, .target = vol }, .{ .kind = .set_value, .target = vol, .value = 0.5 } };
+    steps(&more, e);
+    try testing.expectEqual(1, more[1].value);
+    try testing.expectEqual(0.5, setValue(&more, .from("vol"), 3));
 }
 
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {

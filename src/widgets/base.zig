@@ -70,6 +70,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const events = @import("../comptime/events.zig");
+const focus = @import("../interact/focus.zig");
 const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
 const Id = types.Id;
@@ -396,6 +397,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             const press = in.buttons.left and !ui.pointer.down;
             var event = E.pointer(&ui.pointer, &ui.rects, in);
             if (press) ui.focus = ui.pointer.pressed;
+            // Tab and Shift+Tab, as `Context.begin` moves `Interaction.focus`.
+            E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);

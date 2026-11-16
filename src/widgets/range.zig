@@ -11,9 +11,10 @@
 //! midpoint between them, so a press grabs the nearer thumb.
 //!
 //! Accessibility: each thumb is a slider (its half has role slider), its value the thumb's
-//! value; the track and the pieces are presentational. As for the slider, the range ends and
-//! a name (`aria-valuemin`/`max`, a label) are not in the exported tree: a11y/tree.zig has
-//! no columns for them and the application labels a thumb with `Semantics.labelled_by`.
+//! value; the track and the pieces are presentational. As for the slider, the application
+//! sets each thumb's range with `semantics` (`aria-valuemin`/`max`, as the multi-thumb
+//! pattern has them: each thumb stops at the other) and names each thumb
+//! (`Semantics.labelled_by` or `Semantics.label`).
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -30,6 +31,7 @@ const Response = types.Response;
 const Tree = @import("../core/tree.zig").Tree;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -106,6 +108,22 @@ pub fn parts(th: *const Theme, f0: f32, f1: f32) [2 * thumb_rows]Style {
 /// it after building the track at tree row `track`.
 pub fn expose(t: *Tree, track: u32, value: [2]f32) void {
     for (0..2) |i| t.c.value[track + 1 + thumb_rows * i] = value[i];
+}
+
+/// Each thumb's range for assistive technology, for the range slider named `id` in `t` over
+/// `value` from `lo` to `hi`: the low thumb runs from `lo` to the high thumb's value, the high
+/// thumb from the low thumb's value to `hi` (WAI-ARIA multi-thumb slider), both stepped as
+/// the slider's keys are. Called by the application after building; thumbs not in `t` are
+/// skipped.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, id: Id, value: [2]f32, lo: f32, hi: f32) void {
+    const ends = [2][2]f32{ .{ lo, value[1] }, .{ value[0], hi } };
+    for (ends, 0..) |e, i| {
+        const r = t.find(thumbId(id, @intCast(i)));
+        if (r == types.none) continue;
+        s.c.range[0][r] = e[0];
+        s.c.range[1][r] = e[1];
+        s.c.range[2][r] = (hi - lo) / 100;
+    }
 }
 
 // ---- runtime front end ----------------------------------------------------------------------
@@ -377,7 +395,6 @@ test "range input: a press grabs the nearer thumb, drags across the track; arrow
 var range_semantics: base.Semantic(16) = .{};
 
 test "range a11y: two sliders, each with its thumb's value, in both front ends" {
-    const a11y = @import("../a11y/tree.zig");
     const h = &band;
     h.init();
     const in: Input = .{ .viewport = .{ 216, 40 } };
@@ -394,6 +411,26 @@ test "range a11y: two sliders, each with its thumb's value, in both front ends" 
     // The track and pieces are presentational: the root and two thumbs.
     try testing.expectEqual(null, x.row(2));
     try testing.expectEqual(@as(u32, 3), x.out[0].len);
+}
+
+var range_ranges: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+
+test "range a11y: each thumb's range ends at the other thumb, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &band;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 216, 40 } });
+    const trees = [2]*const Tree{ &h.ctx.trees[h.ctx.cur], &h.ui.tables.t };
+    for (trees, &range_ranges) |t, *x| semantics(t, x.begin(), .from("band"), .{ 20, 60 }, 0, 100);
+    const e = range_ranges[0].finish(trees[0], &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    const c = range_ranges[1].finish(trees[1], &h.ui.tables.tx, h.ui.tables.strings.buf);
+    try testing.expect(popover.sameSemantics(e, c));
+    const want = [2][3]f32{ .{ 0, 60, 1 }, .{ 20, 100, 1 } };
+    for (want, 0..) |w, i| {
+        const r = popover.exportRow(e, trees[0].find(thumbId(.from("band"), @intCast(i))));
+        try testing.expectEqual(w, [3]f32{ e.c.range[0][r], e.c.range[1][r], e.c.range[2][r] });
+        try testing.expectEqual(w, [3]f32{ c.c.range[0][r], c.c.range[1][r], c.c.range[2][r] });
+    }
 }
 
 var page: Page.Run = .{};

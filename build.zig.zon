@@ -114,6 +114,13 @@
             .hash = "N-V-__8AAF1HGhL6m3oy7fK0MrB7Lv3IQXXsnrUvU_Cir4r7",
             .lazy = true,
         },
+        // Gompute 1.0.0 at 37432b2 (branch zig-0.18.0-dev.1151, PR #9): the first revision that
+        // builds with the project's Zig (src/render/gompute/). Fetched only for the gompute steps.
+        .gompute = .{
+            .url = "https://github.com/OmarSiwy/Gompute/archive/37432b2959c1797c158d3fb275853b9c9e659ac6.tar.gz",
+            .hash = "gompute-1.0.0-YJVc1jcyCABEk-Wv_70OHMGiGRLTi-ZiTexE-QNMBeoa",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
