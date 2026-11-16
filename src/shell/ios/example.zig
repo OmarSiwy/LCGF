@@ -37,6 +37,7 @@ fn run() void {
     var safe = shell.safeArea();
     while (shell.poll(&ev)) {
         // The safe area is not Input: a change alone (the status bar hidden) asks for a frame.
+        if (shell.resumed()) ctx.waker.post();
         if (!std.meta.eql(shell.safeArea(), safe)) {
             safe = shell.safeArea();
             ctx.waker.post();

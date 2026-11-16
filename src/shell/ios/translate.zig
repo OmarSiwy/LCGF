@@ -41,6 +41,10 @@ const mod_command = 1 << 20;
 const key_return = 0x28;
 const key_backspace = 0x2a;
 
+/// The application's state: in front and taking events, in front but interrupted (a call,
+/// Control Center, the app switcher), or in the background.
+pub const State = enum { active, inactive, background };
+
 /// Most fingers and pencils followed at once; iOS reports at most 10 fingers on a screen.
 pub const max_contacts = 16;
 
@@ -49,6 +53,9 @@ pub const Translator = struct {
     in: Input = .{},
     /// The application is terminating (`applicationWillTerminate:`): no more frames.
     closed: bool = false,
+    state: State = .active,
+    /// The app came back to the foreground since `takeResumed` was last called.
+    resumed: bool = false,
     /// The view's safe area as padding, logical pixels, in `Style.pad`'s order (left, top,
     /// right, bottom): what the notch, the Dynamic Island, the home indicator and the status
     /// bar cover. The host pads its root node with it (example.zig) so nothing lands under them;
@@ -119,6 +126,32 @@ pub const Translator = struct {
     /// The view's `safeAreaInsets` (top, left, bottom, right in points, UIEdgeInsets' order).
     pub fn setInsets(t: *Translator, top: f32, left: f32, bottom: f32, right: f32) void {
         t.safe = .{ left, top, right, bottom };
+    }
+
+    /// The application's state changed (the delegate's `applicationWillResignActive:`,
+    /// `applicationDidEnterBackground:`, `applicationWillEnterForeground:`,
+    /// `applicationDidBecomeActive:`). Leaving `.active` lets go of held keys and modifiers:
+    /// their key-ups go elsewhere (UIKit cancels the touches itself).
+    pub fn lifecycle(t: *Translator, state: State) void {
+        if (state != .active) {
+            t.in.keys = .{};
+            t.in.mods = .{};
+        }
+        if (t.state == .background and state != .background) t.resumed = true;
+        t.state = state;
+    }
+
+    /// Whether frames can be shown: not in the background, where iOS forbids GPU work (a
+    /// Metal command buffer committed there gets the app killed) and nothing is on screen.
+    pub fn visible(t: *const Translator) bool {
+        return t.state != .background;
+    }
+
+    /// True once after the app returned from the background: what was built while it was
+    /// there was never presented, so the host builds a frame now (posts its waker).
+    pub fn takeResumed(t: *Translator) bool {
+        defer t.resumed = false;
+        return t.resumed;
     }
 
     pub fn terminate(t: *Translator) void {
@@ -367,6 +400,7 @@ pub const Translator = struct {
 ///     unmark                 unmarkText
 ///     paste two words        the pasteboard's text, the rest of the line (`\n` for a line end)
 ///     touch began 1 37 25    a touch: phase, id, x, y, then optionally its `Kind` and pressure
+///     state background       the application's `State`
 ///     terminate              applicationWillTerminate:
 pub const Replay = struct {
     src: []const u8,
@@ -376,7 +410,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { bounds, scale, insets, touch, key, insert, delete, mark, unmark, paste, terminate };
+    const Line = enum { bounds, scale, insets, touch, key, insert, delete, mark, unmark, paste, state, terminate };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -404,6 +438,7 @@ pub const Replay = struct {
                     t.touch(c);
                 },
                 .terminate => t.terminate(),
+                .state => t.lifecycle(std.meta.stringToEnum(State, w.next() orelse return error.Syntax) orelse return error.Syntax),
                 .key => {
                     const down = std.mem.eql(u8, w.next() orelse return error.Syntax, "down");
                     const code = std.fmt.parseInt(u32, w.next() orelse return error.Syntax, 0) catch return error.Syntax;
@@ -753,4 +788,45 @@ test "ime: marked text is shown, converted, then committed as typed text" {
     _ = t.frame(&ev);
     try testing.expectEqual(@as(usize, Translator.max_preedit / 3 * 3), ev.composition.text.len);
     try testing.expectEqual([2]u32{ 0, Translator.max_preedit / 3 * 3 }, ev.composition.range);
+}
+
+test "translate: backgrounding hides the app, releases keys, and asks for a frame on return" {
+    // A key held when a call comes in; the user goes home, then comes back; then the system
+    // terminates the app.
+    var r: Replay = .{ .src =
+        \\frame
+        \\key down 0xe1 shift
+        \\frame
+        \\state inactive
+        \\frame
+        \\state background
+        \\frame
+        \\state inactive
+        \\state active
+        \\frame
+        \\state background
+        \\terminate
+    };
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    const want = [_]struct { state: State, visible: bool, shift: bool, resumed: bool }{
+        .{ .state = .active, .visible = true, .shift = true, .resumed = false },
+        .{ .state = .inactive, .visible = true, .shift = false, .resumed = false },
+        .{ .state = .background, .visible = false, .shift = false, .resumed = false },
+        .{ .state = .active, .visible = true, .shift = false, .resumed = true },
+    };
+    for (want) |w| {
+        try testing.expect(try r.next(&t));
+        try testing.expect(t.frame(&ev));
+        try testing.expectEqual(w.state, t.state);
+        try testing.expectEqual(w.visible, t.visible());
+        try testing.expectEqual(w.shift, ev.in.keys.down(0xe1));
+        try testing.expectEqual(w.shift, ev.in.mods.shift);
+        try testing.expectEqual(w.resumed, t.takeResumed());
+        try testing.expect(!t.takeResumed());
+    }
+    try testing.expect(try r.next(&t));
+    try testing.expect(!t.frame(&ev));
 }

@@ -198,6 +198,11 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
     _ = defineClass("UIResponder", "LcgrAppDelegate", &.{
         .{ .sel = "application:didFinishLaunchingWithOptions:", .imp = &appLaunched, .types = "B@:@@" },
         .{ .sel = "lcgrRun", .imp = &appRun, .types = "v@:" },
+        .{ .sel = "applicationWillResignActive:", .imp = &appInactive, .types = "v@:@" },
+        .{ .sel = "applicationDidEnterBackground:", .imp = &appBackground, .types = "v@:@" },
+        .{ .sel = "applicationWillEnterForeground:", .imp = &appInactive, .types = "v@:@" },
+        .{ .sel = "applicationDidBecomeActive:", .imp = &appActive, .types = "v@:@" },
+        .{ .sel = "applicationWillTerminate:", .imp = &appTerminate, .types = "v@:@" },
     });
     const pool = objc.Pool.push();
     const delegate = objc.string("LcgrAppDelegate");
@@ -270,6 +275,20 @@ fn appLaunched(self: Id, _: Sel, _: Id, _: ?Id) callconv(.c) bool {
     // The host loop runs from the run loop, after launching has finished.
     msg(void, self, "performSelector:withObject:afterDelay:", .{ objc.sel("lcgrRun"), @as(?Id, null), @as(f64, 0) });
     return true;
+}
+
+fn appInactive(_: Id, _: Sel, _: Id) callconv(.c) void {
+    if (app.shell) |s| s.t.lifecycle(.inactive);
+}
+fn appBackground(_: Id, _: Sel, _: Id) callconv(.c) void {
+    if (app.shell) |s| s.t.lifecycle(.background);
+}
+fn appActive(_: Id, _: Sel, _: Id) callconv(.c) void {
+    if (app.shell) |s| s.t.lifecycle(.active);
+}
+/// The system is ending the app (rare: usually it is suspended, then killed without notice).
+fn appTerminate(_: Id, _: Sel, _: Id) callconv(.c) void {
+    if (app.shell) |s| s.t.terminate();
 }
 
 fn appRun(_: Id, _: Sel) callconv(.c) void {
@@ -368,6 +387,12 @@ pub const Ios = struct {
         s.t.setInsets(@floatCast(i.top), @floatCast(i.left), @floatCast(i.bottom), @floatCast(i.right));
     }
 
+    /// True once after the app returned from the background: build a frame (post the
+    /// context's waker), since frames built while it was away were not presented.
+    pub fn resumed(s: *Ios) bool {
+        return s.t.takeResumed();
+    }
+
     /// The safe area as root padding (`Style.pad`): what the notch, the Dynamic Island and
     /// the home indicator cover.
     pub fn safeArea(s: *const Ios) [4]f32 {
@@ -449,6 +474,8 @@ pub const Ios = struct {
 
     /// Draws the frame into the layer's next drawable and presents it.
     pub fn present(s: *Ios, out: *const Output) void {
+        // In the background iOS kills an app that commits GPU work; nothing is shown anyway.
+        if (!s.t.visible()) return;
         const pool = objc.Pool.push();
         defer pool.pop();
         const in = &s.t.in;
@@ -472,10 +499,11 @@ pub const Ios = struct {
 
     /// Runs the run loop until an event is handled or `seconds` pass; `.display` waits one
     /// refresh. Returns at once after a `wake`, or when the translator owes a frame (a tap's
-    /// release).
+    /// release). In the background it waits for the next event only.
     pub fn wait(s: *Ios, seconds: f32, pace: Pace) void {
         if (s.woken.load(.acquire) or s.t.pending()) return;
-        const secs: f64 = if (pace == .display) 1 / s.hz else seconds;
+        // In the background no frame is shown, so animations and timers wait for the return.
+        const secs: f64 = if (!s.t.visible()) std.math.inf(f64) else if (pace == .display) 1 / s.hz else seconds;
         if (!(secs > 0)) return;
         _ = fns.CFRunLoopRunInMode(default_mode, @min(secs, 1e9), true);
     }
