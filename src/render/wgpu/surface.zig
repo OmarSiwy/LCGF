@@ -95,14 +95,20 @@ pub const Surface = struct {
 
 pub const Step = enum { draw, draw_then_reconfigure, reconfigure, skip, fatal };
 
+/// wgpu-native v29 added `Occluded` (a hidden window); v27 (`-Dwgpu-native=v27`) has no such
+/// status. The one difference between the two majors in what this back end uses, found by
+/// compiling against each release's header.
+const occluded: ?c.WGPUSurfaceGetCurrentTextureStatus = if (@hasDecl(c, "WGPUSurfaceGetCurrentTextureStatus_Occluded")) c.WGPUSurfaceGetCurrentTextureStatus_Occluded else null;
+
 /// What to do with a `wgpuSurfaceGetCurrentTexture` status.
 pub fn step(status: c.WGPUSurfaceGetCurrentTextureStatus) Step {
+    if (occluded) |o| if (status == o) return .skip;
     return switch (status) {
         c.WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal => .draw,
         // The window changed under the swapchain (a resize the host has not reported yet).
         c.WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal => .draw_then_reconfigure,
         c.WGPUSurfaceGetCurrentTextureStatus_Outdated, c.WGPUSurfaceGetCurrentTextureStatus_Lost => .reconfigure,
-        c.WGPUSurfaceGetCurrentTextureStatus_Timeout, c.WGPUSurfaceGetCurrentTextureStatus_Occluded => .skip,
+        c.WGPUSurfaceGetCurrentTextureStatus_Timeout => .skip,
         else => .fatal,
     };
 }
@@ -122,7 +128,7 @@ test "surface: every status maps to one action" {
     try testing.expectEqual(Step.reconfigure, step(c.WGPUSurfaceGetCurrentTextureStatus_Outdated));
     try testing.expectEqual(Step.reconfigure, step(c.WGPUSurfaceGetCurrentTextureStatus_Lost));
     try testing.expectEqual(Step.skip, step(c.WGPUSurfaceGetCurrentTextureStatus_Timeout));
-    try testing.expectEqual(Step.skip, step(c.WGPUSurfaceGetCurrentTextureStatus_Occluded));
+    if (occluded) |o| try testing.expectEqual(Step.skip, step(o));
     try testing.expectEqual(Step.fatal, step(c.WGPUSurfaceGetCurrentTextureStatus_Error));
 }
 

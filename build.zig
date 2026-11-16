@@ -236,13 +236,24 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
-    // One archive per host target in build.zig.zon; other targets have no wgpu step.
-    const wgpu_dep = b.fmt("wgpu_native_{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
-    const wgpu_targets = [_][]const u8{ "wgpu_native_linux_x86_64", "wgpu_native_linux_aarch64", "wgpu_native_macos_x86_64", "wgpu_native_macos_aarch64", "wgpu_native_windows_x86_64" };
-    const wgpu_supported = for (wgpu_targets) |t| {
-        if (std.mem.eql(u8, t, wgpu_dep)) break true;
+    // The wgpu-native major to build against: one archive per major and host target in
+    // build.zig.zon, fetched only when picked, so plain builds download none. The binding
+    // compiles against the picked release's own translated header.
+    const WgpuNative = enum { v27, v29 };
+    const wgpu_version = b.option(WgpuNative, "wgpu-native", "wgpu-native major for the wgpu steps (v27, v29)");
+    const wgpu_host = b.fmt("{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
+    const wgpu_targets = [_][]const u8{ "linux_x86_64", "linux_aarch64", "macos_x86_64", "macos_aarch64", "windows_x86_64" };
+    const wgpu_supported = wgpu_version != null and for (wgpu_targets) |t| {
+        if (std.mem.eql(u8, t, wgpu_host)) break true;
     } else false;
-    if (if (wgpu_supported) b.lazyDependency(wgpu_dep, .{}) else null) |wgpu_native| {
+    const wgpu_step = b.step("wgpu", "Test the wgpu-native back end on a real adapter, -Dwgpu-native=v29 (ci/run.sh wgpu)");
+    const wgpu_play_step = b.step("wgpu-play", "Build zig-out/bin/wgpu-play (draws the render conformance scenes with wgpu-native)");
+    if (!wgpu_supported) {
+        const fail = b.addFail(if (wgpu_version == null) "the wgpu steps need -Dwgpu-native=v27 or v29" else "wgpu-native has no archive for this target in build.zig.zon");
+        wgpu_step.dependOn(&fail.step);
+        wgpu_play_step.dependOn(&fail.step);
+    }
+    if (if (wgpu_supported) b.lazyDependency(b.fmt("wgpu_native_{s}_{s}", .{ @tagName(wgpu_version.?), wgpu_host }), .{}) else null) |wgpu_native| {
         const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
         wgpu_h.addIncludePath(wgpu_native.path("include"));
         const wgpu_c = wgpu_h.createModule();
@@ -256,9 +267,9 @@ pub fn build(b: *std.Build) void {
                 else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
             }
         }
+        wgpu_step.dependOn(&b.addRunArtifact(wgpu_tests).step);
+        wgpu_play_step.dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
     }
-    b.step("wgpu", "Test the wgpu-native back end on a real adapter (ci/run.sh wgpu)").dependOn(&b.addRunArtifact(wgpu_tests).step);
-    b.step("wgpu-play", "Build zig-out/bin/wgpu-play (draws the render conformance scenes with wgpu-native)").dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
