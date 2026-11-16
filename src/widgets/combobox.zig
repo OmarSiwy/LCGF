@@ -25,6 +25,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Rect = types.Rect;
@@ -140,17 +141,17 @@ pub fn Combobox(comptime th: Theme, comptime name: @EnumLiteral(), comptime fiel
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
             const cs: ComboState = @field(st, field_name);
-            if (comptime named(n, id)) return .{ .style = inputStyle(&th, cs.focused, v.response) };
+            if (comptime named(n, id)) return .{ .style = valued(inputStyle(&th, cs.focused, v.response), cs), .role = .combobox };
             if (comptime named(n, partName(id, "scrim"))) {
                 if (!cs.open) return null;
                 return .{ .style = popover.scrimStyle(v.in.viewport) };
             }
-            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)) };
+            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)), .role = .listbox };
             inline for (def.items, 0..) |o, k| {
                 if (comptime named(n, partName(id, o))) {
                     const texts = optionTexts(st);
                     if ((filter(&texts, cs.text()) >> k) & 1 == 0) return null;
-                    return .{ .style = optionStyle(&th, cs.active == k, cs.selected == k) };
+                    return .{ .style = optionStyle(&th, cs.active == k, cs.selected == k), .role = .option };
                 }
             }
             return popover.plainPart(th, n, v.response);
@@ -344,6 +345,42 @@ pub fn advance(texts: []const []const u8, st: ComboState, hits: Hits, in: *const
     return s;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The box's style with the value column set: the chosen option's position, -1 for none (the
+/// text itself is the box's content, its label).
+pub fn valued(s: Style, st: ComboState) Style {
+    var out = s;
+    out.value = if (st.selected == no_item) -1 else @floatFromInt(st.selected);
+    return out;
+}
+
+/// The semantics of combo box `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`. The columns hold the roles
+/// (the box `combobox`, valued by `valued`; the list `listbox`; the shown options `option`,
+/// named by their text). Here: the combobox is named by the row `label` (its caption,
+/// `aria-labelledby`; `none` for none), is expandable and expanded while the list is shown
+/// (`aria-expanded`), and names the list; the highlighted option is `selected`, as the APG
+/// combobox marks the option the arrows reach (`aria-selected`). Works on either front end's
+/// tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: menu.Def, st: ComboState, label: u32) void {
+    const b = t.find(.from(name));
+    if (b == types.none) return;
+    const l = t.find(.from(partName(name, "panel")));
+    s.c.state[b] |= a11y.State.bitsOf(.{ .expandable = true, .expanded = l != types.none });
+    if (label != types.none) s.c.labelled_by[b] = label;
+    if (l == types.none) return;
+    s.c.labelled_by[l] = if (label != types.none) label else b;
+    inline for (def.items, 0..) |o, k| {
+        const row = t.find(.from(partName(name, o)));
+        if (row != types.none and st.active == k) s.c.state[row] |= a11y.State.bitsOf(.{ .selected = true });
+    }
+}
+
+fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
+    f.tree().c.role[n.ix()] = @backingInt(r);
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The box of combo box `name` (options `def`, labelled `texts`), in the page's flow, showing
@@ -363,8 +400,9 @@ pub fn input(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     };
     inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(partName(name, o))));
     st.* = advance(texts, st.*, hits, f.in);
-    const b = f.open(.from(name), inputStyle(th, st.focused, r));
+    const b = f.open(.from(name), valued(inputStyle(th, st.focused, r), st.*));
     _ = f.interact(b, .button);
+    role(f, b, .combobox);
     _ = base.label(f, th, st.text());
     f.close();
     return r;
@@ -375,11 +413,15 @@ pub fn input(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
 pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const ComboState, texts: []const []const u8) void {
     if (!st.open) return;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
-    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
+    const l = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    _ = f.interact(l, popover.overlay_sense);
+    role(f, l, .listbox);
     const shown = filter(texts, st.text());
     inline for (def.items, 0..) |o, k| {
         if ((shown >> k) & 1 != 0) {
-            _ = f.interact(f.open(.from(partName(name, o)), optionStyle(th, st.active == k, st.selected == k)), popover.overlay_sense);
+            const row = f.open(.from(partName(name, o)), optionStyle(th, st.active == k, st.selected == k));
+            _ = f.interact(row, popover.overlay_sense);
+            role(f, row, .option);
             _ = base.label(f, th, texts[k]);
             f.close();
         }
@@ -637,6 +679,51 @@ test "Combobox: focus, typing, arrows, Enter, clicks and Escape in both front en
     try testing.expectEqualStrings("Cherry", s[10].text());
     try testing.expect(!s[10].open and s[10].selected == 3 and s[10].focused);
     try testing.expect(!s[11].focused);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Combobox: a combobox named by its caption, valued by its choice, with a listbox of shown options" {
+    const h = &harness;
+    h.init();
+    var st = withText("Ap");
+    st.open = true;
+    st.active = 1;
+    st.selected = 0;
+    const t = try setState(h, st);
+    const cp = &h.ui.tables.t;
+    // The caption is the row before the box.
+    const caption = t.find(.from("fruit")) - 1;
+    semantics(t, sem[0].begin(), "fruit", fruits, h.app.fruit, caption);
+    semantics(cp, sem[1].begin(), "fruit", fruits, h.ui.signals.state.fruit, caption);
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, tr: *const Tree, comptime id: []const u8) u32 {
+            return popover.exportRow(x, tr.find(.from(id)));
+        }
+    }.of;
+    const H = std.hash.Fnv1a_32;
+    const b = row(e, t, "fruit");
+    try testing.expectEqual(@backingInt(a11y.Role.combobox), e.c.role[b]);
+    try testing.expectEqual(H.hash("Fruit"), e.c.name_hash[b]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[b]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true }), e.c.state[b]);
+    try testing.expectEqual(@backingInt(a11y.Role.listbox), e.c.role[row(e, t, "fruit_panel")]);
+    try testing.expectEqual(H.hash("Fruit"), e.c.name_hash[row(e, t, "fruit_panel")]);
+    try testing.expectEqual(@backingInt(a11y.Role.option), e.c.role[row(e, t, "fruit_apricot")]);
+    try testing.expectEqual(H.hash("Apricot"), e.c.name_hash[row(e, t, "fruit_apricot")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "fruit_apricot")]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[row(e, t, "fruit_apple")]);
+    // Filtered out: not in the tree, not exported.
+    try testing.expectEqual(types.none, t.find(.from("fruit_banana")));
+    // Closed, no choice: collapsed, value -1.
+    const t2 = try setState(h, withText("Kiwi"));
+    semantics(t2, sem[0].begin(), "fruit", fruits, h.app.fruit, caption);
+    const e2 = sem[0].finish(t2, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    const b2 = row(e2, t2, "fruit");
+    try testing.expectEqual(@as(f32, -1), e2.c.value[b2]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true }), e2.c.state[b2]);
 }
 
 test "ComboState.setText: cut to the capacity, the caret at the end" {
