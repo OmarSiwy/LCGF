@@ -1,0 +1,45 @@
+# Key events the X11 shell must report for faked key presses (src/shell/x11/x11.zig, test "x11:
+# keys"). Press and release lines are injected with XTEST; text lines are what the shell must add
+# from the keymap. Codes are USB HID; mods are those held after the key's own transition.
+frame
+viewport 800 600
+# a types "a".
+frame
+press 4
+text a
+frame
+release 4
+# Shift+a types "A"; Shift itself types nothing.
+frame
+mods shift
+press 225 shift
+frame
+press 4 shift
+text A
+release 4 shift
+frame
+mods
+release 225
+# 1 then Shift+1 on a US layout.
+frame
+press 30
+text 1
+release 30
+press 225 shift
+press 30 shift
+text !
+release 30 shift
+release 225
+# Ctrl+V is a key with ctrl, and no text.
+frame
+press 224 ctrl
+press 25 ctrl
+release 25 ctrl
+release 224
+# Arrows and Backspace are keys only.
+frame
+press 80
+release 80
+press 42
+release 42
+frame

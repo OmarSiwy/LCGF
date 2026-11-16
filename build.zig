@@ -516,6 +516,10 @@ pub fn build(b: *std.Build) void {
     const baremetal_step = b.step("baremetal", "Run the bare-metal example and build it for Cortex-M7 and RV32IMAC");
     const firmware_test = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
+    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
+    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
+    const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/x11.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
@@ -683,6 +687,18 @@ pub fn build(b: *std.Build) void {
         accesskit_step.dependOn(&b.addRunArtifact(accesskit_tests).step);
         accesskit_build_step.dependOn(&accesskit_tests.step);
     }
+    x11_tests.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
+    const x11_run = b.addRunArtifact(x11_tests);
+    x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
+    b.step("x11", "Test the X11 shell (on a server when LCGR_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
+    // The example application in an X11 window (src/shell/x11/example.zig).
+    const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
