@@ -4,5 +4,5 @@ const s = @import("lcgr").spec;
 const State = struct { volume: f32 };
 
 comptime {
-    @import("lcgr").validate.check(State, s.col(.{}, .{s.slider(.volume, .volum)}));
+    @import("lcgr").validate.check(State, s.col(.{}, .{s.slider(.volume, .volum)}), .{ .require_names = false });
 }

@@ -2,5 +2,5 @@
 const s = @import("lcgr").spec;
 
 comptime {
-    @import("lcgr").validate.check(struct { volume: bool }, s.col(.{}, .{s.slider(.volume, .volume)}));
+    @import("lcgr").validate.check(struct { volume: bool }, s.col(.{}, .{s.slider(.volume, .volume)}), .{ .require_names = false });
 }

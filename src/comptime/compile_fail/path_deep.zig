@@ -10,5 +10,5 @@ comptime {
             s.row(.{}, .{}),
             s.row(.{}, .{ s.label(.x), s.label(.x), s.slider(.a, .x), s.slider(.b, .gain) }),
         }),
-    }));
+    }), .{ .require_names = false });
 }

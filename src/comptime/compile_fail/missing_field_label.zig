@@ -8,5 +8,5 @@ const State = struct {
 };
 
 comptime {
-    @import("lcgr").validate.check(State, s.col(.{}, .{s.label(.tilte)}));
+    @import("lcgr").validate.check(State, s.col(.{}, .{s.label(.tilte)}), .{ .require_names = false });
 }

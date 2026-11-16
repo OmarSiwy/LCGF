@@ -2,5 +2,5 @@
 const s = @import("lcgr").spec;
 
 comptime {
-    @import("lcgr").validate.check(struct { muted: f32 }, s.row(.{}, .{s.checkbox(.mute, .muted)}));
+    @import("lcgr").validate.check(struct { muted: f32 }, s.row(.{}, .{s.checkbox(.mute, .muted)}), .{ .require_names = false });
 }

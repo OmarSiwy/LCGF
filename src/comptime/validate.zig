@@ -11,18 +11,27 @@ const Spec = spec_zig.Spec;
 
 /// Fails compilation with a message naming the first broken rule of `spec` over the state
 /// struct `State`. Rules: widget ids are unique; a slider binds an f32 field and a checkbox a
-/// bool field; every binding names a field of `State`.
+/// bool field; every binding names a field of `State`; and, unless `options.require_names` is
+/// false, every interactive widget (checkbox, slider) has a non-empty accessible name
+/// (`spec.named`), which the accessibility tree reports for it.
 ///
 /// Every message about a node starts with its spec path: the root's kind, then the kind and
 /// child position of each node down to it, as in `col > row[1] > slider[0]: ...` (the first
 /// child of the root's second child). Positions count from 0, as in `children[i]`.
-pub fn check(comptime State: type, comptime spec: Spec) void {
+pub fn check(comptime State: type, comptime spec: Spec, comptime options: Options) void {
     comptime {
         if (@typeInfo(State) != .@"struct") @compileError("state must be a struct, not " ++ @typeName(State));
         var ids: []const Named = &.{};
-        walk(State, spec, @tagName(spec.kind), &ids);
+        walk(State, spec, options, @tagName(spec.kind), &ids);
     }
 }
+
+/// Which optional rules `check` applies.
+pub const Options = struct {
+    /// Lint: interactive widgets have an accessible name. Off only for UIs that are never shown
+    /// to an assistive technology (a kiosk demo, a test).
+    require_names: bool = true,
+};
 
 /// A widget id seen so far and the path of the node that has it.
 const Named = struct { id: [:0]const u8, path: []const u8 };
@@ -42,7 +51,7 @@ fn hasField(comptime State: type, comptime name: []const u8) bool {
     return false;
 }
 
-fn walk(comptime State: type, comptime s: Spec, comptime path: []const u8, comptime ids: *[]const Named) void {
+fn walk(comptime State: type, comptime s: Spec, comptime options: Options, comptime path: []const u8, comptime ids: *[]const Named) void {
     // ponytail: ids are compared pairwise, O(ids^2) comptime work; a UI has tens of ids.
     @setEvalBranchQuota(1000 + 10 * ids.len * ids.len);
     const at = path ++ ": ";
@@ -57,7 +66,13 @@ fn walk(comptime State: type, comptime s: Spec, comptime path: []const u8, compt
         const FT = @FieldType(State, field);
         if (FT != T) @compileError(at ++ @tagName(s.kind) ++ " '" ++ field ++ "' needs " ++ (if (T == f32) "an " else "a ") ++ @typeName(T) ++ " field, not " ++ @typeName(FT));
     };
-    for (s.children, 0..) |c, i| walk(State, c, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }), ids);
+    const interactive = switch (s.kind) {
+        .checkbox, .slider => true,
+        .col, .row, .label => false,
+    };
+    if (options.require_names and interactive and (s.name orelse "").len == 0)
+        @compileError(at ++ @tagName(s.kind) ++ " '" ++ (s.id orelse "") ++ "' has no accessible name; give it one with spec.named(..., \"Name\")");
+    for (s.children, 0..) |c, i| walk(State, c, options, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }), ids);
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -67,20 +82,25 @@ const row = spec_zig.row;
 const label = spec_zig.label;
 const checkbox = spec_zig.checkbox;
 const slider = spec_zig.slider;
+const named = spec_zig.named;
 
-/// The probe's state struct and usage spec.
+/// The probe's state struct and usage spec, with accessible names.
 const Mixer = struct { title: []const u8 = "Mixer", volume: f32 = 0.5, muted: bool = false, pan: f32 = 0 };
 
 const mixer = col(.{ .pad = @splat(8), .gap = 4 }, .{
     label(.title),
-    row(.{ .gap = 8 }, .{ checkbox(.mute, .muted), slider(.volume, .volume) }),
-    row(.{ .gap = 8 }, .{ label(.title), slider(.pan, .pan) }),
+    row(.{ .gap = 8 }, .{ named(checkbox(.mute, .muted), "Mute"), named(slider(.volume, .volume), "Volume") }),
+    row(.{ .gap = 8 }, .{ label(.title), named(slider(.pan, .pan), "Pan") }),
 });
 
 test "check: the probe's mixer breaks no rule" {
-    comptime check(Mixer, mixer);
+    comptime check(Mixer, mixer, .{});
     // Two labels bound to one field are not a duplicate: only ids must be unique.
-    comptime check(Mixer, col(.{}, .{ label(.title), label(.title) }));
+    comptime check(Mixer, col(.{}, .{ label(.title), label(.title) }), .{});
     // A label shows a field of any type.
-    comptime check(Mixer, col(.{}, .{ label(.volume), label(.muted) }));
+    comptime check(Mixer, col(.{}, .{ label(.volume), label(.muted) }), .{});
+}
+
+test "check: require_names = false lets unnamed widgets through" {
+    comptime check(Mixer, row(.{}, .{ checkbox(.mute, .muted), slider(.volume, .volume) }), .{ .require_names = false });
 }
