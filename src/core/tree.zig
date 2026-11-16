@@ -15,14 +15,15 @@ const Rect = types.Rect;
 const b01 = simd.b2f;
 
 /// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
-/// together and layout reads none, so they are one cold row instead of seven hot columns.
-/// `extern` because the row crosses to the GPU; hence `[4]f32`, not a vector.
+/// together and layout reads none, so they are one cold row instead of six hot columns.
+/// 32 bytes with `params` first, so rows and `params` are 16-byte aligned. The border width is
+/// its own column (`Tree.Columns.border`): finalize and `draw.inherit.clip` read it alone
+/// (docs/perf/columns.md). `extern` for a fixed layout; hence `[4]f32`, not a vector.
 pub const Look = extern struct {
+    params: [4]f32,
     fill: u32,
     border_color: u32,
-    border: f32,
     radius: f32,
-    params: [4]f32,
     texture: u16,
     material: u16,
 };
@@ -50,6 +51,7 @@ pub const Template = struct {
     clips: u8,
     sense: u8 = 0,
     look: Look,
+    border: f32,
     uv: [4]f32,
     radii: [4]f32,
     opacity: f32,
@@ -89,12 +91,12 @@ pub const Template = struct {
         r.look = .{
             .fill = s.fill.bitsOf(),
             .border_color = s.border_color.bitsOf(),
-            .border = s.border,
             .radius = s.radius,
             .params = s.params,
             .texture = @backingInt(s.texture),
             .material = @backingInt(s.material),
         };
+        r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
         r.opacity = s.opacity;
@@ -199,8 +201,11 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             sense: Col(u8),
 
             // ---- paint inputs. Cold during layout and always read together, so
-            //      they are one row per node rather than seven columns.
+            //      they are one row per node rather than six columns.
             look: Col(Look),
+            /// Border width (`Style.border`). Read by finalize (children clip inside it),
+            /// `draw.inherit.clip` and paint, so kept out of `look`.
+            border: Col(f32),
             /// Texture coordinates u0, v0, u1, v1 of the quad's corners (`Style.uv`). Kept out
             /// of `Look`, which is a fixed GPU row; read only by paint.
             uv: Col([4]f32),
@@ -398,15 +403,15 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, uv, radii, opacity,
-    // alpha, transform, world, clip radii, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 16 + 16 + 4 + 4 + 24 + 24 + 16 + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, border, uv, radii,
+    // opacity, alpha, transform, world, clip radii, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 4 + 16 + 16 + 4 + 4 + 24 + 24 + 16 + 1 + 4, rowBytes(Tree.Columns));
 }
 
-test "Look: one 36-byte row with the C layout the GPU reads" {
-    try testing.expectEqual(36, @sizeOf(Look));
+test "Look: one 32-byte row, params first" {
+    try testing.expectEqual(32, @sizeOf(Look));
     try testing.expectEqual(4, @alignOf(Look));
-    inline for (.{ "fill", "border_color", "border", "radius", "params", "texture", "material" }, .{ 0, 4, 8, 12, 16, 32, 34 }) |name, off|
+    inline for (.{ "params", "fill", "border_color", "radius", "texture", "material" }, .{ 0, 16, 20, 24, 28, 30 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Look, name));
     try testing.expectEqual([]Look, @FieldType(Tree.Columns, "look"));
 }

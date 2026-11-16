@@ -60,12 +60,22 @@ const src_bytes = blk: {
 var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
-/// same name in `to`. The column sets have the same names and row sizes (Look is the same
-/// 36-byte extern row in both). Columns only src/ has (paint inputs added after the port, such
+/// same name in `to`. The column sets have the same names and row sizes, except `look`, which
+/// is copied field by field (src reorders it and keeps the border width in its own column). Columns only src/ has (paint inputs added after the port, such
 /// as `uv`) are left as they are; the caller gives them the values the prototype implies.
 fn copyColumns(to: anytype, from: anytype, len: u32) void {
     inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
         if (comptime !@hasField(@TypeOf(from.*), name)) continue;
+        if (comptime std.mem.eql(u8, name, "look")) {
+            // src's Look is reordered and has no border (its own column, C0801): copy the
+            // fields both rows have, by name.
+            for (@field(to, name)[0..len], @field(from, name)[0..len]) |*d, sr| {
+                inline for (@typeInfo(@TypeOf(d.*)).@"struct".field_names) |f| {
+                    if (comptime @hasField(@TypeOf(sr), f)) @field(d, f) = @field(sr, f);
+                }
+            }
+            continue;
+        }
         if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
             inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
         } else copyRows(@field(to, name), @field(from, name), len);
@@ -301,6 +311,7 @@ pub fn main(init: std.process.Init) !void {
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
+        for (st.c.border[0..pt.len], pt.c.look[0..pt.len]) |*d, look| d.* = look.border;
         @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
         for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
         @memset(st.c.opacity[0..pt.len], 1); // and no opacity

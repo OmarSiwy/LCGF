@@ -45,7 +45,7 @@ pub fn clip(t: *Tree) void {
     const V4 = @Vector(4, f32);
     const zero: V4 = @splat(0);
     for (0..t.len) |i| {
-        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.look[i].border)), zero);
+        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.border[i])), zero);
         const up = @select(f32, @as(@Vector(4, bool), @splat(i == 0)), zero, @as(V4, c.clip_radii[c.parent[i]]));
         c.clip_radii[i] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, up);
     }
