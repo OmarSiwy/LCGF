@@ -11,10 +11,12 @@ pub const com = @import("com.zig");
 pub const c = com.c;
 pub const device = @import("device.zig");
 pub const host = @import("host.zig");
+pub const pipeline = @import("pipeline.zig");
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(com);
     std.testing.refAllDecls(device);
     std.testing.refAllDecls(host);
+    std.testing.refAllDecls(pipeline);
 }
