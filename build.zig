@@ -483,6 +483,19 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
+    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
+    const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/x11.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    x11_tests.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
+    const x11_run = b.addRunArtifact(x11_tests);
+    x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
+    b.step("x11", "Test the X11 shell (on a server when LCGR_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
