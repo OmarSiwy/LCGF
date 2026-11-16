@@ -135,7 +135,8 @@ pub const Translator = struct {
     in: Input = .{},
     /// windowShouldClose: arrived.
     closed: bool = false,
-    /// Caller-owned storage for the frame's typed text and key events.
+    /// Caller-owned storage for the typed text and key events arriving (`frame` copies them to
+    /// `out`).
     text: []u8 = &.{},
     events: []Input.Event = &.{},
     n_text: u32 = 0,
@@ -145,12 +146,25 @@ pub const Translator = struct {
     /// The input method's composition as UTF-8, held until it changes or ends (`mark`).
     preedit: []u8 = &.{},
     composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 }, units: u32 = 0 } = .{},
+    /// The frame handed out by `frame`, which its `Events` point into. Kept apart from what
+    /// arrives so that, with several windows on one thread, another window's `poll` (which
+    /// dispatches this window's events too) cannot change a frame not yet built.
+    out: Buffers = .{ .text = &.{}, .events = &.{} },
 
-    /// `preedit` holds the longest composition shown; a longer one is cut at a character.
+    /// Each buffer is split in two halves: the events arriving, and the frame handed out.
+    /// `preedit` holds twice the longest composition shown; a longer one is cut at a character.
     pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
-        return .{ .text = buf.text, .events = buf.events, .preedit = buf.preedit };
+        const t = buf.text.len / 2;
+        const e = buf.events.len / 2;
+        const p = buf.preedit.len / 2;
+        return .{
+            .text = buf.text[0..t],
+            .events = buf.events[0..e],
+            .preedit = buf.preedit[0..p],
+            .out = .{ .text = buf.text[t..][0..t], .events = buf.events[e..][0..e], .preedit = buf.preedit[p..][0..p] },
+        };
     }
 
     /// Reads one record.
@@ -334,13 +348,17 @@ pub const Translator = struct {
         t.n_events += 1;
     }
 
-    /// This frame's events, in `ev` until the next call; the next frame starts empty. False
-    /// once the window was closed.
+    /// This frame's events: those since the last `frame`, copied to `out`, where `ev` points
+    /// until the next call. Then the next frame starts empty. False once the window was closed.
     pub fn frame(t: *Translator, ev: *Events) bool {
+        const o = t.out;
+        @memcpy(o.text[0..t.n_text], t.text[0..t.n_text]);
+        @memcpy(o.events[0..t.n_events], t.events[0..t.n_events]);
+        @memcpy(o.preedit[0..t.composition.len], t.preedit[0..t.composition.len]);
         ev.in = t.in;
-        ev.in.text = t.text[0..t.n_text];
-        ev.in.events = t.events[0..t.n_events];
-        ev.composition = .{ .text = t.preedit[0..t.composition.len], .range = t.composition.range };
+        ev.in.text = o.text[0..t.n_text];
+        ev.in.events = o.events[0..t.n_events];
+        ev.composition = .{ .text = o.preedit[0..t.composition.len], .range = t.composition.range };
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
         t.n_text = 0;
@@ -655,8 +673,8 @@ test "translate: keys, modifiers, typed text, wheel and leaving the window" {
 }
 
 test "translate: a full frame drops what does not fit and counts it" {
-    var text: [4]u8 = undefined;
-    var events: [2]Input.Event = undefined;
+    var text: [8]u8 = undefined;
+    var events: [4]Input.Event = undefined;
     var t: Translator = .init(.{ .text = &text, .events = &events });
     var ev: Events = .{};
     t.insert("ab");
@@ -728,8 +746,8 @@ test "cursors: every Platform cursor has its own system cursor" {
 }
 
 test "clipboard: pasted text is typed in one event, with its line ends" {
-    var text: [32]u8 = undefined;
-    var events: [4]Input.Event = undefined;
+    var text: [64]u8 = undefined;
+    var events: [8]Input.Event = undefined;
     var t: Translator = .init(.{ .text = &text, .events = &events });
     var ev: Events = .{};
     t.insert("x");
@@ -744,6 +762,29 @@ test "clipboard: pasted text is typed in one event, with its line ends" {
     try testing.expectEqualStrings("", ev.in.text);
     try testing.expectEqual(@as(u32, 1), t.dropped);
 }
+
+/// One item of the menu bar the shell builds: its title, the action AppKit sends up the
+/// responder chain, its key equivalent with Command (and Option when `option`). An empty title
+/// is a separator; `named` titles end with the application's name ("Quit Example").
+pub const MenuItem = struct { title: [:0]const u8 = "", action: [:0]const u8 = "", key: [:0]const u8 = "", option: bool = false, named: bool = false };
+
+/// The application menu, as the Human Interface Guidelines lay it out. Quit (`terminate:`)
+/// ends every window's `poll`; the process exits only when the host returns.
+pub const app_menu = [_]MenuItem{
+    .{ .title = "Hide", .action = "hide:", .key = "h", .named = true },
+    .{ .title = "Hide Others", .action = "hideOtherApplications:", .key = "h", .option = true },
+    .{ .title = "Show All", .action = "unhideAllApplications:" },
+    .{},
+    .{ .title = "Quit", .action = "terminate:", .key = "q", .named = true },
+};
+
+/// The Window menu; AppKit adds the open windows below these items.
+pub const window_menu = [_]MenuItem{
+    .{ .title = "Minimize", .action = "performMiniaturize:", .key = "m" },
+    .{ .title = "Zoom", .action = "performZoom:" },
+    .{},
+    .{ .title = "Close", .action = "performClose:", .key = "w" },
+};
 
 /// Seconds `wait` blocks for (the `untilDate:` of `nextEventMatchingMask:`), for a wait of
 /// `seconds` (`scheduler.wake`) at `pace` on a display refreshing `hz` times a second; null
@@ -800,7 +841,7 @@ test "ime: a composition is shown, converted, then committed as typed text" {
 
     // A range past the end is clamped to it; a composition longer than the buffer is cut at a
     // character.
-    var small: [4]u8 = undefined;
+    var small: [8]u8 = undefined;
     t = .init(.{ .text = &text, .events = &events, .preedit = &small });
     t.mark("\u{65e5}\u{672c}", .{ 1, 9 });
     _ = t.frame(&ev);
@@ -855,4 +896,48 @@ test "timers: the clock and the wait for each pace" {
     try testing.expectApproxEqAbs(@as(f64, 1.0 / 60.0), waitSeconds(0, .display, 60).?, 1e-12);
     try testing.expectApproxEqAbs(@as(f64, 1.0 / 120.0), waitSeconds(inf, .display, 120).?, 1e-12);
     try testing.expectEqual(@as(?f64, 1), waitSeconds(0, .display, 0));
+}
+
+test "windows: two windows on one thread keep their frames apart" {
+    // One thread, two windows. Each poll dispatches every window's events, so window A's keys
+    // can arrive during B's poll, after A's frame was handed out but before it is built.
+    var a_text: [16]u8 = undefined;
+    var a_events: [8]Input.Event = undefined;
+    var b_text: [16]u8 = undefined;
+    var b_events: [8]Input.Event = undefined;
+    var a: Translator = .init(.{ .text = &a_text, .events = &a_events });
+    var b: Translator = .init(.{ .text = &b_text, .events = &b_events });
+    var ev_a: Events = .{};
+    var ev_b: Events = .{};
+
+    a.feed(.{ .resize = .{ 400, 300 } });
+    a.feed(.{ .insert = "a" });
+    b.feed(.{ .insert = "b" });
+    _ = a.frame(&ev_a); // poll A
+    a.feed(.{ .insert = "x" }); // during poll B
+    b.feed(.close);
+    try testing.expect(!b.frame(&ev_b)); // poll B: B was closed, A goes on
+    // Build A, build B: each sees its own frame, unchanged.
+    try testing.expectEqualStrings("a", ev_a.in.text);
+    try testing.expectEqual([2]f32{ 400, 300 }, ev_a.in.viewport);
+    try testing.expectEqualStrings("b", ev_b.in.text);
+    try testing.expectEqual([2]f32{ 800, 600 }, ev_b.in.viewport);
+    // A's late key is in its next frame.
+    try testing.expect(a.frame(&ev_a));
+    try testing.expectEqualStrings("x", ev_a.in.text);
+}
+
+test "menu: key equivalents are distinct and Quit is Command-Q" {
+    const menus = [_][]const MenuItem{ &app_menu, &window_menu };
+    for (menus, 0..) |items, i| for (items, 0..) |x, j| {
+        if (x.key.len == 0) continue;
+        for (menus[i..], i..) |other, k| for (other, 0..) |y, l| {
+            if (k == i and l <= j) continue;
+            try testing.expect(!(std.mem.eql(u8, x.key, y.key) and x.option == y.option));
+        };
+    };
+    const quit = app_menu[app_menu.len - 1];
+    try testing.expectEqualStrings("terminate:", quit.action);
+    try testing.expectEqualStrings("q", quit.key);
+    try testing.expect(!quit.option);
 }

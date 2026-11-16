@@ -67,6 +67,8 @@ var default_mode: Id = undefined;
 /// NSPasteboardTypeString: plain text on the pasteboard.
 var pasteboard_string: Id = undefined;
 var launched = false;
+/// The user chose Quit: every window's `poll` returns false from now on.
+var quit = false;
 
 const libobjc = "/usr/lib/libobjc.A.dylib";
 const foundation = "/System/Library/Frameworks/Foundation.framework/Foundation";
@@ -95,6 +97,8 @@ fn launch() Error!void {
     defer pool.pop();
     const a = app();
     msg(void, a, "setActivationPolicy:", .{@as(isize, 0)}); // NSApplicationActivationPolicyRegular
+    try registerDelegate(a);
+    menuBar(a);
     msg(void, a, "finishLaunching", .{});
     launched = true;
 }
@@ -171,6 +175,53 @@ fn registerView() Error!void {
     rt.objc_registerClassPair(cls);
     view_class = cls;
     shell_ivar = rt.class_getInstanceVariable(cls, "lcgr") orelse return error.ClassFailed;
+}
+
+/// NSApp's delegate: Quit asks it first, and it says no (NSTerminateCancel), so the host's loop
+/// ends instead of `exit` being called under it.
+fn registerDelegate(a: Id) Error!void {
+    const cls = rt.objc_allocateClassPair(objc.class("NSObject"), "LCGRAppDelegate", 0) orelse return error.ClassFailed;
+    if (!rt.class_addMethod(cls, objc.sel("applicationShouldTerminate:"), @ptrCast(&applicationShouldTerminate), "Q@:@")) return error.ClassFailed;
+    rt.objc_registerClassPair(cls);
+    // Kept for the life of the process: NSApp holds its delegate weakly.
+    msg(void, a, "setDelegate:", .{msg(Id, cls, "new", .{})});
+}
+
+fn applicationShouldTerminate(_: Id, _: Sel, _: Id) callconv(.c) U {
+    quit = true;
+    return 0;
+}
+
+/// The menu bar: the application menu and the Window menu (`translate.app_menu`,
+/// `translate.window_menu`).
+fn menuBar(a: Id) void {
+    const bar = msg(Id, objc.class("NSMenu"), "new", .{});
+    const name = msg(Id, msg(Id, objc.class("NSProcessInfo"), "processInfo", .{}), "processName", .{});
+    _ = submenu(bar, objc.string(""), &translate.app_menu, name);
+    const window = submenu(bar, objc.string("Window"), &translate.window_menu, name);
+    msg(void, a, "setMainMenu:", .{bar});
+    msg(void, a, "setWindowsMenu:", .{window});
+    objc.release(bar);
+}
+
+fn submenu(bar: Id, title: Id, comptime items: []const translate.MenuItem, name: Id) Id {
+    const menu = msg(Id, msg(Id, objc.class("NSMenu"), "alloc", .{}), "initWithTitle:", .{title});
+    inline for (items) |x| {
+        if (x.title.len == 0) {
+            msg(void, menu, "addItem:", .{msg(Id, objc.class("NSMenuItem"), "separatorItem", .{})});
+        } else {
+            var t = objc.string(x.title);
+            if (x.named) t = msg(Id, msg(Id, t, "stringByAppendingString:", .{objc.string(" ")}), "stringByAppendingString:", .{name});
+            const item = msg(Id, menu, "addItemWithTitle:action:keyEquivalent:", .{ t, objc.sel(x.action), objc.string(x.key) });
+            if (x.option) msg(void, item, "setKeyEquivalentModifierMask:", .{@as(U, translate.flag_command | translate.flag_option)});
+        }
+    }
+    const holder = msg(Id, objc.class("NSMenuItem"), "new", .{});
+    msg(void, holder, "setSubmenu:", .{menu});
+    msg(void, bar, "addItem:", .{holder});
+    objc.release(holder);
+    objc.release(menu);
+    return menu;
 }
 
 /// The shell a view method was called on.
@@ -355,8 +406,9 @@ pub const Macos = struct {
         show: bool = true,
     };
 
-    /// Caller-owned storage: `text` and `events` one frame's typed text and key events,
-    /// `preedit` the longest input-method composition shown, `glyphs` one quad per byte of text in a frame (at most the
+    /// Caller-owned storage: `text` and `events` hold two frames' typed text and key events,
+    /// `preedit` twice the longest input-method composition (`translate.Translator.Buffers`:
+    /// what arrives, and the frame handed out), `glyphs` one quad per byte of text in a frame (at most the
     /// renderer's 32768), `first` and `count` one row per text run.
     pub const Buffers = struct {
         text: []u8,
@@ -445,7 +497,9 @@ pub const Macos = struct {
             msg(void, a, "sendEvent:", .{e});
         }
         m.t.clock(metal.present.mediaTime() - m.start);
-        return m.t.frame(ev);
+        // What arrived between polls (a `paste`, another window's poll dispatching ours) is
+        // in this frame.
+        return m.t.frame(ev) and !quit;
     }
 
     /// The refresh rate of the window's display (`maximumFramesPerSecond`, macOS 12); 60 when
@@ -557,6 +611,10 @@ const testing = std.testing;
 const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 
 const Fixture = struct {
+    // A second window's own text, events and composition; glyphs are shared.
+    var text2: [64]u8 = undefined;
+    var events2: [16]lcgr.input.Input.Event = undefined;
+    var preedit2: [64]u8 = undefined;
     var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(lcgr.mem.column_align) = undefined;
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
@@ -631,6 +689,42 @@ test "macos: the view is a text input client that composes and commits" {
     var actual: NSRange = undefined;
     const r = msgRect(m.view, "firstRectForCharacterRange:actualRange:", .{ NSRange{ .location = 0, .length = 0 }, &actual });
     try testing.expectEqual(NSSize{ .width = 30, .height = 40 }, r.size);
+}
+
+test "macos: two windows on one thread get their own events" {
+    var a: Macos = undefined;
+    try Fixture.open(&a);
+    defer a.deinit();
+    var b: Macos = undefined;
+    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
+    defer b.deinit();
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    msg(void, a.view, "insertText:", .{objc.string("a")});
+    msg(void, b.view, "insertText:", .{objc.string("b")});
+    var ev_a: Events = .{};
+    var ev_b: Events = .{};
+    try testing.expect(a.poll(&ev_a));
+    msg(void, a.view, "insertText:", .{objc.string("x")});
+    msg(void, b.window, "performClose:", .{@as(?Id, null)});
+    try testing.expect(!b.poll(&ev_b)); // B closed; A is still open
+    try testing.expectEqualStrings("a", ev_a.in.text);
+    try testing.expectEqualStrings("b", ev_b.in.text);
+    try testing.expect(a.poll(&ev_a));
+    try testing.expectEqualStrings("x", ev_a.in.text);
+}
+
+test "macos: the menu bar is built, and Quit ends every poll without exiting" {
+    var a: Macos = undefined;
+    try Fixture.open(&a);
+    defer a.deinit();
+    const bar = msg(Id, app(), "mainMenu", .{});
+    try testing.expectEqual(@as(isize, 2), msg(isize, bar, "numberOfItems", .{}));
+    var ev: Events = .{};
+    try testing.expect(a.poll(&ev));
+    msg(void, app(), "terminate:", .{@as(?Id, null)});
+    defer quit = false; // the other tests go on
+    try testing.expect(!a.poll(&ev));
 }
 
 fn job(m: *Macos) void {
