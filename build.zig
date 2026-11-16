@@ -11,6 +11,7 @@
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
 //!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
 //!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
+//!   zig build conformance-dump     the render conformance scenes as files (ci/run.sh conformance)
 //!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; HarfBuzz is a lazy
 //!                                  build.zig.zon dependency built from source (ci/run.sh harfbuzz)
 const std = @import("std");
@@ -79,7 +80,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     });
-    draw_dump_mod.addAnonymousImport("quad.wgsl", .{ .root_source_file = b.path("src/render/shaders/quad.wgsl") });
     const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
     draw_dump.addPassthruArgs();
     b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
@@ -123,6 +123,15 @@ pub fn build(b: *std.Build) void {
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
+
+    // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
+    const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/conformance/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
 
     // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
     const fuzz_mod = b.createModule(.{

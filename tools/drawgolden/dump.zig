@@ -3,8 +3,7 @@
 //!
 //!     zig build draw-dump -- <scene> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
-//! The shader is src/render/shaders/quad.wgsl and the instance layout is declared here from
-//! `draw_list.Quad`, until a src/ renderer owns both. ci/jobs/draw-golden.sh renders every scene
+//! The shader and instance layout are src/render/shaders/quad.zig's (`lcgr.quad_shader`). ci/jobs/draw-golden.sh renders every scene
 //! and compares it with tools/drawgolden/ref/<scene>.png.
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -18,27 +17,11 @@ const Color = lcgr.types.Color;
 const Id = lcgr.types.Id;
 const features = lcgr.features;
 
-const wgsl = @embedFile("quad.wgsl");
+const gfx = lcgr.quad_shader;
 
 /// gpu.py draws an 800x600 target.
 const viewport = [2]f32{ 800, 600 };
 const cap = 64;
-
-/// Vertex attributes of `Quad` for the shader above: location, field, format.
-const attrs = .{
-    .{ 0, "rect", "float32x4" },
-    .{ 1, "clip", "float32x4" },
-    .{ 2, "params", "uint32x4" },
-    .{ 3, "uv", "float32x4" },
-    .{ 4, "fill", "unorm8x4" },
-    .{ 5, "border_color", "unorm8x4" },
-    .{ 6, "radii", "float32x4" },
-    .{ 7, "border", "float32" },
-    .{ 8, "opacity", "float32" },
-    .{ 9, "xform", "float32x4" }, // a, b, c, d
-};
-const xform_t = .{ 10, @offsetOf(Quad, "xform") + 16, "float32x2" }; // tx, ty
-const clip_radii = .{ 11, @offsetOf(Quad, "clip_radii"), "float32x4" };
 
 const Scene = struct {
     t: Tree,
@@ -256,17 +239,15 @@ pub fn main(init: std.process.Init) !void {
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.createDirPathOpen(io, out_path, .{});
     defer dir.close(io);
-    try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = wgsl });
+    try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
     try dir.writeFile(io, .{ .sub_path = "quads.bin", .data = sc.d.quadBytes() });
     // No text in these scenes; one zero row, because gpu.py cannot upload an empty buffer.
     try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
 
     var text: [16 * 1024]u8 = undefined;
     var w = std.Io.Writer.fixed(&text);
-    try w.print("stride {d}\n", .{@sizeOf(Quad)});
-    inline for (attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a[0], @offsetOf(Quad, a[1]), a[2] });
-    try w.print("attr {d} {d} {s}\n", xform_t);
-    try w.print("attr {d} {d} {s}\n", clip_radii);
+    try w.print("stride {d}\n", .{gfx.stride});
+    for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text, .custom => return error.SceneHasTextOrCustom,
