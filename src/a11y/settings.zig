@@ -10,6 +10,7 @@ const theme = @import("../theme/theme.zig");
 const base = @import("../widgets/base.zig");
 const Color = types.Color;
 const Tokens = theme.Tokens;
+const Focus = @import("../interact/focus.zig").Focus;
 
 /// What the user asked the platform for. Plain data the host sets, every frame or on change.
 pub const Settings = struct {
@@ -23,6 +24,11 @@ pub const Settings = struct {
     /// motion", Windows "Show animations" off). Transitions finish at once (`progress`); the
     /// animation system (lane anim, C0724) reads this field.
     reduced_motion: bool = false,
+    /// Show the focus ring all the time, not only after a key (`Focus.visible`, CSS
+    /// `:focus-visible`): for keyboard and switch users whose platform says so (macOS "Keyboard
+    /// navigation", Windows "Always show focus indicators"), or whose clicks come from a
+    /// pointer emulator.
+    always_show_focus: bool = false,
 };
 
 /// The range `Settings.text_scale` is clamped to: past both ends of what platforms offer
@@ -64,6 +70,12 @@ pub fn progress(s: *const Settings, elapsed: f32, seconds: f32) f32 {
     const d = seconds * simd.b2f(!s.reduced_motion);
     const done = simd.b2f(!(d > 0));
     return base.unit((@max(elapsed, 0) + done) / @max(d, std.math.floatMin(f32)));
+}
+
+/// Applies `always_show_focus` to this frame's ring: call after `Focus.step`, before
+/// `Focus.ring`. Without the setting the ring follows keys and the pointer as before.
+pub fn showFocus(s: *const Settings, fo: *Focus) void {
+    fo.visible = simd.orB(fo.visible, s.always_show_focus);
 }
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -121,4 +133,70 @@ test "settings: reduced motion finishes every transition on its first frame" {
     // A zero-length transition is done at once, with or without the setting.
     try testing.expectEqual(@as(f32, 1), progress(&.{}, 0, 0));
     try testing.expectEqual(@as(f32, 1), progress(&calm, 0, 0));
+}
+
+/// Ring per frame for a two-button row, as `Interaction`, `Focus` and `showFocus` give it
+/// for `src`.
+fn rings(s: *const Settings, src: []const u8) ![5]types.Rect {
+    const mem = @import("../core/mem.zig");
+    const Tree = @import("../core/tree.zig").Tree;
+    const Texts = @import("../core/texts.zig").Texts;
+    const focus = @import("../interact/focus.zig");
+    const Interaction = @import("../interact/interaction.zig").Interaction;
+    const Input = @import("../core/input.zig").Input;
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 4);
+    var tx = Texts.init(&carver, 1);
+    var sc = focus.Scopes.init(&carver, 4);
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(200), .px(20) } });
+    for ([_]types.Id{ .from("a"), .from("b") }) |id| {
+        const n = t.push(root, id, &.{ .size = .{ .px(100), .px(20) } });
+        t.seal(n);
+        t.c.sense[n] = @bitCast(types.Sense.button);
+    }
+    t.seal(root);
+    @import("../layout/layout.zig").run(&t, &tx, .{ 200, 20 });
+    focus.scan(&t, &sc);
+    var it: Interaction = .{};
+    var fo: Focus = .{};
+    var out: [5]types.Rect = @splat(.{});
+    var text: [4]u8 = undefined;
+    var evs: [4]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    var r: @import("../core/input.zig").Replay = .{ .src = src };
+    var k: usize = 0;
+    while (try r.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| : (k += 1) {
+        it.step(&t, in);
+        fo.step(&it, &t, &sc, in);
+        showFocus(s, &fo);
+        out[k] = fo.ring(&it, &t);
+    }
+    try testing.expectEqual(5, k);
+    return out;
+}
+
+test "settings: always show focus keeps the ring on after the pointer, wherever focus goes" {
+    // Tab focuses "a"; a click on "b" moves focus there; the release keeps it; a click on
+    // nothing clears it.
+    const src =
+        \\frame
+        \\press 43
+        \\frame
+        \\release 43
+        \\frame
+        \\pointer 150 10
+        \\buttons left
+        \\frame
+        \\buttons
+        \\pointer 150 50
+        \\frame
+        \\buttons left
+    ;
+    const a: types.Rect = .{ .x0 = -2, .y0 = -2, .x1 = 102, .y1 = 22 };
+    const b: types.Rect = .{ .x0 = 98, .y0 = -2, .x1 = 202, .y1 = 22 };
+    // Without the setting the click hides the ring (`:focus-visible`).
+    try testing.expectEqualSlices(types.Rect, &.{ a, a, .{}, .{}, .{} }, &try rings(&.{}, src));
+    // With it the ring follows focus through the click; nothing focused still draws nothing.
+    try testing.expectEqualSlices(types.Rect, &.{ a, a, b, b, .{} }, &try rings(&.{ .always_show_focus = true }, src));
 }
