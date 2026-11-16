@@ -28,6 +28,7 @@ const pages = .{
     lcgr.widgets_list.Page,
     lcgr.widgets_vlist.Page,
     lcgr.widgets_table.Page,
+    lcgr.widgets_tree.Page,
 };
 
 var glyph_quads: [4096]Quad = undefined;

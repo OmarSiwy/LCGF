@@ -401,6 +401,19 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/tree.replay");
+    pub const golden_frames = .{
+        .{ "tree-rest", 0 },
+        .{ "tree-expanded", 3 },
+        .{ "tree-keys", 9 },
+        .{ "tree-collapsed", 13 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -411,6 +424,30 @@ const test_labels = [_][]const u8{ "src", "core", "tree.zig", "types.zig", "widg
 const test_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
 
 var harness: Example(theme).Run = .{};
+
+test "tree: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var sel: [14]u32 = undefined;
+    var shown: [14]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        try testing.expectEqual(h.app.outline, h.ui.signals.state.outline);
+        sel[k] = h.app.outline.selected;
+        const t = out.runtime.tree;
+        const box = t.find(.from("outline"));
+        shown[k] = (t.c.end[box] - box - 1) / 3;
+    }
+    try testing.expectEqual(@as(u32, 14), h.frames);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 2, 1, 1, 4, 4, 5, 6, 6, 0, 0 }, &sel);
+    try testing.expectEqualSlices(u32, &.{ 4, 4, 4, 6, 6, 6, 4, 4, 5, 5, 5, 6, 6, 3 }, &shown);
+}
 
 test "tree: roles, value and the expanded and selected states" {
     const h = &harness;
