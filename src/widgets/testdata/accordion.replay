@@ -1,0 +1,31 @@
+# Recorded input for the accordion example page (widgets/accordion.zig, `Page`), at 320 x 200
+# in the default theme: the General header at 8..232 x 8..42 (open, a checkbox below it), the
+# Advanced header at 8..232 x 75..109 (closed). Keys are USB HID codes: 44 Space, 40 Enter
+# (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: hover Advanced
+frame
+pointer 120 92
+# 2: press it: it takes focus
+frame
+buttons left
+# 3: release over it: Advanced opens
+frame
+buttons
+# 4: Space on the focused header: it closes
+frame
+press 44
+# 5: Enter: it opens again
+frame
+press 40
+# 6: press General
+frame
+pointer 120 25
+buttons left
+# 7: release: General closes, Advanced moves up
+frame
+buttons

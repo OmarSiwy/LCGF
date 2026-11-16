@@ -1,0 +1,65 @@
+diff --git a/src/draw/paint.zig b/src/draw/paint.zig
+index f7fbf19..fcdab79 100644
+--- a/src/draw/paint.zig
++++ b/src/draw/paint.zig
+@@ -45,7 +45,59 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
+     const looks = c.look;
+     var q: u32 = 0;
+     var o: u32 = 0;
+-    for (0..t.len) |k| {
++    if (!ordered) {
++        const W = simd.lanes;
++        const U = simd.U;
++        const zero: U = @splat(0);
++        const one: U = @splat(1);
++        var j: usize = 0;
++        while (j < t.len) : (j += W) {
++            const live = simd.iota < @as(U, @splat(@intCast(t.len - j)));
++            var fb: U = undefined;
++            inline for (0..W) |l| fb[l] = looks[j + l].fill | looks[j + l].border_color;
++            const vis: U = @as(@Vector(W, u8), c.visible[j..][0..W].*);
++            const shown = live & (vis != zero);
++            const hq = @select(u32, shown & ((fb >> @splat(24)) != zero) & (simd.loadF(c.alpha, j) > @as(simd.F, @splat(0))), one, zero);
++            const text = simd.loadU(c.text, j);
++            const custom = simd.loadU(c.custom, j);
++            const ht = @select(u32, shown & (text != @as(U, @splat(none))), one, zero);
++            const hc = @select(u32, shown & (custom != @as(U, @splat(none))), one, zero);
++            const r0 = simd.loadF(rect[0], j);
++            const r1 = simd.loadF(rect[1], j);
++            const r2 = simd.loadF(rect[2], j);
++            const r3 = simd.loadF(rect[3], j);
++            inline for (0..W) |l| {
++                const i = j + l;
++                const look = &looks[i];
++                quads[q] = .{
++                    .rect = .{ r0[l], r1[l], r2[l], r3[l] },
++                    .clip = @as(V4, child_clip[parent[i]]) * sign,
++                    .params = look.params,
++                    .uv = c.uv[i],
++                    .fill = look.fill,
++                    .border_color = look.border_color,
++                    .radii = c.radii[i],
++                    .border = c.border[i],
++                    .opacity = c.alpha[i],
++                    .xform = c.world[i],
++                    .clip_radii = c.clip_radii[parent[i]],
++                };
++                op_kind[o] = @backingInt(DrawList.Kind.quads);
++                op_key[o] = (@as(u32, look.texture) << 16) | look.material;
++                op_ref[o] = q;
++                q += hq[l];
++                o += hq[l];
++                op_kind[o] = @backingInt(DrawList.Kind.text);
++                op_key[o] = 0;
++                op_ref[o] = text[l];
++                o += ht[l];
++                op_kind[o] = @backingInt(DrawList.Kind.custom);
++                op_key[o] = 0;
++                op_ref[o] = custom[l];
++                o += hc[l];
++            }
++        }
++    } else for (0..t.len) |k| {
+         const i = if (ordered) order[k] else k;
+         const vis: u32 = c.visible[i];
+         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;

@@ -1,0 +1,29 @@
+[package]
+name = "vs-iced"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Iced's runtime pieces without a window: iced_runtime's UserInterface builds, updates and draws a
+# view into the tiny-skia renderer's layers. bench/vs/iced/main.rs says what is measured.
+[dependencies]
+iced_runtime = "=0.14.0"
+iced_widget = "=0.14.0"
+iced_tiny_skia = "=0.14.0"
+iced_core = "=0.14.0"
+# iced_widget needs a renderer feature on iced_renderer to compile in release mode.
+iced_renderer = { version = "=0.14.0", features = ["tiny-skia"] }
+
+[[bin]]
+name = "vs-iced"
+path = "main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+
+[profile.small]
+inherits = "release"
+opt-level = "s"
+strip = true

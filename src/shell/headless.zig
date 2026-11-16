@@ -19,6 +19,7 @@ const iface = @import("iface.zig");
 const Events = iface.Events;
 const Platform = context.Platform;
 const Output = context.Output;
+const Pace = @import("../runtime/scheduler.zig").Pace;
 const Color = types.Color;
 
 pub const Headless = struct {
@@ -36,6 +37,9 @@ pub const Headless = struct {
     applied: Platform = .{},
     polls: u32 = 0,
     presents: u32 = 0,
+    waits: u32 = 0,
+    /// What the last `wait` was asked for.
+    waited: struct { seconds: f32, pace: Pace } = .{ .seconds = 0, .pace = .idle },
     /// Why `poll` returned false early: the recording has a bad line (`replay.line`) or a frame
     /// that does not fit the buffers.
     err: ?Replay.Error = null,
@@ -86,6 +90,12 @@ pub const Headless = struct {
         h.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, h.scale);
         h.fb.clear(h.background);
         render.render(&h.gfx, .{ .fb = &h.fb, .scissor = h.fb.all() }, out.draw);
+    }
+
+    /// Returns at once: the next recorded frame is the next event, and it is already here.
+    pub fn wait(h: *Headless, seconds: f32, pace: Pace) void {
+        h.waits += 1;
+        h.waited = .{ .seconds = seconds, .pace = pace };
     }
 };
 
@@ -165,6 +175,27 @@ test "headless: runs the example from a recording and draws it" {
     try testing.expectEqual(shell.background, shell.fb.at(400, 300));
     // A glyph cell of "Add layer" is the text colour.
     try testing.expectEqual(th.text, shell.fb.at(20, 70));
+}
+
+test "run: the headless shell runs the example in one call" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var app: example.App = .{};
+    var shell = Fixture.shell(@embedFile("testdata/example.replay"));
+    iface.run(&shell, &ctx, &app);
+    // The same results as the loop written out above.
+    try testing.expectEqual(null, shell.err);
+    try testing.expectEqual(@as(u32, 15), shell.polls);
+    try testing.expectEqual(@as(u32, 13), app.builds);
+    try testing.expectEqual(app.builds, shell.presents);
+    try testing.expectEqual(@as(u32, 1), app.resets);
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+    try testing.expectEqual(context.Cursor.arrow, shell.applied.cursor);
+    try testing.expectEqual(app.theme.panel, shell.fb.at(80, 590));
+    // One wait per poll, and the last one sleeps until the next event.
+    try testing.expectEqual(shell.polls, shell.waits);
+    try testing.expectEqual(types.inf, shell.waited.seconds);
+    try testing.expectEqual(Pace.idle, shell.waited.pace);
 }
 
 test "headless: a bad recording stops the shell and says where" {

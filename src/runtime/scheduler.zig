@@ -20,7 +20,7 @@ const none = types.none;
 /// The host can then sleep until the next event.
 pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     const changed = simd.orB(ctx.frame == 0, in.stamp() != ctx.last_stamp);
-    const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.dirty));
+    const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.signals.dirty));
     const due = in.time >= deadline(ctx);
     const woken = ctx.waker.flag.load(.acquire);
     return simd.orB(simd.orB(changed, woken), simd.orB(pending, due));
@@ -258,7 +258,7 @@ test "needsFrame: the first frame, then only input changes, motion and signals" 
     ctx.motion = 0;
 
     // A signal bumped between frames wakes the host; the frame that sees it clears it.
-    ctx.dirty = true;
+    ctx.signals.dirty = true;
     try testing.expect(ctx.needsFrame(&in));
     _ = frame(&ctx, &in);
     try testing.expect(!ctx.needsFrame(&in));
@@ -590,7 +590,7 @@ test "idle: zero frames and zero wakeups without input" {
 
     // A one-shot timer: the toast hides itself 3 s later with one timeout, then idle.
     s.toast = true;
-    s.ctx.dirty = true; // what a signal bump on the toast flag does
+    s.ctx.signals.dirty = true; // what a signal bump on the toast flag does
     s.frames = 0;
     s.wakeups = 0;
     try s.wait(10);

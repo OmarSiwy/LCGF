@@ -62,6 +62,12 @@
           GALLIUM_DRIVER = "llvmpipe";
           EGL_LOG_LEVEL = "fatal";
         };
+        # Hardware counters for the benchmark (lane optimise, docs/perf/cache.md): perf stat
+        # over a whole run; `zig build bench -- --counters` counts per pass itself.
+        devShells.bench = pkgs.mkShell {
+          inputsFrom = [ devShells.default ];
+          packages = [ pkgs.perf ];
+        };
         # Shader translation and validation (lane shaders): the golden shell plus naga-cli,
         # spirv-val and glslangValidator.
         devShells.shaders = pkgs.mkShell {
@@ -72,6 +78,21 @@
             pkgs.glslang
           ];
           inherit (devShells.golden) LD_LIBRARY_PATH VK_ICD_FILENAMES;
+        };
+        # Competitor harnesses in Rust and QML (bench/vs/, docs/perf/vs.md): cargo and rustc for
+        # egui, Iced and Slint (crates pinned by each Cargo.lock), Qt 6 for Qt Quick. Comparison
+        # only, CI only (ci/jobs/vs-*.sh, `# shell: vs`); never used by `zig build`.
+        devShells.vs = pkgs.mkShell {
+          inputsFrom = [ devShells.default ];
+          packages = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.pkg-config
+            pkgs.qt6.qtbase
+            pkgs.qt6.qtdeclarative
+          ];
+          QT_PLUGIN_PATH = "${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}";
+          QML_IMPORT_PATH = "${pkgs.qt6.qtdeclarative}/${pkgs.qt6.qtbase.qtQmlPrefix}";
         };
       }
     );
