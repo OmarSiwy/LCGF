@@ -16,6 +16,13 @@ const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
+const Id = types.Id;
+const Style = types.Style;
+const Color = types.Color;
+const Response = types.Response;
+const Frame = @import("../runtime/frame.zig").Frame;
+const Input = @import("../core/input.zig").Input;
+const simd = @import("../core/simd.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -27,6 +34,42 @@ pub fn bindError(comptime State: type, comptime name: []const u8) ?[]const u8 {
     return base.fieldError(State, "switch", name, Bind);
 }
 
+// ---- look -----------------------------------------------------------------------------------
+
+/// The row: track, then caption, centred across, `gap` apart.
+pub fn switchStyle(th: *const Theme) Style {
+    return .{ .dir = .x, .gap = th.gap, .cross = .center };
+}
+
+/// The 32 x 18 pill. Off: the control colour, knob at the start; on: the accent, knob at the
+/// end. Both picked by table index from the value.
+pub fn trackStyle(th: *const Theme, on: bool) Style {
+    const fills = [2]Color{ th.control, th.accent };
+    const sides = [2]types.Align{ .start, .end };
+    const k = @intFromBool(on);
+    return .{ .dir = .x, .size = .{ .px(32), .px(18) }, .pad = @splat(2), .radius = 9, .fill = fills[k], .main = sides[k], .cross = .center };
+}
+
+/// The 14 px knob, in the text colour.
+pub fn knobStyle(th: *const Theme) Style {
+    return .{ .size = .{ .px(14), .px(14) }, .radius = 7, .fill = th.text };
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A switch named `id` over `value`, captioned by `str`.
+pub fn @"switch"(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
+    const row = f.open(id, switchStyle(th));
+    const r = f.interact(row, .button);
+    _ = f.open(.none, trackStyle(th, value.*));
+    _ = f.leaf(.none, knobStyle(th));
+    f.close();
+    _ = label_zig.label(f, th, str);
+    f.close();
+    f.tree().c.value[row.ix()] = simd.b2f(value.*);
+    return r;
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
@@ -35,7 +78,7 @@ pub const ct = struct {
     pub fn @"switch"(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
         // Track (with its knob), caption: the rows the front ends push, in spec order.
         const track: Spec = .{ .kind = .col, .children = &.{Spec{ .kind = .col }} };
-        var s = spec_zig.row(.{}, .{ track, label_zig.ct.label(th, text) });
+        var s = spec_zig.row(switchStyle(&th), .{ track, label_zig.ct.label(th, text) });
         s.kind = .@"switch";
         s.id = @tagName(id);
         s.bind = @tagName(bind);
@@ -65,6 +108,63 @@ test "ct.switch: a named, focusable widget with a void event: track, knob and ca
     const E = events.Events(s);
     try testing.expectEqual(void, @FieldType(E.Event, "vsync"));
     try testing.expectEqualSlices(E.Widget, &.{.vsync}, E.focus_order);
+}
+
+/// Two switches, off and on, in both front ends, in theme `th`: the tests' page until the
+/// example page (C0560).
+fn Two(comptime th: Theme) type {
+    return struct {
+        const col: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
+        pub const App = struct {
+            vsync: bool = false,
+            hdr: bool = true,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.from("col"), col);
+                _ = @"switch"(f, &th, .from("vsync"), &app.vsync, "VSync");
+                _ = @"switch"(f, &th, .from("hdr"), &app.hdr, "HDR");
+                f.close();
+            }
+        };
+        pub const State = struct { vsync: bool = false, vsync_text: []const u8 = "VSync", hdr: bool = true, hdr_text: []const u8 = "HDR" };
+        pub const Ui = base.ComptimeUi(State, spec_zig.col(col, .{ ct.@"switch"(th, .vsync, .vsync, .vsync_text), ct.@"switch"(th, .hdr, .hdr, .hdr_text) }), th);
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    };
+}
+
+var two: Two(.default).Run = .{};
+
+test "switch look: the knob at the start when off, at the end when on; the track's fill by value, in both front ends" {
+    const h = &two;
+    h.init();
+    const th = Theme.default;
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    // Rows: root, column, then per switch: row, track, knob, caption.
+    for ([2]u32{ 2, 6 }, [2]bool{ false, true }) |row, on| {
+        const track = t.rect(row + 1);
+        try testing.expectEqual([2]f32{ 32, 18 }, [2]f32{ track.w(), track.h() });
+        const knob = t.rect(row + 2);
+        try testing.expectEqual([2]f32{ 14, 14 }, [2]f32{ knob.w(), knob.h() });
+        try testing.expectEqual(if (on) track.x1 - 16 else track.x0 + 2, knob.x0);
+        try testing.expectEqual(track.y0 + 2, knob.y0);
+        try testing.expectEqual(track.x1 + th.gap, t.rect(row + 3).x0);
+        try testing.expectEqual((if (on) th.accent else th.control).bitsOf(), t.c.look[row + 1].fill);
+        try testing.expectEqual(th.text.bitsOf(), t.c.look[row + 2].fill);
+    }
+}
+
+test "switch look: theme tokens reach both front ends" {
+    const S = struct {
+        var h: Two(.{ .accent = .rgb(3, 4, 5), .text = .rgb(6, 7, 8), .gap = 1 }).Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    const out = try S.h.frame(&in);
+    const t = out.runtime.tree;
+    try testing.expectEqual(Color.rgb(3, 4, 5).bitsOf(), t.c.look[7].fill);
+    try testing.expectEqual(Color.rgb(6, 7, 8).bitsOf(), t.c.look[4].fill);
+    try testing.expectEqual(t.rect(3).x1 + 1, t.rect(5).x0);
 }
 
 test {

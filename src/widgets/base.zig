@@ -461,7 +461,18 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
                 },
                 .radio_option => unreachable, // pushed by its group
-                .@"switch" => @compileError("the comptime switch is built from C0557 on"),
+                .@"switch" => {
+                    const value: bool = @field(state, n.bind.?);
+                    var s = n.style;
+                    s.value = simd.b2f(value);
+                    const i = tb.t.push(parent, .hash(n.id.?), &s);
+                    next.* += 2;
+                    const track = tb.t.push(i, .none, &switch_zig.trackStyle(&th, value));
+                    _ = tb.t.push(track, .none, &switch_zig.knobStyle(&th));
+                    tb.t.seal(track);
+                    ui.push(n.children[1], i, next, in);
+                    tb.t.seal(i);
+                },
                 .row, .col, .button => {
                     var s = n.style;
                     // A container with an id is a button (kind `.button` always has one).
