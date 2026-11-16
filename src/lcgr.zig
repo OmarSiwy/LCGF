@@ -82,6 +82,7 @@ pub const theme = @import("theme/theme.zig");
 pub const widgets_check = @import("widgets/check.zig");
 pub const widgets_spacer = @import("widgets/spacer.zig");
 pub const widgets_accordion = @import("widgets/accordion.zig");
+pub const widgets_tabs = @import("widgets/tabs.zig");
 pub const widgets_popover = @import("widgets/popover.zig");
 pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
