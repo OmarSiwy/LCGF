@@ -90,13 +90,13 @@ pub fn ContextMenu(comptime th: Theme, comptime name: @EnumLiteral(), comptime t
                 if (!cs.menu.open) return null;
                 return .{ .style = popover.scrimStyle(v.in.viewport) };
             }
-            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, cs.at) };
+            if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, cs.at), .role = .menu };
             if (comptime def.sub_at != null and named(n, partName(id, "sub"))) {
                 if (!cs.menu.sub) return null;
-                return .{ .style = menu.subStyle(&th, v.last.of(partName(id, def.items[def.sub_at.?]))) };
+                return .{ .style = menu.subStyle(&th, v.last.of(partName(id, def.items[def.sub_at.?]))), .role = .menu };
             }
             inline for (0..comptime def.count()) |k| {
-                if (comptime named(n, partName(id, def.name(k)))) return .{ .style = menu.itemStyle(&th, menu.highlighted(def, cs.menu, k)) };
+                if (comptime named(n, partName(id, def.name(k)))) return .{ .style = menu.itemStyle(&th, menu.highlighted(def, cs.menu, k)), .role = .menu_item };
             }
             return popover.plainPart(th, n, v.response);
         }
@@ -148,6 +148,20 @@ pub fn advance(comptime def: menu.Def, st: ContextState, target: Rect, hits: men
     return s;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The semantics of context menu `name` of widget `target` the tree's columns cannot hold,
+/// written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`. The
+/// roles are in the columns: the lists are `menu`, the items `menu_item` (named by their text,
+/// value 0). Here: the list is named by the target (`aria-labelledby`), the submenu's item is
+/// expandable and names the submenu, and the highlighted item is `selected` (`menu.semantics`).
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime target: []const u8, comptime def: menu.Def, st: ContextState) void {
+    menu.semantics(t, s, name, def, st.menu);
+    const list = t.find(.from(partName(name, "panel")));
+    const on = t.find(.from(target));
+    if (list != types.none and on != types.none) s.c.labelled_by[list] = on;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Builds context menu `name` of widget `target` (items `def`, labels `texts` in menu.zig's
@@ -163,11 +177,15 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime tar
     st.* = advance(def, st.*, f.lastRect(.from(target)), hits, f.in);
     if (!st.menu.open) return st.menu.chosen;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
-    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, st.at)), popover.overlay_sense);
+    const list = f.open(.from(partName(name, "panel")), listStyle(th, st.at));
+    _ = f.interact(list, popover.overlay_sense);
+    role(f, list, .menu);
     inline for (0..def.items.len) |k| buildItem(f, th, name, def, st.menu, k, texts[k]);
     f.close();
     if (def.sub_at) |at| if (st.menu.sub) {
-        _ = f.interact(f.open(.from(partName(name, "sub")), menu.subStyle(th, f.lastRect(.from(partName(name, def.items[at]))))), popover.overlay_sense);
+        const sub = f.open(.from(partName(name, "sub")), menu.subStyle(th, f.lastRect(.from(partName(name, def.items[at])))));
+        _ = f.interact(sub, popover.overlay_sense);
+        role(f, sub, .menu);
         inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st.menu, k, texts[k]);
         f.close();
     };
@@ -175,8 +193,14 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime tar
     return st.menu.chosen;
 }
 
+fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
+    f.tree().c.role[n.ix()] = @backingInt(r);
+}
+
 fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, ms: menu.MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.interact(f.open(.from(partName(name, def.name(k))), menu.itemStyle(th, menu.highlighted(def, ms, k))), popover.overlay_sense);
+    const row = f.open(.from(partName(name, def.name(k))), menu.itemStyle(th, menu.highlighted(def, ms, k)));
+    _ = f.interact(row, popover.overlay_sense);
+    role(f, row, .menu_item);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -388,6 +412,32 @@ test "ContextMenu: secondary click, pointer and keys in both front ends" {
     try testing.expectEqual(@as(u8, 3), s[6].menu.active);
     try testing.expect(s[7].menu.sub);
     try testing.expect(!s[8].menu.open and !s[9].menu.open);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "ContextMenu: a menu named by its target, of menu items; the same in both front ends" {
+    const h = &harness;
+    h.init();
+    const t = try setState(h, .{ .menu = .{ .open = true, .sub = true, .active = 3 }, .at = .{ 100, 80 } });
+    const cp = &h.ui.tables.t;
+    semantics(t, sem[0].begin(), "ctx", "canvas", edit_menu, h.app.ctx);
+    semantics(cp, sem[1].begin(), "ctx", "canvas", edit_menu, h.ui.signals.state.ctx);
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, tr: *const Tree, comptime id: []const u8) u32 {
+            return popover.exportRow(x, tr.find(.from(id)));
+        }
+    }.of;
+    const H = std.hash.Fnv1a_32;
+    try testing.expectEqual(@backingInt(a11y.Role.menu), e.c.role[row(e, t, "ctx_panel")]);
+    try testing.expectEqual(H.hash("Canvas"), e.c.name_hash[row(e, t, "ctx_panel")]);
+    try testing.expectEqual(@backingInt(a11y.Role.menu_item), e.c.role[row(e, t, "ctx_cut")]);
+    try testing.expectEqual(H.hash("Cut"), e.c.name_hash[row(e, t, "ctx_cut")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true, .selected = true }), e.c.state[row(e, t, "ctx_arrange")]);
+    try testing.expectEqual(H.hash("Arrange"), e.c.name_hash[row(e, t, "ctx_sub")]);
+    try testing.expectEqual(@as(u32, 4), e.c.kids[row(e, t, "ctx_panel")]);
 }
 
 test "checkContext: the state field and the items" {
