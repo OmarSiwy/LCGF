@@ -1,6 +1,11 @@
 //! Toggle button: a button that stays pressed until it is pressed again (bold, mute, pin).
 //! Tier 2, written against the public API of tiers 0 and 1 (the recipe in base.zig).
 //!
+//! Accessibility: role button (ARIA has no toggle-button role: it is a button with
+//! `aria-pressed`), named by its caption, value 1 while pressed and 0 released. a11y/tree.zig
+//! has no pressed state bit and does not derive `checked` for buttons, so the value is the
+//! only place a bridge finds "pressed" (AccessKit `Toggled` on a button).
+//!
 //! State: the application's `bool`, true while pressed. The runtime front end takes a pointer
 //! to it; the comptime front end binds a `bool` field, checked while compiling. The caption is
 //! a bound label, as a button's.
@@ -189,6 +194,27 @@ test "toggle input: click, Enter and Space up flip it; Space down does not, in b
     // Pressed by the click and released over it: the accent under the pointer.
     try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[4].fill);
     try testing.expectEqual(th.accent.bitsOf(), out.runtime.tree.c.look[2].fill);
+}
+
+var toggle_semantics: base.Semantic(16) = .{};
+
+test "toggle a11y: role button, named by its caption, pressed as its value, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &two;
+    h.init();
+    const in: Input = .{ .viewport = .{ 200, 60 } };
+    _ = try h.frame(&in);
+    const x = &toggle_semantics;
+    try x.run(h);
+    for ([2]u32{ 2, 4 }, [2][]const u8{ "B", "I" }, [2]bool{ false, true }) |node, name, pressed| {
+        const r = x.row(node).?;
+        try testing.expectEqual(@backingInt(a11y.Role.button), x.out[0].c.role[r]);
+        try testing.expectEqualStrings(name, x.name(0, r));
+        try testing.expectEqualStrings(name, x.name(1, r));
+        try testing.expectEqual(simd.b2f(pressed), x.out[0].c.value[r]);
+        // No state bit says "pressed" (a gap of the a11y tree): the value does.
+        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    }
 }
 
 test {
