@@ -32,3 +32,6 @@ pub const all = [_]Scene{
     @import("resize.zig").scene,
     @import("idle.zig").scene,
 };
+
+/// The scenes of the comparison (bench/vs/harness.h), in its order.
+pub const vs = all[1..].*;

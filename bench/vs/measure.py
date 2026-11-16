@@ -73,6 +73,8 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--exe", required=True, help="harness built for speed")
     ap.add_argument("--small", help="harness built for size (default: --exe)")
+    ap.add_argument("--startup", help="harness for resident memory and start-up (default: --exe); "
+                    "a static build, for a framework compared with a static row")
     ap.add_argument("--size-tool", default="zig-out/bin/size")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--seconds", type=float, default=2.0, help="idle window of each probe")
@@ -89,7 +91,7 @@ def main():
             "median_us": statistics.median(x[1] for x in runs),
             "p99_us": statistics.median(x[2] for x in runs),
         }
-    probes = [probe([a.exe, "--idle", "--scene", "idle"], a.seconds) for _ in range(a.runs)]
+    probes = [probe([a.startup or a.exe, "--idle", "--scene", "idle"], a.seconds) for _ in range(a.runs)]
     r["rss_kib"] = statistics.median(p[0] for p in probes)
     r["peak_kib"] = statistics.median(p[1] for p in probes)
     r["idle_wakeups_per_s"] = statistics.median(p[2] for p in probes) / a.seconds

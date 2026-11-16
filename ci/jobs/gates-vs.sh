@@ -16,12 +16,14 @@ c++ -O2 -fPIC -std=c++17 bench/vs/qtquick/main.cpp $qt -o zig-out/bin/vs-qtquick
 c++ -Os -s -fPIC -std=c++17 bench/vs/qtquick/main.cpp $qt -o zig-out/bin/vs-qtquick-small
 rm -f zig-out/gates/*.json
 # Pinned to one CPU, every framework on the same one.
+# The fourth argument, when given, is the build measured for resident memory and start-up.
 m() {
-    taskset -c 2 python3 bench/vs/measure.py --name "$1" --exe "$2" --small "$3" --json "zig-out/gates/$1.json"
-    taskset -c 2 python3 bench/gates/gates.py measure-first-frame "zig-out/gates/$1.json" "$2"
+    taskset -c 2 python3 bench/vs/measure.py --name "$1" --exe "$2" --small "$3" --startup "${4:-$2}" --json "zig-out/gates/$1.json"
+    taskset -c 2 python3 bench/gates/gates.py measure-first-frame "zig-out/gates/$1.json" "${4:-$2}"
 }
 m lcgr zig-out/bin/vs-lcgr zig-out/bin/vs-lcgr-small
-for n in clay imgui lvgl qtquick; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small"; done
+m clay zig-out/bin/vs-clay zig-out/bin/vs-clay-small zig-out/bin/vs-clay-static
+for n in imgui lvgl qtquick; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small"; done
 for n in egui iced slint; do m "$n" "zig-out/cargo/release/vs-$n" "zig-out/cargo/small/vs-$n"; done
 python3 bench/gates/gates.py frame zig-out/gates
 python3 bench/gates/gates.py rss zig-out/gates
