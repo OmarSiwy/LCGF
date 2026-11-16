@@ -97,7 +97,7 @@ pub const Null = struct {
 
     pub fn drawText(n: *const Null, pass: Pass, run: u32) void {
         bind(pass, .solid, n.glyphs.texture, .glyphs);
-        pass.push(.{ .draw = .{ .vertices = 4, .instances = n.glyphs.count[run], .first_instance = n.glyphs.first[run] } });
+        pass.push(.{ .draw = .{ .vertices = 4, .instances = n.glyphs.span(run)[1], .first_instance = n.glyphs.span(run)[0] } });
     }
 };
 

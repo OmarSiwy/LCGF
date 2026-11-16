@@ -302,7 +302,7 @@ pub const Renderer = struct {
     /// One instanced draw for a text run's glyphs.
     pub fn drawText(r: *const Renderer, cmd: Pass, run: u32) void {
         r.bind(r.dev, cmd, .solid, r.glyphs.texture, r.glyphsAt());
-        r.dev.fns.vkCmdDraw.?(cmd, 4, r.glyphs.count[run], 0, r.glyphs.first[run]);
+        r.dev.fns.vkCmdDraw.?(cmd, 4, r.glyphs.span(run)[1], 0, r.glyphs.span(run)[0]);
     }
 
     /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
