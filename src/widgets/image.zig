@@ -47,6 +47,19 @@ pub const Image = struct {
 pub const Options = struct {
     /// The box it is shown in, logical pixels; null for its own size.
     box: ?[2]f32 = null,
+    /// How it fits the box.
+    fit: Fit = .contain,
+};
+
+/// How a picture fits a box (CSS `object-fit`).
+pub const Fit = enum(u8) {
+    /// Exactly the box; the picture is stretched.
+    stretch,
+    /// As large as fits inside the box, keeping its shape: the node is that size.
+    contain,
+    /// The whole box, keeping its shape: the middle of the picture, its overflow cut off
+    /// (the texture rect shrinks).
+    cover,
 };
 
 /// Why `pic` cannot be shown, or null: it needs a size above 0 and a texture rect that is
@@ -61,11 +74,51 @@ pub fn checkImage(pic: Image, opt: Options) ?[]const u8 {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The image's node: one quad of `pic`'s texture over its rect, at its size or the box's.
+/// What a picture becomes in a box: the node's size and the texture rect it shows.
+pub const Placed = struct { size: [2]f32, uv: [4]f32 };
+
+/// `pic` placed as `opt` says: its own size without a box, else fitted (`Fit`).
+pub fn place(pic: Image, opt: Options) Placed {
+    const box = opt.box orelse return .{ .size = pic.size, .uv = pic.uv };
+    const sx = box[0] / pic.size[0];
+    const sy = box[1] / pic.size[1];
+    return switch (opt.fit) {
+        .stretch => .{ .size = box, .uv = pic.uv },
+        .contain => .{ .size = .{ pic.size[0] * @min(sx, sy), pic.size[1] * @min(sx, sy) }, .uv = pic.uv },
+        .cover => blk: {
+            // The part of the picture the box shows, per axis (1 on the axis that fits).
+            const k = @max(sx, sy);
+            const shown = [2]f32{ sx / k, sy / k };
+            var uv = pic.uv;
+            inline for (0..2) |a| {
+                const span = pic.uv[a + 2] - pic.uv[a];
+                const cut = span * (1 - shown[a]) * 0.5;
+                uv[a] += cut;
+                uv[a + 2] -= cut;
+            }
+            break :blk .{ .size = box, .uv = uv };
+        },
+    };
+}
+
+/// The image's node: one quad of `pic`'s texture over its placed rect (`place`), rounded by
+/// the theme's radius, tinted from `tints`: white (the picture's own colours), or the control
+/// colour while there is no picture yet (the white texture, a placeholder).
 pub fn style(th: *const Theme, pic: Image, opt: Options) Style {
-    _ = th;
-    const size = opt.box orelse pic.size;
-    return .{ .size = .{ .px(size[0]), .px(size[1]) }, .texture = pic.texture, .uv = pic.uv, .fill = .white, .role = .image };
+    const p = place(pic, opt);
+    return .{
+        .size = .{ .px(p.size[0]), .px(p.size[1]) },
+        .texture = pic.texture,
+        .uv = p.uv,
+        .radius = th.radius,
+        .fill = tints(th)[@intFromBool(pic.texture == .white)],
+        .role = .image,
+    };
+}
+
+/// An image's tint, indexed by "no picture yet": white, then the control colour.
+pub fn tints(th: *const Theme) base.OnOff {
+    return .{ .white, th.control };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -95,7 +148,7 @@ fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     return struct {
         pub const photo: Image = .{ .texture = @fromBackingInt(1), .uv = .{ 0, 0, 0.5, 0.5 }, .size = .{ 64, 48 } };
-        pub const boxed: Options = .{ .box = .{ 96, 96 } };
+        pub const boxed: Options = .{ .box = .{ 96, 96 }, .fit = .cover };
         pub const App = struct {
             pub fn build(app: *App, f: *Frame) void {
                 _ = app;
@@ -151,6 +204,37 @@ test "Image.inAtlas, Image.whole: the texture rect and size from src/assets" {
     const w: Image = .whole(icon, @fromBackingInt(5));
     try testing.expectEqual([2]f32{ 16, 16 }, w.size);
     try testing.expectEqual([4]f32{ 0, 0, 1, 1 }, w.uv);
+}
+
+test "place: own size, stretch, contain and cover" {
+    const pic: Image = .{ .uv = .{ 0, 0, 0.5, 1 }, .size = .{ 40, 20 } };
+    try testing.expectEqual(Placed{ .size = .{ 40, 20 }, .uv = pic.uv }, place(pic, .{}));
+    try testing.expectEqual(Placed{ .size = .{ 30, 30 }, .uv = pic.uv }, place(pic, .{ .box = .{ 30, 30 }, .fit = .stretch }));
+    try testing.expectEqual(Placed{ .size = .{ 30, 15 }, .uv = pic.uv }, place(pic, .{ .box = .{ 30, 30 } }));
+    // Cover: scaled to 60 x 30, half its width shown, the middle half of its texture rect.
+    try testing.expectEqual(Placed{ .size = .{ 30, 30 }, .uv = .{ 0.125, 0, 0.375, 1 } }, place(pic, .{ .box = .{ 30, 30 }, .fit = .cover }));
+}
+
+test "style: the texture, a white tint, the theme's radius; a placeholder in the control colour" {
+    const th: Theme = .default;
+    const s = style(&th, Default.photo, .{});
+    try testing.expectEqual(Default.photo.texture, s.texture);
+    try testing.expectEqual(types.Color.white, s.fill);
+    try testing.expectEqual(th.radius, s.radius);
+    try testing.expectEqual(th.control, style(&th, .{ .size = .{ 8, 8 } }, .{}).fill);
+}
+
+const light: Theme = .{ .control = .rgb(200, 200, 205), .radius = 0 };
+
+test "image: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    const out = try S.h.frame(&in);
+    try testing.expectEqual(@as(f32, 0), out.comptime_.tree.c.look[rows.natural].radius);
+    try testing.expectEqual(types.Color.white.bitsOf(), out.runtime.tree.c.look[rows.boxed].fill);
 }
 
 test "checkImage: a size, a texture rect and a box" {
