@@ -185,11 +185,34 @@ def cursor(page):
     check("cursor: pointer over Reset, default off it", (over, off) == ("pointer", "default"), f"{over}, {off}")
 
 
+def clipboard(page):
+    """C0478: a frame's copy lands on the system clipboard through navigator.clipboard; Ctrl+V
+    on the canvas pastes the clipboard's text as typed text."""
+    origin = page.eval("location.origin")
+    page.browser.send("Browser.grantPermissions", {"origin": origin, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+    page.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+    copied = page.eval("""(async () => { const x = window.lcgr.ui.exports;
+        x.lcgr_test_copy(window.lcgr.ui.put("copied \u2713", x.lcgr_text_buffer(), x.lcgr_text_capacity()));
+        await new Promise(r => setTimeout(r, 100));
+        return navigator.clipboard.readText(); })()""")
+    check("clipboard: copy reaches the clipboard", copied == "copied \u2713", repr(copied))
+
+    page.eval("navigator.clipboard.writeText('pasted \u2713')")
+    mouse(page, "mousePressed", 400, 300, True)  # focus the canvas
+    mouse(page, "mouseReleased", 400, 300)
+    before = seen(page)[1]
+    page.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", "key": "v", "code": "KeyV", "modifiers": 2, "windowsVirtualKeyCode": 86, "commands": ["paste"]})
+    page.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "v", "code": "KeyV", "modifiers": 2, "windowsVirtualKeyCode": 86})
+    frame(page)
+    after = seen(page)[1]
+    check("clipboard: Ctrl+V types the clipboard's text", after[len(before):] == "pasted \u2713", repr(after[len(before):]))
+
+
 def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio.
-    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor)), (2, (dpr,))):
+    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard)), (2, (dpr,))):
         b = browser.Browser(scale=scale)
         try:
             page = b.open(server.url + "index.html")

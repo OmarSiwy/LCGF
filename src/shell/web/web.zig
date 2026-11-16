@@ -21,6 +21,11 @@
 //!
 //!   fn present(*const Output) void          draw the frame (WebGPU or the 2D canvas)
 //!   fn cursor(Cursor) void                  show this cursor over the canvas (CSS `cursor`)
+//!   fn clipboard([]const u8) void           put this text on the clipboard
+//!
+//! Pasting needs no call: the browser's paste event (Ctrl+V or Cmd+V, or the page's menu)
+//! hands shell.js the clipboard's text, which arrives as typed text (`typed`), the way the core
+//! expects a paste to be delivered (src/interact/keyboard.zig `Clipboard.paste`).
 //!   fn schedule(seconds: f32, pace: Pace) void
 //!        when the next animation frame is wanted: in `seconds`, never for inf (only after an
 //!        event)
@@ -237,10 +242,13 @@ pub fn Web(comptime host: type) type {
         }
 
         /// Applies a frame's effects. The cursor: the page's canvas takes the CSS cursor of
-        /// `p.cursor` (shell.js `cursors`), set only when it changes.
+        /// `p.cursor` (shell.js `cursors`), set only when it changes. The clipboard: text the
+        /// frame copies goes to the browser's async clipboard (navigator.clipboard.writeText);
+        /// `p.clipboard` is only valid now, so the page copies the bytes before it returns.
         pub fn apply(s: *Self, p: *const Platform) void {
             if (p.cursor != s.cursor) host.cursor(p.cursor);
             s.cursor = p.cursor;
+            if (p.clipboard.len > 0) host.clipboard(p.clipboard);
         }
 
         pub fn present(_: *Self, out: *const Output) void {
@@ -274,9 +282,16 @@ const Page = struct {
     var cursors: [8]Cursor = undefined;
     var cursor_len: u32 = 0;
 
+    var copied: []const u8 = "";
+    var copies: u32 = 0;
+
     pub fn cursor(c: Cursor) void {
         cursors[cursor_len] = c;
         cursor_len += 1;
+    }
+    pub fn clipboard(text: []const u8) void {
+        copied = text;
+        copies += 1;
     }
 
     pub fn present(_: *const Output) void {
@@ -417,4 +432,13 @@ test "web: keys, text, wheel and contacts become one frame's Input, then reset" 
     // Full buffers drop instead of overflowing.
     for (0..Web(Page).max_events + 3) |_| shell.key(.press, 0x05, .{});
     try testing.expectEqual(@as(u32, 3), shell.dropped);
+}
+
+test "web: a frame's copy reaches the page once; frames without one copy nothing" {
+    var shell: Web(Page) = .{};
+    Page.copies = 0;
+    shell.apply(&.{ .clipboard = "copied text" });
+    try testing.expectEqualStrings("copied text", Page.copied);
+    shell.apply(&.{});
+    try testing.expectEqual(@as(u32, 1), Page.copies);
 }

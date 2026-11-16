@@ -26,6 +26,13 @@ export function shell(page) {
         shell_cursor(c) {
             page.canvas.style.cursor = cursors[c] ?? "default";
         },
+        shell_clipboard(ptr, len) {
+            // Decoded now: the bytes are only valid during the call. writeText is asynchronous
+            // and may be refused (no focus, no permission); the copy is then lost, as in a
+            // native app whose clipboard is busy.
+            const text = ui.str(ptr, len);
+            navigator.clipboard?.writeText(text).catch((e) => console.warn("lcgr: copy refused:", e.message));
+        },
     });
 }
 
@@ -204,6 +211,14 @@ function forward(ui, canvas, on, frame) {
         // Keep Tab, arrows, Space and Backspace from moving focus or scrolling the page;
         // shortcuts with Ctrl or Cmd (copy, paste, reload) stay the browser's.
         if (!e.ctrlKey && !e.metaKey) e.preventDefault();
+        frame();
+    });
+    // Paste: the browser hands the text over in the paste event (Ctrl+V or Cmd+V, which are
+    // left to the browser above, or the context menu); it arrives as typed text.
+    on(canvas, "paste", (e) => {
+        const text = e.clipboardData?.getData("text/plain");
+        if (text) typed(text, 0);
+        e.preventDefault();
         frame();
     });
     on(canvas, "keyup", (e) => {

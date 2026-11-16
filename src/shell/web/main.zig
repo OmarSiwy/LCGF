@@ -17,6 +17,7 @@ pub const panic = rweb.js.panic;
 const imports = struct {
     extern "lcgr" fn shell_schedule(seconds: f32, pace: u32) void;
     extern "lcgr" fn shell_cursor(cursor: u32) void;
+    extern "lcgr" fn shell_clipboard(ptr: [*]const u8, len: usize) void;
 };
 
 /// The page, as web.zig's `host`.
@@ -26,6 +27,9 @@ const host = struct {
     }
     pub fn cursor(c: context.Cursor) void {
         imports.shell_cursor(@backingInt(c));
+    }
+    pub fn clipboard(text: []const u8) void {
+        imports.shell_clipboard(text.ptr, text.len);
     }
     pub fn present(out: *const Output) void {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });
@@ -127,6 +131,11 @@ export fn lcgr_lift(id: u32) void {
 }
 
 var staging: [256]u8 = undefined;
+
+/// For the tests: a frame's effects asking to copy `text` (the example itself copies nothing).
+export fn lcgr_test_copy(len: u32) void {
+    shell.apply(&.{ .clipboard = staging[0..@min(len, staging.len)] });
+}
 
 /// What the frames saw, for the tests (test_shell.py): totals since the page loaded.
 const Seen = struct {
