@@ -7,6 +7,7 @@
     python3 bench/gates/gates.py measure-first-frame JSON EXE   add EXE's time to first frame to JSON
     python3 bench/gates/gates.py idle FILE      zero frames and zero wake-ups while idle
     python3 bench/gates/gates.py latency FILE   input-to-photon latency against its budget
+    python3 bench/gates/gates.py compile-time       comptime front end compile time against its budget
     python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py --self-test
 
@@ -31,6 +32,7 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -209,6 +211,75 @@ def check_latency(text, budget, load):
     return median, bad
 
 
+SPEC_SIZES = (100, 1000, 10000)
+
+
+def spec_source(nodes):
+    """A Zig file flattening a spec of nodes + 1 nodes (a column of nodes / 10 rows, each a row
+    of 9 labels) with the comptime front end (src/comptime/flatten.zig), and exporting a read of
+    one table so the flatten is analysed."""
+    rows = ", ".join("s.row(.{}, .{" + ", ".join(["s.label(.t)"] * 9) + "})" for _ in range(nodes // 10))
+    return f"""const lcgr = @import("lcgr");
+const s = lcgr.spec;
+const F = blk: {{
+    @setEvalBranchQuota(100_000_000);
+    break :blk lcgr.flatten.Flat(s.col(.{{}}, .{{{rows}}}));
+}};
+export fn probe(i: u32) u32 {{
+    return F.parent[i % F.node_count];
+}}
+"""
+
+
+def measure_compile_time(runs=5):
+    """Median seconds of `zig build-obj -fno-emit-bin` (parse and semantic analysis, where the
+    comptime flatten runs; no code generation) per spec size, each run with an empty cache. The
+    generated files live in a temporary directory, outside the tree `zig fmt` checks."""
+    with tempfile.TemporaryDirectory() as d:
+        return compile_times(d, runs)
+
+
+def compile_times(d, runs):
+    root = os.path.dirname(os.path.dirname(HERE))
+    with open(os.path.join(d, "options.zig"), "w") as f:
+        f.write("pub const lanes: ?u32 = null;\n")
+    out = {}
+    for n in SPEC_SIZES:
+        src = os.path.join(d, f"spec{n}.zig")
+        with open(src, "w") as f:
+            f.write(spec_source(n))
+        times = []
+        for k in range(runs):
+            cache = os.path.join(d, f"cache{n}-{k}")
+            subprocess.run(["rm", "-rf", cache], check=True)
+            cmd = ["zig", "build-obj", "-fno-emit-bin", "-OReleaseFast", "--cache-dir", cache,
+                   "--dep", "lcgr", f"-Mroot={src}",
+                   "--dep", "build_options", f"-Mlcgr={os.path.join(root, 'src', 'lcgr.zig')}",
+                   f"-Mbuild_options={os.path.join(d, 'options.zig')}"]
+            t0 = time.perf_counter()
+            subprocess.run(cmd, check=True)
+            times.append(time.perf_counter() - t0)
+        out[str(n)] = round(statistics.median(times), 3)
+    return out
+
+
+def check_compile_time(seconds, budgets, load):
+    """Compile time per spec size within its recorded budget plus TOLERANCE (timed: not applied
+    above load nproc/4). Returns (rows, failed)."""
+    rows, failed = [], False
+    for n, sec in seconds.items():
+        b = budgets.get(n)
+        if b is None:
+            status, bad = "no budget", True
+        elif sec > b * (1 + TOLERANCE):
+            status, bad = f"OVER BUDGET {b} s by {sec / b - 1:+.0%}", not busy(load)
+        else:
+            status, bad = f"within budget {b} s", False
+        failed |= bad
+        rows.append(f"{n:>6} nodes {sec:7.3f} s  {status}")
+    return rows, failed
+
+
 def frameworks_missing(runs, recorded):
     return [n for n in recorded.get("frameworks", []) if n not in runs]
 
@@ -296,6 +367,11 @@ def self_test():
     assert len(check_latency(line, 200.0, 0)[1]) == 1
     assert check_latency(line, 200.0, 1e9)[1] == []  # loaded: the timing is not applied
     assert len(check_latency(line.replace("late=0", "late=3"), 356.3, 1e9)[1]) == 1
+    assert spec_source(20).count("s.label(.t)") == 18
+    assert check_compile_time({"100": 0.1}, {"100": 0.1}, 0) == (["   100 nodes   0.100 s  within budget 0.1 s"], False)
+    assert check_compile_time({"100": 0.2}, {"100": 0.1}, 0)[1] is True
+    assert check_compile_time({"100": 0.2}, {"100": 0.1}, 1e9)[1] is False
+    assert check_compile_time({"100": 0.1}, {}, 0)[1] is True
     print("gates self-test ok")
 
 
@@ -304,8 +380,8 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "idle", "latency", "measure-first-frame"])
-    ap.add_argument("path", help="DIR of results, or for size the output of zig build size")
+    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "idle", "latency", "compile-time", "measure-first-frame"])
+    ap.add_argument("path", nargs="?", help="DIR of results, or for size the output of zig build size")
     ap.add_argument("exe", nargs="?", help="for measure-first-frame: the harness")
     ap.add_argument("--record", action="store_true")
     a = ap.parse_args()
@@ -345,6 +421,27 @@ def main():
         note = ", timing not applied" if busy(load) else ""
         print(f"gate latency: median {median} us, budget {rec.get('latency_us')} us, load {load}{note}: " + ("; ".join(bad) or "held"))
         return 1 if bad else 0
+    if a.gate == "compile-time":
+        rec = {}
+        if os.path.exists(RECORDED):
+            with open(RECORDED) as f:
+                rec = json.load(f)
+        seconds = measure_compile_time()
+        with open("/proc/loadavg") as f:
+            load = float(f.read().split()[0])
+        if os.environ.get("GITHUB_ACTIONS"):
+            load = float("inf")  # the budget is from the owner's machine: timings never compare across machines
+        rows, failed = check_compile_time(seconds, rec.get("compile_time_s", {}), load)
+        print(f"gate compile-time: comptime front end, load {load}" + (", timing not applied" if busy(load) else ""))
+        print("\n".join(rows))
+        if a.record:
+            rec["compile_time_s"] = seconds
+            with open(RECORDED, "w") as f:
+                json.dump(rec, f, indent=1)
+                f.write("\n")
+            print(f"gates: recorded compile-time budgets in {RECORDED}")
+            return 0
+        return 1 if failed else 0
     if a.gate == "size":
         return run_size(a.path, a.record)
     return run_compare(a.gate, a.path, a.record)

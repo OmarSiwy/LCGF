@@ -15,3 +15,5 @@ python3 bench/gates/gates.py idle zig-out/gates/idle.txt
 # Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
 zig build gates-latency > zig-out/gates/latency.txt
 python3 bench/gates/gates.py latency zig-out/gates/latency.txt
+# Compile time of the comptime front end for specs of 100, 1,000 and 10,000 nodes.
+python3 bench/gates/gates.py compile-time
