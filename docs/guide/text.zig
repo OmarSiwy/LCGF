@@ -27,12 +27,6 @@ const Squares = struct {
             c.h[k] = lcgr.simd.selF(mine, c.px[k], c.h[k]);
         }
     }
-
-    /// It never wraps: after layout it writes the same one-line extent again, over what a
-    /// font that runs before it wrote.
-    fn wrap(font: Squares, tx: *lcgr.texts.Texts) void {
-        font.measure(tx);
-    }
 };
 // -- end
 
@@ -62,7 +56,6 @@ test "two fonts on the measure protocol, then glyph quads" {
     layout.resolve(t, .x, in.viewport[0]);
     layout.textAvail(t, tx); // the width each run was given
     mono.wrap(tx); // re-flow the wrapping runs into it
-    squares.wrap(tx);
     layout.applyText(t, tx, .y);
     layout.fit(t, .y);
     layout.resolve(t, .y, in.viewport[1]);

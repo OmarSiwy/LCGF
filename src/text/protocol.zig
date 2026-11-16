@@ -53,8 +53,9 @@ pub const Mono = struct {
         }
     }
 
-    /// SIMD. Re-flows runs flagged `wrap` into `avail` and rewrites `w`, `h`. Runs after
-    /// `measure` and `layout.textAvail`. A run that does not wrap keeps `w` and gets one line.
+    /// SIMD. Re-flows runs flagged `wrap` into `avail` and rewrites their `w`, `h`. Runs after
+    /// `measure` and `layout.textAvail`. A run that does not wrap keeps its measured `w` and `h`,
+    /// so a font that serves only non-wrapping runs needs to run after `Mono` at measure only.
     pub fn wrap(font: Mono, tx: *Texts) void {
         const c = &tx.c;
         const n = simd.padded(tx.len);
@@ -71,7 +72,7 @@ pub const Mono = struct {
             const lines = @max(@ceil(count / per_line), one);
             const w = simd.loadF(c.w, i);
             simd.storeF(c.w, i, @select(f32, wraps, @min(w, avail), w));
-            simd.storeF(c.h, i, @select(f32, wraps, lines, one) * px * simd.f(font.line));
+            simd.storeF(c.h, i, @select(f32, wraps, lines * px * simd.f(font.line), simd.loadF(c.h, i)));
         }
     }
 
@@ -261,6 +262,25 @@ test "Mono.wrap: wrapping runs re-flow into avail, others keep one line" {
         try testing.expectEqual(120, tx.c.w[k]);
         try testing.expectEqual(12, tx.c.h[k]);
     }
+}
+
+test "Mono.wrap: a run that does not wrap keeps the extent another font measured" {
+    var fx: Fixture(4) = .{};
+    var tx = fx.texts();
+    _ = tx.push(0, .{ .bytes = 4 }, &.{ .px = 20, .font = @fromBackingInt(1) });
+    _ = tx.push(0, .{ .bytes = 24 }, &.{ .px = 10, .wrap = true });
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    font.measure(&tx);
+    // A second font measures run 0 after Mono: four 20 px squares.
+    tx.c.w[0] = 80;
+    tx.c.h[0] = 20;
+    tx.c.avail[0] = 100;
+    tx.c.avail[1] = 100;
+    font.wrap(&tx);
+    try testing.expectEqual(80, tx.c.w[0]);
+    try testing.expectEqual(20, tx.c.h[0]);
+    try testing.expectEqual(100, tx.c.w[1]);
+    try testing.expectEqual(24, tx.c.h[1]);
 }
 
 test "Cache: misses are measured once, hits come back without measuring" {
