@@ -19,8 +19,8 @@ const Signals = @import("signals.zig").Signals;
 const Anims = @import("../anim/anims.zig").Anims;
 const Tweens = @import("../anim/tweens.zig").Tweens;
 const Flips = @import("../anim/flip.zig").Flips;
-const Settings = @import("../a11y/settings_data.zig").Settings;
 const Memos = @import("reuse.zig").Memos;
+const Settings = @import("../a11y/settings_data.zig").Settings;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
