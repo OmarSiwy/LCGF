@@ -66,6 +66,7 @@ pub const text_query = @import("text/layout/query.zig");
 pub const text_stack = @import("text/layout/stack.zig");
 pub const text_layout_tests = @import("text/layout/tests.zig");
 pub const scheduler = @import("runtime/scheduler.zig");
+pub const widgets_base = @import("widgets/base.zig");
 
 test {
     std.testing.refAllDecls(@This());
