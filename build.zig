@@ -732,6 +732,22 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
+    // The macOS shell (src/shell/macos/macos.zig): a module of its own over lcgr and the Metal
+    // back end. AppKit, Metal and libobjc are opened at run time, so nothing is linked and it
+    // cross-compiles from Linux (ci/run.sh shell-macos); build with -Dtarget=aarch64-macos.
+    const macos_metal = b.createModule(.{ .root_source_file = b.path("src/render/metal/metal.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    for ([_][]const u8{ "stock", "example" }) |v|
+        macos_metal.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    const macos_tests = b.addTest(.{ .name = "macos-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/macos/macos.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+    }) });
+    b.step("macos", "Test the macOS shell on macOS").dependOn(&b.addRunArtifact(macos_tests).step);
+    b.step("macos-build", "Compile and link the macOS shell's tests without running them (ci/run.sh shell-macos)").dependOn(&b.addInstallArtifact(macos_tests, .{}).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
