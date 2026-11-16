@@ -35,6 +35,12 @@
 //! look and behaviour functions. Until the comptime layout and paint lanes (ct-layout, ct-paint)
 //! land, its rows are pushed from the spec with `Tree.push`, row for row what `flatten.Flat`
 //! numbers (flatten.zig, test "equivalence"), and laid out and painted by the tier-0 passes.
+//!
+//! A widget the spec kinds do not cover sets `Spec.widget` to a namespace (usually a type
+//! its builder generates, which also carries its parameters). `ComptimeUi` then calls its
+//! `push(ui, n, parent, next, in)` to build the node, which must push one tree row per spec
+//! node of its subtree in row order, and before each frame its optional `step(ui, row, event,
+//! in)` to apply input to `ui.signals`.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -263,6 +269,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         const Self = @This();
         pub const Events = E;
         pub const Signals = S;
+        /// The theme the page was built with, for widgets that build their own rows.
+        pub const theme = th;
 
         buf: [bytes]u8 align(mem.column_align) = undefined,
         tables: Tables = undefined,
@@ -270,6 +278,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pointer: E.Pointer = .{},
         /// Last frame's widget rects, which this frame's input is judged against.
         rects: E.Rects = .{},
+        /// The widget the last left press went down on (null over nothing), as the runtime's
+        /// `Interaction.focus`; custom widgets read it for their keys.
+        focus: ?E.Widget = null,
         font: Mono = .{},
 
         const Tables = struct {
@@ -303,7 +314,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// then builds, lays out and paints the frame. A button's click is returned as `event`
         /// for the caller to act on; checkboxes and sliders have already written their field.
         pub fn frame(ui: *Self, in: *const Input) Output {
+            const press = in.buttons.left and !ui.pointer.down;
             const event = E.pointer(&ui.pointer, &ui.rects, in);
+            if (press) ui.focus = ui.pointer.pressed;
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);
@@ -315,6 +328,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     }
                 },
             };
+            // Custom widgets (`Spec.widget`) apply this frame's input to their state.
+            inline for (comptime customRows(spec)) |row| {
+                const W_ = comptime nodeAt(spec, row).widget.?;
+                if (comptime @hasDecl(W_, "step")) W_.step(ui, row, event, in);
+            }
 
             var carver: mem.Carver = .{ .buf = &ui.buf };
             ui.tables = Tables.carve(&carver);
@@ -353,8 +371,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return .{ .draw = &tb.d, .tree = t, .event = event };
         }
 
-        /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+        /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom
+        /// widget pushes its own rows, one per node of its subtree in row order, and advances
+        /// `next` past them.
+        pub fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             const tb = &ui.tables;
             const state = &ui.signals.state;
             next.* += 1;
@@ -396,7 +417,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
         /// them: while a widget is held, only it shows hover.
-        fn response(ui: *const Self, row: u32, in: *const Input) Response {
+        pub fn response(ui: *const Self, row: u32, in: *const Input) Response {
             const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
             const held = ui.pointer.pressed == w;
             const owned = ui.pointer.pressed == null or held;
@@ -404,10 +425,27 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return .{ .hovered = under and owned, .held = held };
         }
 
-        fn field(comptime name: []const u8) S.Field {
+        pub fn field(comptime name: []const u8) S.Field {
             return comptime std.meta.stringToEnum(S.Field, name).?;
         }
     };
+}
+
+/// Depth-first rows of the nodes in `n`'s subtree that are custom widgets (`Spec.widget`).
+fn customRows(comptime n: Spec) []const u32 {
+    comptime {
+        var rows: []const u32 = &.{};
+        var i: u32 = 0;
+        customWalk(n, &i, &rows);
+        const out = rows[0..rows.len].*;
+        return &out;
+    }
+}
+
+fn customWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32) void {
+    if (n.widget != null) rows.* = rows.* ++ .{next.*};
+    next.* += 1;
+    for (n.children) |c| customWalk(c, next, rows);
 }
 
 /// Spec nodes in `n`'s subtree that show text.

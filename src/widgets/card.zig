@@ -116,6 +116,7 @@ const testing = std.testing;
 const Tree = @import("../core/tree.zig").Tree;
 const hit = @import("../interact/hit.zig");
 const focus = @import("../interact/focus.zig");
+const check = @import("check.zig");
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -172,26 +173,6 @@ test "card: other theme tokens restyle both front ends alike" {
     try testing.expectEqual(t.rect(1).x0 + 12, t.rect(2).x0);
 }
 
-/// Checks that rows `inert` take no input in laid-out tree `t`: they sense nothing, a hit test
-/// at each one's centre finds something else (or nothing), and walking the tab order from
-/// nothing (`focus.seek`, what Tab does) never stops on one.
-fn expectInert(t: *const Tree, inert: []const u32) !void {
-    const any: u8 = @bitCast(types.Sense.any);
-    const focusable: u8 = @bitCast(types.Sense{ .focus = true });
-    for (inert) |r| {
-        try testing.expectEqual(@as(u8, 0), t.c.sense[r] & any);
-        const b = t.rect(r);
-        const at = hit.at(t, (b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5, .any);
-        try testing.expect(at != r);
-    }
-    var cur: u32 = types.none;
-    for (0..t.len) |_| {
-        cur = focus.seek(t, t.c.sense, focusable, 0, t.len, cur, false);
-        if (cur == types.none) break;
-        try testing.expect(std.mem.indexOfScalar(u32, inert, cur) == null);
-    }
-}
-
 test "card: takes no input; hit testing and the tab order pass through it to its children" {
     const h = &harness;
     h.init();
@@ -209,7 +190,7 @@ test "card: takes no input; hit testing and the tab order pass through it to its
     out = try h.frame(&in);
     try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
     const t = out.runtime.tree;
-    try expectInert(t, &.{ 1, 2, 5, 6 });
+    try check.expectInert(t, &.{ 1, 2, 5, 6 });
     // The widgets inside still take input and focus: the button and the checkbox.
     try testing.expectEqual(t.find(.from("go")), hit.at(t, (t.rect(3).x0 + t.rect(3).x1) * 0.5, (t.rect(3).y0 + t.rect(3).y1) * 0.5, .any));
     const focusable: u8 = @bitCast(types.Sense{ .focus = true });
@@ -220,35 +201,12 @@ test "card: takes no input; hit testing and the tab order pass through it to its
     try testing.expectEqual(2, Default.Ui.Events.widget_count);
 }
 
-/// Semantic columns for a test tree of up to 32 rows.
-const SemBuf = struct {
-    buf: [bytes]u8 align(@import("../core/mem.zig").column_align) = undefined,
-    const bytes = blk: {
-        var counter: @import("../core/mem.zig").Carver = .{ .buf = null };
-        _ = a11y.Semantics.init(&counter, 32);
-        break :blk counter.off;
-    };
-    fn init(b: *SemBuf) a11y.Semantics {
-        var carver: @import("../core/mem.zig").Carver = .{ .buf = &b.buf };
-        var sem = a11y.Semantics.init(&carver, 32);
-        sem.clear();
-        return sem;
-    }
-};
-
-/// The accessible name of row `row` as the bridge reads it: the bytes of its name run.
-fn nameOf(sem: *const a11y.Semantics, tx: *const @import("../core/texts.zig").Texts, strings: []const u8, row: u32) []const u8 {
-    const run = sem.c.name[row];
-    if (run == types.none) return "";
-    return strings[tx.c.start[run]..][0..tx.c.bytes[run]];
-}
-
 test "card: role group, named by its title, value 0, no states, in both front ends" {
     const h = &harness;
     h.init();
     const in: Input = .{ .viewport = .{ 400, 300 } };
     const out = try h.frame(&in);
-    var sb: [2]SemBuf = undefined;
+    var sb: [2]check.SemBuf = undefined;
     const trees = [2]*const Tree{ out.runtime.tree, out.comptime_.tree };
     const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
     const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
@@ -260,8 +218,8 @@ test "card: role group, named by its title, value 0, no states, in both front en
         a11y.states(t, &sem);
         try testing.expectEqual(@backingInt(a11y.Role.group), t.c.role[1]);
         try testing.expectEqual(@backingInt(a11y.Role.group), t.c.role[5]);
-        try testing.expectEqualStrings("Render", nameOf(&sem, tx, str, 1));
-        try testing.expectEqualStrings("Options", nameOf(&sem, tx, str, 5));
+        try testing.expectEqualStrings("Render", check.nameOf(&sem, tx, str, 1));
+        try testing.expectEqualStrings("Options", check.nameOf(&sem, tx, str, 5));
         try testing.expectEqual(@as(f32, 0), t.c.value[1]);
         try testing.expectEqual(@as(u8, 0), sem.c.state[1]);
         try testing.expectEqual(@as(u8, 0), sem.c.state[5]);
