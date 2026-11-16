@@ -22,11 +22,13 @@
 //!   fn present(*const Output) void          draw the frame (WebGPU or the 2D canvas)
 //!   fn cursor(Cursor) void                  show this cursor over the canvas (CSS `cursor`)
 //!   fn clipboard([]const u8) void           put this text on the clipboard
-//!   fn ime(wants: bool, rect: Rect) void    text input on (at `rect`, CSS pixels) or off
+//!   fn paste() void                         read the clipboard; its text arrives as `typed`
+//!   fn ime(wants: bool, rect: Rect, purpose: Purpose) void
+//!        text input on (at `rect`, CSS pixels, with the keyboard for `purpose`) or off
 //!
-//! Pasting needs no call: the browser's paste event (Ctrl+V or Cmd+V, or the page's menu)
-//! hands shell.js the clipboard's text, which arrives as typed text (`typed`), the way the core
-//! expects a paste to be delivered (src/interact/keyboard.zig `Clipboard.paste`).
+//! Ctrl+V or Cmd+V needs no call: the browser's paste event hands shell.js the clipboard's
+//! text, which arrives as typed text (`typed`), the way the core expects a paste to be
+//! delivered. A widget's own paste (`Platform.paste`, a menu item) calls `paste`.
 //!   fn schedule(seconds: f32, pace: Pace) void
 //!        when the next animation frame is wanted: in `seconds`, never for inf (only after an
 //!        event)
@@ -40,6 +42,7 @@ const Events = iface.Events;
 const Platform = context.Platform;
 const Cursor = context.Cursor;
 const Composition = @import("../../interact/keyboard.zig").Composition;
+const Purpose = @import("../../interact/keyboard.zig").Purpose;
 const Output = context.Output;
 const Pace = scheduler.Pace;
 const none = types.none;
@@ -61,7 +64,7 @@ pub fn Web(comptime host: type) type {
         /// The cursor the canvas shows, as last applied.
         cursor: Cursor = .arrow,
         /// Text input as last applied: whether the hidden input has focus, and where.
-        ime: struct { wants: bool = false, rect: types.Rect = .{} } = .{},
+        ime: struct { wants: bool = false, rect: types.Rect = .{}, purpose: Purpose = .normal } = .{},
         /// What the IME is composing (held until it commits or cancels), UTF-8.
         composing: [max_text]u8 = undefined,
         composition: Composition = .{},
@@ -265,11 +268,14 @@ pub fn Web(comptime host: type) type {
             if (p.cursor != s.cursor) host.cursor(p.cursor);
             s.cursor = p.cursor;
             if (p.clipboard.len > 0) host.clipboard(p.clipboard);
+            if (p.paste) host.paste();
             // Text input: shell.js focuses a hidden <textarea> at `ime_rect` while a widget
-            // wants text, so the IME's candidate window and the on-screen keyboard come up next
-            // to the caret; it hands focus back to the canvas when none does.
-            const want: @TypeOf(s.ime) = .{ .wants = p.wants_text, .rect = if (p.wants_text) p.ime_rect else .{} };
-            if (!std.meta.eql(want, s.ime)) host.ime(want.wants, want.rect);
+            // wants text, so the IME's candidate window and the on-screen keyboard (its
+            // `inputmode` from `purpose`) come up next to the caret; it hands focus back to the
+            // canvas when none does. ponytail: `surrounding` is not put in the textarea, whose
+            // input events are read as typed text; autocorrect there sees an empty field.
+            const want: @TypeOf(s.ime) = if (p.wants_text) .{ .wants = true, .rect = p.ime_rect, .purpose = p.purpose } else .{};
+            if (!std.meta.eql(want, s.ime)) host.ime(want.wants, want.rect, want.purpose);
             s.ime = want;
         }
 
@@ -320,13 +326,19 @@ const Page = struct {
         copied = text;
         copies += 1;
     }
+    var pastes: u32 = 0;
+    pub fn paste() void {
+        pastes += 1;
+    }
     var ime_calls: u32 = 0;
     var ime_on: bool = false;
     var ime_rect: types.Rect = .{};
-    pub fn ime(wants: bool, rect: types.Rect) void {
+    var ime_purpose: Purpose = .normal;
+    pub fn ime(wants: bool, rect: types.Rect, purpose: Purpose) void {
         ime_calls += 1;
         ime_on = wants;
         ime_rect = rect;
+        ime_purpose = purpose;
     }
 
     pub fn present(_: *const Output) void {
@@ -476,6 +488,25 @@ test "web: a frame's copy reaches the page once; frames without one copy nothing
     try testing.expectEqualStrings("copied text", Page.copied);
     shell.apply(&.{});
     try testing.expectEqual(@as(u32, 1), Page.copies);
+}
+
+test "web: a frame's paste asks the page to read the clipboard, once" {
+    var shell: Web(Page) = .{};
+    Page.pastes = 0;
+    shell.apply(&.{ .paste = true });
+    shell.apply(&.{});
+    try testing.expectEqual(@as(u32, 1), Page.pastes);
+}
+
+test "web: the text input's keyboard follows the field's purpose" {
+    var shell: Web(Page) = .{};
+    Page.ime_calls = 0;
+    const caret: types.Rect = .{ .x0 = 100, .y0 = 40, .x1 = 101, .y1 = 58 };
+    shell.apply(&.{ .wants_text = true, .ime_rect = caret, .purpose = .email });
+    try testing.expectEqual(Purpose.email, Page.ime_purpose);
+    shell.apply(&.{ .wants_text = true, .ime_rect = caret, .purpose = .number });
+    try testing.expectEqual(Purpose.number, Page.ime_purpose);
+    try testing.expectEqual(@as(u32, 2), Page.ime_calls);
 }
 
 test "web: text input follows the frames; the composition rides with the input until it ends" {

@@ -136,13 +136,13 @@ fn nothing(_: Id, _: Sel) callconv(.c) ?Id {
 }
 fn ignore(_: Id, _: Sel, _: ?Id) callconv(.c) void {}
 
-/// UIKeyboardType for each `Purpose`: default 0, URL 3, number pad 4, phone pad 5, email
-/// address 7, ASCII capable 1 for a terminal.
+/// UIKeyboardType for each `Purpose`: default 0, URL 3, phone pad 5, email address 7, decimal
+/// pad 8 (digits and the decimal point), ASCII capable 1 for a terminal.
 const keyboard_types = std.enums.EnumArray(lcgr.keyboard.Purpose, objc.NSInteger).init(.{
     .normal = 0,
     .secure = 0,
     .terminal = 1,
-    .number = 4,
+    .number = 8,
     .phone = 5,
     .email = 7,
     .url = 3,
