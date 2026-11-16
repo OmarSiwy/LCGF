@@ -96,9 +96,11 @@ pub fn Dialog(comptime th: Theme, comptime name: @EnumLiteral(), comptime field:
             return checkDialog(State, def, field_name);
         }
 
+        /// The opener's and the buttons' responses, then the keys, through `advance`.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            var hits: Hits = .{ .open = v.responseOf(id).clicked };
+            inline for (def.buttons, 0..) |b, k| hits.add(k, v.responseOf(partName(id, b)));
+            sig.set(field, advance(def, @field(sig.state, field_name), hits, v.in.events));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -170,6 +172,56 @@ pub fn ring(th: *const Theme) base.OnOff {
     return .{ .transparent, th.accent };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// No button.
+pub const no_button: u8 = 0xff;
+
+/// What the pointer did to a dialog this frame, from its widgets' responses.
+pub const Hits = struct {
+    /// The opener was clicked.
+    open: bool = false,
+    /// The button the left button went down on, or `no_button`.
+    pressed: u8 = no_button,
+    /// The button clicked, or `no_button`.
+    clicked: u8 = no_button,
+
+    /// Notes button `k`'s response.
+    pub fn add(h: *Hits, k: u8, r: Response) void {
+        if (r.pressed) h.pressed = k;
+        if (r.clicked) h.clicked = k;
+    }
+};
+
+/// One frame of a modal dialog (APG modal dialog). The opener's click opens it with focus on
+/// the first button. While it is open, focus stays on its buttons: Tab and Shift+Tab move it
+/// among them, wrapping, and a press on a button focuses it; Enter or Space choose the focused
+/// button, a click chooses the clicked one, and either closes the dialog with `result` set for
+/// one frame; Escape closes it with `result` 0. The backdrop takes every other press, so
+/// nothing behind the dialog reacts. Keys are read in order.
+pub fn advance(comptime def: Def, st: DialogState, hits: Hits, evs: []const Input.Event) DialogState {
+    const n: u8 = def.buttons.len;
+    var s = st;
+    s.result = 0;
+    if (!s.open) {
+        if (hits.open) s = .{ .open = true };
+        return s;
+    }
+    if (hits.pressed != no_button) s.focus = hits.pressed;
+    if (hits.clicked != no_button) return .{ .focus = hits.clicked, .result = hits.clicked + 1 };
+    const k = popover.keys;
+    for (evs) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        switch (e.code) {
+            k.tab => s.focus = if (e.mods.shift) (s.focus + n - 1) % n else (s.focus + 1) % n,
+            k.enter, k.space => return .{ .focus = s.focus, .result = s.focus + 1 },
+            k.escape => return .{ .focus = s.focus },
+            else => {},
+        }
+    }
+    return s;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The button that opens dialog `name`, showing `text`.
@@ -182,16 +234,21 @@ pub fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []c
 /// Returns the button chosen this frame plus one, or 0.
 pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *DialogState, title: []const u8, message: []const u8, texts: []const []const u8) u8 {
     std.debug.assert(texts.len == def.buttons.len);
+    // Every response is asked for before anything is built, so the rows show the frame's
+    // final state, as in the comptime front end.
     const inter = &f.ctx.inter;
+    var hits: Hits = .{ .open = inter.response(.from(name)).clicked };
+    inline for (def.buttons, 0..) |b, k| hits.add(k, inter.response(.from(partName(name, b))));
+    st.* = advance(def, st.*, hits, f.in.events);
     if (!st.open) return st.result;
-    _ = f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport));
-    _ = f.open(.from(partName(name, "panel")), panelStyle(th));
+    _ = f.interact(f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport)), popover.overlay_sense);
+    _ = f.interact(f.open(.from(partName(name, "panel")), panelStyle(th)), popover.overlay_sense);
     _ = base.label(f, th, title);
     _ = base.label(f, th, message);
     _ = f.open(.none, rowStyle(th));
     inline for (def.buttons, 0..) |b, k| {
         const bid: Id = .from(partName(name, b));
-        _ = f.open(bid, buttonStyle(th, inter.response(bid), st.focus == k));
+        _ = f.interact(f.open(bid, buttonStyle(th, inter.response(bid), st.focus == k)), .button);
         _ = base.label(f, th, texts[k]);
         f.close();
     }
@@ -303,6 +360,96 @@ test "Dialog: another theme restyles both front ends alike" {
     const t = try setState(&S.h, .{ .open = true, .focus = 1 });
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("delete_panel"))].fill);
     try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("delete_ok"))].border_color);
+}
+
+test "advance: opens on the first button, traps Tab, chooses, Escape closes" {
+    const k = popover.keys;
+    const ev = struct {
+        fn of(comptime codes: []const u8, mods: Input.Mods) [codes.len]Input.Event {
+            var out: [codes.len]Input.Event = undefined;
+            for (&out, codes) |*e, c| e.* = .{ .kind = .press, .code = c, .mods = mods };
+            return out;
+        }
+    }.of;
+    var s = advance(confirm, .{}, .{}, &ev(&.{k.enter}, .{}));
+    try testing.expectEqual(DialogState{}, s); // closed: keys do nothing
+    s = advance(confirm, s, .{ .open = true }, &.{});
+    try testing.expectEqual(DialogState{ .open = true }, s);
+    s = advance(confirm, s, .{}, &ev(&.{ k.tab, k.tab, k.tab }, .{}));
+    try testing.expectEqual(@as(u8, 1), s.focus); // wraps inside the dialog
+    s = advance(confirm, s, .{}, &ev(&.{k.tab}, .{ .shift = true }));
+    try testing.expectEqual(@as(u8, 0), s.focus);
+    s = advance(confirm, s, .{}, &ev(&.{ k.tab, k.space }, .{}));
+    try testing.expectEqual(DialogState{ .focus = 1, .result = 2 }, s);
+    s = advance(confirm, s, .{}, &.{});
+    try testing.expectEqual(@as(u8, 0), s.result); // one frame
+    s = advance(confirm, .{ .open = true }, .{}, &ev(&.{k.escape}, .{}));
+    try testing.expectEqual(DialogState{}, s);
+    s = advance(confirm, .{ .open = true }, .{ .pressed = 1 }, &.{});
+    try testing.expectEqual(DialogState{ .open = true, .focus = 1 }, s);
+    s = advance(confirm, s, .{ .clicked = 0 }, &.{});
+    try testing.expectEqual(DialogState{ .result = 1 }, s);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null, shift: bool = false };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the dialog's
+/// state equal in both after every step; returns the state after each step.
+fn runScript(comptime n: usize, script: [n]Step) ![n]DialogState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]DialogState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k, .mods = .{ .shift = st.shift } };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.dialog, h.ui.signals.state.dialog);
+        try testing.expectEqual(h.app.result, h.app.dialog.result);
+        o.* = h.app.dialog;
+    }
+    return out;
+}
+
+test "Dialog: opener, focus trap, keys and clicks in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(12, .{
+        .{ .aim = .{ .part = "delete" }, .left = true },
+        .{ .aim = .{ .part = "delete" } }, // open, Cancel focused
+        .{ .aim = .{ .part = "delete" }, .key = k.tab }, // Delete
+        .{ .aim = .{ .part = "delete" }, .key = k.tab }, // wraps to Cancel
+        .{ .aim = .{ .part = "delete" }, .key = k.tab, .shift = true }, // back to Delete
+        .{ .aim = .{ .part = "delete" }, .left = true }, // a press behind the dialog: nothing
+        .{ .aim = .{ .part = "delete" } },
+        .{ .aim = .{ .part = "delete" }, .key = k.enter }, // Delete chosen
+        .{ .aim = .{ .part = "delete" }, .left = true },
+        .{ .aim = .{ .part = "delete" } }, // open again
+        .{ .aim = .{ .part = "delete_cancel" }, .left = true }, // press Cancel: focused
+        .{ .aim = .{ .part = "delete_cancel" } }, // click: chosen
+    });
+    try testing.expect(!s[0].open and s[1].open and s[1].focus == 0);
+    try testing.expectEqual(@as(u8, 1), s[2].focus);
+    try testing.expectEqual(@as(u8, 0), s[3].focus);
+    try testing.expectEqual(@as(u8, 1), s[4].focus);
+    try testing.expect(s[6].open and s[6].focus == 1);
+    try testing.expectEqual(DialogState{ .focus = 1, .result = 2 }, s[7]);
+    try testing.expect(s[9].open and s[9].focus == 0);
+    try testing.expect(s[10].open and s[10].focus == 0);
+    try testing.expectEqual(DialogState{ .result = 1 }, s[11]);
 }
 
 test "checkDialog: the state field and the buttons" {
