@@ -461,3 +461,117 @@ test "composition: preedit and range go to the focused widget; the commit is typ
     out.reset();
     try testing.expect(!out.wants_text);
 }
+
+/// Two one-line fields edited from the keyboard, as a widget layer would write them against
+/// `Keyboard`: typed text appends, Backspace (HID 42) deletes the last byte, Ctrl+A selects
+/// all, Ctrl+C copies the selection, Ctrl+V asks the host to paste.
+const Editor = struct {
+    const ids = [2]Id{ Id.from("first"), Id.from("second") };
+    buf: [2][32]u8 = undefined,
+    len: [2]usize = .{ 0, 0 },
+    all: [2]bool = .{ false, false },
+
+    fn update(ed: *Editor, k: *const Keyboard, clip: *Clipboard) void {
+        for (ids, 0..) |id, f| {
+            const cmd = k.commands(id, .{});
+            ed.all[f] = ed.all[f] or cmd.select_all;
+            if (cmd.copy and ed.all[f]) clip.copy(ed.buf[f][0..ed.len[f]]);
+            if (cmd.paste) clip.requestPaste();
+            var e = k.events(id);
+            while (e.next()) |ev| {
+                if (ev.kind == .text) {
+                    const typed = k.in.typed(ev);
+                    if (ed.all[f]) ed.len[f] = 0;
+                    ed.all[f] = false;
+                    @memcpy(ed.buf[f][ed.len[f]..][0..typed.len], typed);
+                    ed.len[f] += typed.len;
+                }
+                if (ev.kind != .release and ev.code == 42 and @as(u8, @bitCast(ev.mods)) == 0) {
+                    ed.len[f] = if (ed.all[f]) 0 else ed.len[f] -| 1;
+                    ed.all[f] = false;
+                }
+            }
+        }
+    }
+    fn value(ed: *const Editor, f: usize) []const u8 {
+        return ed.buf[f][0..ed.len[f]];
+    }
+};
+
+test "replayed input: typing, Tab between fields, shortcuts, clipboard and a paste" {
+    const Tree = @import("../core/tree.zig").Tree;
+    const focus = @import("focus.zig");
+    const Replay = @import("../core/input.zig").Replay;
+    var raw: [32 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var sc = focus.Scopes.init(&carver, 8);
+    var sh = Shortcuts.init(&carver, 2);
+    const save: u16 = 7;
+    _ = sh.add(22, .{ .ctrl = true }, save); // Ctrl+S
+    const root = t.push(0, .none, &.{});
+    for (Editor.ids) |id| {
+        const n = t.push(root, id, &.{});
+        t.seal(n);
+        t.c.sense[n] = @bitCast(types.Sense.button);
+    }
+    t.seal(root);
+    focus.scan(&t, &sc);
+
+    var text: [32]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
+    var r: Replay = .{ .src =
+        \\# Tab into the first field and type, with a typo fixed by Backspace.
+        \\frame
+        \\press 43
+        \\text hx
+        \\press 42
+        \\text i
+        \\# Ctrl+S saves and types nothing; Tab moves on and is not typed either.
+        \\frame
+        \\press 22 ctrl
+        \\press 43
+        \\text yo
+        \\# Ctrl+A then typing replaces; Ctrl+A, Ctrl+C copies.
+        \\frame
+        \\press 4 ctrl
+        \\text ok
+        \\frame
+        \\press 4 ctrl
+        \\press 6 ctrl
+        \\# Shift+Tab back to the first field; Ctrl+V asks for a paste, the host types it next frame.
+        \\frame
+        \\press 43 shift
+        \\press 25 ctrl
+        \\frame
+        \\text ok
+    };
+    var it: Interaction = .{};
+    var fo: focus.Focus = .{};
+    var ed: Editor = .{};
+    var saves: u32 = 0;
+    var copied: [6][]const u8 = undefined;
+    var pastes: [6]bool = undefined;
+    var f: usize = 0;
+    while (try r.next(buf)) |in| : (f += 1) {
+        it.step(&t, in);
+        fo.step(&it, &t, &sc, in);
+        var k = Keyboard.route(&it, &fo, in);
+        var fired: [4]u16 = undefined;
+        for (fired[0..fire(&sh, &k, &fired)]) |a| saves += @intFromBool(a == save);
+        var clip: Clipboard = .{};
+        ed.update(&k, &clip);
+        copied[f] = clip.set;
+        pastes[f] = clip.paste;
+    }
+    try testing.expectEqual(6, f);
+    try testing.expectEqualStrings("hiok", ed.value(0));
+    try testing.expectEqualStrings("ok", ed.value(1));
+    try testing.expectEqual(1, saves);
+    try testing.expectEqualStrings("ok", copied[3]);
+    for (copied, 0..) |c, i| if (i != 3) try testing.expectEqualStrings("", c);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, true, false }, &pastes);
+    try testing.expectEqual(@backingInt(Editor.ids[0]), it.focus);
+}
