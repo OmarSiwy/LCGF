@@ -218,6 +218,37 @@ pub fn build(b: *std.Build) void {
     paths_golden.addPassthruArgs();
     b.step("paths-golden", "Draw the path scenes for the golden check: -- OUT.bin").dependOn(&paths_golden.step);
 
+    // The wgpu-native back end (src/render/wgpu/native.zig): outside the tiers, a module of its
+    // own over lcgr. wgpu-native's release archive for the target (build.zig.zon, lazy), its
+    // headers translated here (@cImport is gone), its static library linked.
+    const wgpu_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/native.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // One archive per host target in build.zig.zon; other targets have no wgpu step.
+    const wgpu_dep = b.fmt("wgpu_native_{s}_{s}", .{ @tagName(target.result.os.tag), @tagName(target.result.cpu.arch) });
+    const wgpu_targets = [_][]const u8{ "wgpu_native_linux_x86_64", "wgpu_native_linux_aarch64", "wgpu_native_macos_x86_64", "wgpu_native_macos_aarch64", "wgpu_native_windows_x86_64" };
+    const wgpu_supported = for (wgpu_targets) |t| {
+        if (std.mem.eql(u8, t, wgpu_dep)) break true;
+    } else false;
+    if (if (wgpu_supported) b.lazyDependency(wgpu_dep, .{}) else null) |wgpu_native| {
+        const wgpu_h = b.addTranslateC(.{ .root_source_file = wgpu_native.path("include/webgpu/wgpu.h"), .target = target, .optimize = optimize });
+        wgpu_h.addIncludePath(wgpu_native.path("include"));
+        const m = wgpu_tests.root_module;
+        m.addImport("wgpu_c", wgpu_h.createModule());
+        m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
+        switch (target.result.os.tag) {
+            .macos => for ([_][]const u8{ "Metal", "QuartzCore", "Foundation" }) |f| m.linkFramework(f, .{}),
+            .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            // Rust panics unwind: libunwind is Zig's own, built for the target.
+            else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+        }
+    }
+    b.step("wgpu", "Test the wgpu-native back end on a real adapter (ci/run.sh wgpu)").dependOn(&b.addRunArtifact(wgpu_tests).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
