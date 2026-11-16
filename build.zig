@@ -483,6 +483,50 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
+    // lcgr. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
+    // libraries per target; its few calls are declared by hand (c.zig), so no header is
+    // translated.
+    const accesskit_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/a11y/accesskit/bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    const accesskit_step = b.step("accesskit", "Test the AccessKit bridge against AccessKit's C library (ci/run.sh accesskit)");
+    const accesskit_build_step = b.step("accesskit-build", "Compile and link the AccessKit bridge tests without running them");
+    const ak_os = target.result.os.tag;
+    const ak_arch: ?[]const u8 = switch (target.result.cpu.arch) {
+        .x86_64 => "x86_64",
+        .x86 => "x86",
+        .aarch64 => if (ak_os == .macos) "arm64" else if (ak_os == .windows) "arm64" else null,
+        else => null,
+    };
+    const ak_lib: ?[]const u8 = if (ak_arch) |arch| switch (ak_os) {
+        .linux => b.fmt("lib/linux/{s}/static/libaccesskit.a", .{arch}),
+        .macos => b.fmt("lib/macos/{s}/static/libaccesskit.a", .{arch}),
+        .windows => if (target.result.abi == .msvc) b.fmt("lib/windows/{s}/msvc/static/accesskit.lib", .{arch}) else b.fmt("lib/windows/{s}/mingw/static/libaccesskit.a", .{arch}),
+        else => null,
+    } else null;
+    if (ak_lib == null) {
+        const fail = b.addFail("AccessKit's archive has no static library for this target");
+        accesskit_step.dependOn(&fail.step);
+        accesskit_build_step.dependOn(&fail.step);
+    }
+    if (if (ak_lib != null) b.lazyDependency("accesskit", .{}) else null) |ak| {
+        const m = accesskit_tests.root_module;
+        m.addObjectFile(ak.path(ak_lib.?));
+        switch (ak_os) {
+            .macos => for ([_][]const u8{ "AppKit", "Foundation" }) |f| m.linkFramework(f, .{}),
+            .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            // Rust panics unwind: libunwind is Zig's own, built for the target.
+            else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+        }
+        accesskit_step.dependOn(&b.addRunArtifact(accesskit_tests).step);
+        accesskit_build_step.dependOn(&accesskit_tests.step);
+    }
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }

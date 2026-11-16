@@ -1,0 +1,371 @@
+//! The AccessKit bridge: hands the semantic tree (`a11y.Export`, src/a11y/tree.zig) to the
+//! platform through AccessKit's C interface. An adapter outside the tiers (docs/ARCHITECTURE.md):
+//! built as its own module over `lcgr` (`zig build accesskit`), never imported by the core.
+//!
+//! The host runs the tier-0 passes (`names`, `states`, `flatten`) after each frame, then calls
+//! `frame` here and the platform adapter's `update`. AccessKit calls back only into this file,
+//! and only to read what `frame` stored or to queue a request; it never reaches the UI's columns
+//! from another thread. When assistive technology first connects (activation), the bridge
+//! answers "not ready" and asks for a frame; that frame's update carries the whole tree, as
+//! AccessKit requires after such an answer.
+
+const std = @import("std");
+const lcgr = @import("lcgr");
+const c = @import("c.zig");
+const a11y = lcgr.a11y_tree;
+const simd = lcgr.simd;
+const mem = lcgr.mem;
+const none = lcgr.types.none;
+const Export = a11y.Export;
+const Role = a11y.Role;
+
+/// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
+pub const root_id: c.NodeId = 1 << 32;
+
+/// AccessKit's role for each `a11y.Role` byte; a stray byte reads `unknown`.
+pub const roles: [256]c.Role = blk: {
+    var m: [256]c.Role = @splat(.unknown);
+    for (@typeInfo(Role).@"enum".field_values) |v| m[v] = switch (@as(Role, @fromBackingInt(v))) {
+        .none, .group => .group,
+        .label => .label,
+        .button => .button,
+        .checkbox => .check_box,
+        .slider => .slider,
+        .image => .image,
+        .text_input => .text_input,
+        .link => .link,
+        .radio => .radio_button,
+        .radio_group => .radio_group,
+        .@"switch" => .@"switch",
+        .spin_button => .spin_button,
+        .meter => .meter,
+        .progress_bar => .progress_indicator,
+        .scroll_bar => .scroll_bar,
+        .separator => .splitter,
+        .heading => .heading,
+        .article => .article,
+        .feed => .feed,
+        .list => .list,
+        .list_item => .list_item,
+        .combobox => .combo_box,
+        .listbox => .list_box,
+        .option => .list_box_option,
+        .menu => .menu,
+        .menu_bar => .menu_bar,
+        .menu_item => .menu_item,
+        .menu_item_checkbox => .menu_item_check_box,
+        .menu_item_radio => .menu_item_radio,
+        .tab_list => .tab_list,
+        .tab => .tab,
+        .tab_panel => .tab_panel,
+        .toolbar => .toolbar,
+        .tree => .tree,
+        .tree_item => .tree_item,
+        .grid => .grid,
+        .tree_grid => .tree_grid,
+        .table => .table,
+        .row_group => .row_group,
+        .row => .row,
+        .cell => .cell,
+        .column_header => .column_header,
+        .row_header => .row_header,
+        .dialog => .dialog,
+        .alert_dialog => .alert_dialog,
+        .alert => .alert,
+        .tooltip => .tooltip,
+        .region => .region,
+        .banner => .banner,
+        .navigation => .navigation,
+        .main => .main,
+        .complementary => .complementary,
+        .content_info => .content_info,
+        .form => .form,
+        .search => .search,
+        .status => .status,
+    };
+    break :blk m;
+};
+
+/// What a role offers assistive technology, indexed by the role byte.
+const Offers = bitpack struct(u8) {
+    click: bool = false,
+    focus: bool = false,
+    /// A numeric value: sent as the node's value, settable.
+    value: bool = false,
+    /// A checked state: sent as toggled, true or false.
+    toggle: bool = false,
+    _: u4 = 0,
+};
+
+const offers: [256]Offers = blk: {
+    var m: [256]Offers = @splat(.{});
+    const press: Offers = .{ .click = true, .focus = true };
+    for ([_]Role{ .button, .link, .tab, .menu_item, .option, .tree_item, .combobox }) |r| m[@backingInt(r)] = press;
+    for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
+        m[@backingInt(r)] = .{ .click = true, .focus = true, .toggle = true };
+    for ([_]Role{ .slider, .spin_button, .scroll_bar }) |r| m[@backingInt(r)] = .{ .focus = true, .value = true };
+    m[@backingInt(Role.text_input)] = .{ .focus = true };
+    // Shown, not set.
+    for ([_]Role{ .meter, .progress_bar }) |r| m[@backingInt(r)] = .{ .value = true };
+    break :blk m;
+};
+
+pub const Bridge = struct {
+    /// The window's name, read by assistive technology as the application's top window.
+    title: []const u8,
+    /// Physical pixels per logical pixel; the root's transform, so rows stay in logical pixels.
+    scale: f32 = 1,
+    /// Per export row (and one past for the root), where its children start in `kids`. Filled
+    /// by `frame`.
+    first: []u32,
+    /// Every row's children ids, grouped by parent in tree order.
+    kids: []c.NodeId,
+    /// Set by activation: the next update must carry the whole tree.
+    full: std.atomic.Value(bool) = .init(false),
+    // ---- this frame, stored by `frame`
+    cur: ?*const Export = null,
+    strings: []const u8 = "",
+    /// Focused export id (`Interaction.focus`), or 0.
+    focus: u32 = 0,
+
+    /// Carves the children scratch for exports of up to `cap` rows. With a counting carver this
+    /// sizes the buffer instead.
+    pub fn init(carver: *mem.Carver, cap: u32, title: []const u8) Bridge {
+        return .{ .title = title, .first = carver.slice(u32, cap + 1), .kids = carver.slice(c.NodeId, cap) };
+    }
+
+    /// Stores this frame's export for the next update and groups each row's children. `strings`
+    /// are the frame's bytes the names point into; they must stay valid until the update.
+    pub fn frame(b: *Bridge, cur: *const Export, strings: []const u8, focus: u32) void {
+        std.debug.assert(b.first.len > cur.len and b.kids.len >= cur.len);
+        const n = cur.len;
+        const e = &cur.c;
+        // Counting sort by parent: `first[p]` ends past p's children, then each row, walked
+        // backwards, steps its parent's cursor back, leaving `first[p]` at p's first child.
+        // Top-level rows (parent `none`) are the root's, bucket `n`.
+        var end: u32 = 0;
+        for (0..n) |r| {
+            end += e.kids[r];
+            b.first[r] = end;
+        }
+        b.first[n] = end + e.kids[cur.cap];
+        var r = n;
+        while (r > 0) {
+            r -= 1;
+            const p = @min(e.parent[r], n);
+            b.first[p] -= 1;
+            b.kids[b.first[p]] = e.id[r];
+        }
+        b.cur = cur;
+        b.strings = strings;
+        b.focus = focus;
+    }
+
+    /// The tree update for the stored frame: every row, with the tree's root and toolkit.
+    pub fn fullUpdate(b: *const Bridge) *c.TreeUpdate {
+        const cur = b.cur.?;
+        const u = c.accesskit_tree_update_with_capacity_and_focus(cur.len + 1, b.focusId());
+        const info = c.accesskit_tree_info_new(root_id);
+        c.accesskit_tree_info_set_toolkit_name_with_length(info, "lcgr", 4);
+        c.accesskit_tree_update_set_tree_info(u, info);
+        c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
+        for (0..cur.len) |r| c.accesskit_tree_update_push_node(u, cur.c.id[r], b.node(@intCast(r)));
+        return u;
+    }
+
+    /// The focused node: the focused widget when it is exported, else the window.
+    fn focusId(b: *const Bridge) c.NodeId {
+        const cur = b.cur.?;
+        const found = b.focus != 0 and simd.find(cur.c.id, cur.len, b.focus) != none;
+        return if (found) b.focus else root_id;
+    }
+
+    fn rootNode(b: *const Bridge) *c.Node {
+        const n = c.accesskit_node_new(.window);
+        const cur = b.cur.?;
+        c.accesskit_node_set_transform(n, c.accesskit_affine_scale(b.scale));
+        c.accesskit_node_set_label_with_length(n, b.title.ptr, b.title.len);
+        c.accesskit_node_set_children(n, cur.c.kids[cur.cap], b.kids[b.first[cur.len]..].ptr);
+        return n;
+    }
+
+    /// Export row `r` as an AccessKit node.
+    fn node(b: *const Bridge, r: u32) *c.Node {
+        const e = &b.cur.?.c;
+        const role = e.role[r];
+        const n = c.accesskit_node_new(roles[role]);
+        c.accesskit_node_set_bounds(n, .{ .x0 = e.rect[0][r], .y0 = e.rect[1][r], .x1 = e.rect[2][r], .y1 = e.rect[3][r] });
+        c.accesskit_node_set_children(n, e.kids[r], b.kids[b.first[r]..].ptr);
+        if (e.name_bytes[r] != 0) c.accesskit_node_set_label_with_length(n, b.strings[e.name_start[r]..].ptr, e.name_bytes[r]);
+        const st: a11y.State = @bitCast(e.state[r]);
+        const of = offers[role];
+        if (of.toggle) c.accesskit_node_set_toggled(n, if (st.checked) .true else .false);
+        if (st.expandable) c.accesskit_node_set_expanded(n, st.expanded);
+        if (st.selected) c.accesskit_node_set_selected(n, true);
+        if (st.disabled) c.accesskit_node_set_disabled(n);
+        if (of.value) c.accesskit_node_set_numeric_value(n, e.value[r]);
+        if (role == @backingInt(Role.status)) c.accesskit_node_set_live(n, .polite);
+        // A disabled control takes focus (to be read) but does nothing.
+        if (of.focus) c.accesskit_node_add_action(n, .focus);
+        if (st.disabled) return n;
+        if (of.click) c.accesskit_node_add_action(n, .click);
+        if (of.value and of.focus) {
+            c.accesskit_node_add_action(n, .set_value);
+            c.accesskit_node_add_action(n, .increment);
+            c.accesskit_node_add_action(n, .decrement);
+        }
+        return n;
+    }
+
+    /// AccessKit's activation handler (`userdata` is the bridge): assistive technology connected.
+    /// Answers "not ready", so AccessKit waits for the next update, which then carries the whole
+    /// tree; the tree is never read off the UI thread.
+    pub fn activate(userdata: ?*anyopaque) callconv(.c) ?*c.TreeUpdate {
+        const b: *Bridge = @ptrCast(@alignCast(userdata.?));
+        b.full.store(true, .release);
+        return null;
+    }
+
+    /// AccessKit's tree update factory, called by the adapter's update on the UI thread.
+    pub fn factory(userdata: ?*anyopaque) callconv(.c) ?*c.TreeUpdate {
+        const b: *Bridge = @ptrCast(@alignCast(userdata.?));
+        _ = b.full.swap(false, .acq_rel);
+        return b.fullUpdate();
+    }
+};
+
+const testing = std.testing;
+const Tree = lcgr.tree.Tree;
+const Texts = lcgr.texts.Texts;
+const Strings = lcgr.strings.Strings;
+
+/// A frame's columns for the tests: tree, text runs, bytes, semantics, two exports, changes and
+/// a bridge over a buffer.
+pub fn Fixture(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        bytes_buf: [1024]u8 = undefined,
+        t: Tree = undefined,
+        tx: Texts = undefined,
+        str: Strings = undefined,
+        s: a11y.Semantics = undefined,
+        out: [2]Export = undefined,
+        ch: a11y.Changes = undefined,
+        b: Bridge = undefined,
+        gen: u1 = 0,
+
+        fn carve(f: ?*Self, carver: *mem.Carver) void {
+            const t = Tree.init(carver, cap);
+            const tx = Texts.init(carver, cap);
+            const s = a11y.Semantics.init(carver, cap);
+            const out = [2]Export{ Export.init(carver, cap), Export.init(carver, cap) };
+            const ch = a11y.Changes.init(carver, cap);
+            const b = Bridge.init(carver, cap, "Example");
+            if (f) |x| {
+                x.* = .{ .t = t, .tx = tx, .s = s, .out = out, .ch = ch, .b = b, .str = .{ .buf = &x.bytes_buf } };
+            }
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(60_000);
+            var counter: mem.Carver = .{ .buf = null };
+            carve(null, &counter);
+            break :blk counter.off;
+        };
+        pub fn init(f: *Self) void {
+            var carver: mem.Carver = .{ .buf = &f.buf };
+            carve(f, &carver);
+        }
+        /// Starts a new frame, as a front end does.
+        pub fn reset(f: *Self) void {
+            f.t.reset();
+            f.tx.reset();
+            f.str.reset();
+            f.s.clear();
+        }
+        pub fn text(f: *Self, parent: u32, str: []const u8) u32 {
+            const n = f.t.push(parent, .none, &.{ .role = .label });
+            f.t.c.text[n] = f.tx.push(n, f.str.add(str), &.{});
+            f.t.seal(n);
+            return n;
+        }
+        /// Runs the passes, diffs against last frame and hands the export to the bridge.
+        pub fn end(f: *Self, focus: u32) void {
+            f.gen +%= 1;
+            a11y.names(&f.t, &f.s);
+            a11y.states(&f.t, &f.s);
+            a11y.flatten(&f.t, &f.tx, f.str.buf[0..f.str.len], &f.s, &f.out[f.gen]);
+            a11y.diff(&f.out[f.gen], &f.out[f.gen ^ 1], &f.ch);
+            f.b.frame(&f.out[f.gen], f.str.buf[0..f.str.len], focus);
+        }
+    };
+}
+
+/// The example's toolbar: a Reset button, a Wireframe checkbox (on) and an Exposure slider.
+pub fn buildToolbar(f: anytype, wire: bool, exposure: f32) void {
+    const t = &f.t;
+    const root = t.push(0, .none, &.{});
+    const bar = t.push(root, .from("toolbar"), &.{});
+    t.c.role[bar] = @backingInt(Role.toolbar);
+    const reset = t.push(bar, .from("reset"), &.{ .role = .button });
+    _ = f.text(reset, "Reset");
+    t.seal(reset);
+    const wf = t.push(bar, .from("wireframe"), &.{ .role = .checkbox, .value = @floatFromInt(@intFromBool(wire)) });
+    _ = f.text(wf, "Wireframe");
+    t.seal(wf);
+    const lab = f.text(bar, "Exposure");
+    const sl = t.push(bar, .from("exposure"), &.{ .role = .slider, .value = exposure });
+    t.seal(sl);
+    t.seal(bar);
+    t.seal(root);
+    f.s.c.labelled_by[sl] = lab;
+}
+
+/// AccessKit's debug form of `u`, freed.
+fn debugText(u: *c.TreeUpdate, out: []u8) []const u8 {
+    const s = c.accesskit_tree_update_debug(u);
+    defer c.accesskit_string_free(s);
+    const got = std.mem.span(s);
+    const len = @min(got.len, out.len);
+    @memcpy(out[0..len], got[0..len]);
+    return out[0..len];
+}
+
+fn expectHas(hay: []const u8, needle: []const u8) !void {
+    if (std.mem.indexOf(u8, hay, needle) == null) {
+        std.debug.print("missing {s} in\n{s}\n", .{ needle, hay });
+        return error.TestExpectedEqual;
+    }
+}
+
+test "accesskit: the whole tree goes out after activation, rooted at the window" {
+    var f: Fixture(32) = .{};
+    f.init();
+    f.reset();
+    buildToolbar(&f, true, 1.5);
+    f.end(@backingInt(lcgr.types.Id.from("reset")));
+    // Activation answers "not ready" and marks the next update as the whole tree.
+    try testing.expectEqual(null, Bridge.activate(&f.b));
+    try testing.expect(f.b.full.load(.acquire));
+    const u = Bridge.factory(&f.b).?;
+    defer c.accesskit_tree_update_free(u);
+    try testing.expect(!f.b.full.load(.acquire));
+    var buf: [8192]u8 = undefined;
+    const d = debugText(u, &buf);
+    try expectHas(d, "Window");
+    try expectHas(d, "\"Example\"");
+    try expectHas(d, "Toolbar");
+    try expectHas(d, "Button");
+    try expectHas(d, "\"Reset\"");
+    try expectHas(d, "CheckBox");
+    try expectHas(d, "\"Wireframe\"");
+    try expectHas(d, "toggled: True");
+    try expectHas(d, "Slider");
+    try expectHas(d, "\"Exposure\"");
+    try expectHas(d, "numeric_value: 1.5");
+    try expectHas(d, "Click");
+    try expectHas(d, "SetValue");
+    try expectHas(d, "\"lcgr\"");
+    var idbuf: [32]u8 = undefined;
+    try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{@backingInt(lcgr.types.Id.from("reset"))}));
+}
