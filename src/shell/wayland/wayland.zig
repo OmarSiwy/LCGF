@@ -1,0 +1,421 @@
+//! The Wayland shell: a window on a Wayland compositor, speaking the wire protocol over the
+//! socket itself (src/shell/wayland/wire.zig), so no libwayland is linked or loaded. It meets
+//! the contract of src/shell/iface.zig: `poll` drains the socket without blocking and turns
+//! what arrived into `Events`, `present` draws the frame with the software back end into shared
+//! memory (`wl_shm`) and commits it, `wait` sleeps in poll(2) on the socket and an eventfd, and
+//! `wake` writes that eventfd.
+//!
+//! Start-up is event-driven, so no call blocks on the compositor: `init` asks for the globals
+//! and a `sync`; when the sync is done the needed globals are bound and the toplevel is created
+//! and committed without a buffer; the first `xdg_surface.configure` makes the window ready
+//! (`configured`) and `present` draws from then on. `connect` is the blocking shortcut for a
+//! program: it waits until that first configure.
+//!
+//! Lessons from Zed's GPUI on Wayland (README, commit af8ea0d): ack every configure before the
+//! next commit, never attach a buffer before the first configure, and answer `xdg_wm_base.ping`
+//! or the compositor marks the window unresponsive.
+//!
+//! Linux only (sockets, memfd, eventfd). Built as its own module over `lcgr` (`zig build
+//! wayland`), not exported from src/lcgr.zig, like the GL ES back end.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const lcgr = @import("lcgr");
+const wire = @import("wire.zig");
+const linux = std.os.linux;
+const iface = lcgr.shell_iface;
+const Events = iface.Events;
+const context = lcgr.context;
+const Platform = context.Platform;
+const Output = context.Output;
+const Pace = lcgr.scheduler.Pace;
+const Input = lcgr.input.Input;
+const Quad = lcgr.draw_list.Quad;
+const Mono = lcgr.protocol.Mono;
+const render = lcgr.render_iface;
+const sw = lcgr.render_sw;
+const Color = lcgr.types.Color;
+
+/// Object ids the client allocates are below this; the compositor's start at 0xff000000.
+pub const max_objects = 256;
+
+/// What each client object id is, so an event can be routed by its target id.
+pub const Kind = enum(u8) {
+    free,
+    /// Destroyed by the client; its id is reusable once the compositor sends `delete_id`.
+    dead,
+    display,
+    registry,
+    /// The start-up `wl_display.sync`.
+    sync,
+    frame,
+    compositor,
+    shm,
+    shm_pool,
+    buffer,
+    wm_base,
+    surface,
+    xdg_surface,
+    toplevel,
+};
+
+/// Interfaces bound from the registry, with the highest version this client speaks.
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base };
+const global_versions = std.enums.EnumArray(Global, u32).init(.{ .wl_compositor = 4, .wl_shm = 1, .xdg_wm_base = 2 });
+
+/// Opcodes used, from wayland.xml and xdg-shell.xml.
+const op = struct {
+    const display_sync = 0;
+    const display_get_registry = 1;
+    const registry_bind = 0;
+    const compositor_create_surface = 0;
+    const shm_create_pool = 0;
+    const pool_create_buffer = 0;
+    const pool_destroy = 1;
+    const buffer_destroy = 0;
+    const surface_attach = 1;
+    const surface_frame = 3;
+    const surface_commit = 6;
+    const surface_damage_buffer = 9;
+    const wm_base_get_xdg_surface = 2;
+    const wm_base_pong = 3;
+    const xdg_surface_get_toplevel = 1;
+    const xdg_surface_ack_configure = 4;
+    const toplevel_set_title = 2;
+    const toplevel_set_app_id = 3;
+};
+
+/// `wl_shm` format: 32-bit ARGB, premultiplied, as one little-endian word: `sw`'s `.bgra8`.
+const argb8888 = 0;
+
+pub const Wayland = struct {
+    conn: wire.Conn,
+    kinds: [max_objects]Kind = @splat(.free),
+    /// Bound globals by interface; 0 when the compositor has none.
+    globals: std.enums.EnumArray(Global, u32) = .initFill(0),
+    registry: u32 = 0,
+    sync: u32 = 0,
+    surface: u32 = 0,
+    xdg_surface: u32 = 0,
+    toplevel: u32 = 0,
+    /// The first configure arrived: `present` may attach buffers.
+    configured: bool = false,
+    /// The compositor asked to close the window, or the connection failed (`err`).
+    closed: bool = false,
+    err: ?Error = null,
+    /// Size from the last `xdg_toplevel.configure` not yet acked; 0 lets the client choose.
+    pending: [2]i32 = .{ 0, 0 },
+    /// Window size in logical pixels.
+    size: [2]f32,
+    /// Physical pixels per logical pixel.
+    scale: f32 = 1,
+    shm: Shm = .{},
+    /// Held input, carried from frame to frame.
+    in: Input = .{},
+    /// Wakes `wait` from another thread (`wake`).
+    wake_fd: i32,
+    woken: std.atomic.Value(bool) = .init(false),
+    options: Options,
+    gfx: sw.Software = .{},
+    font: Mono = .{},
+    glyphs: Buffers,
+    /// What `present` clears to before drawing.
+    background: Color = .rgb(0, 0, 0),
+    polls: u32 = 0,
+    presents: u32 = 0,
+    /// Frames `present` could not show because the compositor still held both buffers.
+    dropped: u32 = 0,
+
+    pub const Error = error{ Disconnected, Protocol, MissingGlobal, OutOfIds, OutOfMemory };
+
+    pub const Options = struct {
+        title: []const u8 = "lcgr",
+        app_id: []const u8 = "lcgr",
+        /// Logical size until the compositor picks one.
+        size: [2]f32 = .{ 800, 600 },
+    };
+
+    /// Caller-owned storage for drawing text: one quad per byte of text in a frame, and one
+    /// `first` and `count` row per text run (as src/shell/headless.zig).
+    pub const Buffers = struct {
+        glyphs: []Quad,
+        first: []u32,
+        count: []u32,
+    };
+
+    /// A shell on the connected socket `fd` (`wire.connect`), which it then owns. Sends the
+    /// start-up requests; the window appears through the events `poll` handles.
+    pub fn init(fd: i32, options: Options, buf: Buffers) Wayland {
+        var w: Wayland = .{
+            .conn = .{ .fd = fd },
+            .size = options.size,
+            .options = options,
+            .glyphs = buf,
+            .wake_fd = @intCast(@as(isize, @bitCast(linux.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK)))),
+        };
+        w.kinds[1] = .display;
+        w.registry = w.new(.registry);
+        w.request(1, op.display_get_registry, .{w.registry});
+        w.sync = w.new(.sync);
+        w.request(1, op.display_sync, .{w.sync});
+        w.flush();
+        return w;
+    }
+
+    /// `init`, then poll and wait until the window is configured (or fails). For a program
+    /// that has nothing else to do meanwhile.
+    pub fn connect(fd: i32, options: Options, buf: Buffers) Error!Wayland {
+        var w = init(fd, options, buf);
+        while (!w.configured and !w.closed) {
+            w.dispatch();
+            if (!w.configured and !w.closed) w.sleep(-1);
+        }
+        if (w.err) |e| return e;
+        return w;
+    }
+
+    pub fn deinit(w: *Wayland) void {
+        w.shm.unmap();
+        w.conn.close();
+        _ = linux.close(w.wake_fd);
+    }
+
+    /// Drains the socket into `ev`. False once the window is closed or the connection failed.
+    pub fn poll(w: *Wayland, ev: *Events) bool {
+        w.dispatch();
+        _ = w.woken.swap(false, .acquire);
+        w.drainWake();
+        w.polls += 1;
+        w.in.viewport = w.size;
+        w.in.scale = w.scale;
+        ev.in = w.in;
+        return !w.closed;
+    }
+
+    pub fn apply(_: *Wayland, _: *const Platform) void {}
+
+    /// Draws the frame into a free shared-memory buffer and commits it. Before the first
+    /// configure there is nothing to draw into yet, so the frame is skipped.
+    pub fn present(w: *Wayland, out: *const Output) void {
+        if (!w.configured or w.closed) return;
+        const px = physical(w.size, w.scale);
+        if (px[0] != w.shm.width or px[1] != w.shm.height) w.resizeBuffers(px) catch |e| return w.fail(e);
+        const slot = for (0..2) |k| {
+            if (!w.shm.busy[k]) break k;
+        } else {
+            w.dropped += 1;
+            return;
+        };
+        var fb = w.shm.framebuffer(slot);
+        const g = w.glyphs;
+        const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
+        w.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, w.scale);
+        fb.clear(w.background);
+        render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
+        w.shm.busy[slot] = true;
+        w.request(w.surface, op.surface_attach, .{ w.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
+        w.request(w.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
+        w.request(w.surface, op.surface_commit, .{});
+        w.flush();
+        w.presents += 1;
+    }
+
+    /// Sleeps until the compositor sends something, `wake` is called, or `seconds` pass.
+    pub fn wait(w: *Wayland, seconds: f32, pace: Pace) void {
+        _ = pace;
+        w.flush();
+        if (w.closed or w.woken.load(.acquire)) return;
+        const ms: i32 = if (seconds >= 2_000_000) -1 else @intFromFloat(@ceil(@max(seconds, 0) * 1000));
+        w.sleep(ms);
+    }
+
+    /// Thread-safe: ends a `wait` in progress and has the next `poll` report a frame.
+    pub fn wake(w: *Wayland) void {
+        w.woken.store(true, .release);
+        const one: u64 = 1;
+        _ = linux.write(w.wake_fd, std.mem.asBytes(&one), 8);
+    }
+
+    fn sleep(w: *Wayland, ms: i32) void {
+        var fds = [2]linux.pollfd{
+            .{ .fd = w.conn.fd, .events = linux.POLL.IN, .revents = 0 },
+            .{ .fd = w.wake_fd, .events = linux.POLL.IN, .revents = 0 },
+        };
+        _ = linux.poll(&fds, fds.len, ms);
+    }
+
+    fn drainWake(w: *Wayland) void {
+        var v: u64 = 0;
+        _ = linux.read(w.wake_fd, std.mem.asBytes(&v), 8);
+    }
+
+    /// Reads and handles everything the compositor has sent, then sends what that produced.
+    pub fn dispatch(w: *Wayland) void {
+        while (!w.closed) {
+            const more = w.conn.fill() catch |e| return w.fail(if (e == error.Overflow) error.Protocol else error.Disconnected);
+            while (w.conn.next()) |m| w.handle(m);
+            if (!more) break;
+        }
+        w.flush();
+    }
+
+    fn handle(w: *Wayland, m: wire.Msg) void {
+        var a = m.args();
+        const kind: Kind = if (m.id < max_objects) w.kinds[m.id] else .free;
+        switch (kind) {
+            .display => switch (m.opcode) {
+                0 => w.fail(error.Protocol), // error: object, code, message
+                1 => { // delete_id
+                    const id = a.uint();
+                    if (id < max_objects) w.kinds[id] = .free;
+                },
+                else => {},
+            },
+            .registry => if (m.opcode == 0) {
+                const name = a.uint();
+                const interface = a.string();
+                const version = a.uint();
+                const g = std.meta.stringToEnum(Global, interface) orelse return;
+                const kinds = std.enums.EnumArray(Global, Kind).init(.{ .wl_compositor = .compositor, .wl_shm = .shm, .xdg_wm_base = .wm_base });
+                const id = w.new(kinds.get(g));
+                w.request(w.registry, op.registry_bind, .{ name, interface, @min(version, global_versions.get(g)), id });
+                w.globals.set(g, id);
+            },
+            .sync => if (m.opcode == 0) {
+                w.kinds[m.id] = .dead;
+                w.createWindow();
+            },
+            .wm_base => if (m.opcode == 0) w.request(m.id, op.wm_base_pong, .{a.uint()}),
+            .xdg_surface => if (m.opcode == 0) {
+                w.request(m.id, op.xdg_surface_ack_configure, .{a.uint()});
+                if (w.pending[0] > 0 and w.pending[1] > 0) w.size = .{ @floatFromInt(w.pending[0]), @floatFromInt(w.pending[1]) };
+                w.configured = true;
+            },
+            .toplevel => switch (m.opcode) {
+                0 => w.pending = .{ a.int(), a.int() }, // configure: width, height, states
+                1 => w.closed = true,
+                else => {},
+            },
+            .buffer => if (m.opcode == 0) { // release
+                for (0..2) |k| w.shm.busy[k] = w.shm.busy[k] and w.shm.buffers[k] != m.id;
+            },
+            .frame => if (m.opcode == 0) {
+                w.kinds[m.id] = .dead;
+            },
+            else => {},
+        }
+    }
+
+    /// After the start-up sync: every global is known, so create the window.
+    fn createWindow(w: *Wayland) void {
+        inline for (.{ .wl_compositor, .wl_shm, .xdg_wm_base }) |g| {
+            if (w.globals.get(g) == 0) return w.fail(error.MissingGlobal);
+        }
+        w.surface = w.new(.surface);
+        w.request(w.globals.get(.wl_compositor), op.compositor_create_surface, .{w.surface});
+        w.xdg_surface = w.new(.xdg_surface);
+        w.request(w.globals.get(.xdg_wm_base), op.wm_base_get_xdg_surface, .{ w.xdg_surface, w.surface });
+        w.toplevel = w.new(.toplevel);
+        w.request(w.xdg_surface, op.xdg_surface_get_toplevel, .{w.toplevel});
+        w.request(w.toplevel, op.toplevel_set_title, .{w.options.title});
+        w.request(w.toplevel, op.toplevel_set_app_id, .{w.options.app_id});
+        w.request(w.surface, op.surface_commit, .{});
+    }
+
+    /// Two buffers of `px` pixels in one new pool, replacing the old ones. A buffer the
+    /// compositor still holds is destroyed anyway: wl_buffer.destroy is allowed at any time and
+    /// the compositor keeps showing its copy until the next commit.
+    fn resizeBuffers(w: *Wayland, px: [2]u32) Error!void {
+        for (w.shm.buffers) |b| if (b != 0) w.destroy(b, op.buffer_destroy);
+        if (w.shm.pool != 0) w.destroy(w.shm.pool, op.pool_destroy);
+        w.shm.unmap();
+        w.shm = .{};
+        const stride: u32 = @intCast(sw.Framebuffer.len(px[0], 1) * 4);
+        const one = std.mem.alignForward(usize, @as(usize, stride) * px[1], 64);
+        const fd_rc = linux.memfd_create("lcgr-wayland", linux.MFD.CLOEXEC);
+        if (linux.errno(fd_rc) != .SUCCESS) return error.OutOfMemory;
+        const fd: i32 = @intCast(fd_rc);
+        if (linux.errno(linux.ftruncate(fd, @intCast(one * 2))) != .SUCCESS) {
+            _ = linux.close(fd);
+            return error.OutOfMemory;
+        }
+        const addr = linux.mmap(null, one * 2, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, 0);
+        if (linux.errno(addr) != .SUCCESS) {
+            _ = linux.close(fd);
+            return error.OutOfMemory;
+        }
+        w.shm = .{ .map = @as([*]align(4096) u8, @ptrFromInt(addr))[0 .. one * 2], .width = px[0], .height = px[1], .stride = stride, .one = one };
+        w.shm.pool = w.new(.shm_pool);
+        w.request(w.globals.get(.wl_shm), op.shm_create_pool, .{ w.shm.pool, wire.Fd{ .fd = fd }, @as(i32, @intCast(one * 2)) });
+        for (0..2) |k| {
+            w.shm.buffers[k] = w.new(.buffer);
+            w.request(w.shm.pool, op.pool_create_buffer, .{ w.shm.buffers[k], @as(i32, @intCast(one * k)), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])), @as(i32, @intCast(stride)), @as(u32, argb8888) });
+        }
+    }
+
+    /// A new client object id of `kind`: the lowest free one.
+    fn new(w: *Wayland, kind: Kind) u32 {
+        for (w.kinds[2..], 2..) |k, id| if (k == .free) {
+            w.kinds[id] = kind;
+            return @intCast(id);
+        };
+        w.fail(error.OutOfIds);
+        return 0;
+    }
+
+    /// Sends a destructor request; the id is reused after the compositor's `delete_id`.
+    fn destroy(w: *Wayland, id: u32, opcode: u16) void {
+        w.request(id, opcode, .{});
+        w.kinds[id] = .dead;
+    }
+
+    fn request(w: *Wayland, id: u32, opcode: u16, args: anytype) void {
+        if (w.closed or id == 0) return;
+        w.conn.send(id, opcode, args) catch w.fail(error.Disconnected);
+    }
+
+    fn flush(w: *Wayland) void {
+        if (w.closed) return;
+        w.conn.flush() catch w.fail(error.Disconnected);
+    }
+
+    fn fail(w: *Wayland, e: Error) void {
+        if (w.err == null) w.err = e;
+        w.closed = true;
+    }
+};
+
+comptime {
+    iface.check(Wayland);
+}
+
+/// The window's buffers in shared memory: two of `width` x `height`, `one` bytes apart.
+const Shm = struct {
+    map: []align(4096) u8 = &.{},
+    pool: u32 = 0,
+    buffers: [2]u32 = .{ 0, 0 },
+    /// The compositor has the buffer and has not released it.
+    busy: [2]bool = .{ false, false },
+    width: u32 = 0,
+    height: u32 = 0,
+    stride: u32 = 0,
+    one: usize = 0,
+
+    fn framebuffer(s: *const Shm, slot: usize) sw.Framebuffer {
+        const px: [*]u32 = @ptrCast(@alignCast(s.map[s.one * slot ..].ptr));
+        return .init(px[0 .. s.one / 4], s.width, s.height, .bgra8);
+    }
+    fn unmap(s: *Shm) void {
+        if (s.map.len > 0) _ = linux.munmap(s.map.ptr, s.map.len);
+        s.map = &.{};
+    }
+};
+
+fn physical(size: [2]f32, scale: f32) [2]u32 {
+    return .{ @intFromFloat(@max(@round(size[0] * scale), 1)), @intFromFloat(@max(@round(size[1] * scale), 1)) };
+}
+
+test {
+    _ = wire;
+    _ = @import("test.zig");
+}

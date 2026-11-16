@@ -49,7 +49,12 @@
         # Mesa's lavapipe, so no GPU or system driver is needed.
         devShells.golden = pkgs.mkShell {
           inputsFrom = [ devShells.default ];
-          packages = [ (pkgs.python3.withPackages (ps: [ ps.wgpu ])) ];
+          packages = [
+            (pkgs.python3.withPackages (ps: [ ps.wgpu ]))
+            # A compositor with no display or input devices, for the Wayland shell's example
+            # (lane shell-wayland, ci/run.sh wayland-weston). A CI tool; the shell links nothing.
+            pkgs.weston
+          ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.vulkan-loader
             pkgs.libglvnd

@@ -483,6 +483,23 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
+    // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
+    const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/wayland.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland", "Test the Wayland shell against a fake compositor (ci/run.sh wayland)").dependOn(&b.addRunArtifact(wayland_tests).step);
+    const wayland_example = b.addExecutable(.{ .name = "wayland-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/wayland/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
