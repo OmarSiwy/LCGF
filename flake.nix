@@ -56,6 +56,9 @@
             # A compositor with no display or input devices, for the Wayland shell's example
             # (lane shell-wayland, ci/run.sh wayland-weston). A CI tool; the shell links nothing.
             pkgs.weston
+            # The Direct3D 12 back end under Wine (ci/run.sh d3d12): its d3d12.dll is vkd3d,
+            # drawing through this shell's lavapipe.
+            pkgs.wineWow64Packages.stable
           ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.vulkan-loader
