@@ -517,3 +517,54 @@ test "wayland: before wl_surface v6, the scale of the output the window entered"
     _ = shell.poll(&ev);
     try testing.expectEqual(@as(f32, 1), ev.in.scale);
 }
+
+test "wayland: the cursor the UI asks for, set again after each enter" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"wp_cursor_shape_manager_v1"}));
+    try testing.expect(shell.poll(&ev));
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 1)});
+    fake.configure(&shell, 800, 600);
+    while (turn(&shell, &ctx, &app, &ev) != null) {}
+    fake.pump(&shell);
+    try testing.expectEqual(shell.seat.pointer, fake.sent(.cursor_manager, 1).?.arg1); // get_pointer
+    try testing.expect(fake.sent(.cursor_device, 1) == null); // no pointer in the window yet
+
+    // Enter over Reset: the button's hand, with the enter's serial.
+    const p = shell.seat.pointer;
+    const enter = fake.nextSerial();
+    fake.send(p, 0, .{ enter, shell.surface, wire.Fixed.from(37), wire.Fixed.from(25) });
+    fake.flush();
+    fake.logged = 0;
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual(Request{ .kind = .cursor_device, .id = shell.cursor_device, .opcode = 1, .arg0 = enter, .arg1 = 4 }, fake.sent(.cursor_device, 1).?);
+
+    // Away from it: the arrow (default).
+    fake.send(p, 2, .{ @as(u32, 0), wire.Fixed.from(400), wire.Fixed.from(400) });
+    fake.flush();
+    fake.logged = 0;
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual(@as(u32, 1), fake.sent(.cursor_device, 1).?.arg1);
+
+    // Leave and come back at the same place: same shape, new serial, so it is sent again.
+    fake.send(p, 1, .{ fake.nextSerial(), shell.surface });
+    const again = fake.nextSerial();
+    fake.send(p, 0, .{ again, shell.surface, wire.Fixed.from(400), wire.Fixed.from(400) });
+    fake.flush();
+    fake.logged = 0;
+    _ = shell.poll(&ev);
+    shell.apply(&.{ .cursor = .arrow });
+    fake.pump(&shell);
+    try testing.expectEqual(again, fake.sent(.cursor_device, 1).?.arg0);
+    // Unchanged after that: nothing is sent.
+    fake.logged = 0;
+    shell.apply(&.{ .cursor = .arrow });
+    fake.pump(&shell);
+    try testing.expect(fake.sent(.cursor_device, 1) == null);
+}

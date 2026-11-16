@@ -67,10 +67,12 @@ pub const Kind = enum(u8) {
     fractional_manager,
     fractional_scale,
     output,
+    cursor_manager,
+    cursor_device,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1 };
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1 };
 const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_compositor = 6,
     .wl_shm = 1,
@@ -78,6 +80,7 @@ const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_seat = 8,
     .wp_viewporter = 1,
     .wp_fractional_scale_manager_v1 = 1,
+    .wp_cursor_shape_manager_v1 = 1,
 });
 const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_compositor = .compositor,
@@ -86,7 +89,12 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_seat = .seat,
     .wp_viewporter = .viewporter,
     .wp_fractional_scale_manager_v1 = .fractional_manager,
+    .wp_cursor_shape_manager_v1 = .cursor_manager,
 });
+
+/// `wp_cursor_shape_device_v1` shapes (cursor-shape-v1.xml) by `Cursor`: default, pointer,
+/// text, grab, ew-resize, ns-resize.
+const cursor_shapes = std.enums.EnumArray(context.Cursor, u32).init(.{ .arrow = 1, .pointer = 4, .text = 9, .grab = 16, .resize_h = 26, .resize_v = 27 });
 
 /// Opcodes used, from wayland.xml and xdg-shell.xml.
 const op = struct {
@@ -106,6 +114,8 @@ const op = struct {
     const viewporter_get_viewport = 1;
     const viewport_set_destination = 2;
     const fractional_get_fractional_scale = 1;
+    const cursor_manager_get_pointer = 1;
+    const cursor_device_set_shape = 1;
     const wm_base_get_xdg_surface = 2;
     const wm_base_pong = 3;
     const xdg_surface_get_toplevel = 1;
@@ -151,6 +161,10 @@ pub const Wayland = struct {
     /// Held input, carried from frame to frame.
     in: Input = .{},
     seat: Seat = .{},
+    /// The cursor last set, and the pointer enter it was set for.
+    cursor: context.Cursor = .arrow,
+    cursor_serial: u32 = 0,
+    cursor_device: u32 = 0,
     /// Clock of `Input.time`: the first poll is time 0.
     t0: ?linux.timespec = null,
     /// Wakes `wait` from another thread (`wake`).
@@ -239,7 +253,21 @@ pub const Wayland = struct {
         return !w.closed;
     }
 
-    pub fn apply(_: *Wayland, _: *const Platform) void {}
+    /// Applies the frame's cursor through wp_cursor_shape_v1. A shape holds only while the
+    /// pointer stays in the window, so it is sent again after each enter.
+    pub fn apply(w: *Wayland, p: *const Platform) void {
+        const s = &w.seat;
+        if (w.cursor_device == 0 and s.pointer != 0 and w.globals.get(.wp_cursor_shape_manager_v1) != 0) {
+            w.cursor_device = w.new(.cursor_device);
+            w.request(w.globals.get(.wp_cursor_shape_manager_v1), op.cursor_manager_get_pointer, .{ w.cursor_device, s.pointer });
+        }
+        if (s.pointer_focus != 0 and (p.cursor != w.cursor or s.enter_serial != w.cursor_serial)) {
+            w.request(w.cursor_device, op.cursor_device_set_shape, .{ s.enter_serial, cursor_shapes.get(p.cursor) });
+            w.cursor = p.cursor;
+            w.cursor_serial = s.enter_serial;
+        }
+        w.flush();
+    }
 
     /// Draws the frame into a free shared-memory buffer and commits it. Before the first
     /// configure there is nothing to draw into yet, so the frame is skipped.
