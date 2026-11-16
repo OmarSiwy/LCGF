@@ -92,3 +92,9 @@ export fn p_cluster_hit(c: *const lcgr.shape_cluster.Carets, x: i32) u32 {
 export fn p_cluster_caret_x(c: *const lcgr.shape_cluster.Carets, offset: u32) i32 {
     return lcgr.shape_cluster.caretX(c, offset);
 }
+export fn p_levels_build(t: *const Tree, lv: *lcgr.levels.Levels) void {
+    lcgr.levels.build(t, lv);
+}
+export fn p_levels_resolve(t: *Tree, lv: *const lcgr.levels.Levels) void {
+    lcgr.levels.resolve(t, lv, .x, 800);
+}
