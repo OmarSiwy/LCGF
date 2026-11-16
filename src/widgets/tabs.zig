@@ -24,6 +24,8 @@ const Theme = base.Theme;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
 const none = types.none;
+const a11y = @import("../a11y/tree.zig");
+const Tree = @import("../core/tree.zig").Tree;
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -45,9 +47,12 @@ pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles
     selected.* = m.selected;
     if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
     _ = f.open(.none, setStyle(th));
-    _ = f.open(.none, listStyle(th));
+    const list = f.open(.none, listStyle(th));
+    f.tree().c.role[list.ix()] = role.list;
+    f.tree().c.value[list.ix()] = @floatFromInt(selected.*);
     for (ids, titles, 0..) |id, title, k| {
         const tab = f.open(id, tabStyle(th));
+        f.tree().c.role[tab.ix()] = role.tab;
         const r = f.interact(tab, .button);
         f.setFill(tab, tabFill(th, r, k == selected.*));
         f.setCursor(.pointer, r.hovered);
@@ -60,7 +65,9 @@ pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles
 
 /// Starts the panel of tab `k`; build its children, then `f.close()`.
 pub fn panel(f: *Frame, th: *const Theme, selected: u32, k: u32) Node {
-    return f.open(.none, panelStyle(th, selected == k));
+    const n = f.open(.none, panelStyle(th, selected == k));
+    f.tree().c.role[n.ix()] = role.panel;
+    return n;
 }
 
 /// Ends the tab set `open` started.
@@ -134,6 +141,34 @@ pub fn select(selected: u32, count: u32, clicked: u32, focused: u32, in: *const 
     return .{ .selected = sel, .focus = foc };
 }
 
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees (WAI-ARIA APG tabs pattern): the tab list is a `tab_list`
+/// whose value is the selected index, each tab a `tab` named by its title (from content),
+/// each panel a `tab_panel`. `types.Role` has none of them, so both front ends write the
+/// bytes to the role column.
+pub const role = struct {
+    pub const list: u8 = @backingInt(a11y.Role.tab_list);
+    pub const tab: u8 = @backingInt(a11y.Role.tab);
+    pub const panel: u8 = @backingInt(a11y.Role.tab_panel);
+};
+
+/// Fills the caller's semantic columns for the tab set at tree row `row` with `count` tabs,
+/// from the tree: the selected tab (the list's value) is `selected`, and each panel is
+/// labelled by its tab. Call after the frame, for either front end.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, row: u32, count: u32) void {
+    const list = row + 1;
+    const sel: u32 = @intFromFloat(t.c.value[list]);
+    var p = list + 1 + 2 * count + 1; // the first panel: after the tabs and the panel stack
+    for (0..count) |k| {
+        const tab = list + 1 + 2 * @as(u32, @intCast(k));
+        const on = -%@as(u8, @intFromBool(k == sel));
+        s.c.state[tab] |= a11y.State.bitsOf(.{ .selected = true }) & on;
+        s.c.labelled_by[p] = tab;
+        p = t.c.end[p];
+    }
+}
+
 /// The tab set as a spec node.
 pub const ct = struct {
     /// Tabs over the u32 field `selected`. `tabs_` is a tuple of `.{ id, title, children }`:
@@ -186,11 +221,14 @@ pub const ct = struct {
                 const sel: u32 = @min(@as(u32, @field(ui.signals.state, selected)), names.len - 1);
                 const set = t.push(parent, .none, &n.style);
                 const list = t.push(set, .none, &n.children[0].style);
+                t.c.role[list] = role.list;
+                t.c.value[list] = @floatFromInt(sel);
                 next.* += 2;
                 inline for (n.children[0].children, names, 0..) |hd, name, k| {
                     var ts = hd.style;
                     ts.fill = tabFill(&th, ui.response(next.*, in), sel == k);
                     const tab = t.push(list, .hash(name), &ts);
+                    t.c.role[tab] = role.tab;
                     next.* += 1;
                     ui.push(hd.children[0], tab, next, in);
                     t.seal(tab);
@@ -200,6 +238,7 @@ pub const ct = struct {
                 next.* += 1;
                 inline for (n.children[1].children, 0..) |p, k| {
                     const row = t.push(panels, .none, &panelStyle(&th, sel == k));
+                    t.c.role[row] = role.panel;
                     next.* += 1;
                     inline for (p.children) |c| ui.push(c, row, next, in);
                     t.seal(row);
@@ -391,6 +430,37 @@ test "tabs: click selects and focuses; arrows move both; in both front ends" {
     _ = try h.frame(&in);
     try testing.expectEqual(@as(u32, 1), h.app.selected);
     try testing.expectEqual(@as(u32, 1), h.ui.signals.state.selected);
+}
+
+test "tabs: tab list with the selection as value, tabs named and selected, panels labelled" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    h.app.selected = 1;
+    h.ui.signals.state.selected = 1;
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const titles = [3][]const u8{ "General", "View", "About" };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        semantics(t, &sem, 2, 3);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(a11y.Role.tab_list, @as(a11y.Role, @fromBackingInt(t.c.role[rows.list])));
+        try testing.expectEqual(@as(f32, 1), t.c.value[rows.list]);
+        for (rows.tab, rows.panel, titles, 0..) |tab, p, title, k| {
+            try testing.expectEqual(a11y.Role.tab, @as(a11y.Role, @fromBackingInt(t.c.role[tab])));
+            try testing.expectEqual(a11y.Role.tab_panel, @as(a11y.Role, @fromBackingInt(t.c.role[p])));
+            try testing.expectEqualStrings(title, check.nameOf(&sem, tx, str, tab));
+            try testing.expectEqualStrings(title, check.nameOf(&sem, tx, str, p));
+            const st: a11y.State = @bitCast(sem.c.state[tab]);
+            try testing.expectEqual(k == 1, st.selected);
+        }
+    }
 }
 
 test {
