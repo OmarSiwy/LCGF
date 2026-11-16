@@ -119,9 +119,18 @@ pub fn MenuBar(comptime th: Theme, comptime name: @EnumLiteral(), comptime field
             return checkBar(State, def, field_name);
         }
 
+        /// Every widget's response, then the keys, through `advance`.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            const bs: BarState = @field(sig.state, field_name);
+            var hits: BarHits = .{ .inside = v.responseOf(partName(id, "bar")).pressed };
+            inline for (def.names, def.menus, 0..) |mn, m, i| {
+                const mid = comptime partName(id, mn);
+                hits.addButton(i, v.responseOf(mid));
+                hits.inside = hits.inside or v.responseOf(partName(mid, "panel")).pressed;
+                if (m.sub.len != 0) hits.inside = hits.inside or v.responseOf(partName(mid, "sub")).pressed;
+                inline for (0..comptime m.count()) |k| hits.addItem(bs.open == i, k, v.responseOf(partName(mid, m.name(k))));
+            }
+            sig.set(field, advance(def, bs, hits, v.in));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -187,16 +196,117 @@ pub fn layerStyle() Style {
     return .{ .float = true };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// What the pointer did to a menu bar this frame, from its widgets' responses.
+pub const BarHits = struct {
+    /// The button clicked, or `menu.no_item`.
+    clicked: u8 = no_item,
+    /// The button under the pointer, or `menu.no_item`.
+    hovered: u8 = no_item,
+    /// The left button went down on one of the bar's widgets.
+    inside: bool = false,
+    /// The open menu's items, as `menu.Hits`.
+    menu: menu.Hits = .{},
+
+    /// Notes button `i`'s response.
+    pub fn addButton(h: *BarHits, i: u8, r: Response) void {
+        if (r.clicked) h.clicked = i;
+        if (r.hovered) h.hovered = i;
+        h.inside = h.inside or r.pressed;
+    }
+
+    /// Notes the response of item `k` of a menu, which is the open one when `open`.
+    pub fn addItem(h: *BarHits, open: bool, k: u8, r: Response) void {
+        h.inside = h.inside or r.pressed;
+        if (open) h.menu.add(k, r);
+    }
+};
+
+/// One frame of a menu bar (APG menubar). A button's click opens its menu, or closes it if it
+/// is the open one; while a menu is open, the pointer reaching another button opens that
+/// one's instead. A press outside the bar's widgets closes it. The open menu follows
+/// `menu.advance` (its pointer hits, then each key), except that Right and Left, outside a
+/// submenu, open the next and previous menu (wrapping), Right only where it does not open
+/// a submenu. Choosing an item or Escape closes the menu; `from` and `menu.chosen` say what
+/// was chosen, for one frame.
+pub fn advance(comptime def: BarDef, st: BarState, hits: BarHits, in: *const Input) BarState {
+    const n: u8 = def.names.len;
+    var s = st;
+    s.from = no_item;
+    s.menu.chosen = 0;
+    s.down = in.buttons.left;
+    const closed: BarState = .{ .hover = s.hover, .down = s.down };
+    if (in.buttons.left and !st.down and !hits.inside) s = closed;
+    if (hits.clicked != no_item) {
+        const k = hits.clicked;
+        s = if (s.open == k) closed else .{ .open = k, .menu = .{ .open = true }, .hover = s.hover, .down = s.down };
+    }
+    if (hits.hovered != s.hover) {
+        const k = hits.hovered;
+        if (s.open != no_item and k != no_item and k != s.open) {
+            s.open = k;
+            s.menu = .{ .open = true };
+        }
+        s.hover = k;
+    }
+    if (s.open == no_item) return s;
+    // The pointer's hits on the items belong to the menu that was open last frame.
+    if (s.open == st.open) s.menu = menuAdvance(def, s.open, s.menu, hits.menu, &.{});
+    const k = popover.keys;
+    for (in.events) |e| {
+        if (!s.menu.open) break;
+        if (e.kind != .press and e.kind != .repeat) continue;
+        const next = e.code == k.right and !s.menu.sub and s.menu.active != subAt(def, s.open);
+        const prev = e.code == k.left and !s.menu.sub;
+        if (next or prev) {
+            s.open = if (next) (s.open + 1) % n else (s.open + n - 1) % n;
+            s.menu = .{ .open = true };
+            continue;
+        }
+        s.menu = menuAdvance(def, s.open, s.menu, .{ .hovered = s.menu.hover }, (&e)[0..1]);
+    }
+    if (!s.menu.open) {
+        s.from = if (s.menu.chosen != 0) s.open else no_item;
+        s.open = no_item;
+    }
+    return s;
+}
+
+/// `menu.advance` for menu `i` of `def`, chosen at run time.
+fn menuAdvance(comptime def: BarDef, i: u8, ms: menu.MenuState, hits: menu.Hits, evs: []const Input.Event) menu.MenuState {
+    inline for (def.menus, 0..) |m, k| if (i == k) return menu.advance(m, ms, hits, evs);
+    unreachable;
+}
+
+/// The submenu opener of menu `i` of `def`, or `menu.no_item`.
+fn subAt(comptime def: BarDef, i: u8) u8 {
+    inline for (def.menus, 0..) |m, k| if (i == k) return m.sub_at orelse no_item;
+    unreachable;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The bar named `name`, in the page's flow, showing `texts` (one per button).
 pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8) void {
     std.debug.assert(texts.len == def.names.len);
+    // Every response is asked for before anything is built, so the rows show the frame's
+    // final state, as in the comptime front end.
     const inter = &f.ctx.inter;
-    _ = f.open(.from(partName(name, "bar")), barStyle(th));
+    const bar_id: Id = .from(partName(name, "bar"));
+    var hits: BarHits = .{ .inside = inter.response(bar_id).pressed };
+    inline for (def.names, def.menus, 0..) |n, m, i| {
+        const mid = comptime partName(name, n);
+        hits.addButton(i, inter.response(.from(mid)));
+        hits.inside = hits.inside or inter.response(.from(partName(mid, "panel"))).pressed;
+        if (m.sub.len != 0) hits.inside = hits.inside or inter.response(.from(partName(mid, "sub"))).pressed;
+        inline for (0..comptime m.count()) |k| hits.addItem(st.open == i, k, inter.response(.from(partName(mid, m.name(k)))));
+    }
+    st.* = advance(def, st.*, hits, f.in);
+    _ = f.interact(f.open(bar_id, barStyle(th)), popover.overlay_sense);
     inline for (def.names, 0..) |n, i| {
         const bid: Id = .from(partName(name, n));
-        _ = f.open(bid, buttonStyle(th, st.open == i, inter.response(bid).hovered));
+        _ = f.interact(f.open(bid, buttonStyle(th, st.open == i, inter.response(bid).hovered)), .button);
         _ = base.label(f, th, texts[i]);
         f.close();
     }
@@ -210,11 +320,11 @@ pub fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     _ = f.open(.none, layerStyle());
     inline for (def.names, def.menus, 0..) |n, m, i| if (st.open == i) {
         const mid = comptime partName(name, n);
-        _ = f.open(.from(partName(mid, "panel")), menu.listStyle(th, f.lastRect(.from(mid))));
+        _ = f.interact(f.open(.from(partName(mid, "panel")), menu.listStyle(th, f.lastRect(.from(mid)))), popover.overlay_sense);
         inline for (0..m.items.len) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
         f.close();
         if (m.sub_at) |at| if (st.menu.sub) {
-            _ = f.open(.from(partName(mid, "sub")), menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at])))));
+            _ = f.interact(f.open(.from(partName(mid, "sub")), menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at]))))), popover.overlay_sense);
             inline for (m.items.len..comptime m.count()) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
             f.close();
         };
@@ -223,7 +333,7 @@ pub fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
 }
 
 fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: menu.Def, ms: menu.MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.open(.from(partName(mid, m.name(k))), menu.itemStyle(th, menu.highlighted(m, ms, k)));
+    _ = f.interact(f.open(.from(partName(mid, m.name(k))), menu.itemStyle(th, menu.highlighted(m, ms, k))), popover.overlay_sense);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -325,6 +435,109 @@ test "MenuBar: another theme restyles both front ends alike" {
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("main_bar"))].fill);
     // The list hangs th.gap below its button.
     try testing.expectEqual(t.rect(t.find(.from("main_edit"))).y1 + 10, t.rect(t.find(.from("main_edit_panel"))).y0);
+}
+
+test "advance: buttons, hover between menus, Left and Right, choosing" {
+    const k = popover.keys;
+    const in = struct {
+        fn keys(comptime codes: []const u8) Input {
+            const evs = comptime blk: {
+                var out: [codes.len]Input.Event = undefined;
+                for (&out, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+                break :blk out;
+            };
+            return .{ .events = &evs };
+        }
+    }.keys;
+    const idle: Input = .{};
+    var s = advance(bar_def, .{}, .{ .clicked = 0, .hovered = 0 }, &idle);
+    try testing.expectEqual(@as(u8, 0), s.open);
+    try testing.expect(s.menu.open);
+    // The pointer reaching Edit while File is open opens Edit.
+    s = advance(bar_def, s, .{ .hovered = 1 }, &idle);
+    try testing.expectEqual(@as(u8, 1), s.open);
+    // Right wraps to File; Down, Down: Recent; Right there opens the submenu, not the next menu.
+    s = advance(bar_def, s, .{ .hovered = 1 }, &in(&.{ k.right, k.down, k.down, k.right }));
+    try testing.expect(s.open == 0 and s.menu.sub and s.menu.active == 2);
+    // Left closes the submenu, Left again goes to Edit.
+    s = advance(bar_def, s, .{ .hovered = 1 }, &in(&.{ k.left, k.left }));
+    try testing.expect(s.open == 1 and !s.menu.sub and s.menu.active == 0);
+    // Enter chooses Undo: closed, chosen from Edit.
+    s = advance(bar_def, s, .{ .hovered = 1 }, &in(&.{k.enter}));
+    try testing.expectEqual(no_item, s.open);
+    try testing.expectEqual(@as(u8, 1), s.from);
+    try testing.expectEqual(@as(u8, 1), s.menu.chosen);
+    // One frame only.
+    s = advance(bar_def, s, .{ .hovered = 1 }, &idle);
+    try testing.expect(s.from == no_item and s.menu.chosen == 0);
+    // Clicking the open menu's button closes it; a press outside closes it too.
+    s = advance(bar_def, s, .{ .clicked = 1, .hovered = 1 }, &idle);
+    try testing.expectEqual(@as(u8, 1), s.open);
+    s = advance(bar_def, s, .{ .clicked = 1, .hovered = 1 }, &idle);
+    try testing.expectEqual(no_item, s.open);
+    s = advance(bar_def, s, .{ .clicked = 0, .hovered = 0 }, &idle);
+    const down: Input = .{ .buttons = .{ .left = true } };
+    try testing.expectEqual(@as(u8, 0), advance(bar_def, s, .{ .hovered = 0, .inside = true }, &down).open);
+    s = advance(bar_def, s, .{}, &down);
+    try testing.expectEqual(no_item, s.open);
+    try testing.expect(s.down);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the bar's state
+/// equal in both after every step; returns the state after each step.
+fn runScript(comptime n: usize, script: [n]Step) ![n]BarState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]BarState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.bar, h.ui.signals.state.bar);
+        o.* = h.app.bar;
+    }
+    return out;
+}
+
+test "MenuBar: pointer and keys in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(10, .{
+        .{ .aim = .{ .part = "main_file" }, .left = true },
+        .{ .aim = .{ .part = "main_file" } }, // File open
+        .{ .aim = .{ .part = "main_edit" } }, // Edit open
+        .{ .aim = .{ .part = "main_edit" }, .key = k.left }, // File open
+        .{ .aim = .{ .part = "main_file_quit" } }, // Quit highlighted
+        .{ .aim = .{ .part = "main_file_quit" }, .left = true },
+        .{ .aim = .{ .part = "main_file_quit" } }, // Quit chosen
+        .{ .aim = .{ .part = "main_edit" }, .left = true },
+        .{ .aim = .{ .part = "main_edit" } }, // Edit open
+        .{ .aim = .{ .at = .{ 390, 290 } }, .left = true }, // press outside: closed
+    });
+    try testing.expectEqual(no_item, s[0].open);
+    try testing.expectEqual(@as(u8, 0), s[1].open);
+    try testing.expectEqual(@as(u8, 1), s[2].open);
+    try testing.expectEqual(@as(u8, 0), s[3].open);
+    try testing.expectEqual(@as(u8, 3), s[4].menu.active);
+    try testing.expect(s[6].open == no_item and s[6].from == 0 and s[6].menu.chosen == 4);
+    try testing.expectEqual(@as(u8, 1), s[8].open);
+    try testing.expectEqual(no_item, s[9].open);
 }
 
 test "checkBar: the state field, one menu per button, the label fields" {
