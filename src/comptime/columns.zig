@@ -87,6 +87,15 @@ fn Rows(comptime FT: type, comptime n: comptime_int) type {
     };
 }
 
+/// One row of a column: `T` for `[]T`, `[k]T` for `[k][]T`.
+fn Element(comptime FT: type) type {
+    return switch (@typeInfo(FT)) {
+        .pointer => |p| p.child,
+        .array => |a| [a.len]@typeInfo(a.child).pointer.child,
+        else => @compileError("not a column: " ++ @typeName(FT)),
+    };
+}
+
 /// Pushes `s` and its subtree under `parent` depth-first, as the front end's `open` / `leaf` /
 /// `close` would; `flatten.Flat` numbers rows the same way.
 fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
@@ -137,6 +146,52 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             break :blk out;
         };
 
+        /// `dropped[k]`: column `names[k]` is kept neither as a table nor in `Dynamic`, because
+        /// the UI does not use the feature it serves. A constant column whose rows are all equal
+        /// is one value (`uniform`): the defaults for a feature no node sets (`scroll`, `offset`,
+        /// `grow`...), and any style every node shares. `child_clip`, the clip a node hands its
+        /// children, is not kept when no node clips.
+        pub const dropped: [names.len]bool = blk: {
+            @setEvalBranchQuota(10_000 + 200 * n * names.len);
+            var out: [names.len]bool = undefined;
+            for (names, class, &out) |name, c, *d| d.* = switch (c) {
+                .constant => allEqual(name),
+                .dynamic => std.mem.eql(u8, name, "child_clip") and classOf("clips") == .constant and
+                    allEqual("clips") and pushed.c.clips[0] == 0,
+            };
+            break :blk out;
+        };
+
+        fn allEqual(comptime name: []const u8) bool {
+            const col = @field(pushed.c, name);
+            // `[k][]T` in Tree.Columns: k axis columns, each must be uniform.
+            if (@typeInfo(@FieldType(RuntimeColumns, name)) == .array) {
+                for (col) |axis| for (axis[0..n]) |r| if (!std.meta.eql(r, axis[0])) return false;
+                return true;
+            }
+            for (col[0..n]) |r| if (!std.meta.eql(r, col[0])) return false;
+            return true;
+        }
+
+        pub fn isDropped(comptime name: []const u8) bool {
+            return dropped[std.meta.fieldIndex(RuntimeColumns, name).?];
+        }
+
+        /// The one row value of a dropped constant column: every node's row (for `[k]` axis
+        /// columns, the k values of a row).
+        pub fn uniform(comptime name: []const u8) Element(@FieldType(RuntimeColumns, name)) {
+            if (comptime !isDropped(name) or classOf(name) != .constant) @compileError("column '" ++ name ++ "' is not a dropped constant");
+            const col = @field(pushed.c, name);
+            return comptime switch (@typeInfo(@FieldType(RuntimeColumns, name))) {
+                .pointer => col[0],
+                else => blk: {
+                    var r: Element(@FieldType(RuntimeColumns, name)) = undefined;
+                    for (&r, col) |*x, axis| x.* = axis[0];
+                    break :blk r;
+                },
+            };
+        }
+
         /// The tree `Tree.push` builds from the spec, built while compiling: the source of every
         /// constant table, so a table equals the runtime column row for row.
         const pushed = blk: {
@@ -158,7 +213,7 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             break :blk out;
         };
         /// `look` stores palette indices (`PalettedLook`) when the palette fits a byte.
-        pub const paletted = classOf("look") == .constant and palette.len <= 256;
+        pub const paletted = classOf("look") == .constant and !isDropped("look") and palette.len <= 256;
         /// The palette, as the read-only table `PalettedLook` rows index.
         pub const palette_table: [palette.len]u32 = palette[0..palette.len].*;
 
@@ -269,8 +324,8 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
         /// Read-only bytes: the constant tables (`table`).
         pub const rodata_bytes = blk: {
             var b = 0;
-            for (names, class) |name, c| {
-                if (c == .constant) b += @sizeOf(TableRows(name));
+            for (names, class, dropped) |name, c, d| {
+                if (c == .constant and !d) b += @sizeOf(TableRows(name));
             }
             if (paletted) b += @sizeOf(@TypeOf(palette_table));
             // A UI without strings needs no spans: every one is empty.
@@ -285,8 +340,8 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             @setEvalBranchQuota(10_000);
             var dyn_names: []const []const u8 = &.{};
             var dyn_types: []const type = &.{};
-            for (names, info.field_types, class) |name, FT, c| {
-                if (c != .dynamic) continue;
+            for (names, info.field_types, class, dropped) |name, FT, c, d| {
+                if (c != .dynamic or d) continue;
                 dyn_names = dyn_names ++ [_][]const u8{name};
                 dyn_types = dyn_types ++ [_]type{if (contains(&coordinate_columns, name)) [4][n]Coordinate else Rows(FT, n)};
             }
@@ -327,6 +382,14 @@ test "Columns: a custom widget builds its own rows, so every column is dynamic" 
 
 /// The constant table `name` of `C` equals the column of the runtime tree `t`, row for row.
 fn expectTable(comptime C: type, comptime name: []const u8, t: *const tree.Tree) !void {
+    if (comptime C.isDropped(name)) {
+        const u = C.uniform(name);
+        const col = @field(t.c, name);
+        if (comptime @typeInfo(@TypeOf(col)) == .pointer) {
+            for (col[0..C.node_count]) |r| try testing.expectEqual(u, r);
+        } else for (col, u) |axis, v| for (axis[0..C.node_count]) |r| try testing.expectEqual(v, r);
+        return;
+    }
     if (comptime std.mem.eql(u8, name, "look")) {
         for (0..C.node_count) |i| try testing.expectEqual(t.c.look[i], C.look(i));
         return;
@@ -361,20 +424,27 @@ test "Columns.table: the mixer's tables hold the probe's structure and its style
     try testing.expectEqual(@backingInt(Id.hash("volume")), C.table("id")[4]);
 }
 
-test "Columns: every column is classified, and the two classes hold the runtime rows" {
+test "Columns: every column is kept exactly once: a table, a Dynamic field or one value" {
     inline for (examples.all) |e| {
         const C = Columns(e.spec, e.options);
-        var row: usize = 0;
-        inline for (@typeInfo(RuntimeColumns).@"struct".field_types) |FT| row += rowBytes(FT);
-        // Equal up to the padding @sizeOf adds to Dynamic's end, the bytes integer coordinates
-        // save in `rect` and `vis`, and what the palette saves in `look`, plus the strings.
-        const palette_saved = if (C.paletted) C.node_count * 4 - 4 * C.palette.len else 0;
-        const strings = if (C.strings.len > 0) C.strings.len + 2 * C.node_count * @sizeOf(C.Span) else 0;
-        const saved = 2 * 4 * C.node_count * (4 - @sizeOf(C.Coordinate)) + palette_saved;
-        try testing.expect(C.rodata_bytes + C.ram_bytes + saved >= C.node_count * row + strings);
-        try testing.expect(C.rodata_bytes + C.ram_bytes + saved < C.node_count * row + strings + 16);
         try testing.expectEqual(@typeInfo(RuntimeColumns).@"struct".field_names.len, C.class.len);
+        inline for (C.names, C.class, C.dropped) |name, c, d| {
+            try testing.expectEqual(c == .dynamic and !d, @hasField(C.Dynamic, name));
+        }
     }
+}
+
+test "Columns.dropped: a column every node shares is one value, and equals the runtime rows" {
+    const C = Columns(examples.mixer, .{});
+    inline for (.{ "scroll", "offset", "grow", "pct", "flow", "shrink", "clips", "role", "look" }) |name|
+        try testing.expect(comptime C.isDropped(name));
+    inline for (.{ "parent", "end", "nkids", "gap", "pad_lo", "main", "id", "rect", "size" }) |name|
+        try testing.expect(comptime !C.isDropped(name));
+    try testing.expectEqual([2]f32{ 0, 0 }, C.uniform("scroll"));
+    try testing.expectEqual(@as(f32, 1), C.uniform("flow"));
+    // No node clips: no child clip in RAM. The badge clips, and keeps it.
+    try testing.expect(!@hasField(C.Dynamic, "child_clip"));
+    try testing.expect(@hasField(Columns(examples.badge, .{}).Dynamic, "child_clip"));
 }
 
 test "PalettedLook: 28 bytes, 4 fewer than Look" {
@@ -472,10 +542,8 @@ test "Columns.Dynamic: one exact array per dynamic column, nothing for constant 
     const D = C.Dynamic;
     try testing.expectEqual([2][8]f32, @FieldType(D, "size"));
     try testing.expectEqual([4][8]f32, @FieldType(D, "rect"));
-    try testing.expectEqual([8][4]f32, @FieldType(D, "child_clip"));
     try testing.expectEqual([8]f32, @FieldType(D, "value"));
     try testing.expect(!@hasField(D, "parent") and !@hasField(D, "look"));
-    inline for (C.names, C.class) |name, c| try testing.expectEqual(c == .dynamic, @hasField(D, name));
     // A frame writes it like the runtime columns, one row per node.
     var d: D = undefined;
     for (&d.rect, 0..) |*side, k| side.* = @splat(@floatFromInt(k));
