@@ -29,5 +29,24 @@ pub fn androidMain() void {
     var ctx = context.Context.init(&ctx_buffer, limits) catch return;
     var app: lcgr.shell_example.App = .{};
     shell.background = app.theme.panel;
-    lcgr.shell_iface.run(&shell, &ctx, &app);
+    // iface.run's loop, with the root padded by the safe area (a change of it alone, which is
+    // not Input, asks for a frame); the panel colour behind it fills the bars' strips.
+    var ev: lcgr.shell_iface.Events = .{};
+    var safe = shell.safeArea();
+    while (shell.poll(&ev)) {
+        if (!std.meta.eql(shell.safeArea(), safe)) {
+            safe = shell.safeArea();
+            ctx.waker.post();
+        }
+        if (ctx.needsFrame(&ev.in)) {
+            var f = ctx.begin(&ev.in);
+            _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = safe });
+            app.build(&f, &ev);
+            f.close();
+            const out = f.end(.{});
+            shell.apply(&out.platform);
+            shell.present(&out);
+        }
+        shell.wait(lcgr.scheduler.wake(&ctx, &ev.in), lcgr.scheduler.pace(&ctx));
+    }
 }

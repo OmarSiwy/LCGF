@@ -58,6 +58,9 @@ pub const Motion = struct {
     scroll: [2]f32 = .{ 0, 0 },
 };
 
+/// The density at which one logical pixel is one physical pixel (ACONFIGURATION_DENSITY_MEDIUM).
+pub const density_default = 160;
+
 /// `AKEY_EVENT_ACTION_*`.
 pub const KeyAction = enum(u8) { down = 0, up = 1, multiple = 2, _ };
 
@@ -99,6 +102,9 @@ pub const Translator = struct {
     m: mobile.Translator = .{},
     /// The window's size in physical pixels (`ANativeWindow_getWidth` / `_getHeight`).
     window: [2]f32 = .{ 800, 600 },
+    /// The part of the window the system bars and cutouts leave the app
+    /// (`onContentRectChanged`), physical pixels: left, top, right, bottom. Null: the whole window.
+    content: ?[4]f32 = null,
 
     pub const Buffers = mobile.Translator.Buffers;
 
@@ -110,7 +116,36 @@ pub const Translator = struct {
     /// `onNativeWindowResized`): `w` x `h` physical pixels.
     pub fn resize(t: *Translator, w: f32, h: f32) void {
         t.window = .{ w, h };
-        t.m.resize(w / t.m.in.scale, h / t.m.in.scale);
+        t.update();
+    }
+
+    /// The screen's density (`AConfiguration_getDensity`, dots per inch): 160 is one physical
+    /// pixel per logical one (Android's dp), 420 is 2.625. 0 (ACONFIGURATION_DENSITY_DEFAULT)
+    /// and 0xffff (none) count as 160.
+    pub fn setDensity(t: *Translator, dpi: u32) void {
+        const d: f32 = @floatFromInt(if (dpi == 0 or dpi == 0xffff) density_default else dpi);
+        t.m.setScale(d / density_default);
+        t.update();
+    }
+
+    /// The content rect (`onContentRectChanged`), window pixels.
+    pub fn setContent(t: *Translator, left: f32, top: f32, right: f32, bottom: f32) void {
+        t.content = .{ left, top, right, bottom };
+        t.update();
+    }
+
+    /// Viewport and safe area from the window, the density and the content rect.
+    fn update(t: *Translator) void {
+        const s = t.m.in.scale;
+        const w = t.window;
+        t.m.resize(w[0] / s, w[1] / s);
+        const r = t.content orelse [4]f32{ 0, 0, w[0], w[1] };
+        t.m.setInsets(@max(r[1], 0) / s, @max(r[0], 0) / s, @max(w[1] - r[3], 0) / s, @max(w[0] - r[2], 0) / s);
+    }
+
+    /// The safe area as root padding (`Style.pad`'s order), logical pixels.
+    pub fn safe(t: *const Translator) [4]f32 {
+        return t.m.safe;
     }
 
     /// A motion event. Fingers, styluses and erasers are touches in the mobile model (the
@@ -206,6 +241,8 @@ pub const Translator = struct {
 ///     # comment              blank lines and comments anywhere
 ///     frame                  starts a frame; the events below it arrive before its poll
 ///     window 1080 2400       the native window's size, physical pixels
+///     density 420            the configuration's density, dpi
+///     content 0 63 1080 2337 the content rect: left, top, right, bottom, window pixels
 ///     motion down 0 1,finger,37,25
 ///                            a motion event: its action (`pointer_down/1`: about pointer 1),
 ///                            the button state, then each pointer as id,tool,x,y[,pressure]
@@ -220,7 +257,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { window, motion, wheel, key, destroy };
+    const Line = enum { window, density, content, motion, wheel, key, destroy };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -238,6 +275,8 @@ pub const Replay = struct {
             switch (std.meta.stringToEnum(Line, w.next().?) orelse return error.Syntax) {
                 .window => t.resize(try num(&w), try num(&w)),
                 .destroy => t.destroy(),
+                .density => t.setDensity(try int(w.next() orelse return error.Syntax)),
+                .content => t.setContent(try num(&w), try num(&w), try num(&w), try num(&w)),
                 .motion => {
                     var a = std.mem.splitScalar(u8, w.next() orelse return error.Syntax, '/');
                     const action = std.meta.stringToEnum(Action, a.first()) orelse return error.Syntax;
@@ -446,4 +485,40 @@ test "translate: keys, a mouse with its wheel, a stylus and its eraser" {
     // The stylus is the first contact down, so it drives the pointer; the mouse left.
     try testing.expectEqual([2]f32{ 10, 10 }, ev.in.pointer);
     try testing.expect(ev.in.buttons.left);
+}
+
+test "translate: density scales the window, the content rect insets it" {
+    // A 1080 x 2400 phone at 420 dpi (2.625): 411.4 x 914.3 dp. The status bar (63 px) and the
+    // gesture bar (63 px) leave the content rect; rotated, a camera cutout is on the left.
+    var r: Replay = .{ .src =
+        \\frame
+        \\density 420
+        \\window 1080 2400
+        \\content 0 63 1080 2337
+        \\motion down 0 1,finger,525,1050
+        \\frame
+        \\motion up 0 1,finger,525,1050
+        \\window 2400 1080
+        \\content 105 0 2400 1017
+    };
+    var t: Translator = .{};
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(f32, 2.625), ev.in.scale);
+    try testing.expectEqual([2]f32{ 1080.0 / 2.625, 2400.0 / 2.625 }, ev.in.viewport);
+    try testing.expectEqual([4]f32{ 0, 24, 0, 24 }, t.safe());
+    try testing.expectEqual([2]f32{ 200, 400 }, ev.in.pointer);
+    try testing.expectEqual(Input.Contact{ .id = 1, .pos = .{ 200, 400 } }, ev.in.contacts[0]);
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]f32{ 2400.0 / 2.625, 1080.0 / 2.625 }, ev.in.viewport);
+    try testing.expectEqual([4]f32{ 40, 0, 0, 24 }, t.safe());
+    // Without a content rect the whole window is the app's; an unknown density is 160.
+    var u: Translator = .{};
+    u.setDensity(0);
+    u.resize(800, 600);
+    try testing.expectEqual(@as(f32, 1), u.m.in.scale);
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, u.safe());
 }

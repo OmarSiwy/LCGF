@@ -117,6 +117,10 @@ extern "android" fn AKeyEvent_getAction(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getKeyCode(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getMetaState(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getRepeatCount(e: *const AInputEvent) i32;
+extern "android" fn AConfiguration_new() ?*anyopaque;
+extern "android" fn AConfiguration_delete(config: *anyopaque) void;
+extern "android" fn AConfiguration_fromAssetManager(config: *anyopaque, assets: *anyopaque) void;
+extern "android" fn AConfiguration_getDensity(config: *anyopaque) i32;
 extern "log" fn __android_log_write(prio: c_int, tag: [*:0]const u8, text: [*:0]const u8) c_int;
 
 const looper_poll_timeout = -3;
@@ -154,6 +158,8 @@ const Shared = struct {
     acked: u32 = 0,
     resized: bool = false,
     destroyed: bool = false,
+    /// The content rect (`onContentRectChanged`), window pixels; null before the first.
+    content: ?ARect = null,
     /// The shell's thread's looper, for `ALooper_wake`; null until its thread runs.
     looper: ?*ALooper = null,
     /// The host loop is running (a shell exists to apply changes).
@@ -200,6 +206,11 @@ fn setResized(s: *Shared) void {
 fn setDestroyed(s: *Shared) void {
     s.destroyed = true;
 }
+var pending_content: ARect = undefined;
+fn setContent(s: *Shared) void {
+    s.content = pending_content;
+}
+fn setConfiguration(_: *Shared) void {}
 
 fn onNativeWindowCreated(_: Act, w: *ANativeWindow) callconv(.c) void {
     pending_window = w;
@@ -223,6 +234,15 @@ fn onInputQueueDestroyed(_: Act, _: *AInputQueue) callconv(.c) void {
 fn onDestroy(_: Act) callconv(.c) void {
     post(setDestroyed, true);
 }
+fn onContentRectChanged(_: Act, r: *const ARect) callconv(.c) void {
+    pending_content = r.*;
+    post(setContent, false);
+}
+/// The density may have changed (moved to another display, display size changed in Settings):
+/// every posted change re-reads it.
+fn onConfigurationChanged(_: Act) callconv(.c) void {
+    post(setConfiguration, false);
+}
 
 /// The library's entry point: Android calls it on the main thread when the activity is
 /// created (again after each destruction, while the process lives).
@@ -234,6 +254,8 @@ pub export fn ANativeActivity_onCreate(activity: Act, _: ?*anyopaque, _: usize) 
     cb.onInputQueueCreated = &onInputQueueCreated;
     cb.onInputQueueDestroyed = &onInputQueueDestroyed;
     cb.onDestroy = &onDestroy;
+    cb.onContentRectChanged = &onContentRectChanged;
+    cb.onConfigurationChanged = &onConfigurationChanged;
     lock();
     shared.activity = activity;
     shared.destroyed = false;
@@ -409,10 +431,27 @@ pub const Android = struct {
             if (shared.window) |w| s.makeTarget(w);
         }
         if (shared.destroyed) s.t.destroy();
+        if (shared.activity) |a| s.t.setDensity(density(a));
+        if (shared.content) |r| s.t.setContent(@floatFromInt(r.left), @floatFromInt(r.top), @floatFromInt(r.right), @floatFromInt(r.bottom));
         shared.resized = false;
         s.seen = shared.posted;
         shared.acked = s.seen;
         broadcast();
+    }
+
+    /// The screen's density from the activity's configuration, dpi (0 when unknown).
+    fn density(a: Act) u32 {
+        const assets = a.asset_manager orelse return 0;
+        const config = AConfiguration_new() orelse return 0;
+        defer AConfiguration_delete(config);
+        AConfiguration_fromAssetManager(config, assets);
+        return @intCast(@max(AConfiguration_getDensity(config), 0));
+    }
+
+    /// The safe area as root padding (`Style.pad`): what the status bar, the navigation bar
+    /// and display cutouts cover, as far as the content rect says.
+    pub fn safeArea(s: *const Android) [4]f32 {
+        return s.t.safe();
     }
 
     fn makeTarget(s: *Android, window: *ANativeWindow) void {

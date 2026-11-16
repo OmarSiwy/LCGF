@@ -764,15 +764,16 @@ pub fn build(b: *std.Build) void {
     // The Android shell (src/shell/android/android.zig) and its example, over lcgr and the
     // Vulkan back end: a shared library a NativeActivity loads. There is no NDK here, so the
     // Android libraries are linked through stubs: empty shared libraries named libandroid.so,
-    // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` so it is kept), and empty
-    // crtbegin_so.o / crtend_so.o, in a sysroot under the install prefix that a libc file
-    // points Zig at. They only give the library its DT_NEEDED entries; at run time the device's
-    // own libraries answer. Every NDK declaration is written by hand (android.zig).
+    // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` and `pthread_create`,
+    // which the shell always calls, so the linker keeps it), and empty crtbegin_so.o and
+    // crtend_so.o, in a sysroot a build tool lays out with the libc file that points Zig at
+    // it. They only give the library its DT_NEEDED entries; at run time the device's own
+    // libraries answer. Every NDK declaration is written by hand (android.zig).
     const android_step = b.step("android-build", "Build zig-out/lib/libandroid-example.so, the example in the Android shell (-Dtarget=aarch64-linux-android)");
     if (target.result.abi.isAndroid()) {
         const stubs = b.addWriteFiles();
         const empty_src = stubs.add("empty.zig", "");
-        const libc_src = stubs.add("libc.zig", "export fn abort() void {}\n");
+        const libc_src = stubs.add("libc.zig", "export fn abort() void {}\nexport fn pthread_create() void {}\n");
         const crt = b.addObject(.{ .name = "crt", .root_module = b.createModule(.{ .root_source_file = empty_src, .target = target, .optimize = .ReleaseSmall }) });
         const sysroot_tool = b.addRunArtifact(b.addExecutable(.{ .name = "android-sysroot", .root_module = b.createModule(.{
             .root_source_file = b.path("src/shell/android/sysroot.zig"),
