@@ -18,6 +18,8 @@ const Style = types.Style;
 const Axis = types.Axis;
 const Id = types.Id;
 const Theme = base.Theme;
+const simd = @import("../core/simd.zig");
+const keys = @import("keys.zig");
 
 /// How thick the handle is across the split, logical pixels.
 pub const handle_px: f32 = 6;
@@ -27,6 +29,9 @@ pub const handle_px: f32 = 6;
 /// Starts a splitter along `axis` (`.x`: panes side by side) whose first pane takes `split.*`
 /// of it, and opens the first pane. `id` names the container; the handle is `id.with(1)`.
 pub fn open(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32) void {
+    // Input first, against last frame's container rect, so this frame shows the new split.
+    const r = f.ctx.inter.response(id.with(1));
+    split.* = resize(split.*, r.held, along(f.lastRect(id), axis, f.in.pointer), r.focused, f.in);
     _ = f.open(id, containerStyle(th, axis));
     _ = f.open(.none, firstStyle(th, axis, split.*));
 }
@@ -59,8 +64,16 @@ pub fn containerStyle(th: *const Theme, axis: Axis) Style {
 /// The first pane: `split` of the container along `axis`, the full container across.
 pub fn firstStyle(th: *const Theme, axis: Axis, split: f32) Style {
     _ = th;
-    const sizes = [2][2]types.Size{ .{ .pct(base.unit(split)), .fill }, .{ .fill, .pct(base.unit(split)) } };
+    const share = shareFloor(base.unit(split));
+    const sizes = [2][2]types.Size{ .{ .pct(share), .fill }, .{ .fill, .pct(share) } };
     return .{ .dir = .y, .size = sizes[@backingInt(axis)], .clip = true };
+}
+
+/// Layout reads `Size.pct(0)` as "no percentage" and gives the pane its content's size
+/// (layout.resolve: `has_pct = pct > 0`), so a share of 0 is sent as 1e-6, which snaps to
+/// 0 px.
+fn shareFloor(share: f32) f32 {
+    return @max(share, 1e-6);
 }
 
 /// The handle: `handle_px` along `axis`, the full container across, with rounded ends.
@@ -84,7 +97,7 @@ pub const cursors = [2]@import("../runtime/context.zig").Cursor{ .resize_h, .res
 /// it exactly whatever their contents (a grower would start from its content's size).
 pub fn secondStyle(th: *const Theme, axis: Axis, split: f32) Style {
     _ = th;
-    const rest = 1 - base.unit(split);
+    const rest = shareFloor(1 - base.unit(split));
     const sizes = [2][2]types.Size{ .{ .pct(rest), .fill }, .{ .fill, .pct(rest) } };
     return .{ .dir = axis, .size = sizes[@backingInt(axis)] };
 }
@@ -93,6 +106,38 @@ pub fn secondStyle(th: *const Theme, axis: Axis, split: f32) Style {
 pub fn bodyStyle(th: *const Theme) Style {
     _ = th;
     return .{ .dir = .y, .size = .{ .fill, .fill }, .clip = true };
+}
+
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// How far one arrow key moves the split.
+pub const step: f32 = 0.05;
+
+/// Where `pointer` is along `axis` of the container rect `box`, 0 at its start to 1 at its
+/// end (not clamped).
+pub fn along(box: types.Rect, axis: Axis, pointer: [2]f32) f32 {
+    const lo = [2]f32{ box.x0, box.y0 };
+    const len = [2]f32{ box.w(), box.h() };
+    const a = @backingInt(axis);
+    return (pointer[a] - lo[a]) / @max(len[a], 1);
+}
+
+/// The next split (WAI-ARIA APG window splitter pattern). While the handle is held it
+/// follows the pointer (`at`, as `along` gives it). While it has focus, Left or Up moves it
+/// back by `step`, Right or Down forward, Home to 0 and End to 1, repeats included. The
+/// result is clamped to 0..1.
+pub fn resize(split: f32, held: bool, at: f32, focused: bool, in: *const Input) f32 {
+    var v = base.slide(split, held, at, 0, 1);
+    const k = keys.map;
+    for (in.events) |e| {
+        const down = focused and (e.kind == .press or e.kind == .repeat);
+        const dir = @as(f32, @floatFromInt(@intFromBool(e.code == k.right or e.code == k.down))) -
+            @as(f32, @floatFromInt(@intFromBool(e.code == k.left or e.code == k.up)));
+        v = simd.selF(down, v + dir * step, v);
+        v = simd.selF(down and e.code == k.home, 0, v);
+        v = simd.selF(down and e.code == k.end, 1, v);
+    }
+    return base.unit(v);
 }
 
 /// The splitter as a spec node.
@@ -113,6 +158,18 @@ pub const ct = struct {
     /// How the comptime front end builds and drives one splitter.
     fn Splitter(comptime id: [:0]const u8, comptime axis: Axis, comptime split: []const u8) type {
         return struct {
+            /// Drag from `ui.pointer` and last frame's container rect; keys from `ui.focus`.
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                _ = event;
+                const me = @field(@TypeOf(ui.*).Events.Widget, id);
+                const held = ui.pointer.pressed == me;
+                // The container's rect in last frame's tree (row + 1, under the root). Read only
+                // while held, which needs a laid-out frame to have been pressed.
+                const at = if (held) along(ui.tables.t.rect(row + 1), axis, in.pointer) else 0;
+                const field = comptime @TypeOf(ui.*).field(split);
+                ui.signals.set(field, resize(@field(ui.signals.state, split), held, at, ui.focus == me, in));
+            }
+
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
                 const th = @TypeOf(ui.*).theme;
                 const t = &ui.tables.t;
@@ -228,6 +285,62 @@ test "splitter: handle filled by state, resize cursor; any theme alike" {
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(200, 200, 205).bitsOf(), lo.runtime.tree.c.look[rows.handle].fill);
     try testing.expectEqual(handle_px / 2, handleStyle(&th, .x).radius);
+}
+
+test "resize: drag follows the pointer, arrows step, Home and End jump, all clamped" {
+    const k = keys.map;
+    const none_in: Input = .{};
+    try testing.expectEqual(@as(f32, 0.7), resize(0.3, true, 0.7, false, &none_in));
+    try testing.expectEqual(@as(f32, 1), resize(0.3, true, 1.4, false, &none_in));
+    try testing.expectEqual(@as(f32, 0.3), resize(0.3, false, 0.9, true, &none_in));
+    const ev = [3]Input.Event{ .{ .kind = .press, .code = k.right }, .{ .kind = .repeat, .code = k.down }, .{ .kind = .press, .code = k.left } };
+    const in: Input = .{ .events = &ev };
+    try testing.expectApproxEqAbs(@as(f32, 0.35), resize(0.3, false, 0, true, &in), 1e-6);
+    try testing.expectEqual(@as(f32, 0.3), resize(0.3, false, 0, false, &in));
+    const he = [2]Input.Event{ .{ .kind = .press, .code = k.end }, .{ .kind = .press, .code = k.right } };
+    try testing.expectEqual(@as(f32, 1), resize(0.3, false, 0, true, &.{ .events = &he }));
+    const ho = [1]Input.Event{.{ .kind = .press, .code = k.home }};
+    try testing.expectEqual(@as(f32, 0), resize(0.3, false, 0, true, &.{ .events = &ho }));
+    try testing.expectEqual(@as(f32, 0.5), along(.{ .x0 = 10, .y0 = 0, .x1 = 110, .y1 = 20 }, .x, .{ 60, 5 }));
+    try testing.expectEqual(@as(f32, 0.25), along(.{ .x0 = 0, .y0 = 0, .x1 = 10, .y1 = 40 }, .y, .{ 60, 10 }));
+}
+
+test "splitter: dragging and arrow keys move the split in both front ends" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const box = out.runtime.tree.rect(rows.box);
+    const hd = out.runtime.tree.rect(rows.handle);
+    in.pointer = .{ (hd.x0 + hd.x1) * 0.5, (hd.y0 + hd.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    // Drag to 60% of the container, then past its end: clamped to 1.
+    in.pointer[0] = box.x0 + 0.6 * box.w();
+    out = try h.frame(&in);
+    try testing.expectApproxEqAbs(@as(f32, 0.6), h.app.split, 1e-5);
+    try testing.expectEqual(h.app.split, h.ui.signals.state.split);
+    try testing.expectApproxEqAbs(0.6 * box.w(), out.runtime.tree.rect(rows.first).w(), 0.5);
+    in.pointer[0] = box.x1 + 40;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(f32, 1), h.app.split);
+    try testing.expectEqual(@as(f32, 1), h.ui.signals.state.split);
+    // Back to 50%, release: the handle keeps focus; Left steps back, Home jumps to 0.
+    in.pointer[0] = box.x0 + 0.5 * box.w();
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    const left = [1]Input.Event{.{ .kind = .press, .code = keys.map.left }};
+    in.events = &left;
+    _ = try h.frame(&in);
+    try testing.expectApproxEqAbs(@as(f32, 0.45), h.app.split, 1e-5);
+    try testing.expectEqual(h.app.split, h.ui.signals.state.split);
+    const home = [1]Input.Event{.{ .kind = .press, .code = keys.map.home }};
+    in.events = &home;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(f32, 0), h.app.split);
+    try testing.expectEqual(@as(f32, 0), h.ui.signals.state.split);
+    try testing.expectEqual(@as(f32, 0), out.runtime.tree.rect(rows.first).w());
 }
 
 test {
