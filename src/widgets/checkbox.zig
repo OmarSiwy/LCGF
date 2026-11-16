@@ -19,6 +19,7 @@ const Response = types.Response;
 const Style = types.Style;
 const Color = types.Color;
 const Input = @import("../core/input.zig").Input;
+const simd = @import("../core/simd.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -60,6 +61,15 @@ pub fn flip(v: anytype, clicked: bool) @TypeOf(v) {
     return if (@TypeOf(v) == bool) c == .on else c;
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// Whether the checkbox toggles this frame: clicked, or focused and Space came up (WAI-ARIA
+/// APG checkbox pattern: Space toggles, Enter does not; on release, as native checkboxes do).
+/// What it toggles to is `flip`'s: a mixed box goes to on.
+pub fn toggled(clicked: bool, focused: bool, in: *const Input) bool {
+    return simd.orB(clicked, simd.andB(focused, base.keyCount(in, base.keys.space, .release) != 0));
+}
+
 // ---- look -----------------------------------------------------------------------------------
 
 /// The row: box, then caption, centred across, `gap` apart; role checkbox.
@@ -86,10 +96,12 @@ pub fn checkboxDash(th: *const Theme, value: Check) Style {
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A checkbox named `id` over `value` (a `*bool` or a `*Check`), captioned by `str`.
+/// A checkbox named `id` over `value` (a `*bool` or a `*Check`), captioned by `str`. A click,
+/// or Space while it has focus, toggles it (`toggled`, `flip`) and sets `clicked`.
 pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []const u8) Response {
     const row = f.open(id, checkboxStyle(th));
-    const r = f.interact(row, .button);
+    var r = f.interact(row, .button);
+    r.clicked = toggled(r.clicked, r.focused, f.in);
     value.* = flip(value.*, r.clicked);
     const c = Check.of(value.*);
     _ = f.open(.none, checkboxBox(th, c));
@@ -214,6 +226,54 @@ test "checkbox look: the theme's control, accent and text tokens reach both fron
     try testing.expectEqual(Color.rgb(4, 5, 6).bitsOf(), t.c.look[7].fill);
     try testing.expectEqual(Color.rgb(7, 8, 9).bitsOf(), t.c.look[8].fill);
     try testing.expectEqual(t.rect(3).x1 + 12, t.rect(5).x0);
+}
+
+test "toggled: a click, or Space up while focused; not Enter, not Space down" {
+    const up = [_]Input.Event{.{ .kind = .release, .code = base.keys.space }};
+    const down = [_]Input.Event{.{ .kind = .press, .code = base.keys.space }};
+    const enter = [_]Input.Event{.{ .kind = .press, .code = base.keys.enter }};
+    const none: Input = .{};
+    try testing.expect(toggled(true, false, &none));
+    try testing.expect(toggled(false, true, &.{ .events = &up }));
+    try testing.expect(!toggled(false, false, &.{ .events = &up }));
+    try testing.expect(!toggled(false, true, &.{ .events = &down }));
+    try testing.expect(!toggled(false, true, &.{ .events = &enter }));
+}
+
+test "checkbox input: click and Space toggle; mixed goes to on, then off and on; in both front ends" {
+    const h = &two;
+    h.init();
+    var in: Input = .{ .viewport = .{ 200, 100 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box_on = t.rect(t.find(.from("on")));
+    const box_tri = t.rect(t.find(.from("tri")));
+    const space_up = [_]Input.Event{.{ .kind = .release, .code = base.keys.space }};
+    const space_down = [_]Input.Event{.{ .kind = .press, .code = base.keys.space }};
+    const Step = struct { at: types.Rect, left: bool = false, events: []const Input.Event = &.{}, on: bool, tri: Check };
+    const steps = [_]Step{
+        .{ .at = box_tri, .on = false, .tri = .mixed },
+        .{ .at = box_tri, .left = true, .on = false, .tri = .mixed },
+        .{ .at = box_tri, .on = false, .tri = .on }, // click: mixed -> on
+        .{ .at = box_tri, .events = &space_down, .on = false, .tri = .on },
+        .{ .at = box_tri, .events = &space_up, .on = false, .tri = .off }, // Space: on -> off
+        .{ .at = box_tri, .events = &space_up, .on = false, .tri = .on },
+        .{ .at = box_on, .left = true, .on = false, .tri = .on }, // focus moves to "on"
+        .{ .at = box_on, .on = true, .tri = .on },
+        .{ .at = box_on, .events = &space_up, .on = false, .tri = .on },
+    };
+    for (steps) |st| {
+        in.pointer = .{ (st.at.x0 + st.at.x1) * 0.5, (st.at.y0 + st.at.y1) * 0.5 };
+        in.buttons.left = st.left;
+        in.events = st.events;
+        out = try h.frame(&in);
+        try testing.expectEqual(st.on, h.app.on);
+        try testing.expectEqual(st.tri, h.app.tri);
+        try testing.expectEqual(st.on, h.ui.signals.state.on);
+        try testing.expectEqual(st.tri, h.ui.signals.state.tri);
+        try testing.expectEqual(Check.of(st.on).value(), out.runtime.tree.c.value[2]);
+        try testing.expectEqual(st.tri.value(), out.runtime.tree.c.value[6]);
+    }
 }
 
 test {

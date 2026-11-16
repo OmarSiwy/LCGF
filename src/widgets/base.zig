@@ -385,6 +385,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             switch (w) {
                 inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
                     .button => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    .checkbox => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     else => {},
                 },
             }
