@@ -104,3 +104,4 @@ pub const i18n_plural = @import("i18n/plural.zig");
 pub const i18n_number = @import("i18n/number.zig");
 pub const i18n_date = @import("i18n/date.zig");
 pub const i18n_bundle = @import("i18n/bundle.zig");
+pub const i18n_pseudo = @import("i18n/pseudo.zig");
