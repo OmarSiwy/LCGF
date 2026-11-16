@@ -57,7 +57,7 @@ pub fn checkToast(comptime State: type, comptime field: []const u8) ?[]const u8 
 pub fn Toast(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime trigger: @EnumLiteral()) type {
     const id = @tagName(name);
     const field_name = @tagName(field);
-    _ = trigger;
+    const trigger_name = @tagName(trigger);
     return struct {
         /// The layer and the toast showing the string field `text`. Put it last in the page's
         /// root so it is drawn above the rest. The layer has no id (it takes no pointer
@@ -72,9 +72,10 @@ pub fn Toast(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: 
             return checkToast(State, field_name);
         }
 
+        /// The trigger's click and the toast's hover, through `advance`.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            const ts: ToastState = @field(sig.state, field_name);
+            sig.set(field, advance(ts, v.responseOf(trigger_name).clicked, v.responseOf(id).hovered, v.in.dt));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -116,16 +117,28 @@ pub fn toastStyle(th: *const Theme, t: ToastState) Style {
     };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// One frame of a toast: `trigger` shows it for `duration` seconds (again from the start if it
+/// is shown); time runs by `dt` except while the pointer rests on it (`hovered`), so a reader
+/// keeps it; it goes when its time is up. It never takes focus (APG alert).
+pub fn advance(t: ToastState, trigger: bool, hovered: bool, dt: f32) ToastState {
+    if (trigger) return .{ .shown = true, .left = duration };
+    const left = @max(t.left - simd.selF(simd.andB(t.shown, !hovered), dt, 0), 0);
+    return .{ .shown = simd.andB(t.shown, left > 0), .left = left };
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Builds the layer of toast `name` and, while it is shown, the toast showing `text`. Call it
-/// at the root's depth, after the rest of the page, so it is drawn on top. `trigger` (the
-/// click that should show the toast) is used from the behaviour commit on.
+/// at the root's depth, after the rest of the page, so it is drawn on top. `trigger` is the
+/// click that shows it (`advance`).
 pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, t: *ToastState, trigger: bool, text: []const u8) void {
-    _ = trigger;
+    const id: Id = .from(name);
+    t.* = advance(t.*, trigger, f.ctx.inter.response(id).hovered, f.in.dt);
     _ = f.open(.none, layerStyle(th, f.in.viewport));
     if (t.shown) {
-        _ = f.open(.from(name), toastStyle(th, t.*));
+        _ = f.interact(f.open(id, toastStyle(th, t.*)), .{ .hover = true });
         _ = base.label(f, th, text);
         f.close();
     }
@@ -223,6 +236,69 @@ test "Toast: another theme restyles both front ends alike" {
     const k = t.find(.from("saved"));
     try testing.expectEqual(light.control.bitsOf(), t.c.look[k].fill);
     try testing.expectEqual(@as(f32, 300 - 24), t.rect(k).y1);
+}
+
+test "advance: shows on the trigger, counts down, pauses on hover, goes" {
+    var t = advance(.{}, false, false, 1);
+    try testing.expectEqual(ToastState{}, t);
+    t = advance(t, true, false, 1);
+    try testing.expectEqual(ToastState{ .shown = true, .left = duration }, t);
+    t = advance(t, false, false, 1);
+    try testing.expectEqual(@as(f32, 2), t.left);
+    t = advance(t, false, true, 1);
+    try testing.expectEqual(@as(f32, 2), t.left); // paused
+    t = advance(t, true, false, 1);
+    try testing.expectEqual(duration, t.left); // shown again: from the start
+    t = advance(advance(advance(t, false, false, 1), false, false, 1), false, false, 1);
+    try testing.expectEqual(ToastState{}, t); // time up
+}
+
+/// Steps through both front ends, clicking Save or resting on the toast, `dt` per frame; the
+/// toast's state after each step, equal in both.
+fn runScript(comptime n: usize, script: [n]struct { save: bool = false, on_toast: bool = false }, dt: f32) ![n]ToastState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 }, .dt = dt };
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]ToastState = undefined;
+    var k: usize = 0;
+    while (k < n) : (k += 1) {
+        const st = script[k];
+        const target: []const u8 = if (st.on_toast) "saved" else "save";
+        const r = last.rect(last.find(.hash(target)));
+        in.pointer = if (st.save or st.on_toast) .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 } else .{ 390, 10 };
+        // A click is a press frame and a release frame; the release is the step.
+        if (st.save) {
+            in.buttons.left = true;
+            _ = try h.frame(&in);
+            in.buttons.left = false;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.toast, h.ui.signals.state.toast);
+        out[k] = h.app.toast;
+    }
+    return out;
+}
+
+test "Toast: Save shows it; it pauses under the pointer and goes after its time" {
+    const s = try runScript(9, .{
+        .{ .save = true }, // shown (the press frame ran 0.5 s before, while it was hidden)
+        .{},
+        .{ .on_toast = true }, // paused
+        .{ .on_toast = true },
+        .{},
+        .{},
+        .{},
+        .{},
+        .{},
+    }, 0.5);
+    try testing.expect(s[0].shown);
+    try testing.expectEqual(@as(f32, 3), s[0].left);
+    try testing.expectEqual(@as(f32, 2.5), s[1].left);
+    try testing.expectEqual(@as(f32, 2.5), s[3].left);
+    try testing.expectEqual(@as(f32, 1), s[6].left);
+    try testing.expectEqual(@as(f32, 0.5), s[7].left);
+    try testing.expectEqual(ToastState{}, s[8]);
 }
 
 test "checkToast: the state field" {
