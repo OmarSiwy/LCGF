@@ -2,4 +2,5 @@
 
 test {
     _ = @import("comptime.zig");
+    _ = @import("runtime.zig");
 }
