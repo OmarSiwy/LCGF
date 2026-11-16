@@ -372,3 +372,89 @@ test "Effect: due on first use, then once per frame in which an input changed" {
     other.set(&s, 9);
     try testing.expect(!save.due(&s, &deps, 6));
 }
+
+// ---- through the runtime front end ---------------------------------------------
+
+test "signals in the host loop: a change wakes the host for one frame, effects run in it" {
+    const Context = @import("context.zig").Context;
+    const Input = @import("../core/input.zig").Input;
+    const limits: @import("context.zig").Limits = .{ .nodes = 16, .texts = 2, .customs = 1, .strings = 64, .signals = 4, .depth = 4 };
+    const S = struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, limits);
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var count: Cell(u32) = .init(&ctx.signals, 0);
+    var title: Cell(u32) = .init(&ctx.signals, 0);
+    var save: Effect = .{};
+    var saves: u32 = 0;
+
+    const App = struct {
+        fn frame(c: *Context, i: *const Input, n: *Cell(u32), e: *Effect, runs: *u32) void {
+            var f = c.begin(i);
+            _ = f.leaf(.none, .{ .size = .{ .px(@floatFromInt(n.get())), .px(10) } });
+            if (e.due(&c.signals, &.{n.signal}, c.frame)) runs.* += 1;
+            _ = f.end(.{});
+        }
+    };
+
+    // Start-up: the first frame and its settle frame, then idle.
+    App.frame(&ctx, &in, &count, &save, &saves);
+    App.frame(&ctx, &in, &count, &save, &saves);
+    try testing.expect(!ctx.needsFrame(&in));
+    try testing.expectEqual(@as(u32, 1), saves);
+
+    // Setting the same value is not a change: the host stays asleep.
+    count.set(&ctx.signals, 0);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    // A change, even made between frames, wakes the host; one frame consumes it.
+    count.set(&ctx.signals, 5);
+    try testing.expect(ctx.needsFrame(&in));
+    App.frame(&ctx, &in, &count, &save, &saves);
+    try testing.expect(!ctx.needsFrame(&in));
+    try testing.expectEqual(@as(u32, 2), saves);
+
+    // A transaction: nothing is requested until it commits, then one frame and one save.
+    ctx.signals.begin();
+    count.set(&ctx.signals, 6);
+    count.set(&ctx.signals, 7);
+    title.set(&ctx.signals, 1);
+    try testing.expect(!ctx.needsFrame(&in));
+    ctx.signals.commit();
+    try testing.expect(ctx.needsFrame(&in));
+    App.frame(&ctx, &in, &count, &save, &saves);
+    try testing.expect(!ctx.needsFrame(&in));
+    try testing.expectEqual(@as(u32, 3), saves);
+
+    // A signal the effect does not read wakes the host but does not run it.
+    title.set(&ctx.signals, 2);
+    App.frame(&ctx, &in, &count, &save, &saves);
+    try testing.expectEqual(@as(u32, 3), saves);
+}
+
+test "signals past Limits.signals share a row: extra wake-ups, never a missed one" {
+    const Context = @import("context.zig").Context;
+    const Input = @import("../core/input.zig").Input;
+    const limits: @import("context.zig").Limits = .{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .signals = 2, .depth = 4 };
+    const S = struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, limits);
+    const in: Input = .{};
+    var a: Cell(u8) = .init(&ctx.signals, 0);
+    const b: Cell(u8) = .init(&ctx.signals, 0);
+    var c: Cell(u8) = .init(&ctx.signals, 0);
+    try testing.expectEqual(b.signal, c.signal);
+    const view: Derived(u8) = .init(&ctx.signals, &.{b.signal}, 0);
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        _ = f.end(.{});
+    }
+    try testing.expect(!ctx.needsFrame(&in));
+    a.set(&ctx.signals, 1);
+    try testing.expect(!view.stale(&ctx.signals, &.{b.signal}));
+    c.set(&ctx.signals, 1);
+    try testing.expect(ctx.needsFrame(&in));
+    try testing.expect(view.stale(&ctx.signals, &.{b.signal}));
+}
