@@ -395,7 +395,8 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         var ctx: Context = undefined;
     };
     const ctx = &S.ctx;
-    ctx.* = try Context.init(buf, ctx_limits);
+    // A static buffer in bss (or fresh huge pages), used once: zero already.
+    ctx.* = try Context.initZeroed(buf, ctx_limits);
     const th: lcgr.widgets_base.Theme = .{};
     var in: lcgr.input.Input = .{};
     const font: lcgr.protocol.Mono = .{};
@@ -577,7 +578,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (counters) try openCounters();
     const src_buf: []align(lcgr.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
-    var carver: lcgr.mem.Carver = .{ .buf = src_buf };
+    var carver: lcgr.mem.Carver = .{ .buf = src_buf, .zeroed = true };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
