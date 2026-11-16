@@ -1,15 +1,17 @@
 # shell: golden
 # all: no
-# The Vulkan back end (src/render/vk/) on Mesa lavapipe: its tests run on a real Vulkan 1.3
-# implementation through the platform loader (VK_ICD_FILENAMES picks lavapipe in this shell),
-# and vk-play draws the render conformance scenes, offscreen and through a headless swapchain
-# (acquire, submit, present), each compared with its golden image.
-# `custom` is drawn by the host's own pipeline in the UI's command buffer (custom.zig).
+# The Vulkan back end (src/render/vk/) on Mesa lavapipe. Its tests run on a real Vulkan 1.3
+# implementation through the platform loader (VK_ICD_FILENAMES picks lavapipe in this shell);
+# one of them draws every render conformance scene offscreen and through a headless swapchain,
+# without and with 4x multisampling, against its golden. vk-play writes the same frames as PNGs
+# and tools/golden/golden.py compares them, the check every back end's job applies.
 zig build vk vk-play --summary all
 for mode in offscreen present; do
-    out=zig-out/vk/$mode; rm -rf "$out"
-    zig-out/bin/vk-play "$out" "$mode"
-    for s in rects clip text custom; do
-        python3 tools/golden/golden.py "$out/$s.png" "src/render/conformance/$s.png"
+    for samples in 1 4; do
+        out=zig-out/vk/$mode-x$samples; rm -rf "$out"
+        zig-out/bin/vk-play "$out" "$mode" "$samples"
+        for ref in src/render/conformance/*.png; do
+            python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref"
+        done
     done
 done
