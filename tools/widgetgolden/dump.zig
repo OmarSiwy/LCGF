@@ -26,6 +26,7 @@ const pages = .{
     },
     lcgr.widgets_popover.golden,
     lcgr.widgets_tooltip.golden,
+    lcgr.widgets_menu.golden,
 };
 
 var glyph_quads: [1024]Quad = undefined;
