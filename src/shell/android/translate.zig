@@ -61,6 +61,9 @@ pub const Motion = struct {
 /// The density at which one logical pixel is one physical pixel (ACONFIGURATION_DENSITY_MEDIUM).
 pub const density_default = 160;
 
+/// `KeyCharacterMap.COMBINING_ACCENT`: the character is a dead key's accent.
+pub const combining_accent = 0x8000_0000;
+
 /// `AKEY_EVENT_ACTION_*`.
 pub const KeyAction = enum(u8) { down = 0, up = 1, multiple = 2, _ };
 
@@ -204,24 +207,44 @@ pub const Translator = struct {
         }
     }
 
-    /// A key event: Android keycode `code`, `AKeyEvent_getMetaState`'s `meta`, and the repeat
-    /// count. True when the key is one the UI reads; the shell hands the others (Back, volume)
-    /// back to the system.
-    pub fn key(t: *Translator, action: KeyAction, code: u32, meta: u32, repeat: u32) bool {
+    /// A key event: Android keycode `code`, `AKeyEvent_getMetaState`'s `meta`, the repeat
+    /// count, and the character the key types with that meta state (`KeyCharacterMap.get`,
+    /// 0 for none; a dead key's has `combining_accent` set and types nothing). A press that
+    /// types a character also gives it as text, after the key event: soft keyboards on a
+    /// NativeActivity commit text as such key events. True when the UI read the key; the shell
+    /// hands the others (Back, volume) back to the system.
+    pub fn key(t: *Translator, action: KeyAction, code: u32, meta: u32, repeat: u32, char: u32) bool {
         const usage = if (code < hid.len) hid[code] else 0;
-        if (usage == 0) return false;
+        const typed = action == .down and char >= 0x20 and char != 0x7f and char <= 0x10ffff;
+        if (usage == 0 and !typed) return false;
         const mods: Input.Mods = .{
             .shift = meta & meta_shift != 0,
             .alt = meta & meta_alt != 0,
             .ctrl = meta & meta_ctrl != 0,
             .cmd = meta & meta_meta != 0,
         };
-        switch (action) {
+        if (usage != 0) switch (action) {
             .down => t.m.keyEvent(usage, if (repeat > 0) .repeat else .press, mods),
             .up => t.m.keyEvent(usage, .release, mods),
             else => return false,
+        };
+        if (typed) {
+            var utf8: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(@intCast(char), &utf8) catch return true;
+            t.m.insert(utf8[0..n]);
         }
         return true;
+    }
+
+    /// Text a key event carries whole (ACTION_MULTIPLE with AKEYCODE_UNKNOWN, `getCharacters`):
+    /// what a soft keyboard commits that no key types (emoji, most scripts). `scratch` holds
+    /// its UTF-8.
+    pub fn characters(t: *Translator, units: []const u16, scratch: []u8) void {
+        const utf8 = utf16ToUtf8(units, scratch) orelse {
+            t.m.dropped += 1;
+            return;
+        };
+        t.m.insert(utf8);
     }
 
     /// Clipboard text (`ClipData.Item.coerceToText`, a Java String's UTF-16) typed into the
@@ -278,7 +301,9 @@ pub fn utf8ToUtf16(utf8: []const u8, out: []u16) ?[]u16 {
 ///                            a motion event: its action (`pointer_down/1`: about pointer 1),
 ///                            the button state, then each pointer as id,tool,x,y[,pressure]
 ///     wheel 0 -1             a mouse wheel: AXIS_HSCROLL, AXIS_VSCROLL
-///     key down 29 0 0        a key event: action, keycode, meta state, repeat count
+///     key down 29 1 0 65     a key event: action, keycode, meta state, repeat count, and
+///                            optionally the character it types
+///     characters 日本        ACTION_MULTIPLE's characters (the rest of the line)
 ///     paste two words        the clipboard's text, the rest of the line (`\n` for a line end)
 ///     destroy                onDestroy
 pub const Replay = struct {
@@ -289,7 +314,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { window, density, content, motion, wheel, key, paste, destroy };
+    const Line = enum { window, density, content, motion, wheel, key, characters, paste, destroy };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -342,7 +367,16 @@ pub const Replay = struct {
                 },
                 .key => {
                     const action = std.meta.stringToEnum(KeyAction, w.next() orelse return error.Syntax) orelse return error.Syntax;
-                    _ = t.key(action, try int(w.next() orelse return error.Syntax), try int(w.next() orelse return error.Syntax), try int(w.next() orelse return error.Syntax));
+                    const code = try int(w.next() orelse return error.Syntax);
+                    const meta = try int(w.next() orelse return error.Syntax);
+                    const repeat = try int(w.next() orelse return error.Syntax);
+                    _ = t.key(action, code, meta, repeat, if (w.next()) |ch| try int(ch) else 0);
+                },
+                .characters => {
+                    var units: [256]u16 = undefined;
+                    var scratch: [256]u8 = undefined;
+                    t.characters(utf8ToUtf16(w.rest(), &units) orelse return error.Syntax, &scratch);
+                    continue;
                 },
             }
             if (w.next() != null) return error.Syntax;
@@ -509,7 +543,7 @@ test "translate: keys, a mouse with its wheel, a stylus and its eraser" {
         .{ .kind = .repeat, .code = 0x04, .mods = shift },
     }, ev.in.events);
     try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe1));
-    try testing.expect(!t.key(.down, 4, 0, 0));
+    try testing.expect(!t.key(.down, 4, 0, 0, 0));
 
     try testing.expect(try r.next(&t));
     _ = t.frame(&ev);
@@ -593,4 +627,55 @@ test "translate: clipboard text crosses UTF-16 both ways and is pasted as typed 
     _ = t.frame(&ev);
     try testing.expectEqualStrings("", ev.in.text);
     try testing.expectEqual(@as(u32, 1), t.m.dropped);
+}
+
+test "translate: the soft keyboard's keys type their characters, whole text arrives as characters" {
+    // A soft keyboard on a NativeActivity: "Hi" as key events with their characters (Shift
+    // held for H), Delete and Enter as keys, a dead key typing nothing, then text no key types.
+    var r: Replay = .{ .src =
+        \\frame
+        \\key down 59 1 0
+        \\key down 36 1 0 72
+        \\key up 36 1 0
+        \\key up 59 0 0
+        \\key down 37 0 0 105
+        \\key up 37 0 0
+        \\key down 67 0 0
+        \\key up 67 0 0
+        \\key down 66 0 0 10
+        \\key up 66 0 0
+        \\key down 75 2 0 0x80000060
+        \\# @ has no HID usage on its own: text only.
+        \\key down 77 0 0 64
+        \\characters 日本😀
+    };
+    var text: [64]u8 = undefined;
+    var events: [32]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("Hi@日本😀", ev.in.text);
+    const shift: Input.Mods = .{ .shift = true };
+    const alt: Input.Mods = .{ .alt = true };
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .press, .code = 0xe1, .mods = shift },
+        .{ .kind = .press, .code = 0x0b, .mods = shift },
+        .{ .kind = .text, .at = 0, .len = 1, .mods = shift },
+        .{ .kind = .release, .code = 0x0b, .mods = shift },
+        .{ .kind = .release, .code = 0xe1 },
+        .{ .kind = .press, .code = 0x0c },
+        .{ .kind = .text, .at = 1, .len = 1 },
+        .{ .kind = .release, .code = 0x0c },
+        .{ .kind = .press, .code = 0x2a },
+        .{ .kind = .release, .code = 0x2a },
+        .{ .kind = .press, .code = 0x28 },
+        .{ .kind = .release, .code = 0x28 },
+        .{ .kind = .press, .code = 0x34, .mods = alt },
+        .{ .kind = .text, .at = 2, .len = 1, .mods = alt },
+        .{ .kind = .text, .at = 3, .len = 10, .mods = alt },
+    }, ev.in.events);
+    // Nothing to compose: a NativeActivity's input connection keeps the IME's composition to
+    // itself, so the frame's composition is empty.
+    try testing.expectEqualStrings("", ev.composition.text);
 }

@@ -118,6 +118,9 @@ extern "android" fn AKeyEvent_getAction(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getKeyCode(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getMetaState(e: *const AInputEvent) i32;
 extern "android" fn AKeyEvent_getRepeatCount(e: *const AInputEvent) i32;
+extern "android" fn AInputEvent_getDeviceId(e: *const AInputEvent) i32;
+extern "android" fn ANativeActivity_showSoftInput(a: Act, flags: u32) void;
+extern "android" fn ANativeActivity_hideSoftInput(a: Act, flags: u32) void;
 extern "android" fn AConfiguration_new() ?*anyopaque;
 extern "android" fn AConfiguration_delete(config: *anyopaque) void;
 extern "android" fn AConfiguration_fromAssetManager(config: *anyopaque, assets: *anyopaque) void;
@@ -371,6 +374,8 @@ const Target = struct {
 var clip_units: [32768]u16 = undefined;
 var clip_utf8: [3 * 32768]u8 = undefined;
 
+var key_event_to_java: ?*const fn (*const *const [229]?*const anyopaque, *const AInputEvent) callconv(.c) ?jni.Object = null;
+
 /// Most pointers read from one motion event.
 const translate_max = 16;
 
@@ -398,6 +403,8 @@ pub const Android = struct {
     /// the clipboard, the soft keyboard. Null if the VM refused the thread.
     env: ?jni.Env = null,
     vm: ?*anyopaque = null,
+    /// The soft keyboard was asked up.
+    keyboard: bool = false,
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame (`first` and `count`
     /// one row per text run); `text` and `events` hold typed text, half arriving, half shown.
@@ -419,6 +426,10 @@ pub const Android = struct {
         if (a) |activity| {
             s.vm = activity.vm;
             s.env = jni.attach(activity.vm);
+        }
+        // AKeyEvent_toJava is Android 12's (API 31): looked up, so older systems still load.
+        if (std.c.dlopen("libandroid.so", .{ .NOW = true })) |lib| {
+            if (std.c.dlsym(lib, "AKeyEvent_toJava")) |f| key_event_to_java = @ptrCast(@alignCast(f));
         }
     }
 
@@ -570,19 +581,57 @@ pub const Android = struct {
                 });
                 return true;
             },
-            input_event_type_key => return s.t.key(
-                @fromBackingInt(@intCast(@as(u8, @truncate(@as(u32, @bitCast(AKeyEvent_getAction(e))))))),
-                @bitCast(AKeyEvent_getKeyCode(e)),
-                @bitCast(AKeyEvent_getMetaState(e)),
-                @bitCast(AKeyEvent_getRepeatCount(e)),
-            ),
+            input_event_type_key => {
+                const action: translate.KeyAction = @fromBackingInt(@intCast(@as(u8, @truncate(@as(u32, @bitCast(AKeyEvent_getAction(e)))))));
+                const code: u32 = @bitCast(AKeyEvent_getKeyCode(e));
+                const meta: u32 = @bitCast(AKeyEvent_getMetaState(e));
+                if (action == .multiple and code == 0) return s.characters(e);
+                const char = if (action == .down) s.character(e, code, meta) else 0;
+                return s.t.key(action, code, meta, @bitCast(AKeyEvent_getRepeatCount(e)), char);
+            },
             else => return false,
         }
     }
 
-    /// Applies a frame's effects: text the frame copies goes to the system clipboard.
+    /// The character a key types: `KeyCharacterMap.load(deviceId).get(keyCode, metaState)`,
+    /// 0 for none (no JNI, or the key types nothing).
+    fn character(s: *Android, e: *const AInputEvent, code: u32, meta: u32) u32 {
+        const env = s.env orelse return 0;
+        env.pushFrame(4);
+        defer env.popFrame();
+        const kcm = env.findClass("android/view/KeyCharacterMap") orelse return 0;
+        const load = env.staticMethod(kcm, "load", "(I)Landroid/view/KeyCharacterMap;") orelse return 0;
+        const map = env.callStaticObject(kcm, load, &.{.{ .i = AInputEvent_getDeviceId(e) }}) orelse return 0;
+        const get = env.method(kcm, "get", "(II)I") orelse return 0;
+        return @bitCast(env.callInt(map, get, &.{ .{ .i = @bitCast(code) }, .{ .i = @bitCast(meta) } }) orelse 0);
+    }
+
+    /// ACTION_MULTIPLE with no keycode: text a soft keyboard committed whole. Its characters
+    /// are only in the Java KeyEvent (`AKeyEvent_toJava`, Android 12+; older systems drop it).
+    fn characters(s: *Android, e: *const AInputEvent) bool {
+        const env = s.env orelse return false;
+        const to_java = key_event_to_java orelse return false;
+        env.pushFrame(4);
+        defer env.popFrame();
+        const event = to_java(env.env, e) orelse return false;
+        const get = env.method(env.objectClass(event), "getCharacters", "()Ljava/lang/String;") orelse return false;
+        const str = env.callObject(event, get, &.{}) orelse return false;
+        s.t.characters(env.units(str, &clip_units) orelse return false, &clip_utf8);
+        return true;
+    }
+
+    /// Applies a frame's effects: text the frame copies goes to the system clipboard; while a
+    /// widget wants text the soft keyboard is up (`ANativeActivity_showSoftInput`, which may
+    /// be called from any thread). `ime_rect` is not used: placing the IME needs a Java view.
     pub fn apply(s: *Android, p: *const Platform) void {
         if (p.clipboard.len > 0) s.copy(p.clipboard);
+        if (p.wants_text == s.keyboard) return;
+        s.keyboard = p.wants_text;
+        lock();
+        const a = shared.activity;
+        unlock();
+        const activity = a orelse return;
+        if (p.wants_text) ANativeActivity_showSoftInput(activity, 0) else ANativeActivity_hideSoftInput(activity, 0);
     }
 
     /// The ClipboardManager: `activity.getSystemService("clipboard")`, a local reference.
