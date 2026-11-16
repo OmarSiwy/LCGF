@@ -59,6 +59,20 @@ pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap
 pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
 
+/// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, a fixed footer.
+/// Not in `all`: a UI with a dynamic region is laid out with `runLive` and a selection.
+pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3 };
+pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
+    s.label(.title),
+    s.list(.len, 8, .{ .gap = 2 }, s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) })),
+    s.row(.{ .gap = 8 }, .{ s.label(.title), s.col(.{ .size = .{ .px(30), .px(10) } }, .{}) }),
+});
+
+/// The examples with dynamic regions.
+pub const dynamic = [_]Example{
+    .{ .name = "todo", .State = Todo, .spec = todo },
+};
+
 pub const all = [_]Example{
     .{ .name = "mixer", .State = Mixer, .spec = mixer },
     .{ .name = "card", .State = Card, .spec = static_card },
@@ -66,6 +80,10 @@ pub const all = [_]Example{
     .{ .name = "badge", .State = Badge, .spec = badge, .options = .{ .viewport = .{ 96, 64 } } },
     .{ .name = "custom", .State = Custom, .spec = custom },
 };
+
+test "examples: every dynamic example passes validation" {
+    inline for (dynamic) |e| comptime @import("validate.zig").check(e.State, e.spec, e.options);
+}
 
 test "examples: every example passes validation" {
     inline for (all) |e| comptime @import("validate.zig").check(e.State, e.spec, e.options);

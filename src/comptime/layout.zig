@@ -31,6 +31,7 @@ const simd = @import("../core/simd.zig");
 const tree = @import("../core/tree.zig");
 const layout = @import("../layout/layout.zig");
 const columns = @import("columns.zig");
+const dynamic = @import("dynamic.zig");
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
@@ -43,6 +44,13 @@ const RuntimeColumns = tree.Tree.Columns;
 /// them instead.
 fn isPrecomputed(comptime name: []const u8) bool {
     return std.mem.eql(u8, name, "gap_total");
+}
+
+/// Columns a UI with dynamic regions rewrites each frame from their tables and the live mask
+/// (`applyMask`).
+fn masked(comptime name: []const u8) bool {
+    for ([_][]const u8{ "max", "flow", "nkids" }) |m| if (std.mem.eql(u8, m, name)) return true;
+    return false;
 }
 
 /// A read-only array of `rows` copies of `v`. Generic instantiation memoizes it, so every dropped
@@ -86,16 +94,22 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
     const R = simd.rows(n);
     const info = @typeInfo(RuntimeColumns).@"struct";
     for (C.class) |c| if (c != .dynamic) break else @compileError("every column is dynamic (a custom widget builds its rows at run time): lay it out with the runtime tree");
+    const D = dynamic.Regions(spec);
+    const live = D.count > 0;
     // Columns a frame writes: the dynamic ones but those precomputed below, and `sense`
-    // (finalize clears its padding rows).
+    // (finalize clears its padding rows). With dynamic regions, also the columns the live mask
+    // is ANDed into (`masked`), and `gap_total` again, which then follows the live child count.
     const writes = blk: {
         var w: [info.field_names.len]bool = undefined;
         for (info.field_names, C.class, &w) |name, c, *x|
-            x.* = (c == .dynamic and !isPrecomputed(name)) or std.mem.eql(u8, name, "sense");
+            x.* = (c == .dynamic and !(isPrecomputed(name) and !live)) or std.mem.eql(u8, name, "sense") or
+                (live and masked(name));
         break :blk w;
     };
     return struct {
         pub const Cols = C;
+        /// The UI's dynamic regions (dynamic.zig); `Regions.count` is 0 for a static UI.
+        pub const Regions = D;
 
         /// The caller's per-frame memory for `run`: one padded f32 array per written column.
         pub const Scratch = blk: {
@@ -196,23 +210,47 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         /// (labels measure zero until text measurement reaches the comptime front end), then the
         /// kept outputs into `ram`.
         pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
-            passes(scratch, viewport);
+            if (live) @compileError("this UI has dynamic regions: lay it out with runLive");
+            runLive(scratch, ram, viewport, .{});
+        }
+
+        /// `run` for a UI with dynamic regions: `sel` (`Regions.select`) decides which of their
+        /// rows are live. Dead rows come out 0 px and not visible.
+        pub fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void {
+            passes(scratch, viewport, sel);
             var v = view(scratch);
             layout.finalize(&v);
             keep(scratch, ram);
         }
 
         /// Every pass but `finalize`, which leaves sizes and positions in `scratch`.
-        pub fn passes(scratch: *Scratch, viewport: [2]f32) void {
+        pub fn passes(scratch: *Scratch, viewport: [2]f32, sel: D.Selection) void {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
-            clear(scratch);
+            if (live) {
+                applyMask(scratch, &D.mask(sel));
+                layout.prepare(&v);
+            } else clear(scratch);
             layout.fit(&v, .x);
             layout.resolve(&v, .x, viewport[0]);
             layout.fit(&v, .y);
             layout.resolve(&v, .y, viewport[1]);
             layout.place(&v);
+        }
+
+        /// Writes the masked columns from their tables: a dead row (mask 0) gets `max` 0 on both
+        /// axes, `flow` 0 and `sense` 0, and `nkids` counts in-flow live children only. Bit ANDs
+        /// with the mask, no select; `nkids` is a scatter-add over the parent column.
+        fn applyMask(scratch: *Scratch, m: *const D.Mask) void {
+            const t = &C.pushed.c;
+            for (0..R) |i| {
+                inline for (0..2) |a| scratch.max[a][i] = @bitCast(@as(u32, @bitCast(t.max[a][i])) & m[i]);
+                scratch.flow[i] = @bitCast(@as(u32, @bitCast(t.flow[i])) & m[i]);
+                scratch.sense[i] &= @truncate(m[i]);
+            }
+            scratch.nkids = @splat(0);
+            for (1..n) |j| scratch.nkids[t.parent[j]] += scratch.flow[j];
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
@@ -248,7 +286,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 /// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
 /// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
 /// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
-fn FoldPlan(comptime C: type) type {
+fn FoldPlan(comptime C: type, comptime D: type) type {
     const n = C.node_count;
     const c = C.pushed.c;
     return struct {
@@ -259,7 +297,8 @@ fn FoldPlan(comptime C: type) type {
             for (1..n) |i| {
                 const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] < 0 and c.pct[1][i] < 0 and
                     (c.shrink[i] == 0 or c.flow[i] == 0);
-                out[i] = out[c.parent[i]] or own;
+                // A row in or above a dynamic region changes with the selection: never folded.
+                out[i] = (out[c.parent[i]] or own) and !D.volatile_rows[i];
             }
             break :blk out;
         };
@@ -313,16 +352,20 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
     const P = Plain(spec, options);
     const C = P.Cols;
     const n = C.node_count;
-    const plan = FoldPlan(C);
+    const D = P.Regions;
+    const plan = FoldPlan(C, D);
     if (plan.folded_rows == 0) return struct {
         pub const Cols = C;
+        pub const Regions = D;
         pub const Scratch = P.Scratch;
         pub const folded_rows = 0;
         pub const run = P.run;
+        pub const runLive = P.runLive;
     };
     const R = simd.rows(n);
     return struct {
         pub const Cols = C;
+        pub const Regions = D;
         /// Rows laid out while compiling.
         pub const folded_rows = plan.folded_rows;
 
@@ -332,7 +375,8 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         const reference: Reference = blk: {
             @setEvalBranchQuota(2_000_000 + 100_000 * n);
             var scratch: P.Scratch = undefined;
-            P.passes(&scratch, .{ 1000, 1000 });
+            // Every region row is volatile and none is folded, so any selection serves.
+            P.passes(&scratch, .{ 1000, 1000 }, @splat(.{}));
             break :blk .{ .size = scratch.size, .pos = scratch.pos };
         };
 
@@ -381,7 +425,14 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         pub const Scratch = struct { skel: S.Scratch, full: P.Scratch };
 
         pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
-            S.passes(&scratch.skel, viewport);
+            if (D.count > 0) @compileError("this UI has dynamic regions: lay it out with runLive");
+            runLive(scratch, ram, viewport, .{});
+        }
+
+        /// `run` for a UI with dynamic regions (`Plain.runLive`). The skeleton keeps every
+        /// region row, in the same order, so one selection serves both.
+        pub fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void {
+            S.passes(&scratch.skel, viewport, sel);
             const sk = &scratch.skel;
             const full = &scratch.full;
             for (0..n) |j| {
@@ -392,6 +443,10 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
                 }
             }
             full.sense = C.pushed.c.sense;
+            if (D.count > 0) {
+                const m = D.mask(sel);
+                for (&full.sense, m) |*x, k| x.* &= @truncate(k);
+            }
             var v = P.view(full);
             layout.finalize(&v);
             P.keep(full, ram);

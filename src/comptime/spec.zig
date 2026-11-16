@@ -34,6 +34,21 @@ pub const Spec = struct {
     /// Accessible name: what a screen reader says for this node. Interactive widgets need one
     /// (validate.zig); set it with `named`.
     name: ?[]const u8 = null,
+    /// Set on a node whose rows are reserved but live only when run-time state says so
+    /// (`list`); null for a node that always exists. dynamic.zig reads it.
+    region: ?Region = null,
+};
+
+/// What makes a node's rows dynamic, and the state field that decides which are live.
+pub const Region = struct {
+    kind: RegionKind,
+    /// The state field: a list's count (an integer).
+    bind: []const u8,
+};
+
+pub const RegionKind = enum(u8) {
+    /// A container with `max` copies of a template; the first `count` are live.
+    list,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -79,6 +94,17 @@ pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
     var out = s;
     out.name = name;
     return out;
+}
+
+/// A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which
+/// the first `count` are live, `count` being the run-time value of the integer state field
+/// bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`. Every copy's rows are reserved, so the
+/// tables stay read-only and the row count exact; a dead copy takes no space, is not drawn and
+/// is not hit (dynamic.zig). A count past `max` shows `max`. Every copy shows the same fields:
+/// what differs per item is run-time data the caller keeps by copy index.
+pub fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec {
+    const copies: [max]Spec = @splat(template);
+    return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(copies), .region = .{ .kind = .list, .bind = @tagName(count) } };
 }
 
 // ---- tests -------------------------------------------------------------------------------------
