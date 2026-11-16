@@ -77,6 +77,7 @@ pub const image_jobs = @import("assets/image_jobs.zig");
 pub const image_atlas = @import("assets/image_atlas.zig");
 pub const image_mipmaps = @import("assets/image_mipmaps.zig");
 pub const image_tests = @import("assets/image_tests.zig");
+pub const render_wgpu = @import("render/wgpu/wgpu.zig");
 
 test {
     std.testing.refAllDecls(@This());
