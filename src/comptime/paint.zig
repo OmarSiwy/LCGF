@@ -66,6 +66,14 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         break :blk rows;
     };
     const m = painted.len;
+    const nb = blk: {
+        var b = 0;
+        for (painted, 0..) |i, k| {
+            const key = keyOf(p.c.look[i]);
+            if (k == 0 or key != keyOf(p.c.look[painted[k - 1]])) b += 1;
+        }
+        break :blk b;
+    };
 
     return struct {
         pub const Cols = C;
@@ -106,12 +114,34 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// Row k: template k's batch key, texture << 16 | material, as `DrawList.op.key`.
         pub const keys: [m]u32 = blk: {
             var out: [m]u32 = undefined;
-            for (&out, node) |*o, i| o.* = (@as(u32, p.c.look[i].texture) << 16) | p.c.look[i].material;
+            for (&out, node) |*o, i| o.* = keyOf(p.c.look[i]);
+            break :blk out;
+        };
+
+        /// The commands when every template is visible, as `paint.encode` would build them:
+        /// consecutive templates with equal keys form one batch. Read-only data.
+        pub const Batches = struct { first: [nb]u32, count: [nb]u32, key: [nb]u32 };
+        pub const batch_count = nb;
+        pub const batches: Batches = blk: {
+            @setEvalBranchQuota(10_000 + 200 * n);
+            var out: Batches = undefined;
+            var b = 0;
+            for (keys, 0..) |key, k| {
+                if (k == 0 or key != keys[k - 1]) {
+                    out.first[b] = k;
+                    out.count[b] = 0;
+                    out.key[b] = key;
+                    b += 1;
+                }
+                out.count[b - 1] += 1;
+            }
             break :blk out;
         };
 
         /// One frame's draw list from the layout outputs in `ram`: every template whose node is
-        /// visible, with its rect and its parent's clip; then the commands. `d` comes from
+        /// visible, with its rect and its parent's clip; then the commands: `batches` when every
+        /// template is visible, else `paint.encode` over the ops (a hidden quad shifts the
+        /// batches after it and may join its neighbours). `d` comes from
         /// `DrawList.init(carver, quad_count, 0, 0)` or larger.
         pub fn emit(ram: *const C.Dynamic, d: *DrawList) void {
             var q: u32 = 0;
@@ -131,7 +161,14 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             d.run_len = 0;
             d.custom_len = 0;
             d.strings = "";
-            encode(d);
+            // Once per frame, not per row.
+            if (q == m) {
+                @memset(d.cmd.kind[0..nb], @backingInt(DrawList.Kind.quads));
+                @memcpy(d.cmd.first[0..nb], &batches.first);
+                @memcpy(d.cmd.count[0..nb], &batches.count);
+                @memcpy(d.cmd.key[0..nb], &batches.key);
+                d.cmd_len = nb;
+            } else encode(d);
         }
 
         /// The clip `paint.emit` gives node `i`'s children, as x0, y0, x1, y1. With no clipping
@@ -141,6 +178,10 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             return @as(V4, ram.child_clip[i]) * sign;
         }
     };
+}
+
+fn keyOf(look: tree.Look) u32 {
+    return (@as(u32, look.texture) << 16) | look.material;
 }
 
 inline fn f32Of(x: anytype) f32 {
@@ -162,7 +203,7 @@ const types = @import("../core/types.zig");
 const Id = types.Id;
 
 /// A clipping, rounded, bordered panel of tiles on two textures and two materials, one faded,
-/// one unfilled, one floated out of the clip: every template field and both visibility cases.
+/// one unfilled, one floated: every template field and both visibility cases.
 pub const tiles = blk: {
     const tex: types.Texture = @fromBackingInt(3);
     const mat: types.Material = @fromBackingInt(2);
@@ -180,7 +221,7 @@ pub const tiles = blk: {
             tile(.{ .fill = .transparent, .border = 2, .border_color = red }),
             tile(.{ .fill = red, .opacity = 0 }),
         }),
-        tile(.{ .fill = red, .float = true, .offset = .{ 5000, 0 } }),
+        tile(.{ .fill = red, .float = true, .offset = .{ 40, 2 } }),
     });
 };
 
@@ -260,7 +301,7 @@ test "Paint.emit: equals paint.emit over the runtime tree, every example and vie
     };
 }
 
-test "Paint.emit: a node outside its clip paints nothing, as in the runtime tree" {
+test "Paint.emit: a node outside its parent's clip paints nothing" {
     const P = Paint(tiles, .{});
     const L = ct_layout.Layout(tiles, .{});
     var buf: [1 << 14]u8 align(64) = undefined;
@@ -270,6 +311,32 @@ test "Paint.emit: a node outside its clip paints nothing, as in the runtime tree
     var ram: P.Cols.Dynamic = undefined;
     L.run(&scratch, &ram, .{ 800, 600 });
     P.emit(&ram, &d);
-    // The floated tile is template 7; it is clipped out, so one quad fewer.
-    try testing.expectEqual(P.quad_count - 1, d.quad_len);
+    try testing.expectEqual(P.quad_count, d.quad_len);
+    // In a 30 x 20 panel (clip 1..29 x 1..19) only the first two tiles of the first row show,
+    // the second in part.
+    L.run(&scratch, &ram, .{ 30, 20 });
+    P.emit(&ram, &d);
+    try testing.expectEqual(3, d.quad_len);
+}
+
+test "Paint.batches: the commands of a frame with every quad visible, computed while compiling" {
+    const P = Paint(tiles, .{});
+    // Keys in paint order: white, white, texture 3, white, material 2, texture 3, white, white.
+    try testing.expectEqual(6, P.batch_count);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 4, 5, 6 }, &P.batches.first);
+    try testing.expectEqualSlices(u32, &.{ 2, 1, 1, 1, 1, 2 }, &P.batches.count);
+    const L = ct_layout.Layout(tiles, .{});
+    var buf: [1 << 14]u8 align(64) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, P.quad_count, 0, 0);
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    L.run(&scratch, &ram, .{ 800, 600 });
+    P.emit(&ram, &d);
+    try testing.expectEqual(P.batch_count, d.cmd_len);
+    // The same as encoding the op stream at run time.
+    const table = d.command(1);
+    encode(&d);
+    try testing.expectEqual(P.batch_count, d.cmd_len);
+    try testing.expectEqual(table, d.command(1));
 }
