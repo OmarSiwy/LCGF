@@ -46,6 +46,7 @@ const src_bytes = blk: {
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
+    _ = lcgr.levels.Levels.init(&counter, limits.nodes);
     _ = lcgr.incremental.Dirty.init(&counter, limits.nodes);
     _ = lcgr.flex.Flex.init(&counter, limits.nodes);
     _ = Customs.init(&counter, limits.customs);
@@ -209,6 +210,7 @@ pub fn main(init: std.process.Init) !void {
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
+    var slv = lcgr.levels.Levels.init(&carver, limits.nodes);
     var sdirty = lcgr.incremental.Dirty.init(&carver, limits.nodes);
     var sflex = lcgr.flex.Flex.init(&carver, limits.nodes);
     var scu = Customs.init(&carver, limits.customs);
@@ -252,8 +254,9 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .x);
         lcgr.layout.fit(t, .x);
         m[6] = now();
-        lcgr.coefs.coefs(t, &sk, .x);
-        lcgr.coefs.resolveK(t, &sk, .x, in.viewport[0]);
+        // Level-order resolve (C0849); the order is rebuilt every frame and timed here.
+        lcgr.levels.build(t, &slv);
+        lcgr.levels.resolve(t, &slv, .x, in.viewport[0]);
         m[7] = now();
         lcgr.layout.textAvail(t, tx);
         font.wrap(tx);
@@ -261,8 +264,7 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .y);
         lcgr.layout.fit(t, .y);
         m[9] = now();
-        lcgr.coefs.coefs(t, &sk, .y);
-        lcgr.coefs.resolveK(t, &sk, .y, in.viewport[1]);
+        lcgr.levels.resolve(t, &slv, .y, in.viewport[1]);
         m[10] = now();
         lcgr.coefs.placeRows(t, &sk);
         lcgr.coefs.placeK(t, &sk);
