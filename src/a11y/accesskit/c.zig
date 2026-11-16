@@ -13,6 +13,7 @@ pub const TreeUpdate = opaque {};
 /// `accesskit_role`: one byte. Only the values the bridge maps to are named.
 pub const Role = enum(u8) {
     unknown = 0,
+    text_run = 1,
     cell = 2,
     label = 3,
     image = 4,
@@ -128,6 +129,8 @@ pub extern fn accesskit_node_add_action(node: *Node, action: Action) void;
 pub extern fn accesskit_node_set_children(node: *Node, length: usize, values: [*]const NodeId) void;
 pub extern fn accesskit_node_set_label_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_value_with_length(node: *Node, value: [*]const u8, length: usize) void;
+pub extern fn accesskit_node_set_character_lengths(node: *Node, length: usize, values: [*]const u8) void;
+pub extern fn accesskit_node_set_placeholder_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_bounds(node: *Node, value: Rect) void;
 pub extern fn accesskit_node_set_transform(node: *Node, value: Affine) void;
 pub extern fn accesskit_node_set_numeric_value(node: *Node, value: f64) void;

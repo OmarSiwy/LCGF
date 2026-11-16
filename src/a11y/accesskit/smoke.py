@@ -12,7 +12,7 @@ enables accessibility, runs the example (zig-out/bin/accesskit-smoke) and then
 2. clicks Reset and Wireframe through AT-SPI's Action interface and checks the example ran
    them (it prints `resets=1`, `wireframe=true`);
 3. runs Orca while the example moves focus round its controls, and checks Orca announced
-   each one (`SPEECH OUTPUT:` lines in Orca's debug log).
+   each one, a text field with its text (`SPEECH OUTPUT:` lines in Orca's debug log).
 
 Needs busctl (systemd), at-spi2-core and orca on PATH. Exits non-zero on the first failure.
 """
@@ -129,7 +129,7 @@ print("ok   actions: AT-SPI clicks on Reset and Wireframe ran in the example")
 # 3. Orca, while the example moves focus round Reset, Wireframe and Exposure.
 orca_log = os.path.join(out, "orca.log")
 start(["orca", "--debug", "--debug-file=" + orca_log], "orca.out")
-expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent"]
+expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled"]
 spoken = []
 
 
@@ -143,6 +143,6 @@ def heard():
 wait_for(heard, lambda: "Orca to announce %s (it said %r)" % (expected, spoken), seconds=20)
 for s in spoken:
     print("     orca: " + s.split("{")[0])
-print("ok   orca announced the window, Reset, Wireframe (checked) and the Exposure slider at a quarter of its range")
+print("ok   orca announced the window, Reset, Wireframe (checked), the Exposure slider at a quarter of its range and the Title field's text")
 for p in procs:
     p.kill()

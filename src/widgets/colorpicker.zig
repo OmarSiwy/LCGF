@@ -466,7 +466,7 @@ test "colorpicker: a group of three sliders with their values" {
     try testing.expectEqual(@as(f32, @floatFromInt(@as(u32, k.r) * 65536 + @as(u32, k.g) * 256 + k.b)), t.c.value[group_row]);
     try testing.expectEqual(t.find(partId(.from("paint"), .hue)), hue_row);
 
-    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var sbuf: [8192]u8 align(@import("../core/mem.zig").column_align) = undefined;
     var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
     var sem = a11y.Semantics.init(&carver, t.cap);
     sem.clear();

@@ -34,6 +34,12 @@ test {
 /// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
 pub const root_id: c.NodeId = 1 << 32;
 
+/// The text run holding the text of the row with id `id` (`runNode`), above every row's id and
+/// the window's.
+pub fn runId(id: u32) c.NodeId {
+    return (2 << 32) | @as(c.NodeId, id);
+}
+
 /// AccessKit's role for each `a11y.Role` byte; a stray byte reads `unknown`.
 pub const roles: [256]c.Role = blk: {
     var m: [256]c.Role = @splat(.unknown);
@@ -220,7 +226,7 @@ pub const Bridge = struct {
         c.accesskit_tree_info_set_toolkit_name_with_length(info, "lcgr", 4);
         c.accesskit_tree_update_set_tree_info(u, info);
         c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
-        for (0..cur.len) |r| c.accesskit_tree_update_push_node(u, cur.c.id[r], b.node(@intCast(r)));
+        for (0..cur.len) |r| b.push(u, @intCast(r));
         b.top_hash = cur.c.kids_hash[cur.cap];
         return u;
     }
@@ -236,9 +242,48 @@ pub const Bridge = struct {
         const u = c.accesskit_tree_update_with_capacity_and_focus(ch.updated_len + 1, b.focusId());
         if (top != b.top_hash) c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
         b.top_hash = top;
-        for (ch.updated[0..ch.updated_len]) |r| c.accesskit_tree_update_push_node(u, cur.c.id[r], b.node(r));
+        for (ch.updated[0..ch.updated_len]) |r| b.push(u, r);
         return u;
     }
+
+    /// Pushes export row `r`, and the text run under it when it has one (`hasRun`).
+    fn push(b: *const Bridge, u: *c.TreeUpdate, r: u32) void {
+        const e = &b.cur.?.c;
+        c.accesskit_tree_update_push_node(u, e.id[r], b.node(r));
+        if (hasRun(e, r)) c.accesskit_tree_update_push_node(u, runId(e.id[r]), b.runNode(r));
+    }
+
+    /// A row with text and no exported children (a text field) gets its text as one AccessKit
+    /// text run, the form a screen reader reads a text input's text in (AT-SPI's Text).
+    // ponytail: one run, no line breaks, bounds or caret; split runs per line and add
+    // character positions and the text selection when a screen reader must move in the text.
+    fn hasRun(e: *const Export.Columns, r: u32) bool {
+        return e.text[r].bytes != 0 and e.kids[r] == 0;
+    }
+
+    /// The text run of row `r`: its text, with each character's length in bytes (characters
+    /// are code points here). Text past `max_run` characters is cut.
+    fn runNode(b: *const Bridge, r: u32) *c.Node {
+        const e = &b.cur.?.c;
+        const n = c.accesskit_node_new(.text_run);
+        const text = b.strings[e.text[r].start..][0..e.text[r].bytes];
+        var lengths: [max_run]u8 = undefined;
+        var chars: usize = 0;
+        var bytes: usize = 0;
+        while (bytes < text.len and chars < max_run) : (chars += 1) {
+            const len = std.unicode.utf8ByteSequenceLength(text[bytes]) catch 1;
+            const l: u8 = @intCast(@min(len, text.len - bytes));
+            lengths[chars] = l;
+            bytes += l;
+        }
+        c.accesskit_node_set_value_with_length(n, text.ptr, bytes);
+        c.accesskit_node_set_character_lengths(n, chars, &lengths);
+        c.accesskit_node_set_bounds(n, .{ .x0 = e.rect[0][r], .y0 = e.rect[1][r], .x1 = e.rect[2][r], .y1 = e.rect[3][r] });
+        return n;
+    }
+
+    /// Characters of a text run sent at most.
+    pub const max_run = 1024;
 
     /// The focused node: the focused widget when it is exported, else the window.
     fn focusId(b: *const Bridge) c.NodeId {
@@ -262,10 +307,19 @@ pub const Bridge = struct {
         const role = e.role[r];
         const n = c.accesskit_node_new(roles[role]);
         c.accesskit_node_set_bounds(n, .{ .x0 = e.rect[0][r], .y0 = e.rect[1][r], .x1 = e.rect[2][r], .y1 = e.rect[3][r] });
-        c.accesskit_node_set_children(n, e.kids[r], b.kids[b.first[r]..].ptr);
+        const run = runId(e.id[r]);
+        if (hasRun(e, r))
+            c.accesskit_node_set_children(n, 1, @ptrCast(&run))
+        else
+            c.accesskit_node_set_children(n, e.kids[r], b.kids[b.first[r]..].ptr);
         // AccessKit reads a label's text from its value (the name of static text is its text).
         const named = if (role == @backingInt(Role.label)) &c.accesskit_node_set_value_with_length else &c.accesskit_node_set_label_with_length;
         if (e.name_bytes[r] != 0) named(n, b.strings[e.name_start[r]..].ptr, e.name_bytes[r]);
+        // An editable node's text is its value, as AccessKit reads a text input's.
+        const text = e.text[r];
+        const hint = e.hint[r];
+        if (text.bytes != 0) c.accesskit_node_set_value_with_length(n, b.strings[text.start..].ptr, text.bytes);
+        if (hint.bytes != 0) c.accesskit_node_set_placeholder_with_length(n, b.strings[hint.start..].ptr, hint.bytes);
         const st: a11y.State = @bitCast(e.state[r]);
         const of = offers[role];
         // `checked` or `pressed`, as the role has it; a mixed node is neither.
@@ -645,6 +699,36 @@ test "accesskit: mixed, pressed and current go out as AccessKit's toggled and ar
     // The toggle button is AccessKit's button: one CheckBox (All), one Button (B).
     try testing.expectEqual(1, std.mem.count(u8, d, "role: CheckBox"));
     try testing.expectEqual(1, std.mem.count(u8, d, "role: Button"));
+}
+
+test "accesskit: a text input's text goes out as its value, its placeholder as placeholder" {
+    var f: Fixture(16) = .{};
+    f.init();
+    f.reset();
+    const t = &f.t;
+    const root = t.push(0, .none, &.{});
+    const name = t.push(root, .from("name"), &.{ .role = .text_input });
+    t.seal(name);
+    const city = t.push(root, .from("city"), &.{ .role = .text_input });
+    t.seal(city);
+    t.seal(root);
+    a11y.setText(&f.s, name, &f.str, "", "Your name");
+    a11y.setText(&f.s, city, &f.str, "Oslo", "");
+    f.end(0);
+    _ = Bridge.activate(&f.b);
+    const u = Bridge.factory(&f.b).?;
+    defer c.accesskit_tree_update_free(u);
+    var buf: [8192]u8 = undefined;
+    const d = debugText(u, &buf);
+    try expectHas(d, "placeholder: \"Your name\"");
+    try expectHas(d, "value: \"Oslo\"");
+    try testing.expectEqual(1, std.mem.count(u8, d, "placeholder"));
+    // Oslo's text as a run under it, which a screen reader reads; the empty field has none.
+    try expectHas(d, "TextRun");
+    try expectHas(d, "character_lengths: [1, 1, 1, 1]");
+    try testing.expectEqual(1, std.mem.count(u8, d, "TextRun"));
+    var idbuf: [32]u8 = undefined;
+    try expectHas(d, try std.fmt.bufPrint(&idbuf, "#{d}", .{runId(@intCast(idOf("city")))}));
 }
 
 /// The bridge's side of a host loop, over a `Context`: the semantic columns, this and last

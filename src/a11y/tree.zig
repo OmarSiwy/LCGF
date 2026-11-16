@@ -194,6 +194,15 @@ pub const Semantics = struct {
         /// frame's `Strings`, `.{}` for none. `labelled_by` wins over it, as ARIA has it; it
         /// wins over the node's content and own text.
         label: []Span,
+        /// An editable node's text, as a span in the frame's `Strings` (a text field's value,
+        /// which the value column, one number, cannot hold); `.{}` for none.
+        text: []Span,
+        /// What an empty editable node shows instead (`aria-placeholder`), a span in the
+        /// frame's `Strings`; `.{}` for none.
+        hint: []Span,
+        /// A hash of `text` and `hint`, 0 for neither, so `flatten` compares them across
+        /// frames without hashing bytes per row. `setText` writes all three.
+        text_hash: []u32,
         /// `State` bits the application sets; `states` adds what follows from the tree.
         state: []u8,
         /// The value's range, as `aria-valuemin`, `aria-valuemax` and the step a screen
@@ -222,10 +231,26 @@ pub const Semantics = struct {
     pub fn clear(s: *Semantics) void {
         @memset(s.c.labelled_by, none);
         @memset(s.c.label, .{});
+        @memset(s.c.text, .{});
+        @memset(s.c.hint, .{});
+        @memset(s.c.text_hash, 0);
         @memset(s.c.state, 0);
         inline for (s.c.range) |col| @memset(col, 0);
     }
 };
+
+/// Sets row `row`'s text and placeholder (`Semantics.Columns.text`, `hint`), copying the bytes
+/// into the frame's strings `str`, and their hash. For an editable node, after building; an
+/// empty `hint` is none.
+pub fn setText(s: *Semantics, row: u32, str: *Strings, text: []const u8, hint: []const u8) void {
+    s.c.text[row] = str.add(text);
+    s.c.hint[row] = str.add(hint);
+    var h = std.hash.Fnv1a_32.init();
+    h.update(text);
+    h.update(&.{0}); // "ab" + "c" is not "a" + "bc"
+    h.update(hint);
+    s.c.text_hash[row] = h.final();
+}
 
 /// Accessible names, as text runs. A node is named by, in order: the text of the node it is
 /// labelled by (its first text run), else its content (the first text run in its subtree) when
@@ -304,8 +329,12 @@ pub const Export = struct {
         /// The name's bytes in the frame's `Strings`; 0 bytes when the node has no name.
         name_start: []u32,
         name_bytes: []u32,
-        /// FNV-1a of the name's bytes, so a later frame compares names without this frame's
-        /// `Strings`.
+        /// `Semantics.Columns.text` and `hint`: spans in the frame's `Strings`.
+        text: []Span,
+        hint: []Span,
+        /// FNV-1a of the name's bytes, xor `Semantics.Columns.text_hash`, so a later frame
+        /// compares name, text and placeholder without this frame's `Strings`. A node with no
+        /// text or placeholder hashes its name alone.
         name_hash: []u32,
         /// Snapped layout rect x0, y0, x1, y1, in logical pixels.
         rect: [4][]f32,
@@ -377,7 +406,9 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         inline for (0..3) |e| o.range[e][w] = s.c.range[e][k];
         o.name_start[w] = start;
         o.name_bytes[w] = bytes;
-        o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]);
+        o.text[w] = s.c.text[k];
+        o.hint[w] = s.c.hint[k];
+        o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]) ^ s.c.text_hash[k];
         inline for (0..4) |e| o.rect[e][w] = c.rect[e][k];
         o.kids[w] = 0;
         o.kids_hash[w] = 0;
@@ -1094,6 +1125,39 @@ test "tree export: a label names a node with no text, unless it is labelled by a
     // The button's text leaf keeps its own.
     try testing.expectEqualStrings("OK", f.name(e, 5));
     try testing.expectEqualStrings("", f.name(e, 0));
+}
+
+test "tree export: a text field's text and placeholder are exported, and a change sends it again" {
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const Scene = struct {
+        fn build(fx: *FrameFixture(8), gen: u1, text: []const u8) *Export {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const field = t.push(root, types.Id.from("name"), &.{ .role = .text_input });
+            t.seal(field);
+            t.seal(root);
+            setText(&fx.s, field, &fx.str, text, "Your name");
+            return fx.run(gen);
+        }
+        fn bytes(fx: *const FrameFixture(8), sp: Span) []const u8 {
+            return fx.str.buf[sp.start..][0..sp.bytes];
+        }
+    };
+    var e = Scene.build(&f, 0, "Ada");
+    try testing.expectEqualStrings("Ada", Scene.bytes(&f, e.c.text[1]));
+    try testing.expectEqualStrings("Your name", Scene.bytes(&f, e.c.hint[1]));
+    try testing.expectEqual(Span{}, e.c.text[0]);
+    // The group has neither: its hash is its name's alone.
+    try testing.expectEqual(std.hash.Fnv1a_32.hash(""), e.c.name_hash[0]);
+    const prev = e;
+    e = Scene.build(&f, 1, "Ada");
+    diff(e, prev, &f.ch);
+    try testing.expectEqual(0, f.ch.updated_len);
+    e = Scene.build(&f, 1, "Adam");
+    diff(e, prev, &f.ch);
+    try testing.expectEqualSlices(u32, &.{1}, f.ch.updated[0..f.ch.updated_len]);
 }
 
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {

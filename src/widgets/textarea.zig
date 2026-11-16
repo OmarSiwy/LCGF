@@ -201,6 +201,9 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
 /// (`textfield.semantics`); a11y/tree.zig has no multiline state to report.
 pub const semantics = tf.semantics;
 
+/// Its text and placeholder, as the text field's (`textfield.textValue`).
+pub const textValue = tf.textValue;
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its

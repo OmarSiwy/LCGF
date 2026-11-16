@@ -120,6 +120,9 @@ pub fn expose(t: *Tree, box: u32, button: u32, shown: bool) void {
 /// caption, `aria-labelledby`), as for the text field.
 pub const semantics = tf.semantics;
 
+/// Its text and placeholder, as the text field's (`textfield.textValue`).
+pub const textValue = tf.textValue;
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns the
