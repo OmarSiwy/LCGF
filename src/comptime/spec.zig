@@ -25,6 +25,8 @@ pub const Kind = enum(u8) {
     radio,
     /// One choice of a `radio` group; `index` is the value it selects.
     radio_option,
+    /// An on/off switch over a bool field (src/widgets/switch.zig).
+    @"switch",
 };
 
 /// One node of the declaration. Exists only at compile time.
