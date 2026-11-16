@@ -101,6 +101,11 @@
             .hash = "N-V-__8AAEVjfgCU7hthaWtlDkNjFB4HE1XYqFl6UO7oqXwD",
             .lazy = true,
         },
+        .lvgl = .{
+            .url = "https://github.com/lvgl/lvgl/archive/refs/tags/v9.6.0.tar.gz",
+            .hash = "N-V-__8AAEV6mgvY3hT-LmCZsLpBhxSxreIJQ6gb0JVt4I6q",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
