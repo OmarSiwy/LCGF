@@ -285,6 +285,17 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
     }) }));
     b.step("ct-layout-bench", "Time comptime layout against the runtime tree per example").dependOn(&ct_layout_bench.step);
+    // Code size of comptime layout, table-driven against unrolled (C0165): installs
+    // zig-out/bin/ct-layout-size for `nm --size-sort` and runs it for the timings.
+    const ct_layout_size = b.addExecutable(.{ .name = "ct-layout-size", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/layout_size_probe.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) });
+    const ct_layout_size_run = b.addRunArtifact(ct_layout_size);
+    ct_layout_size_run.step.dependOn(&b.addInstallArtifact(ct_layout_size, .{}).step);
+    b.step("ct-layout-size", "Time and install comptime layout, table-driven and unrolled").dependOn(&ct_layout_size_run.step);
     // Compile-fail cases for the comptime front end's rules (src/comptime/compile_fail/): each
     // file is built as an object and must fail with the message on its `//! expect: ` first line.
     const compile_fail = b.step("ct-compile-fail", "Check each comptime rule rejects its compile-fail case");

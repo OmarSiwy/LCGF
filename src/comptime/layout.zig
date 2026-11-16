@@ -14,6 +14,17 @@
 //! After the passes, `run` copies the outputs the UI keeps into its `Dynamic` RAM (exact rows,
 //! coordinates as `Coordinate`). Scratch is not kept between frames, so it can live on the
 //! stack.
+//!
+//! Table-driven, not unrolled, at every node count (C0165, `zig build ct-layout-size`,
+//! ReleaseFast x86-64). Each UI already instantiates the passes for its own view type, so the
+//! optimizer knows the row count; making it a compile-time constant of the view (`PlainOf`'s
+//! `unroll`) changed no function's size by more than 16 bytes, and the loops stay rolled. A
+//! fully unrolled `place` (one copy of the body per row, parents as constants) ran 2.4 to 4.3x
+//! faster (3 nodes: 19 against 81 ns; 129 nodes: 679 against 1,630 ns) but grew by about 215
+//! bytes per row (28 KB at 129 rows, against 617 bytes rolled), and every sweep would need the
+//! same: a second copy of each tier-0 pass to keep equal. Code size is the comptime front
+//! end's budget on microcontrollers, so the rolled passes stay; unrolling below a node count is
+//! for the budget lane (ct-budget) to take up with a flash limit to weigh it against.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -64,6 +75,12 @@ fn Field(comptime FT: type, comptime R: usize, comptime writable: bool) type {
 /// Layout of `spec` over its own columns, every row through every pass (see the file comment).
 /// `Layout` adds folding on top.
 pub fn Plain(comptime spec: Spec, comptime options: Options) type {
+    return PlainOf(spec, options, false);
+}
+
+/// `Plain`, with the row count a compile-time constant of the view when `unroll`: every pass
+/// loop then has a constant trip count the optimizer may unroll (C0165 measures it).
+pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: bool) type {
     const C = columns.Columns(spec, options);
     const n = C.node_count;
     const R = simd.rows(n);
@@ -103,7 +120,10 @@ pub fn Plain(comptime spec: Spec, comptime options: Options) type {
         const ViewExtras = struct { border: *const [simd.rows(n + 1)]f32 };
 
         /// What the layout passes take as their tree.
-        pub const View = struct { len: u32, c: ViewColumns, x: ViewExtras };
+        pub const View = if (unroll)
+            struct { comptime len: u32 = n, c: ViewColumns, x: ViewExtras }
+        else
+            struct { len: u32, c: ViewColumns, x: ViewExtras };
 
         /// The view over `scratch` for this UI: every column the passes read, constant ones from
         /// read-only tables.
