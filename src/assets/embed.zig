@@ -6,7 +6,7 @@
 //! The price is compile time: the decoder runs interpreted, about 0.7 ms per pixel on the
 //! machine this was written on (a 64 x 64 RGBA image took 3 s), and the binary holds 4 bytes a
 //! pixel instead of the compressed file. That suits icons and small UI art; large images go
-//! through `png.decode` at run time, or a background thread (C0759).
+//! through `png.decode` at run time, or a background thread (image_jobs.zig).
 
 const std = @import("std");
 const png = @import("png.zig");
