@@ -81,6 +81,61 @@ pub fn showFocus(s: *const Settings, fo: *Focus) void {
     fo.visible = simd.orB(fo.visible, s.always_show_focus);
 }
 
+// ---- contrast check -------------------------------------------------------------------------
+
+/// WCAG 2 minimum contrast for body text: level AA (1.4.3) and AAA (1.4.6).
+pub const aa: f32 = 4.5;
+pub const aaa: f32 = 7;
+/// WCAG 1.4.11 non-text contrast, for marks and outlines at every level.
+pub const non_text: f32 = 3;
+
+/// A foreground role drawn over a background role, and the contrast it needs.
+pub const Pair = struct { fg: theme.Role, bg: theme.Role, min: f32 };
+
+/// The pairs the widgets draw, with body text held to `text_min` (`aa` or `aaa`): text on the
+/// panel and on every control face; a checked box and a slider's fill against the track; the
+/// focus outline against the panel.
+pub fn pairs(text_min: f32) [6]Pair {
+    return .{
+        .{ .fg = .text, .bg = .surface, .min = text_min },
+        .{ .fg = .text, .bg = .control, .min = text_min },
+        .{ .fg = .text, .bg = .control_hot, .min = text_min },
+        .{ .fg = .text, .bg = .control_held, .min = text_min },
+        .{ .fg = .accent, .bg = .control, .min = non_text },
+        .{ .fg = .accent, .bg = .surface, .min = non_text },
+    };
+}
+
+/// The first pair of `pairs(text_min)` whose colours in `tok` contrast less than it needs, or
+/// null when every pair passes. Runs at compile time too, so a theme can assert it is readable;
+/// `std.math.pow` spends branches there, so raise the quota (10,000 covers one check):
+/// `comptime { @setEvalBranchQuota(10_000); std.debug.assert(check(&tok, aa) == null); }`.
+pub fn check(tok: *const Tokens, text_min: f32) ?Pair {
+    for (pairs(text_min)) |p| {
+        if (contrast(tok.color(p.fg), tok.color(p.bg)) < p.min) return p;
+    }
+    return null;
+}
+
+/// WCAG 2 contrast ratio of two opaque colours, 1 (same luminance) to 21 (black on white).
+pub fn contrast(a: Color, b: Color) f32 {
+    const la = luminance(a) + 0.05;
+    const lb = luminance(b) + 0.05;
+    return @max(la, lb) / @min(la, lb);
+}
+
+/// WCAG 2 relative luminance of an sRGB colour, 0 to 1. Alpha is ignored.
+pub fn luminance(c: Color) f32 {
+    const ch = [3]u8{ c.r, c.g, c.b };
+    const w = [3]f32{ 0.2126, 0.7152, 0.0722 };
+    var l: f32 = 0;
+    for (ch, w) |v, k| {
+        const x = @as(f32, @floatFromInt(v)) / 255;
+        l += k * if (x <= 0.04045) x / 12.92 else std.math.pow(f32, (x + 0.055) / 1.055, 2.4);
+    }
+    return l;
+}
+
 // ---- lint for the comptime front end -----------------------------------------------------
 
 /// What a comptime spec can get wrong for assistive technology, checked while compiling.
@@ -321,4 +376,37 @@ test "lint: roleless widgets, unnamed buttons and nested widgets are found by ro
         \\widget 'close' (spec row 1): has no label to be named by; add a label child
         \\widget 'inner' (spec row 5): is inside another interactive widget; move it out
     , comptime message(p));
+}
+
+test "contrast: WCAG ratios at the ends and for known pairs" {
+    try testing.expectApproxEqAbs(@as(f32, 21), contrast(.black, .white), 1e-3);
+    try testing.expectEqual(@as(f32, 1), contrast(.rgb(90, 140, 255), .rgb(90, 140, 255)));
+    try testing.expectEqual(contrast(.black, .rgb(118, 118, 118)), contrast(.rgb(118, 118, 118), .black));
+    // #767676 on white is the classic smallest grey that passes AA: 4.54.
+    try testing.expectApproxEqAbs(@as(f32, 4.54), contrast(.rgb(118, 118, 118), .white), 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 1), luminance(.white), 1e-6);
+    try testing.expectEqual(@as(f32, 0), luminance(.black));
+}
+
+test "contrast check: stock themes pass AA, high contrast passes AAA, in every setting" {
+    try testing.expectEqual(null, check(&theme.dark, aa));
+    try testing.expectEqual(null, check(&theme.light, aa));
+    // The stock themes are not AAA; the high-contrast palette is there for that.
+    try testing.expect(check(&theme.dark, aaa) != null);
+    const hc: Settings = .{ .high_contrast = true, .text_scale = 2 };
+    for ([_]Tokens{ theme.dark, theme.light }) |tok| try testing.expectEqual(null, check(&tokens(&hc, &tok), aaa));
+    // At compile time, as a theme author asserts it.
+    comptime {
+        @setEvalBranchQuota(10_000);
+        std.debug.assert(check(&tokens(&hc, &theme.dark), aaa) == null);
+    }
+}
+
+test "contrast check: reports the first pair that fails" {
+    var tok = theme.dark;
+    tok.palette[@backingInt(theme.Role.control_hot)] = .rgb(170, 170, 175); // light text on light grey
+    try testing.expectEqual(Pair{ .fg = .text, .bg = .control_hot, .min = aa }, check(&tok, aa).?);
+    tok = theme.light;
+    tok.palette[@backingInt(theme.Role.accent)] = tok.color(.control);
+    try testing.expectEqual(Pair{ .fg = .accent, .bg = .control, .min = non_text }, check(&tok, aa).?);
 }
