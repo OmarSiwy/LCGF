@@ -11,6 +11,7 @@
 const std = @import("std");
 const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
+const Cursor = @import("../../runtime/context.zig").Cursor;
 
 /// The NSEvent types the translator reads, by their `NSEventType` values.
 pub const Kind = enum(u32) {
@@ -107,6 +108,19 @@ fn modifierBit(code: u16) u64 {
         else => 0,
     };
 }
+
+/// The NSCursor class method giving the system cursor of each `Platform.cursor`. `grab` is the
+/// open hand, as AppKit shows over something that can be dragged.
+pub const cursor_names = names: {
+    var a: [@typeInfo(Cursor).@"enum".field_names.len][:0]const u8 = undefined;
+    a[@backingInt(Cursor.arrow)] = "arrowCursor";
+    a[@backingInt(Cursor.pointer)] = "pointingHandCursor";
+    a[@backingInt(Cursor.text)] = "IBeamCursor";
+    a[@backingInt(Cursor.grab)] = "openHandCursor";
+    a[@backingInt(Cursor.resize_h)] = "resizeLeftRightCursor";
+    a[@backingInt(Cursor.resize_v)] = "resizeUpDownCursor";
+    break :names a;
+};
 
 pub const Translator = struct {
     /// Held state, kept from event to event: viewport, scale, pointer, buttons, keys, mods.
@@ -452,7 +466,11 @@ test "translate: the example's events give the headless recording's input and ru
     var app: example.App = .{};
     var ev: Events = .{};
     var frames: u32 = 0;
+    // The cursor shown after each poll: the last frame's, as the shell applies it.
+    var shown: [15]Cursor = undefined;
+    var cursor: Cursor = .arrow;
     while (try rec.next(&buf)) |records| : (frames += 1) {
+        defer shown[frames] = cursor;
         for (records) |r| t.feed(r);
         try testing.expect(t.frame(&ev));
         const in = (try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts })).?;
@@ -462,8 +480,13 @@ test "translate: the example's events give the headless recording's input and ru
         if (!ctx.needsFrame(&ev.in)) continue;
         var f = ctx.begin(&ev.in);
         app.build(&f, &ev);
-        _ = f.end(.{});
+        cursor = f.end(.{}).platform.cursor;
     }
+    // Over Reset, Add layer and the slider the hand shows; the headless shell's cursors.
+    const a = Cursor.arrow;
+    const h = Cursor.pointer;
+    try testing.expectEqualSlices(Cursor, &.{ a, a, a, h, h, h, h, h, h, a, a, a, a, a, a }, &shown);
+    try testing.expectEqualStrings("pointingHandCursor", cursor_names[@backingInt(h)]);
     try testing.expectEqual(null, try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts }));
     try testing.expectEqual(@as(u32, 15), frames);
     // The headless shell's results (src/shell/headless.zig).
@@ -629,4 +652,9 @@ test "scale: a move to a Retina display changes the scale, not the viewport or t
     var b: Translator = .{};
     b.setScale(2);
     try testing.expect(a.in.stamp() != b.in.stamp());
+}
+
+test "cursors: every Platform cursor has its own system cursor" {
+    for (cursor_names, 0..) |a, i| for (cursor_names[i + 1 ..]) |b| try testing.expect(!std.mem.eql(u8, a, b));
+    try testing.expectEqualStrings("IBeamCursor", cursor_names[@backingInt(Cursor.text)]);
 }

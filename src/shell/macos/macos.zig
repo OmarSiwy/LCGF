@@ -131,6 +131,7 @@ const methods = .{
     .{ "windowDidResize:", &windowDidResize, "v@:@" },
     .{ "windowShouldClose:", &windowShouldClose, "c@:@" },
     .{ "windowDidResignKey:", &windowDidResignKey, "v@:@" },
+    .{ "cursorUpdate:", &cursorUpdate, "v@:@" },
     .{ "viewDidChangeBackingProperties", &viewDidChangeBackingProperties, "v@:" },
     .{ "insertText:", &insertText, "v@:@" },
     .{ "doCommandBySelector:", &doCommandBySelector, "v@::" },
@@ -201,6 +202,13 @@ fn insertText(view: Id, _: Sel, text: Id) callconv(.c) void {
 /// NSResponder's beep is not sounded).
 fn doCommandBySelector(_: Id, _: Sel, _: Sel) callconv(.c) void {}
 
+/// The pointer entered the view (its tracking area asks for this): AppKit would show the arrow;
+/// the frame's cursor is shown instead.
+fn cursorUpdate(view: Id, _: Sel, _: Id) callconv(.c) void {
+    const m = shellOf(view);
+    msg(void, m.cursors[@backingInt(m.applied.cursor)], "set", .{});
+}
+
 /// The window moved to a display of another scale, or that display's scale changed. The next
 /// `present` resizes the layer's drawables (device.zig `Layer.resize`).
 fn viewDidChangeBackingProperties(view: Id, _: Sel) callconv(.c) void {
@@ -233,9 +241,9 @@ const ns_event_type_application_defined = 15;
 /// The subtype of the NSEvent `wake` posts.
 const wake_subtype = 0x6c63; // "lc"
 const ns_event_type_key_up = 11;
-/// NSTrackingArea options: entered and exited, moves, always (not only in the key window), and
+/// NSTrackingArea options: entered and exited, moves, cursor updates, always (not only in the key window), and
 /// the rectangle follows the view's visible rectangle.
-const ns_tracking = 0x01 | 0x02 | 0x80 | 0x200;
+const ns_tracking = 0x01 | 0x02 | 0x04 | 0x80 | 0x200;
 
 // ---- The shell ------------------------------------------------------------------------------
 
@@ -253,6 +261,9 @@ pub const Macos = struct {
     background: Color = .rgb(0, 0, 0),
     /// The effects of the last frame, as `apply` received them.
     applied: Platform = .{},
+    /// The system cursors, by `Platform.cursor` (`translate.cursor_names`); shared objects
+    /// AppKit owns.
+    cursors: [translate.cursor_names.len]Id = undefined,
 
     pub const Options = struct {
         title: [:0]const u8 = "LCGR",
@@ -297,6 +308,7 @@ pub const Macos = struct {
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
         rt.object_setIvar(view, shell_ivar, m);
+        inline for (translate.cursor_names, &m.cursors) |name, *c| c.* = msg(Id, objc.class("NSCursor"), name, .{});
         m.t.resize(.{ size[0], size[1] });
         msg(void, window, "setReleasedWhenClosed:", .{false});
         msg(void, window, "setTitle:", .{objc.string(opt.title)});
@@ -351,6 +363,8 @@ pub const Macos = struct {
     }
 
     pub fn apply(m: *Macos, p: *const Platform) void {
+        // Shown now if the pointer is over the view; `cursorUpdate:` shows it on the way in.
+        if (p.cursor != m.applied.cursor and m.t.in.pointer[0] >= 0) msg(void, m.cursors[@backingInt(p.cursor)], "set", .{});
         m.applied = p.*;
     }
 
@@ -512,4 +526,7 @@ test "macos: a real window runs the example from posted events" {
     try testing.expectEqual(@as(u32, 1), app_.resets);
     try testing.expectEqual(@as(u32, 4), app_.layers);
     try testing.expectApproxEqAbs(@as(f32, 3), app_.exposure, 0.01);
+    // The arrow is back after leaving the slider, and it is AppKit's.
+    try testing.expectEqual(context.Cursor.arrow, m.applied.cursor);
+    try testing.expectEqual(msg(Id, objc.class("NSCursor"), "arrowCursor", .{}), m.cursors[0]);
 }
