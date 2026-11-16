@@ -39,6 +39,7 @@ pub const Para = struct {
     baseline: [32]f32 = undefined,
     height: [32]f32 = undefined,
     extra: [32]f32 = undefined,
+    ellipsis_glyph: u16 = 0,
     g: Glyphs = undefined,
     l: Lines = undefined,
 
@@ -85,7 +86,7 @@ pub const RunCols = struct {
     }
 };
 
-pub const Scene = enum { wrap, narrow, center, end, justify };
+pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single };
 
 const Spec = struct {
     text: []const u8,
@@ -95,6 +96,9 @@ const Spec = struct {
     size: [2]u32,
     factor: f32 = 0,
     justify: bool = false,
+    /// Text that does not wrap is broken at an infinite width.
+    wrap: bool = true,
+    max_lines: u32 = std.math.maxInt(u32),
 };
 
 const para = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it.";
@@ -105,6 +109,8 @@ fn spec(s: Scene) Spec {
         .center => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .factor = 0.5 },
         .end => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .factor = 1 },
         .justify => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 104 }, .justify = true },
+        .clamp => .{ .text = para, .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 56 }, .max_lines = 2 },
+        .single => .{ .text = "Type office fluff into a lovely file", .px = 16, .box = .{ 4, 2, 150 }, .size = .{ 160, 28 }, .wrap = false, .max_lines = 1 },
         .narrow => .{ .text = "Pneumonoultramicroscopic words\nbreak hard.", .px = 16, .box = .{ 3, 1, 90 }, .size = .{ 96, 92 } },
     };
 }
@@ -118,7 +124,15 @@ pub fn expectScene(s: Scene) !void {
     const shaper: shape.Shaper = .init(try opentype.Face.parse(font, 0));
     var p: Para = .{};
     try p.shaped(&shaper, sp.text, sp.px);
-    try lines_.breakLines(&p.g, sp.text, sp.box[2], &p.l);
+    try lines_.breakLines(&p.g, sp.text, if (sp.wrap) sp.box[2] else std.math.inf(f32), &p.l);
+    // The ellipsis, shaped like any text.
+    var ecols: RunCols = .{};
+    var erun = ecols.run();
+    try shaper.shape("\u{2026}", &erun, .{});
+    try std.testing.expectEqual(1, erun.len);
+    p.ellipsis_glyph = erun.glyph[0];
+    const ellipsis_w = @as(f32, @floatFromInt(erun.advance[0])) * sp.px / @as(f32, @floatFromInt(shaper.face.units_per_em));
+    lines_.ellipsize(&p.l, &p.g, sp.text, sp.box[2], sp.max_lines, ellipsis_w);
     lines_.place(&p.l, &p.g, sp.text, .of(&shaper.face, sp.px), .{ .width = sp.box[2], .factor = sp.factor, .justify = sp.justify });
 
     var img: [max_w * max_h]u8 = @splat(0);
@@ -133,32 +147,39 @@ pub fn expectScene(s: Scene) !void {
 /// Composites every inked glyph of `p` (laid out at `px`) at `origin` + its position, by
 /// maximum coverage. Baselines snap to whole pixels (round half up), pen x stays fractional.
 pub fn draw(face: *const opentype.Face, p: *const Para, px: f32, origin: [2]f32, img: []u8, w: u32) !void {
-    const h = img.len / w;
     const scale = px / @as(f32, @floatFromInt(face.units_per_em));
+    for (0..p.l.len) |k| {
+        const base: i32 = @intFromFloat(@floor(origin[1] + p.l.baseline[k] + 0.5));
+        const left = origin[0] + p.l.x[k];
+        for (p.l.first[k]..p.l.ink[k]) |i| {
+            try std.testing.expectEqual(0, p.g.y_offset[i]);
+            try glyphAt(face, p.g.glyph[i], scale, left + p.g.x[i] + p.g.x_offset[i], base, img, w);
+        }
+        if (k == p.l.len - 1 and p.l.ellipsis > 0)
+            try glyphAt(face, p.ellipsis_glyph, scale, left + p.l.width[k] - p.l.ellipsis, base, img, w);
+    }
+}
+
+/// Composites glyph `id` with its pen at (`x`, baseline row `base`).
+fn glyphAt(face: *const opentype.Face, id: u16, scale: f32, x: f32, base: i32, img: []u8, w: u32) !void {
+    const h = img.len / w;
     var ocols: raster.TestOutline = .{};
     var acc: [64 * 64]f32 = undefined;
     var cov: [64 * 64]u8 = undefined;
-    for (0..p.l.len) |k| {
-        const base: i32 = @intFromFloat(@floor(origin[1] + p.l.baseline[k] + 0.5));
-        for (p.l.first[k]..p.l.ink[k]) |i| {
-            try std.testing.expectEqual(0, p.g.y_offset[i]);
-            var o = ocols.outline();
-            try face.outline(p.g.glyph[i], &o);
-            const x = origin[0] + p.l.x[k] + p.g.x[i] + p.g.x_offset[i];
-            const pixel = @floor(x);
-            const b = raster.box(&o, scale, x - pixel);
-            if (b.w == 0) continue;
-            raster.fill(&o, scale, x - pixel, b, &acc);
-            raster.coverage(&acc, &cov, @as(usize, b.w) * b.h);
-            for (0..b.h) |r| for (0..b.w) |c| {
-                const ix = @as(i32, @intFromFloat(pixel)) + b.left + @as(i32, @intCast(c));
-                const iy = base - b.top + @as(i32, @intCast(r));
-                if (ix < 0 or iy < 0 or ix >= w or iy >= h) continue;
-                const at = @as(usize, @intCast(iy)) * w + @as(usize, @intCast(ix));
-                img[at] = @max(img[at], cov[r * b.w + c]);
-            };
-        }
-    }
+    var o = ocols.outline();
+    try face.outline(id, &o);
+    const pixel = @floor(x);
+    const b = raster.box(&o, scale, x - pixel);
+    if (b.w == 0) return;
+    raster.fill(&o, scale, x - pixel, b, &acc);
+    raster.coverage(&acc, &cov, @as(usize, b.w) * b.h);
+    for (0..b.h) |r| for (0..b.w) |c| {
+        const ix = @as(i32, @intFromFloat(pixel)) + b.left + @as(i32, @intCast(c));
+        const iy = base - b.top + @as(i32, @intCast(r));
+        if (ix < 0 or iy < 0 or ix >= w or iy >= h) continue;
+        const at = @as(usize, @intCast(iy)) * w + @as(usize, @intCast(ix));
+        img[at] = @max(img[at], cov[r * b.w + c]);
+    };
 }
 
 fn reference(s: Scene) []const u8 {

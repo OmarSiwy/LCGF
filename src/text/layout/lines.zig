@@ -79,6 +79,9 @@ pub const Lines = struct {
     height: []f32,
     extra: []f32,
     len: u32 = 0,
+    /// Written by `ellipsize`: the advance of the ellipsis that ends the last line (counted in
+    /// its `width`, drawn at `x + width - ellipsis`), 0 when the text was not cut.
+    ellipsis: f32 = 0,
 };
 
 /// Where lines sit in a box `width` px wide. `factor` is 0 for the start, 0.5 for the centre,
@@ -171,22 +174,56 @@ pub fn breakLines(g: *const Glyphs, text: []const u8, width: f32, lines: *Lines)
 fn push(lines: *Lines, g: *const Glyphs, text: []const u8, first: u32, end: u32, hard: bool) error{NoSpace}!void {
     const k = lines.len;
     if (k == lines.first.len) return error.NoSpace;
-    var ink = first;
+    lines.first[k] = first;
+    lines.end[k] = end;
+    lines.start[k] = if (first < g.len) g.cluster[first] else @intCast(text.len);
+    lines.hard[k] = @floatFromInt(@intFromBool(hard));
+    lines.len = k + 1;
+    measure(lines, k, g, text);
+}
+
+/// Writes `ink` and `width` of line `k` from its glyphs `first..end`.
+fn measure(lines: *Lines, k: usize, g: *const Glyphs, text: []const u8) void {
+    var ink = lines.first[k];
     var pen: f32 = 0;
-    var width: f32 = 0;
-    for (first..end) |i| {
+    var w: f32 = 0;
+    for (lines.first[k]..lines.end[k]) |i| {
         pen += g.advance[i];
         const space = isSpace(text, g.cluster[i]);
         ink = if (space) ink else @intCast(i + 1);
-        width = if (space) width else pen;
+        w = if (space) w else pen;
     }
-    lines.first[k] = first;
-    lines.end[k] = end;
     lines.ink[k] = ink;
-    lines.start[k] = if (first < g.len) g.cluster[first] else @intCast(text.len);
-    lines.width[k] = width;
-    lines.hard[k] = @floatFromInt(@intFromBool(hard));
-    lines.len = k + 1;
+    lines.width[k] = w;
+}
+
+/// Keeps at most `max_lines` lines (at least 1) and, when lines were dropped or the last one
+/// is wider than `width`, cuts the last line to end in an ellipsis `ellipsis` px wide: whole
+/// clusters are dropped from its end until its ink (trailing spaces hang, as
+/// always) and the ellipsis fit, or nothing is left. The cut line becomes hard, so it is never justified.
+/// Call after `breakLines` and before `place`. For text that does not wrap, break with an
+/// infinite width and pass `max_lines` 1.
+pub fn ellipsize(lines: *Lines, g: *const Glyphs, text: []const u8, width: f32, max_lines: u32, ellipsis: f32) void {
+    std.debug.assert(lines.len > 0);
+    lines.ellipsis = 0;
+    const kept = @min(lines.len, @max(max_lines, 1));
+    const dropped = kept < lines.len;
+    lines.len = kept;
+    const k = kept - 1;
+    if (!dropped and lines.width[k] <= width + slack) return;
+    const first = lines.first[k];
+    var end = lines.ink[k];
+    lines.end[k] = end;
+    measure(lines, k, g, text);
+    while (end > first and lines.width[k] + ellipsis > width + slack) {
+        const cluster = g.cluster[end - 1];
+        while (end > first and g.cluster[end - 1] == cluster) end -= 1;
+        lines.end[k] = end;
+        measure(lines, k, g, text);
+    }
+    lines.width[k] += ellipsis;
+    lines.hard[k] = 1;
+    lines.ellipsis = ellipsis;
 }
 
 /// Whether the character at `at` hangs at a line's end: a space or a mandatory break.
@@ -327,6 +364,41 @@ test "golden: aligned and justified paragraphs match the reference" {
     try golden.expectScene(.center);
     try golden.expectScene(.end);
     try golden.expectScene(.justify);
+}
+
+test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
+    var t: golden.Para = .{};
+    const text = "aa bb cc dd";
+    t.fixed(text, 10);
+    try breakLines(&t.g, text, 50, &t.l);
+    try testing.expectEqual(2, t.l.len); // "aa bb " | "cc dd"
+    // Two lines allowed, nothing dropped, both fit: no ellipsis.
+    ellipsize(&t.l, &t.g, text, 50, 2, 15);
+    try testing.expectEqual(2, t.l.len);
+    try testing.expectEqual(0, t.l.ellipsis);
+    // One line: "aa bb" + 15 px is too wide, so "bb" and its space go: "aa" + ellipsis.
+    ellipsize(&t.l, &t.g, text, 50, 1, 15);
+    try testing.expectEqual(1, t.l.len);
+    try testing.expectEqual(3, t.l.end[0]); // the space stays, hanging
+    try testing.expectEqual(2, t.l.ink[0]);
+    try testing.expectEqual(35, t.l.width[0]);
+    try testing.expectEqual(1, t.l.hard[0]);
+    try testing.expectEqual(15, t.l.ellipsis);
+    // Text that does not wrap: one line, cut where it overflows.
+    try breakLines(&t.g, text, std.math.inf(f32), &t.l);
+    ellipsize(&t.l, &t.g, text, 75, 1, 15);
+    try testing.expectEqual(5, t.l.ink[0]); // "aa bb" + ellipsis = 65
+    try testing.expectEqual(65, t.l.width[0]);
+    // No room at all: only the ellipsis is left.
+    try breakLines(&t.g, text, std.math.inf(f32), &t.l);
+    ellipsize(&t.l, &t.g, text, 10, 1, 15);
+    try testing.expectEqual(0, t.l.ink[0]);
+    try testing.expectEqual(15, t.l.width[0]);
+}
+
+test "golden: clamped and truncated paragraphs match the reference" {
+    try golden.expectScene(.clamp);
+    try golden.expectScene(.single);
 }
 
 test "golden: shaped paragraphs wrap like the reference" {

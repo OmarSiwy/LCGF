@@ -20,6 +20,10 @@ The rules, as text layout implements them:
 - Each line starts at (box - ink width) * align (0 start, 0.5 centre, 1 end). Justified lines
   (all but the last and those ended by a newline) share the free width equally among their
   inner spaces.
+- With max_lines, lines after the last are dropped; if any were, or the last line is wider
+  than the box, its clusters are dropped from the end until its ink plus an ellipsis fits, and
+  the ellipsis is drawn after the ink. The cut line is never justified. Text that does not wrap
+  is broken at an infinite width.
 - Lines stack from the top: each is as tall as the tallest span on it (ascender - descender +
   line gap) and its baseline is the tallest ascender below its top. Baselines snap to whole
   pixels (round half up), x stays fractional.
@@ -47,6 +51,8 @@ SCENES = {
     "center": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), align=0.5),
     "end": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), align=1),
     "justify": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), justify=True),
+    "clamp": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 56), max_lines=2),
+    "single": dict(text="Type office fluff into a lovely file", px=16, box=(4, 2, 150), size=(160, 28), wrap=False, max_lines=1),
     "narrow": dict(text="Pneumonoultramicroscopic words\nbreak hard.", px=16, box=(3, 1, 90), size=(96, 92)),
 }
 
@@ -155,6 +161,28 @@ def break_lines(glyphs, raw, width):
     return lines
 
 
+def ellipsize(lines, glyphs, raw, width, max_lines, ell):
+    """Drops lines past max_lines and cuts the last one to end in an ellipsis `ell` px wide."""
+    if max_lines is None:
+        return lines, 0
+    dropped = len(lines) > max_lines
+    lines = lines[:max_lines]
+    ln = lines[-1]
+    if not dropped and ln["width"] <= width + SLACK:
+        return lines, 0
+    first, end = ln["first"], ln["ink"]
+    while end > first and ink_of(glyphs, raw, first, end) + ell > width + SLACK:
+        c = glyphs[end - 1].cluster
+        while end > first and glyphs[end - 1].cluster == c:
+            end -= 1
+    ink = first
+    for k in range(first, end):
+        if not is_space(raw, glyphs[k]):
+            ink = k + 1
+    ln.update(end=end, ink=ink, hard=True, width=sum(g.advance for g in glyphs[first:ink]) + ell)
+    return lines, ell
+
+
 def ink_of(glyphs, raw, first, end):
     """Width from glyph `first` to the end of the last non-space glyph before `end`."""
     w, ink = 0.0, 0.0
@@ -173,7 +201,9 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
     bx, by, bw = scene["box"]
     W, H = scene["size"]
     glyphs = shape(hbfont, upem, text, spans)
-    lines = break_lines(glyphs, raw, bw)
+    lines = break_lines(glyphs, raw, bw if scene.get("wrap", True) else math.inf)
+    (ell,) = shape(hbfont, upem, "\u2026", [(0, px)])
+    lines, ell_w = ellipsize(lines, glyphs, raw, bw, scene.get("max_lines"), ell.advance)
     img = bytearray(W * H)
     top = by
     for ln in lines:
@@ -189,6 +219,8 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
         for g in ink:
             draw(img, W, H, face, g, x, y)
             x += g.advance + (extra if is_space(raw, g) else 0)
+        if ln is lines[-1] and ell_w:
+            draw(img, W, H, face, ell, x, y)
         top += (asc - desc + gap) * tall
     return img
 
