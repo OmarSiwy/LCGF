@@ -371,6 +371,12 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
             /// The widget the left button went down on this frame.
             pressed: ?E.Widget,
             response: Response = .{},
+            page: *const Self,
+
+            /// The response of the widget named `name` this frame, as `part` sees its own.
+            pub fn responseOf(v: *const View, comptime name: []const u8) Response {
+                return v.page.response(comptime rowOf(spec, name), v);
+            }
         };
 
         const Tables = struct {
@@ -406,7 +412,7 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
             const press = in.buttons.left and !ui.pointer.down;
             const pressed = if (press) E.at(&ui.rects, in.pointer[0], in.pointer[1]) else null;
             const event = E.pointer(&ui.pointer, &ui.rects, in);
-            var v: View = .{ .in = in, .last = &ui.last, .event = event, .pressed = pressed };
+            var v: View = .{ .in = in, .last = &ui.last, .event = event, .pressed = pressed, .page = ui };
             H.step(&ui.signals, &v);
 
             var carver: mem.Carver = .{ .buf = &ui.buf };
