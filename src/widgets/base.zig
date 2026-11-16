@@ -464,9 +464,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 .radio_option => unreachable, // pushed by its group
                 .@"switch" => {
                     const value: bool = @field(state, n.bind.?);
-                    var s = n.style;
-                    s.value = simd.b2f(value);
-                    const i = tb.t.push(parent, .hash(n.id.?), &s);
+                    const i = tb.t.push(parent, .hash(n.id.?), &n.style);
+                    switch_zig.expose(&tb.t, i, value);
                     next.* += 2;
                     const track = tb.t.push(i, .none, &switch_zig.trackStyle(&th, value));
                     _ = tb.t.push(track, .none, &switch_zig.knobStyle(&th));

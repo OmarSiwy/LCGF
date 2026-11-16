@@ -3,6 +3,10 @@
 //! behaviour (a click or Space flips it) and a different thing to assistive technology: it
 //! reports on and off, not checked.
 //!
+//! Accessibility: role switch, named by its caption, value 1 on and 0 off; a11y/tree.zig
+//! `states` sets `checked` from it, which a bridge reports as on (AccessKit `Toggled`, ARIA
+//! `aria-checked` on a switch).
+//!
 //! State: the application's `bool`. The runtime front end takes a pointer to it; the comptime
 //! front end binds a `bool` field, checked while compiling. The caption is a bound label.
 //!
@@ -24,6 +28,8 @@ const Response = types.Response;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
+const Tree = @import("../core/tree.zig").Tree;
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -70,8 +76,16 @@ pub fn @"switch"(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const
     f.close();
     _ = label_zig.label(f, th, str);
     f.close();
-    f.tree().c.value[row.ix()] = simd.b2f(value.*);
+    expose(f.tree(), row.ix(), value.*);
     return r;
+}
+
+/// Writes what assistive technology reads of the switch at tree row `row`: role switch (past
+/// `types.Role`, so written to the column directly) and the value, 1 on and 0 off. Both front
+/// ends call it.
+pub fn expose(t: *Tree, row: u32, on: bool) void {
+    t.c.role[row] = @backingInt(a11y.Role.@"switch");
+    t.c.value[row] = simd.b2f(on);
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -205,6 +219,28 @@ test "switch input: click and Space flip it, Enter and Space down do not, in bot
         try testing.expectEqual(st.hdr, h.ui.signals.state.hdr);
         try testing.expectEqual(simd.b2f(st.vsync), out.runtime.tree.c.value[2]);
     }
+}
+
+var switch_semantics: base.Semantic(16) = .{};
+
+test "switch a11y: role switch, named by its caption, on as value and checked, in both front ends" {
+    const h = &two;
+    h.init();
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    _ = try h.frame(&in);
+    const x = &switch_semantics;
+    try x.run(h);
+    const checked = a11y.State.bitsOf(.{ .checked = true });
+    for ([2]u32{ 2, 6 }, [2][]const u8{ "VSync", "HDR" }, [2]bool{ false, true }) |node, name, on| {
+        const r = x.row(node).?;
+        try testing.expectEqual(@backingInt(a11y.Role.@"switch"), x.out[0].c.role[r]);
+        try testing.expectEqualStrings(name, x.name(0, r));
+        try testing.expectEqualStrings(name, x.name(1, r));
+        try testing.expectEqual(simd.b2f(on), x.out[0].c.value[r]);
+        try testing.expectEqual(if (on) checked else 0, x.out[0].c.state[r]);
+    }
+    // Track and knob are presentational: the root, two switches, two captions.
+    try testing.expectEqual(@as(u32, 5), x.out[0].len);
 }
 
 test {
