@@ -22,9 +22,11 @@ const scheduler = lcgr.scheduler;
 
 /// The platform adapters: each takes the bridge and the shell's window.
 pub const windows = @import("windows.zig");
+pub const macos = @import("macos.zig");
 
 test {
     _ = windows;
+    _ = macos;
 }
 
 /// The window: the tree's root, above the exported rows. Export ids are u32, so no row has it.
