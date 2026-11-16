@@ -235,28 +235,42 @@ pub fn reveal(scroll: f32, x: f32, view: f32, content: f32) f32 {
 /// view scrolls to the caret, and a focused field asks for text input at it. Both front ends
 /// call this with what they know of the frame.
 pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void {
+    const ed = point(s, th, r, last, in);
+    const k = keyboardOf(in, id, r.focused);
+    s.result = ed.update(&k, id, .{ .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
+    follow(s, th, r, last);
+}
+
+/// The first part of `behave`: resets what the field asks of the host, and places the caret
+/// where the pointer holds the field. Returns the single-line editor, for the keys.
+pub fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const Input) *edit.Editor {
     const ed = s.editor();
     ed.mode.single_line = true;
     s.clipboard.reset();
     s.input.reset();
-    const adv = advance(th);
-    const pad = padding(th);
-    const x0 = last.x0 + pad[0];
     if (r.held) {
-        const at = stopNear(ed.text(), (in.pointer[0] - x0 + s.scroll) / adv);
+        const x0 = last.x0 + padding(th)[0];
+        const at = stopNear(ed.text(), (in.pointer[0] - x0 + s.scroll) / advance(th));
         ed.caret = at;
         if (!s.held and !in.mods.shift) ed.anchor = at;
         ed.goal = std.math.nan(f32);
         ed.run = .none;
     }
     s.held = r.held;
-    const k: keyboard.Keyboard = .{ .in = in, .target = if (r.focused) @backingInt(id) else 0, .taken = 0 };
-    s.result = ed.update(&k, id, .{ .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
+    return ed;
+}
+
+/// The last part of `behave`, after the keys: scrolls the view to the caret, and asks for text
+/// input at it while focused.
+pub fn follow(s: anytype, th: *const Theme, r: Response, last: Rect) void {
+    const ed = s.editor();
+    const adv = advance(th);
+    const pad = padding(th);
     const x = @as(f32, @floatFromInt(ed.shownCaret())) * adv;
     const view = last.w() - pad[0] - pad[2];
     if (view > 0) s.scroll = reveal(s.scroll, x, view, @as(f32, @floatFromInt(ed.text().len)) * adv);
     if (r.focused) {
-        const cx = x0 - s.scroll + x;
+        const cx = last.x0 + pad[0] - s.scroll + x;
         const top = last.y0 + pad[1];
         s.input.request(.{ .x0 = cx, .y0 = top, .x1 = cx + 1, .y1 = top + lineHeight(th) }, .normal);
     }

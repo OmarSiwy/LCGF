@@ -12,6 +12,7 @@
 const std = @import("std");
 const base = @import("base.zig");
 const tf = @import("textfield.zig");
+const keys = @import("keys.zig");
 const types = @import("../core/types.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
@@ -69,13 +70,89 @@ pub fn show(s: *Number) void {
     s.text.set(format(s.value, &buf));
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// The value typed in `text` (spaces around it ignored), clamped to `range`, or null when
+/// it is not a number.
+pub fn parse(text: []const u8, range: Range) ?f32 {
+    const v = std.fmt.parseFloat(f32, std.mem.trim(u8, text, " ")) catch return null;
+    if (std.math.isNan(v)) return null;
+    return std.math.clamp(v, range.lo, range.hi);
+}
+
+/// The value after key `code` on a focused field, or null for a key that does not step:
+/// Up and Down by the step, Page Up and Page Down by ten, Home and End to the ends.
+pub fn stepped(value: f32, code: u8, range: Range) ?f32 {
+    const v: f32 = if (code == keys.up)
+        value + range.step
+    else if (code == keys.down)
+        value - range.step
+    else if (code == keys.page_up)
+        value + 10 * range.step
+    else if (code == keys.page_down)
+        value - 10 * range.step
+    else if (code == keys.home)
+        range.lo
+    else if (code == keys.end)
+        range.hi
+    else
+        return null;
+    return std.math.clamp(v, range.lo, range.hi);
+}
+
+/// Takes the typed text as the value (or, if it is not a number, the value back as the text).
+pub fn commit(s: *Number, range: Range) void {
+    s.value = parse(s.text.text(), range) orelse s.value;
+    show(s);
+}
+
+/// Applies a frame's input to field `s` named `id`, laid out last frame at `last`: the pointer
+/// places the caret (as `textfield.behave`); while focused the stepping keys (`stepped`)
+/// change the value, Enter takes the typed text, and other keys and typed text edit it; the
+/// wheel over the field steps the value (up adds); losing focus takes the typed text. Returns
+/// whether the value changed.
+pub fn behave(s: *Number, th: *const Theme, id: Id, r: Response, last: Rect, range: Range, in: *const Input) bool {
+    const before = s.value;
+    const t = &s.text;
+    // Unfocused, the text is the value: so this is also where losing focus takes the text.
+    if (!r.focused) commit(s, range);
+    const ed = tf.point(t, th, r, last, in);
+    const cx: edit.Context = .{ .clipboard = &t.clipboard, .copy_buf = &t.copied };
+    var res: edit.Result = .{};
+    for (in.events, 0..) |e, i| {
+        if (!r.focused or i >= 64) break;
+        const down = (e.kind == .press or e.kind == .repeat) and @as(u8, @bitCast(e.mods)) & 0xf == 0;
+        const v = if (down) stepped(parse(t.text(), range) orelse s.value, e.code, range) else null;
+        if (v) |nv| {
+            s.value = nv;
+            show(s);
+            continue;
+        }
+        const one = tf.feed(ed, in, id, i, cx);
+        tf.orResult(&res, one);
+        if (one.submitted) commit(s, range);
+    }
+    const k = tf.keyboardOf(in, id, r.focused);
+    var last_cx = cx;
+    last_cx.composition = k.composition(id, &t.ime);
+    tf.orResult(&res, tf.feed(ed, in, id, null, last_cx));
+    if (r.hovered and in.wheel[1] != 0) {
+        s.value = std.math.clamp(s.value + in.wheel[1] * range.step, range.lo, range.hi);
+        show(s);
+    }
+    t.result = res;
+    tf.follow(t, th, r, last);
+    return s.value != before;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A number field named `id` over `s`, running `range`. Returns its response.
+/// A number field named `id` over `s`, running `range`. Returns its response; whether the
+/// value changed is `s.value` against what it was.
 pub fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Response {
     const r0 = f.ctx.inter.response(id);
-    _ = range;
-    if (!r0.focused) show(s);
+    _ = behave(s, th, id, r0, f.lastRect(id), range, f.in);
+    tf.platform(f, &s.text);
     const node = f.open(id, numberStyle(th, r0.focused, s.text.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -90,7 +167,8 @@ pub fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Res
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// A number field named `id` over the `Number` field `bind`, running `range`. A range whose ends are not ordered, or
+    /// A number field named `id` over the `Number` field `bind`, running `range`. Its events
+    /// carry the value, on a frame that changed it. A range whose ends are not ordered, or
     /// whose step is not positive, is a compile error.
     pub fn number(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime range: Range) Spec {
         if (comptime rangeError(@tagName(id), range)) |msg| @compileError(msg);
@@ -103,10 +181,11 @@ pub const ct = struct {
 };
 
 /// The comptime number field named `name` over field `bind`, running `range` (`Spec.widget`):
-/// the same rows as `number`.
+/// the same rows as `number`, the same input applied (`behave`).
 pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime range: Range) type {
     return struct {
         pub const focusable = true;
+        pub const Payload = f32;
         /// The ends and step of its value.
         pub const value_range = range;
 
@@ -121,7 +200,6 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
-            if (!focused) show(s);
             next.* += 4;
             const i = t.push(parent, .hash(name), &numberStyle(th, focused, s.text.scroll));
             const v = tf.shown(&s.text, th, "");
@@ -129,6 +207,15 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             tf.pushText(ui, i, v.str, tf.textStyle(th, false));
             _ = t.push(i, .none, &tf.caretStyle(th, v.caret, 0, focused));
             t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            const last: Rect = if (ui.built) ui.tables.t.rect(row + 1) else .{};
+            const s = &@field(ui.signals.state, bind);
+            if (!behave(s, &Ui.theme, .hash(name), r, last, range, in)) return null;
+            return @unionInit(Ui.Events.Event, name, s.value);
         }
     };
 }
@@ -193,6 +280,21 @@ test "format: the shortest text of a value" {
     try testing.expectEqualStrings("0.1", format(0.1, &buf));
 }
 
+test "parse, stepped: typed text and steps of a value" {
+    const r: Range = .{ .lo = -1, .hi = 1, .step = 0.25 };
+    try testing.expectEqual(@as(?f32, 0.5), parse(" 0.5 ", r));
+    try testing.expectEqual(@as(?f32, 1), parse("7", r));
+    try testing.expectEqual(@as(?f32, null), parse("x", r));
+    try testing.expectEqual(@as(?f32, null), parse("nan", r));
+    try testing.expectEqual(@as(?f32, 0.75), stepped(0.5, keys.up, r));
+    try testing.expectEqual(@as(?f32, 0.25), stepped(0.5, keys.down, r));
+    try testing.expectEqual(@as(?f32, 1), stepped(0.5, keys.page_up, r));
+    try testing.expectEqual(@as(?f32, -1), stepped(0.5, keys.page_down, r));
+    try testing.expectEqual(@as(?f32, -1), stepped(0.5, keys.home, r));
+    try testing.expectEqual(@as(?f32, 1), stepped(0.5, keys.end, r));
+    try testing.expectEqual(@as(?f32, null), stepped(0.5, keys.enter, r));
+}
+
 var page: Page.Run = .{};
 
 fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
@@ -205,6 +307,10 @@ fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
         try testing.expectEqual([2]u32{ a.text.ed.caret, a.text.ed.anchor }, [2]u32{ b.text.ed.caret, b.text.ed.anchor });
     }
     return out;
+}
+
+fn press(code: u8, mods: Input.Mods) Input.Event {
+    return .{ .kind = .press, .code = code, .mods = mods };
 }
 
 test "number: the page agrees in both front ends; the text shows the value" {
@@ -241,6 +347,63 @@ test "number look: a text field's box showing the value, the caret at its end wh
     try testing.expectEqual(th.accent.bitsOf(), t.c.look[q].border_color);
     try testing.expectEqual(th.text.bitsOf(), t.c.look[q + 3].fill);
     try testing.expectApproxEqAbs(box.x0 + th.pad + tf.advance(&th), t.rect(q + 3).x0, 0.5);
+}
+
+test "number input: steps by keys and wheel, typing taken on Enter, a step or blur" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try both(h, &in);
+    const t = out.runtime.tree;
+    const qty = t.rect(t.find(.from("qty")));
+    const scale = t.rect(t.find(.from("scale")));
+    in.pointer = .{ qty.x1 - 4, (qty.y0 + qty.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    for ([_]struct { code: u8, v: f32 }{ .{ .code = keys.up, .v = 4 }, .{ .code = keys.page_up, .v = 10 }, .{ .code = keys.down, .v = 9 }, .{ .code = keys.home, .v = 0 } }) |st| {
+        const ev = [_]Input.Event{press(st.code, .{})};
+        in.events = &ev;
+        out = try both(h, &in);
+        try testing.expectEqual(st.v, h.app.qty.value);
+        try testing.expectEqual(@as(?Page.Ui.Events.Event, .{ .qty = st.v }), out.comptime_.event);
+    }
+    // Select all, type 7, Enter: taken.
+    var seven = "7".*;
+    const typed = [_]Input.Event{ press(0x04, .{ .ctrl = true }), .{ .kind = .text, .at = 0, .len = 1 }, press(keys.enter, .{}) };
+    in.text = &seven;
+    in.events = &typed;
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 7), h.app.qty.value);
+    // Typed 5 then Up: the step starts from what was typed.
+    var five = "5".*;
+    const up = [_]Input.Event{ press(0x04, .{ .ctrl = true }), .{ .kind = .text, .at = 0, .len = 1 }, press(keys.up, .{}) };
+    in.text = &five;
+    in.events = &up;
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 6), h.app.qty.value);
+    try testing.expectEqualStrings("6", h.app.qty.text.text());
+    // Garbage, then a click on Scale: Quantity keeps 6; the wheel over Scale steps it.
+    var junk = "x".*;
+    const j = [_]Input.Event{.{ .kind = .text, .at = 0, .len = 1 }};
+    in.text = &junk;
+    in.events = &j;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("6x", h.app.qty.text.text());
+    in.text = "";
+    in.events = &.{};
+    in.pointer = .{ scale.x1 - 4, (scale.y0 + scale.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    try testing.expectEqual(@as(f32, 6), h.app.qty.value);
+    try testing.expectEqualStrings("6", h.app.qty.text.text());
+    in.wheel = .{ 0, 1 };
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 0.75), h.app.scale.value);
+    in.wheel = .{ 0, -3 };
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 0), h.app.scale.value);
 }
 
 test {
