@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const popover = @import("popover.zig");
 const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
@@ -345,38 +346,49 @@ pub fn Datepicker(comptime name: @EnumLiteral(), comptime field: @EnumLiteral())
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The button: a theme button filled by its response.
+/// The button: a theme button filled by its response, at least 160 wide, its text at the
+/// start.
 pub fn buttonStyle(th: *const Theme, r: Response) Style {
     var s = base.buttonStyle(th);
     s.fill = base.buttonFill(th, r);
+    s.min = .{ 160, 0 };
+    s.main = .start;
     return s;
 }
 
-/// The dialog, floating `th.gap` below the button's rect `at`, left edges aligned.
+/// The dialog: popover.zig's panel, floating `th.gap` below the button's rect `at`, left
+/// edges aligned.
 pub fn dialogStyle(th: *const Theme, at: Rect) Style {
-    return .{ .float = true, .offset = .{ at.x0, at.y1 + th.gap }, .pad = @splat(th.pad), .gap = th.gap };
+    return popover.panelStyle(th, at);
 }
 
+/// The header: previous month, the title, next month, across the dialog.
 pub fn headerStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .size = .{ .fill, .fit }, .cross = .center };
+    return .{ .dir = .x, .size = .{ .fill, .fit }, .cross = .center, .gap = th.gap };
 }
 
-/// The previous and next month buttons.
+/// The previous and next month buttons, filled from `navFills` by hover.
 pub fn navStyle(th: *const Theme, hovered: bool) Style {
-    _ = hovered;
-    return .{ .size = .{ .px(28), .px(28) }, .main = .center, .cross = .center, .radius = th.radius };
+    return .{ .size = .{ .px(28), .px(28) }, .main = .center, .cross = .center, .radius = th.radius, .fill = navFills(th)[@intFromBool(hovered)] };
 }
 
+/// A month button's fill, indexed by hover: none, then the hot control colour.
+pub fn navFills(th: *const Theme) base.OnOff {
+    return .{ .transparent, th.control_hot };
+}
+
+/// The month's title, centred between the buttons.
 pub fn titleStyle() Style {
     return .{ .size = .{ .grow(1), .fit }, .main = .center, .cross = .center };
 }
 
+/// The grid: the weekdays' row and six weeks, touching.
 pub fn gridStyle(th: *const Theme) Style {
     _ = th;
     return .{};
 }
 
+/// A week: seven cells, touching.
 pub fn weekStyle() Style {
     return .{ .dir = .x };
 }
@@ -384,16 +396,42 @@ pub fn weekStyle() Style {
 /// What a cell shows besides its day.
 pub const CellState = struct { hovered: bool = false, focused: bool = false, chosen: bool = false };
 
-/// A day cell (and a weekday heading, with no state).
+/// A day cell (and a weekday heading, with no state): filled from `cellFills` by choice and
+/// hover, outlined in the text colour where the keyboard focus is (`focusBorders`).
 pub fn cellStyle(th: *const Theme, cs: CellState) Style {
-    _ = cs;
-    return .{ .size = .{ .px(32), .px(28) }, .main = .center, .cross = .center, .radius = th.radius };
+    return .{
+        .size = .{ .px(32), .px(28) },
+        .main = .center,
+        .cross = .center,
+        .radius = th.radius,
+        .fill = cellFills(th)[(@as(u2, @intFromBool(cs.chosen)) << 1) | @intFromBool(cs.hovered)],
+        .border = 1,
+        .border_color = focusBorders(th)[@intFromBool(cs.focused)],
+    };
 }
 
-/// A day's number, by whether it is in the month shown.
+/// A cell's fill, indexed by `chosen << 1 | hovered`: none, the hot control colour under the
+/// pointer, the accent for the chosen day, hovered or not.
+pub fn cellFills(th: *const Theme) base.StateColors {
+    return .{ .transparent, th.control_hot, th.accent, th.accent };
+}
+
+/// A cell's outline, indexed by focus: none, then the text colour.
+pub fn focusBorders(th: *const Theme) base.OnOff {
+    return .{ .transparent, th.text };
+}
+
+/// A day's number, by whether it is in the month shown (`dayColors`).
 pub fn dayText(th: *const Theme, in_month: bool) TextStyle {
-    _ = in_month;
-    return base.labelText(th);
+    var ts = base.labelText(th);
+    ts.color = dayColors(th)[@intFromBool(in_month)];
+    return ts;
+}
+
+/// A day's colour, indexed by whether it is in the month shown: the hot control colour (dim),
+/// then the text colour.
+pub fn dayColors(th: *const Theme) base.OnOff {
+    return .{ th.control_hot, th.text };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -502,6 +540,44 @@ test "Datepicker: the page agrees in both front ends, closed and open" {
     // The first cell is November 1st, the last December 12th.
     try testing.expect(t.rect(t.find(.from("due_d0"))).x0 < t.rect(t.find(.from("due_d6"))).x0);
     try testing.expect(t.rect(t.find(.from("due_d0"))).y0 < t.rect(t.find(.from("due_d41"))).y0);
+}
+
+test "buttonStyle, dialogStyle, navStyle, cellStyle, dayText: the theme's tokens" {
+    const th: Theme = .default;
+    try testing.expectEqual(th.control_hot, buttonStyle(&th, .{ .hovered = true }).fill);
+    try testing.expectEqual([2]f32{ 160, 0 }, buttonStyle(&th, .{}).min);
+    const d = dialogStyle(&th, .{ .x0 = 10, .y0 = 0, .x1 = 170, .y1 = 30 });
+    try testing.expectEqual(th.panel, d.fill);
+    try testing.expectEqual([2]f32{ 10, 30 + th.gap }, d.offset);
+    try testing.expectEqual(types.Color.transparent, navStyle(&th, false).fill);
+    try testing.expectEqual(th.control_hot, navStyle(&th, true).fill);
+    try testing.expectEqual(types.Color.transparent, cellStyle(&th, .{}).fill);
+    try testing.expectEqual(th.control_hot, cellStyle(&th, .{ .hovered = true }).fill);
+    try testing.expectEqual(th.accent, cellStyle(&th, .{ .chosen = true }).fill);
+    try testing.expectEqual(th.accent, cellStyle(&th, .{ .chosen = true, .hovered = true }).fill);
+    try testing.expectEqual(types.Color.transparent, cellStyle(&th, .{}).border_color);
+    try testing.expectEqual(th.text, cellStyle(&th, .{ .focused = true }).border_color);
+    try testing.expectEqual(th.text, dayText(&th, true).color);
+    try testing.expectEqual(th.control_hot, dayText(&th, false).color);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .accent = .rgb(0, 90, 200), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Datepicker: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    var st: DateState = .on(today);
+    st.open = true;
+    st.focus = today + 1;
+    st.hover = 3;
+    const t = try setState(&S.h, st);
+    // November 2026: cell k is the (k + 1)th.
+    try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("due_d15"))].fill);
+    try testing.expectEqual(light.text.bitsOf(), t.c.look[t.find(.from("due_d16"))].border_color);
+    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("due_d3"))].fill);
+    try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("due_dialog"))].fill);
 }
 
 test "checkDatepicker: the state field" {
