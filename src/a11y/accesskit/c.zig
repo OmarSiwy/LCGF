@@ -58,6 +58,7 @@ pub const Role = enum(u8) {
     radio_group = 102,
     region = 103,
     scroll_bar = 107,
+    scroll_view = 108,
     search = 109,
     slider = 113,
     spin_button = 114,
