@@ -205,6 +205,25 @@ pub fn update(c: Hsva, r: [3]Response, rects: [3]Rect, in: *const Input) Hsva {
     return out;
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// The parts' `value` columns: the area its saturation (a 2D slider has one value; its value
+/// is reported as saturation, ARIA has no two-axis slider), the hue slider degrees, the opacity
+/// slider its fraction. The group's value is the opacity-free colour as 0xRRGGBB.
+pub fn values(c: Hsva) [3]f32 {
+    return .{ base.unit(c.s), base.unit(c.h) * 360, base.unit(c.a) };
+}
+
+pub fn groupValue(c: Hsva) f32 {
+    const k = c.rgba();
+    return @floatFromInt((@as(u32, k.r) << 16) | (@as(u32, k.g) << 8) | k.b);
+}
+
+/// Names the picker after the text of `label` (a caption's row), as `aria-labelledby`.
+pub fn setName(s: *a11y.Semantics, group: u32, label: u32) void {
+    s.c.labelled_by[group] = label;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A colour picker for `color`. Returns the area's response.
@@ -219,11 +238,12 @@ pub fn colorpicker(f: *Frame, th: *const Theme, id: Id, color: *Hsva) Response {
     }
     color.* = update(color.*, r, rects, f.in);
     const c = color.*;
+    const vals = values(c);
     var g = pickerStyle(th);
-    _ = &g;
+    g.value = groupValue(c);
     _ = f.open(.none, g);
     var a = areaStyle(th, c);
-    _ = &a;
+    a.value = vals[0];
     const area = f.open(partId(id, .area), a);
     const ra = f.interact(area, .any);
     _ = f.leaf(.none, areaLayer(false));
@@ -231,14 +251,14 @@ pub fn colorpicker(f: *Frame, th: *const Theme, id: Id, color: *Hsva) Response {
     _ = f.leaf(.none, areaMarker(c));
     f.close();
     var hs = trackStyle(th);
-    _ = &hs;
+    hs.value = vals[1];
     const hue = f.open(partId(id, .hue), hs);
     _ = f.interact(hue, .any);
     for (0..hue_stops) |k| _ = f.leaf(.none, hueSegment(@intCast(k)));
     _ = f.leaf(.none, thumbStyle(c.h));
     f.close();
     var al = trackStyle(th);
-    _ = &al;
+    al.value = vals[2];
     const alpha = f.open(partId(id, .alpha), al);
     _ = f.interact(alpha, .any);
     _ = f.leaf(.none, alphaFill(c));
@@ -352,24 +372,25 @@ pub fn ComptimeColorpicker(comptime State: type, comptime spec: Spec, comptime t
             const v = comptime ct.fields(n);
             const id: Id = .hash(v.name);
             const c: Hsva = @field(state, v.color);
+            const vals = values(c);
             var g = pickerStyle(&th);
-            _ = &g;
+            g.value = groupValue(c);
             const group = tb.t.push(parent, .none, &g);
             var a = areaStyle(&th, c);
-            _ = &a;
+            a.value = vals[0];
             const area = tb.t.push(group, partId(id, .area), &a);
             _ = tb.t.push(area, .none, &areaLayer(false));
             _ = tb.t.push(area, .none, &areaLayer(true));
             _ = tb.t.push(area, .none, &areaMarker(c));
             tb.t.seal(area);
             var hs = trackStyle(&th);
-            _ = &hs;
+            hs.value = vals[1];
             const hue = tb.t.push(group, partId(id, .hue), &hs);
             for (0..hue_stops) |k| _ = tb.t.push(hue, .none, &hueSegment(@intCast(k)));
             _ = tb.t.push(hue, .none, &thumbStyle(c.h));
             tb.t.seal(hue);
             var al = trackStyle(&th);
-            _ = &al;
+            al.value = vals[2];
             const alpha = tb.t.push(group, partId(id, .alpha), &al);
             _ = tb.t.push(alpha, .none, &alphaFill(c));
             _ = tb.t.push(alpha, .none, &thumbStyle(c.a));
@@ -445,6 +466,31 @@ const group_row = 3;
 const area_row = group_row + 1;
 const hue_row = area_row + 4;
 const alpha_row = hue_row + 1 + hue_stops + 1;
+
+test "colorpicker: a group of three sliders with their values" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const c = Example(theme).start;
+    try testing.expectEqual(@backingInt(a11y.Role.group), t.c.role[group_row]);
+    for ([_]u32{ area_row, hue_row, alpha_row }) |k| try testing.expectEqual(@backingInt(a11y.Role.slider), t.c.role[k]);
+    try testing.expectEqual(@as(f32, 0.5), t.c.value[area_row]);
+    try testing.expectApproxEqAbs(@as(f32, 216), t.c.value[hue_row], 1e-3);
+    try testing.expectEqual(@as(f32, 1), t.c.value[alpha_row]);
+    const k = c.rgba();
+    try testing.expectEqual(@as(f32, @floatFromInt(@as(u32, k.r) * 65536 + @as(u32, k.g) * 256 + k.b)), t.c.value[group_row]);
+    try testing.expectEqual(t.find(partId(.from("paint"), .hue)), hue_row);
+
+    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    setName(&sem, group_row, group_row - 1);
+    a11y.names(t, &sem);
+    try testing.expectEqual(t.c.text[group_row - 1], sem.c.name[group_row]);
+}
 
 test "check: what a comptime colour picker's state must have" {
     const Good = struct { c: Hsva = .{} };
