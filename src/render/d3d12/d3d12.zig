@@ -12,6 +12,8 @@ pub const c = com.c;
 pub const device = @import("device.zig");
 pub const host = @import("host.zig");
 pub const pipeline = @import("pipeline.zig");
+pub const renderer = @import("renderer.zig");
+pub const Renderer = renderer.Renderer;
 
 test {
     std.testing.refAllDecls(@This());
@@ -19,4 +21,5 @@ test {
     std.testing.refAllDecls(device);
     std.testing.refAllDecls(host);
     std.testing.refAllDecls(pipeline);
+    std.testing.refAllDecls(renderer);
 }
