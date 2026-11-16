@@ -20,9 +20,10 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 | egui 0.37.0 | `Context::run_ui` (input, egui's own widgets, layout, shapes) and `Context::tessellate` (meshes), no eframe, no window | default fonts at 14 and 20 px, every glyph tessellated into vertices | springs are the prototype's step (egui's animation helpers are tweens) |
 | Iced 0.14.0 | `view`, `UserInterface::build` (diff against the widget tree, layout), `update` with the frame's event, `draw` into the tiny-skia renderer's layers (no rasterisation until `present`); no window | cosmic-text shaping with Iced's embedded Fira Sans, 14 and 20 px, layouts cached in the widget tree | springs are the prototype's step |
 | Slint 1.18.1 | retained, lazy bindings: components made once; per frame the property changes (pointer event, ListView `content-y`, bar widths, window size), then `draw_if_needed` on a `MinimalSoftwareWindow`: bindings, layout and software redraw of the dirty region into a 32-bit buffer | system fonts, 14 and 20 px, rasterised | includes rasterisation; layout is evaluated lazily during rendering, so there is no layout-only time |
+| Qt Quick 6.12.0 | retained, bindings and scene graph: QML made once; per frame the changes (mouse move, ListView `contentY`, bar widths, window size), then `grabWindow`: polish (layout), scene graph sync and render with the software back end into an image | system fonts, 14 and 20 px, rasterised | includes rasterisation; `grabWindow` renders every frame, so the idle row uses Qt's own render loop instead (frames swapped) |
 | LVGL 9.6.0 | retained: objects made once; per frame the changes (pointer read, list rows recycled, bar widths, resolution), then `lv_refr_now`: layout and software redraw of the invalidated areas into a 32-bit partial buffer | Montserrat 14 and 20 px, rasterised | includes rasterisation; LVGL's own `layout` line (changes + `lv_obj_update_layout`) is given below |
 
-None of these rows rasterises except LVGL and Slint. Draw output per frame differs in kind (LCGR quads and
+None of these rows rasterises except LVGL, Slint and Qt Quick. Draw output per frame differs in kind (LCGR quads and
 text runs, Clay render commands, ImGui and egui vertices, Iced layers), so the `out=` counts in the harness output are not comparable
 across rows.
 
@@ -34,14 +35,14 @@ springs most). The LCGR column here is from the Clay run. For LVGL and Slint the
 poll, and the idle row counts the polls that redrew anything; for egui and Iced it counts the frames an
 eframe or iced_winit host would have run.
 
-| Scene | LCGR | Clay | Dear ImGui | LVGL (layout only) | egui | Iced | Slint |
-|---|---|---|---|---|---|---|---|
-| form | 16.7 / 19.6 | 28.0 / 39.3 | 15.8 / 23.2 | 0.9 / 1.2 (0.8) | 216.1 / 291.8 | 21.6 / 24.6 | 46.0 / 379.1 |
-| list | 12.3 / 15.0 | 21.7 / 27.0 | 11.1 / 19.5 | 795.9 / 905.7 (421) | 242.3 / 259.1 | 212.4 / 311.9 | 2,216.6 / 2,551.7 |
-| text | 17.6 / 20.2 | 29.8 / 33.1 | 89.9 / 164.4 | 1.0 / 1.9 (0.9) | 130.1 / 182.0 | 19.9 / 23.1 | 31.7 / 35.1 |
-| springs | 219.8 / 226.5 | 112.3 / 161.4 | 52.8 / 90.4 | 3,248.9 / 3,386.0 (2,472) | 316.5 / 370.1 | 165.7 / 172.4 | 5,260.1 / 5,937.1 |
-| resize | 17.6 / 26.1 | 29.4 / 36.7 | 92.9 / 151.8 | 1,970.1 / 3,514.8 (1,039) | 281.3 / 331.2 | 141.2 / 240.5 | 2,534.9 / 4,710.9 |
-| idle: frames built of 3,000 polls | 2 | 3,000 | 3,000 | 1 | 3 | 1 | 1 |
+| Scene | LCGR | Clay | Dear ImGui | LVGL (layout only) | egui | Iced | Slint | Qt Quick |
+|---|---|---|---|---|---|---|---|---|
+| form | 16.7 / 19.6 | 28.0 / 39.3 | 15.8 / 23.2 | 0.9 / 1.2 (0.8) | 216.1 / 291.8 | 21.6 / 24.6 | 46.0 / 379.1 | 114.2 / 117.7 |
+| list | 12.3 / 15.0 | 21.7 / 27.0 | 11.1 / 19.5 | 795.9 / 905.7 (421) | 242.3 / 259.1 | 212.4 / 311.9 | 2,216.6 / 2,551.7 | 203.5 / 208.5 |
+| text | 17.6 / 20.2 | 29.8 / 33.1 | 89.9 / 164.4 | 1.0 / 1.9 (0.9) | 130.1 / 182.0 | 19.9 / 23.1 | 31.7 / 35.1 | 214.1 / 218.7 |
+| springs | 219.8 / 226.5 | 112.3 / 161.4 | 52.8 / 90.4 | 3,248.9 / 3,386.0 (2,472) | 316.5 / 370.1 | 165.7 / 172.4 | 5,260.1 / 5,937.1 | 12,016.7 / 15,133.5 |
+| resize | 17.6 / 26.1 | 29.4 / 36.7 | 92.9 / 151.8 | 1,970.1 / 3,514.8 (1,039) | 281.3 / 331.2 | 141.2 / 240.5 | 2,534.9 / 4,710.9 | 313.7 / 1,879.4 |
+| idle: frames built of 3,000 polls | 2 | 3,000 | 3,000 | 1 | 3 | 1 | 1 | 2 |
 
 LCGR frame medians (us) in each run, and the load average (1 minute, 32 CPUs) during it:
 
@@ -53,20 +54,25 @@ LCGR frame medians (us) in each run, and the load average (1 minute, 32 CPUs) du
 | vs-egui | 3.3 to 3.9 | 16.8 | 12.8 | 17.8 | 76.3 | 17.9 |
 | vs-iced | 4.5 to 5.3 | 16.9 | 12.8 | 17.7 | 75.5 | 17.7 |
 | vs-slint | 3.1 to 6.4 | 16.9 | 12.8 | 17.7 | 74.5 | 17.9 |
+| vs-qtquick | 2.3 to 3.2 | 16.8 | 12.8 | 17.9 | 74.3 | 19.2 |
 
 ## Memory, idle and size
 
 LCGR from the Clay run; in the egui run it was 12,312 KiB resident and 269,459 + 11,785,924 bytes,
 after the benchmark gained more columns.
 
-| | LCGR | Clay | Dear ImGui | LVGL | egui | Iced | Slint |
-|---|---|---|---|---|---|---|---|
-| Resident after one idle frame | 8,048 KiB | 2,096 KiB | 3,844 KiB | 3,540 KiB | 6,884 KiB | 6,024 KiB | 15,176 KiB |
-| Idle wake-ups per second | 0 | 0 | 0 | 30 | 0 | 0 | 0 |
-| Loaded bytes (size build) + bss | 220,643 + 7,557,108 | 99,105 + 101,392 | 757,100 + 61,448 | 659,062 + 1,022,184 | 3,938,932 + 400 | 1,626,435 + 264 | 8,016,224 + 2,312 |
+| | LCGR | Clay | Dear ImGui | LVGL | egui | Iced | Slint | Qt Quick |
+|---|---|---|---|---|---|---|---|---|
+| Resident after one idle frame | 8,048 KiB | 2,096 KiB | 3,844 KiB | 3,540 KiB | 6,884 KiB | 6,024 KiB | 15,176 KiB | 70,440 KiB |
+| Idle wake-ups per second | 0 | 0 | 0 | 30 | 0 | 0 | 0 | 0 |
+| Loaded bytes (size build) + bss | 220,643 + 7,557,108 | 99,105 + 101,392 | 757,100 + 61,448 | 659,062 + 1,022,184 | 3,938,932 + 400 | 1,626,435 + 264 | 8,016,224 + 2,312 | 47,534 + 32,240, plus shared libraries |
 
-The size build is ReleaseSmall for the Zig, C and C++ rows, and cargo's `small` profile
-(opt-level s, LTO, one codegen unit, panic abort, stripped) for the Rust rows.
+The size build is ReleaseSmall for the Zig, C and C++ rows, cargo's `small` profile (opt-level s,
+LTO, one codegen unit, panic abort, stripped) for the Rust rows, and `c++ -Os -s` for Qt Quick.
+Every other row links its framework statically (and libc dynamically); Qt ships as shared
+libraries, so its executable is only the harness: once idle it maps 107 shared libraries of
+199,423,208 bytes on disk (`bench/vs/measure.py --libraries`), Qt's own and those it pulls in
+(ICU with its data, libstdc++, fontconfig, FreeType, HarfBuzz, libc and more).
 
 ## What these numbers do and do not say
 
@@ -111,8 +117,8 @@ The size build is ReleaseSmall for the Zig, C and C++ rows, and cargo's `small` 
   widget tree and is reused while its content and bounds stay the same, which is why form and text
   cost about what LCGR's do. Where texts or sizes change every frame (the list's "Row N" labels, a
   resize re-wrapping every paragraph, 1,000 bar widths) it re-shapes or re-lays out, and the time
-  goes up 7 to 10 times (resize against text, list against form). The list scrolls a `scrollable` over the visible rows between two spacers,
-  moved by the `scroll_to` operation each frame.
+  goes up 7 to 10 times (resize against text, list against form). The list scrolls a `scrollable`
+  over the visible rows between two spacers, moved by the `scroll_to` operation each frame.
 - Slint, like LVGL, is retained and draws only dirty regions, and its idle loop is its own: run
   due timers, redraw if needed, sleep until the next timer or input. With nothing animating it has
   no timer, so it sleeps without waking (0 wake-ups). In the form scene the std-widgets' hover
@@ -122,3 +128,19 @@ The size build is ReleaseSmall for the Zig, C and C++ rows, and cargo's `small` 
   re-evaluating the bindings: setting 1,000 bar widths through a model notifies the repeater row by
   row. Its resident memory and binary include the system font database and the image and SVG
   decoders the std-widgets icons need (8.0 MB loaded).
+- Qt Quick: form and text cost 0.1 to 0.2 ms a grab although `grabWindow` renders every frame,
+  which suggests its software renderer repaints only the regions that changed (not verified in
+  Qt's code); a resize re-polishes the layouts and repaints the window. Springs set a `list<real>` property of 1,000
+  widths each frame, which re-evaluates the 1,000 JavaScript bindings that read it: most of its
+  12 ms. Its idle loop (`exec`, with nothing animating and no cursor blinking) did not wake in the
+  2 s window. Resident memory is mostly the shared libraries' pages and the QML engine.
+
+## What could not be measured fairly here
+
+- Idle wake-ups for egui and Iced: their event loops (eframe, iced_winit) need a window, and the
+  harnesses run without one; the "frames built" row stands in for them.
+- GPU paths: every row runs on the CPU. The GPU back ends (wgpu for egui, Iced and Slint, the RHI
+  for Qt Quick, ImGui's and Clay's renderers) are not measured, and neither is LCGR's.
+- The cost of drawing pixels for the immediate-mode rows and LCGR: their frames stop at the draw
+  list, while LVGL, Slint and Qt Quick rasterise in theirs. The two groups compare within
+  themselves; across groups only the scenes where little changes (form, text, idle) say much.
