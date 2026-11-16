@@ -23,10 +23,12 @@ pub fn spacer(f: *Frame, axis: Axis) Node {
     return f.leaf(.none, style(axis));
 }
 
-/// The spacer's node.
+/// The spacer's node: it fills what is left along `axis` (`Size.fill`), so siblings after it
+/// go to the far end, and is 0 across, so it never widens its parent. Unpainted in every
+/// theme; the axis picks the size by table index.
 pub fn style(axis: Axis) Style {
-    _ = axis;
-    return .{};
+    const sizes = [2][2]types.Size{ .{ .fill, .px(0) }, .{ .px(0), .fill } };
+    return .{ .size = sizes[@backingInt(axis)] };
 }
 
 /// The spacer as a spec node.
@@ -97,6 +99,27 @@ test "spacer: both front ends build one empty leaf where it is placed" {
     try testing.expectEqual(@as(u32, 14), t.len);
     try testing.expectEqual(t.c.end[7], 8);
     try testing.expectEqual(t.c.end[12], 13);
+}
+
+test "spacer: takes the space left, pushing later siblings to the far end; paints nothing" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const bar = t.rect(2);
+    const close = t.rect(t.find(.from("close")));
+    const gap = t.rect(7);
+    try testing.expectEqual(bar.x1 - 8, close.x1);
+    try testing.expectEqual(t.rect(t.find(.from("save"))).x1 + 8, gap.x0);
+    try testing.expectEqual(close.x0 - 8, gap.x1);
+    try testing.expectEqual(@as(f32, 0), gap.h());
+    const side = t.rect(10);
+    try testing.expectEqual(side.y1 - 8, t.rect(13).y1);
+    try testing.expectEqual(@as(f32, 0), t.rect(12).w());
+    // Drawn: the bar and three buttons; neither spacer has a quad.
+    try testing.expectEqual(@as(u32, 4), out.runtime.draw.quad_len);
+    try testing.expectEqual(types.Color.transparent.bitsOf(), t.c.look[7].fill);
 }
 
 test {
