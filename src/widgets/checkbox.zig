@@ -360,7 +360,7 @@ test "checkbox input: click and Space toggle; mixed goes to on, then off and on;
 
 var checkbox_semantics: base.Semantic(16) = .{};
 
-test "checkbox a11y: role checkbox, named by its caption, value and checked state, in both front ends" {
+test "checkbox a11y: role checkbox, named by its caption, value and checked or mixed state, in both front ends" {
     const a11y = @import("../a11y/tree.zig");
     const h = &two;
     h.init();
@@ -382,8 +382,9 @@ test "checkbox a11y: role checkbox, named by its caption, value and checked stat
             try testing.expectEqualStrings(name, x.name(0, r));
             try testing.expectEqualStrings(name, x.name(1, r));
             try testing.expectEqual(v.value(), x.out[0].c.value[r]);
-            // Mixed is checked too: the value 0.5 is what tells it apart.
-            try testing.expectEqual(if (v == .off) 0 else checked, x.out[0].c.state[r]);
+            // Mixed is its own state bit, not checked.
+            const want = [3]u8{ 0, checked, a11y.State.bitsOf(.{ .mixed = true }) };
+            try testing.expectEqual(want[@backingInt(v)], x.out[0].c.state[r]);
         }
     }
     // The box and its dash are presentational: each checkbox exports itself and its caption.

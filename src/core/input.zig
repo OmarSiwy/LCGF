@@ -35,6 +35,16 @@ pub const Input = struct {
     /// Fingers and pens on or over the surface this frame, one row each. The mouse stays in
     /// `pointer` and `buttons`. The host owns the slice. Only read during the frame.
     contacts: []const Contact = &.{},
+    /// Logical pixels at each edge, in `Style.pad` order (left, top, right, bottom), that the
+    /// system draws over: a notch, the status and navigation bars, the home indicator. Pad the
+    /// UI's content by it; backgrounds may run underneath. Zero on a plain window.
+    safe_area: [4]f32 = @splat(0),
+    /// The platform's light or dark mode and accent colour. A change builds a frame; an app
+    /// that follows it restyles when it differs from the one it last styled for.
+    appearance: Appearance = .{},
+    /// This frame only: the shell lost what it showed (the app came back from the background,
+    /// its surface was made again), so a frame is needed though no other field changed.
+    redraw: bool = false,
 
     /// `pointer` when the pointer is outside the window.
     pub const outside: [2]f32 = .{ -1, -1 };
@@ -53,6 +63,13 @@ pub const Input = struct {
         pub fn down(k: *const Keys, code: u8) bool {
             return ((k.bits[code >> 6] >> @as(u6, @truncate(code))) & 1) != 0;
         }
+    };
+
+    /// The system's appearance setting, as far as the shell can read it.
+    pub const Appearance = struct {
+        dark: bool = false,
+        /// The system's accent colour; transparent when it has none, and the theme's stays.
+        accent: types.Color = .transparent,
     };
 
     /// One key transition or one piece of typed text.
@@ -130,6 +147,12 @@ pub const Input = struct {
         // Events and contacts last: with none the stamp is the prototype's.
         for (std.mem.sliceAsBytes(in.events)) |b| h = (h ^ b) *% 0x0000_0100_0000_01b3;
         for (std.mem.sliceAsBytes(in.contacts)) |b| h = (h ^ b) *% 0x0000_0100_0000_01b3;
+        // Then the safe area and appearance, only when either is not the default, for the
+        // same reason. `redraw` is not stamped: `needsFrame` reads it.
+        const look = (@as(u64, in.appearance.accent.bitsOf()) << 1) | @intFromBool(in.appearance.dark);
+        const more = [_]u64{ @as(u32, @bitCast(in.safe_area[0])), @as(u32, @bitCast(in.safe_area[1])), @as(u32, @bitCast(in.safe_area[2])), @as(u32, @bitCast(in.safe_area[3])), look };
+        const any = @reduce(.Or, @as(@Vector(more.len, u64), more) != @as(@Vector(more.len, u64), @splat(0)));
+        for (more[0 .. more.len * @intFromBool(any)]) |w| h = (h ^ w) *% 0x0000_0100_0000_01b3;
         return h;
     }
 };
@@ -228,6 +251,22 @@ test "Input.stamp: ignores the clock, sees every other field" {
     changed[10].scroll[0] = 0.5;
     changed[11].scroll[1] = -12;
     for (changed) |c| try std.testing.expect(c.stamp() != base.stamp());
+}
+
+test "Input.stamp: sees the safe area and the appearance, not redraw" {
+    const base = busyInput();
+    var changed: [4]Input = @splat(base);
+    changed[0].safe_area[1] = 47;
+    changed[1].safe_area[3] = 34;
+    changed[2].appearance.dark = true;
+    changed[3].appearance.accent = .rgb(0, 120, 215);
+    for (changed, 0..) |c, i| {
+        try std.testing.expect(c.stamp() != base.stamp());
+        for (changed[0..i]) |d| try std.testing.expect(c.stamp() != d.stamp());
+    }
+    var redraw = base;
+    redraw.redraw = true;
+    try std.testing.expectEqual(base.stamp(), redraw.stamp());
 }
 
 test "Input.events: keys and typed text keep their order" {

@@ -58,19 +58,19 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
         // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).
         const own = c.extra[i];
         const scope = c.scope[i];
-        const alpha = x.alpha[scope];
+        const alpha = x.row[scope].alpha;
         quads[q] = .{
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
             .params = look.params,
-            .uv = x.uv[own],
+            .uv = x.row[own].uv,
             .fill = look.fill,
             .border_color = look.border_color,
-            .radii = radiiOf(x.radii[own], look.radius),
-            .border = x.border[own],
+            .radii = radiiOf(x.row[own].radii, look.radius),
+            .border = x.row[own].border,
             .opacity = alpha,
-            .xform = x.world[scope],
-            .clip_radii = x.clip_radii[c.scope[parent[i]]],
+            .xform = x.row[scope].world,
+            .clip_radii = x.row[c.scope[parent[i]]].clip_radii,
         };
         // Painted when either colour has alpha and the node is not fully transparent.
         const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(alpha > 0);
@@ -105,7 +105,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .start = tx.c.start[k],
             .bytes = tx.c.bytes[k],
             .px = tx.c.px[k],
-            .color = fade(tx.c.color[k], x.alpha[c.scope[n]]),
+            .color = fade(tx.c.color[k], x.row[c.scope[n]].alpha),
             .font = tx.c.font[k],
         };
     }
@@ -363,4 +363,21 @@ test "an empty tree paints nothing" {
     var sc = Scene.carve(&carver);
     emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
     try testing.expectEqual(0, sc.d.quad_len + sc.d.run_len + sc.d.custom_len + sc.d.cmd_len);
+}
+
+test "a textured node with no fill paints its texture untinted" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var sc = Scene.carve(&carver);
+    const t = &sc.t;
+    _ = t.push(0, Id.from("root"), &.{ .size = .{ .px(100), .px(100) } });
+    _ = t.push(0, Id.from("photo"), &.{ .size = .{ .px(20), .px(20) }, .texture = @fromBackingInt(3) });
+    _ = t.push(0, Id.from("framed"), &.{ .size = .{ .px(20), .px(20) }, .texture = @fromBackingInt(3), .border = 1, .border_color = .black });
+    t.seal(0);
+    layout.run(t, &sc.tx, .{ 100, 100 });
+    emit(t, &sc.tx, &sc.cu, "", &sc.d);
+    // The unfilled root paints nothing; both textured leaves are white-tinted quads on texture 3.
+    try testing.expectEqual(2, sc.d.quad_len);
+    for (sc.d.quads[0..2]) |q| try testing.expectEqual(Color.white.bitsOf(), q.fill);
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 0, .count = 2, .texture = @fromBackingInt(3), .material = .solid } }, sc.d.command(0));
 }

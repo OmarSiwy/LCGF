@@ -48,7 +48,6 @@ layout.fit(t, .x);
 layout.resolve(t, .x, in.viewport[0]);
 layout.textAvail(t, tx); // the width each run was given
 mono.wrap(tx); // re-flow the wrapping runs into it
-squares.wrap(tx);
 layout.applyText(t, tx, .y);
 layout.fit(t, .y);
 layout.resolve(t, .y, in.viewport[1]);
@@ -77,19 +76,13 @@ const Squares = struct {
             c.h[k] = lcgr.simd.selF(mine, c.px[k], c.h[k]);
         }
     }
-
-    /// It never wraps: after layout it writes the same one-line extent again, over what a
-    /// font that runs before it wrote.
-    fn wrap(font: Squares, tx: *lcgr.texts.Texts) void {
-        font.measure(tx);
-    }
 };
 ```
 
-`Mono.measure` and `Mono.wrap` write every row (they are vector loops with no mask), so run
-`Mono` first and the other fonts after it, at both points. Without `squares.wrap` above, the
-title would come out 24 px tall instead of 20: `Mono.wrap` gives every non-wrapping run one Mono
-line.
+`Mono.measure` writes every row (a vector loop with no mask), so run `Mono` first and the other
+fonts after it. `Mono.wrap` rewrites only the runs whose `wrap` is set and leaves every other row
+as measured, so `Squares`, which never wraps, has nothing to do at the second point; a font that
+wraps its own runs runs its wrap after `Mono.wrap`.
 
 A run picks its font through `TextStyle.font`:
 

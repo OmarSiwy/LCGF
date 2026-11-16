@@ -213,7 +213,8 @@ pub const Size = extern struct {
     pub const k_max = [4]f32{ 0, 1, 0, 0 }; //   max  = v * k_max + c_max
     pub const c_max = [4]f32{ inf, 0, inf, inf };
     pub const k_grow = [4]f32{ 0, 0, 1, 0 }; //  grow = v * k_grow
-    pub const k_pct = [4]f32{ 0, 0, 0, 1 }; //   pct  = v * k_pct
+    pub const k_pct = [4]f32{ 0, 0, 0, 1 }; //   pct  = v * k_pct + c_pct
+    pub const c_pct = [4]f32{ -1, -1, -1, 0 }; // -1: not a percentage, so pct(0) is 0 px
 };
 
 test "Size: constructors store kind and value" {
@@ -226,17 +227,18 @@ test "Size: constructors store kind and value" {
 
 test "Size: coefficient tables give min, max, grow and pct without a switch" {
     const cases = [_]struct { s: Size, min: f32, max: f32, grow: f32, pct: f32 }{
-        .{ .s = .fit, .min = 0, .max = inf, .grow = 0, .pct = 0 },
-        .{ .s = .px(30), .min = 30, .max = 30, .grow = 0, .pct = 0 },
-        .{ .s = .grow(3), .min = 0, .max = inf, .grow = 3, .pct = 0 },
+        .{ .s = .fit, .min = 0, .max = inf, .grow = 0, .pct = -1 },
+        .{ .s = .px(30), .min = 30, .max = 30, .grow = 0, .pct = -1 },
+        .{ .s = .grow(3), .min = 0, .max = inf, .grow = 3, .pct = -1 },
         .{ .s = .pct(0.5), .min = 0, .max = inf, .grow = 0, .pct = 0.5 },
+        .{ .s = .pct(0), .min = 0, .max = inf, .grow = 0, .pct = 0 },
     };
     for (cases) |c| {
         const k = @backingInt(c.s.kind);
         try std.testing.expectEqual(c.min, c.s.v * Size.k_min[k]);
         try std.testing.expectEqual(c.max, c.s.v * Size.k_max[k] + Size.c_max[k]);
         try std.testing.expectEqual(c.grow, c.s.v * Size.k_grow[k]);
-        try std.testing.expectEqual(c.pct, c.s.v * Size.k_pct[k]);
+        try std.testing.expectEqual(c.pct, c.s.v * Size.k_pct[k] + Size.c_pct[k]);
     }
 }
 
@@ -341,6 +343,7 @@ pub const Style = struct {
     border_color: Color = .transparent,
     border: f32 = 0,
     radius: f32 = 0,
+    /// Sampled under `fill`, which tints it; with no fill (alpha 0) the tint is white.
     texture: Texture = .white,
     material: Material = .solid,
     /// Passed through to the material's shader.

@@ -330,14 +330,22 @@ pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const 
     return r;
 }
 
-/// Copies what field `s` asks of the host this frame to the runtime front end's `Platform`.
+/// Copies what field `s` asks of the host this frame to the runtime front end's `Platform`:
+/// text input with its purpose and, but for a password, the text and selection around the
+/// caret for the IME and autocorrect; the clipboard text it copied, and a paste.
 pub fn platform(f: *Frame, s: anytype) void {
     const p = &f.ctx.platform;
     if (s.input.wants_text) {
         p.wants_text = true;
         p.ime_rect = s.input.rect;
+        p.purpose = s.input.purpose;
+        const ed = s.editor();
+        const open = s.input.purpose != .secure;
+        p.surrounding = if (open) ed.text() else "";
+        p.selection = if (open) .{ ed.anchor, ed.caret } else .{ 0, 0 };
     }
     if (s.clipboard.set.len > 0) p.clipboard = s.clipboard.set;
+    p.paste = p.paste or s.clipboard.paste;
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -625,6 +633,9 @@ test "textfield input: click to focus, type, select by drag and keys, Enter, in 
     try testing.expect(h.app.name.result.submitted);
     try testing.expectEqual(@as(?Page.Ui.Events.Event, .{ .name = .{ .changed = true, .submitted = true } }), out.comptime_.event);
     try testing.expectEqual(name.x0 + Theme.default.pad + 11 * adv, out.runtime.platform.ime_rect.x0);
+    // The IME is told the field's text and caret.
+    try testing.expectEqualStrings("hello world", out.runtime.platform.surrounding);
+    try testing.expectEqual([2]u32{ 11, 11 }, out.runtime.platform.selection);
     // Shift+Home selects to the start; Shift+Right then Right collapse.
     const sel = [_]Input.Event{ press(0x4a, .{ .shift = true }), press(0x4f, .{ .shift = true }) };
     in.events = &sel;
@@ -637,6 +648,11 @@ test "textfield input: click to focus, type, select by drag and keys, Enter, in 
     out = try both(h, &in);
     try testing.expectEqualStrings("ello world", h.app.name.clipboard.set);
     try testing.expectEqualStrings("ello world", out.runtime.platform.clipboard);
+    // Ctrl+V asks the host for the clipboard's text.
+    const paste = [_]Input.Event{press(0x19, .{ .ctrl = true })};
+    in.events = &paste;
+    out = try both(h, &in);
+    try testing.expect(out.runtime.platform.paste);
     in.events = &.{};
     // Drag from the 2nd byte to the 5th: "llo" selected, caret at 5.
     in.pointer = .{ name.x0 + Theme.default.pad + 2 * adv, y };

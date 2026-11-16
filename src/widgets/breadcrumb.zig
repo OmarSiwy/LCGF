@@ -22,6 +22,7 @@ const none = types.none;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
 const a11y = @import("../a11y/tree.zig");
+const Tree = @import("../core/tree.zig").Tree;
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -93,13 +94,23 @@ pub fn dividerStyle(th: *const Theme) Style {
 /// What assistive technology sees (WAI-ARIA APG breadcrumb pattern): the trail is a
 /// `navigation` landmark, each earlier page a `link` named by its title (from content), and
 /// the current page static text. `types.Role` has neither navigation nor link, so both
-/// front ends write the bytes. The pattern's `aria-current="page"` on the last item has no
-/// bit in `a11y.State`, so it is not exported. The trail has no name of its own (a page
-/// labels it, as "Breadcrumb", with `Semantics.labelled_by`), value 0 and no states.
+/// front ends write the bytes. The pattern's `aria-current="page"` on the last item is
+/// `a11y.State.current`, an application state: `semantics` sets it. The trail has no name of
+/// its own (a page labels it, as "Breadcrumb", with `Semantics.labelled_by`) and value 0.
 pub const role = struct {
     pub const nav: u8 = @backingInt(a11y.Role.navigation);
     pub const link: u8 = @backingInt(a11y.Role.link);
 };
+
+/// Marks the current page (the trail's last item) `current` for assistive technology, in the
+/// trail whose first link is `first_link` in `t`. The application calls it after building
+/// either front end's tree. A trail with no links has nothing to find it by and is skipped.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, first_link: Id) void {
+    const link = t.find(first_link);
+    if (link == none) return;
+    // The current page is the trail's last row.
+    s.c.state[t.c.end[t.c.parent[link]] - 1] |= a11y.State.bitsOf(.{ .current = true });
+}
 
 // ---- behaviour ----------------------------------------------------------------------------
 
@@ -351,7 +362,7 @@ test "breadcrumb: a click or Enter follows a link; every link is a tab stop; bot
     try testing.expectEqual(none, h.ui.signals.state.activated);
 }
 
-test "breadcrumb: navigation holding links named by their titles, in both front ends" {
+test "breadcrumb: navigation holding links named by their titles, the page current, in both front ends" {
     const check = @import("check.zig");
     const h = &harness;
     h.init();
@@ -363,6 +374,7 @@ test "breadcrumb: navigation holding links named by their titles, in both front 
     const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
     for (trees, texts, strings) |t, tx, str| {
         var sem = sb.init();
+        semantics(t, &sem, Default.ids[0]);
         a11y.names(t, &sem);
         a11y.states(t, &sem);
         try testing.expectEqual(a11y.Role.navigation, @as(a11y.Role, @fromBackingInt(t.c.role[rows.nav])));
@@ -375,6 +387,8 @@ test "breadcrumb: navigation holding links named by their titles, in both front 
         }
         try testing.expectEqual(a11y.Role.label, @as(a11y.Role, @fromBackingInt(t.c.role[rows.current])));
         try testing.expectEqualStrings("Widgets", check.nameOf(&sem, tx, str, rows.current));
+        try testing.expectEqual(a11y.State.bitsOf(.{ .current = true }), sem.c.state[rows.current]);
+        try testing.expectEqual(@as(u8, 0), sem.c.state[rows.nav]);
         try testing.expectEqual(a11y.Role.none, @as(a11y.Role, @fromBackingInt(t.c.role[rows.divider[0]])));
     }
 }

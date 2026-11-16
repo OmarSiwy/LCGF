@@ -1,0 +1,206 @@
+diff '--color=never' -ru src/anim/anims.zig src/anim/anims.zig
+--- src/anim/anims.zig
++++ src/anim/anims.zig
+@@ -19,6 +19,7 @@
+ pub const Anims = struct {
+     len: u32 = 0,
+     cap: u32,
++    lost: u32 = 0,
+     c: Columns,
+     /// The row `slot` tries first: the one after the row it last returned, from row 0 after
+     /// each `sweep`. A frame asks for its springs in the same order every frame and `sweep`
+@@ -68,6 +69,7 @@
+         const c = &a.c;
+         const is_new = found == none;
+         const i = simd.selU(is_new, @min(a.len, a.cap - 1), found);
++        a.lost += @intFromBool(is_new and a.len == a.cap);
+         a.len = @min(a.len + @intFromBool(is_new), a.cap);
+         c.id[i] = k;
+         // Select the row to write, not the value: a new spring's start goes to its row, an
+diff '--color=never' -ru src/anim/tweens.zig src/anim/tweens.zig
+--- src/anim/tweens.zig
++++ src/anim/tweens.zig
+@@ -37,6 +37,7 @@
+ pub const Tweens = struct {
+     len: u32 = 0,
+     cap: u32,
++    lost: u32 = 0,
+     c: Columns,
+     /// The row `slot` tries first: the one after the row it last returned, from row 0 after
+     /// each `sweep` (as `Anims.next`). In a steady UI every `slot` is one compare, not a scan.
+@@ -79,6 +80,7 @@
+         const found = if (hit) guess else simd.find(c.id, t.len, k);
+         const is_new = found == none;
+         const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
++        t.lost += @intFromBool(is_new and t.len == t.cap);
+         t.len = @min(t.len + @intFromBool(is_new), t.cap);
+         c.id[i] = k;
+         c.x[i] = simd.selF(is_new, initial, c.x[i]);
+diff '--color=never' -ru src/core/customs.zig src/core/customs.zig
+--- src/core/customs.zig
++++ src/core/customs.zig
+@@ -14,6 +14,7 @@
+     /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+     /// The front end reports it as `Status.customs`.
+     overflow: bool = false,
++    lost: u32 = 0,
+     c: Columns,
+ 
+     pub const Columns = struct {
+@@ -33,11 +34,13 @@
+     pub fn reset(cu: *Customs) void {
+         cu.len = 0;
+         cu.overflow = false;
++        cu.lost = 0;
+     }
+     /// Appends a custom draw for `node` and returns its row.
+     pub fn push(cu: *Customs, node: u32, id: Id, data: u64) u32 {
+         const k = @min(cu.len, cu.cap - 1);
+         cu.overflow = simd.orB(cu.overflow, cu.len >= cu.cap);
++        cu.lost += @intFromBool(cu.len >= cu.cap);
+         cu.len = k + 1;
+         cu.c.node[k] = node;
+         cu.c.id[k] = @backingInt(id);
+diff '--color=never' -ru src/core/strings.zig src/core/strings.zig
+--- src/core/strings.zig
++++ src/core/strings.zig
+@@ -14,6 +14,7 @@
+     /// `add` ran out of room. The bytes that fit are kept; nothing is written out of bounds.
+     /// The front end reports it as `Status.strings`.
+     overflow: bool = false,
++    lost: u32 = 0,
+ 
+     /// Copies `bytes` to the end of the buffer and returns where they landed. When they do not
+     /// fit, the span holds only the prefix that did and `overflow` is set.
+@@ -21,6 +22,7 @@
+         const room = s.buf.len - s.len;
+         const n: u32 = @intCast(@min(bytes.len, room));
+         s.overflow = simd.orB(s.overflow, bytes.len > room);
++        s.lost += @intCast(bytes.len - n);
+         @memcpy(s.buf[s.len..][0..n], bytes[0..n]);
+         const span: Span = .{ .start = s.len, .bytes = n };
+         s.len += n;
+@@ -33,6 +35,7 @@
+     pub fn reset(s: *Strings) void {
+         s.len = 0;
+         s.overflow = false;
++        s.lost = 0;
+     }
+ };
+ 
+diff '--color=never' -ru src/core/texts.zig src/core/texts.zig
+--- src/core/texts.zig
++++ src/core/texts.zig
+@@ -17,6 +17,7 @@
+     /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+     /// The front end reports it as `Status.texts`.
+     overflow: bool = false,
++    lost: u32 = 0,
+     c: Columns,
+ 
+     pub const Columns = struct {
+@@ -46,12 +47,14 @@
+     pub fn reset(tx: *Texts) void {
+         tx.len = 0;
+         tx.overflow = false;
++        tx.lost = 0;
+     }
+     /// Appends a run of `span` for `node` and returns its row. Measured extents and the
+     /// available width start at 0 for the measure and layout passes to fill.
+     pub fn push(tx: *Texts, node: u32, span: Span, ts: *const TextStyle) u32 {
+         const k = @min(tx.len, tx.cap - 1);
+         tx.overflow = simd.orB(tx.overflow, tx.len >= tx.cap);
++        tx.lost += @intFromBool(tx.len >= tx.cap);
+         tx.len = k + 1;
+         tx.c.node[k] = node;
+         tx.c.start[k] = span.start;
+diff '--color=never' -ru src/core/tree.zig src/core/tree.zig
+--- src/core/tree.zig
++++ src/core/tree.zig
+@@ -204,6 +204,7 @@
+         /// `push` ran out of rows. The last row is overwritten; nothing is written out of bounds.
+         /// The front end reports it as `Status.nodes`.
+         overflow: bool = false,
++        lost: u32 = 0,
+         c: Columns,
+         x: Extras,
+         /// Rows of `x` in use, row 0 included.
+@@ -359,6 +360,7 @@
+         pub fn reset(t: *Self) void {
+             t.len = 0;
+             t.overflow = false;
++            t.lost = 0;
+             t.xlen = 1;
+             t.x.node[0] = 0;
+             t.x.row[0] = .defaults;
+@@ -378,6 +380,7 @@
+             const c = &t.c;
+             const i: Index = @intCast(@min(t.len, t.cap - 1));
+             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
++            t.lost += @intFromBool(t.len >= t.cap);
+             t.len = i + 1;
+ 
+             c.id[i] = @backingInt(id);
+diff '--color=never' -ru src/runtime/context.zig src/runtime/context.zig
+--- src/runtime/context.zig
++++ src/runtime/context.zig
+@@ -120,6 +120,11 @@
+     /// Rows of the currently open nodes.
+     stack: []u32,
+     depth: u32 = 0,
++    open_n: u32 = 0,
++    peak_depth: u32 = 0,
++    peak: @Vector(16, u32) = @splat(0),
++    hits: @Vector(16, u32) = @splat(0),
++    first: @Vector(16, u32) = @splat(0),
+     inter: Interaction = .{},
+     /// Keyboard focus: Tab and Shift+Tab, arrows in focus groups, modal traps, the ring.
+     /// `begin` steps it after `inter`, so `inter.focus` is where the keys left it.
+@@ -239,6 +244,8 @@
+         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
+         ctx.stack[0] = root;
+         ctx.depth = 1;
++        ctx.open_n = 1;
++        ctx.peak_depth = 1;
+         return .{ .ctx = ctx, .in = in };
+     }
+ };
+diff '--color=never' -ru src/runtime/frame.zig src/runtime/frame.zig
+--- src/runtime/frame.zig
++++ src/runtime/frame.zig
+@@ -57,6 +57,8 @@
+         ctx.status.depth = simd.orB(ctx.status.depth, ctx.depth >= ctx.limits.depth);
+         ctx.stack[d] = i;
+         ctx.depth = d + 1;
++        ctx.open_n += 1;
++        ctx.peak_depth = @max(ctx.peak_depth, ctx.open_n);
+         return @fromBackingInt(i);
+     }
+ 
+@@ -66,6 +68,7 @@
+         const d = @max(ctx.depth, 2) - 1;
+         f.tree().seal(ctx.stack[d]);
+         ctx.depth = d;
++        ctx.open_n = @max(ctx.open_n, 2) - 1;
+     }
+ 
+     /// A node with no children. Same as `open` then `close`.
+@@ -273,6 +276,18 @@
+             .depth = ctx.status.depth,
+         };
+         ctx.timers.sweep(ctx.frame);
++        {
++            const L = ctx.limits;
++            const want: @Vector(16, u32) = .{ t.len + t.lost, tx.len + tx.lost, cu.len + cu.lost, strings.len + strings.lost, ctx.anims.len + ctx.anims.lost, ctx.tweens.len + ctx.tweens.lost, ctx.flips.len, ctx.signals.len, ctx.peak_depth, ctx.timers.len, ctx.memos.len, 0, 0, 0, 0, 0 };
++            const cap: @Vector(16, u32) = .{ L.nodes, L.texts, L.customs, L.strings, L.anims, L.tweens, L.flips, L.signals, L.depth, L.timers, L.memos, 0, 0, 0, 0, 0 };
++            const over = want > cap;
++            ctx.peak = @max(ctx.peak, want);
++            ctx.hits +%= @select(u32, over, @as(@Vector(16, u32), @splat(1)), @as(@Vector(16, u32), @splat(0)));
++            const z: @Vector(16, u32) = @splat(0);
++            ctx.first = @select(u32, over & (ctx.first == z), @as(@Vector(16, u32), @splat(ctx.frame)), ctx.first);
++            ctx.anims.lost = 0;
++            ctx.tweens.lost = 0;
++        }
+         return .{
+             .draw = &ctx.draw,
+             .tree = t,

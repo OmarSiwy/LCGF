@@ -1,23 +1,27 @@
 //! Input methods through `zwp_text_input_v3`. `Platform.wants_text` enables the text input
-//! while the window has its focus and `Platform.ime_rect` places the candidate window; what
-//! the input method sends is double-buffered until `done`: the preedit becomes
-//! `Events.composition`, committed text is typed (`Input.text` and a `.text` event).
+//! while the window has its focus, `Platform.ime_rect` places the candidate window,
+//! `Platform.purpose` is its content type and `Platform.surrounding` with `selection` its
+//! surrounding text; what the input method sends is double-buffered until `done`: the preedit
+//! becomes `Events.composition`, committed text is typed (`Input.text` and a `.text` event).
 //!
-//! ponytail: no surrounding text and no delete_surrounding_text: the widgets do not expose the
-//! text around the caret to the shell. Input methods that rewrite before the caret (some
-//! Korean and Thai ones) need it; add it with a host call that passes the surrounding text.
+//! ponytail: delete_surrounding_text is ignored: `Input` has no way to say "delete n bytes
+//! around the caret". Input methods that rewrite before the caret (some Korean and Thai ones)
+//! need it; add it as an `Input.Event` kind when a text widget can apply it.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
 const wire = @import("wire.zig");
 const Wayland = @import("wayland.zig").Wayland;
 const Composition = lcgr.keyboard.Composition;
+const Purpose = lcgr.keyboard.Purpose;
+const Platform = lcgr.context.Platform;
 const Rect = lcgr.types.Rect;
 
 const op = struct {
     const manager_get_text_input = 1;
     const enable = 1;
     const disable = 2;
+    const set_surrounding_text = 3;
     const set_content_type = 5;
     const set_cursor_rectangle = 6;
     const commit = 7;
@@ -27,9 +31,12 @@ pub const Ime = struct {
     text_input: u32 = 0,
     /// Surface with the text input's focus (enter, until leave); 0 for none.
     focus: u32 = 0,
-    /// What was last sent: enabled, at `rect`.
+    /// What was last sent: enabled, at `rect`, for `purpose`, with surrounding text hashed
+    /// to `around` (with its selection).
     enabled: bool = false,
     rect: Rect = .{},
+    purpose: Purpose = .normal,
+    around: u64 = 0,
     /// Pending until `done`.
     preedit: [4096]u8 = undefined,
     preedit_len: u32 = 0,
@@ -91,22 +98,70 @@ pub const Ime = struct {
         }
     }
 
-    /// Enables, moves or disables the input method to match the frame's request.
-    pub fn apply(m: *Ime, w: *Wayland, wants: bool, rect: Rect) void {
+    /// Enables, moves or disables the input method to match the frame's request, and sends its
+    /// content type and surrounding text when they changed.
+    pub fn apply(m: *Ime, w: *Wayland, p: *const Platform) void {
         if (m.text_input == 0 or m.focus == 0) return;
-        if (wants == m.enabled and (!wants or std.meta.eql(rect, m.rect))) return;
+        const wants = p.wants_text;
+        const around = std.hash.Wyhash.hash(@as(u64, @bitCast(p.selection)), p.surrounding);
+        const same = std.meta.eql(p.ime_rect, m.rect) and p.purpose == m.purpose and around == m.around;
+        if (wants == m.enabled and (!wants or same)) return;
         if (wants) {
-            if (!m.enabled) {
-                w.request(m.text_input, op.enable, .{});
-                w.request(m.text_input, op.set_content_type, .{ @as(u32, 0), @as(u32, 0) });
+            // Enabling resets the state, so content type and surrounding text go again.
+            if (!m.enabled) w.request(m.text_input, op.enable, .{});
+            if (!m.enabled or p.purpose != m.purpose) w.request(m.text_input, op.set_content_type, content_types.get(p.purpose));
+            if (!m.enabled or around != m.around) {
+                const text, const sel = window(p.surrounding, p.selection);
+                w.request(m.text_input, op.set_surrounding_text, .{ text, @as(i32, @intCast(sel[1])), @as(i32, @intCast(sel[0])) });
             }
-            w.request(m.text_input, op.set_cursor_rectangle, .{ @as(i32, @intFromFloat(rect.x0)), @as(i32, @intFromFloat(rect.y0)), @as(i32, @intFromFloat(rect.w())), @as(i32, @intFromFloat(rect.h())) });
+            const r = p.ime_rect;
+            w.request(m.text_input, op.set_cursor_rectangle, .{ @as(i32, @intFromFloat(r.x0)), @as(i32, @intFromFloat(r.y0)), @as(i32, @intFromFloat(r.w())), @as(i32, @intFromFloat(r.h())) });
         } else {
             w.request(m.text_input, op.disable, .{});
             m.shown_len = 0;
         }
         w.request(m.text_input, op.commit, .{});
         m.enabled = wants;
-        m.rect = rect;
+        m.rect = p.ime_rect;
+        m.purpose = p.purpose;
+        m.around = around;
     }
 };
+
+/// `set_content_type`'s hint and purpose for each `Purpose`. A password is hidden and
+/// sensitive (no learning, no suggestions).
+const content_types = std.enums.EnumArray(Purpose, struct { u32, u32 }).init(.{
+    .normal = .{ 0, 0 },
+    .secure = .{ 0x40 | 0x80, 8 },
+    .terminal = .{ 0, 13 },
+    .number = .{ 0, 3 },
+    .phone = .{ 0, 4 },
+    .email = .{ 0, 6 },
+    .url = .{ 0, 5 },
+});
+
+/// The protocol takes under 4000 bytes of surrounding text.
+const max_surrounding = 3999;
+
+/// At most `max_surrounding` bytes of `text` around the selection, cut at character starts,
+/// and the selection (anchor, cursor) inside that window, clamped to it.
+fn window(text: []const u8, sel: [2]u32) struct { []const u8, [2]u32 } {
+    var lo: usize = (@min(sel[0], sel[1], text.len)) -| max_surrounding / 2;
+    while (lo < text.len and text[lo] & 0xc0 == 0x80) lo += 1;
+    var hi: usize = @min(text.len, lo + max_surrounding);
+    while (hi < text.len and text[hi] & 0xc0 == 0x80) hi -= 1;
+    var at: [2]u32 = undefined;
+    for (sel, 0..) |x, i| at[i] = @intCast(std.math.clamp(x, lo, hi) - lo);
+    return .{ text[lo..hi], at };
+}
+
+test "window: short text whole; long text cut around the caret at character starts" {
+    try std.testing.expectEqual(@as(usize, 5), window("hello", .{ 2, 9 })[0].len);
+    try std.testing.expectEqual([2]u32{ 2, 5 }, window("hello", .{ 2, 9 })[1]);
+    var long: [6000]u8 = undefined; // 3000 two-byte characters
+    for (0..3000) |i| long[2 * i ..][0..2].* = "\xc3\xa9".*;
+    const text, const at = window(&long, .{ 4001, 4001 });
+    try std.testing.expect(text.len <= max_surrounding);
+    try std.testing.expect(text[0] == 0xc3 and std.unicode.utf8ValidateSlice(text));
+    try std.testing.expectEqualSlices(u8, long[4001 - at[0] ..][0..text.len], text);
+}

@@ -39,7 +39,6 @@ const Pace = lcgr.scheduler.Pace;
 const Input = lcgr.input.Input;
 const Quad = lcgr.draw_list.Quad;
 const Mono = lcgr.protocol.Mono;
-const render = lcgr.render_iface;
 const sw = lcgr.render_sw;
 const Color = lcgr.types.Color;
 
@@ -267,7 +266,7 @@ pub const Wayland = struct {
     wake_fd: i32,
     woken: std.atomic.Value(bool) = .init(false),
     options: Options,
-    gfx: sw.Software = .{},
+    gfx: sw.Setup = .{},
     font: Mono = .{},
     glyphs: Buffers,
     /// What `present` clears to before drawing.
@@ -414,18 +413,10 @@ pub const Wayland = struct {
             w.cursor_serial = s.enter_serial;
         }
         w.data.set(w, p.clipboard);
-        if (w.ime.focus == surface) w.ime.apply(w, p.wants_text, p.ime_rect);
+        // A paste's text arrives as typed text in a later poll; nothing when there is none.
+        if (p.paste) _ = w.data.paste(w);
+        if (w.ime.focus == surface) w.ime.apply(w, p);
         w.flush();
-    }
-
-    /// Asks for the clipboard's text, which arrives as typed text (`Input.text` and a `.text`
-    /// event) in a later poll. The host calls it when a widget asks to paste
-    /// (`keyboard.Clipboard.paste`): `Platform` carries no paste request. False when the
-    /// clipboard holds no text.
-    pub fn paste(w: *Wayland) bool {
-        const ok = w.data.paste(w);
-        w.flush();
-        return ok;
     }
 
     /// The contract's present, for the main window.
@@ -449,9 +440,7 @@ pub const Wayland = struct {
         var fb = win.shm.framebuffer(slot);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, win.scale);
-        fb.clear(w.background);
-        render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
+        w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, w.background, win.scale);
         win.shm.busy[slot] = true;
         win.shown = @intCast(slot);
         w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });

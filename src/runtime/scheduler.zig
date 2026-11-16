@@ -28,7 +28,7 @@ pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.signals.dirty));
     const due = in.time >= deadline(ctx);
     const woken = ctx.waker.flag.load(.acquire);
-    return simd.orB(simd.orB(changed, woken), simd.orB(pending, due));
+    return simd.orB(simd.orB(simd.orB(changed, woken), simd.orB(pending, due)), in.redraw);
 }
 
 /// Seconds until a frame is due with no new input: 0 while a settle frame is owed, a spring
@@ -285,6 +285,21 @@ test "needsFrame: the first frame, then only input changes, motion and signals" 
     try testing.expect(ctx.needsFrame(&in));
     _ = frame(&ctx, &in);
     try testing.expect(!ctx.needsFrame(&in));
+
+    // A shell that lost its picture asks for one frame; the next input without it is idle.
+    in.redraw = true;
+    try testing.expect(ctx.needsFrame(&in));
+    _ = frame(&ctx, &in);
+    in.redraw = false;
+    try testing.expect(!ctx.needsFrame(&in));
+    // A safe area or appearance change is input.
+    in.safe_area[1] = 47;
+    try testing.expect(ctx.needsFrame(&in));
+    _ = frame(&ctx, &in);
+    _ = frame(&ctx, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+    in.appearance.dark = true;
+    try testing.expect(ctx.needsFrame(&in));
 }
 
 test "needsFrame: the pointer position counts over sensing nodes and while held" {

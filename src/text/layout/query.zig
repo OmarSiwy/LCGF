@@ -15,6 +15,7 @@ const std = @import("std");
 const lines_ = @import("lines.zig");
 const Graphemes = @import("../unicode/grapheme.zig").Graphemes;
 
+const Rect = @import("../../core/types.zig").Rect;
 const Lines = lines_.Lines;
 const Glyphs = lines_.Glyphs;
 
@@ -170,6 +171,53 @@ pub fn hit(l: *const Lines, g: *const Glyphs, text: []const u8, x: f32, y: f32) 
     return best;
 }
 
+/// The text from byte `from` to `to` (grapheme boundaries) as rectangles to highlight, px from
+/// the paragraph's top left: one per run of selected glyphs at one bidi level on each line, so
+/// a selection across a change of direction covers on screen only what it selects. Clusters
+/// of several graphemes are shared as the caret shares them. Fills `out` from row 0 and
+/// returns the number written, at most `out.len`.
+pub fn selection(l: *const Lines, g: *const Glyphs, text: []const u8, from: u32, to: u32, out: []Rect) u32 {
+    var n: u32 = 0;
+    for (0..l.len) |k| {
+        var open = false; // out[n] is this line's run being extended
+        var level: u8 = 0;
+        var i = l.first[k];
+        while (i < l.end[k]) {
+            // The cluster at i: its glyphs, text range, left edge and width.
+            const cs = g.cluster[i];
+            const rtl: f32 = @floatFromInt(g.level[i] & 1);
+            var left = std.math.inf(f32);
+            var w: f32 = 0;
+            const lv = g.level[i];
+            while (i < l.end[k] and g.cluster[i] == cs) : (i += 1) {
+                left = @min(left, g.x[i]);
+                w += g.advance[i] + l.extra[k] * @as(f32, @floatFromInt(@intFromBool(lines_.isSpace(text, g.cluster[i]))));
+            }
+            const ce = byteAt(g, text, i);
+            const a = @max(cs, from);
+            const b = @min(ce, to);
+            if (a >= b) continue;
+            // The selected share of the cluster, from its leading edge.
+            const all = graphemes(text[cs..ce]);
+            const f0 = if (a == cs) 0 else graphemes(text[cs..a]) / all;
+            const f1 = if (b == ce) 1 else graphemes(text[cs..b]) / all;
+            const x0 = l.x[k] + left + w * (rtl + (1 - 2 * rtl) * f0);
+            const x1 = l.x[k] + left + w * (rtl + (1 - 2 * rtl) * f1);
+            if (open and lv == level) {
+                out[n - 1].x0 = @min(out[n - 1].x0, @min(x0, x1));
+                out[n - 1].x1 = @max(out[n - 1].x1, @max(x0, x1));
+                continue;
+            }
+            if (n == out.len) return n;
+            out[n] = .{ .x0 = @min(x0, x1), .y0 = l.top[k], .x1 = @max(x0, x1), .y1 = l.top[k] + l.height[k] };
+            n += 1;
+            open = true;
+            level = lv;
+        }
+    }
+    return n;
+}
+
 // ---------------------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -227,4 +275,49 @@ test "caret inside a ligature takes an equal share; hit inverts caret at every s
 
 test "golden: carets at every offset match the reference" {
     try golden.expectScene(.carets);
+}
+
+test "selection: one rectangle per direction run on each line" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const bs = carver.columns(lines_.BidiScratch, 32);
+    const m: lines_.Metrics = .{ .ascent = 8, .descent = 2 };
+    var t: golden.Para = .{};
+    // "ab אבג" shows as "ab גבא". Selecting "b אב" covers "b " on the left and "בא" on the
+    // right, not the gimel between them.
+    const text = "ab \u{5D0}\u{5D1}\u{5D2}";
+    t.fixed(text, 10);
+    try lines_.breakLines(&t.g, text, 1000, &t.l);
+    lines_.place(&t.l, &t.g, text, &.{m}, .{});
+    try lines_.reorder(&t.l, &t.g, text, .{}, bs);
+    var out: [4]Rect = undefined;
+    try testing.expectEqual(2, selection(&t.l, &t.g, text, 1, 7, &out));
+    try testing.expectEqual(Rect{ .x0 = 10, .y0 = 0, .x1 = 30, .y1 = 10 }, out[0]);
+    try testing.expectEqual(Rect{ .x0 = 40, .y0 = 0, .x1 = 60, .y1 = 10 }, out[1]);
+    // Over two lines, "ab " | "cd": a rectangle on each. Nothing selected: none. Too few rows:
+    // the first ones.
+    t.fixed("ab cd", 10);
+    try lines_.breakLines(&t.g, "ab cd", 25, &t.l);
+    lines_.place(&t.l, &t.g, "ab cd", &.{m}, .{});
+    try testing.expectEqual(2, selection(&t.l, &t.g, "ab cd", 1, 4, &out));
+    try testing.expectEqual(Rect{ .x0 = 10, .y0 = 0, .x1 = 30, .y1 = 10 }, out[0]);
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 10, .x1 = 10, .y1 = 20 }, out[1]);
+    try testing.expectEqual(0, selection(&t.l, &t.g, "ab cd", 2, 2, &out));
+    try testing.expectEqual(1, selection(&t.l, &t.g, "ab cd", 1, 4, out[0..1]));
+}
+
+test "selection: part of a ligature is its share of the glyph" {
+    const shapers = [_]@import("../shape/shape.zig").Shaper{.init(try @import("../font/opentype.zig").Face.parse(golden.font, 0))};
+    var t: golden.Para = .{};
+    t.bind();
+    const text = "office";
+    _ = try t.s.push(0, 0, 20, 0);
+    try t.shaped(&shapers, text);
+    try lines_.breakLines(&t.g, text, 1000, &t.l);
+    lines_.place(&t.l, &t.g, text, &.{lines_.Metrics.of(&shapers[0].face, 20)}, .{});
+    var out: [2]Rect = undefined;
+    try testing.expectEqual(1, selection(&t.l, &t.g, text, 2, 5, &out));
+    try testing.expectApproxEqAbs(caret(&t.l, &t.g, text, 2).x, out[0].x0, 1e-4);
+    try testing.expectApproxEqAbs(caret(&t.l, &t.g, text, 5).x, out[0].x1, 1e-4);
 }

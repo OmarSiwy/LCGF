@@ -69,9 +69,22 @@ pub const Platform = struct {
     /// Show the on-screen keyboard / enable IME, anchored at `ime_rect`.
     wants_text: bool = false,
     ime_rect: types.Rect = .{},
+    /// What the focused field takes, so the keyboard lays out for it (digits, an email's @)
+    /// and a password gets no IME and no suggestions. Read with `wants_text`.
+    purpose: Purpose = .normal,
+    /// The focused field's text around the caret, and the caret or selection in it as byte
+    /// offsets (equal for a caret), so the IME and autocorrect see what is being edited. Empty
+    /// when the field does not say. Valid until the next `begin`.
+    surrounding: []const u8 = "",
+    selection: [2]u32 = .{ 0, 0 },
     /// Non-empty when the UI asks to set the clipboard. Valid until the next `begin`.
     clipboard: []const u8 = "",
+    /// The UI asks for the clipboard's text (`keyboard.Clipboard.paste`). The shell types it
+    /// into a later frame, a `.text` event and `Input.text`, for the widget focused then.
+    paste: bool = false,
 };
+
+pub const Purpose = @import("../interact/keyboard.zig").Purpose;
 
 /// What a frame produced. Every field is data the host reads; nothing calls back.
 pub const Output = struct {
@@ -111,9 +124,12 @@ pub const Context = struct {
     /// Keyboard focus: Tab and Shift+Tab, arrows in focus groups, modal traps, the ring.
     /// `begin` steps it after `inter`, so `inter.focus` is where the keys left it.
     focus: focus.Focus = .{},
-    /// Focus groups and traps (`kind`, set while building; cleared by `begin`) of the tree
-    /// `focus` steps through: the next `begin` scans the tree that set them, then steps.
+    /// Focus groups and traps (`kind`, set while building with `Frame.focusScope`; cleared by
+    /// the next `begin`) of the tree `focus` steps through: that `begin` scans the tree that
+    /// set them, then steps.
     scopes: focus.Scopes,
+    /// `Frame.focusScope` was called this frame.
+    scoped: bool = false,
     platform: Platform = .{},
     status: Status = .{},
     frame: u32 = 0,
@@ -211,14 +227,26 @@ pub const Context = struct {
 
         const prev = &ctx.trees[ctx.cur ^ 1];
         ctx.inter.step(prev, in);
-        // Focus groups and traps of last frame's tree. ponytail: scanned only when a key could
-        // move focus or a scope is set, since the scan is a scalar sweep of every row (about
-        // 30 us at 4,000 nodes); without either, nothing in `step` reads what it would write.
+        // Keyboard focus. Its sweeps (the scope scan, `step`'s searches of the id column) run
+        // only on frames with key events, after a frame that set a scope, or while a modal
+        // layer is open; otherwise nothing they compute is read, and the frame does only the
+        // bookkeeping `step` would.
         const sc = &ctx.scopes;
-        if (in.events.len != 0 or !std.mem.allEqual(u8, sc.c.kind[0..prev.len], 0)) focus.scan(prev, sc) else sc.modal = types.none;
-        ctx.focus.step(&ctx.inter, prev, sc, in);
-        ctx.focus.visible = simd.orB(ctx.focus.visible, ctx.settings.always_show_focus);
-        ctx.scopes.reset();
+        const scoped = ctx.scoped;
+        ctx.scoped = false;
+        const keys = in.events.len != 0;
+        const fo = &ctx.focus;
+        if (simd.orB(simd.orB(keys, scoped), fo.depth != 0)) {
+            if (simd.orB(keys, scoped)) focus.scan(prev, sc) else sc.modal = types.none;
+            fo.step(&ctx.inter, prev, sc, in);
+        } else {
+            fo.visible = simd.andB(fo.visible, !simd.andB(in.buttons.left, !fo.left));
+            fo.left = in.buttons.left;
+            fo.last = ctx.inter.focus;
+            fo.taken = 0;
+        }
+        fo.visible = simd.orB(fo.visible, ctx.settings.always_show_focus);
+        if (scoped) sc.reset();
         scheduler.settle(ctx, in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
         ctx.flips.len = 0;
@@ -392,6 +420,31 @@ test "begin: Tab and Shift+Tab move focus through the focusable nodes in tree or
     try testing.expectEqual(@backingInt(ids[steps[steps.len - 1].want]), ctx.inter.focus);
     // The ring shows after a key.
     try testing.expect(ctx.focus.visible);
+}
+
+test "begin: a focus group set with Frame.focusScope is one Tab stop" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const ids = [_]types.Id{ .from("a"), .from("g1"), .from("g2"), .from("c") };
+    const tab = [1]Input.Event{.{ .kind = .press, .code = ctx.focus.keys.tab }};
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var want: [3]u32 = undefined;
+    for (0..4) |k| {
+        var f = ctx.begin(&in);
+        if (k > 0) want[k - 1] = ctx.inter.focus;
+        _ = f.interact(f.leaf(ids[0], .{ .size = .{ .px(40), .px(20) } }), .button);
+        f.focusScope(f.open(.from("group"), .{}), focus.Scopes.group);
+        for (ids[1..3]) |id| _ = f.interact(f.leaf(id, .{ .size = .{ .px(40), .px(20) } }), .button);
+        f.close();
+        _ = f.interact(f.leaf(ids[3], .{ .size = .{ .px(40), .px(20) } }), .button);
+        _ = f.end(.{});
+        in.events = &tab;
+    }
+    // a, then the group's first, then past the group to c.
+    try testing.expectEqualSlices(u32, &.{ @backingInt(ids[0]), @backingInt(ids[1]), @backingInt(ids[3]) }, &want);
 }
 
 // ---- the prototype example's host loop ---------------------------------------

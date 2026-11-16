@@ -222,7 +222,7 @@ inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) 
         // `inner` replaces both; a floating node takes its natural size or its percentage.
         // None of k0..k2 depends on the parent's size, so only the three terms below sit on
         // the parent-to-child dependency chain.
-        const has_pct = b01(pct[i] > 0);
+        const has_pct = b01(pct[i] >= 0);
         const keep = 1 - has_pct;
         const across = (1 - main) * b01(grow[i] > 0);
         const k0 = nat * keep * (1 - fl * across);
@@ -367,7 +367,7 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     const clips_ = c.clips;
     const visible = c.visible;
     const extra = c.extra;
-    const border = t.x.border;
+    const xrow = t.x.row;
     // The root is its own parent: it reads its own row before writing it, so that row starts as
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
     if (first == 0) child_clip[0] = everything;
@@ -381,7 +381,7 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        const inner = @select(f32, clips, r + @as(V4, @splat(border[extra[i]])), everything);
+        const inner = @select(f32, clips, r + @as(V4, @splat(xrow[extra[i]].border)), everything);
         child_clip[i] = @max(inherited, inner);
         const out = v * sign;
         vis[0][i] = out[0];
@@ -665,7 +665,7 @@ test "finalize: a clipping parent insets by its border and hides what lies outsi
     const c = &s.t.c;
     sized(&s);
     c.clips[Scene.col] = 1;
-    s.t.x.border[1] = 2; // col's own extras row
+    s.t.x.row[1].border = 2; // col's own extras row
     c.extra[Scene.col] = 1;
     c.offset[0][Scene.para] = 150; // para's 100 px start past col's right edge
     place(&s.t);
@@ -819,4 +819,18 @@ test "fitSpan, resolveSpan: pieces from any cut rows equal the whole pass" {
             try expectCol(whole.t.c.used[a][0..n], t.c.used[a]);
         }
     }
+}
+
+test "resolve: pct(0) is zero of the parent, not the content's size" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    const root = t.push(0, .none, &.{ .dir = .x });
+    const pane = t.push(root, .none, &.{ .size = .{ .pct(0), .pct(0) } });
+    _ = t.push(pane, .none, &.{ .size = .{ .px(30), .px(20) } });
+    t.seal(pane);
+    t.seal(root);
+    run(&t, &tx, .{ 200, 100 });
+    try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 }, t.rect(pane));
 }

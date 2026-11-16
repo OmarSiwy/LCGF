@@ -8,8 +8,13 @@
 //! composition through `setMarkedText:selectedRange:`, the delete key through
 //! `deleteBackward`. Its candidate window and the caret anchor at `Platform.ime_rect`.
 //!
-//! ponytail: without the document's text around the caret, autocorrection and predictions
-//! see an empty field; giving UIKit the focused widget's text needs it in `Platform`.
+//! The keyboard's layout follows `Platform.purpose` (UITextInputTraits `keyboardType`,
+//! `secureTextEntry`).
+//!
+//! ponytail: the document is still only the marked text, so autocorrection and predictions see
+//! an empty field. `Platform.surrounding` and `selection` now carry the focused widget's text
+//! and caret; making them the document UIKit sees means positions over surrounding plus marked
+//! text and replaceRange edits sent back as input. Not done: it needs a device to test on.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -33,6 +38,8 @@ const rect_types = "{CGRect={CGPoint=dd}{CGSize=dd}}";
 /// The view's UIKeyInput and UITextInput methods, added to LcgrView.
 pub const methods = [_]ios.Method{
     .{ .sel = "canBecomeFirstResponder", .imp = &yes, .types = "B@:" },
+    .{ .sel = "keyboardType", .imp = &keyboardType, .types = "q@:" },
+    .{ .sel = "isSecureTextEntry", .imp = &secureTextEntry, .types = "B@:" },
     .{ .sel = "hasText", .imp = &hasText, .types = "B@:" },
     .{ .sel = "insertText:", .imp = &insertText, .types = "v@:@" },
     .{ .sel = "deleteBackward", .imp = &deleteBackward, .types = "v@:" },
@@ -128,6 +135,28 @@ fn nothing(_: Id, _: Sel) callconv(.c) ?Id {
     return null;
 }
 fn ignore(_: Id, _: Sel, _: ?Id) callconv(.c) void {}
+
+/// UIKeyboardType for each `Purpose`: default 0, URL 3, phone pad 5, email address 7, decimal
+/// pad 8 (digits and the decimal point), ASCII capable 1 for a terminal.
+const keyboard_types = std.enums.EnumArray(lcgr.keyboard.Purpose, objc.NSInteger).init(.{
+    .normal = 0,
+    .secure = 0,
+    .terminal = 1,
+    .number = 8,
+    .phone = 5,
+    .email = 7,
+    .url = 3,
+});
+
+fn keyboardType(_: Id, _: Sel) callconv(.c) objc.NSInteger {
+    const s = ios.app.shell orelse return 0;
+    return keyboard_types.get(s.text.purpose);
+}
+
+fn secureTextEntry(_: Id, _: Sel) callconv(.c) bool {
+    const s = ios.app.shell orelse return false;
+    return s.text.purpose == .secure;
+}
 
 fn hasText(_: Id, _: Sel) callconv(.c) bool {
     const s = ios.app.shell orelse return false;
