@@ -85,6 +85,7 @@ pub const widgets_accordion = @import("widgets/accordion.zig");
 pub const widgets_popover = @import("widgets/popover.zig");
 pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
+pub const a11y_settings = @import("a11y/settings.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
 pub const embed = @import("assets/embed.zig");
