@@ -22,6 +22,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
+const none = types.none;
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -42,6 +43,30 @@ pub fn optionId(group: Id, index: u32) Id {
 /// The group's name from an option's comptime name `<group>.<index>`.
 pub fn groupName(comptime option: []const u8) []const u8 {
     return option[0..comptime std.mem.lastIndexOfScalar(u8, option, '.').?];
+}
+
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// What one frame's input does to a group's selection and focus.
+pub const Step = struct { value: u32, focus: u32 };
+
+/// The selection and focus of a group of `n` options after this frame's input, or null when
+/// nothing changes them.
+/// `clicked` is the option clicked and `focused` the option with focus (`none` for neither).
+/// A click selects; with focus, Right and Down select the next option and Left and Up the
+/// previous one, wrapping, and focus follows, and Space selects the focused option (WAI-ARIA
+/// APG radio group pattern).
+pub fn step(n: u32, clicked: u32, focused: u32, in: *const Input) ?Step {
+    if (clicked != none) return .{ .value = clicked, .focus = clicked };
+    if (focused == none) return null;
+    const k = base.keys;
+    const fwd = base.keyCount(in, k.right, .press) + base.keyCount(in, k.down, .press);
+    const back = base.keyCount(in, k.left, .press) + base.keyCount(in, k.up, .press);
+    const space = base.keyCount(in, k.space, .release) != 0;
+    if (fwd == back and !space) return null;
+    // Moves count from the focused option; `n` * back keeps the sum from wrapping below 0.
+    const to = (focused + fwd + (n - 1) * back) % n;
+    return .{ .value = to, .focus = to };
 }
 
 // ---- look -----------------------------------------------------------------------------------
@@ -73,14 +98,21 @@ pub const option_rows = 4;
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A radio group named `id` over `value`, the selected index, one option per caption.
+/// A radio group named `id` over `value`, the selected index, one option per caption. A
+/// click, or the arrows and Space on the focused option, select (`step`); arrows move focus
+/// along. The response is every option's, OR'd; `clicked` is set when the selection was
+/// chosen this frame.
 pub fn radio(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const []const u8) Response {
     const group = f.open(id, groupStyle(th));
     var all: u8 = 0;
+    var clicked: u32 = none;
+    var focused: u32 = none;
     for (captions, 0..) |caption, i| {
         const o = f.open(optionId(id, @intCast(i)), optionStyle(th));
         const r = f.interact(o, .button);
         all |= @bitCast(r);
+        clicked = simd.selU(r.clicked, @intCast(i), clicked);
+        focused = simd.selU(r.focused, @intCast(i), focused);
         _ = f.open(.none, ringStyle(th));
         _ = f.leaf(.none, dotStyle(th, false));
         f.close();
@@ -88,10 +120,18 @@ pub fn radio(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const
         f.close();
     }
     f.close();
+    var r: Response = @bitCast(all);
+    r.clicked = false;
+    if (step(@intCast(captions.len), clicked, focused, f.in)) |s| {
+        value.* = s.value;
+        // Focus follows the arrows (the interaction state is the front end's public data).
+        f.ctx.inter.focus = @backingInt(optionId(id, s.focus));
+        r.clicked = true;
+    }
     // The selection is final only now, so the dots and the value column are written after
     // every option has been asked: an option drawn before the one clicked shows it too.
     paintSelection(f.tree(), th, group.ix(), value.*, @intCast(captions.len));
-    return @bitCast(all);
+    return r;
 }
 
 /// Writes the dots' fills and the options' value column (1 selected, 0 not) for the group at
@@ -226,6 +266,63 @@ test "radio look: theme tokens reach both front ends" {
     try testing.expectEqual(Color.rgb(9, 8, 7).bitsOf(), t.c.look[3 + option_rows + 2].fill);
     try testing.expectEqual(Color.rgb(1, 1, 1).bitsOf(), t.c.look[4].fill);
     try testing.expectEqual(t.rect(3).y1 + 2, t.rect(3 + option_rows).y0);
+}
+
+test "step: a click selects; arrows move from the focused option, wrapping; Space selects it" {
+    const k = base.keys;
+    const ev = struct {
+        fn in(comptime list: []const Input.Event) Input {
+            return .{ .events = list };
+        }
+    };
+    const empty: Input = .{};
+    try testing.expectEqual(Step{ .value = 2, .focus = 2 }, step(3, 2, none, &empty).?);
+    try testing.expectEqual(null, step(3, none, none, &ev.in(&.{.{ .kind = .press, .code = k.down }})));
+    try testing.expectEqual(null, step(3, none, 0, &empty));
+    try testing.expectEqual(@as(u32, 1), step(3, none, 0, &ev.in(&.{.{ .kind = .press, .code = k.down }})).?.value);
+    try testing.expectEqual(@as(u32, 1), step(3, none, 0, &ev.in(&.{.{ .kind = .press, .code = k.right }})).?.value);
+    try testing.expectEqual(@as(u32, 2), step(3, none, 0, &ev.in(&.{.{ .kind = .press, .code = k.up }})).?.value);
+    try testing.expectEqual(@as(u32, 0), step(3, none, 2, &ev.in(&.{.{ .kind = .repeat, .code = k.right }})).?.value);
+    try testing.expectEqual(@as(u32, 2), step(3, none, 0, &ev.in(&.{ .{ .kind = .press, .code = k.down }, .{ .kind = .press, .code = k.down } })).?.value);
+    // Focus on an unselected option (a Tab could put it there): Space selects it.
+    try testing.expectEqual(Step{ .value = 1, .focus = 1 }, step(3, none, 1, &ev.in(&.{.{ .kind = .release, .code = k.space }})).?);
+}
+
+test "radio input: click selects, arrows move selection and focus, in both front ends" {
+    const h = &sizes;
+    h.init();
+    const k = base.keys;
+    var in: Input = .{ .viewport = .{ 200, 120 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const opt = struct {
+        fn at(tr: *const Tree, i: u32) [2]f32 {
+            const r = tr.rect(3 + option_rows * i);
+            return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        }
+    };
+    const down = [_]Input.Event{.{ .kind = .press, .code = k.down }};
+    const up = [_]Input.Event{.{ .kind = .press, .code = k.up }};
+    const Step_ = struct { at: u32, left: bool = false, events: []const Input.Event = &.{}, value: u32, focus: u32 };
+    const steps = [_]Step_{
+        .{ .at = 2, .left = true, .value = 1, .focus = 2 }, // press: focus
+        .{ .at = 2, .value = 2, .focus = 2 }, // click: Large
+        .{ .at = 2, .events = &down, .value = 0, .focus = 0 }, // Down wraps to Small
+        .{ .at = 2, .events = &up, .value = 2, .focus = 2 }, // Up wraps back
+        .{ .at = 2, .events = &up, .value = 1, .focus = 1 },
+    };
+    for (steps) |st| {
+        in.pointer = opt.at(t, st.at);
+        in.buttons.left = st.left;
+        in.events = st.events;
+        out = try h.frame(&in);
+        try testing.expectEqual(st.value, h.app.size);
+        try testing.expectEqual(st.value, h.ui.signals.state.size);
+        try testing.expectEqual(@backingInt(optionId(.from("size"), st.focus)), h.ctx.inter.focus);
+        // Comptime widgets are spec rows: column 0, group 1, then option i at 2 + 4i.
+        try testing.expectEqual(st.focus, (@as(u32, @backingInt(h.ui.focus.?)) - 2) / option_rows);
+        for (0..3) |i| try testing.expectEqual(simd.b2f(i == st.value), out.runtime.tree.c.value[3 + option_rows * i]);
+    }
 }
 
 test {

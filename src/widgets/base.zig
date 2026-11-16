@@ -66,6 +66,7 @@ const Color = types.Color;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Response = types.Response;
+const none = types.none;
 
 /// Design tokens: every colour and size a widget uses comes from here, so restyling is one
 /// value. Plain data with defaults, usable at compile time (the `ct` builders take a comptime
@@ -331,7 +332,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     switch (comptime E.widget_kinds[k]) {
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
-                        .label, .col, .row, .button, .radio, .radio_option => {},
+                        .radio_option => ui.signals.set(field(n.bind.?), n.index),
+                        .label, .col, .row, .button, .radio => {},
                     }
                 },
             };
@@ -382,12 +384,25 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         }
 
         /// The event this frame's keys make on the focused widget, or null.
-        fn keyEvent(ui: *const Self, in: *const Input) ?E.Event {
+        /// A key may move focus too (arrows in a radio group).
+        fn keyEvent(ui: *Self, in: *const Input) ?E.Event {
             const w = ui.focus orelse return null;
             switch (w) {
                 inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
                     .button => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     .checkbox => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    .radio_option => {
+                        const k = comptime E.slot(tag);
+                        const o = comptime nodeAt(spec, E.widget_nodes[k]);
+                        const n = comptime nodeAt(spec, E.widget_nodes[k] - optionRows(o.index) - 1).children.len;
+                        const s = radio_zig.step(n, none, o.index, in) orelse return null;
+                        // The group's options are consecutive in widget order.
+                        const to = E.widget(k - o.index + s.value);
+                        ui.focus = to;
+                        return switch (to) {
+                            inline else => |t| if (comptime E.widget_kinds[E.slot(t)] == .radio_option) @unionInit(E.Event, @tagName(t), {}) else unreachable,
+                        };
+                    },
                     else => {},
                 },
             }
@@ -469,6 +484,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return comptime std.meta.stringToEnum(S.Field, name).?;
         }
     };
+}
+
+/// Spec rows before radio option `index` within its group: earlier options and their parts.
+fn optionRows(comptime index: u32) u32 {
+    return index * radio_zig.option_rows;
 }
 
 /// Spec nodes in `n`'s subtree that show text.
