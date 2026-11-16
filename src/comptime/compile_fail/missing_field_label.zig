@@ -1,4 +1,4 @@
-//! expect: has no field 'tilte'
+//! expect: col > label[0]: state missing_field_label.State has no field 'tilte'
 const s = @import("lcgr").spec;
 
 /// A declaration is not a field: binding to it is still an error.

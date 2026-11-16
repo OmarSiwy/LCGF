@@ -1,6 +1,8 @@
-//! expect: has no field 'volum'
+//! expect: col > slider[0]: state missing_field.State has no field 'volum'
 const s = @import("lcgr").spec;
 
+const State = struct { volume: f32 };
+
 comptime {
-    @import("lcgr").validate.check(struct { volume: f32 }, s.col(.{}, .{s.slider(.volume, .volum)}));
+    @import("lcgr").validate.check(State, s.col(.{}, .{s.slider(.volume, .volum)}));
 }

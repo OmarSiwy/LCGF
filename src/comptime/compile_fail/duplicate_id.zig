@@ -1,4 +1,4 @@
-//! expect: duplicate widget id 'volume'
+//! expect: col > row[1] > checkbox[0]: duplicate widget id 'volume', first used at col > slider[0]
 const s = @import("lcgr").spec;
 
 comptime {

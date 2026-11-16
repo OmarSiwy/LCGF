@@ -1,4 +1,4 @@
-//! expect: slider 'volume' needs an f32 field, not bool
+//! expect: col > slider[0]: slider 'volume' needs an f32 field, not bool
 const s = @import("lcgr").spec;
 
 comptime {

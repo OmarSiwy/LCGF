@@ -1,4 +1,4 @@
-//! expect: checkbox 'muted' needs a bool field, not f32
+//! expect: row > checkbox[0]: checkbox 'muted' needs a bool field, not f32
 const s = @import("lcgr").spec;
 
 comptime {

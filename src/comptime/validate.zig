@@ -12,13 +12,20 @@ const Spec = spec_zig.Spec;
 /// Fails compilation with a message naming the first broken rule of `spec` over the state
 /// struct `State`. Rules: widget ids are unique; a slider binds an f32 field and a checkbox a
 /// bool field; every binding names a field of `State`.
+///
+/// Every message about a node starts with its spec path: the root's kind, then the kind and
+/// child position of each node down to it, as in `col > row[1] > slider[0]: ...` (the first
+/// child of the root's second child). Positions count from 0, as in `children[i]`.
 pub fn check(comptime State: type, comptime spec: Spec) void {
     comptime {
         if (@typeInfo(State) != .@"struct") @compileError("state must be a struct, not " ++ @typeName(State));
-        var ids: []const [:0]const u8 = &.{};
-        walk(State, spec, &ids);
+        var ids: []const Named = &.{};
+        walk(State, spec, @tagName(spec.kind), &ids);
     }
 }
+
+/// A widget id seen so far and the path of the node that has it.
+const Named = struct { id: [:0]const u8, path: []const u8 };
 
 /// The state type a widget kind's binding needs; null for kinds that show any field.
 fn bindType(comptime kind: spec_zig.Kind) ?type {
@@ -35,21 +42,22 @@ fn hasField(comptime State: type, comptime name: []const u8) bool {
     return false;
 }
 
-fn walk(comptime State: type, comptime s: Spec, comptime ids: *[]const [:0]const u8) void {
+fn walk(comptime State: type, comptime s: Spec, comptime path: []const u8, comptime ids: *[]const Named) void {
     // ponytail: ids are compared pairwise, O(ids^2) comptime work; a UI has tens of ids.
     @setEvalBranchQuota(1000 + 10 * ids.len * ids.len);
+    const at = path ++ ": ";
     if (s.id) |name| {
-        for (ids.*) |seen| if (std.mem.eql(u8, seen, name)) @compileError("duplicate widget id '" ++ name ++ "'");
-        ids.* = ids.* ++ [_][:0]const u8{name};
+        for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
+        ids.* = ids.* ++ [_]Named{.{ .id = name, .path = path }};
     }
     if (s.bind) |field| {
-        if (!hasField(State, field)) @compileError("state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
+        if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }
     if (s.bind) |field| if (bindType(s.kind)) |T| {
         const FT = @FieldType(State, field);
-        if (FT != T) @compileError(@tagName(s.kind) ++ " '" ++ field ++ "' needs " ++ (if (T == f32) "an " else "a ") ++ @typeName(T) ++ " field, not " ++ @typeName(FT));
+        if (FT != T) @compileError(at ++ @tagName(s.kind) ++ " '" ++ field ++ "' needs " ++ (if (T == f32) "an " else "a ") ++ @typeName(T) ++ " field, not " ++ @typeName(FT));
     };
-    for (s.children) |c| walk(State, c, ids);
+    for (s.children, 0..) |c, i| walk(State, c, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }), ids);
 }
 
 // ---- tests -------------------------------------------------------------------------------------
