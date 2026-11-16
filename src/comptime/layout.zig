@@ -480,3 +480,64 @@ test "Layout.run: equals the runtime layout of the same UI" {
     // Every example but the custom widget's, whose rows are built at run time.
     inline for (examples.all) |e| if (comptime !std.mem.eql(u8, e.name, "custom")) try expectBoth(e);
 }
+
+// ---- equivalence with the runtime front end ----------------------------------------------------
+
+const Context = @import("../runtime/context.zig").Context;
+const Frame = @import("../runtime/frame.zig").Frame;
+const Input = @import("../core/input.zig").Input;
+const Mono = @import("../text/protocol.zig").Mono;
+const spec_zig = @import("spec.zig");
+
+/// Builds `s` with the runtime front end's open / close, as an application would write it.
+fn build(f: *Frame, comptime s: Spec) void {
+    const id: Id = if (s.id) |name| .hash(name) else .none;
+    _ = f.open(id, s.style);
+    inline for (s.children) |c| build(f, c);
+    f.close();
+}
+
+/// `e` through a runtime `Context` frame (`begin`, `open` / `close`, `end`: level-by-level
+/// resolve, incremental place, finalize, paint) against the comptime `Layout` of the same UI
+/// under the root `Context.begin` opens: a viewport-sized group that clips.
+fn expectSameAsContext(comptime e: examples.Example, viewport: [2]f32) !void {
+    const limits: @import("../runtime/context.zig").Limits = .{ .nodes = 64, .texts = 4, .customs = 1, .strings = 64, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .depth = 8, .timers = 1, .memos = 1 };
+    const S = struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, limits);
+    const in: Input = .{ .viewport = viewport };
+    var f = ctx.begin(&in);
+    build(&f, e.spec);
+    const out = f.end(.{ .advance = 0.5, .line = 1.2 });
+    try testing.expect(out.status.ok());
+    const t = out.tree;
+
+    const wrapped = comptime spec_zig.col(.{ .clip = true, .role = .group }, .{e.spec});
+    const L = Layout(wrapped, e.options);
+    try testing.expectEqual(L.Cols.node_count, t.len);
+    var scratch: L.Scratch = undefined;
+    var ram: L.Cols.Dynamic = undefined;
+    L.run(&scratch, &ram, viewport);
+    for (0..t.len) |i| {
+        inline for (0..2) |a| {
+            try testing.expectEqual(t.c.size[a][i], ram.size[a][i]);
+            try testing.expectEqual(t.c.pos[a][i], ram.pos[a][i]);
+        }
+        inline for (0..4) |k| {
+            try testing.expectEqual(t.c.rect[k][i], toF32(ram.rect[k][i]));
+            try testing.expectEqual(t.c.vis[k][i], toF32(ram.vis[k][i]));
+        }
+        try testing.expectEqual(t.c.visible[i], ram.visible[i]);
+    }
+}
+
+test "Layout: equals the runtime front end (Context frame) for every example and viewport" {
+    // Viewports up to an example's declared one, whose size its coordinate type is chosen for.
+    inline for (examples.all) |e| if (comptime !std.mem.eql(u8, e.name, "custom")) {
+        inline for (.{ [2]f32{ 800, 600 }, [2]f32{ 320, 240 }, [2]f32{ 96, 64 }, [2]f32{ 1, 1 }, [2]f32{ 333.5, 21.25 }, [2]f32{ 50.5, 63 } }) |vp| {
+            const max = e.options.viewport orelse .{ std.math.inf(f32), std.math.inf(f32) };
+            if (vp[0] <= max[0] and vp[1] <= max[1]) try expectSameAsContext(e, vp);
+        }
+    };
+}
