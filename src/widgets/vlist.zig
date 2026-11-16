@@ -92,6 +92,40 @@ pub fn rowAt(th: *const Theme, top: f32, y: f32, scroll: f32, count: u32) u32 {
     return list_zig.rowAt(th, top - scroll, y, count);
 }
 
+// ---- behaviour ---------------------------------------------------------------------------------
+
+/// The largest scroll offset: the last row at the bottom edge.
+pub fn maxScroll(th: *const Theme, count: u32, visible: u32) f32 {
+    return @as(f32, @floatFromInt(count -| visible)) * list_zig.rowHeight(th);
+}
+
+/// The scroll offset after a wheel or touchpad movement of `delta` pixels, clamped.
+pub fn wheel(th: *const Theme, scroll: f32, delta: f32, count: u32, visible: u32) f32 {
+    return std.math.clamp(scroll + delta, 0, maxScroll(th, count, visible));
+}
+
+/// The scroll offset that shows row `sel` whole, moving as little as possible from `scroll`.
+pub fn reveal(th: *const Theme, scroll: f32, sel: u32, visible: u32) f32 {
+    if (sel == none) return scroll;
+    const h = list_zig.rowHeight(th);
+    const top = @as(f32, @floatFromInt(sel)) * h;
+    return std.math.clamp(scroll, top + h - @as(f32, @floatFromInt(visible)) * h, top);
+}
+
+/// One frame of input, as `list`'s plus scrolling: a click selects the row under the pointer,
+/// keys move the selection while focused (`list.keys`), a changed selection is scrolled into
+/// view, then the wheel scrolls while the pointer is over the list. `options` is the whole
+/// options slice; nothing per row is touched but the type-ahead search.
+pub fn update(th: *const Theme, r: Response, top: f32, options: []const []const u8, visible: u32, sel: *u32, scroll: *f32, in: *const Input) void {
+    const n: u32 = @intCast(options.len);
+    const old = sel.*;
+    sel.* = list_zig.click(sel.*, r.clicked, rowAt(th, top, in.pointer[1], scroll.*, n));
+    if (r.focused) sel.* = list_zig.keys(sel.*, options, in, &list_zig.default_keys);
+    if (sel.* != old) scroll.* = reveal(th, scroll.*, sel.*, visible);
+    const delta = (in.wheel[1] * list_zig.rowHeight(th) + in.scroll[1]) * @as(f32, @floatFromInt(@intFromBool(r.hovered)));
+    scroll.* = wheel(th, scroll.*, delta, n, visible);
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A virtual list of `options` showing `visible` rows: as `list.list`, plus the wheel scrolls
@@ -101,6 +135,7 @@ pub fn vlist(f: *Frame, th: *const Theme, id: Id, options: []const []const u8, v
     const top = f.lastRect(id).y0;
     // The input moves the scroll the style shows, so the response is read before the list is
     // opened; `interact` then marks it and reports the same response.
+    update(th, f.ctx.inter.response(id), top, options, visible, selected, scroll, f.in);
     var s = vlistStyle(th, visible, scroll.*);
     s.border_color = list_zig.listBorder(th, f.ctx.inter.response(id).focused);
     const box = f.open(id, s);
@@ -166,6 +201,18 @@ pub fn ComptimeVList(comptime State: type, comptime spec: Spec, comptime th: The
 
         pub fn frame(ui: *Self, in: *const Input) Output {
             const event = ui.pointer.step(in);
+            const state = &ui.signals.state;
+            inline for (0..E.widget_count) |k| {
+                const v = comptime ct.fields(list_zig.nodeAt(spec, E.widget_nodes[k]));
+                const w = comptime E.widget(k);
+                var r = ui.pointer.response(w, in);
+                r.clicked = if (event) |e| e == w else false;
+                var sel: u32 = @field(state, v.selected);
+                var scroll: f32 = @field(state, v.scroll);
+                update(&th, r, ui.pointer.rectOf(w).y0, @field(state, v.items), v.visible, &sel, &scroll, in);
+                ui.signals.set(comptime field(v.selected), sel);
+                ui.signals.set(comptime field(v.scroll), scroll);
+            }
 
             const tb = ui.page.begin(in);
             var next: u32 = 0;
@@ -352,6 +399,22 @@ test "vlist: both front ends agree when scrolled part way" {
     // The first built row is option 1, pulled up by the 7 px the scroll takes past it.
     try testing.expectEqual(@as(u32, 6), builtRows(t, box));
     try testing.expectApproxEqAbs(t.rect(box).y0 + list_zig.inset(&theme) - 7, t.rect(box + 1).y0, 0.5);
+}
+
+test "wheel, reveal, maxScroll: scrolling as pure functions" {
+    const h = list_zig.rowHeight(&theme);
+    try testing.expectEqual(195 * h, maxScroll(&theme, 200, 5));
+    try testing.expectEqual(@as(f32, 0), maxScroll(&theme, 3, 5));
+    try testing.expectEqual(@as(f32, 0), wheel(&theme, 10, -50, 200, 5));
+    try testing.expectEqual(195 * h, wheel(&theme, 10, 1e9, 200, 5));
+    try testing.expectEqual(@as(f32, 40), wheel(&theme, 10, 30, 200, 5));
+    // Row 10 below the window: scrolled until it is the last row on screen.
+    try testing.expectEqual(6 * h, reveal(&theme, 0, 10, 5));
+    // Row 2 above it: scrolled until it is the first.
+    try testing.expectEqual(2 * h, reveal(&theme, 9 * h, 2, 5));
+    // Already whole on screen: no movement.
+    try testing.expectEqual(3 * h, reveal(&theme, 3 * h, 5, 5));
+    try testing.expectEqual(@as(f32, 17), reveal(&theme, 17, none, 5));
 }
 
 test {
