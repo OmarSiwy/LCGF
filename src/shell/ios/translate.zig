@@ -40,6 +40,11 @@ pub const Translator = struct {
     in: Input = .{},
     /// The application is terminating (`applicationWillTerminate:`): no more frames.
     closed: bool = false,
+    /// The view's safe area as padding, logical pixels, in `Style.pad`'s order (left, top,
+    /// right, bottom): what the notch, the Dynamic Island, the home indicator and the status
+    /// bar cover. The host pads its root node with it (example.zig) so nothing lands under them;
+    /// a full-bleed background still fills the whole viewport.
+    safe: [4]f32 = .{ 0, 0, 0, 0 },
     /// Fingers and pencils on the screen, in the order they touched down. `fresh`: touched
     /// down since the last frame, so not reported yet; `lift`: ended, removed once reported.
     rows: [max_contacts]Input.Contact = undefined,
@@ -65,6 +70,18 @@ pub const Translator = struct {
     /// The view's bounds changed (`layoutSubviews`): `w` x `h` points.
     pub fn resize(t: *Translator, w: f32, h: f32) void {
         t.in.viewport = .{ w, h };
+    }
+
+    /// Physical pixels per point: the view's `contentScaleFactor`, which the shell sets to the
+    /// screen's `nativeScale` (2 or 3 on iPhones; 2.608 on a display-zoomed Plus or Max).
+    /// Points stay points: the viewport and every position are unchanged.
+    pub fn setScale(t: *Translator, scale: f32) void {
+        t.in.scale = if (scale > 0) scale else 1;
+    }
+
+    /// The view's `safeAreaInsets` (top, left, bottom, right in points, UIEdgeInsets' order).
+    pub fn setInsets(t: *Translator, top: f32, left: f32, bottom: f32, right: f32) void {
+        t.safe = .{ left, top, right, bottom };
     }
 
     pub fn terminate(t: *Translator) void {
@@ -186,6 +203,8 @@ pub const Translator = struct {
 ///     # comment              blank lines and comments anywhere
 ///     frame                  starts a frame; the events below it arrive before its poll
 ///     bounds 390 844         the view's bounds, points
+///     scale 3                its contentScaleFactor
+///     insets 47 0 34 0       its safeAreaInsets: top, left, bottom, right
 ///     touch began 1 37 25    a touch: phase, id, x, y, then optionally its `Kind` and pressure
 ///     terminate              applicationWillTerminate:
 pub const Replay = struct {
@@ -196,7 +215,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { bounds, touch, terminate };
+    const Line = enum { bounds, scale, insets, touch, terminate };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -213,6 +232,8 @@ pub const Replay = struct {
             var w = std.mem.tokenizeScalar(u8, l, ' ');
             switch (std.meta.stringToEnum(Line, w.next().?) orelse return error.Syntax) {
                 .bounds => t.resize(try num(&w), try num(&w)),
+                .scale => t.setScale(try num(&w)),
+                .insets => t.setInsets(try num(&w), try num(&w), try num(&w), try num(&w)),
                 .touch => {
                     const phase = std.meta.stringToEnum(Phase, w.next() orelse return error.Syntax) orelse return error.Syntax;
                     const id = std.fmt.parseInt(u32, w.next() orelse return error.Syntax, 10) catch return error.Syntax;
@@ -378,4 +399,46 @@ test "translate: pencils are pens, trackpad clicks are the mouse, extra fingers 
     t.touch(.{ .id = 10 + max_contacts, .phase = .moved, .pos = .{ 2, 2 } });
     _ = t.frame(&ev);
     try testing.expectEqual(none, ev.in.contact(10 + max_contacts));
+}
+
+test "translate: scale and safe area, portrait then landscape" {
+    // An iPhone 15: 393 x 852 points at 3x; the Dynamic Island above, the home indicator below.
+    // Rotated, the island's side and the opposite one are inset alike, the bottom less.
+    var r: Replay = .{ .src =
+        \\frame
+        \\bounds 393 852
+        \\scale 3
+        \\insets 59 0 34 0
+        \\touch began 1 100 70
+        \\frame
+        \\touch ended 1 100 70
+        \\bounds 852 393
+        \\insets 0 59 21 59
+    };
+    var t: Translator = .{};
+    var ctx = try context.Context.init(&example_buffer, example_limits);
+    var app: example.App = .{};
+    var ev: Events = .{};
+    const want = [_]struct { vp: [2]f32, safe: [4]f32, sidebar: types.Rect }{
+        .{ .vp = .{ 393, 852 }, .safe = .{ 0, 59, 0, 34 }, .sidebar = .{ .x0 = 0, .y0 = 59 + 50, .x1 = 160, .y1 = 852 - 34 } },
+        .{ .vp = .{ 852, 393 }, .safe = .{ 59, 0, 59, 21 }, .sidebar = .{ .x0 = 59, .y0 = 50, .x1 = 59 + 160, .y1 = 393 - 21 } },
+    };
+    for (want) |w| {
+        try testing.expect(try r.next(&t));
+        try testing.expect(t.frame(&ev));
+        try testing.expectEqual(@as(f32, 3), ev.in.scale);
+        try testing.expectEqual(w.vp, ev.in.viewport);
+        try testing.expectEqual(w.safe, t.safe);
+        // Touches stay in points whatever the scale.
+        try testing.expectEqual([2]f32{ 100, 70 }, ev.in.pointer);
+        // The host pads its root with the safe area: the example stays clear of the island
+        // and the home indicator.
+        var f = ctx.begin(&ev.in);
+        _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = t.safe });
+        app.build(&f, &ev);
+        f.close();
+        const out = f.end(.{});
+        try testing.expect(out.status.ok());
+        try testing.expectEqual(w.sidebar, out.tree.rect(out.tree.find(example.id_sidebar)));
+    }
 }

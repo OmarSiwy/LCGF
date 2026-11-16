@@ -54,6 +54,7 @@ comptime {
 
 pub const CGPoint = extern struct { x: CGFloat, y: CGFloat };
 pub const CGRect = extern struct { origin: CGPoint, size: objc.CGSize };
+pub const UIEdgeInsets = extern struct { top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat };
 const CFRunLoop = *opaque {};
 const CFRunLoopSource = *opaque {};
 const CFString = *opaque {};
@@ -164,6 +165,7 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
     app.view_class = defineClass("UIView", "LcgrView", &.{
         .{ .sel = "layerClass", .imp = &viewLayerClass, .types = "#@:", .meta = true },
         .{ .sel = "layoutSubviews", .imp = &viewLayout, .types = "v@:" },
+        .{ .sel = "safeAreaInsetsDidChange", .imp = &viewInsets, .types = "v@:" },
         .{ .sel = "touchesBegan:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
         .{ .sel = "touchesMoved:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
         .{ .sel = "touchesEnded:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
@@ -198,12 +200,19 @@ fn viewTouches(self: Id, _: Sel, touches: Id, _: ?Id) callconv(.c) void {
     for (0..n) |i| s.touch(self, msg(Id, all, "objectAtIndex:", .{@as(objc.NSUInteger, i)}));
 }
 
+fn viewInsets(self: Id, _: Sel) callconv(.c) void {
+    super(void, self, app.view_class, "safeAreaInsetsDidChange", .{});
+    if (app.shell) |s| s.layout();
+}
+
 fn appLaunched(self: Id, _: Sel, _: Id, _: ?Id) callconv(.c) bool {
     const screen = msg(Id, objc.class("UIScreen"), "mainScreen", .{});
     const bounds = msg(CGRect, screen, "bounds", .{});
     const window = msg(Id, msg(Id, objc.class("UIWindow"), "alloc", .{}), "initWithFrame:", .{bounds});
     const view = msg(Id, msg(Id, app.view_class, "alloc", .{}), "initWithFrame:", .{bounds});
     msg(void, view, "setMultipleTouchEnabled:", .{@as(objc.BOOL, true)});
+    // A view with its own layer class draws at 1x unless told the screen's scale.
+    msg(void, view, "setContentScaleFactor:", .{msg(CGFloat, screen, "nativeScale", .{})});
     const vc = msg(Id, objc.class("UIViewController"), "new", .{});
     msg(void, vc, "setView:", .{view});
     msg(void, window, "setRootViewController:", .{vc});
@@ -290,10 +299,19 @@ pub const Ios = struct {
         s.dev.deinit();
     }
 
-    /// Reads the view's bounds into the translator.
+    /// Reads the view's bounds, scale and safe area into the translator.
     fn layout(s: *Ios) void {
         const b = msg(CGRect, s.view, "bounds", .{});
         s.t.resize(@floatCast(b.size.width), @floatCast(b.size.height));
+        s.t.setScale(@floatCast(msg(CGFloat, s.view, "contentScaleFactor", .{})));
+        const i = msg(UIEdgeInsets, s.view, "safeAreaInsets", .{});
+        s.t.setInsets(@floatCast(i.top), @floatCast(i.left), @floatCast(i.bottom), @floatCast(i.right));
+    }
+
+    /// The safe area as root padding (`Style.pad`): what the notch, the Dynamic Island and
+    /// the home indicator cover.
+    pub fn safeArea(s: *const Ios) [4]f32 {
+        return s.t.safe;
     }
 
     fn touch(s: *Ios, view: Id, ui: Id) void {
