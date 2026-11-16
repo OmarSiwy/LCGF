@@ -151,6 +151,60 @@ pub fn thumbStyle(frac: f32) Style {
     return .{ .size = .{ .px(4), .px(track_px + 4) }, .float = true, .offset = .{ base.unit(frac) * area_size[0] - 2, -2 }, .fill = .white, .border = 1, .border_color = .black };
 }
 
+// ---- behaviour: pure functions of the value and what happened -------------------------------
+
+/// Step of an arrow key, as a fraction of a part's range.
+pub const key_step: f32 = 0.01;
+
+/// While the area is held, saturation and value follow the pointer inside `rect`: across is
+/// saturation, up is value (both clamped).
+pub fn dragArea(c: Hsva, held: bool, rect: Rect, x: f32, y: f32) Hsva {
+    if (!held) return c;
+    var out = c;
+    out.s = base.unit((x - rect.x0) / @max(rect.w(), 1));
+    out.v = 1 - base.unit((y - rect.y0) / @max(rect.h(), 1));
+    return out;
+}
+
+/// A slider's value after this frame's keys (press and repeat): Right and Up add a step, Left
+/// and Down take one, Home and End go to the ends (APG slider).
+pub fn sliderKeys(value: f32, in: *const Input) f32 {
+    const km = &list_zig.default_keys;
+    var v = value;
+    for (in.events) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        if (e.code == km.right or e.code == km.up) v += key_step;
+        if (e.code == km.left or e.code == km.down) v -= key_step;
+        if (e.code == km.home) v = 0;
+        if (e.code == km.end) v = 1;
+    }
+    return base.unit(v);
+}
+
+/// One frame of input for a picker: each part follows the pointer while held (the area in two
+/// dimensions, the sliders across, as `base.slide`), and the focused part answers keys (the
+/// area: Left and Right move saturation, Up and Down value). `r` and `rects` are the parts'
+/// responses and last rects, in `Part` order.
+pub fn update(c: Hsva, r: [3]Response, rects: [3]Rect, in: *const Input) Hsva {
+    const x = in.pointer[0];
+    var out = dragArea(c, r[0].held, rects[0], x, in.pointer[1]);
+    out.h = base.slide(out.h, r[1].held, (x - rects[1].x0) / @max(rects[1].w(), 1), 0, 1);
+    out.a = base.slide(out.a, r[2].held, (x - rects[2].x0) / @max(rects[2].w(), 1), 0, 1);
+    if (r[0].focused) {
+        const km = &list_zig.default_keys;
+        for (in.events) |e| {
+            if (e.kind != .press and e.kind != .repeat) continue;
+            if (e.code == km.right) out.s = base.unit(out.s + key_step);
+            if (e.code == km.left) out.s = base.unit(out.s - key_step);
+            if (e.code == km.up) out.v = base.unit(out.v + key_step);
+            if (e.code == km.down) out.v = base.unit(out.v - key_step);
+        }
+    }
+    if (r[1].focused) out.h = sliderKeys(out.h, in);
+    if (r[2].focused) out.a = sliderKeys(out.a, in);
+    return out;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A colour picker for `color`. Returns the area's response.
@@ -163,6 +217,7 @@ pub fn colorpicker(f: *Frame, th: *const Theme, id: Id, color: *Hsva) Response {
         r[k] = f.ctx.inter.response(partId(id, p));
         rects[k] = f.lastRect(partId(id, p));
     }
+    color.* = update(color.*, r, rects, f.in);
     const c = color.*;
     var g = pickerStyle(th);
     _ = &g;
@@ -262,6 +317,13 @@ pub fn ComptimeColorpicker(comptime State: type, comptime spec: Spec, comptime t
 
         pub fn frame(ui: *Self, in: *const Input) Output {
             const event = ui.pointer.step(in);
+            inline for (comptime pickersOf(spec)) |n| {
+                const v = comptime ct.fields(n);
+                var rects: [3]Rect = undefined;
+                inline for (parts(v.name), 0..) |w, k| rects[k] = ui.pointer.rectOf(w);
+                const c = update(@field(ui.signals.state, v.color), ui.responses(v.name, in), rects, in);
+                ui.signals.set(comptime field(v.color), c);
+            }
 
             const tb = ui.page.begin(in);
             var next: u32 = 0;
@@ -436,6 +498,32 @@ test "colorpicker: both front ends agree; marker and thumbs sit at the values" {
     // The area's base is the pure hue; the hue track's segments share its width.
     try testing.expectEqual((Hsva{ .h = c.h }).rgba().bitsOf(), t.c.look[area_row].fill);
     try testing.expectApproxEqAbs(area_size[0] / hue_stops, t.rect(hue_row + 1).w(), 1);
+}
+
+test "dragArea, sliderKeys, update: the behaviour as pure functions" {
+    const rect: Rect = .{ .x0 = 10, .y0 = 20, .x1 = 110, .y1 = 70 };
+    const c: Hsva = .{};
+    try testing.expectEqual(c, dragArea(c, false, rect, 60, 45));
+    const d = dragArea(c, true, rect, 60, 45);
+    try testing.expectEqual(@as(f32, 0.5), d.s);
+    try testing.expectEqual(@as(f32, 0.5), d.v);
+    const e = dragArea(c, true, rect, -50, 500);
+    try testing.expectEqual(@as(f32, 0), e.s);
+    try testing.expectEqual(@as(f32, 0), e.v);
+    const km = list_zig.default_keys;
+    const keys = [_]Input.Event{ .{ .kind = .press, .code = km.right }, .{ .kind = .repeat, .code = km.up }, .{ .kind = .release, .code = km.up } };
+    try testing.expectApproxEqAbs(@as(f32, 0.52), sliderKeys(0.5, &.{ .events = &keys }), 1e-6);
+    const ends = [_]Input.Event{ .{ .kind = .press, .code = km.end }, .{ .kind = .press, .code = km.right } };
+    try testing.expectEqual(@as(f32, 1), sliderKeys(0.2, &.{ .events = &ends }));
+    const home = [_]Input.Event{.{ .kind = .press, .code = km.home }};
+    try testing.expectEqual(@as(f32, 0), sliderKeys(0.7, &.{ .events = &home }));
+    // Only the focused part takes keys; only a held part follows the pointer.
+    const rects = [3]Rect{ rect, rect, rect };
+    var r: [3]Response = @splat(.{});
+    r[1] = .{ .held = true, .focused = true };
+    const in: Input = .{ .pointer = .{ 35, 45 }, .events = &home };
+    const u = update(.{ .h = 0.9, .s = 0.3, .v = 0.4, .a = 0.6 }, r, rects, &in);
+    try testing.expectEqual(Hsva{ .h = 0, .s = 0.3, .v = 0.4, .a = 0.6 }, u);
 }
 
 test {
