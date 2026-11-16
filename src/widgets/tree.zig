@@ -417,7 +417,7 @@ test "tree: roles, value and the expanded and selected states" {
     // src (expanded), core, widgets, docs (collapsed parents).
     for (0..4) |k| try testing.expectEqual(@backingInt(a11y.Role.tree_item), t.c.role[box + 1 + 3 * k]);
 
-    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var sbuf: [8192]u8 align(@import("../core/mem.zig").column_align) = undefined;
     var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
     var sem = a11y.Semantics.init(&carver, t.cap);
     sem.clear();
@@ -426,7 +426,7 @@ test "tree: roles, value and the expanded and selected states" {
     setStates(&sem, box, &test_depths, &h.app.outline, scratch[0..len]);
     a11y.names(t, &sem);
     const st = struct {
-        fn of(s: u8) a11y.State {
+        fn of(s: u16) a11y.State {
             return @bitCast(s);
         }
     }.of;

@@ -93,6 +93,8 @@ pub const Role = enum(u8) {
     /// A clipped viewport whose content scrolls (AccessKit's ScrollView; ARIA has none and
     /// leaves it a group).
     scroll_view,
+    /// A text input for a search query (ARIA's searchbox; AccessKit's SearchInput).
+    search_box,
 };
 
 /// The name of the role in a raw role byte, as in `Role` (`"tab"`, `"toggle_button"`), or
@@ -148,7 +150,7 @@ pub const live: [256]Live = blk: {
 /// on the checkable roles (`checkable`), `mixed` on those too, `expanded` where `expandable` is
 /// set (a disclosure button, a tree item, a combobox), so a bridge can tell "collapsed" from
 /// "cannot expand", and "not checked" from "cannot be checked".
-pub const State = bitpack struct(u8) {
+pub const State = bitpack struct(u16) {
     checked: bool = false,
     expandable: bool = false,
     expanded: bool = false,
@@ -163,8 +165,16 @@ pub const State = bitpack struct(u8) {
     /// The current item of a set (`aria-current`), such as a breadcrumb's page. The
     /// application's to set.
     current: bool = false,
+    /// A text input of several lines (`aria-multiline`), such as a text area. The
+    /// application's (the widget's `semantics`) to set.
+    multiline: bool = false,
+    /// The node has keyboard focus. Set by `focused` from the interaction state.
+    focused: bool = false,
+    /// Shown but not editable (`aria-readonly`). The application's to set.
+    read_only: bool = false,
+    _: u5 = 0,
 
-    pub inline fn bitsOf(st: State) u8 {
+    pub inline fn bitsOf(st: State) u16 {
         return @bitCast(st);
     }
 };
@@ -172,8 +182,8 @@ pub const State = bitpack struct(u8) {
 /// The state bit a role's `value` turns on (as the core's checkbox stores it: 1 on, 0 off,
 /// between them mixed): `checked` for the checkable roles, `pressed` for a toggle button, zero
 /// for the rest. Indexed by the raw role byte.
-pub const checkable: [256]u8 = blk: {
-    var m: [256]u8 = @splat(0);
+pub const checkable: [256]u16 = blk: {
+    var m: [256]u16 = @splat(0);
     for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
         m[@backingInt(r)] = State.bitsOf(.{ .checked = true });
     m[@backingInt(Role.toggle_button)] = State.bitsOf(.{ .pressed = true });
@@ -194,8 +204,17 @@ pub const Semantics = struct {
         /// frame's `Strings`, `.{}` for none. `labelled_by` wins over it, as ARIA has it; it
         /// wins over the node's content and own text.
         label: []Span,
+        /// An editable node's text, as a span in the frame's `Strings` (a text field's value,
+        /// which the value column, one number, cannot hold); `.{}` for none.
+        text: []Span,
+        /// What an empty editable node shows instead (`aria-placeholder`), a span in the
+        /// frame's `Strings`; `.{}` for none.
+        hint: []Span,
+        /// A hash of `text` and `hint`, 0 for neither, so `flatten` compares them across
+        /// frames without hashing bytes per row. `setText` writes all three.
+        text_hash: []u32,
         /// `State` bits the application sets; `states` adds what follows from the tree.
-        state: []u8,
+        state: []u16,
         /// The value's range, as `aria-valuemin`, `aria-valuemax` and the step a screen
         /// reader's increment and decrement move by, in the value's units. `hi <= lo` is no
         /// range (the cleared 0, 0); `step` 0 is none.
@@ -222,10 +241,26 @@ pub const Semantics = struct {
     pub fn clear(s: *Semantics) void {
         @memset(s.c.labelled_by, none);
         @memset(s.c.label, .{});
+        @memset(s.c.text, .{});
+        @memset(s.c.hint, .{});
+        @memset(s.c.text_hash, 0);
         @memset(s.c.state, 0);
         inline for (s.c.range) |col| @memset(col, 0);
     }
 };
+
+/// Sets row `row`'s text and placeholder (`Semantics.Columns.text`, `hint`), copying the bytes
+/// into the frame's strings `str`, and their hash. For an editable node, after building; an
+/// empty `hint` is none.
+pub fn setText(s: *Semantics, row: u32, str: *Strings, text: []const u8, hint: []const u8) void {
+    s.c.text[row] = str.add(text);
+    s.c.hint[row] = str.add(hint);
+    var h = std.hash.Fnv1a_32.init();
+    h.update(text);
+    h.update(&.{0}); // "ab" + "c" is not "a" + "bc"
+    h.update(hint);
+    s.c.text_hash[row] = h.final();
+}
 
 /// Accessible names, as text runs. A node is named by, in order: the text of the node it is
 /// labelled by (its first text run), else its content (the first text run in its subtree) when
@@ -271,11 +306,19 @@ pub fn states(t: *const Tree, s: *Semantics) void {
     for (0..t.len) |k| {
         const v = c.value[k];
         const bit = checkable[c.role[k]];
-        const half = -%(@as(u8, @intFromBool(v > 0)) & @intFromBool(v < 1));
-        const on = -%@as(u8, @intFromBool(v != 0)) & ~half;
-        const can = -%@as(u8, @intFromBool(bit != 0));
+        const half = -%(@as(u16, @intFromBool(v > 0)) & @intFromBool(v < 1));
+        const on = -%@as(u16, @intFromBool(v != 0)) & ~half;
+        const can = -%@as(u16, @intFromBool(bit != 0));
         st[k] |= (bit & on) | (mixed & half & can) | (st[c.parent[k]] & disabled);
     }
+}
+
+/// Marks the node with id `focus` (`Interaction.focus`, 0 for none) `focused`. Run it with
+/// `states`, before `flatten`; a focus on no node of `t` marks nothing.
+pub fn focused(t: *const Tree, s: *Semantics, focus: u32) void {
+    const r = t.find(@fromBackingInt(focus));
+    if (focus == 0 or r == none) return;
+    s.c.state[r] |= State.bitsOf(.{ .focused = true });
 }
 
 /// The semantic tree as flat arrays, the form a bridge hands to the platform: one row per
@@ -297,15 +340,19 @@ pub const Export = struct {
         /// Export row of the parent; `none` for the root.
         parent: []u32,
         role: []u8,
-        state: []u8,
+        state: []u16,
         value: []f32,
         /// `Semantics.Columns.range`: lo, hi, step.
         range: [3][]f32,
         /// The name's bytes in the frame's `Strings`; 0 bytes when the node has no name.
         name_start: []u32,
         name_bytes: []u32,
-        /// FNV-1a of the name's bytes, so a later frame compares names without this frame's
-        /// `Strings`.
+        /// `Semantics.Columns.text` and `hint`: spans in the frame's `Strings`.
+        text: []Span,
+        hint: []Span,
+        /// FNV-1a of the name's bytes, xor `Semantics.Columns.text_hash`, so a later frame
+        /// compares name, text and placeholder without this frame's `Strings`. A node with no
+        /// text or placeholder hashes its name alone.
         name_hash: []u32,
         /// Snapped layout rect x0, y0, x1, y1, in logical pixels.
         rect: [4][]f32,
@@ -377,7 +424,9 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         inline for (0..3) |e| o.range[e][w] = s.c.range[e][k];
         o.name_start[w] = start;
         o.name_bytes[w] = bytes;
-        o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]);
+        o.text[w] = s.c.text[k];
+        o.hint[w] = s.c.hint[k];
+        o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]) ^ s.c.text_hash[k];
         inline for (0..4) |e| o.rect[e][w] = c.rect[e][k];
         o.kids[w] = 0;
         o.kids_hash[w] = 0;
@@ -724,10 +773,10 @@ test "tree export: states come from the application, checkable values and disabl
     try testing.expectEqual(State{ .mixed = true }, got(&s, some));
     try testing.expectEqual(State{ .current = true }, got(&s, page));
     // Idempotent; and `clear` drops what the application set last frame.
-    const before: [15]u8 = s.c.state[0..15].*;
+    const before: [15]u16 = s.c.state[0..15].*;
     try testing.expectEqual(15, t.len);
     states(&t, &s);
-    try testing.expectEqualSlices(u8, &before, s.c.state[0..t.len]);
+    try testing.expectEqualSlices(u16, &before, s.c.state[0..t.len]);
     s.clear();
     states(&t, &s);
     try testing.expectEqual(State{}, got(&s, button));
@@ -1096,6 +1145,61 @@ test "tree export: a label names a node with no text, unless it is labelled by a
     try testing.expectEqualStrings("", f.name(e, 0));
 }
 
+test "tree export: a text field's text and placeholder are exported, and a change sends it again" {
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const Scene = struct {
+        fn build(fx: *FrameFixture(8), gen: u1, text: []const u8) *Export {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const field = t.push(root, types.Id.from("name"), &.{ .role = .text_input });
+            t.seal(field);
+            t.seal(root);
+            setText(&fx.s, field, &fx.str, text, "Your name");
+            return fx.run(gen);
+        }
+        fn bytes(fx: *const FrameFixture(8), sp: Span) []const u8 {
+            return fx.str.buf[sp.start..][0..sp.bytes];
+        }
+    };
+    var e = Scene.build(&f, 0, "Ada");
+    try testing.expectEqualStrings("Ada", Scene.bytes(&f, e.c.text[1]));
+    try testing.expectEqualStrings("Your name", Scene.bytes(&f, e.c.hint[1]));
+    try testing.expectEqual(Span{}, e.c.text[0]);
+    // The group has neither: its hash is its name's alone.
+    try testing.expectEqual(std.hash.Fnv1a_32.hash(""), e.c.name_hash[0]);
+    const prev = e;
+    e = Scene.build(&f, 1, "Ada");
+    diff(e, prev, &f.ch);
+    try testing.expectEqual(0, f.ch.updated_len);
+    e = Scene.build(&f, 1, "Adam");
+    diff(e, prev, &f.ch);
+    try testing.expectEqualSlices(u32, &.{1}, f.ch.updated[0..f.ch.updated_len]);
+}
+
+test "tree export: the focused node is marked focused; multiline and read-only are exported" {
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const t = &f.t;
+    const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const notes = t.push(root, types.Id.from("notes"), &.{ .role = .text_input });
+    t.seal(notes);
+    const log = t.push(root, types.Id.from("log"), &.{ .role = .text_input });
+    t.seal(log);
+    t.seal(root);
+    f.s.c.state[notes] = State.bitsOf(.{ .multiline = true });
+    f.s.c.state[log] = State.bitsOf(.{ .multiline = true, .read_only = true });
+    focused(t, &f.s, @backingInt(types.Id.from("notes")));
+    // No focus, or a focus on a node not in the tree, marks nothing.
+    focused(t, &f.s, 0);
+    focused(t, &f.s, @backingInt(types.Id.from("gone")));
+    const e = f.run(0);
+    try testing.expectEqual(State{ .multiline = true, .focused = true }, @as(State, @bitCast(e.c.state[1])));
+    try testing.expectEqual(State{ .multiline = true, .read_only = true }, @as(State, @bitCast(e.c.state[2])));
+    try testing.expectEqual(State{}, @as(State, @bitCast(e.c.state[0])));
+}
+
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {
     var f: FrameFixture(8) = .{};
     f.init();
@@ -1259,5 +1363,5 @@ test "tree export: counting carvers size what the carvers cut" {
         try testing.expectEqual(counter.off, carver.off);
     }
     try testing.expectEqual(12, @sizeOf(Action));
-    try testing.expectEqual(1, @sizeOf(State));
+    try testing.expectEqual(2, @sizeOf(State));
 }

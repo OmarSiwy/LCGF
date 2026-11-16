@@ -12,7 +12,7 @@ enables accessibility, runs the example (zig-out/bin/accesskit-smoke) and then
 2. clicks Reset and Wireframe through AT-SPI's Action interface and checks the example ran
    them (it prints `resets=1`, `wireframe=true`);
 3. runs Orca while the example moves focus round its controls, and checks Orca announced
-   each one (`SPEECH OUTPUT:` lines in Orca's debug log).
+   each one, a text field with its text (`SPEECH OUTPUT:` lines in Orca's debug log).
 
 Needs busctl (systemd), at-spi2-core and orca on PATH. Exits non-zero on the first failure.
 """
@@ -84,7 +84,7 @@ def prop(dest, path, iface, name):
 
 
 # 1. The tree, from the registry's desktop down.
-atspi_roles = {7: "check box", 23: "frame", 29: "label", 39: "panel", 43: "push button", 51: "slider", 62: "tool bar", 75: "application"}
+atspi_roles = {79: "entry", 7: "check box", 23: "frame", 29: "label", 39: "panel", 43: "push button", 51: "slider", 62: "tool bar", 75: "application"}
 nodes = {}  # name -> (role name, dest, path)
 
 
@@ -94,8 +94,9 @@ def walk(dest, path, depth):
     number = call(dest, path, "org.a11y.atspi.Accessible", "GetRole")[0]
     role = atspi_roles.get(number, str(number))
     print("  " * depth + "%s %r" % (role, name))
-    if name:
-        nodes.setdefault(name, (role, dest, path))
+    # A control and its caption share a name: keep the control.
+    if name and nodes.get(name, ("label",))[0] == "label":
+        nodes[name] = (role, dest, path)
     for child_dest, child_path in call(dest, path, "org.a11y.atspi.Accessible", "GetChildren")[0]:
         walk(child_dest, child_path, depth + 1)
 
@@ -104,10 +105,22 @@ apps = call("org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root", "org.a
 if len(apps) != 1:
     fail("expected one application on the bus, got %r" % apps)
 walk(apps[0][0], apps[0][1], 0)
-for name, role in [("LCGR example", "frame"), ("Reset", "push button"), ("Wireframe", "check box"), ("Add layer", "push button"), ("Layer 0", "label")]:
+for name, role in [("LCGR example", "frame"), ("Reset", "push button"), ("Wireframe", "check box"), ("Add layer", "push button"), ("Layer 0", "label"), ("Title", "entry"), ("Notes", "entry")]:
     if nodes.get(name, ("missing",))[0] != role:
         fail("%r: expected role %r, got %r" % (name, role, nodes.get(name)))
 print("ok   tree: window, buttons, check box and labels with their names and roles")
+
+
+def states(name):
+    _, dest, path = nodes[name]
+    words = call(dest, path, "org.a11y.atspi.Accessible", "GetState")[0]
+    return {i for i in range(64) if words[i // 32] >> (i % 32) & 1}
+
+
+MULTI_LINE, SINGLE_LINE = 17, 26  # AtspiStateType
+if MULTI_LINE not in states("Notes") or MULTI_LINE in states("Title") or SINGLE_LINE not in states("Title"):
+    fail("expected Notes multi-line and Title single-line: Notes %r, Title %r" % (sorted(states("Notes")), sorted(states("Title"))))
+print("ok   states: the Notes text area is multi-line, the Title field single-line")
 
 
 # 2. Actions from the assistive technology's side.
@@ -129,7 +142,7 @@ print("ok   actions: AT-SPI clicks on Reset and Wireframe ran in the example")
 # 3. Orca, while the example moves focus round Reset, Wireframe and Exposure.
 orca_log = os.path.join(out, "orca.log")
 start(["orca", "--debug", "--debug-file=" + orca_log], "orca.out")
-expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent"]
+expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled", "'Find entry zig", "'Notes entry Buy milk"]
 spoken = []
 
 
@@ -143,6 +156,6 @@ def heard():
 wait_for(heard, lambda: "Orca to announce %s (it said %r)" % (expected, spoken), seconds=20)
 for s in spoken:
     print("     orca: " + s.split("{")[0])
-print("ok   orca announced the window, Reset, Wireframe (checked) and the Exposure slider at a quarter of its range")
+print("ok   orca announced the window, Reset, Wireframe (checked), the Exposure slider at a quarter of its range, and the Title, Find and Notes fields' text")
 for p in procs:
     p.kill()

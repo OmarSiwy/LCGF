@@ -29,6 +29,7 @@ const keyboard = @import("../interact/keyboard.zig");
 const Mono = @import("../text/protocol.zig").Mono;
 const Graphemes = @import("../text/unicode/grapheme.zig").Graphemes;
 const a11y = @import("../a11y/tree.zig");
+const Strings = @import("../core/strings.zig").Strings;
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -347,11 +348,23 @@ pub fn orResult(into: *edit.Result, r: edit.Result) void {
 
 /// The semantics the tree columns cannot carry, for field `name` in either front end's tree:
 /// its name is the row `label` (its caption, `aria-labelledby`; `none` for none). The role is
-/// in the tree (text input, ARIA textbox); the text and placeholder are presentational.
+/// in the tree (text input, ARIA textbox); its text and placeholder are `textValue`'s, as the
+/// text leaf drawing them is presentational.
 pub fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void {
     const f = t.find(name);
     if (f == types.none or label == types.none) return;
     s.c.labelled_by[f] = label;
+}
+
+/// What field `name` (over `field`, a `*Text(cap)`, showing `hint` while empty) holds, for
+/// assistive technology: its text and its placeholder, copied to the frame's strings `str`
+/// (`a11y.setText`). Call it after building either front end's tree; a field not in `t` is
+/// skipped. A password field, when there is one, must not call it: its text is not to be read
+/// out.
+pub fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, field: anytype, hint: []const u8) void {
+    const f = t.find(name);
+    if (f == types.none) return;
+    a11y.setText(s, f, str, field.text(), hint);
 }
 
 // ---- runtime front end ----------------------------------------------------------------------
@@ -622,6 +635,42 @@ test "textfield a11y: role text input named by its caption; text and caret prese
         semantics(tree, &sem, .from("name"), f - 1);
         a11y.names(tree, &sem);
         try testing.expectEqualStrings("Name", check.nameOf(&sem, tx, str, f));
+    }
+}
+
+var field_content: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+
+test "textfield a11y: its text and placeholder, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &page;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 320, 140 } });
+    const tb = &h.ui.tables;
+    const ctx = &h.ctx;
+    const trees = [2]*const Tree{ &ctx.trees[ctx.cur], &tb.t };
+    const strs = [2]*Strings{ &ctx.strings[ctx.cur], &tb.strings };
+    const st = &h.ui.signals.state;
+    for (trees, strs, &field_content, 0..) |t, str, *x, k| {
+        const sem = x.begin();
+        const fields = [2]*Page.Field{ if (k == 0) &h.app.name else &st.name, if (k == 0) &h.app.city else &st.city };
+        textValue(t, sem, str, .from("name"), fields[0], "Your name");
+        textValue(t, sem, str, .from("city"), fields[1], "");
+    }
+    const e = field_content[0].finish(trees[0], &ctx.texts[ctx.cur], strs[0].buf);
+    const c = field_content[1].finish(trees[1], &tb.tx, strs[1].buf);
+    try testing.expect(popover.sameSemantics(e, c));
+    const span = struct {
+        fn of(str: *const Strings, sp: @import("../core/strings.zig").Span) []const u8 {
+            return str.buf[sp.start..][0..sp.bytes];
+        }
+    }.of;
+    const name = popover.exportRow(e, trees[0].find(.from("name")));
+    const city = popover.exportRow(e, trees[0].find(.from("city")));
+    for ([2]*const a11y.Export{ e, c }, strs) |x, str| {
+        try testing.expectEqualStrings("", span(str, x.c.text[name]));
+        try testing.expectEqualStrings("Your name", span(str, x.c.hint[name]));
+        try testing.expectEqualStrings("Oslo", span(str, x.c.text[city]));
+        try testing.expectEqualStrings("", span(str, x.c.hint[city]));
     }
 }
 

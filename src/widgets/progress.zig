@@ -224,7 +224,7 @@ test "progress: role, value and a name from its caption" {
     try testing.expectEqual(@as(f32, 0), progressValue(-1));
     try testing.expectEqual(@as(f32, 0.4), progressValue(0.4));
 
-    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var sbuf: [8192]u8 align(@import("../core/mem.zig").column_align) = undefined;
     var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
     var sem = a11y.Semantics.init(&carver, t.cap);
     sem.clear();

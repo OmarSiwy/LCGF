@@ -464,7 +464,7 @@ test "list: roles, value and the selected state for accessibility" {
     try testing.expectEqual(@as(f32, -1), selectedValue(none));
 
     // The bridge's view: the list box named by nothing, the options by their text, one selected.
-    var sbuf: [4096]u8 align(mem.column_align) = undefined;
+    var sbuf: [8192]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &sbuf };
     var sem = a11y.Semantics.init(&carver, t.cap);
     sem.clear();

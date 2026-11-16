@@ -13,6 +13,7 @@ pub const TreeUpdate = opaque {};
 /// `accesskit_role`: one byte. Only the values the bridge maps to are named.
 pub const Role = enum(u8) {
     unknown = 0,
+    text_run = 1,
     cell = 2,
     label = 3,
     image = 4,
@@ -26,6 +27,8 @@ pub const Role = enum(u8) {
     check_box = 15,
     radio_button = 16,
     text_input = 17,
+    multiline_text_input = 31,
+    search_input = 32,
     button = 18,
     row_header = 21,
     column_header = 22,
@@ -128,6 +131,8 @@ pub extern fn accesskit_node_add_action(node: *Node, action: Action) void;
 pub extern fn accesskit_node_set_children(node: *Node, length: usize, values: [*]const NodeId) void;
 pub extern fn accesskit_node_set_label_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_value_with_length(node: *Node, value: [*]const u8, length: usize) void;
+pub extern fn accesskit_node_set_character_lengths(node: *Node, length: usize, values: [*]const u8) void;
+pub extern fn accesskit_node_set_placeholder_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_bounds(node: *Node, value: Rect) void;
 pub extern fn accesskit_node_set_transform(node: *Node, value: Affine) void;
 pub extern fn accesskit_node_set_numeric_value(node: *Node, value: f64) void;
@@ -135,6 +140,7 @@ pub extern fn accesskit_node_set_toggled(node: *Node, value: Toggled) void;
 pub extern fn accesskit_node_set_expanded(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_selected(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_disabled(node: *Node) void;
+pub extern fn accesskit_node_set_read_only(node: *Node) void;
 pub extern fn accesskit_node_set_live(node: *Node, value: Live) void;
 pub extern fn accesskit_node_set_aria_current(node: *Node, value: AriaCurrent) void;
 pub extern fn accesskit_node_set_min_numeric_value(node: *Node, value: f64) void;
