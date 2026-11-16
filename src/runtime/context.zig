@@ -16,10 +16,10 @@ const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
-const Memos = @import("reuse.zig").Memos;
 const Anims = @import("../anim/anims.zig").Anims;
 const Tweens = @import("../anim/tweens.zig").Tweens;
 const Flips = @import("../anim/flip.zig").Flips;
+const Memos = @import("reuse.zig").Memos;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -238,10 +238,10 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
     try testing.expectEqual(example_limits.signals, ctx.signals.cap);
-    try testing.expectEqual(example_limits.memos, ctx.memos.cap);
-    try testing.expect(@intFromPtr(ctx.memos.c.stamp.ptr + ctx.memos.c.stamp.len) <= hi);
     try testing.expectEqual(example_limits.anims, ctx.anims.cap);
     try testing.expectEqual(example_limits.tweens, ctx.tweens.cap);
+    try testing.expectEqual(example_limits.memos, ctx.memos.cap);
+    try testing.expect(@intFromPtr(ctx.memos.c.stamp.ptr + ctx.memos.c.stamp.len) <= hi);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
