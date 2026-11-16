@@ -83,6 +83,15 @@ pub fn paragraphLevel(orig: []const Class, scratch: Scratch) u8 {
     return firstStrong(orig, scratch.pair, 0, orig.len) orelse 0;
 }
 
+/// A paragraph's base direction: given (HL1), or `auto` from its text (P2, P3). The values
+/// are BidiCharacterTest's paragraph directions.
+pub const Direction = enum(u8) { ltr = 0, rtl = 1, auto = 2 };
+
+/// The paragraph level for direction `d`.
+pub fn baseLevel(orig: []const Class, scratch: Scratch, d: Direction) u8 {
+    return if (d == .auto) paragraphLevel(orig, scratch) else @backingInt(d);
+}
+
 /// Resolves the embedding level of every character of one paragraph (X1 to I2). Characters
 /// removed by X9 get the level of the character before them. `cps` gives the code points for
 /// bracket pairs (N0); pass an empty slice when only classes are known. L1 is `lineLevels`.
