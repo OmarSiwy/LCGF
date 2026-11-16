@@ -946,3 +946,66 @@ test "wayland: a popup below its anchor, placed and closed by the compositor" {
     shell.closeWindow(k);
     try testing.expect(shell.poll(&evs[0]));
 }
+
+test "wayland: files dragged over the window, listed while they hover, then dropped" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"wl_data_device_manager"}));
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 1)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    const dev = shell.data.device;
+    const offer: u32 = 0xff00_0010;
+
+    // A file manager's drag enters at (100, 200).
+    fake.send(dev, 0, .{offer});
+    fake.send(offer, 0, .{@as([]const u8, "text/uri-list")});
+    const serial = fake.nextSerial();
+    fake.send(dev, 1, .{ serial, shell.windows[0].surface, wire.Fixed.from(100), wire.Fixed.from(200), offer });
+    fake.flush();
+    fake.logged = 0;
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    try testing.expectEqual(serial, fake.sent(.free, 0).?.arg0); // accept
+    try testing.expect(fake.sent(.free, 4) != null); // set_actions: copy
+    try testing.expect(fake.received >= 0); // receive text/uri-list
+    try testing.expect(ev.files.hover);
+    try testing.expectEqual(@as(usize, 0), ev.files.count()); // not read yet
+
+    const list = "file:///home/u/photo%201.png\r\nfile:///home/u/notes.txt\r\n";
+    _ = linux.write(fake.received, list.ptr, list.len);
+    _ = linux.close(fake.received);
+    fake.send(dev, 3, .{ @as(u32, 0), wire.Fixed.from(120), wire.Fixed.from(210) }); // motion
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expect(ev.files.hover and !ev.files.drop);
+    try testing.expectEqual([2]f32{ 120, 210 }, ev.files.pos);
+    try testing.expectEqual(@as(usize, 2), ev.files.count());
+    try testing.expectEqualStrings("/home/u/photo 1.png", ev.files.path(0));
+    try testing.expectEqualStrings("/home/u/notes.txt", ev.files.path(1));
+
+    // Dropped: one poll says so, the offer is finished, and the next poll has no files.
+    fake.send(dev, 4, .{});
+    fake.send(dev, 2, .{}); // leave, which compositors send after a drop
+    fake.flush();
+    fake.logged = 0;
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    try testing.expect(ev.files.drop and ev.files.hover);
+    try testing.expectEqual(@as(usize, 2), ev.files.count());
+    try testing.expect(fake.sent(.free, 3) != null); // finish
+    try testing.expect(fake.sent(.free, 2) != null); // destroy
+    _ = shell.poll(&ev);
+    try testing.expect(!ev.files.hover and !ev.files.drop);
+
+    // A drag of something else (text) is refused and shows no files.
+    fake.send(dev, 0, .{offer + 1});
+    fake.send(offer + 1, 0, .{@as([]const u8, "text/plain")});
+    fake.send(dev, 1, .{ fake.nextSerial(), shell.windows[0].surface, wire.Fixed.from(1), wire.Fixed.from(1), offer + 1 });
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expect(!ev.files.hover);
+}

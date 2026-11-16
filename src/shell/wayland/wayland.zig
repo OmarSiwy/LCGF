@@ -338,6 +338,7 @@ pub const Wayland = struct {
         w.data.bind(w);
         w.ime.bind(w);
         w.data.readPaste(w);
+        w.data.readDrag();
         const t = w.clock();
         w.seat.repeat(t);
         w.flush();
@@ -355,8 +356,11 @@ pub const Wayland = struct {
             s.fill(in, .{ .pointer = w.owns(s.pointer_focus, at), .keyboard = w.owns(s.key_focus, at), .touch = w.owns(s.touch_focus, at) });
             ev.in = in.*;
             ev.composition = if (w.owns(w.ime.focus, at)) w.ime.composition() else .{};
+            ev.files = w.data.files(at);
         }
         s.begin();
+        w.data.endPoll(w);
+        w.flush();
         var any = false;
         for (w.windows) |win| any = any or (win.open and !win.closed);
         return !w.closed and any;
@@ -550,11 +554,13 @@ pub const Wayland = struct {
 
     /// True when something is ready, false on timeout.
     fn sleep(w: *Wayland, ms: i32) bool {
-        var fds = [3]linux.pollfd{
+        var fds = [4]linux.pollfd{
             .{ .fd = w.conn.fd, .events = linux.POLL.IN, .revents = 0 },
             .{ .fd = w.wake_fd, .events = linux.POLL.IN, .revents = 0 },
             // A paste in progress (poll ignores -1).
             .{ .fd = w.data.paste_fd, .events = linux.POLL.IN, .revents = 0 },
+            // A dragged file list being read.
+            .{ .fd = w.data.drag_fd, .events = linux.POLL.IN, .revents = 0 },
         };
         const rc = linux.poll(&fds, fds.len, ms);
         return linux.errno(rc) != .SUCCESS or rc > 0;
@@ -846,5 +852,6 @@ fn physical(size: [2]f32, scale: f32) [2]u32 {
 test {
     _ = wire;
     _ = @import("xkb.zig");
+    _ = @import("data.zig");
     _ = @import("test.zig");
 }
