@@ -135,21 +135,21 @@ pub fn MenuBar(comptime th: Theme, comptime name: @EnumLiteral(), comptime field
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
             const bs: BarState = @field(st, field_name);
-            if (comptime named(n, partName(id, "bar"))) return .{ .style = barStyle(&th) };
+            if (comptime named(n, partName(id, "bar"))) return .{ .style = barStyle(&th), .role = .menu_bar };
             inline for (def.names, def.menus, 0..) |mn, m, i| {
                 const mid = comptime partName(id, mn);
                 const open = bs.open == i;
-                if (comptime named(n, mid)) return .{ .style = buttonStyle(&th, open, v.response.hovered) };
+                if (comptime named(n, mid)) return .{ .style = buttonStyle(&th, open, v.response.hovered), .role = .menu_item };
                 if (comptime named(n, partName(mid, "panel"))) {
                     if (!open) return null;
-                    return .{ .style = menu.listStyle(&th, v.last.of(mid)) };
+                    return .{ .style = menu.listStyle(&th, v.last.of(mid)), .role = .menu };
                 }
                 if (comptime m.sub_at != null and named(n, partName(mid, "sub"))) {
                     if (!open or !bs.menu.sub) return null;
-                    return .{ .style = menu.subStyle(&th, v.last.of(partName(mid, m.items[m.sub_at.?]))) };
+                    return .{ .style = menu.subStyle(&th, v.last.of(partName(mid, m.items[m.sub_at.?]))), .role = .menu };
                 }
                 inline for (0..comptime m.count()) |k| {
-                    if (comptime named(n, partName(mid, m.name(k)))) return .{ .style = menu.itemStyle(&th, menu.highlighted(m, bs.menu, k)) };
+                    if (comptime named(n, partName(mid, m.name(k)))) return .{ .style = menu.itemStyle(&th, menu.highlighted(m, bs.menu, k)), .role = .menu_item };
                 }
             }
             return popover.plainPart(th, n, v.response);
@@ -285,6 +285,20 @@ fn subAt(comptime def: BarDef, i: u8) u8 {
     unreachable;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The semantics of menu bar `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`. The roles are in the columns:
+/// the bar is `menu_bar`, its buttons `menu_item` (named by their text, value 0), the lists
+/// `menu` and their items `menu_item`. Here, per menu as `menu.semantics` writes it: each
+/// button is expandable, expanded while its list is shown, and names it; the open menu's
+/// highlighted item is `selected`.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: BarDef, st: BarState) void {
+    inline for (def.names, def.menus, 0..) |n, m, i| {
+        menu.semantics(t, s, comptime partName(name, n), m, if (st.open == i) st.menu else .{});
+    }
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The bar named `name`, in the page's flow, showing `texts` (one per button).
@@ -303,10 +317,14 @@ pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def:
         inline for (0..comptime m.count()) |k| hits.addItem(st.open == i, k, inter.response(.from(partName(mid, m.name(k)))));
     }
     st.* = advance(def, st.*, hits, f.in);
-    _ = f.interact(f.open(bar_id, barStyle(th)), popover.overlay_sense);
+    const b = f.open(bar_id, barStyle(th));
+    _ = f.interact(b, popover.overlay_sense);
+    role(f, b, .menu_bar);
     inline for (def.names, 0..) |n, i| {
         const bid: Id = .from(partName(name, n));
-        _ = f.interact(f.open(bid, buttonStyle(th, st.open == i, inter.response(bid).hovered)), .button);
+        const button = f.open(bid, buttonStyle(th, st.open == i, inter.response(bid).hovered));
+        _ = f.interact(button, .button);
+        role(f, button, .menu_item);
         _ = base.label(f, th, texts[i]);
         f.close();
     }
@@ -320,11 +338,15 @@ pub fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     _ = f.open(.none, layerStyle());
     inline for (def.names, def.menus, 0..) |n, m, i| if (st.open == i) {
         const mid = comptime partName(name, n);
-        _ = f.interact(f.open(.from(partName(mid, "panel")), menu.listStyle(th, f.lastRect(.from(mid)))), popover.overlay_sense);
+        const list = f.open(.from(partName(mid, "panel")), menu.listStyle(th, f.lastRect(.from(mid))));
+        _ = f.interact(list, popover.overlay_sense);
+        role(f, list, .menu);
         inline for (0..m.items.len) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
         f.close();
         if (m.sub_at) |at| if (st.menu.sub) {
-            _ = f.interact(f.open(.from(partName(mid, "sub")), menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at]))))), popover.overlay_sense);
+            const sub = f.open(.from(partName(mid, "sub")), menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at])))));
+            _ = f.interact(sub, popover.overlay_sense);
+            role(f, sub, .menu);
             inline for (m.items.len..comptime m.count()) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
             f.close();
         };
@@ -332,8 +354,14 @@ pub fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     f.close();
 }
 
+fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
+    f.tree().c.role[n.ix()] = @backingInt(r);
+}
+
 fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: menu.Def, ms: menu.MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.interact(f.open(.from(partName(mid, m.name(k))), menu.itemStyle(th, menu.highlighted(m, ms, k))), popover.overlay_sense);
+    const row = f.open(.from(partName(mid, m.name(k))), menu.itemStyle(th, menu.highlighted(m, ms, k)));
+    _ = f.interact(row, popover.overlay_sense);
+    role(f, row, .menu_item);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -538,6 +566,39 @@ test "MenuBar: pointer and keys in both front ends" {
     try testing.expect(s[6].open == no_item and s[6].from == 0 and s[6].menu.chosen == 4);
     try testing.expectEqual(@as(u8, 1), s[8].open);
     try testing.expectEqual(no_item, s[9].open);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "MenuBar: a menu bar of expandable menu items, the open one's list a menu; the same in both front ends" {
+    const h = &harness;
+    h.init();
+    const st: BarState = .{ .open = 1, .menu = .{ .open = true, .active = 1 } };
+    const t = try setBar(h, st);
+    const rt_tree = t;
+    const cp_tree = &h.ui.tables.t;
+    semantics(rt_tree, sem[0].begin(), "main", bar_def, h.app.bar);
+    semantics(cp_tree, sem[1].begin(), "main", bar_def, h.ui.signals.state.bar);
+    const rt_texts = &h.ctx.texts[h.ctx.cur];
+    const e = sem[0].finish(rt_tree, rt_texts, h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp_tree, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, tr: *const Tree, comptime id: []const u8) u32 {
+            return popover.exportRow(x, tr.find(.from(id)));
+        }
+    }.of;
+    const H = std.hash.Fnv1a_32;
+    const R = a11y.Role;
+    try testing.expectEqual(@backingInt(R.menu_bar), e.c.role[row(e, t, "main_bar")]);
+    try testing.expectEqual(@as(u32, 2), e.c.kids[row(e, t, "main_bar")]);
+    try testing.expectEqual(@backingInt(R.menu_item), e.c.role[row(e, t, "main_file")]);
+    try testing.expectEqual(H.hash("File"), e.c.name_hash[row(e, t, "main_file")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true }), e.c.state[row(e, t, "main_file")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true }), e.c.state[row(e, t, "main_edit")]);
+    try testing.expectEqual(@backingInt(R.menu), e.c.role[row(e, t, "main_edit_panel")]);
+    try testing.expectEqual(H.hash("Edit"), e.c.name_hash[row(e, t, "main_edit_panel")]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "main_edit_redo")]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[row(e, t, "main_edit_redo")]);
 }
 
 test "checkBar: the state field, one menu per button, the label fields" {
