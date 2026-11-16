@@ -62,6 +62,8 @@ var msg_stret: ?*const fn () callconv(.c) void = null;
 var view_class: Id = undefined;
 var shell_ivar: *anyopaque = undefined;
 var default_mode: Id = undefined;
+/// NSPasteboardTypeString: plain text on the pasteboard.
+var pasteboard_string: Id = undefined;
 var launched = false;
 
 const libobjc = "/usr/lib/libobjc.A.dylib";
@@ -77,13 +79,15 @@ fn launch() Error!void {
     try objc.load();
     const lib = std.c.dlopen(libobjc, .{ .NOW = true }) orelse return error.NoLibrary;
     const fnd = std.c.dlopen(foundation, .{ .NOW = true }) orelse return error.NoLibrary;
-    _ = std.c.dlopen(appkit, .{ .NOW = true }) orelse return error.NoLibrary;
     inline for (@typeInfo(Runtime).@"struct".field_names) |name| {
         @field(rt, name) = @ptrCast(@alignCast(std.c.dlsym(lib, name.ptr) orelse return error.MissingFunction));
     }
     if (builtin.cpu.arch == .x86_64) msg_stret = @ptrCast(@alignCast(std.c.dlsym(lib, "objc_msgSend_stret") orelse return error.MissingFunction));
     const mode: *const Id = @ptrCast(@alignCast(std.c.dlsym(fnd, "NSDefaultRunLoopMode") orelse return error.MissingFunction));
     default_mode = mode.*;
+    const kit = std.c.dlopen(appkit, .{ .NOW = true }) orelse return error.NoLibrary;
+    const pb: *const Id = @ptrCast(@alignCast(std.c.dlsym(kit, "NSPasteboardTypeString") orelse return error.MissingFunction));
+    pasteboard_string = pb.*;
     try registerView();
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -241,6 +245,7 @@ const ns_event_type_application_defined = 15;
 /// The subtype of the NSEvent `wake` posts.
 const wake_subtype = 0x6c63; // "lc"
 const ns_event_type_key_up = 11;
+const ns_utf8_string_encoding = 4;
 /// NSTrackingArea options: entered and exited, moves, cursor updates, always (not only in the key window), and
 /// the rectangle follows the view's visible rectangle.
 const ns_tracking = 0x01 | 0x02 | 0x04 | 0x80 | 0x200;
@@ -365,7 +370,30 @@ pub const Macos = struct {
     pub fn apply(m: *Macos, p: *const Platform) void {
         // Shown now if the pointer is over the view; `cursorUpdate:` shows it on the way in.
         if (p.cursor != m.applied.cursor and m.t.in.pointer[0] >= 0) msg(void, m.cursors[@backingInt(p.cursor)], "set", .{});
+        if (p.clipboard.len > 0) copy(p.clipboard);
         m.applied = p.*;
+    }
+
+    /// Puts UTF-8 text on the general pasteboard. Called by `apply` for `Platform.clipboard`.
+    /// Invalid UTF-8 leaves the pasteboard as it was.
+    pub fn copy(utf8_text: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const s = msg(?Id, msg(Id, objc.class("NSString"), "alloc", .{}), "initWithBytes:length:encoding:", .{ utf8_text.ptr, @as(U, utf8_text.len), @as(U, ns_utf8_string_encoding) }) orelse return;
+        defer objc.release(s);
+        const pb = msg(Id, objc.class("NSPasteboard"), "generalPasteboard", .{});
+        _ = msg(isize, pb, "clearContents", .{});
+        _ = msg(bool, pb, "setString:forType:", .{ s, pasteboard_string });
+    }
+
+    /// Types the pasteboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
+    /// host to: call it after a frame whose widgets requested a paste.
+    pub fn paste(m: *Macos) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const pb = msg(Id, objc.class("NSPasteboard"), "generalPasteboard", .{});
+        const s = msg(?Id, pb, "stringForType:", .{pasteboard_string}) orelse return;
+        m.t.paste(utf8(s));
     }
 
     /// Draws the frame with Metal into the view's layer and presents it.
@@ -460,6 +488,18 @@ test "macos: the backing scale is the window's, and follows a change" {
     msg(void, m.view, "viewDidChangeBackingProperties", .{});
     _ = m.poll(&ev);
     try testing.expectEqual(@as(f32, @floatCast(msg(f64, m.window, "backingScaleFactor", .{}))), ev.in.scale);
+}
+
+test "macos: copy then paste round-trips through the general pasteboard" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    var ev: Events = .{};
+    _ = m.poll(&ev);
+    m.apply(&.{ .clipboard = "two\nlines \u{e9}" });
+    m.paste();
+    try testing.expect(m.poll(&ev));
+    try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
 }
 
 test "macos: wake ends a wait with no timeout" {

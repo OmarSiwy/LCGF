@@ -263,6 +263,12 @@ pub const Translator = struct {
         t.push(.{ .kind = .text, .mods = t.in.mods, .at = at, .len = t.n_text - at });
     }
 
+    /// The pasteboard's text delivered as typed text, the way `keyboard.Clipboard` asks a host
+    /// to answer a paste: as `insert`, one `.text` event with `\n` line ends.
+    pub fn paste(t: *Translator, utf8: []const u8) void {
+        t.insert(utf8);
+    }
+
     fn push(t: *Translator, e: Input.Event) void {
         if (t.n_events == t.events.len) {
             t.dropped += 1;
@@ -657,4 +663,22 @@ test "scale: a move to a Retina display changes the scale, not the viewport or t
 test "cursors: every Platform cursor has its own system cursor" {
     for (cursor_names, 0..) |a, i| for (cursor_names[i + 1 ..]) |b| try testing.expect(!std.mem.eql(u8, a, b));
     try testing.expectEqualStrings("IBeamCursor", cursor_names[@backingInt(Cursor.text)]);
+}
+
+test "clipboard: pasted text is typed in one event, with its line ends" {
+    var text: [32]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    t.insert("x");
+    t.paste("one\r\ntwo\t\u{1f600}\x07");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("xone\ntwo\t\u{1f600}", ev.in.text);
+    try testing.expectEqual(@as(usize, 2), ev.in.events.len);
+    try testing.expectEqualStrings("one\ntwo\t\u{1f600}", ev.in.typed(ev.in.events[1]));
+    // Too long for what is left: nothing of it is typed.
+    t.paste("0123456789012345678901234567890123456789");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(u32, 1), t.dropped);
 }
