@@ -90,8 +90,11 @@ pub const Lines = struct {
     extra: []f32,
     len: u32 = 0,
     /// Written by `ellipsize`: the advance of the ellipsis that ends the last line (counted in
-    /// its `width`, drawn at `x + width - ellipsis`), 0 when the text was not cut.
+    /// its `width`), 0 when the text was not cut.
     ellipsis: f32 = 0,
+    /// Where the ellipsis is drawn, px from the last line's left edge (`x`): after the ink,
+    /// or, once `reorder` has run, before it in a right-to-left paragraph.
+    ellipsis_x: f32 = 0,
 };
 
 /// Where lines sit in a box `width` px wide. `factor` is 0 for the start, 0.5 for the centre,
@@ -233,6 +236,7 @@ pub fn ellipsize(lines: *Lines, g: *const Glyphs, text: []const u8, width: f32, 
         lines.end[k] = end;
         measure(lines, k, g, text);
     }
+    lines.ellipsis_x = lines.width[k];
     lines.width[k] += ellipsis;
     lines.hard[k] = 1;
     lines.ellipsis = ellipsis;
@@ -371,13 +375,16 @@ fn visualLine(lines: *Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, box
     if (n > order.len) return error.NoSpace;
     bidi.reorder(g.level[first..lines.ink[k]], order[0..n]);
     const extra = lines.extra[k];
-    var pen: f32 = 0;
+    const rtl = para & 1 == 1;
+    // The ellipsis ends the last line in its direction: on the left of a right-to-left one.
+    const cut = rtl and k + 1 == lines.len and lines.ellipsis > 0;
+    if (cut) lines.ellipsis_x = 0;
+    var pen: f32 = if (cut) lines.ellipsis else 0;
     for (order[0..n]) |o| {
         const i = first + o;
         g.x[i] = pen;
         pen += g.advance[i] + extra * space01(text, g.cluster[i]);
     }
-    const rtl = para & 1 == 1;
     if (rtl and box < std.math.inf(f32)) lines.x[k] = box - lines.x[k] - pen;
     var back: f32 = 0;
     for (lines.ink[k]..lines.end[k]) |i| {
@@ -592,6 +599,7 @@ test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
     try testing.expectEqual(35, t.l.width[0]);
     try testing.expectEqual(1, t.l.hard[0]);
     try testing.expectEqual(15, t.l.ellipsis);
+    try testing.expectEqual(20, t.l.ellipsis_x); // after "aa"
     // Text that does not wrap: one line, cut where it overflows.
     try breakLines(&t.g, text, std.math.inf(f32), &t.l);
     ellipsize(&t.l, &t.g, text, 75, 1, 15);
@@ -602,6 +610,27 @@ test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
     ellipsize(&t.l, &t.g, text, 10, 1, 15);
     try testing.expectEqual(0, t.l.ink[0]);
     try testing.expectEqual(15, t.l.width[0]);
+}
+
+test "ellipsize: a right-to-left line ends in an ellipsis on its left" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(BidiScratch, 32);
+    var t: golden.Para = .{};
+    // "אב גד" cut to "אב" and the ellipsis in a 40 px box: on screen, from the right edge,
+    // alef, bet, then the ellipsis, the hanging space past it.
+    const text = "\u{5D0}\u{5D1} \u{5D2}\u{5D3}";
+    t.fixed(text, 10);
+    try breakLines(&t.g, text, std.math.inf(f32), &t.l);
+    ellipsize(&t.l, &t.g, text, 40, 1, 15);
+    try testing.expectEqual(2, t.l.ink[0]);
+    const a: Align = .{ .width = 40 };
+    place(&t.l, &t.g, text, &.{.{ .ascent = 8, .descent = 2 }}, a);
+    try reorder(&t.l, &t.g, text, a, s);
+    try testing.expectEqual(5, t.l.x[0]);
+    try testing.expectEqual(0, t.l.ellipsis_x);
+    try testing.expectEqualSlices(f32, &.{ 25, 15, -10 }, t.g.x[0..3]);
 }
 
 test "golden: clamped and truncated paragraphs match the reference" {
