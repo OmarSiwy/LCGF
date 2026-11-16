@@ -188,8 +188,8 @@ test "the sample resolves to runs of the face that has each character" {
             return @intCast(std.mem.indexOf(u8, test_sample, s).?);
         }
     }.f;
-    // Armenian has no "!" or space, so they fall back to Latin inside the Armenian script run;
-    // the space after the Georgian word stays Georgian (georgian.ttf has it).
+    // armenian.ttf has no "!", so it falls back to Latin inside the Armenian script run, and
+    // the space after it stays Latin; the space after the Georgian word stays Georgian.
     try std.testing.expectEqualSlices(u32, &.{ at("Բ"), at("!"), at("გ"), at("α"), t.len }, runs.end[0..runs.len]);
     try std.testing.expectEqualSlices(u16, &.{ 0, 1, 0, 2, 0 }, runs.face[0..runs.len]);
     try std.testing.expectEqualSlices(Script, &.{ .Latin, .Armenian, .Armenian, .Georgian, .Greek }, runs.script[0..runs.len]);

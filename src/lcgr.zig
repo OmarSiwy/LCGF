@@ -99,9 +99,11 @@ pub const text_edit = @import("text/edit/edit.zig");
 pub const text_history = @import("text/edit/history.zig");
 pub const text_edit_tests = @import("text/edit/tests.zig");
 pub const fallback = @import("text/fallback/fallback.zig");
+pub const fallback_tests = @import("text/fallback/tests.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
 pub const runtime_signals = @import("runtime/signals.zig");
+pub const shell_headless = @import("shell/headless.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -109,3 +111,6 @@ test {
 pub const i18n_catalogue = @import("i18n/catalogue.zig");
 pub const i18n_plural = @import("i18n/plural.zig");
 pub const i18n_number = @import("i18n/number.zig");
+pub const i18n_date = @import("i18n/date.zig");
+pub const i18n_bundle = @import("i18n/bundle.zig");
+pub const i18n_pseudo = @import("i18n/pseudo.zig");
