@@ -406,14 +406,55 @@ pub fn changePropertySize(data_len: usize) usize {
 
 /// Replaces `property` of `window` with `data`, items of `format` bits (8, 16 or 32).
 pub fn changeProperty(b: *Buf, window: u32, property: u32, kind: u32, format: u8, data: []const u8) void {
-    b.head(op.change_property, 0, changePropertySize(data.len) / 4);
+    changePropertyHead(b, window, property, kind, format, data.len);
+    b.str(data);
+}
+
+pub const change_property_head = 24;
+
+/// ChangeProperty without its data, for data too large for the output buffer: the caller sends
+/// the `len` bytes and the padding to 4 right after.
+pub fn changePropertyHead(b: *Buf, window: u32, property: u32, kind: u32, format: u8, len: usize) void {
+    b.head(op.change_property, 0, changePropertySize(len) / 4);
     b.int(u32, window);
     b.int(u32, property);
     b.int(u32, kind);
     b.int(u8, format);
     b.zeros(3);
-    b.int(u32, @intCast(data.len / (format / 8)));
-    b.str(data);
+    b.int(u32, @intCast(len / (format / 8)));
+}
+
+pub const set_selection_owner_size = 16;
+
+pub fn setSelectionOwner(b: *Buf, owner: u32, selection: u32) void {
+    b.head(op.set_selection_owner, 0, set_selection_owner_size / 4);
+    b.int(u32, owner);
+    b.int(u32, selection);
+    b.int(u32, 0); // CurrentTime
+}
+
+pub const convert_selection_size = 24;
+
+/// Asks the owner of `selection` to put it, as `target`, in `property` of `requestor`; a
+/// SelectionNotify says when it has.
+pub fn convertSelection(b: *Buf, requestor: u32, selection: u32, target: u32, property: u32) void {
+    b.head(op.convert_selection, 0, convert_selection_size / 4);
+    b.int(u32, requestor);
+    b.int(u32, selection);
+    b.int(u32, target);
+    b.int(u32, property);
+    b.int(u32, 0);
+}
+
+/// The SelectionNotify an owner sends the requestor; `property` 0 refuses.
+pub fn selectionNotify(requestor: u32, selection: u32, target: u32, property: u32) [32]u8 {
+    var e: [32]u8 = @splat(0);
+    e[0] = selection_notify;
+    std.mem.writeInt(u32, e[8..12], requestor, .little);
+    std.mem.writeInt(u32, e[12..16], selection, .little);
+    std.mem.writeInt(u32, e[16..20], target, .little);
+    std.mem.writeInt(u32, e[20..24], property, .little);
+    return e;
 }
 
 pub const get_property_size = 24;
@@ -796,6 +837,8 @@ test "requests: lengths match the bytes written" {
         .{ fake_input_size, fakeInput, .{ 130, 6, 0, 1, 10, 20 } },
         .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
         .{ set_input_focus_size, setInputFocus, .{1} },
+        .{ set_selection_owner_size, setSelectionOwner, .{ 1, 2 } },
+        .{ convert_selection_size, convertSelection, .{ 1, 2, 3, 4 } },
         .{ change_event_mask_size, changeEventMask, .{ 1, 2 } },
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },
         .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },

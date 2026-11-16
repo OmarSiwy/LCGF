@@ -49,7 +49,16 @@ pub const Atoms = struct {
     _NET_WM_NAME: u32 = 0,
     UTF8_STRING: u32 = 0,
     RESOURCE_MANAGER: u32 = 0,
+    CLIPBOARD: u32 = 0,
+    TARGETS: u32 = 0,
+    TEXT: u32 = 0,
+    /// Where a paste is delivered, on the requesting window.
+    LCGR_PASTE: u32 = 0,
 };
+
+/// Predefined atoms.
+const atom_atom = 4;
+const atom_string = 31;
 
 pub const max_windows = 8;
 
@@ -85,6 +94,11 @@ pub const Connection = struct {
     /// The "cursor" font and a cursor per `context.Cursor`, created on first use; 0 is none.
     cursor_font: u32 = 0,
     cursors: [cursor_glyphs.len]u32 = @splat(0),
+    /// What this application put on the clipboard, and the window that owns the CLIPBOARD
+    /// selection for it (0 once another client took it).
+    clip: [64 * 1024]u8 = undefined,
+    clip_len: usize = 0,
+    clip_owner: u32 = 0,
     /// Set when the socket failed or closed; every window's `poll` is false after it.
     err: ?Error = null,
 
@@ -295,6 +309,8 @@ pub const Connection = struct {
             return;
         }
         if (kind == wire.mapping_notify and m[4] != 0) c.keymap_stale = true; // keyboard or modifiers
+        if (kind == wire.selection_request) c.answer(m) catch {};
+        if (kind == wire.selection_clear and wire.get(u32, m, 12) == c.atoms.CLIPBOARD) c.clip_owner = 0;
         if (kind == wire.property_notify and wire.get(u32, m, 4) == c.setup.root and wire.get(u32, m, 8) == c.atoms.RESOURCE_MANAGER) c.scale_stale = true;
         if (c.randr_event != 0 and kind == c.randr_event) {
             // ScreenChangeNotify: the root's new size in pixels and millimetres.
@@ -307,6 +323,32 @@ pub const Connection = struct {
             const w = slot orelse continue;
             if (w.id == target) w.handle(m);
         }
+    }
+
+    /// Answers another client's request for the clipboard: the list of targets, or the text as
+    /// UTF8_STRING, STRING or TEXT. No INCR transfers: the text goes in one property.
+    fn answer(c: *Connection, m: []const u8) Error!void {
+        const a = c.atoms;
+        const requestor = wire.get(u32, m, 12);
+        const selection = wire.get(u32, m, 16);
+        const target = wire.get(u32, m, 20);
+        var property = wire.get(u32, m, 24);
+        if (property == 0) property = target; // an obsolete requestor
+        const text = target == a.UTF8_STRING or target == atom_string or target == a.TEXT;
+        const ours = selection == a.CLIPBOARD and c.clip_owner != 0;
+        if (ours and target == a.TARGETS) {
+            const targets = [_]u32{ a.TARGETS, a.UTF8_STRING, atom_string, a.TEXT };
+            _ = c.send(wire.changePropertySize(16), wire.changeProperty, .{ requestor, property, atom_atom, 32, std.mem.sliceAsBytes(&targets) });
+        } else if (ours and text) {
+            const data = c.clip[0..c.clip_len];
+            const kind = if (target == atom_string) atom_string else a.UTF8_STRING;
+            _ = c.send(wire.change_property_head, wire.changePropertyHead, .{ requestor, property, kind, 8, data.len });
+            try c.flush();
+            try c.writeAll(data);
+            try c.writeAll(("\x00\x00\x00")[0..wire.pad4(data.len)]);
+        } else property = 0;
+        const note = wire.selectionNotify(requestor, selection, target, property);
+        _ = c.send(wire.send_event_size, wire.sendEvent, .{ requestor, 0, &note });
     }
 
     /// Major opcode of extension `name`.
@@ -376,6 +418,8 @@ pub const Window = struct {
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
     applied: Platform = .{},
+    /// A SelectionNotify said the pasted text is in LCGR_PASTE; `poll` reads it.
+    paste_ready: bool = false,
     /// The cursor the window shows, so `apply` sends only changes.
     cursor: ?context.Cursor = null,
     polls: u32 = 0,
@@ -384,7 +428,7 @@ pub const Window = struct {
     const PerFrame = struct {
         wheel: [2]f32 = .{ 0, 0 },
         /// Typed UTF-8 and key events, in order. A frame that overflows them drops the rest.
-        text: [256]u8 = undefined,
+        text: [16 * 1024]u8 = undefined,
         text_len: u32 = 0,
         events: [64]Input.Event = undefined,
         events_len: u32 = 0,
@@ -397,10 +441,14 @@ pub const Window = struct {
         fn typed(f: *PerFrame, cp: u21) void {
             var utf8: [4]u8 = undefined;
             const n = std.unicode.utf8Encode(cp, &utf8) catch return;
-            if (f.text.len - f.text_len < n or f.events_len == f.events.len) return;
-            @memcpy(f.text[f.text_len..][0..n], utf8[0..n]);
-            f.add(.{ .kind = .text, .at = f.text_len, .len = n });
-            f.text_len += n;
+            f.typedBytes(utf8[0..n]);
+        }
+        /// UTF-8 as one `.text` event; dropped whole when it does not fit.
+        fn typedBytes(f: *PerFrame, bytes: []const u8) void {
+            if (f.text.len - f.text_len < bytes.len or f.events_len == f.events.len or bytes.len == 0) return;
+            @memcpy(f.text[f.text_len..][0..bytes.len], bytes);
+            f.add(.{ .kind = .text, .at = f.text_len, .len = @intCast(bytes.len) });
+            f.text_len += @intCast(bytes.len);
         }
     };
 
@@ -509,6 +557,10 @@ pub const Window = struct {
             },
             wire.expose => w.damaged = true,
             wire.destroy_notify => w.is_open = false,
+            wire.selection_notify => {
+                const a = w.conn.atoms;
+                if (wire.get(u32, m, 12) == a.CLIPBOARD and wire.get(u32, m, 20) == a.LCGR_PASTE) w.paste_ready = true;
+            },
             wire.client_message => {
                 const a = w.conn.atoms;
                 if (wire.get(u32, m, 8) == a.WM_PROTOCOLS and wire.get(u32, m, 12) == a.WM_DELETE_WINDOW) w.is_open = false;
@@ -558,6 +610,10 @@ pub const Window = struct {
         c.pump() catch return false;
         if (!w.is_open) return false;
         if (w.damaged and w.presented) w.send() catch return false;
+        if (w.paste_ready) {
+            w.paste_ready = false;
+            w.readPaste() catch return false;
+        }
         w.damaged = false;
         _ = w.woken.swap(false, .acq_rel);
 
@@ -576,9 +632,35 @@ pub const Window = struct {
         return true;
     }
 
-    /// Sets the cursor the frame asks for, when it changed.
+    /// Asks for the clipboard's text. It arrives in a later `poll` as typed text (a `.text` event
+    /// and `Input.text`), as `keyboard.Clipboard.paste` expects; nothing arrives when the
+    /// clipboard is empty or holds no text. Text longer than a frame's text buffer is dropped.
+    pub fn requestPaste(w: *Window) void {
+        const a = w.conn.atoms;
+        _ = w.conn.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.CLIPBOARD, a.UTF8_STRING, a.LCGR_PASTE });
+        w.conn.flush() catch {};
+    }
+
+    fn readPaste(w: *Window) Error!void {
+        const c = w.conn;
+        const words: u32 = @intCast(@min(w.frames[0].text.len, c.in.len - 32) / 4);
+        const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGR_PASTE, true, words }));
+        const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
+        if (wire.get(u32, r, 12) == 0) w.frames[w.cur].typedBytes(r[32..][0..len]);
+    }
+
+    /// Sets the cursor the frame asks for, when it changed, and puts the text the frame copied
+    /// on the clipboard (the CLIPBOARD selection, owned by this window).
     pub fn apply(w: *Window, p: *const Platform) void {
         w.applied = p.*;
+        if (p.clipboard.len > 0) {
+            const c = w.conn;
+            c.clip_len = @min(p.clipboard.len, c.clip.len);
+            @memcpy(c.clip[0..c.clip_len], p.clipboard[0..c.clip_len]);
+            c.clip_owner = w.id;
+            _ = c.send(wire.set_selection_owner_size, wire.setSelectionOwner, .{ w.id, c.atoms.CLIPBOARD });
+            c.flush() catch {};
+        }
         if (w.cursor != p.cursor) {
             w.cursor = p.cursor;
             const c = w.conn;
@@ -948,4 +1030,72 @@ test "x11: the cursor the frame asks for is the one the server shows" {
     const r = try c.reply(c.send(wire.xfixes_get_cursor_image_size, wire.xfixesGetCursorImage, .{xfixes}));
     try testing.expectEqual(shapes[0].serial, wire.get(u32, r, 20));
     try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
+test "x11: copy in one application, paste in another" {
+    const display = try testDisplay();
+    const Other = struct {
+        var conn: Connection = .{};
+        var pixels: [64 * 64]u32 = undefined;
+    };
+    const a = &Fixture.conn;
+    const b = &Other.conn;
+    try a.open(display, "");
+    defer a.close();
+    try b.open(display, "");
+    defer b.close();
+    var wa: Window = undefined;
+    try wa.open(a, 64, 64, "copy", Fixture.buffers);
+    defer wa.close();
+    var bufs = Fixture.buffers;
+    bufs.pixels = &Other.pixels;
+    var wb: Window = undefined;
+    try wb.open(b, 64, 64, "paste", bufs);
+    defer wb.close();
+
+    // A frame of the first application copies; the second pastes. Both run their loops.
+    const text = "h\xc3\xa9llo, X11 \xe2\x9c\x93";
+    wa.apply(&.{ .clipboard = text });
+    try a.sync();
+    wb.requestPaste();
+    var ev: Events = .{};
+    for (0..2000) |_| {
+        try testing.expect(wa.poll(&ev));
+        try testing.expect(wb.poll(&ev));
+        if (ev.in.text.len > 0) break;
+        b.waitReadable(0.005);
+    } else return error.PasteNeverArrived;
+    try testing.expectEqualStrings(text, ev.in.text);
+    try testing.expectEqual(@as(usize, 1), ev.in.events.len);
+    try testing.expectEqual(Input.Event.Kind.text, ev.in.events[0].kind);
+
+    // The owner lists its targets.
+    _ = b.send(wire.convert_selection_size, wire.convertSelection, .{ wb.id, b.atoms.CLIPBOARD, b.atoms.TARGETS, b.atoms.LCGR_PASTE });
+    for (0..2000) |_| {
+        _ = wa.poll(&ev);
+        try b.pump();
+        if (wb.paste_ready) break;
+        b.waitReadable(0.005);
+    } else return error.TargetsNeverArrived;
+    wb.paste_ready = false;
+    const r = try b.reply(b.send(wire.get_property_size, wire.getProperty, .{ wb.id, b.atoms.LCGR_PASTE, true, 16 }));
+    try testing.expectEqual(@as(u32, atom_atom), wire.get(u32, r, 8));
+    const want = [_]u32{ b.atoms.TARGETS, b.atoms.UTF8_STRING, atom_string, b.atoms.TEXT };
+    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&want), r[32..][0..16]);
+
+    // Another client takes the clipboard: the first no longer answers for it.
+    wb.apply(&.{ .clipboard = "theirs" });
+    for (0..2000) |_| {
+        _ = wa.poll(&ev);
+        if (a.clip_owner == 0) break;
+        a.waitReadable(0.005);
+    } else return error.ClearNeverArrived;
+    wa.requestPaste();
+    for (0..2000) |_| {
+        try testing.expect(wb.poll(&ev));
+        try testing.expect(wa.poll(&ev));
+        if (ev.in.text.len > 0) break;
+        a.waitReadable(0.005);
+    } else return error.PasteNeverArrived;
+    try testing.expectEqualStrings("theirs", ev.in.text);
 }
