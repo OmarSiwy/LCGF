@@ -44,6 +44,10 @@ const none = types.none;
 
 // ---- spec ------------------------------------------------------------------------------------
 
+/// The keys a list answers to. USB HID usage ids, as `focus.Keymap`; a host with other codes
+/// passes its own to `keys`.
+pub const default_keys: Keymap = .{};
+
 /// Why `State` cannot back a comptime list bound to `selected` with option fields `items`, or
 /// null when it can. `validate` turns the answer into a compile error; tests read it directly.
 pub fn check(comptime State: type, comptime selected: []const u8, comptime items: []const []const u8) ?[]const u8 {
@@ -124,6 +128,59 @@ pub fn rowAt(th: *const Theme, top: f32, y: f32, count: u32) u32 {
     return @intFromFloat(std.math.clamp(k, 0, hi));
 }
 
+// ---- behaviour: pure functions of the value and what happened -------------------------------
+
+/// The selection after one navigation key (WAI-ARIA listbox: selection follows focus). Down
+/// and Up move by one and stop at the ends, Home and End jump there; from no selection, Down and
+/// Home select the first row and Up and End the last. Other keys leave it.
+pub fn step(sel: u32, count: u32, code: u8, km: *const Keymap) u32 {
+    if (count == 0) return none;
+    const last = count - 1;
+    const has = sel != none;
+    if (code == km.down) return if (has) @min(sel + 1, last) else 0;
+    if (code == km.up) return if (has) sel -| 1 else last;
+    if (code == km.home) return 0;
+    if (code == km.end) return last;
+    return sel;
+}
+
+/// Type-ahead: the next option after `sel`, wrapping, whose text starts with `ch` (ASCII case
+/// ignored); `sel` when none does.
+pub fn typeAhead(items: []const []const u8, sel: u32, ch: u8) u32 {
+    const n: u32 = @intCast(items.len);
+    const want = std.ascii.toLower(ch);
+    // From no selection the search starts at the first row.
+    const from = if (sel == none) n - 1 else sel;
+    for (1..n + 1) |d| {
+        const k: u32 = @intCast((from + d) % n);
+        const s = items[k];
+        if (s.len > 0 and std.ascii.toLower(s[0]) == want) return k;
+    }
+    return sel;
+}
+
+/// The selection after this frame's key events, in order: navigation keys (press and repeat)
+/// and the first byte of each piece of typed text.
+// ponytail: one character per search; APG's multi-character prefix with a timeout needs the
+// last keystroke's time kept in the application, add it when a list is long enough to want it.
+pub fn keys(sel: u32, items: []const []const u8, in: *const Input, km: *const Keymap) u32 {
+    var s = sel;
+    const n: u32 = @intCast(items.len);
+    for (in.events) |e| switch (e.kind) {
+        .press, .repeat => s = step(s, n, e.code, km),
+        .text => if (e.len > 0 and n > 0) {
+            s = typeAhead(items, s, in.text[e.at]);
+        },
+        .release => {},
+    };
+    return s;
+}
+
+/// What a click does: selects the row under the pointer.
+pub fn click(sel: u32, clicked: bool, row: u32) u32 {
+    return if (clicked) row else sel;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A list of `items` with `selected.*` the selected row. Clicking a row selects it; while the
@@ -135,6 +192,8 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
     const r = f.interact(box, .button);
     const top = f.lastRect(id).y0;
     const under = rowAt(th, top, f.in.pointer[1], n);
+    selected.* = click(selected.*, r.clicked, under);
+    if (r.focused) selected.* = keys(selected.*, items, f.in, &default_keys);
     const t = f.tree();
     t.c.look[box.ix()].border_color = listBorder(th, r.focused).bitsOf();
     for (items, 0..) |s, k| {
@@ -194,6 +253,19 @@ pub fn ComptimeList(comptime State: type, comptime spec: Spec, comptime th: Them
 
         pub fn frame(ui: *Self, in: *const Input) Output {
             const event = ui.pointer.step(in);
+            const state = &ui.signals.state;
+            inline for (0..E.widget_count) |k| {
+                const n = comptime nodeAt(spec, E.widget_nodes[k]);
+                const w = comptime E.widget(k);
+                const fields = comptime itemFields(n);
+                var items: [fields.len][]const u8 = undefined;
+                inline for (&items, fields) |*s, f| s.* = @field(state, f);
+                const clicked = if (event) |e| e == w else false;
+                var sel: u32 = @field(state, n.bind.?);
+                sel = click(sel, clicked, rowAt(&th, ui.pointer.rects.c[1][k], in.pointer[1], fields.len));
+                if (ui.pointer.focus == w) sel = keys(sel, &items, in, &default_keys);
+                ui.signals.set(comptime field(n.bind.?), sel);
+            }
 
             const tb = ui.page.begin(in);
             var next: u32 = 0;
@@ -497,6 +569,31 @@ test "list: both front ends agree at rest and under the pointer" {
     try testing.expectApproxEqAbs(5 * rowHeight(&theme) + 2 * inset(&theme), r.h(), 1);
 }
 
+test "step, typeAhead, rowAt, click: the behaviour as pure functions" {
+    const km = default_keys;
+    try testing.expectEqual(@as(u32, 0), step(none, 3, km.down, &km));
+    try testing.expectEqual(@as(u32, 2), step(none, 3, km.up, &km));
+    try testing.expectEqual(@as(u32, 2), step(2, 3, km.down, &km));
+    try testing.expectEqual(@as(u32, 0), step(0, 3, km.up, &km));
+    try testing.expectEqual(@as(u32, 1), step(0, 3, km.down, &km));
+    try testing.expectEqual(@as(u32, 0), step(2, 3, km.home, &km));
+    try testing.expectEqual(@as(u32, 2), step(0, 3, km.end, &km));
+    try testing.expectEqual(@as(u32, 1), step(1, 3, km.tab, &km));
+    try testing.expectEqual(none, step(1, 0, km.down, &km));
+    const items = [_][]const u8{ "beta", "Alpha", "bravo", "" };
+    try testing.expectEqual(@as(u32, 0), typeAhead(&items, none, 'B'));
+    try testing.expectEqual(@as(u32, 2), typeAhead(&items, 0, 'b'));
+    try testing.expectEqual(@as(u32, 0), typeAhead(&items, 2, 'b'));
+    try testing.expectEqual(@as(u32, 1), typeAhead(&items, 2, 'a'));
+    try testing.expectEqual(@as(u32, 2), typeAhead(&items, 2, 'z'));
+    const h = rowHeight(&theme);
+    try testing.expectEqual(@as(u32, 0), rowAt(&theme, 10, 0, 4));
+    try testing.expectEqual(@as(u32, 1), rowAt(&theme, 10, 12 + h * 1.5, 4));
+    try testing.expectEqual(@as(u32, 3), rowAt(&theme, 10, 1000, 4));
+    try testing.expectEqual(@as(u32, 5), click(5, false, 1));
+    try testing.expectEqual(@as(u32, 1), click(5, true, 1));
+}
+
 test "look: fills by table index from hover and selection; outline by focus" {
     const f = optionFills(&theme);
     try testing.expectEqual(f[0], optionFill(&theme, false, false));
@@ -505,6 +602,26 @@ test "look: fills by table index from hover and selection; outline by focus" {
     try testing.expectEqual(theme.accent, optionFill(&theme, true, true));
     try testing.expectEqual(theme.control_hot, listBorder(&theme, false));
     try testing.expectEqual(theme.accent, listBorder(&theme, true));
+}
+
+test "list: another theme restyles both front ends alike" {
+    const other = comptime Theme{ .text = .rgb(20, 20, 20), .text_px = 18, .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .control_held = .rgb(160, 160, 170), .accent = .rgb(0, 120, 60), .radius = 0, .pad = 4, .gap = 10 };
+    const S = struct {
+        var h: Example(other).Run = .{};
+    };
+    S.h.init();
+    var in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try S.h.frame(&in);
+    // Click the fourth option, aimed with the other theme's row height.
+    const t = S.h.ctx.trees[S.h.ctx.cur];
+    const r = t.rect(t.find(.from("fruit")));
+    in.pointer = .{ r.x0 + 10, r.y0 + inset(&other) + rowHeight(&other) * 3.5 };
+    in.buttons.left = true;
+    _ = try S.h.frame(&in);
+    in.buttons.left = false;
+    _ = try S.h.frame(&in);
+    try testing.expectEqual(@as(u32, 3), S.h.app.selected);
+    try testing.expectEqual(@as(u32, 3), S.h.ui.signals.state.selected);
 }
 
 test {
