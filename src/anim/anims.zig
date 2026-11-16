@@ -79,6 +79,13 @@ pub const Anims = struct {
         }
         return @reduce(.Max, motion);
     }
+
+    /// Drops springs nobody asked for in frame `frame` (`seen` differs). Branch-free stream
+    /// compaction (`simd.compact`): every row is copied to the write cursor, which advances only
+    /// for kept rows, and the rows freed at the end are zeroed so `step` sees them inert.
+    pub fn sweep(a: *Anims, frame: u32) void {
+        a.len = simd.compact(a.c, a.len, a.c.seen, frame);
+    }
 };
 
 const testing = std.testing;
@@ -185,5 +192,36 @@ test "step: every row is stepped as the scalar reference, across vectors and pad
 
 test "step: an empty table is at rest" {
     var a = fixture(4);
+    try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
+}
+
+test "sweep: keeps the springs seen this frame, in order, and zeroes the rest" {
+    var a = fixture(2 * simd.lanes);
+    const n = 2 * simd.lanes;
+    for (0..n) |k| {
+        const i = aim(&a, Id.from("s").with(@intCast(k)), @floatFromInt(k), 0, .{});
+        // Every third spring was asked for in frame 7; the others last in frame 6.
+        a.c.seen[i] = @as(u32, 6) + @intFromBool(k % 3 == 0);
+    }
+    a.sweep(7);
+    const kept = (n + 2) / 3;
+    try testing.expectEqual(@as(u32, kept), a.len);
+    for (0..kept) |r| {
+        try testing.expectEqual(@as(f32, @floatFromInt(3 * r)), a.c.x[r]);
+        try testing.expectEqual(@backingInt(Id.from("s").with(@intCast(3 * r))), a.c.id[r]);
+        try testing.expectEqual(@as(u32, 7), a.c.seen[r]);
+    }
+    for (kept..n) |r| {
+        try testing.expectEqual(@as(u32, 0), a.c.id[r]);
+        try testing.expectEqual(@as(f32, 0), a.c.x[r]);
+        try testing.expectEqual(@as(f32, 0), a.c.target[r]);
+    }
+    // A dropped id comes back as a new spring at its initial value.
+    const back = a.slot(Id.from("s").with(1), 42);
+    try testing.expectEqual(@as(u32, kept), back);
+    try testing.expectEqual(@as(f32, 42), a.c.x[back]);
+    // Sweeping a frame nobody asked for empties the table.
+    a.sweep(8);
+    try testing.expectEqual(@as(u32, 0), a.len);
     try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
 }

@@ -5,3 +5,6 @@ const lcgr = @import("lcgr");
 export fn p_anim(a: *lcgr.anims.Anims, dt: f32) f32 {
     return a.step(dt);
 }
+export fn p_sweep(a: *lcgr.anims.Anims, frame: u32) void {
+    a.sweep(frame);
+}

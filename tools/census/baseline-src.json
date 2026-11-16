@@ -304,6 +304,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_sweep": {
+    "back": 1,
+    "jcc": 3,
+    "short_fwd": 0
+  },
   "p_text_avail": {
     "back": 2,
     "jcc": 5,

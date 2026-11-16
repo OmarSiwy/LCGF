@@ -165,6 +165,7 @@ pub const Frame = struct {
         t.seal(0);
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        ctx.anims.sweep(ctx.frame);
         ctx.signals.dirty = false;
         // The tables flag their own overflow; the frame reports them together.
         ctx.status = .{
