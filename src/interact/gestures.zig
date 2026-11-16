@@ -204,6 +204,70 @@ pub const Kinetic = struct {
     }
 };
 
+/// Pinch zoom, from two fingers on a touch screen (`Input.contacts`) or from Ctrl+wheel, which
+/// is how touchpad pinches reach a window on Windows, on Linux and in browsers. Plain data the
+/// caller keeps and steps once per frame; the outputs describe this frame only.
+pub const Pinch = struct {
+    /// Pointer ids of the two fingers followed, or `none`.
+    fingers: [2]u32 = .{ none, none },
+    /// Their distance and midpoint last frame.
+    spread: f32 = 0,
+    mid: [2]f32 = .{ 0, 0 },
+    /// Zoom per wheel notch with Ctrl held.
+    notch: f32 = 1.1,
+
+    /// A pinch (two fingers) is in progress this frame.
+    active: bool = false,
+    /// Zoom this frame as a factor: 1 for none, 2 for twice as large. Apply it about `center`.
+    scale: f32 = 1,
+    /// Where to zoom about, in logical pixels: the fingers' midpoint, or the mouse pointer.
+    center: [2]f32 = .{ 0, 0 },
+    /// Movement of the fingers' midpoint this frame: two-finger pan, in logical pixels.
+    pan: [2]f32 = .{ 0, 0 },
+
+    pub fn step(p: *Pinch, in: *const Input) void {
+        // Keep the two fingers already followed while both are down; otherwise start over
+        // with the first two touches that are down. A new pair gives no zoom on its first
+        // frame, only a baseline, so a third finger landing does not jump.
+        const a = in.contact(p.fingers[0]);
+        const b = in.contact(p.fingers[1]);
+        const kept = a != none and b != none and in.contacts[a].down and in.contacts[b].down;
+        var pair: [2]u32 = .{ a, b };
+        if (!kept) {
+            // Write always, advance by 0 or 1; the third slot takes the rest.
+            var first: [3]u32 = .{ none, none, none };
+            var n: u32 = 0;
+            for (in.contacts, 0..) |c, i| {
+                first[@min(n, 2)] = @intCast(i);
+                n += @intFromBool(simd.andB(c.down, c.kind == .touch));
+            }
+            pair = if (n >= 2) .{ first[0], first[1] } else .{ none, none };
+        }
+        p.active = pair[0] != none;
+        p.scale = 1;
+        p.pan = .{ 0, 0 };
+        p.center = in.pointer;
+        if (p.active) {
+            const c0 = in.contacts[pair[0]].pos;
+            const c1 = in.contacts[pair[1]].pos;
+            const spread = @max(std.math.hypot(c1[0] - c0[0], c1[1] - c0[1]), 1e-3);
+            const mid = [2]f32{ (c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2 };
+            if (kept) {
+                p.scale = spread / p.spread;
+                p.pan = .{ mid[0] - p.mid[0], mid[1] - p.mid[1] };
+            }
+            p.fingers = .{ in.contacts[pair[0]].id, in.contacts[pair[1]].id };
+            p.spread = spread;
+            p.mid = mid;
+            p.center = mid;
+        } else {
+            p.fingers = .{ none, none };
+            // Ctrl+wheel: one notch up (positive y) zooms in by `notch`.
+            p.scale = std.math.pow(f32, p.notch, in.wheel[1] * simd.b2f(in.mods.ctrl));
+        }
+    }
+};
+
 /// What `route` reads as the id when an axis has no target.
 const zero_id: u32 = 0;
 
@@ -366,4 +430,52 @@ test "Kinetic: rows step independently, across vectors" {
         if (v0 < 0) try testing.expect(k.c.x[j] <= x0[j]);
         if (v0 == 0) try testing.expect(k.c.x[j] == x0[j]);
     }
+}
+
+test "Pinch: two fingers spreading zoom about their midpoint and pan it" {
+    var p: Pinch = .{};
+    var c: [3]Input.Contact = undefined;
+    // Frame 1: fingers 4 and 9 land 100 apart, centred on (100, 100): a baseline, no zoom.
+    c[0] = .{ .id = 4, .pos = .{ 50, 100 } };
+    c[1] = .{ .id = 9, .pos = .{ 150, 100 } };
+    p.step(&.{ .contacts = c[0..2] });
+    try testing.expect(p.active);
+    try testing.expectEqual(1, p.scale);
+    try testing.expectEqual([2]f32{ 100, 100 }, p.center);
+    // Frame 2: 200 apart and moved 10 right, listed in the other order: twice as large.
+    c[0] = .{ .id = 9, .pos = .{ 210, 100 } };
+    c[1] = .{ .id = 4, .pos = .{ 10, 100 } };
+    p.step(&.{ .contacts = c[0..2] });
+    try testing.expectEqual(2, p.scale);
+    try testing.expectEqual([2]f32{ 110, 100 }, p.center);
+    try testing.expectEqual([2]f32{ 10, 0 }, p.pan);
+    // Frame 3: a third finger lands; the pair is kept, they pinch in to 100 apart.
+    c[0] = .{ .id = 9, .pos = .{ 160, 100 } };
+    c[1] = .{ .id = 4, .pos = .{ 60, 100 } };
+    c[2] = .{ .id = 2, .pos = .{ 0, 0 } };
+    p.step(&.{ .contacts = c[0..3] });
+    try testing.expectEqual(0.5, p.scale);
+    // Frame 4: finger 4 lifts: 9 and 2 are a new pair, which only sets a baseline.
+    c[1] = .{ .id = 4, .pos = .{ 60, 100 }, .down = false };
+    p.step(&.{ .contacts = c[0..3] });
+    try testing.expect(p.active);
+    try testing.expectEqual(1, p.scale);
+    try testing.expectEqual([2]u32{ 9, 2 }, p.fingers);
+    // Frame 5: one finger: no pinch.
+    p.step(&.{ .contacts = c[0..1] });
+    try testing.expect(!p.active);
+    try testing.expectEqual(1, p.scale);
+    try testing.expectEqual([2]u32{ none, none }, p.fingers);
+}
+
+test "Pinch: Ctrl+wheel zooms about the pointer; a plain wheel does not" {
+    var p: Pinch = .{};
+    p.step(&.{ .pointer = .{ 30, 40 }, .wheel = .{ 0, 2 }, .mods = .{ .ctrl = true } });
+    try testing.expect(!p.active);
+    try testing.expectApproxEqAbs(@as(f32, 1.21), p.scale, 1e-5);
+    try testing.expectEqual([2]f32{ 30, 40 }, p.center);
+    p.step(&.{ .pointer = .{ 30, 40 }, .wheel = .{ 0, -1 }, .mods = .{ .ctrl = true } });
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 1.1), p.scale, 1e-5);
+    p.step(&.{ .wheel = .{ 0, 3 } });
+    try testing.expectEqual(1, p.scale);
 }
