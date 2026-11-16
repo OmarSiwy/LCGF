@@ -12,6 +12,7 @@ const Input = @import("../../core/input.zig").Input;
 const keyboard = @import("../../interact/keyboard.zig");
 const Buffer = @import("buffer.zig").Buffer;
 const moves = @import("moves.zig");
+const History = @import("history.zig").History;
 
 const Id = types.Id;
 const Keyboard = keyboard.Keyboard;
@@ -35,6 +36,9 @@ pub const Keys = struct {
     word: Input.Mods = .{ .ctrl = true },
     /// Select all, cut, copy and paste, as `Keyboard.commands` reads them.
     clipboard: keyboard.ClipboardKeys = .{},
+    /// Undo, and redo, with `clipboard.mods`; undo with Shift added also redoes.
+    undo: u8 = 0x1d,
+    redo: u8 = 0x1c,
 };
 
 /// The pointer over the editor this frame, in px from the laid-out paragraph's top left.
@@ -103,6 +107,13 @@ pub const Editor = struct {
     /// passing a short line returns to its column. NaN when the next vertical move starts one.
     goal: f32 = std.math.nan(f32),
     keys: Keys = .{},
+    /// Undo and redo; records nothing until the caller gives it rows (`History.init`).
+    history: History = .{},
+    /// What the last edit was, so that a run of typing or of deleting is one undo step. Any
+    /// other key, a click, undo and redo end the run.
+    run: Run = .none,
+
+    pub const Run = enum(u8) { none, typing, deleting };
 
     /// An editor over `buf` holding `initial`, with the caret at its end.
     pub fn init(buf: []u8, initial: []const u8) Buffer.Error!Editor {
@@ -161,6 +172,7 @@ pub const Editor = struct {
         if (!(p.press or p.held or p.double)) return;
         const at = v.hit(p.at[0], p.at[1]);
         ed.goal = std.math.nan(f32);
+        ed.run = .none;
         if (p.double) {
             const w = moves.wordAt(v.text, at);
             ed.anchor = w[0];
@@ -188,7 +200,29 @@ pub const Editor = struct {
         const some = sel[0] < sel[1];
         const vertical = c == ks.up or c == ks.down;
         if (!vertical) ed.goal = std.math.nan(f32);
+        if (c == ks.backspace) {
+            if (some) return ed.remove(sel[0], sel[1], false, r);
+            const from = if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
+            return ed.remove(from, at, ed.run == .deleting, r);
+        }
+        if (c == ks.delete) {
+            if (some) return ed.remove(sel[0], sel[1], false, r);
+            const to = if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at);
+            return ed.remove(at, to, ed.run == .deleting, r);
+        }
+        if (c == ks.enter or c == ks.keypad_enter) return ed.insert("\n", r);
+        ed.run = .none;
         const cmd = @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(ks.clipboard.mods));
+        var cmd_shift = ks.clipboard.mods;
+        cmd_shift.shift = true;
+        const redo = (cmd and c == ks.redo) or (c == ks.undo and @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(cmd_shift)));
+        if ((cmd and c == ks.undo) or redo) {
+            const s = (if (redo) ed.history.redo(&ed.b) else ed.history.undo(&ed.b)) orelse return;
+            ed.caret = s.caret;
+            ed.anchor = s.anchor;
+            r.changed = true;
+            return;
+        }
         if (cmd and c == ks.clipboard.select_all) {
             ed.anchor = 0;
             ed.caret = @intCast(t.len);
@@ -202,22 +236,16 @@ pub const Editor = struct {
                 return;
             }
             clip.copy(ed.b.copy(sel[0], sel[1], cx.copy_buf));
-            if (c == ks.clipboard.cut) ed.remove(sel[0], sel[1], r);
+            if (c == ks.clipboard.cut) {
+                ed.remove(sel[0], sel[1], false, r);
+                ed.run = .none;
+            }
             return;
         }
         if (cmd and c == ks.clipboard.paste) {
             if (cx.clipboard) |clip| clip.requestPaste();
             return;
         }
-        if (c == ks.backspace) {
-            if (some) return ed.remove(sel[0], sel[1], r);
-            return ed.remove(if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at), at, r);
-        }
-        if (c == ks.delete) {
-            if (some) return ed.remove(sel[0], sel[1], r);
-            return ed.remove(at, if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at), r);
-        }
-        if (c == ks.enter or c == ks.keypad_enter) return ed.insert("\n", r);
         // Left and Right without Shift collapse a selection to its edge.
         if (c == ks.left) {
             ed.caret = if (some and !shift and !word) sel[0] else if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
@@ -256,24 +284,35 @@ pub const Editor = struct {
         return (c >= 0x20 and c != 0x7f) or c == '\n' or c == '\t';
     }
 
-    /// Inserts `bytes` in place of the selection and moves the caret past them. What does not
-    /// fit is cut at a code point boundary and dropped.
+    /// Inserts `bytes` in place of the selection and moves the caret past them, recorded as
+    /// part of a typing run or of the selection's removal. What does not fit is cut at a code
+    /// point boundary and dropped.
     fn insert(ed: *Editor, bytes: []const u8, r: *Result) void {
         const sel = ed.selection();
-        if (sel[0] < sel[1]) ed.remove(sel[0], sel[1], r);
+        var join = ed.run == .typing;
+        if (sel[0] < sel[1]) {
+            ed.remove(sel[0], sel[1], false, r);
+            join = true;
+        }
+        ed.run = .typing;
         var n: usize = @min(bytes.len, ed.b.free());
         // Back off a cut inside a UTF-8 sequence.
         while (n < bytes.len and n > 0 and bytes[n] & 0xc0 == 0x80) n -= 1;
         r.full = r.full or n < bytes.len;
         if (n == 0) return;
+        if (ed.history.push(.insert, ed.caret, @intCast(n), ed.caret, ed.anchor, join)) |d| @memcpy(d, bytes[0..n]);
         ed.b.insert(ed.caret, bytes[0..n]) catch unreachable;
         ed.caret += @intCast(n);
         ed.anchor = ed.caret;
         r.changed = true;
     }
 
-    /// Removes `[from, to)`; the caret goes to `from`, with nothing selected.
-    fn remove(ed: *Editor, from: u32, to: u32, r: *Result) void {
+    /// Removes `[from, to)`, recorded in the last undo step when `join`; the caret goes to
+    /// `from`, with nothing selected.
+    fn remove(ed: *Editor, from: u32, to: u32, join: bool, r: *Result) void {
+        ed.run = .deleting;
+        if (from == to) return ed.place(from);
+        if (ed.history.push(.delete, from, to - from, ed.caret, ed.anchor, join)) |d| _ = ed.b.copy(from, to, d);
         ed.b.delete(from, to);
         ed.place(from);
         r.changed = r.changed or from < to;
@@ -639,4 +678,75 @@ test "replayed input: cut, copy and paste through the clipboard rows" {
         \\press 27 ctrl
     );
     try testing.expectEqualStrings("copy_", ed.text());
+}
+
+test "replayed input: undo and redo whole runs of typing and deleting" {
+    const mem = @import("../../core/mem.zig");
+    var cols: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &cols };
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "");
+    ed.history = History.init(&carver, 16, 64);
+    // Two runs of typing, split by a move; then a run of Backspace.
+    _ = try replay(&ed,
+        \\frame
+        \\text hello
+        \\text  world
+        \\press 80
+        \\press 79
+        \\text !
+        \\frame
+        \\press 42
+        \\press 42
+    );
+    try testing.expectEqualStrings("hello worl", ed.text());
+    // Undo the Backspaces, then the "!", in one frame.
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("hello world", ed.text());
+    try testing.expectEqual(11, ed.caret);
+    // Redo with Ctrl+Y, and with Ctrl+Shift+Z.
+    _ = try replay(&ed,
+        \\frame
+        \\press 28 ctrl
+    );
+    try testing.expectEqualStrings("hello world!", ed.text());
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl shift
+    );
+    try testing.expectEqualStrings("hello worl", ed.text());
+    // Typing over a selection is one step: undo brings the selection back.
+    _ = try replay(&ed,
+        \\frame
+        \\press 80 shift ctrl
+        \\text there
+    );
+    try testing.expectEqualStrings("hello there", ed.text());
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("hello worl", ed.text());
+    try testing.expectEqualStrings("worl", ed.selected());
+    // A new edit after an undo drops the redo.
+    _ = try replay(&ed,
+        \\frame
+        \\text X
+        \\press 28 ctrl
+    );
+    try testing.expectEqualStrings("hello X", ed.text());
+    // Undo everything, past the first step: nothing more happens.
+    for (0..6) |_| _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("", ed.text());
+    try testing.expect(!(try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    )).changed);
 }
