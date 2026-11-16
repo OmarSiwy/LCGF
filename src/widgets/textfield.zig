@@ -405,6 +405,9 @@ pub const Page = struct {
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
+    pub const replay = @embedFile("testdata/textfield.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/textfield-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "selected", 3 }, .{ "drag", 8 } };
 };
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -681,6 +684,47 @@ test "textfield input: a long text scrolls to keep the caret in view" {
     in.events = &home;
     _ = try both(h, &in);
     try testing.expectEqual(@as(f32, 0), h.app.name.scroll);
+}
+
+test "Page: the text field replay types, selects and submits, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [32]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    const Want = struct { name: []const u8, city: []const u8, sel: [2]u32 };
+    const want = [_]Want{
+        .{ .name = "", .city = "Oslo", .sel = .{ 0, 0 } },
+        .{ .name = "", .city = "Oslo", .sel = .{ 0, 0 } },
+        .{ .name = "Ada Lovelace", .city = "Oslo", .sel = .{ 12, 12 } },
+        .{ .name = "Ada Lovelace", .city = "Oslo", .sel = .{ 0, 12 } },
+        .{ .name = "Grace", .city = "Oslo", .sel = .{ 5, 5 } },
+        .{ .name = "Grace", .city = "Oslo", .sel = .{ 3, 3 } },
+        .{ .name = "Grace", .city = "Oslo", .sel = .{ 3, 3 } },
+        .{ .name = "Grace", .city = "Oslo", .sel = .{ 2, 2 } },
+        .{ .name = "Grace", .city = "Oslo", .sel = .{ 2, 4 } },
+        .{ .name = "Grace", .city = "Os", .sel = .{ 2, 2 } },
+        .{ .name = "Grace", .city = "Osaka", .sel = .{ 5, 5 } },
+    };
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try both(h, in);
+        try testing.expectEqualStrings(want[k].name, h.app.name.text());
+        try testing.expectEqualStrings(want[k].city, h.app.city.text());
+        const focused = if (k < 7) &h.app.name else &h.app.city;
+        try testing.expectEqual(want[k].sel, focused.ed.selection());
+        try testing.expectEqual(k >= 1, out.runtime.platform.wants_text);
+        try testing.expectEqual(@as(u32, @intFromBool(k >= 6)), h.app.submits);
+    }
+    try testing.expectEqual(@as(u32, 11), h.frames);
+    const t = &h.ctx.trees[h.ctx.cur];
+    // The rects the replay's comment gives.
+    try testing.expectEqual(Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 63 }, t.rect(t.find(.from("name"))));
+    try testing.expectEqual(Rect{ .x0 = 12, .y0 = 97, .x1 = 308, .y1 = 122 }, t.rect(t.find(.from("city"))));
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 11);
 }
 
 test {
