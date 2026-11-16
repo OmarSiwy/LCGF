@@ -13,8 +13,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -376,6 +374,7 @@ pub const ct = struct {
         body.id = name;
         var s = spec_zig.col(.{}, .{ spec_zig.row(.{}, hs), body });
         s.bind = @tagName(state);
+        s.widget = TableWidget(name, @tagName(state), @tagName(headers), @tagName(cells), cols, rows);
         return s;
     }
 
@@ -394,146 +393,80 @@ pub const ct = struct {
     }
 };
 
-/// Whether spec node `n` is a table made by `ct.table`: a column bound to a field.
-fn isTable(comptime n: Spec) bool {
-    return n.kind == .col and n.bind != null;
-}
-
-/// The comptime front end for a page of tables: rows, columns and labels as in
-/// `base.ComptimeUi`, every column bound to a field a table made by `ct.table`.
-pub fn ComptimeTable(comptime S: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const Sig = signals.Signals(S, spec);
-    inline for (comptime tablesOf(spec)) |n| {
-        const v = ct.fields(n);
-        validate(S, v.state, v.headers, v.cells, v.cols, v.rows);
-    }
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+/// A table in `base.ComptimeUi`, for the fields and size `ct.table` was given: `step` applies
+/// the input of its headers, handles and body to the table state, `push` builds the rows
+/// `table` builds.
+fn TableWidget(comptime name: [:0]const u8, comptime state: []const u8, comptime headers: []const u8, comptime cells: []const u8, comptime cols: u32, comptime rows: u32) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = Sig;
-
-        page: Tables = .{},
-        signals: Sig.Runtime = .{},
-        pointer: list_zig.CtPointer(E) = .{},
-        font: Mono = .{},
-        order_buf: [maxRows(spec)]u32 = undefined,
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        fn widgetOf(comptime name: []const u8) E.Widget {
-            return comptime std.meta.stringToEnum(E.Widget, name).?;
+        fn row(comptime Ui: type, comptime part: []const u8, comptime k: usize) u32 {
+            return comptime list_zig.widgetRow(Ui, std.fmt.comptimePrint("{s}_{s}{d}", .{ name, part, k }));
         }
 
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = ui.pointer.step(in);
-            inline for (comptime tablesOf(spec)) |n| {
-                const v = comptime ct.fields(n);
-                var hr: [v.cols]Response = undefined;
-                var gr: [v.cols]Response = undefined;
-                var x0: [v.cols]f32 = undefined;
-                inline for (0..v.cols) |k| {
-                    const hw = comptime widgetOf(std.fmt.comptimePrint("{s}_h{d}", .{ v.name, k }));
-                    const gw = comptime widgetOf(std.fmt.comptimePrint("{s}_r{d}", .{ v.name, k }));
-                    hr[k] = ui.pointer.response(hw, in);
-                    hr[k].clicked = if (event) |e| e == hw else false;
-                    gr[k] = ui.pointer.response(gw, in);
-                    x0[k] = ui.pointer.rectOf(hw).x0;
-                }
-                const bw = comptime widgetOf(v.name);
-                var br = ui.pointer.response(bw, in);
-                br.clicked = if (event) |e| e == bw else false;
-                var st = @field(ui.signals.state, v.state);
-                update(&st, &th, v.rows, &hr, &gr, &x0, br, ui.pointer.rectOf(bw), in);
-                ui.signals.set(comptime field(v.state), st);
+        pub fn step(ui: anytype, comptime table_row: u32, event: anytype, in: *const Input) void {
+            _ = table_row;
+            const Ui = @TypeOf(ui.*);
+            comptime validate(@TypeOf(ui.signals.state), state, headers, cells, cols, rows);
+            var hr: [cols]Response = undefined;
+            var gr: [cols]Response = undefined;
+            var x0: [cols]f32 = undefined;
+            inline for (0..cols) |k| {
+                hr[k] = list_zig.ctResponse(ui, row(Ui, "h", k), in);
+                hr[k].clicked = list_zig.ctClicked(ui, row(Ui, "h", k), event);
+                gr[k] = list_zig.ctResponse(ui, row(Ui, "r", k), in);
+                x0[k] = list_zig.ctRect(ui, row(Ui, "h", k)).x0;
             }
-
-            const tb = ui.page.begin(in);
-            var next: u32 = 0;
-            ui.push(spec, 0, &next, in);
-            const t = ui.page.end(in);
-            ui.pointer.store(t);
-            return .{ .draw = &tb.d, .tree = t, .event = event };
+            const body = comptime list_zig.widgetRow(Ui, name);
+            var br = list_zig.ctResponse(ui, body, in);
+            br.clicked = list_zig.ctClicked(ui, body, event);
+            var st = @field(ui.signals.state, state);
+            update(&st, &Ui.theme, rows, &hr, &gr, &x0, br, list_zig.ctRect(ui, body), in);
+            ui.signals.set(comptime Ui.field(state), st);
         }
 
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const tb = &ui.page.tables;
-            const state = &ui.signals.state;
-            next.* += 1;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (comptime !isTable(n)) {
-                const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, next, in);
-                tb.t.seal(i);
-                return;
-            }
-            // A table (`ct.table`): rows as `table` builds them.
-            next.* += comptime flatten.count(n) - 1;
-            const v = comptime ct.fields(n);
-            const id: Id = .hash(v.name);
-            const st = @field(state, v.state);
-            const headers: []const []const u8 = @field(state, v.headers);
-            const cells: []const []const u8 = @field(state, v.cells);
-            const order_buf = ui.order_buf[0..v.rows];
-            order(cells, v.cols, st.sort, st.descending, order_buf);
-            const box = tb.t.push(parent, .none, &tableStyle(&th));
-            const head = tb.t.push(box, .none, &headerRowStyle(&th));
-            inline for (0..v.cols) |k| {
-                const hw = comptime widgetOf(std.fmt.comptimePrint("{s}_h{d}", .{ v.name, k }));
-                const gw = comptime widgetOf(std.fmt.comptimePrint("{s}_r{d}", .{ v.name, k }));
-                var hs = headerStyle(&th, st.widths[k]);
-                hs.fill = headerFill(&th, ui.pointer.response(hw, in));
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const th = &Ui.theme;
+            const tb = &ui.tables;
+            next.* += comptime flatten.count(n);
+            const id: Id = .hash(name);
+            const st = @field(ui.signals.state, state);
+            const hs_: []const []const u8 = @field(ui.signals.state, headers);
+            const cs: []const []const u8 = @field(ui.signals.state, cells);
+            var order_buf: [rows]u32 = undefined;
+            order(cs, cols, st.sort, st.descending, &order_buf);
+            const box = tb.t.push(parent, .none, &tableStyle(th));
+            const head = tb.t.push(box, .none, &headerRowStyle(th));
+            inline for (0..cols) |k| {
+                var hs = headerStyle(th, st.widths[k]);
+                hs.fill = headerFill(th, list_zig.ctResponse(ui, row(Ui, "h", k), in));
                 hs.value = sortValue(st.sort == k, st.descending);
                 const h = tb.t.push(head, headerId(id, k), &hs);
-                list_zig.pushLabel(tb, h, &.{ .role = .label }, headers[k], &th);
-                _ = tb.t.push(h, .none, &markStyle(&th, st.widths[k], st.sort == k, st.descending));
-                var gs = handleStyle(&th, st.widths[k], ui.pointer.response(gw, in));
+                list_zig.pushLabel(tb, h, &.{ .role = .label }, hs_[k], th);
+                _ = tb.t.push(h, .none, &markStyle(th, st.widths[k], st.sort == k, st.descending));
+                var gs = handleStyle(th, st.widths[k], list_zig.ctResponse(ui, row(Ui, "r", k), in));
                 gs.value = st.widths[k];
-                _ = tb.t.push(h, handleId(id, v.cols, k), &gs);
+                _ = tb.t.push(h, handleId(id, cols, k), &gs);
                 tb.t.seal(h);
             }
             tb.t.seal(head);
-            const focused = ui.pointer.response(comptime widgetOf(v.name), in).focused;
-            var bs = bodyStyle(&th);
+            const focused = list_zig.ctResponse(ui, comptime list_zig.widgetRow(Ui, name), in).focused;
+            var bs = bodyStyle(th);
             bs.value = @floatFromInt(st.row);
             const body = tb.t.push(box, id, &bs);
             for (order_buf, 0..) |data_row, i| {
-                const row = tb.t.push(body, .none, &rowStyle(&th));
-                for (0..v.cols) |k| {
-                    const c = tb.t.push(row, .none, &cellStyle(&th, st.widths[k], st.row == i and st.col == k, focused));
-                    list_zig.pushLabel(tb, c, &.{ .role = .label }, cells[data_row * v.cols + k], &th);
+                const r = tb.t.push(body, .none, &rowStyle(th));
+                for (0..cols) |k| {
+                    const c = tb.t.push(r, .none, &cellStyle(th, st.widths[k], st.row == i and st.col == k, focused));
+                    list_zig.pushLabel(tb, c, &.{ .role = .label }, cs[data_row * cols + k], th);
                     tb.t.seal(c);
                 }
-                tb.t.seal(row);
+                tb.t.seal(r);
             }
             tb.t.seal(body);
             tb.t.seal(box);
-            setRoles(&tb.t, .{ .box = box, .cols = v.cols, .rows = v.rows });
-        }
-
-        fn field(comptime name: []const u8) Sig.Field {
-            return comptime std.meta.stringToEnum(Sig.Field, name).?;
+            setRoles(&tb.t, .{ .box = box, .cols = cols, .rows = rows });
         }
     };
-}
-
-/// The table nodes of `n`'s subtree.
-fn tablesOf(comptime n: Spec) []const Spec {
-    if (isTable(n)) return &.{n};
-    var out: []const Spec = &.{};
-    for (n.children) |c| out = out ++ tablesOf(c);
-    return out;
-}
-
-/// The most rows any table in `n` has (at least 1): the comptime sort order's scratch.
-fn maxRows(comptime n: Spec) usize {
-    var m: usize = 1;
-    for (tablesOf(n)) |t| m = @max(m, ct.fields(t).rows);
-    return m;
 }
 
 // ---- example page -----------------------------------------------------------------------------
@@ -579,7 +512,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .title),
             ct.table(th, .files, .table, .headers, .cells, 3, 5),
         });
-        pub const Ui = ComptimeTable(PageState, spec, th);
+        pub const Ui = base.ComptimeUi(PageState, spec, th);
         pub const limits: context.Limits = .{ .nodes = 64, .texts = 32, .customs = 1, .strings = 1024, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };

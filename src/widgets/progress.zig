@@ -10,8 +10,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -21,7 +19,6 @@ const flatten = @import("../comptime/flatten.zig");
 const a11y = @import("../a11y/tree.zig");
 const hit = @import("../interact/hit.zig");
 const base = @import("base.zig");
-const list_zig = @import("list.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Node = types.Node;
@@ -96,68 +93,30 @@ pub const ct = struct {
         _ = th;
         var s = spec_zig.row(.{}, .{Spec{ .kind = .col }});
         s.bind = @tagName(value);
+        s.widget = ProgressWidget(@tagName(value));
         return s;
     }
 };
 
-/// Whether spec node `n` is a progress bar made by `ct.progress`: a row bound to a field.
-fn isProgress(comptime n: Spec) bool {
-    return n.kind == .row and n.bind != null;
-}
-
-/// The comptime front end for a page of progress bars: rows, columns and labels as in
-/// `base.ComptimeUi`, every row bound to a field a progress bar made by `ct.progress`. The page
-/// has no widgets, so there is no input to step.
-pub fn ComptimeProgress(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const S = signals.Signals(State, spec);
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
-    comptime checkAll(State, spec);
+/// A progress bar in `base.ComptimeUi`, showing the field `value`: `push` builds the rows
+/// `progress` builds. It takes no input, so it has no `step`.
+fn ProgressWidget(comptime value: []const u8) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = S;
-
-        page: Tables = .{},
-        signals: S.Runtime = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const tb = ui.page.begin(in);
-            ui.push(spec, 0);
-            const t = ui.page.end(in);
-            return .{ .draw = &tb.d, .tree = t, .event = null };
-        }
-
-        fn push(ui: *Self, comptime n: Spec, parent: u32) void {
-            const tb = &ui.page.tables;
-            const state = &ui.signals.state;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (comptime !isProgress(n)) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i);
-                tb.t.seal(i);
-                return;
-            }
-            const value: f32 = @field(state, n.bind.?);
-            var s = trackStyle(&th);
-            s.value = progressValue(value);
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            comptime validate(@TypeOf(ui.signals.state), value);
+            const th = &@TypeOf(ui.*).theme;
+            const tb = &ui.tables;
+            next.* += comptime flatten.count(n);
+            const v: f32 = @field(ui.signals.state, value);
+            var s = trackStyle(th);
+            s.value = progressValue(v);
             const track = tb.t.push(parent, .none, &s);
-            _ = tb.t.push(track, .none, &barStyle(&th, value));
+            _ = tb.t.push(track, .none, &barStyle(th, v));
             tb.t.seal(track);
             setRole(&tb.t, track);
         }
     };
-}
-
-fn checkAll(comptime State: type, comptime n: Spec) void {
-    if (isProgress(n)) validate(State, n.bind.?);
-    for (n.children) |c| checkAll(State, c);
 }
 
 // ---- example page -----------------------------------------------------------------------------
@@ -196,7 +155,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .install_text),
             ct.progress(th, .install),
         });
-        pub const Ui = ComptimeProgress(State, spec, th);
+        pub const Ui = base.ComptimeUi(State, spec, th);
         pub const limits: context.Limits = .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };

@@ -10,10 +10,7 @@
 
 const std = @import("std");
 const types = @import("../core/types.zig");
-const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const features = @import("../draw/features.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
@@ -27,7 +24,6 @@ const list_zig = @import("list.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
-const Node = types.Node;
 const Color = types.Color;
 const Style = types.Style;
 const Response = types.Response;
@@ -287,6 +283,7 @@ pub const ct = struct {
         alpha.id = name ++ "_alpha";
         var s = spec_zig.col(.{}, .{ area, hue, alpha });
         s.bind = @tagName(color);
+        s.widget = PickerWidget(name, @tagName(color));
         return s;
     }
 
@@ -297,99 +294,57 @@ pub const ct = struct {
     }
 };
 
-/// Whether spec node `n` is a colour picker made by `ct.colorpicker`: a column bound to a field.
-fn isPicker(comptime n: Spec) bool {
-    return n.kind == .col and n.bind != null;
-}
-
-/// The comptime front end for a page of colour pickers: rows, columns and labels as in
-/// `base.ComptimeUi`, every column bound to a field a picker made by `ct.colorpicker`.
-pub fn ComptimeColorpicker(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const S = signals.Signals(State, spec);
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
-    comptime checkAll(State, spec);
+/// A colour picker in `base.ComptimeUi`, named `name` and bound to the field `color`: `step`
+/// applies its parts' input to the colour, `push` builds the rows `colorpicker` builds.
+fn PickerWidget(comptime name: []const u8, comptime color: []const u8) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = S;
-
-        page: Tables = .{},
-        signals: S.Runtime = .{},
-        pointer: list_zig.CtPointer(E) = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        fn parts(comptime name: []const u8) [3]E.Widget {
+        fn partRows(comptime Ui: type) [3]u32 {
             return comptime .{
-                std.meta.stringToEnum(E.Widget, name ++ "_area").?,
-                std.meta.stringToEnum(E.Widget, name ++ "_hue").?,
-                std.meta.stringToEnum(E.Widget, name ++ "_alpha").?,
+                list_zig.widgetRow(Ui, name ++ "_area"),
+                list_zig.widgetRow(Ui, name ++ "_hue"),
+                list_zig.widgetRow(Ui, name ++ "_alpha"),
             };
         }
 
-        fn responses(ui: *const Self, comptime name: []const u8, in: *const Input) [3]Response {
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = row;
+            _ = event;
+            const Ui = @TypeOf(ui.*);
+            comptime validate(@TypeOf(ui.signals.state), color);
             var r: [3]Response = undefined;
-            inline for (parts(name), 0..) |w, k| r[k] = ui.pointer.response(w, in);
-            return r;
+            var rects: [3]Rect = undefined;
+            inline for (comptime partRows(Ui), 0..) |pr, k| {
+                r[k] = list_zig.ctResponse(ui, pr, in);
+                rects[k] = list_zig.ctRect(ui, pr);
+            }
+            ui.signals.set(comptime Ui.field(color), update(@field(ui.signals.state, color), r, rects, in));
         }
 
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = ui.pointer.step(in);
-            inline for (comptime pickersOf(spec)) |n| {
-                const v = comptime ct.fields(n);
-                var rects: [3]Rect = undefined;
-                inline for (parts(v.name), 0..) |w, k| rects[k] = ui.pointer.rectOf(w);
-                const c = update(@field(ui.signals.state, v.color), ui.responses(v.name, in), rects, in);
-                ui.signals.set(comptime field(v.color), c);
-            }
-
-            const tb = ui.page.begin(in);
-            var next: u32 = 0;
-            ui.push(spec, 0, &next, in);
-            const t = ui.page.end(in);
-            ui.pointer.store(t);
-            return .{ .draw = &tb.d, .tree = t, .event = event };
-        }
-
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const tb = &ui.page.tables;
-            const state = &ui.signals.state;
-            next.* += 1;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (comptime !isPicker(n)) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, next, in);
-                tb.t.seal(i);
-                return;
-            }
-            // A colour picker (`ct.colorpicker`): rows as `colorpicker` builds them.
-            next.* += comptime flatten.count(n) - 1;
-            const v = comptime ct.fields(n);
-            const id: Id = .hash(v.name);
-            const c: Hsva = @field(state, v.color);
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            const th = &@TypeOf(ui.*).theme;
+            const tb = &ui.tables;
+            next.* += comptime flatten.count(n);
+            const id: Id = .hash(name);
+            const c: Hsva = @field(ui.signals.state, color);
             const vals = values(c);
-            var g = pickerStyle(&th);
+            var g = pickerStyle(th);
             g.value = groupValue(c);
             const group = tb.t.push(parent, .none, &g);
-            var a = areaStyle(&th, c);
+            var a = areaStyle(th, c);
             a.value = vals[0];
             const area = tb.t.push(group, partId(id, .area), &a);
             _ = tb.t.push(area, .none, &areaLayer(false));
             _ = tb.t.push(area, .none, &areaLayer(true));
             _ = tb.t.push(area, .none, &areaMarker(c));
             tb.t.seal(area);
-            var hs = trackStyle(&th);
+            var hs = trackStyle(th);
             hs.value = vals[1];
             const hue = tb.t.push(group, partId(id, .hue), &hs);
             for (0..hue_stops) |k| _ = tb.t.push(hue, .none, &hueSegment(@intCast(k)));
             _ = tb.t.push(hue, .none, &thumbStyle(c.h));
             tb.t.seal(hue);
-            var al = trackStyle(&th);
+            var al = trackStyle(th);
             al.value = vals[2];
             const alpha = tb.t.push(group, partId(id, .alpha), &al);
             _ = tb.t.push(alpha, .none, &alphaFill(c));
@@ -397,24 +352,7 @@ pub fn ComptimeColorpicker(comptime State: type, comptime spec: Spec, comptime t
             tb.t.seal(alpha);
             tb.t.seal(group);
         }
-
-        fn field(comptime name: []const u8) S.Field {
-            return comptime std.meta.stringToEnum(S.Field, name).?;
-        }
     };
-}
-
-/// The picker nodes of `n`'s subtree.
-fn pickersOf(comptime n: Spec) []const Spec {
-    if (isPicker(n)) return &.{n};
-    var out: []const Spec = &.{};
-    for (n.children) |c| out = out ++ pickersOf(c);
-    return out;
-}
-
-fn checkAll(comptime State: type, comptime n: Spec) void {
-    if (isPicker(n)) validate(State, n.bind.?);
-    for (n.children) |c| checkAll(State, c);
 }
 
 // ---- example page -----------------------------------------------------------------------------
@@ -447,7 +385,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .title),
             ct.colorpicker(th, .paint, .color),
         });
-        pub const Ui = ComptimeColorpicker(State, spec, th);
+        pub const Ui = base.ComptimeUi(State, spec, th);
         pub const limits: context.Limits = .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };

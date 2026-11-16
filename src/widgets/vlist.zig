@@ -18,8 +18,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Input = @import("../core/input.zig").Input;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -182,6 +180,7 @@ pub const ct = struct {
         var s = spec_zig.col(list_zig.listStyle(&th), rows);
         s.id = @tagName(id);
         s.bind = @tagName(selected);
+        s.widget = VListWidget(@tagName(items), @tagName(selected), @tagName(scroll), visible);
         return s;
     }
 
@@ -191,97 +190,53 @@ pub const ct = struct {
     }
 };
 
-/// The comptime front end for a page of virtual lists: rows, columns and labels as in
-/// `base.ComptimeUi`, every node with an id a list made by `ct.vlist`.
-pub fn ComptimeVList(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
-    const E = events.Events(spec);
-    const S = signals.Signals(State, spec);
-    inline for (E.widget_nodes) |row| {
-        const v = ct.fields(list_zig.nodeAt(spec, row));
-        validate(State, v.items, v.selected, v.scroll, v.visible);
-    }
-    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+/// A virtual list in `base.ComptimeUi`, for the fields and row count `ct.vlist` was given:
+/// `step` applies the input to the selection and scroll fields, `push` builds the rows on
+/// screen as `vlist` does.
+fn VListWidget(comptime items: []const u8, comptime selected: []const u8, comptime scroll: []const u8, comptime visible: u32) type {
     return struct {
-        const Self = @This();
-        pub const Events = E;
-        pub const Signals = S;
-
-        page: Tables = .{},
-        signals: S.Runtime = .{},
-        pointer: list_zig.CtPointer(E) = .{},
-        font: Mono = .{},
-
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
-
-        pub fn frame(ui: *Self, in: *const Input) Output {
-            const event = ui.pointer.step(in);
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            comptime validate(@TypeOf(ui.signals.state), items, selected, scroll, visible);
             const state = &ui.signals.state;
-            inline for (0..E.widget_count) |k| {
-                const v = comptime ct.fields(list_zig.nodeAt(spec, E.widget_nodes[k]));
-                const w = comptime E.widget(k);
-                var r = ui.pointer.response(w, in);
-                r.clicked = if (event) |e| e == w else false;
-                var sel: u32 = @field(state, v.selected);
-                var scroll: f32 = @field(state, v.scroll);
-                update(&th, r, ui.pointer.rectOf(w).y0, @field(state, v.items), v.visible, &sel, &scroll, in);
-                ui.signals.set(comptime field(v.selected), sel);
-                ui.signals.set(comptime field(v.scroll), scroll);
-            }
-
-            const tb = ui.page.begin(in);
-            var next: u32 = 0;
-            ui.push(spec, 0, &next, in);
-            const t = ui.page.end(in);
-            ui.pointer.store(t);
-            return .{ .draw = &tb.d, .tree = t, .event = event };
+            var r = list_zig.ctResponse(ui, row, in);
+            r.clicked = list_zig.ctClicked(ui, row, event);
+            var sel: u32 = @field(state, selected);
+            var off: f32 = @field(state, scroll);
+            update(&Ui.theme, r, list_zig.ctRect(ui, row).y0, @field(state, items), visible, &sel, &off, in);
+            ui.signals.set(comptime Ui.field(selected), sel);
+            ui.signals.set(comptime Ui.field(scroll), off);
         }
 
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const tb = &ui.page.tables;
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const row = comptime list_zig.widgetRow(@TypeOf(ui.*), n.id.?);
+            const tb = &ui.tables;
             const state = &ui.signals.state;
-            const row = next.*;
-            next.* += 1;
-            if (n.kind == .label) {
-                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
-                return;
-            }
-            if (n.id == null) {
-                const i = tb.t.push(parent, .none, &n.style);
-                inline for (n.children) |c| ui.push(c, i, next, in);
-                tb.t.seal(i);
-                return;
-            }
-            // A virtual list (`ct.vlist`): its template rows are filled from the window.
-            next.* += 2 * n.children.len;
-            const v = comptime ct.fields(n);
-            const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
-            const r = ui.pointer.response(w, in);
-            const options: []const []const u8 = @field(state, v.items);
+            next.* += comptime flatten.count(n);
+            const r = list_zig.ctResponse(ui, row, in);
+            const options: []const []const u8 = @field(state, items);
             const count: u32 = @intCast(options.len);
-            const sel: u32 = @field(state, v.selected);
-            const scroll: f32 = @field(state, v.scroll);
-            const top = ui.pointer.rectOf(w).y0;
-            var s = vlistStyle(&th, v.visible, scroll);
-            s.border_color = list_zig.listBorder(&th, r.focused);
+            const sel: u32 = @field(state, selected);
+            const off: f32 = @field(state, scroll);
+            const top = list_zig.ctRect(ui, row).y0;
+            var s = vlistStyle(th, visible, off);
+            s.border_color = list_zig.listBorder(th, r.focused);
             const box = tb.t.push(parent, .hash(n.id.?), &s);
-            const under = rowAt(&th, top, in.pointer[1], scroll, count);
-            const win = window(&th, count, v.visible, scroll);
+            const under = rowAt(th, top, in.pointer[1], off, count);
+            const win = window(th, count, visible, off);
             const first = tb.t.len;
             const template = n.children[0];
             for (win.first..win.first + win.len) |k| {
                 var o = template.style;
-                o.fill = list_zig.optionFill(&th, r.hovered and under == k, sel == k);
+                o.fill = list_zig.optionFill(th, r.hovered and under == k, sel == k);
                 const i = tb.t.push(box, .none, &o);
-                list_zig.pushLabel(tb, i, &template.children[0].style, options[k], &th);
+                list_zig.pushLabel(tb, i, &template.children[0].style, options[k], th);
                 tb.t.seal(i);
             }
             tb.t.seal(box);
             tb.t.c.value[box] = list_zig.selectedValue(sel);
             setRoles(&tb.t, box, first, win.len);
-        }
-
-        fn field(comptime name: []const u8) S.Field {
-            return comptime std.meta.stringToEnum(S.Field, name).?;
         }
     };
 }
@@ -329,7 +284,7 @@ pub fn Example(comptime th: Theme) type {
             base.ct.label(th, .title),
             ct.vlist(th, .items, .options, .selected, .scroll, visible),
         });
-        pub const Ui = ComptimeVList(State, spec, th);
+        pub const Ui = base.ComptimeUi(State, spec, th);
         pub const limits: context.Limits = .{ .nodes = 32, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
         pub const Run = base.Harness(App, Ui, limits);
     };
