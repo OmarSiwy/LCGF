@@ -229,15 +229,15 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
-test "requiredBytes: 890 bytes per node of capacity (docs/perf/bytes.md)" {
-    // Two tree generations of 376 bytes a row less the 48 bytes of layout scratch they share,
-    // plus 170 bytes of draw list and 16 of level-order index (docs/perf/port-perf.md). A
-    // change here is a change to the recorded footprint.
+test "requiredBytes: 914 bytes per node of capacity (docs/perf/bytes.md)" {
+    // Two tree generations of 276 bytes a row and a 112-byte extras row each, less the 48
+    // bytes of layout scratch they share, plus 170 bytes of draw list and 16 of level-order
+    // index (docs/perf/port-perf.md). A change here is a change to the recorded footprint.
     var a = example_limits;
     a.nodes = 4096;
     var b = a;
     b.nodes = 8192;
-    try testing.expectEqual(890 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+    try testing.expectEqual(914 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {

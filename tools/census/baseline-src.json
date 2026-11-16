@@ -155,9 +155,9 @@
     "short_fwd": 0
   },
   "p_inherit_opacity": {
-    "back": 2,
-    "jcc": 6,
-    "short_fwd": 0
+    "jcc": 4,
+    "back": 1,
+    "short_fwd": 1
   },
   "p_inherit_transform": {
     "back": 1,
@@ -190,14 +190,14 @@
     "short_fwd": 5
   },
   "p_paint": {
-    "back": 4,
-    "jcc": 8,
-    "short_fwd": 0
+    "jcc": 14,
+    "back": 6,
+    "short_fwd": 1
   },
   "p_paint_layered": {
-    "back": 4,
-    "jcc": 8,
-    "short_fwd": 0
+    "jcc": 14,
+    "back": 6,
+    "short_fwd": 1
   },
   "p_path_fill": {
     "back": 10,
@@ -265,9 +265,9 @@
     "short_fwd": 0
   },
   "p_reuse": {
-    "back": 15,
-    "jcc": 39,
-    "short_fwd": 6
+    "jcc": 49,
+    "back": 19,
+    "short_fwd": 10
   },
   "p_sdf_distances": {
     "back": 9,
@@ -340,13 +340,13 @@
     "short_fwd": 0
   },
   "p_tree_push": {
+    "jcc": 1,
     "back": 0,
-    "jcc": 0,
     "short_fwd": 0
   },
   "p_tree_push_row": {
+    "jcc": 1,
     "back": 0,
-    "jcc": 0,
     "short_fwd": 0
   },
   "p_tween": {

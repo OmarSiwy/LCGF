@@ -44,7 +44,7 @@ export fn p_place_k(t: *Tree, k: *const lcgr.coefs.Coefs) void {
 export fn p_tree_push(t: *Tree, parent: u32, s: *const lcgr.types.Style) u32 {
     return t.push(parent, .none, s);
 }
-export fn p_paint(t: *const Tree, tx: *const Texts, cu: *const Customs, d: *DrawList) void {
+export fn p_paint(t: *Tree, tx: *const Texts, cu: *const Customs, d: *DrawList) void {
     lcgr.paint.emit(t, tx, cu, "", d);
 }
 export fn p_hit(t: *const Tree, x: f32, y: f32) u32 {
