@@ -75,6 +75,34 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The button's example page: two buttons on a panel, in both front ends, counting their
+/// clicks. Its replay (testdata/button.replay) clicks, drags off and uses Enter and Space; its
+/// golden images (tools/widgetgolden/ref/button-*.png) are the face at rest, hovered, held.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
+
+    pub const App = struct {
+        resets: u32 = 0,
+        applies: u32 = 0,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            app.resets += @intFromBool(button(f, &th, .from("reset"), "Reset").clicked);
+            app.applies += @intFromBool(button(f, &th, .from("apply"), "Apply").clicked);
+            f.close();
+        }
+    };
+    pub const State = struct { reset_text: []const u8 = "Reset", apply_text: []const u8 = "Apply" };
+    pub const spec = spec_zig.row(panel, .{ ct.button(th, .reset, .reset_text), ct.button(th, .apply, .apply_text) });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+    pub const replay = @embedFile("testdata/button.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/button-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -247,6 +275,46 @@ test "button a11y: role button, named by its caption, value 0, no states, in bot
     try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
     // Its caption is exported as its child, static text.
     try testing.expectEqual(r, x.out[0].c.parent[x.row(3).?]);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the button replay fires on click, Enter and Space up, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    const Fired = enum { none, reset, apply };
+    var fired: [12]Fired = undefined;
+    var fills: [12]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const before = .{ h.app.resets, h.app.applies };
+        const out = try h.frame(in);
+        const rt: Fired = if (h.app.resets != before[0]) .reset else if (h.app.applies != before[1]) .apply else .none;
+        const cp: Fired = if (out.comptime_.event) |e| switch (e) {
+            .reset => .reset,
+            .apply => .apply,
+        } else .none;
+        try testing.expectEqual(rt, cp);
+        fired[k] = rt;
+        fills[k] = out.runtime.tree.c.look[2].fill;
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(Fired, &.{ .none, .none, .none, .reset, .reset, .none, .reset, .none, .none, .none, .apply, .none }, &fired);
+    try testing.expectEqual(@as(u32, 3), h.app.resets);
+    try testing.expectEqual(@as(u32, 1), h.app.applies);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, fills[0..4]);
+    // The rects the replay's comment gives.
+    const t = &h.ctx.trees[h.ctx.cur];
+    try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = 12, .x1 = 70, .y1 = 46 }, t.rect(t.find(.from("reset"))));
+    try testing.expectEqual(types.Rect{ .x0 = 78, .y0 = 12, .x1 = 136, .y1 = 46 }, t.rect(t.find(.from("apply"))));
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test {
