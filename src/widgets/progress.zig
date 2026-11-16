@@ -56,15 +56,34 @@ pub fn barStyle(th: *const Theme, value: f32) Style {
     return .{ .size = .{ .pct(base.unit(value)), .fill }, .radius = 4, .fill = th.accent };
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// The track's `value` column: the fraction done, clamped (aria-valuenow over 0..1).
+pub fn progressValue(value: f32) f32 {
+    return base.unit(value);
+}
+
+/// The track is a progress bar (`a11y.Role.progress_bar`, past `types.Role`).
+pub fn setRole(t: *Tree, track: u32) void {
+    t.c.role[track] = @backingInt(a11y.Role.progress_bar);
+}
+
+/// Names the bar after the text of `label` (a caption's row), as `aria-labelledby`: a progress
+/// bar does not take its name from its content.
+pub fn setName(s: *a11y.Semantics, track: u32, label: u32) void {
+    s.c.labelled_by[track] = label;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A progress bar showing `value` (0 to 1). Anonymous and insensitive: it takes no input.
 pub fn progress(f: *Frame, th: *const Theme, value: f32) Node {
     var s = trackStyle(th);
-    _ = &s;
+    s.value = progressValue(value);
     const track = f.open(.none, s);
     _ = f.leaf(.none, barStyle(th, value));
     f.close();
+    setRole(f.tree(), track.ix());
     return track;
 }
 
@@ -127,10 +146,11 @@ pub fn ComptimeProgress(comptime State: type, comptime spec: Spec, comptime th: 
             }
             const value: f32 = @field(state, n.bind.?);
             var s = trackStyle(&th);
-            _ = &s;
+            s.value = progressValue(value);
             const track = tb.t.push(parent, .none, &s);
             _ = tb.t.push(track, .none, &barStyle(&th, value));
             tb.t.seal(track);
+            setRole(&tb.t, track);
         }
     };
 }
@@ -192,6 +212,33 @@ var harness: Example(theme).Run = .{};
 
 /// Rows of the example page's two tracks: panel, caption, track, bar, caption, track, bar.
 const tracks = [2]u32{ 3, 6 };
+
+test "progress: role, value and a name from its caption" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.download = 1.7;
+    h.ui.signals.state.download = 1.7;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    for (tracks) |k| {
+        try testing.expectEqual(@backingInt(a11y.Role.progress_bar), t.c.role[k]);
+        try testing.expectEqual(@as(f32, 1), t.c.value[k]);
+    }
+    try testing.expectEqual(@as(f32, 0), progressValue(-1));
+    try testing.expectEqual(@as(f32, 0.4), progressValue(0.4));
+
+    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    setName(&sem, tracks[0], tracks[0] - 1);
+    a11y.names(t, &sem);
+    try testing.expectEqual(t.c.text[tracks[0] - 1], sem.c.name[tracks[0]]);
+    // Without a caption it has no name: it does not take one from its content.
+    try testing.expectEqual(none, sem.c.name[tracks[1]]);
+}
 
 test "check: what a comptime progress bar's state must have" {
     const Good = struct { v: f32 = 0 };
