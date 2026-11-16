@@ -28,7 +28,10 @@ pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const
     current.* = @min(current.*, @as(u32, @intCast(ids.len - 1)));
     _ = f.open(.none, barStyle(th));
     for (ids, titles) |id, title| {
-        _ = f.open(id, itemStyle(th));
+        const item = f.open(id, itemStyle(th));
+        const r = f.interact(item, .button);
+        f.setFill(item, base.buttonFill(th, r));
+        f.setCursor(.pointer, r.hovered);
         _ = base.label(f, th, title);
         f.close();
     }
@@ -36,16 +39,16 @@ pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const
     return none;
 }
 
-/// The bar: its buttons side by side.
+/// The bar: its buttons side by side on the panel colour, padded and spaced by the theme,
+/// as the reference page's toolbar.
 pub fn barStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x };
+    return .{ .dir = .x, .pad = @splat(th.pad), .gap = th.gap, .cross = .center, .fill = th.panel, .radius = th.radius };
 }
 
-/// One button.
+/// One button, as `base.buttonStyle`; filled as a button by interaction state
+/// (`base.buttonFill`).
 pub fn itemStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .cross = .center };
+    return base.buttonStyle(th);
 }
 
 /// The toolbar as a spec node.
@@ -89,8 +92,11 @@ pub const ct = struct {
                 const t = &ui.tables.t;
                 const row = t.push(parent, .none, &n.style);
                 next.* += 1;
+                const th = @TypeOf(ui.*).theme;
                 inline for (n.children, names) |item, name| {
-                    const i = t.push(row, .hash(name), &item.style);
+                    var st = item.style;
+                    st.fill = base.buttonFill(&th, ui.response(next.*, in));
+                    const i = t.push(row, .hash(name), &st);
                     next.* += 1;
                     ui.push(item.children[0], i, next, in);
                     t.seal(i);
@@ -159,6 +165,34 @@ test "toolbar: both front ends build one row of buttons" {
     try testing.expect(t.rect(rows.item[1]).x0 >= t.rect(rows.item[0]).x1);
     try testing.expectEqual(none, h.app.activated);
     try testing.expectEqual(none, h.ui.signals.state.activated);
+}
+
+test "toolbar: buttons on a panel bar, filled by state; any theme alike" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const th = Theme.default;
+    var t = out.runtime.tree;
+    try testing.expectEqual(th.panel.bitsOf(), t.c.look[rows.bar].fill);
+    try testing.expectEqual(t.rect(rows.bar).x0 + th.pad, t.rect(rows.item[0]).x0);
+    try testing.expectEqual(t.rect(rows.item[0]).x1 + th.gap, t.rect(rows.item[1]).x0);
+    const r = t.rect(rows.item[2]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[rows.item[2]].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[rows.item[2]].fill);
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[rows.item[0]].fill);
+
+    const Light = Page(.{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    _ = try S.light.frame(&in);
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(180, 180, 190).bitsOf(), lo.runtime.tree.c.look[rows.item[2]].fill);
 }
 
 test {
