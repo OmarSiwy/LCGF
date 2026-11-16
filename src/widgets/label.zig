@@ -60,6 +60,37 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The label's example page: three labels in a column on a panel, in both front ends. Its
+/// replay (testdata/label.replay) and golden images (tools/widgetgolden/ref/label-*.png)
+/// show that input leaves it as it is.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 6, .fill = th.panel };
+
+    pub const App = struct {
+        pub fn build(_: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = label(f, &th, "Labels");
+            _ = label(f, &th, "Layer 0");
+            _ = label(f, &th, "Exposure 25%");
+            f.close();
+        }
+    };
+    pub const State = struct {
+        title: []const u8 = "Labels",
+        layer: []const u8 = "Layer 0",
+        exposure: []const u8 = "Exposure 25%",
+    };
+    pub const spec = spec_zig.col(panel, .{ ct.label(th, .title), ct.label(th, .layer), ct.label(th, .exposure) });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 4 });
+    pub const replay = @embedFile("testdata/label.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/label-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 2 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -212,6 +243,44 @@ test "label a11y: role label, named by its own text, no value, no states, in bot
     // The column is presentational: the labels hang off the root.
     try testing.expectEqual(null, x.row(1));
     try testing.expectEqual(@as(u32, 3), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the label replay draws frame 0 in every frame, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const DrawList = @import("../draw/draw_list.zig").DrawList;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    // Frame 0's draw list, copied: quads and runs as bytes.
+    var quads: [256]u8 = undefined;
+    var quad_len: usize = 0;
+    var first: ?DrawList = null;
+    while (try replay.next(buf)) |in| {
+        const out = try h.frame(in);
+        const d = out.runtime.draw;
+        if (first) |f0| {
+            try testing.expectEqual(f0.quad_len, d.quad_len);
+            try testing.expectEqual(f0.run_len, d.run_len);
+            try testing.expectEqualSlices(u8, quads[0..quad_len], d.quadBytes());
+        } else {
+            first = d.*;
+            quad_len = d.quadBytes().len;
+            @memcpy(quads[0..quad_len], d.quadBytes());
+        }
+        try testing.expectEqual(null, out.comptime_.event);
+        try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    }
+    try testing.expectEqual(@as(u32, 5), h.frames);
+    // The first label sits where the replay's comment says.
+    const r = page.ctx.trees[page.ctx.cur].rect(2);
+    try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = 12, .x1 = 62, .y1 = 30 }, r);
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 5);
 }
 
 test {
