@@ -19,6 +19,29 @@
 //! Custom commands are not a back-end call: the back end never sees them. The host draws them
 //! with its own pipeline, between the UI's draws, by stopping at each one (`drawUntilCustom`).
 //! `render` is the diagonal for frames with no custom draws, or ones the host skips.
+//!
+//! ## Three routes for custom rendering
+//!
+//! All three follow from the host owning the pass; none needs a callback or a back-end hook.
+//! The names are Qt Quick's (custom render node example: underlay, inline, texture).
+//!
+//!   1. Underlay / overlay. The host records its own draws into the pass before or after the
+//!      UI's (`render` or the `drawUntilCustom` loop). Under: a 3D scene behind the UI, the UI
+//!      drawn on top with premultiplied blending. Over: debug lines or a cursor above it. Cheapest
+//!      route; the host's draws are not clipped or ordered with UI nodes.
+//!   2. Inline. A custom node (a `Customs` row) puts a `custom` command in paint order. `drawUntilCustom`
+//!      stops there; the host draws into `customs[k].rect` (scissor to `customs[k].clip`, the
+//!      host's own pipeline, `customs[k].data` to say what), then continues. UI nodes painted
+//!      later cover it, earlier ones lie under it. Conformance scene `custom` checks this route.
+//!      Uploads the host needs happen before the pass, next to `prepare`: egui-wgpu splits its
+//!      `CallbackTrait` the same way (`prepare` with the queue, `paint` inside the pass), but
+//!      as a callback the framework calls; here the host's loop simply does both.
+//!   3. Texture. The host renders into its own texture in an earlier pass, registers the view
+//!      with the back end (the wgpu back end's `addTexture`) and shows it with `Style.texture` on
+//!      any node. It is then an ordinary quad: clipped, rounded, batched, layered like the rest.
+//!      Costs a texture and a pass; the only route whose output the UI can transform or reuse.
+//!
+//! After an inline draw the pass may be in any state.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
