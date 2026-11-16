@@ -137,6 +137,7 @@ const axis_tilt = 25;
 /// The looper ident the input queue reports with.
 const ident_input = 1;
 const log_error = 6;
+const log_info = 4;
 
 fn logError(comptime fmt: []const u8, args: anytype) void {
     var buf: [256]u8 = undefined;
@@ -445,6 +446,12 @@ pub const Android = struct {
     /// the clipboard, the soft keyboard. Null if the VM refused the thread.
     env: ?jni.Env = null,
     vm: ?*anyopaque = null,
+    /// A recording of NativeActivity events (translate.Replay) fed to the translator one frame
+    /// per `poll` in place of the user's: the input replay test on a device. It sets the
+    /// window size, density and content rect itself.
+    recording: ?translate.Replay = null,
+    /// Why `poll` ended a recording early: a bad line (`recording.line`).
+    err: ?translate.Replay.Error = null,
     /// Surfaces or devices made again after a loss.
     recovered: u32 = 0,
     /// The soft keyboard was asked up.
@@ -519,8 +526,9 @@ pub const Android = struct {
             .focus => |f| s.t.focus(f),
         };
         shared.n_life = 0;
-        if (shared.activity) |a| s.t.setDensity(density(a));
-        if (shared.content) |r| s.t.setContent(@floatFromInt(r.left), @floatFromInt(r.top), @floatFromInt(r.right), @floatFromInt(r.bottom));
+        // A recording sets its own window, density and content rect.
+        if (s.recording == null) if (shared.activity) |a| s.t.setDensity(density(a));
+        if (s.recording == null) if (shared.content) |r| s.t.setContent(@floatFromInt(r.left), @floatFromInt(r.top), @floatFromInt(r.right), @floatFromInt(r.bottom));
         shared.resized = false;
         s.seen = shared.posted;
         shared.acked = s.seen;
@@ -534,6 +542,26 @@ pub const Android = struct {
         defer AConfiguration_delete(config);
         AConfiguration_fromAssetManager(config, assets);
         return @intCast(@max(AConfiguration_getDensity(config), 0));
+    }
+
+    /// The activity was started with the boolean intent extra `name` set
+    /// (`adb shell am start ... --ez lcgr.replay true`): `getIntent().getBooleanExtra`.
+    pub fn intentFlag(s: *Android, name: [*:0]const u8) bool {
+        const e = s.env orelse return false;
+        const activity = activityObject() orelse return false;
+        e.pushFrame(4);
+        defer e.popFrame();
+        const get_intent = e.method(e.objectClass(activity), "getIntent", "()Landroid/content/Intent;") orelse return false;
+        const intent = e.callObject(activity, get_intent, &.{}) orelse return false;
+        const get = e.method(e.objectClass(intent), "getBooleanExtra", "(Ljava/lang/String;Z)Z") orelse return false;
+        return e.callBool(intent, get, &.{ jni.obj(e.ascii(name)), .{ .z = 0 } });
+    }
+
+    /// Writes a line to the system log (logcat, tag `lcgr`), at info level.
+    pub fn log(_: *Android, comptime fmt: []const u8, args: anytype) void {
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrintSentinel(&buf, fmt, args, 0) catch return;
+        _ = __android_log_write(log_info, "lcgr", line);
     }
 
     /// True once after the activity returned from the background: build a frame (post the
@@ -582,6 +610,10 @@ pub const Android = struct {
     }
 
     fn resize(s: *Android, window: *ANativeWindow) void {
+        if (s.recording != null) {
+            s.t.has_window = true;
+            return;
+        }
         s.t.resize(@floatFromInt(ANativeWindow_getWidth(window)), @floatFromInt(ANativeWindow_getHeight(window)));
     }
 
@@ -599,6 +631,13 @@ pub const Android = struct {
         }
         if (s.target) |tg| s.resize(tg.window);
         _ = s.woken.swap(false, .acq_rel);
+        if (s.recording) |*r| {
+            const more = r.next(&s.t) catch |e| blk: {
+                s.err = e;
+                break :blk false;
+            };
+            if (!more) return false;
+        }
         s.polls += 1;
         return s.t.frame(ev);
     }
@@ -787,7 +826,7 @@ pub const Android = struct {
     /// Blocks in the looper until an event, a posted change or a `wake`, at most `seconds`;
     /// `.display` waits one refresh (FIFO presentation paces it too).
     pub fn wait(s: *Android, seconds: f32, pace: Pace) void {
-        if (s.woken.load(.acquire) or s.t.m.pending()) return;
+        if (s.woken.load(.acquire) or s.t.m.pending() or s.recording != null) return;
         // Nothing is shown while stopped or without a window: timers and animations wait.
         const secs = if (!s.t.visible()) std.math.inf(f32) else if (pace == .display) 1 / s.hz else seconds;
         if (!(secs > 0)) return;

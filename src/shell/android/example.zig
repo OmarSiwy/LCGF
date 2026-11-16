@@ -1,6 +1,13 @@
 //! The shells' example application (src/shell/example.zig) in the Android shell: `zig build
 //! android-build -Dtarget=aarch64-linux-android` builds zig-out/lib/libandroid-example.so, the
 //! library a NativeActivity loads (its manifest names it with `android.app.lib_name`).
+//!
+//! Started with the intent extra `lcgr.replay` (`adb shell am start -n <package>/
+//! android.app.NativeActivity --ez lcgr.replay true`), it is the input replay test on a
+//! device: the real activity, window and Vulkan swapchain, with testdata/example.events fed to
+//! the translator in place of the user's touches. It logs the example's results (logcat, tag
+//! lcgr: "replay ... ok" when they are the headless shell's: one reset, four layers,
+//! exposure 3) and finishes the activity.
 
 const std = @import("std");
 const lcgr = @import("lcgr");
@@ -26,6 +33,8 @@ pub fn androidMain() void {
     var shell: android.Android = undefined;
     shell.init(.{ .glyphs = &glyphs, .first = &first, .count = &count, .text = &text, .events = &events }) catch return;
     defer shell.deinit();
+    const replay = shell.intentFlag("lcgr.replay");
+    if (replay) shell.recording = .{ .src = @embedFile("testdata/example.events") };
     var ctx = context.Context.init(&ctx_buffer, limits) catch return;
     var app: lcgr.shell_example.App = .{};
     shell.background = app.theme.panel;
@@ -42,7 +51,8 @@ pub fn androidMain() void {
         }
         if (ctx.needsFrame(&ev.in)) {
             var f = ctx.begin(&ev.in);
-            _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = safe });
+            // The recording's taps are at the example's 800 x 600 layout, unpadded.
+            _ = f.open(.from("safe-area"), .{ .size = .{ .fill, .fill }, .pad = if (replay) @splat(0) else safe });
             app.build(&f, &ev);
             f.close();
             const out = f.end(.{});
@@ -51,4 +61,9 @@ pub fn androidMain() void {
         }
         shell.wait(lcgr.scheduler.wake(&ctx, &ev.in), lcgr.scheduler.pace(&ctx));
     }
+    if (!replay) return;
+    const ok = shell.err == null and app.resets == 1 and app.layers == 4 and @abs(app.exposure - 3) < 0.01;
+    shell.log("replay: polls={d} presents={d} builds={d} resets={d} layers={d} exposure={d:.2} {s}", .{
+        shell.polls, shell.presents, app.builds, app.resets, app.layers, app.exposure, if (ok) "ok" else "FAILED",
+    });
 }
