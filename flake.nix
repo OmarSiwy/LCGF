@@ -49,7 +49,11 @@
         # Mesa's lavapipe, so no GPU or system driver is needed.
         devShells.golden = pkgs.mkShell {
           inputsFrom = [ devShells.default ];
-          packages = [ (pkgs.python3.withPackages (ps: [ ps.wgpu ])) ];
+          packages = [
+            (pkgs.python3.withPackages (ps: [ ps.wgpu ]))
+            # A headless X server for the X11 shell's tests (ci/run.sh x11).
+            pkgs.xvfb
+          ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.vulkan-loader
             pkgs.libglvnd

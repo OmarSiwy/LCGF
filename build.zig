@@ -495,6 +495,14 @@ pub fn build(b: *std.Build) void {
     const x11_run = b.addRunArtifact(x11_tests);
     x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
     b.step("x11", "Test the X11 shell (on a server when LCGR_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
+    // The example application in an X11 window (src/shell/x11/example.zig).
+    const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
