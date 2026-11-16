@@ -528,93 +528,6 @@ pub fn build(b: *std.Build) void {
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
 
-    // The Gompute back end (src/render/gompute/): kernels written in Zig, compiled to PTX and HSACO
-    // and embedded, launched through Gompute's run-time driver loader (build.zig.zon, lazy).
-    // Device targets are pinned, not Gompute's `.auto` (which probes the build machine's GPU).
-    const gompute_step = b.step("gompute", "Test the Gompute back end: kernels on the CPU, and on CUDA when a driver and card are present");
-    const gompute_play_step = b.step("gompute-play", "Build zig-out/bin/gompute-play (draws a dumped frame with the Gompute back end) and gompute-probe");
-    const gompute_vk_step = b.step("gompute-vk", "Test the Gompute back end presenting through Vulkan external memory (needs CUDA and an NVIDIA Vulkan driver)");
-    if (b.lazyDependency("gompute", .{ .target = target, .optimize = optimize })) |gompute_dep| {
-        if (b.lazyImport(@This(), "gompute")) |gompute_build| {
-            const k = gompute_build.addKernels(b, gompute_dep, .{
-                .root_source_file = b.path("src/render/gompute/kernels.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &gomputeDeviceImports,
-                .imports_ctx = options,
-                .cuda = .{ .gpu = .{ .name = "sm_75" }, .sass = false },
-                .hip = .{ .gpu = .{ .name = "gfx1100" } },
-            });
-            const gompute_tests = b.addTest(.{ .root_module = b.createModule(.{
-                .root_source_file = b.path("src/render/gompute/gompute.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-                .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "gompute", .module = k.gompute } },
-            }) });
-            gompute_step.dependOn(&b.addRunArtifact(gompute_tests).step);
-            // Draws a dumped frame as a PNG (src/render/gompute/play.zig, ci/run.sh gompute-golden).
-            const gompute_play = b.addExecutable(.{ .name = "gompute-play", .root_module = b.createModule(.{
-                .root_source_file = b.path("src/render/gompute/play.zig"),
-                .target = target,
-                .optimize = .ReleaseFast,
-                .link_libc = true,
-                .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute } },
-            }) });
-            gompute_play_step.dependOn(&b.addInstallArtifact(gompute_play, .{}).step);
-            // Read-back, memory and frame-time measurements (src/render/gompute/probe.zig).
-            const gompute_probe = b.addExecutable(.{ .name = "gompute-probe", .root_module = b.createModule(.{
-                .root_source_file = b.path("src/render/gompute/probe.zig"),
-                .target = target,
-                .optimize = .ReleaseFast,
-                .link_libc = true,
-                .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute } },
-            }) });
-            gompute_play_step.dependOn(&b.addInstallArtifact(gompute_probe, .{}).step);
-            // Present through Vulkan external memory (src/render/gompute/vulkan.zig), over the Vulkan
-            // back end's device code; Vulkan-Headers translated as for the vk steps.
-            if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
-                const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
-                vk_h.addIncludePath(vulkan_headers.path("include"));
-                vk_h.defineCMacro("VK_NO_PROTOTYPES", null);
-                const vk_mod = b.createModule(.{ .root_source_file = b.path("src/render/vk/vk.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "vk_c", .module = vk_h.createModule() } } });
-                const gompute_vk_tests = b.addTest(.{ .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/render/gompute/vulkan.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                    .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "gompute", .module = k.gompute }, .{ .name = "vk", .module = vk_mod } },
-                }) });
-                gompute_vk_step.dependOn(&b.addRunArtifact(gompute_vk_tests).step);
-                const gompute_vk_probe = b.addExecutable(.{
-                    .name = "gompute-vk-probe",
-                    .root_module = b.createModule(.{
-                        .root_source_file = b.path("src/render/gompute/probe_vulkan.zig"),
-                        .target = target,
-                        .optimize = .ReleaseFast,
-                        .link_libc = true,
-                        // lcgr as the vk module has it: one module per file.
-                        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "gompute", .module = k.gompute }, .{ .name = "vk", .module = vk_mod } },
-                    }),
-                });
-                gompute_vk_step.dependOn(&b.addInstallArtifact(gompute_vk_probe, .{}).step);
-                // Frame time of the benchmark scene against sw and vk (src/render/gompute/bench_frame.zig),
-                // over lcgr_fast like tools/bench, so the Vulkan back end gets a module of its own.
-                const vk_fast = b.createModule(.{ .root_source_file = b.path("src/render/vk/vk.zig"), .target = target, .optimize = .ReleaseFast, .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "vk_c", .module = vk_h.createModule() } } });
-                vk_fast.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
-                vk_fast.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
-                const gompute_bench = b.addExecutable(.{ .name = "gompute-bench-frame", .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/render/gompute/bench_frame.zig"),
-                    .target = target,
-                    .optimize = .ReleaseFast,
-                    .link_libc = true,
-                    .imports = &.{ .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "gompute", .module = k.gompute }, .{ .name = "vk", .module = vk_fast }, .{ .name = "src_scenes", .module = bench_src_scenes } },
-                }) });
-                gompute_vk_step.dependOn(&b.addInstallArtifact(gompute_bench, .{}).step);
-            }
-        }
-    }
-
     // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
     const gles_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -1048,12 +961,4 @@ pub fn build(b: *std.Build) void {
     // cannot parse.
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
-}
-
-/// The device compilations of src/render/gompute/kernels.zig import lcgr built for the GPU
-/// target (Gompute calls this once per backend); only what the kernels name is analysed.
-fn gomputeDeviceImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, ctx: ?*anyopaque) []const std.Build.Module.Import {
-    const lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = optimize });
-    lcgr.addOptions("build_options", @ptrCast(@alignCast(ctx.?)));
-    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "lcgr", .module = lcgr }}) catch @panic("OOM");
 }

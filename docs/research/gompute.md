@@ -1,4 +1,4 @@
-# Gompute back end: decision record
+# Gompute back end: measured, then dropped
 
 The Gompute back end is optional and experimental (docs/DESIGN.md): CUDA and HIP compute kernels
 written in Zig, for offscreen effects shown as textures, never a replacement for a graphics back
@@ -6,7 +6,15 @@ end. This file records each step of lane render-gompute with what was measured. 
 number: x86_64 Linux (NixOS), RTX 4060 Laptop GPU (sm_89) with driver 595.71.05, no AMD GPU, Zig
 0.18.0-dev.1151+8dfb7a7cc.
 
-Decision (C0425, last section): keep it as an optional offscreen and heavy-effects back end.
+Outcome: dropped. Lane render-gompute's own decision (C0425, last section) was to keep it as an
+optional offscreen and heavy-effects back end. The owner and lead dropped it on its numbers: it
+lost to the Vulkan back end on every measure here (frame time 1.8 to 4.8x slower at 1280x720,
++34 MiB resident and +93 MiB GPU memory for the CUDA context, +0.7 s cold start, NVIDIA and AMD
+only, and presenting needs Vulkan anyway), and Vulkan compute shaders cover the offscreen effects
+it was meant for, on every vendor, without a second GPU context. It beat only the CPU software
+renderer, which a machine with a CUDA or HIP GPU has no reason to use. The code was removed after
+the lane merged; it is in history at plan/render-gompute (C0418-C0425, 1d36a86). This file was
+src/render/gompute/DECISION.md; paths below refer to that tree.
 
 ## C0418: pin a Gompute revision that builds with the project's Zig
 
