@@ -101,6 +101,7 @@ pub const text_edit_tests = @import("text/edit/tests.zig");
 pub const fallback = @import("text/fallback/fallback.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
+pub const shell_headless = @import("shell/headless.zig");
 
 test {
     std.testing.refAllDecls(@This());
