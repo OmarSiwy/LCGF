@@ -114,6 +114,7 @@ pub const widgets_dialog = @import("widgets/dialog.zig");
 pub const widgets_toast = @import("widgets/toast.zig");
 pub const widgets_select = @import("widgets/select.zig");
 pub const widgets_textfield = @import("widgets/textfield.zig");
+pub const widgets_textarea = @import("widgets/textarea.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const a11y_settings = @import("a11y/settings.zig");
 pub const settings_data = @import("a11y/settings_data.zig");
