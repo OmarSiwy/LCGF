@@ -13,6 +13,7 @@ const tree = @import("../core/tree.zig");
 const spec_zig = @import("spec.zig");
 const flatten = @import("flatten.zig");
 const Spec = spec_zig.Spec;
+const Id = @import("../core/types.zig").Id;
 const RuntimeColumns = tree.Tree.Columns;
 
 pub const Class = enum { constant, dynamic };
@@ -53,6 +54,24 @@ fn rowBytes(comptime FT: type) comptime_int {
     };
 }
 
+/// The row type of a column with `n` rows: `[]T` becomes `[n]T`, `[k][]T` becomes `[k][n]T`.
+fn Rows(comptime FT: type, comptime n: comptime_int) type {
+    return switch (@typeInfo(FT)) {
+        .pointer => |p| [n]p.child,
+        .array => |a| [a.len][n]@typeInfo(a.child).pointer.child,
+        else => @compileError("not a column: " ++ @typeName(FT)),
+    };
+}
+
+/// Pushes `s` and its subtree under `parent` depth-first, as the front end's `open` / `leaf` /
+/// `close` would; `flatten.Flat` numbers rows the same way.
+fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
+    const id: Id = if (s.id) |name| .hash(name) else .none;
+    const i = t.push(parent, id, &s.style);
+    inline for (s.children) |c| pushAll(t, c, i);
+    t.seal(i);
+}
+
 /// The column split of the UI declared by `spec`.
 pub fn Columns(comptime spec: Spec) type {
     const n = flatten.count(spec);
@@ -75,6 +94,35 @@ pub fn Columns(comptime spec: Spec) type {
             break :blk out;
         };
 
+        /// The tree `Tree.push` builds from the spec, built while compiling: the source of every
+        /// constant table, so a table equals the runtime column row for row.
+        const pushed = blk: {
+            @setEvalBranchQuota(100_000 + 5_000 * n);
+            var t: tree.TreeOf(u32, .{ .array = n }) = .empty;
+            pushAll(&t, spec, 0);
+            break :blk t;
+        };
+
+        /// The read-only table of the constant column `name`: its `n` rows as `Tree.push` writes
+        /// them. A comptime constant, so it lives in read-only data, not in RAM the UI owns.
+        pub fn table(comptime name: []const u8) *const Rows(@FieldType(RuntimeColumns, name), n) {
+            if (comptime classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic in this UI");
+            return &struct {
+                const rows: Rows(@FieldType(RuntimeColumns, name), n) = blk: {
+                    @setEvalBranchQuota(10_000 + 100 * n);
+                    const col = @field(pushed.c, name);
+                    var out: Rows(@FieldType(RuntimeColumns, name), n) = undefined;
+                    switch (@typeInfo(@FieldType(RuntimeColumns, name))) {
+                        .pointer => out = col[0..n].*,
+                        else => for (&out, col) |*o, c| {
+                            o.* = c[0..n].*;
+                        },
+                    }
+                    break :blk out;
+                };
+            }.rows;
+        }
+
         pub fn classOf(comptime name: []const u8) Class {
             return class[std.meta.fieldIndex(RuntimeColumns, name) orelse @compileError("no column '" ++ name ++ "'")];
         }
@@ -88,8 +136,14 @@ pub fn Columns(comptime spec: Spec) type {
             return b;
         }
 
-        /// Read-only bytes: the constant columns, one row per node.
-        pub const rodata_bytes = bytesOf(.constant);
+        /// Read-only bytes: the constant tables (`table`).
+        pub const rodata_bytes = blk: {
+            var b = 0;
+            for (info.field_types, class) |FT, c| {
+                if (c == .constant) b += @sizeOf(Rows(FT, n));
+            }
+            break :blk b;
+        };
         /// RAM bytes: the dynamic columns, one row per node.
         pub const ram_bytes = bytesOf(.dynamic);
     };
@@ -118,6 +172,38 @@ test "Columns: a custom widget builds its own rows, so every column is dynamic" 
     const C = Columns(examples.custom);
     for (C.class) |c| try testing.expectEqual(Class.dynamic, c);
     try testing.expectEqual(0, C.rodata_bytes);
+}
+
+/// The constant table `name` of `C` equals the column of the runtime tree `t`, row for row.
+fn expectTable(comptime C: type, comptime name: []const u8, t: *const tree.Tree) !void {
+    const rows = C.table(name);
+    const col = @field(t.c, name);
+    if (comptime @typeInfo(@TypeOf(col)) == .pointer) {
+        try testing.expectEqualSlices(@typeInfo(@TypeOf(col)).pointer.child, rows, col[0..C.node_count]);
+    } else for (rows, col) |r, c| try testing.expectEqualSlices(f32, &r, c[0..C.node_count]);
+}
+
+test "Columns.table: every constant table equals the column Tree.push builds at run time" {
+    inline for (examples.all) |e| {
+        const C = Columns(e.spec);
+        var buf: [1 << 16]u8 align(64) = undefined;
+        var carver: @import("../core/mem.zig").Carver = .{ .buf = &buf };
+        var t = tree.Tree.init(&carver, C.node_count);
+        pushAll(&t, e.spec, 0);
+        try testing.expect(!t.overflow);
+        inline for (C.names, 0..) |name, k| {
+            if (comptime C.class[k] == .constant) try expectTable(C, name, &t);
+        }
+    }
+}
+
+test "Columns.table: the mixer's tables hold the probe's structure and its style" {
+    const C = Columns(examples.mixer);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, C.table("parent"));
+    try testing.expectEqualSlices(u32, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, C.table("end"));
+    try testing.expectEqualSlices(f32, &.{ 3, 0, 2, 0, 0, 2, 0, 0 }, C.table("nkids"));
+    try testing.expectEqualSlices(f32, &.{ 4, 0, 8, 0, 0, 8, 0, 0 }, C.table("gap"));
+    try testing.expectEqual(@backingInt(Id.hash("volume")), C.table("id")[4]);
 }
 
 test "Columns: every column is classified, and the two classes add up to the runtime row" {
