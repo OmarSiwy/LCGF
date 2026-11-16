@@ -405,29 +405,15 @@ pub const Translator = struct {
     }
 };
 
-/// The system's light or dark mode and accent colour, as Settings > Personalization sets them.
-pub const Appearance = struct {
-    dark: bool = false,
-    /// Null when the system has none to give; the theme's own accent stays.
-    accent: ?Color = null,
-
-    /// From the registry values the shell reads (null when missing): `AppsUseLightTheme`
-    /// (0 is dark; missing is light, as Windows before 10 1809 shows apps) under
-    /// HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize, and `AccentColor`
-    /// (0xAABBGGRR) under HKCU\Software\Microsoft\Windows\DWM.
-    pub fn fromRegistry(apps_use_light_theme: ?u32, accent_color: ?u32) Appearance {
-        const a = accent_color orelse return .{ .dark = apps_use_light_theme == 0 };
-        return .{ .dark = apps_use_light_theme == 0, .accent = .rgb(@truncate(a), @truncate(a >> 8), @truncate(a >> 16)) };
-    }
-
-    /// The theme tokens that follow it: `theme.dark` or `theme.light`, with the system's
-    /// accent for checked boxes, slider fills and focus.
-    pub fn tokens(a: Appearance) theme.Tokens {
-        var tok = if (a.dark) theme.dark else theme.light;
-        if (a.accent) |c| tok.palette[@backingInt(theme.Role.accent)] = c;
-        return tok;
-    }
-};
+/// The system's light or dark mode and accent colour, as Settings > Personalization sets them,
+/// from the registry values the shell reads (null when missing): `AppsUseLightTheme` (0 is
+/// dark; missing is light, as Windows before 10 1809 shows apps) under
+/// HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize, and `AccentColor`
+/// (0xAABBGGRR) under HKCU\Software\Microsoft\Windows\DWM.
+pub fn appearance(apps_use_light_theme: ?u32, accent_color: ?u32) Input.Appearance {
+    const a = accent_color orelse return .{ .dark = apps_use_light_theme == 0 };
+    return .{ .dark = apps_use_light_theme == 0, .accent = .rgb(@truncate(a), @truncate(a >> 8), @truncate(a >> 16)) };
+}
 
 /// `INFINITE`: a wait with no timeout.
 pub const infinite: u32 = 0xffff_ffff;
@@ -910,19 +896,20 @@ test "drop: dropped paths reach one frame, at the drop point" {
 
 test "appearance: dark mode and the accent colour become theme tokens" {
     // Dark, with the default blue accent (RGB 0, 120, 215 stored as 0xffd77800).
-    const dark = Appearance.fromRegistry(0, 0xffd7_7800);
+    const dark = appearance(0, 0xffd7_7800);
     try testing.expect(dark.dark);
-    try testing.expectEqual(Color.rgb(0, 120, 215), dark.accent.?);
-    const tok = dark.tokens();
+    try testing.expectEqual(Color.rgb(0, 120, 215), dark.accent);
+    const tok = theme.forAppearance(dark);
     try testing.expectEqual(theme.dark_palette[0], tok.palette[0]);
     try testing.expectEqual(Color.rgb(0, 120, 215), tok.color(.accent));
     // Light; no accent in the registry keeps the theme's.
-    const light = Appearance.fromRegistry(1, null);
-    try testing.expectEqual(theme.light_palette, light.tokens().palette);
+    const light = appearance(1, null);
+    try testing.expectEqual(Color.transparent, light.accent);
+    try testing.expectEqual(theme.light_palette, theme.forAppearance(light).palette);
     // Nothing in the registry at all: light.
-    try testing.expect(!Appearance.fromRegistry(null, null).dark);
+    try testing.expect(!appearance(null, null).dark);
     // The widget theme switches with it.
-    try testing.expect(!std.meta.eql(theme.widgets(&dark.tokens()).panel, theme.widgets(&light.tokens()).panel));
+    try testing.expect(!std.meta.eql(theme.widgets(&theme.forAppearance(dark)).panel, theme.widgets(&theme.forAppearance(light)).panel));
 }
 
 test "translate: a full frame drops what does not fit and counts it" {

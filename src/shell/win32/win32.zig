@@ -26,6 +26,7 @@ const Mono = lcgr.protocol.Mono;
 const Color = lcgr.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
+const Input = lcgr.input.Input;
 const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 
@@ -214,10 +215,6 @@ pub const Win32 = struct {
     ticks: i64 = 1,
     /// The display's refresh rate, for `.display` pacing.
     hz: u32 = 60,
-    /// The system's light or dark mode and accent, read at `init` and again when Windows says
-    /// they changed. `appearanceChanged` hands a change to the host once.
-    appearance: translate.Appearance = .{},
-    appearance_changed: bool = false,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
@@ -285,7 +282,9 @@ pub const Win32 = struct {
             _ = ReleaseDC(w.hwnd, dc);
         }
         DragAcceptFiles(w.hwnd, 1);
-        w.appearance = readAppearance();
+        // The system's light or dark mode and accent, read now and again when Windows says
+        // they changed, is held input (`Input.appearance`).
+        w.t.in.appearance = readAppearance();
         w.titleBar();
         // No IME until a frame asks for text (`apply`).
         _ = ImmAssociateContextEx(w.hwnd, null, 0);
@@ -319,15 +318,20 @@ pub const Win32 = struct {
         if (cursor != w.cursor and w.t.in.pointer[0] >= 0) _ = SetCursor(cursor);
         w.cursor = cursor;
         if (p.clipboard.len > 0) w.copy(p.clipboard);
+        if (p.paste) w.paste();
         w.ime(p);
         w.applied = p.*;
     }
 
-    /// Turns the IME on while a widget wants text, and puts its windows at `ime_rect`: the
-    /// composition at its top left, the candidates below it without covering it.
+    /// Turns the IME on while a widget wants text, except for a password (as an ES_PASSWORD
+    /// edit control does), and puts its windows at `ime_rect`: the composition at its top left,
+    /// the candidates below it without covering it. ponytail: the IMM32 IME is not given
+    /// `surrounding` (that is WM_IME_REQUEST's IMR_DOCUMENTFEED); add it for reconversion.
     fn ime(w: *Win32, p: *const Platform) void {
-        if (p.wants_text != w.applied.wants_text) _ = ImmAssociateContextEx(w.hwnd, null, if (p.wants_text) iace_default else 0);
-        if (!p.wants_text) return;
+        const on = p.wants_text and p.purpose != .secure;
+        const was = w.applied.wants_text and w.applied.purpose != .secure;
+        if (on != was) _ = ImmAssociateContextEx(w.hwnd, null, if (on) iace_default else 0);
+        if (!on) return;
         const himc = ImmGetContext(w.hwnd) orelse return;
         defer _ = ImmReleaseContext(w.hwnd, himc);
         const r = translate.physicalRect(p.ime_rect, w.t.in.scale);
@@ -355,25 +359,11 @@ pub const Win32 = struct {
         return w.ime_units[0..@intCast(std.math.clamp(@divTrunc(bytes, 2), 0, w.ime_units.len))];
     }
 
-    /// The new appearance once after the system's changed, else null. The host restyles and
-    /// asks for a frame, since nothing in `Input` changed:
-    ///
-    ///     if (shell.appearanceChanged()) |a| {
-    ///         app.theme = lcgr.theme.widgets(&a.tokens());
-    ///         ctx.waker.post();
-    ///     }
-    pub fn appearanceChanged(w: *Win32) ?translate.Appearance {
-        if (!w.appearance_changed) return null;
-        w.appearance_changed = false;
-        return w.appearance;
-    }
-
-    /// Rereads the appearance; a change is kept for `appearanceChanged`.
+    /// Rereads the appearance into the held input, where the next frame sees a change.
     fn settingsChanged(w: *Win32) void {
         const a = readAppearance();
-        if (std.meta.eql(a, w.appearance)) return;
-        w.appearance = a;
-        w.appearance_changed = true;
+        if (std.meta.eql(a, w.t.in.appearance)) return;
+        w.t.in.appearance = a;
         w.titleBar();
         // Wake a `wait` in progress so the host sees the change now.
         w.wake();
@@ -381,7 +371,7 @@ pub const Win32 = struct {
 
     /// The title bar follows dark mode (ignored before Windows 10 20H1).
     fn titleBar(w: *Win32) void {
-        const on: BOOL = @intFromBool(w.appearance.dark);
+        const on: BOOL = @intFromBool(w.t.in.appearance.dark);
         _ = DwmSetWindowAttribute(w.hwnd, dwmwa_use_immersive_dark_mode, &on, @sizeOf(BOOL));
     }
 
@@ -425,9 +415,8 @@ pub const Win32 = struct {
         _ = GlobalFree(mem_h);
     }
 
-    /// Types the clipboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
-    /// host to: call it after a frame whose widgets requested a paste.
-    pub fn paste(w: *Win32) void {
+    /// Types the clipboard's text into the next frame (`Platform.paste`).
+    fn paste(w: *Win32) void {
         if (OpenClipboard(w.hwnd) == 0) return;
         defer _ = CloseClipboard();
         const h = GetClipboardData(cf_unicodetext) orelse return;
@@ -549,10 +538,10 @@ pub const Win32 = struct {
     }
 };
 
-/// The appearance from the registry values `translate.Appearance.fromRegistry` reads.
-fn readAppearance() translate.Appearance {
+/// The appearance from the registry values `translate.appearance` reads.
+fn readAppearance() Input.Appearance {
     const u = std.unicode.utf8ToUtf16LeStringLiteral;
-    return .fromRegistry(
+    return translate.appearance(
         regDword(u("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"), u("AppsUseLightTheme")),
         regDword(u("Software\\Microsoft\\Windows\\DWM"), u("AccentColor")),
     );
@@ -703,20 +692,15 @@ test "win32: the appearance is read from the registry and follows a setting chan
     var w: Win32 = undefined;
     try Fixture.open(&w);
     defer w.deinit();
-    // Whatever this machine is set to, it is what the registry says, and no change is pending.
-    try testing.expectEqual(readAppearance(), w.appearance);
-    try testing.expectEqual(null, w.appearanceChanged());
-    // A setting change that changed nothing hands nothing to the host.
-    _ = PostMessageW(w.hwnd, wm_settingchange, 0, 0);
+    // Whatever this machine is set to, it is what the registry says, in the first frame's input.
     var ev: Events = .{};
     _ = w.poll(&ev);
-    try testing.expectEqual(null, w.appearanceChanged());
-    // A changed one is handed over once.
-    w.appearance.dark = !w.appearance.dark;
+    try testing.expectEqual(readAppearance(), ev.in.appearance);
+    // A setting change rereads it: a stale value is put right in the next frame.
+    w.t.in.appearance.dark = !w.t.in.appearance.dark;
     _ = PostMessageW(w.hwnd, wm_settingchange, 0, 0);
     _ = w.poll(&ev);
-    try testing.expectEqual(readAppearance(), w.appearanceChanged().?);
-    try testing.expectEqual(null, w.appearanceChanged());
+    try testing.expectEqual(readAppearance(), ev.in.appearance);
 }
 
 test "win32: copy then paste round-trips through the system clipboard" {
@@ -725,8 +709,7 @@ test "win32: copy then paste round-trips through the system clipboard" {
     defer w.deinit();
     var ev: Events = .{};
     _ = w.poll(&ev);
-    w.apply(&.{ .clipboard = "two\nlines \u{e9}" });
-    w.paste();
+    w.apply(&.{ .clipboard = "two\nlines \u{e9}", .paste = true });
     try testing.expect(w.poll(&ev));
     try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
 }
