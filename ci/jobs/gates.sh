@@ -19,3 +19,5 @@ python3 bench/gates/gates.py latency zig-out/gates/latency.txt
 python3 bench/gates/gates.py compile-time
 # Branches in hot loops: the census jobs gate the census object; this checks every probe is in it.
 python3 bench/gates/gates.py census
+# The published table (bench/gates/README.md) is the recorded one.
+python3 bench/gates/gates.py table
