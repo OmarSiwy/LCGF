@@ -167,6 +167,26 @@ buffer that is zero already (the benchmark's static buffers), so only touched pa
 Measured, pinned, at load 30 to 47 of 32 CPUs: resident 12,000 -> 8,932 (harness) -> 1,752 KiB
 (Clay 2,140 in the same window); first frame 6.9 -> 5.2 -> 1.8 ms (Clay 1.0).
 
+A third cause was the harness again: std's default 256 KB thread-local signal stack, which
+start.zig clears before main (64 page faults per start). The benchmark sets
+`std_options.signal_stack_size = null`. Pinned, 31 starts, load 4: first frame 2.90 ms before
+the branch, 0.57 after the two fixes above, 0.47 without the signal stack (Clay 0.45);
+resident 1,624 KiB (Clay 2,076).
+
+## Springs and list against Dear ImGui (not met)
+
+Quiet run (load 5, pinned, `measure.py --runs 3`): springs 75.4 us against ImGui's 57.0 (x1.32),
+list 12.2 against 11.9 (x1.03, inside the run-to-run spread; x1.13 in the gates run). Both
+harnesses build every frame of these scenes, so the comparison is fair as it stands. The
+springs frame splits into build 30 us, layout 33 us and paint 13 us (1,042 nodes). The profile
+is flat: `Tree.push` 26% (about 20 ns a node, store-bound over its columns, as
+docs/perf/port-perf.md found), `paint.emit` 16%, the scene's `animate` calls and styles 15%,
+`levels.resolve` 13%, `fitSpan` 10%, `place` 7%. No function has a hotspot to remove. ImGui
+puts each bar at its cursor in one pass and writes four vertices; LCGR runs the eight-pass flex
+layout over every node and paints from the laid-out columns. Closing x1.32 needs fewer
+passes or fewer columns written per node, which is a layout and tree design change, not a fix
+in this branch.
+
 ## What could not be measured fairly here
 
 - Idle wake-ups for egui and Iced: their event loops (eframe, iced_winit) need a window, and the
