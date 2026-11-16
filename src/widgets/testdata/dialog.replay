@@ -1,0 +1,47 @@
+# Recorded input for the dialog example page (widgets/dialog.zig, `Example`), at 800 x 600 in
+# the default theme: the opener "Delete scene" at x 8..125, y 8..42; the open dialog centred at
+# x 270..530, y 238..362, with Cancel at x 375..442 and Delete at x 448..514, y 313..346. One
+# line per frame says what it does (format: input.Replay). Keys are USB HID: 43 Tab, 41 Escape.
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 300
+# 1: press the opener
+frame
+pointer 66 25
+buttons left
+# 2: release: the dialog opens, Cancel focused
+frame
+buttons
+# 3: Tab: Delete focused
+frame
+press 43
+# 4: Tab: wraps to Cancel, focus stays in the dialog
+frame
+press 43
+# 5: press the opener behind the backdrop: nothing
+frame
+buttons left
+# 6: release
+frame
+buttons
+# 7: hover Delete
+frame
+pointer 481 329
+# 8: press it: focused
+frame
+buttons left
+# 9: release: Delete chosen, the dialog closes
+frame
+buttons
+# 10: press the opener
+frame
+pointer 66 25
+buttons left
+# 11: release: open again
+frame
+buttons
+# 12: Escape: closed, nothing chosen
+frame
+press 41
