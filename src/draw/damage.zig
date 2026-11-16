@@ -136,12 +136,12 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
             .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
-            .border = x.border[own],
-            .uv = x.uv[own],
-            .radii = @import("../core/tree.zig").radiiOf(x.radii[own], c.look[i].radius),
-            .alpha = x.alpha[scope],
-            .world = x.world[scope],
-            .clip_radii = x.clip_radii[c.scope[c.parent[i]]],
+            .border = x.row[own].border,
+            .uv = x.row[own].uv,
+            .radii = @import("../core/tree.zig").radiiOf(x.row[own].radii, c.look[i].radius),
+            .alpha = x.row[scope].alpha,
+            .world = x.row[scope].world,
+            .clip_radii = x.row[c.scope[c.parent[i]]].clip_radii,
         };
         out[i] = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&row)));
     }

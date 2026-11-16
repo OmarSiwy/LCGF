@@ -118,11 +118,11 @@ fn protoExtras(st: *Tree, pt: *const ui.Tree) void {
         st.c.extra[i] = r;
         st.c.scope[i] = r;
         st.x.node[r] = @intCast(i);
-        st.x.border[r] = pt.c.look[i].border;
-        st.x.uv[r] = .{ 0, 0, 1, 1 };
-        st.x.radii[r] = @splat(pt.c.look[i].radius);
-        st.x.opacity[r] = 1;
-        st.x.transform[r] = .{ 1, 0, 0, 1, 0, 0 };
+        st.x.row[r].border = pt.c.look[i].border;
+        st.x.row[r].uv = .{ 0, 0, 1, 1 };
+        st.x.row[r].radii = @splat(pt.c.look[i].radius);
+        st.x.row[r].opacity = 1;
+        st.x.row[r].transform = .{ 1, 0, 0, 1, 0, 0 };
     }
 }
 

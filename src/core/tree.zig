@@ -14,6 +14,42 @@ const Style = types.Style;
 const Rect = types.Rect;
 const b01 = simd.b2f;
 
+/// One row of a tree's paint extras (`Tree.Extras`).
+pub const Extra = struct {
+    /// `Style.border`. Read by finalize (children clip inside it), inherit and paint.
+    border: f32,
+    /// `Style.uv`.
+    uv: [4]f32,
+    /// Corner radii, negative corners already taken from `Style.radius` (row 0 keeps
+    /// -1: `radiiOf` with the node's `Look.radius`).
+    radii: [4]f32,
+    /// `Style.opacity` of this node alone.
+    opacity: f32,
+    /// `Style.transform` of this node alone, about its centre.
+    transform: [6]f32,
+    /// Opacity paint applies: the product of `opacity` over the row's node and its
+    /// ancestors. Written by `draw.inherit.opacity`.
+    alpha: f32,
+    /// Layout space to screen after the node's transform and its ancestors'. Written by
+    /// `draw.inherit.transform`.
+    world: [6]f32,
+    /// Corner radii of the clip the row's node hands its children: a clipping node's
+    /// radii less its border, otherwise the parent's. Written by `draw.inherit.clip`.
+    clip_radii: [4]f32,
+
+    /// Row 0: what a node without extras paints with.
+    pub const defaults: Extra = .{
+        .border = 0,
+        .uv = .{ 0, 0, 1, 1 },
+        .radii = @splat(-1),
+        .opacity = 1,
+        .transform = .{ 1, 0, 0, 1, 0, 0 },
+        .alpha = 1,
+        .world = .{ 1, 0, 0, 1, 0, 0 },
+        .clip_radii = @splat(0),
+    };
+};
+
 /// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
 /// together and layout reads none, so they are one cold row instead of six hot columns.
 /// 32 bytes with `params` first, so rows and `params` are 16-byte aligned. The border width is
@@ -253,30 +289,12 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// Side table of the paint extras a few nodes set (docs/perf/port-perf.md): one row per
         /// node with a non-default `border`, `uv`, `radii`, `opacity` or `transform`, or with
         /// `clip`, appended by `push` in node order. Row 0 holds the defaults every other node
-        /// reads through `Columns.extra`. `alpha`, `world` and `clip_radii` are outputs of
-        /// `draw.inherit`, which `paint.emit` runs.
+        /// reads through `Columns.extra`. `node` is a column (reuse ranks it); the rest is one
+        /// `Extra` row, since every reader gathers a whole row by index: the few rows a frame
+        /// uses then share a page or two instead of one page per column.
         pub const Extras = struct {
             node: XCol(u32),
-            /// `Style.border`. Read by finalize (children clip inside it), inherit and paint.
-            border: XCol(f32),
-            /// `Style.uv`.
-            uv: XCol([4]f32),
-            /// Corner radii, negative corners already taken from `Style.radius` (row 0 keeps
-            /// -1: `radiiOf` with the node's `Look.radius`).
-            radii: XCol([4]f32),
-            /// `Style.opacity` of this node alone.
-            opacity: XCol(f32),
-            /// `Style.transform` of this node alone, about its centre.
-            transform: XCol([6]f32),
-            /// Opacity paint applies: the product of `opacity` over the row's node and its
-            /// ancestors. Written by `draw.inherit.opacity`.
-            alpha: XCol(f32),
-            /// Layout space to screen after the node's transform and its ancestors'. Written by
-            /// `draw.inherit.transform`.
-            world: XCol([6]f32),
-            /// Corner radii of the clip the row's node hands its children: a clipping node's
-            /// radii less its border, otherwise the parent's. Written by `draw.inherit.clip`.
-            clip_radii: XCol([4]f32),
+            row: XCol(Extra),
         };
 
         /// Rows allocated for `cap` nodes: whole vectors plus one spare, so batch
@@ -339,16 +357,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             t.len = 0;
             t.overflow = false;
             t.xlen = 1;
-            const x = &t.x;
-            x.node[0] = 0;
-            x.border[0] = 0;
-            x.uv[0] = .{ 0, 0, 1, 1 };
-            x.radii[0] = @splat(-1);
-            x.opacity[0] = 1;
-            x.transform[0] = .{ 1, 0, 0, 1, 0, 0 };
-            x.alpha[0] = 1;
-            x.world[0] = .{ 1, 0, 0, 1, 0, 0 };
-            x.clip_radii[0] = @splat(0);
+            t.x.node[0] = 0;
+            t.x.row[0] = .defaults;
         }
 
         /// Appends a node as the last child of `parent` and returns its row. One row write
@@ -396,19 +406,19 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             // 149 us of rows build: `push` (noalias style) computes them only in here
             // (docs/perf/port-perf.md).
             if (!own) return i;
-            const x = &t.x;
-            x.node[r] = i;
-            x.border[r] = row.border;
-            x.uv[r] = row.uv;
-            x.radii[r] = row.radii;
-            x.opacity[r] = row.opacity;
-            x.transform[r] = row.transform;
+            t.x.node[r] = i;
+            const x = &t.x.row[r];
+            x.border = row.border;
+            x.uv = row.uv;
+            x.radii = row.radii;
+            x.opacity = row.opacity;
+            x.transform = row.transform;
             return i;
         }
 
         /// Border width of node `i` (`Style.border`).
         pub fn border(t: *const Self, i: u32) f32 {
-            return t.x.border[t.c.extra[i]];
+            return t.x.row[t.c.extra[i]].border;
         }
 
         /// Closes node `i`: everything pushed since belongs to its subtree.
@@ -530,6 +540,7 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // flags, look, role, value. The paint extras are a side table (`Extras`).
     try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
     try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 4 + 24 + 16, rowBytes(Tree.Extras));
+    try testing.expectEqual(108, @sizeOf(Extra));
 }
 
 test "Look: one 32-byte row, params first" {
@@ -624,7 +635,7 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqualSlices(f32, &.{ 1, 0, 0 }, c.nkids[0..3]);
     try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
     try testing.expectEqual(4, c.look[a].radius);
-    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, radiiOf(t.x.radii[c.extra[a]], c.look[a].radius));
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, radiiOf(t.x.row[c.extra[a]].radii, c.look[a].radius));
     // Only the clipping root has an extras row; the others read row 0, the defaults.
     try testing.expectEqualSlices(u32, &.{ 1, 0, 0 }, c.extra[0..3]);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 1 }, c.scope[0..3]);
@@ -680,14 +691,14 @@ test "push: a row in Extras only for a style with a paint extra or a clip; scope
     try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 2, 0, 3 }, &.{ c.scope[root], c.scope[faded], c.scope[kid], c.scope[moved], c.scope[plain], c.scope[clipped] });
     try testing.expectEqual(4, t.xlen);
     try testing.expectEqualSlices(u32, &.{ faded, moved, clipped }, t.x.node[1..4]);
-    try testing.expectEqual(0.5, t.x.opacity[1]);
-    try testing.expectEqual([4]f32{ 4, 2, 4, 3 }, t.x.radii[1]);
-    try testing.expectEqual([4]f32{ 9, 9, 9, 9 }, radiiOf(t.x.radii[c.extra[kid]], c.look[kid].radius));
-    try testing.expectEqual([6]f32{ 2, 0, 0, 2, 1, 1 }, t.x.transform[2]);
+    try testing.expectEqual(0.5, t.x.row[1].opacity);
+    try testing.expectEqual([4]f32{ 4, 2, 4, 3 }, t.x.row[1].radii);
+    try testing.expectEqual([4]f32{ 9, 9, 9, 9 }, radiiOf(t.x.row[c.extra[kid]].radii, c.look[kid].radius));
+    try testing.expectEqual([6]f32{ 2, 0, 0, 2, 1, 1 }, t.x.row[2].transform);
     // reset empties the table back to its defaults row.
     t.reset();
     try testing.expectEqual(1, t.xlen);
-    try testing.expectEqual(1, t.x.opacity[0]);
+    try testing.expectEqual(1, t.x.row[0].opacity);
 }
 
 test "initSharing: a second tree shares the scratch columns and carves the rest" {
