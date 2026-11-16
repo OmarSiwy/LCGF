@@ -1,0 +1,42 @@
+# Recorded input for the list example (widgets/list.zig, `Example`), at 320 x 240 in the default
+# theme: the list at x 16..136, its five 30 px option rows from y 43.5 (Apple) down.
+# Keys are USB HID usage ids: 81 Down, 82 Up, 74 Home, 77 End.
+# 0: rest
+frame
+viewport 320 240
+dt 0.016
+pointer 300 220
+# 1: hover Banana
+frame
+pointer 60 88
+# 2: press it
+frame
+buttons left
+# 3: release: Banana selected, the list focused
+frame
+buttons
+# 4: Down: Cherry
+frame
+press 81
+# 5: End: Elder
+frame
+press 77
+# 6: type b: Banana
+frame
+text b
+# 7: Home: Apple
+frame
+press 74
+# 8: Up at the top: stays
+frame
+press 82
+# 9: press outside the list: focus leaves it
+frame
+pointer 300 220
+buttons left
+# 10: release
+frame
+buttons
+# 11: Down without focus: nothing
+frame
+press 81

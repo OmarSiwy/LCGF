@@ -1,0 +1,48 @@
+# Recorded input for the tree view example (widgets/tree.zig, `Example`), at 320 x 240 in the
+# default theme: the tree view at x 16, its 30 px rows from y 43.5 (src, core, widgets, docs at
+# rest). A depth-1 item's disclosure mark is at x 42..50. Keys are USB HID usage ids: 79 Right,
+# 80 Left, 81 Down, 74 Home, 77 End.
+# 0: rest: src expanded
+frame
+viewport 320 240
+dt 0.016
+pointer 300 225
+# 1: hover core's mark
+frame
+pointer 46 88
+# 2: press it
+frame
+buttons left
+# 3: release: core expanded and selected, the tree view focused
+frame
+buttons
+# 4: Down: tree.zig
+frame
+press 81
+# 5: Left on a leaf: up to core
+frame
+press 80
+# 6: Left on an expanded parent: core collapses
+frame
+press 80
+# 7: Down: widgets
+frame
+press 81
+# 8: Right: widgets expands
+frame
+press 79
+# 9: Right: into list.zig
+frame
+press 79
+# 10: End: docs
+frame
+press 77
+# 11: Right: docs expands
+frame
+press 79
+# 12: Home: src
+frame
+press 74
+# 13: Left: src collapses
+frame
+press 80
