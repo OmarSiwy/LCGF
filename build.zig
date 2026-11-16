@@ -277,6 +277,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) }));
     b.step("ct-sizes", "Print read-only and RAM bytes of each example comptime UI").dependOn(&ct_sizes.step);
+    // Layout time of each example comptime UI against the runtime tree (ReleaseFast).
+    const ct_layout_bench = b.addRunArtifact(b.addExecutable(.{ .name = "ct-layout-bench", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/layout_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) }));
+    b.step("ct-layout-bench", "Time comptime layout against the runtime tree per example").dependOn(&ct_layout_bench.step);
     // Compile-fail cases for the comptime front end's rules (src/comptime/compile_fail/): each
     // file is built as an object and must fail with the message on its `//! expect: ` first line.
     const compile_fail = b.step("ct-compile-fail", "Check each comptime rule rejects its compile-fail case");

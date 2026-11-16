@@ -195,7 +195,7 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
 
         /// The tree `Tree.push` builds from the spec, built while compiling: the source of every
         /// constant table, so a table equals the runtime column row for row.
-        const pushed = blk: {
+        pub const pushed = blk: {
             @setEvalBranchQuota(100_000 + 5_000 * n);
             var t: tree.TreeOf(u32, .{ .array = n }) = .empty;
             pushAll(&t, spec, 0);
