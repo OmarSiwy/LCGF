@@ -12,6 +12,11 @@ const Id = types.Id;
 const Node = types.Node;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
+const Rect = types.Rect;
+const Sense = types.Sense;
+const Response = types.Response;
+const Color = types.Color;
+const none = types.none;
 
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
@@ -79,7 +84,56 @@ pub const Frame = struct {
         f.tree().c.custom[n.ix()] = ctx.customs[ctx.cur].push(n.ix(), id, data);
         return n;
     }
+
+    // ---- queries: input is asked for, never delivered ----------------------
+
+    /// Makes `node` interactive and reports what happened to it this frame. The node must have
+    /// been created with an id; anonymous nodes report nothing.
+    pub fn interact(f: *Frame, node: Node, sense: Sense) Response {
+        const c = &f.tree().c;
+        c.sense[node.ix()] = @bitCast(sense);
+        return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
+    }
+
+    /// Pointer movement this frame while `id` is held; zero otherwise. (`Interaction.drag` is
+    /// the thresholded form, for drags that must not start on a jittery click.)
+    pub fn drag(f: *const Frame, id: Id) [2]f32 {
+        const s = &f.ctx.inter;
+        const k = @backingInt(id);
+        const m = simd.b2f(simd.andB(k != 0, s.active == k));
+        return .{ s.delta[0] * m, s.delta[1] * m };
+    }
+
+    /// Where `id` was laid out last frame. A zero rect if it did not exist. Scans the id
+    /// column (SIMD, O(n)); prefer `heldRect` inside widgets.
+    pub fn lastRect(f: *const Frame, id: Id) Rect {
+        const prev = f.prevTree();
+        return rowRect(prev, simd.find(prev.c.id, prev.len, @backingInt(id)));
+    }
+
+    /// Last frame's rect of the widget the pointer is holding. O(1): the interaction step
+    /// already knows its row. A zero rect if nothing is held.
+    pub fn heldRect(f: *const Frame) Rect {
+        return rowRect(f.prevTree(), f.ctx.inter.active_node);
+    }
+
+    pub fn setFill(f: *Frame, node: Node, color: Color) void {
+        f.tree().c.look[node.ix()].fill = color.bitsOf();
+    }
 };
+
+/// Rect of row `i` of `t`, or a zero rect for `none`. The read is clamped into bounds and the
+/// result scaled by 0 or 1, so there is no branch.
+fn rowRect(t: *const Tree, i: u32) Rect {
+    const row = @min(i, t.cap - 1);
+    const m = simd.b2f(i != none);
+    return .{
+        .x0 = t.c.rect[0][row] * m,
+        .y0 = t.c.rect[1][row] * m,
+        .x1 = t.c.rect[2][row] * m,
+        .y1 = t.c.rect[3][row] * m,
+    };
+}
 
 const std = @import("std");
 const testing = std.testing;
@@ -189,4 +243,61 @@ test "custom: links the leaf to a row carrying its id and data" {
     try testing.expectEqual(@backingInt(Id.from("view")), cu.c.id[k]);
     try testing.expectEqual(@as(u64, 42), cu.c.data[k]);
     try testing.expectEqual(n.ix(), f.tree().find(.from("view")));
+}
+
+/// Two 40 x 40 buttons, "a" at x 0..40 and "b" at 50..90, laid out by hand (Frame.end comes later).
+fn twoButtons(f: *Frame) [2]Response {
+    const layout = @import("../layout/layout.zig");
+    _ = f.open(.none, .{ .dir = .x, .gap = 10 });
+    const a = f.leaf(.from("a"), .{ .size = .{ .px(40), .px(40) } });
+    const ra = f.interact(a, .button);
+    const b = f.leaf(.from("b"), .{ .size = .{ .px(40), .px(40) } });
+    const rb = f.interact(b, .any);
+    f.setFill(b, .rgb(1, 2, 3));
+    f.close();
+    f.tree().seal(0);
+    layout.run(f.tree(), f.texts(), f.in.viewport);
+    return .{ ra, rb };
+}
+
+test "interact, drag, lastRect, heldRect: answers from last frame's geometry" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 4 });
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 200, 100 } };
+    var f = ctx.begin(&in);
+    var r = twoButtons(&f);
+    try testing.expect(!r[0].hovered and !r[1].hovered);
+    try testing.expectEqual(Color.rgb(1, 2, 3).bitsOf(), f.tree().c.look[f.tree().find(.from("b"))].fill);
+    try testing.expectEqual(@as(u8, @bitCast(Sense.button)), f.tree().c.sense[f.tree().find(.from("a"))]);
+    // Nothing existed before frame 1, and nothing is held.
+    try testing.expectEqual(Rect{}, f.lastRect(.from("a")));
+    try testing.expectEqual(Rect{}, f.heldRect());
+
+    in.pointer = .{ 60, 20 };
+    f = ctx.begin(&in);
+    r = twoButtons(&f);
+    try testing.expect(!r[0].hovered and r[1].hovered);
+    try testing.expectEqual(Rect{ .x0 = 0, .y0 = 0, .x1 = 40, .y1 = 40 }, f.lastRect(.from("a")));
+    try testing.expectEqual(Rect{}, f.lastRect(.from("missing")));
+
+    in.buttons.left = true;
+    f = ctx.begin(&in);
+    r = twoButtons(&f);
+    try testing.expect(r[1].pressed and r[1].held);
+    try testing.expectEqual(Rect{ .x0 = 50, .y0 = 0, .x1 = 90, .y1 = 40 }, f.heldRect());
+    try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("b")));
+
+    // Held and moved: the movement this frame, for the held widget only.
+    in.pointer = .{ 70, 25 };
+    f = ctx.begin(&in);
+    _ = twoButtons(&f);
+    try testing.expectEqual([2]f32{ 10, 5 }, f.drag(.from("b")));
+    try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.from("a")));
+    try testing.expectEqual([2]f32{ 0, 0 }, f.drag(.none));
+
+    in.buttons.left = false;
+    f = ctx.begin(&in);
+    r = twoButtons(&f);
+    try testing.expect(r[1].released and r[1].clicked);
+    try testing.expectEqual(Rect{}, f.heldRect());
 }
