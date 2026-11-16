@@ -2,7 +2,9 @@
 //! wgpu-native and writes each as a PNG, for comparison with the golden images
 //! (ci/jobs/wgpu.sh):
 //!
-//!     wgpu-play OUT      ->  OUT/<scene>.png
+//!     wgpu-play OUT [SAMPLES]      ->  OUT/<scene>.png
+//!
+//! SAMPLES (default 1) above 1 draws through a multisampled target resolved into the image.
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
@@ -21,6 +23,7 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(gpa);
     _ = args.next();
     const out_path = args.next() orelse return error.MissingOutputDir;
+    const samples = try std.fmt.parseInt(u32, args.next() orelse "1", 10);
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, out_path);
     var out = try cwd.openDir(io, out_path, .{});
@@ -34,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
     defer c.wgpuSamplerRelease(sampler);
     var white = host.Image.init(&h, 1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
     defer white.deinit();
-    var gfx = native.Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm }, white.view, sampler);
+    var gfx = native.Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm, .sample_count = samples }, white.view, sampler);
     defer gfx.deinit();
 
     // The goldens' stand-in glyph atlas (render.py): 16x16 cells of 4x4 texels, every printable
@@ -59,7 +62,12 @@ pub fn main(init: std.process.Init) !void {
         glyphs.texture = atlas_handle;
         gfx.prepare(h.queue, &st.draw, glyphs, s.viewport, 1);
         const encoder = c.wgpuDeviceCreateCommandEncoder(h.device, null);
-        const pass = host.beginPass(encoder, target.view, .{ 0, 0, 0, 1 });
+        var msaa: ?native.Multisample = if (samples > 1) .init(h.device, w, ht, c.WGPUTextureFormat_RGBA8Unorm, samples) else null;
+        defer if (msaa) |*m| m.deinit();
+        const pass = if (msaa) |m|
+            host.beginPass(encoder, m.view, target.view, .{ 0, 0, 0, 1 })
+        else
+            host.beginPass(encoder, target.view, null, .{ 0, 0, 0, 1 });
         gfx.render(pass, &st.draw);
         host.endPass(pass);
         h.submit(encoder);

@@ -182,10 +182,12 @@ pub fn nearestSampler(h: *const Host) c.WGPUSampler {
     });
 }
 
-/// Begins a pass over `view` that clears it to `clear` (straight RGBA, 0 to 1).
-pub fn beginPass(encoder: c.WGPUCommandEncoder, view: c.WGPUTextureView, clear: [4]f64) c.WGPURenderPassEncoder {
+/// Begins a pass over `view` that clears it to `clear` (straight RGBA, 0 to 1). With `resolve`,
+/// `view` is a multisampled texture (`native.Multisample`) resolved into `resolve` at the end.
+pub fn beginPass(encoder: c.WGPUCommandEncoder, view: c.WGPUTextureView, resolve: c.WGPUTextureView, clear: [4]f64) c.WGPURenderPassEncoder {
     const attachment: c.WGPURenderPassColorAttachment = .{
         .view = view,
+        .resolveTarget = resolve,
         .depthSlice = c.WGPU_DEPTH_SLICE_UNDEFINED,
         .loadOp = c.WGPULoadOp_Clear,
         .storeOp = c.WGPUStoreOp_Store,
