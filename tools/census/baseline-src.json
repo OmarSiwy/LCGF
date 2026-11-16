@@ -233,5 +233,10 @@
     "jcc": 9,
     "back": 3,
     "short_fwd": 1
+  },
+  "p_a11y_states": {
+    "jcc": 4,
+    "back": 1,
+    "short_fwd": 1
   }
 }

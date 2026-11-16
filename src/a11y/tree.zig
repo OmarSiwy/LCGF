@@ -103,6 +103,32 @@ pub const from_content: [256]u32 = blk: {
     break :blk m;
 };
 
+/// States a node reports, one bit each, in `Semantics.Columns.state`. `checked` and
+/// `expanded` are meaningful only on roles that have them: `checked` on the checkable roles
+/// (`checkable`), `expanded` where `expandable` is set (a disclosure button, a tree item, a
+/// combobox), so a bridge can tell "collapsed" from "cannot expand".
+pub const State = bitpack struct(u8) {
+    checked: bool = false,
+    expandable: bool = false,
+    expanded: bool = false,
+    selected: bool = false,
+    disabled: bool = false,
+    _: u3 = 0,
+
+    pub inline fn bitsOf(st: State) u8 {
+        return @bitCast(st);
+    }
+};
+
+/// `State.checked` for the roles whose checked state is their `value` (as the core's checkbox
+/// stores it: 1 checked, 0 not), zero for the rest. Indexed by the raw role byte.
+pub const checkable: [256]u8 = blk: {
+    var m: [256]u8 = @splat(0);
+    for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
+        m[@backingInt(r)] = State.bitsOf(.{ .checked = true });
+    break :blk m;
+};
+
 /// The accessibility column set: one row per tree row, beside `Tree.Columns`. Inputs are
 /// written by the front end or the application after `push`; outputs by the passes below.
 pub const Semantics = struct {
@@ -113,6 +139,8 @@ pub const Semantics = struct {
         // ---- inputs, cleared by `clear` each frame
         /// Row of the node whose text names this one (`aria-labelledby`), or `none`.
         labelled_by: []u32,
+        /// `State` bits the application sets; `states` adds what follows from the tree.
+        state: []u8,
 
         // ---- outputs of `names`
         /// First text run (row in `Texts`) in the node's subtree, or `none`.
@@ -130,6 +158,7 @@ pub const Semantics = struct {
     /// Resets the inputs for a new frame: no node is labelled by another.
     pub fn clear(s: *Semantics) void {
         @memset(s.c.labelled_by, none);
+        @memset(s.c.state, 0);
     }
 };
 
@@ -164,6 +193,21 @@ pub fn names(t: *const Tree, s: *Semantics) void {
             @branchHint(.unpredictable);
             break :blk via;
         } else self;
+    }
+}
+
+/// Completes `state` from the tree: a checkable role is checked when its `value` is not 0, and
+/// a node inside a disabled node is disabled (as `aria-disabled` applies to descendants).
+/// Adds bits, never clears them, so running it twice changes nothing.
+pub fn states(t: *const Tree, s: *Semantics) void {
+    const c = &t.c;
+    const st = s.c.state;
+    const disabled = State.bitsOf(.{ .disabled = true });
+    // Parents come before children, so a parent's state is final when its children read it.
+    // The root is its own parent: reading it back changes nothing.
+    for (0..t.len) |k| {
+        const on = -%@as(u8, @intFromBool(c.value[k] != 0));
+        st[k] |= (checkable[c.role[k]] & on) | (st[c.parent[k]] & disabled);
     }
 }
 
@@ -291,4 +335,60 @@ test "tree export: names come from labels, from content for the roles that take 
     names(&t, &s);
     try testing.expectEqual(3, s.c.name[group]);
     try testing.expectEqual(none, s.c.name[slider]); // cleared: no longer labelled
+}
+
+test "tree export: states come from the application, checkable values and disabled ancestors" {
+    var fx: TreeFixture(16) = .{};
+    var t = fx.init();
+    var sx: SemFixture(16) = .{};
+    var s = sx.init();
+    // root { checkbox(on), checkbox(off), switch(on), slider(0.5), panel(disabled) { button,
+    //        row { radio(on) } }, tree_item(expandable, expanded, selected) }
+    const root = t.push(0, .none, &.{ .role = .group });
+    const on = t.push(root, .none, &.{ .role = .checkbox, .value = 1 });
+    const off = t.push(root, .none, &.{ .role = .checkbox, .value = 0 });
+    const sw = t.push(root, .none, &.{ .value = 1 });
+    t.c.role[sw] = @backingInt(Role.@"switch");
+    const slider = t.push(root, .none, &.{ .role = .slider, .value = 0.5 });
+    const panel = t.push(root, .none, &.{ .role = .group });
+    const button = t.push(panel, .none, &.{ .role = .button });
+    const row = t.push(panel, .none, &.{});
+    const radio = t.push(row, .none, &.{ .value = 1 });
+    t.c.role[radio] = @backingInt(Role.radio);
+    t.seal(row);
+    t.seal(panel);
+    const item = t.push(root, .none, &.{});
+    t.c.role[item] = @backingInt(Role.tree_item);
+    t.seal(root);
+    try t.check();
+
+    s.c.state[panel] = State.bitsOf(.{ .disabled = true });
+    s.c.state[item] = State.bitsOf(.{ .expandable = true, .expanded = true, .selected = true });
+    states(&t, &s);
+    const got = struct {
+        fn of(sem: *const Semantics, k: u32) State {
+            return @bitCast(sem.c.state[k]);
+        }
+    }.of;
+    try testing.expectEqual(State{ .checked = true }, got(&s, on));
+    try testing.expectEqual(State{}, got(&s, off));
+    try testing.expectEqual(State{ .checked = true }, got(&s, sw));
+    // A slider's value is not a checked state.
+    try testing.expectEqual(State{}, got(&s, slider));
+    try testing.expectEqual(State{ .disabled = true }, got(&s, panel));
+    try testing.expectEqual(State{ .disabled = true }, got(&s, button));
+    try testing.expectEqual(State{ .disabled = true }, got(&s, row));
+    try testing.expectEqual(State{ .disabled = true, .checked = true }, got(&s, radio));
+    try testing.expectEqual(State{ .expandable = true, .expanded = true, .selected = true }, got(&s, item));
+    try testing.expectEqual(State{}, got(&s, root));
+    // Idempotent; and `clear` drops what the application set last frame.
+    const before: [10]u8 = s.c.state[0..10].*;
+    try testing.expectEqual(10, t.len);
+    states(&t, &s);
+    try testing.expectEqualSlices(u8, &before, s.c.state[0..t.len]);
+    s.clear();
+    states(&t, &s);
+    try testing.expectEqual(State{}, got(&s, button));
+    try testing.expectEqual(State{}, got(&s, item));
+    try testing.expectEqual(State{ .checked = true }, got(&s, on));
 }

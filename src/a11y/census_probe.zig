@@ -7,3 +7,6 @@ const a11y = lcgr.a11y_tree;
 export fn p_a11y_names(t: *const Tree, s: *a11y.Semantics) void {
     a11y.names(t, s);
 }
+export fn p_a11y_states(t: *const Tree, s: *a11y.Semantics) void {
+    a11y.states(t, s);
+}
