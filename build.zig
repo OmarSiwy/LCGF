@@ -483,6 +483,33 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The Direct3D 12 back end (src/render/d3d12/d3d12.zig): a module of its own over lcgr, always
+    // built for x86_64-windows (ci/run.sh d3d12 runs it under Wine). Zig's own MinGW-w64 headers
+    // are translated for the structs and constants (com.zig checks its hand-written vtable slots
+    // against them); d3d12, dxgi and d3dcompiler_47 are linked from Zig's MinGW import libraries.
+    const win = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu });
+    const lcgr_win = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = win, .optimize = optimize });
+    lcgr_win.addOptions("build_options", options);
+    lcgr_win.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const d3d12_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c.h"), .target = win, .optimize = optimize, .link_libc = true });
+    const d3d12_c = d3d12_h.createModule();
+    const d3d12_tests = b.addTest(.{ .name = "d3d12-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/d3d12/d3d12.zig"),
+        .target = win,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+    }) });
+    for ([_]*std.Build.Module{d3d12_tests.root_module}) |m| {
+        for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
+        // The committed HLSL of the shipped shaders (src/render/shaders/gen/, from naga).
+        for ([_][]const u8{ "stock", "example" }) |v|
+            m.addAnonymousImport(b.fmt("{s}_hlsl", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.hlsl", .{v})) });
+        for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
+            m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
+    }
+    b.step("d3d12", "Build zig-out/bin/d3d12-test.exe, the Direct3D 12 back end's tests (ci/run.sh d3d12 runs it under Wine)").dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
