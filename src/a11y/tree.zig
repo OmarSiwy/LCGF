@@ -878,3 +878,169 @@ test "tree export: actions from assistive technology arrive as input the widgets
     try testing.expectEqual(0.5, volume);
     try testing.expectEqual(0.25, setValue(&.{}, vol, 0.25));
 }
+
+test "tree export: a presentational root leaves several top-level rows with distinct ids" {
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const t = &f.t;
+    const root = t.push(0, .none, &.{});
+    const a = f.text(root, "A");
+    const b = f.text(root, "B");
+    t.seal(root);
+    const e = f.run(0);
+    try testing.expectEqual(2, e.len);
+    try testing.expectEqualSlices(u32, &.{ a, b }, e.c.node[0..2]);
+    try testing.expectEqualSlices(u32, &.{ none, none }, e.c.parent[0..2]);
+    try testing.expect(e.c.id[0] != e.c.id[1]);
+    try testing.expect(e.c.id[0] != 0 and e.c.id[1] != 0);
+    try testing.expectEqualStrings("B", f.name(e, 1));
+}
+
+test "tree export: a full tree exports every row; the spare row only counts top-level rows" {
+    const cap = 12;
+    var f: FrameFixture(cap) = .{};
+    f.init();
+    const t = &f.t;
+    const root = t.push(0, types.Id.from("r"), &.{ .role = .group });
+    for (1..cap) |k| t.seal(t.push(root, types.Id.from("i").with(@intCast(k)), &.{ .role = .label }));
+    t.seal(root);
+    try testing.expect(!t.overflow);
+    const e = f.run(0);
+    try testing.expectEqual(cap, e.len);
+    try testing.expectEqual(cap - 1, e.c.kids[0]);
+    try testing.expectEqual(0, e.c.id[e.cap]);
+    try testing.expectEqual(1, e.c.kids[e.cap]);
+}
+
+test "tree export: reordering or moving children sends their parents again" {
+    var f: FrameFixture(16) = .{};
+    f.init();
+    const Scene = struct {
+        swap: bool = false,
+        moved: bool = false,
+
+        fn build(sc: @This(), fx: *FrameFixture(16)) void {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const l = t.push(root, types.Id.from("left"), &.{ .role = .group });
+            const ids = [2]types.Id{ types.Id.from("x"), types.Id.from("y") };
+            const first = @intFromBool(sc.swap);
+            t.seal(t.push(l, ids[first], &.{ .role = .button }));
+            if (!sc.moved) t.seal(t.push(l, ids[first ^ 1], &.{ .role = .button }));
+            t.seal(l);
+            const r = t.push(root, types.Id.from("right"), &.{ .role = .group });
+            if (sc.moved) t.seal(t.push(r, ids[first ^ 1], &.{ .role = .button }));
+            t.seal(r);
+            t.seal(root);
+        }
+    };
+    var gen: u1 = 0;
+    (Scene{}).build(&f);
+    _ = f.run(gen);
+
+    // Swapping two children: their parent's child list changed; the children themselves did not.
+    gen ^= 1;
+    (Scene{ .swap = true }).build(&f);
+    var e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqual(1, f.ch.updated_len);
+    try testing.expectEqual(@backingInt(types.Id.from("left")), e.c.id[f.ch.updated[0]]);
+
+    // Moving "x" from left to right: both parents, and "x" for its new parent.
+    gen ^= 1;
+    (Scene{ .swap = true, .moved = true }).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    var got: [3]u32 = undefined;
+    for (f.ch.updated[0..f.ch.updated_len], 0..) |r, k| got[k] = e.c.id[r];
+    try testing.expectEqual(3, f.ch.updated_len);
+    try testing.expectEqualSlices(u32, &.{ @backingInt(types.Id.from("left")), @backingInt(types.Id.from("right")), @backingInt(types.Id.from("x")) }, &got);
+    try testing.expectEqual(0, f.ch.removed_len);
+}
+
+test "tree export: random trees agree with a parent-walking reference" {
+    const cap = 64;
+    var f: FrameFixture(cap) = .{};
+    f.init();
+    var prng = std.Random.DefaultPrng.init(0xa11);
+    const rnd = prng.random();
+    for (0..200) |_| {
+        f.reset();
+        const t = &f.t;
+        // Random depth-first tree: each new node opens under a random still-open node.
+        var open: [cap]u32 = undefined;
+        var depth: usize = 1;
+        const n = rnd.intRangeAtMost(u32, 1, cap);
+        open[0] = t.push(0, .none, &.{});
+        t.c.role[0] = rnd.uintLessThan(u8, 4); // 0 is presentational
+        for (1..n) |_| {
+            depth = rnd.intRangeAtMost(usize, 1, depth);
+            const id: types.Id = if (rnd.boolean()) .none else types.Id.hash(&std.mem.toBytes(rnd.int(u32)));
+            const k = t.push(open[depth - 1], id, &.{});
+            t.c.role[k] = rnd.uintLessThan(u8, 4);
+            t.c.value[k] = @floatFromInt(rnd.uintLessThan(u8, 2));
+            open[depth] = k;
+            depth += 1;
+        }
+        // Set every row's end to one past its last descendant, found by walking parent links.
+        var r = t.len;
+        while (r > 0) {
+            r -= 1;
+            var end = r + 1;
+            for (r + 1..t.len) |j| {
+                var a = t.c.parent[j];
+                while (a > r) a = t.c.parent[a];
+                if (a == r) end = @intCast(j + 1);
+            }
+            t.c.end[r] = end;
+        }
+        try t.check();
+        const e = f.run(0);
+
+        // Reference: walk parent links to the nearest kept ancestor; count kept rows.
+        var w: u32 = 0;
+        var row_of: [cap]u32 = @splat(none);
+        var kids: [cap]u32 = @splat(0);
+        for (0..t.len) |k| {
+            if (t.c.role[k] == 0) continue;
+            var a: u32 = @intCast(k);
+            var par: u32 = none;
+            while (a != 0) {
+                a = t.c.parent[a];
+                if (t.c.role[a] != 0) {
+                    par = row_of[a];
+                    break;
+                }
+            }
+            try testing.expectEqual(@as(u32, @intCast(k)), e.c.node[w]);
+            try testing.expectEqual(par, e.c.parent[w]);
+            if (par != none) kids[par] += 1;
+            const checked = t.c.role[k] == @backingInt(Role.checkbox) and t.c.value[k] != 0;
+            try testing.expectEqual(checked, (State{ .checked = true }).bitsOf() & e.c.state[w] != 0);
+            row_of[k] = w;
+            w += 1;
+        }
+        try testing.expectEqual(w, e.len);
+        try testing.expectEqualSlices(u32, kids[0..w], e.c.kids[0..w]);
+        // Every exported id is unique (anonymous ones derived), and diffing a frame against
+        // itself reports nothing.
+        for (0..e.len) |a| for (0..a) |b| try testing.expect(e.c.id[a] != e.c.id[b]);
+        diff(e, e, &f.ch);
+        try testing.expectEqual(0, f.ch.updated_len);
+        try testing.expectEqual(0, f.ch.removed_len);
+    }
+}
+
+test "tree export: counting carvers size what the carvers cut" {
+    inline for (.{ Semantics, Export, Changes }) |T| {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = T.init(&counter, 37);
+        var buf: [16384]u8 align(mem.column_align) = undefined;
+        var carver: mem.Carver = .{ .buf = &buf };
+        _ = T.init(&carver, 37);
+        try testing.expectEqual(counter.off, carver.off);
+    }
+    try testing.expectEqual(12, @sizeOf(Action));
+    try testing.expectEqual(1, @sizeOf(State));
+}
