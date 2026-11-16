@@ -32,8 +32,11 @@ pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles
     selected.* = @min(selected.*, @as(u32, @intCast(ids.len - 1)));
     _ = f.open(.none, setStyle(th));
     _ = f.open(.none, listStyle(th));
-    for (ids, titles) |id, title| {
-        _ = f.open(id, tabStyle(th));
+    for (ids, titles, 0..) |id, title, k| {
+        const tab = f.open(id, tabStyle(th));
+        const r = f.interact(tab, .button);
+        f.setFill(tab, tabFill(th, r, k == selected.*));
+        f.setCursor(.pointer, r.hovered);
         _ = base.label(f, th, title);
         f.close();
     }
@@ -64,16 +67,22 @@ pub fn listStyle(th: *const Theme) Style {
     return .{ .dir = .x, .size = .{ .fill, .fit } };
 }
 
-/// One tab: its title.
+/// One tab: its title, padded, with its top corners rounded so it joins the panels below.
 pub fn tabStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .cross = .center };
+    return .{ .dir = .x, .cross = .center, .pad = .{ th.pad, th.gap, th.pad, th.gap }, .radii = .{ th.radius, th.radius, 0, 0 } };
 }
 
-/// The stack of panels.
+/// A tab's fill: the selected tab takes the panels' colour, so it reads as the front of the
+/// stack; the others are filled as buttons, by interaction state. Picked by table index.
+pub fn tabFill(th: *const Theme, r: types.Response, selected: bool) types.Color {
+    const fills = [2]types.Color{ base.buttonFill(th, r), th.panel };
+    return fills[@intFromBool(selected)];
+}
+
+/// The stack of panels, on the panel colour and padded; its top-left corner is square, under
+/// the first tab.
 pub fn panelsStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .y, .size = .{ .fill, .fit } };
+    return .{ .dir = .y, .size = .{ .fill, .fit }, .pad = @splat(th.pad), .fill = th.panel, .radii = .{ 0, th.radius, th.radius, th.radius } };
 }
 
 /// One panel: as tall as its children while its tab is selected, else 0 px and clipping,
@@ -119,8 +128,10 @@ pub const ct = struct {
                 const set = t.push(parent, .none, &n.style);
                 const list = t.push(set, .none, &n.children[0].style);
                 next.* += 2;
-                inline for (n.children[0].children, names) |hd, name| {
-                    const tab = t.push(list, .hash(name), &hd.style);
+                inline for (n.children[0].children, names, 0..) |hd, name, k| {
+                    var ts = hd.style;
+                    ts.fill = tabFill(&th, ui.response(next.*, in), sel == k);
+                    const tab = t.push(list, .hash(name), &ts);
                     next.* += 1;
                     ui.push(hd.children[0], tab, next, in);
                     t.seal(tab);
@@ -220,6 +231,36 @@ test "tabs: both front ends build every panel; only the selected one has height"
     const o2 = try h.frame(&in);
     try testing.expectEqual(@as(u32, 2), h.app.selected);
     try testing.expect(o2.runtime.tree.rect(rows.panel[2]).h() > 0);
+}
+
+test "tabs: selected tab on the panel colour, others as buttons; any theme alike" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const th = Theme.default;
+    var t = out.runtime.tree;
+    try testing.expectEqual(th.panel.bitsOf(), t.c.look[rows.tab[0]].fill);
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[rows.tab[1]].fill);
+    try testing.expectEqual(th.panel.bitsOf(), t.c.look[10].fill);
+    // The panels start right under the tabs.
+    try testing.expectEqual(t.rect(rows.tab[0]).y1, t.rect(10).y0);
+    // Hovering View lights it in both front ends.
+    const r = t.rect(rows.tab[1]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[rows.tab[1]].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[rows.tab[1]].fill);
+
+    const Light = Page(.{ .panel = .rgb(240, 240, 240), .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    _ = try S.light.frame(&in);
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(240, 240, 240).bitsOf(), lo.runtime.tree.c.look[rows.tab[0]].fill);
 }
 
 test {
