@@ -11,6 +11,8 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const base = @import("../widgets/base.zig");
 const Color = types.Color;
+const Style = types.Style;
+const Response = types.Response;
 
 /// What a colour is for. A palette holds one colour per role, in this order.
 pub const Role = enum(u8) {
@@ -72,16 +74,59 @@ pub const Tokens = struct {
     }
 };
 
+// ---- state styles -----------------------------------------------------------------------
+
+/// What an interaction state changes on a control: its face and its outline.
+pub const Look = struct {
+    fill: Color,
+    border_color: Color = .transparent,
+    border: f32 = 0,
+};
+
+/// One `Look` per combination of interaction bits, indexed by `stateBits`: `hovered | held << 1 |
+/// focused << 2`. A widget picks its look by indexing, never by branching on its state. Rows 0
+/// to 3 are `widgets_base.StateColors`'s order, so its fills are rows 0 to 3 of this table.
+pub const States = [8]Look;
+
+/// The row of a `States` table for response `r`. Other bits of the response do not move it.
+pub inline fn stateBits(r: Response) u3 {
+    return @as(u3, @intFromBool(r.hovered)) | (@as(u3, @intFromBool(r.held)) << 1) | (@as(u3, @intFromBool(r.focused)) << 2);
+}
+
+/// A control's looks from the tokens: rest, hot, held (held looks held wherever the pointer is,
+/// as in the prototype's button), and the same four focused with an accent outline `xs` wide.
+pub fn controlStates(tok: *const Tokens) States {
+    var t: States = undefined;
+    const faces = [4]Color{ tok.color(.control), tok.color(.control_hot), tok.color(.control_held), tok.color(.control_held) };
+    for (&t, 0..) |*row, i| row.* = .{
+        .fill = faces[i & 3],
+        .border_color = if (i >= 4) tok.color(.accent) else .transparent,
+        .border = if (i >= 4) tok.spaceAt(.xs) else 0,
+    };
+    return t;
+}
+
+/// `s` with the look of state `r` from `states`: one table load.
+pub fn styled(s: Style, states: *const States, r: Response) Style {
+    const l = states[stateBits(r)];
+    var out = s;
+    out.fill = l.fill;
+    out.border_color = l.border_color;
+    out.border = l.border;
+    return out;
+}
+
 /// The widget theme of `tok`: every widget reads its look from this, so it is the only place
 /// tokens meet widgets.
 pub fn widgets(tok: *const Tokens) base.Theme {
+    const states = controlStates(tok);
     return .{
         .text = tok.color(.text),
         .text_px = tok.textAt(.md),
         .panel = tok.color(.surface),
-        .control = tok.color(.control),
-        .control_hot = tok.color(.control_hot),
-        .control_held = tok.color(.control_held),
+        .control = states[0].fill,
+        .control_hot = states[1].fill,
+        .control_held = states[2].fill,
         .accent = tok.color(.accent),
         .radius = tok.radiusAt(.md),
         .pad = tok.spaceAt(.lg),
@@ -196,5 +241,41 @@ test "theme switch: other tokens restyle the reference page, behaviour unchanged
         t.space = .{ 2, 4, 8, 12, 16 };
         break :blk t;
     };
+    try expectSwitch(widgets(&.{}), comptime widgets(&tok));
+}
+
+test "States: indexed by hovered | held << 1 | focused << 2" {
+    try testing.expectEqual(@as(u3, 0), stateBits(.{ .pressed = true, .clicked = true, .released = true }));
+    try testing.expectEqual(@as(u3, 1), stateBits(.{ .hovered = true }));
+    try testing.expectEqual(@as(u3, 2), stateBits(.{ .held = true }));
+    try testing.expectEqual(@as(u3, 4), stateBits(.{ .focused = true }));
+    try testing.expectEqual(@as(u3, 7), stateBits(.{ .hovered = true, .held = true, .focused = true }));
+    const tok: Tokens = .{};
+    const t = controlStates(&tok);
+    const th = widgets(&tok);
+    // Rows 0 to 3 are the widget theme's state colours; focus only adds the outline.
+    for (th.controlFills(), t[0..4], t[4..8]) |c, plain, focused| {
+        try testing.expectEqual(c, plain.fill);
+        try testing.expectEqual(c, focused.fill);
+        try testing.expectEqual(@as(f32, 0), plain.border);
+        try testing.expectEqual(tok.color(.accent), focused.border_color);
+        try testing.expectEqual(tok.spaceAt(.xs), focused.border);
+    }
+    const s = styled(base.buttonStyle(&th), &t, .{ .held = true, .focused = true });
+    try testing.expectEqual(th.control_held, s.fill);
+    try testing.expectEqual(@as(f32, 2), s.border);
+    try testing.expectEqual(th.pad, s.pad[0]);
+}
+
+test "theme switch: state tables from other tokens restyle every state" {
+    const tok = comptime blk: {
+        var t: Tokens = .{};
+        t.palette[@backingInt(Role.control)] = .rgb(10, 20, 30);
+        t.palette[@backingInt(Role.control_hot)] = .rgb(40, 50, 60);
+        t.palette[@backingInt(Role.control_held)] = .rgb(70, 80, 90);
+        break :blk t;
+    };
+    const t = comptime controlStates(&tok);
+    try testing.expectEqual(Color.rgb(40, 50, 60), t[stateBits(.{ .hovered = true })].fill);
     try expectSwitch(widgets(&.{}), comptime widgets(&tok));
 }
