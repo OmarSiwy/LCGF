@@ -2,10 +2,10 @@
 //! the public API of tiers 0 and 1 (the recipe in base.zig).
 //!
 //! Accessibility: role slider (`sliderTrack`), value the value itself in the tree's value
-//! column; the thumb is presentational. Two things ARIA wants are not in the exported tree:
-//! the range (`aria-valuemin`, `aria-valuemax`; a11y/tree.zig `Export` has a value column
-//! only) and a name (a slider has no text of its own; the application labels it with
-//! `Semantics.labelled_by`).
+//! column; the thumb is presentational. The range (`aria-valuemin`, `aria-valuemax` and the
+//! step a screen reader's increment moves by) and a name are the application's to set, as a
+//! slider has neither in the tree: `semantics` writes the range, and the application labels
+//! the slider with `Semantics.labelled_by` or `Semantics.label`.
 //!
 //! State: the application's `f32`, between `lo` and `hi`. The runtime front end takes a
 //! pointer to it and the ends as arguments; the comptime front end binds an `f32` field
@@ -24,6 +24,8 @@ const Id = types.Id;
 const Response = types.Response;
 const Style = types.Style;
 const Input = @import("../core/input.zig").Input;
+const Tree = @import("../core/tree.zig").Tree;
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -104,6 +106,17 @@ pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32
     f.close();
     f.tree().c.value[track.ix()] = value.*;
     return r;
+}
+
+/// The range of the slider named `id` in `t`, for assistive technology: `lo` to `hi`, stepped
+/// by a hundredth of it as its arrow keys are (`keyed`). The application calls it after
+/// building either front end's tree, with the slider's ends; a slider not in `t` is skipped.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, id: Id, lo: f32, hi: f32) void {
+    const r = t.find(id);
+    if (r == types.none) return;
+    s.c.range[0][r] = lo;
+    s.c.range[1][r] = hi;
+    s.c.range[2][r] = (hi - lo) / 100;
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -342,7 +355,6 @@ test "slider input: drag, then arrows, Page Up, Home and End while focused, in b
 var slider_semantics: base.Semantic(16) = .{};
 
 test "slider a11y: role slider, its value as the value, no states, in both front ends" {
-    const a11y = @import("../a11y/tree.zig");
     const h = &gain;
     h.init();
     const in: Input = .{ .viewport = .{ 216, 40 } };
@@ -358,6 +370,25 @@ test "slider a11y: role slider, its value as the value, no states, in both front
     // The thumb is presentational: the root and the slider.
     try testing.expectEqual(null, x.row(3));
     try testing.expectEqual(@as(u32, 2), x.out[0].len);
+}
+
+var slider_range: [2]@import("popover.zig").Semantic(16) = .{ .{}, .{} };
+
+test "slider a11y: its ends and key step as the exported range, in both front ends" {
+    const popover = @import("popover.zig");
+    const h = &gain;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 216, 40 } });
+    const trees = [2]*const Tree{ &h.ctx.trees[h.ctx.cur], &h.ui.tables.t };
+    for (trees, &slider_range) |t, *x| semantics(t, x.begin(), .from("gain"), -12, 12);
+    const e = slider_range[0].finish(trees[0], &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    const c = slider_range[1].finish(trees[1], &h.ui.tables.tx, h.ui.tables.strings.buf);
+    try testing.expect(popover.sameSemantics(e, c));
+    const r = popover.exportRow(e, trees[0].find(.from("gain")));
+    for (0..3) |k| try testing.expectEqual(e.c.range[k][r], c.c.range[k][r]);
+    try testing.expectEqual([3]f32{ -12, 12, 0.24 }, [3]f32{ e.c.range[0][r], e.c.range[1][r], e.c.range[2][r] });
+    // Only the slider has one.
+    try testing.expectEqual(@as(f32, 0), e.c.range[1][0]);
 }
 
 var page: Page.Run = .{};
