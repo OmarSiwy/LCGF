@@ -306,6 +306,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pub fn frame(ui: *Self, in: *const Input) Output {
             if (in.buttons.left and !ui.pointer.down) ui.focus = focusAt(&ui.rects, in);
             var event = E.pointer(&ui.pointer, &ui.rects, in);
+            // A key event has already done its work (`keyEvent`); a pointer event's is below.
+            const from_pointer = event != null;
             if (event == null) event = ui.keyEvent(in);
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
@@ -313,7 +315,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     const n = comptime nodeAt(spec, E.widget_nodes[k]);
                     switch (comptime E.widget_kinds[k]) {
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
-                        .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
+                        .slider => if (from_pointer) ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
                         .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
                         .label, .col, .row, .button, .radio => {},
@@ -367,13 +369,20 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         }
 
         /// The event this frame's keys make on the focused widget, or null.
-        /// A key may move focus too (arrows in a radio group).
+        /// A key may move focus too (arrows in a radio group). Each arm applies what its keys do;
+        /// a slider's event then carries the new value's fraction of its range.
         fn keyEvent(ui: *Self, in: *const Input) ?E.Event {
             const w = ui.focus orelse return null;
             switch (w) {
                 inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
                     .button, .toggle => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     .checkbox, .@"switch" => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    .slider => {
+                        const n = comptime nodeAt(spec, E.widget_nodes[E.slot(tag)]);
+                        const v = slider_zig.keyed(@field(ui.signals.state, n.bind.?), n.lo, n.hi, in) orelse return null;
+                        ui.signals.set(field(n.bind.?), v);
+                        return @unionInit(E.Event, @tagName(tag), fraction(v, n.lo, n.hi));
+                    },
                     .radio_option => {
                         const k = comptime E.slot(tag);
                         const o = comptime nodeAt(spec, E.widget_nodes[k]);
