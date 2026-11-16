@@ -75,6 +75,7 @@ pub const widgets_table = @import("widgets/table.zig");
 pub const widgets_tree = @import("widgets/tree.zig");
 pub const widgets_progress = @import("widgets/progress.zig");
 pub const widgets_spinner = @import("widgets/spinner.zig");
+pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
