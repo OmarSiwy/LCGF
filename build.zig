@@ -361,6 +361,17 @@ pub fn build(b: *std.Build) void {
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
 
+    // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
+    // GL ES are the platform's, opened at run time, so nothing GL is linked.
+    const gles_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/gles/gles.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
