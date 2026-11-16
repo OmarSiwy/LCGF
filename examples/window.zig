@@ -83,7 +83,7 @@ fn present(w: *x11.Window, out: *const context.Output) void {
     const width: u32 = w.width;
     const rows: u32 = @intCast(@min(w.height, w.pixels.len / sw.Framebuffer.len(width, 1)));
     w.fb = .init(w.pixels, width, rows, .bgra8);
-    host.draw(&app, &w.gfx, &w.fb, .{ .quads = w.glyphs.quads, .first = w.glyphs.first, .count = w.glyphs.count }, out, w.scale, w.background);
+    host.draw(&app, &w.gfx.gfx, &w.fb, .{ .quads = w.glyphs.quads, .first = w.glyphs.first, .count = w.glyphs.count }, out, w.scale, w.background);
     const c = w.conn;
     const fb = &w.fb;
     const row_bytes = @as(usize, fb.stride) * 4;

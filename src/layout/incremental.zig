@@ -338,19 +338,19 @@ const Change = struct {
                 c.min[a][i] = ch.v;
                 c.max[a][i] = ch.v;
                 c.grow[a][i] = 0;
-                c.pct[a][i] = 0;
+                c.pct[a][i] = -1;
             },
             1 => { // fit
                 c.min[a][i] = 0;
                 c.max[a][i] = inf;
                 c.grow[a][i] = 0;
-                c.pct[a][i] = 0;
+                c.pct[a][i] = -1;
             },
             2 => { // grow
                 c.min[a][i] = 0;
                 c.max[a][i] = inf;
                 c.grow[a][i] = 1 + @mod(ch.v, 3);
-                c.pct[a][i] = 0;
+                c.pct[a][i] = -1;
             },
             3 => c.pct[a][i] = ch.v / 120,
             4 => c.pad_lo[a][i] = @mod(ch.v, 8),

@@ -7,4 +7,5 @@ test {
     _ = @import("text.zig");
     _ = @import("porting.zig");
     _ = @import("perf.zig");
+    _ = @import("backends.zig");
 }
