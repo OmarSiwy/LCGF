@@ -260,7 +260,9 @@ pub const Bridge = struct {
         const n = c.accesskit_node_new(roles[role]);
         c.accesskit_node_set_bounds(n, .{ .x0 = e.rect[0][r], .y0 = e.rect[1][r], .x1 = e.rect[2][r], .y1 = e.rect[3][r] });
         c.accesskit_node_set_children(n, e.kids[r], b.kids[b.first[r]..].ptr);
-        if (e.name_bytes[r] != 0) c.accesskit_node_set_label_with_length(n, b.strings[e.name_start[r]..].ptr, e.name_bytes[r]);
+        // AccessKit reads a label's text from its value (the name of static text is its text).
+        const named = if (role == @backingInt(Role.label)) &c.accesskit_node_set_value_with_length else &c.accesskit_node_set_label_with_length;
+        if (e.name_bytes[r] != 0) named(n, b.strings[e.name_start[r]..].ptr, e.name_bytes[r]);
         const st: a11y.State = @bitCast(e.state[r]);
         const of = offers[role];
         if (of.toggle) c.accesskit_node_set_toggled(n, if (st.checked) .true else .false);
@@ -651,7 +653,7 @@ test "accesskit: action requests reach the example as the user's own input" {
     const d = debugText(u, &buf);
     try expectHas(d, "label: \"Reset\"");
     try expectHas(d, "label: \"Add layer\"");
-    try expectHas(d, "label: \"Layer 2\"");
+    try expectHas(d, "value: \"Layer 2\""); // static text: AccessKit reads a label's value
     c.accesskit_tree_update_free(u);
 
     // "Press Reset", "focus Exposure", "set Exposure to 3", and a scroll the bridge does not

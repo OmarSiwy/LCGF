@@ -125,6 +125,7 @@ pub extern fn accesskit_node_free(node: *Node) void;
 pub extern fn accesskit_node_add_action(node: *Node, action: Action) void;
 pub extern fn accesskit_node_set_children(node: *Node, length: usize, values: [*]const NodeId) void;
 pub extern fn accesskit_node_set_label_with_length(node: *Node, value: [*]const u8, length: usize) void;
+pub extern fn accesskit_node_set_value_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_bounds(node: *Node, value: Rect) void;
 pub extern fn accesskit_node_set_transform(node: *Node, value: Affine) void;
 pub extern fn accesskit_node_set_numeric_value(node: *Node, value: f64) void;
