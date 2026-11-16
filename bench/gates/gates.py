@@ -2,6 +2,7 @@
 """Release gates of docs/GATES.md, checked against bench/gates/recorded.json.
 
     python3 bench/gates/gates.py frame DIR      frame CPU time against the fastest comparison
+    python3 bench/gates/gates.py rss DIR        resident memory against the lightest comparison
     python3 bench/gates/gates.py --self-test
 
 DIR holds one bench/vs/measure.py JSON per framework, lcgr.json among them (ci/jobs/gates-vs.sh
@@ -26,6 +27,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDED = os.path.join(HERE, "recorded.json")
 TOLERANCE = 0.5  # timings move by about a third between runs on one machine (docs/CHECKS.md)
+MEMORY_TOLERANCE = 0.1  # LCGR measured 12,476 and 12,104 KiB in two gates-vs runs (3%)
 # The idle scene is gated by frames built and wake-ups (the idle gate), not by frame time.
 TIMED_SCENES = ("form", "list", "text", "springs", "resize")
 
@@ -75,6 +77,20 @@ def check_frame(runs, recorded):
     return entries, rows, failed
 
 
+def check_rss(runs, recorded):
+    """Resident memory: VmRSS after the idle scene's first frame, while it waits for input
+    (tools/bench/probe.py), against the lightest other framework. Pages the process maps and
+    touches count, shared libraries included; the GPU driver's are not there to count, since no
+    harness opens a device."""
+    values = {n: r["rss_kib"] for n, r in runs.items()}
+    e, status, failed = versus(values, recorded.get("idle"), MEMORY_TOLERANCE)
+    row = f"idle     lcgr {values['lcgr']:9.0f} KiB best {e['best']:<8} {values[e['best']]:9.0f} KiB x{e['ratio']:<6} {status}"
+    return {"idle": e}, [row], failed
+
+
+CHECKS = {"frame": (check_frame, True), "rss": (check_rss, False)}  # gate: (check, timed)
+
+
 def frameworks_missing(runs, recorded):
     return [n for n in recorded.get("frameworks", []) if n not in runs]
 
@@ -86,7 +102,8 @@ def run_compare(kind, d, record):
             rec = json.load(f)
     runs = results(d)
     missing = frameworks_missing(runs, rec)
-    entries, rows, failed = check_frame(runs, rec.get(kind, {}))
+    check, timed = CHECKS[kind]
+    entries, rows, failed = check(runs, rec.get(kind, {}))
     print(f"gate {kind}: LCGR against {', '.join(n for n in runs if n != 'lcgr')}")
     print("\n".join(rows))
     load = max(max(r["load_before"], r["load_after"]) for r in runs.values())
@@ -102,7 +119,7 @@ def run_compare(kind, d, record):
     if missing:
         print("gates: missing results for " + ", ".join(missing))
         return 1
-    if failed and busy(load):
+    if failed and timed and busy(load):
         print(f"gates: load {load} on {os.cpu_count()} CPUs during the measurement, timing gate not applied")
         return 0
     return 1 if failed else 0
@@ -130,6 +147,13 @@ def self_test():
     runs["lcgr"]["scenes"]["form"]["median_us"] = 30
     _, rows, failed = check_frame(runs, entries)
     assert failed and "REGRESSED" in rows[0], rows
+    for r, kib in zip(runs.values(), (900, 1000)):
+        r["rss_kib"] = kib
+    entries, _, failed = check_rss(runs, {})
+    assert failed and entries["idle"]["held"]
+    runs["lcgr"]["rss_kib"] = 1001
+    _, rows, failed = check_rss(runs, entries)
+    assert failed and "REGRESSED" in rows[0], rows
     assert frameworks_missing(runs, {"frameworks": ["a", "b"]}) == ["b"]
     print("gates self-test ok")
 
@@ -139,7 +163,7 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=["frame"])
+    ap.add_argument("gate", choices=sorted(CHECKS))
     ap.add_argument("dir")
     ap.add_argument("--record", action="store_true")
     a = ap.parse_args()

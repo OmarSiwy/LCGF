@@ -34,5 +34,12 @@
   "lvgl",
   "qtquick",
   "slint"
- ]
+ ],
+ "rss": {
+  "idle": {
+   "held": false,
+   "ratio": 5.656,
+   "best": "clay"
+  }
+ }
 }

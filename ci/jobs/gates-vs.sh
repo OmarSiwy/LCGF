@@ -21,3 +21,4 @@ m lcgr zig-out/bin/vs-lcgr zig-out/bin/vs-lcgr-small
 for n in clay imgui lvgl qtquick; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small"; done
 for n in egui iced slint; do m "$n" "zig-out/cargo/release/vs-$n" "zig-out/cargo/small/vs-$n"; done
 python3 bench/gates/gates.py frame zig-out/gates
+python3 bench/gates/gates.py rss zig-out/gates
