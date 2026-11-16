@@ -27,6 +27,8 @@ pub const Kind = enum(u8) {
     radio_option,
     /// An on/off switch over a bool field (src/widgets/switch.zig).
     @"switch",
+    /// A button that stays pressed, over a bool field (src/widgets/toggle.zig).
+    toggle,
 };
 
 /// One node of the declaration. Exists only at compile time.
