@@ -28,6 +28,7 @@ const pages = .{
     .{ "", Reference },
     .{ "label", lcgr.widgets_label.Page },
     .{ "button", lcgr.widgets_button.Page },
+    .{ "checkbox", lcgr.widgets_checkbox.Page },
 };
 
 var glyph_quads: [1024]Quad = undefined;

@@ -129,6 +129,47 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The checkbox's example page: a tri-state "All" that starts mixed and two plain boxes on a
+/// panel, in both front ends. Its replay (testdata/checkbox.replay) clicks and uses Space; its
+/// golden images (tools/widgetgolden/ref/checkbox-*.png) show mixed, on and off.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
+
+    pub const App = struct {
+        all: Check = .mixed,
+        wire: bool = false,
+        shadows: bool = true,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = checkbox(f, &th, .from("all"), &app.all, "All");
+            _ = checkbox(f, &th, .from("wire"), &app.wire, "Wireframe");
+            _ = checkbox(f, &th, .from("shadows"), &app.shadows, "Shadows");
+            f.close();
+        }
+    };
+    pub const State = struct {
+        all: Check = .mixed,
+        all_text: []const u8 = "All",
+        wire: bool = false,
+        wire_text: []const u8 = "Wireframe",
+        shadows: bool = true,
+        shadows_text: []const u8 = "Shadows",
+    };
+    pub const spec = spec_zig.col(panel, .{
+        ct.checkbox(th, .all, .all, .all_text),
+        ct.checkbox(th, .wire, .wire, .wire_text),
+        ct.checkbox(th, .shadows, .shadows, .shadows_text),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/checkbox.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/checkbox-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "keys", 5 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -308,6 +349,49 @@ test "checkbox a11y: role checkbox, named by its caption, value and checked stat
     try testing.expectEqual(null, x.row(3));
     try testing.expectEqual(null, x.row(4));
     try testing.expectEqual(@as(u32, 5), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the checkbox replay toggles by click and Space, mixed first to on, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var all: [12]Check = undefined;
+    var wire: [12]bool = undefined;
+    var shadows: [12]bool = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        const st = &h.ui.signals.state;
+        try testing.expectEqual(h.app.all, st.all);
+        try testing.expectEqual(h.app.wire, st.wire);
+        try testing.expectEqual(h.app.shadows, st.shadows);
+        all[k] = h.app.all;
+        wire[k] = h.app.wire;
+        shadows[k] = h.app.shadows;
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(Check, &.{ .mixed, .mixed, .on, .off, .off, .off, .off, .off, .off, .off, .off, .off }, &all);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true, true, true, false, false, false, false }, &wire);
+    const always: [12]bool = @splat(true);
+    try testing.expectEqualSlices(bool, &always, &shadows);
+    // The rects the replay's comment gives.
+    const t = &h.ctx.trees[h.ctx.cur];
+    // Rows 17.5 px tall, 8 apart, snapped to whole pixels.
+    const rows = [3][4]f32{ .{ 12, 30, 13, 29 }, .{ 38, 55, 38, 54 }, .{ 63, 81, 64, 80 } };
+    for ([3][]const u8{ "all", "wire", "shadows" }, rows) |name, y| {
+        const row = t.find(.hash(name));
+        const r = t.rect(row);
+        try testing.expectEqual([2]f32{ y[0], y[1] }, [2]f32{ r.y0, r.y1 });
+        try testing.expectEqual(types.Rect{ .x0 = 12, .y0 = y[2], .x1 = 28, .y1 = y[3] }, t.rect(row + 1));
+    }
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test {
