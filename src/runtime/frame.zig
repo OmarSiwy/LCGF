@@ -20,6 +20,11 @@ const none = types.none;
 const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
+const Spring = @import("../anim/anims.zig").Spring;
+const Ease = @import("../anim/tweens.zig").Ease;
+const Transition = @import("../anim/tweens.zig").Transition;
+const keyframes = @import("../anim/keyframes.zig");
+const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -133,6 +138,81 @@ pub const Frame = struct {
 
     pub const timer = scheduler.timer;
 
+    /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
+    /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,
+    /// `needsFrame` true) until it lands; a spring not asked for in a frame is dropped.
+    pub fn animate(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
+        const ctx = f.ctx;
+        const a = &ctx.anims;
+        const i = a.slot(id, target);
+        a.c.target[i] = target;
+        a.c.stiffness[i] = spring.stiffness;
+        a.c.damping[i] = spring.damping;
+        a.c.seen[i] = ctx.frame;
+        if (ctx.reduced_motion) a.land(i);
+        // A new target moves the spring from next frame's step on; wake for it now.
+        ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
+        return a.c.x[i];
+    }
+
+    /// Slides `node` (and its subtree) on a spring whenever its laid-out position changes,
+    /// starting from where it was shown last frame. The node needs a stable, non-`none` id.
+    /// Position only: a size change still takes effect at once. `end` runs the slide
+    /// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
+    /// themselves call it there too.
+    pub fn animateLayout(f: *Frame, node: Node, spring: Spring) void {
+        f.ctx.flips.add(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring);
+    }
+
+    /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
+    /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
+    /// key; stop asking for one frame and the next ask plays it again from the start.
+    pub fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32 {
+        const ctx = f.ctx;
+        const t = &ctx.tweens;
+        const total = keyframes.duration(keys);
+        // A new row rests at 0, so the first retarget starts the clock's only leg.
+        const i = t.slot(id, 0);
+        t.retarget(i, total, total, .linear);
+        t.c.seen[i] = ctx.frame;
+        if (ctx.reduced_motion) t.land(i);
+        ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
+        return keyframes.sample(keys, t.c.elapsed[i]);
+    }
+
+    /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
+    /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    pub fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color {
+        const want = [4]u8{ target.r, target.g, target.b, target.a };
+        var got: [4]u8 = undefined;
+        for (want, &got, 0..) |w, *g, k| {
+            const v = f.tween(id.with(@intCast(k)), @floatFromInt(w), tr.seconds, tr.ease);
+            g.* = @intFromFloat(@min(@max(@round(v), 0), 255));
+        }
+        return .rgba(got[0], got[1], got[2], got[3]);
+    }
+
+    /// `setFill` with a transition: a fill that changes between frames (hover, press, theme)
+    /// fades to the new colour along `tr`. `id` keys the transition; use the widget's id.
+    pub fn setFillAnimated(f: *Frame, node: Node, id: Id, color: Color, tr: Transition) void {
+        f.setFill(node, f.transition(id, color, tr));
+    }
+
+    /// A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the
+    /// target changes, a new leg starts from the current value. Returns this frame's value
+    /// (`target` on first use). Keeps the host awake until it lands; a tween not asked for in
+    /// a frame is dropped.
+    pub fn tween(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
+        const ctx = f.ctx;
+        const t = &ctx.tweens;
+        const i = t.slot(id, target);
+        t.retarget(i, target, seconds, ease);
+        t.c.seen[i] = ctx.frame;
+        if (ctx.reduced_motion) t.land(i);
+        ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
+        return t.c.x[i];
+    }
+
     // ---- finishing ------------------------------------------------------------
 
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
@@ -152,6 +232,8 @@ pub const Frame = struct {
         layout.fit(t, .y);
         layout.resolve(t, .y, f.in.viewport[1]);
         layout.place(t);
+        // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
+        if (!f.ctx.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);
         return f.finish();
     }
@@ -165,6 +247,8 @@ pub const Frame = struct {
         t.seal(0);
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        ctx.anims.sweep(ctx.frame);
+        ctx.tweens.sweep(ctx.frame);
         ctx.signals.dirty = false;
         // The tables flag their own overflow; the frame reports them together.
         ctx.status = .{

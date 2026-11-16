@@ -34,6 +34,11 @@
     "jcc": 20,
     "short_fwd": 5
   },
+  "p_anim": {
+    "back": 1,
+    "jcc": 2,
+    "short_fwd": 0
+  },
   "p_apply_text": {
     "back": 2,
     "jcc": 5,
@@ -103,6 +108,11 @@
     "back": 2,
     "jcc": 4,
     "short_fwd": 0
+  },
+  "p_flip": {
+    "back": 16,
+    "jcc": 30,
+    "short_fwd": 4
   },
   "p_focus_scan": {
     "back": 1,
@@ -299,6 +309,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_sweep": {
+    "back": 1,
+    "jcc": 3,
+    "short_fwd": 0
+  },
   "p_text_avail": {
     "back": 2,
     "jcc": 5,
@@ -312,6 +327,11 @@
   "p_tree_push": {
     "back": 0,
     "jcc": 0,
+    "short_fwd": 0
+  },
+  "p_tween": {
+    "back": 1,
+    "jcc": 2,
     "short_fwd": 0
   },
   "p_wheel_route": {
