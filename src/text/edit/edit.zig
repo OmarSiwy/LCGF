@@ -102,6 +102,9 @@ pub const Context = struct {
     /// shown at the caret as a preedit range of the buffer until the IME commits it (as typed
     /// text, which ends the composition) or drops it.
     composition: keyboard.Composition = .{},
+    /// Scratch for Left and Right in visual order on lines with right-to-left text
+    /// (`moves.visual`). Without it they move in logical order.
+    bidi: ?moves.BidiScratch = null,
 };
 
 /// What one `update` did.
@@ -368,10 +371,13 @@ pub const Editor = struct {
             return;
         }
         // Left and Right without Shift collapse a selection to its edge.
+        const shown = if (ed.mode.password) null else cx.bidi;
         if (c == ks.left) {
-            ed.caret = if (some and !shift and !word) sel[0] else if (word) ed.wordBefore(t, at) else moves.prevGrapheme(t, at);
+            const v = if (shown) |b| moves.visual(t, at, -1, b) else null;
+            ed.caret = if (some and !shift and !word) sel[0] else if (word) ed.wordBefore(t, at) else v orelse moves.prevGrapheme(t, at);
         } else if (c == ks.right) {
-            ed.caret = if (some and !shift and !word) sel[1] else if (word) ed.wordAfter(t, at) else moves.nextGrapheme(t, at);
+            const v = if (shown) |b| moves.visual(t, at, 1, b) else null;
+            ed.caret = if (some and !shift and !word) sel[1] else if (word) ed.wordAfter(t, at) else v orelse moves.nextGrapheme(t, at);
         } else if (c == ks.home) {
             ed.caret = if (word) 0 else if (view) |v| v.home(at) else moves.lineStart(t, at);
         } else if (c == ks.end) {
@@ -475,6 +481,7 @@ pub const Replayed = struct {
     copy_buf: []u8 = &.{},
     /// The IME's composition in each frame, by frame number; none past the end.
     compositions: []const keyboard.Composition = &.{},
+    bidi: ?moves.BidiScratch = null,
 };
 
 /// As `replay`, run as `opt` says. The editor is one focusable node covering (0, 0) to
@@ -509,7 +516,7 @@ pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
     while (try r.next(buf)) |in| : (frame += 1) {
         it.step(&tree, in);
         const k = Keyboard.route(&it, &fo, in);
-        var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods), .clipboard = opt.clipboard, .copy_buf = opt.copy_buf };
+        var cx: Context = .{ .pointer = .of(&it, field, .{ 0, 0 }, in.mods), .clipboard = opt.clipboard, .copy_buf = opt.copy_buf, .bidi = opt.bidi };
         if (opt.clipboard) |c| c.reset();
         if (frame < opt.compositions.len) cx.composition = k.composition(field, &opt.compositions[frame]);
         if (opt.width) |w| {
@@ -1056,4 +1063,45 @@ test "replayed input: password mode shows bullets, hides words and is never copi
     ed.requestInput(&out, .{ .l = &para.l, .g = &para.g, .text = t }, .{ 0, 0 });
     try testing.expectEqual(keyboard.Purpose.secure, out.purpose);
     try testing.expectEqual(@as(f32, 30), out.rect.x0);
+}
+
+test "replayed input: Right and Left follow the screen over right-to-left text" {
+    const mem = @import("../../core/mem.zig");
+    var cols: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &cols };
+    const bidi_cols = carver.columns(moves.BidiScratch, 32);
+    var raw: [64]u8 = undefined;
+    // "ab " and Hebrew alef bet: on screen "ab בא".
+    var ed = try Editor.init(&raw, "ab \u{5D0}\u{5D1}");
+    ed.place(2);
+    // Right from after "b" crosses the space and lands left of bet, the text's end (the caret
+    // stop after a right-to-left letter is its left edge); typing there appends.
+    _ = try replayWith(&ed,
+        \\frame
+        \\press 79
+        \\text !
+    , .{ .bidi = bidi_cols });
+    try testing.expectEqualStrings("ab \u{5D0}\u{5D1}!", ed.text());
+    // Without the scratch, Right is logical: from after "b" to after the space.
+    var ed2 = try Editor.init(&raw, "ab \u{5D0}\u{5D1}");
+    ed2.place(2);
+    _ = try replay(&ed2,
+        \\frame
+        \\press 79
+    );
+    try testing.expectEqual(3, ed2.caret);
+    // Shift+Right selects visually too: from 2 to the end, which on screen is the space.
+    ed2.place(2);
+    _ = try replayWith(&ed2,
+        \\frame
+        \\press 79 shift
+    , .{ .bidi = bidi_cols });
+    try testing.expectEqual([2]u32{ 2, 7 }, ed2.selection());
+    // Left from the visual right end (offset 3, right of alef) walks into the Hebrew.
+    ed2.place(3);
+    _ = try replayWith(&ed2,
+        \\frame
+        \\press 80
+    , .{ .bidi = bidi_cols });
+    try testing.expectEqual(5, ed2.caret);
 }

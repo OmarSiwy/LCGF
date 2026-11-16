@@ -14,6 +14,7 @@ const utf8 = @import("../unicode/utf8.zig");
 const lines = @import("../layout/lines.zig");
 const query = @import("../layout/query.zig");
 const types = @import("../../core/types.zig");
+const bidi = @import("../unicode/bidi.zig");
 
 /// The grapheme boundary after `at`, or `text.len` at the end.
 pub fn nextGrapheme(text: []const u8, at: u32) u32 {
@@ -145,6 +146,106 @@ pub const View = struct {
     }
 };
 
+/// Columns for `visual`, each as long as the longest line it moves over in code points, plus
+/// one row (`mem.Carver.columns` carves them all at once). A longer line moves logically.
+pub const BidiScratch = struct {
+    cps: []u21,
+    orig: []property.BidiClass,
+    levels: []u8,
+    cls: []property.BidiClass,
+    next: []u32,
+    pair: []u32,
+    /// Per grapheme of the line: its byte offset (one row more for the line's end), its first
+    /// code point, its level, and the visual order and its inverse.
+    start: []u32,
+    first: []u32,
+    glevel: []u8,
+    order: []u32,
+    inv: []u32,
+};
+
+/// Left and Right in visual order (UAX #9 L1, L2), for a line with right-to-left text in it:
+/// the caret at `at` moves to the stop next to it on screen in direction `dir` (+1 right, -1
+/// left), not to the next offset. Lines are those between newlines, each a bidi paragraph.
+///
+/// Each caret stop has one place on screen, taken from the grapheme after it: the left edge of
+/// a left-to-right grapheme, the right edge of a right-to-left one (at the line's end, the
+/// trailing edge of the last grapheme). A move goes to the stop whose place is the nearest one
+/// in `dir`, so repeated moves visit places strictly left to right, never stall, and stop at
+/// the line's visual end; past it they go to the next line in the paragraph's direction, or
+/// the previous line against it. Two offsets with one place (at a direction change) are one
+/// stop. Returns null when the line is all left to right (logical moves are the same) or too
+/// long for `s`.
+pub fn visual(text: []const u8, at: u32, dir: i2, s: BidiScratch) ?u32 {
+    const from = lineStart(text, at);
+    const to = lineEnd(text, at);
+    // Graphemes of the line and their code points.
+    var it: Graphemes = .{ .text = text[from..to] };
+    var n: u32 = 0; // code points
+    var ng: u32 = 0; // graphemes
+    var pos: u32 = from;
+    while (it.next()) |e| {
+        if (ng + 1 >= s.start.len) return null;
+        s.start[ng] = pos;
+        s.first[ng] = n;
+        ng += 1;
+        const end = from + @as(u32, @intCast(e));
+        while (pos < end) {
+            if (n >= s.cps.len) return null;
+            const d = utf8.decode(text, pos);
+            s.cps[n] = d.cp;
+            n += 1;
+            pos += d.len;
+        }
+    }
+    s.start[ng] = to;
+    const orig = s.orig[0..n];
+    bidi.classes(s.cps[0..n], orig);
+    const scratch: bidi.Scratch = .{ .cls = s.cls, .next = s.next, .pair = s.pair };
+    const para = bidi.paragraphLevel(orig, scratch);
+    bidi.resolve(orig, s.cps[0..n], para, s.levels, scratch);
+    bidi.lineLevels(orig, s.levels[0..n], para);
+    var odd = para;
+    for (s.first[0..ng], s.glevel[0..ng]) |f, *l| {
+        l.* = s.levels[f];
+        odd |= l.*;
+    }
+    if (odd & 1 == 0) return null;
+    bidi.reorder(s.glevel[0..ng], s.order);
+    for (s.order[0..ng], 0..) |g, v| s.inv[g] = @intCast(v);
+
+    var here: u32 = 0;
+    for (s.start[0 .. ng + 1], 0..) |off, b| {
+        if (off == at) here = place(s, ng, @intCast(b));
+    }
+    // The nearest place in `dir`, and the stop holding it.
+    var best: ?u32 = null;
+    var best_place: u32 = 0;
+    for (s.start[0 .. ng + 1], 0..) |off, b| {
+        const p = place(s, ng, @intCast(b));
+        const ahead = if (dir > 0) p > here else p < here;
+        const nearer = best == null or (if (dir > 0) p < best_place else p > best_place);
+        if (ahead and nearer) {
+            best = off;
+            best_place = p;
+        }
+    }
+    if (best) |b| return b;
+    // At the line's visual end: on to the next line along the paragraph's direction.
+    const forward = (dir > 0) == (para & 1 == 0);
+    if (forward) return if (to < text.len) to + 1 else at;
+    return if (from > 0) from - 1 else at;
+}
+
+/// Where stop `b` (0 to `ng`) of the line is on screen, as a boundary between visual
+/// positions 0 to `ng`.
+fn place(s: BidiScratch, ng: u32, b: u32) u32 {
+    if (ng == 0) return 0;
+    if (b < ng) return s.inv[b] + (s.glevel[b] & 1);
+    const g = ng - 1;
+    return s.inv[g] + 1 - (s.glevel[g] & 1);
+}
+
 const testing = std.testing;
 
 test "grapheme stops: combining marks, flags, CR LF and emoji sequences are one step" {
@@ -216,4 +317,44 @@ test "wordAt: the segment under a double click" {
     try testing.expectEqual([2]u32{ 5, 8 }, wordAt(text, 7));
     try testing.expectEqual([2]u32{ 5, 8 }, wordAt(text, 8));
     try testing.expectEqual([2]u32{ 0, 0 }, wordAt("", 0));
+}
+
+fn walk(text: []const u8, from: u32, dir: i2, steps: []u32, s: BidiScratch) void {
+    var at = from;
+    for (steps) |*st| {
+        at = visual(text, at, dir, s) orelse at;
+        st.* = at;
+    }
+}
+
+test "visual: Right and Left in screen order over mixed directions" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(BidiScratch, 16);
+    // "abc " then Hebrew alef bet gimel, two bytes each: on screen "abc גבא".
+    const ltr = "abc \u{5D0}\u{5D1}\u{5D2}";
+    var got: [8]u32 = undefined;
+    walk(ltr, 0, 1, &got, s);
+    // Right: over "abc " (0 to 3), then into the Hebrew from its left end (10 is the text's end,
+    // left of gimel), right to left in offsets, and it stays at the line's end (4).
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3, 10, 8, 6, 4, 4 }, &got);
+    walk(ltr, 4, -1, &got, s);
+    try testing.expectEqualSlices(u32, &.{ 6, 8, 10, 3, 2, 1, 0, 0 }, &got);
+    // A right-to-left paragraph: "\u{5D0}\u{5D1} ab" shows as "ab בא", the caret starting at
+    // the right. Left walks to the left end.
+    const rtl = "\u{5D0}\u{5D1} ab";
+    var got2: [6]u32 = undefined;
+    walk(rtl, 0, -1, &got2, s);
+    try testing.expectEqualSlices(u32, &.{ 2, 4, 7, 6, 5, 5 }, &got2);
+    walk(rtl, 5, 1, &got2, s);
+    try testing.expectEqualSlices(u32, &.{ 6, 7, 4, 2, 0, 0 }, &got2);
+    // All left to right: no visual move, the caller moves logically.
+    try testing.expectEqual(null, visual("abc", 1, 1, s));
+    // Too long for the scratch: logical too.
+    try testing.expectEqual(null, visual("\u{5D0}bcdefghijklmnopqrstu", 0, 1, s));
+    // Past the visual end of a line: on to the next line, or back to the previous one.
+    const two = "a\u{5D0}\nb";
+    try testing.expectEqual(4, visual(two, 1, 1, s).?);
+    try testing.expectEqual(0, visual(two, 3, -1, s).?);
 }
