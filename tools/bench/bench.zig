@@ -35,6 +35,10 @@ const scenes = @import("scenes");
 const src_scenes = @import("src_scenes");
 const linux = std.os.linux;
 
+/// No 256 KB thread-local signal stack (std's default, for stack traces on a crash): start.zig
+/// clears it before main, which the other harnesses' start-up does not pay.
+pub const std_options: std.Options = .{ .signal_stack_size = null };
+
 const rows = scenes.rows.count;
 const frames = 3000;
 
@@ -142,12 +146,15 @@ const grid_bytes = blk: {
     _ = lcgr.grid.Grids.init(&counter, grid_cap);
     break :blk counter.off;
 };
-var grid_buffer: [grid_bytes]u8 align(lcgr.mem.column_align) = undefined;
+comptime {
+    // The grid scene borrows the prototype core's buffer, whose frames are done by then.
+    std.debug.assert(grid_bytes <= buffer.len);
+}
 
-/// Times the grid passes on a 4,000-item grid: columns cycle through fixed, fit and fraction
+/// Times the grid passes on a 4,000-item grid, in `buffer` (run after the frame loops): columns cycle through fixed, fit and fraction
 /// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
 fn gridBench() void {
-    var carver: lcgr.mem.Carver = .{ .buf = &grid_buffer };
+    var carver: lcgr.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
     var t = Tree.init(&carver, grid_items + 2);
     var tx = Texts.init(&carver, 1);
     var gs = lcgr.grid.Grids.init(&carver, grid_cap);

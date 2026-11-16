@@ -21,7 +21,10 @@ const none = types.none;
 /// `stamp`), nothing moves, no settle frame is owed and no signal changed. The host can then
 /// sleep until the next event.
 pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
-    const changed = simd.orB(ctx.frame == 0, stamp(ctx, in) != ctx.last_stamp);
+    const t = &ctx.trees[ctx.cur];
+    const node = hit.at(t, in.pointer[0], in.pointer[1], .any);
+    const over = simd.andB(node != none, t.c.id[@min(node, t.cap - 1)] != 0);
+    const changed = simd.orB(ctx.frame == 0, stamp(ctx, in, over) != ctx.last_stamp);
     const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.signals.dirty));
     const due = in.time >= deadline(ctx);
     const woken = ctx.waker.flag.load(.acquire);
@@ -152,20 +155,21 @@ pub const TimerMode = enum { once, repeat };
 /// Called by `begin`. Owes one extra frame after any input change, so state that this frame's
 /// events modify (a click handled after the widget was drawn) is visible without waiting for the
 /// next event. Unchanged input pays one owed frame back.
+/// Runs after `Interaction.step`, whose `under` is the hit test `needsFrame` makes.
 pub fn settle(ctx: *Context, in: *const Input) void {
-    const s = stamp(ctx, in);
+    const s = stamp(ctx, in, ctx.inter.under != 0);
     ctx.settle = simd.selU(s != ctx.last_stamp, 1, ctx.settle -| 1);
     ctx.last_stamp = s;
 }
 
 /// `Input.stamp` as the frame sees it. Widgets read the pointer position only over a node that
-/// senses the pointer or while a button is held, so elsewhere the position is stamped as
+/// senses the pointer (`over`: a node with an id, hit on the last frame's tree as
+/// `Interaction.step` hits it) or while a button is held, so elsewhere the position is stamped as
 /// "outside the window": a move across text and panels builds no frame, as a retained toolkit
-/// redraws nothing for it. Entering or leaving a sensing node changes the stamp. Judged on the
-/// last frame's tree, as `Interaction.step` judges hover. `Context.track_pointer` keeps every move.
-fn stamp(ctx: *const Context, in: *const Input) u64 {
-    const over = hit.at(&ctx.trees[ctx.cur], in.pointer[0], in.pointer[1], .any) != none;
-    const held = simd.orB(@as(u8, @bitCast(in.buttons)) != 0, ctx.inter.active != 0);
+/// redraws nothing for it. Entering or leaving a sensing node changes the stamp.
+/// `Context.track_pointer` keeps every move.
+fn stamp(ctx: *const Context, in: *const Input, over: bool) u64 {
+    const held = @as(u8, @bitCast(in.buttons)) != 0;
     const keep = simd.orB(simd.orB(over, held), ctx.track_pointer);
     var seen = in.*;
     seen.pointer = @bitCast(selD(keep, @bitCast(in.pointer), @bitCast(Input.outside)));

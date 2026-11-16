@@ -186,7 +186,6 @@ pub const Context = struct {
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
-        scheduler.settle(ctx, in);
         // Cleared before the app drains its mailboxes, so a result posted after this point
         // wakes the next frame instead of being missed.
         _ = ctx.waker.flag.swap(false, .acq_rel);
@@ -203,6 +202,7 @@ pub const Context = struct {
         ctx.memos.kept_len = 0;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
+        scheduler.settle(ctx, in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
         ctx.flips.len = 0;
 
