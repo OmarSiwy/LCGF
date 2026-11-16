@@ -75,6 +75,7 @@ pub const text_buffer = @import("text/edit/buffer.zig");
 pub const text_moves = @import("text/edit/moves.zig");
 pub const text_edit = @import("text/edit/edit.zig");
 pub const text_history = @import("text/edit/history.zig");
+pub const text_edit_tests = @import("text/edit/tests.zig");
 
 test {
     std.testing.refAllDecls(@This());
