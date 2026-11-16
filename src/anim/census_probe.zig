@@ -11,3 +11,6 @@ export fn p_sweep(a: *lcgr.anims.Anims, frame: u32) void {
 export fn p_tween(t: *lcgr.tweens.Tweens, dt: f32) f32 {
     return t.step(dt);
 }
+export fn p_flip(t: *lcgr.tree.Tree, prev: *const lcgr.tree.Tree, fl: *lcgr.flip.Flips, an: *lcgr.anims.Anims, frame: u32) f32 {
+    return lcgr.flip.apply(t, prev, fl, an, frame);
+}

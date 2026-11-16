@@ -24,6 +24,7 @@ const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
+const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
@@ -153,6 +154,15 @@ pub const Frame = struct {
         return a.c.x[i];
     }
 
+    /// Slides `node` (and its subtree) on a spring whenever its laid-out position changes,
+    /// starting from where it was shown last frame. The node needs a stable, non-`none` id.
+    /// Position only: a size change still takes effect at once. `end` runs the slide
+    /// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
+    /// themselves call it there too.
+    pub fn animateLayout(f: *Frame, node: Node, spring: Spring) void {
+        f.ctx.flips.add(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring);
+    }
+
     /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
     /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
     /// key; stop asking for one frame and the next ask plays it again from the start.
@@ -219,6 +229,7 @@ pub const Frame = struct {
         layout.fit(t, .y);
         layout.resolve(t, .y, f.in.viewport[1]);
         layout.place(t);
+        f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);
         return f.finish();
     }

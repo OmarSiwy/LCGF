@@ -109,6 +109,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_flip": {
+    "back": 16,
+    "jcc": 30,
+    "short_fwd": 4
+  },
   "p_focus_scan": {
     "back": 1,
     "jcc": 3,

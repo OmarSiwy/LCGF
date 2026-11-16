@@ -47,8 +47,13 @@ pub const Anims = struct {
         const i = simd.selU(is_new, @min(a.len, a.cap - 1), found);
         a.len = @min(a.len + @intFromBool(is_new), a.cap);
         c.id[i] = k;
-        c.x[i] = simd.selF(is_new, initial, c.x[i]);
-        c.v[i] = simd.selF(is_new, 0, c.v[i]);
+        // Select the row to write, not the value: a new spring's start goes to its row, an
+        // existing one's to the last spare row, which no pass reads (it is past
+        // `padded(cap)`). A select of a value loaded only for it becomes a branch on Zig 0.18
+        // (docs/CHECKS.md), and `flip.apply` calls this once per registered node.
+        const dst = simd.selU(is_new, i, @intCast(c.x.len - 1));
+        c.x[dst] = initial;
+        c.v[dst] = 0;
         return i;
     }
 

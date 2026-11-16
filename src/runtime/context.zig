@@ -18,6 +18,7 @@ const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
 const Anims = @import("../anim/anims.zig").Anims;
 const Tweens = @import("../anim/tweens.zig").Tweens;
+const Flips = @import("../anim/flip.zig").Flips;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -30,6 +31,8 @@ pub const Limits = struct {
     anims: u32 = 256,
     /// Tweens alive at once (`Frame.tween`).
     tweens: u32 = 128,
+    /// Nodes per frame that animate their layout (`Frame.animateLayout`).
+    flips: u32 = 64,
     signals: u32 = 256,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
@@ -94,6 +97,7 @@ pub const Context = struct {
     signals: Signals,
     anims: Anims,
     tweens: Tweens,
+    flips: Flips,
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
@@ -124,6 +128,7 @@ pub const Context = struct {
             .signals = Signals.init(carver, limits.signals),
             .anims = Anims.init(carver, limits.anims),
             .tweens = Tweens.init(carver, limits.tweens),
+            .flips = Flips.init(carver, limits.flips),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
         };
@@ -167,6 +172,7 @@ pub const Context = struct {
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
+        ctx.flips.len = 0;
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
@@ -629,4 +635,49 @@ test "sequence: plays its keys once on the frame clock, then the host sleeps" {
     for (1..8) |k| try testing.expect(seen[k] > seen[k - 1]);
     for (9..17) |k| try testing.expect(seen[k] < seen[k - 1]);
     try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "animateLayout: a node pushed down by a growing sibling slides there, then rests" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 200 } };
+    const card = types.Id.from("card");
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input, top: f32) Output {
+            var f = c.begin(i);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(top) } });
+            const node = f.open(types.Id.from("card"), .{ .size = .{ .fill, .px(40) } });
+            f.animateLayout(node, .{});
+            _ = f.leaf(types.Id.from("inside"), .{ .size = .{ .px(10), .px(10) } });
+            f.close();
+            return f.end(.{});
+        }
+    };
+    // First appearance: no slide.
+    var out = Ui.frame(&ctx, &in, 10);
+    try testing.expectEqual(@as(f32, 10), out.tree.rect(out.tree.find(card)).y0);
+    _ = Ui.frame(&ctx, &in, 10);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    // The sibling grows: the card's layout moves to y = 50, but it is shown where it was and
+    // slides down, its child with it.
+    out = Ui.frame(&ctx, &in, 50);
+    var y = out.tree.rect(out.tree.find(card)).y0;
+    try testing.expectEqual(@as(f32, 10), y);
+    try testing.expect(ctx.needsFrame(&in));
+    var frames: u32 = 0;
+    while (ctx.needsFrame(&in) and frames < 600) : (frames += 1) {
+        out = Ui.frame(&ctx, &in, 50);
+        const t = out.tree;
+        const now = t.rect(t.find(card)).y0;
+        try testing.expect(now >= y and now <= 50.5);
+        try testing.expectEqual(now, t.rect(t.find(types.Id.from("inside"))).y0);
+        y = now;
+    }
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(@as(f32, 50), y);
+    try testing.expectEqual(types.inf, out.wake);
 }
