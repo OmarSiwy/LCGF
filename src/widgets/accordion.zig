@@ -30,6 +30,7 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const
     _ = f.open(.none, sectionStyle(th));
     const head = f.open(id, headerStyle(th));
     const r = f.interact(head, .button);
+    expanded.* = expand(expanded.*, r.clicked, r.focused, f.in);
     f.setFill(head, base.buttonFill(th, r));
     f.setCursor(.pointer, r.hovered);
     _ = f.leaf(.none, indicatorStyle(th, expanded.*));
@@ -70,6 +71,27 @@ pub fn panelStyle(th: *const Theme, expanded: bool) Style {
     return .{ .dir = .y, .size = .{ .fill, heights[@intFromBool(expanded)] }, .pad = .{ th.pad, th.gap, th.pad, th.gap }, .gap = th.gap, .clip = true };
 }
 
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// Scancodes of the keys that activate a focused header (USB HID usage ids, as
+/// `focus.Keymap`'s defaults).
+pub const enter: u8 = 0x28;
+pub const space: u8 = 0x2c;
+
+/// Presses of Enter or Space in this frame's key events (auto-repeat does not count).
+pub fn activations(in: *const Input) u32 {
+    var k: u32 = 0;
+    for (in.events) |e| k += @intFromBool(e.kind == .press and (e.code == enter or e.code == space));
+    return k;
+}
+
+/// The section's next expanded state: a click on its header toggles it, and so does each
+/// Enter or Space while the header has focus (WAI-ARIA APG accordion pattern).
+pub fn expand(expanded: bool, clicked: bool, focused: bool, in: *const Input) bool {
+    const presses = activations(in) * @intFromBool(focused);
+    return base.toggle(expanded, (@intFromBool(clicked) + presses) & 1 == 1);
+}
+
 /// The accordion's sections as spec nodes.
 pub const ct = struct {
     /// A section whose header is the widget `id`, titled by the string field `title`, showing
@@ -88,6 +110,16 @@ pub const ct = struct {
     /// How the comptime front end builds and drives one section.
     fn Section(comptime id: [:0]const u8, comptime expanded: []const u8) type {
         return struct {
+            /// The header was clicked (the frame's event), or has focus (the last press).
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                _ = row;
+                const E = @TypeOf(ui.*).Events;
+                const me = @field(E.Widget, id);
+                const clicked = if (event) |e| std.meta.activeTag(e) == me else false;
+                const field = comptime @TypeOf(ui.*).field(expanded);
+                ui.signals.set(field, expand(@field(ui.signals.state, expanded), clicked, ui.focus == me, in));
+            }
+
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
                 const th = @TypeOf(ui.*).theme;
                 const t = &ui.tables.t;
@@ -205,6 +237,71 @@ test "accordion: header filled as a button, indicator by state, panel inset; any
     _ = try S.light.frame(&in);
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(0, 120, 60).bitsOf(), lo.runtime.tree.c.look[g + 1].fill);
+}
+
+test "accordion: a click or Enter/Space on the focused header toggles it, in both front ends" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const at = struct {
+        fn center(o: anytype, name: []const u8) [2]f32 {
+            const t = o.runtime.tree;
+            const r = t.rect(t.find(.hash(name)));
+            return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        }
+    };
+    // Click Advanced: it opens; its slider becomes visible.
+    in.pointer = at.center(out, "advanced");
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expect(h.app.advanced and h.ui.signals.state.advanced);
+    try testing.expect(out.runtime.tree.c.visible[out.runtime.tree.find(.from("level"))] != 0);
+    // Advanced has focus now: Enter closes it, Space opens it, a repeat does nothing.
+    const keys = [_]struct { code: u8, kind: Input.Event.Kind, open: bool }{
+        .{ .code = enter, .kind = .press, .open = false },
+        .{ .code = space, .kind = .press, .open = true },
+        .{ .code = space, .kind = .repeat, .open = true },
+        .{ .code = 0x04, .kind = .press, .open = true }, // 'a'
+    };
+    for (keys) |k| {
+        const ev = [1]Input.Event{.{ .kind = k.kind, .code = k.code }};
+        in.events = &ev;
+        _ = try h.frame(&in);
+        try testing.expectEqual(k.open, h.app.advanced);
+        try testing.expectEqual(k.open, h.ui.signals.state.advanced);
+    }
+    // General is not focused: Enter does not touch it.
+    try testing.expect(h.app.general);
+    // Two activations in one frame cancel out.
+    const two = [2]Input.Event{ .{ .kind = .press, .code = enter }, .{ .kind = .press, .code = space } };
+    in.events = &two;
+    _ = try h.frame(&in);
+    try testing.expect(h.app.advanced and h.ui.signals.state.advanced);
+    in.events = &.{};
+    // Click General: it closes, and the checkbox inside can no longer be hit.
+    in.pointer = at.center(out, "general");
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expect(!h.app.general and !h.ui.signals.state.general);
+    const t = out.runtime.tree;
+    const box = t.find(.from("wire"));
+    try testing.expectEqual(@as(u32, 0), t.c.visible[box]);
+    try testing.expect(@import("../interact/hit.zig").at(t, t.rect(box).x0 + 1, t.rect(box).y0 + 1, .any) != box);
+}
+
+test "expand: clicks and focused presses toggle; unfocused presses do not" {
+    const ev = [3]Input.Event{ .{ .kind = .press, .code = enter }, .{ .kind = .release, .code = enter }, .{ .kind = .press, .code = 0x2c } };
+    const in: Input = .{ .events = &ev };
+    try testing.expectEqual(@as(u32, 2), activations(&in));
+    try testing.expect(expand(false, true, false, &in));
+    try testing.expect(!expand(false, false, true, &in));
+    try testing.expect(expand(false, true, true, &in));
+    try testing.expect(!expand(false, false, false, &in));
 }
 
 test {
