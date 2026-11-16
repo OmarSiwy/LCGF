@@ -132,8 +132,11 @@ pub const Template = struct {
         r.align_cross = Align.factor[@backingInt(s.cross)];
         r.clips = @intFromBool(s.clip);
         r.sense = 0;
+        // The fill tints the texture. A texture with no fill shows its own colours: a white
+        // tint, else the quad would multiply to nothing and paint would drop it.
+        const untinted = @intFromBool(s.texture != .white) & @intFromBool(s.fill.a == 0);
         r.look = .{
-            .fill = s.fill.bitsOf(),
+            .fill = s.fill.bitsOf() | (0 -% @as(u32, untinted)),
             .border_color = s.border_color.bitsOf(),
             .radius = s.radius,
             .params = s.params,

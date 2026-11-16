@@ -364,3 +364,20 @@ test "an empty tree paints nothing" {
     emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
     try testing.expectEqual(0, sc.d.quad_len + sc.d.run_len + sc.d.custom_len + sc.d.cmd_len);
 }
+
+test "a textured node with no fill paints its texture untinted" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var sc = Scene.carve(&carver);
+    const t = &sc.t;
+    _ = t.push(0, Id.from("root"), &.{ .size = .{ .px(100), .px(100) } });
+    _ = t.push(0, Id.from("photo"), &.{ .size = .{ .px(20), .px(20) }, .texture = @fromBackingInt(3) });
+    _ = t.push(0, Id.from("framed"), &.{ .size = .{ .px(20), .px(20) }, .texture = @fromBackingInt(3), .border = 1, .border_color = .black });
+    t.seal(0);
+    layout.run(t, &sc.tx, .{ 100, 100 });
+    emit(t, &sc.tx, &sc.cu, "", &sc.d);
+    // The unfilled root paints nothing; both textured leaves are white-tinted quads on texture 3.
+    try testing.expectEqual(2, sc.d.quad_len);
+    for (sc.d.quads[0..2]) |q| try testing.expectEqual(Color.white.bitsOf(), q.fill);
+    try testing.expectEqual(Cmd{ .quads = .{ .first = 0, .count = 2, .texture = @fromBackingInt(3), .material = .solid } }, sc.d.command(0));
+}
