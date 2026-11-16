@@ -31,9 +31,15 @@ pub fn open(f: *Frame, th: *const Theme, variant: Variant, title: []const u8) No
 }
 
 /// The node of a card or group box: a column, padded, its children spaced by the theme's gap.
+/// A card is filled with the panel colour; a group box is outlined in the control-hot colour
+/// and left unfilled. Both round their corners by the theme's radius. The variant picks its
+/// colours and border width by table index.
 pub fn style(th: *const Theme, variant: Variant) Style {
-    _ = variant;
-    return .{ .dir = .y, .pad = @splat(th.pad), .gap = th.gap };
+    const k = @backingInt(variant);
+    const fills = [2]types.Color{ th.panel, .transparent };
+    const borders = [2]types.Color{ .transparent, th.control_hot };
+    const widths = [2]f32{ 0, 1 };
+    return .{ .dir = .y, .pad = @splat(th.pad), .gap = th.gap, .radius = th.radius, .fill = fills[k], .border_color = borders[k], .border = widths[k] };
 }
 
 /// The containers as spec nodes.
@@ -103,6 +109,38 @@ test "card: both front ends build the same rows: the container, its title, then 
     const title = t.rect(card_row + 1);
     try testing.expectEqual(r.x0 + Theme.default.pad, title.x0);
     try testing.expectEqual(r.y0 + Theme.default.pad, title.y0);
+}
+
+test "card: the variant picks fill and outline from the theme" {
+    const th = Theme.default;
+    const c = style(&th, .card);
+    const g = style(&th, .group_box);
+    try testing.expectEqual(th.panel, c.fill);
+    try testing.expectEqual(@as(f32, 0), c.border);
+    try testing.expectEqual(types.Color.transparent, g.fill);
+    try testing.expectEqual(th.control_hot, g.border_color);
+    try testing.expectEqual(@as(f32, 1), g.border);
+    try testing.expectEqual(th.radius, c.radius);
+    try testing.expectEqual(th.radius, g.radius);
+    // Painted as styled in both front ends: the card's quad carries the panel colour.
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    const out = try h.frame(&in);
+    try testing.expectEqual(th.panel.bitsOf(), out.runtime.tree.c.look[1].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[5].border_color);
+}
+
+test "card: other theme tokens restyle both front ends alike" {
+    const Light = Page(.{ .panel = .rgb(240, 240, 240), .control_hot = .rgb(120, 120, 130), .radius = 0, .pad = 12, .gap = 10, .text = .rgb(20, 20, 20) });
+    const S = struct {
+        var h: Light.Run = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    const out = try S.h.frame(&in);
+    const t = out.runtime.tree;
+    try testing.expectEqual(t.rect(1).x0 + 12, t.rect(2).x0);
 }
 
 test {
