@@ -201,14 +201,8 @@ pub const buttonFill = button_zig.buttonFill;
 pub const checkboxStyle = checkbox_zig.checkboxStyle;
 pub const checkboxBox = checkbox_zig.checkboxBox;
 
-pub fn sliderTrack(th: *const Theme) Style {
-    return .{ .dir = .x, .size = .{ .fill, .px(8) }, .min = .{ 40, 0 }, .radius = 4, .fill = th.control, .role = .slider };
-}
-
-/// The filled part of the track, `frac` of its width.
-pub fn sliderThumb(th: *const Theme, frac: f32) Style {
-    return .{ .size = .{ .pct(frac), .fill }, .radius = 4, .fill = th.accent };
-}
+pub const sliderTrack = slider_zig.sliderTrack;
+pub const sliderThumb = slider_zig.sliderThumb;
 
 // ---- behaviour: pure functions of the value and what happened -------------------------------
 
