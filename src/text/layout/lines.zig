@@ -275,7 +275,8 @@ pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metri
             below = @max(below, m.descent + m.gap);
         }
         for (first..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
-        const free = a.width - lines.width[k];
+        // Clamped so an unbounded box (text that does not wrap) gives 0 * free = 0, not NaN.
+        const free = @min(a.width - lines.width[k], std.math.floatMax(f32));
         const j = justify * (1 - lines.hard[k]) * @min(spaces, 1);
         lines.extra[k] = j * free / @max(spaces, 1);
         lines.x[k] = (1 - j) * free * a.factor;
@@ -378,6 +379,11 @@ test "place: alignment is an offset, justification widens inner spaces" {
     try testing.expectEqualSlices(f32, &.{ 20, 0, 0 }, t.l.extra[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 20, 40 }, t.l.x[0..3]);
     try testing.expectEqualSlices(f32, &.{ 0, 10, 20, 50 }, t.g.x[0..4]);
+    // An unbounded box, as for text that does not wrap: start aligned, no NaN.
+    try breakLines(&t.g, text, std.math.inf(f32), &t.l);
+    place(&t.l, &t.g, text, &.{m}, .{ .width = std.math.inf(f32), .justify = true });
+    try testing.expectEqualSlices(f32, &.{ 0, 0 }, t.l.x[0..2]);
+    try testing.expectEqualSlices(f32, &.{ 0, 0 }, t.l.extra[0..2]);
 }
 
 test "golden: aligned and justified paragraphs match the reference" {

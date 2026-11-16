@@ -52,6 +52,9 @@ SLACK = 1 / 64
 # name: text, px, box (x, y, width), picture (w, h), align, justify, max_lines, spans
 # (byte start, px) after the first, which starts at 0 with `px`.
 PARA = "Lines of a paragraph can sit at the start, the centre or the end of the box, or fill it."
+FRAME_TITLE = "Text layout"
+FRAME_PARA = "The measure and wrap protocol hands every run to the shaper and the line breaker."
+FRAME_SIZE = (240, 140)
 SCENES = {
     "wrap": dict(text="Type office fluff into a lovely file, then copy every line of it.", px=20, box=(4, 2, 200), size=(208, 88)),
     "center": dict(text=PARA, px=18, box=(4, 2, 200), size=(208, 104), align=0.5),
@@ -241,6 +244,28 @@ def render(scene, face, hbfont, upem, asc, desc, gap):
     return img
 
 
+def render_frame(face, hbfont, upem, asc, desc, gap):
+    """The frame scene of golden.zig expectFrame: a column (pad 8, gap 6) holding a 22 px
+    title that does not wrap and a 200 px wide box with a 16 px paragraph that does. Node
+    rects are positions rounded to whole pixels, as layout.finalize does."""
+    W, H = FRAME_SIZE
+    img = bytearray(W * H)
+    title_h = (asc - desc + gap) * 22 / upem
+    runs = [(FRAME_TITLE, 22, math.inf, 8, 8), (FRAME_PARA, 16, 200, 8, math.floor(8 + title_h + 6 + 0.5))]
+    for text, px, width, x0, y0 in runs:
+        raw = text.encode("utf-8")
+        glyphs = shape(hbfont, upem, text, [(0, px)])
+        top = y0
+        for ln in break_lines(glyphs, raw, width):
+            y = math.floor(top + asc * px / upem + 0.5)
+            x = x0
+            for g in glyphs[ln["first"]:ln["ink"]]:
+                draw(img, W, H, face, g, x, y)
+                x += g.advance
+            top += (asc - desc + gap) * px / upem
+    return img
+
+
 def caret(placed, glyphs, raw, index):
     """Caret x, line top and height for byte offset `index`."""
     def start(ln):
@@ -314,6 +339,10 @@ def main(src):
         with open(os.path.join(HERE, name + ".pgm"), "wb") as f:
             f.write(b"P5\n%d %d\n255\n" % (W, H) + bytes(img))
         print(name, "ink pixels", sum(1 for v in img if v))
+    img = render_frame(face, hbfont, upem, hhea.ascent, hhea.descent, hhea.lineGap)
+    with open(os.path.join(HERE, "frame.pgm"), "wb") as f:
+        f.write(b"P5\n%d %d\n255\n" % FRAME_SIZE + bytes(img))
+    print("frame ink pixels", sum(1 for v in img if v))
 
 
 main(sys.argv[1])

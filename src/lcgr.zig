@@ -50,6 +50,7 @@ pub const shape_cache = @import("text/shape/cache.zig");
 pub const text_lines = @import("text/layout/lines.zig");
 pub const text_spans = @import("text/layout/spans.zig");
 pub const text_query = @import("text/layout/query.zig");
+pub const text_stack = @import("text/layout/stack.zig");
 
 test {
     std.testing.refAllDecls(@This());

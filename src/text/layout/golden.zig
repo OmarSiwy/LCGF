@@ -94,7 +94,7 @@ pub const RunCols = struct {
     }
 };
 
-pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single, rich, carets };
+pub const Scene = enum { wrap, narrow, center, end, justify, clamp, single, rich, carets, frame };
 
 /// A span after the first (which starts at 0 at the scene's `px`).
 const SpanSpec = struct { start: u32, px: f32 };
@@ -127,6 +127,7 @@ fn spec(s: Scene) Spec {
         .single => .{ .text = "Type office fluff into a lovely file", .px = 16, .box = .{ 4, 2, 150 }, .size = .{ 160, 28 }, .wrap = false, .max_lines = 1 },
         .rich => .{ .text = "Small words, BIG words and small again, all in one paragraph.", .px = 16, .box = .{ 4, 2, 200 }, .size = .{ 208, 124 }, .spans = &.{ .{ .start = 13, .px = 28 }, .{ .start = 22, .px = 16 } } },
         .carets => .{ .text = "An office fluff\nflows on, justified to the end of the box.", .px = 18, .box = .{ 4, 2, 200 }, .size = .{ 208, 84 }, .justify = true, .carets = true },
+        .frame => unreachable, // expectFrame
         .narrow => .{ .text = "Pneumonoultramicroscopic words\nbreak hard.", .px = 16, .box = .{ 3, 1, 90 }, .size = .{ 96, 92 } },
     };
 }
@@ -251,4 +252,105 @@ fn compare(s: Scene, img: []const u8, w: u32, h: u32) !void {
     try std.testing.expect(max <= 16);
     try std.testing.expect(sum < 2 * ink);
     try std.testing.expect(ink > 500);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The frame scene: the whole stack on the measure / wrap protocol, through layout and paint.
+
+const frame_title = "Text layout";
+const frame_para = "The measure and wrap protocol hands every run to the shaper and the line breaker.";
+
+/// Builds a tree, measures and wraps its text with `stack.Stack` in the order of prototype
+/// `Frame.end`, lays out and paints it, then draws every draw-list run as the stack lays it out
+/// again (`Stack.paragraph`) at the run's rect, and compares with testdata/frame.pgm.
+///
+///   root  px(240) x px(140), pad 8, gap 6
+///   ├ title  "Text layout", 22 px, does not wrap
+///   └ col    px(200) x fit
+///     └ para   shrinks; 16 px, wraps
+pub fn expectFrame() !void {
+    const mem = @import("../../core/mem.zig");
+    const types = @import("../../core/types.zig");
+    const Tree = @import("../../core/tree.zig").Tree;
+    const Texts = @import("../../core/texts.zig").Texts;
+    const Customs = @import("../../core/customs.zig").Customs;
+    const Strings = @import("../../core/strings.zig").Strings;
+    const layout = @import("../../layout/layout.zig");
+    const paint = @import("../../draw/paint.zig");
+    const DrawList = @import("../../draw/draw_list.zig").DrawList;
+    const Stack = @import("stack.zig").Stack;
+
+    const Parts = struct {
+        t: Tree,
+        tx: Texts,
+        cu: Customs,
+        d: DrawList,
+        fn carve(c: *mem.Carver) @This() {
+            return .{ .t = .init(c, 8), .tx = .init(c, 4), .cu = .init(c, 1), .d = .init(c, 8, 4, 1) };
+        }
+    };
+    const bytes = comptime blk: {
+        @setEvalBranchQuota(10_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Parts.carve(&counter);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var parts: Parts = .carve(&carver);
+    const t = &parts.t;
+    const tx = &parts.tx;
+    var str_buf: [256]u8 = undefined;
+    var strings: Strings = .{ .buf = &str_buf };
+
+    const root = t.push(0, types.Id.from("root"), &.{ .size = .{ .px(240), .px(140) }, .pad = @splat(8), .gap = 6 });
+    const title = t.push(root, .none, &.{});
+    t.c.text[title] = tx.push(title, strings.add(frame_title), &.{ .px = 22 });
+    const col = t.push(root, .none, &.{ .size = .{ .px(200), .fit } });
+    const body = t.push(col, .none, &.{ .shrink = true });
+    t.c.text[body] = tx.push(body, strings.add(frame_para), &.{ .px = 16, .wrap = true });
+    t.seal(col);
+    t.seal(root);
+
+    const shapers = [_]shape.Shaper{.init(try opentype.Face.parse(font, 0))};
+    var p: Para = .{};
+    p.bind();
+    var cols: RunCols = .{};
+    var st: Stack = .{ .shapers = &shapers, .run = cols.run(), .g = p.g, .l = p.l };
+    var ascent: [4]f32 = undefined;
+
+    // prototype Frame.end, with the stack where Mono was.
+    st.measure(tx, &strings, &ascent);
+    layout.prepare(t);
+    layout.applyText(t, tx, .x);
+    layout.fit(t, .x);
+    layout.resolve(t, .x, 240);
+    layout.textAvail(t, tx);
+    st.wrap(tx, &strings, &ascent);
+    layout.applyText(t, tx, .y);
+    layout.fit(t, .y);
+    layout.resolve(t, .y, 140);
+    layout.place(t);
+    layout.finalize(t);
+    paint.emit(t, tx, &parts.cu, strings.buf[0..strings.len], &parts.d);
+    try std.testing.expect(!st.overflow);
+
+    const w = 240;
+    const h = 140;
+    var img: [w * h]u8 = @splat(0);
+    const d = &parts.d;
+    try std.testing.expectEqual(2, d.run_len);
+    for (d.runs[0..d.run_len], 0..) |r, k| {
+        try st.paragraph(tx, &strings, k);
+        // The draw-time layout is the measured one, and fits its rect.
+        try std.testing.expectEqual(tx.c.h[k], lines_.stackHeight(&st.l));
+        try std.testing.expect(r.rect[1] + tx.c.h[k] <= r.rect[3] + 0.5);
+        p.g.len = st.g.len;
+        p.l.len = st.l.len;
+        p.l.ellipsis = 0;
+        p.s.len = 0;
+        _ = try p.s.push(0, 0, r.px, 0);
+        try draw(&shapers[0].face, &p, .{ r.rect[0], r.rect[1] }, &img, w);
+    }
+    try compare(.frame, &img, w, h);
 }
