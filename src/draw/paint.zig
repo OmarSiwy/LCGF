@@ -49,7 +49,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
         const i = if (ordered) order[k] else k;
         const vis: u32 = c.visible[i];
         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
-        const look = looks[i];
+        const look = &looks[i];
         quads[q] = .{
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
@@ -58,7 +58,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .fill = look.fill,
             .border_color = look.border_color,
             .radii = c.radii[i],
-            .border = look.border,
+            .border = c.border[i],
             .opacity = c.alpha[i],
             .xform = c.world[i],
             .clip_radii = c.clip_radii[parent[i]],

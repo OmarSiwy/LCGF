@@ -1,6 +1,7 @@
-//! Golden-image dumper for the reference widgets: replays `widgets_base.reference_replay`
-//! through both front ends with the widget harness (which fails if they draw differently), and
-//! writes the named frame as tools/golden/gpu.py draws it, into a directory:
+//! Golden-image dumper for the widgets: replays a page's input (`widgets_base.reference_replay`,
+//! or a widget's own, see `pages`) through both front ends with the widget harness (which fails
+//! if they draw differently), and writes the named frame as tools/golden/gpu.py draws it, into
+//! a directory:
 //!
 //!     zig build widget-dump -- <frame> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
@@ -19,6 +20,15 @@ const gfx = lcgr.quad_shader;
 const pages = .{
     .{ "", w.Reference(.default), w.reference_replay, w.golden_frames },
     .{ "card-", lcgr.widgets_card.Page(.default), lcgr.widgets_card.replay, lcgr.widgets_card.golden_frames },
+    .{ "separator-", lcgr.widgets_separator.Page(.default), lcgr.widgets_separator.replay, lcgr.widgets_separator.golden_frames },
+    .{ "spacer-", lcgr.widgets_spacer.Page(.default), lcgr.widgets_spacer.replay, lcgr.widgets_spacer.golden_frames },
+    .{ "accordion-", lcgr.widgets_accordion.Page(.default), lcgr.widgets_accordion.replay, lcgr.widgets_accordion.golden_frames },
+    .{ "tabs-", lcgr.widgets_tabs.Page(.default), lcgr.widgets_tabs.replay, lcgr.widgets_tabs.golden_frames },
+    .{ "splitter-", lcgr.widgets_splitter.Page(.default), lcgr.widgets_splitter.replay, lcgr.widgets_splitter.golden_frames },
+    .{ "scroll-", lcgr.widgets_scroll.Page(.default), lcgr.widgets_scroll.replay, lcgr.widgets_scroll.golden_frames },
+    .{ "toolbar-", lcgr.widgets_toolbar.Page(.default), lcgr.widgets_toolbar.replay, lcgr.widgets_toolbar.golden_frames },
+    .{ "breadcrumb-", lcgr.widgets_breadcrumb.Page(.default), lcgr.widgets_breadcrumb.replay, lcgr.widgets_breadcrumb.golden_frames },
+    .{ "icon-", lcgr.widgets_icon.Page(.default), lcgr.widgets_icon.replay, lcgr.widgets_icon.golden_frames },
     .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
     .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
     .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },
@@ -26,6 +36,7 @@ const pages = .{
     .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
     .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
     .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
+    .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
 };
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;
