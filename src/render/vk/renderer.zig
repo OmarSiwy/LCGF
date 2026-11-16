@@ -70,8 +70,14 @@ pub const Desc = struct {
     /// Format of the images the pass draws into (the swapchain's, or an offscreen target's).
     format: c.VkFormat,
     samples: u32 = 1,
-    max_quads: u32 = 16 * 1024,
-    max_glyphs: u32 = 32 * 1024,
+    /// Capacities of each ring slot, which is host-visible memory (pinned system memory on a
+    /// discrete GPU), `frames` times over: 136 bytes per quad. The defaults are what a frame
+    /// of the default `Limits` can hold: one quad per node (4096), and a 1920x1080 screen
+    /// filled with 8x16-pixel glyphs (16200). 2.8 MB per slot; the prototype's 16K and 32K
+    /// were 6.5 MB, 13 MB with two slots. Raise them for larger frames: past them quads and
+    /// glyphs are dropped.
+    max_quads: u32 = 4 * 1024,
+    max_glyphs: u32 = 16 * 1024,
     /// Frames the host lets the GPU work on while it prepares the next: one ring slot each.
     frames: u32 = 2,
 };
