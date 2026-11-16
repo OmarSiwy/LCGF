@@ -132,3 +132,33 @@ At 800x600 a read-back costs about as much as drawing the frame on the GPU (C042
 so the whole frame (draw plus read-back, roughly 0.25 to 0.5 ms) is still 2 to 10 times below sw
 on one core for these scenes, but read-back grows with pixels, not with content: at 4K it is 2.5 ms
 per frame before anything is drawn, which a 60 Hz budget can afford once and a 144 Hz one barely.
+
+## C0422: present through Vulkan external memory where available
+
+Decision: where the GPU's Vulkan driver exports memory (VK_KHR_external_memory_fd) and CUDA can
+import it, Vulkan allocates the framebuffer, CUDA maps it (cuImportExternalMemory,
+cuExternalMemoryGetMappedBuffer) and the kernels draw straight into it (`Capacity.framebuffer`);
+Vulkan then copies it into an image that the Vulkan back end samples like any texture (route 3 of
+src/render/iface.zig), or that a host copies to a swapchain image. No pixel crosses to the host.
+Elsewhere (no Vulkan, a driver without the extension, HIP) the read-back of C0421 stays.
+
+Built over the Vulkan back end's public device code without editing it: `vulkan.device` creates a
+`vk.device.Device` the way `Device.init` does, plus the one extension (`Device.init` takes no
+extension list). Synchronisation is the simple kind (the host waits for CUDA, then for the copy);
+external semaphores would let the queues overlap. The device is the one `vk.device.pick` prefers;
+matching it to CUDA's by UUID is left for a machine with two GPUs.
+
+Measured on the RTX 4060 with the NVIDIA Vulkan driver (`ci/run.sh gompute-vk`, golden shell with
+the NVIDIA ICD instead of lavapipe):
+
+| What | Value |
+|---|---|
+| Test `vulkan: CUDA draws into Vulkan memory, Vulkan copies it into an image, the pixels are the CPU path's` | passes: `rects` and `clip`, every byte read back from the Vulkan image equals the CPU path's |
+| Hand-over, 800x600 (GPU done to image ready: record, submit, wait; median of 50, two runs) | 145 to 149 us |
+| Hand-over, 1920x1080 | 266 to 296 us |
+| Hand-over, 3840x2160 | 823 to 930 us |
+
+Against the read-back of C0421 (pinned memory): equal at 800x600 (150 to 296 us), 2 to 4 times
+cheaper at 1080p (634 to 1,263 us) and about 3 times at 4K (2,522 us). About 100 us of each
+hand-over is the submit-and-wait round trip, not the copy; a frame that the Vulkan back end goes
+on to draw anyway would put the copy in its own command buffer and pay none of it.

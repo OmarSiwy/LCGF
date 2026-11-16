@@ -137,6 +137,9 @@ pub fn Device(comptime backend: g.Backend) type {
             images: u32,
             texels: u32,
             bin_cap: u32 = 64,
+            /// Device address of a framebuffer the caller owns and keeps alive (`stride * height`
+            /// pixels; Vulkan external memory, vulkan.zig); null allocates one.
+            framebuffer: ?u64 = null,
         };
 
         pub fn init(ordinal: c_int, cap: Capacity) !Self {
@@ -158,7 +161,12 @@ pub fn Device(comptime backend: g.Backend) type {
                 @as(usize, cap.stride) * cap.height * 4,
             };
             const bufs = [_]*Buffer{ &d.quads, &d.tex, &d.images, &d.texels, &d.bin_idx, &d.bin_count, &d.px };
-            for (bufs, sizes, 0..) |b, n, k| {
+            const own = if (cap.framebuffer != null) bufs.len - 1 else bufs.len;
+            if (cap.framebuffer) |addr| {
+                const Handle = @FieldType(Buffer, "handle");
+                d.px = .{ .handle = if (comptime @typeInfo(Handle) == .int) addr else @ptrFromInt(addr), .bytes = sizes[6], .ordinal = ordinal };
+            }
+            for (bufs[0..own], sizes[0..own], 0..) |b, n, k| {
                 b.* = d.raster_k.alloc(@max(n, 4)) catch |err| {
                     for (bufs[0..k]) |done| done.free();
                     return err;
@@ -168,7 +176,8 @@ pub fn Device(comptime backend: g.Backend) type {
         }
 
         pub fn deinit(d: *Self) void {
-            for ([_]*Buffer{ &d.quads, &d.tex, &d.images, &d.texels, &d.bin_idx, &d.bin_count, &d.px }) |b| b.free();
+            for ([_]*Buffer{ &d.quads, &d.tex, &d.images, &d.texels, &d.bin_idx, &d.bin_count }) |b| b.free();
+            if (d.cap.framebuffer == null) d.px.free();
             d.raster_k.deinit();
             d.bin_k.deinit();
             d.fill_k.deinit();
