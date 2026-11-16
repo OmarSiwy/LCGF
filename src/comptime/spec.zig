@@ -33,6 +33,8 @@ pub const Kind = enum(u8) {
     range,
     /// One thumb of a `range`, `index` 0 (low) or 1 (high): the half of the track nearer it.
     range_thumb,
+    /// A caption on a pill, maybe with a remove button (src/widgets/chip.zig).
+    chip,
 };
 
 /// One node of the declaration. Exists only at compile time.

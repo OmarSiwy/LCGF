@@ -327,7 +327,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                             const v = range_zig.step(@field(ui.signals.state, n.bind.?), @intCast(n.index), true, along, false, n.lo, n.hi, in);
                             ui.signals.set(field(n.bind.?), v);
                         },
-                        .label, .col, .row, .button, .radio, .range => {},
+                        .label, .col, .row, .button, .radio, .range, .chip => {},
                     }
                 },
             };
@@ -484,6 +484,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     range_zig.expose(&tb.t, track, value);
                 },
                 .range_thumb => unreachable, // pushed by its track
+                .chip => @compileError("the comptime chip is built from C0697 on"),
                 .toggle => {
                     const value: bool = @field(state, n.bind.?);
                     var s = n.style;

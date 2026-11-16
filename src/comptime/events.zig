@@ -125,7 +125,7 @@ pub fn Events(comptime spec: Spec) type {
         pub fn Payload(comptime kind: Kind) type {
             return switch (kind) {
                 .slider, .range_thumb => f32,
-                .checkbox, .button, .radio, .radio_option, .@"switch", .toggle, .range, .label, .col, .row => void,
+                .checkbox, .button, .radio, .radio_option, .@"switch", .toggle, .range, .chip, .label, .col, .row => void,
             };
         }
 
@@ -143,7 +143,7 @@ pub fn Events(comptime spec: Spec) type {
         pub fn focusable(comptime kind: Kind) bool {
             return switch (kind) {
                 .checkbox, .slider, .button, .radio_option, .@"switch", .toggle, .range_thumb => true,
-                .radio, .range, .label, .col, .row => false,
+                .radio, .range, .chip, .label, .col, .row => false,
             };
         }
 
