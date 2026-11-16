@@ -204,6 +204,8 @@ pub const Window = struct {
     /// Physical pixels per logical pixel.
     scale: f32 = 1,
     shm: Shm = .{},
+    /// The buffer (0 or 1) of the last frame committed.
+    shown: u1 = 0,
     /// A frame was committed and its frame callback (`frame`) has not come yet.
     frame: u32 = 0,
     /// Held input of this window, carried from poll to poll.
@@ -451,6 +453,7 @@ pub const Wayland = struct {
         fb.clear(w.background);
         render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
         win.shm.busy[slot] = true;
+        win.shown = @intCast(slot);
         w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
         // Fractional scale draws `px` pixels and has the compositor show them at the logical
         // size; the integer fallback (wl_surface.preferred_buffer_scale) tells it the factor.
@@ -867,7 +870,7 @@ comptime {
 }
 
 /// A window's buffers in shared memory: two of `width` x `height`, `one` bytes apart.
-const Shm = struct {
+pub const Shm = struct {
     map: []align(4096) u8 = &.{},
     pool: u32 = 0,
     buffers: [2]u32 = .{ 0, 0 },
@@ -878,7 +881,7 @@ const Shm = struct {
     stride: u32 = 0,
     one: usize = 0,
 
-    fn framebuffer(s: *const Shm, slot: usize) sw.Framebuffer {
+    pub fn framebuffer(s: *const Shm, slot: usize) sw.Framebuffer {
         const px: [*]u32 = @ptrCast(@alignCast(s.map[s.one * slot ..].ptr));
         return .init(px[0 .. s.one / 4], s.width, s.height, .bgra8);
     }

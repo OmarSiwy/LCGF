@@ -5,6 +5,8 @@
 //!                      happened and the theme's colours: what a compositor without input
 //!                      devices (weston --backend=headless) can show
 //!   --idle SECONDS     how long "idle" is (default 0.5): long enough to take a screenshot
+//!   --dump PATH        at the end, write the main window's last frame as committed: width and
+//!                      height (u32, little-endian), then its rows of ARGB words
 //!   --multi            also open a second toplevel and a popup under the Reset button, each
 //!                      running the example with its own context
 
@@ -26,11 +28,13 @@ pub fn main(init: std.process.Init) !void {
     var exit_when_idle = false;
     var multi = false;
     var idle_seconds: f32 = 0.5;
+    var dump: ?[]const u8 = null;
     var args = init.minimal.args.iterate();
     _ = args.skip();
     while (args.next()) |a| {
         exit_when_idle = exit_when_idle or std.mem.eql(u8, a, "--exit-when-idle");
         multi = multi or std.mem.eql(u8, a, "--multi");
+        if (std.mem.eql(u8, a, "--dump")) dump = args.next();
         if (std.mem.eql(u8, a, "--idle")) idle_seconds = try std.fmt.parseFloat(f32, args.next() orelse "0.5");
     }
 
@@ -97,6 +101,18 @@ pub fn main(init: std.process.Init) !void {
     const th = apps[0].theme;
     try w.interface.print("wayland-example: colours panel {x:0>6} control {x:0>6} text {x:0>6}\n", .{ rgb(th.panel), rgb(th.control), rgb(th.text) });
     try w.interface.flush();
+    if (dump) |path| {
+        const main_win = &shell.windows[0];
+        const fb = main_win.shm.framebuffer(main_win.shown);
+        const file = try std.Io.Dir.cwd().createFile(init.io, path, .{});
+        defer file.close(init.io);
+        var fbuf: [4096]u8 = undefined;
+        var fw = file.writerStreaming(init.io, &fbuf);
+        try fw.interface.writeInt(u32, fb.width, .little);
+        try fw.interface.writeInt(u32, fb.height, .little);
+        for (0..fb.height) |y| try fw.interface.writeAll(std.mem.sliceAsBytes(fb.pixels[y * fb.stride ..][0..fb.width]));
+        try fw.interface.flush();
+    }
     if (shell.err != null) std.process.exit(1);
 }
 
