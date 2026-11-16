@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const rules = @import("plural.zig");
+const number = @import("number.zig");
 
 const forms = @typeInfo(rules.Category).@"enum".field_names.len;
 
@@ -56,6 +57,15 @@ pub fn Catalogue(comptime Key: type) type {
         /// The form of `key` that the number `n` takes in this catalogue's locale.
         pub fn plural(c: *const @This(), key: Key, n: rules.Operands) []const u8 {
             return c.texts[@backingInt(key)][@backingInt(rules.category(c.locale, n))];
+        }
+
+        /// The one-call form for counts: formats `value / 10^frac_digits` for the locale, picks
+        /// the plural form of `key` it takes and fills `{0}` with it. Other placeholders are
+        /// not allowed in that message.
+        pub fn formatCount(c: *const @This(), out: []u8, key: Key, value: i64, frac_digits: u8) error{NoSpaceLeft}![]u8 {
+            var digits: [128]u8 = undefined; // 20 digits, 6 groups, a separator and a sign, each at most 4 bytes
+            const shown = try number.format(&digits, c.locale, value, frac_digits);
+            return fill(out, c.plural(key, number.operands(value, frac_digits)), &.{shown});
         }
     };
 }
@@ -197,4 +207,16 @@ test "missing, unknown and unused plural forms are caught at comptime" {
     try testing.expectEqualStrings("message 'files' has a plural form locale 'ja' never selects", comptime check(Files, .ja, .{ .files = .{ .one = "", .other = "" } }).?);
     try testing.expectEqualStrings("message 'files' has unknown plural form 'plural'", comptime check(Files, .en, .{ .files = .{ .plural = "", .other = "" } }).?);
     try testing.expectEqualStrings("message 'files.one' has a malformed placeholder", comptime check(Files, .en, .{ .files = .{ .one = "{", .other = "" } }).?);
+}
+
+test "formatCount formats the number and picks its plural form" {
+    const Files = enum { files };
+    const de: Catalogue(Files) = .init(.de, .{ .files = .{ .one = "{0} Datei", .other = "{0} Dateien" } });
+    const ru: Catalogue(Files) = .init(.ru, .{ .files = .{ .one = "{0} файл", .few = "{0} файла", .many = "{0} файлов", .other = "{0} файла" } });
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("1 Datei", try de.formatCount(&buf, .files, 1, 0));
+    try testing.expectEqualStrings("1,0 Dateien", try de.formatCount(&buf, .files, 10, 1));
+    try testing.expectEqualStrings("12.345 Dateien", try de.formatCount(&buf, .files, 12345, 0));
+    try testing.expectEqualStrings("1\u{a0}021 файл", try ru.formatCount(&buf, .files, 1021, 0));
+    try testing.expectEqualStrings("2,5 файла", try ru.formatCount(&buf, .files, 25, 1));
 }
