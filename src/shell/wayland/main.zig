@@ -2,8 +2,9 @@
 //! `$WAYLAND_DISPLAY`, opens a toplevel and runs `iface.run`'s loop until the window is closed.
 //!
 //!   --exit-when-idle   end once nothing is left to draw for half a second, and print what
-//!                      happened: what a compositor without input devices (weston
-//!                      --backend=headless) can show
+//!                      happened and the theme's colours: what a compositor without input
+//!                      devices (weston --backend=headless) can show
+//!   --idle SECONDS     how long "idle" is (default 0.5): long enough to take a screenshot
 //!   --multi            also open a second toplevel and a popup under the Reset button, each
 //!                      running the example with its own context
 
@@ -24,11 +25,13 @@ var count: [limits.texts]u32 = undefined;
 pub fn main(init: std.process.Init) !void {
     var exit_when_idle = false;
     var multi = false;
+    var idle_seconds: f32 = 0.5;
     var args = init.minimal.args.iterate();
     _ = args.skip();
     while (args.next()) |a| {
         exit_when_idle = exit_when_idle or std.mem.eql(u8, a, "--exit-when-idle");
         multi = multi or std.mem.eql(u8, a, "--multi");
+        if (std.mem.eql(u8, a, "--idle")) idle_seconds = try std.fmt.parseFloat(f32, args.next() orelse "0.5");
     }
 
     const env = init.minimal.environ;
@@ -50,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
     var evs: [3]Events = @splat(.{});
     // iface.run's body for each window, with a way out when idle: half a second without
     // anything to draw (events after a window is mapped, such as its scale, come first).
-    var idle = false;
+    var idle_since: ?f64 = null;
     while (shell.pollWindows(evs[0..n])) {
         var built = false;
         var wake: f32 = lcgr.types.inf;
@@ -71,12 +74,15 @@ pub fn main(init: std.process.Init) !void {
             pace = @fromBackingInt(@intCast(@max(@backingInt(pace), @backingInt(scheduler.pace(ctx)))));
         }
         if (!built and exit_when_idle) {
-            if (idle) break;
-            idle = true;
-            shell.wait(0.5, .timer);
+            const now = shell.clock();
+            const since = idle_since orelse now;
+            idle_since = since;
+            const left = idle_seconds - (now - since);
+            if (!(left > 0)) break;
+            shell.wait(@floatCast(left), .timer);
             continue;
         }
-        idle = false;
+        idle_since = null;
         shell.wait(wake, pace);
     }
 
@@ -88,6 +94,12 @@ pub fn main(init: std.process.Init) !void {
         try w.interface.print("wayland-example: window {d}{s}: viewport {d}x{d} scale {d}, configured {}, {d} frames built\n", .{ k, if (win.popup) " (popup)" else "", in.viewport[0], in.viewport[1], in.scale, win.configured, apps[k].builds });
     }
     try w.interface.print("wayland-example: {d} presented, {d} dropped, error {?}\n", .{ shell.presents, shell.dropped, shell.err });
+    const th = apps[0].theme;
+    try w.interface.print("wayland-example: colours panel {x:0>6} control {x:0>6} text {x:0>6}\n", .{ rgb(th.panel), rgb(th.control), rgb(th.text) });
     try w.interface.flush();
     if (shell.err != null) std.process.exit(1);
+}
+
+fn rgb(c: lcgr.types.Color) u32 {
+    return (@as(u32, c.r) << 16) | (@as(u32, c.g) << 8) | c.b;
 }
