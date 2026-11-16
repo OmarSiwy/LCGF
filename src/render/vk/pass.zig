@@ -89,6 +89,25 @@ pub fn end(d: *const Device, cmd: c.VkCommandBuffer, e: End) void {
     barrier(d, cmd, (&b)[0..1]);
 }
 
+/// A whole-image layout change ordered against all earlier and later work: for the rare
+/// transitions outside a pass (a copy out of a swapchain image before presenting it).
+pub fn transition(d: *const Device, cmd: c.VkCommandBuffer, image: c.VkImage, from: c.VkImageLayout, to: c.VkImageLayout) void {
+    const b: c.VkImageMemoryBarrier2 = .{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = c.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .srcAccessMask = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+        .dstStageMask = c.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .dstAccessMask = c.VK_ACCESS_2_MEMORY_READ_BIT | c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+        .oldLayout = from,
+        .newLayout = to,
+        .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = color_range,
+    };
+    barrier(d, cmd, (&b)[0..1]);
+}
+
 fn toAttachment(image: c.VkImage, from: c.VkImageLayout) c.VkImageMemoryBarrier2 {
     return .{
         .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,

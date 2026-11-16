@@ -133,14 +133,15 @@ fn chooseExtent(caps: c.VkSurfaceCapabilitiesKHR, want: c.VkExtent2D) c.VkExtent
 
 const testing = std.testing;
 
-/// Instance, headless surface and presenting device, for tests.
-pub const TestHost = struct {
+/// Instance, headless surface and presenting device: a host with a swapchain and no window,
+/// for tests and tools.
+pub const Headless = struct {
     lib: loader.Library,
     instance: loader.Instance,
     surface: c.VkSurfaceKHR,
     device: Device,
 
-    pub fn init(h: *TestHost) !void {
+    pub fn init(h: *Headless) !void {
         h.lib = try loader.Library.open();
         errdefer h.lib.close();
         h.instance = try loader.Instance.init(&h.lib, .{ .extensions = &headless_extensions });
@@ -150,7 +151,7 @@ pub const TestHost = struct {
         h.device = try Device.init(&h.instance, try device_mod.pick(&h.instance, h.surface), true);
     }
 
-    pub fn deinit(h: *TestHost) void {
+    pub fn deinit(h: *Headless) void {
         h.device.deinit();
         destroySurface(&h.instance, h.surface);
         h.instance.deinit();
@@ -159,7 +160,7 @@ pub const TestHost = struct {
 };
 
 test "swapchain: a headless surface gets a FIFO swapchain at the requested size" {
-    var h: TestHost = undefined;
+    var h: Headless = undefined;
     try h.init();
     defer h.deinit();
     var s = try Swapchain.init(&h.instance, &h.device, h.surface, .{ .width = 160, .height = 120 }, null);
