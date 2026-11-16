@@ -19,6 +19,8 @@ const popover = @import("popover.zig");
 const menu = @import("menu.zig");
 const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
+const Keyboard = @import("../interact/keyboard.zig").Keyboard;
+const Editor = @import("../text/edit/edit.zig").Editor;
 const Tree = @import("../core/tree.zig").Tree;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
@@ -113,8 +115,27 @@ pub fn Combobox(comptime th: Theme, comptime name: @EnumLiteral(), comptime fiel
             return checkCombobox(State, def, field_name, @tagName(text));
         }
 
+        /// The options' texts: their string fields.
+        fn optionTexts(st: anytype) [def.items.len][]const u8 {
+            var out: [def.items.len][]const u8 = undefined;
+            inline for (def.items, 0..) |o, k| out[k] = @field(st, o);
+            return out;
+        }
+
+        /// The box's, the scrim's and the options' responses, the rects of last frame and the
+        /// keys, through `advance`; then the box's text field points at the state's text.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = .{ sig, v };
+            const p = v.in.pointer;
+            var hits: Hits = .{
+                .toggle = v.responseOf(id).clicked,
+                .outside = v.responseOf(partName(id, "scrim")).pressed,
+                .down = v.in.buttons.left,
+                .inside = within(v.last.of(id), p) or within(v.last.of(partName(id, "panel")), p),
+            };
+            inline for (def.items, 0..) |o, k| hits.add(k, v.responseOf(partName(id, o)));
+            const texts = optionTexts(sig.state);
+            sig.set(field, advance(&texts, @field(sig.state, field_name), hits, v.in));
+            sig.set(text, @field(sig.state, field_name).text());
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -126,7 +147,11 @@ pub fn Combobox(comptime th: Theme, comptime name: @EnumLiteral(), comptime fiel
             }
             if (comptime named(n, partName(id, "panel"))) return .{ .style = listStyle(&th, v.last.of(id)) };
             inline for (def.items, 0..) |o, k| {
-                if (comptime named(n, partName(id, o))) return .{ .style = optionStyle(&th, cs.active == k, cs.selected == k) };
+                if (comptime named(n, partName(id, o))) {
+                    const texts = optionTexts(st);
+                    if ((filter(&texts, cs.text()) >> k) & 1 == 0) return null;
+                    return .{ .style = optionStyle(&th, cs.active == k, cs.selected == k) };
+                }
             }
             return popover.plainPart(th, n, v.response);
         }
@@ -177,13 +202,167 @@ pub fn optionFills(th: *const Theme) base.StateColors {
     return .{ .transparent, th.control, th.control_hot, th.control_hot };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// What the pointer did to a combo box this frame, from its parts' responses and last frame's
+/// rects.
+pub const Hits = struct {
+    /// The box was clicked.
+    toggle: bool = false,
+    /// The pointer went down on the scrim, outside the list.
+    outside: bool = false,
+    /// The option clicked, or `menu.no_item`.
+    clicked: u8 = no_item,
+    /// The option under the pointer, or `menu.no_item`.
+    hovered: u8 = no_item,
+    /// The left button is down.
+    down: bool = false,
+    /// The pointer is over the box or the shown list.
+    inside: bool = false,
+
+    /// Notes option `k`'s response.
+    pub fn add(h: *Hits, k: u8, r: Response) void {
+        if (r.clicked) h.clicked = k;
+        if (r.hovered) h.hovered = k;
+    }
+};
+
+/// Whether `p` is inside `r` (an empty rect holds nothing).
+pub fn within(r: Rect, p: [2]f32) bool {
+    return p[0] >= r.x0 and p[0] < r.x1 and p[1] >= r.y0 and p[1] < r.y1;
+}
+
+/// The options shown for `typed`: those whose text starts with it, ASCII case folded, one bit
+/// per option (all of them for no text).
+pub fn filter(texts: []const []const u8, typed: []const u8) u64 {
+    var m: u64 = 0;
+    for (texts, 0..) |t, k| m |= @as(u64, @intFromBool(std.ascii.startsWithIgnoreCase(t, typed))) << @intCast(k);
+    return m;
+}
+
+/// The next shown option after `from` (before it when `back`), wrapping, among `n`; from
+/// `menu.no_item` the first (last) shown one; `menu.no_item` when none is shown.
+pub fn nextShown(shown: u64, n: u8, from: u8, back: bool) u8 {
+    if (shown == 0) return no_item;
+    const step: u8 = if (back) n - 1 else 1;
+    var k: u8 = if (from != no_item) from else if (back) 0 else n - 1;
+    while (true) {
+        k = (k + step) % n;
+        if ((shown >> @intCast(k)) & 1 != 0) return k;
+    }
+}
+
+/// The id the box's editor reads its keys as (a `Keyboard` aimed at it while focused).
+const edit_id = types.Id.from("combobox");
+
+/// Applies this frame's keys to the box's text through src/text/edit/ (one line), all but the
+/// list's keys (Up, Down, Enter, Escape), which `advance` reads. True when the text changed.
+fn edit(s: *ComboState, in: *const Input) bool {
+    const k = popover.keys;
+    var taken: u64 = 0;
+    for (in.events[0..@min(in.events.len, 64)], 0..) |e, i| {
+        const list_key = e.code == k.up or e.code == k.down or e.code == k.enter or e.code == k.escape;
+        taken |= @as(u64, @intFromBool(e.kind != .text and list_key)) << @intCast(i);
+    }
+    const kb: Keyboard = .{ .in = in, .target = @backingInt(edit_id), .taken = taken };
+    var ed: Editor = .{ .b = .{ .buf = &s.buf, .gap = s.len }, .caret = s.caret, .anchor = s.anchor, .mode = .{ .single_line = true } };
+    const r = ed.update(&kb, edit_id, .{});
+    // The gap to the end, the rest zeroed: equal texts are equal states.
+    s.len = @intCast(ed.text().len);
+    @memset(s.buf[s.len..], 0);
+    s.caret = @intCast(ed.caret);
+    s.anchor = @intCast(ed.anchor);
+    return r.changed;
+}
+
+/// Choosing option `k`: its text becomes the box's, it becomes the selection, the list closes.
+fn choose(s: *ComboState, texts: []const []const u8, k: u8) void {
+    s.setText(texts[k]);
+    s.selected = k;
+    s.open = false;
+}
+
+/// One frame of a combo box (APG editable combobox with list autocomplete, manual selection).
+/// A press on the box or the list gives it the keyboard, a press elsewhere takes it. The box's
+/// click toggles the list (opening on the chosen option if it is shown), a press outside
+/// closes it, the pointer reaching a shown option highlights it, a click chooses it. While
+/// focused, typing edits the text (src/text/edit/: Left, Right, Home, End, Backspace, Delete,
+/// select-all, ...), which clears the choice, opens the list and filters it to the options
+/// starting with the text; then, in order, Down and Up open the list or move the highlight
+/// among the shown options, wrapping, Enter chooses the highlighted option (its text becomes
+/// the box's), Escape closes the list, or with the list closed clears the text. Within one
+/// frame the text edits come before the list's keys.
+pub fn advance(texts: []const []const u8, st: ComboState, hits: Hits, in: *const Input) ComboState {
+    const n: u8 = @intCast(texts.len);
+    var s = st;
+    const press = hits.down and !st.down;
+    s.down = hits.down;
+    if (press) s.focused = hits.inside;
+    if (hits.outside) s.open = false;
+    if (hits.toggle) {
+        s.open = !st.open;
+        const shown = filter(texts, s.text());
+        const on_choice = st.selected != no_item and (shown >> @intCast(st.selected)) & 1 != 0;
+        s.active = if (on_choice) st.selected else no_item;
+        s.hover = no_item;
+    }
+    if (s.open and hits.hovered != s.hover) {
+        if (hits.hovered != no_item) s.active = hits.hovered;
+        s.hover = hits.hovered;
+    }
+    if (s.open and hits.clicked != no_item) choose(&s, texts, hits.clicked);
+    if (s.focused) {
+        if (edit(&s, in)) {
+            s.selected = no_item;
+            s.open = true;
+            s.active = no_item;
+        }
+        const shown = filter(texts, s.text());
+        const k = popover.keys;
+        for (in.events) |e| {
+            if (e.kind != .press and e.kind != .repeat) continue;
+            switch (e.code) {
+                k.down, k.up => {
+                    s.active = if (s.open) nextShown(shown, n, s.active, e.code == k.up) else nextShown(shown, n, no_item, e.code == k.up);
+                    s.open = true;
+                },
+                k.enter => if (s.open and s.active != no_item) choose(&s, texts, s.active),
+                k.escape => if (s.open) {
+                    s.open = false;
+                } else {
+                    s.setText("");
+                    s.selected = no_item;
+                },
+                else => {},
+            }
+        }
+    }
+    if (!s.open) {
+        s.active = no_item;
+        s.hover = no_item;
+    }
+    return s;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The box of combo box `name` (options `def`, labelled `texts`), in the page's flow, showing
 /// its text.
 pub fn input(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *ComboState, texts: []const []const u8) Response {
     std.debug.assert(texts.len == def.items.len);
-    const r = f.ctx.inter.response(.from(name));
+    // Every response is asked for before anything is built, so the rows show the frame's
+    // final state, as in the comptime front end.
+    const inter = &f.ctx.inter;
+    const r = inter.response(.from(name));
+    const p = f.in.pointer;
+    var hits: Hits = .{
+        .toggle = r.clicked,
+        .outside = inter.response(.from(partName(name, "scrim"))).pressed,
+        .down = f.in.buttons.left,
+        .inside = within(f.lastRect(.from(name)), p) or within(f.lastRect(.from(partName(name, "panel"))), p),
+    };
+    inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(partName(name, o))));
+    st.* = advance(texts, st.*, hits, f.in);
     const b = f.open(.from(name), inputStyle(th, st.focused, r));
     _ = f.interact(b, .button);
     _ = base.label(f, th, st.text());
@@ -197,10 +376,13 @@ pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     if (!st.open) return;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
     _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
+    const shown = filter(texts, st.text());
     inline for (def.items, 0..) |o, k| {
-        _ = f.interact(f.open(.from(partName(name, o)), optionStyle(th, st.active == k, st.selected == k)), popover.overlay_sense);
-        _ = base.label(f, th, texts[k]);
-        f.close();
+        if ((shown >> k) & 1 != 0) {
+            _ = f.interact(f.open(.from(partName(name, o)), optionStyle(th, st.active == k, st.selected == k)), popover.overlay_sense);
+            _ = base.label(f, th, texts[k]);
+            f.close();
+        }
     }
     f.close();
     f.close();
@@ -282,7 +464,7 @@ test "Combobox: the page agrees in both front ends, closed and open" {
     var st = withText("Ap");
     st.open = true;
     t = try setState(h, st);
-    try testing.expectEqual(@as(u32, 6 + 2 + 2 * 4), t.len);
+    try testing.expectEqual(@as(u32, 6 + 2 + 2 * 2), t.len); // Apple, Apricot
     const at = t.rect(t.find(.from("fruit")));
     try testing.expectEqual(at.x0, t.rect(t.find(.from("fruit_panel"))).x0);
 }
@@ -320,6 +502,141 @@ test "Combobox: another theme restyles both front ends alike" {
     try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("fruit"))].border_color);
     // The list is at least as wide as the box.
     try testing.expect(t.rect(t.find(.from("fruit_panel"))).w() >= t.rect(t.find(.from("fruit"))).w());
+}
+
+test "filter, nextShown: options starting with the text; moves among them, wrapping" {
+    try testing.expectEqual(@as(u64, 0b1111), filter(&fruit_texts, ""));
+    try testing.expectEqual(@as(u64, 0b0011), filter(&fruit_texts, "aP"));
+    try testing.expectEqual(@as(u64, 0b0010), filter(&fruit_texts, "apr"));
+    try testing.expectEqual(@as(u64, 0), filter(&fruit_texts, "kiwi"));
+    try testing.expectEqual(@as(u8, 2), nextShown(0b1100, 4, no_item, false));
+    try testing.expectEqual(@as(u8, 3), nextShown(0b1100, 4, 2, false));
+    try testing.expectEqual(@as(u8, 2), nextShown(0b1100, 4, 3, false));
+    try testing.expectEqual(@as(u8, 3), nextShown(0b1100, 4, no_item, true));
+    try testing.expectEqual(@as(u8, 3), nextShown(0b1100, 4, 2, true));
+    try testing.expectEqual(no_item, nextShown(0, 4, no_item, false));
+}
+
+/// `advance` over the frames of replay `src` (focused, no pointer), from `st`.
+fn typeIn(st: ComboState, src: []const u8) !ComboState {
+    const Replay = @import("../core/input.zig").Replay;
+    var text: [32]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    var r: Replay = .{ .src = src };
+    var s = st;
+    while (try r.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| s = advance(&fruit_texts, s, .{}, in);
+    return s;
+}
+
+test "advance: typing filters and opens; arrows move among the shown options; Enter chooses" {
+    const focused: ComboState = .{ .focused = true };
+    var s = try typeIn(focused, "frame\ntext ap\n");
+    try testing.expectEqualStrings("ap", s.text());
+    try testing.expect(s.open and s.active == no_item);
+    s = try typeIn(s, "frame\npress 81\nframe\npress 81\nframe\npress 81\n"); // Apple, Apricot, Apple
+    try testing.expectEqual(@as(u8, 0), s.active);
+    s = try typeIn(s, "frame\npress 82\npress 40\n"); // Up wraps to Apricot; Enter
+    try testing.expectEqualStrings("Apricot", s.text());
+    try testing.expect(!s.open and s.selected == 1 and s.caret == 7);
+    s = try typeIn(s, "frame\npress 42\n"); // Backspace: edited, the choice cleared
+    try testing.expectEqualStrings("Aprico", s.text());
+    try testing.expect(s.open and s.selected == no_item);
+    s = try typeIn(s, "frame\npress 41\nframe\npress 41\n"); // Escape closes, then clears
+    try testing.expectEqualStrings("", s.text());
+    try testing.expect(!s.open);
+    s = try typeIn(s, "frame\npress 82\n"); // Up opens on the last option
+    try testing.expect(s.open and s.active == 3);
+    // Unfocused, keys do nothing.
+    s = try typeIn(.{}, "frame\ntext b\npress 81\n");
+    try testing.expect(s.len == 0 and !s.open);
+}
+
+test "advance: a press on the box focuses, elsewhere unfocuses; a click on an option chooses" {
+    var s = advance(&fruit_texts, .{}, .{ .down = true, .inside = true }, &.{});
+    try testing.expect(s.focused);
+    s = advance(&fruit_texts, s, .{ .toggle = true }, &.{});
+    try testing.expect(s.open and !s.down);
+    s = advance(&fruit_texts, s, .{ .hovered = 2 }, &.{});
+    try testing.expectEqual(@as(u8, 2), s.active);
+    s = advance(&fruit_texts, s, .{ .hovered = 2, .clicked = 2 }, &.{});
+    try testing.expectEqualStrings("Banana", s.text());
+    try testing.expect(!s.open and s.selected == 2 and s.focused);
+    s = advance(&fruit_texts, s, .{ .toggle = true }, &.{});
+    try testing.expectEqual(@as(u8, 2), s.active); // reopens on the choice
+    s = advance(&fruit_texts, s, .{ .down = true, .outside = true }, &.{});
+    try testing.expect(!s.open and !s.focused);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null, text: []const u8 = "" };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the combo box's
+/// state and the box's text equal in both after every step; returns the state after each.
+fn runScript(comptime n: usize, script: [n]Step) ![n]ComboState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [2]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]ComboState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.text = st.text;
+        var k: usize = 0;
+        if (st.text.len != 0) {
+            ev[k] = .{ .kind = .text, .len = @intCast(st.text.len) };
+            k += 1;
+        }
+        if (st.key) |code| {
+            ev[k] = .{ .kind = .press, .code = code };
+            k += 1;
+        }
+        in.events = ev[0..k];
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.fruit, h.ui.signals.state.fruit);
+        try testing.expectEqualStrings(h.app.fruit.text(), h.ui.signals.state.fruit_text);
+        o.* = h.app.fruit;
+    }
+    return out;
+}
+
+test "Combobox: focus, typing, arrows, Enter, clicks and Escape in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(12, .{
+        .{ .aim = .{ .part = "fruit" }, .left = true }, // focus
+        .{ .aim = .{ .part = "fruit" } }, // click: the list opens, all shown
+        .{ .aim = .{ .part = "fruit" }, .text = "a" }, // Apple, Apricot
+        .{ .aim = .{ .part = "fruit" }, .text = "pr" }, // Apricot
+        .{ .aim = .{ .part = "fruit" }, .key = k.down },
+        .{ .aim = .{ .part = "fruit" }, .key = k.enter }, // chosen
+        .{ .aim = .{ .part = "fruit" }, .key = k.escape }, // cleared
+        .{ .aim = .{ .part = "fruit" }, .key = k.down }, // opens on Apple
+        .{ .aim = .{ .part = "fruit_cherry" } }, // the pointer reaches Cherry
+        .{ .aim = .{ .part = "fruit_cherry" }, .left = true },
+        .{ .aim = .{ .part = "fruit_cherry" } }, // chosen by click
+        .{ .aim = .{ .at = .{ 390, 290 } }, .left = true }, // press elsewhere: unfocused
+    });
+    try testing.expect(s[0].focused and !s[0].open);
+    try testing.expect(s[1].open);
+    try testing.expectEqualStrings("a", s[2].text());
+    try testing.expectEqual(no_item, s[3].active);
+    try testing.expectEqual(@as(u8, 1), s[4].active);
+    try testing.expect(!s[5].open and s[5].selected == 1);
+    try testing.expectEqualStrings("Apricot", s[5].text());
+    try testing.expectEqual(@as(u8, 0), s[6].len);
+    try testing.expect(s[7].open and s[7].active == 0);
+    try testing.expectEqual(@as(u8, 3), s[8].active);
+    try testing.expectEqualStrings("Cherry", s[10].text());
+    try testing.expect(!s[10].open and s[10].selected == 3 and s[10].focused);
+    try testing.expect(!s[11].focused);
 }
 
 test "ComboState.setText: cut to the capacity, the caret at the end" {
