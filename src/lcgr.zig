@@ -33,6 +33,7 @@ pub const gestures = @import("interact/gestures.zig");
 pub const spec = @import("comptime/spec.zig");
 pub const protocol = @import("text/protocol.zig");
 pub const flatten = @import("comptime/flatten.zig");
+pub const validate = @import("comptime/validate.zig");
 pub const signals = @import("comptime/signals.zig");
 pub const events = @import("comptime/events.zig");
 pub const draw_list = @import("draw/draw_list.zig");
