@@ -71,6 +71,7 @@ pub const scheduler = @import("runtime/scheduler.zig");
 pub const widgets_base = @import("widgets/base.zig");
 pub const widgets_card = @import("widgets/card.zig");
 pub const widgets_separator = @import("widgets/separator.zig");
+pub const widgets_check = @import("widgets/check.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");

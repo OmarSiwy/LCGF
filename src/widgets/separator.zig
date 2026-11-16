@@ -47,6 +47,7 @@ pub const ct = struct {
 
 const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
+const check = @import("check.zig");
 
 /// Two labels split by a horizontal rule, then a row of two labels split by a vertical one.
 fn Page(comptime th: Theme) type {
@@ -124,6 +125,24 @@ test "separator: painted in the theme's outline colour, in any theme, alike in b
     S.light.init();
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(120, 120, 130).bitsOf(), lo.runtime.tree.c.look[3].fill);
+}
+
+test "separator: takes no input; hit testing and the tab order skip it" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    // Press and release right on the horizontal rule: nothing is held, nothing focused.
+    const r = out.runtime.tree.rect(3);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, r.y0 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try check.expectInert(out.runtime.tree, &.{ 3, 7 });
+    try testing.expectEqual(0, Default.Ui.Events.widget_count);
 }
 
 test {
