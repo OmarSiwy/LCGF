@@ -24,6 +24,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const a11y = @import("../a11y/tree.zig");
+const focus = @import("../interact/focus.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -109,7 +110,7 @@ pub fn Dialog(comptime th: Theme, comptime name: @EnumLiteral(), comptime field:
                 if (!ds.open) return null;
                 return .{ .style = backdropStyle(&th, v.in.viewport) };
             }
-            if (comptime named(n, partName(id, "panel"))) return .{ .style = panelStyle(&th) };
+            if (comptime named(n, partName(id, "panel"))) return .{ .style = panelStyle(&th), .role = role };
             inline for (def.buttons, 0..) |b, k| {
                 if (comptime named(n, partName(id, b))) return .{ .style = buttonStyle(&th, v.response, ds.focus == k) };
             }
@@ -222,6 +223,29 @@ pub fn advance(comptime def: Def, st: DialogState, hits: Hits, evs: []const Inpu
     return s;
 }
 
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The panel's role (APG modal dialog); its value is 0. The buttons are buttons, named by their
+/// text.
+pub const role: a11y.Role = .dialog;
+
+/// The semantics of dialog `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`: the dialog is named by its
+/// title, the panel's first child (`aria-labelledby`). Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8) void {
+    const panel = t.find(.from(partName(name, "panel")));
+    if (panel != types.none) s.c.labelled_by[panel] = panel + 1;
+}
+
+/// Marks dialog `name`'s panel as a modal layer in `sc` (`focus.Scopes.trap`), for an
+/// application that runs `focus.Focus` over the tree: Tab then stays inside it, and focus goes
+/// back to what had it when the dialog closes. Call after the tree is built, before
+/// `focus.scan`.
+pub fn trapFocus(t: *const Tree, sc: *focus.Scopes, comptime name: []const u8) void {
+    const panel = t.find(.from(partName(name, "panel")));
+    if (panel != types.none) sc.c.kind[panel] |= focus.Scopes.trap;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The button that opens dialog `name`, showing `text`.
@@ -242,7 +266,9 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     st.* = advance(def, st.*, hits, f.in.events);
     if (!st.open) return st.result;
     _ = f.interact(f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport)), popover.overlay_sense);
-    _ = f.interact(f.open(.from(partName(name, "panel")), panelStyle(th)), popover.overlay_sense);
+    const panel = f.open(.from(partName(name, "panel")), panelStyle(th));
+    _ = f.interact(panel, popover.overlay_sense);
+    f.tree().c.role[panel.ix()] = @backingInt(role);
     _ = base.label(f, th, title);
     _ = base.label(f, th, message);
     _ = f.open(.none, rowStyle(th));
@@ -450,6 +476,41 @@ test "Dialog: opener, focus trap, keys and clicks in both front ends" {
     try testing.expect(s[9].open and s[9].focus == 0);
     try testing.expect(s[10].open and s[10].focus == 0);
     try testing.expectEqual(DialogState{ .result = 1 }, s[11]);
+}
+
+var sem: [2]popover.Semantic(64) = .{ .{}, .{} };
+
+test "Dialog: a dialog named by its title, with its buttons; the same in both front ends" {
+    const h = &harness;
+    h.init();
+    const t = try setState(h, .{ .open = true });
+    const cp = &h.ui.tables.t;
+    semantics(t, sem[0].begin(), "delete");
+    semantics(cp, sem[1].begin(), "delete");
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(popover.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const d = popover.exportRow(e, t.find(.from("delete_panel")));
+    try testing.expectEqual(@backingInt(a11y.Role.dialog), e.c.role[d]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Delete scene?"), e.c.name_hash[d]);
+    try testing.expectEqual(@as(f32, 0), e.c.value[d]);
+    const ok = popover.exportRow(e, t.find(.from("delete_ok")));
+    try testing.expectEqual(@backingInt(a11y.Role.button), e.c.role[ok]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Delete"), e.c.name_hash[ok]);
+}
+
+test "trapFocus: the panel is the modal layer focus.scan finds" {
+    const h = &harness;
+    h.init();
+    const t = try setState(h, .{ .open = true });
+    const S = struct {
+        var buf: [64 * 1024]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    };
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &S.buf };
+    var sc = focus.Scopes.init(&carver, t.cap);
+    sc.reset();
+    trapFocus(t, &sc, "delete");
+    focus.scan(t, &sc);
+    try testing.expectEqual(t.find(.from("delete_panel")), sc.modal);
 }
 
 test "checkDialog: the state field and the buttons" {
