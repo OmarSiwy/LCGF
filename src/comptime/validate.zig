@@ -11,9 +11,10 @@ const Spec = spec_zig.Spec;
 
 /// Fails compilation with a message naming the first broken rule of `spec` over the state
 /// struct `State`. Rules: widget ids are unique; a slider binds an f32 field and a checkbox a
-/// bool field.
+/// bool field; every binding names a field of `State`.
 pub fn check(comptime State: type, comptime spec: Spec) void {
     comptime {
+        if (@typeInfo(State) != .@"struct") @compileError("state must be a struct, not " ++ @typeName(State));
         var ids: []const [:0]const u8 = &.{};
         walk(State, spec, &ids);
     }
@@ -28,12 +29,21 @@ fn bindType(comptime kind: spec_zig.Kind) ?type {
     };
 }
 
+/// `@hasField` also accepts a struct's declarations; a binding needs a field.
+fn hasField(comptime State: type, comptime name: []const u8) bool {
+    for (@typeInfo(State).@"struct".field_names) |f| if (std.mem.eql(u8, f, name)) return true;
+    return false;
+}
+
 fn walk(comptime State: type, comptime s: Spec, comptime ids: *[]const [:0]const u8) void {
     // ponytail: ids are compared pairwise, O(ids^2) comptime work; a UI has tens of ids.
     @setEvalBranchQuota(1000 + 10 * ids.len * ids.len);
     if (s.id) |name| {
         for (ids.*) |seen| if (std.mem.eql(u8, seen, name)) @compileError("duplicate widget id '" ++ name ++ "'");
         ids.* = ids.* ++ [_][:0]const u8{name};
+    }
+    if (s.bind) |field| {
+        if (!hasField(State, field)) @compileError("state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }
     if (s.bind) |field| if (bindType(s.kind)) |T| {
         const FT = @FieldType(State, field);
