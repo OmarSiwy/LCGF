@@ -493,6 +493,14 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("win32", "Test the Win32 shell on Windows").dependOn(&b.addRunArtifact(win32_tests).step);
     b.step("win32-build", "Compile the Win32 shell's tests without running them (ci/run.sh win32)").dependOn(&win32_tests.step);
+    // The shells' example in a Win32 window (src/shell/win32/example.zig).
+    const win32_example = b.addExecutable(.{ .name = "win32-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
