@@ -141,6 +141,16 @@ pub const tweens = @import("anim/tweens.zig");
 pub const keyframes = @import("anim/keyframes.zig");
 pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
+pub const shell_baremetal_flush = @import("shell/baremetal/flush.zig");
+pub const shell_baremetal_input = @import("shell/baremetal/input.zig");
+pub const shell_baremetal_tick = @import("shell/baremetal/tick.zig");
+pub const shell_baremetal_shell = @import("shell/baremetal/shell.zig");
+pub const shell_baremetal_sim = @import("shell/baremetal/sim.zig");
+pub const shell_web = @import("shell/web/web.zig");
+pub const shell_x11_wire = @import("shell/x11/wire.zig");
+pub const shell_x11_keys = @import("shell/x11/keys.zig");
+pub const shell_x11_xim = @import("shell/x11/xim.zig");
+pub const shell_win32_translate = @import("shell/win32/translate.zig");
 
 test {
     std.testing.refAllDecls(@This());

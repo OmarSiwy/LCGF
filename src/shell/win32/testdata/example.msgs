@@ -1,0 +1,34 @@
+# src/shell/testdata/example.replay as the window messages a user's session produces: the same
+# frames, so the translator must give the same Input for each (translate.zig). Mouse messages
+# carry the held buttons in wParam (MK_LBUTTON = 1) and client coordinates in lParam.
+frame
+size 0 800:600
+# Unchanged: the settle frame, then a frame with nothing to build.
+frame
+frame
+# Click Reset (8,8 .. 66,42).
+frame
+mousemove 0 37:25
+frame
+lbuttondown 1 37:25
+frame
+lbuttonup 0 37:25
+# Click Add layer (8,58 .. 100,91).
+frame
+mousemove 0 54:74
+frame
+lbuttondown 1 54:74
+frame
+lbuttonup 0 54:74
+# Hold the exposure slider (180 .. 792) at 75% of its track.
+frame
+mousemove 0 639:25
+frame
+lbuttondown 1 639:25
+frame
+lbuttonup 0 639:25
+# Leave everything; settle, then idle.
+frame
+mousemove 0 400:400
+frame
+frame

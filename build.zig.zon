@@ -106,6 +106,14 @@
             .hash = "N-V-__8AAEV6mgvY3hT-LmCZsLpBhxSxreIJQ6gb0JVt4I6q",
             .lazy = true,
         },
+        // AccessKit C 0.23.2 release archive: its header and prebuilt static libraries for every
+        // platform (cargo builds them upstream, so none is needed here). Fetched only for the
+        // `zig build accesskit*` steps (src/a11y/accesskit/).
+        .accesskit = .{
+            .url = "https://github.com/AccessKit/accesskit-c/releases/download/0.23.2/accesskit-c-0.23.2.zip",
+            .hash = "N-V-__8AAF1HGhL6m3oy7fK0MrB7Lv3IQXXsnrUvU_Cir4r7",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
