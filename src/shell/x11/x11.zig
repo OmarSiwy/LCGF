@@ -82,6 +82,9 @@ pub const Connection = struct {
     screen_mm: u16 = 0,
     /// RandR's ScreenChangeNotify event code; 0 without RandR.
     randr_event: u8 = 0,
+    /// The "cursor" font and a cursor per `context.Cursor`, created on first use; 0 is none.
+    cursor_font: u32 = 0,
+    cursors: [cursor_glyphs.len]u32 = @splat(0),
     /// Set when the socket failed or closed; every window's `poll` is false after it.
     err: ?Error = null,
 
@@ -314,6 +317,15 @@ pub const Connection = struct {
     }
 };
 
+/// Glyphs of the core cursor font (X11 cursorfont.h) for each `context.Cursor`: left_ptr,
+/// hand2, xterm, fleur, sb_h_double_arrow, sb_v_double_arrow. Desktops' Xcursor themes are
+/// files read by libXcursor on the client; this shell draws the server's own glyphs instead.
+const cursor_glyphs = [_]u16{ 68, 60, 152, 52, 108, 116 };
+
+comptime {
+    std.debug.assert(cursor_glyphs.len == @typeInfo(context.Cursor).@"enum".field_names.len);
+}
+
 fn connectUnix(path: []const u8) Error!i32 {
     const r = linux.socket(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0);
     if (linux.errno(r) != .SUCCESS) return error.ConnectFailed;
@@ -364,6 +376,8 @@ pub const Window = struct {
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
     applied: Platform = .{},
+    /// The cursor the window shows, so `apply` sends only changes.
+    cursor: ?context.Cursor = null,
     polls: u32 = 0,
     presents: u32 = 0,
 
@@ -562,8 +576,24 @@ pub const Window = struct {
         return true;
     }
 
+    /// Sets the cursor the frame asks for, when it changed.
     pub fn apply(w: *Window, p: *const Platform) void {
         w.applied = p.*;
+        if (w.cursor != p.cursor) {
+            w.cursor = p.cursor;
+            const c = w.conn;
+            const k = @backingInt(p.cursor);
+            if (c.cursor_font == 0) {
+                c.cursor_font = c.id();
+                _ = c.send(wire.openFontSize("cursor"), wire.openFont, .{ c.cursor_font, "cursor" });
+            }
+            if (c.cursors[k] == 0) {
+                c.cursors[k] = c.id();
+                _ = c.send(wire.create_glyph_cursor_size, wire.createGlyphCursor, .{ c.cursors[k], c.cursor_font, cursor_glyphs[k] });
+            }
+            _ = c.send(wire.change_cursor_size, wire.changeCursor, .{ w.id, c.cursors[k] });
+            c.flush() catch {};
+        }
     }
 
     /// Draws the frame in software and sends it.
@@ -889,4 +919,33 @@ test "x11: the scale follows Xft.dpi and RandR's screen size" {
     try waitScale(&w, 1);
     try testing.expect(w.poll(&ev));
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
+}
+
+test "x11: the cursor the frame asks for is the one the server shows" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    const xtest = try c.extension("XTEST");
+    const xfixes = try c.extension("XFIXES");
+    _ = try c.reply(c.send(wire.xfixes_query_version_size, wire.xfixesQueryVersion, .{xfixes}));
+    var w: Window = undefined;
+    try w.open(c, 200, 200, "cursor", Fixture.buffers);
+    defer w.close();
+    _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.motion_notify, 0, c.setup.root, 100, 100 });
+
+    // Each shape shows a different glyph (size and hot spot) and a different cursor object.
+    const Shape = struct { size: [4]u16, serial: u32 };
+    var shapes: [cursor_glyphs.len]Shape = undefined;
+    for (&shapes, 0..) |*sh, k| {
+        w.apply(&.{ .cursor = @fromBackingInt(@intCast(k)) });
+        const r = try c.reply(c.send(wire.xfixes_get_cursor_image_size, wire.xfixesGetCursorImage, .{xfixes}));
+        sh.* = .{ .size = .{ wire.get(u16, r, 12), wire.get(u16, r, 14), wire.get(u16, r, 16), wire.get(u16, r, 18) }, .serial = wire.get(u32, r, 20) };
+        for (shapes[0..k]) |other| try testing.expect(other.serial != sh.serial and !std.meta.eql(other.size, sh.size));
+    }
+    // Back to the arrow: the same cursor as before, created once.
+    w.apply(&.{ .cursor = .arrow });
+    const r = try c.reply(c.send(wire.xfixes_get_cursor_image_size, wire.xfixesGetCursorImage, .{xfixes}));
+    try testing.expectEqual(shapes[0].serial, wire.get(u32, r, 20));
+    try testing.expectEqual(@as(u32, 0), c.errors);
 }

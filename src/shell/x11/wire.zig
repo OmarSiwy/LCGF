@@ -470,6 +470,50 @@ pub fn randrSetScreenSize(b: *Buf, randr: u8, window: u32, w: u16, h: u16, mm_w:
     b.int(u32, mm_h);
 }
 
+pub fn openFontSize(name: []const u8) usize {
+    return 12 + name.len + pad4(name.len);
+}
+
+pub fn openFont(b: *Buf, id: u32, name: []const u8) void {
+    b.head(op.open_font, 0, openFontSize(name) / 4);
+    b.int(u32, id);
+    b.int(u16, @intCast(name.len));
+    b.zeros(2);
+    b.str(name);
+}
+
+pub const create_glyph_cursor_size = 32;
+
+/// A cursor from glyph `glyph` of the core "cursor" font, its mask the next glyph, black on
+/// white.
+pub fn createGlyphCursor(b: *Buf, id: u32, font: u32, glyph: u16) void {
+    b.head(op.create_glyph_cursor, 0, create_glyph_cursor_size / 4);
+    b.int(u32, id);
+    b.int(u32, font);
+    b.int(u32, font);
+    b.int(u16, glyph);
+    b.int(u16, glyph + 1);
+    b.zeros(6); // foreground black
+    for (0..3) |_| b.int(u16, 0xffff);
+}
+
+pub const xfixes_query_version_size = 12;
+
+/// XFIXES QueryVersion 4.0 (minor 0), required before other XFIXES requests; has a reply.
+pub fn xfixesQueryVersion(b: *Buf, xfixes: u8) void {
+    b.head(xfixes, 0, xfixes_query_version_size / 4);
+    b.int(u32, 4);
+    b.int(u32, 0);
+}
+
+pub const xfixes_get_cursor_image_size = 4;
+
+/// XFIXES GetCursorImage (minor 4): the cursor shown now. The reply: width at 12, height at 14,
+/// hot spot at 16 and 18, serial at 20, ARGB pixels from 32.
+pub fn xfixesGetCursorImage(b: *Buf, xfixes: u8) void {
+    b.head(xfixes, 4, 1);
+}
+
 pub const send_event_size = 44;
 
 /// Sends the 32-byte `event` to `window` (to its owner when `mask` is 0).
@@ -755,6 +799,10 @@ test "requests: lengths match the bytes written" {
         .{ change_event_mask_size, changeEventMask, .{ 1, 2 } },
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },
         .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },
+        .{ openFontSize("cursor"), openFont, .{ 1, "cursor" } },
+        .{ create_glyph_cursor_size, createGlyphCursor, .{ 1, 2, 68 } },
+        .{ xfixes_query_version_size, xfixesQueryVersion, .{140} },
+        .{ xfixes_get_cursor_image_size, xfixesGetCursorImage, .{140} },
         .{ randr_set_screen_size_size, randrSetScreenSize, .{ 140, 1, 2, 3, 4, 5 } },
         .{ xkb_use_extension_size, xkbUseExtension, .{130} },
         .{ xkb_per_client_flags_size, xkbDetectableAutoRepeat, .{130} },
