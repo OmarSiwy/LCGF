@@ -1,0 +1,7 @@
+//! Branch-census probe for the spring passes (docs/CHECKS.md section 2), imported by
+//! src/census_probes.zig. Not exported from src/lcgr.zig.
+const lcgr = @import("lcgr");
+
+export fn p_anim(a: *lcgr.anims.Anims, dt: f32) f32 {
+    return a.step(dt);
+}

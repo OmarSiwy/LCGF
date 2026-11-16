@@ -51,6 +51,34 @@ pub const Anims = struct {
         c.v[i] = simd.selF(is_new, 0, c.v[i]);
         return i;
     }
+
+    /// SIMD. Advances every spring by `dt` seconds (semi-implicit Euler, `dt` capped at 1/30 s
+    /// so a stalled frame cannot blow up the integration). A spring within 1e-3 of its target
+    /// and slower than 1e-2 per second snaps onto it and stops. Returns how much is still
+    /// moving; 0 means every spring is at rest and no further frames are needed.
+    pub fn step(a: *Anims, dt: f32) f32 {
+        const c = &a.c;
+        const h = simd.f(@min(dt, 1.0 / 30.0));
+        const zero = simd.f(0);
+        var motion = zero;
+        const n = simd.padded(a.len);
+        var i: usize = 0;
+        while (i < n) : (i += simd.lanes) {
+            const x = simd.loadF(c.x, i);
+            const v = simd.loadF(c.v, i);
+            const target = simd.loadF(c.target, i);
+            const acc = simd.loadF(c.stiffness, i) * (target - x) - simd.loadF(c.damping, i) * v;
+            const v1 = v + acc * h;
+            const x1 = x + v1 * h;
+            const left = @abs(target - x1);
+            const speed = @abs(v1);
+            const rest = (left < simd.f(1e-3)) & (speed < simd.f(1e-2));
+            simd.storeF(c.x, i, @select(f32, rest, target, x1));
+            simd.storeF(c.v, i, @select(f32, rest, zero, v1));
+            motion = @max(motion, @select(f32, rest, zero, left + speed));
+        }
+        return @reduce(.Max, motion);
+    }
 };
 
 const testing = std.testing;
@@ -94,4 +122,68 @@ test "slot: past capacity, new ids share the last row" {
     try testing.expectEqual(@as(u32, 2), a.len);
     try testing.expectEqual(@as(f32, 3), a.c.x[c]);
     try testing.expectEqual(@backingInt(Id.from("c")), a.c.id[c]);
+}
+
+/// A spring pulled from `from` to `to`: the row as `Frame.animate` leaves it.
+fn aim(a: *Anims, id: Id, from: f32, to: f32, spring: Spring) u32 {
+    const i = a.slot(id, from);
+    a.c.target[i] = to;
+    a.c.stiffness[i] = spring.stiffness;
+    a.c.damping[i] = spring.damping;
+    return i;
+}
+
+test "step: a spring lands on its target, then reports rest and stays idle" {
+    var a = fixture(4);
+    const i = aim(&a, Id.from("glow"), 0, 1, .{});
+    var frames: u32 = 0;
+    var last = a.c.x[i];
+    while (a.step(1.0 / 60.0) > 0 and frames < 600) : (frames += 1) {
+        // Critically damped or close to it: no visible overshoot, never moves backwards.
+        try testing.expect(a.c.x[i] >= last - 1e-3 and a.c.x[i] < 1.01);
+        last = a.c.x[i];
+    }
+    try testing.expect(frames > 5 and frames < 60);
+    try testing.expectEqual(@as(f32, 1), a.c.x[i]);
+    try testing.expectEqual(@as(f32, 0), a.c.v[i]);
+    // At rest: further steps change nothing and keep reporting no motion.
+    for (0..3) |_| try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
+    try testing.expectEqual(@as(f32, 1), a.c.x[i]);
+}
+
+test "step: every row is stepped as the scalar reference, across vectors and padding" {
+    var a = fixture(3 * simd.lanes + 1);
+    const n = 3 * simd.lanes + 1;
+    var ref_x: [n]f32 = undefined;
+    var ref_v: [n]f32 = undefined;
+    for (0..n) |k| {
+        const fk: f32 = @floatFromInt(k);
+        const i = aim(&a, Id.from("s").with(@intCast(k)), fk, 10 - fk, .{ .stiffness = 100 + fk, .damping = 10 + fk });
+        ref_x[i] = fk;
+        ref_v[i] = 0;
+    }
+    try testing.expectEqual(@as(u32, n), a.len);
+    for (0..5) |_| {
+        const moving = a.step(0.1); // capped to 1/30
+        var most: f32 = 0;
+        for (0..n) |i| {
+            const h: f32 = 1.0 / 30.0;
+            const acc = a.c.stiffness[i] * (a.c.target[i] - ref_x[i]) - a.c.damping[i] * ref_v[i];
+            ref_v[i] += acc * h;
+            ref_x[i] += ref_v[i] * h;
+            most = @max(most, @abs(a.c.target[i] - ref_x[i]) + @abs(ref_v[i]));
+        }
+        for (0..n) |i| {
+            try testing.expectApproxEqRel(ref_x[i], a.c.x[i], 1e-5);
+            try testing.expectApproxEqRel(ref_v[i], a.c.v[i], 1e-5);
+        }
+        try testing.expectApproxEqRel(most, moving, 1e-5);
+    }
+    // The padding past len stays inert.
+    for (n..simd.padded(n)) |i| try testing.expectEqual(@as(f32, 0), a.c.x[i]);
+}
+
+test "step: an empty table is at rest" {
+    var a = fixture(4);
+    try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
 }

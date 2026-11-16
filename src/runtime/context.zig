@@ -100,8 +100,7 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
-    /// How much the springs are still moving; 0 at rest. The anim lane's step writes it
-    /// (C0716-C0719); until then nothing moves.
+    /// How much the springs are still moving; 0 at rest. `begin` sets it from `Anims.step`.
     motion: f32 = 0,
     timers: scheduler.Timers,
     /// Set from any thread to ask for a frame; see `scheduler.Wake`.
@@ -161,9 +160,7 @@ pub const Context = struct {
         ctx.frame +%= 1;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
-        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719), as
-        // `ctx.motion = ctx.anims.step(in.dt)`; with no springs nothing moves.
-        ctx.motion = 0;
+        ctx.motion = ctx.anims.step(in.dt);
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
