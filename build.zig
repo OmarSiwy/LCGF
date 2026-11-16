@@ -975,6 +975,29 @@ pub fn build(b: *std.Build) void {
     mcu_exe.entry = .{ .symbol_name = "_start" };
     examples_step.dependOn(&b.addInstallArtifact(mcu_exe, .{ .dest_dir = .{ .override = .{ .custom = "mcu" } } }).step);
 
+    // The macOS shell (src/shell/macos/macos.zig): a module of its own over lcgr and the Metal
+    // back end. AppKit, Metal and libobjc are opened at run time, so nothing is linked and it
+    // cross-compiles from Linux (ci/run.sh shell-macos); build with -Dtarget=aarch64-macos.
+    const macos_metal = renderBackend(b, .metal, target, optimize, lcgr, wgpu_native_mod).?;
+    const macos_tests = b.addTest(.{ .name = "macos-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/macos/macos.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+    }) });
+    b.step("macos", "Test the macOS shell on macOS").dependOn(&b.addRunArtifact(macos_tests).step);
+    b.step("macos-build", "Compile and link the macOS shell's tests without running them (ci/run.sh shell-macos)").dependOn(&b.addInstallArtifact(macos_tests, .{}).step);
+    // The shells' example in a macOS window (src/shell/macos/example.zig).
+    const macos_example = b.addExecutable(.{ .name = "macos-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/macos/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+    }) });
+    b.step("macos-example", "Build zig-out/bin/macos-example, the example in a macOS window").dependOn(&b.addInstallArtifact(macos_example, .{}).step);
+
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig") }, .check = true });
