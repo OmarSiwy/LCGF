@@ -117,6 +117,7 @@ pub const keyframes = @import("anim/keyframes.zig");
 pub const flip = @import("anim/flip.zig");
 pub const shell_headless = @import("shell/headless.zig");
 pub const devtools_inspector = @import("devtools/inspector.zig");
+pub const devtools_timing = @import("devtools/timing.zig");
 
 test {
     std.testing.refAllDecls(@This());

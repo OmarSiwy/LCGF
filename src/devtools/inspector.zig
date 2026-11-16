@@ -23,6 +23,7 @@ const types = @import("../core/types.zig");
 const Frame = @import("../runtime/frame.zig").Frame;
 const Tree = @import("../core/tree.zig").Tree;
 const w = @import("../widgets/base.zig");
+const timing = @import("timing.zig");
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -37,7 +38,7 @@ pub const id_clips = Id.from("devtools.clips");
 pub const Inspector = struct {
     open: bool = true,
     /// Panel size in logical pixels; it sits `margin` from the bottom-right corner.
-    size: [2]f32 = .{ 320, 440 },
+    size: [2]f32 = .{ 320, 540 },
     margin: f32 = 8,
     text_px: f32 = 12,
     text: Color = .rgb(220, 222, 230),
@@ -56,6 +57,10 @@ pub const Inspector = struct {
     clip_color: Color = .rgb(255, 150, 40),
     /// Laid over the node under the pointer, outlined in `border`.
     hover_fill: Color = .rgba(90, 140, 255, 60),
+    /// Per-pass times of a frame, set by the host (`timing.end`); shown when not all zero.
+    timings: timing.Timings = .{},
+    /// A pass as long as the longest gets a bar this wide.
+    bar_px: f32 = 120,
 
     /// Row where the inspector's own nodes began last frame: rows below it are the application's.
     own_first: u32 = none,
@@ -95,8 +100,29 @@ pub const Inspector = struct {
         _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Layout rects");
         _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clip rects");
         f.close();
+        insp.timingLines(f);
         insp.treeLines(f, prev);
         f.close();
+    }
+
+    /// One line per pass: its name, its time, and a bar scaled to the longest pass.
+    fn timingLines(insp: *const Inspector, f: *Frame) void {
+        const tm = &insp.timings;
+        const total = tm.total();
+        if (total == 0) return;
+        insp.line(f, insp.text, "frame {d:.1} us", .{@as(f32, @floatFromInt(total)) / 1000});
+        var longest: u64 = 1;
+        for (tm.ns) |n| longest = @max(longest, n);
+        for (tm.ns, 0..) |n, k| {
+            _ = f.open(.none, .{ .dir = .x, .gap = 6, .cross = .center });
+            var buf: [32]u8 = undefined;
+            const name = @tagName(@as(timing.Pass, @fromBackingInt(@intCast(k))));
+            const str = std.fmt.bufPrint(&buf, "{s:<9}{d:>8.1} us", .{ name, @as(f32, @floatFromInt(n)) / 1000 }) catch &buf;
+            _ = f.text(str, .{ .px = insp.text_px, .color = insp.dim });
+            const frac = @as(f32, @floatFromInt(n)) / @as(f32, @floatFromInt(longest));
+            _ = f.leaf(.none, .{ .size = .{ .px(@max(frac * insp.bar_px, 1)), .px(6) }, .fill = insp.theme.accent });
+            f.close();
+        }
     }
 
     /// Boxes over the application, under the panel: layout rects, clip rects and the hovered
@@ -202,6 +228,7 @@ const fb_h = 600;
 
 const Fixture = struct {
     var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
+    var ctx_buffer2: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
     var pixels: [sw.Framebuffer.len(fb_w, fb_h)]u32 = undefined;
     var glyphs: [4096]Quad = undefined;
     var first: [example_limits.texts]u32 = undefined;
@@ -333,4 +360,62 @@ test "inspector: names the node under the pointer, takes the pointer, hides on F
     out = f.end(.{});
     try testing.expectEqual(none, out.tree.find(id_panel));
     try testing.expectEqual(out.tree.len, host.insp.own_first);
+}
+
+test "timing.end: the same frames as Frame.end, with every pass timed" {
+    var plain = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var timed = try context.Context.init(&Fixture.ctx_buffer2, example_limits);
+    var app_a: example.App = .{};
+    var app_b: example.App = .{};
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var ev: iface.Events = .{};
+    var tm: timing.Timings = .{};
+    while (shell.poll(&ev)) {
+        if (!plain.needsFrame(&ev.in)) continue;
+        var f = plain.begin(&ev.in);
+        app_a.build(&f, &ev);
+        const a = f.end(.{});
+        var clock: timing.Clock = .start(testing.io);
+        var g = timed.begin(&ev.in);
+        clock.lap(&tm, .begin);
+        app_b.build(&g, &ev);
+        clock.lap(&tm, .build);
+        const b = timing.end(&g, .{}, &clock, &tm);
+        try testing.expect(w.sameDraw(a.draw, b.draw));
+        try testing.expectEqual(a.wake, b.wake);
+    }
+    try testing.expectEqual(@as(u32, 13), app_b.builds);
+    try testing.expect(tm.total() > 0);
+}
+
+test "inspector runs inside the example with per-pass times shown" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: ExampleHost = .{};
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var ev: iface.Events = .{};
+    var last: ?context.Output = null;
+    // `iface.run`'s loop written out, with the clock between the passes.
+    while (shell.poll(&ev)) {
+        if (ctx.needsFrame(&ev.in)) {
+            var tm: timing.Timings = .{};
+            var clock: timing.Clock = .start(testing.io);
+            var f = ctx.begin(&ev.in);
+            clock.lap(&tm, .begin);
+            host.build(&f, &ev);
+            clock.lap(&tm, .build);
+            const out = timing.end(&f, .{}, &clock, &tm);
+            host.insp.timings = tm;
+            shell.apply(&out.platform);
+            shell.present(&out);
+            last = out;
+        }
+    }
+    try testing.expectEqual(null, shell.err);
+    try testing.expectEqual(@as(u32, 1), host.app.resets);
+    try testing.expectEqual(@as(u32, 4), host.app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), host.app.exposure, 0.01);
+    const out = last.?;
+    try testing.expect(shows(&out, "frame "));
+    inline for (@typeInfo(timing.Pass).@"enum".field_names) |name| try testing.expect(shows(&out, name ++ " "));
+    try testing.expect(out.status.ok());
 }
