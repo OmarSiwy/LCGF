@@ -71,6 +71,8 @@ pub const max_windows = 8;
 
 pub const Connection = struct {
     fd: i32 = -1,
+    /// An eventfd that `Window.wake` writes, from any thread, to end a `wait`.
+    wake_fd: i32 = -1,
     setup: wire.Setup = undefined,
     atoms: Atoms = .{},
     /// Sequence number of the last request sent (the server counts the same way).
@@ -122,6 +124,10 @@ pub const Connection = struct {
         const path = d.path(&path_buf);
         c.fd = try connectUnix(path);
         errdefer _ = linux.close(c.fd);
+        const efd = linux.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK);
+        if (linux.errno(efd) != .SUCCESS) return error.ConnectFailed;
+        c.wake_fd = @intCast(efd);
+        errdefer _ = linux.close(c.wake_fd);
 
         const auth = wire.cookie(xauthority, d.number);
         _ = c.send(wire.setupSize(auth), wire.setup, .{auth});
@@ -174,7 +180,9 @@ pub const Connection = struct {
 
     pub fn close(c: *Connection) void {
         if (c.fd >= 0) _ = linux.close(c.fd);
+        if (c.wake_fd >= 0) _ = linux.close(c.wake_fd);
         c.fd = -1;
+        c.wake_fd = -1;
     }
 
     /// A new resource id.
@@ -305,11 +313,15 @@ pub const Connection = struct {
     }
 
     /// Blocks until the socket has something to read or `seconds` pass (`inf`: no limit).
+    /// Also returns when a window is woken; the wake is consumed.
     pub fn waitReadable(c: *Connection, seconds: f32) void {
         if (c.err != null or c.in_len - c.in_at >= 32) return;
+        // Whole milliseconds, rounded up, so a timer is never woken for early.
         const ms: i32 = if (seconds >= inf) -1 else @intFromFloat(@min(@ceil(@max(seconds, 0) * 1000), 1e9));
-        var p = [_]linux.pollfd{.{ .fd = c.fd, .events = linux.POLL.IN }};
-        _ = linux.poll(&p, 1, ms);
+        var p = [_]linux.pollfd{ .{ .fd = c.fd, .events = linux.POLL.IN }, .{ .fd = c.wake_fd, .events = linux.POLL.IN } };
+        _ = linux.poll(&p, 2, ms);
+        var count: u64 = 0;
+        if (p[1].revents & linux.POLL.IN != 0) _ = linux.read(c.wake_fd, std.mem.asBytes(&count), 8);
     }
 
     /// Routes an event to its window.
@@ -624,6 +636,8 @@ pub const Window = struct {
     /// An Expose arrived: the window's pixels have to be sent again.
     damaged: bool = false,
     presented: bool = false,
+    /// Clock time of the last `present`, for `wait`'s display pacing.
+    last_present: f64 = 0,
     /// Set by `wake`; makes the next `poll` report a frame.
     woken: std.atomic.Value(bool) = .init(false),
     t0: f64,
@@ -951,6 +965,7 @@ pub const Window = struct {
         render.render(&w.gfx, .{ .fb = &w.fb, .scissor = w.fb.all() }, out.draw);
         w.send() catch {};
         w.presented = true;
+        w.last_present = now();
     }
 
     /// Sends the framebuffer with PutImage, in strips that fit the server's request size. Rows
@@ -971,16 +986,26 @@ pub const Window = struct {
         }
     }
 
-    /// Blocks until the server sends something or `seconds` pass (`inf`: no limit).
+    /// Blocks until the server sends something, `wake` is called, or `seconds` pass (`inf`: no
+    /// limit), whichever is first; a timer is never woken for early. With `pace` `.display`, at
+    /// least until the next refresh after the last present: PutImage has no vertical sync, so
+    /// frames are paced to a 60 Hz clock.
     pub fn wait(w: *Window, seconds: f32, pace: Pace) void {
-        _ = pace;
         if (w.woken.load(.acquire)) return;
-        w.conn.waitReadable(seconds);
+        var s = seconds;
+        if (pace == .display) s = @max(s, @as(f32, @floatCast(w.last_present + refresh - now())));
+        w.conn.waitReadable(s);
     }
 
-    /// Thread-safe: the next `poll` gives a frame.
+    /// Seconds between frames when pacing to the display.
+    pub const refresh = 1.0 / 60.0;
+
+    /// Thread-safe: ends a `wait` in progress (or makes the next return at once) on any window
+    /// of the connection.
     pub fn wake(w: *Window) void {
         w.woken.store(true, .release);
+        const one: u64 = 1;
+        _ = linux.write(w.conn.wake_fd, std.mem.asBytes(&one), 8);
     }
 };
 
@@ -1679,4 +1704,55 @@ test "x11: IME over XIM: compose, commit, keys it does not use, spot and focus" 
         try testing.expectEqual(@as(u32, 0), c.errors);
         try testing.expectEqual(@as(u32, 0), S.server.errors);
     }
+}
+
+fn sleeper(w: *Window) void {
+    // Long enough that the UI thread is asleep in `wait` first.
+    var ts: linux.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+    _ = linux.nanosleep(&ts, null);
+    w.wake();
+}
+
+test "x11: wait keeps timers and display pace, and a worker thread wakes it" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    var w: Window = undefined;
+    try w.open(c, 64, 64, "wait", Fixture.buffers);
+    defer w.close();
+    var ev: Events = .{};
+    // Drain what mapping the window sent (Expose and the like).
+    try c.sync();
+    try testing.expect(w.poll(&ev));
+
+    // A timer 50 ms away: no event comes, so the wait lasts until it, not less.
+    var t0 = now();
+    w.wait(0.05, .timer);
+    var slept = now() - t0;
+    try testing.expect(slept >= 0.05 and slept < 1);
+
+    // Animating: the next frame is one refresh after the last present.
+    w.last_present = now();
+    w.wait(0, .display);
+    slept = now() - w.last_present;
+    try testing.expect(slept >= Window.refresh - 0.001 and slept < 0.5);
+
+    // Idle: only a wake ends the wait. A missed wake would hang; the 10 s limit fails it instead.
+    const worker = try std.Thread.spawn(.{}, sleeper, .{&w});
+    t0 = now();
+    w.wait(10, .idle);
+    slept = now() - t0;
+    worker.join();
+    try testing.expect(slept >= 0.04 and slept < 5);
+    try testing.expect(w.woken.load(.acquire));
+    try testing.expect(w.poll(&ev));
+    try testing.expect(!w.woken.load(.acquire));
+
+    // A wake before the wait: it returns at once.
+    w.wake();
+    t0 = now();
+    w.wait(10, .idle);
+    try testing.expect(now() - t0 < 1);
 }
