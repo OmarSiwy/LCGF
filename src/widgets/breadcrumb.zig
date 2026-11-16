@@ -19,6 +19,8 @@ const TextStyle = types.TextStyle;
 const Id = types.Id;
 const Theme = base.Theme;
 const none = types.none;
+const simd = @import("../core/simd.zig");
+const keys = @import("keys.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -28,9 +30,13 @@ const none = types.none;
 pub fn trail(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8) u32 {
     std.debug.assert(ids.len + 1 == titles.len);
     _ = f.open(.none, navStyle(th));
-    for (ids, titles[0..ids.len]) |id, title| {
+    var clicked: u32 = none;
+    var focused: u32 = none;
+    for (ids, titles[0..ids.len], 0..) |id, title, k| {
         const link = f.open(id, linkStyle(th));
         const r = f.interact(link, .button);
+        clicked = simd.selU(r.clicked, @intCast(k), clicked);
+        focused = simd.selU(r.focused, @intCast(k), focused);
         f.setFill(link, linkFill(th, r));
         f.setCursor(.pointer, r.hovered);
         _ = f.textStyled(title, linkText(th), textStyle());
@@ -39,7 +45,7 @@ pub fn trail(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []con
     }
     _ = f.textStyled(titles[ids.len], currentText(th), textStyle());
     f.close();
-    return none;
+    return follow(clicked, focused, f.in);
 }
 
 /// The trail: its links and dividers in a row, spaced by the theme's gap.
@@ -79,6 +85,17 @@ pub fn dividerStyle(th: *const Theme) Style {
     return .{ .size = .{ .px(4), .px(4) }, .radius = 2, .fill = th.control_hot };
 }
 
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// The link followed this frame (WAI-ARIA APG breadcrumb and link patterns): the one
+/// clicked, else the focused one if Enter was pressed (links take Enter, not Space), else
+/// `none`. `clicked` and `focused` are link indices or `none`. Each link is its own tab stop.
+pub fn follow(clicked: u32, focused: u32, in: *const Input) u32 {
+    var enter = false;
+    for (in.events) |e| enter = enter or (e.kind == .press and e.code == keys.enter);
+    return simd.selU(clicked != none, clicked, simd.selU(enter, focused, none));
+}
+
 /// The breadcrumb as a spec node.
 pub const ct = struct {
     /// A trail of links `links` (a tuple of `.{ id, title }`: the link's widget name and the
@@ -109,12 +126,18 @@ pub const ct = struct {
     /// How the comptime front end builds and drives one trail.
     fn Trail(comptime activated: []const u8, comptime names: []const [:0]const u8, comptime titles: []const []const u8) type {
         return struct {
-            /// Nothing activated yet.
+            /// The followed link from the frame's click event and `ui.focus` (`follow`).
             pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
                 _ = row;
-                _ = event;
-                _ = in;
-                ui.signals.set(comptime @TypeOf(ui.*).field(activated), none);
+                const U = @TypeOf(ui.*);
+                var clicked: u32 = none;
+                var focused: u32 = none;
+                inline for (names, 0..) |name, k| {
+                    const me = @field(U.Events.Widget, name);
+                    if (event) |e| clicked = simd.selU(std.meta.activeTag(e) == me, k, clicked);
+                    focused = simd.selU(ui.focus == me, k, focused);
+                }
+                ui.signals.set(comptime U.field(activated), follow(clicked, focused, in));
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -236,6 +259,67 @@ test "breadcrumb: links in the accent colour with a hover fill, dots between; an
     _ = try S.light.frame(&in);
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(0, 90, 200).bitsOf(), lo.runtime.texts.c.color[lo.runtime.tree.c.text[rows.link[0] + 1]]);
+}
+
+test "follow: a click, or Enter on the focused link; Space and other keys do nothing" {
+    const enter = [1]Input.Event{.{ .kind = .press, .code = keys.enter }};
+    const space = [1]Input.Event{.{ .kind = .press, .code = keys.space }};
+    const rep_ = [1]Input.Event{.{ .kind = .repeat, .code = keys.enter }};
+    const none_in: Input = .{};
+    try testing.expectEqual(@as(u32, 1), follow(1, none, &none_in));
+    try testing.expectEqual(@as(u32, 0), follow(none, 0, &.{ .events = &enter }));
+    try testing.expectEqual(none, follow(none, 0, &.{ .events = &space }));
+    try testing.expectEqual(none, follow(none, 0, &.{ .events = &rep_ }));
+    try testing.expectEqual(none, follow(none, none, &.{ .events = &enter }));
+    try testing.expectEqual(none, follow(none, 1, &none_in));
+}
+
+test "breadcrumb: a click or Enter follows a link; every link is a tab stop; both front ends" {
+    const focus = @import("../interact/focus.zig");
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const fmask: u8 = @bitCast(types.Sense{ .focus = true });
+    const first = focus.seek(t, t.c.sense, fmask, 0, t.len, none, false);
+    try testing.expectEqual(rows.link[0], first);
+    try testing.expectEqual(rows.link[1], focus.seek(t, t.c.sense, fmask, 0, t.len, first, false));
+    // Click Docs: followed once.
+    const r = t.rect(rows.link[1]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    try testing.expectEqual(none, h.app.activated);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.activated);
+    try testing.expectEqual(@as(u32, 1), h.ui.signals.state.activated);
+    _ = try h.frame(&in);
+    try testing.expectEqual(none, h.app.activated);
+    try testing.expectEqual(none, h.ui.signals.state.activated);
+    // Docs keeps focus: Enter follows it again, Space does not.
+    const space = [1]Input.Event{.{ .kind = .press, .code = keys.space }};
+    in.events = &space;
+    _ = try h.frame(&in);
+    try testing.expectEqual(none, h.app.activated);
+    try testing.expectEqual(none, h.ui.signals.state.activated);
+    const enter = [1]Input.Event{.{ .kind = .press, .code = keys.enter }};
+    in.events = &enter;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.activated);
+    try testing.expectEqual(@as(u32, 1), h.ui.signals.state.activated);
+    // The current page is not a link: clicking it follows nothing.
+    in.events = &.{};
+    t = out.runtime.tree;
+    const c = t.rect(rows.current);
+    in.pointer = .{ (c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    try testing.expectEqual(none, h.app.activated);
+    try testing.expectEqual(none, h.ui.signals.state.activated);
 }
 
 test {
