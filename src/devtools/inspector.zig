@@ -26,6 +26,7 @@ const w = @import("../widgets/base.zig");
 const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
 const batches = @import("batches.zig");
+const changes = @import("changes.zig");
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const none = types.none;
 const Id = types.Id;
@@ -62,6 +63,12 @@ pub const Inspector = struct {
     overdraw_fill: Color = .rgba(255, 40, 40, 50),
     /// Batches listed; the rest are counted.
     batch_lines: u32 = 4,
+    /// Signals whose version moved since last frame's build.
+    signals: changes.SignalWatch = .{},
+    /// This frame's `Frame.reuse` decisions; the application asks through `insp.reuses.reuse`.
+    reuses: changes.ReuseLog = .{},
+    /// Lines of either list shown.
+    change_lines: u32 = 4,
     /// The application's draw commands in last frame's draw list.
     draw: batches.Stats = .{},
     rect_color: Color = .rgb(80, 220, 120),
@@ -95,6 +102,8 @@ pub const Inspector = struct {
         insp.draw = batches.stats(&ctx.draw, prev, insp.rows, ctx.texts[ctx.cur ^ 1].c.node, ctx.customs[ctx.cur ^ 1].c.node, f.in.viewport);
         insp.hovered = under(prev, insp.rows, f.in.pointer);
         insp.own_first = f.tree().len;
+        insp.signals.diff(&f.ctx.signals);
+        defer insp.reuses.clear();
         if (!insp.open) return;
 
         insp.outlines(f, prev, &f.ctx.draw);
@@ -121,6 +130,7 @@ pub const Inspector = struct {
         _ = w.checkbox(f, &insp.theme, id_overdraw, &insp.show_overdraw, "Overdraw");
         f.close();
         insp.drawLines(f, &f.ctx.draw);
+        insp.changeLines(f);
         insp.logLines(f);
         insp.timingLines(f);
         insp.treeLines(f, prev);
@@ -140,6 +150,18 @@ pub const Inspector = struct {
             },
             else => {},
         };
+    }
+
+    /// Signals that changed, and what `reuse` decided for each subtree this frame.
+    fn changeLines(insp: *const Inspector, f: *Frame) void {
+        const sg = &insp.signals;
+        insp.line(f, insp.text, "signals: {d} changed", .{sg.changed_len});
+        for (0..@min(sg.changed_len, insp.change_lines)) |k| insp.line(f, insp.dim, "  #{d} now v{d}", .{ sg.changed[k], sg.version[k] });
+        const ru = &insp.reuses;
+        var kept: u32 = 0;
+        for (ru.decision[0..ru.len]) |d| kept += @intFromBool(d == .reused);
+        insp.line(f, insp.text, "reuse: {d} of {d} copied", .{ kept, ru.len + ru.dropped });
+        for (0..@min(ru.len, insp.change_lines)) |k| insp.line(f, insp.dim, "  {x:0>8} {s}", .{ ru.id[k], @tagName(ru.decision[k]) });
     }
 
     fn logLines(insp: *const Inspector, f: *Frame) void {
@@ -537,4 +559,70 @@ test "inspector runs inside the example and counts its draw batches and overdraw
     const tinted = shell.fb.at(80, 590);
     try testing.expect(tinted.r > host.app.theme.panel.r);
     try testing.expectEqual(@as(f32, 1), ctx.trees[ctx.cur].c.value[ctx.trees[ctx.cur].find(id_overdraw)]);
+}
+
+/// The example with a reused subtree, as the prototype's example reuses its sidebar: a badge
+/// showing the layer count, rebuilt only when the `layers` signal moves.
+const ReuseHost = struct {
+    app: example.App = .{},
+    insp: Inspector = .{},
+    layers: ?@import("../runtime/signals.zig").Signal = null,
+    shown: u32 = 0,
+    /// This frame's decision for the badge, kept before the inspector clears its log.
+    decided: changes.Decision = .other,
+
+    pub fn build(h: *ReuseHost, f: *Frame, ev: *const iface.Events) void {
+        h.app.build(f, ev);
+        const sig = h.layers orelse f.ctx.signals.create();
+        h.layers = sig;
+        f.ctx.signals.bump(sig, h.app.layers != h.shown);
+        h.shown = h.app.layers;
+        const id = Id.from("badge");
+        if (!h.insp.reuses.reuse(f, id, &.{sig})) {
+            _ = f.open(id, .{ .float = true, .offset = .{ 170, 60 }, .pad = @splat(4), .fill = .rgb(60, 60, 60) });
+            var buf: [16]u8 = undefined;
+            _ = f.text(std.fmt.bufPrint(&buf, "{d} layers", .{h.app.layers}) catch "?", .{});
+            f.close();
+        }
+        h.decided = h.insp.reuses.decision[h.insp.reuses.len - 1];
+        h.insp.build(f);
+    }
+};
+
+test "inspector runs inside the example and shows signal changes and reuse decisions" {
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: ReuseHost = .{};
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var ev: iface.Events = .{};
+    var seen: [16][2]u32 = undefined;
+    var decided: [16]changes.Decision = undefined;
+    var n: usize = 0;
+    var last: ?context.Output = null;
+    while (shell.poll(&ev)) {
+        if (!ctx.needsFrame(&ev.in)) continue;
+        var f = ctx.begin(&ev.in);
+        host.build(&f, &ev);
+        const out = f.end(.{});
+        seen[n] = .{ host.insp.signals.changed_len, host.app.layers };
+        decided[n] = host.decided;
+        try testing.expect(shows(&out, @tagName(host.decided)));
+        n += 1;
+        last = out;
+    }
+    try testing.expectEqual(@as(u32, 4), host.app.layers);
+    try testing.expectEqual(@as(usize, 13), n);
+    // Frame 1 builds the badge new. Clicking Add layer (frames 7-8) moves the signal once, and
+    // that frame rebuilds it for the signal; frames with the pointer elsewhere copy it.
+    try testing.expectEqual(changes.Decision.new, decided[0]);
+    try testing.expectEqual(changes.Decision.reused, decided[1]);
+    var signal_frames: u32 = 0;
+    for (seen[0..n], decided[0..n], 0..) |s, d, k| {
+        if (k > 0 and s[0] > 0) {
+            signal_frames += 1;
+            try testing.expectEqual(changes.Decision.signals, d);
+            try testing.expectEqual(@as(u32, 4), s[1]);
+        }
+    }
+    try testing.expectEqual(@as(u32, 1), signal_frames);
+    try testing.expect(shows(&last.?, "4 layers"));
 }
