@@ -74,6 +74,21 @@ pub const Tokens = struct {
     }
 };
 
+/// A light palette: dark text on light surfaces, controls darkening as they are engaged.
+pub const light_palette: Palette = .{
+    Color.rgb(28, 29, 33), // text
+    Color.rgb(245, 245, 247), // surface
+    Color.rgb(222, 223, 228), // control
+    Color.rgb(206, 208, 216), // control_hot
+    Color.rgb(190, 192, 201), // control_held
+    Color.rgb(30, 96, 220), // accent
+};
+
+/// The prototype's theme: light text on dark surfaces.
+pub const dark: Tokens = .{};
+/// The same sizes in `light_palette`.
+pub const light: Tokens = .{ .palette = light_palette };
+
 // ---- state styles -----------------------------------------------------------------------
 
 /// What an interaction state changes on a control: its face and its outline.
@@ -278,4 +293,42 @@ test "theme switch: state tables from other tokens restyle every state" {
     const t = comptime controlStates(&tok);
     try testing.expectEqual(Color.rgb(40, 50, 60), t[stateBits(.{ .hovered = true })].fill);
     try expectSwitch(widgets(&.{}), comptime widgets(&tok));
+}
+
+/// WCAG 2 contrast ratio of two opaque colours, 1 to 21.
+fn contrast(a: Color, b: Color) f32 {
+    const la = luminance(a) + 0.05;
+    const lb = luminance(b) + 0.05;
+    return @max(la, lb) / @min(la, lb);
+}
+
+fn luminance(c: Color) f32 {
+    const ch = [3]u8{ c.r, c.g, c.b };
+    const w = [3]f32{ 0.2126, 0.7152, 0.0722 };
+    var l: f32 = 0;
+    for (ch, w) |v, k| {
+        const x = @as(f32, @floatFromInt(v)) / 255;
+        l += k * if (x <= 0.04045) x / 12.92 else std.math.pow(f32, (x + 0.055) / 1.055, 2.4);
+    }
+    return l;
+}
+
+test "light, dark: text is readable on every surface it sits on" {
+    for ([_]Tokens{ dark, light }) |tok| {
+        // WCAG AA for body text: 4.5:1, on panels and on every control face.
+        for ([_]Role{ .surface, .control, .control_hot, .control_held }) |bg| {
+            try testing.expect(contrast(tok.color(.text), tok.color(bg)) >= 4.5);
+        }
+        // Non-text contrast (WCAG 1.4.11, 3:1): a checked box and a slider's fill against the
+        // track, and the focus outline against the panel.
+        try testing.expect(contrast(tok.color(.accent), tok.color(.control)) >= 3);
+        try testing.expect(contrast(tok.color(.accent), tok.color(.surface)) >= 3);
+    }
+    try testing.expectEqual(base.Theme.default, widgets(&dark));
+    try testing.expectApproxEqAbs(@as(f32, 21), contrast(.black, .white), 1e-3);
+}
+
+test "theme switch: dark to light and back" {
+    try expectSwitch(comptime widgets(&dark), comptime widgets(&light));
+    try expectSwitch(comptime widgets(&light), comptime widgets(&dark));
 }
