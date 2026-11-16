@@ -454,6 +454,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    // The committed GLSL ES 3.0 of the shipped shaders (src/render/shaders/gen/, from naga).
+    for ([_][]const u8{ "stock", "example" }) |v| for ([_][]const u8{ "vert", "frag" }) |stage| {
+        gles_tests.root_module.addAnonymousImport(b.fmt("{s}_{s}", .{ v, stage }), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.{s}", .{ v, stage })) });
+    };
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });

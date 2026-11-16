@@ -14,6 +14,8 @@ pub const Host = struct {
     lib: egl.Library,
     ctx: egl.Context,
     gl: gl.Fns,
+    /// Loaded when the context is GL ES 3 or later; undefined otherwise.
+    gl3: gl.Fns3,
 
     pub fn init(h: *Host, desc: egl.Desc) Error!void {
         h.lib = try egl.Library.open();
@@ -21,6 +23,7 @@ pub const Host = struct {
         h.ctx = try egl.Context.init(&h.lib, desc);
         errdefer h.ctx.deinit();
         h.gl = try gl.load(gl.Fns, &h.lib);
+        if (desc.major >= 3) h.gl3 = try gl.load(gl.Fns3, &h.lib);
     }
 
     pub fn deinit(h: *Host) void {

@@ -8,10 +8,12 @@ const std = @import("std");
 pub const egl = @import("egl.zig");
 pub const gl = @import("gl.zig");
 pub const host = @import("host.zig");
+pub const program = @import("program.zig");
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(egl);
     std.testing.refAllDecls(gl);
     std.testing.refAllDecls(host);
+    std.testing.refAllDecls(program);
 }

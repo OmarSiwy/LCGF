@@ -34,6 +34,12 @@ pub const PACK_ALIGNMENT: Enum = 0x0D05;
 pub const FRAMEBUFFER: Enum = 0x8D40;
 pub const COLOR_ATTACHMENT0: Enum = 0x8CE0;
 pub const FRAMEBUFFER_COMPLETE: Enum = 0x8CD5;
+pub const VERTEX_SHADER: Enum = 0x8B31;
+pub const FRAGMENT_SHADER: Enum = 0x8B30;
+pub const COMPILE_STATUS: Enum = 0x8B81;
+pub const LINK_STATUS: Enum = 0x8B82;
+pub const ACTIVE_UNIFORM_BLOCKS: Enum = 0x8A36;
+pub const INVALID_INDEX: Uint = 0xffff_ffff;
 
 /// GL ES functions, named as in GL.
 pub const Fns = struct {
@@ -56,6 +62,28 @@ pub const Fns = struct {
     glBindFramebuffer: *const fn (Enum, Uint) callconv(.c) void,
     glFramebufferTexture2D: *const fn (Enum, Enum, Enum, Uint, Int) callconv(.c) void,
     glCheckFramebufferStatus: *const fn (Enum) callconv(.c) Enum,
+    glCreateShader: *const fn (Enum) callconv(.c) Uint,
+    glShaderSource: *const fn (Uint, Sizei, [*]const [*]const u8, ?[*]const Int) callconv(.c) void,
+    glCompileShader: *const fn (Uint) callconv(.c) void,
+    glGetShaderiv: *const fn (Uint, Enum, *Int) callconv(.c) void,
+    glGetShaderInfoLog: *const fn (Uint, Sizei, *Sizei, [*]u8) callconv(.c) void,
+    glDeleteShader: *const fn (Uint) callconv(.c) void,
+    glCreateProgram: *const fn () callconv(.c) Uint,
+    glAttachShader: *const fn (Uint, Uint) callconv(.c) void,
+    glBindAttribLocation: *const fn (Uint, Uint, [*:0]const u8) callconv(.c) void,
+    glLinkProgram: *const fn (Uint) callconv(.c) void,
+    glGetProgramiv: *const fn (Uint, Enum, *Int) callconv(.c) void,
+    glGetProgramInfoLog: *const fn (Uint, Sizei, *Sizei, [*]u8) callconv(.c) void,
+    glDeleteProgram: *const fn (Uint) callconv(.c) void,
+    glUseProgram: *const fn (Uint) callconv(.c) void,
+    glGetUniformLocation: *const fn (Uint, [*:0]const u8) callconv(.c) Int,
+    glUniform1i: *const fn (Int, Int) callconv(.c) void,
+};
+
+/// GL ES 3.0 functions on top of `Fns`; a GL ES 2 driver need not have them.
+pub const Fns3 = struct {
+    glGetUniformBlockIndex: *const fn (Uint, [*:0]const u8) callconv(.c) Uint,
+    glUniformBlockBinding: *const fn (Uint, Uint, Uint) callconv(.c) void,
 };
 
 /// Fetches every function of `T` (fields named as the GL function) through EGL. A function the
