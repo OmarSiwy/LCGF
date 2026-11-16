@@ -92,6 +92,31 @@ fn copyColumns(to: anytype, from: anytype, len: u32) void {
         } else copyRows(@field(to, name), @field(from, name), len);
     }
 }
+/// The extras rows the prototype's tree implies: one per node with a border or a clip (it has
+/// no other paint extras), each with the whole texture, one radius, no opacity and no transform.
+fn protoExtras(st: *Tree, pt: *const ui.Tree) void {
+    st.xlen = 1;
+    for (0..pt.len) |i| {
+        const own = pt.c.look[i].border != 0 or pt.c.clips[i] != 0;
+        const up = if (i == 0) 0 else st.c.scope[pt.c.parent[i]];
+        if (!own) {
+            st.c.extra[i] = 0;
+            st.c.scope[i] = up;
+            continue;
+        }
+        const r = st.xlen;
+        st.xlen += 1;
+        st.c.extra[i] = r;
+        st.c.scope[i] = r;
+        st.x.node[r] = @intCast(i);
+        st.x.border[r] = pt.c.look[i].border;
+        st.x.uv[r] = .{ 0, 0, 1, 1 };
+        st.x.radii[r] = @splat(pt.c.look[i].radius);
+        st.x.opacity[r] = 1;
+        st.x.transform[r] = .{ 1, 0, 0, 1, 0, 0 };
+    }
+}
+
 fn copyRows(to: anytype, from: anytype, len: u32) void {
     const n = @min(lcgr.simd.rows(len), to.len);
     @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
@@ -387,14 +412,7 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
-        for (st.c.border[0..pt.len], pt.c.look[0..pt.len]) |*d, look| d.* = look.border;
-        @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
-        for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*rd, look| rd.* = @splat(look.radius); // and one radius
-        @memset(st.c.opacity[0..pt.len], 1); // and no opacity
-        @memset(st.c.alpha[0..pt.len], 1);
-        @memset(st.c.transform[0..pt.len], .{ 1, 0, 0, 1, 0, 0 }); // and no transform
-        @memset(st.c.world[0..pt.len], .{ 1, 0, 0, 1, 0, 0 });
-        @memset(st.c.clip_radii[0..pt.len], @splat(0)); // and square clips
+        protoExtras(st, pt);
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;

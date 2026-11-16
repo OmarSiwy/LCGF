@@ -129,16 +129,19 @@ const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border
 pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, out: []u32) void {
     const c = &t.c;
     for (0..t.len) |i| {
+        const x = &t.x;
+        const own = c.extra[i];
+        const scope = c.scope[i];
         const row: QuadInputs = .{
             .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
-            .border = c.border[i],
-            .uv = c.uv[i],
-            .radii = c.radii[i],
-            .alpha = c.alpha[i],
-            .world = c.world[i],
-            .clip_radii = c.clip_radii[c.parent[i]],
+            .border = x.border[own],
+            .uv = x.uv[own],
+            .radii = @import("../core/tree.zig").radiiOf(x.radii[own], c.look[i].radius),
+            .alpha = x.alpha[scope],
+            .world = x.world[scope],
+            .clip_radii = x.clip_radii[c.scope[c.parent[i]]],
         };
         out[i] = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&row)));
     }
@@ -344,6 +347,7 @@ const Scene = struct {
         _ = t.push(0, Id.from("panel"), &.{ .size = .{ .fill, .fill }, .fill = e.panel_fill });
         t.seal(0);
         layout.run(t, &sc.tx, .{ 400, 300 });
+        @import("inherit.zig").all(t);
         hashNodes(t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], sc.hash);
         return sc;
     }
@@ -680,7 +684,7 @@ test "damage: random edits over many frames, every changed node's old and new re
         // Reference: a node needs repainting when anything paint reads from it differs.
         for (0..sc.t.len) |i| {
             const same = std.meta.eql(sc.t.rect(@intCast(i)), last.t.rect(@intCast(i))) and
-                std.meta.eql(sc.t.c.look[i], last.t.c.look[i]) and sc.t.c.border[i] == last.t.c.border[i] and
+                std.meta.eql(sc.t.c.look[i], last.t.c.look[i]) and sc.t.border(@intCast(i)) == last.t.border(@intCast(i)) and
                 sc.hash[i] == last.hash[i];
             if (!same) {
                 try testing.expectEqual(1, tr.dm.dirty[i]);

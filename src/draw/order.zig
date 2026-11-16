@@ -354,7 +354,7 @@ test "depth order: opaque quads front to back in one draw; batch counts recorded
     const strings = l.s.buf[0..l.s.len];
     // Make two quads translucent and round a third: they stay out of the opaque list.
     l.t.c.look[1].fill = types.Color.rgba(30, 30, 30, 128).bitsOf(); // row 0
-    l.t.c.radii[3] = @splat(4); // row 1
+    l.t.c.look[3].radius = 4; // row 1
     paint.emitLayered(&l.t, &l.tx, &l.cu, strings, &l.ly, &l.d);
     mergeAcrossText(&l.d);
     depthOrder(&l.d);

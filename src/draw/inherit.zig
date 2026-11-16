@@ -1,60 +1,84 @@
 //! inherit: paint inputs that a node passes down to its subtree, resolved in one parent-ordered
-//! sweep after layout and before paint. Tier 0. Rows are in push order, so a parent's value is
-//! final before any child reads it; the sweep stays scalar for that reason (docs/DESIGN.md).
+//! sweep after layout and before paint. Tier 0. The values live in the tree's `Extras` rows,
+//! which only nodes with a paint extra or a clip have (`Tree.push`); every other node takes its
+//! `scope` row's, which equals what a per-node sweep gives it: opacity 1 and the identity
+//! transform change nothing, and only a clipping node changes the clip it hands down. Rows are
+//! in push order, so a parent's row is final before any child row reads it; the sweeps stay
+//! scalar for that reason (docs/DESIGN.md). `paint.emit` runs all three.
 
 const std = @import("std");
 const Tree = @import("../core/tree.zig").Tree;
 const simd = @import("../core/simd.zig");
 
-/// `alpha[i]` = `opacity[i]` times the parent's `alpha`: the opacity paint applies to node `i`.
-/// The root takes its own. Idempotent: it reads `opacity`, never its own output.
-pub fn opacity(t: *Tree) void {
-    const c = &t.c;
-    for (0..t.len) |i| {
-        // Both operands loaded, so the root test is a select, not a branch. Seeding the root's
-        // row instead, as `transform` and `clip` do, measured slower here (docs/perf/chains.md).
-        const up = c.alpha[c.parent[i]];
-        c.alpha[i] = c.opacity[i] * simd.selF(i == 0, 1, up);
-    }
+/// The row a row's node inherits from: its parent's `scope`, or row 0 (the defaults) for the
+/// root, which is its own parent.
+inline fn up(t: *const Tree, n: u32) u32 {
+    return simd.selU(n == 0, 0, t.c.scope[t.c.parent[n]]);
 }
 
-/// `world[i]` = the parent's `world` after node `i`'s `transform` about its own centre: what
-/// maps the node's layout rect to the screen. Run after layout (the centre comes from `rect`).
-/// The root's parent is the identity. Idempotent like `opacity`.
+/// `alpha` of every extras row = its `opacity` times the inherited row's `alpha`: the opacity
+/// paint applies to the row's node and the nodes that take its scope. Idempotent: it reads
+/// `opacity`, never its own output.
+pub fn opacity(t: *Tree) void {
+    const x = &t.x;
+    for (1..t.xlen) |r| x.alpha[r] = x.opacity[r] * x.alpha[up(t, x.node[r])];
+}
+
+/// `world` of every extras row = the inherited `world` after the row's `transform` about its
+/// node's centre: what maps the node's layout rect to the screen. Run after layout (the centre
+/// comes from `rect`). Idempotent like `opacity`.
 pub fn transform(t: *Tree) void {
     const c = &t.c;
-    const V6 = @Vector(6, f32);
-    const identity: V6 = .{ 1, 0, 0, 1, 0, 0 };
-    // The root is its own parent: seeding its row with the value its parent would give (the
-    // identity) removes the `i == 0` select from the parent -> child chain (docs/perf/chains.md).
-    // Row 0 exists even in an empty tree (capacity > 0), so the seed needs no length test.
-    c.world[0] = identity;
-    for (0..t.len) |i| {
-        const m = c.transform[i];
+    const x = &t.x;
+    for (1..t.xlen) |r| {
+        const i = x.node[r];
+        const m = x.transform[r];
         const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
         const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
         // Translate the centre to the origin, apply m, translate back.
         const l: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
-        c.world[i] = compose(c.world[c.parent[i]], l);
+        x.world[r] = compose(x.world[up(t, i)], l);
     }
 }
 
-/// `clip_radii[i]`: the corner radii of the clip node `i` hands its children. A clipping node
-/// clips to the area inside its border, so its radii less the border (not below 0); any other
-/// node passes its parent's on; the root's parent has square corners. Paint gives each quad its
-/// parent's. Rounded corners are applied to the clip rect the quad gets, which is the clipping
-/// node's inner rect unless an outer clip cut into it.
+/// `clip_radii` of every extras row: the corner radii of the clip its node hands its children.
+/// A clipping node clips to the area inside its border, so its radii less the border (not
+/// below 0); any other node passes the inherited row's on; row 0 is square. Paint gives each
+/// quad its parent's. Rounded corners are applied to the clip rect the quad gets, which is the
+/// clipping node's inner rect unless an outer clip cut into it.
 pub fn clip(t: *Tree) void {
     const c = &t.c;
+    const x = &t.x;
     const V4 = @Vector(4, f32);
     const zero: V4 = @splat(0);
-    // The root reads its own row as its parent's: start it square (see `transform`).
-    c.clip_radii[0] = zero;
-    for (0..t.len) |i| {
-        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.border[i])), zero);
-        const up: V4 = c.clip_radii[c.parent[i]];
-        c.clip_radii[i] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, up);
+    for (1..t.xlen) |r| {
+        const i = x.node[r];
+        const own = @max(@as(V4, x.radii[r]) - @as(V4, @splat(x.border[r])), zero);
+        const inherited: V4 = x.clip_radii[up(t, i)];
+        x.clip_radii[r] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, inherited);
     }
+}
+
+/// The three sweeps, as `paint.emit` runs them.
+pub fn all(t: *Tree) void {
+    opacity(t);
+    transform(t);
+    clip(t);
+}
+
+/// Opacity paint applies to node `i`, after `opacity`.
+pub fn alphaOf(t: *const Tree, i: u32) f32 {
+    return t.x.alpha[t.c.scope[i]];
+}
+
+/// Layout space to screen for node `i`, after `transform`.
+pub fn worldOf(t: *const Tree, i: u32) [6]f32 {
+    return t.x.world[t.c.scope[i]];
+}
+
+/// Corner radii of the clip node `i` hands its children, after `clip`.
+pub fn clipRadiiOf(t: *const Tree, i: u32) [4]f32 {
+    return t.x.clip_radii[t.c.scope[i]];
 }
 
 /// p after l: x -> p(l(x)).
@@ -98,11 +122,11 @@ test "opacity: nested opacities multiply down the tree, siblings do not affect e
     t.seal(root);
     opacity(&t);
     opacity(&t); // a second run gives the same result
-    try testing.expectEqual(0.8, t.c.alpha[root]);
-    try testing.expectEqual(0.4, t.c.alpha[half]);
-    try testing.expectEqual(0.2, t.c.alpha[inner]);
-    try testing.expectEqual(0.2, t.c.alpha[leaf]);
-    try testing.expectEqual(0.8, t.c.alpha[side]);
+    try testing.expectEqual(0.8, alphaOf(&t, root));
+    try testing.expectEqual(0.4, alphaOf(&t, half));
+    try testing.expectEqual(0.2, alphaOf(&t, inner));
+    try testing.expectEqual(0.2, alphaOf(&t, leaf));
+    try testing.expectEqual(0.8, alphaOf(&t, side));
 }
 
 test "opacity: paint fades quads by the instance opacity and text by its colour's alpha" {
@@ -141,7 +165,7 @@ test "opacity: paint fades quads by the instance opacity and text by its colour'
     // The root quad carries its opacity; the fully transparent node paints nothing.
     try testing.expectEqual(1, sc.d.quad_len);
     try testing.expectEqual(0.5, sc.d.quads[0].opacity);
-    try testing.expectEqual(0.0, t.c.alpha[gone]);
+    try testing.expectEqual(0.0, alphaOf(t, gone));
     // Text has no instance opacity: its colour's alpha is scaled, 200 * 0.5.
     try testing.expectEqual(@import("../core/types.zig").Color.rgba(10, 20, 30, 100).bitsOf(), sc.d.runs[0].color);
 }
@@ -168,12 +192,12 @@ test "transform: about the centre, composed down the tree" {
     inline for (.{ 0, 0, 20, 20 }, 0..) |v, k| t.c.rect[k][kid] = v;
     transform(&t);
     transform(&t);
-    try testing.expectEqual([6]f32{ 1, 0, 0, 1, 0, 0 }, t.c.world[0]);
+    try testing.expectEqual([6]f32{ 1, 0, 0, 1, 0, 0 }, worldOf(&t, 0));
     // The box's centre stays put; its top-left corner goes to the top-right.
-    try testing.expectEqual([2]f32{ 50, 50 }, apply(t.c.world[box], 50, 50));
-    try testing.expectEqual([2]f32{ 100, 0 }, apply(t.c.world[box], 0, 0));
+    try testing.expectEqual([2]f32{ 50, 50 }, apply(worldOf(&t, box), 50, 50));
+    try testing.expectEqual([2]f32{ 100, 0 }, apply(worldOf(&t, box), 0, 0));
     // The child: moved right by 10, then turned with the box: right becomes down.
-    try testing.expectEqual([2]f32{ 100, 10 }, apply(t.c.world[kid], 0, 0));
+    try testing.expectEqual([2]f32{ 100, 10 }, apply(worldOf(&t, kid), 0, 0));
 }
 
 test "clip: a clipping node's radii less its border reach every descendant until the next clip" {
@@ -196,8 +220,8 @@ test "clip: a clipping node's radii less its border reach every descendant until
     t.seal(0);
     clip(&t);
     clip(&t);
-    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, t.c.clip_radii[0]); // root does not clip
-    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, t.c.clip_radii[card]);
-    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, t.c.clip_radii[row]); // not clipping: passes it on
-    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, t.c.clip_radii[inner]); // square clip of its own
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, clipRadiiOf(&t, 0)); // root does not clip
+    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, clipRadiiOf(&t, card));
+    try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, clipRadiiOf(&t, row)); // not clipping: passes it on
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, clipRadiiOf(&t, inner)); // square clip of its own
 }
