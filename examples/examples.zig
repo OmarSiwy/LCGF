@@ -7,4 +7,5 @@ test {
     _ = @import("list.zig");
     _ = @import("dashboard.zig");
     _ = @import("viewport.zig");
+    _ = @import("texture.zig");
 }
