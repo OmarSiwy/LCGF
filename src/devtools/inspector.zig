@@ -320,7 +320,7 @@ const Fixture = struct {
     var contacts: [4]Input.Contact = undefined;
 
     fn shell(recording: []const u8) Headless {
-        return .init(recording, fb_w, fb_h, .{
+        return .init(std.testing.io, recording, fb_w, fb_h, .{
             .replay = .{ .text = &text, .events = &events, .contacts = &contacts },
             .pixels = &pixels,
             .glyphs = &glyphs,
