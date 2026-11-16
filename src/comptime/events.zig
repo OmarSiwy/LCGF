@@ -25,7 +25,7 @@ pub fn Events(comptime spec: Spec) type {
         /// Widgets: spec nodes with an id.
         pub const widget_count = count;
 
-        const Ids = struct { names: [count][:0]const u8, nodes: [count]Index, kinds: [count]Kind };
+        const Ids = struct { names: [count][:0]const u8, nodes: [count]Index, kinds: [count]Kind, focus: [count]bool };
         const ids: Ids = blk: {
             @setEvalBranchQuota(1000 + 8 * F.node_count);
             var out: Ids = undefined;
@@ -40,6 +40,7 @@ pub fn Events(comptime spec: Spec) type {
                 out.names[k.*] = name;
                 out.nodes[k.*] = row.*;
                 out.kinds[k.*] = node.kind;
+                out.focus[k.*] = if (node.widget) |W_| (@hasDecl(W_, "focusable") and W_.focusable) else focusable(node.kind);
                 k.* += 1;
             }
             row.* += 1;
@@ -55,6 +56,28 @@ pub fn Events(comptime spec: Spec) type {
         pub const widget_nodes: [count]Index = ids.nodes;
         /// Kind of each widget, in widget order.
         pub const widget_kinds: [count]Kind = ids.kinds;
+        /// Whether keyboard focus stops at each widget, in widget order: by its kind, or for a
+        /// node with a `Spec.widget`, that type's optional `focusable` (false when absent).
+        pub const widget_focusable: [count]bool = ids.focus;
+        /// What an event on each widget carries, in widget order: by its kind (`Payload`), or
+        /// for a node with a `Spec.widget`, that type's optional `Payload` (void when absent).
+        pub const widget_payloads: [count]type = blk: {
+            @setEvalBranchQuota(1000 + 8 * F.node_count);
+            var out: [count]type = undefined;
+            var row: usize = 0;
+            var k: usize = 0;
+            payloadWalk(spec, &row, &k, &out);
+            break :blk out;
+        };
+
+        fn payloadWalk(comptime node: Spec, comptime row: *usize, comptime k: *usize, comptime out: *[count]type) void {
+            if (node.id != null) {
+                out[k.*] = if (node.widget) |W_| (if (@hasDecl(W_, "Payload")) W_.Payload else void) else Payload(node.kind);
+                k.* += 1;
+            }
+            row.* += 1;
+            for (node.children) |c| payloadWalk(c, row, k, out);
+        }
 
         /// The widget's position in widget order: its index into the per-widget tables.
         pub fn slot(comptime w: Widget) usize {
@@ -134,12 +157,12 @@ pub fn Events(comptime spec: Spec) type {
         /// `switch (e) { .mute => ..., .volume => |v| ..., .pan => |v| ... }`.
         pub const Event = if (count == 0) union {} else blk: {
             @setEvalBranchQuota(1000 + 8 * count);
-            var types_: [count]type = undefined;
-            for (&types_, widget_kinds) |*T, kind| T.* = Payload(kind);
+            const types_ = widget_payloads;
             break :blk @Union(.auto, Widget, &ids.names, &types_, &@splat(.{}));
         };
 
-        /// Whether keyboard focus stops at a widget of `kind`: the ones that take input.
+        /// Whether keyboard focus stops at a widget of `kind`: the ones that take input. Nodes
+        /// with a `Spec.widget` say for themselves (`widget_focusable`).
         pub fn focusable(comptime kind: Kind) bool {
             return switch (kind) {
                 .checkbox, .slider => true,
@@ -153,10 +176,10 @@ pub fn Events(comptime spec: Spec) type {
         const focus_table = blk: {
             @setEvalBranchQuota(1000 + 8 * F.node_count);
             var k: usize = 0;
-            for (widget_kinds) |kind| k += @intFromBool(focusable(kind));
+            for (widget_focusable) |f| k += @intFromBool(f);
             var out: [k]Widget = undefined;
             k = 0;
-            for (widget_kinds, 0..) |kind, w| if (focusable(kind)) {
+            for (widget_focusable, 0..) |f, w| if (f) {
                 out[k] = widget(w);
                 k += 1;
             };
@@ -309,6 +332,9 @@ pub fn Events(comptime spec: Spec) type {
                         return @unionInit(Event, @tagName(tag), v);
                     }
                     if (down or at(r, x, y) != tag) return null;
+                    // A custom widget whose events carry a payload reports them from its own
+                    // `step`; a click on it is not an event here.
+                    if (comptime widget_payloads[k] != void) return null;
                     return @unionInit(Event, @tagName(tag), {});
                 },
             }

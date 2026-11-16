@@ -25,6 +25,34 @@
 //!        pace to the display's refresh instead of returning at once.
 //!
 //! `run` is the whole host loop over these four calls, for the common case.
+//!
+//! ## Embedding in a loop you already have
+//!
+//! The library never owns the loop, so there are three ways in, from least to most control
+//! (DVUI's "on top of an existing application" is the third):
+//!
+//!   1. `run(shell, ctx, app)`. A new program with nothing else to do.
+//!   2. Copy `run`'s body into your loop. You use a shell for the window and its events but
+//!      have other work per tick (a simulation, network, audio). `poll` never blocks, so call it
+//!      once per tick; replace `wait` with your own pacing (vsync, a fixed tick), or keep it and
+//!      sleep as long as the UI allows (`scheduler.wake`, `scheduler.pace`).
+//!   3. No shell at all. Your engine or application already has a window, an event loop and a
+//!      renderer. Each tick, fill an `Input` (and an `Events`, if widgets read the composition
+//!      or files) from the events you already handle. Then:
+//!
+//!          if (ctx.needsFrame(&ev.in)) {
+//!              var f = ctx.begin(&ev.in);
+//!              app.build(&f, &ev);
+//!              out = f.end(.{});
+//!              // apply out.platform with your windowing code
+//!          }
+//!          // inside your own pass, after your scene: draw out.draw (src/render/iface.zig),
+//!          // stopping at each custom command to draw into its rect
+//!
+//!      The UI is one step of your tick. It keeps no thread and no timer, and it holds no memory
+//!      beyond the buffer you gave `Context.init`. When `needsFrame` is false, the last `out` is
+//!      still valid and can be drawn again. Test "embed: an engine's own loop runs the example"
+//!      in headless.zig does exactly this.
 
 const std = @import("std");
 const Input = @import("../core/input.zig").Input;

@@ -198,6 +198,53 @@ test "run: the headless shell runs the example in one call" {
     try testing.expectEqual(Pace.idle, shell.waited.pace);
 }
 
+test "embed: an engine's own loop runs the example" {
+    // The engine owns the loop, its events (here a recording), its framebuffer and its tick.
+    // The UI is one step per tick; no shell is involved.
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var app: example.App = .{};
+    var replay: Replay = .{ .src = @embedFile("testdata/example.replay") };
+    const buf: Replay.Buffers = .{ .text = &Fixture.text, .events = &Fixture.events, .contacts = &Fixture.contacts };
+    var fb: sw.Framebuffer = .init(&Fixture.pixels, fb_w, fb_h, .rgba8);
+    var gfx: sw.Software = .{};
+    const font: Mono = .{};
+    const scene: Color = .rgb(10, 80, 40);
+
+    var ev: Events = .{};
+    var out: ?Output = null;
+    var ticks: u32 = 0;
+    var simulated: u32 = 0;
+    while (try replay.next(buf)) |in| : (ticks += 1) {
+        ev.in = in.*;
+        simulated += 1; // the engine's own work, every tick
+        if (ctx.needsFrame(&ev.in)) {
+            var f = ctx.begin(&ev.in);
+            app.build(&f, &ev);
+            out = f.end(.{});
+        }
+        // The engine draws every tick: its clear, then the UI, then its scene into the custom rect.
+        const o = &out.?;
+        fb.clear(.rgb(0, 0, 0));
+        const n = font.quads(o.draw, &Fixture.glyphs, .{ .first = &Fixture.first, .count = &Fixture.count });
+        gfx.prepare({}, o.draw, .{ .quads = Fixture.glyphs[0..n], .first = &Fixture.first, .count = &Fixture.count }, .{ 0, 0 }, 1);
+        const pass: sw.Target = .{ .fb = &fb, .scissor = fb.all() };
+        var i = render.drawUntilCustom(&gfx, pass, o.draw, 0);
+        while (i < o.draw.cmd_len) : (i = render.drawUntilCustom(&gfx, pass, o.draw, i + 1)) {
+            const r = o.draw.customs[o.draw.command(i).custom].rect;
+            fb.fill(.{ @intFromFloat(r[0]), @intFromFloat(r[1]), @intFromFloat(r[2]), @intFromFloat(r[3]) }, scene);
+        }
+    }
+    try testing.expectEqual(@as(u32, 15), ticks);
+    try testing.expectEqual(ticks, simulated);
+    // The UI built only the frames that changed; the results match the shell's.
+    try testing.expectEqual(@as(u32, 13), app.builds);
+    try testing.expectEqual(@as(u32, 1), app.resets);
+    try testing.expectEqual(@as(u32, 4), app.layers);
+    try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
+    try testing.expectEqual(app.theme.panel, fb.at(80, 590));
+    try testing.expectEqual(scene, fb.at(400, 300));
+}
+
 test "headless: a bad recording stops the shell and says where" {
     var shell = Fixture.shell("frame\nviewport 800\n");
     var ev: Events = .{};

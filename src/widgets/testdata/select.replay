@@ -1,0 +1,50 @@
+# Recorded input for the select example page (widgets/select.zig, `Example`), at 800 x 600 in
+# the default theme: the select at x 58..178, y 8..42; its open list at x 58..178, y 48..143:
+# Circle (y 51..81), Square (81..110), Triangle (110..140), x 61..175. One line per frame says
+# what it does (format: input.Replay). Keys are USB HID: 81 Down, 40 Enter, 41 Escape.
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 300
+# 1: press the select
+frame
+pointer 118 25
+buttons left
+# 2: release: the list opens on Circle, the value
+frame
+buttons
+# 3: Down: Square
+frame
+press 81
+# 4: Down: Triangle
+frame
+press 81
+# 5: Enter: Triangle chosen, the list closes
+frame
+press 40
+# 6: press the select
+frame
+buttons left
+# 7: release: the list opens on Triangle
+frame
+buttons
+# 8: the pointer reaches Square
+frame
+pointer 118 95
+# 9: press it
+frame
+buttons left
+# 10: release: Square chosen
+frame
+buttons
+# 11: press the select
+frame
+pointer 118 25
+buttons left
+# 12: release: open on Square
+frame
+buttons
+# 13: Escape: closed, still Square
+frame
+press 41

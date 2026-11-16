@@ -37,6 +37,13 @@ const pages = .{
     .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
     .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
     .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
+    .{ "", lcgr.widgets_tooltip.golden, lcgr.widgets_tooltip.golden.src, lcgr.widgets_tooltip.golden.frames },
+    .{ "", lcgr.widgets_menu.golden, lcgr.widgets_menu.golden.src, lcgr.widgets_menu.golden.frames },
+    .{ "", lcgr.widgets_menubar.golden, lcgr.widgets_menubar.golden.src, lcgr.widgets_menubar.golden.frames },
+    .{ "", lcgr.widgets_contextmenu.golden, lcgr.widgets_contextmenu.golden.src, lcgr.widgets_contextmenu.golden.frames },
+    .{ "", lcgr.widgets_dialog.golden, lcgr.widgets_dialog.golden.src, lcgr.widgets_dialog.golden.frames },
+    .{ "", lcgr.widgets_toast.golden, lcgr.widgets_toast.golden.src, lcgr.widgets_toast.golden.frames },
+    .{ "", lcgr.widgets_select.golden, lcgr.widgets_select.golden.src, lcgr.widgets_select.golden.frames },
 };
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;

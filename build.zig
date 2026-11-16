@@ -48,6 +48,15 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{ "auxiliary/GraphemeBreakTest", "auxiliary/WordBreakTest", "auxiliary/LineBreakTest", "BidiTest", "BidiCharacterTest", "Scripts" }) |f|
         conformance.root_module.addAnonymousImport(b.fmt("{s}.txt", .{std.fs.path.basename(f)}), .{ .root_source_file = ucd.path(b.fmt("{s}.txt", .{f})) });
     b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
+    // Lines laid out and reordered for display against BidiCharacterTest (src/text/layout/conformance.zig).
+    const text_conformance = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/text/layout/conformance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    text_conformance.root_module.addAnonymousImport("BidiCharacterTest.txt", .{ .root_source_file = ucd.path("BidiCharacterTest.txt") });
+    b.step("text-conformance", "Lay out and reorder BidiCharacterTest lines").dependOn(&b.addRunArtifact(text_conformance).step);
 
     // The package root built ReleaseFast, for the branch census and the benchmark.
     const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
