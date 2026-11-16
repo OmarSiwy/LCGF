@@ -1,4 +1,5 @@
-//! Times layout of each example comptime UI three ways: the runtime tree rebuilt every frame
+//! Layout benchmark for static UIs. Times each example comptime UI, and two longer static lists,
+//! three ways: the runtime tree rebuilt every frame
 //! (`Tree.push`, then `layout.run`), the runtime tree's `layout.run` alone, and the comptime front
 //! end (`ct_layout.Layout.run` over read-only tables, which needs no rebuild).
 //! `zig build ct-layout-bench` (ReleaseFast). Its own module root, importing the package as `lcgr`.
@@ -18,6 +19,23 @@ fn pushAll(t: anytype, comptime s: lcgr.spec.Spec, parent: u32) void {
     t.seal(i);
 }
 
+/// A static list: a column of `k` rows, each a label and a bar: 3k + 1 nodes, fixed-height rows
+/// that fill the width.
+fn list(comptime k: usize) lcgr.spec.Spec {
+    @setEvalBranchQuota(1000 + 200 * k);
+    const s = lcgr.spec;
+    var kids: [k]s.Spec = undefined;
+    for (&kids) |*r| r.* = s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.x), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) });
+    return s.col(.{ .pad = @splat(4), .gap = 2 }, kids);
+}
+
+const List = struct { x: f32 = 0 };
+/// The examples, then two longer static lists.
+const uis = examples.all ++ [_]examples.Example{
+    .{ .name = "list-49", .State = List, .spec = list(16) },
+    .{ .name = "list-193", .State = List, .spec = list(64) },
+};
+
 fn median(xs: *[batches]u64) u64 {
     std.mem.sort(u64, xs, {}, std.sort.asc(u64));
     return xs[batches / 2];
@@ -29,9 +47,9 @@ pub fn main(init: std.process.Init) !void {
     var out = std.Io.File.stdout().writerStreaming(io, &out_buf);
     const w = &out.interface;
     try w.print("{s:<10} {s:>5} {s:>14} {s:>14} {s:>12}\n", .{ "example", "nodes", "push+layout ns", "rt layout ns", "comptime ns" });
-    const buf = try init.gpa.alignedAlloc(u8, .fromByteUnits(lcgr.mem.column_align), 1 << 20);
+    const buf = try init.gpa.alignedAlloc(u8, .fromByteUnits(lcgr.mem.column_align), 1 << 21);
     defer init.gpa.free(buf);
-    inline for (examples.all) |e| if (comptime !std.mem.eql(u8, e.name, "custom")) {
+    inline for (uis) |e| if (comptime !std.mem.eql(u8, e.name, "custom")) {
         const L = lcgr.ct_layout.Layout(e.spec, e.options);
         const n = L.Cols.node_count;
         // A run-time viewport, so the optimizer cannot fold a layout whose inputs are all
