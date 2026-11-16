@@ -144,6 +144,7 @@ pub const shell_baremetal_input = @import("shell/baremetal/input.zig");
 pub const shell_baremetal_tick = @import("shell/baremetal/tick.zig");
 pub const shell_baremetal_shell = @import("shell/baremetal/shell.zig");
 pub const shell_baremetal_sim = @import("shell/baremetal/sim.zig");
+pub const shell_web = @import("shell/web/web.zig");
 
 test {
     std.testing.refAllDecls(@This());
