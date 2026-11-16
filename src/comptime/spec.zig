@@ -29,6 +29,10 @@ pub const Kind = enum(u8) {
     @"switch",
     /// A button that stays pressed, over a bool field (src/widgets/toggle.zig).
     toggle,
+    /// A two-thumb slider over a `[2]f32` field (src/widgets/range.zig): the track.
+    range,
+    /// One thumb of a `range`, `index` 0 (low) or 1 (high): the half of the track nearer it.
+    range_thumb,
 };
 
 /// One node of the declaration. Exists only at compile time.

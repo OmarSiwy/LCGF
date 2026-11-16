@@ -124,8 +124,8 @@ pub fn Events(comptime spec: Spec) type {
         /// nothing (it was clicked).
         pub fn Payload(comptime kind: Kind) type {
             return switch (kind) {
-                .slider => f32,
-                .checkbox, .button, .radio, .radio_option, .@"switch", .toggle, .label, .col, .row => void,
+                .slider, .range_thumb => f32,
+                .checkbox, .button, .radio, .radio_option, .@"switch", .toggle, .range, .label, .col, .row => void,
             };
         }
 
@@ -142,8 +142,8 @@ pub fn Events(comptime spec: Spec) type {
         /// Whether keyboard focus stops at a widget of `kind`: the ones that take input.
         pub fn focusable(comptime kind: Kind) bool {
             return switch (kind) {
-                .checkbox, .slider, .button, .radio_option, .@"switch", .toggle => true,
-                .radio, .label, .col, .row => false,
+                .checkbox, .slider, .button, .radio_option, .@"switch", .toggle, .range_thumb => true,
+                .radio, .range, .label, .col, .row => false,
             };
         }
 
@@ -285,9 +285,9 @@ pub fn Events(comptime spec: Spec) type {
             down: bool = false,
         };
 
-        /// The event this frame's mouse makes, or null. A slider reports its value on press and
-        /// every frame it stays pressed (a drag, clamped to the slider's ends, even outside
-        /// it); any other widget reports a click when the button goes up over the widget it
+        /// The event this frame's mouse makes, or null. A slider (or a range slider's thumb)
+        /// reports its value on press and every frame it stays pressed (a drag, clamped to the
+        /// slider's ends, even outside it); any other widget reports a click when the button goes up over the widget it
         /// went down on.
         pub fn pointer(p: *Pointer, r: *const Rects, in: *const Input) ?Event {
             if (comptime count == 0) return null;
@@ -301,7 +301,7 @@ pub fn Events(comptime spec: Spec) type {
             switch (w) {
                 inline else => |tag| {
                     const k = comptime slot(tag);
-                    if (comptime widget_kinds[k] == .slider) {
+                    if (comptime widget_kinds[k] == .slider or widget_kinds[k] == .range_thumb) {
                         if (!down) return null;
                         const x0 = r.c[0][k];
                         const span = r.c[2][k] - x0;

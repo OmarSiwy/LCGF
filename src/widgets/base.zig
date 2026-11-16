@@ -62,6 +62,7 @@ const radio_zig = @import("radio.zig");
 const switch_zig = @import("switch.zig");
 const toggle_zig = @import("toggle.zig");
 const slider_zig = @import("slider.zig");
+const range_zig = @import("range.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -183,6 +184,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
                 .@"switch" => switch_zig.bindError(State, name),
                 .toggle => toggle_zig.bindError(State, name),
                 .slider => slider_zig.bindError(State, name),
+                .range, .range_thumb => range_zig.bindError(State, name),
                 else => null,
             };
             if (err) |msg| @compileError(msg);
@@ -318,7 +320,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         .slider => if (from_pointer) ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
                         .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
-                        .label, .col, .row, .button, .radio => {},
+                        .label, .col, .row, .button, .radio, .range, .range_thumb => {},
                     }
                 },
             };
@@ -451,6 +453,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
                 },
                 .radio_option => unreachable, // pushed by its group
+                .range, .range_thumb => @compileError("the comptime range slider is built from C0562 on"),
                 .toggle => {
                     const value: bool = @field(state, n.bind.?);
                     var s = n.style;
