@@ -108,14 +108,15 @@ pub const cursor_ids = ids: {
 
 pub const Translator = struct {
     /// Held state, kept from message to message: viewport, scale, pointer, buttons, keys, mods.
-    /// The per-frame part (wheel, text, events) collects the messages since `begin`.
+    /// The per-frame part (wheel, text, events) collects the messages since the last `frame`.
     in: Input = .{},
     /// The client area in physical pixels, from `WM_SIZE`; `in.viewport` is it in logical
     /// pixels, at `in.scale`.
     client: [2]f32 = .{ 800, 600 },
     /// `WM_CLOSE` arrived: the user asked to close the window.
     closed: bool = false,
-    /// Caller-owned storage for one frame's typed text and key events.
+    /// Caller-owned storage for the typed text and key events arriving (`frame` copies them
+    /// to `out`).
     text: []u8 = &.{},
     events: []Input.Event = &.{},
     n_text: u32 = 0,
@@ -127,20 +128,25 @@ pub const Translator = struct {
     /// The IME's composition as UTF-8, held until it changes or ends (`compose`).
     preedit: []u8 = &.{},
     composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 } } = .{},
+    /// The frame handed out by `frame`, which its `Events` point into. Kept apart from what
+    /// arrives so that, with several windows on one thread, another window's `poll` (which
+    /// dispatches this window's messages too) cannot change a frame not yet built.
+    out: Buffers = .{ .text = &.{}, .events = &.{} },
 
-    /// `preedit` holds the longest composition shown; a longer one is cut at a character.
+    /// Each buffer is split in two halves: the messages arriving, and the frame handed out.
+    /// `preedit` holds twice the longest composition shown; a longer one is cut at a character.
     pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
-        return .{ .text = buf.text, .events = buf.events, .preedit = buf.preedit };
-    }
-
-    /// Clears the per-frame state, before the messages of the next frame.
-    pub fn begin(t: *Translator) void {
-        t.in.wheel = .{ 0, 0 };
-        t.in.scroll = .{ 0, 0 };
-        t.n_text = 0;
-        t.n_events = 0;
+        const t = buf.text.len / 2;
+        const e = buf.events.len / 2;
+        const p = buf.preedit.len / 2;
+        return .{
+            .text = buf.text[0..t],
+            .events = buf.events[0..e],
+            .preedit = buf.preedit[0..p],
+            .out = .{ .text = buf.text[t..][0..t], .events = buf.events[e..][0..e], .preedit = buf.preedit[p..][0..p] },
+        };
     }
 
     /// Reads one message. Messages the translator does not know are ignored.
@@ -317,12 +323,22 @@ pub const Translator = struct {
         t.n_events += 1;
     }
 
-    /// This frame's events. False once the window was closed.
-    pub fn frame(t: *const Translator, ev: *Events) bool {
+    /// This frame's events: the messages since the last `frame`, copied to `out`, where `ev`
+    /// points until the next call. Then the next frame starts empty. False once the window
+    /// was closed.
+    pub fn frame(t: *Translator, ev: *Events) bool {
+        const o = t.out;
+        @memcpy(o.text[0..t.n_text], t.text[0..t.n_text]);
+        @memcpy(o.events[0..t.n_events], t.events[0..t.n_events]);
+        @memcpy(o.preedit[0..t.composition.len], t.preedit[0..t.composition.len]);
         ev.in = t.in;
-        ev.in.text = t.text[0..t.n_text];
-        ev.in.events = t.events[0..t.n_events];
-        ev.composition = .{ .text = t.preedit[0..t.composition.len], .range = t.composition.range };
+        ev.in.text = o.text[0..t.n_text];
+        ev.in.events = o.events[0..t.n_events];
+        ev.composition = .{ .text = o.preedit[0..t.composition.len], .range = t.composition.range };
+        t.in.wheel = .{ 0, 0 };
+        t.in.scroll = .{ 0, 0 };
+        t.n_text = 0;
+        t.n_events = 0;
         return !t.closed;
     }
 };
@@ -480,7 +496,6 @@ test "translate: size and close from a recording" {
     var ev: Events = .{};
     const want = [_][2]f32{ .{ 800, 600 }, .{ 800, 600 }, .{ 1024, 768 } };
     for (want, 0..) |vp, i| {
-        t.begin();
         for ((try r.next(&buf)).?) |m| t.feed(m);
         try testing.expectEqual(i < 2, t.frame(&ev));
         try testing.expectEqual(vp, ev.in.viewport);
@@ -529,7 +544,6 @@ test "translate: the example's messages give the headless recording's input and 
     var cursor: u16 = cursor_ids[@backingInt(Cursor.arrow)];
     while (try msgs.next(&buf)) |frame_msgs| : (frames += 1) {
         defer shown[frames] = cursor;
-        t.begin();
         for (frame_msgs) |m| t.feed(m);
         try testing.expect(t.frame(&ev));
         const in = (try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts })).?;
@@ -590,7 +604,6 @@ test "translate: keys, typed text, wheel and leaving the window" {
     var t: Translator = .init(.{ .text = &text, .events = &events });
     var ev: Events = .{};
 
-    t.begin();
     for ((try r.next(&buf)).?) |m| t.feed(m);
     _ = t.frame(&ev);
     const shift: Input.Mods = .{ .shift = true };
@@ -607,7 +620,6 @@ test "translate: keys, typed text, wheel and leaving the window" {
     try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe1));
     try testing.expectEqual([2]f32{ -0.5, -2 }, ev.in.wheel);
 
-    t.begin();
     for ((try r.next(&buf)).?) |m| t.feed(m);
     _ = t.frame(&ev);
     const ctrl: Input.Mods = .{ .ctrl = true };
@@ -625,7 +637,6 @@ test "translate: keys, typed text, wheel and leaving the window" {
     try testing.expectEqual(ctrl, ev.in.mods);
 
     // Focus lost: held keys are let go; the pointer left.
-    t.begin();
     for ((try r.next(&buf)).?) |m| t.feed(m);
     _ = t.frame(&ev);
     try testing.expectEqual(Input.Keys{}, ev.in.keys);
@@ -657,7 +668,6 @@ test "translate: per-monitor DPI scales the viewport and the pointer" {
         .{ .scale = 1.5, .viewport = .{ 800, 600 }, .pointer = .{ 200, 100 } },
     };
     for (want) |w| {
-        t.begin();
         for ((try r.next(&buf)).?) |m| t.feed(m);
         _ = t.frame(&ev);
         try testing.expectEqual(w.scale, ev.in.scale);
@@ -679,7 +689,6 @@ test "clipboard: pasted text is typed in one event, copied text gets CRLF" {
     try testing.expectEqualStrings("one\ntwo\t\u{1f600}", ev.in.typed(ev.in.events[1]));
 
     // Too long for what is left: nothing of it is typed.
-    t.begin();
     t.paste(std.unicode.utf8ToUtf16LeStringLiteral("0123456789012345678901234567890123456789"));
     _ = t.frame(&ev);
     try testing.expectEqualStrings("", ev.in.text);
@@ -707,20 +716,17 @@ test "ime: a composition is shown, converted, then committed as typed text" {
     try testing.expectEqualStrings("", ev.in.text);
 
     // Space converts: two clauses, the first ("nichi" -> U+65E5) the target.
-    t.begin();
     t.compose(u("\u{65e5}\u{672c}"), &.{ attr_target_converted, 2 }, 1);
     _ = t.frame(&ev);
     try testing.expectEqual([2]u32{ 0, 3 }, ev.composition.range);
 
     // A surrogate pair and a caret after it.
-    t.begin();
     t.compose(u("a\u{20bb7}b"), &.{ 0, 0, 0, 0 }, 3);
     _ = t.frame(&ev);
     try testing.expectEqualStrings("a\u{20bb7}b", ev.composition.text);
     try testing.expectEqual([2]u32{ 5, 5 }, ev.composition.range);
 
     // Enter commits: the result is typed, the composition ends.
-    t.begin();
     t.commit(u("\u{65e5}\u{672c}"));
     t.compose(&.{}, &.{}, 0);
     _ = t.frame(&ev);
@@ -729,8 +735,8 @@ test "ime: a composition is shown, converted, then committed as typed text" {
     try testing.expectEqual(Input.Event.Kind.text, ev.in.events[0].kind);
 
     // A composition longer than the buffer is cut at a character.
-    var small: [4]u8 = undefined;
-    t.preedit = &small;
+    var small: [8]u8 = undefined;
+    t = .init(.{ .text = &text, .events = &events, .preedit = &small });
     t.compose(u("\u{65e5}\u{672c}"), &.{}, 2);
     _ = t.frame(&ev);
     try testing.expectEqualStrings("\u{65e5}", ev.composition.text);
@@ -759,12 +765,41 @@ test "timers: the clock and the wait for each pace" {
     try testing.expectEqual(@as(u32, 7), waitMs(0, .display, 144));
 }
 
+test "windows: two windows on one thread keep their frames apart" {
+    // One thread, two windows. Each poll dispatches every window's messages, so window A's
+    // keys can arrive during B's poll, after A's frame was handed out but before it is built.
+    var a_text: [16]u8 = undefined;
+    var a_events: [8]Input.Event = undefined;
+    var b_text: [16]u8 = undefined;
+    var b_events: [8]Input.Event = undefined;
+    var a: Translator = .init(.{ .text = &a_text, .events = &a_events });
+    var b: Translator = .init(.{ .text = &b_text, .events = &b_events });
+    const char = @backingInt(Wm.char);
+    var ev_a: Events = .{};
+    var ev_b: Events = .{};
+
+    a.feed(.{ .msg = @backingInt(Wm.size), .lparam = lparam(400, 300) });
+    a.feed(.{ .msg = char, .wparam = 'a' });
+    b.feed(.{ .msg = char, .wparam = 'b' });
+    _ = a.frame(&ev_a); // poll A
+    a.feed(.{ .msg = char, .wparam = 'x' }); // during poll B
+    b.feed(.{ .msg = @backingInt(Wm.close) });
+    try testing.expect(!b.frame(&ev_b)); // poll B: B was closed, A goes on
+    // Build A, build B: each sees its own frame, unchanged.
+    try testing.expectEqualStrings("a", ev_a.in.text);
+    try testing.expectEqual([2]f32{ 400, 300 }, ev_a.in.viewport);
+    try testing.expectEqualStrings("b", ev_b.in.text);
+    try testing.expectEqual([2]f32{ 800, 600 }, ev_b.in.viewport);
+    // A's late key is in its next frame.
+    try testing.expect(a.frame(&ev_a));
+    try testing.expectEqualStrings("x", ev_a.in.text);
+}
+
 test "translate: a full frame drops what does not fit and counts it" {
-    var text: [2]u8 = undefined;
-    var events: [2]Input.Event = undefined;
+    var text: [4]u8 = undefined;
+    var events: [4]Input.Event = undefined;
     var t: Translator = .init(.{ .text = &text, .events = &events });
     var ev: Events = .{};
-    t.begin();
     for ("abc") |c| t.feed(.{ .msg = @backingInt(Wm.char), .wparam = c });
     _ = t.frame(&ev);
     try testing.expectEqualStrings("ab", ev.in.text);

@@ -216,8 +216,8 @@ pub const Win32 = struct {
     /// Caller-owned storage, as for the headless shell: `pixels` holds the largest client area
     /// to draw (`sw.Framebuffer.len(w, h)`; a larger window is drawn cut off), `glyphs` one quad
     /// per byte of text in a frame, `first` and `count` one row per text run. `text` and
-    /// `events` hold one frame's typed text and key events, `preedit` the IME's composition
-    /// (`translate.Translator.Buffers`).
+    /// `events` hold two frames' typed text and key events, `preedit` twice the IME's
+    /// composition (`translate.Translator.Buffers`: what arrives, and the frame handed out).
     pub const Buffers = struct {
         text: []u8,
         events: []lcgr.input.Input.Event,
@@ -277,7 +277,6 @@ pub const Win32 = struct {
     /// Drains the thread's message queue without blocking; the window procedure translates each
     /// message. False once the user closed the window.
     pub fn poll(w: *Win32, ev: *Events) bool {
-        w.t.begin();
         var m: MSG = undefined;
         while (PeekMessageW(&m, null, 0, 0, pm_remove) != 0) {
             _ = TranslateMessage(&m);
@@ -286,11 +285,9 @@ pub const Win32 = struct {
         var now: i64 = 0;
         _ = QueryPerformanceCounter(&now);
         w.t.clock(@as(f64, @floatFromInt(now - w.start)) / @as(f64, @floatFromInt(@max(w.ticks, 1))));
-        const open = w.t.frame(ev);
-        // Cleared after, not before: what arrives between polls (a `paste`, the messages
-        // `apply` causes) belongs to the next frame.
-        w.t.begin();
-        return open;
+        // What arrived between polls (a `paste`, the messages `apply` causes, another
+        // window's poll dispatching ours) is in this frame.
+        return w.t.frame(ev);
     }
 
     pub fn apply(w: *Win32, p: *const Platform) void {
@@ -495,6 +492,10 @@ const Fixture = struct {
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
     var preedit: [64]u8 = undefined;
+    // A second window's own text, events and composition; pixels and glyphs are shared.
+    var text2: [64]u8 = undefined;
+    var events2: [16]lcgr.input.Input.Event = undefined;
+    var preedit2: [64]u8 = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [example_limits.texts]u32 = undefined;
     var count: [example_limits.texts]u32 = undefined;
@@ -574,6 +575,28 @@ test "win32: a worker thread ends a wait, and the clock runs" {
     try testing.expect(w.poll(&ev));
     try testing.expect(ev.in.time > t0);
     try testing.expect(ev.in.dt > 0);
+}
+
+test "win32: two windows on one thread get their own messages" {
+    var a: Win32 = undefined;
+    try Fixture.open(&a);
+    defer a.deinit();
+    var b: Win32 = undefined;
+    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .pixels = &Fixture.pixels, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
+    defer b.deinit();
+    const char = @backingInt(translate.Wm.char);
+    _ = PostMessageW(a.hwnd, char, 'a', 0);
+    _ = PostMessageW(b.hwnd, char, 'b', 0);
+    var ev_a: Events = .{};
+    var ev_b: Events = .{};
+    try testing.expect(a.poll(&ev_a)); // dispatches both
+    _ = PostMessageW(a.hwnd, char, 'x', 0);
+    _ = PostMessageW(b.hwnd, @backingInt(translate.Wm.close), 0, 0);
+    try testing.expect(!b.poll(&ev_b)); // B closed; A is still open
+    try testing.expectEqualStrings("a", ev_a.in.text);
+    try testing.expectEqualStrings("b", ev_b.in.text);
+    try testing.expect(a.poll(&ev_a));
+    try testing.expectEqualStrings("x", ev_a.in.text);
 }
 
 test "win32: copy then paste round-trips through the system clipboard" {
