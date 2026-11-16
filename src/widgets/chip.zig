@@ -16,18 +16,61 @@ const spec_zig = @import("../comptime/spec.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
+const Style = types.Style;
+const Color = types.Color;
+const Response = types.Response;
+const Frame = @import("../runtime/frame.zig").Frame;
+const Input = @import("../core/input.zig").Input;
+const button_zig = @import("button.zig");
 
 // ---- spec -----------------------------------------------------------------------------------
 
-/// The id of the remove button of the chip named `chip`, in both front ends: the runtime one
+/// The id of the remove button of the chip named `owner`, in both front ends: the runtime one
 /// derives it with `Id.with`, the comptime one from the button's spec name `<chip>.remove`.
-pub fn removeId(chip: Id) Id {
-    return chip.with(0);
+pub fn removeId(owner: Id) Id {
+    return owner.with(0);
 }
 
 /// The chip's name from its remove button's comptime name `<chip>.remove`.
 pub fn chipName(comptime remove: []const u8) []const u8 {
     return remove[0 .. remove.len - ".remove".len];
+}
+
+// ---- look -----------------------------------------------------------------------------------
+
+/// The pill: caption (then the remove button) in a row, padded wider than tall, fully rounded
+/// at the theme's text size, in the control's hot colour so a remove button at rest shows on
+/// it; static text to assistive technology through its caption, nothing itself.
+pub fn chipStyle(th: *const Theme) Style {
+    const h = th.text_px * 1.25 + 8;
+    return .{ .dir = .x, .pad = .{ 10, 4, 4, 4 }, .gap = 6, .radius = h * 0.5, .fill = th.control_hot, .cross = .center };
+}
+
+/// The remove button: a small round button (role button) around its caption, filled from the
+/// control fills by hover and held as a button is (`button.buttonFill`).
+pub fn removeStyle(th: *const Theme, r: Response) Style {
+    const h = th.text_px * 1.25;
+    return .{ .dir = .x, .pad = .{ 4, 0, 4, 0 }, .radius = h * 0.5, .main = .center, .cross = .center, .fill = button_zig.buttonFill(th, r), .role = .button };
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A chip showing `str`, with a remove button named `removeId(id)` and captioned `remove`
+/// when that is not null. The response is the remove button's (empty without one).
+pub fn chip(f: *Frame, th: *const Theme, id: Id, str: []const u8, remove: ?[]const u8) Response {
+    _ = f.open(.none, chipStyle(th));
+    _ = label_zig.label(f, th, str);
+    var r: Response = .{};
+    if (remove) |caption| {
+        const b = f.open(removeId(id), removeStyle(th, .{}));
+        r = f.interact(b, .button);
+        f.setFill(b, button_zig.buttonFill(th, r));
+        f.setCursor(.pointer, r.hovered);
+        _ = label_zig.label(f, th, caption);
+        f.close();
+    }
+    f.close();
+    return r;
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -45,7 +88,7 @@ pub const ct = struct {
             .id = @tagName(id) ++ ".remove",
             .children = &.{label_zig.ct.label(th, r)},
         } } else &.{caption};
-        return .{ .kind = .chip, .children = kids };
+        return .{ .kind = .chip, .style = chipStyle(&th), .children = kids };
     }
 };
 
@@ -78,6 +121,54 @@ test "chip state: captions bind as labels do; removeId differs from the chip's i
     try testing.expect(comptime label_zig.bindError(State, "n") != null);
     try testing.expect(removeId(.from("rust")) != Id.from("rust"));
     try testing.expectEqual(Id.from("rust").with(0), removeId(.from("rust")));
+}
+
+/// A removable chip and a plain one in both front ends, in theme `th`: the tests' page until
+/// the example page (C0700).
+fn Two(comptime th: Theme) type {
+    return struct {
+        const row: Style = .{ .dir = .x, .pad = @splat(8), .gap = 8, .cross = .center };
+        pub const App = struct {
+            removed: bool = false,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.from("row"), row);
+                app.removed = chip(f, &th, .from("rust"), "Rust", "x").clicked;
+                _ = chip(f, &th, .from("draft"), "Draft", null);
+                f.close();
+            }
+        };
+        pub const State = struct { rust_text: []const u8 = "Rust", remove_text: []const u8 = "x", draft_text: []const u8 = "Draft" };
+        pub const Ui = base.ComptimeUi(State, spec_zig.row(row, .{ ct.chip(th, .rust, .rust_text, .remove_text), ct.chip(th, .draft, .draft_text, null) }), th);
+        pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
+    };
+}
+
+var two: Two(.default).Run = .{};
+
+test "chip look: a rounded pill around its caption and its remove button, in both front ends" {
+    const h = &two;
+    h.init();
+    const th = Theme.default;
+    var in: Input = .{ .viewport = .{ 240, 60 } };
+    var out = try h.frame(&in);
+    // Rows: root, row, chip (2), caption (3), remove (4), its caption (5), chip (6), caption (7).
+    const t = out.runtime.tree;
+    const pill = t.rect(2);
+    try testing.expectApproxEqAbs(@as(f32, 17.5 + 8), pill.h(), 0.5);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[2].fill);
+    try testing.expectEqual(pill.x0 + 10, t.rect(3).x0);
+    const rm = t.rect(4);
+    try testing.expectEqual(t.rect(3).x1 + 6, rm.x0);
+    try testing.expectEqual(pill.x1 - 4, rm.x1);
+    try testing.expectEqual(@backingInt(removeId(.from("rust"))), t.c.id[4]);
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[4].fill);
+    // The plain chip: its caption, padded, and nothing else.
+    try testing.expectEqual(@as(u32, 8), t.len);
+    try testing.expectEqual(t.rect(6).x0 + 10, t.rect(7).x0);
+    // Hovering the remove button lights it as a button.
+    in.pointer = .{ (rm.x0 + rm.x1) * 0.5, (rm.y0 + rm.y1) * 0.5 };
+    out = try h.frame(&in);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[4].fill);
 }
 
 test {

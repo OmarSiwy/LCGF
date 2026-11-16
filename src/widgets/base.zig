@@ -63,6 +63,7 @@ const switch_zig = @import("switch.zig");
 const toggle_zig = @import("toggle.zig");
 const slider_zig = @import("slider.zig");
 const range_zig = @import("range.zig");
+const chip_zig = @import("chip.zig");
 const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
@@ -484,7 +485,19 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     range_zig.expose(&tb.t, track, value);
                 },
                 .range_thumb => unreachable, // pushed by its track
-                .chip => @compileError("the comptime chip is built from C0697 on"),
+                .chip => {
+                    const i = tb.t.push(parent, .none, &n.style);
+                    ui.push(n.children[0], i, next, in);
+                    if (n.children.len == 2) {
+                        const rm = n.children[1];
+                        next.* += 1;
+                        const s = chip_zig.removeStyle(&th, ui.response(next.* - 1, in));
+                        const b = tb.t.push(i, chip_zig.removeId(.hash(comptime chip_zig.chipName(rm.id.?))), &s);
+                        ui.push(rm.children[0], b, next, in);
+                        tb.t.seal(b);
+                    }
+                    tb.t.seal(i);
+                },
                 .toggle => {
                     const value: bool = @field(state, n.bind.?);
                     var s = n.style;
