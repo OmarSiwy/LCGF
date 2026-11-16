@@ -34,6 +34,27 @@ const columns = @import("columns.zig");
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
+const Texts = @import("../core/texts.zig").Texts;
+const Span = @import("../core/strings.zig").Span;
+const TextStyle = @import("../core/types.zig").TextStyle;
+const Mono = @import("../text/protocol.zig").Mono;
+
+/// Rows of the labels of `s`, depth-first: label k of the UI is node `labelRows(s)[k]`.
+pub fn labelRows(comptime s: Spec) []const u32 {
+    comptime {
+        @setEvalBranchQuota(10_000 + 100 * @import("flatten.zig").count(s));
+        var out: []const u32 = &.{};
+        var next: u32 = 0;
+        labelWalk(s, &next, &out);
+        return out;
+    }
+}
+
+fn labelWalk(comptime s: Spec, comptime next: *u32, comptime out: *[]const u32) void {
+    if (s.kind == .label) out.* = out.* ++ [_]u32{next.*};
+    next.* += 1;
+    for (s.children) |c| labelWalk(c, next, out);
+}
 
 /// Layout scratch columns whose every row the spec fixes, so the comptime front end keeps them
 /// as read-only tables instead of having `prepare` derive them each frame: `gap_total`, the gap
@@ -94,10 +115,17 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             x.* = (c == .dynamic and !isPrecomputed(name)) or std.mem.eql(u8, name, "sense");
         break :blk w;
     };
+    const labels = labelRows(spec);
+    const RT = simd.rows(@max(labels.len, 1));
+    const tx_info = @typeInfo(Texts.Columns).@"struct";
     return struct {
         pub const Cols = C;
+        /// Label k is node `label_rows[k]`; its text is span k of `run`'s `spans`.
+        pub const label_rows = labels;
+        pub const label_count = labels.len;
 
-        /// The caller's per-frame memory for `run`: one padded f32 array per written column.
+        /// The caller's per-frame memory for `run`: one padded array per written column, in
+        /// f32 as the passes write them, and the label text runs (`tx_` + a `Texts` column).
         pub const Scratch = blk: {
             @setEvalBranchQuota(20_000);
             var names: []const []const u8 = &.{};
@@ -106,6 +134,10 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                 names = names ++ [_][]const u8{name};
                 types = types ++ [_]type{Padded(FT, R)};
             };
+            for (tx_info.field_names, tx_info.field_types) |name, FT| {
+                names = names ++ [_][]const u8{"tx_" ++ name};
+                types = types ++ [_]type{[RT]@typeInfo(FT).pointer.child};
+            }
             const nm = names[0..names.len].*;
             const ty = types[0..types.len].*;
             break :blk @Struct(.auto, null, &nm, &ty, &@splat(.{}));
@@ -192,24 +224,53 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             scratch.cursor = @splat(0);
         }
 
-        /// Lays the UI out in a `viewport`-sized area: `layout.run`'s pass sequence without text
-        /// (labels measure zero until text measurement reaches the comptime front end), then the
-        /// kept outputs into `ram`.
-        pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
-            passes(scratch, viewport);
+        /// The label text runs over `scratch`, as the text protocol (src/text/protocol.zig)
+        /// reads and writes them: run k is label k, with the default `TextStyle` and the bytes of
+        /// `spans[k]`, as `Frame.text` would push it.
+        pub fn texts(scratch: *Scratch, spans: *const [label_count]Span) Texts {
+            var tx: Texts = .{ .len = label_count, .cap = @max(label_count, 1), .c = undefined };
+            inline for (tx_info.field_names) |name| @field(tx.c, name) = &@field(scratch, "tx_" ++ name);
+            const ts: TextStyle = .{};
+            for (0..label_count) |k| {
+                tx.c.node[k] = label_rows[k];
+                tx.c.start[k] = spans[k].start;
+                tx.c.bytes[k] = spans[k].bytes;
+                tx.c.px[k] = ts.px;
+                tx.c.color[k] = ts.color.bitsOf();
+                tx.c.font[k] = @backingInt(ts.font);
+                tx.c.wrap[k] = @floatFromInt(@intFromBool(ts.wrap));
+                tx.c.w[k] = 0;
+                tx.c.h[k] = 0;
+                tx.c.avail[k] = 0;
+            }
+            return tx;
+        }
+
+        /// Lays the UI out in a `viewport`-sized area, `Frame.end`'s sequence: `font` measures
+        /// the labels' text (`spans[k]` is label k's bytes in the caller's strings), the passes
+        /// run with the text extents, `font` wraps, then finalize, and the kept outputs go to
+        /// `ram`. `font` is anything with the text protocol's `measure` and `wrap` (`Mono`).
+        pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
+            passes(scratch, viewport, spans, font);
             var v = view(scratch);
             layout.finalize(&v);
             keep(scratch, ram);
         }
 
         /// Every pass but `finalize`, which leaves sizes and positions in `scratch`.
-        pub fn passes(scratch: *Scratch, viewport: [2]f32) void {
+        pub fn passes(scratch: *Scratch, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
+            var tx = texts(scratch, spans);
+            font.measure(&tx);
             clear(scratch);
+            layout.applyText(&v, &tx, .x);
             layout.fit(&v, .x);
             layout.resolve(&v, .x, viewport[0]);
+            layout.textAvail(&v, &tx);
+            font.wrap(&tx);
+            layout.applyText(&v, &tx, .y);
             layout.fit(&v, .y);
             layout.resolve(&v, .y, viewport[1]);
             layout.place(&v);
@@ -248,10 +309,23 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 /// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
 /// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
 /// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
-fn FoldPlan(comptime C: type) type {
+fn FoldPlan(comptime C: type, comptime labels: []const u32) type {
     const n = C.node_count;
     const c = C.pushed.c;
     return struct {
+        /// A label's size is its text's, which comes from state at run time: no row with a
+        /// label in its subtree folds.
+        const has_label: [n]bool = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [n]bool = @splat(false);
+            for (labels) |l| out[l] = true;
+            var i = n;
+            while (i > 1) {
+                i -= 1;
+                if (out[i]) out[c.parent[i]] = true;
+            }
+            break :blk out;
+        };
         const indep: [n]bool = blk: {
             @setEvalBranchQuota(10_000 + 100 * n);
             var out: [n]bool = undefined;
@@ -259,7 +333,7 @@ fn FoldPlan(comptime C: type) type {
             for (1..n) |i| {
                 const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] < 0 and c.pct[1][i] < 0 and
                     (c.shrink[i] == 0 or c.flow[i] == 0);
-                out[i] = out[c.parent[i]] or own;
+                out[i] = !has_label[i] and (out[c.parent[i]] or own);
             }
             break :blk out;
         };
@@ -313,10 +387,11 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
     const P = Plain(spec, options);
     const C = P.Cols;
     const n = C.node_count;
-    const plan = FoldPlan(C);
+    const plan = FoldPlan(C, P.label_rows);
     if (plan.folded_rows == 0) return struct {
         pub const Cols = C;
         pub const Scratch = P.Scratch;
+        pub const label_count = P.label_count;
         pub const folded_rows = 0;
         pub const run = P.run;
     };
@@ -332,7 +407,9 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         const reference: Reference = blk: {
             @setEvalBranchQuota(2_000_000 + 100_000 * n);
             var scratch: P.Scratch = undefined;
-            P.passes(&scratch, .{ 1000, 1000 });
+            // No folded row is a label or holds one, so the label text does not matter here.
+            const none: [P.label_count]Span = @splat(.{ .start = 0, .bytes = 0 });
+            P.passes(&scratch, .{ 1000, 1000 }, &none, Mono{});
             break :blk .{ .size = scratch.size, .pos = scratch.pos };
         };
 
@@ -380,8 +457,12 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         /// Per-frame memory: the skeleton's and the whole tree's.
         pub const Scratch = struct { skel: S.Scratch, full: P.Scratch };
 
-        pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32) void {
-            S.passes(&scratch.skel, viewport);
+        /// Labels never fold, so the skeleton has the same labels, in the same order.
+        pub const label_count = P.label_count;
+
+        pub fn run(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
+            comptime std.debug.assert(S.label_count == label_count);
+            S.passes(&scratch.skel, viewport, spans, font);
             const sk = &scratch.skel;
             const full = &scratch.full;
             for (0..n) |j| {
@@ -404,7 +485,6 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
 const testing = std.testing;
 const examples = @import("examples.zig");
 const mem = @import("../core/mem.zig");
-const Texts = @import("../core/texts.zig").Texts;
 const Id = @import("../core/types.zig").Id;
 
 fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
@@ -413,6 +493,33 @@ fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
     inline for (s.children) |c| pushAll(t, c, i);
     t.seal(i);
 }
+
+/// Text of label k in the tests: lengths 0 to 30 bytes, different for neighbouring labels.
+const sample = "the quick brown fox jumps over the lazy dog";
+fn labelBytes(k: usize) u32 {
+    return @intCast((k * 7 + 3) % 31);
+}
+
+/// Spans of every label of a UI with `count` labels, all starting at 0 in `sample`.
+fn labelSpans(comptime count: usize) [count]Span {
+    var out: [count]Span = undefined;
+    for (&out, 0..) |*sp, k| sp.* = .{ .start = 0, .bytes = labelBytes(k) };
+    return out;
+}
+
+/// Pushes `s` like `pushAll`, and a text run for every label (`Frame.text`'s run).
+fn pushWithText(t: anytype, tx: *Texts, comptime s: Spec, parent: u32, next_label: *usize) void {
+    const id: Id = if (s.id) |name| .hash(name) else .none;
+    const i = t.push(parent, id, &s.style);
+    if (s.kind == .label) {
+        t.c.text[i] = tx.push(i, .{ .start = 0, .bytes = labelBytes(next_label.*) }, &.{});
+        next_label.* += 1;
+    }
+    inline for (s.children) |c| pushWithText(t, tx, c, i, next_label);
+    t.seal(i);
+}
+
+const test_font: Mono = .{ .advance = 0.5, .line = 1.2 };
 
 fn toF32(x: anytype) f32 {
     return if (@TypeOf(x) == f32) x else @floatFromInt(x);
@@ -425,13 +532,16 @@ fn expectSameLayout(comptime e: examples.Example, viewport: [2]f32) !void {
     var buf: [1 << 17]u8 align(64) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
     var t = tree.Tree.init(&carver, C.node_count);
-    var tx = Texts.init(&carver, 1);
-    pushAll(&t, e.spec, 0);
+    var tx = Texts.init(&carver, @max(L.label_count, 1));
+    var next_label: usize = 0;
+    pushWithText(&t, &tx, e.spec, 0, &next_label);
+    test_font.measure(&tx);
     layout.run(&t, &tx, viewport);
 
     var scratch: L.Scratch = undefined;
     var ram: C.Dynamic = undefined;
-    L.run(&scratch, &ram, viewport);
+    const spans = labelSpans(L.label_count);
+    L.run(&scratch, &ram, viewport, &spans, test_font);
     for (0..C.node_count) |i| {
         inline for (0..2) |a| {
             try testing.expectEqual(t.c.size[a][i], ram.size[a][i]);
@@ -453,9 +563,9 @@ fn expectBoth(comptime e: examples.Example) !void {
 }
 
 test "Layout: subtrees that do not depend on the viewport are laid out while compiling" {
-    // The mixer's root takes the viewport; its label and its two fit-sized rows do not, so the
-    // rows' children (4 of 8 nodes) fold.
-    try testing.expectEqual(4, Layout(examples.mixer, .{}).folded_rows);
+    // The mixer's root takes the viewport; its rows are fit-sized, but a label's size is its
+    // text, which is state: only the row without a label folds (its checkbox and slider).
+    try testing.expectEqual(2, Layout(examples.mixer, .{}).folded_rows);
     // The settings rows fill the width, so nothing below them is fixed but their leaves.
     try testing.expectEqual(0, Layout(examples.settings, .{ .viewport = .{ 320, 240 } }).folded_rows);
     // Folded results equal the runtime layout in any viewport, however small.
@@ -486,14 +596,19 @@ test "Layout.run: equals the runtime layout of the same UI" {
 const Context = @import("../runtime/context.zig").Context;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
-const Mono = @import("../text/protocol.zig").Mono;
 const spec_zig = @import("spec.zig");
 
 /// Builds `s` with the runtime front end's open / close, as an application would write it.
-fn build(f: *Frame, comptime s: Spec) void {
+fn build(f: *Frame, comptime s: Spec, next_label: *usize) void {
+    if (s.kind == .label) {
+        // Frame.text's run on the spec node's own style.
+        _ = f.textStyled(sample[0..labelBytes(next_label.*)], .{}, s.style);
+        next_label.* += 1;
+        return;
+    }
     const id: Id = if (s.id) |name| .hash(name) else .none;
     _ = f.open(id, s.style);
-    inline for (s.children) |c| build(f, c);
+    inline for (s.children) |c| build(f, c, next_label);
     f.close();
 }
 
@@ -501,15 +616,16 @@ fn build(f: *Frame, comptime s: Spec) void {
 /// resolve, incremental place, finalize, paint) against the comptime `Layout` of the same UI
 /// under the root `Context.begin` opens: a viewport-sized group that clips.
 fn expectSameAsContext(comptime e: examples.Example, viewport: [2]f32) !void {
-    const limits: @import("../runtime/context.zig").Limits = .{ .nodes = 64, .texts = 4, .customs = 1, .strings = 64, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .depth = 8, .timers = 1, .memos = 1 };
+    const limits: @import("../runtime/context.zig").Limits = .{ .nodes = 64, .texts = 32, .customs = 1, .strings = 1024, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .depth = 8, .timers = 1, .memos = 1 };
     const S = struct {
         var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
     };
     var ctx = try Context.init(&S.buffer, limits);
     const in: Input = .{ .viewport = viewport };
     var f = ctx.begin(&in);
-    build(&f, e.spec);
-    const out = f.end(.{ .advance = 0.5, .line = 1.2 });
+    var next_label: usize = 0;
+    build(&f, e.spec, &next_label);
+    const out = f.end(test_font);
     try testing.expect(out.status.ok());
     const t = out.tree;
 
@@ -518,7 +634,8 @@ fn expectSameAsContext(comptime e: examples.Example, viewport: [2]f32) !void {
     try testing.expectEqual(L.Cols.node_count, t.len);
     var scratch: L.Scratch = undefined;
     var ram: L.Cols.Dynamic = undefined;
-    L.run(&scratch, &ram, viewport);
+    const spans = labelSpans(L.label_count);
+    L.run(&scratch, &ram, viewport, &spans, test_font);
     for (0..t.len) |i| {
         inline for (0..2) |a| {
             try testing.expectEqual(t.c.size[a][i], ram.size[a][i]);

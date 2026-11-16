@@ -1,7 +1,8 @@
 //! Layout benchmark for static UIs. Times each example comptime UI, and two longer static lists,
-//! three ways: the runtime tree rebuilt every frame
-//! (`Tree.push`, then `layout.run`), the runtime tree's `layout.run` alone, and the comptime front
-//! end (`ct_layout.Layout.run` over read-only tables, which needs no rebuild).
+//! three ways, every label showing 12 bytes measured with `Mono`: the runtime tree rebuilt every
+//! frame (`Tree.push`, then measure and `layout.run`), the runtime tree's measure and
+//! `layout.run` alone, and the comptime front end (`ct_layout.Layout.run` over read-only tables,
+//! which needs no rebuild).
 //! `zig build ct-layout-bench` (ReleaseFast). Its own module root, importing the package as `lcgr`.
 //! Prints the median of 15 batches, each the mean of 2,000 frames, in nanoseconds per frame.
 
@@ -12,10 +13,16 @@ const examples = lcgr.ct_examples;
 const batches = 15;
 const frames = 2000;
 
-fn pushAll(t: anytype, comptime s: lcgr.spec.Spec, parent: u32) void {
+/// Every label shows 12 bytes of text.
+const label_bytes = 12;
+const font: lcgr.protocol.Mono = .{};
+
+/// `Tree.push` per node and `Texts.push` per label, as `Frame.text` does.
+fn pushAll(t: anytype, tx: *lcgr.texts.Texts, comptime s: lcgr.spec.Spec, parent: u32) void {
     const id: lcgr.types.Id = if (s.id) |name| .hash(name) else .none;
     const i = t.push(parent, id, &s.style);
-    inline for (s.children) |c| pushAll(t, c, i);
+    if (s.kind == .label) t.c.text[i] = tx.push(i, .{ .start = 0, .bytes = label_bytes }, &.{});
+    inline for (s.children) |c| pushAll(t, tx, c, i);
     t.seal(i);
 }
 
@@ -61,24 +68,28 @@ pub fn main(init: std.process.Init) !void {
         var ct: [batches]u64 = undefined;
         var carver: lcgr.mem.Carver = .{ .buf = buf };
         var t = lcgr.tree.Tree.init(&carver, n);
-        var tx = lcgr.texts.Texts.init(&carver, 1);
+        var tx = lcgr.texts.Texts.init(&carver, @max(L.label_count, 1));
+        const spans: [L.label_count]lcgr.strings.Span = @splat(.{ .start = 0, .bytes = label_bytes });
         var scratch: L.Scratch = undefined;
         var ram: L.Cols.Dynamic = undefined;
         for (&rt, &lo, &ct) |*r, *l, *c| {
             const t0 = std.Io.Timestamp.now(io, .awake);
             for (0..frames) |_| {
                 t.reset();
-                pushAll(&t, e.spec, 0);
+                tx.reset();
+                pushAll(&t, &tx, e.spec, 0);
+                font.measure(&tx);
                 lcgr.layout.run(&t, &tx, vp);
                 std.mem.doNotOptimizeAway(&t);
             }
             const t1 = std.Io.Timestamp.now(io, .awake);
             for (0..frames) |_| {
-                L.run(&scratch, &ram, vp);
+                L.run(&scratch, &ram, vp, &spans, font);
                 std.mem.doNotOptimizeAway(&ram);
             }
             const t2 = std.Io.Timestamp.now(io, .awake);
             for (0..frames) |_| {
+                font.measure(&tx);
                 lcgr.layout.run(&t, &tx, vp);
                 std.mem.doNotOptimizeAway(&t);
             }
