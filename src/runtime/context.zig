@@ -20,6 +20,7 @@ const Anims = @import("../anim/anims.zig").Anims;
 const Tweens = @import("../anim/tweens.zig").Tweens;
 const Flips = @import("../anim/flip.zig").Flips;
 const Memos = @import("reuse.zig").Memos;
+const Levels = @import("../layout/levels.zig").Levels;
 const Settings = @import("../a11y/settings_data.zig").Settings;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
@@ -124,6 +125,9 @@ pub const Context = struct {
     waker: scheduler.Wake = .{},
     /// Where each reusable subtree was built and from which signal versions (`Frame.reuse`).
     memos: Memos,
+    /// Level-order index of the tree, rebuilt by `Frame.end` when no subtree is kept, so resolve
+    /// sweeps level by level (docs/perf/port-perf.md).
+    levels: Levels,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -144,6 +148,7 @@ pub const Context = struct {
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
             .memos = Memos.init(carver, limits.memos),
+            .levels = Levels.init(carver, limits.nodes),
         };
     }
 
@@ -224,14 +229,15 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
-test "requiredBytes: 874 bytes per node of capacity (docs/perf/bytes.md)" {
+test "requiredBytes: 890 bytes per node of capacity (docs/perf/bytes.md)" {
     // Two tree generations of 376 bytes a row less the 48 bytes of layout scratch they share,
-    // plus 170 bytes of draw list. A change here is a change to the recorded footprint.
+    // plus 170 bytes of draw list and 16 of level-order index (docs/perf/port-perf.md). A
+    // change here is a change to the recorded footprint.
     var a = example_limits;
     a.nodes = 4096;
     var b = a;
     b.nodes = 8192;
-    try testing.expectEqual(874 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+    try testing.expectEqual(890 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {

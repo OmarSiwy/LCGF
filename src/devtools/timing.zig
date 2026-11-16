@@ -27,6 +27,8 @@ const Mono = @import("lcgr").protocol.Mono;
 const layout = @import("lcgr").layout;
 const incremental = @import("lcgr").incremental;
 const flip = @import("lcgr").flip;
+const levels = @import("lcgr").levels;
+const resolve = @import("lcgr").frame.resolve;
 
 /// The steps of one frame, in order. `layout_x` and `layout_y` are prepare, text, fit and
 /// resolve on each axis; `wrap` is text width handed down and the font's wrap; `place` includes
@@ -75,14 +77,16 @@ pub fn end(f: *Frame, font: Mono, c: *Clock, tm: *Timings) Output {
     incremental.prepareKept(t, kept);
     incremental.applyTextKept(t, tx, .x, kept);
     incremental.fitKept(t, .x, kept);
-    incremental.resolveKept(t, .x, f.in.viewport[0], kept);
+    const lv = &f.ctx.levels;
+    if (kept.len == 0) levels.build(t, lv);
+    resolve(t, lv, .x, f.in.viewport[0], kept);
     c.lap(tm, .layout_x);
     layout.textAvail(t, tx);
     font.wrap(tx);
     c.lap(tm, .wrap);
     incremental.applyTextKept(t, tx, .y, kept);
     incremental.fitKept(t, .y, kept);
-    incremental.resolveKept(t, .y, f.in.viewport[1], kept);
+    resolve(t, lv, .y, f.in.viewport[1], kept);
     c.lap(tm, .layout_y);
     incremental.placeKept(t, kept);
     if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));

@@ -330,7 +330,9 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         inc.applyTextKept(t, tx, .x, kept);
         inc.fitKept(t, .x, kept);
         m.mark(6);
-        inc.resolveKept(t, .x, in.viewport[0], kept);
+        const lv = &ctx.levels;
+        if (kept.len == 0) lcgr.levels.build(t, lv);
+        lcgr.frame.resolve(t, lv, .x, in.viewport[0], kept);
         m.mark(7);
         lcgr.layout.textAvail(t, tx);
         font.wrap(tx);
@@ -338,7 +340,7 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         inc.applyTextKept(t, tx, .y, kept);
         inc.fitKept(t, .y, kept);
         m.mark(9);
-        inc.resolveKept(t, .y, in.viewport[1], kept);
+        lcgr.frame.resolve(t, lv, .y, in.viewport[1], kept);
         m.mark(10);
         inc.placeKept(t, kept);
         m.mark(11);
