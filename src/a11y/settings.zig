@@ -11,6 +11,9 @@ const base = @import("../widgets/base.zig");
 const Color = types.Color;
 const Tokens = theme.Tokens;
 const Focus = @import("../interact/focus.zig").Focus;
+const spec_zig = @import("../comptime/spec.zig");
+const a11y = @import("tree.zig");
+const Spec = spec_zig.Spec;
 
 /// What the user asked the platform for. Plain data the host sets, every frame or on change.
 pub const Settings = struct {
@@ -76,6 +79,80 @@ pub fn progress(s: *const Settings, elapsed: f32, seconds: f32) f32 {
 /// `Focus.ring`. Without the setting the ring follows keys and the pointer as before.
 pub fn showFocus(s: *const Settings, fo: *Focus) void {
     fo.visible = simd.orB(fo.visible, s.always_show_focus);
+}
+
+// ---- lint for the comptime front end -----------------------------------------------------
+
+/// What a comptime spec can get wrong for assistive technology, checked while compiling.
+pub const Rule = enum {
+    /// An interactive node (one with an id) whose role is `none`: presentational, so it is
+    /// left out of the semantic tree and a screen reader never finds it.
+    no_role,
+    /// An interactive node whose role takes its name from its content (a button, a checkbox)
+    /// with no label in its subtree: it is announced with no name.
+    unnamed,
+    /// An interactive node inside another: ARIA allows no interactive content in a button or
+    /// a checkbox, and readers announce only the outer one.
+    nested,
+};
+
+pub const Finding = struct {
+    rule: Rule,
+    /// Depth-first row in the spec, as `flatten` numbers it.
+    row: u32,
+    /// The widget's id.
+    id: []const u8,
+};
+
+/// Every finding in `spec`, in row order. Empty for a clean spec.
+pub fn findings(comptime spec: Spec) []const Finding {
+    comptime {
+        @setEvalBranchQuota(1000 + 100 * @import("../comptime/flatten.zig").count(spec));
+        var out: []const Finding = &.{};
+        var row: u32 = 0;
+        lintWalk(spec, false, &row, &out);
+        const final = out[0..out.len].*;
+        return &final;
+    }
+}
+
+fn lintWalk(comptime s: Spec, comptime inside: bool, comptime row: *u32, comptime out: *[]const Finding) void {
+    const here = row.*;
+    row.* += 1;
+    if (s.id) |id| {
+        const role = @backingInt(s.style.role);
+        if (role == 0) out.* = out.* ++ [_]Finding{.{ .rule = .no_role, .row = here, .id = id }};
+        if (a11y.from_content[role] != 0 and !hasLabel(s))
+            out.* = out.* ++ [_]Finding{.{ .rule = .unnamed, .row = here, .id = id }};
+        if (inside) out.* = out.* ++ [_]Finding{.{ .rule = .nested, .row = here, .id = id }};
+    }
+    for (s.children) |c| lintWalk(c, inside or s.id != null, row, out);
+}
+
+fn hasLabel(comptime s: Spec) bool {
+    if (s.kind == .label) return true;
+    for (s.children) |c| if (hasLabel(c)) return true;
+    return false;
+}
+
+/// The compile error `lint` gives for `found`, one line per finding.
+pub fn message(comptime found: []const Finding) []const u8 {
+    comptime {
+        var m: []const u8 = "";
+        for (found) |f| m = m ++ std.fmt.comptimePrint("\nwidget '{s}' (spec row {d}): {s}", .{ f.id, f.row, switch (f.rule) {
+            .no_role => "has an id but no role; set `style.role` so assistive technology sees it",
+            .unnamed => "has no label to be named by; add a label child",
+            .nested => "is inside another interactive widget; move it out",
+        } });
+        return std.fmt.comptimePrint("accessibility lint: {d} finding(s){s}", .{ found.len, m });
+    }
+}
+
+/// Fails the build when `spec` breaks a `Rule`: `comptime settings.lint(spec);` beside the
+/// `ComptimeUi(State, spec, th)` it checks.
+pub fn lint(comptime spec: Spec) void {
+    const found = comptime findings(spec);
+    if (found.len > 0) @compileError(message(found));
 }
 
 // ---- tests ----------------------------------------------------------------------------------
@@ -199,4 +276,49 @@ test "settings: always show focus keeps the ring on after the pointer, wherever 
     try testing.expectEqualSlices(types.Rect, &.{ a, a, .{}, .{}, .{} }, &try rings(&.{}, src));
     // With it the ring follows focus through the click; nothing focused still draws nothing.
     try testing.expectEqualSlices(types.Rect, &.{ a, a, b, b, .{} }, &try rings(&.{ .always_show_focus = true }, src));
+}
+
+test "lint: the reference page is clean" {
+    const R = base.Reference(.default);
+    comptime lint(R.spec);
+    try testing.expectEqual(0, (comptime findings(R.spec)).len);
+}
+
+test "lint: roleless widgets, unnamed buttons and nested widgets are found by row" {
+    // The probe's mixer from the plain builders: widgets with ids but no role.
+    const mixer = comptime spec_zig.col(.{}, .{
+        spec_zig.label(.title),
+        spec_zig.row(.{}, .{ spec_zig.checkbox(.mute, .muted), spec_zig.slider(.volume, .volume) }),
+        spec_zig.row(.{}, .{ spec_zig.label(.title), spec_zig.slider(.pan, .pan) }),
+    });
+    const m = comptime findings(mixer);
+    try testing.expectEqual(3, m.len);
+    inline for (m, .{ "mute", "volume", "pan" }, .{ 3, 4, 7 }) |f, id, row| {
+        try testing.expectEqual(Rule.no_role, f.rule);
+        try testing.expectEqualStrings(id, f.id);
+        try testing.expectEqual(row, f.row);
+    }
+
+    // A button with an icon only, and a checkbox inside a button.
+    const th: base.Theme = .default;
+    const page = comptime blk: {
+        var icon = spec_zig.row(base.buttonStyle(&th), .{Spec{ .kind = .col }});
+        icon.id = "close";
+        var outer = spec_zig.row(base.buttonStyle(&th), .{ base.ct.label(th, .text), base.ct.checkbox(th, .inner, .on, .text) });
+        outer.id = "outer";
+        break :blk spec_zig.col(.{}, .{ icon, outer });
+    };
+    const p = comptime findings(page);
+    try testing.expectEqual(2, p.len);
+    try testing.expectEqual(Finding{ .rule = .unnamed, .row = 1, .id = "close" }, p[0]);
+    try testing.expectEqual(Rule.nested, p[1].rule);
+    try testing.expectEqualStrings("inner", p[1].id);
+    try testing.expectEqual(5, p[1].row);
+
+    // What the build fails with.
+    try testing.expectEqualStrings(
+        \\accessibility lint: 2 finding(s)
+        \\widget 'close' (spec row 1): has no label to be named by; add a label child
+        \\widget 'inner' (spec row 5): is inside another interactive widget; move it out
+    , comptime message(p));
 }
