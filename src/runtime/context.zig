@@ -98,6 +98,8 @@ pub const Context = struct {
     /// (C0238); `Frame.finish` clears it.
     dirty: bool = false,
     timers: scheduler.Timers,
+    /// Set from any thread to ask for a frame; see `scheduler.Wake`.
+    waker: scheduler.Wake = .{},
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -136,6 +138,9 @@ pub const Context = struct {
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
         scheduler.settle(ctx, in);
+        // Cleared before the app drains its mailboxes, so a result posted after this point
+        // wakes the next frame instead of being missed.
+        _ = ctx.waker.flag.swap(false, .acq_rel);
 
         ctx.cur ^= 1;
         const t = &ctx.trees[ctx.cur];

@@ -21,7 +21,8 @@ pub fn needsFrame(ctx: *const Context, in: *const Input) bool {
     const changed = simd.orB(ctx.frame == 0, in.stamp() != ctx.last_stamp);
     const pending = simd.orB(ctx.motion > 0, simd.orB(ctx.settle > 0, ctx.dirty));
     const due = in.time >= deadline(ctx);
-    return simd.orB(changed, simd.orB(pending, due));
+    const woken = ctx.waker.flag.load(.acquire);
+    return simd.orB(simd.orB(changed, woken), simd.orB(pending, due));
 }
 
 /// Seconds until a frame is due with no new input: 0 while a settle frame is owed or a spring
@@ -120,6 +121,60 @@ pub fn settle(ctx: *Context, in: *const Input) void {
     const stamp = in.stamp();
     ctx.settle = simd.selU(stamp != ctx.last_stamp, 1, ctx.settle -| 1);
     ctx.last_stamp = stamp;
+}
+
+/// A frame request that any thread may post: a background job posts it after pushing its result
+/// to a `Mailbox`, `needsFrame` then says yes, and `begin` clears it. It does not interrupt the
+/// host's sleep; the shell's cross-thread wake does that (shell lane, C0430), so a worker posts
+/// both.
+pub const Wake = struct {
+    flag: std.atomic.Value(bool) = .init(false),
+
+    pub fn post(w: *Wake) void {
+        w.flag.store(true, .release);
+    }
+};
+
+/// A bounded queue for results computed off the UI thread, over a buffer the caller owns. One
+/// producer thread and one consumer thread (the UI); lock-free, nothing allocated, never blocks.
+/// ponytail: single producer; give each worker its own mailbox, or add a CAS on `tail` if one
+/// queue must take many producers.
+pub fn Mailbox(comptime T: type) type {
+    return struct {
+        buf: []T,
+        /// Next slot to pop. Written only by the consumer.
+        head: std.atomic.Value(u32) = .init(0),
+        /// Next slot to push. Written only by the producer.
+        tail: std.atomic.Value(u32) = .init(0),
+
+        const Self = @This();
+
+        /// `buf.len` must be a power of two, so the free-running u32 counters wrap cleanly.
+        pub fn init(buf: []T) Self {
+            std.debug.assert(std.math.isPowerOfTwo(buf.len) and buf.len <= 1 << 31);
+            return .{ .buf = buf };
+        }
+
+        /// Producer side. False when full; the item is not queued.
+        pub fn push(m: *Self, item: T) bool {
+            const tail = m.tail.load(.monotonic);
+            const head = m.head.load(.acquire);
+            if (tail -% head == m.buf.len) return false;
+            m.buf[tail & (@as(u32, @intCast(m.buf.len)) - 1)] = item;
+            m.tail.store(tail +% 1, .release);
+            return true;
+        }
+
+        /// Consumer side. The oldest item, or null when empty.
+        pub fn pop(m: *Self) ?T {
+            const head = m.head.load(.monotonic);
+            const tail = m.tail.load(.acquire);
+            if (head == tail) return null;
+            const item = m.buf[head & (@as(u32, @intCast(m.buf.len)) - 1)];
+            m.head.store(head +% 1, .release);
+            return item;
+        }
+    };
 }
 
 const testing = std.testing;
@@ -302,6 +357,62 @@ test "deadline: a pending hover intent wakes a sleeping host through needsFrame"
     try testing.expect(!ctx.needsFrame(&in));
     in.time = 1.5;
     try testing.expect(ctx.needsFrame(&in));
+}
+
+test "Mailbox: first in, first out; refuses when full" {
+    var buf: [4]u32 = undefined;
+    var m: Mailbox(u32) = .init(&buf);
+    try testing.expectEqual(@as(?u32, null), m.pop());
+    for (0..4) |i| try testing.expect(m.push(@intCast(i)));
+    try testing.expect(!m.push(9));
+    try testing.expectEqual(@as(?u32, 0), m.pop());
+    try testing.expect(m.push(4));
+    // Wraps around the buffer in order.
+    for (1..5) |i| try testing.expectEqual(@as(?u32, @intCast(i)), m.pop());
+    try testing.expectEqual(@as(?u32, null), m.pop());
+}
+
+test "Mailbox and Wake: a worker thread's results arrive in order and wake the host" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const Fx = Fixture(small);
+    var ctx = try Fx.context();
+    var in: Input = .{ .viewport = .{ 100, 100 } };
+    _ = frame(&ctx, &in);
+    _ = frame(&ctx, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    var buf: [8]u64 = undefined;
+    var box: Mailbox(u64) = .init(&buf);
+    const count = 10_000;
+    const Worker = struct {
+        fn run(b: *Mailbox(u64), w: *Wake) void {
+            for (1..count + 1) |v| {
+                while (!b.push(v)) std.Thread.yield() catch {};
+                w.post();
+            }
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Worker.run, .{ &box, &ctx.waker });
+
+    // The host loop: a frame only when asked for, draining the mailbox inside it.
+    var next: u64 = 1;
+    var frames: u32 = 0;
+    while (next <= count) {
+        if (!ctx.needsFrame(&in)) {
+            std.Thread.yield() catch {};
+            continue;
+        }
+        frames += 1;
+        var f = ctx.begin(&in);
+        while (box.pop()) |v| : (next += 1) try testing.expectEqual(next, v);
+        _ = f.end(.{});
+    }
+    thread.join();
+    try testing.expect(frames >= 1);
+    // The last post may land after the frame that drained it: at most one more frame, then idle.
+    if (ctx.needsFrame(&in)) _ = frame(&ctx, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+    try testing.expectEqual(@as(?u64, null), box.pop());
 }
 
 /// What an event-driven host did over `ticks` turns of its loop with no new input: frames it
