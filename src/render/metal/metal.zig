@@ -8,10 +8,17 @@ const std = @import("std");
 pub const objc = @import("objc.zig");
 pub const mtl = @import("mtl.zig");
 pub const device = @import("device.zig");
+pub const msl = @import("msl.zig");
+pub const pipeline = @import("pipeline.zig");
+pub const renderer = @import("renderer.zig");
+pub const Renderer = renderer.Renderer;
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(objc);
     std.testing.refAllDecls(mtl);
     std.testing.refAllDecls(device);
+    std.testing.refAllDecls(msl);
+    std.testing.refAllDecls(pipeline);
+    std.testing.refAllDecls(renderer);
 }
