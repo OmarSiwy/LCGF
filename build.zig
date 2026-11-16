@@ -84,6 +84,16 @@ pub fn build(b: *std.Build) void {
     draw_dump.addPassthruArgs();
     b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
 
+    // tools/widgetgolden: dumps a reference-widget frame for tools/golden/gpu.py (ci/run.sh widget-golden).
+    const widget_dump = b.addRunArtifact(b.addExecutable(.{ .name = "widget-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/widgetgolden/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) }));
+    widget_dump.addPassthruArgs();
+    b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
+
     // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
     // the rest moves to src/ as it is ported.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });

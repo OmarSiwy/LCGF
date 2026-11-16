@@ -21,7 +21,8 @@
 //! 4. **accessibility**: its `Role`, accessible name (its label's text) and value (the tree's
 //!    `role` and `value` columns, which the accessibility bridge reads).
 //! 5. **tests**: scripted input with exact expectations, run through both front ends, which must
-//!    produce the same draw list.
+//!    produce the same draw list: a page (as `Reference`), a replay file under testdata/, a test
+//!    driving `Harness` over it, and golden images of chosen frames (tools/widgetgolden/).
 //!
 //! ## Two front ends, one widget
 //!
@@ -431,28 +432,82 @@ fn nodeWalk(comptime n: Spec, comptime row: comptime_int, comptime next: *compti
     return null;
 }
 
-// ---- tests ----------------------------------------------------------------------------------
+// ---- test harness: both front ends, replayed input, golden images ------------------------
 
-const testing = std.testing;
+/// Whether two draw lists are the same: quad bytes, text runs and commands, in order.
+pub fn sameDraw(a: *const DrawList, b: *const DrawList) bool {
+    if (a.quad_len != b.quad_len or a.run_len != b.run_len or a.cmd_len != b.cmd_len) return false;
+    if (!std.mem.eql(u8, a.quadBytes(), b.quadBytes())) return false;
+    if (!std.mem.eql(u8, std.mem.sliceAsBytes(a.runs[0..a.run_len]), std.mem.sliceAsBytes(b.runs[0..b.run_len]))) return false;
+    for (0..a.cmd_len) |i| {
+        if (!std.meta.eql(a.command(@intCast(i)), b.command(@intCast(i)))) return false;
+    }
+    return true;
+}
 
-const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
-var rt_buffer: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+/// Runs one UI through both front ends, frame by frame, and checks they agree. `App` is the
+/// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`. `Ui` is the
+/// comptime side, a `ComptimeUi`. The harness owns both and the runtime context's buffer, so
+/// it must not move after `init`; declare it as a `var` at container level (it is too big for
+/// a test's stack) and drive it from replayed input:
+///
+///     h.init();
+///     var replay: Replay = .{ .src = @embedFile("testdata/page.replay") };
+///     while (try replay.next(buffers)) |in| { const out = try h.frame(in); ... }
+pub fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Limits) type {
+    return struct {
+        const Self = @This();
 
-const theme: Theme = .default;
+        buffer: [context.Context.requiredBytes(caps)]u8 align(mem.column_align) = undefined,
+        ctx: context.Context = undefined,
+        app: App = .{},
+        ui: Ui = .{},
+        frames: u32 = 0,
 
-/// The prototype example's toolbar in both front ends, in theme `th`.
-fn Toolbar(comptime th: Theme) type {
+        /// What one frame produced in each front end.
+        pub const Pair = struct { runtime: context.Output, comptime_: Ui.Output };
+
+        /// Carves the runtime context from the harness's buffer and resets both front ends.
+        pub fn init(h: *Self) void {
+            h.ctx = context.Context.init(&h.buffer, caps) catch unreachable;
+            h.app = .{};
+            h.ui = .{};
+            h.frames = 0;
+        }
+
+        /// Builds frame `in` in both front ends. `error.FrontEndsDiffer` when their draw lists,
+        /// row counts, or `role` and `value` columns (what accessibility reads) differ.
+        pub fn frame(h: *Self, in: *const Input) error{FrontEndsDiffer}!Pair {
+            var f = h.ctx.begin(in);
+            h.app.build(&f);
+            const rt = f.end(h.ui.font);
+            const cp = h.ui.frame(in);
+            h.frames += 1;
+            const a = rt.tree;
+            const b = cp.tree;
+            if (!sameDraw(rt.draw, cp.draw) or a.len != b.len or
+                !std.mem.eql(u8, a.c.role[0..a.len], b.c.role[0..b.len]) or
+                !std.mem.eql(f32, a.c.value[0..a.len], b.c.value[0..b.len])) return error.FrontEndsDiffer;
+            return .{ .runtime = rt, .comptime_ = cp };
+        }
+    };
+}
+
+/// The reference page: the prototype example's toolbar (a button, a checkbox, a slider and a
+/// label on a panel) in both front ends, in theme `th`. The harness's own tests and the golden
+/// images (tools/widgetgolden/) run it; a widget lane copies it for its own page.
+pub fn Reference(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
         /// Runtime front end: the application owns the values.
-        const RtApp = struct {
+        pub const App = struct {
             resets: u32 = 0,
             wireframe: bool = false,
             exposure: f32 = 0.25,
             clicked: bool = false,
 
-            fn build(app: *@This(), f: *Frame) void {
+            pub fn build(app: *App, f: *Frame) void {
                 _ = f.open(.from("toolbar"), toolbar_style);
                 app.clicked = button(f, &th, .from("reset"), "Reset").clicked;
                 app.resets += @intFromBool(app.clicked);
@@ -464,48 +519,134 @@ fn Toolbar(comptime th: Theme) type {
         };
 
         /// Comptime front end: the same toolbar as a spec over a state struct.
-        const CtState = struct {
+        pub const State = struct {
             reset_text: []const u8 = "Reset",
             wireframe: bool = false,
             wire_text: []const u8 = "Wireframe",
             exposure: f32 = 0.25,
             layer: []const u8 = "Layer 0",
         };
-        const spec = spec_zig.row(toolbar_style, .{
+        pub const spec = spec_zig.row(toolbar_style, .{
             ct.button(th, .reset, .reset_text),
             ct.checkbox(th, .wire, .wireframe, .wire_text),
             ct.slider(th, .exposure, .exposure),
             ct.label(th, .layer),
         });
-        const CtUi = ComptimeUi(CtState, spec, th);
+        pub const Ui = ComptimeUi(State, spec, th);
+        /// Room for the page in the runtime front end.
+        pub const page_limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
+        /// Both front ends over this page.
+        pub const Run = Harness(App, Ui, page_limits);
     };
 }
-const Default = Toolbar(theme);
+
+/// Input for `Reference(.default)` at 800 x 600, one commented line per frame.
+pub const reference_replay = @embedFile("testdata/reference.replay");
+
+/// The frames of `reference_replay` kept as golden images, by name
+/// (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "hover", 1 },
+    .{ "held", 2 },
+    .{ "checked", 5 },
+    .{ "slide", 6 },
+};
+
+// ---- tests ----------------------------------------------------------------------------------
+
+const testing = std.testing;
+
+const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
+var rt_buffer: [context.Context.requiredBytes(Default.page_limits)]u8 align(mem.column_align) = undefined;
+
+const theme: Theme = .default;
+const Default = Reference(theme);
+var default_harness: Default.Run = .{};
 
 fn center(r: types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
 }
 
-fn expectSameDraw(a: *const DrawList, b: *const DrawList) !void {
-    try testing.expectEqual(a.quad_len, b.quad_len);
-    try testing.expectEqualSlices(u8, a.quadBytes(), b.quadBytes());
-    try testing.expectEqual(a.run_len, b.run_len);
-    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(a.runs[0..a.run_len]), std.mem.sliceAsBytes(b.runs[0..b.run_len]));
-    try testing.expectEqual(a.cmd_len, b.cmd_len);
-    for (0..a.cmd_len) |i| try testing.expectEqual(a.command(@intCast(i)), b.command(@intCast(i)));
+test "Harness: the reference replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &default_harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = reference_replay };
+    var clicks: [12]bool = undefined;
+    var wire: [12]bool = undefined;
+    var exposure: [12]f32 = undefined;
+    var fills: [12]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        clicks[k] = h.app.clicked;
+        wire[k] = h.ui.signals.state.wireframe;
+        exposure[k] = h.ui.signals.state.exposure;
+        fills[k] = t.c.look[t.find(.from("reset"))].fill;
+        try testing.expectEqual(h.app.clicked, if (out.comptime_.event) |e| e == .reset else false);
+        try testing.expectEqual(h.app.wireframe, wire[k]);
+        try testing.expectEqual(h.app.exposure, exposure[k]);
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, true, false, false, false, false, false, false, false, false }, &clicks);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true, true, true, true, true, true, false }, &wire);
+    try testing.expectApproxEqAbs(@as(f32, 0.75), exposure[6], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.1), exposure[7], 1e-5);
+    try testing.expectEqual(@as(f32, 0), exposure[8]);
+    const c = theme.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, fills[0..4]);
+    // While the slider is held, the pointer over Reset does not light it up.
+    try testing.expectEqual(c[0].bitsOf(), fills[8]);
+    try testing.expectEqual(c[1].bitsOf(), fills[9]);
+}
+
+test "Harness: a front end that draws differently is caught" {
+    // The comptime side in another theme: same layout, other colours.
+    const other = comptime blk: {
+        var o = theme;
+        o.accent = .rgb(1, 2, 3);
+        break :blk o;
+    };
+    const Odd = Harness(Default.App, Reference(other).Ui, Default.page_limits);
+    const S = struct {
+        var h: Odd = .{};
+    };
+    S.h.init();
+    const in: Input = .{ .viewport = .{ 800, 600 } };
+    try testing.expectError(error.FrontEndsDiffer, S.h.frame(&in));
+    // And sameDraw itself: equal to itself, not to an empty list.
+    default_harness.init();
+    const out = try default_harness.frame(&in);
+    try testing.expect(sameDraw(out.runtime.draw, out.comptime_.draw));
+    var empty = out.runtime.draw.*;
+    empty.quad_len = 0;
+    try testing.expect(!sameDraw(out.runtime.draw, &empty));
+}
+
+test "golden_frames: name frames the reference replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test "reference widgets: the same input gives the same draw list in both front ends" {
     try expectFrontEndsAgree(theme);
 }
 
-/// Replays 12 frames of clicks and drags through both front ends in theme `th` and requires the
-/// same draw list, semantics and state after every frame.
+/// Replays 12 frames of clicks and drags, aimed at last frame's rects so any theme's layout is
+/// hit, through both front ends in theme `th`, and requires the same draw list, semantics and
+/// state after every frame.
 fn expectFrontEndsAgree(comptime th: Theme) !void {
-    const T = Toolbar(th);
-    var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: T.RtApp = .{};
-    var ui: T.CtUi = .{};
+    const R = Reference(th);
+    const S = struct {
+        var h: R.Run = .{};
+    };
+    const h = &S.h;
+    h.init();
     var in: Input = .{ .viewport = .{ 400, 100 } };
 
     const Step = struct { target: ?[]const u8, along: f32 = 0.5, left: bool };
@@ -525,40 +666,27 @@ fn expectFrontEndsAgree(comptime th: Theme) !void {
     };
     var clicks: u32 = 0;
     var last: ?context.Output = null;
-    for (script, 0..) |step, frame_no| {
+    for (script) |step| {
         if (step.target) |name| {
             const t = last.?.tree;
             const r = t.rect(t.find(.hash(name)));
             in.pointer = .{ r.x0 + step.along * r.w(), (r.y0 + r.y1) * 0.5 };
         }
         in.buttons.left = step.left;
-
-        var f = ctx.begin(&in);
-        app.build(&f);
-        const rt_out = f.end(.{});
-        const ct_out = ui.frame(&in);
-        last = rt_out;
-
-        expectSameDraw(rt_out.draw, ct_out.draw) catch |err| {
-            std.debug.print("frame {d} differs\n", .{frame_no});
-            return err;
-        };
-        // Same semantics: role and value per row (the comptime rows sit under the same root).
-        try testing.expectEqual(rt_out.tree.len, ct_out.tree.len);
-        try testing.expectEqualSlices(u8, rt_out.tree.c.role[0..rt_out.tree.len], ct_out.tree.c.role[0..ct_out.tree.len]);
-        try testing.expectEqualSlices(f32, rt_out.tree.c.value[0..rt_out.tree.len], ct_out.tree.c.value[0..ct_out.tree.len]);
+        const out = try h.frame(&in);
+        last = out.runtime;
         // State: the application's fields and the comptime front end's signals agree.
-        try testing.expectEqual(app.wireframe, ui.signals.state.wireframe);
-        try testing.expectEqual(app.exposure, ui.signals.state.exposure);
-        const ct_click = if (ct_out.event) |e| e == .reset else false;
-        try testing.expectEqual(app.clicked, ct_click);
+        try testing.expectEqual(h.app.wireframe, h.ui.signals.state.wireframe);
+        try testing.expectEqual(h.app.exposure, h.ui.signals.state.exposure);
+        const ct_click = if (out.comptime_.event) |e| e == .reset else false;
+        try testing.expectEqual(h.app.clicked, ct_click);
         clicks += @intFromBool(ct_click);
     }
     try testing.expectEqual(@as(u32, 1), clicks);
-    try testing.expectEqual(@as(u32, 1), app.resets);
-    try testing.expect(!app.wireframe);
+    try testing.expectEqual(@as(u32, 1), h.app.resets);
+    try testing.expect(!h.app.wireframe);
     // Dragged left off the track onto the button while held: clamped to lo.
-    try testing.expectEqual(@as(f32, 0), app.exposure);
+    try testing.expectEqual(@as(f32, 0), h.app.exposure);
 }
 
 test "Theme: the default tokens are the prototype's dark theme" {
@@ -588,7 +716,7 @@ test "Theme: other tokens restyle both front ends alike" {
         .gap = 10,
     });
     // The tokens reach the widgets: a bigger pad makes a bigger button.
-    var ctx = try context.Context.init(&rt_buffer, limits);
+    var ctx = try context.Context.init(&rt_buffer, Default.page_limits);
     const in: Input = .{ .viewport = .{ 400, 100 } };
     var widths: [2]f32 = undefined;
     for (&widths, [2]f32{ 8, 16 }) |*w, pad| {
@@ -638,8 +766,8 @@ test "StateColors, OnOff: the theme's tables, indexed by state and value" {
 }
 
 test "button: hover and hold pick the fill by table index; click on release over it" {
-    var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: Default.RtApp = .{};
+    var ctx = try context.Context.init(&rt_buffer, Default.page_limits);
+    var app: Default.App = .{};
     var in: Input = .{ .viewport = .{ 400, 100 } };
     var f = ctx.begin(&in);
     app.build(&f);
@@ -673,8 +801,8 @@ test "button: hover and hold pick the fill by table index; click on release over
 }
 
 test "checkbox, slider: value columns and the slider's held-rect mapping" {
-    var ctx = try context.Context.init(&rt_buffer, limits);
-    var app: Default.RtApp = .{};
+    var ctx = try context.Context.init(&rt_buffer, Default.page_limits);
+    var app: Default.App = .{};
     var in: Input = .{ .viewport = .{ 400, 100 } };
     var f = ctx.begin(&in);
     app.build(&f);
@@ -720,7 +848,7 @@ test "checkbox, slider: value columns and the slider's held-rect mapping" {
 }
 
 test "label: a text leaf in the theme's size and colour" {
-    var ctx = try context.Context.init(&rt_buffer, limits);
+    var ctx = try context.Context.init(&rt_buffer, Default.page_limits);
     const in: Input = .{ .viewport = .{ 400, 100 } };
     var f = ctx.begin(&in);
     const n = label(&f, &theme, "hi");
@@ -732,11 +860,11 @@ test "label: a text leaf in the theme's size and colour" {
 }
 
 test "ct: spec builders give the comptime front end's widget enum, kinds and focus order" {
-    try testing.expectEqual(3, Default.CtUi.Events.widget_count);
-    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.CtUi.Events.widget_kinds);
-    try testing.expectEqual(void, @FieldType(Default.CtUi.Events.Event, "reset"));
-    try testing.expectEqual(f32, @FieldType(Default.CtUi.Events.Event, "exposure"));
-    try testing.expectEqualSlices(Default.CtUi.Events.Widget, &.{ .wire, .exposure }, Default.CtUi.Events.focus_order);
+    try testing.expectEqual(3, Default.Ui.Events.widget_count);
+    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
+    try testing.expectEqual(void, @FieldType(Default.Ui.Events.Event, "reset"));
+    try testing.expectEqual(f32, @FieldType(Default.Ui.Events.Event, "exposure"));
+    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .wire, .exposure }, Default.Ui.Events.focus_order);
 }
 
 test {
