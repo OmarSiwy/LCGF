@@ -191,6 +191,27 @@ pub fn update(st: anytype, th: *const Theme, depths: []const u8, r: Response, re
     }
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// Roles of the built rows: the tree view a tree, each item row a tree item. Rows are the box,
+/// then per visible item its row, mark and label.
+pub fn setRoles(t: *Tree, box: u32, len: u32) void {
+    t.c.role[box] = @backingInt(a11y.Role.tree);
+    for (0..len) |k| t.c.role[box + 1 + 3 * k] = @backingInt(a11y.Role.tree_item);
+}
+
+/// States of the built items for the bridge: parents are expandable and say whether they are
+/// expanded, the selected item is selected. Run before `a11y.states`.
+pub fn setStates(s: *a11y.Semantics, box: u32, depths: []const u8, st: anytype, visible: []const u32) void {
+    for (visible, 0..) |item, k| {
+        s.c.state[box + 1 + 3 * k] |= a11y.State.bitsOf(.{
+            .expandable = hasChildren(depths, item),
+            .expanded = hasChildren(depths, item) and st.expanded[item],
+            .selected = item == st.selected,
+        });
+    }
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A tree view of `n` items, `labels` and `depths` in depth-first order, with `st` its state.
@@ -204,6 +225,7 @@ pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []co
     const len = visibleItems(depths, &st.expanded, &scratch);
     var s = treeStyle(th);
     s.border_color = list_zig.listBorder(th, pre.focused);
+    s.value = @floatFromInt(st.selected);
     const box = f.open(id, s);
     const r = f.interact(box, .button);
     const under = rowAt(th, rect.y0, f.in.pointer[1], len);
@@ -215,6 +237,7 @@ pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []co
         f.close();
     }
     f.close();
+    setRoles(f.tree(), box.ix(), len);
     return r;
 }
 
@@ -314,6 +337,7 @@ pub fn ComptimeTree(comptime S: type, comptime spec: Spec, comptime th: Theme) t
             const rect = ui.pointer.rectOf(w);
             var s = treeStyle(&th);
             s.border_color = list_zig.listBorder(&th, r.focused);
+            s.value = @floatFromInt(st.selected);
             const box = tb.t.push(parent, .hash(n.id.?), &s);
             const under = rowAt(&th, rect.y0, in.pointer[1], len);
             for (scratch[0..len], 0..) |item, k| {
@@ -325,6 +349,7 @@ pub fn ComptimeTree(comptime S: type, comptime spec: Spec, comptime th: Theme) t
                 tb.t.seal(i);
             }
             tb.t.seal(box);
+            setRoles(&tb.t, box, len);
         }
 
         fn field(comptime name: []const u8) Sig.Field {
@@ -386,6 +411,41 @@ const test_labels = [_][]const u8{ "src", "core", "tree.zig", "types.zig", "widg
 const test_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
 
 var harness: Example(theme).Run = .{};
+
+test "tree: roles, value and the expanded and selected states" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.outline.selected = 4;
+    h.ui.signals.state.outline = h.app.outline;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box = t.find(.from("outline"));
+    try testing.expectEqual(@backingInt(a11y.Role.tree), t.c.role[box]);
+    try testing.expectEqual(@as(f32, 4), t.c.value[box]);
+    // src (expanded), core, widgets, docs (collapsed parents).
+    for (0..4) |k| try testing.expectEqual(@backingInt(a11y.Role.tree_item), t.c.role[box + 1 + 3 * k]);
+
+    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    var scratch: [8]u32 = undefined;
+    const len = visibleItems(&test_depths, &h.app.outline.expanded, &scratch);
+    setStates(&sem, box, &test_depths, &h.app.outline, scratch[0..len]);
+    a11y.names(t, &sem);
+    const st = struct {
+        fn of(s: u8) a11y.State {
+            return @bitCast(s);
+        }
+    }.of;
+    try testing.expectEqual(a11y.State{ .expandable = true, .expanded = true }, st(sem.c.state[box + 1]));
+    try testing.expectEqual(a11y.State{ .expandable = true }, st(sem.c.state[box + 4]));
+    try testing.expectEqual(a11y.State{ .expandable = true, .selected = true }, st(sem.c.state[box + 7]));
+    // Items are named by their label.
+    try testing.expectEqual(t.c.text[box + 3], sem.c.name[box + 1]);
+}
 
 test "check: what a comptime tree view's state must have" {
     const Good = struct { st: State(3) = .{}, l: []const []const u8 = &.{}, d: []const u8 = &.{} };
