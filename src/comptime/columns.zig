@@ -127,15 +127,6 @@ pub fn Columns(comptime spec: Spec) type {
             return class[std.meta.fieldIndex(RuntimeColumns, name) orelse @compileError("no column '" ++ name ++ "'")];
         }
 
-        /// Bytes of `cls` columns at one row per node.
-        fn bytesOf(comptime cls: Class) comptime_int {
-            var b = 0;
-            for (info.field_types, class) |FT, c| {
-                if (c == cls) b += n * rowBytes(FT);
-            }
-            return b;
-        }
-
         /// Read-only bytes: the constant tables (`table`).
         pub const rodata_bytes = blk: {
             var b = 0;
@@ -144,8 +135,26 @@ pub fn Columns(comptime spec: Spec) type {
             }
             break :blk b;
         };
-        /// RAM bytes: the dynamic columns, one row per node.
-        pub const ram_bytes = bytesOf(.dynamic);
+        /// The dynamic columns: one field per dynamic column of `Tree.Columns`, of the same name,
+        /// with exactly one row per node (`[n]T`, `[k][n]T`), as the probe's `Runtime.rect` is
+        /// `[n][4]i16`. No capacity and no overflow path: the node count is exact. Not padded to
+        /// whole vectors (`simd.rows`); a pass that reads them with vectors needs the padding.
+        pub const Dynamic = blk: {
+            @setEvalBranchQuota(10_000);
+            var dyn_names: []const []const u8 = &.{};
+            var dyn_types: []const type = &.{};
+            for (names, info.field_types, class) |name, FT, c| {
+                if (c != .dynamic) continue;
+                dyn_names = dyn_names ++ [_][]const u8{name};
+                dyn_types = dyn_types ++ [_]type{Rows(FT, n)};
+            }
+            const nm = dyn_names[0..dyn_names.len].*;
+            const ty = dyn_types[0..dyn_types.len].*;
+            break :blk @Struct(.auto, null, &nm, &ty, &@splat(.{}));
+        };
+
+        /// RAM bytes: one `Dynamic`.
+        pub const ram_bytes = @sizeOf(Dynamic);
     };
 }
 
@@ -206,12 +215,29 @@ test "Columns.table: the mixer's tables hold the probe's structure and its style
     try testing.expectEqual(@backingInt(Id.hash("volume")), C.table("id")[4]);
 }
 
-test "Columns: every column is classified, and the two classes add up to the runtime row" {
+test "Columns: every column is classified, and the two classes hold the runtime rows" {
     inline for (examples.all) |e| {
         const C = Columns(e.spec);
         var row: usize = 0;
         inline for (@typeInfo(RuntimeColumns).@"struct".field_types) |FT| row += rowBytes(FT);
-        try testing.expectEqual(C.node_count * row, C.rodata_bytes + C.ram_bytes);
+        // Equal up to the padding @sizeOf adds to Dynamic's end.
+        try testing.expect(C.rodata_bytes + C.ram_bytes >= C.node_count * row);
+        try testing.expect(C.rodata_bytes + C.ram_bytes < C.node_count * row + 16);
         try testing.expectEqual(@typeInfo(RuntimeColumns).@"struct".field_names.len, C.class.len);
     }
+}
+
+test "Columns.Dynamic: one exact array per dynamic column, nothing for constant ones" {
+    const C = Columns(examples.mixer);
+    const D = C.Dynamic;
+    try testing.expectEqual([2][8]f32, @FieldType(D, "size"));
+    try testing.expectEqual([4][8]f32, @FieldType(D, "rect"));
+    try testing.expectEqual([8][4]f32, @FieldType(D, "child_clip"));
+    try testing.expectEqual([8]f32, @FieldType(D, "value"));
+    try testing.expect(!@hasField(D, "parent") and !@hasField(D, "look"));
+    inline for (C.names, C.class) |name, c| try testing.expectEqual(c == .dynamic, @hasField(D, name));
+    // A frame writes it like the runtime columns, one row per node.
+    var d: D = undefined;
+    for (&d.rect, 0..) |*side, k| side.* = @splat(@floatFromInt(k));
+    try testing.expectEqual(3, d.rect[3][7]);
 }
