@@ -10,7 +10,10 @@ window.lcgrTest = (async () => {
     const ui = await load("hello.wasm");
     const nodes = ui.exports.lcgr_hello(800, 600);
     const sidebar = ui.logs.at(-1);
-    return { ok: nodes > 0 && sidebar === "sidebar 0 50 160 600", nodes, sidebar,
+    // The size probe (layout.wasm, size.py) runs too: the view fills 800 - 160.
+    const layout = await load("layout.wasm");
+    const view = layout.exports.lcgr_layout(800, 600);
+    return { ok: nodes > 0 && sidebar === "sidebar 0 50 160 600" && view === 640, nodes, sidebar, view,
              wasm_exports: Object.keys(ui.exports) };
 })();
 </script>

@@ -491,7 +491,7 @@ pub fn build(b: *std.Build) void {
     lcgr_web.addOptions("build_options", options);
     lcgr_web.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const web_step = b.step("web", "Build the web examples and their JavaScript into zig-out/web/ (ci/run.sh web)");
-    for ([_][]const u8{ "hello", "scenes" }) |name| {
+    for ([_][]const u8{ "hello", "scenes", "layout" }) |name| {
         const wasm = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/render/web/{s}.zig", .{name})),
             .target = web_target,
