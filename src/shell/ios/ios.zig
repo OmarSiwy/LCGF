@@ -40,6 +40,7 @@ const Platform = context.Platform;
 const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const objc = metal.objc;
+const text_input = @import("text_input.zig");
 const present_ = metal.present;
 const Id = objc.Id;
 const Sel = objc.Sel;
@@ -76,12 +77,17 @@ const Super = extern struct { receiver: Id, class: Id };
 const run_handled_source = 4;
 
 /// The runtime and framework functions this file calls, fetched once by `load`.
-const Fns = struct {
+pub const Fns = struct {
     objc_allocateClassPair: *const fn (Id, [*:0]const u8, usize) callconv(.c) ?Id,
     objc_registerClassPair: *const fn (Id) callconv(.c) void,
     class_addMethod: *const fn (Id, Sel, *const anyopaque, [*:0]const u8) callconv(.c) bool,
     object_getClass: *const fn (Id) callconv(.c) Id,
     objc_msgSendSuper: *const fn () callconv(.c) void,
+    class_addIvar: *const fn (Id, [*:0]const u8, usize, u8, [*:0]const u8) callconv(.c) bool,
+    class_getInstanceVariable: *const fn (Id, [*:0]const u8) callconv(.c) ?*anyopaque,
+    ivar_getOffset: *const fn (*anyopaque) callconv(.c) isize,
+    objc_getProtocol: *const fn ([*:0]const u8) callconv(.c) ?*anyopaque,
+    class_addProtocol: *const fn (Id, *anyopaque) callconv(.c) bool,
     UIApplicationMain: *const fn (c_int, ?[*]?[*:0]u8, ?Id, ?Id) callconv(.c) c_int,
     CFRunLoopGetMain: *const fn () callconv(.c) CFRunLoop,
     CFRunLoopRunInMode: *const fn (CFString, f64, bool) callconv(.c) i32,
@@ -91,7 +97,7 @@ const Fns = struct {
     CFRunLoopSourceSignal: *const fn (CFRunLoopSource) callconv(.c) void,
 };
 // ponytail: process-global, as UIKit's one application is.
-var fns: Fns = undefined;
+pub var fns: Fns = undefined;
 var default_mode: CFString = undefined;
 var common_modes: CFString = undefined;
 
@@ -118,7 +124,7 @@ fn load() Error!void {
 }
 
 /// Sends `selector` to `self` as `class`'s superclass implements it.
-fn super(comptime R: type, self: Id, class: Id, comptime selector: [:0]const u8, args: anytype) R {
+pub fn super(comptime R: type, self: Id, class: Id, comptime selector: [:0]const u8, args: anytype) R {
     const sup: Super = .{ .receiver = self, .class = msg(Id, class, "superclass", .{}) };
     const A = @typeInfo(@TypeOf(args)).@"struct".field_types;
     const F = switch (A.len) {
@@ -133,9 +139,15 @@ fn super(comptime R: type, self: Id, class: Id, comptime selector: [:0]const u8,
 
 /// A new class `name` under `parent` with `methods` (selector, implementation, type encoding).
 /// Class methods go on the metaclass: pass `meta = true`.
-const Method = struct { sel: [:0]const u8, imp: *const anyopaque, types: [:0]const u8, meta: bool = false };
+pub const Method = struct { sel: [:0]const u8, imp: *const anyopaque, types: [:0]const u8, meta: bool = false };
 fn defineClass(comptime parent: [:0]const u8, name: [:0]const u8, comptime methods: []const Method) Id {
+    return defineClassWith(parent, name, methods, &.{});
+}
+
+/// `defineClass` with NSInteger instance variables, read and written with `ivar`.
+fn defineClassWith(comptime parent: [:0]const u8, name: [:0]const u8, comptime methods: []const Method, comptime ivars: []const [:0]const u8) Id {
     const cls = fns.objc_allocateClassPair(objc.class(parent), name, 0) orelse std.debug.panic("ios: class {s} exists", .{name});
+    inline for (ivars) |v| _ = fns.class_addIvar(cls, v, @sizeOf(isize), 3, "q");
     inline for (methods) |m| {
         const target = if (m.meta) fns.object_getClass(cls) else cls;
         _ = fns.class_addMethod(target, objc.sel(m.sel), m.imp, m.types);
@@ -147,7 +159,7 @@ fn defineClass(comptime parent: [:0]const u8, name: [:0]const u8, comptime metho
 // ---- The application: delegate, window, view ---------------------------------------------------
 
 /// What UIKit's callbacks reach: the host's entry, the view, and the shell once `init` ran.
-const App = struct {
+pub const App = struct {
     entry: *const fn () void = undefined,
     window: ?Id = null,
     view: ?Id = null,
@@ -155,14 +167,14 @@ const App = struct {
     shell: ?*Ios = null,
 };
 // ponytail: one application, one window, one view per process, as UIKit gives a scene-less app.
-var app: App = .{};
+pub var app: App = .{};
 
 /// Hands the process to UIKit, which calls `entry` once the window is up. Never returns: the
 /// app exits when `entry` does.
 pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn {
     load() catch |e| std.debug.panic("ios: {t}", .{e});
     app.entry = entry;
-    app.view_class = defineClass("UIView", "LcgrView", &.{
+    app.view_class = defineClass("UIView", "LcgrView", &[_]Method{
         .{ .sel = "layerClass", .imp = &viewLayerClass, .types = "#@:", .meta = true },
         .{ .sel = "layoutSubviews", .imp = &viewLayout, .types = "v@:" },
         .{ .sel = "safeAreaInsetsDidChange", .imp = &viewInsets, .types = "v@:" },
@@ -170,7 +182,19 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
         .{ .sel = "touchesMoved:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
         .{ .sel = "touchesEnded:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
         .{ .sel = "touchesCancelled:withEvent:", .imp = &viewTouches, .types = "v@:@@" },
-    });
+        .{ .sel = "pressesBegan:withEvent:", .imp = &viewPressesBegan, .types = "v@:@@" },
+        .{ .sel = "pressesEnded:withEvent:", .imp = &viewPressesEnded, .types = "v@:@@" },
+        .{ .sel = "pressesCancelled:withEvent:", .imp = &viewPressesCancelled, .types = "v@:@@" },
+    } ++ text_input.methods);
+    for ([_][*:0]const u8{ "UIKeyInput", "UITextInput" }) |name| {
+        if (fns.objc_getProtocol(name)) |proto| _ = fns.class_addProtocol(app.view_class, proto);
+    }
+    text_input.position_class = defineClassWith("UITextPosition", "LcgrTextPosition", &.{}, &.{"o"});
+    text_input.range_class = defineClassWith("UITextRange", "LcgrTextRange", &.{
+        .{ .sel = "start", .imp = &text_input.rangeStart, .types = "@@:" },
+        .{ .sel = "end", .imp = &text_input.rangeEnd, .types = "@@:" },
+        .{ .sel = "isEmpty", .imp = &text_input.rangeEmpty, .types = "B@:" },
+    }, &.{ "a", "b" });
     _ = defineClass("UIResponder", "LcgrAppDelegate", &.{
         .{ .sel = "application:didFinishLaunchingWithOptions:", .imp = &appLaunched, .types = "B@:@@" },
         .{ .sel = "lcgrRun", .imp = &appRun, .types = "v@:" },
@@ -203,6 +227,30 @@ fn viewTouches(self: Id, _: Sel, touches: Id, _: ?Id) callconv(.c) void {
 fn viewInsets(self: Id, _: Sel) callconv(.c) void {
     super(void, self, app.view_class, "safeAreaInsetsDidChange", .{});
     if (app.shell) |s| s.layout();
+}
+
+/// Hardware keys: each UIPress's UIKey (iOS 13.4+) is a key event; then UIKit's own handling,
+/// which inserts the text a key types through `insertText:`.
+fn presses(self: Id, set: Id, event: ?Id, down: bool, comptime selector: [:0]const u8) void {
+    if (app.shell) |s| {
+        const all = msg(Id, set, "allObjects", .{});
+        for (0..msg(objc.NSUInteger, all, "count", .{})) |i| {
+            const k = msg(?Id, msg(Id, all, "objectAtIndex:", .{@as(objc.NSUInteger, i)}), "key", .{}) orelse continue;
+            const code: u32 = @intCast(@max(msg(objc.NSInteger, k, "keyCode", .{}), 0));
+            s.t.key(code, down, @bitCast(msg(objc.NSInteger, k, "modifierFlags", .{})));
+        }
+    }
+    super(void, self, app.view_class, selector, .{ set, event });
+}
+
+fn viewPressesBegan(self: Id, _: Sel, set: Id, event: ?Id) callconv(.c) void {
+    presses(self, set, event, true, "pressesBegan:withEvent:");
+}
+fn viewPressesEnded(self: Id, _: Sel, set: Id, event: ?Id) callconv(.c) void {
+    presses(self, set, event, false, "pressesEnded:withEvent:");
+}
+fn viewPressesCancelled(self: Id, _: Sel, set: Id, event: ?Id) callconv(.c) void {
+    presses(self, set, event, false, "pressesCancelled:withEvent:");
 }
 
 fn appLaunched(self: Id, _: Sel, _: Id, _: ?Id) callconv(.c) bool {
@@ -253,6 +301,15 @@ pub const Ios = struct {
     /// The UITouch object behind each translator id (id = row + 1), null for a free row. UIKit
     /// keeps a touch's object from began to ended.
     touches: [translate.max_contacts]?Id = @splat(null),
+    /// Text input as last applied: whether the view is first responder (keyboard up), and
+    /// the rect (points) the IME's candidates and the text-selection UI anchor to.
+    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{} } = .{},
+    /// The IME's marked text (retained, an NSString) and the UTF-16 range it selects: the
+    /// whole document UITextInput sees (text_input).
+    marked: ?Id = null,
+    selected: [2]usize = .{ 0, 0 },
+    input_delegate: ?Id = null,
+    tokenizer: ?Id = null,
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame; `first` and `count`
     /// one row per text run.
@@ -352,9 +409,21 @@ pub const Ios = struct {
         return s.t.frame(ev);
     }
 
-    /// Applies a frame's effects: text the frame copies goes to the general pasteboard.
+    /// Applies a frame's effects: text the frame copies goes to the general pasteboard; while
+    /// a widget wants text the view is first responder, which brings up the soft keyboard (or
+    /// takes a hardware keyboard's text), and its IME anchors at `ime_rect`.
     pub fn apply(s: *Ios, p: *const Platform) void {
         if (p.clipboard.len > 0) s.copy(p.clipboard);
+        s.text.rect = p.ime_rect;
+        if (p.wants_text != s.text.wants) {
+            s.text.wants = p.wants_text;
+            if (p.wants_text) {
+                _ = msg(bool, s.view, "becomeFirstResponder", .{});
+            } else {
+                _ = msg(bool, s.view, "resignFirstResponder", .{});
+                text_input.clear(s);
+            }
+        }
     }
 
     /// Puts UTF-8 text on the general pasteboard (`UIPasteboard.string`). Invalid UTF-8 leaves

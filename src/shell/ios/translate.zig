@@ -32,6 +32,15 @@ pub const Touch = struct {
     tilt: [2]f32 = .{ 0, 0 },
 };
 
+/// `UIKeyModifierFlags` bits.
+const mod_shift = 1 << 17;
+const mod_control = 1 << 18;
+const mod_alternate = 1 << 19;
+const mod_command = 1 << 20;
+/// HID usages of the keys the soft keyboard has besides text.
+const key_return = 0x28;
+const key_backspace = 0x2a;
+
 /// Most fingers and pencils followed at once; iOS reports at most 10 fingers on a screen.
 pub const max_contacts = 16;
 
@@ -73,6 +82,14 @@ pub const Translator = struct {
     n_text: u32 = 0,
     n_events: u32 = 0,
     out: Buffers = .{ .text = &.{}, .events = &.{} },
+    /// The IME's marked text (UTF-8) and the byte range it selects in it, held until it
+    /// changes or ends, and the frame's copy of it.
+    preedit: [max_preedit]u8 = undefined,
+    composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 } } = .{},
+    out_preedit: [max_preedit]u8 = undefined,
+
+    /// Longest marked text shown; a longer one is cut at a character.
+    pub const max_preedit = 256;
 
     /// Each buffer is split in two halves: what arrives, and the frame handed out.
     pub const Buffers = struct { text: []u8, events: []Input.Event };
@@ -184,6 +201,72 @@ pub const Translator = struct {
         t.n_rows = n - 1;
     }
 
+    /// A hardware key went down or up (`pressesBegan:` / `pressesEnded:`). `code` is the
+    /// UIKey's `keyCode`, a USB HID usage, which is what `Input.keys` holds; `flags` its
+    /// `modifierFlags` (UIKeyModifierFlags).
+    pub fn key(t: *Translator, code: u32, down: bool, flags: u64) void {
+        if (code == 0 or code > 0xff) return;
+        t.in.mods = .{
+            .shift = flags & mod_shift != 0,
+            .ctrl = flags & mod_control != 0,
+            .alt = flags & mod_alternate != 0,
+            .cmd = flags & mod_command != 0,
+        };
+        const c: u8 = @intCast(code);
+        const k = &t.in.keys.bits[c >> 6];
+        const bit = @as(u64, 1) << @as(u6, @truncate(c));
+        k.* = if (down) k.* | bit else k.* & ~bit;
+        t.push(.{ .kind = if (down) .press else .release, .mods = t.in.mods, .code = c }, t.n_text);
+    }
+
+    /// Text the keyboard typed or the IME committed (`insertText:`): one `.text` event. It
+    /// ends a composition. A line end is the Return key, as a press and a release, unless a
+    /// hardware Return is held (its own events said so already).
+    pub fn insert(t: *Translator, utf8: []const u8) void {
+        t.composition = .{};
+        if (std.mem.eql(u8, utf8, "\n")) return t.tap(key_return);
+        if (!std.unicode.utf8ValidateSlice(utf8) or t.text.len - t.n_text < utf8.len) {
+            t.dropped += 1;
+            return;
+        }
+        const at = t.n_text;
+        @memcpy(t.text[at..][0..utf8.len], utf8);
+        t.n_text += @intCast(utf8.len);
+        t.push(.{ .kind = .text, .mods = t.in.mods, .at = at, .len = @intCast(utf8.len) }, at);
+    }
+
+    /// The keyboard's delete key (`deleteBackward`): Backspace, as a press and a release,
+    /// unless a hardware Backspace is held.
+    pub fn deleteBackward(t: *Translator) void {
+        t.tap(key_backspace);
+    }
+
+    fn tap(t: *Translator, code: u8) void {
+        if (t.in.keys.down(code)) return;
+        t.push(.{ .kind = .press, .mods = t.in.mods, .code = code }, t.n_text);
+        t.push(.{ .kind = .release, .mods = t.in.mods, .code = code }, t.n_text);
+    }
+
+    /// The IME's marked text changed (`setMarkedText:selectedRange:`): `utf8`, with the byte
+    /// range it selects (the clause being converted, or the caret). Empty ends the composition.
+    pub fn mark(t: *Translator, utf8: []const u8, range: [2]u32) void {
+        var n: usize = @min(utf8.len, max_preedit);
+        while (n > 0 and n < utf8.len and utf8[n] & 0xc0 == 0x80) n -= 1;
+        @memcpy(t.preedit[0..n], utf8[0..n]);
+        const len: u32 = @intCast(n);
+        t.composition = .{ .len = len, .range = .{ @min(range[0], len), @min(range[1], len) } };
+    }
+
+    /// The IME let go of its marked text without replacing it (`unmarkText`): it stays as
+    /// typed text.
+    pub fn unmark(t: *Translator) void {
+        const c = t.composition;
+        if (c.len == 0) return;
+        var buf: [max_preedit]u8 = undefined;
+        @memcpy(buf[0..c.len], t.preedit[0..c.len]);
+        t.insert(buf[0..c.len]);
+    }
+
     /// Pasteboard text (`UIPasteboard.string`, UTF-8) delivered as typed text, the way
     /// `keyboard.Clipboard` asks a host to answer a paste: one `.text` event, line ends as
     /// `\n`, other control characters but tabs left out. Invalid UTF-8, or a paste that does
@@ -243,6 +326,9 @@ pub const Translator = struct {
         ev.in.contacts = t.out_rows[0..n];
         ev.in.text = o.text[0..t.n_text];
         ev.in.events = o.events[0..t.n_events];
+        const c = t.composition;
+        @memcpy(t.out_preedit[0..c.len], t.preedit[0..c.len]);
+        ev.composition = .{ .text = t.out_preedit[0..c.len], .range = c.range };
         t.n_text = 0;
         t.n_events = 0;
         // What this frame reported is settled: lifted rows go, the deferred release follows.
@@ -274,6 +360,11 @@ pub const Translator = struct {
 ///     bounds 390 844         the view's bounds, points
 ///     scale 3                its contentScaleFactor
 ///     insets 47 0 34 0       its safeAreaInsets: top, left, bottom, right
+///     key down 4 shift       a hardware key (HID usage) down or up, with the modifiers held
+///     insert hi              insertText: (the rest of the line; `\n` is Return)
+///     delete                 deleteBackward
+///     mark 0 3 にほ          setMarkedText: its selected byte range, then the text; no text ends it
+///     unmark                 unmarkText
 ///     paste two words        the pasteboard's text, the rest of the line (`\n` for a line end)
 ///     touch began 1 37 25    a touch: phase, id, x, y, then optionally its `Kind` and pressure
 ///     terminate              applicationWillTerminate:
@@ -285,7 +376,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { bounds, scale, insets, touch, paste, terminate };
+    const Line = enum { bounds, scale, insets, touch, key, insert, delete, mark, unmark, paste, terminate };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -313,12 +404,33 @@ pub const Replay = struct {
                     t.touch(c);
                 },
                 .terminate => t.terminate(),
-                .paste => {
+                .key => {
+                    const down = std.mem.eql(u8, w.next() orelse return error.Syntax, "down");
+                    const code = std.fmt.parseInt(u32, w.next() orelse return error.Syntax, 0) catch return error.Syntax;
+                    var flags: u64 = 0;
+                    while (w.next()) |m| flags |= @as(u64, switch (std.meta.stringToEnum(enum { shift, ctrl, alt, cmd }, m) orelse return error.Syntax) {
+                        .shift => mod_shift,
+                        .ctrl => mod_control,
+                        .alt => mod_alternate,
+                        .cmd => mod_command,
+                    });
+                    t.key(code, down, flags);
+                },
+                .delete => t.deleteBackward(),
+                .unmark => t.unmark(),
+                .mark => {
+                    const a = std.fmt.parseInt(u32, w.next() orelse return error.Syntax, 10) catch return error.Syntax;
+                    const b = std.fmt.parseInt(u32, w.next() orelse return error.Syntax, 10) catch return error.Syntax;
+                    t.mark(w.rest(), .{ a, b });
+                    continue;
+                },
+                .insert, .paste => |which| {
                     // The rest of the line, with `\n` for a line end, through a line-sized buffer.
                     var line: [256]u8 = undefined;
-                    const rest = l[@min(l.len, "paste ".len)..];
+                    const rest = w.rest();
                     const n = std.mem.replace(u8, rest[0..@min(rest.len, line.len)], "\\n", "\n", &line);
-                    t.paste(line[0 .. @min(rest.len, line.len) - n]);
+                    const text = line[0 .. @min(rest.len, line.len) - n];
+                    if (which == .insert) t.insert(text) else t.paste(text);
                     continue;
                 },
             }
@@ -549,4 +661,96 @@ test "translate: pasted text is typed in one event, line ends as \\n, control ch
     try testing.expectEqualStrings("", ev.in.text);
     try testing.expectEqual(@as(usize, 0), ev.in.events.len);
     try testing.expectEqual(@as(u32, 2), t.dropped);
+}
+
+test "translate: the soft keyboard types, Return and delete are keys, hardware keys are held" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\insert hi
+        \\insert \n
+        \\delete
+        \\frame
+        \\# A hardware keyboard: Shift then A down (HID 0xe1, 0x04); UIKit also inserts the text.
+        \\key down 0xe1 shift
+        \\key down 0x04 shift
+        \\insert A
+        \\# Its Return: the key events say it, the inserted line end adds nothing.
+        \\key down 0x28 shift
+        \\insert \n
+        \\frame
+        \\key up 0x28 shift
+        \\key up 0x04 shift
+        \\key up 0xe1
+    };
+    var text: [64]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("hi", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .text, .at = 0, .len = 2 },
+        .{ .kind = .press, .code = 0x28 },
+        .{ .kind = .release, .code = 0x28 },
+        .{ .kind = .press, .code = 0x2a },
+        .{ .kind = .release, .code = 0x2a },
+    }, ev.in.events);
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    const shift: Input.Mods = .{ .shift = true };
+    try testing.expectEqualStrings("A", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .press, .code = 0xe1, .mods = shift },
+        .{ .kind = .press, .code = 0x04, .mods = shift },
+        .{ .kind = .text, .at = 0, .len = 1, .mods = shift },
+        .{ .kind = .press, .code = 0x28, .mods = shift },
+    }, ev.in.events);
+    try testing.expect(ev.in.keys.down(0x04) and ev.in.keys.down(0xe1) and ev.in.keys.down(0x28));
+    try testing.expectEqual(shift, ev.in.mods);
+
+    try testing.expect(try r.next(&t));
+    _ = t.frame(&ev);
+    try testing.expectEqual(Input.Keys{}, ev.in.keys);
+    try testing.expectEqual(Input.Mods{}, ev.in.mods);
+}
+
+test "ime: marked text is shown, converted, then committed as typed text" {
+    // Japanese romaji: n-i-h-o-n marks にほん with the caret at its end, the space bar converts
+    // it to 日本 (the whole clause selected), Return commits it; then a composition let go of.
+    var r: Replay = .{ .src =
+        \\frame
+        \\mark 9 9 にほん
+        \\frame
+        \\mark 0 6 日本
+        \\frame
+        \\insert 日本
+        \\frame
+        \\mark 3 3 か
+        \\unmark
+    };
+    var text: [64]u8 = undefined;
+    var events: [16]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    const want = [_]struct { text: []const u8, range: [2]u32, typed: []const u8 }{
+        .{ .text = "にほん", .range = .{ 9, 9 }, .typed = "" },
+        .{ .text = "日本", .range = .{ 0, 6 }, .typed = "" },
+        .{ .text = "", .range = .{ 0, 0 }, .typed = "日本" },
+        .{ .text = "", .range = .{ 0, 0 }, .typed = "か" },
+    };
+    for (want) |w| {
+        try testing.expect(try r.next(&t));
+        _ = t.frame(&ev);
+        try testing.expectEqualStrings(w.text, ev.composition.text);
+        try testing.expectEqual(w.range, ev.composition.range);
+        try testing.expectEqualStrings(w.typed, ev.in.text);
+    }
+    // Marked text longer than the buffer is cut at a character, its range clamped.
+    const long: [Translator.max_preedit / 3 + 1][3]u8 = @splat("あ".*);
+    t.mark(std.mem.asBytes(&long), .{ 0, 1000 });
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(usize, Translator.max_preedit / 3 * 3), ev.composition.text.len);
+    try testing.expectEqual([2]u32{ 0, Translator.max_preedit / 3 * 3 }, ev.composition.range);
 }
