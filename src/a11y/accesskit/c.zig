@@ -27,6 +27,7 @@ pub const Role = enum(u8) {
     check_box = 15,
     radio_button = 16,
     text_input = 17,
+    multiline_text_input = 31,
     search_input = 32,
     button = 18,
     row_header = 21,
@@ -139,6 +140,7 @@ pub extern fn accesskit_node_set_toggled(node: *Node, value: Toggled) void;
 pub extern fn accesskit_node_set_expanded(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_selected(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_disabled(node: *Node) void;
+pub extern fn accesskit_node_set_read_only(node: *Node) void;
 pub extern fn accesskit_node_set_live(node: *Node, value: Live) void;
 pub extern fn accesskit_node_set_aria_current(node: *Node, value: AriaCurrent) void;
 pub extern fn accesskit_node_set_min_numeric_value(node: *Node, value: f64) void;

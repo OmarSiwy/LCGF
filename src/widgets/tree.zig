@@ -426,7 +426,7 @@ test "tree: roles, value and the expanded and selected states" {
     setStates(&sem, box, &test_depths, &h.app.outline, scratch[0..len]);
     a11y.names(t, &sem);
     const st = struct {
-        fn of(s: u8) a11y.State {
+        fn of(s: u16) a11y.State {
             return @bitCast(s);
         }
     }.of;

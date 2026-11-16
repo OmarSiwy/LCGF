@@ -150,7 +150,7 @@ pub const live: [256]Live = blk: {
 /// on the checkable roles (`checkable`), `mixed` on those too, `expanded` where `expandable` is
 /// set (a disclosure button, a tree item, a combobox), so a bridge can tell "collapsed" from
 /// "cannot expand", and "not checked" from "cannot be checked".
-pub const State = bitpack struct(u8) {
+pub const State = bitpack struct(u16) {
     checked: bool = false,
     expandable: bool = false,
     expanded: bool = false,
@@ -165,8 +165,16 @@ pub const State = bitpack struct(u8) {
     /// The current item of a set (`aria-current`), such as a breadcrumb's page. The
     /// application's to set.
     current: bool = false,
+    /// A text input of several lines (`aria-multiline`), such as a text area. The
+    /// application's (the widget's `semantics`) to set.
+    multiline: bool = false,
+    /// The node has keyboard focus. Set by `focused` from the interaction state.
+    focused: bool = false,
+    /// Shown but not editable (`aria-readonly`). The application's to set.
+    read_only: bool = false,
+    _: u5 = 0,
 
-    pub inline fn bitsOf(st: State) u8 {
+    pub inline fn bitsOf(st: State) u16 {
         return @bitCast(st);
     }
 };
@@ -174,8 +182,8 @@ pub const State = bitpack struct(u8) {
 /// The state bit a role's `value` turns on (as the core's checkbox stores it: 1 on, 0 off,
 /// between them mixed): `checked` for the checkable roles, `pressed` for a toggle button, zero
 /// for the rest. Indexed by the raw role byte.
-pub const checkable: [256]u8 = blk: {
-    var m: [256]u8 = @splat(0);
+pub const checkable: [256]u16 = blk: {
+    var m: [256]u16 = @splat(0);
     for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
         m[@backingInt(r)] = State.bitsOf(.{ .checked = true });
     m[@backingInt(Role.toggle_button)] = State.bitsOf(.{ .pressed = true });
@@ -206,7 +214,7 @@ pub const Semantics = struct {
         /// frames without hashing bytes per row. `setText` writes all three.
         text_hash: []u32,
         /// `State` bits the application sets; `states` adds what follows from the tree.
-        state: []u8,
+        state: []u16,
         /// The value's range, as `aria-valuemin`, `aria-valuemax` and the step a screen
         /// reader's increment and decrement move by, in the value's units. `hi <= lo` is no
         /// range (the cleared 0, 0); `step` 0 is none.
@@ -298,11 +306,19 @@ pub fn states(t: *const Tree, s: *Semantics) void {
     for (0..t.len) |k| {
         const v = c.value[k];
         const bit = checkable[c.role[k]];
-        const half = -%(@as(u8, @intFromBool(v > 0)) & @intFromBool(v < 1));
-        const on = -%@as(u8, @intFromBool(v != 0)) & ~half;
-        const can = -%@as(u8, @intFromBool(bit != 0));
+        const half = -%(@as(u16, @intFromBool(v > 0)) & @intFromBool(v < 1));
+        const on = -%@as(u16, @intFromBool(v != 0)) & ~half;
+        const can = -%@as(u16, @intFromBool(bit != 0));
         st[k] |= (bit & on) | (mixed & half & can) | (st[c.parent[k]] & disabled);
     }
+}
+
+/// Marks the node with id `focus` (`Interaction.focus`, 0 for none) `focused`. Run it with
+/// `states`, before `flatten`; a focus on no node of `t` marks nothing.
+pub fn focused(t: *const Tree, s: *Semantics, focus: u32) void {
+    const r = t.find(@fromBackingInt(focus));
+    if (focus == 0 or r == none) return;
+    s.c.state[r] |= State.bitsOf(.{ .focused = true });
 }
 
 /// The semantic tree as flat arrays, the form a bridge hands to the platform: one row per
@@ -324,7 +340,7 @@ pub const Export = struct {
         /// Export row of the parent; `none` for the root.
         parent: []u32,
         role: []u8,
-        state: []u8,
+        state: []u16,
         value: []f32,
         /// `Semantics.Columns.range`: lo, hi, step.
         range: [3][]f32,
@@ -757,10 +773,10 @@ test "tree export: states come from the application, checkable values and disabl
     try testing.expectEqual(State{ .mixed = true }, got(&s, some));
     try testing.expectEqual(State{ .current = true }, got(&s, page));
     // Idempotent; and `clear` drops what the application set last frame.
-    const before: [15]u8 = s.c.state[0..15].*;
+    const before: [15]u16 = s.c.state[0..15].*;
     try testing.expectEqual(15, t.len);
     states(&t, &s);
-    try testing.expectEqualSlices(u8, &before, s.c.state[0..t.len]);
+    try testing.expectEqualSlices(u16, &before, s.c.state[0..t.len]);
     s.clear();
     states(&t, &s);
     try testing.expectEqual(State{}, got(&s, button));
@@ -1162,6 +1178,28 @@ test "tree export: a text field's text and placeholder are exported, and a chang
     try testing.expectEqualSlices(u32, &.{1}, f.ch.updated[0..f.ch.updated_len]);
 }
 
+test "tree export: the focused node is marked focused; multiline and read-only are exported" {
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const t = &f.t;
+    const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const notes = t.push(root, types.Id.from("notes"), &.{ .role = .text_input });
+    t.seal(notes);
+    const log = t.push(root, types.Id.from("log"), &.{ .role = .text_input });
+    t.seal(log);
+    t.seal(root);
+    f.s.c.state[notes] = State.bitsOf(.{ .multiline = true });
+    f.s.c.state[log] = State.bitsOf(.{ .multiline = true, .read_only = true });
+    focused(t, &f.s, @backingInt(types.Id.from("notes")));
+    // No focus, or a focus on a node not in the tree, marks nothing.
+    focused(t, &f.s, 0);
+    focused(t, &f.s, @backingInt(types.Id.from("gone")));
+    const e = f.run(0);
+    try testing.expectEqual(State{ .multiline = true, .focused = true }, @as(State, @bitCast(e.c.state[1])));
+    try testing.expectEqual(State{ .multiline = true, .read_only = true }, @as(State, @bitCast(e.c.state[2])));
+    try testing.expectEqual(State{}, @as(State, @bitCast(e.c.state[0])));
+}
+
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {
     var f: FrameFixture(8) = .{};
     f.init();
@@ -1325,5 +1363,5 @@ test "tree export: counting carvers size what the carvers cut" {
         try testing.expectEqual(counter.off, carver.off);
     }
     try testing.expectEqual(12, @sizeOf(Action));
-    try testing.expectEqual(1, @sizeOf(State));
+    try testing.expectEqual(2, @sizeOf(State));
 }

@@ -313,7 +313,7 @@ pub fn sameSemantics(a: *const a11y.Export, b: *const a11y.Export) bool {
     const n = a.len;
     if (n != b.len) return false;
     for (a.c.range, b.c.range) |x, y| if (!std.mem.eql(f32, x[0..n], y[0..n])) return false;
-    return std.mem.eql(u8, a.c.role[0..n], b.c.role[0..n]) and std.mem.eql(u8, a.c.state[0..n], b.c.state[0..n]) and
+    return std.mem.eql(u8, a.c.role[0..n], b.c.role[0..n]) and std.mem.eql(u16, a.c.state[0..n], b.c.state[0..n]) and
         std.mem.eql(f32, a.c.value[0..n], b.c.value[0..n]) and std.mem.eql(u32, a.c.name_hash[0..n], b.c.name_hash[0..n]) and
         std.mem.eql(u32, a.c.parent[0..n], b.c.parent[0..n]);
 }

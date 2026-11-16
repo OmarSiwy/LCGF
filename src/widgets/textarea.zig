@@ -197,9 +197,13 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
 // ---- accessibility --------------------------------------------------------------------------
 
 /// The semantics the tree columns cannot carry, for text area `name`: its name is the row
-/// `label` (its caption, `aria-labelledby`; `none` for none). As for the text field
-/// (`textfield.semantics`); a11y/tree.zig has no multiline state to report.
-pub const semantics = tf.semantics;
+/// `label` (its caption, `aria-labelledby`; `none` for none), as for the text field
+/// (`textfield.semantics`), and it is multiline (`aria-multiline`).
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void {
+    tf.semantics(t, s, name, label);
+    const f = t.find(name);
+    if (f != types.none) s.c.state[f] |= a11y.State.bitsOf(.{ .multiline = true });
+}
 
 /// Its text and placeholder, as the text field's (`textfield.textValue`).
 pub const textValue = tf.textValue;
@@ -465,7 +469,7 @@ test "textarea look: an inset box rows lines tall; the selection on each line, t
 
 var area_semantics: base.Semantic(16) = .{};
 
-test "textarea a11y: role text input, one node, named by its caption" {
+test "textarea a11y: role text input, one node, named by its caption, multiline" {
     const h = &page;
     h.init();
     const in: Input = .{ .viewport = .{ 320, 140 } };
@@ -485,6 +489,13 @@ test "textarea a11y: role text input, one node, named by its caption" {
     a11y.names(t, &sem);
     const ctx = &h.ctx;
     try testing.expectEqualStrings("Notes", check.nameOf(&sem, out.runtime.texts, ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], a));
+    try testing.expectEqual(a11y.State.bitsOf(.{ .multiline = true }), sem.c.state[a]);
+    // The same in the comptime front end's tree.
+    var sb2: check.SemBuf = .{};
+    var sem2 = sb2.init();
+    semantics(&h.ui.tables.t, &sem2, .from("notes"), a - 1);
+    try testing.expectEqual(sem.c.state[a], sem2.c.state[a]);
+    try testing.expectEqual(sem.c.labelled_by[a], sem2.c.labelled_by[a]);
 }
 
 fn press(code: u8, mods: Input.Mods) Input.Event {

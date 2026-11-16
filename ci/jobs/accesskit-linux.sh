@@ -2,7 +2,8 @@
 # Screen-reader smoke test of the AccessKit bridge on Linux (src/a11y/accesskit/smoke.py): the
 # shells' example on a private AT-SPI bus. Its tree is walked and its buttons clicked over D-Bus,
 # then Orca runs (on Xvfb) while the example moves focus, and Orca's speech must name the window,
-# Reset, Wireframe, the Exposure slider with its range and a text field with its text.
+# Reset, Wireframe, the Exposure slider with its range and three text fields with their text
+# (one a search box); the text area must be multi-line on AT-SPI.
 # at-spi2-core, Orca, Xvfb and busctl come from the flake's pinned nixpkgs. Out of `all`: it
 # fetches them and AccessKit's 68 MB archive, and takes ~20 s.
 zig build accesskit-smoke

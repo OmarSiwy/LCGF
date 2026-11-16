@@ -306,7 +306,10 @@ pub const Bridge = struct {
     fn node(b: *const Bridge, r: u32) *c.Node {
         const e = &b.cur.?.c;
         const role = e.role[r];
-        const n = c.accesskit_node_new(roles[role]);
+        const st: a11y.State = @bitCast(e.state[r]);
+        // A text input of several lines is AccessKit's multiline text input.
+        const multiline = st.multiline and role == @backingInt(Role.text_input);
+        const n = c.accesskit_node_new(if (multiline) .multiline_text_input else roles[role]);
         c.accesskit_node_set_bounds(n, .{ .x0 = e.rect[0][r], .y0 = e.rect[1][r], .x1 = e.rect[2][r], .y1 = e.rect[3][r] });
         const run = runId(e.id[r]);
         if (hasRun(e, r))
@@ -321,7 +324,6 @@ pub const Bridge = struct {
         const hint = e.hint[r];
         if (text.bytes != 0) c.accesskit_node_set_value_with_length(n, b.strings[text.start..].ptr, text.bytes);
         if (hint.bytes != 0) c.accesskit_node_set_placeholder_with_length(n, b.strings[hint.start..].ptr, hint.bytes);
-        const st: a11y.State = @bitCast(e.state[r]);
         const of = offers[role];
         // `checked` or `pressed`, as the role has it; a mixed node is neither.
         if (of.toggle) c.accesskit_node_set_toggled(n, if (st.mixed) .mixed else if (st.checked or st.pressed) .true else .false);
@@ -331,6 +333,8 @@ pub const Bridge = struct {
         if (st.expandable) c.accesskit_node_set_expanded(n, st.expanded);
         if (st.selected) c.accesskit_node_set_selected(n, true);
         if (st.disabled) c.accesskit_node_set_disabled(n);
+        if (st.read_only) c.accesskit_node_set_read_only(n);
+        // `focused` needs nothing here: AccessKit takes focus from the update (`focusId`).
         if (of.value) c.accesskit_node_set_numeric_value(n, e.value[r]);
         const lo = e.range[0][r];
         const hi = e.range[1][r];
@@ -718,6 +722,8 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     t.seal(root);
     a11y.setText(&f.s, name, &f.str, "", "Your name");
     a11y.setText(&f.s, city, &f.str, "Oslo", "");
+    // Name is a read-only text area (several lines).
+    f.s.c.state[name] = a11y.State.bitsOf(.{ .multiline = true, .read_only = true });
     f.end(0);
     _ = Bridge.activate(&f.b);
     const u = Bridge.factory(&f.b).?;
@@ -729,6 +735,8 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     try testing.expectEqual(1, std.mem.count(u8, d, "placeholder"));
     // Oslo's text as a run under it, which a screen reader reads; the empty field has none.
     try expectHas(d, "role: SearchInput");
+    try expectHas(d, "role: MultilineTextInput");
+    try expectHas(d, "is_read_only");
     try expectHas(d, "TextRun");
     try expectHas(d, "character_lengths: [1, 1, 1, 1]");
     try testing.expectEqual(1, std.mem.count(u8, d, "TextRun"));
@@ -783,6 +791,7 @@ pub fn Host(comptime cap: u32) type {
             h.gen +%= 1;
             a11y.names(out.tree, &h.s);
             a11y.states(out.tree, &h.s);
+            a11y.focused(out.tree, &h.s, ctx.inter.focus);
             a11y.flatten(out.tree, out.texts, str.buf[0..str.len], &h.s, &h.out[h.gen]);
             a11y.diff(&h.out[h.gen], &h.out[h.gen ^ 1], &h.ch);
             h.b.frame(&h.out[h.gen], &h.ch, str.buf[0..str.len], ctx.inter.focus);
