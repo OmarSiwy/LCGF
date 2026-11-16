@@ -46,6 +46,7 @@ const src_bytes = blk: {
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
     _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
+    _ = lcgr.levels.Levels.init(&counter, limits.nodes);
     _ = lcgr.incremental.Dirty.init(&counter, limits.nodes);
     _ = lcgr.flex.Flex.init(&counter, limits.nodes);
     _ = Customs.init(&counter, limits.customs);
@@ -56,9 +57,11 @@ var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
 /// same name in `to`. The column sets have the same names and row sizes (Look is the same
-/// 36-byte extern row in both); a missing name is a compile error.
+/// 36-byte extern row in both). Columns only src/ has (paint inputs added after the port, such
+/// as `uv`) are left as they are; the caller gives them the values the prototype implies.
 fn copyColumns(to: anytype, from: anytype, len: u32) void {
     inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
+        if (comptime !@hasField(@TypeOf(from.*), name)) continue;
         if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
             inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
         } else copyRows(@field(to, name), @field(from, name), len);
@@ -74,8 +77,13 @@ fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
     const bytes = std.mem.sliceAsBytes;
     if (want.quad_len != got.quad_len or want.run_len != got.run_len or
         want.custom_len != got.custom_len or want.cmd_len != got.cmd_len) return error.PaintDiffers;
-    if (!eql(u8, want.quadBytes(), got.quadBytes()) or
-        !eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
+    // Quads field by field: src's row has per-corner radii where the prototype has one radius.
+    for (want.quads[0..want.quad_len], got.quads[0..got.quad_len]) |w, g| {
+        if (!eql(u8, bytes(&[4][4]f32{ w.rect, w.clip, w.params, w.uv }), bytes(&[4][4]f32{ g.rect, g.clip, g.params, g.uv })) or
+            w.fill != g.fill or w.border_color != g.border_color or w.border != g.border or
+            !eql(f32, &@as([4]f32, @splat(w.radius)), &g.radii)) return error.PaintDiffers;
+    }
+    if (!eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
         !eql(u8, bytes(want.customs[0..want.custom_len]), bytes(got.customs[0..got.custom_len])) or
         !eql(u8, want.strings, got.strings)) return error.PaintDiffers;
     const n = want.cmd_len;
@@ -202,6 +210,7 @@ pub fn main(init: std.process.Init) !void {
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
+    var slv = lcgr.levels.Levels.init(&carver, limits.nodes);
     var sdirty = lcgr.incremental.Dirty.init(&carver, limits.nodes);
     var sflex = lcgr.flex.Flex.init(&carver, limits.nodes);
     var scu = Customs.init(&carver, limits.customs);
@@ -223,6 +232,13 @@ pub fn main(init: std.process.Init) !void {
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
+        @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
+        for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
+        @memset(st.c.opacity[0..pt.len], 1); // and no opacity
+        @memset(st.c.alpha[0..pt.len], 1);
+        @memset(st.c.transform[0..pt.len], .{ 1, 0, 0, 1, 0, 0 }); // and no transform
+        @memset(st.c.world[0..pt.len], .{ 1, 0, 0, 1, 0, 0 });
+        @memset(st.c.clip_radii[0..pt.len], @splat(0)); // and square clips
         copyColumns(&stx.c, &ptx.c, ptx.len);
         const pcu = &f.ctx.customs[f.ctx.cur];
         scu.len = pcu.len;
@@ -238,8 +254,9 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .x);
         lcgr.layout.fit(t, .x);
         m[6] = now();
-        lcgr.coefs.coefs(t, &sk, .x);
-        lcgr.coefs.resolveK(t, &sk, .x, in.viewport[0]);
+        // Level-order resolve (C0849); the order is rebuilt every frame and timed here.
+        lcgr.levels.build(t, &slv);
+        lcgr.levels.resolve(t, &slv, .x, in.viewport[0]);
         m[7] = now();
         lcgr.layout.textAvail(t, tx);
         font.wrap(tx);
@@ -247,8 +264,7 @@ pub fn main(init: std.process.Init) !void {
         lcgr.layout.applyText(t, tx, .y);
         lcgr.layout.fit(t, .y);
         m[9] = now();
-        lcgr.coefs.coefs(t, &sk, .y);
-        lcgr.coefs.resolveK(t, &sk, .y, in.viewport[1]);
+        lcgr.levels.resolve(t, &slv, .y, in.viewport[1]);
         m[10] = now();
         lcgr.coefs.placeRows(t, &sk);
         lcgr.coefs.placeK(t, &sk);
@@ -292,6 +308,14 @@ pub fn main(init: std.process.Init) !void {
         std.mem.sort(u64, s, {}, std.sort.asc(u64));
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
     }
+    // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
+    // in paint order, after merging across text, and the opaque quads a depth back end draws
+    // first in one call.
+    const plain = lcgr.order.counts(&sd);
+    lcgr.order.mergeAcrossText(&sd);
+    const merged = lcgr.order.counts(&sd);
+    lcgr.order.depthOrder(&sd);
+    try w.print("batches   quads={d} text={d} custom={d} merged: quads={d} text={d} custom={d} opaque={d} of {d} quads\n", .{ plain.quads, plain.text, plain.custom, merged.quads, merged.text, merged.custom, sd.opaque_len, sd.quad_len });
     try w.flush();
 
     const path = json_path orelse return;

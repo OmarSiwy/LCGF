@@ -21,6 +21,7 @@ pub const wrap = @import("layout/wrap.zig");
 pub const baseline = @import("layout/baseline.zig");
 pub const layout_check = @import("layout/check.zig");
 pub const coefs = @import("layout/coefs.zig");
+pub const levels = @import("layout/levels.zig");
 pub const incremental = @import("layout/incremental.zig");
 pub const interaction = @import("interact/interaction.zig");
 pub const focus = @import("interact/focus.zig");
@@ -37,6 +38,9 @@ pub const unicode_grapheme = @import("text/unicode/grapheme.zig");
 pub const unicode_word = @import("text/unicode/word.zig");
 pub const paint = @import("draw/paint.zig");
 pub const damage = @import("draw/damage.zig");
+pub const features = @import("draw/features.zig");
+pub const inherit = @import("draw/inherit.zig");
+pub const order = @import("draw/order.zig");
 pub const unicode_line = @import("text/unicode/line.zig");
 pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");
@@ -48,6 +52,10 @@ pub const shape = @import("text/shape/shape.zig");
 pub const shape_layout = @import("text/shape/layout.zig");
 pub const shape_cluster = @import("text/shape/cluster.zig");
 pub const shape_cache = @import("text/shape/cache.zig");
+pub const render_iface = @import("render/iface.zig");
+pub const render_conformance = @import("render/conformance.zig");
+pub const quad_shader = @import("render/shaders/quad.zig");
+pub const render_null = @import("render/null.zig");
 
 test {
     std.testing.refAllDecls(@This());

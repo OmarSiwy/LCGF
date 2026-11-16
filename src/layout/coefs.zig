@@ -25,8 +25,9 @@
 //! With the copy, one axis costs 51 us against 34; the copy disappears if `coefs` writes each
 //! row at its level-order rank (it already stores row by row), leaving 13.5 us of order, shared
 //! by both axes and place, plus 10.5 us per sweep and a gather back to depth-first order. That
-//! derived index, built by coefs and leaving the tree in depth-first order, is the form worth
-//! adopting; it needs a plan commit of its own (it is not one of this lane's).
+//! derived index, leaving the tree in depth-first order, is src/layout/levels.zig (C0849); there
+//! the sweep gathers straight from the tree's columns, which measured faster than storing rows at
+//! their ranks.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");

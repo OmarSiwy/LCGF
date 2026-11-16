@@ -11,8 +11,9 @@
 //!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
 //!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
 //!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
-//!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; links the system
-//!                                  libharfbuzz (nix develop .#harfbuzz; ci/run.sh harfbuzz)
+//!   zig build conformance-dump     the render conformance scenes as files (ci/run.sh conformance)
+//!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; HarfBuzz is a lazy
+//!                                  build.zig.zon dependency built from source (ci/run.sh harfbuzz)
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -36,8 +37,10 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
     }) }));
     const ucd_tables = ucd_gen.addOutputFileArg("unicode_tables.zig");
-    for ([_][]const u8{ "GraphemeBreakProperty", "emoji-data", "DerivedCoreProperties", "WordBreakProperty", "LineBreak", "EastAsianWidth", "DerivedGeneralCategory", "DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
-        ucd_gen.addFileArg(b.path(b.fmt("src/text/unicode/data/{s}.txt", .{f})));
+    // The Unicode Character Database 16.0.0, a build.zig.zon dependency (UCD.zip, pinned hash).
+    const ucd = b.dependency("ucd", .{});
+    for ([_][]const u8{ "auxiliary/GraphemeBreakProperty", "emoji/emoji-data", "DerivedCoreProperties", "auxiliary/WordBreakProperty", "LineBreak", "EastAsianWidth", "extracted/DerivedGeneralCategory", "extracted/DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
+        ucd_gen.addFileArg(ucd.path(b.fmt("{s}.txt", .{f})));
     lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
 
     const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
@@ -55,6 +58,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    for ([_][]const u8{ "auxiliary/GraphemeBreakTest", "auxiliary/WordBreakTest", "auxiliary/LineBreakTest", "BidiTest", "BidiCharacterTest", "Scripts" }) |f|
+        conformance.root_module.addAnonymousImport(b.fmt("{s}.txt", .{std.fs.path.basename(f)}), .{ .root_source_file = ucd.path(b.fmt("{s}.txt", .{f})) });
     b.step("conformance", "Run the Unicode conformance files").dependOn(&b.addRunArtifact(conformance).step);
 
     // The package root built ReleaseFast, for the branch census and the benchmark.
@@ -67,6 +72,17 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
     }) });
     b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+
+    // tools/drawgolden: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
+    const draw_dump_mod = b.createModule(.{
+        .root_source_file = b.path("tools/drawgolden/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
+    draw_dump.addPassthruArgs();
+    b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
 
     // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
     // the rest moves to src/ as it is ported.
@@ -107,6 +123,15 @@ pub fn build(b: *std.Build) void {
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
+
+    // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
+    const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/conformance/dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
 
     // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
     const fuzz_mod = b.createModule(.{
@@ -156,8 +181,18 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
-    harfbuzz.root_module.linkSystemLibrary("harfbuzz", .{});
-    b.step("harfbuzz", "Test the HarfBuzz shaping adapter (needs libharfbuzz)").dependOn(&b.addRunArtifact(harfbuzz).step);
+    // HarfBuzz 13.2.1 from build.zig.zon (lazy: fetched only for this step), compiled from its
+    // single-file amalgamation; no system library.
+    if (b.lazyDependency("harfbuzz", .{})) |hb| {
+        const hb_lib = b.addLibrary(.{ .name = "harfbuzz", .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = true,
+        }) });
+        hb_lib.root_module.addCSourceFile(.{ .file = hb.path("src/harfbuzz.cc"), .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DHB_NO_MT" } });
+        harfbuzz.root_module.linkLibrary(hb_lib);
+    }
+    b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

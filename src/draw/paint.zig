@@ -12,10 +12,23 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const DrawList = @import("draw_list.zig").DrawList;
+const Layers = @import("../layout/overlay.zig").Layers;
 const none = types.none;
 
 /// Tree and side lists in, draw list out. `strings` is the storage `TextRun.start` indexes.
+/// Nodes paint in row order.
 pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void {
+    paintIn(t, tx, cu, strings, false, &.{}, d);
+}
+
+/// `emit` with nodes painted in stacking-layer order: `ly.c.order` as written by
+/// `overlay.order`, so a raised node and its subtree draw over every row of a lower layer.
+/// Each node still clips to its parent's clip.
+pub fn emitLayered(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, ly: *const Layers, d: *DrawList) void {
+    paintIn(t, tx, cu, strings, true, ly.c.order[0..t.len], d);
+}
+
+inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, comptime ordered: bool, order: []const u32, d: *DrawList) void {
     const c = &t.c;
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
@@ -32,7 +45,8 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
     const looks = c.look;
     var q: u32 = 0;
     var o: u32 = 0;
-    for (0..t.len) |i| {
+    for (0..t.len) |k| {
+        const i = if (ordered) order[k] else k;
         const vis: u32 = c.visible[i];
         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
         const look = looks[i];
@@ -40,14 +54,17 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
             .clip = clip,
             .params = look.params,
-            .uv = .{ 0, 0, 1, 1 },
+            .uv = c.uv[i],
             .fill = look.fill,
             .border_color = look.border_color,
-            .radius = look.radius,
+            .radii = c.radii[i],
             .border = look.border,
+            .opacity = c.alpha[i],
+            .xform = c.world[i],
+            .clip_radii = c.clip_radii[parent[i]],
         };
-        // Painted when either colour has alpha.
-        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0);
+        // Painted when either colour has alpha and the node is not fully transparent.
+        const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(c.alpha[i] > 0);
         op_kind[o] = @backingInt(DrawList.Kind.quads);
         op_key[o] = (@as(u32, look.texture) << 16) | look.material;
         op_ref[o] = q;
@@ -79,7 +96,7 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
             .start = tx.c.start[k],
             .bytes = tx.c.bytes[k],
             .px = tx.c.px[k],
-            .color = tx.c.color[k],
+            .color = fade(tx.c.color[k], c.alpha[n]),
             .font = tx.c.font[k],
         };
     }
@@ -96,9 +113,16 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
     }
     d.custom_len = cu.len;
     d.strings = strings;
+    d.op_len = o;
+    encode(d);
+}
 
-    // 3. Ops -> commands by run-length encoding. Consecutive quads with the
-    //    same texture and material merge; text and custom ops stand alone.
+/// Sweep 3 alone: `d.op[0..op_len]` -> commands by run-length encoding. Consecutive quads with
+/// the same texture and material merge; text and custom ops stand alone. Consecutive quad ops
+/// must reference consecutive quads, as sweep 1 writes them. For passes that reorder ops
+/// (`order.mergeAcrossText`) and then encode again.
+pub fn encode(d: *DrawList) void {
+    const o = d.op_len;
     var n: u32 = 0;
     var prev_kind: u8 = 0xff;
     var prev_key: u32 = 0;
@@ -116,6 +140,13 @@ pub fn emit(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []con
         prev_key = key;
     }
     d.cmd_len = n;
+}
+
+/// `color` (rgba8, alpha in the top byte) with its alpha times `alpha`, rounded. Exact for 1.
+inline fn fade(color: u32, alpha: f32) u32 {
+    const a: f32 = @floatFromInt(color >> 24);
+    const scaled: u32 = @intFromFloat(@round(a * std.math.clamp(alpha, 0, 1)));
+    return (color & 0x00ff_ffff) | (scaled << 24);
 }
 
 const testing = std.testing;
@@ -197,7 +228,7 @@ test "sweep 1: visible painted nodes become quads, every node its ops in paint o
     try testing.expectEqual([4]f32{ 0, 0, 1, 1 }, d.quads[1].uv);
     try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), d.quads[1].fill);
     try testing.expectEqual(Color.white.bitsOf(), d.quads[1].border_color);
-    try testing.expectEqual(4, d.quads[1].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, d.quads[1].radii);
     try testing.expectEqual(2, d.quads[1].border);
     try testing.expectEqual(sc.t.rect(Scene.plain).array(), d.quads[3].rect);
     // The op stream: quad, quad, text, custom, quad on texture 3, quad.
