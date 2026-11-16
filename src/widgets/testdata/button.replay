@@ -1,0 +1,44 @@
+# Recorded input for the button page (widgets/button.zig, `Page`), at 320 x 80 in the default
+# theme: Reset at x 12..70 and Apply at 78..136, both on y 12..46. One line per frame below
+# (format: input.Replay). Scancodes: Enter 40, Space 44.
+# 0: rest
+frame
+viewport 320 80
+dt 0.016
+pointer 300 70
+# 1: hover Reset
+frame
+pointer 41 29
+# 2: hold it (it takes focus)
+frame
+buttons left
+# 3: release over it: a click
+frame
+buttons
+# 4: Enter: Reset fires again
+frame
+pointer 300 70
+press 40
+# 5: Space down: nothing yet
+frame
+press 44
+# 6: Space up: Reset fires
+frame
+release 44
+# 7: press Apply, drag off it, release: no click, and Apply keeps focus
+frame
+pointer 107 29
+buttons left
+# 8: dragged off, still held
+frame
+pointer 200 70
+# 9: released off it: no click
+frame
+buttons
+# 10: Enter: Apply fires
+frame
+press 40
+# 11: a press on the panel takes focus away; Enter does nothing
+frame
+buttons left
+press 40
