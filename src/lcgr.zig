@@ -60,6 +60,7 @@ pub const embed = @import("assets/embed.zig");
 pub const image_jobs = @import("assets/image_jobs.zig");
 pub const image_atlas = @import("assets/image_atlas.zig");
 pub const image_mipmaps = @import("assets/image_mipmaps.zig");
+pub const image_tests = @import("assets/image_tests.zig");
 
 test {
     std.testing.refAllDecls(@This());
