@@ -23,8 +23,21 @@
 //!        Blocks until the next platform event or `seconds` pass, whichever is first (`inf`:
 //!        until the next event). `pace` says why (`scheduler.Pace`): `.display` asks the shell to
 //!        pace to the display's refresh instead of returning at once.
+//!   fn wake(*S) void
+//!        Thread-safe: any thread may call it, at any time. Makes a `wait` in progress (or the
+//!        next one) return soon, and the next `poll` report a frame even if no platform event
+//!        arrived. A worker that finished a job posts its result, asks for a frame, then wakes
+//!        the shell (a Win32 shell would PostMessage, Wayland write an eventfd, macOS post an
+//!        NSEvent):
 //!
-//! `run` is the whole host loop over these four calls, for the common case.
+//!            _ = mailbox.push(result); // scheduler.Mailbox, drained by the app in `build`
+//!            ctx.waker.post();         // needsFrame says yes
+//!            shell.wake();             // the UI thread stops sleeping
+//!
+//!        `ctx.waker` alone does not interrupt a sleep, and `wake` alone does not make
+//!        `needsFrame` say yes; post both.
+//!
+//! `run` is the whole host loop over these calls, for the common case.
 //!
 //! ## Embedding in a loop you already have
 //!
@@ -76,7 +89,7 @@ pub const Events = struct {
 };
 
 /// The declarations `check` requires of a shell.
-pub const required = [_][]const u8{ "poll", "apply", "present", "wait" };
+pub const required = [_][]const u8{ "poll", "apply", "present", "wait", "wake" };
 
 /// Compile error unless `S` declares everything in `required`.
 pub fn check(comptime S: type) void {
@@ -128,6 +141,7 @@ const Manual = struct {
     }
     pub fn present(_: *Manual, _: *const Output) void {}
     pub fn wait(_: *Manual, _: f32, _: Pace) void {}
+    pub fn wake(_: *Manual) void {}
 };
 
 comptime {
