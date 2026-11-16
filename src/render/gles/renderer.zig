@@ -185,8 +185,8 @@ pub const Renderer = struct {
 
     /// One instanced draw for a text run's glyphs.
     pub fn drawText(r: *const Renderer, _: Pass, run: u32) void {
-        r.bind(.solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.first[run]) * quad_shader.stride);
-        r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(r.glyphs.count[run]));
+        r.bind(.solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * quad_shader.stride);
+        r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(r.glyphs.span(run)[1]));
         r.f3.glBindVertexArray(0);
     }
 

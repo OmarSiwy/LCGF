@@ -215,7 +215,7 @@ pub fn Renderer(comptime gpu: type) type {
         /// One instanced draw call for a text run's glyphs.
         pub fn drawText(self: *const Self, pass: gpu.RenderPass, run: u32) void {
             self.bind(pass, .solid, self.glyphs.texture, self.glyph_quads, @as(u64, self.desc.max_glyphs) * quad_stride);
-            gpu.draw(pass, 4, self.glyphs.count[run], 0, self.glyphs.first[run]);
+            gpu.draw(pass, 4, self.glyphs.span(run)[1], 0, self.glyphs.span(run)[0]);
         }
 
         /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
