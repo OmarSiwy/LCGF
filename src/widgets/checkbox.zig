@@ -276,6 +276,40 @@ test "checkbox input: click and Space toggle; mixed goes to on, then off and on;
     }
 }
 
+var checkbox_semantics: base.Semantic(16) = .{};
+
+test "checkbox a11y: role checkbox, named by its caption, value and checked state, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &two;
+    h.init();
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    const x = &checkbox_semantics;
+    const checked = a11y.State.bitsOf(.{ .checked = true });
+    // Off, mixed (the defaults); then on, off, by setting the values in both front ends.
+    const cases = [_]struct { on: bool, tri: Check }{ .{ .on = false, .tri = .mixed }, .{ .on = true, .tri = .on }, .{ .on = true, .tri = .off } };
+    for (cases) |c| {
+        h.app.on = c.on;
+        h.app.tri = c.tri;
+        h.ui.signals.set(.on, c.on);
+        h.ui.signals.set(.tri, c.tri);
+        _ = try h.frame(&in);
+        try x.run(h);
+        for ([2]u32{ 2, 6 }, [2][]const u8{ "On", "All" }, [2]Check{ Check.of(c.on), c.tri }) |node, name, v| {
+            const r = x.row(node).?;
+            try testing.expectEqual(@backingInt(a11y.Role.checkbox), x.out[0].c.role[r]);
+            try testing.expectEqualStrings(name, x.name(0, r));
+            try testing.expectEqualStrings(name, x.name(1, r));
+            try testing.expectEqual(v.value(), x.out[0].c.value[r]);
+            // Mixed is checked too: the value 0.5 is what tells it apart.
+            try testing.expectEqual(if (v == .off) 0 else checked, x.out[0].c.state[r]);
+        }
+    }
+    // The box and its dash are presentational: each checkbox exports itself and its caption.
+    try testing.expectEqual(null, x.row(3));
+    try testing.expectEqual(null, x.row(4));
+    try testing.expectEqual(@as(u32, 5), x.out[0].len);
+}
+
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
