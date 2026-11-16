@@ -21,15 +21,29 @@ const Style = types.Style;
 const Id = types.Id;
 const Node = types.Node;
 const Theme = base.Theme;
+const simd = @import("../core/simd.zig");
+const keys = @import("keys.zig");
+const none = types.none;
 
 // ---- spec ---------------------------------------------------------------------------------
 
 /// Starts the tab set and builds its tab list: tab `k` has the identity `ids[k]` and shows
-/// `titles[k]`. `selected.*` is clamped into range. Build the panels next, one per tab in
-/// order, then `close`.
+/// `titles[k]`. Input moves `selected.*` and keyboard focus first (`select`); it is clamped
+/// into range. Build the panels next, one per tab in order, then `close`.
 pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles: []const []const u8) void {
     std.debug.assert(ids.len == titles.len and ids.len > 0);
-    selected.* = @min(selected.*, @as(u32, @intCast(ids.len - 1)));
+    const count: u32 = @intCast(ids.len);
+    // What happened to the tabs, from this frame's interaction step (as `Frame.interact`).
+    var clicked: u32 = none;
+    var focused: u32 = none;
+    for (ids, 0..) |id, k| {
+        const r = f.ctx.inter.response(id);
+        clicked = simd.selU(r.clicked, @intCast(k), clicked);
+        focused = simd.selU(r.focused, @intCast(k), focused);
+    }
+    const m = select(selected.*, count, clicked, focused, f.in);
+    selected.* = m.selected;
+    if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
     _ = f.open(.none, setStyle(th));
     _ = f.open(.none, listStyle(th));
     for (ids, titles, 0..) |id, title, k| {
@@ -93,6 +107,33 @@ pub fn panelStyle(th: *const Theme, shown: bool) Style {
     return .{ .dir = .y, .size = .{ .fill, heights[@intFromBool(shown)] }, .clip = true };
 }
 
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// Where selection and focus go: tab indices, `none` for "no tab focused".
+pub const Move = struct { selected: u32, focus: u32 };
+
+/// The next selection and focus of a tab set of `count` tabs (WAI-ARIA APG tabs pattern,
+/// automatic activation). A click on tab `clicked` selects it. While tab `focused` has focus,
+/// Right and Left move focus to the next and previous tab (wrapping), Home and End to the
+/// first and last, and the tab focus lands on is selected; Enter and Space select the focused
+/// tab. Key repeats move again. `clicked` and `focused` are `none` when no tab was clicked or
+/// has focus; then keys do nothing. The selection is clamped into range.
+pub fn select(selected: u32, count: u32, clicked: u32, focused: u32, in: *const Input) Move {
+    const last = count - 1;
+    var sel = @min(simd.selU(clicked != none, clicked, selected), last);
+    var foc = focused;
+    if (foc == none) return .{ .selected = sel, .focus = none };
+    for (in.events) |e| {
+        if (e.kind != .press and e.kind != .repeat) continue;
+        const k = keys.map;
+        const to = if (e.code == k.right) (foc + 1) % count else if (e.code == k.left) (foc + last) % count else if (e.code == k.home) 0 else if (e.code == k.end) last else none;
+        foc = simd.selU(to != none, to, foc);
+        const activate = e.kind == .press and (e.code == keys.enter or e.code == keys.space);
+        sel = simd.selU(to != none or activate, foc, sel);
+    }
+    return .{ .selected = sel, .focus = foc };
+}
+
 /// The tab set as a spec node.
 pub const ct = struct {
     /// Tabs over the u32 field `selected`. `tabs_` is a tuple of `.{ id, title, children }`:
@@ -121,6 +162,24 @@ pub const ct = struct {
     /// How the comptime front end builds and drives one tab set.
     fn Tabs(comptime selected: []const u8, comptime names: []const [:0]const u8) type {
         return struct {
+            /// Selection and focus from the frame's click event and `ui.focus`.
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                _ = row;
+                const E = @TypeOf(ui.*).Events;
+                var clicked: u32 = none;
+                var focused: u32 = none;
+                inline for (names, 0..) |name, k| {
+                    const me = @field(E.Widget, name);
+                    if (event) |e| clicked = simd.selU(std.meta.activeTag(e) == me, k, clicked);
+                    focused = simd.selU(ui.focus == me, k, focused);
+                }
+                const m = select(@field(ui.signals.state, selected), names.len, clicked, focused, in);
+                ui.signals.set(comptime @TypeOf(ui.*).field(selected), m.selected);
+                inline for (names, 0..) |name, k| {
+                    if (m.focus == k) ui.focus = @field(E.Widget, name);
+                }
+            }
+
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
                 const th = @TypeOf(ui.*).theme;
                 const t = &ui.tables.t;
@@ -261,6 +320,77 @@ test "tabs: selected tab on the panel colour, others as buttons; any theme alike
     _ = try S.light.frame(&in);
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(240, 240, 240).bitsOf(), lo.runtime.tree.c.look[rows.tab[0]].fill);
+}
+
+test "select: clicks select; arrows, Home and End move focus and selection; Enter selects" {
+    const k = keys.map;
+    const ev = struct {
+        fn of(comptime codes: []const u8) Input {
+            const list = comptime blk: {
+                var l: [codes.len]Input.Event = undefined;
+                for (&l, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+                break :blk l;
+            };
+            return .{ .events = &list };
+        }
+    };
+    const none_in: Input = .{};
+    try testing.expectEqual(Move{ .selected = 2, .focus = none }, select(0, 3, 2, none, &none_in));
+    try testing.expectEqual(Move{ .selected = 1, .focus = none }, select(1, 3, none, none, &ev.of(&.{k.right})));
+    try testing.expectEqual(Move{ .selected = 1, .focus = 1 }, select(0, 3, none, 0, &ev.of(&.{k.right})));
+    try testing.expectEqual(Move{ .selected = 0, .focus = 0 }, select(2, 3, none, 2, &ev.of(&.{k.right})));
+    try testing.expectEqual(Move{ .selected = 2, .focus = 2 }, select(0, 3, none, 0, &ev.of(&.{k.left})));
+    try testing.expectEqual(Move{ .selected = 2, .focus = 2 }, select(0, 3, none, 1, &ev.of(&.{k.end})));
+    try testing.expectEqual(Move{ .selected = 0, .focus = 0 }, select(2, 3, none, 1, &ev.of(&.{k.home})));
+    try testing.expectEqual(Move{ .selected = 1, .focus = 1 }, select(0, 3, none, 1, &ev.of(&.{keys.enter})));
+    try testing.expectEqual(Move{ .selected = 1, .focus = 1 }, select(0, 3, none, 0, &ev.of(&.{ k.right, k.right, k.left, k.right, k.left })));
+    try testing.expectEqual(Move{ .selected = 2, .focus = none }, select(9, 3, none, none, &none_in));
+}
+
+test "tabs: click selects and focuses; arrows move both; in both front ends" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const r = t.rect(rows.tab[1]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    var o = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.selected);
+    try testing.expectEqual(@as(u32, 1), h.ui.signals.state.selected);
+    try testing.expect(o.runtime.tree.rect(rows.panel[1]).h() > 0);
+    try testing.expectEqual(@as(f32, 0), o.runtime.tree.rect(rows.panel[0]).h());
+    const steps = [_]struct { code: u8, sel: u32 }{
+        .{ .code = keys.map.right, .sel = 2 },
+        .{ .code = keys.map.right, .sel = 0 },
+        .{ .code = keys.map.end, .sel = 2 },
+        .{ .code = keys.map.left, .sel = 1 },
+        .{ .code = 0x04, .sel = 1 },
+    };
+    for (steps) |st| {
+        const e = [1]Input.Event{.{ .kind = .press, .code = st.code }};
+        in.events = &e;
+        o = try h.frame(&in);
+        try testing.expectEqual(st.sel, h.app.selected);
+        try testing.expectEqual(st.sel, h.ui.signals.state.selected);
+        try testing.expectEqual(@backingInt(Default.ids[st.sel]), h.ctx.inter.focus);
+        const W = Default.Ui.Events.Widget;
+        try testing.expectEqual(([3]W{ .general, .view, .about })[st.sel], h.ui.focus.?);
+    }
+    // Keys without a focused tab do nothing.
+    in.events = &.{};
+    in.pointer = .{ 300, 190 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    const e = [1]Input.Event{.{ .kind = .press, .code = keys.map.right }};
+    in.events = &e;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 1), h.app.selected);
+    try testing.expectEqual(@as(u32, 1), h.ui.signals.state.selected);
 }
 
 test {

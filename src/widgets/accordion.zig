@@ -20,6 +20,7 @@ const Style = types.Style;
 const Id = types.Id;
 const Response = types.Response;
 const Theme = base.Theme;
+const keys = @import("keys.zig");
 const simd = @import("../core/simd.zig");
 const a11y = @import("../a11y/tree.zig");
 const Tree = @import("../core/tree.zig").Tree;
@@ -78,22 +79,14 @@ pub fn panelStyle(th: *const Theme, expanded: bool) Style {
 
 // ---- behaviour ----------------------------------------------------------------------------
 
-/// Scancodes of the keys that activate a focused header (USB HID usage ids, as
-/// `focus.Keymap`'s defaults).
-pub const enter: u8 = 0x28;
-pub const space: u8 = 0x2c;
-
-/// Presses of Enter or Space in this frame's key events (auto-repeat does not count).
-pub fn activations(in: *const Input) u32 {
-    var k: u32 = 0;
-    for (in.events) |e| k += @intFromBool(e.kind == .press and (e.code == enter or e.code == space));
-    return k;
-}
+/// The keys that activate a focused header: Enter and Space (src/widgets/keys.zig).
+pub const enter = keys.enter;
+pub const space = keys.space;
 
 /// The section's next expanded state: a click on its header toggles it, and so does each
 /// Enter or Space while the header has focus (WAI-ARIA APG accordion pattern).
 pub fn expand(expanded: bool, clicked: bool, focused: bool, in: *const Input) bool {
-    const presses = activations(in) * @intFromBool(focused);
+    const presses = keys.activations(in) * @intFromBool(focused);
     return base.toggle(expanded, (@intFromBool(clicked) + presses) & 1 == 1);
 }
 
@@ -298,13 +291,13 @@ test "accordion: a click or Enter/Space on the focused header toggles it, in bot
     try testing.expect(h.app.advanced and h.ui.signals.state.advanced);
     try testing.expect(out.runtime.tree.c.visible[out.runtime.tree.find(.from("level"))] != 0);
     // Advanced has focus now: Enter closes it, Space opens it, a repeat does nothing.
-    const keys = [_]struct { code: u8, kind: Input.Event.Kind, open: bool }{
+    const presses = [_]struct { code: u8, kind: Input.Event.Kind, open: bool }{
         .{ .code = enter, .kind = .press, .open = false },
         .{ .code = space, .kind = .press, .open = true },
         .{ .code = space, .kind = .repeat, .open = true },
         .{ .code = 0x04, .kind = .press, .open = true }, // 'a'
     };
-    for (keys) |k| {
+    for (presses) |k| {
         const ev = [1]Input.Event{.{ .kind = k.kind, .code = k.code }};
         in.events = &ev;
         _ = try h.frame(&in);
@@ -335,7 +328,7 @@ test "accordion: a click or Enter/Space on the focused header toggles it, in bot
 test "expand: clicks and focused presses toggle; unfocused presses do not" {
     const ev = [3]Input.Event{ .{ .kind = .press, .code = enter }, .{ .kind = .release, .code = enter }, .{ .kind = .press, .code = 0x2c } };
     const in: Input = .{ .events = &ev };
-    try testing.expectEqual(@as(u32, 2), activations(&in));
+    try testing.expectEqual(@as(u32, 2), keys.activations(&in));
     try testing.expect(expand(false, true, false, &in));
     try testing.expect(!expand(false, false, true, &in));
     try testing.expect(expand(false, true, true, &in));
