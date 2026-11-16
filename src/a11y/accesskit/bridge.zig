@@ -124,9 +124,13 @@ pub const Bridge = struct {
     full: std.atomic.Value(bool) = .init(false),
     // ---- this frame, stored by `frame`
     cur: ?*const Export = null,
+    /// Rows that changed since the last frame (`a11y.diff`).
+    ch: ?*const a11y.Changes = null,
     strings: []const u8 = "",
     /// Focused export id (`Interaction.focus`), or 0.
     focus: u32 = 0,
+    /// The top-level rows' `kids_hash` the window was last sent with.
+    top_hash: u32 = 0,
 
     /// Carves the children scratch for exports of up to `cap` rows. With a counting carver this
     /// sizes the buffer instead.
@@ -134,9 +138,11 @@ pub const Bridge = struct {
         return .{ .title = title, .first = carver.slice(u32, cap + 1), .kids = carver.slice(c.NodeId, cap) };
     }
 
-    /// Stores this frame's export for the next update and groups each row's children. `strings`
-    /// are the frame's bytes the names point into; they must stay valid until the update.
-    pub fn frame(b: *Bridge, cur: *const Export, strings: []const u8, focus: u32) void {
+    /// Stores this frame's export and its changes (`a11y.diff` against the previous frame's) for
+    /// the next update, and groups each row's children. `strings` are the frame's bytes the names
+    /// point into; they must stay valid until the update. Call it for every built frame, so no
+    /// frame's changes are skipped.
+    pub fn frame(b: *Bridge, cur: *const Export, ch: *const a11y.Changes, strings: []const u8, focus: u32) void {
         std.debug.assert(b.first.len > cur.len and b.kids.len >= cur.len);
         const n = cur.len;
         const e = &cur.c;
@@ -157,12 +163,13 @@ pub const Bridge = struct {
             b.kids[b.first[p]] = e.id[r];
         }
         b.cur = cur;
+        b.ch = ch;
         b.strings = strings;
         b.focus = focus;
     }
 
     /// The tree update for the stored frame: every row, with the tree's root and toolkit.
-    pub fn fullUpdate(b: *const Bridge) *c.TreeUpdate {
+    pub fn fullUpdate(b: *Bridge) *c.TreeUpdate {
         const cur = b.cur.?;
         const u = c.accesskit_tree_update_with_capacity_and_focus(cur.len + 1, b.focusId());
         const info = c.accesskit_tree_info_new(root_id);
@@ -170,6 +177,22 @@ pub const Bridge = struct {
         c.accesskit_tree_update_set_tree_info(u, info);
         c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
         for (0..cur.len) |r| c.accesskit_tree_update_push_node(u, cur.c.id[r], b.node(@intCast(r)));
+        b.top_hash = cur.c.kids_hash[cur.cap];
+        return u;
+    }
+
+    /// The tree update for the stored frame's changes: the rows `a11y.diff` found new or
+    /// changed, in tree order, and the window when its top-level rows changed. Rows that went
+    /// are not named: their parent is sent with its new child list, and AccessKit drops what no
+    /// node refers to any more. Focus is sent every time.
+    pub fn changesUpdate(b: *Bridge) *c.TreeUpdate {
+        const cur = b.cur.?;
+        const ch = b.ch.?;
+        const top = cur.c.kids_hash[cur.cap];
+        const u = c.accesskit_tree_update_with_capacity_and_focus(ch.updated_len + 1, b.focusId());
+        if (top != b.top_hash) c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
+        b.top_hash = top;
+        for (ch.updated[0..ch.updated_len]) |r| c.accesskit_tree_update_push_node(u, cur.c.id[r], b.node(r));
         return u;
     }
 
@@ -229,8 +252,7 @@ pub const Bridge = struct {
     /// AccessKit's tree update factory, called by the adapter's update on the UI thread.
     pub fn factory(userdata: ?*anyopaque) callconv(.c) ?*c.TreeUpdate {
         const b: *Bridge = @ptrCast(@alignCast(userdata.?));
-        _ = b.full.swap(false, .acq_rel);
-        return b.fullUpdate();
+        return if (b.full.swap(false, .acq_rel)) b.fullUpdate() else b.changesUpdate();
     }
 };
 
@@ -263,7 +285,13 @@ pub fn Fixture(comptime cap: u32) type {
             const ch = a11y.Changes.init(carver, cap);
             const b = Bridge.init(carver, cap, "Example");
             if (f) |x| {
-                x.* = .{ .t = t, .tx = tx, .s = s, .out = out, .ch = ch, .b = b, .str = .{ .buf = &x.bytes_buf } };
+                x.t = t;
+                x.tx = tx;
+                x.s = s;
+                x.out = out;
+                x.ch = ch;
+                x.b = b;
+                x.str = .{ .buf = &x.bytes_buf };
             }
         }
         const bytes = blk: {
@@ -296,7 +324,7 @@ pub fn Fixture(comptime cap: u32) type {
             a11y.states(&f.t, &f.s);
             a11y.flatten(&f.t, &f.tx, f.str.buf[0..f.str.len], &f.s, &f.out[f.gen]);
             a11y.diff(&f.out[f.gen], &f.out[f.gen ^ 1], &f.ch);
-            f.b.frame(&f.out[f.gen], f.str.buf[0..f.str.len], focus);
+            f.b.frame(&f.out[f.gen], &f.ch, f.str.buf[0..f.str.len], focus);
         }
     };
 }
@@ -368,4 +396,82 @@ test "accesskit: the whole tree goes out after activation, rooted at the window"
     try expectHas(d, "\"lcgr\"");
     var idbuf: [32]u8 = undefined;
     try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{@backingInt(lcgr.types.Id.from("reset"))}));
+}
+
+/// Node ids pushed in `u`, in order, read from its debug form.
+fn pushedIds(u: *c.TreeUpdate, out: []c.NodeId) ![]c.NodeId {
+    var buf: [8192]u8 = undefined;
+    const d = debugText(u, &buf);
+    var n: usize = 0;
+    // Each pushed node prints as `(#id, Node {`.
+    var it = std.mem.splitSequence(u8, d, "(#");
+    _ = it.next();
+    while (it.next()) |part| {
+        const end = std.mem.indexOfScalar(u8, part, ',') orelse continue;
+        out[n] = try std.fmt.parseInt(c.NodeId, part[0..end], 10);
+        n += 1;
+    }
+    return out[0..n];
+}
+
+fn idOf(comptime name: []const u8) c.NodeId {
+    return @backingInt(lcgr.types.Id.from(name));
+}
+
+test "accesskit: later frames send only the rows that changed, and the window when its rows do" {
+    var f: Fixture(32) = .{};
+    f.init();
+    f.reset();
+    buildToolbar(&f, true, 1.5);
+    f.end(0);
+    _ = Bridge.activate(&f.b);
+    c.accesskit_tree_update_free(Bridge.factory(&f.b).?);
+    var ids: [32]c.NodeId = undefined;
+
+    // Nothing changed: an update with focus only (the window, as nothing is focused).
+    f.reset();
+    buildToolbar(&f, true, 1.5);
+    f.end(0);
+    var u = Bridge.factory(&f.b).?;
+    try testing.expectEqualSlices(c.NodeId, &.{}, try pushedIds(u, &ids));
+    var buf: [8192]u8 = undefined;
+    var idbuf: [32]u8 = undefined;
+    try expectHas(debugText(u, &buf), try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{root_id}));
+    c.accesskit_tree_update_free(u);
+
+    // The checkbox unticked and the slider moved: those two rows, in tree order.
+    f.reset();
+    buildToolbar(&f, false, 2);
+    f.end(@backingInt(lcgr.types.Id.from("exposure")));
+    u = Bridge.factory(&f.b).?;
+    try testing.expectEqualSlices(c.NodeId, &.{ idOf("wireframe"), idOf("exposure") }, try pushedIds(u, &ids));
+    const d = debugText(u, &buf);
+    try expectHas(d, "toggled: False");
+    try expectHas(d, "numeric_value: 2.0");
+    try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{idOf("exposure")}));
+    c.accesskit_tree_update_free(u);
+
+    // A second top-level row (a status line): the window goes again with it.
+    f.reset();
+    buildToolbar(&f, false, 2);
+    const st = f.t.push(0, .from("status"), &.{});
+    f.t.c.role[st] = @backingInt(Role.status);
+    _ = f.text(st, "Saved");
+    f.t.seal(st);
+    f.end(0);
+    u = Bridge.factory(&f.b).?;
+    const got = try pushedIds(u, &ids);
+    try testing.expectEqual(root_id, got[0]);
+    try testing.expectEqual(idOf("status"), got[1]);
+    try expectHas(debugText(u, &buf), "live: Polite");
+    c.accesskit_tree_update_free(u);
+
+    // Activation again (a screen reader restarted): the whole tree, whatever changed.
+    f.reset();
+    buildToolbar(&f, false, 2);
+    f.end(0);
+    _ = Bridge.activate(&f.b);
+    u = Bridge.factory(&f.b).?;
+    try testing.expectEqual(1 + f.out[f.gen].len, (try pushedIds(u, &ids)).len);
+    c.accesskit_tree_update_free(u);
 }
