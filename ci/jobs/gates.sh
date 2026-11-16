@@ -6,3 +6,9 @@ python3 bench/gates/gates.py --self-test
 mkdir -p zig-out/gates
 zig build size -Dtarget=x86_64-linux -Dcpu=x86_64_v3 > zig-out/gates/size.txt
 python3 bench/gates/gates.py size zig-out/gates/size.txt
+# Idle (target D5): frames built while nothing changes, and wake-ups once idle, of the
+# benchmark's idle scene (the LCGR row of the comparison).
+zig build vs-lcgr
+{ zig-out/bin/vs-lcgr --scene idle; python3 tools/bench/probe.py -- zig-out/bin/vs-lcgr --idle --scene idle; } > zig-out/gates/idle.txt
+cat zig-out/gates/idle.txt
+python3 bench/gates/gates.py idle zig-out/gates/idle.txt

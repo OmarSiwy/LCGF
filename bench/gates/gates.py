@@ -5,6 +5,7 @@
     python3 bench/gates/gates.py rss DIR        resident memory against the lightest comparison
     python3 bench/gates/gates.py first-frame DIR   time to first frame against the lightest comparison
     python3 bench/gates/gates.py measure-first-frame JSON EXE   add EXE's time to first frame to JSON
+    python3 bench/gates/gates.py idle FILE      zero frames and zero wake-ups while idle
     python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py --self-test
 
@@ -25,6 +26,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -171,6 +173,24 @@ def run_size(path, record):
     return 1 if failed else 0
 
 
+def check_idle(text):
+    """Idle (target D5): in the output of the benchmark's idle scene, frames built of its 3,000
+    unchanged polls, and in tools/bench/probe.py's, wake-ups while waiting after the first frame.
+    The two frames allowed are the first frame and the one settle frame after it
+    (bench/scenes/idle.zig); every poll after them must build nothing. Not timed: always applies.
+    Returns failure lines, empty when the gate holds."""
+    frames = re.search(r"scene=idle\b.*\bframes=(\d+)", text)
+    wakeups = re.search(r"^idle\s+(\d+) wake-ups", text, re.M)
+    bad = []
+    if not frames or not wakeups:
+        return ["idle: no 'scene=idle ... frames=' line or no probe 'idle N wake-ups' line"]
+    if int(frames.group(1)) > 2:
+        bad.append(f"idle: {frames.group(1)} frames built of unchanged polls, more than the first and the settle frame")
+    if int(wakeups.group(1)) != 0:
+        bad.append(f"idle: {wakeups.group(1)} wake-ups while waiting for input")
+    return bad
+
+
 def frameworks_missing(runs, recorded):
     return [n for n in recorded.get("frameworks", []) if n not in runs]
 
@@ -248,6 +268,11 @@ def self_test():
     assert entries["idle"] == {"held": True, "ratio": 0.5, "best": "a"}
     runs["lcgr"]["first_frame_ms"] = 3.0
     assert check_first_frame(runs, entries)[2] is True
+    ok = "scene=idle core=src nodes=200 frames=2 polls=3000\nidle      0 wake-ups in 2 s  (0.0/s)\n"
+    assert check_idle(ok) == []
+    assert len(check_idle(ok.replace("frames=2", "frames=3"))) == 1
+    assert len(check_idle(ok.replace("idle      0", "idle      4"))) == 1
+    assert len(check_idle("")) == 1
     print("gates self-test ok")
 
 
@@ -256,7 +281,7 @@ def main():
         self_test()
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "measure-first-frame"])
+    ap.add_argument("gate", choices=sorted(CHECKS) + ["size", "idle", "measure-first-frame"])
     ap.add_argument("path", help="DIR of results, or for size the output of zig build size")
     ap.add_argument("exe", nargs="?", help="for measure-first-frame: the harness")
     ap.add_argument("--record", action="store_true")
@@ -271,6 +296,11 @@ def main():
             json.dump(r, f, indent=1)
         print(f"{r['name']}: first frame {r['first_frame_ms']:.2f} ms")
         return 0
+    if a.gate == "idle":
+        with open(a.path) as f:
+            bad = check_idle(f.read())
+        print("gate idle: " + ("; ".join(bad) if bad else "held: 2 frames of 3,000 polls at most, 0 wake-ups"))
+        return 1 if bad else 0
     if a.gate == "size":
         return run_size(a.path, a.record)
     return run_compare(a.gate, a.path, a.record)
