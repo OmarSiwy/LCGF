@@ -1,6 +1,6 @@
 //! The shell example (src/shell/example.zig) in a Wayland window: connects to
 //! `$WAYLAND_DISPLAY`, opens a toplevel and runs `iface.run`'s loop until the window is closed.
-//! `--exit-when-idle` ends the program instead once nothing is left to draw, and prints what
+//! `--exit-when-idle` ends the program instead once nothing is left to draw for half a second, and prints what
 //! happened: what a compositor without input devices (weston --backend=headless) can show.
 
 const std = @import("std");
@@ -30,7 +30,9 @@ pub fn main(init: std.process.Init) !void {
     var ctx = try context.Context.init(&ctx_buffer, limits);
     var app: lcgr.shell_example.App = .{};
     var ev: lcgr.shell_iface.Events = .{};
-    // iface.run's body, with a way out when idle.
+    // iface.run's body, with a way out when idle: half a second without anything to draw
+    // (the compositor's events after the window is mapped, such as its scale, come first).
+    var idle = false;
     while (shell.poll(&ev)) {
         if (ctx.needsFrame(&ev.in)) {
             var f = ctx.begin(&ev.in);
@@ -38,7 +40,13 @@ pub fn main(init: std.process.Init) !void {
             const out = f.end(.{});
             shell.apply(&out.platform);
             shell.present(&out);
-        } else if (exit_when_idle) break;
+            idle = false;
+        } else if (exit_when_idle) {
+            if (idle) break;
+            idle = true;
+            shell.wait(0.5, .timer);
+            continue;
+        }
         shell.wait(scheduler.wake(&ctx, &ev.in), scheduler.pace(&ctx));
     }
 

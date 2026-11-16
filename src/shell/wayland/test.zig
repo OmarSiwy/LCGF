@@ -442,3 +442,78 @@ test "wayland: touch points are contacts, and a quick tap is still seen" {
     _ = shell.poll(&ev);
     try testing.expectEqual(@as(usize, 1), ev.in.contacts.len);
 }
+
+test "wayland: fractional scale 1.5 draws 1200 x 900 pixels shown at 800 x 600" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(core_globals ++ [_][]const u8{ "wp_viewporter", "wp_fractional_scale_manager_v1" }));
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    const frac = fake.sent(.fractional_manager, 1).?.arg0;
+    try testing.expect(shell.viewport != 0);
+    fake.send(frac, 0, .{@as(u32, 180)}); // preferred_scale: 1.5 * 120
+    fake.configure(&shell, 800, 600);
+    const out = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual(@as(f32, 1.5), ev.in.scale);
+    try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
+    // Layout stays logical; the buffer is physical, and the viewport maps it back.
+    try testing.expectEqual(lcgr.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
+    try testing.expectEqual([2]u32{ 1200, 900 }, fake.committedSize());
+    const dest = fake.sent(.viewport, 2).?;
+    try testing.expectEqual([2]u32{ 800, 600 }, [2]u32{ dest.arg0, dest.arg1 });
+    try testing.expect(fake.sent(.surface, 8) == null); // no integer buffer scale
+    try testing.expectEqual(app.theme.panel, fake.pixel(120, 885));
+    try testing.expectEqual(shell.background, fake.pixel(600, 450));
+    // Moving to a scale-1.25 output: the next frame is redrawn at 1000 x 750.
+    fake.send(frac, 0, .{@as(u32, 150)});
+    fake.flush();
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual([2]u32{ 1000, 750 }, fake.committedSize());
+}
+
+test "wayland: without fractional scaling, the integer buffer scale" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &core_globals);
+    _ = shell.poll(&ev);
+    fake.send(shell.surface, 2, .{@as(i32, 2)}); // preferred_buffer_scale
+    fake.configure(&shell, 400, 300);
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual(@as(f32, 2), ev.in.scale);
+    try testing.expectEqual([2]u32{ 800, 600 }, fake.committedSize());
+    try testing.expectEqual(@as(u32, 2), fake.sent(.surface, 8).?.arg0);
+    try testing.expectEqual(app.theme.panel, fake.pixel(160, 590));
+}
+
+test "wayland: before wl_surface v6, the scale of the output the window entered" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(core_globals ++ [_][]const u8{"wl_output"}));
+    _ = shell.poll(&ev);
+    const out = shell.outputs[0].id;
+    fake.send(out, 3, .{@as(i32, 3)}); // scale
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(f32, 1), ev.in.scale); // not on that output yet
+    fake.send(shell.surface, 0, .{out}); // enter
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(f32, 3), ev.in.scale);
+    fake.send(shell.surface, 1, .{out}); // leave
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(f32, 1), ev.in.scale);
+}

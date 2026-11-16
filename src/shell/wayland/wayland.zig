@@ -62,12 +62,31 @@ pub const Kind = enum(u8) {
     pointer,
     keyboard,
     touch,
+    viewporter,
+    viewport,
+    fractional_manager,
+    fractional_scale,
+    output,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat };
-const global_versions = std.enums.EnumArray(Global, u32).init(.{ .wl_compositor = 4, .wl_shm = 1, .xdg_wm_base = 2, .wl_seat = 8 });
-const global_kinds = std.enums.EnumArray(Global, Kind).init(.{ .wl_compositor = .compositor, .wl_shm = .shm, .xdg_wm_base = .wm_base, .wl_seat = .seat });
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1 };
+const global_versions = std.enums.EnumArray(Global, u32).init(.{
+    .wl_compositor = 6,
+    .wl_shm = 1,
+    .xdg_wm_base = 2,
+    .wl_seat = 8,
+    .wp_viewporter = 1,
+    .wp_fractional_scale_manager_v1 = 1,
+});
+const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
+    .wl_compositor = .compositor,
+    .wl_shm = .shm,
+    .xdg_wm_base = .wm_base,
+    .wl_seat = .seat,
+    .wp_viewporter = .viewporter,
+    .wp_fractional_scale_manager_v1 = .fractional_manager,
+});
 
 /// Opcodes used, from wayland.xml and xdg-shell.xml.
 const op = struct {
@@ -82,7 +101,11 @@ const op = struct {
     const surface_attach = 1;
     const surface_frame = 3;
     const surface_commit = 6;
+    const surface_set_buffer_scale = 8;
     const surface_damage_buffer = 9;
+    const viewporter_get_viewport = 1;
+    const viewport_set_destination = 2;
+    const fractional_get_fractional_scale = 1;
     const wm_base_get_xdg_surface = 2;
     const wm_base_pong = 3;
     const xdg_surface_get_toplevel = 1;
@@ -107,6 +130,12 @@ pub const Wayland = struct {
     surface: u32 = 0,
     xdg_surface: u32 = 0,
     toplevel: u32 = 0,
+    /// Set when the compositor scales fractionally (wp_viewporter and wp_fractional_scale_v1).
+    viewport: u32 = 0,
+    /// The compositor sends wl_surface.preferred_buffer_scale, so outputs are not consulted.
+    preferred: bool = false,
+    outputs: [8]struct { id: u32, scale: i32 = 1, on: bool = false } = undefined,
+    nout: u32 = 0,
     /// The first configure arrived: `present` may attach buffers.
     configured: bool = false,
     /// The compositor asked to close the window, or the connection failed (`err`).
@@ -232,6 +261,13 @@ pub const Wayland = struct {
         render.render(&w.gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
         w.shm.busy[slot] = true;
         w.request(w.surface, op.surface_attach, .{ w.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
+        // Fractional scale draws `px` pixels and has the compositor show them at the logical
+        // size; the integer fallback (wl_surface.preferred_buffer_scale) tells it the factor.
+        if (w.viewport != 0) {
+            w.request(w.viewport, op.viewport_set_destination, .{ @as(i32, @intFromFloat(w.size[0])), @as(i32, @intFromFloat(w.size[1])) });
+        } else {
+            w.request(w.surface, op.surface_set_buffer_scale, .{@as(i32, @intFromFloat(w.scale))});
+        }
         w.request(w.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
         w.request(w.surface, op.surface_commit, .{});
         w.flush();
@@ -294,6 +330,14 @@ pub const Wayland = struct {
                 const name = a.uint();
                 const interface = a.string();
                 const version = a.uint();
+                // Every output, for the integer scale of compositors before wl_surface v6.
+                if (std.mem.eql(u8, interface, "wl_output") and version >= 2 and w.nout < w.outputs.len) {
+                    const id = w.new(.output);
+                    w.request(w.registry, op.registry_bind, .{ name, interface, @as(u32, 2), id });
+                    w.outputs[w.nout] = .{ .id = id };
+                    w.nout += 1;
+                    return;
+                }
                 const g = std.meta.stringToEnum(Global, interface) orelse return;
                 const id = w.new(global_kinds.get(g));
                 w.request(w.registry, op.registry_bind, .{ name, interface, @min(version, global_versions.get(g)), id });
@@ -334,11 +378,43 @@ pub const Wayland = struct {
             .pointer => w.seat.pointerEvent(m.opcode, &a),
             .keyboard => w.seat.keyboardEvent(m.opcode, &a, &w.conn),
             .touch => w.seat.touchEvent(m.opcode, &a),
+            // preferred_buffer_scale: the integer scale, used without fractional scaling.
+            .surface => switch (m.opcode) {
+                0, 1 => { // enter, leave: output
+                    const id = a.uint();
+                    for (w.outputs[0..w.nout]) |*o| o.on = if (o.id == id) m.opcode == 0 else o.on;
+                    w.outputScale();
+                },
+                2 => { // preferred_buffer_scale
+                    w.preferred = true;
+                    if (w.viewport == 0) w.scale = @floatFromInt(@max(a.int(), 1));
+                },
+                else => {},
+            },
+            .output => if (m.opcode == 3) { // scale
+                const id = m.id;
+                const factor = a.int();
+                for (w.outputs[0..w.nout]) |*o| o.scale = if (o.id == id) @max(factor, 1) else o.scale;
+                w.outputScale();
+            },
+            // preferred_scale: the scale times 120.
+            .fractional_scale => if (m.opcode == 0) {
+                w.scale = @as(f32, @floatFromInt(@max(a.uint(), 1))) / 120;
+            },
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
             },
             else => {},
         }
+    }
+
+    /// Without fractional scaling or wl_surface v6: the largest scale of the outputs the
+    /// window is on, as before preferred_buffer_scale existed.
+    fn outputScale(w: *Wayland) void {
+        if (w.viewport != 0 or w.preferred) return;
+        var scale: i32 = 1;
+        for (w.outputs[0..w.nout]) |o| scale = if (o.on) @max(scale, o.scale) else scale;
+        w.scale = @floatFromInt(scale);
     }
 
     /// After the start-up sync: every global is known, so create the window.
@@ -354,6 +430,12 @@ pub const Wayland = struct {
         w.request(w.xdg_surface, op.xdg_surface_get_toplevel, .{w.toplevel});
         w.request(w.toplevel, op.toplevel_set_title, .{w.options.title});
         w.request(w.toplevel, op.toplevel_set_app_id, .{w.options.app_id});
+        if (w.globals.get(.wp_viewporter) != 0 and w.globals.get(.wp_fractional_scale_manager_v1) != 0) {
+            w.viewport = w.new(.viewport);
+            w.request(w.globals.get(.wp_viewporter), op.viewporter_get_viewport, .{ w.viewport, w.surface });
+            const frac = w.new(.fractional_scale);
+            w.request(w.globals.get(.wp_fractional_scale_manager_v1), op.fractional_get_fractional_scale, .{ frac, w.surface });
+        }
         w.request(w.surface, op.surface_commit, .{});
     }
 
