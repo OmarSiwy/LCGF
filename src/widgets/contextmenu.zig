@@ -106,10 +106,12 @@ fn named(comptime n: Spec, comptime want: []const u8) bool {
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The list, its top-left corner at `at`.
+/// The list, its top-left corner at `at`: menu.zig's list (panel fill, control outline, half a
+/// gap of padding), placed at a point instead of below a button.
 pub fn listStyle(th: *const Theme, at: [2]f32) Style {
-    _ = th;
-    return .{ .float = true, .offset = at };
+    var s = menu.listStyle(th, .{});
+    s.offset = at;
+    return s;
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -221,6 +223,27 @@ test "ContextMenu: the page agrees in both front ends, closed, open and with the
     try testing.expectEqual([2]f32{ 120, 90 }, [2]f32{ list.x0, list.y0 });
     t = try setState(h, .{ .menu = .{ .open = true, .sub = true }, .at = .{ 120, 90 } });
     try testing.expectEqual(@as(u32, 6 + 2 + 8 + 1 + 4), t.len);
+}
+
+test "listStyle: menu.zig's list at a point" {
+    const th: Theme = .default;
+    const s = listStyle(&th, .{ 5, 7 });
+    var want = menu.listStyle(&th, .{});
+    want.offset = .{ 5, 7 };
+    try testing.expectEqual(want, s);
+    try testing.expectEqual(th.panel, s.fill);
+}
+
+const light: Theme = .{ .panel = .rgb(240, 240, 240), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "ContextMenu: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    const t = try setState(&S.h, .{ .menu = .{ .open = true, .active = 1 }, .at = .{ 50, 60 } });
+    try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("ctx_panel"))].fill);
+    try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("ctx_copy"))].fill);
 }
 
 test "checkContext: the state field and the items" {
