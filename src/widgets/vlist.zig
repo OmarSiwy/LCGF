@@ -73,6 +73,50 @@ pub fn window(th: *const Theme, count: u32, visible: u32, scroll: f32) Window {
     return .{ .first = first, .len = @min(capacity(visible), count - first) };
 }
 
+// ---- look ------------------------------------------------------------------------------------
+
+/// The list box's look (`list.listStyle`), `visible` rows tall, clipped, scrolled by the part
+/// of `scroll` that the first built row does not take up.
+pub fn vlistStyle(th: *const Theme, visible: u32, scroll: f32) Style {
+    const h = list_zig.rowHeight(th);
+    var s = list_zig.listStyle(th);
+    s.size[1] = .px(@as(f32, @floatFromInt(visible)) * h + 2 * list_zig.inset(th));
+    s.clip = true;
+    s.scroll = .{ 0, @max(scroll, 0) - @floor(@max(scroll, 0) / h) * h };
+    return s;
+}
+
+/// The option row at height `y`, for a list whose last rect starts at `top` scrolled by
+/// `scroll`; clamped into the `count` rows.
+pub fn rowAt(th: *const Theme, top: f32, y: f32, scroll: f32, count: u32) u32 {
+    return list_zig.rowAt(th, top - scroll, y, count);
+}
+
+// ---- runtime front end ----------------------------------------------------------------------
+
+/// A virtual list of `options` showing `visible` rows: as `list.list`, plus the wheel scrolls
+/// it, and only the rows on screen are built.
+pub fn vlist(f: *Frame, th: *const Theme, id: Id, options: []const []const u8, visible: u32, selected: *u32, scroll: *f32) Response {
+    const n: u32 = @intCast(options.len);
+    const top = f.lastRect(id).y0;
+    // The input moves the scroll the style shows, so the response is read before the list is
+    // opened; `interact` then marks it and reports the same response.
+    var s = vlistStyle(th, visible, scroll.*);
+    s.border_color = list_zig.listBorder(th, f.ctx.inter.response(id).focused);
+    const box = f.open(id, s);
+    const r = f.interact(box, .button);
+    const under = rowAt(th, top, f.in.pointer[1], scroll.*, n);
+    const win = window(th, n, visible, scroll.*);
+    for (win.first..win.first + win.len) |k| {
+        const row = f.open(.none, list_zig.optionStyle(th));
+        f.setFill(row, list_zig.optionFill(th, r.hovered and under == k, selected.* == k));
+        _ = base.label(f, th, options[k]);
+        f.close();
+    }
+    f.close();
+    return r;
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
@@ -98,11 +142,148 @@ pub const ct = struct {
     }
 };
 
+/// The comptime front end for a page of virtual lists: rows, columns and labels as in
+/// `base.ComptimeUi`, every node with an id a list made by `ct.vlist`.
+pub fn ComptimeVList(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
+    const E = events.Events(spec);
+    const S = signals.Signals(State, spec);
+    inline for (E.widget_nodes) |row| {
+        const v = ct.fields(list_zig.nodeAt(spec, row));
+        validate(State, v.items, v.selected, v.scroll, v.visible);
+    }
+    const Tables = list_zig.CtFrame(flatten.count(spec) + 1, @max(list_zig.labelCount(spec), 1));
+    return struct {
+        const Self = @This();
+        pub const Events = E;
+        pub const Signals = S;
+
+        page: Tables = .{},
+        signals: S.Runtime = .{},
+        pointer: list_zig.CtPointer(E) = .{},
+        font: Mono = .{},
+
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
+
+        pub fn frame(ui: *Self, in: *const Input) Output {
+            const event = ui.pointer.step(in);
+
+            const tb = ui.page.begin(in);
+            var next: u32 = 0;
+            ui.push(spec, 0, &next, in);
+            const t = ui.page.end(in);
+            ui.pointer.store(t);
+            return .{ .draw = &tb.d, .tree = t, .event = event };
+        }
+
+        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const tb = &ui.page.tables;
+            const state = &ui.signals.state;
+            const row = next.*;
+            next.* += 1;
+            if (n.kind == .label) {
+                list_zig.pushLabel(tb, parent, &n.style, @field(state, n.bind.?), &th);
+                return;
+            }
+            if (n.id == null) {
+                const i = tb.t.push(parent, .none, &n.style);
+                inline for (n.children) |c| ui.push(c, i, next, in);
+                tb.t.seal(i);
+                return;
+            }
+            // A virtual list (`ct.vlist`): its template rows are filled from the window.
+            next.* += 2 * n.children.len;
+            const v = comptime ct.fields(n);
+            const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
+            const r = ui.pointer.response(w, in);
+            const options: []const []const u8 = @field(state, v.items);
+            const count: u32 = @intCast(options.len);
+            const sel: u32 = @field(state, v.selected);
+            const scroll: f32 = @field(state, v.scroll);
+            const top = ui.pointer.rectOf(w).y0;
+            var s = vlistStyle(&th, v.visible, scroll);
+            s.border_color = list_zig.listBorder(&th, r.focused);
+            const box = tb.t.push(parent, .hash(n.id.?), &s);
+            const under = rowAt(&th, top, in.pointer[1], scroll, count);
+            const win = window(&th, count, v.visible, scroll);
+            const template = n.children[0];
+            for (win.first..win.first + win.len) |k| {
+                var o = template.style;
+                o.fill = list_zig.optionFill(&th, r.hovered and under == k, sel == k);
+                const i = tb.t.push(box, .none, &o);
+                list_zig.pushLabel(tb, i, &template.children[0].style, options[k], &th);
+                tb.t.seal(i);
+            }
+            tb.t.seal(box);
+        }
+
+        fn field(comptime name: []const u8) S.Field {
+            return comptime std.meta.stringToEnum(S.Field, name).?;
+        }
+    };
+}
+
+// ---- example page -----------------------------------------------------------------------------
+
+/// Two hundred options, "Item 0" to "Item 199".
+const items_200: [200][]const u8 = blk: {
+    @setEvalBranchQuota(200_000);
+    var out: [200][]const u8 = undefined;
+    for (&out, 0..) |*s, k| s.* = std.fmt.comptimePrint("Item {d}", .{k});
+    break :blk out;
+};
+
+/// The example page: a caption and a virtual list of 200 options, five rows tall, on a panel,
+/// in both front ends, in theme `th`. Its tests and golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
+    return struct {
+        const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
+        pub const visible = 5;
+
+        /// Runtime front end: the application owns the options, selection and scroll offset.
+        pub const App = struct {
+            options: []const []const u8 = &items_200,
+            selected: u32 = none,
+            scroll: f32 = 0,
+            clicked: bool = false,
+
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = base.label(f, &th, "Items");
+                app.clicked = vlist(f, &th, .from("items"), app.options, visible, &app.selected, &app.scroll).clicked;
+                f.close();
+            }
+        };
+
+        /// Comptime front end: the same page as a spec over a state struct.
+        pub const State = struct {
+            title: []const u8 = "Items",
+            options: []const []const u8 = &items_200,
+            selected: u32 = none,
+            scroll: f32 = 0,
+        };
+        pub const spec = spec_zig.col(panel, .{
+            base.ct.label(th, .title),
+            ct.vlist(th, .items, .options, .selected, .scroll, visible),
+        });
+        pub const Ui = ComptimeVList(State, spec, th);
+        pub const limits: context.Limits = .{ .nodes = 32, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };
+        pub const Run = base.Harness(App, Ui, limits);
+    };
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
 const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
+
+var harness: Example(theme).Run = .{};
+
+/// The option rows built under the list: the list's subtree minus the list itself, halved (a
+/// row and its label).
+fn builtRows(t: *const Tree, box: u32) u32 {
+    return (t.c.end[box] - box - 1) / 2;
+}
 
 test "check: what a comptime virtual list's state must have" {
     const Good = struct { o: []const []const u8 = &.{}, sel: u32 = none, sc: f32 = 0 };
@@ -136,6 +317,41 @@ test "window: the rows on screen by index arithmetic" {
     try testing.expectEqual(Window{ .first = 0, .len = 3 }, window(&theme, 3, 5, 0));
     try testing.expectEqual(Window{ .first = 0, .len = 0 }, window(&theme, 0, 5, 0));
     try testing.expectEqual(Window{ .first = 0, .len = 6 }, window(&theme, 200, 5, -10));
+}
+
+test "vlist: builds only the rows on screen, for 10 options or 10,000 (E1)" {
+    var buffer: [context.Context.requiredBytes(Example(theme).limits)]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var ctx = try context.Context.init(&buffer, Example(theme).limits);
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    const many: [10_000][]const u8 = @splat("Item");
+    var lens: [2]u32 = undefined;
+    for (&lens, [2][]const []const u8{ many[0..10], &many }) |*len, options| {
+        var sel: u32 = none;
+        var scroll: f32 = 3 * list_zig.rowHeight(&theme) + 4;
+        var f = ctx.begin(&in);
+        _ = vlist(&f, &theme, .from("v"), options, 5, &sel, &scroll);
+        const out = f.end(.{});
+        len.* = out.tree.len;
+        try testing.expect(out.status.ok());
+    }
+    // Root, list, 6 x (row + label): the same tree for both.
+    try testing.expectEqual(@as(u32, 14), lens[1]);
+    try testing.expectEqual(lens[0], lens[1]);
+}
+
+test "vlist: both front ends agree when scrolled part way" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.scroll = 37;
+    h.ui.signals.state.scroll = 37;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box = t.find(.from("items"));
+    // The first built row is option 1, pulled up by the 7 px the scroll takes past it.
+    try testing.expectEqual(@as(u32, 6), builtRows(t, box));
+    try testing.expectApproxEqAbs(t.rect(box).y0 + list_zig.inset(&theme) - 7, t.rect(box + 1).y0, 0.5);
 }
 
 test {
