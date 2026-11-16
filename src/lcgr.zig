@@ -80,6 +80,12 @@ pub const image_jobs = @import("assets/image_jobs.zig");
 pub const image_atlas = @import("assets/image_atlas.zig");
 pub const image_mipmaps = @import("assets/image_mipmaps.zig");
 pub const image_tests = @import("assets/image_tests.zig");
+pub const render_wgpu = @import("render/wgpu/wgpu.zig");
+pub const text_buffer = @import("text/edit/buffer.zig");
+pub const text_moves = @import("text/edit/moves.zig");
+pub const text_edit = @import("text/edit/edit.zig");
+pub const text_history = @import("text/edit/history.zig");
+pub const text_edit_tests = @import("text/edit/tests.zig");
 
 test {
     std.testing.refAllDecls(@This());

@@ -1,6 +1,6 @@
 {
  "meta": {
-  "commits": 849,
+  "commits": 850,
   "lanes": 142,
   "waves": 82,
   "critical_path_commits": 82,
@@ -1378,7 +1378,8 @@
     "C0330",
     "C0331",
     "C0332",
-    "C0333"
+    "C0333",
+    "C0850"
    ]
   },
   "font-fallback": {
@@ -10457,6 +10458,30 @@
    "unblocks": 4
   },
   {
+   "id": "C0850",
+   "title": "text: reorder each line's glyphs by bidi level for display",
+   "lane": "text-layout",
+   "phase": "P07",
+   "wave": 61,
+   "critical": false,
+   "deps": [
+    "C0333",
+    "C0347"
+   ],
+   "look_at": [
+    {
+     "ref": "ui.zig",
+     "detail": "layout.textAvail, fonts.Mono.wrap"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "H1"
+   ],
+   "done_when": "right-to-left and mixed lines draw in BidiCharacterTest visual order; text-edit's screen-order caret sits on the glyph it moved to",
+   "unblocks": 1
+  },
+  {
    "id": "C0334",
    "title": "fallback: add fallback chain per script",
    "lane": "font-fallback",
@@ -10845,7 +10870,7 @@
     "H1"
    ],
    "done_when": "editing tests pass with replayed input",
-   "unblocks": 8
+   "unblocks": 9
   },
   {
    "id": "C0348",
@@ -24006,7 +24031,6 @@
     "C0311",
     "C0317",
     "C0326",
-    "C0333",
     "C0338",
     "C0347",
     "C0352",
@@ -24094,7 +24118,8 @@
     "C0838",
     "C0845",
     "C0847",
-    "C0849"
+    "C0849",
+    "C0850"
    ],
    "look_at": [
     {

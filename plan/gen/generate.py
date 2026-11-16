@@ -518,15 +518,18 @@ lane("P07", "text-layout", ["shaping", "unicode"], U("layout.textAvail, fonts.Mo
     ("text: add position-to-index and index-to-position queries", {}),
     ("text: plug the full stack into the measure / wrap protocol", dict(ref=U("Frame.end: where a shaper slots in"))),
     ("text: add text layout tests", dict(key="text-layout-done")),
+    # Found by lane text-edit (C0346): caret moves are in screen order, glyphs were still in
+    # text order, so right-to-left carets missed their glyphs.
+    ("text: reorder each line's glyphs by bidi level for display", dict(needs=["text-edit"], done="right-to-left and mixed lines draw in BidiCharacterTest visual order; text-edit's screen-order caret sits on the glyph it moved to")),
 ])
-lane("P07", "font-fallback", ["text-layout"], R("SLINT", "platform text integration") + "; " + R("GPUI", "OS text systems"), "H1", "mixed-script sample renders", [
+lane("P07", "font-fallback", ["text-layout-done"], R("SLINT", "platform text integration") + "; " + R("GPUI", "OS text systems"), "H1", "mixed-script sample renders", [
     ("fallback: add fallback chain per script", {}),
     ("fallback: discover system fonts on Windows (DirectWrite)", dict(spec=S("WIN32", "DirectWrite font enumeration"))),
     ("fallback: discover system fonts on macOS (Core Text)", dict(spec=S("APPKIT", "Core Text font descriptors"))),
     ("fallback: discover system fonts on Linux (fontconfig)", {}),
     ("fallback: add fallback tests", {}),
 ])
-lane("P07", "text-edit", ["text-layout", "keyboard"], R("ICED_REL", "input method support") + "; " + R("DVUI", "text entry"), "H1", "editing tests pass with replayed input", [
+lane("P07", "text-edit", ["text-layout-done", "keyboard"], R("ICED_REL", "input method support") + "; " + R("DVUI", "text entry"), "H1", "editing tests pass with replayed input", [
     ("edit: add text buffer with a gap", {}),
     ("edit: move the caret by grapheme, word and line", dict(spec=S("UAX29"))),
     ("edit: add selection with keyboard and pointer", {}),

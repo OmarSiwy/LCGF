@@ -1,0 +1,43 @@
+# An editing session for src/text/edit/tests.zig, laid out 80 px wide with 10 px glyphs:
+# typing, a click, a double click, copy and paste through the host, and undo.
+
+# Two lines, with a typo.
+frame
+text Hello wrld
+press 40
+text second line
+
+# Click after the "w" (line 1, "wrld" from x 0) and type the missing "o".
+frame
+pointer 11 15
+buttons left
+frame
+buttons
+text o
+
+# Double-click "second" on line 2 and copy it.
+frame
+pointer 25 25
+buttons left
+frame
+buttons
+frame
+buttons left
+frame
+buttons
+frame
+press 6 ctrl
+
+# To the end, a space, then paste: the host types the clipboard in the next frame.
+frame
+press 77 ctrl
+text  
+press 25 ctrl
+frame
+text second
+
+# Up from the end of the last line lands on line 2 at the same x; Ctrl+Z undoes the paste.
+frame
+press 82
+frame
+press 29 ctrl
