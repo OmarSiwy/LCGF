@@ -12,6 +12,58 @@
             // Only `zig build harfbuzz` needs it.
             .lazy = true,
         },
+        // wgpu-native, one release archive per major and host target; fetched only for the
+        // version `-Dwgpu-native` picks (src/render/wgpu/, ci/run.sh wgpu).
+        .wgpu_native_v29_linux_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-linux-x86_64-release.zip",
+            .hash = "N-V-__8AAAVLrgM9jWFLs7n4rHyodpjIYxtBBE1No8nK0pRz",
+            .lazy = true,
+        },
+        .wgpu_native_v29_linux_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-linux-aarch64-release.zip",
+            .hash = "N-V-__8AACvXrAO11f5LA-Qfgm2C0XyWNhS_0N30HTL-Y5pQ",
+            .lazy = true,
+        },
+        .wgpu_native_v29_macos_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-macos-x86_64-release.zip",
+            .hash = "N-V-__8AAFWheQIu8DV1xiTixrDsCJ0xr7-Ssy-XhEIkgx5u",
+            .lazy = true,
+        },
+        .wgpu_native_v29_macos_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-macos-aarch64-release.zip",
+            .hash = "N-V-__8AAAUNfQJBPHGd3KMhFvl4WLpzHDx9rFkwSf2rFVhr",
+            .lazy = true,
+        },
+        .wgpu_native_v29_windows_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-windows-x86_64-gnu-release.zip",
+            .hash = "N-V-__8AAIV6GgPzrhI9UgYVJuTvVgZIm4n3bPc6dMAOpPYl",
+            .lazy = true,
+        },
+        .wgpu_native_v27_linux_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-linux-x86_64-release.zip",
+            .hash = "N-V-__8AAFaxzwMLGqi40Z0MHLd-0zSAmSfFRKyYqbVthzGv",
+            .lazy = true,
+        },
+        .wgpu_native_v27_linux_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-linux-aarch64-release.zip",
+            .hash = "N-V-__8AAHCUzgO0Olq9GH85aAwI3wBk9tKWwm5kS7pMj0bj",
+            .lazy = true,
+        },
+        .wgpu_native_v27_macos_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-macos-x86_64-release.zip",
+            .hash = "N-V-__8AAHKAeAKl8zoz6qBN8wqdJV_iyjSjoa7WnF-LBG-1",
+            .lazy = true,
+        },
+        .wgpu_native_v27_macos_aarch64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-macos-aarch64-release.zip",
+            .hash = "N-V-__8AAFrwdALczQGx7UyaZHPULiPwNNY3jid-iCfW3pWn",
+            .lazy = true,
+        },
+        .wgpu_native_v27_windows_x86_64 = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.4.1/wgpu-windows-x86_64-gnu-release.zip",
+            .hash = "N-V-__8AAAbdBgPG_GCWLhyX5luKipfZab5bSXgeOCm3czTm",
+            .lazy = true,
+        },
     },
     .fingerprint = 0x8e920fae7b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",

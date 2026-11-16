@@ -203,13 +203,13 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/widgetgolden/ref/progress-<name>.png), as tools/widgetgolden/dump.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/progress.replay");
     pub const golden_frames = .{
-        .{ "progress-rest", 0 },
-        .{ "progress-pressed", 2 },
+        .{ "rest", 0 },
+        .{ "pressed", 2 },
     };
 };
 

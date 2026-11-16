@@ -402,15 +402,15 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/widgetgolden/ref/tree-<name>.png), as tools/widgetgolden/dump.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/tree.replay");
     pub const golden_frames = .{
-        .{ "tree-rest", 0 },
-        .{ "tree-expanded", 3 },
-        .{ "tree-keys", 9 },
-        .{ "tree-collapsed", 13 },
+        .{ "rest", 0 },
+        .{ "expanded", 3 },
+        .{ "keys", 9 },
+        .{ "collapsed", 13 },
     };
 };
 

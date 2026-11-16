@@ -76,6 +76,8 @@ pub const widgets_tree = @import("widgets/tree.zig");
 pub const widgets_progress = @import("widgets/progress.zig");
 pub const widgets_spinner = @import("widgets/spinner.zig");
 pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
+pub const widgets_card = @import("widgets/card.zig");
+pub const widgets_separator = @import("widgets/separator.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
@@ -84,6 +86,7 @@ pub const image_jobs = @import("assets/image_jobs.zig");
 pub const image_atlas = @import("assets/image_atlas.zig");
 pub const image_mipmaps = @import("assets/image_mipmaps.zig");
 pub const image_tests = @import("assets/image_tests.zig");
+pub const render_wgpu = @import("render/wgpu/wgpu.zig");
 
 test {
     std.testing.refAllDecls(@This());

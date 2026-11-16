@@ -237,13 +237,13 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/widgetgolden/ref/spinner-<name>.png), as tools/widgetgolden/dump.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/spinner.replay");
     pub const golden_frames = .{
-        .{ "spinner-start", 0 },
-        .{ "spinner-turned", 3 },
+        .{ "start", 0 },
+        .{ "turned", 3 },
     };
 };
 

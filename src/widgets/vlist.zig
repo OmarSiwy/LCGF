@@ -336,15 +336,15 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/widgetgolden/ref/vlist-<name>.png), as tools/widgetgolden/dump.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/vlist.replay");
     pub const golden_frames = .{
-        .{ "vlist-rest", 0 },
-        .{ "vlist-scrolled", 3 },
-        .{ "vlist-selected", 5 },
-        .{ "vlist-end", 6 },
+        .{ "rest", 0 },
+        .{ "scrolled", 3 },
+        .{ "selected", 5 },
+        .{ "end", 6 },
     };
 };
 

@@ -11,3 +11,4 @@ prototype/frame.png
 # intermediate output of plan/gen/generate.py
 plan/gen/generated.json
 .worktrees/
+zig-pkg/

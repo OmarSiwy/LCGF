@@ -586,15 +586,15 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/widgetgolden/ref/table-<name>.png), as tools/widgetgolden/dump.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/table.replay");
     pub const golden_frames = .{
-        .{ "table-rest", 0 },
-        .{ "table-sorted", 5 },
-        .{ "table-cell", 9 },
-        .{ "table-resized", 11 },
+        .{ "rest", 0 },
+        .{ "sorted", 5 },
+        .{ "cell", 9 },
+        .{ "resized", 11 },
     };
 };
 
