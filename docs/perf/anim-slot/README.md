@@ -24,3 +24,18 @@ taskset -c 4 zig-out/springs
 
 For "before", extract the old tree (`git archive 3001d5a src | tar -x -C OLD`) and pass
 `-Mlcgr=OLD/src/lcgr.zig` instead; nothing else changes.
+
+## Tweens
+
+`transitions.zig` is the same harness for `Tweens.slot`: 250 colour swatches, each a
+`Frame.transition` (four tweens: 1,000 `Tweens.slot` calls per frame), target colours flipping
+every 30 frames, 3,000 frames. The sink (a sum of every colour shown) is the same before and
+after, so the results are unchanged.
+
+| Build | Median build, three alternated runs | p99 |
+|---|---|---|
+| before (26b0826: `Tweens.slot` scans every id) | 152.7, 152.0, 152.7 us | 157.1 to 233.3 us |
+| after (the commit that adds this section: tries the row after the last one first) | 13.7, 12.3, 12.4 us | 15.3 to 20.6 us |
+
+Build it as above with `-Mmain=docs/perf/anim-slot/transitions.zig`; for "before", extract
+26b0826's `src` the same way.
