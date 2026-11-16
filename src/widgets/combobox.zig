@@ -430,15 +430,15 @@ pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     f.close();
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
+/// The example's options.
+pub const fruits: menu.Def = .{ .items = &.{ "apple", "apricot", "banana", "cherry" } };
+pub const fruit_texts = [_][]const u8{ "Apple", "Apricot", "Banana", "Cherry" };
 
-const fruits: menu.Def = .{ .items = &.{ "apple", "apricot", "banana", "cherry" } };
-const fruit_texts = [_][]const u8{ "Apple", "Apricot", "Banana", "Cherry" };
-
-/// The test page: a toolbar with a caption and the combo box, and the combo box's list.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with a caption and the combo box, and the combo box's list, in
+/// both front ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
         const page_style: Style = .{ .size = .{ .fill, .fill } };
@@ -476,6 +476,30 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/combobox.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "combobox-open", 2 },
+    .{ "combobox-filtered", 3 },
+    .{ "combobox-keyed", 5 },
+    .{ "combobox-chosen", 6 },
+    .{ "combobox-hover", 9 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -544,6 +568,57 @@ test "Combobox: another theme restyles both front ends alike" {
     try testing.expectEqual(light.accent.bitsOf(), t.c.look[t.find(.from("fruit"))].border_color);
     // The list is at least as wide as the box.
     try testing.expect(t.rect(t.find(.from("fruit_panel"))).w() >= t.rect(t.find(.from("fruit"))).w());
+}
+
+test "Combobox: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var st: [14]ComboState = undefined;
+    var shown: [14]u32 = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.fruit, h.ui.signals.state.fruit);
+        try testing.expectEqualStrings(h.app.fruit.text(), h.ui.signals.state.fruit_text);
+        st[k] = h.app.fruit;
+        shown[k] = t.len;
+        if (k == 2) {
+            // The rects the replay's comments give.
+            const want = [_]struct { []const u8, Rect }{
+                .{ "fruit", .{ .x0 = 58, .y0 = 8, .x1 = 218, .y1 = 42 } },
+                .{ "fruit_panel", .{ .x0 = 58, .y0 = 48, .x1 = 218, .y1 = 172 } },
+                .{ "fruit_apricot", .{ .x0 = 61, .y0 = 81, .x1 = 215, .y1 = 110 } },
+            };
+            for (want) |w| try testing.expectEqual(w[1], t.rect(t.find(.hash(w[0]))));
+        }
+    }
+    try testing.expectEqual(@as(u32, 14), h.frames);
+    const focused = [_]bool{ false, true, true, true, true, true, true, true, true, true, true, true, false, false };
+    const open = [_]bool{ false, false, true, true, true, true, false, false, true, true, true, false, false, false };
+    const texts = [_][]const u8{ "", "", "", "ap", "ap", "ap", "Apricot", "", "b", "b", "b", "Banana", "Banana", "Banana" };
+    const active = [_]u8{ no_item, no_item, no_item, no_item, 0, 1, no_item, no_item, no_item, 2, 2, no_item, no_item, no_item };
+    for (st, focused, open, texts, active) |s, f, o, x, a| {
+        try testing.expectEqual(f, s.focused);
+        try testing.expectEqual(o, s.open);
+        try testing.expectEqualStrings(x, s.text());
+        try testing.expectEqual(a, s.active);
+    }
+    // Rows: the page's 6, then the scrim and list and two rows per shown option.
+    const rows = [_]u32{ 6, 6, 6 + 2 + 8, 6 + 2 + 4, 6 + 2 + 4, 6 + 2 + 4, 6, 6, 6 + 2 + 2, 6 + 2 + 2, 6 + 2 + 2, 6, 6, 6 };
+    try testing.expectEqualSlices(u32, &rows, &shown);
+    try testing.expectEqual(@as(u8, 1), st[6].selected);
+    try testing.expectEqual(@as(u8, 2), st[11].selected);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 14);
 }
 
 test "filter, nextShown: options starting with the text; moves among them, wrapping" {
