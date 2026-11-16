@@ -180,6 +180,25 @@ inline fn sat(x: F) F {
     return @min(@max(x, simd.f(0)), simd.f(1));
 }
 
+inline fn len2(x: F, y: F) F {
+    return @sqrt(x * x + y * y);
+}
+
+/// The shader's `corner_radius`: the radius of p's quadrant, capped by the half size.
+inline fn cornerRadius(px: F, py: F, hx: f32, hy: f32, radii: [4]f32) F {
+    const down = py > simd.f(0);
+    const right = @select(f32, down, simd.f(radii[2]), simd.f(radii[1]));
+    const left = @select(f32, down, simd.f(radii[3]), simd.f(radii[0]));
+    return @min(@select(f32, px > simd.f(0), right, left), simd.f(@min(hx, hy)));
+}
+
+/// The shader's `rounded_box`: signed distance to a box of half size (hx, hy) with radius r.
+inline fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F {
+    const qx = @abs(px) - simd.f(hx) + r;
+    const qy = @abs(py) - simd.f(hy) + r;
+    return len2(@max(qx, simd.f(0)), @max(qy, simd.f(0))) + @min(@max(qx, qy), simd.f(0)) - r;
+}
+
 inline fn unpack(p: U, red: u5) [4]F {
     const m = simd.u(255);
     const k = simd.f(1.0 / 255.0);
@@ -200,6 +219,10 @@ inline fn pack(c: [4]F, red: u5) U {
 /// Shades `q` into `t`: quad.wgsl `vs` and `fs` per pixel.
 pub fn shade(t: Target, q: *const Quad, scale: f32) void {
     const x0, const y0, const x1, const y1 = q.rect;
+    const hx = (x1 - x0) * 0.5;
+    const hy = (y1 - y0) * 0.5;
+    const cx = (x0 + x1) * 0.5;
+    const cy = (y0 + y1) * 0.5;
     const box = clampBox(toPixels(.{ x0 * scale, y0 * scale, x1 * scale + 1, y1 * scale + 1 }), t.scissor);
 
     const fill = rgba(q.fill);
@@ -216,10 +239,17 @@ pub fn shade(t: Target, q: *const Quad, scale: f32) void {
             const qx = sx;
             const qy = sy;
             const geo = (qx >= simd.f(x0)) & (qx < simd.f(x1)) & (qy >= simd.f(y0)) & (qy < simd.f(y1));
+            const lx = qx - simd.f(cx);
+            const ly = qy - simd.f(cy);
+
+            const r = cornerRadius(lx, ly, hx, hy, q.radii);
+            const dist = roundedBox(lx, ly, hx, hy, r) * simd.f(scale);
+            const shape = sat(simd.f(0.5) - dist);
 
             const color: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
+            const cover = shape;
 
-            const alpha = @select(f32, geo, simd.f(q.opacity), simd.f(0));
+            const alpha = @select(f32, geo, cover * simd.f(q.opacity), simd.f(0));
 
             // Premultiplied source over the framebuffer.
             const old: U = row[x..][0..W].*;
