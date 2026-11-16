@@ -81,9 +81,14 @@ pub fn Select(comptime th: Theme, comptime name: @EnumLiteral(), comptime field:
             return checkSelect(State, def, field_name, @tagName(text));
         }
 
+        /// The button's, the scrim's and the options' responses and the keys, through
+        /// `advance`; then the button's text follows the value.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            var hits: menu.Hits = .{ .toggle = v.responseOf(id).clicked, .outside = v.responseOf(partName(id, "scrim")).pressed };
+            inline for (def.items, 0..) |o, k| hits.add(k, v.responseOf(partName(id, o)));
+            const ss = advance(def, @field(sig.state, field_name), hits, v.in.events);
+            sig.set(field, ss);
+            inline for (def.items, 0..) |o, k| if (ss.selected == k) sig.set(text, @field(sig.state, o));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -139,14 +144,33 @@ pub fn optionFills(th: *const Theme) base.StateColors {
     return .{ .transparent, th.control, th.control_hot, th.control_hot };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// One frame of a select (APG select-only combobox): the list works as `menu.advance` works a
+/// menu (the button's click toggles it, a press outside closes it, the pointer and Up, Down,
+/// Home and End move the highlight, Enter, Space or a click choose and close, Escape closes),
+/// but it opens with the chosen option highlighted, and a choice becomes the value.
+pub fn advance(comptime def: menu.Def, st: SelectState, hits: menu.Hits, evs: []const Input.Event) SelectState {
+    var s = st;
+    s.menu = menu.advance(def, st.menu, hits, evs);
+    if (s.menu.open and !st.menu.open) s.menu.active = st.selected;
+    if (s.menu.chosen != 0) s.selected = s.menu.chosen - 1;
+    return s;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The button of select `name` (options `def`, labelled `texts`), in the page's flow, showing
 /// the chosen option.
 pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *SelectState, texts: []const []const u8) Response {
     std.debug.assert(texts.len == def.items.len);
+    // Every response is asked for before anything is built, so the rows show the frame's
+    // final state, as in the comptime front end.
     const inter = &f.ctx.inter;
     const r = inter.response(.from(name));
+    var hits: menu.Hits = .{ .toggle = r.clicked, .outside = inter.response(.from(partName(name, "scrim"))).pressed };
+    inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(partName(name, o))));
+    st.* = advance(def, st.*, hits, f.in.events);
     const b = f.open(.from(name), buttonStyle(th, r));
     _ = f.interact(b, .button);
     _ = base.label(f, th, texts[st.selected]);
@@ -158,10 +182,10 @@ pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime d
 /// the page, so it is drawn on top.
 pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8) void {
     if (!st.menu.open) return;
-    _ = f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport));
-    _ = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
+    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
     inline for (def.items, 0..) |o, k| {
-        _ = f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k));
+        _ = f.interact(f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k)), popover.overlay_sense);
         _ = base.label(f, th, texts[k]);
         f.close();
     }
@@ -265,6 +289,90 @@ test "Select: another theme restyles both front ends alike" {
     try testing.expectEqual(light.control_hot.bitsOf(), t.c.look[t.find(.from("shape_circle"))].fill);
     // The list is at least as wide as the button.
     try testing.expect(t.rect(t.find(.from("shape_panel"))).w() >= t.rect(t.find(.from("shape"))).w());
+}
+
+test "advance: opens on the chosen option; a choice becomes the value" {
+    const k = popover.keys;
+    const ev = struct {
+        fn of(comptime codes: []const u8) [codes.len]Input.Event {
+            var out: [codes.len]Input.Event = undefined;
+            for (&out, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+            return out;
+        }
+    }.of;
+    var s = advance(shapes, .{ .selected = 2 }, .{ .toggle = true }, &.{});
+    try testing.expect(s.menu.open);
+    try testing.expectEqual(@as(u8, 2), s.menu.active);
+    s = advance(shapes, s, .{}, &ev(&.{ k.down, k.enter }));
+    try testing.expectEqual(@as(u8, 0), s.selected); // wrapped to Circle, chosen
+    try testing.expect(!s.menu.open);
+    s = advance(shapes, s, .{ .toggle = true }, &.{});
+    s = advance(shapes, s, .{}, &ev(&.{ k.end, k.escape }));
+    try testing.expectEqual(@as(u8, 0), s.selected); // Escape keeps the value
+    s = advance(shapes, s, .{ .toggle = true }, &.{});
+    s = advance(shapes, s, .{ .hovered = 1, .clicked = 1 }, &.{});
+    try testing.expectEqual(@as(u8, 1), s.selected);
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the select's
+/// state and the button's text equal in both after every step; returns the state after each.
+fn runScript(comptime n: usize, script: [n]Step) ![n]SelectState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]SelectState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.shape, h.ui.signals.state.shape);
+        try testing.expectEqualStrings(shape_texts[h.app.shape.selected], h.ui.signals.state.shape_text);
+        o.* = h.app.shape;
+    }
+    return out;
+}
+
+test "Select: open, arrows, Enter, Escape and clicks in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(13, .{
+        .{ .aim = .{ .part = "shape" }, .left = true },
+        .{ .aim = .{ .part = "shape" } }, // open on Circle
+        .{ .aim = .{ .part = "shape" }, .key = k.down }, // Square
+        .{ .aim = .{ .part = "shape" }, .key = k.down }, // Triangle
+        .{ .aim = .{ .part = "shape" }, .key = k.enter }, // chosen
+        .{ .aim = .{ .part = "shape" }, .left = true },
+        .{ .aim = .{ .part = "shape" } }, // open on Triangle
+        .{ .aim = .{ .part = "shape" }, .key = k.home }, // Circle highlighted
+        .{ .aim = .{ .part = "shape" }, .key = k.escape }, // closed, still Triangle
+        .{ .aim = .{ .part = "shape" }, .left = true },
+        .{ .aim = .{ .part = "shape" } }, // open
+        .{ .aim = .{ .part = "shape_square" } }, // the pointer reaches Square
+        .{ .aim = .{ .at = .{ 390, 290 } }, .left = true }, // press outside: closed
+    });
+    try testing.expect(s[1].menu.open and s[1].menu.active == 0);
+    try testing.expectEqual(@as(u8, 2), s[3].menu.active);
+    try testing.expect(!s[4].menu.open and s[4].selected == 2);
+    try testing.expectEqual(@as(u8, 2), s[6].menu.active);
+    try testing.expectEqual(@as(u8, 0), s[7].menu.active);
+    try testing.expect(!s[8].menu.open and s[8].selected == 2);
+    try testing.expectEqual(@as(u8, 1), s[11].menu.active);
+    try testing.expect(!s[12].menu.open and s[12].selected == 2);
 }
 
 test "checkSelect: the state field, the button's text and the options" {
