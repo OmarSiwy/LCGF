@@ -516,14 +516,6 @@ pub fn build(b: *std.Build) void {
     const baremetal_step = b.step("baremetal", "Run the bare-metal example and build it for Cortex-M7 and RV32IMAC");
     const firmware_test = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
-    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
-    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
-    const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/shell/x11/x11.zig"),
-    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgr. user32, gdi32
-    // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
-    const win32_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/shell/win32/win32.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
@@ -578,17 +570,12 @@ pub fn build(b: *std.Build) void {
     shell_wasm.rdynamic = true;
     web_step.dependOn(&b.addInstallArtifact(shell_wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/shell/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+
     // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgr. libobjc,
     // Metal and QuartzCore are the platform's, opened at run time, so nothing is linked and it
     // cross-compiles from Linux (ci/run.sh metal).
     const metal_tests = b.addTest(.{ .name = "metal-test", .root_module = b.createModule(.{
         .root_source_file = b.path("src/render/metal/metal.zig"),
-    // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
-    // lcgr. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
-    // libraries per target; its few calls are declared by hand (c.zig), so no header is
-    // translated.
-    const accesskit_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/a11y/accesskit/bridge.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -608,6 +595,7 @@ pub fn build(b: *std.Build) void {
     b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
     b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
     b.step("metal-play", "Build zig-out/bin/metal-play (draws the render conformance scenes with Metal)").dependOn(&b.addInstallArtifact(metal_play, .{}).step);
+
     // The Direct3D 12 back end (src/render/d3d12/d3d12.zig): a module of its own over lcgr, always
     // built for x86_64-windows (ci/run.sh d3d12 runs it under Wine). Zig's own MinGW-w64 headers
     // are translated for the structs and constants (com.zig checks its hand-written vtable slots
@@ -644,6 +632,18 @@ pub fn build(b: *std.Build) void {
     const d3d12_step = b.step("d3d12", "Build zig-out/bin/d3d12-test.exe (the Direct3D 12 back end's tests) and d3d12-play.exe (draws the render conformance scenes); ci/run.sh d3d12 runs them under Wine");
     d3d12_step.dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
     d3d12_step.dependOn(&b.addInstallArtifact(d3d12_play, .{}).step);
+
+    // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
+    // lcgr. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
+    // libraries per target; its few calls are declared by hand (c.zig), so no header is
+    // translated.
+    const accesskit_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/a11y/accesskit/bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
     const accesskit_step = b.step("accesskit", "Test the AccessKit bridge against AccessKit's C library (ci/run.sh accesskit)");
     const accesskit_build_step = b.step("accesskit-build", "Compile and link the AccessKit bridge tests without running them");
     const accesskit_smoke_step = b.step("accesskit-smoke", "Build zig-out/bin/accesskit-smoke (the example on AT-SPI, Linux)");
@@ -691,6 +691,15 @@ pub fn build(b: *std.Build) void {
         accesskit_step.dependOn(&b.addRunArtifact(accesskit_tests).step);
         accesskit_build_step.dependOn(&accesskit_tests.step);
     }
+
+    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
+    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
+    const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/x11/x11.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
     x11_tests.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
     const x11_run = b.addRunArtifact(x11_tests);
     x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
@@ -698,6 +707,20 @@ pub fn build(b: *std.Build) void {
     // The example application in an X11 window (src/shell/x11/example.zig).
     const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/x11/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
+
+    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgr. user32, gdi32
+    // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
+    const win32_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
     b.step("win32", "Test the Win32 shell on Windows").dependOn(&b.addRunArtifact(win32_tests).step);
     b.step("win32-build", "Compile the Win32 shell's tests without running them (ci/run.sh win32)").dependOn(&win32_tests.step);
     // The shells' example in a Win32 window (src/shell/win32/example.zig).
@@ -707,7 +730,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
-    b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
