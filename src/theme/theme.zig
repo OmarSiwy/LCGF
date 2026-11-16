@@ -13,6 +13,7 @@ const base = @import("../widgets/base.zig");
 const simd = @import("../core/simd.zig");
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const spec_zig = @import("../comptime/spec.zig");
+const quad_shader = @import("../render/shaders/quad.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Mono = @import("../text/protocol.zig").Mono;
@@ -184,6 +185,27 @@ pub fn widgets(tok: *const Tokens) base.Theme {
 pub fn override(th: base.Theme, patch: anytype) base.Theme {
     var out = th;
     inline for (@typeInfo(@TypeOf(patch)).@"struct".field_names) |name| @field(out, name) = @field(patch, name);
+    return out;
+}
+
+// ---- custom material example -------------------------------------------------------------------
+
+/// An example custom material (sheen.wgsl): a themed surface lit from above. Like every user
+/// material it is one WGSL `fn material(in: Frag) -> vec4f`; the renderer's quad shader wraps it
+/// (`quad_shader.shader`), the back end compiles it once (`quad_shader.Materials.add`, which
+/// hands back the `Material`), and a node opts in through `Style.material` and `Style.params`.
+/// The colour still comes from the theme's tokens, so the material follows a theme switch.
+pub const sheen_wgsl = @embedFile("sheen.wgsl");
+
+/// The full quad shader for the sheen material, ready for `Materials.add`.
+pub const sheen_shader = quad_shader.shader(sheen_wgsl);
+
+/// `s` drawn with sheen material `m` (the handle `Materials.add(sheen_shader)` returned),
+/// lifted toward white by `strength`, 0 to 1, at its top edge.
+pub fn sheen(s: Style, m: types.Material, strength: f32) Style {
+    var out = s;
+    out.material = m;
+    out.params = .{ strength, 0, 0, 0 };
     return out;
 }
 
@@ -730,4 +752,37 @@ test "theme switch: an override restyles one widget, in both front ends" {
     try testing.expectEqual(Dark.theme.text.bitsOf(), out.draw.runs[0].color);
     try testing.expectEqual(Color.rgb(1, 2, 3).bitsOf(), out.draw.runs[1].color);
     try testing.expectEqual(Dark.theme, override(Dark.theme, .{}));
+}
+
+test "theme switch: a custom material keeps its handle and params, its colour follows the theme" {
+    // What a back end does once at start-up: register the material, get its handle.
+    var materials: quad_shader.Materials = .{};
+    const m = materials.add(sheen_shader);
+    try testing.expectEqual(@as(u16, 1), @backingInt(m));
+    try testing.expectEqualStrings(sheen_shader, materials.source(m));
+    try testing.expect(std.mem.endsWith(u8, sheen_shader, sheen_wgsl));
+
+    var ctx = try context.Context.init(&inherit_buffer, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 6 });
+    const in: Input = .{ .viewport = .{ 400, 100 } };
+    for ([2]base.Theme{ Dark.theme, Light.theme }) |th| {
+        var f = ctx.begin(&in);
+        _ = f.open(.from("bar"), sheen(.{ .dir = .x, .pad = @splat(th.pad), .fill = th.panel, .radius = th.radius }, m, 0.35));
+        _ = base.button(&f, &th, .from("b"), "Go");
+        f.close();
+        const out = f.end(.{});
+        const d = out.draw;
+        // The bar is its own batch on the sheen pipeline; the button stays on the stock one.
+        var seen = false;
+        for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
+            .quads => |b| if (b.material == m) {
+                try testing.expectEqual(@as(u32, 1), b.count);
+                const q = d.quads[b.first];
+                try testing.expectEqual(th.panel.bitsOf(), q.fill);
+                try testing.expectEqual(@as(f32, 0.35), q.params[0]);
+                seen = true;
+            } else try testing.expectEqual(types.Material.solid, b.material),
+            else => {},
+        };
+        try testing.expect(seen);
+    }
 }
