@@ -1009,3 +1009,73 @@ test "wayland: files dragged over the window, listed while they hover, then drop
     _ = shell.poll(&ev);
     try testing.expect(!ev.files.hover);
 }
+
+test "wayland: server-side decorations when the compositor offers them, else move and resize" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"zxdg_decoration_manager_v1"}));
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    const win = &shell.windows[0];
+    const get = fake.sent(.decoration_manager, 1).?;
+    try testing.expectEqual([2]u32{ win.decoration, win.role }, [2]u32{ get.arg0, get.arg1 });
+    try testing.expectEqual(@as(u32, 2), fake.sent(.decoration, 1).?.arg0); // set_mode: server_side
+    // Asked before the toplevel's first commit, as the protocol wants.
+    var at_mode: usize = 0;
+    var at_commit: usize = 0;
+    for (fake.log[0..fake.logged], 0..) |q, i| {
+        if (q.kind == .decoration and q.opcode == 1) at_mode = i;
+        if (q.kind == .surface and q.opcode == 6 and at_commit == 0) at_commit = i;
+    }
+    try testing.expect(at_mode < at_commit);
+
+    fake.send(win.decoration, 0, .{@as(u32, 2)});
+    fake.configure(&shell, 800, 600);
+    _ = shell.poll(&ev);
+    try testing.expect(win.server_decorations);
+    // The compositor prefers the client to draw them (GNOME): the app's own title bar moves
+    // and resizes the window with the press's serial.
+    fake.send(win.decoration, 0, .{@as(u32, 1)});
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 1)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expect(!win.server_decorations);
+    const press = fake.nextSerial();
+    fake.send(shell.seat.pointer, 3, .{ press, @as(u32, 0), @as(u32, 0x110), @as(u32, 1) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    shell.move(0);
+    shell.resize(0, Wayland.Edge.bottom | Wayland.Edge.right);
+    fake.pump(&shell);
+    try testing.expectEqual(press, fake.sent(.toplevel, 5).?.arg1);
+    const rs = fake.sent(.toplevel, 6).?;
+    try testing.expectEqual(press, rs.arg1);
+
+    // Closing destroys the decoration before its toplevel.
+    const deco = win.decoration;
+    const role = win.role;
+    fake.logged = 0;
+    shell.closeWindow(0);
+    fake.pump(&shell);
+    var first: u32 = 0;
+    for (fake.log[0..fake.logged]) |q| if (first == 0 and (q.id == deco or q.id == role)) {
+        first = q.id;
+    };
+    try testing.expectEqual(deco, first);
+}
+
+test "wayland: without the decoration protocol the client decorates" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &core_globals);
+    _ = shell.poll(&ev);
+    fake.configure(&shell, 800, 600);
+    _ = shell.poll(&ev);
+    try testing.expect(shell.windows[0].configured);
+    try testing.expect(!shell.windows[0].server_decorations);
+    try testing.expectEqual(@as(u32, 0), shell.windows[0].decoration);
+}

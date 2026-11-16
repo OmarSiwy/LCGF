@@ -82,10 +82,12 @@ pub const Kind = enum(u8) {
     data_source,
     text_input_manager,
     text_input,
+    decoration_manager,
+    decoration,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager, zwp_text_input_manager_v3 };
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager, zwp_text_input_manager_v3, zxdg_decoration_manager_v1 };
 const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_compositor = 6,
     .wl_shm = 1,
@@ -96,6 +98,7 @@ const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wp_cursor_shape_manager_v1 = 1,
     .wl_data_device_manager = 3,
     .zwp_text_input_manager_v3 = 1,
+    .zxdg_decoration_manager_v1 = 1,
 });
 const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_compositor = .compositor,
@@ -107,6 +110,7 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wp_cursor_shape_manager_v1 = .cursor_manager,
     .wl_data_device_manager = .data_manager,
     .zwp_text_input_manager_v3 = .text_input_manager,
+    .zxdg_decoration_manager_v1 = .decoration_manager,
 });
 
 /// `wp_cursor_shape_device_v1` shapes (cursor-shape-v1.xml) by `Cursor`: default, pointer,
@@ -152,6 +156,11 @@ const op = struct {
     const toplevel_destroy = 0;
     const toplevel_set_title = 2;
     const toplevel_set_app_id = 3;
+    const toplevel_move = 5;
+    const toplevel_resize = 6;
+    const decoration_manager_get_toplevel_decoration = 1;
+    const decoration_destroy = 0;
+    const decoration_set_mode = 1;
     const popup_destroy = 0;
     const popup_grab = 1;
     const seat_get_pointer = 0;
@@ -199,6 +208,12 @@ pub const Window = struct {
     frame: u32 = 0,
     /// Held input of this window, carried from poll to poll.
     in: Input = .{},
+    /// zxdg_toplevel_decoration_v1, when the compositor has the decoration protocol.
+    decoration: u32 = 0,
+    /// The compositor draws the title bar and borders. False (no decoration protocol, or the
+    /// compositor said client_side, as GNOME does): the application draws its own and calls
+    /// `Wayland.move` and `Wayland.resize` from them.
+    server_decorations: bool = false,
 };
 
 /// How a popup sits next to the rectangle it belongs to (xdg_positioner): below it, growing
@@ -496,6 +511,8 @@ pub const Wayland = struct {
     pub fn closeWindow(w: *Wayland, k: u32) void {
         const win = &w.windows[k];
         if (!win.open) return;
+        // The decoration goes first: destroying its toplevel first is a protocol error.
+        if (win.decoration != 0) w.destroy(win.decoration, op.decoration_destroy);
         w.destroy(win.role, if (win.popup) op.popup_destroy else op.toplevel_destroy);
         w.destroy(win.xdg_surface, op.xdg_surface_destroy);
         if (win.viewport != 0) w.destroy(win.viewport, op.viewport_destroy);
@@ -505,6 +522,32 @@ pub const Wayland = struct {
         w.destroy(win.surface, op.surface_destroy);
         win.shm.unmap();
         win.* = .{};
+        w.flush();
+    }
+
+    /// Starts an interactive move of toplevel `k`, for a title bar the application draws:
+    /// call it on the press that starts the drag.
+    pub fn move(w: *Wayland, k: u32) void {
+        const win = &w.windows[k];
+        if (!win.open or win.popup) return;
+        w.request(win.role, op.toplevel_move, .{ w.globals.get(.wl_seat), w.seat.serial });
+        w.flush();
+    }
+
+    /// Edges of an interactive resize (xdg_toplevel.resize_edge), combined with `|`.
+    pub const Edge = struct {
+        pub const top = 1;
+        pub const bottom = 2;
+        pub const left = 4;
+        pub const right = 8;
+    };
+
+    /// Starts an interactive resize of toplevel `k` from `edges` (`Edge`), for borders the
+    /// application draws: call it on the press that starts the drag.
+    pub fn resize(w: *Wayland, k: u32, edges: u32) void {
+        const win = &w.windows[k];
+        if (!win.open or win.popup) return;
+        w.request(win.role, op.toplevel_resize, .{ w.globals.get(.wl_seat), w.seat.serial, edges });
         w.flush();
     }
 
@@ -696,6 +739,10 @@ pub const Wayland = struct {
                 const win = w.windowBy("fractional", m.id) orelse return;
                 win.scale = @as(f32, @floatFromInt(@max(a.uint(), 1))) / 120;
             },
+            .decoration => if (m.opcode == 0) { // configure: mode
+                const mode = a.uint();
+                if (w.windowBy("decoration", m.id)) |win| win.server_decorations = mode == 2;
+            },
             .data_device => w.data.deviceEvent(w, m.opcode, &a),
             .data_source => w.data.sourceEvent(w, m.opcode, &a),
             .text_input => w.ime.event(w, m.opcode, &a),
@@ -743,6 +790,12 @@ pub const Wayland = struct {
         w.request(win.xdg_surface, op.xdg_surface_get_toplevel, .{win.role});
         w.request(win.role, op.toplevel_set_title, .{options.title});
         w.request(win.role, op.toplevel_set_app_id, .{options.app_id});
+        // Ask the compositor to decorate the window; its configure says whether it will.
+        if (w.globals.get(.zxdg_decoration_manager_v1) != 0) {
+            win.decoration = w.new(.decoration);
+            w.request(w.globals.get(.zxdg_decoration_manager_v1), op.decoration_manager_get_toplevel_decoration, .{ win.decoration, win.role });
+            w.request(win.decoration, op.decoration_set_mode, .{@as(u32, 2)}); // server_side
+        }
         w.request(win.surface, op.surface_commit, .{});
     }
 
