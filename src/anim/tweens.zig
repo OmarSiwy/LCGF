@@ -95,6 +95,12 @@ pub const Tweens = struct {
         c.ease_c[i] = simd.selF(fresh, e[2], c.ease_c[i]);
     }
 
+    /// Ends row `i`'s leg now, at its target (reduced motion: the end state, no movement).
+    pub fn land(t: *Tweens, i: u32) void {
+        t.c.elapsed[i] = t.c.duration[i];
+        t.c.x[i] = t.c.to[i];
+    }
+
     /// SIMD. Advances every tween by `dt` seconds. Returns the longest time any tween still
     /// needs; 0 means all have landed and no further frames are needed. A zero duration lands
     /// on the first step.

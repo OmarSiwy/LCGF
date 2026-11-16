@@ -57,6 +57,12 @@ pub const Anims = struct {
         return i;
     }
 
+    /// Puts row `i` at its target, at rest (reduced motion: the end state, no movement).
+    pub fn land(a: *Anims, i: u32) void {
+        a.c.x[i] = a.c.target[i];
+        a.c.v[i] = 0;
+    }
+
     /// SIMD. Advances every spring by `dt` seconds (semi-implicit Euler, `dt` capped at 1/30 s
     /// so a stalled frame cannot blow up the integration). A spring within 1e-3 of its target
     /// and slower than 1e-2 per second snaps onto it and stops. Returns how much is still

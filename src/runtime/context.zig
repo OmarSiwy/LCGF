@@ -108,6 +108,10 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
+    /// The user asked for reduced motion (the platform's accessibility setting; the host copies
+    /// it here). Springs, tweens, transitions and sequences then show their end state at once,
+    /// and layout changes do not slide, so nothing keeps the host awake.
+    reduced_motion: bool = false,
     /// How much the springs and tweens are still moving; 0 at rest. `begin` sets it from
     /// `Anims.step` and `Tweens.step`.
     motion: f32 = 0,
@@ -680,4 +684,54 @@ test "animateLayout: a node pushed down by a growing sibling slides there, then 
     try testing.expect(frames > 5 and frames < 600);
     try testing.expectEqual(@as(f32, 50), y);
     try testing.expectEqual(types.inf, out.wake);
+}
+
+test "reduced motion: every animation shows its end state in the frame it changes; idle at once" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    ctx.reduced_motion = true;
+    const in: Input = .{ .viewport = .{ 100, 200 } };
+    const Key = @import("../anim/keyframes.zig").Key;
+    const keys = [_]Key{ .{ .at = 0, .value = 0 }, .{ .at = 0.5, .value = 7 } };
+    const Shown = struct { spring: f32, tween: f32, fill: types.Color, seq: f32, y: f32, out: Output };
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input, on: bool) Shown {
+            var f = c.begin(i);
+            var s: Shown = undefined;
+            s.spring = f.animate(types.Id.from("glow"), simd.b2f(on), .{});
+            s.tween = f.tween(types.Id.from("fade"), 10 * simd.b2f(on), 0.3, .in_out);
+            s.fill = f.transition(types.Id.from("fill"), if (on) types.Color.white else types.Color.black, .{});
+            s.seq = f.sequence(types.Id.from("pulse"), &keys);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(if (on) 50 else 10) } });
+            const card = f.leaf(types.Id.from("card"), .{ .size = .{ .fill, .px(20) } });
+            f.animateLayout(card, .{});
+            s.out = f.end(.{});
+            s.y = s.out.tree.rect(card.ix()).y0;
+            return s;
+        }
+    };
+    var s = Ui.frame(&ctx, &in, false);
+    try testing.expectEqual(@as(f32, 7), s.seq); // a sequence shows its last key
+    _ = Ui.frame(&ctx, &in, false);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    s = Ui.frame(&ctx, &in, true);
+    try testing.expectEqual(@as(f32, 1), s.spring);
+    try testing.expectEqual(@as(f32, 10), s.tween);
+    try testing.expectEqual(types.Color.white, s.fill);
+    try testing.expectEqual(@as(f32, 7), s.seq);
+    try testing.expectEqual(@as(f32, 50), s.y);
+    try testing.expectEqual(types.inf, s.out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    // Turned off again: the next change moves as usual.
+    ctx.reduced_motion = false;
+    _ = Ui.frame(&ctx, &in, true);
+    s = Ui.frame(&ctx, &in, false);
+    try testing.expectEqual(@as(f32, 1), s.spring);
+    try testing.expectEqual(@as(f32, 50), s.y);
+    try testing.expectEqual(@as(f32, 0), s.out.wake);
 }
