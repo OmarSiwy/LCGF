@@ -216,6 +216,26 @@ pub fn build(b: *std.Build) void {
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
+    // The i18n tables against CLDR 49 JSON (lazy: fetched only for this step). Test-only, so a
+    // module of its own over lcgr; the tables themselves stay hand-written and tier 0.
+    const i18n_cldr = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/i18n/cldr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    if (b.lazyDependency("cldr_core", .{})) |core| {
+        i18n_cldr.root_module.addAnonymousImport("plurals.json", .{ .root_source_file = core.path("supplemental/plurals.json") });
+        i18n_cldr.root_module.addAnonymousImport("numberingSystems.json", .{ .root_source_file = core.path("supplemental/numberingSystems.json") });
+    }
+    for ([_][]const u8{ "en", "de", "fr", "ru", "pl", "ja", "ar" }) |l| {
+        if (b.lazyDependency("cldr_numbers", .{})) |numbers|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("numbers-{s}.json", .{l}), .{ .root_source_file = numbers.path(b.fmt("main/{s}/numbers.json", .{l})) });
+        if (b.lazyDependency("cldr_dates", .{})) |dates|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("gregorian-{s}.json", .{l}), .{ .root_source_file = dates.path(b.fmt("main/{s}/ca-gregorian.json", .{l})) });
+    }
+    b.step("i18n-cldr", "Check the i18n locale tables against CLDR 49").dependOn(&b.addRunArtifact(i18n_cldr).step);
+
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
     const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
         .root_source_file = b.path("src/draw/paths_golden.zig"),
