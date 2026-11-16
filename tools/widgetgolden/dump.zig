@@ -1,13 +1,12 @@
-//! Golden-image dumper for the widget pages: replays a page's input through both front ends
-//! with the widget harness (which fails if they draw differently), and writes the named frame
-//! as tools/golden/gpu.py draws it, into a directory:
+//! Golden-image dumper for the reference widgets: replays `widgets_base.reference_replay`
+//! through both front ends with the widget harness (which fails if they draw differently), and
+//! writes the named frame as tools/golden/gpu.py draws it, into a directory:
 //!
 //!     zig build widget-dump -- <frame> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
-//! A frame is `<page>-<name>` for a widget page in `pages` (`label-rest`), or a bare name of
-//! the reference page's `widgets_base.golden_frames` (`rest`). ci/jobs/widget-golden.sh renders
-//! each one and compares it with tools/widgetgolden/ref/<frame>.png. A widget lane adds its
-//! page with one line in `pages`.
+//! Frame names are a page's prefix plus one of its `golden_frames` (`rest`, `card-rest`): one
+//! line per page in `pages` below. ci/jobs/widget-golden.sh renders each one and compares it
+//! with tools/widgetgolden/ref/<frame>.png.
 const std = @import("std");
 const lcgr = @import("lcgr");
 const w = lcgr.widgets_base;
@@ -16,27 +15,20 @@ const Replay = lcgr.input.Replay;
 const Input = lcgr.input.Input;
 const gfx = lcgr.quad_shader;
 
-/// The reference page in the shape every widget page has.
-const Reference = struct {
-    pub const Run = w.Reference(.default).Run;
-    pub const replay = w.reference_replay;
-    pub const golden_frames = w.golden_frames;
-};
-
-/// Pages by prefix: `Run` (a harness), `replay` (input.Replay text), `golden_frames`.
+/// Each widget page: frame-name prefix, page type (with `Run`), replay, golden frames.
 const pages = .{
-    .{ "", Reference },
-    .{ "label", lcgr.widgets_label.Page },
-    .{ "button", lcgr.widgets_button.Page },
-    .{ "checkbox", lcgr.widgets_checkbox.Page },
-    .{ "radio", lcgr.widgets_radio.Page },
-    .{ "switch", lcgr.widgets_switch.Page },
-    .{ "toggle", lcgr.widgets_toggle.Page },
-    .{ "slider", lcgr.widgets_slider.Page },
-    .{ "range", lcgr.widgets_range.Page },
-    .{ "chip", lcgr.widgets_chip.Page },
+    .{ "", w.Reference(.default), w.reference_replay, w.golden_frames },
+    .{ "card-", lcgr.widgets_card.Page(.default), lcgr.widgets_card.replay, lcgr.widgets_card.golden_frames },
+    .{ "label-", lcgr.widgets_label.Page, lcgr.widgets_label.Page.replay, lcgr.widgets_label.Page.golden_frames },
+    .{ "button-", lcgr.widgets_button.Page, lcgr.widgets_button.Page.replay, lcgr.widgets_button.Page.golden_frames },
+    .{ "checkbox-", lcgr.widgets_checkbox.Page, lcgr.widgets_checkbox.Page.replay, lcgr.widgets_checkbox.Page.golden_frames },
+    .{ "radio-", lcgr.widgets_radio.Page, lcgr.widgets_radio.Page.replay, lcgr.widgets_radio.Page.golden_frames },
+    .{ "switch-", lcgr.widgets_switch.Page, lcgr.widgets_switch.Page.replay, lcgr.widgets_switch.Page.golden_frames },
+    .{ "toggle-", lcgr.widgets_toggle.Page, lcgr.widgets_toggle.Page.replay, lcgr.widgets_toggle.Page.golden_frames },
+    .{ "slider-", lcgr.widgets_slider.Page, lcgr.widgets_slider.Page.replay, lcgr.widgets_slider.Page.golden_frames },
+    .{ "range-", lcgr.widgets_range.Page, lcgr.widgets_range.Page.replay, lcgr.widgets_range.Page.golden_frames },
+    .{ "chip-", lcgr.widgets_chip.Page, lcgr.widgets_chip.Page.replay, lcgr.widgets_chip.Page.golden_frames },
 };
-
 var glyph_quads: [1024]Quad = undefined;
 var first: [16]u32 = undefined;
 var count: [16]u32 = undefined;
@@ -49,28 +41,23 @@ pub fn main(init: std.process.Init) !void {
     const name = args.next() orelse return error.Usage;
     const out_path = args.next() orelse return error.Usage;
 
-    inline for (pages) |p| {
-        const prefix = if (p[0].len == 0) "" else p[0] ++ "-";
-        if (std.mem.startsWith(u8, name, prefix) and (prefix.len > 0 or std.mem.indexOfScalar(u8, name, '-') == null)) {
-            inline for (p[1].golden_frames) |g| {
-                if (std.mem.eql(u8, name[prefix.len..], g[0])) return dump(io, p[1], g[1], out_path);
-            }
-        }
-    }
+    inline for (pages) |page| inline for (page[3]) |g| {
+        if (std.mem.eql(u8, name, page[0] ++ g[0])) return dump(page[1], page[2], g[1], io, out_path);
+    };
     return error.UnknownFrame;
 }
 
-fn dump(io: std.Io, comptime Page: type, target: u32, out_path: []const u8) !void {
+fn dump(comptime Page: type, replay_src: []const u8, target: u32, io: std.Io, out_path: []const u8) !void {
     const S = struct {
         var harness: Page.Run = .{};
     };
     const harness = &S.harness;
     harness.init();
-    var text: [64]u8 = undefined;
-    var events: [16]Input.Event = undefined;
-    var contacts: [4]Input.Contact = undefined;
+    var text: [16]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
     const buf: Replay.Buffers = .{ .text = &text, .events = &events, .contacts = &contacts };
-    var replay: Replay = .{ .src = Page.replay };
+    var replay: Replay = .{ .src = replay_src };
     var pair: ?Page.Run.Pair = null;
     while (try replay.next(buf)) |in| {
         const p = try harness.frame(in);

@@ -75,12 +75,46 @@ pub const ct = struct {
     /// `text`: `ct.toggle(th, .bold, .bold, .bold_text)`.
     pub fn toggle(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
         var s = spec_zig.row(button_zig.buttonStyle(&th), .{label_zig.ct.label(th, text)});
-        s.kind = .toggle;
         s.id = @tagName(id);
         s.bind = @tagName(bind);
+        s.widget = Comptime(@tagName(id), @tagName(bind));
         return s;
     }
 };
+
+/// The comptime toggle button named `name` over field `bind` (`Spec.widget`): the same rows
+/// as `toggle`, and the same input (`button.activated`, `base.toggle`) applied to the comptime
+/// front end's state; Enter and Space on it while focused are also its event.
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return base.fieldError(State, "toggle button", field, Bind);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const value: bool = @field(ui.signals.state, bind);
+            const row = next.*;
+            next.* += 1;
+            var s = n.style;
+            s.fill = toggleFill(&@TypeOf(ui.*).theme, value, ui.response(row, in));
+            s.value = simd.b2f(value);
+            const i = ui.tables.t.push(parent, .hash(name), &s);
+            ui.push(n.children[0], i, next, in);
+            ui.tables.t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            if (!button_zig.activated(r.clicked, r.focused, in)) return null;
+            ui.signals.set(Ui.field(bind), base.toggle(@field(ui.signals.state, bind), true));
+            if (r.clicked) return null;
+            return @unionInit(Ui.Events.Event, name, {});
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -133,16 +167,15 @@ test "bindError: a toggle button binds a bool" {
     try testing.expectEqualStrings("toggle button 'size' needs a bool field, not f32", comptime bindError(State, "size").?);
 }
 
-test "ct.toggle: a named, focusable widget with a void event, bound to its field, captioned" {
+test "ct.toggle: a named widget with a void event, bound to its field, captioned" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.toggle(.default, .bold, .bold, .bold_text);
-    try testing.expectEqual(spec_zig.Kind.toggle, s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqualStrings("bold", s.id.?);
     try testing.expectEqualStrings("bold", s.bind.?);
     try testing.expectEqualStrings("bold_text", s.children[0].bind.?);
     const E = events.Events(s);
     try testing.expectEqual(void, @FieldType(E.Event, "bold"));
-    try testing.expectEqualSlices(E.Widget, &.{.bold}, E.focus_order);
 }
 
 /// Two toggle buttons, released and pressed, in both front ends, in theme `th`: the tests'

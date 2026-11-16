@@ -141,31 +141,81 @@ pub fn range(f: *Frame, th: *const Theme, id: Id, value: *[2]f32, lo: f32, hi: f
 pub const ct = struct {
     /// A range slider named `id` over the `[2]f32` field `bind`, running `range.lo` to
     /// `range.hi`: `ct.range(th, .band, .band, .{ .hi = 20_000 })`. Its thumbs are the widgets
-    /// `<id>.0` and `<id>.1`; their `f32` events carry the pointer along the thumb's half.
-    /// Equal or reversed ends are a compile error.
+    /// `<id>.0` and `<id>.1`; the track's `Spec.widget` type carries the range and applies the
+    /// input. Equal or reversed ends are a compile error.
     pub fn range(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime r: slider_zig.Range) Spec {
         if (!(r.lo < r.hi)) @compileError(std.fmt.comptimePrint("range slider '{s}': lo ({d}) must be below hi ({d})", .{ @tagName(id), r.lo, r.hi }));
         // Each half holds two pieces (what lies outside the span, and the span's part).
         const pieces = [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
         var thumbs: [2]Spec = undefined;
         for (&thumbs, 0..) |*t, i| t.* = .{
-            .kind = .range_thumb,
-            .id = std.fmt.comptimePrint("{s}.{d}", .{ @tagName(id), i }),
-            .bind = @tagName(bind),
-            .index = i,
-            .lo = r.lo,
-            .hi = r.hi,
+            .kind = .row,
+            .id = thumbName(@tagName(id), i),
             .children = &pieces,
+            .widget = base.FocusStop,
         };
         const final = thumbs;
-        return .{ .kind = .range, .bind = @tagName(bind), .lo = r.lo, .hi = r.hi, .style = trackStyle(&th), .children = &final };
-    }
-
-    /// The track's name from a thumb's comptime name `<id>.<index>`.
-    pub fn trackName(comptime thumb: []const u8) []const u8 {
-        return thumb[0..comptime std.mem.lastIndexOfScalar(u8, thumb, '.').?];
+        return .{
+            .kind = .row,
+            .bind = @tagName(bind),
+            .style = trackStyle(&th),
+            .children = &final,
+            .widget = Comptime(@tagName(id), @tagName(bind), r),
+        };
     }
 };
+
+/// The comptime name of thumb `index` of the range slider named `track`.
+fn thumbName(comptime track: []const u8, comptime index: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("{s}.{d}", .{ track, index });
+}
+
+/// The comptime range slider named `name` over field `bind`, running `r` (`Spec.widget`): the
+/// same rows as `range`, and the same input (`step`) applied to the comptime front end's
+/// state, a held thumb following the pointer across the track's last rect.
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime r: slider_zig.Range) type {
+    return struct {
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return base.fieldError(State, "range slider", field, Bind);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            const t = &ui.tables.t;
+            const value: [2]f32 = @field(ui.signals.state, bind);
+            const track = t.push(parent, .hash(name), &n.style);
+            const p = parts(&@TypeOf(ui.*).theme, base.fraction(value[0], r.lo, r.hi), base.fraction(value[1], r.lo, r.hi));
+            for (0..2) |k| {
+                const half = t.push(track, thumbId(.hash(name), @intCast(k)), &p[thumb_rows * k]);
+                _ = t.push(half, .none, &p[thumb_rows * k + 1]);
+                _ = t.push(half, .none, &p[thumb_rows * k + 2]);
+                t.seal(half);
+            }
+            next.* += 1 + 2 * thumb_rows;
+            t.seal(track);
+            expose(t, track, value);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const now: [2]f32 = @field(ui.signals.state, bind);
+            var v = now;
+            inline for (0..2) |i| {
+                const res = base.ctResponse(ui, row + 1 + thumb_rows * i, event, in);
+                var along: f32 = 0;
+                if (res.held) {
+                    // Last frame's tree is still in the tables while input is applied.
+                    const rect = ui.tables.t.rect(row + 1);
+                    along = (in.pointer[0] - rect.x0) / @max(rect.w(), 1);
+                }
+                v = step_(v, i, res.held, along, res.focused, r.lo, r.hi, in);
+            }
+            if (!std.meta.eql(v, now)) ui.signals.set(Ui.field(bind), v);
+        }
+    };
+}
+
+const step_ = step;
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -204,22 +254,19 @@ test "bindError: a range slider binds a [2]f32" {
     try testing.expectEqualStrings("range slider 'v' needs a [2]f32 field, not f32", comptime bindError(State, "v").?);
 }
 
-test "ct.range: two focusable thumb widgets with f32 events, the range in every node" {
+test "ct.range: two thumb widgets, focus stops of their own; the track binds the field" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.range(.default, .band, .band, .{ .lo = 20, .hi = 200 });
-    try testing.expectEqual(spec_zig.Kind.range, s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqual(null, s.id);
-    try testing.expectEqual([2]f32{ 20, 200 }, [2]f32{ s.lo, s.hi });
+    try testing.expectEqualStrings("band", s.bind.?);
     inline for (s.children, 0..) |t, i| {
-        try testing.expectEqual(spec_zig.Kind.range_thumb, t.kind);
-        try testing.expectEqual(@as(u32, i), t.index);
-        try testing.expectEqualStrings("band", t.bind.?);
-        try testing.expectEqualStrings("band", comptime ct.trackName(t.id.?));
+        try testing.expectEqualStrings(comptime thumbName("band", i), t.id.?);
+        try testing.expect(t.widget.?.focusable);
         try testing.expectEqual(@as(usize, thumb_rows - 1), t.children.len);
     }
     const E = events.Events(s);
-    try testing.expectEqual(f32, @FieldType(E.Event, "band.0"));
-    try testing.expectEqualSlices(E.Widget, &.{ .@"band.0", .@"band.1" }, E.focus_order);
+    try testing.expectEqual(2, E.widget_count);
 }
 
 test "thumbId: the two thumbs and the track have distinct ids" {

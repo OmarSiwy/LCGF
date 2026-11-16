@@ -13,29 +13,7 @@ const types = @import("../core/types.zig");
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
-pub const Kind = enum(u8) {
-    col,
-    row,
-    label,
-    checkbox,
-    slider,
-    /// A horizontal container that is clicked as a whole (src/widgets/button.zig).
-    button,
-    /// A group of `radio_option`s choosing one value of its bound field (src/widgets/radio.zig).
-    radio,
-    /// One choice of a `radio` group; `index` is the value it selects.
-    radio_option,
-    /// An on/off switch over a bool field (src/widgets/switch.zig).
-    @"switch",
-    /// A button that stays pressed, over a bool field (src/widgets/toggle.zig).
-    toggle,
-    /// A two-thumb slider over a `[2]f32` field (src/widgets/range.zig): the track.
-    range,
-    /// One thumb of a `range`, `index` 0 (low) or 1 (high): the half of the track nearer it.
-    range_thumb,
-    /// A caption on a pill, maybe with a remove button (src/widgets/chip.zig).
-    chip,
-};
+pub const Kind = enum(u8) { col, row, label, checkbox, slider };
 
 /// One node of the declaration. Exists only at compile time.
 pub const Spec = struct {
@@ -48,11 +26,11 @@ pub const Spec = struct {
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     children: []const Spec = &.{},
-    /// Which of several a node is, for widgets made of numbered parts: a radio option's value.
-    index: u32 = 0,
-    /// The range of a value widget (a slider): its value runs `lo` to `hi`.
-    lo: f32 = 0,
-    hi: f32 = 1,
+    /// A widget that builds this node itself, for widgets the kinds above do not cover: a
+    /// namespace with `push` (and optionally `step`), which the widgets' comptime front end
+    /// calls instead of building the node as its kind (src/widgets/base.zig, `ComptimeUi`).
+    /// Null for plain nodes. Being a type, it keeps `Spec` a compile-time-only value.
+    widget: ?type = null,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -271,7 +249,11 @@ test "composition: a function returning Spec flattens exactly like the nodes wri
         try std.testing.expectEqual(comptime bindMask(probe_mixer, f), comptime bindMask(composed, f));
     inline for (.{ "mute", "volume", "pan" }) |w|
         try std.testing.expectEqual(comptime nodeOf(probe_mixer, w), comptime nodeOf(composed, w));
-    try std.testing.expectEqualDeep(probe_mixer.children[1], composed.children[1]);
+    // Compared while compiling: a `Spec` can hold a type (`widget`), so it has no run-time form.
+    comptime {
+        @setEvalBranchQuota(10_000);
+        std.testing.expectEqualDeep(probe_mixer.children[1], composed.children[1]) catch unreachable;
+    }
 }
 
 /// A component with parameters: which widgets and fields it uses, and how it is spaced.
@@ -288,7 +270,10 @@ fn faders(comptime levels: anytype) Spec {
 
 test "parameters: comptime arguments choose ids, fields and style" {
     const s = comptime col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.title), channel(.mute, .muted, .volume, 8), row(.{ .gap = 8 }, .{ label(.title), slider(.pan, .pan) }) });
-    try std.testing.expectEqualDeep(probe_mixer, s);
+    comptime {
+        @setEvalBranchQuota(10_000);
+        std.testing.expectEqualDeep(probe_mixer, s) catch unreachable;
+    }
     const other = comptime channel(.solo, .soloed, .gain, 2);
     try std.testing.expectEqualStrings("solo", other.children[0].id.?);
     try std.testing.expectEqualStrings("soloed", other.children[0].bind.?);

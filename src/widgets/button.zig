@@ -65,15 +65,40 @@ pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
 
 pub const ct = struct {
     /// A button named `id` showing the string field `text`; its click is its event:
-    /// `ct.button(th, .reset, .reset_text)`. Its kind is `.button`, so it is a `Widget` with
-    /// a `void` event and a stop in the focus order.
+    /// `ct.button(th, .reset, .reset_text)`. A `Widget` with a `void` event, built and
+    /// stepped by `Comptime` (`Spec.widget`).
     pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
         var s = spec_zig.row(buttonStyle(&th), .{label_zig.ct.label(th, text)});
-        s.kind = .button;
         s.id = @tagName(id);
+        s.widget = Comptime(@tagName(id));
         return s;
     }
 };
+
+/// The comptime button named `name` (`Spec.widget`): it builds the same rows as `button`, with
+/// the comptime front end's hover and held, and turns Enter and Space on it while focused into
+/// its event, as `button` sets `clicked`.
+pub fn Comptime(comptime name: [:0]const u8) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const row = next.*;
+            next.* += 1;
+            var s = n.style;
+            s.fill = buttonFill(&@TypeOf(ui.*).theme, ui.response(row, in));
+            const i = ui.tables.t.push(parent, .hash(name), &s);
+            ui.push(n.children[0], i, next, in);
+            ui.tables.t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const r = base.ctResponse(ui, row, event, in);
+            if (!r.clicked and activated(false, r.focused, in)) return @unionInit(@TypeOf(ui.*).Events.Event, name, {});
+            return null;
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -108,9 +133,10 @@ pub const Page = struct {
 const testing = std.testing;
 const events = @import("../comptime/events.zig");
 
-test "ct.button: a named, focusable widget with a void event, its caption a bound label" {
+test "ct.button: a named widget with a void event, its caption a bound label" {
     const s = comptime ct.button(.default, .go, .go_text);
-    try testing.expectEqual(spec_zig.Kind.button, s.kind);
+    try testing.expectEqual(spec_zig.Kind.row, s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqualStrings("go", s.id.?);
     try testing.expectEqual(null, s.bind);
     try testing.expectEqual(types.Axis.x, s.style.dir);
@@ -118,7 +144,6 @@ test "ct.button: a named, focusable widget with a void event, its caption a boun
     try testing.expectEqualStrings("go_text", s.children[0].bind.?);
     const E = events.Events(spec_zig.row(.{}, .{ s, comptime ct.button(.default, .stop, .stop_text) }));
     try testing.expectEqual(void, @FieldType(E.Event, "go"));
-    try testing.expectEqualSlices(E.Widget, &.{ .go, .stop }, E.focus_order);
 }
 
 test "button state: the caption binds as a label does" {

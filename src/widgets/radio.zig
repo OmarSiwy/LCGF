@@ -46,11 +46,6 @@ pub fn optionId(group: Id, index: u32) Id {
     return group.with(index);
 }
 
-/// The group's name from an option's comptime name `<group>.<index>`.
-pub fn groupName(comptime option: []const u8) []const u8 {
-    return option[0..comptime std.mem.lastIndexOfScalar(u8, option, '.').?];
-}
-
 // ---- behaviour ------------------------------------------------------------------------------
 
 /// What one frame's input does to a group's selection and focus.
@@ -168,18 +163,83 @@ pub const ct = struct {
         var options: [captions.len]Spec = undefined;
         for (&options, captions, 0..) |*o, caption, i| {
             o.* = .{
-                .kind = .radio_option,
-                .id = std.fmt.comptimePrint("{s}.{d}", .{ @tagName(id), i }),
-                .bind = @tagName(bind),
-                .index = i,
+                .kind = .row,
+                .id = optionName(@tagName(id), i),
+                .widget = base.FocusStop,
                 .style = optionStyle(&th),
                 .children = &.{ ring, label_zig.ct.label(th, caption) },
             };
         }
         const final = options;
-        return .{ .kind = .radio, .bind = @tagName(bind), .style = groupStyle(&th), .children = &final };
+        return .{
+            .kind = .col,
+            .bind = @tagName(bind),
+            .style = groupStyle(&th),
+            .children = &final,
+            .widget = Comptime(@tagName(id), @tagName(bind), captions.len),
+        };
     }
 };
+
+/// The comptime name of option `index` of the group named `group`.
+fn optionName(comptime group: []const u8, comptime index: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("{s}.{d}", .{ group, index });
+}
+
+/// The comptime radio group named `name` over field `bind`, with `n` options (`Spec.widget`):
+/// the same rows as `radio`, and the same input (`step`) applied to the comptime front end's
+/// state and focus. A selection made by keys is reported as the new option's event, as a
+/// click on it would be.
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime n: u32) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return base.fieldError(State, "radio group", field, Bind);
+        }
+
+        pub fn push(ui: anytype, comptime g: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const t = &ui.tables.t;
+            next.* += 1;
+            const group = t.push(parent, .hash(name), &g.style);
+            inline for (g.children, 0..) |o, i| {
+                next.* += 3; // the option, its ring and the dot
+                const row = t.push(group, optionId(.hash(name), i), &o.style);
+                const ring = t.push(row, .none, &ringStyle(th));
+                _ = t.push(ring, .none, &dotStyle(th, false));
+                t.seal(ring);
+                ui.push(o.children[1], row, next, in);
+                t.seal(row);
+            }
+            t.seal(group);
+            paintSelection(t, th, group, @field(ui.signals.state, bind), n);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            var clicked: u32 = none;
+            var focused: u32 = none;
+            inline for (0..n) |i| {
+                const r = base.ctResponse(ui, row + 1 + option_rows * i, event, in);
+                clicked = simd.selU(r.clicked, i, clicked);
+                focused = simd.selU(r.focused, i, focused);
+            }
+            const s = step_(n, clicked, focused, in) orelse return null;
+            ui.signals.set(Ui.field(bind), s.value);
+            inline for (0..n) |i| {
+                if (s.focus == i) {
+                    const w = @field(Ui.Events.Widget, optionName(name, i));
+                    ui.focus = w;
+                    if (clicked == none) return @unionInit(Ui.Events.Event, optionName(name, i), {});
+                }
+            }
+            return null;
+        }
+    };
+}
+
+const step_ = step;
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -222,22 +282,21 @@ test "bindError: a radio group binds a u32" {
     try testing.expectEqualStrings("radio group 'on' needs a u32 field, not bool", comptime bindError(State, "on").?);
 }
 
-test "ct.radio: one focusable widget per option, named <group>.<index>, bound to the group's field" {
+test "ct.radio: one widget per option, named <group>.<index>; the group binds the field" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.radio(.default, .size, .size, .{ .s_text, .m_text, .l_text });
-    try testing.expectEqual(spec_zig.Kind.radio, s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqual(null, s.id);
+    try testing.expectEqualStrings("size", s.bind.?);
     try testing.expectEqual(@as(usize, 3), s.children.len);
     inline for (s.children, 0..) |o, i| {
-        try testing.expectEqual(spec_zig.Kind.radio_option, o.kind);
         try testing.expectEqual(@as(usize, 2), o.children.len);
-        try testing.expectEqual(@as(u32, i), o.index);
-        try testing.expectEqualStrings("size", o.bind.?);
-        try testing.expectEqualStrings("size", comptime groupName(o.id.?));
+        try testing.expectEqualStrings(comptime optionName("size", i), o.id.?);
     }
     const E = events.Events(s);
     try testing.expectEqual(3, E.widget_count);
-    try testing.expectEqualSlices(E.Widget, &.{ .@"size.0", .@"size.1", .@"size.2" }, E.focus_order);
+    // The group is row 0; option i is row 1 + 4i.
+    try testing.expectEqual(@as(E.Index, 5), @backingInt(E.Widget.@"size.1"));
     try testing.expectEqual(void, @FieldType(E.Event, "size.1"));
 }
 

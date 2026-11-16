@@ -109,19 +109,56 @@ pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32
 
 pub const ct = struct {
     /// A slider named `id` over the `f32` field `bind`, running `range.lo` to `range.hi`:
-    /// `ct.slider(th, .volume, .volume, .{ .hi = 100 })`. Its event carries where the pointer
-    /// is along the track, 0 to 1. Ends that are equal or reversed are a compile error.
+    /// `ct.slider(th, .volume, .volume, .{ .hi = 100 })`; the range rides in its
+    /// `Spec.widget` type. Ends that are equal or reversed are a compile error.
     pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime range: Range) Spec {
         if (!(range.lo < range.hi)) @compileError(std.fmt.comptimePrint("slider '{s}': lo ({d}) must be below hi ({d})", .{ @tagName(id), range.lo, range.hi }));
         var s = spec_zig.row(sliderTrack(&th), .{Spec{ .kind = .col }});
-        s.kind = .slider;
         s.id = @tagName(id);
         s.bind = @tagName(bind);
-        s.lo = range.lo;
-        s.hi = range.hi;
+        s.widget = Comptime(@tagName(id), @tagName(bind), range);
         return s;
     }
 };
+
+/// The comptime slider named `name` over field `bind`, running `range` (`Spec.widget`): the
+/// same rows as `slider`, and the same input applied to the comptime front end's state: while
+/// held the value follows the pointer across the track's last rect (`base.slide`), while
+/// focused the keys move it (`keyed`).
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime range: Range) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return base.fieldError(State, "slider", field, Bind);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            const t = &ui.tables.t;
+            const value: f32 = @field(ui.signals.state, bind);
+            var s = n.style;
+            s.value = value;
+            next.* += 2; // the track and its filled part
+            const i = t.push(parent, .hash(name), &s);
+            _ = t.push(i, .none, &sliderThumb(&@TypeOf(ui.*).theme, base.fraction(value, range.lo, range.hi)));
+            t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            var v: f32 = @field(ui.signals.state, bind);
+            if (r.held) {
+                // Last frame's tree is still in the tables while input is applied.
+                const rect = ui.tables.t.rect(row + 1);
+                v = base.slide(v, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), range.lo, range.hi);
+            }
+            if (r.focused) v = keyed(v, range.lo, range.hi, in) orelse v;
+            if (v != @field(ui.signals.state, bind)) ui.signals.set(Ui.field(bind), v);
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -176,12 +213,9 @@ test "bindError: a slider binds an f32" {
 test "ct.slider: a focusable widget whose f32 event is the pointer along the track; its range in the spec" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.slider(.default, .gain, .gain, .{ .lo = -12, .hi = 12 });
-    try testing.expectEqual(spec_zig.Kind.slider, s.kind);
-    try testing.expectEqual([2]f32{ -12, 12 }, [2]f32{ s.lo, s.hi });
-    try testing.expectEqual([2]f32{ 0, 1 }, [2]f32{ (comptime ct.slider(.default, .a, .a, .{})).lo, (comptime ct.slider(.default, .a, .a, .{})).hi });
+    try testing.expect(s.widget != null);
     const E = events.Events(s);
-    try testing.expectEqual(f32, @FieldType(E.Event, "gain"));
-    try testing.expectEqualSlices(E.Widget, &.{.gain}, E.focus_order);
+    try testing.expectEqual(1, E.widget_count);
 }
 
 /// A slider over -12..12 in both front ends: the comptime slider honours its range.

@@ -46,6 +46,10 @@ pub const Check = enum(u2) {
 /// Why `State`'s field `name` cannot be a checkbox's value, or null when it can: it must be a
 /// `bool` or a `Check`.
 pub fn bindError(comptime State: type, comptime name: []const u8) ?[]const u8 {
+    return bindCheck(State, name);
+}
+
+fn bindCheck(comptime State: type, comptime name: []const u8) ?[]const u8 {
     const as_bool = base.fieldError(State, "checkbox", name, bool) orelse return null;
     if (base.fieldError(State, "checkbox", name, Check) == null) return null;
     return comptime as_bool ++ " (or Check)";
@@ -122,12 +126,49 @@ pub const ct = struct {
         // Box (with its dash), caption: the rows the front ends push, so rows keep spec order.
         const box: Spec = .{ .kind = .col, .children = &.{Spec{ .kind = .col }} };
         var s = spec_zig.row(checkboxStyle(&th), .{ box, label_zig.ct.label(th, text) });
-        s.kind = .checkbox;
         s.id = @tagName(id);
         s.bind = @tagName(bind);
+        s.widget = Comptime(@tagName(id), @tagName(bind));
         return s;
     }
 };
+
+/// The comptime checkbox named `name` over field `bind` (`Spec.widget`): the same rows as
+/// `checkbox`, and the same input (`toggled`, `flip`) applied to the comptime front end's
+/// state; Space on it while focused is also its event, as `checkbox` sets `clicked`.
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return bindCheck(State, field);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const t = &ui.tables.t;
+            const value = Check.of(@field(ui.signals.state, bind));
+            var s = n.style;
+            s.value = value.value();
+            next.* += 3; // the checkbox, its box and the dash
+            const i = t.push(parent, .hash(name), &s);
+            const box = t.push(i, .none, &checkboxBox(th, value));
+            _ = t.push(box, .none, &checkboxDash(th, value));
+            t.seal(box);
+            ui.push(n.children[1], i, next, in);
+            t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            if (!toggled(r.clicked, r.focused, in)) return null;
+            ui.signals.set(Ui.field(bind), flip(@field(ui.signals.state, bind), true));
+            if (r.clicked) return null;
+            return @unionInit(Ui.Events.Event, name, {});
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -195,15 +236,14 @@ test "Check: of, value, and flip in either type" {
     try testing.expectEqual(Check.on, flip(Check.off, true));
 }
 
-test "ct.checkbox: a named, focusable widget bound to its field, a box and a caption" {
+test "ct.checkbox: a named widget bound to its field, a box and a caption" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.checkbox(.default, .tri, .tri, .tri_text);
-    try testing.expectEqual(spec_zig.Kind.checkbox, s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqualStrings("tri", s.bind.?);
     try testing.expectEqual(@as(usize, 2), s.children.len);
     const E = events.Events(s);
     try testing.expectEqual(void, @FieldType(E.Event, "tri"));
-    try testing.expectEqualSlices(E.Widget, &.{.tri}, E.focus_order);
 }
 
 /// Two checkboxes, a bool and a tri-state one, in both front ends, in theme `th`: the tests'

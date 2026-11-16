@@ -91,13 +91,47 @@ pub const ct = struct {
     pub fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral(), comptime remove: ?@EnumLiteral()) Spec {
         const caption = label_zig.ct.label(th, text);
         const kids: []const Spec = if (remove) |r| &.{ caption, .{
-            .kind = .button,
+            .kind = .row,
             .id = @tagName(id) ++ ".remove",
             .children = &.{label_zig.ct.label(th, r)},
+            .widget = base.FocusStop,
         } } else &.{caption};
-        return .{ .kind = .chip, .style = chipStyle(&th), .children = kids };
+        return .{ .kind = .row, .style = chipStyle(&th), .children = kids, .widget = Comptime(@tagName(id), remove != null) };
     }
 };
+
+/// The comptime chip named `name`, with a remove button when `removable` (`Spec.widget`): the
+/// same rows as `chip`, the remove button with the comptime front end's hover and held, and
+/// Enter and Space on it while focused turned into its event, as `chip` sets `clicked`.
+pub fn Comptime(comptime name: [:0]const u8, comptime removable: bool) type {
+    return struct {
+        const remove_name = name ++ ".remove";
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const t = &ui.tables.t;
+            next.* += 1;
+            const i = t.push(parent, .none, &n.style);
+            ui.push(n.children[0], i, next, in);
+            if (removable) {
+                const row = next.*;
+                next.* += 1;
+                const s = removeStyle(&@TypeOf(ui.*).theme, ui.response(row, in));
+                const b = t.push(i, removeId(.hash(name)), &s);
+                ui.push(n.children[1].children[0], b, next, in);
+                t.seal(b);
+            }
+            t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            if (!removable) return null;
+            // The chip's row, its caption's, then the remove button's.
+            const r = base.ctResponse(ui, row + 2, event, in);
+            if (!r.clicked and button_zig.activated(false, r.focused, in)) return @unionInit(@TypeOf(ui.*).Events.Event, remove_name, {});
+            return null;
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -142,23 +176,22 @@ pub const Page = struct {
 
 const testing = std.testing;
 
-test "ct.chip: no widget of its own; the remove button, when asked for, is a focusable button" {
+test "ct.chip: no widget of its own; the remove button, when asked for, is a widget and a focus stop" {
     const events = @import("../comptime/events.zig");
     const plain = comptime ct.chip(.default, .draft, .draft_text, null);
-    try testing.expectEqual(spec_zig.Kind.chip, plain.kind);
+    try testing.expect(plain.widget != null);
     try testing.expectEqual(null, plain.id);
     try testing.expectEqual(@as(usize, 1), plain.children.len);
     try testing.expectEqual(0, events.Events(plain).widget_count);
     const removable = comptime ct.chip(.default, .rust, .rust_text, .remove_text);
     try testing.expectEqual(@as(usize, 2), removable.children.len);
     const r = removable.children[1];
-    try testing.expectEqual(spec_zig.Kind.button, r.kind);
+    try testing.expect(r.widget.?.focusable);
     try testing.expectEqualStrings("rust.remove", r.id.?);
     try testing.expectEqualStrings("rust", comptime chipName(r.id.?));
     try testing.expectEqualStrings("remove_text", r.children[0].bind.?);
     const E = events.Events(removable);
     try testing.expectEqual(void, @FieldType(E.Event, "rust.remove"));
-    try testing.expectEqualSlices(E.Widget, &.{.@"rust.remove"}, E.focus_order);
 }
 
 test "chip state: captions bind as labels do; removeId differs from the chip's id" {

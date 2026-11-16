@@ -35,6 +35,15 @@
 //! look and behaviour functions. Until the comptime layout and paint lanes (ct-layout, ct-paint)
 //! land, its rows are pushed from the spec with `Tree.push`, row for row what `flatten.Flat`
 //! numbers (flatten.zig, test "equivalence"), and laid out and painted by the tier-0 passes.
+//!
+//! A widget the spec kinds do not cover sets `Spec.widget` to a namespace (usually a type
+//! its builder generates, which also carries its parameters). `ComptimeUi` then calls its
+//! `push(ui, n, parent, next, in)` to build the node, which must push one tree row per spec
+//! node of its subtree in row order, and before each frame its optional `step(ui, row, event,
+//! in)` to apply input to `ui.signals`. A `step` may return `@TypeOf(event)` instead of
+//! `void`: an event of its own (a key that activated the widget), which the frame reports when
+//! the pointer made none. `ctResponse` gives a step what `Frame.interact` gives a runtime
+//! widget; `FocusStop` marks a focusable node a custom widget pushes itself.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
@@ -55,23 +64,13 @@ const spec_zig = @import("../comptime/spec.zig");
 const events = @import("../comptime/events.zig");
 const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
-const label_zig = @import("label.zig");
-const button_zig = @import("button.zig");
-const checkbox_zig = @import("checkbox.zig");
-const radio_zig = @import("radio.zig");
-const switch_zig = @import("switch.zig");
-const toggle_zig = @import("toggle.zig");
-const slider_zig = @import("slider.zig");
-const range_zig = @import("range.zig");
-const chip_zig = @import("chip.zig");
-const a11y = @import("../a11y/tree.zig");
 const Id = types.Id;
 const Node = types.Node;
 const Color = types.Color;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Response = types.Response;
-const none = types.none;
+const a11y = @import("../a11y/tree.zig");
 
 /// Design tokens: every colour and size a widget uses comes from here, so restyling is one
 /// value. Plain data with defaults, usable at compile time (the `ct` builders take a comptime
@@ -174,38 +173,79 @@ pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime na
     }
 }
 
-/// A compile error for the first node in `n`'s subtree whose binding its widget cannot take.
+/// A compile error for the first node in `n`'s subtree whose binding its widget cannot take:
+/// a label needs a string; a custom widget (`Spec.widget`) says by its optional `bindError`.
 fn checkBindings(comptime State: type, comptime n: Spec) void {
     comptime {
         if (n.bind) |name| {
-            const err: ?[]const u8 = switch (n.kind) {
-                .label => label_zig.bindError(State, name),
-                .checkbox => checkbox_zig.bindError(State, name),
-                .radio, .radio_option => radio_zig.bindError(State, name),
-                .@"switch" => switch_zig.bindError(State, name),
-                .toggle => toggle_zig.bindError(State, name),
-                .slider => slider_zig.bindError(State, name),
-                .range, .range_thumb => range_zig.bindError(State, name),
-                else => null,
-            };
+            const err: ?[]const u8 = if (n.widget) |W_|
+                (if (@hasDecl(W_, "bindError")) W_.bindError(State, name) else null)
+            else if (n.kind == .label)
+                fieldError(State, "label", name, []const u8)
+            else
+                null;
             if (err) |msg| @compileError(msg);
         }
         for (n.children) |c| checkBindings(State, c);
     }
 }
 
+/// What a custom widget at spec row `row` of comptime front end `ui` got this frame, as the
+/// runtime front end's `Frame.interact` reports it: hover and held (`response`), clicked
+/// (this frame's pointer `event` is on it) and focused (`ui.focus`). For `W.step` and
+/// `W.push`, which feed it to the same behaviour functions the runtime widget calls.
+pub fn ctResponse(ui: anytype, comptime row: u32, event: anytype, in: *const Input) Response {
+    const E = @TypeOf(ui.*).Events;
+    const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
+    var r = ui.response(row, in);
+    r.clicked = if (event) |e| std.meta.activeTag(e) == w else false;
+    r.focused = ui.focus == w;
+    return r;
+}
+
+/// The `Spec.widget` of a node inside a custom widget that is a focus stop of its own (a radio
+/// option, a range slider's thumb, a chip's remove button): its owner pushes and steps it, so
+/// it only says `focusable`.
+pub const FocusStop = struct {
+    pub const focusable = true;
+
+    pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+        _ = .{ ui, n, parent, next, in };
+        unreachable; // pushed by the widget that owns it
+    }
+};
+
 // ---- look: one function per part, called by both front ends -------------------------------
 
-pub const labelText = label_zig.labelText;
+pub fn labelText(th: *const Theme) TextStyle {
+    return .{ .px = th.text_px, .color = th.text };
+}
 
-pub const buttonStyle = button_zig.buttonStyle;
-pub const buttonFill = button_zig.buttonFill;
+pub fn buttonStyle(th: *const Theme) Style {
+    return .{ .dir = .x, .pad = @splat(th.pad), .radius = th.radius, .main = .center, .cross = .center, .role = .button };
+}
 
-pub const checkboxStyle = checkbox_zig.checkboxStyle;
-pub const checkboxBox = checkbox_zig.checkboxBox;
+/// State selects the colour by table index.
+pub fn buttonFill(th: *const Theme, r: Response) Color {
+    return th.controlFills()[stateIndex(r)];
+}
 
-pub const sliderTrack = slider_zig.sliderTrack;
-pub const sliderThumb = slider_zig.sliderThumb;
+pub fn checkboxStyle(th: *const Theme) Style {
+    return .{ .dir = .x, .gap = th.gap, .cross = .center, .role = .checkbox };
+}
+
+pub fn checkboxBox(th: *const Theme, value: bool) Style {
+    return .{ .size = .{ .px(16), .px(16) }, .radius = 3, .fill = th.marks()[@intFromBool(value)], .border = 1, .border_color = th.control_hot };
+}
+
+pub fn sliderTrack(th: *const Theme) Style {
+    return .{ .dir = .x, .size = .{ .fill, .px(8) }, .min = .{ 40, 0 }, .radius = 4, .fill = th.control, .role = .slider };
+}
+
+/// The filled part of the track, `frac` of its width.
+pub fn sliderThumb(th: *const Theme, frac: f32) Style {
+    return .{ .size = .{ .pct(frac), .fill }, .radius = 4, .fill = th.accent };
+}
 
 // ---- behaviour: pure functions of the value and what happened -------------------------------
 
@@ -227,26 +267,79 @@ pub fn fraction(value: f32, lo: f32, hi: f32) f32 {
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-pub const label = label_zig.label;
+pub fn label(f: *Frame, th: *const Theme, str: []const u8) Node {
+    return f.text(str, labelText(th));
+}
 
-pub const button = button_zig.button;
+pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
+    const node = f.open(id, buttonStyle(th));
+    const r = f.interact(node, .button);
+    f.setFill(node, buttonFill(th, r));
+    f.setCursor(.pointer, r.hovered);
+    _ = label(f, th, str);
+    f.close();
+    return r;
+}
 
-pub const checkbox = checkbox_zig.checkbox;
+pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
+    const row = f.open(id, checkboxStyle(th));
+    const r = f.interact(row, .button);
+    value.* = toggle(value.*, r.clicked);
+    _ = f.leaf(.none, checkboxBox(th, value.*));
+    _ = label(f, th, str);
+    f.close();
+    f.tree().c.value[row.ix()] = simd.b2f(value.*);
+    return r;
+}
 
-pub const slider = slider_zig.slider;
+pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response {
+    const track = f.open(id, sliderTrack(th));
+    const r = f.interact(track, .{ .hover = true, .click = true, .drag = true, .focus = true });
+    // `heldRect` is this slider's last rect exactly when `r.held` is set.
+    const rect = f.heldRect();
+    value.* = slide(value.*, r.held, (f.in.pointer[0] - rect.x0) / @max(rect.w(), 1), lo, hi);
+    _ = f.leaf(.none, sliderThumb(th, fraction(value.*, lo, hi)));
+    f.close();
+    f.tree().c.value[track.ix()] = value.*;
+    return r;
+}
 
 // ---- comptime front end ---------------------------------------------------------------------
 
 /// The reference widgets as spec nodes. Ids and bound state fields are enum literals; the
 /// state struct of `ComptimeUi` must have them, with the types noted (a compile error if not).
+/// A comptime slider's value runs 0 to 1, the range of its `Event` payload.
 pub const ct = struct {
-    pub const label = label_zig.ct.label;
+    /// Text showing the string field `text`.
+    pub fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec {
+        _ = th;
+        return .{ .kind = .label, .bind = @tagName(text), .style = .{ .role = .label } };
+    }
 
-    pub const button = button_zig.ct.button;
+    /// A button named `id` showing the string field `text`; its click is its event.
+    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+        var s = spec_zig.row(buttonStyle(&th), .{ct.label(th, text)});
+        s.id = @tagName(id);
+        return s;
+    }
 
-    pub const checkbox = checkbox_zig.ct.checkbox;
+    /// A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
+    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+        var s = spec_zig.row(checkboxStyle(&th), .{ Spec{ .kind = .col }, ct.label(th, text) });
+        s.kind = .checkbox;
+        s.id = @tagName(id);
+        s.bind = @tagName(bind);
+        return s;
+    }
 
-    pub const slider = slider_zig.ct.slider;
+    /// A slider named `id` setting the f32 field `bind`, 0 to 1.
+    pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
+        var s = spec_zig.row(sliderTrack(&th), .{Spec{ .kind = .col }});
+        s.kind = .slider;
+        s.id = @tagName(id);
+        s.bind = @tagName(bind);
+        return s;
+    }
 };
 
 /// The comptime front end running the reference widgets of `spec`: state in `Signals`, input
@@ -254,7 +347,7 @@ pub const ct = struct {
 /// and calls `frame` once per frame, as with `Context`. Labels are measured with `Mono`.
 pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
     const flatten = @import("../comptime/flatten.zig");
-    checkBindings(State, spec);
+    comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
     // One root row (the runtime front end's) above the spec's rows.
@@ -264,6 +357,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         const Self = @This();
         pub const Events = E;
         pub const Signals = S;
+        /// The theme the page was built with, for widgets that build their own rows.
+        pub const theme = th;
 
         buf: [bytes]u8 align(mem.column_align) = undefined,
         tables: Tables = undefined,
@@ -271,8 +366,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pointer: E.Pointer = .{},
         /// Last frame's widget rects, which this frame's input is judged against.
         rects: E.Rects = .{},
-        /// The focused widget: a press on a focusable widget focuses it, a press anywhere
-        /// else clears it, as `Interaction` does for nodes that sense focus. Keys go to it.
+        /// The widget the last left press went down on (null over nothing), as the runtime's
+        /// `Interaction.focus`; custom widgets read it for their keys.
         focus: ?E.Widget = null,
         font: Mono = .{},
 
@@ -307,31 +402,30 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// then builds, lays out and paints the frame. A button's click is returned as `event`
         /// for the caller to act on; checkboxes and sliders have already written their field.
         pub fn frame(ui: *Self, in: *const Input) Output {
-            if (in.buttons.left and !ui.pointer.down) ui.focus = focusAt(&ui.rects, in);
+            const press = in.buttons.left and !ui.pointer.down;
             var event = E.pointer(&ui.pointer, &ui.rects, in);
-            // A key event has already done its work (`keyEvent`); a pointer event's is below.
-            const from_pointer = event != null;
-            if (event == null) event = ui.keyEvent(in);
+            if (press) ui.focus = ui.pointer.pressed;
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);
                     const n = comptime nodeAt(spec, E.widget_nodes[k]);
                     switch (comptime E.widget_kinds[k]) {
-                        .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
-                        .slider => if (from_pointer) ui.signals.set(field(n.bind.?), slide(0, true, payload, n.lo, n.hi)),
-                        .radio_option => ui.signals.set(field(n.bind.?), n.index),
-                        .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
-                        .range_thumb => if (from_pointer) {
-                            // Along the whole track, last frame's (the tree still holds it).
-                            const r = ui.tables.t.rect(E.widget_nodes[k] - thumbOffset(n.index));
-                            const along = (in.pointer[0] - r.x0) / @max(r.w(), 1);
-                            const v = range_zig.step(@field(ui.signals.state, n.bind.?), @intCast(n.index), true, along, false, n.lo, n.hi, in);
-                            ui.signals.set(field(n.bind.?), v);
-                        },
-                        .label, .col, .row, .button, .radio, .range, .chip => {},
+                        .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
+                        .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
+                        .label, .col, .row => {},
                     }
                 },
             };
+            // Custom widgets (`Spec.widget`) apply this frame's input to their state.
+            inline for (comptime customRows(spec)) |row| {
+                const W_ = comptime nodeAt(spec, row).widget.?;
+                // A step may return an event of its own (a key that activates the widget),
+                // which the frame reports when the pointer made none.
+                if (comptime @hasDecl(W_, "step")) {
+                    const got = W_.step(ui, row, event, in);
+                    if (@TypeOf(got) == ?E.Event) event = event orelse got;
+                }
+            }
 
             var carver: mem.Carver = .{ .buf = &ui.buf };
             ui.tables = Tables.carve(&carver);
@@ -370,57 +464,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return .{ .draw = &tb.d, .tree = t, .event = event };
         }
 
-        /// The focusable widget under the pointer, or null.
-        fn focusAt(r: *const E.Rects, in: *const Input) ?E.Widget {
-            const w = E.at(r, in.pointer[0], in.pointer[1]) orelse return null;
-            return switch (w) {
-                inline else => |tag| if (comptime E.focusable(E.widget_kinds[E.slot(tag)])) tag else null,
-            };
-        }
-
-        /// The event this frame's keys make on the focused widget, or null.
-        /// A key may move focus too (arrows in a radio group). Each arm applies what its keys do;
-        /// a slider's event then carries the new value's fraction of its range.
-        fn keyEvent(ui: *Self, in: *const Input) ?E.Event {
-            const w = ui.focus orelse return null;
-            switch (w) {
-                inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
-                    .button, .toggle => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
-                    .checkbox, .@"switch" => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
-                    .slider => {
-                        const n = comptime nodeAt(spec, E.widget_nodes[E.slot(tag)]);
-                        const v = slider_zig.keyed(@field(ui.signals.state, n.bind.?), n.lo, n.hi, in) orelse return null;
-                        ui.signals.set(field(n.bind.?), v);
-                        return @unionInit(E.Event, @tagName(tag), fraction(v, n.lo, n.hi));
-                    },
-                    .range_thumb => {
-                        const n = comptime nodeAt(spec, E.widget_nodes[E.slot(tag)]);
-                        const now = @field(ui.signals.state, n.bind.?);
-                        const v = range_zig.step(now, @intCast(n.index), false, 0, true, n.lo, n.hi, in);
-                        if (std.meta.eql(v, now) and slider_zig.keyed(now[n.index], n.lo, n.hi, in) == null) return null;
-                        ui.signals.set(field(n.bind.?), v);
-                        return @unionInit(E.Event, @tagName(tag), fraction(v[n.index], n.lo, n.hi));
-                    },
-                    .radio_option => {
-                        const k = comptime E.slot(tag);
-                        const o = comptime nodeAt(spec, E.widget_nodes[k]);
-                        const n = comptime nodeAt(spec, E.widget_nodes[k] - optionRows(o.index) - 1).children.len;
-                        const s = radio_zig.step(n, none, o.index, in) orelse return null;
-                        // The group's options are consecutive in widget order.
-                        const to = E.widget(k - o.index + s.value);
-                        ui.focus = to;
-                        return switch (to) {
-                            inline else => |t| if (comptime E.widget_kinds[E.slot(t)] == .radio_option) @unionInit(E.Event, @tagName(t), {}) else unreachable,
-                        };
-                    },
-                    else => {},
-                },
-            }
-            return null;
-        }
-
-        /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
-        fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+        /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom
+        /// widget pushes its own rows, one per node of its subtree in row order, and advances
+        /// `next` past them.
+        pub fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             const tb = &ui.tables;
             const state = &ui.signals.state;
             next.* += 1;
@@ -431,15 +479,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     tb.t.c.text[i] = tb.tx.push(i, span, &labelText(&th));
                 },
                 .checkbox => {
-                    const value = checkbox_zig.Check.of(@field(state, n.bind.?));
+                    const value: bool = @field(state, n.bind.?);
                     var s = n.style;
-                    s.value = value.value();
+                    s.value = simd.b2f(value);
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
                     next.* += 1;
-                    const box = tb.t.push(i, .none, &checkboxBox(&th, value));
-                    next.* += 1;
-                    _ = tb.t.push(box, .none, &checkbox_zig.checkboxDash(&th, value));
-                    tb.t.seal(box);
+                    _ = tb.t.push(i, .none, &checkboxBox(&th, value));
                     ui.push(n.children[1], i, next, in);
                     tb.t.seal(i);
                 },
@@ -449,78 +494,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     s.value = value;
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, n.lo, n.hi)));
+                    _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
                     tb.t.seal(i);
                 },
-                .radio => {
-                    const g = tb.t.push(parent, .hash(radio_zig.groupName(n.children[0].id.?)), &n.style);
-                    inline for (n.children) |o| {
-                        next.* += 1;
-                        const id = radio_zig.optionId(.hash(radio_zig.groupName(o.id.?)), o.index);
-                        const i = tb.t.push(g, id, &o.style);
-                        next.* += 2;
-                        const ring = tb.t.push(i, .none, &radio_zig.ringStyle(&th));
-                        _ = tb.t.push(ring, .none, &radio_zig.dotStyle(&th, false));
-                        tb.t.seal(ring);
-                        ui.push(o.children[1], i, next, in);
-                        tb.t.seal(i);
-                    }
-                    tb.t.seal(g);
-                    radio_zig.paintSelection(&tb.t, &th, g, @field(state, n.bind.?), n.children.len);
-                },
-                .radio_option => unreachable, // pushed by its group
-                .range => {
-                    const value: [2]f32 = @field(state, n.bind.?);
-                    const name = comptime range_zig.ct.trackName(n.children[0].id.?);
-                    const track = tb.t.push(parent, .hash(name), &n.style);
-                    const p = range_zig.parts(&th, fraction(value[0], n.lo, n.hi), fraction(value[1], n.lo, n.hi));
-                    for (0..2) |k| {
-                        const half = tb.t.push(track, range_zig.thumbId(.hash(name), @intCast(k)), &p[range_zig.thumb_rows * k]);
-                        _ = tb.t.push(half, .none, &p[range_zig.thumb_rows * k + 1]);
-                        _ = tb.t.push(half, .none, &p[range_zig.thumb_rows * k + 2]);
-                        tb.t.seal(half);
-                    }
-                    next.* += 2 * range_zig.thumb_rows;
-                    tb.t.seal(track);
-                    range_zig.expose(&tb.t, track, value);
-                },
-                .range_thumb => unreachable, // pushed by its track
-                .chip => {
-                    const i = tb.t.push(parent, .none, &n.style);
-                    ui.push(n.children[0], i, next, in);
-                    if (n.children.len == 2) {
-                        const rm = n.children[1];
-                        next.* += 1;
-                        const s = chip_zig.removeStyle(&th, ui.response(next.* - 1, in));
-                        const b = tb.t.push(i, chip_zig.removeId(.hash(comptime chip_zig.chipName(rm.id.?))), &s);
-                        ui.push(rm.children[0], b, next, in);
-                        tb.t.seal(b);
-                    }
-                    tb.t.seal(i);
-                },
-                .toggle => {
-                    const value: bool = @field(state, n.bind.?);
+                .row, .col => {
                     var s = n.style;
-                    s.fill = toggle_zig.toggleFill(&th, value, ui.response(next.* - 1, in));
-                    s.value = simd.b2f(value);
-                    const i = tb.t.push(parent, .hash(n.id.?), &s);
-                    ui.push(n.children[0], i, next, in);
-                    tb.t.seal(i);
-                },
-                .@"switch" => {
-                    const value: bool = @field(state, n.bind.?);
-                    const i = tb.t.push(parent, .hash(n.id.?), &n.style);
-                    switch_zig.expose(&tb.t, i, value);
-                    next.* += 2;
-                    const track = tb.t.push(i, .none, &switch_zig.trackStyle(&th, value));
-                    _ = tb.t.push(track, .none, &switch_zig.knobStyle(&th));
-                    tb.t.seal(track);
-                    ui.push(n.children[1], i, next, in);
-                    tb.t.seal(i);
-                },
-                .row, .col, .button => {
-                    var s = n.style;
-                    // A container with an id is a button (kind `.button` always has one).
+                    // A container with an id is a button.
                     if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
                     const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
                     inline for (n.children) |c| ui.push(c, i, next, in);
@@ -531,7 +510,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
         /// them: while a widget is held, only it shows hover.
-        fn response(ui: *const Self, row: u32, in: *const Input) Response {
+        pub fn response(ui: *const Self, row: u32, in: *const Input) Response {
             const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
             const held = ui.pointer.pressed == w;
             const owned = ui.pointer.pressed == null or held;
@@ -539,21 +518,27 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return .{ .hovered = under and owned, .held = held };
         }
 
-        fn field(comptime name: []const u8) S.Field {
+        pub fn field(comptime name: []const u8) S.Field {
             return comptime std.meta.stringToEnum(S.Field, name).?;
         }
     };
 }
 
-/// Spec rows before radio option `index` within its group: earlier options and their parts.
-fn optionRows(comptime index: u32) u32 {
-    return index * radio_zig.option_rows;
+/// Depth-first rows of the nodes in `n`'s subtree that are custom widgets (`Spec.widget`).
+fn customRows(comptime n: Spec) []const u32 {
+    comptime {
+        var rows: []const u32 = &.{};
+        var i: u32 = 0;
+        customWalk(n, &i, &rows);
+        const out = rows[0..rows.len].*;
+        return &out;
+    }
 }
 
-/// Tree rows from range thumb `index` back to its track: the thumb's spec row plus one (the
-/// root) minus this is the track's tree row.
-fn thumbOffset(comptime index: u32) u32 {
-    return index * range_zig.thumb_rows;
+fn customWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32) void {
+    if (n.widget != null) rows.* = rows.* ++ .{next.*};
+    next.* += 1;
+    for (n.children) |c| customWalk(c, next, rows);
 }
 
 /// Spec nodes in `n`'s subtree that show text.
@@ -743,7 +728,7 @@ pub fn Reference(comptime th: Theme) type {
         pub const spec = spec_zig.row(toolbar_style, .{
             ct.button(th, .reset, .reset_text),
             ct.checkbox(th, .wire, .wireframe, .wire_text),
-            ct.slider(th, .exposure, .exposure, .{}),
+            ct.slider(th, .exposure, .exposure),
             ct.label(th, .layer),
         });
         pub const Ui = ComptimeUi(State, spec, th);
@@ -973,7 +958,7 @@ test "StateColors, OnOff: the theme's tables, indexed by state and value" {
     }
     // Other bits of the response do not move the index.
     try testing.expectEqual(th.control, buttonFill(&th, .{ .pressed = true, .released = true, .clicked = true, .focused = true }));
-    for ([2]bool{ false, true }, th.marks()) |v, c| try testing.expectEqual(c, checkboxBox(&th, .of(v)).fill);
+    for ([2]bool{ false, true }, th.marks()) |v, c| try testing.expectEqual(c, checkboxBox(&th, v).fill);
     // A comptime theme gives comptime tables: they can live in read-only data.
     const fills = comptime Theme.default.controlFills();
     try testing.expectEqual(th.control_hot, fills[1]);
@@ -1075,10 +1060,10 @@ test "label: a text leaf in the theme's size and colour" {
 
 test "ct: spec builders give the comptime front end's widget enum, kinds and focus order" {
     try testing.expectEqual(3, Default.Ui.Events.widget_count);
-    try testing.expectEqualSlices(spec_zig.Kind, &.{ .button, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
+    try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
     try testing.expectEqual(void, @FieldType(Default.Ui.Events.Event, "reset"));
     try testing.expectEqual(f32, @FieldType(Default.Ui.Events.Event, "exposure"));
-    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .reset, .wire, .exposure }, Default.Ui.Events.focus_order);
+    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .wire, .exposure }, Default.Ui.Events.focus_order);
 }
 
 test {

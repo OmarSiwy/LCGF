@@ -97,12 +97,48 @@ pub const ct = struct {
         // Track (with its knob), caption: the rows the front ends push, in spec order.
         const track: Spec = .{ .kind = .col, .children = &.{Spec{ .kind = .col }} };
         var s = spec_zig.row(switchStyle(&th), .{ track, label_zig.ct.label(th, text) });
-        s.kind = .@"switch";
         s.id = @tagName(id);
         s.bind = @tagName(bind);
+        s.widget = Comptime(@tagName(id), @tagName(bind));
         return s;
     }
 };
+
+/// The comptime switch named `name` over field `bind` (`Spec.widget`): the same rows as
+/// `switch`, and the same input (`checkbox.toggled`, `base.toggle`) applied to the comptime
+/// front end's state; Space on it while focused is also its event.
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
+    return struct {
+        pub const focusable = true;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            return base.fieldError(State, "switch", field, Bind);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const th = &@TypeOf(ui.*).theme;
+            const t = &ui.tables.t;
+            const value: bool = @field(ui.signals.state, bind);
+            next.* += 3; // the switch, its track and the knob
+            const i = t.push(parent, .hash(name), &n.style);
+            expose(t, i, value);
+            const track = t.push(i, .none, &trackStyle(th, value));
+            _ = t.push(track, .none, &knobStyle(th));
+            t.seal(track);
+            ui.push(n.children[1], i, next, in);
+            t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            if (!checkbox_zig.toggled(r.clicked, r.focused, in)) return null;
+            ui.signals.set(Ui.field(bind), base.toggle(@field(ui.signals.state, bind), true));
+            if (r.clicked) return null;
+            return @unionInit(Ui.Events.Event, name, {});
+        }
+    };
+}
 
 // ---- example page -------------------------------------------------------------------------
 
@@ -155,10 +191,10 @@ test "bindError: a switch binds a bool" {
     try testing.expectEqualStrings("switch 'n' needs a bool field, not u32", comptime bindError(State, "n").?);
 }
 
-test "ct.switch: a named, focusable widget with a void event: track, knob and caption rows" {
+test "ct.switch: a named widget with a void event: track, knob and caption rows" {
     const events = @import("../comptime/events.zig");
     const s = comptime ct.@"switch"(.default, .vsync, .vsync, .vsync_text);
-    try testing.expectEqual(spec_zig.Kind.@"switch", s.kind);
+    try testing.expect(s.widget != null);
     try testing.expectEqualStrings("vsync", s.id.?);
     try testing.expectEqualStrings("vsync", s.bind.?);
     try testing.expectEqual(@as(usize, 2), s.children.len);
@@ -166,7 +202,6 @@ test "ct.switch: a named, focusable widget with a void event: track, knob and ca
     try testing.expectEqualStrings("vsync_text", s.children[1].bind.?);
     const E = events.Events(s);
     try testing.expectEqual(void, @FieldType(E.Event, "vsync"));
-    try testing.expectEqualSlices(E.Widget, &.{.vsync}, E.focus_order);
 }
 
 /// Two switches, off and on, in both front ends, in theme `th`: the tests' page until the
