@@ -453,6 +453,19 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/colorpicker.replay");
+    pub const golden_frames = .{
+        .{ "colorpicker-rest", 0 },
+        .{ "colorpicker-area", 3 },
+        .{ "colorpicker-hue", 6 },
+        .{ "colorpicker-alpha", 10 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -466,6 +479,38 @@ const group_row = 3;
 const area_row = group_row + 1;
 const hue_row = area_row + 4;
 const alpha_row = hue_row + 1 + hue_stops + 1;
+
+test "colorpicker: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var seen: [12]Hsva = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.color, h.ui.signals.state.color);
+        seen[k] = h.app.color;
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    const tol = 1e-5;
+    // Pressed at a quarter across, a quarter down: s 0.25, v 0.75; dragged to the far corner.
+    try testing.expectApproxEqAbs(@as(f32, 0.25), seen[2].s, tol);
+    try testing.expectApproxEqAbs(@as(f32, 0.75), seen[2].v, tol);
+    try testing.expectEqual(@as(f32, 1), seen[3].s);
+    try testing.expectEqual(@as(f32, 0), seen[3].v);
+    // Released, then Up twice with the area focused.
+    try testing.expectApproxEqAbs(@as(f32, 0.02), seen[5].v, tol);
+    // The hue slider pressed at its middle, then End.
+    try testing.expectApproxEqAbs(@as(f32, 0.5), seen[6].h, tol);
+    try testing.expectEqual(@as(f32, 1), seen[8].h);
+    // The opacity slider dragged off its left end: clamped to 0; Right once.
+    try testing.expectEqual(@as(f32, 0), seen[10].a);
+    try testing.expectApproxEqAbs(@as(f32, 0.01), seen[11].a, tol);
+}
 
 test "colorpicker: a group of three sliders with their values" {
     const h = &harness;

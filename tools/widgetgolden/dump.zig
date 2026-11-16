@@ -31,6 +31,7 @@ const pages = .{
     lcgr.widgets_tree.Page,
     lcgr.widgets_progress.Page,
     lcgr.widgets_spinner.Page,
+    lcgr.widgets_colorpicker.Page,
 };
 
 var glyph_quads: [4096]Quad = undefined;
