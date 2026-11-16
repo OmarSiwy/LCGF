@@ -16,6 +16,7 @@ const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -105,6 +106,20 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, clear_clicked: 
     s.result.changed = s.result.changed or cleared;
 }
 
+// ---- accessibility --------------------------------------------------------------------------
+
+/// Roles of the box (a search landmark around the field) and of the clear button (a button
+/// while shown, presentational otherwise), written to rows `box` and `button` of `t`.
+pub fn expose(t: *Tree, box: u32, button: u32, shown: bool) void {
+    const roles = [2]a11y.Role{ .none, .button };
+    t.c.role[box] = @backingInt(a11y.Role.search);
+    t.c.role[button] = @backingInt(roles[@intFromBool(shown)]);
+}
+
+/// The semantics the tree columns cannot carry: the field's name is the row `label` (its
+/// caption, `aria-labelledby`), as for the text field.
+pub const semantics = tf.semantics;
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns the
@@ -120,7 +135,7 @@ pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8)
     behave(s, th, id, r0, clear.clicked, f.lastRect(id), f.in);
     tf.platform(f, s);
     const shown = s.text().len > 0;
-    _ = f.open(.none, boxStyle(th, r0.focused));
+    const box = f.open(.none, boxStyle(th, r0.focused));
     const node = f.open(id, inputStyle(th, s.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -136,6 +151,7 @@ pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8)
     _ = f.textStyled(clear_text, clearText(th, shown), .{ .role = .label });
     f.close();
     f.close();
+    expose(f.tree(), box.ix(), b.ix(), shown);
     return r;
 }
 
@@ -201,6 +217,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             t.seal(b);
             t.seal(box);
             _ = n;
+            expose(t, box, b, shown);
         }
 
         pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
@@ -291,15 +308,17 @@ test "search: the page agrees in both front ends; the clear button only shows wi
     const f = t.find(.from("find"));
     // root, panel, caption, box, field and its three rows, button and its caption.
     try testing.expectEqual(@as(u32, 10), t.len);
-    // The field inside the box.
-    try testing.expectEqual(f - 1, t.c.parent[f]);
+    try testing.expectEqual(@backingInt(a11y.Role.search), t.c.role[f - 1]);
+    try testing.expectEqual(@backingInt(a11y.Role.text_input), t.c.role[f]);
     const b = t.find(clearId(.from("find")));
+    try testing.expectEqual(@as(u8, 0), t.c.role[b]);
     try testing.expectEqual(Color.transparent.bitsOf(), t.c.look[b].fill);
     // With text, the button shows.
     h.app.find.set("zig");
     h.ui.signals.state.find.set("zig");
     out = try both(h, &in);
     t = out.runtime.tree;
+    try testing.expectEqual(@backingInt(a11y.Role.button), t.c.role[b]);
     try testing.expectEqual(Theme.default.control.bitsOf(), t.c.look[b].fill);
 }
 
@@ -331,6 +350,41 @@ test "search look: one inset box around the field and the button; the button lig
     t = out.runtime.tree;
     try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[b].fill);
     try testing.expectEqual(th.text.bitsOf(), out.runtime.texts.c.color[t.c.text[b + 1]]);
+}
+
+var search_semantics: base.Semantic(16) = .{};
+
+test "search a11y: a search landmark holding the text input and, with text, a Clear button" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 100 } };
+    _ = try h.frame(&in);
+    h.app.find.set("zig");
+    h.ui.signals.state.find.set("zig");
+    in.pointer = .{ 0, 0 };
+    const out = try h.frame(&in);
+    const x = &search_semantics;
+    try x.run(h);
+    const t = out.runtime.tree;
+    const f = t.find(.from("find"));
+    const b = t.find(clearId(.from("find")));
+    const box = x.row(f - 1).?;
+    try testing.expectEqual(@backingInt(a11y.Role.search), x.out[0].c.role[box]);
+    const r = x.row(f).?;
+    try testing.expectEqual(@backingInt(a11y.Role.text_input), x.out[0].c.role[r]);
+    try testing.expectEqual(box, x.out[0].c.parent[r]);
+    const br = x.row(b).?;
+    try testing.expectEqual(@backingInt(a11y.Role.button), x.out[0].c.role[br]);
+    try testing.expectEqualStrings("Clear", x.name(0, br));
+    try testing.expectEqualStrings("Clear", x.name(1, br));
+    // The field is named by its caption.
+    const check = @import("check.zig");
+    var sb: check.SemBuf = .{};
+    var sem = sb.init();
+    semantics(t, &sem, .from("find"), f - 2);
+    a11y.names(t, &sem);
+    const ctx = &h.ctx;
+    try testing.expectEqualStrings("Find", check.nameOf(&sem, out.runtime.texts, ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], f));
 }
 
 fn press(code: u8, mods: Input.Mods) Input.Event {
