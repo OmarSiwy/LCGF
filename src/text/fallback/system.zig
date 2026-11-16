@@ -12,11 +12,13 @@ const builtin = @import("builtin");
 const lcgr = @import("lcgr");
 
 /// A face found for a character: its file, in the caller's buffer, and its index in the file
-/// (non-zero only in collections).
-pub const Found = struct { path: []const u8, index: u32 };
+/// (non-zero only in collections). Core Text gives no index: it sets `name`, the face's
+/// PostScript name, which `fallback.faceByName` turns into the index.
+pub const Found = struct { path: []const u8, index: u32, name: []const u8 = "" };
 
 pub const Discovery = switch (builtin.os.tag) {
     .windows => @import("directwrite.zig").Discovery,
+    .macos => @import("coretext.zig").Discovery,
     else => @compileError("no system font discovery for this OS"),
 };
 
@@ -47,7 +49,8 @@ test "a mixed-script sample renders with system fonts" {
         std.debug.print("U+{X:0>4}: {s} #{}\n", .{ cp, found.path, found.index });
         files[k] = try std.Io.Dir.cwd().readFileAlloc(io, found.path, gpa, .limited(64 << 20));
         loaded += 1;
-        faces[k] = try .parse(files[k], try lcgr.opentype.faceOffset(files[k], found.index));
+        const index = if (found.name.len > 0) (try lcgr.fallback.faceByName(files[k], found.name)) orelse return error.NoSuchFace else found.index;
+        faces[k] = try .parse(files[k], try lcgr.opentype.faceOffset(files[k], index));
         try std.testing.expect(faces[k].cmap.glyph(cp) != 0);
     }
     const chain: lcgr.fallback.Chain = .{ .faces = &faces, .script = &scripts, .face = &.{ 0, 1, 2, 3 }, .default = &.{ 0, 1, 2, 3 } };

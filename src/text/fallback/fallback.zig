@@ -89,6 +89,54 @@ pub fn resolve(chain: *const Chain, text: []const u8, runs: *Runs) error{NoSpace
     }
 }
 
+/// The face of a font file whose PostScript name (name table, ID 6) is `ps`, or null. For
+/// discovery that names a face instead of indexing it (Core Text). Names are ASCII; records
+/// are read in Macintosh Roman (platform 1) or UTF-16BE (platforms 0 and 3).
+pub fn faceByName(data: []const u8, ps: []const u8) opentype.Error!?u32 {
+    for (0..try opentype.faceCount(data)) |i| {
+        const index: u32 = @intCast(i);
+        const dir = opentype.Directory.parse(data, try opentype.faceOffset(data, index)) catch continue;
+        const name = (dir.find(opentype.tag("name")) catch continue) orelse continue;
+        if (nameHas(name, ps)) return index;
+    }
+    return null;
+}
+
+/// Whether one of the PostScript-name records of `name` is `ps`. A record that does not fit
+/// the table is skipped (fonts are untrusted).
+fn nameHas(name: []const u8, ps: []const u8) bool {
+    if (name.len < 6) return false;
+    const count = std.mem.readInt(u16, name[2..4], .big);
+    const strings = std.mem.readInt(u16, name[4..6], .big);
+    for (0..count) |k| {
+        const at = 6 + k * 12;
+        if (at + 12 > name.len) return false;
+        const rec = name[at..][0..12];
+        if (std.mem.readInt(u16, rec[6..8], .big) != 6) continue;
+        const platform = std.mem.readInt(u16, rec[0..2], .big);
+        const len: usize = std.mem.readInt(u16, rec[8..10], .big);
+        const off = @as(usize, strings) + std.mem.readInt(u16, rec[10..12], .big);
+        if (off + len > name.len) continue;
+        const s = name[off..][0..len];
+        if (platform == 1 and std.mem.eql(u8, s, ps)) return true;
+        if (platform == 1 or len != ps.len * 2) continue;
+        for (ps, 0..) |c, j| {
+            if (s[2 * j] != 0 or s[2 * j + 1] != c) break;
+        } else return true;
+    }
+    return false;
+}
+
+test faceByName {
+    const ttc = @embedFile("../font/testdata/test.ttc");
+    // Expected: fontTools TTCollection on test.ttc, nameID 6 of each face.
+    try std.testing.expectEqual(0, try faceByName(ttc, "LcgrTest-Sans-Regular"));
+    try std.testing.expectEqual(1, try faceByName(ttc, "LcgrTest-Sans-Bold"));
+    try std.testing.expectEqual(null, try faceByName(ttc, "LcgrTest-Sans"));
+    try std.testing.expectEqual(null, try faceByName(ttc, "LcgrTest-Sans-Bolder"));
+    try std.testing.expectEqual(0, try faceByName(test_latin, "LcgrFallbackSans-Regular"));
+}
+
 /// Columns for a few test runs.
 pub const TestRuns = struct {
     end: [16]u32 = undefined,
