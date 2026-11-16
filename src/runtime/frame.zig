@@ -149,7 +149,7 @@ pub const Frame = struct {
         a.c.stiffness[i] = spring.stiffness;
         a.c.damping[i] = spring.damping;
         a.c.seen[i] = ctx.frame;
-        if (ctx.reduced_motion) a.land(i);
+        if (ctx.settings.reduced_motion) a.land(i);
         // A new target moves the spring from next frame's step on; wake for it now.
         ctx.motion = @max(ctx.motion, @abs(target - a.c.x[i]));
         return a.c.x[i];
@@ -175,7 +175,7 @@ pub const Frame = struct {
         const i = t.slot(id, 0);
         t.retarget(i, total, total, .linear);
         t.c.seen[i] = ctx.frame;
-        if (ctx.reduced_motion) t.land(i);
+        if (ctx.settings.reduced_motion) t.land(i);
         ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
         return keyframes.sample(keys, t.c.elapsed[i]);
     }
@@ -208,7 +208,7 @@ pub const Frame = struct {
         const i = t.slot(id, target);
         t.retarget(i, target, seconds, ease);
         t.c.seen[i] = ctx.frame;
-        if (ctx.reduced_motion) t.land(i);
+        if (ctx.settings.reduced_motion) t.land(i);
         ctx.motion = @max(ctx.motion, t.c.duration[i] - t.c.elapsed[i]);
         return t.c.x[i];
     }
@@ -233,7 +233,7 @@ pub const Frame = struct {
         layout.resolve(t, .y, f.in.viewport[1]);
         layout.place(t);
         // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
-        if (!f.ctx.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
+        if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);
         return f.finish();
     }

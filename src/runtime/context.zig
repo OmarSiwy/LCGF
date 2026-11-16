@@ -19,6 +19,7 @@ const Signals = @import("signals.zig").Signals;
 const Anims = @import("../anim/anims.zig").Anims;
 const Tweens = @import("../anim/tweens.zig").Tweens;
 const Flips = @import("../anim/flip.zig").Flips;
+const Settings = @import("../a11y/settings_data.zig").Settings;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -108,10 +109,10 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
-    /// The user asked for reduced motion (the platform's accessibility setting; the host copies
-    /// it here). Springs, tweens, transitions and sequences then show their end state at once,
-    /// and layout changes do not slide, so nothing keeps the host awake.
-    reduced_motion: bool = false,
+    /// The platform's accessibility settings; the host sets them, on change or every frame.
+    /// Under `reduced_motion` springs, tweens, transitions and sequences show their end state at
+    /// once and layout changes do not slide, so nothing keeps the host awake.
+    settings: Settings = .{},
     /// How much the springs and tweens are still moving; 0 at rest. `begin` sets it from
     /// `Anims.step` and `Tweens.step`.
     motion: f32 = 0,
@@ -692,7 +693,7 @@ test "reduced motion: every animation shows its end state in the frame it change
         var buffer: [n]u8 align(mem.column_align) = undefined;
     };
     var ctx = try Context.init(&S.buffer, example_limits);
-    ctx.reduced_motion = true;
+    ctx.settings.reduced_motion = true;
     const in: Input = .{ .viewport = .{ 100, 200 } };
     const Key = @import("../anim/keyframes.zig").Key;
     const keys = [_]Key{ .{ .at = 0, .value = 0 }, .{ .at = 0.5, .value = 7 } };
@@ -728,7 +729,7 @@ test "reduced motion: every animation shows its end state in the frame it change
     try testing.expect(!ctx.needsFrame(&in));
 
     // Turned off again: the next change moves as usual.
-    ctx.reduced_motion = false;
+    ctx.settings.reduced_motion = false;
     _ = Ui.frame(&ctx, &in, true);
     s = Ui.frame(&ctx, &in, false);
     try testing.expectEqual(@as(f32, 1), s.spring);

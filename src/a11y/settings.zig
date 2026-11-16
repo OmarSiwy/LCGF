@@ -13,26 +13,11 @@ const Tokens = theme.Tokens;
 const Focus = @import("../interact/focus.zig").Focus;
 const spec_zig = @import("../comptime/spec.zig");
 const a11y = @import("tree.zig");
+const settings_data = @import("settings_data.zig");
 const Spec = spec_zig.Spec;
 
-/// What the user asked the platform for. Plain data the host sets, every frame or on change.
-pub const Settings = struct {
-    /// Use `high_contrast_palette` instead of the theme's colours.
-    high_contrast: bool = false,
-    /// Text size relative to the theme's, from the platform's text-size setting (Windows "Make
-    /// text bigger", iOS Dynamic Type, Android font scale). Clamped to `text_scale_min` to
-    /// `text_scale_max`; NaN reads as `text_scale_min`. Only text grows: layout fits it.
-    text_scale: f32 = 1,
-    /// The platform asks for less motion (`prefers-reduced-motion`, macOS and iOS "Reduce
-    /// motion", Windows "Show animations" off). Transitions finish at once (`progress`); the
-    /// animation system (lane anim, C0724) reads this field.
-    reduced_motion: bool = false,
-    /// Show the focus ring all the time, not only after a key (`Focus.visible`, CSS
-    /// `:focus-visible`): for keyboard and switch users whose platform says so (macOS "Keyboard
-    /// navigation", Windows "Always show focus indicators"), or whose clicks come from a
-    /// pointer emulator.
-    always_show_focus: bool = false,
-};
+pub const Settings = settings_data.Settings;
+pub const progress = settings_data.progress;
 
 /// The range `Settings.text_scale` is clamped to: past both ends of what platforms offer
 /// (Android 0.85, iOS accessibility sizes about 3.1).
@@ -64,15 +49,6 @@ pub fn tokens(s: *const Settings, tok: *const Tokens) Tokens {
 /// of setting restyles the next frame.
 pub fn widgets(s: *const Settings, tok: *const Tokens) base.Theme {
     return theme.widgets(&tokens(s, tok));
-}
-
-/// How far through a transition of `seconds` the UI is, `elapsed` seconds after it started:
-/// 0 to 1. Under reduced motion every transition is done (1) from its first frame, so the
-/// host stops waking for it; a transition of 0 seconds is done at once either way.
-pub fn progress(s: *const Settings, elapsed: f32, seconds: f32) f32 {
-    const d = seconds * simd.b2f(!s.reduced_motion);
-    const done = simd.b2f(!(d > 0));
-    return base.unit((@max(elapsed, 0) + done) / @max(d, std.math.floatMin(f32)));
 }
 
 /// Applies `always_show_focus` to this frame's ring: call after `Focus.step`, before
