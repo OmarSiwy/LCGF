@@ -35,6 +35,10 @@ const scenes = @import("scenes");
 const src_scenes = @import("src_scenes");
 const linux = std.os.linux;
 
+/// No 256 KB thread-local signal stack (std's default, for stack traces on a crash): start.zig
+/// clears it before main, which the other harnesses' start-up does not pay.
+pub const std_options: std.Options = .{ .signal_stack_size = null };
+
 const rows = scenes.rows.count;
 const frames = 3000;
 
