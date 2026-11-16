@@ -55,6 +55,7 @@ const spec_zig = @import("../comptime/spec.zig");
 const events = @import("../comptime/events.zig");
 const signals = @import("../comptime/signals.zig");
 const Spec = spec_zig.Spec;
+const label_zig = @import("label.zig");
 const Id = types.Id;
 const Node = types.Node;
 const Color = types.Color;
@@ -122,6 +123,31 @@ pub inline fn stateIndex(r: Response) u2 {
     return @as(u2, @intFromBool(r.hovered)) | (@as(u2, @intFromBool(r.held)) << 1);
 }
 
+/// Why `State`'s field `name` cannot be bound by a `widget` that needs a `T`, or null when it
+/// can: the message `ComptimeUi` stops compilation with. Each widget's `bindError` calls it.
+pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime name: []const u8, comptime T: type) ?[]const u8 {
+    comptime {
+        if (!@hasField(State, name)) return widget ++ " '" ++ name ++ "': the state has no such field";
+        const FT = @FieldType(State, name);
+        if (FT == T) return null;
+        return widget ++ " '" ++ name ++ "' needs a " ++ @typeName(T) ++ " field, not " ++ @typeName(FT);
+    }
+}
+
+/// A compile error for the first node in `n`'s subtree whose binding its widget cannot take.
+fn checkBindings(comptime State: type, comptime n: Spec) void {
+    comptime {
+        if (n.bind) |name| {
+            const err: ?[]const u8 = switch (n.kind) {
+                .label => label_zig.bindError(State, name),
+                else => null,
+            };
+            if (err) |msg| @compileError(msg);
+        }
+        for (n.children) |c| checkBindings(State, c);
+    }
+}
+
 // ---- look: one function per part, called by both front ends -------------------------------
 
 pub fn labelText(th: *const Theme) TextStyle {
@@ -174,9 +200,7 @@ pub fn fraction(value: f32, lo: f32, hi: f32) f32 {
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-pub fn label(f: *Frame, th: *const Theme, str: []const u8) Node {
-    return f.text(str, labelText(th));
-}
+pub const label = label_zig.label;
 
 pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
     const node = f.open(id, buttonStyle(th));
@@ -217,11 +241,7 @@ pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32
 /// state struct of `ComptimeUi` must have them, with the types noted (a compile error if not).
 /// A comptime slider's value runs 0 to 1, the range of its `Event` payload.
 pub const ct = struct {
-    /// Text showing the string field `text`.
-    pub fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec {
-        _ = th;
-        return .{ .kind = .label, .bind = @tagName(text), .style = .{ .role = .label } };
-    }
+    pub const label = label_zig.ct.label;
 
     /// A button named `id` showing the string field `text`; its click is its event.
     pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
@@ -254,6 +274,7 @@ pub const ct = struct {
 /// and calls `frame` once per frame, as with `Context`. Labels are measured with `Mono`.
 pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
     const flatten = @import("../comptime/flatten.zig");
+    checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
     // One root row (the runtime front end's) above the spec's rows.
