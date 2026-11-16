@@ -42,6 +42,8 @@ pub const damage = @import("draw/damage.zig");
 pub const features = @import("draw/features.zig");
 pub const inherit = @import("draw/inherit.zig");
 pub const order = @import("draw/order.zig");
+pub const paths = @import("draw/paths.zig");
+pub const tinyvg = @import("draw/tinyvg.zig");
 pub const unicode_line = @import("text/unicode/line.zig");
 pub const unicode_bidi = @import("text/unicode/bidi.zig");
 pub const unicode_script = @import("text/unicode/script.zig");
@@ -57,6 +59,13 @@ pub const render_iface = @import("render/iface.zig");
 pub const render_conformance = @import("render/conformance.zig");
 pub const quad_shader = @import("render/shaders/quad.zig");
 pub const render_null = @import("render/null.zig");
+pub const context = @import("runtime/context.zig");
+pub const frame = @import("runtime/frame.zig");
+pub const text_lines = @import("text/layout/lines.zig");
+pub const text_spans = @import("text/layout/spans.zig");
+pub const text_query = @import("text/layout/query.zig");
+pub const text_stack = @import("text/layout/stack.zig");
+pub const text_layout_tests = @import("text/layout/tests.zig");
 
 test {
     std.testing.refAllDecls(@This());

@@ -1,19 +1,6 @@
 //! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
-//!   zig build                      compile the library module
-//!   zig build test                 run every test reachable from src/lcgr.zig
-//!   zig build test -Dcpu=x86_64_v3 same, with 8 SIMD lanes on x86-64
-//!   zig build test -Dlanes=16      same, with the SIMD lane count forced (simd.lanes)
-//!   zig build test-build           compile the tests only, e.g. with -Dtarget=aarch64-linux
-//!   zig build fmt                  fail if any Zig file is not formatted (CI runs this)
-//!   zig build fuzz [--fuzz=N]      tools/fuzz tests; with --fuzz, coverage-guided fuzzing
-//!   zig build fuzz-run -- 60       tools/fuzz seeded loop for 60 s (ci/run.sh fuzz)
-//!   zig build ct-rodata            object for the comptime read-only-data check (ci/run.sh ct-rodata)
-//!   zig build ct-setter            object for the comptime setter-shape check (ci/run.sh ct-setter)
-//!   zig build font-fuzz -- 300     font parser seeded mutation loop for 300 s (ci/run.sh font-fuzz)
-//!   zig build conformance-dump     the render conformance scenes as files (ci/run.sh conformance)
-//!   zig build harfbuzz             tests of the HarfBuzz shaping adapter; HarfBuzz is a lazy
-//!                                  build.zig.zon dependency built from source (ci/run.sh harfbuzz)
+//! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -193,6 +180,16 @@ pub fn build(b: *std.Build) void {
         harfbuzz.root_module.linkLibrary(hb_lib);
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
+
+    // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
+    const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/draw/paths_golden.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) }));
+    paths_golden.addPassthruArgs();
+    b.step("paths-golden", "Draw the path scenes for the golden check: -- OUT.bin").dependOn(&paths_golden.step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
