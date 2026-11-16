@@ -2,6 +2,10 @@
 //! that asks to remove it. Tier 2, written against the public API of tiers 0 and 1 (the
 //! recipe in base.zig).
 //!
+//! Accessibility: the pill is presentational; what assistive technology meets is its caption,
+//! static text (role label), and, on a removable chip, the remove button (role button, named
+//! by its caption). A chip is therefore static text, or static text and a button.
+//!
 //! State: the caption, the application's string, and nothing else: removing a chip is the
 //! application's to do when it is asked (the remove button's click), as a list of chips is
 //! the application's data. The runtime front end takes the caption as `str` and the remove
@@ -211,6 +215,30 @@ test "chip input: the remove button asks for removal on click, Enter and Space; 
         try testing.expectEqual(st.removed, h.app.removed);
         try testing.expectEqual(st.removed, if (o.comptime_.event) |e| e == .@"rust.remove" else false);
     }
+}
+
+var chip_semantics: base.Semantic(16) = .{};
+
+test "chip a11y: static text, and a button named by its caption when removable, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const h = &two;
+    h.init();
+    const in: Input = .{ .viewport = .{ 240, 60 } };
+    _ = try h.frame(&in);
+    const x = &chip_semantics;
+    try x.run(h);
+    // The pills are presentational.
+    try testing.expectEqual(null, x.row(2));
+    try testing.expectEqual(null, x.row(6));
+    for ([3]u32{ 3, 4, 7 }, [3]a11y.Role{ .label, .button, .label }, [3][]const u8{ "Rust", "x", "Draft" }) |node, role, name| {
+        const r = x.row(node).?;
+        try testing.expectEqual(@backingInt(role), x.out[0].c.role[r]);
+        try testing.expectEqualStrings(name, x.name(0, r));
+        try testing.expectEqualStrings(name, x.name(1, r));
+        try testing.expectEqual(@as(f32, 0), x.out[0].c.value[r]);
+        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    }
+    try testing.expectEqual(@backingInt(removeId(.from("rust"))), x.out[0].c.id[x.row(4).?]);
 }
 
 test {
