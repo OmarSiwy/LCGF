@@ -19,6 +19,7 @@ const Theme = base.Theme;
 const none = types.none;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -38,7 +39,8 @@ pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const
     const m = rove(current.*, @intCast(ids.len), clicked, focused, f.in);
     current.* = m.current;
     if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
-    _ = f.open(.none, barStyle(th));
+    const row = f.open(.none, barStyle(th));
+    f.tree().c.role[row.ix()] = role;
     for (ids, titles, 0..) |id, title, k| {
         const item = f.open(id, itemStyle(th));
         const r = f.interact(item, sense(k == current.*));
@@ -62,6 +64,14 @@ pub fn barStyle(th: *const Theme) Style {
 pub fn itemStyle(th: *const Theme) Style {
     return base.buttonStyle(th);
 }
+
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees (WAI-ARIA APG toolbar pattern): the bar is a `toolbar`
+/// holding `button`s named by their titles (from content). `types.Role` has no toolbar, so
+/// both front ends write the byte. The bar has no value or states, and no name of its own:
+/// a page labels it with `Semantics.labelled_by` where it has one.
+pub const role: u8 = @backingInt(a11y.Role.toolbar);
 
 // ---- behaviour ----------------------------------------------------------------------------
 
@@ -148,6 +158,7 @@ pub const ct = struct {
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
                 const t = &ui.tables.t;
                 const row = t.push(parent, .none, &n.style);
+                t.c.role[row] = role;
                 next.* += 1;
                 const th = @TypeOf(ui.*).theme;
                 inline for (n.children, names) |item, name| {
@@ -319,6 +330,31 @@ test "toolbar: one tab stop; click and Enter activate; arrows rove; in both fron
         try testing.expectEqual(st.act, h.app.activated);
         try testing.expectEqual(st.act, h.ui.signals.state.activated);
         try testing.expectEqual(@backingInt(Default.ids[st.cur]), h.ctx.inter.focus);
+    }
+}
+
+test "toolbar: role toolbar holding buttons named by their titles, in both front ends" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(a11y.Role.toolbar, @as(a11y.Role, @fromBackingInt(t.c.role[rows.bar])));
+        try testing.expectEqual(@as(f32, 0), t.c.value[rows.bar]);
+        try testing.expectEqual(none, sem.c.name[rows.bar]);
+        for (rows.item, [3][]const u8{ "Bold", "Italic", "Underline" }) |r, title| {
+            try testing.expectEqual(a11y.Role.button, @as(a11y.Role, @fromBackingInt(t.c.role[r])));
+            try testing.expectEqualStrings(title, check.nameOf(&sem, tx, str, r));
+            try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
+        }
     }
 }
 
