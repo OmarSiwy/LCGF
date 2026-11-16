@@ -26,6 +26,7 @@ const Reference = struct {
 const pages = .{
     Reference,
     lcgr.widgets_list.Page,
+    lcgr.widgets_vlist.Page,
 };
 
 var glyph_quads: [4096]Quad = undefined;

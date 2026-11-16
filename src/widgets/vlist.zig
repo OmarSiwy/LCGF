@@ -335,6 +335,19 @@ pub fn Example(comptime th: Theme) type {
     };
 }
 
+/// The example page in the default theme, its replay and the frames kept as golden images
+/// (tools/widgetgolden/ref/<name>.png), as tools/widgetgolden/dump.zig takes a page.
+pub const Page = struct {
+    pub const Run = Example(.default).Run;
+    pub const replay = @embedFile("testdata/vlist.replay");
+    pub const golden_frames = .{
+        .{ "vlist-rest", 0 },
+        .{ "vlist-scrolled", 3 },
+        .{ "vlist-selected", 5 },
+        .{ "vlist-end", 6 },
+    };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -347,6 +360,34 @@ var harness: Example(theme).Run = .{};
 /// row and its label).
 fn builtRows(t: *const Tree, box: u32) u32 {
     return (t.c.end[box] - box - 1) / 2;
+}
+
+test "vlist: the replay gives the same frames in both front ends" {
+    const h = &harness;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var sel: [12]u32 = undefined;
+    var scroll: [12]f32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        try testing.expectEqual(h.app.selected, h.ui.signals.state.selected);
+        try testing.expectEqual(h.app.scroll, h.ui.signals.state.scroll);
+        sel[k] = h.app.selected;
+        scroll[k] = h.app.scroll;
+        const t = out.runtime.tree;
+        const box = t.find(.from("items"));
+        // Never more rows than fit, whatever the scroll position.
+        try testing.expect(builtRows(t, box) <= capacity(5));
+        try testing.expectEqual(list_zig.selectedValue(h.app.selected), t.c.value[box]);
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(u32, &.{ none, none, none, none, none, 3, 199, 198, 199, 0, 0, 0 }, &sel);
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 60, 75, 75, 75, 5850, 5850, 5850, 0, 0, 5850 }, &scroll);
 }
 
 test "vlist: roles and value; only rows on screen are exported" {
