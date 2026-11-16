@@ -5,4 +5,5 @@ test {
     _ = @import("counter.zig");
     _ = @import("form.zig");
     _ = @import("list.zig");
+    _ = @import("dashboard.zig");
 }
