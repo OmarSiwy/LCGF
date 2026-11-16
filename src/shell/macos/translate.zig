@@ -64,6 +64,15 @@ pub const Record = union(enum) {
     /// `setMarkedText:selectedRange:replacementRange:`: the input method's composition, and the
     /// selected range in it in UTF-16 units (location, length). Empty text ends it.
     mark: Mark,
+    /// draggingEntered: or draggingUpdated:: files are over the window, at `draggingLocation`
+    /// (window coordinates).
+    drag: [2]f64,
+    /// draggingExited: the files left without being dropped.
+    drag_exit,
+    /// performDragOperation:, after its paths (`file`): dropped at `draggingLocation`.
+    drop: [2]f64,
+    /// One path of a drop, UTF-8 (`fileSystemRepresentation`).
+    file: []const u8,
     /// windowDidResize: the content view's size, in points.
     resize: [2]f64,
     /// viewDidChangeBackingProperties: the window's `backingScaleFactor`, physical pixels per
@@ -150,20 +159,41 @@ pub const Translator = struct {
     /// arrives so that, with several windows on one thread, another window's `poll` (which
     /// dispatches this window's events too) cannot change a frame not yet built.
     out: Buffers = .{ .text = &.{}, .events = &.{} },
+    /// Paths dropped since the last frame, back to back, and where each ends.
+    names: []u8 = &.{},
+    ends: []u32 = &.{},
+    n_names: u32 = 0,
+    n_files: u32 = 0,
+    /// Files are over the window, at `drag_at` (logical pixels); `dropped_files`: let go of
+    /// since the last frame.
+    dragging: bool = false,
+    dropped_files: bool = false,
+    drag_at: [2]f32 = .{ -1, -1 },
 
     /// Each buffer is split in two halves: the events arriving, and the frame handed out.
     /// `preedit` holds twice the longest composition shown; a longer one is cut at a character.
-    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
+    /// `names` and `ends` hold the paths of a drop, as `gestures.Files` lists them.
+    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{}, names: []u8 = &.{}, ends: []u32 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
         const t = buf.text.len / 2;
         const e = buf.events.len / 2;
         const p = buf.preedit.len / 2;
+        const n = buf.names.len / 2;
+        const f = buf.ends.len / 2;
         return .{
             .text = buf.text[0..t],
             .events = buf.events[0..e],
             .preedit = buf.preedit[0..p],
-            .out = .{ .text = buf.text[t..][0..t], .events = buf.events[e..][0..e], .preedit = buf.preedit[p..][0..p] },
+            .names = buf.names[0..n],
+            .ends = buf.ends[0..f],
+            .out = .{
+                .text = buf.text[t..][0..t],
+                .events = buf.events[e..][0..e],
+                .preedit = buf.preedit[p..][0..p],
+                .names = buf.names[n..][0..n],
+                .ends = buf.ends[f..][0..f],
+            },
         };
     }
 
@@ -173,6 +203,17 @@ pub const Translator = struct {
             .event => |e| t.event(e),
             .insert => |s| t.commit(s),
             .mark => |k| t.mark(k.text, k.selected),
+            .drag => |at| {
+                t.dragging = true;
+                t.drag_at = t.flip(at);
+            },
+            .drag_exit => t.dragging = false,
+            .file => |p| t.dropFile(p),
+            .drop => |at| {
+                t.dragging = false;
+                t.dropped_files = true;
+                t.drag_at = t.flip(at);
+            },
             .resize => |s| t.resize(s),
             .scale => |s| t.setScale(s),
             // Keys released while another window had the keyboard never send keyUp.
@@ -187,6 +228,24 @@ pub const Translator = struct {
     /// The content view's size in points, which is the viewport in logical pixels.
     pub fn resize(t: *Translator, size: [2]f64) void {
         t.in.viewport = .{ @floatCast(size[0]), @floatCast(size[1]) };
+    }
+
+    /// A point in window coordinates (origin bottom left) in logical pixels from the top left.
+    fn flip(t: *const Translator, at: [2]f64) [2]f32 {
+        return .{ @floatCast(at[0]), @floatCast(@as(f64, t.in.viewport[1]) - at[1]) };
+    }
+
+    /// One path of a drop. A path that does not fit, or is not UTF-8, is left out and counted
+    /// in `dropped`.
+    pub fn dropFile(t: *Translator, path: []const u8) void {
+        if (!std.unicode.utf8ValidateSlice(path) or t.names.len - t.n_names < path.len or t.n_files == t.ends.len) {
+            t.dropped += 1;
+            return;
+        }
+        @memcpy(t.names[t.n_names..][0..path.len], path);
+        t.n_names += @intCast(path.len);
+        t.ends[t.n_files] = t.n_names;
+        t.n_files += 1;
     }
 
     /// Physical pixels per logical pixel. Points are logical pixels, so the viewport and the
@@ -206,7 +265,7 @@ pub const Translator = struct {
         const b = &t.in.buttons;
         switch (e.kind) {
             .left_down, .left_up, .right_down, .right_up, .moved, .left_dragged, .right_dragged, .other_down, .other_up, .other_dragged, .entered => {
-                t.in.pointer = .{ @floatCast(e.at[0]), @floatCast(@as(f64, t.in.viewport[1]) - e.at[1]) };
+                t.in.pointer = t.flip(e.at);
                 switch (e.kind) {
                     .left_down, .left_up => b.left = e.kind == .left_down,
                     .right_down, .right_up => b.right = e.kind == .right_down,
@@ -355,10 +414,25 @@ pub const Translator = struct {
         @memcpy(o.text[0..t.n_text], t.text[0..t.n_text]);
         @memcpy(o.events[0..t.n_events], t.events[0..t.n_events]);
         @memcpy(o.preedit[0..t.composition.len], t.preedit[0..t.composition.len]);
+        @memcpy(o.names[0..t.n_names], t.names[0..t.n_names]);
+        @memcpy(o.ends[0..t.n_files], t.ends[0..t.n_files]);
         ev.in = t.in;
         ev.in.text = o.text[0..t.n_text];
         ev.in.events = o.events[0..t.n_events];
         ev.composition = .{ .text = o.preedit[0..t.composition.len], .range = t.composition.range };
+        // AppKit reports files over the window as they move, so drop targets can highlight
+        // before the drop; the paths come only with the drop.
+        const dropped = t.dropped_files;
+        ev.files = .{
+            .names = o.names[0..t.n_names],
+            .ends = o.ends[0 .. t.n_files * @intFromBool(dropped)],
+            .pos = t.drag_at,
+            .hover = t.dragging or dropped,
+            .drop = dropped,
+        };
+        t.dropped_files = false;
+        t.n_names = 0;
+        t.n_files = 0;
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
         t.n_text = 0;
@@ -375,6 +449,8 @@ pub const Translator = struct {
 ///     resize 800 600         content size in points
 ///     scale 2                backing scale factor
 ///     resign                 the window lost the keyboard
+///     drag 300 400           files over the window at x y; `drag_exit` they left
+///     file /tmp/a.txt        a dropped path, the rest of the line; `drop x y` the drop
 ///     close                  the close button
 ///     insert héllo           insertText:, the rest of the line
 ///     mark 1 0 にほ           setMarkedText: selected location and length, then the text
@@ -420,6 +496,10 @@ pub const Replay = struct {
         const name = it.next().?;
         const rec: Record = if (std.meta.stringToEnum(std.meta.Tag(Record), name)) |tag| switch (tag) {
             .resize => .{ .resize = .{ try num(&it), try num(&it) } },
+            .drag => .{ .drag = .{ try num(&it), try num(&it) } },
+            .drop => .{ .drop = .{ try num(&it), try num(&it) } },
+            .drag_exit => .drag_exit,
+            .file => return .{ .file = l[@min(l.len, "file ".len)..] },
             .scale => .{ .scale = try num(&it) },
             .resign => .resign,
             .close => .close,
@@ -940,4 +1020,55 @@ test "menu: key equivalents are distinct and Quit is Command-Q" {
     try testing.expectEqualStrings("terminate:", quit.action);
     try testing.expectEqualStrings("q", quit.key);
     try testing.expect(!quit.option);
+}
+
+test "drop: files hover as they are dragged, and their paths reach the drop frame" {
+    var text: [8]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var names: [128]u8 = undefined;
+    var ends: [8]u32 = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events, .names = &names, .ends = &ends });
+    var ev: Events = .{};
+    var buf: [8]Record = undefined;
+    var r: Replay = .{ .src =
+        \\frame
+        \\resize 800 600
+        \\drag 300 400
+        \\frame
+        \\drag 310 390
+        \\file /Users/a/a.txt
+        \\file /Users/a/\xe6\x97\xa5.png
+        \\# Too long for what is left of its 64 bytes: left out, the others kept.
+        \\file /Users/a/0123456789012345678901234567890123456789
+        \\drop 310 390
+        \\frame
+        \\frame
+        \\drag 10 10
+        \\drag_exit
+    };
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expect(ev.files.hover and !ev.files.drop);
+    try testing.expectEqual(@as(usize, 0), ev.files.count());
+    try testing.expectEqual([2]f32{ 300, 200 }, ev.files.pos);
+
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(usize, 2), ev.files.count());
+    try testing.expectEqualStrings("/Users/a/a.txt", ev.files.path(0));
+    try testing.expectEqualStrings("/Users/a/\\xe6\\x97\\xa5.png", ev.files.path(1));
+    try testing.expectEqual([2]f32{ 310, 210 }, ev.files.pos);
+    try testing.expect(ev.files.drop and ev.files.hover);
+    try testing.expectEqual(@as(u32, 1), t.dropped);
+
+    // The next frame has no files; neither has one after the files left.
+    _ = t.frame(&ev);
+    try testing.expectEqual(@as(usize, 0), ev.files.count());
+    try testing.expect(!ev.files.drop and !ev.files.hover);
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expect(!ev.files.drop and !ev.files.hover);
+
+    t.dropFile("\xff");
+    try testing.expectEqual(@as(u32, 2), t.dropped);
 }

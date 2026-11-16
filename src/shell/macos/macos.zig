@@ -66,6 +66,9 @@ var shell_ivar: *anyopaque = undefined;
 var default_mode: Id = undefined;
 /// NSPasteboardTypeString: plain text on the pasteboard.
 var pasteboard_string: Id = undefined;
+/// NSPasteboardTypeFileURL, and the reading option that keeps only file URLs.
+var pasteboard_file_url: Id = undefined;
+var file_urls_only: Id = undefined;
 var launched = false;
 /// The user chose Quit: every window's `poll` returns false from now on.
 var quit = false;
@@ -92,6 +95,10 @@ fn launch() Error!void {
     const kit = std.c.dlopen(appkit, .{ .NOW = true }) orelse return error.NoLibrary;
     const pb: *const Id = @ptrCast(@alignCast(std.c.dlsym(kit, "NSPasteboardTypeString") orelse return error.MissingFunction));
     pasteboard_string = pb.*;
+    inline for (.{ .{ &pasteboard_file_url, "NSPasteboardTypeFileURL" }, .{ &file_urls_only, "NSPasteboardURLReadingFileURLsOnlyKey" } }) |g| {
+        const p: *const Id = @ptrCast(@alignCast(std.c.dlsym(kit, g[1]) orelse return error.MissingFunction));
+        g[0].* = p.*;
+    }
     try registerView();
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -142,6 +149,11 @@ const methods = .{
     .{ "windowShouldClose:", &windowShouldClose, "c@:@" },
     .{ "windowDidResignKey:", &windowDidResignKey, "v@:@" },
     .{ "cursorUpdate:", &cursorUpdate, "v@:@" },
+    // NSDraggingDestination: files dragged from Finder.
+    .{ "draggingEntered:", &draggingUpdated, "Q@:@" },
+    .{ "draggingUpdated:", &draggingUpdated, "Q@:@" },
+    .{ "draggingExited:", &draggingExited, "v@:@" },
+    .{ "performDragOperation:", &performDragOperation, "c@:@" },
     .{ "viewDidChangeBackingProperties", &viewDidChangeBackingProperties, "v@:" },
     .{ "insertText:", &insertText, "v@:@" },
     // NSTextInputClient: the input method's view of the text.
@@ -339,6 +351,38 @@ fn cursorUpdate(view: Id, _: Sel, _: Id) callconv(.c) void {
     msg(void, m.cursors[@backingInt(m.applied.cursor)], "set", .{});
 }
 
+/// NSDragOperationCopy: the pointer shows a plus.
+const drag_copy: U = 1;
+
+fn draggingUpdated(view: Id, _: Sel, info: Id) callconv(.c) U {
+    const p = msg(NSPoint, info, "draggingLocation", .{});
+    shellOf(view).t.feed(.{ .drag = .{ p.x, p.y } });
+    return drag_copy;
+}
+
+fn draggingExited(view: Id, _: Sel, _: Id) callconv(.c) void {
+    shellOf(view).t.feed(.drag_exit);
+}
+
+/// The drop: each file URL on the dragging pasteboard as a path, then the drop point.
+fn performDragOperation(view: Id, _: Sel, info: Id) callconv(.c) bool {
+    const m = shellOf(view);
+    const pb = msg(Id, info, "draggingPasteboard", .{});
+    const classes = msg(Id, objc.class("NSArray"), "arrayWithObject:", .{objc.class("NSURL")});
+    const yes = msg(Id, objc.class("NSNumber"), "numberWithBool:", .{true});
+    const options = msg(Id, objc.class("NSDictionary"), "dictionaryWithObject:forKey:", .{ yes, file_urls_only });
+    if (msg(?Id, pb, "readObjectsForClasses:options:", .{ classes, options })) |urls| {
+        for (0..msg(U, urls, "count", .{})) |i| {
+            const url = msg(Id, urls, "objectAtIndex:", .{@as(U, i)});
+            const path = msg(?[*:0]const u8, url, "fileSystemRepresentation", .{}) orelse continue;
+            m.t.feed(.{ .file = std.mem.span(path) });
+        }
+    }
+    const p = msg(NSPoint, info, "draggingLocation", .{});
+    m.t.feed(.{ .drop = .{ p.x, p.y } });
+    return true;
+}
+
 /// The window moved to a display of another scale, or that display's scale changed. The next
 /// `present` resizes the layer's drawables (device.zig `Layer.resize`).
 fn viewDidChangeBackingProperties(view: Id, _: Sel) callconv(.c) void {
@@ -407,13 +451,16 @@ pub const Macos = struct {
     };
 
     /// Caller-owned storage: `text` and `events` hold two frames' typed text and key events,
-    /// `preedit` twice the longest input-method composition (`translate.Translator.Buffers`:
-    /// what arrives, and the frame handed out), `glyphs` one quad per byte of text in a frame (at most the
+    /// `preedit` twice the longest input-method composition, `names` and `ends` twice the
+    /// paths of one drop (`translate.Translator.Buffers`: what arrives, and the frame handed
+    /// out), `glyphs` one quad per byte of text in a frame (at most the
     /// renderer's 32768), `first` and `count` one row per text run.
     pub const Buffers = struct {
         text: []u8,
         events: []lcgr.input.Input.Event,
         preedit: []u8,
+        names: []u8,
+        ends: []u32,
         glyphs: []Quad,
         first: []u32,
         count: []u32,
@@ -440,7 +487,7 @@ pub const Macos = struct {
             .layer = .init(&dev, .{ .size = size, .scale = 1 }),
             .gfx = gfx,
             .frames = .init(dev.queue, gfx.desc.frames_in_flight),
-            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit }),
+            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit, .names = buf.names, .ends = buf.ends }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
         rt.object_setIvar(view, shell_ivar, m);
@@ -455,6 +502,7 @@ pub const Macos = struct {
         const area = msg(Id, msg(Id, objc.class("NSTrackingArea"), "alloc", .{}), "initWithRect:options:owner:userInfo:", .{ NSRect{}, @as(U, ns_tracking), view, @as(?Id, null) });
         msg(void, view, "addTrackingArea:", .{area});
         objc.release(area);
+        msg(void, view, "registerForDraggedTypes:", .{msg(Id, objc.class("NSArray"), "arrayWithObject:", .{pasteboard_file_url})});
         m.layer.attach(view);
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
@@ -619,12 +667,16 @@ const Fixture = struct {
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
     var preedit: [64]u8 = undefined;
+    var names: [512]u8 = undefined;
+    var ends: [16]u32 = undefined;
+    var names2: [512]u8 = undefined;
+    var ends2: [16]u32 = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [256]u32 = undefined;
     var count: [256]u32 = undefined;
 
     fn open(m: *Macos) !void {
-        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .glyphs = &glyphs, .first = &first, .count = &count });
+        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -667,6 +719,14 @@ test "macos: copy then paste round-trips through the general pasteboard" {
     try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
 }
 
+test "macos: the view accepts file drags from Finder" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    const types = msg(Id, m.view, "registeredDraggedTypes", .{});
+    try testing.expect(msg(bool, types, "containsObject:", .{pasteboard_file_url}));
+}
+
 test "macos: the view is a text input client that composes and commits" {
     var m: Macos = undefined;
     try Fixture.open(&m);
@@ -696,7 +756,7 @@ test "macos: two windows on one thread get their own events" {
     try Fixture.open(&a);
     defer a.deinit();
     var b: Macos = undefined;
-    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
+    try b.init(.{ .show = false }, .{ .text = &Fixture.text2, .events = &Fixture.events2, .preedit = &Fixture.preedit2, .names = &Fixture.names2, .ends = &Fixture.ends2, .glyphs = &Fixture.glyphs, .first = &Fixture.first, .count = &Fixture.count });
     defer b.deinit();
     const pool = objc.Pool.push();
     defer pool.pop();
