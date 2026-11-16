@@ -29,6 +29,7 @@ const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
 const date = @import("../i18n/date.zig");
 const keys = @import("keys.zig");
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -185,6 +186,9 @@ pub const TableBuilder = struct {
         const i = b.t.push(b.stack[b.depth - 1], .none, &.{ .role = .label });
         b.t.c.text[i] = b.tx.push(i, b.strings.add(str), &ts);
     }
+    pub fn role(b: *TableBuilder, i: u32, r: a11y.Role) void {
+        b.t.c.role[i] = @backingInt(r);
+    }
 };
 
 /// The runtime front end's side of `buildDialog`.
@@ -200,12 +204,15 @@ pub const FrameBuilder = struct {
     pub fn text(b: *FrameBuilder, str: []const u8, ts: TextStyle) void {
         _ = b.f.text(str, ts);
     }
+    pub fn role(b: *FrameBuilder, i: u32, r: a11y.Role) void {
+        b.f.tree().c.role[i] = @backingInt(r);
+    }
 };
 
 /// The button's rows: the button (filled by its response `r`) and its label, the chosen date.
 pub fn buildButton(b: anytype, th: *const Theme, comptime name: []const u8, st: DateState, r: Response) u32 {
     var buf: [48]u8 = undefined;
-    const i = b.open(.from(name), buttonStyle(th, r));
+    const i = b.open(.from(name), valued(buttonStyle(th, r), st));
     b.text(valueText(&buf, st.value), base.labelText(th));
     b.close();
     return i;
@@ -215,22 +222,22 @@ pub fn buildButton(b: anytype, th: *const Theme, comptime name: []const u8, st: 
 /// the month's title, next month), the weekdays, and six weeks of days.
 pub fn buildDialog(b: anytype, th: *const Theme, comptime name: []const u8, st: DateState, at: Rect) void {
     var buf: [48]u8 = undefined;
-    _ = b.open(.from(partName(name, "dialog")), dialogStyle(th, at));
+    b.role(b.open(.from(partName(name, "dialog")), dialogStyle(th, at)), .dialog);
     _ = b.open(.none, headerStyle(th));
-    _ = b.open(.from(partName(name, "prev")), navStyle(th, st.hover == Target.prev));
+    b.role(b.open(.from(partName(name, "prev")), navStyle(th, st.hover == Target.prev)), .button);
     b.text("<", base.labelText(th));
     b.close();
-    _ = b.open(.none, titleStyle());
+    b.role(b.open(.from(partName(name, "title")), titleStyle()), .heading);
     b.text(title(&buf, st.focus), base.labelText(th));
     b.close();
-    _ = b.open(.from(partName(name, "next")), navStyle(th, st.hover == Target.next));
+    b.role(b.open(.from(partName(name, "next")), navStyle(th, st.hover == Target.next)), .button);
     b.text(">", base.labelText(th));
     b.close();
     b.close();
-    _ = b.open(.from(partName(name, "grid")), gridStyle(th));
-    _ = b.open(.none, weekStyle());
+    b.role(b.open(.from(partName(name, "grid")), gridStyle(th)), .grid);
+    b.role(b.open(.none, weekStyle()), .row);
     for (weekday_texts) |w| {
-        _ = b.open(.none, cellStyle(th, .{}));
+        b.role(b.open(.none, cellStyle(th, .{})), .column_header);
         b.text(w, base.labelText(th));
         b.close();
     }
@@ -238,12 +245,12 @@ pub fn buildDialog(b: anytype, th: *const Theme, comptime name: []const u8, st: 
     const start = gridStart(st.focus);
     const month = civil(st.focus).month;
     inline for (0..6) |week| {
-        _ = b.open(.none, weekStyle());
+        b.role(b.open(.none, weekStyle()), .row);
         inline for (0..7) |wd| {
             const k: u8 = week * 7 + wd;
             const day: i32 = start + @as(i32, k);
             const d = civil(day);
-            _ = b.open(cellId(name, k), cellStyle(th, .{ .hovered = st.hover == k, .focused = day == st.focus, .chosen = day == st.value }));
+            b.role(b.open(cellId(name, k), cellStyle(th, .{ .hovered = st.hover == k, .focused = day == st.focus, .chosen = day == st.value })), .cell);
             b.text(day_texts[d.day], dayText(th, d.month == month));
             b.close();
         }
@@ -366,6 +373,37 @@ fn activate(st: DateState, t: u8) DateState {
         },
     }
     return s;
+}
+
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The button's style with the value column set: the chosen date, days since 1970-01-01 (exact
+/// in an f32 for any date a calendar shows).
+pub fn valued(s: Style, st: DateState) Style {
+    var out = s;
+    out.value = @floatFromInt(st.value);
+    return out;
+}
+
+/// The semantics of date picker `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`. The columns hold the roles (the
+/// button `button`, valued by `valued`, named by its text, the chosen date; the dialog
+/// `dialog`; its title `heading`; the month buttons `button`; the grid `grid` of `row`s, the
+/// weekdays `column_header`, the days `cell`, named by their number). Here: the button is
+/// expandable and expanded while the dialog is shown (`aria-expanded`), the dialog is named by
+/// its title (`aria-labelledby`, the month shown) and the chosen day is `selected`
+/// (`aria-selected`). Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, st: DateState) void {
+    const b = t.find(.from(name));
+    if (b == types.none) return;
+    const d = t.find(.from(partName(name, "dialog")));
+    s.c.state[b] |= a11y.State.bitsOf(.{ .expandable = true, .expanded = d != types.none });
+    if (d == types.none) return;
+    s.c.labelled_by[d] = t.find(.from(partName(name, "title")));
+    const k = st.value - gridStart(st.focus);
+    inline for (0..cells) |c| {
+        if (k == c) s.c.state[t.find(cellId(name, c))] |= a11y.State.bitsOf(.{ .selected = true });
+    }
 }
 
 // ---- comptime front end -------------------------------------------------------------------------
@@ -780,6 +818,52 @@ test "Datepicker: open, keys, month buttons, clicks and Escape in both front end
     try testing.expectEqual(@as(u8, 9), s[7].hover);
     try testing.expect(!s[9].open and s[9].value == daysFromCivil(2026, 11, 10));
     try testing.expect(!s[10].open and !s[11].open);
+}
+
+var sem: [2]@import("popover.zig").Semantic(160) = .{ .{}, .{} };
+
+test "Datepicker: a button valued by its date, opening a dialog named by its month with a grid of days" {
+    const pop = @import("popover.zig");
+    const h = &harness;
+    h.init();
+    var st: DateState = .on(today);
+    st.open = true;
+    const t = try setState(h, st);
+    const cp = &h.ui.tables.t;
+    semantics(t, sem[0].begin(), "due", h.app.due);
+    semantics(cp, sem[1].begin(), "due", h.ui.signals.state.due);
+    const e = sem[0].finish(t, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expect(pop.sameSemantics(e, sem[1].finish(cp, &h.ui.tables.tx, h.ui.tables.strings.buf)));
+    const row = struct {
+        fn of(x: *const a11y.Export, tr: *const Tree, comptime id: []const u8) u32 {
+            return pop.exportRow(x, tr.find(.from(id)));
+        }
+    }.of;
+    const H = std.hash.Fnv1a_32;
+    const b = row(e, t, "due");
+    try testing.expectEqual(@backingInt(a11y.Role.button), e.c.role[b]);
+    try testing.expectEqual(H.hash("November 16, 2026"), e.c.name_hash[b]);
+    try testing.expectEqual(@as(f32, today), e.c.value[b]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true }), e.c.state[b]);
+    const d = row(e, t, "due_dialog");
+    try testing.expectEqual(@backingInt(a11y.Role.dialog), e.c.role[d]);
+    try testing.expectEqual(H.hash("November 2026"), e.c.name_hash[d]);
+    try testing.expectEqual(@backingInt(a11y.Role.heading), e.c.role[row(e, t, "due_title")]);
+    try testing.expectEqual(@backingInt(a11y.Role.grid), e.c.role[row(e, t, "due_grid")]);
+    const c = row(e, t, "due_d15"); // the 16th
+    try testing.expectEqual(@backingInt(a11y.Role.cell), e.c.role[c]);
+    try testing.expectEqual(H.hash("16"), e.c.name_hash[c]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[c]);
+    try testing.expectEqual(@as(u8, 0), e.c.state[row(e, t, "due_d14")]);
+    // A week row and a weekday heading.
+    const week = t.c.parent[t.find(.from("due_d15"))];
+    try testing.expectEqual(@backingInt(a11y.Role.row), t.c.role[week]);
+    try testing.expectEqual(@backingInt(a11y.Role.column_header), t.c.role[t.find(.from("due_grid")) + 2]);
+    // Closed: collapsed.
+    const t2 = try setState(h, .on(today));
+    semantics(t2, sem[0].begin(), "due", h.app.due);
+    const e2 = sem[0].finish(t2, &h.ctx.texts[h.ctx.cur], h.ctx.strings[h.ctx.cur].buf);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true }), e2.c.state[row(e2, t2, "due")]);
 }
 
 test "checkDatepicker: the state field" {
