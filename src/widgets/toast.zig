@@ -92,17 +92,28 @@ pub fn Toast(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: 
 
 // ---- look -------------------------------------------------------------------------------------
 
-/// The layer: over the whole viewport, the toast at its bottom centre.
+/// The layer: over the whole viewport, the toast at its bottom centre, twice a button's
+/// padding from the edge.
 pub fn layerStyle(th: *const Theme, viewport: [2]f32) Style {
-    _ = th;
-    return .{ .float = true, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .main = .end, .cross = .center };
+    return .{ .float = true, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(th.pad * 2), .main = .end, .cross = .center };
 }
 
-/// The toast.
+/// Seconds over which a toast fades out at the end of its time.
+pub const fade: f32 = 0.3;
+
+/// The toast: a control-coloured plate with the control outline, padded like a wide button,
+/// fading out over its last `fade` seconds.
 pub fn toastStyle(th: *const Theme, t: ToastState) Style {
-    _ = th;
-    _ = t;
-    return .{ .dir = .x };
+    return .{
+        .dir = .x,
+        .pad = .{ th.pad * 2, th.pad, th.pad * 2, th.pad },
+        .cross = .center,
+        .fill = th.control,
+        .border = 1,
+        .border_color = th.control_hot,
+        .radius = th.radius,
+        .opacity = base.unit(t.left / fade),
+    };
 }
 
 // ---- runtime front end ------------------------------------------------------------------------
@@ -182,8 +193,36 @@ test "Toast: the page agrees in both front ends, hidden and shown" {
     try testing.expectEqual(@as(u32, 9), t.len);
     // At the bottom centre of the viewport.
     const r = t.rect(t.find(.from("saved")));
-    try testing.expectEqual(@as(f32, 300), r.y1);
+    try testing.expectEqual(@as(f32, 300 - 2 * Theme.default.pad), r.y1);
     try testing.expectApproxEqAbs(@as(f32, 200), (r.x0 + r.x1) * 0.5, 1);
+}
+
+test "layerStyle, toastStyle: the theme's tokens and the fade" {
+    const th: Theme = .default;
+    const s = toastStyle(&th, .{ .shown = true, .left = 2 });
+    try testing.expectEqual(th.control, s.fill);
+    try testing.expectEqual(th.control_hot, s.border_color);
+    try testing.expectEqual(@as(f32, 1), s.opacity);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), toastStyle(&th, .{ .shown = true, .left = 0.15 }).opacity, 1e-6);
+    try testing.expectEqual(@as(f32, 0), toastStyle(&th, .{}).opacity);
+    const l = layerStyle(&th, .{ 400, 300 });
+    try testing.expect(l.float);
+    try testing.expectEqual(types.Align.end, l.main);
+    try testing.expectEqual(types.Align.center, l.cross);
+}
+
+const light: Theme = .{ .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 };
+
+test "Toast: another theme restyles both front ends alike" {
+    const S = struct {
+        var h: Page(light).Run = .{};
+    };
+    S.h.init();
+    _ = try setState(&S.h, .{});
+    const t = try setState(&S.h, .{ .shown = true, .left = 0.1 });
+    const k = t.find(.from("saved"));
+    try testing.expectEqual(light.control.bitsOf(), t.c.look[k].fill);
+    try testing.expectEqual(@as(f32, 300 - 24), t.rect(k).y1);
 }
 
 test "checkToast: the state field" {
