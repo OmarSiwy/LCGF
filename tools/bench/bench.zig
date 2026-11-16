@@ -13,6 +13,10 @@
 //!   zig build bench                    print median and p99 per pass, in microseconds
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
 //!   zig build bench -- --scene NAME    run another scene of bench/scenes/ (frame passes only)
+//!   zig build bench -- --counters      also count cycles, instructions, L1D and LLC read misses
+//!                                      per pass (perf_event_open; pin to one core with taskset)
+//!   zig build bench -- --huge          put both column buffers in 2 MB transparent huge pages
+//!                                      (mmap + madvise; docs/perf/huge-pages.md)
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
 //!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
@@ -58,12 +62,22 @@ const src_bytes = blk: {
 var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = undefined;
 
 /// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
-/// same name in `to`. The column sets have the same names and row sizes (Look is the same
-/// 36-byte extern row in both). Columns only src/ has (paint inputs added after the port, such
+/// same name in `to`. The column sets have the same names and row sizes, except `look`, which
+/// is copied field by field (src reorders it and keeps the border width in its own column). Columns only src/ has (paint inputs added after the port, such
 /// as `uv`) are left as they are; the caller gives them the values the prototype implies.
 fn copyColumns(to: anytype, from: anytype, len: u32) void {
     inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
         if (comptime !@hasField(@TypeOf(from.*), name)) continue;
+        if (comptime std.mem.eql(u8, name, "look")) {
+            // src's Look is reordered and has no border (its own column, C0801): copy the
+            // fields both rows have, by name.
+            for (@field(to, name)[0..len], @field(from, name)[0..len]) |*d, sr| {
+                inline for (@typeInfo(@TypeOf(d.*)).@"struct".field_names) |f| {
+                    if (comptime @hasField(@TypeOf(sr), f)) @field(d, f) = @field(sr, f);
+                }
+            }
+            continue;
+        }
         if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
             inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
         } else copyRows(@field(to, name), @field(from, name), len);
@@ -195,6 +209,62 @@ fn build(f: *ui.Frame, th: *const ui.Theme) void {
     }
 }
 
+/// Hardware counters per pass, user space only, one group read per timestamp: cycles,
+/// instructions, L1D read misses, last-level read misses. -1 when not counting.
+var group: i32 = -1;
+const counter_names = [_][]const u8{ "cycles", "insns", "L1D miss", "LLC miss" };
+var counter_sums: [pass_names.len][counter_names.len]u64 = @splat(@splat(0));
+
+fn openCounters() !void {
+    const P = linux.PERF;
+    const miss = (@backingInt(P.COUNT.HW.CACHE.OP.READ) << 8) | (@backingInt(P.COUNT.HW.CACHE.RESULT.MISS) << 16);
+    const events = [counter_names.len]struct { linux.PERF.TYPE, u64 }{
+        .{ .HARDWARE, @backingInt(P.COUNT.HW.CPU_CYCLES) },
+        .{ .HARDWARE, @backingInt(P.COUNT.HW.INSTRUCTIONS) },
+        .{ .HW_CACHE, @backingInt(P.COUNT.HW.CACHE.L1D) | miss },
+        .{ .HW_CACHE, @backingInt(P.COUNT.HW.CACHE.LL) | miss },
+    };
+    for (events) |e| {
+        var a: linux.perf_event_attr = .{ .type = e[0], .config = e[1], .read_format = 8 }; // PERF_FORMAT_GROUP
+        a.flags.exclude_kernel = true;
+        a.flags.exclude_hv = true;
+        const rc: isize = @bitCast(linux.perf_event_open(&a, 0, -1, group, 0));
+        if (rc < 0) return error.PerfEventOpen; // perf_event_paranoid > 2, or no such event on this core
+        if (group < 0) group = @intCast(rc);
+    }
+}
+
+/// Timestamps (and, when counting, counter values) at the points the frame loop marks.
+const Marks = struct {
+    t: [16]u64 = undefined,
+    c: [16][counter_names.len]u64 = undefined,
+
+    fn mark(m: *Marks, j: usize) void {
+        m.t[j] = now();
+        if (group < 0) return;
+        var v: [1 + counter_names.len]u64 = undefined; // nr, then one value per event
+        _ = linux.read(group, @ptrCast(&v), @sizeOf(@TypeOf(v)));
+        m.c[j] = v[1..].*;
+    }
+    fn count(m: *const Marks, p: usize, from: usize, to: usize) void {
+        if (group < 0) return;
+        for (&counter_sums[p], m.c[from], m.c[to]) |*s, a, b| s.* += b - a;
+    }
+};
+
+/// `n` bytes of anonymous memory, 2 MB aligned, advised as transparent huge pages and touched,
+/// so the kernel backs it with huge pages now rather than on first use inside a timed pass.
+fn hugeBuffer(n: usize) ![]align(2 << 20) u8 {
+    const huge = 2 << 20;
+    const size = std.mem.alignForward(usize, n, huge);
+    const rc = linux.mmap(null, size + huge, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+    if (@as(isize, @bitCast(rc)) < 0) return error.Mmap;
+    const base: [*]align(huge) u8 = @ptrFromInt(std.mem.alignForward(usize, rc, huge));
+    if (linux.madvise(base, size, linux.MADV.HUGEPAGE) != 0) return error.Madvise;
+    @memset(base[0..size], 0);
+    return base[0..n];
+}
+
 fn us(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1000.0;
 }
@@ -205,10 +275,16 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     var json_path: ?[]const u8 = null;
     var idle = false;
+    var counters = false;
+    var huge = false;
     var scene = rows_scene;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--idle")) {
             idle = true;
+        } else if (std.mem.eql(u8, arg, "--huge")) {
+            huge = true;
+        } else if (std.mem.eql(u8, arg, "--counters")) {
+            counters = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
             json_path = args.next() orelse return error.MissingPath;
         } else if (std.mem.eql(u8, arg, "--scene")) {
@@ -219,11 +295,14 @@ pub fn main(init: std.process.Init) !void {
         } else return error.UnknownArgument;
     }
 
-    var ctx = try ui.Context.init(&buffer, limits);
+    if (counters) try openCounters();
+    const proto_buf: []align(ui.mem.column_align) u8 = if (huge) try hugeBuffer(buffer.len) else &buffer;
+    const src_buf: []align(lcgr.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
+    var ctx = try ui.Context.init(proto_buf, limits);
     const th: ui.Theme = .{};
     var in: ui.Input = .{};
     const font: lcgr.protocol.Mono = .{};
-    var carver: lcgr.mem.Carver = .{ .buf = &src_buffer };
+    var carver: lcgr.mem.Carver = .{ .buf = src_buf };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
     var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
@@ -240,18 +319,19 @@ pub fn main(init: std.process.Init) !void {
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
         if (scene.idle and !ctx.needsFrame(&in)) continue;
-        var m: [16]u64 = undefined;
-        m[0] = now();
+        var m: Marks = .{};
+        m.mark(0);
         var f = ctx.begin(&in); // includes the SIMD hit test and spring step
-        m[1] = now();
+        m.mark(1);
         scene.build(&f, &th);
-        m[2] = now();
+        m.mark(2);
         const pt = f.tree();
         const ptx = f.texts();
         pt.seal(0);
         st.len = pt.len;
         stx.len = ptx.len;
         copyColumns(&st.c, &pt.c, pt.len);
+        for (st.c.border[0..pt.len], pt.c.look[0..pt.len]) |*d, look| d.* = look.border;
         @memset(st.c.uv[0..pt.len], .{ 0, 0, 1, 1 }); // the prototype paints every quad with the whole texture
         for (st.c.radii[0..pt.len], st.c.look[0..pt.len]) |*r, look| r.* = @splat(look.radius); // and one radius
         @memset(st.c.opacity[0..pt.len], 1); // and no opacity
@@ -266,33 +346,33 @@ pub fn main(init: std.process.Init) !void {
         const strings = &f.ctx.strings[f.ctx.cur];
         const t = &st;
         const tx = &stx;
-        m[3] = now();
+        m.mark(3);
         font.measure(tx);
-        m[4] = now();
+        m.mark(4);
         lcgr.layout.prepare(t);
-        m[5] = now();
+        m.mark(5);
         lcgr.layout.applyText(t, tx, .x);
         lcgr.layout.fit(t, .x);
-        m[6] = now();
+        m.mark(6);
         // Level-order resolve (C0849); the order is rebuilt every frame and timed here.
         lcgr.levels.build(t, &slv);
         lcgr.levels.resolve(t, &slv, .x, in.viewport[0]);
-        m[7] = now();
+        m.mark(7);
         lcgr.layout.textAvail(t, tx);
         font.wrap(tx);
-        m[8] = now();
+        m.mark(8);
         lcgr.layout.applyText(t, tx, .y);
         lcgr.layout.fit(t, .y);
-        m[9] = now();
+        m.mark(9);
         lcgr.levels.resolve(t, &slv, .y, in.viewport[1]);
-        m[10] = now();
+        m.mark(10);
         lcgr.coefs.placeRows(t, &sk);
         lcgr.coefs.placeK(t, &sk);
-        m[11] = now();
+        m.mark(11);
         lcgr.layout.finalize(t);
-        m[12] = now();
+        m.mark(12);
         lcgr.paint.emit(t, tx, &scu, strings.buf[0..strings.len], &sd);
-        m[13] = now();
+        m.mark(13);
         copyColumns(&pt.c, &st.c, pt.len);
         copyColumns(&ptx.c, &stx.c, ptx.len);
         const out = f.finish();
@@ -302,12 +382,13 @@ pub fn main(init: std.process.Init) !void {
         nodes = t.len;
         texts = tx.len;
         const b = built;
-        samples[0][b] = m[1] - m[0];
-        samples[1][b] = m[2] - m[1];
-        samples[2][b] = m[12] - m[3];
-        samples[3][b] = m[13] - m[12];
+        const spans = [pass_names.len][2]u8{ .{ 0, 1 }, .{ 1, 2 }, .{ 3, 12 }, .{ 12, 13 }, .{ 0, 0 }, .{ 3, 4 }, .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 8 }, .{ 8, 9 }, .{ 9, 10 }, .{ 10, 11 }, .{ 11, 12 } };
+        for (spans, 0..) |sp, p| {
+            samples[p][b] = m.t[sp[1]] - m.t[sp[0]];
+            m.count(p, sp[0], sp[1]);
+        }
         samples[4][b] = samples[0][b] + samples[1][b] + samples[2][b] + samples[3][b];
-        for (5..pass_names.len, 3..) |p, j| samples[p][b] = m[j + 1] - m[j];
+        for (0..4) |p| m.count(4, spans[p][0], spans[p][1]);
         built += 1;
     }
     // Target D5: with input that never changes, only the first frame and its settle frame are built.
@@ -338,6 +419,19 @@ pub fn main(init: std.process.Init) !void {
     for (names, samples[0..names.len], 0..) |name, *s, p| {
         const n = if (p < pass_names.len) built else frames;
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[n / 2]), us(s[n * 99 / 100]) });
+    }
+    if (group >= 0) {
+        // Means per built frame. Each read is a syscall: its kernel half is not counted, but it
+        // evicts some L1 lines, so short passes carry a few dozen extra misses.
+        try w.print("{s:<10}", .{"counters"});
+        for (counter_names) |name| try w.print(" {s:>10}", .{name});
+        try w.print(" {s:>10} {s:>10}\n", .{ "IPC", "L1D/node" });
+        for (pass_names, counter_sums) |name, sums| {
+            try w.print("{s:<10}", .{name});
+            for (sums) |v| try w.print(" {d:10.0}", .{@as(f64, @floatFromInt(v)) / @as(f64, @floatFromInt(built))});
+            const f: [4]f64 = .{ @floatFromInt(sums[0]), @floatFromInt(sums[1]), @floatFromInt(sums[2]), @floatFromInt(@max(built * nodes, 1)) };
+            try w.print(" {d:10.2} {d:10.2}\n", .{ f[1] / @max(f[0], 1), f[2] / f[3] });
+        }
     }
     // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
     // in paint order, after merging across text, and the opaque quads a depth back end draws
