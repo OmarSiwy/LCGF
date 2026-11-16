@@ -42,13 +42,15 @@ pub const Spec = struct {
 /// What makes a node's rows dynamic, and the state field that decides which are live.
 pub const Region = struct {
     kind: RegionKind,
-    /// The state field: a list's count (an integer).
+    /// The state field: a list's count (an integer), a `when`'s condition (a bool).
     bind: []const u8,
 };
 
 pub const RegionKind = enum(u8) {
     /// A container with `max` copies of a template; the first `count` are live.
     list,
+    /// A subtree, itself included, that is live only while its condition holds.
+    when,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -105,6 +107,17 @@ pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
 pub fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec {
     const copies: [max]Spec = @splat(template);
     return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(copies), .region = .{ .kind = .list, .bind = @tagName(count) } };
+}
+
+/// `subtree`, live only while the bool state field `condition` is true: `when(.advanced,
+/// col(...))`. Its rows are reserved either way; while the condition is false they take no
+/// space, are not drawn and are not hit, and the parent lays out as if it had no such child.
+/// A node has one region: to make a list conditional, wrap it in a `col`.
+pub fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec {
+    if (subtree.region != null) @compileError("when: the subtree already has a region; wrap it in a col");
+    var out = subtree;
+    out.region = .{ .kind = .when, .bind = @tagName(condition) };
+    return out;
 }
 
 // ---- tests -------------------------------------------------------------------------------------

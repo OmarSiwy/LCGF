@@ -1,5 +1,5 @@
 //! Dynamic regions: the parts of a comptime UI whose rows exist only when run-time state says
-//! so (`spec.list`). Tier 1.
+//! so (`spec.list`, `spec.when`). Tier 1.
 //!
 //! A region's rows are all reserved: the flattened tables hold every row it could ever need,
 //! so they stay read-only and the row count exact. Each frame a selection (`Selection`, read
@@ -28,13 +28,13 @@ pub const Info = struct {
     row: u32,
     /// One past its last descendant.
     end: u32,
-    /// Rows of one list copy.
+    /// Rows of one list copy; 0 for other kinds.
     stride: u32,
-    /// List copies reserved.
+    /// List copies reserved; 0 for other kinds.
     max: u32,
 };
 
-/// One region's run-time input: a list's count.
+/// One region's run-time input: a list's count, a `when`'s condition as 0 or 1.
 pub const Select = struct { n: u32 = 0 };
 
 fn collect(comptime s: Spec, comptime next: *comptime_int, comptime out: *[]const Info) void {
@@ -45,8 +45,8 @@ fn collect(comptime s: Spec, comptime next: *comptime_int, comptime out: *[]cons
         .bind = r.bind,
         .row = i,
         .end = i + flatten.count(s),
-        .stride = if (s.children.len == 0) 0 else flatten.count(s.children[0]),
-        .max = s.children.len,
+        .stride = if (r.kind != .list or s.children.len == 0) 0 else flatten.count(s.children[0]),
+        .max = if (r.kind != .list) 0 else s.children.len,
     }};
     for (s.children) |c| collect(c, next, out);
 }
@@ -97,9 +97,14 @@ pub fn Regions(comptime spec: Spec) type {
         pub fn mask(sel: Selection) Mask {
             var m: Mask = @splat(~@as(u32, 0));
             inline for (regions, sel) |r, s| {
-                const first = r.row + 1;
+                // The rows the region may hide, and how many of them from the first are live.
+                const first = switch (r.kind) {
+                    .list => r.row + 1,
+                    .when => r.row,
+                };
                 const len = switch (r.kind) {
                     .list => @min(s.n, r.max) * r.stride,
+                    .when => @min(s.n, 1) * (r.end - r.row),
                 };
                 for (first..r.end) |j| m[j] &= 0 -% @as(u32, @intFromBool(@as(u32, @intCast(j)) - first < len));
             }
@@ -108,11 +113,12 @@ pub fn Regions(comptime spec: Spec) type {
     };
 }
 
-/// A bound selector field as a count: integers saturate into u32.
+/// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1.
 fn number(v: anytype) u32 {
     return switch (@typeInfo(@TypeOf(v))) {
         .int => @intCast(std.math.clamp(v, 0, std.math.maxInt(u32))),
-        else => @compileError("a list count is an integer field, not " ++ @typeName(@TypeOf(v))),
+        .bool => @intFromBool(v),
+        else => @compileError("a region selects by an integer or bool field, not " ++ @typeName(@TypeOf(v))),
     };
 }
 
@@ -143,10 +149,10 @@ fn pushLive(t: anytype, comptime s: Spec, parent: u32, sel: []const Select, next
     const k = next.*;
     if (s.region != null) next.* += 1;
     inline for (s.children, 0..) |c, ci| {
-        const shown = if (s.region) |r| switch (r.kind) {
-            .list => ci < sel[k].n,
-        } else true;
-        if (shown) pushLive(t, c, i, sel, next) else next.* += regionsIn(c);
+        const in_list = if (s.region) |r| r.kind != .list or ci < sel[k].n else true;
+        // A `when` child's region is the next one numbered.
+        const cond = if (c.region) |r| r.kind != .when or sel[next.*].n != 0 else true;
+        if (in_list and cond) pushLive(t, c, i, sel, next) else next.* += regionsIn(c);
     }
     t.seal(i);
 }
@@ -193,35 +199,40 @@ fn expectLive(comptime L: type, comptime s: Spec, sel: L.Regions.Selection, view
     try testing.expectEqual(t.len, r);
 }
 
-test "list: the to-do example lays out its live copies as the runtime tree of them, at every count" {
+test "list, when: the to-do example lays out its live rows as the runtime tree of them, at every count" {
     const e = examples.dynamic[0];
     const P = ct_layout.Plain(e.spec, e.options);
     const L = ct_layout.Layout(e.spec, e.options);
     const D = P.Regions;
-    try testing.expectEqual(1, D.count);
-    // 1 + 8 copies of 3 rows + the footer's 3: the template is bounded, rows are reserved.
-    try testing.expectEqual(1 + 1 + 1 + 8 * 3 + 3, P.Cols.node_count);
-    try testing.expectEqual(Info{ .kind = .list, .bind = "len", .row = 2, .end = 27, .stride = 3, .max = 8 }, D.regions[0]);
-    // The footer row folds even beside a dynamic region; nothing in or above the list does.
+    try testing.expectEqual(2, D.count);
+    // Root, heading 3, list 1 + 8 copies of 3 rows, footer 3: the template is bounded and every
+    // row a region could need is reserved.
+    try testing.expectEqual(1 + 3 + 1 + 8 * 3 + 3, P.Cols.node_count);
+    try testing.expectEqual(Info{ .kind = .list, .bind = "len", .row = 4, .end = 29, .stride = 3, .max = 8 }, D.regions[0]);
+    try testing.expectEqual(Info{ .kind = .when, .bind = "footer", .row = 29, .end = 32, .stride = 0, .max = 0 }, D.regions[1]);
+    // The heading folds beside the dynamic regions; nothing in or above them does.
     try testing.expectEqual(2, L.folded_rows);
-    for (0..11) |count| {
-        var state: examples.Todo = .{ .len = @intCast(count) };
+    for (0..11) |count| for ([_]bool{ false, true }) |footer| {
+        var state: examples.Todo = .{ .len = @intCast(count), .footer = footer };
         const sel = D.select(examples.Todo, &state);
-        try testing.expectEqual(@min(count, 10), sel[0].n);
+        try testing.expectEqual(count, sel[0].n);
+        try testing.expectEqual(@intFromBool(footer), sel[1].n);
         inline for (.{ [2]f32{ 800, 600 }, [2]f32{ 120, 90 }, [2]f32{ 1, 1 } }) |vp| {
             try expectLive(P, e.spec, sel, vp);
             try expectLive(L, e.spec, sel, vp);
         }
-    }
+    };
 }
 
-test "Regions.mask: live rows are the first count copies; a count past max shows max" {
+test "Regions.mask: a list keeps its first count copies (max past max); a when its whole subtree or nothing" {
     const D = Regions(examples.todo);
-    const r = D.regions[0];
-    inline for (.{ 0, 1, 5, 8, 9, 1 << 31 }) |k| {
-        const m = D.mask(.{.{ .n = k }});
-        for (0..r.row + 1) |j| try testing.expectEqual(~@as(u32, 0), m[j]);
-        for (r.row + 1..r.end) |j| try testing.expectEqual(j - (r.row + 1) < @min(k, 8) * 3, m[j] != 0);
-        for (r.end..m.len) |j| try testing.expectEqual(~@as(u32, 0), m[j]);
-    }
+    const list = D.regions[0];
+    const cond = D.regions[1];
+    inline for (.{ 0, 1, 5, 8, 9, 1 << 31 }) |k| for ([_]u32{ 0, 1, 7 }) |c| {
+        const m = D.mask(.{ .{ .n = k }, .{ .n = c } });
+        for (0..list.row + 1) |j| try testing.expectEqual(~@as(u32, 0), m[j]);
+        for (list.row + 1..list.end) |j| try testing.expectEqual(j - (list.row + 1) < @min(k, 8) * 3, m[j] != 0);
+        for (cond.row..cond.end) |j| try testing.expectEqual(c != 0, m[j] != 0);
+        for (cond.end..m.len) |j| try testing.expectEqual(~@as(u32, 0), m[j]);
+    };
 }

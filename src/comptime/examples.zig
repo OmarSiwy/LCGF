@@ -59,13 +59,14 @@ pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap
 pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
 
-/// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, a fixed footer.
-/// Not in `all`: a UI with a dynamic region is laid out with `runLive` and a selection.
-pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3 };
+/// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, and a footer shown
+/// while `footer` is set. Not in `all`: a UI with dynamic regions is laid out with `runLive`
+/// and a selection.
+pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3, footer: bool = true };
 pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
-    s.label(.title),
-    s.list(.len, 8, .{ .gap = 2 }, s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) })),
     s.row(.{ .gap = 8 }, .{ s.label(.title), s.col(.{ .size = .{ .px(30), .px(10) } }, .{}) }),
+    s.list(.len, 8, .{ .gap = 2 }, s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) })),
+    s.when(.footer, s.row(.{ .gap = 8, .pad = @splat(2) }, .{ s.label(.title), s.col(.{ .size = .{ .px(40), .px(12) } }, .{}) })),
 });
 
 /// The examples with dynamic regions.
