@@ -256,7 +256,9 @@ pub const Ios = struct {
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame; `first` and `count`
     /// one row per text run.
-    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32 };
+    /// `text` and `events` hold what arrives between polls and the frame handed out (half each):
+    /// pasted and, later, typed text.
+    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32, text: []u8, events: []lcgr.input.Input.Event };
 
     /// The shell over the view the application delegate opened. Call from `start`'s `entry`;
     /// the shell must not move afterwards (UIKit's callbacks point at it).
@@ -278,6 +280,7 @@ pub const Ios = struct {
         fns.CFRunLoopAddSource(run_loop, source, common_modes);
         const screen = msg(Id, objc.class("UIScreen"), "mainScreen", .{});
         s.* = .{
+            .t = .init(.{ .text = buf.text, .events = buf.events }),
             .view = view,
             .dev = dev,
             .layer = .{ .layer = layer, .format = .bgra8_unorm },
@@ -349,7 +352,31 @@ pub const Ios = struct {
         return s.t.frame(ev);
     }
 
-    pub fn apply(_: *Ios, _: *const Platform) void {}
+    /// Applies a frame's effects: text the frame copies goes to the general pasteboard.
+    pub fn apply(s: *Ios, p: *const Platform) void {
+        if (p.clipboard.len > 0) s.copy(p.clipboard);
+    }
+
+    /// Puts UTF-8 text on the general pasteboard (`UIPasteboard.string`). Invalid UTF-8 leaves
+    /// the pasteboard as it was.
+    pub fn copy(_: *Ios, utf8: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const str = msg(?Id, msg(Id, objc.class("NSString"), "alloc", .{}), "initWithBytes:length:encoding:", .{ utf8.ptr, @as(objc.NSUInteger, utf8.len), ns_utf8_encoding }) orelse return;
+        defer objc.release(str);
+        msg(void, generalPasteboard(), "setString:", .{str});
+    }
+
+    /// Types the pasteboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
+    /// host to: call it after a frame whose widgets requested a paste. iOS may ask the user
+    /// first ("Allow Paste") and returns nothing if they decline.
+    pub fn paste(s: *Ios) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const str = msg(?Id, generalPasteboard(), "string", .{}) orelse return;
+        const utf8 = msg(?[*:0]const u8, str, "UTF8String", .{}) orelse return;
+        s.t.paste(std.mem.span(utf8));
+    }
 
     /// Draws the frame into the layer's next drawable and presents it.
     pub fn present(s: *Ios, out: *const Output) void {
@@ -391,6 +418,12 @@ pub const Ios = struct {
         fns.CFRunLoopWakeUp(s.run_loop);
     }
 };
+
+const ns_utf8_encoding: objc.NSUInteger = 4;
+
+fn generalPasteboard() Id {
+    return msg(Id, objc.class("UIPasteboard"), "generalPasteboard", .{});
+}
 
 /// The wake source's callback: handling it is what ends the run loop's turn.
 fn performWake(_: ?*anyopaque) callconv(.c) void {}

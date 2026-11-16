@@ -64,8 +64,28 @@ pub const Translator = struct {
     /// It ended: the pointer leaves after this frame, as a finger lifted from glass hovers
     /// nothing. A trackpad's pointer stays.
     leave_next: bool = false,
-    /// Touches beyond `max_contacts`, since `init`.
+    /// Touches beyond `max_contacts`, and text that did not fit the buffers, since `init`.
     dropped: u32 = 0,
+    /// Caller-owned storage for the typed text and text events arriving (`frame` copies them
+    /// to `out`, which `ev` points into until the next `frame`).
+    text: []u8 = &.{},
+    events: []Input.Event = &.{},
+    n_text: u32 = 0,
+    n_events: u32 = 0,
+    out: Buffers = .{ .text = &.{}, .events = &.{} },
+
+    /// Each buffer is split in two halves: what arrives, and the frame handed out.
+    pub const Buffers = struct { text: []u8, events: []Input.Event };
+
+    pub fn init(buf: Buffers) Translator {
+        const t = buf.text.len / 2;
+        const e = buf.events.len / 2;
+        return .{
+            .text = buf.text[0..t],
+            .events = buf.events[0..e],
+            .out = .{ .text = buf.text[t..][0..t], .events = buf.events[e..][0..e] },
+        };
+    }
 
     /// The view's bounds changed (`layoutSubviews`): `w` x `h` points.
     pub fn resize(t: *Translator, w: f32, h: f32) void {
@@ -164,6 +184,48 @@ pub const Translator = struct {
         t.n_rows = n - 1;
     }
 
+    /// Pasteboard text (`UIPasteboard.string`, UTF-8) delivered as typed text, the way
+    /// `keyboard.Clipboard` asks a host to answer a paste: one `.text` event, line ends as
+    /// `\n`, other control characters but tabs left out. Invalid UTF-8, or a paste that does
+    /// not fit, is dropped whole.
+    pub fn paste(t: *Translator, utf8: []const u8) void {
+        if (!std.unicode.utf8ValidateSlice(utf8)) {
+            t.dropped += 1;
+            return;
+        }
+        const at = t.n_text;
+        var i: usize = 0;
+        while (i < utf8.len) : (i += 1) {
+            var ch = utf8[i];
+            if (ch == '\r') {
+                // \r\n and a lone \r are both one line end.
+                if (i + 1 < utf8.len and utf8[i + 1] == '\n') i += 1;
+                ch = '\n';
+            }
+            if ((ch < 0x20 and ch != '\n' and ch != '\t') or ch == 0x7f) continue;
+            if (t.n_text == t.text.len) {
+                t.n_text = at;
+                t.dropped += 1;
+                return;
+            }
+            t.text[t.n_text] = ch;
+            t.n_text += 1;
+        }
+        if (t.n_text == at) return;
+        t.push(.{ .kind = .text, .mods = t.in.mods, .at = at, .len = t.n_text - at }, at);
+    }
+
+    /// Appends `e`; if the events are full, takes back the text from `at` and counts it.
+    fn push(t: *Translator, e: Input.Event, at: u32) void {
+        if (t.n_events == t.events.len) {
+            t.n_text = at;
+            t.dropped += 1;
+            return;
+        }
+        t.events[t.n_events] = e;
+        t.n_events += 1;
+    }
+
     /// A frame is owed without a new event: a release, a pointer leaving or a lift that the
     /// last frame deferred. The shell does not sleep while this holds.
     pub fn pending(t: *const Translator) bool {
@@ -174,8 +236,15 @@ pub const Translator = struct {
     pub fn frame(t: *Translator, ev: *Events) bool {
         const n = t.n_rows;
         @memcpy(t.out_rows[0..n], t.rows[0..n]);
+        const o = t.out;
+        @memcpy(o.text[0..t.n_text], t.text[0..t.n_text]);
+        @memcpy(o.events[0..t.n_events], t.events[0..t.n_events]);
         ev.in = t.in;
         ev.in.contacts = t.out_rows[0..n];
+        ev.in.text = o.text[0..t.n_text];
+        ev.in.events = o.events[0..t.n_events];
+        t.n_text = 0;
+        t.n_events = 0;
         // What this frame reported is settled: lifted rows go, the deferred release follows.
         var row: u32 = n;
         while (row > 0) {
@@ -205,6 +274,7 @@ pub const Translator = struct {
 ///     bounds 390 844         the view's bounds, points
 ///     scale 3                its contentScaleFactor
 ///     insets 47 0 34 0       its safeAreaInsets: top, left, bottom, right
+///     paste two words        the pasteboard's text, the rest of the line (`\n` for a line end)
 ///     touch began 1 37 25    a touch: phase, id, x, y, then optionally its `Kind` and pressure
 ///     terminate              applicationWillTerminate:
 pub const Replay = struct {
@@ -215,7 +285,7 @@ pub const Replay = struct {
 
     pub const Error = error{Syntax};
     const Words = std.mem.TokenIterator(u8, .scalar);
-    const Line = enum { bounds, scale, insets, touch, terminate };
+    const Line = enum { bounds, scale, insets, touch, paste, terminate };
 
     /// Feeds the next frame's events to `t`. False after the last frame.
     pub fn next(r: *Replay, t: *Translator) Error!bool {
@@ -243,6 +313,14 @@ pub const Replay = struct {
                     t.touch(c);
                 },
                 .terminate => t.terminate(),
+                .paste => {
+                    // The rest of the line, with `\n` for a line end, through a line-sized buffer.
+                    var line: [256]u8 = undefined;
+                    const rest = l[@min(l.len, "paste ".len)..];
+                    const n = std.mem.replace(u8, rest[0..@min(rest.len, line.len)], "\\n", "\n", &line);
+                    t.paste(line[0 .. @min(rest.len, line.len) - n]);
+                    continue;
+                },
             }
             if (w.next() != null) return error.Syntax;
         }
@@ -441,4 +519,34 @@ test "translate: scale and safe area, portrait then landscape" {
         try testing.expect(out.status.ok());
         try testing.expectEqual(w.sidebar, out.tree.rect(out.tree.find(example.id_sidebar)));
     }
+}
+
+test "translate: pasted text is typed in one event, line ends as \\n, control characters out" {
+    var r: Replay = .{ .src =
+        \\frame
+        \\paste two\nlines é
+        \\frame
+    };
+    var text: [64]u8 = undefined;
+    var events: [8]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events });
+    var ev: Events = .{};
+    try testing.expect(try r.next(&t));
+    t.paste("a\r\nb\rc\x07\td");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("two\nlines \u{e9}a\nb\nc\td", ev.in.text);
+    try testing.expectEqualSlices(Input.Event, &.{
+        .{ .kind = .text, .at = 0, .len = 12 },
+        .{ .kind = .text, .at = 12, .len = 7 },
+    }, ev.in.events);
+    // The next frame starts empty; a paste that does not fit (32 bytes a half), or that is not
+    // UTF-8, is dropped whole.
+    try testing.expect(try r.next(&t));
+    const long: [33]u8 = @splat('x');
+    t.paste(&long);
+    t.paste("\xff");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.in.text);
+    try testing.expectEqual(@as(usize, 0), ev.in.events.len);
+    try testing.expectEqual(@as(u32, 2), t.dropped);
 }

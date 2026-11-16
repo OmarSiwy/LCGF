@@ -14,6 +14,8 @@ var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
+var text: [512]u8 = undefined;
+var events: [128]lcgr.input.Input.Event = undefined;
 
 export fn main(argc: c_int, argv: ?[*]?[*:0]u8) c_int {
     ios.start(argc, argv, run);
@@ -21,7 +23,7 @@ export fn main(argc: c_int, argv: ?[*]?[*:0]u8) c_int {
 
 fn run() void {
     var shell: ios.Ios = undefined;
-    shell.init(.{ .glyphs = &glyphs, .first = &first, .count = &count }) catch |e| {
+    shell.init(.{ .glyphs = &glyphs, .first = &first, .count = &count, .text = &text, .events = &events }) catch |e| {
         std.debug.print("ios-example: {t}\n", .{e});
         return;
     };
