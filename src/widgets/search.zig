@@ -90,14 +90,35 @@ pub fn clearText(th: *const Theme, shown: bool) TextStyle {
     return .{ .px = th.text_px, .color = colors[@intFromBool(shown)] };
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// Applies a frame's input to search field `s` named `id`, laid out last frame at `last`:
+/// a click on the shown clear button (`clear_clicked`) or Escape on the focused field empties
+/// it; then everything a text field does (`textfield.behave`). `r` is the field's response; a
+/// clear click focuses it, which the caller has done. `s.result.changed` covers clearing.
+pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, clear_clicked: bool, last: Rect, in: *const Input) void {
+    const some = s.text().len > 0;
+    const esc = r.focused and keys.keyCount(in, escape, .press) > 0;
+    const cleared = some and (clear_clicked or esc);
+    if (cleared) s.set("");
+    tf.behave(s, th, id, r, last, in);
+    s.result.changed = s.result.changed or cleared;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns the
-/// field's response.
+/// field's response; what the input did is `s.result` (`submitted`: Enter).
 pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
     const inter = &f.ctx.inter;
     const clear = inter.response(clearId(id));
-    const r0 = inter.response(id);
+    const some = s.text().len > 0;
+    var r0 = inter.response(id);
+    const refocus = clear.clicked and some;
+    if (refocus) inter.focus = @backingInt(id);
+    r0.focused = r0.focused or refocus;
+    behave(s, th, id, r0, clear.clicked, f.lastRect(id), f.in);
+    tf.platform(f, s);
     const shown = s.text().len > 0;
     _ = f.open(.none, boxStyle(th, r0.focused));
     const node = f.open(id, inputStyle(th, s.scroll));
@@ -122,7 +143,8 @@ pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8)
 
 pub const ct = struct {
     /// A search field named `id` over the `Text(cap)` field `bind`, showing the string field
-    /// `hint` while empty; its clear button is the widget `<id>.clear`.
+    /// `hint` while empty; its clear button is the widget `<id>.clear`. Its events carry the
+    /// `edit.Result` of a frame that changed, cleared or submitted the text.
     pub fn search(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec {
         const name = @tagName(id);
         var field = spec_zig.row(inputStyle(&th, 0), .{ Spec{ .kind = .col }, Spec{ .kind = .label }, Spec{ .kind = .col } });
@@ -150,7 +172,7 @@ pub const Stop = struct {
 };
 
 /// The comptime search field named `name` over field `bind`, placeholder field `hint`
-/// (`Spec.widget` of the box): the same rows as `search`.
+/// (`Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
 pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type {
     return struct {
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
@@ -179,6 +201,18 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             t.seal(b);
             t.seal(box);
             _ = n;
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const s = &@field(ui.signals.state, bind);
+            const clear = base.ctResponse(ui, row + 5, event, in);
+            if (clear.clicked and s.text().len > 0) ui.focus = @field(Ui.Events.Widget, name);
+            const r = base.ctResponse(ui, row + 1, event, in);
+            const last: Rect = if (ui.built) ui.tables.t.rect(row + 2) else .{};
+            behave(s, &Ui.theme, .hash(name), r, clear.clicked, last, in);
+            if (!(s.result.changed or s.result.submitted)) return null;
+            return @unionInit(Ui.Events.Event, name, s.result);
         }
     };
 }
@@ -297,6 +331,54 @@ test "search look: one inset box around the field and the button; the button lig
     t = out.runtime.tree;
     try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[b].fill);
     try testing.expectEqual(th.text.bitsOf(), out.runtime.texts.c.color[t.c.text[b + 1]]);
+}
+
+fn press(code: u8, mods: Input.Mods) Input.Event {
+    return .{ .kind = .press, .code = code, .mods = mods };
+}
+
+test "search input: Enter submits, Escape clears, the clear button clears and refocuses" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 100 } };
+    var out = try both(h, &in);
+    var t = out.runtime.tree;
+    const box = t.rect(t.find(.from("find")));
+    in.pointer = .{ box.x0 + 4, (box.y0 + box.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    var zig = "zig".*;
+    const typed = [_]Input.Event{ .{ .kind = .text, .at = 0, .len = 3 }, press(keys.enter, .{}) };
+    in.text = &zig;
+    in.events = &typed;
+    out = try both(h, &in);
+    try testing.expectEqual(@as(u32, 1), h.app.searches);
+    try testing.expectEqual(@as(?Page.Ui.Events.Event, .{ .find = .{ .changed = true, .submitted = true } }), out.comptime_.event);
+    const esc = [_]Input.Event{press(escape, .{})};
+    in.text = "";
+    in.events = &esc;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("", h.app.find.text());
+    // Type again, then click Clear: empty, and typing goes on in the field.
+    in.text = &zig;
+    in.events = typed[0..1];
+    out = try both(h, &in);
+    t = out.runtime.tree;
+    const b = t.rect(t.find(clearId(.from("find"))));
+    in.text = "";
+    in.events = &.{};
+    in.pointer = .{ (b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    out = try both(h, &in);
+    try testing.expectEqualStrings("", h.app.find.text());
+    try testing.expect(out.runtime.platform.wants_text);
+    in.text = &zig;
+    in.events = typed[0..1];
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("zig", h.app.find.text());
 }
 
 test {
