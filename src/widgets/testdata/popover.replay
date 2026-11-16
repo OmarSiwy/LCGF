@@ -1,0 +1,44 @@
+# Recorded input for the popover example page (widgets/popover.zig, `Example`), at 800 x 600 in
+# the default theme: the trigger "Details" at x 8..83, y 8..42; the open panel at x 8..133,
+# y 48..105, on a scrim over the whole window. One line per frame says what it does (format:
+# input.Replay). Key 41 is Escape (USB HID).
+# 0: rest
+frame
+viewport 800 600
+dt 0.016
+pointer 400 300
+# 1: hover the trigger
+frame
+pointer 45 25
+# 2: hold it
+frame
+buttons left
+# 3: release over it: open
+frame
+buttons
+# 4: hover the panel
+frame
+pointer 70 76
+# 5: press inside the panel: stays open
+frame
+buttons left
+# 6: release
+frame
+buttons
+# 7: press outside (on the scrim): closed
+frame
+pointer 400 300
+buttons left
+# 8: release: nothing under the pointer clicks
+frame
+buttons
+# 9: press the trigger
+frame
+pointer 45 25
+buttons left
+# 10: release: open again
+frame
+buttons
+# 11: Escape: closed
+frame
+press 41

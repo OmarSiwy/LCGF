@@ -1,6 +1,7 @@
-//! Golden-image dumper for the reference widgets: replays `widgets_base.reference_replay`
-//! through both front ends with the widget harness (which fails if they draw differently), and
-//! writes the named frame as tools/golden/gpu.py draws it, into a directory:
+//! Golden-image dumper for the widgets: replays a page's input (`widgets_base.reference_replay`,
+//! or a widget's own, see `pages`) through both front ends with the widget harness (which fails
+//! if they draw differently), and writes the named frame as tools/golden/gpu.py draws it, into
+//! a directory:
 //!
 //!     zig build widget-dump -- <frame> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
@@ -28,6 +29,7 @@ const pages = .{
     .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
     .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
     .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
+    .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
 };
 // Room for the largest page's text (the table example has 23 runs).
 var glyph_quads: [4096]Quad = undefined;
