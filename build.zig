@@ -81,15 +81,20 @@ pub fn build(b: *std.Build) void {
     widget_dump.addPassthruArgs();
     b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
 
-    // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
-    // the rest moves to src/ as it is ported.
+    // tools/bench times lcgr's runtime front end ("lcgr"); `--core=prototype` builds frames with the
+    // prototype core ("ui") and lays them out and paints them with lcgr, as before.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
     const bench_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = bench_core }} });
+    // The same scenes against lcgr's runtime front end (the default; tools/bench/src_ui.zig). A
+    // file belongs to one module per compilation, so this module roots a copy of bench/scenes/.
+    const src_scenes_root = b.addWriteFiles().addCopyDirectory(b.path("bench/scenes"), "scenes", .{}).path(b, "scenes.zig");
+    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }} });
+    const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes } },
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes }, .{ .name = "src_scenes", .module = bench_src_scenes } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -110,12 +115,14 @@ pub fn build(b: *std.Build) void {
     const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgr_small.addOptions("build_options", options);
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
+    const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_small }} });
+    const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes } },
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
     }
