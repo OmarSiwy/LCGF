@@ -161,12 +161,12 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, t: *ToastSta
     f.close();
 }
 
-// ---- tests ------------------------------------------------------------------------------------
+// ---- example page, replay and golden frames ---------------------------------------------------
 
-const testing = std.testing;
-
-/// The test page: a toolbar with a Save button and a label, and the toast Save shows.
-fn Page(comptime th: Theme) type {
+/// The example page: a toolbar with a Save button and a label, and the toast Save shows, in
+/// both front ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run
+/// it.
+pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
         const page_style: Style = .{ .size = .{ .fill, .fill } };
@@ -201,6 +201,29 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, limits);
     };
 }
+
+/// Input for `Example(.default)` at 800 x 600, one commented line per frame.
+pub const replay = @embedFile("testdata/toast.replay");
+
+/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+pub const golden_frames = .{
+    .{ "toast-shown", 2 },
+    .{ "toast-hover", 4 },
+    .{ "toast-fading", 10 },
+    .{ "toast-gone", 11 },
+};
+
+/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+pub const golden = struct {
+    pub const Run = Example(.default).Run;
+    pub const src = replay;
+    pub const frames = golden_frames;
+};
+
+// ---- tests ------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -252,6 +275,45 @@ test "Toast: another theme restyles both front ends alike" {
     const k = t.find(.from("saved"));
     try testing.expectEqual(light.control.bitsOf(), t.c.look[k].fill);
     try testing.expectEqual(@as(f32, 300 - 24), t.rect(k).y1);
+}
+
+test "Toast: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var r: Replay = .{ .src = replay };
+    var left: [12]f32 = undefined;
+    var shown: [12]bool = undefined;
+    var opacity: [12]u8 = undefined;
+    while (try r.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        try testing.expectEqual(h.app.toast, h.ui.signals.state.toast);
+        left[k] = h.app.toast.left;
+        shown[k] = h.app.toast.shown;
+        const row = t.find(.from("saved"));
+        opacity[k] = if (row == types.none) 0 else @intFromFloat(@round(toastStyle(&Theme.default, h.app.toast).opacity * 100));
+        if (k == 2) {
+            // The rects the replay's comments give.
+            try testing.expectEqual(Rect{ .x0 = 8, .y0 = 8, .x1 = 58, .y1 = 42 }, t.rect(t.find(.from("save"))));
+            try testing.expectEqual(Rect{ .x0 = 338, .y0 = 551, .x1 = 462, .y1 = 584 }, t.rect(row));
+        }
+    }
+    try testing.expectEqual(@as(u32, 12), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, true, true, true, true, true, true, true, true, true, false }, &shown);
+    try testing.expectEqualSlices(f32, &.{ 3, 2.5, 2.5, 2.5, 2, 1.5, 1, 0.5 }, left[2..10]);
+    try testing.expectApproxEqAbs(@as(f32, 0.1), left[10], 1e-6);
+    try testing.expectEqual(@as(u8, 33), opacity[10]);
+    try testing.expectEqual(@as(u8, 100), opacity[9]);
+}
+
+test "golden_frames: name frames the replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 12);
 }
 
 test "advance: shows on the trigger, counts down, pauses on hover, goes" {

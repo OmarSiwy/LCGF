@@ -1,0 +1,37 @@
+# Recorded input for the toast example page (widgets/toast.zig, `Example`), at 800 x 600 in the
+# default theme, 0.5 s per frame: Save at x 8..58, y 8..42; the toast, while shown, at
+# x 338..462, y 551..584 (the bottom centre). It stays 3 s, paused while the pointer is on it,
+# and fades over its last 0.3 s. One line per frame says what it does (format: input.Replay).
+# 0: rest
+frame
+viewport 800 600
+dt 0.5
+pointer 400 300
+# 1: press Save
+frame
+pointer 33 25
+buttons left
+# 2: release: the toast shows, 3 s left
+frame
+buttons
+# 3: 2.5 s left
+frame
+# 4: the pointer rests on the toast: paused at 2.5 s
+frame
+pointer 400 567
+# 5: still paused
+frame
+# 6: the pointer leaves: 2 s
+frame
+pointer 400 300
+# 7: 1.5 s
+frame
+# 8: 1 s
+frame
+# 9: 0.5 s
+frame
+# 10: a shorter frame: 0.1 s left, fading
+frame
+dt 0.4
+# 11: gone
+frame

@@ -30,6 +30,7 @@ const pages = .{
     lcgr.widgets_menubar.golden,
     lcgr.widgets_contextmenu.golden,
     lcgr.widgets_dialog.golden,
+    lcgr.widgets_toast.golden,
 };
 
 var glyph_quads: [1024]Quad = undefined;
