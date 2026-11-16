@@ -6,7 +6,9 @@
 //! State: a `textfield.Text(cap)`, whose `scroll` is the first line shown. A text area shows
 //! `rows` lines (a compile-time count in the comptime front end, so its rows are fixed): one
 //! text leaf per line shown, each line the text between two newlines. Lines are not wrapped;
-//! one longer than the box is clipped.
+//! one longer than the box is clipped. With the host's layout in `Text.view` (unwrapped, one
+//! laid-out line per line), the caret, clicks and selection follow it, the selection as up to
+//! `textfield.bands` bands per line, one per direction run.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -19,6 +21,7 @@ const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
 const moves = @import("../text/edit/moves.zig");
+const query = @import("../text/layout/query.zig");
 const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
@@ -94,14 +97,34 @@ pub fn shownLine(t: []const u8, scroll: u32, k: u32, sel: [2]u32, adv: f32) Line
     return .{ .str = t[l[0]..l[1]], .sel = .{ x0, @max(x1, x0) } };
 }
 
+/// The selection `sel` on the text's line `line` as bands, x px from the line's left edge:
+/// one per direction run from the layout `v` (`query.selection`), or the one `Mono` band
+/// `mono` without it.
+pub fn lineBands(v: ?moves.View, line: u32, sel: [2]u32, mono: [2]f32) [tf.bands][2]f32 {
+    var out: [tf.bands][2]f32 = @splat(.{ 0, 0 });
+    const lv = v orelse {
+        out[0] = mono;
+        return out;
+    };
+    const l = lineAt(lv.text, line) orelse return out;
+    // The line's bytes and its newline, which the layout gives a glyph of its own.
+    const a = @max(sel[0], l[0]);
+    const b = @min(sel[1], l[1] + 1);
+    if (a >= b) return out;
+    var rects: [tf.bands]Rect = undefined;
+    const n = query.selection(lv.l, lv.g, lv.text, a, b, &rects);
+    for (rects[0..n], 0..) |r, k| out[k] = .{ r.x0, r.x1 };
+    return out;
+}
+
 /// Where the caret is drawn, px from the first shown line's left edge, and whether it is on a
-/// line that is shown.
-pub fn caretAt(t: []const u8, at: u32, scroll: u32, rows: u32, th: *const Theme) struct { x: f32, y: f32, shown: bool } {
+/// line that is shown: its x from the layout `v` when given, else its column in advances.
+pub fn caretAt(t: []const u8, at: u32, scroll: u32, rows: u32, th: *const Theme, v: ?moves.View) struct { x: f32, y: f32, shown: bool } {
     const line = lineOf(t, at);
     const col = at - moves.lineStart(t, at);
     const k = @as(i64, line) - scroll;
     return .{
-        .x = @as(f32, @floatFromInt(col)) * tf.advance(th),
+        .x = if (v) |lv| lv.caretRect(at).x0 else @as(f32, @floatFromInt(col)) * tf.advance(th),
         .y = @as(f32, @floatFromInt(k)) * tf.lineHeight(th),
         .shown = k >= 0 and k < rows,
     };
@@ -148,7 +171,10 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
         const row = @max(@floor((in.pointer[1] - origin[1]) / lh), 0);
         const line = @min(@as(u32, @intFromFloat(@min(row, 1e6))) + scroll, lines - 1);
         const l = lineAt(t, line).?;
-        const at = l[0] + tf.stopNear(t[l[0]..l[1]], (in.pointer[0] - origin[0]) / adv);
+        const px = in.pointer[0] - origin[0];
+        const fresh = tf.fresh(s);
+        const laid = if (fresh) |v| line < v.l.len else false;
+        const at = if (laid) fresh.?.hit(px, fresh.?.l.top[line] + fresh.?.l.height[line] / 2) else l[0] + tf.stopNear(t[l[0]..l[1]], px / adv);
         ed.caret = at;
         if (!s.held and !in.mods.shift) ed.anchor = at;
         ed.goal = std.math.nan(f32);
@@ -165,7 +191,9 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
         const down = (e.kind == .press or e.kind == .repeat) and plain;
         const dir: i2 = if (down and e.code == keys.up) -1 else if (down and e.code == keys.down) 1 else 0;
         if (dir == 0) {
-            tf.orResult(&res, tf.feed(ed, in, id, i, cx));
+            var one = cx;
+            one.view = tf.fresh(s);
+            tf.orResult(&res, tf.feed(ed, in, id, i, one));
             continue;
         }
         if (std.math.isNan(ed.goal)) ed.goal = @floatFromInt(ed.caret - moves.lineStart(ed.text(), ed.caret));
@@ -175,6 +203,7 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
     }
     const k = tf.keyboardOf(in, id, r.focused);
     var last_cx = cx;
+    last_cx.view = tf.fresh(s);
     last_cx.composition = k.composition(id, &s.ime);
     tf.orResult(&res, tf.feed(ed, in, id, null, last_cx));
     s.result = res;
@@ -187,7 +216,7 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, row
     if (caret != before or res.changed) scroll = revealLine(scroll, lineOf(t, caret), rows, lines);
     s.scroll = @floatFromInt(scroll);
     if (r.focused) {
-        const c = caretAt(t, caret, scroll, rows, th);
+        const c = caretAt(t, caret, scroll, rows, th, tf.fresh(s));
         const x = origin[0] + c.x;
         const y = origin[1] + c.y;
         s.input.request(.{ .x0 = x, .y0 = y, .x1 = x + 1, .y1 = y + lh }, .normal);
@@ -216,7 +245,8 @@ pub fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint
     const v = view(s, th, rows, r0.focused);
     for (0..rows) |k| {
         const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);
-        _ = f.leaf(.none, tf.selectionStyle(th, l.sel, @as(f32, @floatFromInt(k)) * v.lh));
+        const top = @as(f32, @floatFromInt(k)) * v.lh;
+        for (lineBands(v.fresh, v.scroll + @as(u32, @intCast(k)), v.sel, l.sel)) |b| _ = f.leaf(.none, tf.selectionStyle(th, b, top));
     }
     for (0..rows) |k| {
         const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);
@@ -237,6 +267,8 @@ const View = struct {
     lh: f32,
     empty: bool,
     caret: @typeInfo(@TypeOf(caretAt)).@"fn".return_type.?,
+    /// The host's layout while it is of the current text (`textfield.fresh`).
+    fresh: ?moves.View,
 };
 
 fn view(s: anytype, th: *const Theme, rows: u32, focused: bool) View {
@@ -251,7 +283,8 @@ fn view(s: anytype, th: *const Theme, rows: u32, focused: bool) View {
         .adv = tf.advance(th),
         .lh = tf.lineHeight(th),
         .empty = t.len == 0,
-        .caret = caretAt(t, ed.shownCaret(), scroll, rows, th),
+        .caret = caretAt(t, ed.shownCaret(), scroll, rows, th, tf.fresh(s)),
+        .fresh = tf.fresh(s),
     };
 }
 
@@ -262,7 +295,7 @@ pub const ct = struct {
     /// string field `hint` while empty. Its events carry the `edit.Result` of a frame that
     /// changed the text.
     pub fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: @EnumLiteral()) Spec {
-        const sel: [rows]Spec = @splat(.{ .kind = .col });
+        const sel: [rows * tf.bands]Spec = @splat(.{ .kind = .col });
         const lines: [rows]Spec = @splat(.{ .kind = .label });
         const kids = sel ++ lines ++ [1]Spec{.{ .kind = .col }};
         var s = spec_zig.col(areaStyle(&th, rows, false), kids);
@@ -291,12 +324,13 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
-            next.* += 2 * rows + 2;
+            next.* += (tf.bands + 1) * rows + 2; // box, bands per line, lines, caret
             const i = t.push(parent, .hash(name), &areaStyle(th, rows, focused));
             const v = view(s, th, rows, focused);
             for (0..rows) |k| {
                 const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);
-                _ = t.push(i, .none, &tf.selectionStyle(th, l.sel, @as(f32, @floatFromInt(k)) * v.lh));
+                const top = @as(f32, @floatFromInt(k)) * v.lh;
+                for (lineBands(v.fresh, v.scroll + @as(u32, @intCast(k)), v.sel, l.sel)) |b| _ = t.push(i, .none, &tf.selectionStyle(th, b, top));
             }
             for (0..rows) |k| {
                 const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);
@@ -350,7 +384,7 @@ pub const Page = struct {
         ct.textarea(th, .notes, .notes, rows, .notes_hint),
     });
     pub const Ui = base.ComptimeUi(State, spec, th);
-    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 8, .customs = 1, .strings = 512, .depth = 8 });
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 512, .depth = 8 });
     pub const replay = @embedFile("testdata/textarea.replay");
     /// Frames kept as golden images, by name: tools/widgetgolden/ref/textarea-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 3 }, .{ "scrolled", 5 }, .{ "selected", 7 } };
@@ -359,6 +393,11 @@ pub const Page = struct {
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+/// Rows of the page's text area below its box: the bands, line by line, then the lines, then
+/// the caret.
+const line_row = 1 + Page.rows * tf.bands;
+const caret_row = line_row + Page.rows;
 
 test "bindError: a text area binds a Text(cap) and shows at least one row" {
     const State = struct { t: Text(4) = .{}, n: u32 = 0 };
@@ -409,15 +448,15 @@ test "textarea: the page agrees in both front ends at rest; rows lines tall" {
     const out = try both(h, &in);
     const t = out.runtime.tree;
     const a = t.find(.from("notes"));
-    // root, panel, caption, the area and its 3 + 3 + 1 rows.
-    try testing.expectEqual(@as(u32, 3 + 1 + 7), t.len);
+    // root, panel, caption, the area and its rows: bands, lines and the caret.
+    try testing.expectEqual(@as(u32, 3 + 1 + caret_row), t.len);
     const th = Theme.default;
     try testing.expectApproxEqAbs(3 * tf.lineHeight(&th) + th.pad, t.rect(a).h(), 0.5);
     try testing.expectEqual(@backingInt(types.Role.text_input), t.c.role[a]);
     // The lines, one leaf each: "one", "two", "".
     const strs = &h.ctx.strings[h.ctx.cur];
     for ([_][]const u8{ "one", "two", "" }, 0..) |want, k| {
-        const run = t.c.text[a + 4 + @as(u32, @intCast(k))];
+        const run = t.c.text[a + line_row + @as(u32, @intCast(k))];
         try testing.expectEqualStrings(want, strs.buf[out.runtime.texts.c.start[run]..][0..out.runtime.texts.c.bytes[run]]);
     }
 }
@@ -434,7 +473,7 @@ test "textarea look: an inset box rows lines tall; the selection on each line, t
     try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[a].border_color);
     // Lines stacked one line height apart.
     const lh = tf.lineHeight(&th);
-    try testing.expectApproxEqAbs(t.rect(a + 4).y0 + lh, t.rect(a + 5).y0, 0.5);
+    try testing.expectApproxEqAbs(t.rect(a + line_row).y0 + lh, t.rect(a + line_row + 1).y0, 0.5);
     // Focused, the selection from column 3 of "one" to the end of "two": on line 0 one
     // advance wide (the newline), on line 1 three; the caret at the end of "two".
     const box = t.rect(a);
@@ -453,14 +492,14 @@ test "textarea look: an inset box rows lines tall; the selection on each line, t
     try testing.expectEqual(th.accent.bitsOf(), t.c.look[a].border_color);
     // Edges snap to whole pixels: within one of the exact width.
     try testing.expectApproxEqAbs(adv, t.rect(a + 1).w(), 1);
-    try testing.expectApproxEqAbs(3 * adv, t.rect(a + 2).w(), 1);
-    try testing.expectEqual(@as(f32, 0), t.rect(a + 3).w());
-    try testing.expectEqual(th.text.bitsOf(), t.c.look[a + 7].fill);
-    try testing.expectApproxEqAbs(t.rect(a + 5).y0, t.rect(a + 7).y0, 0.5);
-    try testing.expectApproxEqAbs(t.rect(a + 5).x0 + 3 * adv, t.rect(a + 7).x0, 0.5);
+    try testing.expectApproxEqAbs(3 * adv, t.rect(a + 1 + tf.bands).w(), 1);
+    try testing.expectEqual(@as(f32, 0), t.rect(a + 1 + 2 * tf.bands).w());
+    try testing.expectEqual(th.text.bitsOf(), t.c.look[a + caret_row].fill);
+    try testing.expectApproxEqAbs(t.rect(a + line_row + 1).y0, t.rect(a + caret_row).y0, 0.5);
+    try testing.expectApproxEqAbs(t.rect(a + line_row + 1).x0 + 3 * adv, t.rect(a + caret_row).x0, 0.5);
 }
 
-var area_semantics: base.Semantic(16) = .{};
+var area_semantics: base.Semantic(32) = .{};
 
 test "textarea a11y: role text input, one node, named by its caption" {
     const h = &page;
@@ -474,7 +513,7 @@ test "textarea a11y: role text input, one node, named by its caption" {
     const r = x.row(a).?;
     try testing.expectEqual(@backingInt(a11y.Role.text_input), x.out[0].c.role[r]);
     try testing.expectEqual(@backingInt(Id.from("notes")), x.out[0].c.id[r]);
-    for (1..8) |k| try testing.expectEqual(null, x.row(a + @as(u32, @intCast(k))));
+    for (1..caret_row + 1) |k| try testing.expectEqual(null, x.row(a + @as(u32, @intCast(k))));
     const check = @import("check.zig");
     var sb: check.SemBuf = .{};
     var sem = sb.init();
@@ -540,6 +579,60 @@ test "textarea input: Enter, Up and Down in their column, scrolling to the caret
     in.events = &sel;
     _ = try both(h, &in);
     try testing.expectEqual([2]u32{ 12, 14 }, h.app.notes.ed.selection());
+}
+
+var mixed: tf.Mixed = .{};
+
+test "textarea view: bands per direction run on each line, caret and clicks on the layout" {
+    const h = &page;
+    h.init();
+    const th = Theme.default;
+    const adv = tf.advance(&th);
+    const lh = tf.lineHeight(&th);
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try both(h, &in);
+    const a = out.runtime.tree.find(.from("notes"));
+    const box = out.runtime.tree.rect(a);
+    const text = tf.Mixed.text ++ "\nxyz";
+    const v = try mixed.view(text, adv, lh);
+    // From "c" on line 0 to after "x" on line 1.
+    for ([2]*Page.Field{ &h.app.notes, &h.ui.signals.state.notes }) |f| {
+        f.set(text);
+        f.view = v;
+        f.ed.anchor = 2;
+        f.ed.caret = 16;
+    }
+    out = try both(h, &in);
+    const t = out.runtime.tree;
+    const x0 = box.x0 + th.pad;
+    const band = struct {
+        fn of(tree: *const @import("../core/tree.zig").Tree, area: u32, line: u32, k: u32) Rect {
+            return tree.rect(area + 1 + line * tf.bands + k);
+        }
+    }.of;
+    // Line 0: "c " left to right, the Hebrew word right to left, " def" and the newline left
+    // to right: three bands side by side. Laid out to whole pixels: within one of the place.
+    const want = [_][2]f32{ .{ 2, 4 }, .{ 4, 7 }, .{ 7, 12 } };
+    for (want, 0..) |w, k| {
+        const r = band(t, a, 0, @intCast(k));
+        try testing.expectApproxEqAbs(x0 + w[0] * adv, r.x0, 1);
+        try testing.expectApproxEqAbs((w[1] - w[0]) * adv, r.w(), 1);
+    }
+    try testing.expectEqual(@as(f32, 0), band(t, a, 0, 3).w());
+    // Line 1: "x", one band; the caret after it.
+    try testing.expectApproxEqAbs(x0, band(t, a, 1, 0).x0, 1);
+    try testing.expectApproxEqAbs(adv, band(t, a, 1, 0).w(), 1);
+    try testing.expectEqual(@as(f32, 0), band(t, a, 1, 1).w());
+    try testing.expectApproxEqAbs(band(t, a, 1, 0).y0, t.rect(a + caret_row).y0, 0.5);
+    try testing.expectApproxEqAbs(x0 + adv, t.rect(a + caret_row).x0, 1);
+    // A click near the right edge of "א" on line 0 lands on its logical start (4).
+    in.pointer = .{ x0 + 6.8 * adv, box.y0 + th.pad / 2 + 0.5 * lh };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    out = try both(h, &in);
+    try testing.expectEqual(@as(u32, 4), h.app.notes.ed.caret);
+    try testing.expectApproxEqAbs(x0 + 7 * adv, out.runtime.tree.rect(a + caret_row).x0, 1);
 }
 
 test "Page: the text area replay types lines, moves, scrolls and selects, in both front ends" {
