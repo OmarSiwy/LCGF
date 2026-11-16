@@ -306,6 +306,14 @@ pub fn main(init: std.process.Init) !void {
         std.mem.sort(u64, s, {}, std.sort.asc(u64));
         try w.print("{s:<10} {d:9.1} {d:9.1}\n", .{ name, us(s[frames / 2]), us(s[frames * 99 / 100]) });
     }
+    // Batch counts of the last frame (src/draw/order.zig): what a GPU back end issues per frame
+    // in paint order, after merging across text, and the opaque quads a depth back end draws
+    // first in one call.
+    const plain = lcgr.order.counts(&sd);
+    lcgr.order.mergeAcrossText(&sd);
+    const merged = lcgr.order.counts(&sd);
+    lcgr.order.depthOrder(&sd);
+    try w.print("batches   quads={d} text={d} custom={d} merged: quads={d} text={d} custom={d} opaque={d} of {d} quads\n", .{ plain.quads, plain.text, plain.custom, merged.quads, merged.text, merged.custom, sd.opaque_len, sd.quad_len });
     try w.flush();
 
     const path = json_path orelse return;
