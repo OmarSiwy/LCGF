@@ -7,6 +7,7 @@ const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
 const Texture = types.Texture;
 const Material = types.Material;
+const Region = @import("damage.zig").Region;
 
 /// One instance of the quad pipeline. This is the GPU vertex-buffer layout,
 /// so the whole array uploads with a single copy.
@@ -19,10 +20,17 @@ pub const Quad = extern struct {
     params: [4]f32,
     /// u0, v0, u1, v1.
     uv: [4]f32,
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    radii: [4]f32,
     fill: u32,
     border_color: u32,
-    radius: f32,
     border: f32,
+    /// Multiplies the whole quad's output: the node's inherited opacity.
+    opacity: f32,
+    /// Layout space to screen, a, b, c, d, tx, ty: applied to the corners in the vertex shader.
+    xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    /// Corner radii of `clip` (top-left, top-right, bottom-right, bottom-left); 0 is square.
+    clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
 };
 
 /// One text node's run, for the renderer's text pass.
@@ -77,6 +85,15 @@ pub const DrawList = struct {
     cmd: CmdColumns,
     cmd_len: u32 = 0,
     op: OpColumns,
+    op_len: u32 = 0,
+    /// What changed since the last frame (`damage.cull` sets it): a renderer that keeps last
+    /// frame's pixels redraws only inside these rects and may leave the rest. `everything`
+    /// unless the frame was culled.
+    damage: Region = .everything,
+    /// For back ends with a depth buffer, written by `order.depthOrder`: opaque quads to draw
+    /// first, front to back, and the depth of everything. Empty until that pass runs.
+    depth: Depth = .{ .quad = &.{}, .cmd = &.{}, .opaques = &.{} },
+    opaque_len: u32 = 0,
 
     pub const Kind = enum(u8) { quads, text, custom };
     /// `key` is texture << 16 | material for quad batches, 0 otherwise. `first` indexes `quads`,
@@ -85,6 +102,10 @@ pub const DrawList = struct {
     /// Paint's intermediate stream: one op per painted quad, text run or custom draw, in paint
     /// order, before quads with equal keys merge into commands.
     pub const OpColumns = struct { kind: []u8, key: []u32, ref: []u32 };
+    /// `quad[i]` is quad i's depth and `cmd[k]` that of text or custom command k, in (0, 1),
+    /// smaller in front (later in paint order). `opaques` lists the quads that cover their
+    /// whole rect with alpha 1, front to back.
+    pub const Depth = struct { quad: []f32, cmd: []f32, opaques: []u32 };
 
     pub fn init(carver: *mem.Carver, nodes: u32, texts: u32, customs: u32) DrawList {
         // One spare row everywhere: emitters write first and advance after.
@@ -95,6 +116,7 @@ pub const DrawList = struct {
             .customs = carver.slice(CustomDraw, customs + 1),
             .cmd = carver.columns(CmdColumns, ops),
             .op = carver.columns(OpColumns, ops),
+            .depth = .{ .quad = carver.slice(f32, nodes + 1), .cmd = carver.slice(f32, ops), .opaques = carver.slice(u32, nodes + 1) },
         };
     }
 
@@ -121,11 +143,13 @@ pub const DrawList = struct {
 
 const testing = std.testing;
 
-test "layout: Quad is the 80-byte instance row the quad pipeline declares" {
-    // Renderers declare vertex attributes at these offsets (prototype/ui_wgpu.zig quad_attrs).
-    try testing.expectEqual(80, @sizeOf(Quad));
+test "layout: Quad is the 136-byte instance row the quad pipeline declares" {
+    // Renderers declare vertex attributes at these offsets (src/render/shaders/quad.wgsl). The
+    // prototype's 80-byte row had one `radius` after the colours; per-corner `radii` replaced it,
+    // and `opacity`, `xform` and `clip_radii` were added.
+    try testing.expectEqual(136, @sizeOf(Quad));
     try testing.expectEqual(4, @alignOf(Quad));
-    inline for (.{ "rect", "clip", "params", "uv", "fill", "border_color", "radius", "border" }, .{ 0, 16, 32, 48, 64, 68, 72, 76 }) |name, off|
+    inline for (.{ "rect", "clip", "params", "uv", "radii", "fill", "border_color", "border", "opacity", "xform", "clip_radii" }, .{ 0, 16, 32, 48, 64, 80, 84, 88, 92, 96, 120 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Quad, name));
 }
 
@@ -161,7 +185,7 @@ test "DrawList.init carves one spare row per table and sizes like a counting car
     d.quad_len = 2;
     const raw = d.quadBytes();
     try testing.expectEqual(2 * @sizeOf(Quad), raw.len);
-    try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + 64 ..][0..4]));
+    try testing.expectEqual(0xdead_beef, std.mem.bytesToValue(u32, raw[@sizeOf(Quad) + @offsetOf(Quad, "fill") ..][0..4]));
 }
 
 test "command: the columns read back as tagged unions, key split into texture and material" {

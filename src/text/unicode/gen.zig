@@ -4,7 +4,7 @@
 //!   gen <out.zig> GraphemeBreakProperty emoji-data DerivedCoreProperties WordBreakProperty
 //!       LineBreak EastAsianWidth DerivedGeneralCategory DerivedBidiClass BidiBrackets Scripts
 //!
-//! Every table is one value per code point, emitted as a two-stage table (see `emit`).
+//! Every table is one value per code point, emitted as a three-stage table (see `emit`).
 
 const std = @import("std");
 const property = @import("property.zig");
@@ -166,33 +166,43 @@ const Lines = struct {
     }
 };
 
-/// Two-stage table: `<name>_stage1[cp >> shift]` is a block number, `<name>_stage2` holds the
-/// distinct blocks of 2^shift values. The shift is the one with the fewest bytes, tried from 4
-/// to 10; a comment records the bytes against the run-length form this replaced (C0326).
+/// Three-stage table. `<name>_stage3` holds the distinct leaf blocks of 2^leaf values,
+/// `<name>_stage2` the distinct middle blocks of 2^mid leaf numbers, and `<name>_stage1` one
+/// middle-block number per 2^(mid + leaf) code points. Both shifts are searched from 3 to 8 for
+/// the fewest bytes; a comment records the size against the run-length form.
 fn emit(gpa: std.mem.Allocator, w: *std.Io.Writer, comptime name: []const u8, comptime T: type, values: []const T) !void {
     var runs: usize = 0;
     for (values, 0..) |v, cp| runs += @intFromBool(cp == 0 or v != values[cp - 1]);
     const run_bytes = runs * (@sizeOf(u21) + @sizeOf(T));
 
-    var best_shift: u5 = 0;
+    var best = [2]u5{ 0, 0 };
     var best_bytes: usize = std.math.maxInt(usize);
-    var shift: u5 = 4;
-    while (shift <= 10) : (shift += 1) {
-        const blocks = try split(gpa, T, values, shift);
-        const bytes = blocks.index.len * indexBytes(blocks.distinct) + blocks.distinct * (@as(usize, 1) << shift) * @sizeOf(T);
-        if (bytes < best_bytes) {
-            best_bytes = bytes;
-            best_shift = shift;
+    for (3..9) |leaf| {
+        const leaves = try split(gpa, T, values, @intCast(leaf));
+        for (3..9) |mid| {
+            const mids = try split(gpa, u32, leaves.index, @intCast(mid));
+            const bytes = mids.index.len * indexBytes(mids.distinct) + (mids.distinct << @intCast(mid)) * indexBytes(leaves.distinct) +
+                (leaves.distinct << @intCast(leaf)) * @sizeOf(T);
+            if (bytes < best_bytes) {
+                best_bytes = bytes;
+                best = .{ @intCast(mid), @intCast(leaf) };
+            }
         }
     }
-    const blocks = try split(gpa, T, values, best_shift);
-    const size: usize = @as(usize, 1) << best_shift;
-    try w.print("// {s}: {d} bytes in two stages (shift {d}, {d} distinct blocks); run-length form {d} bytes\n", .{ name, best_bytes, best_shift, blocks.distinct, run_bytes });
-    try w.print("pub const {s}_shift = {d};\npub const {s}_stage1 = [_]u{d}{{", .{ name, best_shift, name, indexBytes(blocks.distinct) * 8 });
-    for (blocks.index) |b| try w.print("{d},", .{b});
-    try w.print("}};\npub const {s}_stage2 = [_]{s}{{", .{ name, @typeName(T) });
-    for (blocks.first[0..blocks.distinct]) |b| {
-        for (values[b * size ..][0..size]) |v| try w.print("{d},", .{v});
+    const mid, const leaf = best;
+    const leaves = try split(gpa, T, values, leaf);
+    const mids = try split(gpa, u32, leaves.index, mid);
+    try w.print("// {s}: {d} bytes in three stages (mid {d}, leaf {d}); run-length form {d}\n", .{ name, best_bytes, mid, leaf, run_bytes });
+    try w.print("pub const {s}_mid = {d};\npub const {s}_leaf = {d};\n", .{ name, mid, name, leaf });
+    try w.print("pub const {s}_stage1 = [_]u{d}{{", .{ name, indexBytes(mids.distinct) * 8 });
+    for (mids.index) |b| try w.print("{d},", .{b});
+    try w.print("}};\npub const {s}_stage2 = [_]u{d}{{", .{ name, indexBytes(leaves.distinct) * 8 });
+    for (mids.first[0..mids.distinct]) |b| {
+        for (leaves.index[b << mid ..][0 .. @as(usize, 1) << mid]) |v| try w.print("{d},", .{v});
+    }
+    try w.print("}};\npub const {s}_stage3 = [_]{s}{{", .{ name, @typeName(T) });
+    for (leaves.first[0..leaves.distinct]) |b| {
+        for (values[b << leaf ..][0 .. @as(usize, 1) << leaf]) |v| try w.print("{d},", .{v});
     }
     try w.writeAll("};\n");
 }

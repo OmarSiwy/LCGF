@@ -5,9 +5,9 @@ const std = @import("std");
 const lcgr = @import("lcgr");
 const property = lcgr.unicode_property;
 
-const grapheme_test = @embedFile("data/GraphemeBreakTest.txt");
-const word_test = @embedFile("data/WordBreakTest.txt");
-const line_test = @embedFile("data/LineBreakTest.txt");
+const grapheme_test = @embedFile("GraphemeBreakTest.txt");
+const word_test = @embedFile("WordBreakTest.txt");
+const line_test = @embedFile("LineBreakTest.txt");
 
 /// One line of a *BreakTest.txt file: code points, whether a boundary precedes each position
 /// (`breaks[i]` is before `cps[i]`, `breaks[cps.len]` is the end), and the class name the comment
@@ -177,8 +177,8 @@ test "LineBreakTest.txt" {
 }
 
 const bidi = lcgr.unicode_bidi;
-const bidi_test = @embedFile("data/BidiTest.txt");
-const bidi_character_test = @embedFile("data/BidiCharacterTest.txt");
+const bidi_test = @embedFile("BidiTest.txt");
+const bidi_character_test = @embedFile("BidiCharacterTest.txt");
 
 const BidiBuffers = struct {
     orig: [256]property.BidiClass = undefined,
@@ -317,7 +317,7 @@ test "Scripts.txt: every code point" {
     const want = try std.testing.allocator.alloc(property.Script, 0x110000);
     defer std.testing.allocator.free(want);
     @memset(want, .Unknown);
-    var lines = std.mem.splitScalar(u8, @embedFile("data/Scripts.txt"), '\n');
+    var lines = std.mem.splitScalar(u8, @embedFile("Scripts.txt"), '\n');
     while (lines.next()) |ln| {
         const data = ln[0 .. std.mem.indexOfScalar(u8, ln, '#') orelse ln.len];
         const semi = std.mem.indexOfScalar(u8, data, ';') orelse continue;
@@ -354,4 +354,21 @@ test "script runs: one script each, Common only where nothing else" {
     // Latin, Greek, Cyrillic, Greek (")" closes the Greek bracket), Hiragana, Han, Hiragana
     // ("」" closes the Hiragana bracket), Arabic, Hebrew.
     try std.testing.expectEqual(9, runs);
+}
+
+test "lookup speed" {
+    // Prints ns per line+grapheme lookup pair over every 7th code point; read it in ReleaseFast
+    // (`zig build conformance -Doptimize=ReleaseFast`). Timing only, nothing asserted.
+    var ts0: std.os.linux.timespec = undefined;
+    var ts1: std.os.linux.timespec = undefined;
+    var acc: u32 = 0;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts0);
+    for (0..20) |r| {
+        var cp: u32 = @intCast(r);
+        while (cp < 0x110000) : (cp += 7) acc +%= @as(u16, @bitCast(property.line(@intCast(cp)))) +% @as(u8, @bitCast(property.grapheme(@intCast(cp))));
+    }
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts1);
+    const ns: u64 = @intCast((ts1.sec - ts0.sec) * 1_000_000_000 + (ts1.nsec - ts0.nsec));
+    const pairs: u64 = 20 * (0x110000 / 7);
+    std.debug.print("unicode lookups: {d}.{d:0>2} ns per line+grapheme pair (checksum {d})\n", .{ ns / pairs, (ns * 100 / pairs) % 100, acc });
 }

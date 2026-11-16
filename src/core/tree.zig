@@ -15,16 +15,101 @@ const Rect = types.Rect;
 const b01 = simd.b2f;
 
 /// How a node is painted. One row per node in `Tree.Columns.look`: paint reads all of these
-/// together and layout reads none, so they are one cold row instead of seven hot columns.
-/// `extern` because the row crosses to the GPU; hence `[4]f32`, not a vector.
+/// together and layout reads none, so they are one cold row instead of six hot columns.
+/// 32 bytes with `params` first, so rows and `params` are 16-byte aligned. The border width is
+/// its own column (`Tree.Columns.border`): finalize and `draw.inherit.clip` read it alone
+/// (docs/perf/columns.md). `extern` for a fixed layout; hence `[4]f32`, not a vector.
 pub const Look = extern struct {
+    params: [4]f32,
     fill: u32,
     border_color: u32,
-    border: f32,
     radius: f32,
-    params: [4]f32,
     texture: u16,
     material: u16,
+};
+
+/// One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes as
+/// coefficients, enums as factors, paint fields as their GPU row. A widget whose style does not
+/// change between nodes builds it once (`from`, also at comptime) and pushes it with
+/// `Tree.pushRow`, so the per-node work is the copy alone. Field names are the column names;
+/// `[2]f32` fields go to the two axis columns.
+pub const Template = struct {
+    min: [2]f32,
+    max: [2]f32,
+    grow: [2]f32,
+    pct: [2]f32,
+    pad_lo: [2]f32,
+    pad_hi: [2]f32,
+    offset: [2]f32,
+    scroll: [2]f32,
+    main: [2]f32,
+    gap: f32,
+    flow: f32,
+    shrink: f32,
+    align_main: f32,
+    align_cross: f32,
+    clips: u8,
+    sense: u8 = 0,
+    look: Look,
+    border: f32,
+    uv: [4]f32,
+    radii: [4]f32,
+    opacity: f32,
+    alpha: f32,
+    transform: [6]f32,
+    world: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    clip_radii: [4]f32 = @splat(0),
+    role: u8,
+    value: f32,
+    text: u32 = none,
+    custom: u32 = none,
+
+    pub fn from(s: *const Style) Template {
+        var r: Template = undefined;
+        inline for (0..2) |a| {
+            const k = @backingInt(s.size[a].kind);
+            const v = s.size[a].v;
+            r.min[a] = @max(v * Size.k_min[k], s.min[a]);
+            r.max[a] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
+            r.grow[a] = v * Size.k_grow[k];
+            r.pct[a] = v * Size.k_pct[k];
+            r.pad_lo[a] = s.pad[a];
+            r.pad_hi[a] = s.pad[a + 2];
+            r.offset[a] = s.offset[a];
+            r.scroll[a] = s.scroll[a];
+        }
+        const along_y: f32 = @floatFromInt(@backingInt(s.dir));
+        const corners: @Vector(4, f32) = s.radii;
+        r.main = .{ 1 - along_y, along_y };
+        r.gap = s.gap;
+        r.flow = b01(!s.float);
+        r.shrink = b01(s.shrink);
+        r.align_main = Align.factor[@backingInt(s.main)];
+        r.align_cross = Align.factor[@backingInt(s.cross)];
+        r.clips = @intFromBool(s.clip);
+        r.sense = 0;
+        r.look = .{
+            .fill = s.fill.bitsOf(),
+            .border_color = s.border_color.bitsOf(),
+            .radius = s.radius,
+            .params = s.params,
+            .texture = @backingInt(s.texture),
+            .material = @backingInt(s.material),
+        };
+        r.border = s.border;
+        r.uv = s.uv;
+        r.radii = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
+        r.opacity = s.opacity;
+        r.alpha = s.opacity;
+        r.transform = s.transform;
+        r.world = .{ 1, 0, 0, 1, 0, 0 };
+        r.clip_radii = @splat(0);
+        r.role = @backingInt(s.role);
+        r.value = s.value;
+        r.text = none;
+        r.custom = none;
+        return r;
+    }
 };
 
 /// Where the columns live: slices carved from a caller's buffer (`init`), or arrays inside the
@@ -108,16 +193,39 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             rect: [4]Col(f32),
             /// `rect` cut down to the inherited clip. What hit testing reads.
             vis: [4]Col(f32),
-            /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular:
-            /// children of a rounded node are not clipped to its corners.
+            /// Clip handed down to children, as (x0, y0, -x1, -y1). Rectangular here; its
+            /// rounded corners are `clip_radii`, which paint passes to the shader.
             child_clip: Col([4]f32),
             visible: Col(u8),
             clips: Col(u8),
             sense: Col(u8),
 
             // ---- paint inputs. Cold during layout and always read together, so
-            //      they are one row per node rather than seven columns.
+            //      they are one row per node rather than six columns.
             look: Col(Look),
+            /// Border width (`Style.border`). Read by finalize (children clip inside it),
+            /// `draw.inherit.clip` and paint, so kept out of `look`.
+            border: Col(f32),
+            /// Texture coordinates u0, v0, u1, v1 of the quad's corners (`Style.uv`). Kept out
+            /// of `Look`, which is a fixed GPU row; read only by paint.
+            uv: Col([4]f32),
+            /// Corner radii top-left, top-right, bottom-right, bottom-left (`Style.radii`, with
+            /// negative corners taken from `Style.radius`).
+            radii: Col([4]f32),
+            /// `Style.opacity` of this node alone.
+            opacity: Col(f32),
+            /// Opacity paint applies: the product of `opacity` over the node and its ancestors,
+            /// written by `draw.inherit.opacity`. Push sets it to the node's own.
+            alpha: Col(f32),
+            /// `Style.transform` of this node alone, about its centre.
+            transform: Col([6]f32),
+            /// Layout space to screen: the node's transform after its ancestors', written by
+            /// `draw.inherit.transform`. Push sets the identity.
+            world: Col([6]f32),
+            /// Corner radii of the clip handed to children (`child_clip`), written by
+            /// `draw.inherit.clip`: a clipping node's radii less its border, otherwise the
+            /// parent's. Push sets 0, a rectangular clip.
+            clip_radii: Col([4]f32),
 
             // ---- semantics, read by the host to build an accessibility tree
             role: Col(u8),
@@ -140,6 +248,36 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index));
             return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
         }
+        /// The layout scratch columns: every layout run rewrites them before reading them
+        /// (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing
+        /// outside a layout run reads them.
+        pub const scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" };
+
+        /// `init`, except the `scratch` columns are `other`'s, not carved: two trees that are
+        /// never laid out at the same time (the runtime front end's two generations) share them.
+        /// Saves 48 bytes per node of capacity (docs/perf/bytes.md). Slice storage only.
+        pub fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self {
+            comptime std.debug.assert(storage == .slice);
+            std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index) and cap == other.cap);
+            var c: Columns = undefined;
+            const info = @typeInfo(Columns).@"struct";
+            inline for (info.field_names, info.field_types) |name, FT| {
+                if (comptime isScratch(name)) {
+                    @field(c, name) = @field(other.c, name);
+                } else switch (@typeInfo(FT)) {
+                    .pointer => |p| @field(c, name) = carver.slice(p.child, rows(cap)),
+                    .array => |a| inline for (0..a.len) |k| {
+                        @field(c, name)[k] = carver.slice(@typeInfo(a.child).pointer.child, rows(cap));
+                    },
+                    else => unreachable,
+                }
+            }
+            return .{ .cap = cap, .c = c };
+        }
+        fn isScratch(comptime name: []const u8) bool {
+            for (scratch) |s| if (std.mem.eql(u8, s, name)) return true;
+            return false;
+        }
         /// An empty tree with zeroed columns. Array storage only: the value holds every row.
         pub const empty = if (storage == .array) Self{ .cap = storage.array, .c = std.mem.zeroes(Columns) } else {};
         /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
@@ -152,6 +290,12 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// Appends a node as the last child of `parent` and returns its row.
         /// One row write per column; no searching, no allocation, no branch.
         pub fn push(t: *Self, parent: Index, id: Id, s: *const Style) Index {
+            return t.pushRow(parent, id, &.from(s));
+        }
+
+        /// `push` from a style already turned into its row (`Template.from`, once per style
+        /// rather than once per node): the row is copied as it is, one store per column.
+        pub fn pushRow(t: *Self, parent: Index, id: Id, row: *const Template) Index {
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
@@ -160,46 +304,16 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             c.id[i] = @backingInt(id);
             c.parent[i] = parent;
             c.end[i] = i + 1;
-            inline for (0..2) |a| {
-                const k = @backingInt(s.size[a].kind);
-                const v = s.size[a].v;
-                c.min[a][i] = @max(v * Size.k_min[k], s.min[a]);
-                c.max[a][i] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
-                c.grow[a][i] = v * Size.k_grow[k];
-                c.pct[a][i] = v * Size.k_pct[k];
-                c.pad_lo[a][i] = s.pad[a];
-                c.pad_hi[a][i] = s.pad[a + 2];
-                c.offset[a][i] = s.offset[a];
-                c.scroll[a][i] = s.scroll[a];
+            inline for (@typeInfo(Template).@"struct".field_names) |name| {
+                const v = @field(row, name);
+                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                    inline for (0..2) |a| @field(c, name)[a][i] = v[a];
+                } else @field(c, name)[i] = v;
             }
-            const fl = b01(!s.float);
-            c.gap[i] = s.gap;
-            c.flow[i] = fl;
-            c.shrink[i] = b01(s.shrink);
-            c.align_main[i] = Align.factor[@backingInt(s.main)];
-            c.align_cross[i] = Align.factor[@backingInt(s.cross)];
-            const along_y: f32 = @floatFromInt(@backingInt(s.dir));
-            c.main[0][i] = 1 - along_y;
-            c.main[1][i] = along_y;
-            c.clips[i] = @intFromBool(s.clip);
-            c.sense[i] = 0;
-            c.look[i] = .{
-                .fill = s.fill.bitsOf(),
-                .border_color = s.border_color.bitsOf(),
-                .border = s.border,
-                .radius = s.radius,
-                .params = s.params,
-                .texture = @backingInt(s.texture),
-                .material = @backingInt(s.material),
-            };
-            c.role[i] = @backingInt(s.role);
-            c.value[i] = s.value;
-            c.text[i] = none;
-            c.custom[i] = none;
             // Count this node in its parent, then clear its own count. The root is its own
             // parent, so the clear also removes its self-count: no `i != 0` test, which
             // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
-            c.nkids[parent] += fl;
+            c.nkids[parent] += row.flow;
             c.nkids[i] = 0;
             return i;
         }
@@ -319,14 +433,15 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "parent"));
     try testing.expectEqual([]u32, @FieldType(Tree.Columns, "end"));
     // Sum of one row over every column, the per-node cost before line rounding.
-    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, role, value.
-    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
+    // u32 links, layout inputs, scratch, outputs, child clip, three u8 flags, look, border, uv, radii,
+    // opacity, alpha, transform, world, clip radii, role, value.
+    try testing.expectEqual(4 * 5 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 4 + 16 + 16 + 4 + 4 + 24 + 24 + 16 + 1 + 4, rowBytes(Tree.Columns));
 }
 
-test "Look: one 36-byte row with the C layout the GPU reads" {
-    try testing.expectEqual(36, @sizeOf(Look));
+test "Look: one 32-byte row, params first" {
+    try testing.expectEqual(32, @sizeOf(Look));
     try testing.expectEqual(4, @alignOf(Look));
-    inline for (.{ "fill", "border_color", "border", "radius", "params", "texture", "material" }, .{ 0, 4, 8, 12, 16, 32, 34 }) |name, off|
+    inline for (.{ "params", "fill", "border_color", "radius", "texture", "material" }, .{ 0, 16, 20, 24, 28, 30 }) |name, off|
         try testing.expectEqual(off, @offsetOf(Look, name));
     try testing.expectEqual([]Look, @FieldType(Tree.Columns, "look"));
 }
@@ -415,11 +530,59 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqualSlices(f32, &.{ 1, 0, 0 }, c.nkids[0..3]);
     try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
     try testing.expectEqual(4, c.look[a].radius);
+    try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, c.radii[a]);
     try testing.expectEqual(9, c.look[a].texture);
     try testing.expectEqual(@backingInt(types.Role.button), c.role[a]);
     try testing.expectEqual(0.25, c.value[a]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.text[0..3]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.custom[0..3]);
+}
+
+test "pushRow of a style's template writes the row push writes" {
+    var fx: Fixture(8) = .{};
+    var fy: Fixture(8) = .{};
+    var a = fx.tree();
+    var b = fy.tree();
+    const styles = comptime [_]Style{
+        .{ .dir = .x, .size = .{ .px(100), .fill }, .pad = .{ 1, 2, 3, 4 }, .gap = 5, .clip = true },
+        .{ .size = .{ .pct(0.5), .fit }, .max = .{ 30, types.inf }, .cross = .end, .shrink = true, .radius = 4, .radii = .{ -1, 2, -1, 3 }, .opacity = 0.5 },
+        .{ .float = true, .offset = .{ 6, 8 }, .transform = .{ 2, 0, 0, 2, 1, 1 }, .role = .button },
+    };
+    // At comptime too: a widget's fixed style costs nothing per node.
+    const fixed = comptime Template.from(&styles[2]);
+    for (&styles, 0..) |*s, k| {
+        const p: u32 = @intCast(@min(k, 1));
+        _ = a.push(p, Id.from("n").with(@intCast(k)), s);
+        _ = b.pushRow(p, Id.from("n").with(@intCast(k)), &if (k == 2) fixed else Template.from(s));
+    }
+    try testing.expectEqual(a.len, b.len);
+    inline for (@typeInfo(Tree.Columns).@"struct".field_names) |name| {
+        const ca = @field(a.c, name);
+        const cb = @field(b.c, name);
+        if (@typeInfo(@TypeOf(ca)) == .array) {
+            inline for (ca, cb) |x, y| try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(x[0..a.len]), std.mem.sliceAsBytes(y[0..a.len]));
+        } else try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(ca[0..a.len]), std.mem.sliceAsBytes(cb[0..a.len]));
+    }
+}
+
+test "initSharing: a second tree shares the scratch columns and carves the rest" {
+    const cap = 10;
+    const one = comptime blk: {
+        @setEvalBranchQuota(20_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Tree.init(&counter, cap);
+        break :blk counter.off;
+    };
+    var buf: [2 * one]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    const a = Tree.init(&carver, cap);
+    const b = Tree.initSharing(&carver, cap, &a);
+    // 7 scratch columns, 5 of them per axis: 12 columns of rows(cap) f32 not carved twice.
+    try testing.expectEqual(one + one - 12 * std.mem.alignForward(usize, Tree.rows(cap) * 4, mem.column_align), carver.off);
+    try testing.expectEqual(a.c.fit[0].ptr, b.c.fit[0].ptr);
+    try testing.expectEqual(a.c.cursor.ptr, b.c.cursor.ptr);
+    try testing.expect(a.c.rect[0].ptr != b.c.rect[0].ptr);
+    try testing.expect(a.c.id.ptr != b.c.id.ptr);
 }
 
 test "seal closes a subtree over everything pushed since its node" {

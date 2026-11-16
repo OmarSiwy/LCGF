@@ -213,12 +213,14 @@ lane("P02", "layout-incremental", ["layout-core"], M("C2") + "; " + R("XILEM", "
     ("layout: add equivalence test against full layout", {}),
     ("layout: add benchmark for a one-node change in 4,000 nodes", dict(ref=R("CHK", "benchmark scene"), key="layout-inc-done")),
 ])
-lane("P02", "layout-latency", ["layout-core", "bench"], R("CHK", "resolve is latency-bound at about 9 ns per node"), "C1", "resolve and place at least 1.5x faster in the benchmark, same results", [
+lane("P02", "layout-latency", ["layout-core", "bench"], R("CHK", "resolve is latency-bound at about 9 ns per node"), "C1", "same results; median timing against the lane's start recorded in the message", [
     ("layout: rewrite resolve as K0 + K1*inner + K2*max(inner - taken, 0)", dict(ref=U("layout.resolve"))),
     ("layout: precompute K coefficients in a SIMD pass", {}),
     ("layout: group per-axis inputs into one row per node and measure", dict(ref=R("KELLEY_DOD", "fewer streams per loop"))),
     ("layout: experiment with level-order storage so sweeps vectorise", dict(done="decision recorded with numbers")),
-    ("layout: add prefetch of parent rows and measure", {}),
+    ("layout: add prefetch of parent rows and measure", dict(done="kept only if faster; numbers recorded either way")),
+    # Lane layout-c measured the derived index at 33.8 -> 10.5 us per resolve sweep (C0121).
+    ("layout: sweep resolve and place by level through a derived level-order index", dict(done="resolve and place at least 1.5x faster than at the lane's start, same results")),
 ])
 
 # =============================================================================
@@ -516,15 +518,18 @@ lane("P07", "text-layout", ["shaping", "unicode"], U("layout.textAvail, fonts.Mo
     ("text: add position-to-index and index-to-position queries", {}),
     ("text: plug the full stack into the measure / wrap protocol", dict(ref=U("Frame.end: where a shaper slots in"))),
     ("text: add text layout tests", dict(key="text-layout-done")),
+    # Found by lane text-edit (C0346): caret moves are in screen order, glyphs were still in
+    # text order, so right-to-left carets missed their glyphs.
+    ("text: reorder each line's glyphs by bidi level for display", dict(needs=["text-edit"], done="right-to-left and mixed lines draw in BidiCharacterTest visual order; text-edit's screen-order caret sits on the glyph it moved to")),
 ])
-lane("P07", "font-fallback", ["text-layout"], R("SLINT", "platform text integration") + "; " + R("GPUI", "OS text systems"), "H1", "mixed-script sample renders", [
+lane("P07", "font-fallback", ["text-layout-done"], R("SLINT", "platform text integration") + "; " + R("GPUI", "OS text systems"), "H1", "mixed-script sample renders", [
     ("fallback: add fallback chain per script", {}),
     ("fallback: discover system fonts on Windows (DirectWrite)", dict(spec=S("WIN32", "DirectWrite font enumeration"))),
     ("fallback: discover system fonts on macOS (Core Text)", dict(spec=S("APPKIT", "Core Text font descriptors"))),
     ("fallback: discover system fonts on Linux (fontconfig)", {}),
     ("fallback: add fallback tests", {}),
 ])
-lane("P07", "text-edit", ["text-layout", "keyboard"], R("ICED_REL", "input method support") + "; " + R("DVUI", "text entry"), "H1", "editing tests pass with replayed input", [
+lane("P07", "text-edit", ["text-layout-done", "keyboard"], R("ICED_REL", "input method support") + "; " + R("DVUI", "text entry"), "H1", "editing tests pass with replayed input", [
     ("edit: add text buffer with a gap", {}),
     ("edit: move the caret by grapheme, word and line", dict(spec=S("UAX29"))),
     ("edit: add selection with keyboard and pointer", {}),
