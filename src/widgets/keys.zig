@@ -9,6 +9,8 @@ const Input = @import("../core/input.zig").Input;
 pub const map: @import("../interact/focus.zig").Keymap = .{};
 pub const enter: u8 = 0x28;
 pub const space: u8 = 0x2c;
+pub const page_up: u8 = 0x4b;
+pub const page_down: u8 = 0x4e;
 
 /// Presses of Enter or Space in this frame's key events (auto-repeat does not count).
 pub fn activations(in: *const Input) u32 {

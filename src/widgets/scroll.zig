@@ -21,6 +21,8 @@ const Style = types.Style;
 const Id = types.Id;
 const Rect = types.Rect;
 const Theme = base.Theme;
+const simd = @import("../core/simd.zig");
+const keys = @import("keys.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -49,10 +51,14 @@ pub fn clamp(offset: f32, g: Geometry) f32 {
 /// Starts a scroll area named `id` showing its content from `offset.*` down, and opens the
 /// content. `offset.*` is clamped to what last frame's layout allows.
 pub fn open(f: *Frame, th: *const Theme, id: Id, offset: *f32) void {
-    const g = Geometry.of(f.lastRect(id), f.lastRect(id.with(1)));
-    offset.* = clamp(offset.*, g);
+    const view = f.lastRect(id);
+    const g = Geometry.of(view, f.lastRect(id.with(1)));
+    const it = &f.ctx.inter;
+    const over = inside(view, f.in.pointer);
+    offset.* = scrolled(offset.*, g, over, it.response(id.with(2)).held, it.delta[1], it.response(id).focused, f.in);
     _ = f.open(.none, areaStyle(th));
-    _ = f.open(id, viewportStyle(th, offset.*));
+    const vp = f.open(id, viewportStyle(th, offset.*));
+    _ = f.interact(vp, .{ .hover = true, .click = true, .focus = true });
     _ = f.open(id.with(1), contentStyle(th));
 }
 
@@ -62,7 +68,8 @@ pub fn close(f: *Frame, th: *const Theme, id: Id, offset: f32) void {
     f.close();
     const g = Geometry.of(f.lastRect(id), f.lastRect(id.with(1)));
     _ = f.open(.none, trackStyle(th));
-    _ = f.leaf(id.with(2), thumbStyle(th, g, offset));
+    const thumb = f.leaf(id.with(2), thumbStyle(th, g, offset));
+    _ = f.interact(thumb, .{ .hover = true, .click = true, .drag = true });
     f.close();
     f.close();
 }
@@ -101,6 +108,37 @@ pub fn thumbStyle(th: *const Theme, g: Geometry, offset: f32) Style {
     return .{ .float = true, .offset = .{ 0, offset * scale }, .size = .{ .px(bar_px), .px(g.view * scale) }, .fill = th.control_hot, .radius = bar_px / 2 };
 }
 
+// ---- behaviour ----------------------------------------------------------------------------
+
+/// How far one wheel notch or one arrow key scrolls, logical pixels.
+pub const line_px: f32 = 40;
+
+/// Whether `p` is inside `r` (half-open, as hit testing).
+pub fn inside(r: Rect, p: [2]f32) bool {
+    return p[0] >= r.x0 and p[0] < r.x1 and p[1] >= r.y0 and p[1] < r.y1;
+}
+
+/// The next offset, clamped to `g`. With the pointer `over` the viewport, the wheel scrolls
+/// `line_px` a notch (up is back) and pixel scrolling by its pixels. While the thumb is held,
+/// the pointer's movement `dy` moves it, which scrolls the content by `dy` times content over
+/// view. While the viewport has focus, Down and Up scroll a line, Page Down and Page Up a
+/// viewport, Home and End to the ends; repeats included.
+pub fn scrolled(offset: f32, g: Geometry, over: bool, held: bool, dy: f32, focused: bool, in: *const Input) f32 {
+    var v = offset;
+    v -= simd.b2f(over) * (in.wheel[1] * line_px + in.scroll[1]);
+    v += simd.b2f(held) * dy * g.content / @max(g.view, 1);
+    const k = keys.map;
+    for (in.events) |e| {
+        const down = focused and (e.kind == .press or e.kind == .repeat);
+        const lines = simd.b2f(e.code == k.down) - simd.b2f(e.code == k.up);
+        const pages = simd.b2f(e.code == keys.page_down) - simd.b2f(e.code == keys.page_up);
+        v += simd.b2f(down) * (lines * line_px + pages * g.view);
+        v = simd.selF(down and e.code == k.home, 0, v);
+        v = simd.selF(down and e.code == k.end, g.limit(), v);
+    }
+    return clamp(v, g);
+}
+
 /// The scroll area as a spec node.
 pub const ct = struct {
     /// A scroll area whose viewport is the widget `id`, scrolled by the f32 field `offset`,
@@ -123,14 +161,21 @@ pub const ct = struct {
         return struct {
             const thumb = id ++ "_thumb";
 
-            /// Measures last frame's viewport and content and clamps the offset to them.
+            /// Measures last frame's viewport and content, then scrolls by this frame's input
+            /// (`scrolled`): the wheel over the viewport, the held thumb's movement since the
+            /// pointer's last frame position (kept), and keys while the viewport has focus.
             pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
                 _ = event;
-                _ = in;
+                const E = @TypeOf(ui.*).Events;
                 const g = geometry(ui, row);
-                ui.keep(@This()).* = .{ g.view, g.content, 0, 0 };
+                const kept = ui.keep(@This());
+                const over = ui.built and inside(ui.tables.t.rect(row + 2), in.pointer);
+                const held = ui.pointer.pressed == @field(E.Widget, thumb);
+                const dy = in.pointer[1] - kept[2];
+                kept.* = .{ g.view, g.content, in.pointer[1], 0 };
                 const field = comptime @TypeOf(ui.*).field(offset);
-                ui.signals.set(field, clamp(@field(ui.signals.state, offset), g));
+                const focused = ui.focus == @field(E.Widget, id);
+                ui.signals.set(field, scrolled(@field(ui.signals.state, offset), g, over, held, dy, focused, in));
             }
 
             fn geometry(ui: anytype, comptime row: u32) Geometry {
@@ -285,6 +330,77 @@ test "scroll: a bar beside the viewport; the thumb is the visible share at the o
     in.pointer = .{ 1, 1 };
     const lo = try S.light.frame(&in);
     try testing.expectEqual(types.Color.rgb(150, 150, 160).bitsOf(), lo.runtime.tree.c.look[rows.thumb].fill);
+}
+
+test "scrolled: wheel over the viewport, thumb drag, keys while focused, clamped" {
+    const g: Geometry = .{ .view = 100, .content = 300 };
+    const none_in: Input = .{};
+    const wheel: Input = .{ .wheel = .{ 0, -1 } };
+    try testing.expectEqual(@as(f32, 40), scrolled(0, g, true, false, 0, false, &wheel));
+    try testing.expectEqual(@as(f32, 0), scrolled(0, g, false, false, 0, false, &wheel));
+    const pixels: Input = .{ .scroll = .{ 0, -12 } };
+    try testing.expectEqual(@as(f32, 22), scrolled(10, g, true, false, 0, false, &pixels));
+    try testing.expectEqual(@as(f32, 30), scrolled(0, g, false, true, 10, false, &none_in));
+    try testing.expectEqual(@as(f32, 200), scrolled(0, g, false, true, 500, false, &none_in));
+    const k = keys.map;
+    const ev = [3]Input.Event{ .{ .kind = .press, .code = k.down }, .{ .kind = .repeat, .code = keys.page_down }, .{ .kind = .press, .code = k.up } };
+    try testing.expectEqual(@as(f32, 100), scrolled(0, g, false, false, 0, true, &.{ .events = &ev }));
+    try testing.expectEqual(@as(f32, 0), scrolled(0, g, false, false, 0, false, &.{ .events = &ev }));
+    const he = [1]Input.Event{.{ .kind = .press, .code = k.end }};
+    try testing.expectEqual(@as(f32, 200), scrolled(0, g, false, false, 0, true, &.{ .events = &he }));
+    const ho = [1]Input.Event{.{ .kind = .press, .code = k.home }};
+    try testing.expectEqual(@as(f32, 0), scrolled(150, g, false, false, 0, true, &.{ .events = &ho }));
+}
+
+test "scroll: wheel, thumb drag and paging keys in both front ends" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const view = out.runtime.tree.rect(rows.viewport);
+    const content = out.runtime.tree.rect(rows.content);
+    const limit = content.h() - view.h();
+    // Wheel down one notch over the viewport.
+    in.pointer = .{ view.x0 + 20, view.y0 + 10 };
+    in.wheel = .{ 0, -1 };
+    _ = try h.frame(&in);
+    in.wheel = .{ 0, 0 };
+    try testing.expectEqual(line_px, h.app.offset);
+    try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
+    // Wheel over the bar's track does nothing.
+    in.pointer = .{ view.x1 + 2, view.y0 + 10 };
+    in.wheel = .{ 0, -1 };
+    out = try h.frame(&in);
+    in.wheel = .{ 0, 0 };
+    try testing.expectEqual(line_px, h.app.offset);
+    // Drag the thumb down 10 px: the content moves 10 * content / view.
+    const tb = out.runtime.tree.rect(rows.thumb);
+    in.pointer = .{ (tb.x0 + tb.x1) * 0.5, (tb.y0 + tb.y1) * 0.5 };
+    _ = try h.frame(&in);
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.pointer[1] += 10;
+    _ = try h.frame(&in);
+    try testing.expectApproxEqAbs(line_px + 10 * content.h() / view.h(), h.app.offset, 1e-3);
+    try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    // Click the viewport (a label, not the checkbox), then End and Page Up.
+    in.pointer = .{ view.x0 + 20, view.y0 + 5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    const end = [1]Input.Event{.{ .kind = .press, .code = keys.map.end }};
+    in.events = &end;
+    _ = try h.frame(&in);
+    try testing.expectEqual(limit, h.app.offset);
+    try testing.expectEqual(limit, h.ui.signals.state.offset);
+    const up = [1]Input.Event{.{ .kind = .press, .code = keys.page_up }};
+    in.events = &up;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@max(limit - view.h(), 0), h.app.offset);
+    try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
 }
 
 test {
