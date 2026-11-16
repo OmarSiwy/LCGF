@@ -331,24 +331,9 @@ pub const DragDrop = struct {
         // Address select, then load (a select on the loaded `end` became a branch).
         const end_at = [2]*const u32{ &zero_id, &c.end[@min(src, prev.cap - 1)] };
         const src_hi = end_at[@intFromBool(src != none)].*;
-        const px = simd.f(in.pointer[0]);
-        const py = simd.f(in.pointer[1]);
-        const kind = simd.u(d.kind);
-        var best = simd.u(none);
-        const n = simd.padded(prev.len);
-        var i: usize = 0;
-        while (i < n) : (i += W) {
-            const inside = (px >= simd.loadF(c.vis[0], i)) & (px < simd.loadF(c.vis[2], i)) &
-                (py >= simd.loadF(c.vis[1], i)) & (py < simd.loadF(c.vis[3], i));
-            const r = simd.iota + simd.u(@intCast(i));
-            const own = (r >= simd.u(src_lo)) & (r < simd.u(src_hi));
-            const take = inside & ((simd.loadU(tg.c.accept, i) & kind) != simd.u(0)) & !own;
-            best = @select(u32, take, r, best);
-        }
-        // Latest row wins, as in `route`. With no drag `kind` is 0 and nothing accepts it.
-        const node = @reduce(.Max, best +% simd.u(1)) -% 1;
-        const id_at = [2]*const u32{ &zero_id, &c.id[@min(node, prev.cap - 1)] };
-        const over = id_at[@intFromBool(node != none)].*;
+        // With no drag `kind` is 0 and nothing accepts it.
+        const node = accepting(prev, tg, in.pointer, d.kind, src_lo, src_hi);
+        const over = idOf(prev, node);
         const active = d.source != 0;
         const released = simd.andB(active, it.released == d.source);
         d.dropped = simd.selU(released, over, 0);
@@ -360,6 +345,81 @@ pub const DragDrop = struct {
         d.kind = simd.selU(going, d.kind, 0);
     }
 };
+
+/// Files dragged in from outside the application, filled by the host each frame beside `Input`
+/// (Input has no file field): the paths while files hover over the window, and the frame they
+/// are dropped. Paths are UTF-8 joined in `names`; path `k` is `names[ends[k-1]..ends[k]]`.
+/// The host owns the bytes; they are read during the frame only.
+pub const Files = struct {
+    names: []const u8 = "",
+    ends: []const u32 = &.{},
+    /// Where the files are, in logical pixels (the pointer is not reported during an OS drag).
+    pos: [2]f32 = .{ -1, -1 },
+    /// Files are over the window this frame (also on the drop frame).
+    hover: bool = false,
+    /// The user let go of them this frame.
+    drop: bool = false,
+
+    pub fn count(fs: *const Files) usize {
+        return fs.ends.len;
+    }
+    /// Path `k`, for `k < count()`.
+    pub fn path(fs: *const Files, k: usize) []const u8 {
+        const start = if (k == 0) 0 else fs.ends[k - 1];
+        return fs.names[start..fs.ends[k]];
+    }
+
+    /// Where these files go: the topmost node under `pos` whose `Targets.accept` includes
+    /// `kind` (the application's bit for files). One SIMD sweep, as `DragDrop.step`'s.
+    pub fn route(fs: *const Files, prev: *const Tree, tg: *const Targets, kind: u32) FileDrop {
+        const active = simd.andB(fs.hover, fs.count() > 0);
+        const node = accepting(prev, tg, fs.pos, simd.selU(active, kind, 0), 0, 0);
+        const id = idOf(prev, node);
+        return .{
+            .over = simd.selU(fs.drop, 0, id),
+            .over_node = simd.selU(fs.drop, none, node),
+            .dropped = simd.selU(fs.drop, id, 0),
+        };
+    }
+};
+
+/// Where external files are this frame (`Files.route`).
+pub const FileDrop = struct {
+    /// Id of the accepting node they hover over, or 0; for drop highlighting.
+    over: u32 = 0,
+    over_node: u32 = none,
+    /// Id they were dropped on this frame, or 0.
+    dropped: u32 = 0,
+};
+
+/// The topmost (latest) row of `t` whose visible rect holds `p` and whose `accept` shares a
+/// bit with `kind`, rows [lo, hi) excluded; `none` if there is none. One SIMD sweep.
+fn accepting(t: *const Tree, tg: *const Targets, p: [2]f32, kind: u32, lo: u32, hi: u32) u32 {
+    const c = &t.c;
+    const px = simd.f(p[0]);
+    const py = simd.f(p[1]);
+    const kv = simd.u(kind);
+    var best = simd.u(none);
+    const n = simd.padded(t.len);
+    var i: usize = 0;
+    while (i < n) : (i += W) {
+        const inside = (px >= simd.loadF(c.vis[0], i)) & (px < simd.loadF(c.vis[2], i)) &
+            (py >= simd.loadF(c.vis[1], i)) & (py < simd.loadF(c.vis[3], i));
+        const r = simd.iota + simd.u(@intCast(i));
+        const skip = (r >= simd.u(lo)) & (r < simd.u(hi));
+        const take = inside & ((simd.loadU(tg.c.accept, i) & kv) != simd.u(0)) & !skip;
+        best = @select(u32, take, r, best);
+    }
+    // Latest row wins, as in `route`.
+    return @reduce(.Max, best +% simd.u(1)) -% 1;
+}
+
+/// The id of row `node`, or 0 for `none`. Selects the address, then loads: a select on the
+/// loaded id became a branch (docs/CHECKS.md).
+fn idOf(t: *const Tree, node: u32) u32 {
+    const id_at = [2]*const u32{ &zero_id, &t.c.id[@min(node, t.cap - 1)] };
+    return id_at[@intFromBool(node != none)].*;
+}
 
 /// What `route` reads as the id when an axis has no target.
 const zero_id: u32 = 0;
@@ -688,4 +748,33 @@ test "DragDrop: release on nothing drops nothing; cancel ends it; one drag at a 
     dd.step(&it, &f.t, &f.tg, &.{ .pointer = .{ 90, 50 } });
     try testing.expectEqual(0, dd.over);
     try testing.expectEqual(0, dd.source);
+}
+
+test "Files: dragged in from outside, they hover over the bin that takes files and drop there" {
+    var f: Board = .{};
+    f.build();
+    const file_kind = 4;
+    f.tg.c.accept[f.t.find(types.Id.from("files"))] |= file_kind;
+    const files = @backingInt(types.Id.from("files"));
+    const names = "/tmp/a.png/home/u/notes.txt";
+    const ends = [_]u32{ 10, 27 };
+    var fs: Files = .{ .names = names, .ends = &ends, .pos = .{ 90, 50 }, .hover = true };
+    try testing.expectEqual(2, fs.count());
+    try testing.expectEqualStrings("/tmp/a.png", fs.path(0));
+    try testing.expectEqualStrings("/home/u/notes.txt", fs.path(1));
+    // Hovering over files: highlighted, not dropped.
+    try testing.expectEqual(FileDrop{ .over = files, .over_node = f.t.find(types.Id.from("files")) }, fs.route(&f.t, &f.tg, file_kind));
+    // Over trash, which does not take files, and over the list, which takes only cards.
+    fs.pos = .{ 180, 50 };
+    try testing.expectEqual(FileDrop{}, fs.route(&f.t, &f.tg, file_kind));
+    fs.pos = .{ 20, 20 };
+    try testing.expectEqual(FileDrop{}, fs.route(&f.t, &f.tg, file_kind));
+    // Dropped on files.
+    fs.pos = .{ 90, 50 };
+    fs.drop = true;
+    try testing.expectEqual(FileDrop{ .dropped = files }, fs.route(&f.t, &f.tg, file_kind));
+    // No files, or not over the window: nothing.
+    try testing.expectEqual(FileDrop{}, (Files{ .pos = .{ 90, 50 }, .hover = true, .drop = true }).route(&f.t, &f.tg, file_kind));
+    fs.hover = false;
+    try testing.expectEqual(FileDrop{}, fs.route(&f.t, &f.tg, file_kind));
 }

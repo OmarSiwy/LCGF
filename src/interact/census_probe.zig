@@ -31,3 +31,6 @@ export fn p_kinetic_step(k: *lcgr.gestures.Kinetic, dt: f32) f32 {
 export fn p_drop_step(d: *lcgr.gestures.DragDrop, it: *const lcgr.interaction.Interaction, prev: *const Tree, tg: *const lcgr.gestures.Targets, in: *const Input) void {
     d.step(it, prev, tg, in);
 }
+export fn p_files_route(fs: *const lcgr.gestures.Files, prev: *const Tree, tg: *const lcgr.gestures.Targets, out: *lcgr.gestures.FileDrop) void {
+    out.* = fs.route(prev, tg, 4);
+}
