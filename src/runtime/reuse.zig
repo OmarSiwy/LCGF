@@ -119,7 +119,8 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     const count = b - a;
     const delta = n -% a;
 
-    mem.copyRows(Tree.Columns, &t.c, n, &prev.c, a, count);
+    // Not the layout scratch: both generations share it, and layout rewrites it.
+    mem.copyRowsExcept(Tree.Columns, &t.c, n, &prev.c, a, count, &Tree.scratch);
     // Rebase links, `lanes` rows per step. The last vector may run past the subtree into rows
     // that are not in use yet; the next push rewrites them. `n + count <= cap`, so it stays
     // inside the padded columns (`simd.rows`).

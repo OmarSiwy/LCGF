@@ -248,6 +248,36 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index));
             return .{ .cap = cap, .c = carver.columns(Columns, rows(cap)) };
         }
+        /// The layout scratch columns: every layout run rewrites them before reading them
+        /// (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing
+        /// outside a layout run reads them.
+        pub const scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" };
+
+        /// `init`, except the `scratch` columns are `other`'s, not carved: two trees that are
+        /// never laid out at the same time (the runtime front end's two generations) share them.
+        /// Saves 48 bytes per node of capacity (docs/perf/bytes.md). Slice storage only.
+        pub fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self {
+            comptime std.debug.assert(storage == .slice);
+            std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index) and cap == other.cap);
+            var c: Columns = undefined;
+            const info = @typeInfo(Columns).@"struct";
+            inline for (info.field_names, info.field_types) |name, FT| {
+                if (comptime isScratch(name)) {
+                    @field(c, name) = @field(other.c, name);
+                } else switch (@typeInfo(FT)) {
+                    .pointer => |p| @field(c, name) = carver.slice(p.child, rows(cap)),
+                    .array => |a| inline for (0..a.len) |k| {
+                        @field(c, name)[k] = carver.slice(@typeInfo(a.child).pointer.child, rows(cap));
+                    },
+                    else => unreachable,
+                }
+            }
+            return .{ .cap = cap, .c = c };
+        }
+        fn isScratch(comptime name: []const u8) bool {
+            for (scratch) |s| if (std.mem.eql(u8, s, name)) return true;
+            return false;
+        }
         /// An empty tree with zeroed columns. Array storage only: the value holds every row.
         pub const empty = if (storage == .array) Self{ .cap = storage.array, .c = std.mem.zeroes(Columns) } else {};
         /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
@@ -533,6 +563,26 @@ test "pushRow of a style's template writes the row push writes" {
             inline for (ca, cb) |x, y| try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(x[0..a.len]), std.mem.sliceAsBytes(y[0..a.len]));
         } else try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(ca[0..a.len]), std.mem.sliceAsBytes(cb[0..a.len]));
     }
+}
+
+test "initSharing: a second tree shares the scratch columns and carves the rest" {
+    const cap = 10;
+    const one = comptime blk: {
+        @setEvalBranchQuota(20_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Tree.init(&counter, cap);
+        break :blk counter.off;
+    };
+    var buf: [2 * one]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    const a = Tree.init(&carver, cap);
+    const b = Tree.initSharing(&carver, cap, &a);
+    // 7 scratch columns, 5 of them per axis: 12 columns of rows(cap) f32 not carved twice.
+    try testing.expectEqual(one + one - 12 * std.mem.alignForward(usize, Tree.rows(cap) * 4, mem.column_align), carver.off);
+    try testing.expectEqual(a.c.fit[0].ptr, b.c.fit[0].ptr);
+    try testing.expectEqual(a.c.cursor.ptr, b.c.cursor.ptr);
+    try testing.expect(a.c.rect[0].ptr != b.c.rect[0].ptr);
+    try testing.expect(a.c.id.ptr != b.c.id.ptr);
 }
 
 test "seal closes a subtree over everything pushed since its node" {
