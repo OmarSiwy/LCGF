@@ -110,6 +110,10 @@ pub fn build(b: *std.Build) void {
     const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgr_small.addOptions("build_options", options);
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
+    // The reference row of docs/perf/vs.md: the benchmark itself, fast and small (bench/vs/measure.py).
+    const vs_lcgr = b.step("vs-lcgr", "Install the benchmark as the LCGR row of the comparison (bench/vs/)");
+    vs_lcgr.dependOn(&b.addInstallArtifact(bench, .{ .dest_sub_path = "vs-lcgr" }).step);
+    vs_lcgr.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
@@ -118,10 +122,25 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes } },
         }) });
         size_run.addArtifactArg(exe);
+        if (std.mem.eql(u8, ex[0], "bench")) vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "vs-lcgr-small" }).step);
     }
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
     test_step.dependOn(&b.addRunArtifact(size_tests).step);
+
+    // Competitor harnesses (bench/vs/, docs/perf/vs.md, ci/jobs/vs-*.sh): `zig build vs-NAME`
+    // installs zig-out/bin/vs-NAME (ReleaseFast, timed), vs-NAME-small (ReleaseSmall, sized) and
+    // the size tool. Each framework is a lazy dependency, fetched only for its own step.
+    const vs_clay = b.step("vs-clay", "Build the Clay comparison harness (bench/vs/clay/)");
+    vs_clay.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    if (b.lazyDependency("clay", .{})) |clay| {
+        for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-clay", "vs-clay-small" }) |mode, name| {
+            const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
+            exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/main.c"), .flags = &.{"-std=gnu99"} });
+            exe.root_module.addIncludePath(clay.path(""));
+            vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
+    }
 
     // Conformance scenes as files for a real GPU (src/render/conformance/, ci/run.sh conformance).
     const conformance_dump = b.addExecutable(.{ .name = "conformance-dump", .root_module = b.createModule(.{
