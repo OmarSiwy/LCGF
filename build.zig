@@ -644,6 +644,34 @@ pub fn build(b: *std.Build) void {
         firmware.entry = .{ .symbol_name = "_start" };
         baremetal_step.dependOn(&b.addInstallArtifact(firmware, .{}).step);
     }
+    // The embedded profile's demo (examples/embedded/demo.zig): its test runs here, and it is
+    // linked freestanding, unstripped so its symbols can be checked (ci/run.sh embedded).
+    const embedded_step = b.step("embedded", "Run the embedded demo and link it for microcontrollers");
+    const embedded_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/embedded/demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    embedded_step.dependOn(&b.addRunArtifact(embedded_test).step);
+    for ([_]struct { []const u8, std.Target.Query }{
+        .{ "cortex-m7", .{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } } },
+        .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } },
+    }) |mcu| {
+        const mcu_target = b.resolveTargetQuery(mcu[1]);
+        const mcu_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
+        mcu_lcgr.addOptions("build_options", options);
+        mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const demo = b.addExecutable(.{ .name = b.fmt("embedded-demo-{s}", .{mcu[0]}), .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/embedded/demo.zig"),
+            .target = mcu_target,
+            .optimize = .ReleaseSmall,
+            .strip = false,
+            .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
+        }) });
+        demo.entry = .{ .symbol_name = "_start" };
+        embedded_step.dependOn(&b.addInstallArtifact(demo, .{}).step);
+    }
     // The web back end (src/render/web/): wasm32-freestanding modules and the JavaScript that
     // loads them, installed together in zig-out/web/ for a browser (ci/run.sh web).
     const web_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
