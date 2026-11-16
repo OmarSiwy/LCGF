@@ -30,6 +30,8 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const
     _ = f.open(.none, sectionStyle(th));
     const head = f.open(id, headerStyle(th));
     const r = f.interact(head, .button);
+    f.setFill(head, base.buttonFill(th, r));
+    f.setCursor(.pointer, r.hovered);
     _ = f.leaf(.none, indicatorStyle(th, expanded.*));
     _ = base.label(f, th, title);
     f.close();
@@ -49,24 +51,23 @@ pub fn sectionStyle(th: *const Theme) Style {
     return .{ .dir = .y, .size = .{ .fill, .fit } };
 }
 
-/// The header: a row across the section holding the indicator and the title.
+/// The header: a row across the section holding the indicator and the title, padded and
+/// rounded as a button. Its fill is a button's, by interaction state (`base.buttonFill`).
 pub fn headerStyle(th: *const Theme) Style {
-    return .{ .dir = .x, .size = .{ .fill, .fit }, .gap = th.gap, .cross = .center, .role = .button };
+    return .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(th.pad), .gap = th.gap, .radius = th.radius, .cross = .center, .role = .button };
 }
 
-/// The mark before the title that shows whether the section is open.
+/// The mark before the title: the accent colour while the section is open, the control
+/// colour while it is closed (`Theme.marks`, by table index).
 pub fn indicatorStyle(th: *const Theme, expanded: bool) Style {
-    _ = th;
-    _ = expanded;
-    return .{ .size = .{ .px(8), .px(8) } };
+    return .{ .size = .{ .px(8), .px(8) }, .radius = 2, .fill = th.marks()[@intFromBool(expanded)] };
 }
 
 /// The panel: as tall as its children when expanded, 0 px and clipping when collapsed,
-/// picked by table index.
+/// picked by table index. Its children are inset by the theme's pad and spaced by its gap.
 pub fn panelStyle(th: *const Theme, expanded: bool) Style {
-    _ = th;
     const heights = [2]types.Size{ .px(0), .fit };
-    return .{ .dir = .y, .size = .{ .fill, heights[@intFromBool(expanded)] }, .clip = true };
+    return .{ .dir = .y, .size = .{ .fill, heights[@intFromBool(expanded)] }, .pad = .{ th.pad, th.gap, th.pad, th.gap }, .gap = th.gap, .clip = true };
 }
 
 /// The accordion's sections as spec nodes.
@@ -92,7 +93,9 @@ pub const ct = struct {
                 const t = &ui.tables.t;
                 const open_: bool = @field(ui.signals.state, expanded);
                 const sec = t.push(parent, .none, &n.style);
-                const head = t.push(sec, .hash(id), &n.children[0].style);
+                var hs = n.children[0].style;
+                hs.fill = base.buttonFill(&th, ui.response(next.* + 1, in));
+                const head = t.push(sec, .hash(id), &hs);
                 _ = t.push(head, .none, &indicatorStyle(&th, open_));
                 next.* += 3;
                 ui.push(n.children[0].children[1], head, next, in);
@@ -168,6 +171,40 @@ test "accordion: both front ends build every section's rows; a collapsed panel i
     // The closed panel's slider is there but invisible.
     try testing.expectEqual(@as(u32, 0), t.c.visible[t.find(.from("level"))]);
     try testing.expectEqual(4, Default.Ui.Events.widget_count);
+}
+
+test "accordion: header filled as a button, indicator by state, panel inset; any theme alike" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const th = Theme.default;
+    var t = out.runtime.tree;
+    const g = t.find(.from("general"));
+    const a = t.find(.from("advanced"));
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[g].fill);
+    try testing.expectEqual(th.accent.bitsOf(), t.c.look[g + 1].fill);
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[a + 1].fill);
+    // The open panel's checkbox sits inset by pad and gap; the closed panel stays 0 px.
+    try testing.expectEqual(t.rect(g + 3).x0 + th.pad, t.rect(g + 4).x0);
+    try testing.expectEqual(t.rect(g + 3).y0 + th.gap, t.rect(g + 4).y0);
+    try testing.expectEqual(@as(f32, 0), t.rect(a + 3).h());
+    // Hovering a header lights it in both front ends.
+    const r = t.rect(a);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[a].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[a].fill);
+
+    const Light = Page(.{ .control = .rgb(200, 200, 205), .control_hot = .rgb(180, 180, 190), .accent = .rgb(0, 120, 60), .text = .rgb(20, 20, 20), .pad = 12, .gap = 10, .radius = 0 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    _ = try S.light.frame(&in);
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(0, 120, 60).bitsOf(), lo.runtime.tree.c.look[g + 1].fill);
 }
 
 test {
