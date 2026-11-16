@@ -21,6 +21,9 @@ export fn p_sw_linear(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *
 export fn p_sw_radial(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
     shade(.radial, t, q, img, scale);
 }
+export fn p_sw_shadow(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
+    shade(.shadow, t, q, img, scale);
+}
 export fn p_sw_nine_slice(t: *const sw.Target, q: *const lcgr.draw_list.Quad, img: *const sw.Image, scale: f32) void {
     shade(.nine_slice, t, q, img, scale);
 }

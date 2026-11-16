@@ -294,12 +294,29 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
     const hy = (y1 - y0) * 0.5;
     const cx = (x0 + x1) * 0.5;
     const cy = (y0 + y1) * 0.5;
+    // A shadow draws 3 sigma past its rect, where the blur fades out.
+    const sigma: f32 = @bitCast(p[1]);
+    const grow: f32 = if (kind == .shadow) 3 * sigma else 0;
+    const g0 = [2]f32{ x0 - grow, y0 - grow };
+    const g1 = [2]f32{ x1 + grow, y1 + grow };
+
+    // The vertex shader maps corners by the transform; per pixel, its inverse gives the point
+    // in the node's own space, which is what the interpolated `local` and `uv` are.
+    const a, const b, const c, const d, const tx, const ty = q.xform;
+    const inv = 1 / (a * d - b * c);
+    var lo: @Vector(2, f32) = @splat(std.math.inf(f32));
+    var hi: @Vector(2, f32) = @splat(-std.math.inf(f32));
+    for ([_][2]f32{ g0, .{ g1[0], g0[1] }, .{ g0[0], g1[1] }, g1 }) |corner| {
+        const sc: @Vector(2, f32) = .{ a * corner[0] + c * corner[1] + tx, b * corner[0] + d * corner[1] + ty };
+        lo = @min(lo, sc);
+        hi = @max(hi, sc);
+    }
     const clip = q.clip;
     const box = clampBox(toPixels(.{
-        @max(x0, clip[0]) * scale,
-        @max(y0, clip[1]) * scale,
-        @min(x1, clip[2]) * scale + 1,
-        @min(y1, clip[3]) * scale + 1,
+        @max(lo[0], clip[0]) * scale,
+        @max(lo[1], clip[1]) * scale,
+        @min(hi[0], clip[2]) * scale + 1,
+        @min(hi[1], clip[3]) * scale + 1,
     }), t.scissor);
 
     const fill = rgba(q.fill);
@@ -341,10 +358,13 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
         var x = std.mem.alignBackward(u32, box[0], W);
         while (x < box[2]) : (x += W) {
             const sx = (@as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5)) * simd.f(inv_scale);
-            // Pixels whose centre is outside the quad get no fragment.
-            const qx = sx;
-            const qy = sy;
-            const geo = (qx >= simd.f(x0)) & (qx < simd.f(x1)) & (qy >= simd.f(y0)) & (qy < simd.f(y1));
+            // The point in the quad's own space; pixels whose centre is outside the drawn
+            // geometry get no fragment.
+            const ox = sx - simd.f(tx);
+            const oy = sy - simd.f(ty);
+            const qx = (simd.f(d) * ox - simd.f(c) * oy) * simd.f(inv);
+            const qy = (simd.f(a) * oy - simd.f(b) * ox) * simd.f(inv);
+            const geo = (qx >= simd.f(g0[0])) & (qx < simd.f(g1[0])) & (qy >= simd.f(g0[1])) & (qy < simd.f(g1[1]));
             const lx = qx - simd.f(cx);
             const ly = qy - simd.f(cy);
 
@@ -386,11 +406,21 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
                 inline for (0..4) |i| base[i] += (simd.f(to[i]) - base[i]) * g;
             }
             var color: [4]F = undefined;
-            const cover = shape;
-            const tex = sample(img, tu, tv);
-            inline for (0..4) |i| {
-                const m = base[i] * tex[i];
-                color[i] = m + (simd.f(edge[i]) - m) * on_border;
+            var cover = shape;
+            if (kind == .shadow) {
+                // The rounded rect blurred by a Gaussian: 0.5 - erf(d / (sigma sqrt 2)) / 2.
+                const e = dist * simd.f(inv_scale / (@max(sigma, 1e-3) * 1.41421356));
+                const e2 = e * e;
+                const k = simd.f(0.147);
+                const erf = std.math.sign(e) * @sqrt(simd.f(1) - @exp(-e2 * (simd.f(1.27323954) + k * e2) / (simd.f(1) + k * e2)));
+                cover = simd.f(0.5) - simd.f(0.5) * erf;
+                color = base;
+            } else {
+                const tex = sample(img, tu, tv);
+                inline for (0..4) |i| {
+                    const m = base[i] * tex[i];
+                    color[i] = m + (simd.f(edge[i]) - m) * on_border;
+                }
             }
 
             // Clip as coverage: the rect as a step, its rounded corners as a distance field.

@@ -219,6 +219,11 @@
     "jcc": 4,
     "short_fwd": 0
   },
+  "p_sw_shadow": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
   "p_sw_radial": {
     "back": 2,
     "jcc": 4,
