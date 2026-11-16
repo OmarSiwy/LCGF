@@ -916,7 +916,7 @@ pub fn build(b: *std.Build) void {
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
     const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
-    for ([_][]const u8{ "hello", "counter" }) |name| {
+    for ([_][]const u8{ "hello", "counter", "form" }) |name| {
         const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } } });
         const exe = b.addExecutable(.{ .name = b.fmt("example-{s}", .{name}), .root_module = b.createModule(.{
             .root_source_file = b.path("examples/window.zig"),
