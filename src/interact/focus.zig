@@ -705,3 +705,134 @@ test "walkthrough: closing a layer gives focus back to what opened it, nested la
     try w.run(&f.t, &f.sc, "frame\n");
     try testing.expectEqual(bi(D.ok), w.focus[w.n - 1]);
 }
+
+/// Scalar reference for `seek`: walk the range from `cur`, one row at a time, with wrap.
+fn seekScalar(t: *const Tree, col: []const u8, mask: u8, lo: u32, hi: u32, cur: u32, back: bool) u32 {
+    if (lo >= hi) return none;
+    const span = hi - lo;
+    // Where the walk starts: just past `cur` inside the range, or at an end from outside it.
+    const inside = cur >= lo and cur < hi;
+    var k: u32 = 0;
+    while (k < span) : (k += 1) {
+        const r: u32 = if (inside)
+            (if (back) lo + (cur - lo + span - 1 - k) % span else lo + (cur - lo + 1 + k) % span)
+        else
+            (if (back) hi - 1 - k else lo + k);
+        if ((col[r] & mask) != 0 and t.c.id[r] != 0) return r;
+    }
+    return none;
+}
+
+test "seek matches the scalar walk on random trees, ranges and starting rows" {
+    var raw: [128 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 80);
+    var seed: u32 = 777;
+    const root = t.push(0, .none, &.{});
+    for (1..70) |k| {
+        seed = seed *% 1103515245 +% 12345;
+        const n = t.push(root, @fromBackingInt(@intCast(@as(u32, @intFromBool((seed >> 16) % 3 != 0)) * @as(u32, @intCast(k)))), &.{});
+        t.seal(n);
+        t.c.sense[n] = @intCast((seed >> 8) % 16);
+    }
+    t.seal(root);
+    const m: u8 = @bitCast(Sense{ .focus = true });
+    var found: u32 = 0;
+    for (0..400) |_| {
+        seed = seed *% 1103515245 +% 12345;
+        const lo = (seed >> 4) % 72;
+        const hi = @min((seed >> 12) % 75, t.len);
+        const cur = switch ((seed >> 20) % 4) {
+            0 => none,
+            else => (seed >> 24) % 72,
+        };
+        for ([_]bool{ false, true }) |back| {
+            const want = seekScalar(&t, t.c.sense, m, lo, hi, cur, back);
+            try testing.expectEqual(want, seek(&t, t.c.sense, m, lo, hi, cur, back));
+            found += @intFromBool(want != none);
+        }
+    }
+    try testing.expect(found > 300);
+}
+
+test "walkthrough: keyboard only, through a form, a group, a dialog and back" {
+    // root { name, colours (group) { red, blue, green }, ok, [dialog (trap) { yes, no }] }
+    const S = struct {
+        raw: [64 * 1024]u8 align(mem.column_align) = undefined,
+        t: Tree = undefined,
+        sc: Scopes = undefined,
+
+        fn build(f: *@This(), open: bool) void {
+            const layout = @import("../layout/layout.zig");
+            const Texts = @import("../core/texts.zig").Texts;
+            var carver: mem.Carver = .{ .buf = &f.raw };
+            f.t = Tree.init(&carver, 16);
+            var tx = Texts.init(&carver, 1);
+            f.sc = Scopes.init(&carver, 16);
+            const t = &f.t;
+            const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+            f.leaf(root, "name");
+            const g = t.push(root, Id.from("colours"), &.{ .dir = .x });
+            f.sc.c.kind[g] = Scopes.group;
+            inline for (.{ "red", "blue", "green" }) |n| f.leaf(g, n);
+            t.seal(g);
+            f.leaf(root, "ok");
+            if (open) {
+                const d = t.push(root, Id.from("dialog"), &.{ .float = true, .offset = .{ 150, 150 } });
+                f.sc.c.kind[d] = Scopes.trap;
+                f.leaf(d, "yes");
+                f.leaf(d, "no");
+                t.seal(d);
+            }
+            t.seal(root);
+            layout.run(t, &tx, .{ 300, 300 });
+        }
+        fn leaf(f: *@This(), parent: u32, comptime name: []const u8) void {
+            const n = f.t.push(parent, Id.from(name), &.{ .size = .{ .px(40), .px(20) } });
+            f.t.seal(n);
+            f.t.c.sense[n] = @bitCast(Sense.button);
+        }
+    };
+    var f: S = .{};
+    var w: Walk = .{};
+    f.build(false);
+    // Tab to name, into the group, Right to blue, Tab to ok; Enter (40) "opens" the dialog.
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\press 43
+        \\frame
+        \\press 43
+        \\press 79
+        \\frame
+        \\press 43
+        \\frame
+        \\press 40
+    );
+    f.build(true);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\frame
+        \\press 43
+        \\press 43
+        \\press 43
+    );
+    f.build(false);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\frame
+        \\press 43 shift
+        \\frame
+        \\press 80
+    );
+    const ids = [_][]const u8{ "name", "blue", "ok", "ok", "yes", "no", "ok", "red", "green" };
+    try testing.expectEqual(ids.len, w.n);
+    inline for (ids, 0..) |name, k| {
+        try testing.expectEqual(bi(Id.from(name)), w.focus[k]);
+        const ring = w.ring[k];
+        // The keyboard user sees the ring every frame, on the focused node of that frame's tree.
+        try testing.expect(ring.x1 > ring.x0);
+    }
+    // `Interaction.response` reports the keyboard's focus.
+    try testing.expect(w.it.response(Id.from("green")).focused);
+    try testing.expect(!w.it.response(Id.from("red")).focused);
+}
