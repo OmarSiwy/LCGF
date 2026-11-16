@@ -173,8 +173,9 @@ pub const ct = struct {
 
 const testing = std.testing;
 
-/// Two sections: "General" (open) holding a checkbox, "Advanced" (closed) holding a slider.
-fn Page(comptime th: Theme) type {
+/// The example page: two sections, "General" (open) holding a checkbox and "Advanced"
+/// (closed) holding a slider, in both front ends, in theme `th`.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .size = .{ .px(240), .fit }, .pad = @splat(8), .gap = 4 };
     return struct {
         pub const App = struct {
@@ -210,6 +211,16 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/accordion.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/accordion-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "open", 3 },
+    .{ "closed", 7 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -365,6 +376,39 @@ test "accordion: group, header button named by its title with expanded state, pa
             try testing.expect(!st.checked);
         }
     }
+}
+
+test "accordion: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var general: [8]bool = undefined;
+    var advanced: [8]bool = undefined;
+    var fills: [8]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        const t = out.runtime.tree;
+        general[k] = h.app.general;
+        advanced[k] = h.app.advanced;
+        try testing.expectEqual(h.app.general, h.ui.signals.state.general);
+        try testing.expectEqual(h.app.advanced, h.ui.signals.state.advanced);
+        fills[k] = t.c.look[t.find(.from("advanced"))].fill;
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(bool, &.{ true, true, true, true, true, true, true, false }, &general);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, true, false, true, true, true }, &advanced);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, fills[0..4]);
+}
+
+test "golden_frames: name frames the accordion replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {
