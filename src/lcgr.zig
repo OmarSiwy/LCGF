@@ -119,6 +119,7 @@ pub const shell_headless = @import("shell/headless.zig");
 pub const devtools_inspector = @import("devtools/inspector.zig");
 pub const devtools_timing = @import("devtools/timing.zig");
 pub const devtools_log = @import("devtools/log.zig");
+pub const devtools_batches = @import("devtools/batches.zig");
 
 test {
     std.testing.refAllDecls(@This());

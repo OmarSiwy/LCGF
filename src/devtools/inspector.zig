@@ -25,6 +25,8 @@ const Tree = @import("../core/tree.zig").Tree;
 const w = @import("../widgets/base.zig");
 const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
+const batches = @import("batches.zig");
+const DrawList = @import("../draw/draw_list.zig").DrawList;
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -35,6 +37,7 @@ pub const id_panel = Id.from("devtools.inspector");
 pub const toggle_key: u8 = 0x45;
 pub const id_rects = Id.from("devtools.rects");
 pub const id_clips = Id.from("devtools.clips");
+pub const id_overdraw = Id.from("devtools.overdraw");
 
 pub const Inspector = struct {
     open: bool = true,
@@ -54,6 +57,13 @@ pub const Inspector = struct {
     show_rects: bool = false,
     /// Outline the visible part (`Tree.Columns.vis`) of every node its ancestors clip.
     show_clips: bool = false,
+    /// Tint every application quad, clipped, so overlaps show as deeper colour.
+    show_overdraw: bool = false,
+    overdraw_fill: Color = .rgba(255, 40, 40, 50),
+    /// Batches listed; the rest are counted.
+    batch_lines: u32 = 4,
+    /// The application's draw commands in last frame's draw list.
+    draw: batches.Stats = .{},
     rect_color: Color = .rgb(80, 220, 120),
     clip_color: Color = .rgb(255, 150, 40),
     /// Laid over the node under the pointer, outlined in `border`.
@@ -80,11 +90,14 @@ pub const Inspector = struct {
         const prev = f.prevTree();
         insp.rows = @min(insp.own_first, prev.len);
         insp.log.record(f.ctx.frame, f.in, &f.ctx.inter, prev);
+        // Paint has not run yet: the context's draw list and last generation are last frame's.
+        const ctx = f.ctx;
+        insp.draw = batches.stats(&ctx.draw, prev, insp.rows, ctx.texts[ctx.cur ^ 1].c.node, ctx.customs[ctx.cur ^ 1].c.node, f.in.viewport);
         insp.hovered = under(prev, insp.rows, f.in.pointer);
         insp.own_first = f.tree().len;
         if (!insp.open) return;
 
-        insp.outlines(f, prev);
+        insp.outlines(f, prev, &f.ctx.draw);
         const vp = f.in.viewport;
         const root = f.open(id_panel, .{
             .float = true,
@@ -103,13 +116,30 @@ pub const Inspector = struct {
         insp.line(f, insp.text, "Inspector  {d} nodes", .{insp.rows});
         insp.hoveredLine(f, prev);
         _ = f.open(.none, .{ .dir = .x, .gap = 12 });
-        _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Layout rects");
-        _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clip rects");
+        _ = w.checkbox(f, &insp.theme, id_rects, &insp.show_rects, "Rects");
+        _ = w.checkbox(f, &insp.theme, id_clips, &insp.show_clips, "Clips");
+        _ = w.checkbox(f, &insp.theme, id_overdraw, &insp.show_overdraw, "Overdraw");
         f.close();
+        insp.drawLines(f, &f.ctx.draw);
         insp.logLines(f);
         insp.timingLines(f);
         insp.treeLines(f, prev);
         f.close();
+    }
+
+    /// Command counts, overdraw, and the first batches: quads per draw, texture and material.
+    fn drawLines(insp: *const Inspector, f: *Frame, d: *const DrawList) void {
+        const s = &insp.draw;
+        insp.line(f, insp.text, "draw {d} cmds: {d} batches {d} text {d} custom", .{ s.cmds, s.batches, s.texts, s.customs });
+        insp.line(f, insp.dim, "{d} quads, overdraw {d:.2}x", .{ s.quads, s.overdraw });
+        var shown: u32 = 0;
+        for (0..s.cmds) |k| switch (d.command(@intCast(k))) {
+            .quads => |b| {
+                if (shown < insp.batch_lines) insp.line(f, insp.dim, "  cmd {d}: {d} quads tex {d} mat {d}", .{ k, b.count, @backingInt(b.texture), @backingInt(b.material) });
+                shown += 1;
+            },
+            else => {},
+        };
     }
 
     fn logLines(insp: *const Inspector, f: *Frame) void {
@@ -140,7 +170,7 @@ pub const Inspector = struct {
 
     /// Boxes over the application, under the panel: layout rects, clip rects and the hovered
     /// node, each a floating, bordered leaf at last frame's rect. They take no input.
-    fn outlines(insp: *const Inspector, f: *Frame, prev: *const Tree) void {
+    fn outlines(insp: *const Inspector, f: *Frame, prev: *const Tree, d: *const DrawList) void {
         // A zero-size floating group at the root's origin, so a child's offset is its position.
         _ = f.open(.none, .{ .float = true });
         for (0..insp.rows) |k| {
@@ -151,6 +181,10 @@ pub const Inspector = struct {
             const clipped = !std.meta.eql(v, r) and v.w() > 0 and v.h() > 0;
             if (insp.show_clips and clipped) box(f, v, insp.clip_color, .transparent);
         }
+        if (insp.show_overdraw) for (d.quads[0..insp.draw.quads]) |*q| {
+            const r = batches.clipped(q);
+            box(f, .{ .x0 = r[0], .y0 = r[1], .x1 = r[2], .y1 = r[3] }, .transparent, insp.overdraw_fill);
+        };
         if (insp.hovered != none) box(f, prev.rect(insp.hovered), insp.border, insp.hover_fill);
         f.close();
     }
@@ -469,4 +503,38 @@ test "inspector runs inside the example and logs what reached it" {
         \\12 hover nothing
         \\
     , all[0..n]);
+}
+
+test "inspector runs inside the example and counts its draw batches and overdraw" {
+    // The example alone: the draw list the inspector should describe.
+    var alone = try context.Context.init(&Fixture.ctx_buffer2, example_limits);
+    var app: example.App = .{};
+    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    iface.run(&shell, &alone, &app);
+    const d = &alone.draw;
+    var area: f32 = 0;
+    for (d.quads[0..d.quad_len]) |*q| {
+        const r = batches.clipped(q);
+        area += (r[2] - r[0]) * (r[3] - r[1]);
+    }
+
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var host: ExampleHost = .{ .insp = .{ .show_overdraw = true } };
+    shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    iface.run(&shell, &ctx, &host);
+    try testing.expectEqual(@as(u32, 1), host.app.resets);
+    try testing.expectEqual(@as(u32, 4), host.app.layers);
+    const s = host.insp.draw;
+    // Its share of a frame with the inspector in it is the frame without it.
+    try testing.expectEqual(d.quad_len, s.quads);
+    try testing.expectEqual(d.cmd_len, s.cmds);
+    try testing.expectEqual(d.run_len, s.texts);
+    try testing.expectEqual(d.custom_len, s.customs);
+    try testing.expectEqual(d.cmd_len - d.run_len - d.custom_len, s.batches);
+    try testing.expectApproxEqAbs(area / (800 * 600), s.overdraw, 1e-6);
+    try testing.expect(s.overdraw > 0.2);
+    // The overdraw tint is over the sidebar's panel.
+    const tinted = shell.fb.at(80, 590);
+    try testing.expect(tinted.r > host.app.theme.panel.r);
+    try testing.expectEqual(@as(f32, 1), ctx.trees[ctx.cur].c.value[ctx.trees[ctx.cur].find(id_overdraw)]);
 }
