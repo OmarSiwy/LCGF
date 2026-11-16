@@ -154,6 +154,19 @@ form builds 908 of 3,000 polls (the pointer is over a checkbox, slider or button
 one), text 2 of 3,000. Rows, list and springs still build every poll: their state changes
 outside `Input` (the per-pass benchmark's pointer, the scroll position, the spring targets).
 
+## Resident memory and time to first frame
+
+Two causes, found on the perf-gaps branch, made the LCGR row 12,104 KiB and 4.72 ms against
+Clay's 2,140 KiB and 0.67 ms. First, the harness: `--idle` ran the untimed differential check
+against the prototype core, which builds a whole prototype context (3.3 MB) beside LCGR's;
+it now runs only in timed runs. Second, the library: `mem.Carver` cleared every column it
+carved, so a context made every byte of its capacity resident (4.4 MB for 4,096 nodes) and
+paid for clearing it before the first frame. Clay mallocs its arena (8,192 elements by default)
+and touches only what it uses. `Carver.zeroed` / `Context.initZeroed` skip the clear for a
+buffer that is zero already (the benchmark's static buffers), so only touched pages count.
+Measured, pinned, at load 30 to 47 of 32 CPUs: resident 12,000 -> 8,932 (harness) -> 1,752 KiB
+(Clay 2,140 in the same window); first frame 6.9 -> 5.2 -> 1.8 ms (Clay 1.0).
+
 ## What could not be measured fairly here
 
 - Idle wake-ups for egui and Iced: their event loops (eframe, iced_winit) need a window, and the

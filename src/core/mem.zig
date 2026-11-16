@@ -26,7 +26,9 @@
 //! lanes (8 lanes: 384 more, from padding), about 722 B per node all-in; `.{ .nodes = 1024,
 //! .texts = 256 }` needs 859,520. Size limits from the largest frame the app builds: nodes
 //! dominate, so budget about 0.65 KB per node of capacity plus twice the per-frame string bytes.
-//! The buffer is sized by capacity, not use: a smaller frame does not need less of it.
+//! The buffer is sized by capacity, not use: a smaller frame does not need less of it. It need
+//! not be resident, though: carve a buffer that is zero already (static, fresh `mmap`) with
+//! `Carver.zeroed` (`Context.initZeroed`) and only the pages the frames touch are.
 
 const std = @import("std");
 
@@ -39,6 +41,10 @@ pub const column_align = 64;
 pub const Carver = struct {
     buf: ?[]align(column_align) u8,
     off: usize = 0,
+    /// The buffer is all zero bytes already (a static buffer in bss, fresh `mmap` memory), so
+    /// carving does not clear it: pages of capacity the UI never reaches are never touched and
+    /// never become resident.
+    zeroed: bool = false,
 
     /// Next `n` rows of `T`, zeroed. The carved size is rounded up to `column_align`, so the
     /// next column starts on a fresh cache line. Asserts the buffer is large enough. When counting
@@ -51,7 +57,7 @@ pub const Carver = struct {
         c.off += bytes;
         const b = c.buf orelse return &.{};
         std.debug.assert(c.off <= b.len);
-        @memset(b[start..c.off], 0);
+        if (!c.zeroed) @memset(b[start..c.off], 0);
         std.debug.assert(@intFromPtr(b.ptr + start) % column_align == 0);
         const p: [*]T = @ptrCast(@alignCast(b.ptr + start));
         return p[0..n];
@@ -119,6 +125,15 @@ test "Carver.slice carves zeroed, cache-line aligned slices in order" {
 
     // Bytes past the carved, rounded-up size are untouched.
     try std.testing.expectEqual(0xaa, buf[192]);
+}
+
+test "Carver.zeroed carves without writing the buffer" {
+    var buf: [256]u8 align(column_align) = @splat(0xaa);
+    var c: Carver = .{ .buf = &buf, .zeroed = true };
+    const a = c.slice(u32, 4);
+    // Nothing was cleared: the caller promised zero bytes, and these are not.
+    try std.testing.expectEqual(@as(u32, 0xaaaa_aaaa), a[0]);
+    try std.testing.expectEqual(@as(usize, column_align), c.off);
 }
 
 test "Carver.columns carves every []T and [k][]T field in order" {

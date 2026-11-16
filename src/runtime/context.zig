@@ -172,6 +172,15 @@ pub const Context = struct {
         return build(&carver, limits);
     }
 
+    /// `init` over a buffer that is all zero bytes (a static buffer never used before, fresh
+    /// `mmap` memory): it is not cleared, so capacity the frames never reach stays untouched and
+    /// costs no resident memory. A reused buffer needs `init`.
+    pub fn initZeroed(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context {
+        if (buffer.len < requiredBytes(limits)) return error.BufferTooSmall;
+        var carver: mem.Carver = .{ .buf = buffer, .zeroed = true };
+        return build(&carver, limits);
+    }
+
     pub const needsFrame = scheduler.needsFrame;
 
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
