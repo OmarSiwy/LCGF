@@ -747,6 +747,15 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("macos", "Test the macOS shell on macOS").dependOn(&b.addRunArtifact(macos_tests).step);
     b.step("macos-build", "Compile and link the macOS shell's tests without running them (ci/run.sh shell-macos)").dependOn(&b.addInstallArtifact(macos_tests, .{}).step);
+    // The shells' example in a macOS window (src/shell/macos/example.zig).
+    const macos_example = b.addExecutable(.{ .name = "macos-example", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/macos/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+    }) });
+    b.step("macos-example", "Build zig-out/bin/macos-example, the example in a macOS window").dependOn(&b.addInstallArtifact(macos_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
