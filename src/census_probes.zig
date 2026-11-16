@@ -9,4 +9,5 @@ comptime {
     _ = @import("text/census_probe.zig");
     _ = @import("a11y/census_probe.zig");
     _ = @import("render/sw/census_probe.zig");
+    _ = @import("core/census_probe.zig");
 }

@@ -314,6 +314,11 @@
     "jcc": 0,
     "short_fwd": 0
   },
+  "p_tree_push_row": {
+    "back": 0,
+    "jcc": 0,
+    "short_fwd": 0
+  },
   "p_wheel_route": {
     "back": 1,
     "jcc": 2,

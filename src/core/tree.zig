@@ -27,6 +27,89 @@ pub const Look = extern struct {
     material: u16,
 };
 
+/// One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes as
+/// coefficients, enums as factors, paint fields as their GPU row. A widget whose style does not
+/// change between nodes builds it once (`from`, also at comptime) and pushes it with
+/// `Tree.pushRow`, so the per-node work is the copy alone. Field names are the column names;
+/// `[2]f32` fields go to the two axis columns.
+pub const Template = struct {
+    min: [2]f32,
+    max: [2]f32,
+    grow: [2]f32,
+    pct: [2]f32,
+    pad_lo: [2]f32,
+    pad_hi: [2]f32,
+    offset: [2]f32,
+    scroll: [2]f32,
+    main: [2]f32,
+    gap: f32,
+    flow: f32,
+    shrink: f32,
+    align_main: f32,
+    align_cross: f32,
+    clips: u8,
+    sense: u8 = 0,
+    look: Look,
+    uv: [4]f32,
+    radii: [4]f32,
+    opacity: f32,
+    alpha: f32,
+    transform: [6]f32,
+    world: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    clip_radii: [4]f32 = @splat(0),
+    role: u8,
+    value: f32,
+    text: u32 = none,
+    custom: u32 = none,
+
+    pub fn from(s: *const Style) Template {
+        var r: Template = undefined;
+        inline for (0..2) |a| {
+            const k = @backingInt(s.size[a].kind);
+            const v = s.size[a].v;
+            r.min[a] = @max(v * Size.k_min[k], s.min[a]);
+            r.max[a] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
+            r.grow[a] = v * Size.k_grow[k];
+            r.pct[a] = v * Size.k_pct[k];
+            r.pad_lo[a] = s.pad[a];
+            r.pad_hi[a] = s.pad[a + 2];
+            r.offset[a] = s.offset[a];
+            r.scroll[a] = s.scroll[a];
+        }
+        const along_y: f32 = @floatFromInt(@backingInt(s.dir));
+        const corners: @Vector(4, f32) = s.radii;
+        r.main = .{ 1 - along_y, along_y };
+        r.gap = s.gap;
+        r.flow = b01(!s.float);
+        r.shrink = b01(s.shrink);
+        r.align_main = Align.factor[@backingInt(s.main)];
+        r.align_cross = Align.factor[@backingInt(s.cross)];
+        r.clips = @intFromBool(s.clip);
+        r.sense = 0;
+        r.look = .{
+            .fill = s.fill.bitsOf(),
+            .border_color = s.border_color.bitsOf(),
+            .border = s.border,
+            .radius = s.radius,
+            .params = s.params,
+            .texture = @backingInt(s.texture),
+            .material = @backingInt(s.material),
+        };
+        r.uv = s.uv;
+        r.radii = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
+        r.opacity = s.opacity;
+        r.alpha = s.opacity;
+        r.transform = s.transform;
+        r.world = .{ 1, 0, 0, 1, 0, 0 };
+        r.clip_radii = @splat(0);
+        r.role = @backingInt(s.role);
+        r.value = s.value;
+        r.text = none;
+        r.custom = none;
+        return r;
+    }
+};
+
 /// Where the columns live: slices carved from a caller's buffer (`init`), or arrays inside the
 /// tree value itself for a capacity known at compile time (`empty`), as the comptime front end
 /// keeps its tables.
@@ -172,6 +255,12 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// Appends a node as the last child of `parent` and returns its row.
         /// One row write per column; no searching, no allocation, no branch.
         pub fn push(t: *Self, parent: Index, id: Id, s: *const Style) Index {
+            return t.pushRow(parent, id, &.from(s));
+        }
+
+        /// `push` from a style already turned into its row (`Template.from`, once per style
+        /// rather than once per node): the row is copied as it is, one store per column.
+        pub fn pushRow(t: *Self, parent: Index, id: Id, row: *const Template) Index {
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
@@ -180,54 +269,16 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             c.id[i] = @backingInt(id);
             c.parent[i] = parent;
             c.end[i] = i + 1;
-            inline for (0..2) |a| {
-                const k = @backingInt(s.size[a].kind);
-                const v = s.size[a].v;
-                c.min[a][i] = @max(v * Size.k_min[k], s.min[a]);
-                c.max[a][i] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
-                c.grow[a][i] = v * Size.k_grow[k];
-                c.pct[a][i] = v * Size.k_pct[k];
-                c.pad_lo[a][i] = s.pad[a];
-                c.pad_hi[a][i] = s.pad[a + 2];
-                c.offset[a][i] = s.offset[a];
-                c.scroll[a][i] = s.scroll[a];
+            inline for (@typeInfo(Template).@"struct".field_names) |name| {
+                const v = @field(row, name);
+                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                    inline for (0..2) |a| @field(c, name)[a][i] = v[a];
+                } else @field(c, name)[i] = v;
             }
-            const fl = b01(!s.float);
-            c.gap[i] = s.gap;
-            c.flow[i] = fl;
-            c.shrink[i] = b01(s.shrink);
-            c.align_main[i] = Align.factor[@backingInt(s.main)];
-            c.align_cross[i] = Align.factor[@backingInt(s.cross)];
-            const along_y: f32 = @floatFromInt(@backingInt(s.dir));
-            c.main[0][i] = 1 - along_y;
-            c.main[1][i] = along_y;
-            c.clips[i] = @intFromBool(s.clip);
-            c.sense[i] = 0;
-            c.look[i] = .{
-                .fill = s.fill.bitsOf(),
-                .border_color = s.border_color.bitsOf(),
-                .border = s.border,
-                .radius = s.radius,
-                .params = s.params,
-                .texture = @backingInt(s.texture),
-                .material = @backingInt(s.material),
-            };
-            c.uv[i] = s.uv;
-            const corners: @Vector(4, f32) = s.radii;
-            c.opacity[i] = s.opacity;
-            c.alpha[i] = s.opacity;
-            c.transform[i] = s.transform;
-            c.world[i] = .{ 1, 0, 0, 1, 0, 0 };
-            c.clip_radii[i] = @splat(0);
-            c.radii[i] = @select(f32, corners < @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), @splat(s.radius)), corners);
-            c.role[i] = @backingInt(s.role);
-            c.value[i] = s.value;
-            c.text[i] = none;
-            c.custom[i] = none;
             // Count this node in its parent, then clear its own count. The root is its own
             // parent, so the clear also removes its self-count: no `i != 0` test, which
             // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
-            c.nkids[parent] += fl;
+            c.nkids[parent] += row.flow;
             c.nkids[i] = 0;
             return i;
         }
@@ -450,6 +501,33 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqual(0.25, c.value[a]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.text[0..3]);
     try testing.expectEqualSlices(u32, &.{ none, none, none }, c.custom[0..3]);
+}
+
+test "pushRow of a style's template writes the row push writes" {
+    var fx: Fixture(8) = .{};
+    var fy: Fixture(8) = .{};
+    var a = fx.tree();
+    var b = fy.tree();
+    const styles = comptime [_]Style{
+        .{ .dir = .x, .size = .{ .px(100), .fill }, .pad = .{ 1, 2, 3, 4 }, .gap = 5, .clip = true },
+        .{ .size = .{ .pct(0.5), .fit }, .max = .{ 30, types.inf }, .cross = .end, .shrink = true, .radius = 4, .radii = .{ -1, 2, -1, 3 }, .opacity = 0.5 },
+        .{ .float = true, .offset = .{ 6, 8 }, .transform = .{ 2, 0, 0, 2, 1, 1 }, .role = .button },
+    };
+    // At comptime too: a widget's fixed style costs nothing per node.
+    const fixed = comptime Template.from(&styles[2]);
+    for (&styles, 0..) |*s, k| {
+        const p: u32 = @intCast(@min(k, 1));
+        _ = a.push(p, Id.from("n").with(@intCast(k)), s);
+        _ = b.pushRow(p, Id.from("n").with(@intCast(k)), &if (k == 2) fixed else Template.from(s));
+    }
+    try testing.expectEqual(a.len, b.len);
+    inline for (@typeInfo(Tree.Columns).@"struct".field_names) |name| {
+        const ca = @field(a.c, name);
+        const cb = @field(b.c, name);
+        if (@typeInfo(@TypeOf(ca)) == .array) {
+            inline for (ca, cb) |x, y| try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(x[0..a.len]), std.mem.sliceAsBytes(y[0..a.len]));
+        } else try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(ca[0..a.len]), std.mem.sliceAsBytes(cb[0..a.len]));
+    }
 }
 
 test "seal closes a subtree over everything pushed since its node" {
