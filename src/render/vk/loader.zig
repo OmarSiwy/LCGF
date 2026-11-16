@@ -13,7 +13,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 pub const c = @import("vk_c");
 
-pub const Error = error{ NoLoader, MissingFunction, VulkanTooOld, MissingExtension, MissingLayer, InitializationFailed, OutOfMemory, DeviceLost, SurfaceLost, OutOfDate, Unknown };
+pub const Error = error{ NoLoader, MissingFunction, VulkanTooOld, MissingExtension, MissingLayer, InitializationFailed, OutOfMemory, DeviceLost, SurfaceLost, OutOfDate, ZeroExtent, Unknown };
 
 /// Maps a failing VkResult to an error. Success codes (SUBOPTIMAL included) are not errors.
 pub fn check(r: c.VkResult) Error!void {

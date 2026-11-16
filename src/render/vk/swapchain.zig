@@ -59,6 +59,9 @@ pub const Swapchain = struct {
         if (n == 0) return error.Unknown;
         const format = chooseFormat(formats[0..n]);
         const extent = chooseExtent(caps, want);
+        // A minimised window (the surface reports 0x0, or the host's window size is 0): no
+        // swapchain can exist until it has a size again.
+        if (extent.width == 0 or extent.height == 0 or want.width == 0 or want.height == 0) return error.ZeroExtent;
         var count = @min(caps.minImageCount + 1, max_images);
         if (caps.maxImageCount != 0) count = @min(count, caps.maxImageCount);
         const usage: c.VkImageUsageFlags = @as(c.VkImageUsageFlags, c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) | (caps.supportedUsageFlags & c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
@@ -99,6 +102,17 @@ pub const Swapchain = struct {
             s.len += 1;
         }
         return s;
+    }
+
+    /// Replaces `s` with a swapchain at the surface's new size (or `want`, when the surface
+    /// leaves the size to the swapchain). Waits for the device first: frames in flight still
+    /// draw into the old images. On error.ZeroExtent (minimised) `s` is kept; try again when
+    /// the window has a size.
+    pub fn recreate(s: *Swapchain, instance: *const loader.Instance, d: *const Device, surface: c.VkSurfaceKHR, want: c.VkExtent2D) Error!void {
+        try check(d.fns.vkDeviceWaitIdle.?(d.handle));
+        const next = try init(instance, d, surface, want, s.handle);
+        s.deinit(d);
+        s.* = next;
     }
 
     pub fn deinit(s: *Swapchain, d: *const Device) void {
