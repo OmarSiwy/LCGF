@@ -13,6 +13,7 @@ const keyboard = @import("../../interact/keyboard.zig");
 const Buffer = @import("buffer.zig").Buffer;
 const moves = @import("moves.zig");
 const History = @import("history.zig").History;
+const Graphemes = @import("../unicode/grapheme.zig").Graphemes;
 
 const Id = types.Id;
 const Keyboard = keyboard.Keyboard;
@@ -68,6 +69,19 @@ pub const Pointer = struct {
     }
 };
 
+/// How the editor treats its text (Iced 0.14 `text_input` and its `secure` flag, DVUI's
+/// `TextEntryWidget` `multiline` and `password_char`).
+pub const Mode = struct {
+    /// One line: Enter submits (`Result.submitted`) instead of inserting a newline, typed and
+    /// pasted newlines become spaces, Up and Down go to the start and end.
+    single_line: bool = false,
+    /// A password: one line, shown as one `bullet` per grapheme (`display`), never copied or
+    /// cut, word moves and word deletes go to the start or end (they would show where its words
+    /// are), and the host is asked for secure input.
+    password: bool = false,
+    bullet: []const u8 = "\u{2022}",
+};
+
 /// What `update` reads besides the keyboard.
 pub const Context = struct {
     /// The layout of `Editor.text()` as it is before this update, for Home, End, Up and Down
@@ -99,6 +113,8 @@ pub const Result = struct {
     /// A selection to cut or copy was longer than `Context.copy_buf`: it was neither copied nor
     /// cut.
     copy_full: bool = false,
+    /// Enter was pressed in a single-line editor.
+    submitted: bool = false,
 };
 
 pub const Editor = struct {
@@ -112,6 +128,7 @@ pub const Editor = struct {
     /// passing a short line returns to its column. NaN when the next vertical move starts one.
     goal: f32 = std.math.nan(f32),
     keys: Keys = .{},
+    mode: Mode = .{},
     /// Undo and redo; records nothing until the caller gives it rows (`History.init`).
     history: History = .{},
     /// What the last edit was, so that a run of typing or of deleting is one undo step. Any
@@ -156,14 +173,47 @@ pub const Editor = struct {
     /// the IME's window placed at the caret, or at the start of the preedit while composing
     /// so the window does not follow every keystroke. `v` is the layout of `text()`, drawn
     /// with its top left at `origin`, logical px.
-    pub fn requestInput(ed: *const Editor, out: *keyboard.TextInput, v: moves.View, origin: [2]f32) void {
+    pub fn requestInput(ed: *Editor, out: *keyboard.TextInput, v: moves.View, origin: [2]f32) void {
         const at = if (ed.composing()) ed.preedit[0] else ed.caret;
-        var rect = v.caretRect(at);
+        var rect = v.caretRect(ed.toDisplay(at));
         rect.x0 += origin[0];
         rect.x1 += origin[0];
         rect.y0 += origin[1];
         rect.y1 += origin[1];
-        out.request(rect, .normal);
+        out.request(rect, if (ed.mode.password) .secure else .normal);
+    }
+
+    /// What to lay out and draw: the text, or for a password one `mode.bullet` per grapheme,
+    /// written to `out` (at least `bullet.len` bytes per byte of text). Valid until the next
+    /// edit. The layout of it is the `View` that `update` and `requestInput` take; offsets in
+    /// it and in the text convert with `toDisplay` and `fromDisplay`.
+    pub fn display(ed: *Editor, out: []u8) []const u8 {
+        const t = ed.text();
+        if (!ed.mode.password) return t;
+        const bullet = ed.mode.bullet;
+        var it: Graphemes = .{ .text = t };
+        var n: usize = 0;
+        while (it.next()) |_| : (n += bullet.len) @memcpy(out[n..][0..bullet.len], bullet);
+        return out[0..n];
+    }
+
+    /// The offset in `display` of text offset `at` (a grapheme boundary).
+    pub fn toDisplay(ed: *Editor, at: u32) u32 {
+        if (!ed.mode.password) return at;
+        var it: Graphemes = .{ .text = ed.text()[0..at] };
+        var n: u32 = 0;
+        while (it.next()) |_| n += 1;
+        return n * @as(u32, @intCast(ed.mode.bullet.len));
+    }
+
+    /// The text offset of offset `at` in `display` (rounded down to a whole bullet).
+    pub fn fromDisplay(ed: *Editor, at: u32) u32 {
+        if (!ed.mode.password) return at;
+        var it: Graphemes = .{ .text = ed.text() };
+        var left = at / @as(u32, @intCast(ed.mode.bullet.len));
+        var off: u32 = 0;
+        while (left > 0) : (left -= 1) off = @intCast(it.next() orelse break);
+        return off;
     }
 
     /// Puts the caret at `at` with nothing selected.
@@ -233,11 +283,11 @@ pub const Editor = struct {
     /// caret, a double click selects the word under the pointer.
     fn point(ed: *Editor, v: moves.View, p: Pointer) void {
         if (!(p.press or p.held or p.double)) return;
-        const at = v.hit(p.at[0], p.at[1]);
+        const at = ed.fromDisplay(v.hit(p.at[0], p.at[1]));
         ed.goal = std.math.nan(f32);
         ed.run = .none;
         if (p.double) {
-            const w = moves.wordAt(v.text, at);
+            const w: [2]u32 = if (ed.mode.password) .{ 0, ed.b.len() } else moves.wordAt(v.text, at);
             ed.anchor = w[0];
             ed.caret = w[1];
         } else if (p.press) {
@@ -248,8 +298,11 @@ pub const Editor = struct {
         }
     }
 
-    fn key(ed: *Editor, e: Input.Event, view: ?moves.View, cx: Context, r: *Result) void {
+    fn key(ed: *Editor, e: Input.Event, laid_out: ?moves.View, cx: Context, r: *Result) void {
         const ks = &ed.keys;
+        const single = ed.mode.single_line or ed.mode.password;
+        // One line has no lines to move between, and a password's layout is of its bullets.
+        const view = if (single) null else laid_out;
         const t = ed.text();
         const at = ed.caret;
         const shift = e.mods.shift;
@@ -265,15 +318,20 @@ pub const Editor = struct {
         if (!vertical) ed.goal = std.math.nan(f32);
         if (c == ks.backspace) {
             if (some) return ed.remove(sel[0], sel[1], false, r);
-            const from = if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
+            const from = if (word) ed.wordBefore(t, at) else moves.prevGrapheme(t, at);
             return ed.remove(from, at, ed.run == .deleting, r);
         }
         if (c == ks.delete) {
             if (some) return ed.remove(sel[0], sel[1], false, r);
-            const to = if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at);
+            const to = if (word) ed.wordAfter(t, at) else moves.nextGrapheme(t, at);
             return ed.remove(at, to, ed.run == .deleting, r);
         }
-        if (c == ks.enter or c == ks.keypad_enter) return ed.insert("\n", r);
+        if (c == ks.enter or c == ks.keypad_enter) {
+            if (!single) return ed.insert("\n", r);
+            ed.run = .none;
+            r.submitted = true;
+            return;
+        }
         ed.run = .none;
         const cmd = @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(ks.clipboard.mods));
         var cmd_shift = ks.clipboard.mods;
@@ -293,7 +351,7 @@ pub const Editor = struct {
         }
         if (cmd and (c == ks.clipboard.copy or c == ks.clipboard.cut)) {
             const clip = cx.clipboard orelse return;
-            if (!some) return;
+            if (!some or ed.mode.password) return;
             if (sel[1] - sel[0] > cx.copy_buf.len) {
                 r.copy_full = true;
                 return;
@@ -311,9 +369,9 @@ pub const Editor = struct {
         }
         // Left and Right without Shift collapse a selection to its edge.
         if (c == ks.left) {
-            ed.caret = if (some and !shift and !word) sel[0] else if (word) moves.prevWord(t, at) else moves.prevGrapheme(t, at);
+            ed.caret = if (some and !shift and !word) sel[0] else if (word) ed.wordBefore(t, at) else moves.prevGrapheme(t, at);
         } else if (c == ks.right) {
-            ed.caret = if (some and !shift and !word) sel[1] else if (word) moves.nextWord(t, at) else moves.nextGrapheme(t, at);
+            ed.caret = if (some and !shift and !word) sel[1] else if (word) ed.wordAfter(t, at) else moves.nextGrapheme(t, at);
         } else if (c == ks.home) {
             ed.caret = if (word) 0 else if (view) |v| v.home(at) else moves.lineStart(t, at);
         } else if (c == ks.end) {
@@ -331,14 +389,24 @@ pub const Editor = struct {
         if (!shift) ed.anchor = ed.caret;
     }
 
+    fn wordBefore(ed: *const Editor, t: []const u8, at: u32) u32 {
+        return if (ed.mode.password) 0 else moves.prevWord(t, at);
+    }
+    fn wordAfter(ed: *const Editor, t: []const u8, at: u32) u32 {
+        return if (ed.mode.password) @intCast(t.len) else moves.nextWord(t, at);
+    }
+
     /// Inserts typed text in place of the selection, leaving out control characters other than
-    /// newline and tab (Enter arrives as a key, and some hosts also type it as "\r").
+    /// newline and tab (Enter arrives as a key, and some hosts also type it as "\r"). One line
+    /// takes a newline as a space.
     fn typeText(ed: *Editor, typed: []const u8, r: *Result) void {
+        const single = ed.mode.single_line or ed.mode.password;
         var i: usize = 0;
         while (i < typed.len) {
             var j = i;
-            while (j < typed.len and allowed(typed[j])) j += 1;
+            while (j < typed.len and allowed(typed[j]) and !(single and typed[j] == '\n')) j += 1;
             ed.insert(typed[i..j], r);
+            if (j < typed.len and single and typed[j] == '\n') ed.insert(" ", r);
             i = j + 1;
         }
     }
@@ -428,6 +496,7 @@ pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
     for (tree.c.vis, [4]f32{ 0, 0, 1000, 1000 }) |col, v| col[n] = v;
 
     var para: golden.Para = .{};
+    var shown: [256]u8 = undefined;
     var text_buf: [256]u8 = undefined;
     var events: [64]Input.Event = undefined;
     var contacts: [1]Input.Contact = undefined;
@@ -444,7 +513,7 @@ pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
         if (opt.clipboard) |c| c.reset();
         if (frame < opt.compositions.len) cx.composition = k.composition(field, &opt.compositions[frame]);
         if (opt.width) |w| {
-            const t = ed.text();
+            const t = ed.display(&shown);
             para.fixed(t, 10);
             try lines.breakLines(&para.g, t, w, &para.l);
             lines.place(&para.l, &para.g, t, &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = w });
@@ -454,6 +523,7 @@ pub fn replayWith(ed: *Editor, src: []const u8, opt: Replayed) !Result {
         all.changed = all.changed or one.changed;
         all.full = all.full or one.full;
         all.copy_full = all.copy_full or one.copy_full;
+        all.submitted = all.submitted or one.submitted;
     }
     return all;
 }
@@ -885,4 +955,105 @@ test "replayed input: IME composition shows a preedit range; the commit is one u
         \\frame
     , .{ .compositions = comps[0..1] });
     try testing.expectEqualStrings("ab", ed.text());
+}
+
+/// One frame in which the focused `field` is typed `typed`, then the keys `press` pressed.
+fn typeIn(ed: *Editor, typed: []const u8, press: []const u8) Result {
+    var ev: [8]Input.Event = undefined;
+    ev[0] = .{ .kind = .text, .at = 0, .len = @intCast(typed.len) };
+    for (press, ev[1..][0..press.len]) |code, *e| e.* = .{ .kind = .press, .code = code };
+    const in: Input = .{ .text = typed, .events = ev[0 .. press.len + 1] };
+    const it: Interaction = .{ .focus = @backingInt(field) };
+    const fo: Focus = .{};
+    const k = Keyboard.route(&it, &fo, &in);
+    return ed.update(&k, field, .{});
+}
+
+test "replayed input: single-line mode submits on Enter and keeps to one line" {
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "");
+    ed.mode = .{ .single_line = true };
+    const r = try replay(&ed,
+        \\frame
+        \\text one
+        \\press 40
+        \\press 88
+    );
+    try testing.expect(r.submitted);
+    try testing.expectEqualStrings("one", ed.text());
+    // A pasted newline becomes a space; Up goes to the start, Down to the end.
+    try testing.expect(!typeIn(&ed, "a\nb", &.{0x52}).submitted);
+    try testing.expectEqualStrings("onea b", ed.text());
+    try testing.expectEqual(0, ed.caret);
+    _ = typeIn(&ed, "", &.{0x51});
+    try testing.expectEqual(6, ed.caret);
+}
+
+test "replayed input: password mode shows bullets, hides words and is never copied" {
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "");
+    ed.mode = .{ .password = true };
+    var clip: keyboard.Clipboard = .{};
+    var copied: [64]u8 = undefined;
+    _ = try replayWith(&ed,
+        \\frame
+        \\text hunter 2
+        \\press 4 ctrl
+        \\press 6 ctrl
+        \\press 27 ctrl
+    , .{ .clipboard = &clip, .copy_buf = &copied });
+    try testing.expectEqualStrings("", clip.set);
+    try testing.expectEqualStrings("hunter 2", ed.text());
+    var shown: [64]u8 = undefined;
+    try testing.expectEqualStrings("\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}", ed.display(&shown));
+    // Ctrl+Left goes to the start, not to the start of "2"; Ctrl+Delete deletes to the end.
+    _ = try replay(&ed,
+        \\frame
+        \\press 79
+        \\press 80 ctrl
+        \\text >
+        \\press 79
+        \\press 76 ctrl
+    );
+    try testing.expectEqualStrings(">h", ed.text());
+    // A grapheme is one bullet: e + combining acute shows as one, and offsets convert.
+    _ = typeIn(&ed, "e\u{301}", &.{});
+    ed.mode.bullet = "*"; // one byte, so the test layout's one glyph per byte holds
+    try testing.expectEqualStrings("***", ed.display(&shown));
+    try testing.expectEqual(3, ed.toDisplay(5));
+    try testing.expectEqual(5, ed.fromDisplay(3));
+    try testing.expectEqual(2, ed.fromDisplay(2));
+    // Clicks land on the bullets; a double click selects everything.
+    _ = try replayWith(&ed,
+        \\frame
+        \\pointer 11 5
+        \\buttons left
+        \\frame
+        \\buttons
+    , .{ .width = 200 });
+    try testing.expectEqual(1, ed.caret);
+    _ = try replayWith(&ed,
+        \\frame
+        \\pointer 11 5
+        \\buttons left
+        \\frame
+        \\buttons
+        \\frame
+        \\buttons left
+        \\frame
+        \\buttons
+    , .{ .width = 200 });
+    try testing.expectEqual([2]u32{ 0, 5 }, ed.selection());
+    // The host is asked for secure input, at the bullet after the caret's grapheme.
+    const golden = @import("../layout/golden.zig");
+    const lines = @import("../layout/lines.zig");
+    var para: golden.Para = .{};
+    const t = ed.display(&shown);
+    para.fixed(t, 10);
+    try lines.breakLines(&para.g, t, 200, &para.l);
+    lines.place(&para.l, &para.g, t, &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = 200 });
+    var out: keyboard.TextInput = .{};
+    ed.requestInput(&out, .{ .l = &para.l, .g = &para.g, .text = t }, .{ 0, 0 });
+    try testing.expectEqual(keyboard.Purpose.secure, out.purpose);
+    try testing.expectEqual(@as(f32, 30), out.rect.x0);
 }
