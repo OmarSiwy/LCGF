@@ -21,63 +21,98 @@ const Glyphs = lines_.Glyphs;
 /// A caret stop: a byte offset and the caret's x, px from the paragraph's left edge.
 pub const Stop = struct { offset: u32, x: f32 };
 
-/// The caret stops of line `k`, left to right. An iterator over the columns: no scratch.
+/// The caret stops of line `k`, left to right: the grapheme boundaries of its text, each at
+/// the x of the cluster it starts, or a share of the cluster it falls inside. Shaping may give
+/// a combining mark its own cluster; the boundary walk skips it, as src/text/shape/cluster.zig
+/// does. An iterator over the columns: no scratch.
 pub const Stops = struct {
     l: *const Lines,
     g: *const Glyphs,
     text: []const u8,
     k: u32,
-    /// First glyph of the next cluster.
+    /// Graphemes of the line's text from its start.
+    it: Graphemes,
+    base: u32,
+    /// Byte offset where the line's text ends.
+    stop: u32,
+    /// Next glyph after the open cluster.
     i: u32,
-    /// The open cluster: its text range, x, width, graphemes in it and emitted so far.
+    /// The open cluster (`cs == ce` when none is left): text range, x and width.
     cs: u32 = 0,
     ce: u32 = 0,
-    cx: f32 = 0,
+    cx: f32,
     cw: f32 = 0,
-    n: u32 = 0,
-    j: u32 = 0,
-    inner: Graphemes = .{ .text = "" },
+    started: bool = false,
     /// The line's end is still to come.
     final: bool,
 
     pub fn init(l: *const Lines, g: *const Glyphs, text: []const u8, k: u32) Stops {
-        const last = k + 1 == l.len;
-        return .{ .l = l, .g = g, .text = text, .k = k, .i = l.first[k], .cx = l.x[k], .final = last or l.end[k] == l.ink[k] };
+        const stop = byteAt(g, text, l.end[k]);
+        const base = l.start[k];
+        var s: Stops = .{
+            .l = l,
+            .g = g,
+            .text = text,
+            .k = k,
+            .it = .{ .text = text[base..stop] },
+            .base = base,
+            .stop = stop,
+            .i = l.first[k],
+            .cx = l.x[k],
+            .final = k + 1 == l.len or l.end[k] == l.ink[k],
+        };
+        s.open();
+        return s;
     }
 
-    pub fn next(s: *Stops) ?Stop {
-        if (s.inner.next()) |e| {
-            const b = s.cs + @as(u32, @intCast(e));
-            if (b < s.ce) {
-                s.j += 1;
-                return .{ .offset = b, .x = s.cx + s.cw * @as(f32, @floatFromInt(s.j)) / @as(f32, @floatFromInt(s.n)) };
-            }
-        }
-        const end = s.l.end[s.k];
-        if (s.i >= end) {
-            if (!s.final) return null;
-            s.final = false;
-            return .{ .offset = byteAt(s.g, s.text, end), .x = s.cx + s.cw };
-        }
-        // Open the cluster at glyph i.
+    /// Opens the cluster at glyph `i`, or none past the line's end.
+    fn open(s: *Stops) void {
         const g = s.g;
-        s.cx += s.cw;
-        s.cs = g.cluster[s.i];
+        const end = s.l.end[s.k];
         s.cw = 0;
+        if (s.i >= end) {
+            s.cs = s.stop;
+            s.ce = s.stop;
+            return;
+        }
+        s.cs = g.cluster[s.i];
         const extra = s.l.extra[s.k];
         while (s.i < end and g.cluster[s.i] == s.cs) : (s.i += 1) {
             s.cw += g.advance[s.i] + extra * @as(f32, @floatFromInt(@intFromBool(lines_.isSpace(s.text, g.cluster[s.i]))));
         }
         s.ce = byteAt(g, s.text, s.i);
-        var count: Graphemes = .{ .text = s.text[s.cs..s.ce] };
-        s.n = 0;
-        while (count.next()) |_| s.n += 1;
-        s.n = @max(s.n, 1);
-        s.j = 0;
-        s.inner = .{ .text = s.text[s.cs..s.ce] };
-        return .{ .offset = s.cs, .x = s.cx };
+    }
+
+    pub fn next(s: *Stops) ?Stop {
+        if (!s.started) {
+            s.started = true;
+            return .{ .offset = s.base, .x = s.cx };
+        }
+        const b = if (s.it.next()) |e| s.base + @as(u32, @intCast(e)) else s.stop;
+        // Move past the clusters that end at or before this boundary.
+        while (s.cs < s.ce and s.ce <= b) {
+            s.cx += s.cw;
+            s.open();
+        }
+        if (b >= s.stop) {
+            if (!s.final) return null;
+            s.final = false;
+            return .{ .offset = s.stop, .x = s.cx };
+        }
+        if (b == s.cs) return .{ .offset = b, .x = s.cx };
+        // Inside a cluster of several graphemes: an equal share of its width per grapheme.
+        const before = graphemes(s.text[s.cs..b]);
+        const all = graphemes(s.text[s.cs..s.ce]);
+        return .{ .offset = b, .x = s.cx + s.cw * before / all };
     }
 };
+
+fn graphemes(text: []const u8) f32 {
+    var it: Graphemes = .{ .text = text };
+    var n: f32 = 0;
+    while (it.next()) |_| n += 1;
+    return @max(n, 1);
+}
 
 /// The byte offset where glyph `i` starts: its cluster, or the end of the text past the last.
 fn byteAt(g: *const Glyphs, text: []const u8, i: u32) u32 {

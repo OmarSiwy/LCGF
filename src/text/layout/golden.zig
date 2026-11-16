@@ -132,12 +132,25 @@ fn spec(s: Scene) Spec {
     };
 }
 
-const max_w = 208;
-const max_h = 128;
+pub const max_w = 208;
+pub const max_h = 128;
 
 /// Lays scene `s` out, draws it and compares it with its reference picture.
 pub fn expectScene(s: Scene) !void {
-    const sp = spec(s);
+    var img: [max_w * max_h]u8 = undefined;
+    const d = try diff(s, try render(s, .{}, &img));
+    errdefer std.debug.print("scene {s}: max {d}, sum {d} over {d} inked pixels\n", .{ @tagName(s), d.max, d.sum, d.ink });
+    try std.testing.expect(d.matches());
+}
+
+/// A deliberate mistake, to show a picture catches it: the box narrower by `narrower` px, or
+/// every glyph `dx` px to the right.
+pub const Mistake = struct { narrower: f32 = 0, dx: f32 = 0 };
+
+/// Lays scene `s` out (with `mistake`) and draws it into `buf`; returns the picture.
+pub fn render(s: Scene, mistake: Mistake, buf: *[max_w * max_h]u8) ![]u8 {
+    var sp = spec(s);
+    sp.box[2] -= mistake.narrower;
     const shapers = [_]shape.Shaper{.init(try opentype.Face.parse(font, 0))};
     const shaper = &shapers[0];
     var p: Para = .{};
@@ -158,17 +171,18 @@ pub fn expectScene(s: Scene) !void {
     spans_.metrics(&shapers, &p.s, &m);
     lines_.place(&p.l, &p.g, sp.text, m[0..p.s.len], .{ .width = sp.box[2], .factor = sp.factor, .justify = sp.justify });
 
-    var img: [max_w * max_h]u8 = @splat(0);
     const w = sp.size[0];
     const h = sp.size[1];
+    const img = buf[0 .. w * h];
+    @memset(img, 0);
     // Every line is in the picture.
-    try std.testing.expect(sp.box[1] + lines_.stackHeight(&p.l) <= @as(f32, @floatFromInt(h)));
-    try draw(&shaper.face, &p, .{ sp.box[0], sp.box[1] }, img[0 .. w * h], w);
+    if (mistake.narrower == 0) try std.testing.expect(sp.box[1] + lines_.stackHeight(&p.l) <= @as(f32, @floatFromInt(h)));
+    try draw(&shaper.face, &p, .{ sp.box[0] + mistake.dx, sp.box[1] }, img, w);
     if (sp.carets) for (0..sp.text.len + 1) |i| {
         const c = query.caret(&p.l, &p.g, sp.text, @intCast(i));
-        bar(img[0 .. w * h], w, sp.box[0] + c.x, sp.box[1] + c.top, c.height);
+        bar(img, w, sp.box[0] + c.x, sp.box[1] + c.top, c.height);
     };
-    try compare(s, img[0 .. w * h], w, h);
+    return img;
 }
 
 /// Composites every inked glyph of `p` at `origin` + its position, by maximum coverage, each at
@@ -232,32 +246,43 @@ fn reference(s: Scene) []const u8 {
     };
 }
 
-fn compare(s: Scene, img: []const u8, w: u32, h: u32) !void {
+/// How a picture differs from its reference: the largest per-pixel difference, the sum of
+/// differences, and the reference's inked pixels.
+pub const Diff = struct {
+    max: u32 = 0,
+    sum: u64 = 0,
+    ink: u64 = 0,
+
+    /// Only the rasterisers differ: raster.zig's bound per pixel, under 2 levels per inked
+    /// pixel on average, and a picture with real content.
+    pub fn matches(d: Diff) bool {
+        return d.max <= 16 and d.sum < 2 * d.ink and d.ink > 500;
+    }
+};
+
+pub fn diff(s: Scene, img: []const u8) !Diff {
     const pgm = reference(s);
+    const sp: Spec = if (s == .frame) .{ .text = "", .px = 0, .box = .{ 0, 0, 0 }, .size = frame_size } else spec(s);
     var buf: [32]u8 = undefined;
-    const header = try std.fmt.bufPrint(&buf, "P5\n{d} {d}\n255\n", .{ w, h });
+    const header = try std.fmt.bufPrint(&buf, "P5\n{d} {d}\n255\n", .{ sp.size[0], sp.size[1] });
     try std.testing.expectEqualStrings(header, pgm[0..header.len]);
     const ref = pgm[header.len..];
     try std.testing.expectEqual(img.len, ref.len);
-    var max: u32 = 0;
-    var sum: u64 = 0;
-    var ink: u64 = 0;
+    var d: Diff = .{};
     for (img, ref) |a, b| {
-        const d: u32 = @abs(@as(i32, a) - b);
-        max = @max(max, d);
-        sum += d;
-        ink += @intFromBool(b != 0);
+        const e: u32 = @abs(@as(i32, a) - b);
+        d.max = @max(d.max, e);
+        d.sum += e;
+        d.ink += @intFromBool(b != 0);
     }
-    errdefer std.debug.print("scene {s}: max {d}, sum {d} over {d} inked pixels\n", .{ @tagName(s), max, sum, ink });
-    try std.testing.expect(max <= 16);
-    try std.testing.expect(sum < 2 * ink);
-    try std.testing.expect(ink > 500);
+    return d;
 }
 
 // ---------------------------------------------------------------------------------------------
 // The frame scene: the whole stack on the measure / wrap protocol, through layout and paint.
 
 const frame_title = "Text layout";
+const frame_size = [2]u32{ 240, 140 };
 const frame_para = "The measure and wrap protocol hands every run to the shaper and the line breaker.";
 
 /// Builds a tree, measures and wraps its text with `stack.Stack` in the order of prototype
@@ -335,8 +360,8 @@ pub fn expectFrame() !void {
     paint.emit(t, tx, &parts.cu, strings.buf[0..strings.len], &parts.d);
     try std.testing.expect(!st.overflow);
 
-    const w = 240;
-    const h = 140;
+    const w = frame_size[0];
+    const h = frame_size[1];
     var img: [w * h]u8 = @splat(0);
     const d = &parts.d;
     try std.testing.expectEqual(2, d.run_len);
@@ -352,5 +377,7 @@ pub fn expectFrame() !void {
         _ = try p.s.push(0, 0, r.px, 0);
         try draw(&shapers[0].face, &p, .{ r.rect[0], r.rect[1] }, &img, w);
     }
-    try compare(.frame, &img, w, h);
+    const dd = try diff(.frame, &img);
+    errdefer std.debug.print("scene frame: max {d}, sum {d} over {d} inked pixels\n", .{ dd.max, dd.sum, dd.ink });
+    try std.testing.expect(dd.matches());
 }
