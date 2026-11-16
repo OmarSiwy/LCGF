@@ -321,6 +321,7 @@ pub const op = struct {
     pub const send_event = 25;
     pub const set_input_focus = 42;
     pub const get_input_focus = 43;
+    pub const translate_coordinates = 40;
     pub const open_font = 45;
     pub const create_gc = 55;
     pub const put_image = 72;
@@ -593,6 +594,55 @@ pub fn clientMessage(window: u32, kind: u32, format: u8, data: []const u8) [32]u
     std.mem.writeInt(u32, e[8..12], kind, .little);
     @memcpy(e[12..][0..data.len], data);
     return e;
+}
+
+pub const translate_coordinates_size = 16;
+
+/// Where (x, y) of `src` is in `dst`: the reply has it at bytes 12 and 14.
+pub fn translateCoordinates(b: *Buf, src: u32, dst: u32, x: i16, y: i16) void {
+    b.head(op.translate_coordinates, 0, translate_coordinates_size / 4);
+    b.int(u32, src);
+    b.int(u32, dst);
+    b.int(i16, x);
+    b.int(i16, y);
+}
+
+/// The local paths of a text/uri-list (RFC 2483): one URI per line, `#` lines are comments,
+/// only `file:` URIs on this host (`file:///p`, `file://localhost/p`, `file:/p`) are kept, and
+/// %XX escapes are decoded. Paths go into `names` back to back, the end of each into `ends`;
+/// returns how many, stopping where either runs out.
+pub fn uriListPaths(list: []const u8, names: []u8, ends: []u32) usize {
+    var n: usize = 0;
+    var at: usize = 0;
+    var lines = std.mem.tokenizeAny(u8, list, "\r\n");
+    while (lines.next()) |line| {
+        if (line[0] == '#' or n == ends.len) continue;
+        var rest = line;
+        if (!std.ascii.startsWithIgnoreCase(rest, "file:")) continue;
+        rest = rest[5..];
+        if (std.mem.startsWith(u8, rest, "//")) {
+            rest = rest[2..];
+            const slash = std.mem.indexOfScalar(u8, rest, '/') orelse continue;
+            const host = rest[0..slash];
+            if (!(host.len == 0 or std.mem.eql(u8, host, "localhost"))) continue;
+            rest = rest[slash..];
+        }
+        const start = at;
+        var i: usize = 0;
+        while (i < rest.len and at < names.len) : (at += 1) {
+            const escaped = rest[i] == '%' and i + 2 < rest.len and std.ascii.isHex(rest[i + 1]) and std.ascii.isHex(rest[i + 2]);
+            const hex = if (escaped) std.fmt.parseInt(u8, rest[i + 1 ..][0..2], 16) catch unreachable else null;
+            names[at] = hex orelse rest[i];
+            i += if (hex != null) 3 else 1;
+        }
+        if (i < rest.len) {
+            at = start; // did not fit
+            break;
+        }
+        ends[n] = @intCast(at);
+        n += 1;
+    }
+    return n;
 }
 
 pub const send_event_size = 44;
@@ -878,6 +928,7 @@ test "requests: lengths match the bytes written" {
         .{ get_keyboard_mapping_size, getKeyboardMapping, .{ 8, 248 } },
         .{ set_input_focus_size, setInputFocus, .{1} },
         .{ move_window_size, moveWindow, .{ 1, 2, 3 } },
+        .{ translate_coordinates_size, translateCoordinates, .{ 1, 2, 3, 4 } },
         .{ set_selection_owner_size, setSelectionOwner, .{ 1, 2 } },
         .{ get_selection_owner_size, getSelectionOwner, .{1} },
         .{ changePropertySize(3), appendProperty, .{ 1, 2, 3, 8, "abc" } },
@@ -934,4 +985,21 @@ test "scale: Xft.dpi wins, then the screen's physical size in quarter steps" {
     try testing.expectEqual(@as(f32, 1.5), scale(null, 2880, 508)); // 144 DPI
     try testing.expectEqual(@as(f32, 1), scale(null, 1024, 400)); // under 96: never below 1
     try testing.expectEqual(@as(f32, 1), scale(null, 1024, 0));
+}
+
+test "uriListPaths: local file URIs, decoded" {
+    var names: [64]u8 = undefined;
+    var ends: [4]u32 = undefined;
+    const list = "# from a file manager\r\nfile:///tmp/a%20b.txt\r\nhttp://example.com/x\r\nfile://localhost/home/x/%C3%BC.png\r\nfile://otherhost/y\r\nfile:/z\r\n";
+    const n = uriListPaths(list, &names, &ends);
+    try testing.expectEqual(@as(usize, 3), n);
+    try testing.expectEqualStrings("/tmp/a b.txt", names[0..ends[0]]);
+    try testing.expectEqualStrings("/home/x/\xc3\xbc.png", names[ends[0]..ends[1]]);
+    try testing.expectEqualStrings("/z", names[ends[1]..ends[2]]);
+    // Out of room: the paths that fit.
+    try testing.expectEqual(@as(usize, 1), uriListPaths(list, names[0..16], &ends));
+    try testing.expectEqual(@as(usize, 2), uriListPaths(list, &names, ends[0..2]));
+    // A % without two hex digits is kept as it is.
+    try testing.expectEqual(@as(usize, 1), uriListPaths("file:///100%\n", &names, &ends));
+    try testing.expectEqualStrings("/100%", names[0..ends[0]]);
 }

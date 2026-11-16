@@ -61,6 +61,19 @@ pub const Atoms = struct {
     _XIM_XCONNECT: u32 = 0,
     _XIM_PROTOCOL: u32 = 0,
     _XIM_MOREDATA: u32 = 0,
+    /// Drag and drop (XDND 5).
+    XdndAware: u32 = 0,
+    XdndEnter: u32 = 0,
+    XdndPosition: u32 = 0,
+    XdndStatus: u32 = 0,
+    XdndLeave: u32 = 0,
+    XdndDrop: u32 = 0,
+    XdndFinished: u32 = 0,
+    XdndSelection: u32 = 0,
+    XdndActionCopy: u32 = 0,
+    @"text/uri-list": u32 = 0,
+    /// Where dropped data is delivered, on the target window.
+    LCGR_DROP: u32 = 0,
 };
 
 /// Predefined atoms.
@@ -653,6 +666,22 @@ pub const Window = struct {
     ic: u16 = 0,
     ime_on: bool = false,
     spot: [2]i16 = .{ 0, 0 },
+    /// The drag over the window: its source window (0: none), where it is (root pixels, made
+    /// window-relative by `poll`), the timestamp to convert with, and the files it carries.
+    dnd: struct {
+        source: u32 = 0,
+        root: [2]i16 = .{ 0, 0 },
+        moved: bool = false,
+        /// The data was asked for, is in LCGR_DROP, and was read into `drop_names`.
+        asked: bool = false,
+        arrived: bool = false,
+        read: bool = false,
+        dropped: bool = false,
+        files: lcgr.gestures.Files = .{},
+    } = .{},
+    /// The dragged files' paths, back to back, and where each ends.
+    drop_names: [4096]u8 = undefined,
+    drop_ends: [64]u32 = undefined,
     /// A SelectionNotify said the pasted text is in LCGR_PASTE; `poll` reads it.
     paste_ready: bool = false,
     /// The cursor the window shows, so `apply` sends only changes.
@@ -725,6 +754,8 @@ pub const Window = struct {
         _ = c.send(wire.changePropertySize(title.len), wire.changeProperty, .{ xid, a._NET_WM_NAME, a.UTF8_STRING, 8, title });
         const protocols = std.mem.asBytes(&a.WM_DELETE_WINDOW);
         _ = c.send(wire.changePropertySize(4), wire.changeProperty, .{ xid, a.WM_PROTOCOLS, 4, 32, protocols }); // type ATOM
+        const xdnd_version: u32 = 5;
+        _ = c.send(wire.changePropertySize(4), wire.changeProperty, .{ xid, a.XdndAware, atom_atom, 32, std.mem.asBytes(&xdnd_version) });
         _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.map_window, xid });
         c.windows[slot] = w;
         try c.sync();
@@ -803,9 +834,11 @@ pub const Window = struct {
             wire.selection_notify => {
                 const a = w.conn.atoms;
                 if (wire.get(u32, m, 12) == a.CLIPBOARD and wire.get(u32, m, 20) == a.LCGR_PASTE) w.paste_ready = true;
+                if (wire.get(u32, m, 12) == a.XdndSelection) w.dnd.arrived = true;
             },
             wire.client_message => {
                 const a = w.conn.atoms;
+                w.xdnd(m);
                 if (wire.get(u32, m, 8) == a.WM_PROTOCOLS and wire.get(u32, m, 12) == a.WM_DELETE_WINDOW) w.is_open = false;
             },
             else => {},
@@ -874,6 +907,71 @@ pub const Window = struct {
         }
     }
 
+    /// A ClientMessage of the XDND protocol from a drag source.
+    fn xdnd(w: *Window, m: []const u8) void {
+        const c = w.conn;
+        const a = c.atoms;
+        const kind = wire.get(u32, m, 8);
+        const source = wire.get(u32, m, 12);
+        const d = &w.dnd;
+        if (kind == a.XdndEnter) {
+            d.* = .{ .source = source };
+        } else if (kind == a.XdndPosition and source == d.source) {
+            const xy = wire.get(u32, m, 20);
+            d.root = .{ @bitCast(@as(u16, @truncate(xy >> 16))), @bitCast(@as(u16, @truncate(xy))) };
+            d.moved = true;
+            // The files are asked for while they hover, so widgets can tell whether to accept.
+            if (!d.asked) {
+                d.asked = true;
+                _ = c.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.XdndSelection, a.@"text/uri-list", a.LCGR_DROP });
+            }
+            // Accepted as a copy anywhere in the window; the application decides what to do.
+            const l = [5]u32{ w.id, 1, 0, 0, a.XdndActionCopy };
+            const e = wire.clientMessage(source, a.XdndStatus, 32, std.mem.asBytes(&l));
+            _ = c.send(wire.send_event_size, wire.sendEvent, .{ source, 0, &e });
+        } else if (kind == a.XdndLeave and source == d.source) {
+            d.* = .{};
+        } else if (kind == a.XdndDrop and source == d.source) {
+            d.dropped = true;
+        }
+    }
+
+    /// Fills `ev.files` from the drag: hover while a drag is over the window, the files once
+    /// they arrived, and drop in the frame they are dropped, after which the drag ends.
+    fn dragFrame(w: *Window, ev: *Events) Error!void {
+        const c = w.conn;
+        const d = &w.dnd;
+        if (d.moved) {
+            d.moved = false;
+            const r = try c.reply(c.send(wire.translate_coordinates_size, wire.translateCoordinates, .{ c.setup.root, w.id, d.root[0], d.root[1] }));
+            d.files.pos = .{ @as(f32, @floatFromInt(wire.get(i16, r, 12))) / w.scale, @as(f32, @floatFromInt(wire.get(i16, r, 14))) / w.scale };
+        }
+        if (d.arrived) {
+            d.arrived = false;
+            // An empty or refused conversion reads as no files.
+            const words: u32 = @intCast(@min(w.drop_names.len, c.in.len - 32) / 4);
+            const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGR_DROP, true, words }));
+            const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
+            const n = wire.uriListPaths(r[32..][0..len], &w.drop_names, &w.drop_ends);
+            d.files.names = w.drop_names[0..if (n == 0) 0 else w.drop_ends[n - 1]];
+            d.files.ends = w.drop_ends[0..n];
+            d.read = true;
+        }
+        d.files.hover = d.source != 0;
+        // The drop waits for the data, which was asked for at the first position.
+        d.files.drop = d.dropped and d.read;
+        ev.files = d.files;
+        if (d.files.drop) {
+            const a = c.atoms;
+            const l = [5]u32{ w.id, @intFromBool(d.files.count() > 0), a.XdndActionCopy, 0, 0 };
+            const e = wire.clientMessage(d.source, a.XdndFinished, 32, std.mem.asBytes(&l));
+            _ = c.send(wire.send_event_size, wire.sendEvent, .{ d.source, 0, &e });
+            try c.flush();
+            // The drag is over; the names stay valid until the next poll.
+            d.* = .{ .files = .{ .pos = d.files.pos } };
+        }
+    }
+
     /// Handles the server's pending events and gives this window's frame. False once the window
     /// was closed (by the user through the window manager, or `close`) or the connection failed
     /// (`conn.err`).
@@ -886,6 +984,7 @@ pub const Window = struct {
             w.paste_ready = false;
             w.readPaste() catch return false;
         }
+        w.dragFrame(ev) catch return false;
         w.damaged = false;
         _ = w.woken.swap(false, .acq_rel);
 
@@ -1851,5 +1950,139 @@ test "x11: two windows on one connection get their own input and frames" {
     var extra: Window = undefined;
     try testing.expectError(error.TooManyWindows, extra.open(c, 8, 8, "extra", Fixture.buffers));
     for (&more) |*m| m.close();
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
+/// A drag source on a connection of its own, as a file manager is: it owns XdndSelection,
+/// sends the XDND messages and answers the request for text/uri-list.
+const FakeDrag = struct {
+    conn: *Connection,
+    window: u32 = 0,
+    uris: []const u8,
+    statuses: u32 = 0,
+    accepted: bool = false,
+    finished: ?u32 = null,
+
+    fn start(f: *FakeDrag, display: []const u8) !void {
+        const c = f.conn;
+        try c.open(display, "");
+        f.window = c.id();
+        _ = c.send(wire.create_window_size, wire.createWindow, .{ f.window, c.setup.root, 1, 1, 0 });
+        _ = c.send(wire.set_selection_owner_size, wire.setSelectionOwner, .{ f.window, c.atoms.XdndSelection });
+        try c.sync();
+    }
+
+    fn message(f: *FakeDrag, to: u32, kind: u32, l: [5]u32) void {
+        const e = wire.clientMessage(to, kind, 32, std.mem.asBytes(&l));
+        _ = f.conn.send(wire.send_event_size, wire.sendEvent, .{ to, 0, &e });
+    }
+
+    fn step(f: *FakeDrag) !void {
+        const c = f.conn;
+        const a = c.atoms;
+        try c.flush();
+        var p = [_]linux.pollfd{.{ .fd = c.fd, .events = linux.POLL.IN }};
+        if (linux.poll(&p, 1, 0) == 1) try c.readSome();
+        while (try c.message()) |m| {
+            switch (m[0] & 0x7f) {
+                wire.client_message => {
+                    const kind = wire.get(u32, m, 8);
+                    if (kind == a.XdndStatus) {
+                        f.statuses += 1;
+                        f.accepted = wire.get(u32, m, 16) & 1 != 0 and wire.get(u32, m, 28) == a.XdndActionCopy;
+                    }
+                    if (kind == a.XdndFinished) f.finished = wire.get(u32, m, 16);
+                },
+                wire.selection_request => {
+                    const requestor = wire.get(u32, m, 12);
+                    const target = wire.get(u32, m, 20);
+                    const property = wire.get(u32, m, 24);
+                    try testing.expectEqual(a.@"text/uri-list", target);
+                    _ = c.send(wire.changePropertySize(f.uris.len), wire.changeProperty, .{ requestor, property, target, 8, f.uris });
+                    const note = wire.selectionNotify(requestor, a.XdndSelection, target, property);
+                    _ = c.send(wire.send_event_size, wire.sendEvent, .{ requestor, 0, &note });
+                },
+                else => {},
+            }
+        }
+        try c.flush();
+    }
+};
+
+test "x11: files dragged from another application hover, then drop" {
+    const display = try testDisplay();
+    const S = struct {
+        var conn: Connection = .{};
+    };
+    var src: FakeDrag = .{ .conn = &S.conn, .uris = "file:///tmp/a%20b.txt\r\nfile:///home/x/%C3%BC.png\r\n" };
+    try src.start(display);
+    defer S.conn.close();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    var w: Window = undefined;
+    try w.open(c, 200, 100, "drop", Fixture.buffers);
+    defer w.close();
+    var ev: Events = .{};
+    const a = S.conn.atoms;
+    const version: u32 = 5 << 24;
+
+    // The window says it takes drops.
+    const aware = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.XdndAware, false, 1 }));
+    try testing.expectEqual(@as(u32, 5), wire.get(u32, aware, 32));
+
+    // Enter and move over the window at (60, 40): it accepts a copy and sees the files hover.
+    src.message(w.id, a.XdndEnter, .{ src.window, version, a.@"text/uri-list", 0, 0 });
+    src.message(w.id, a.XdndPosition, .{ src.window, 0, (60 << 16) | 40, 0, a.XdndActionCopy });
+    for (0..2000) |_| {
+        try src.step();
+        try testing.expect(w.poll(&ev));
+        if (ev.files.count() == 2 and src.statuses > 0) break;
+        c.waitReadable(0.002);
+    } else return error.DragNeverArrived;
+    try testing.expect(src.accepted);
+    try testing.expect(ev.files.hover and !ev.files.drop);
+    try testing.expectEqual([2]f32{ 60, 40 }, ev.files.pos);
+    try testing.expectEqualStrings("/tmp/a b.txt", ev.files.path(0));
+    try testing.expectEqualStrings("/home/x/\xc3\xbc.png", ev.files.path(1));
+
+    // Drop: one frame with drop set and the files, then the drag is over.
+    src.message(w.id, a.XdndDrop, .{ src.window, 0, 0, 0, 0 });
+    for (0..2000) |_| {
+        try src.step();
+        try testing.expect(w.poll(&ev));
+        if (ev.files.drop) break;
+        c.waitReadable(0.002);
+    } else return error.DropNeverArrived;
+    try testing.expect(ev.files.hover);
+    try testing.expectEqual(@as(usize, 2), ev.files.count());
+    try testing.expectEqualStrings("/tmp/a b.txt", ev.files.path(0));
+    for (0..2000) |_| {
+        try src.step();
+        if (src.finished != null) break;
+        c.waitReadable(0.002);
+    } else return error.FinishNeverArrived;
+    try testing.expectEqual(@as(?u32, 1), src.finished);
+    try testing.expect(w.poll(&ev));
+    try testing.expect(!ev.files.hover and !ev.files.drop);
+    try testing.expectEqual(@as(usize, 0), ev.files.count());
+
+    // A drag that leaves without dropping only hovered.
+    src.message(w.id, a.XdndEnter, .{ src.window, version, a.@"text/uri-list", 0, 0 });
+    src.message(w.id, a.XdndPosition, .{ src.window, 0, (10 << 16) | 10, 0, a.XdndActionCopy });
+    for (0..2000) |_| {
+        try src.step();
+        try testing.expect(w.poll(&ev));
+        if (ev.files.hover and ev.files.count() == 2) break;
+        c.waitReadable(0.002);
+    } else return error.DragNeverArrived;
+    src.message(w.id, a.XdndLeave, .{ src.window, 0, 0, 0, 0 });
+    try src.step();
+    for (0..2000) |_| {
+        try testing.expect(w.poll(&ev));
+        if (!ev.files.hover) break;
+        c.waitReadable(0.002);
+    } else return error.LeaveNeverArrived;
+    try testing.expect(!ev.files.drop);
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
