@@ -93,6 +93,24 @@ pub fn dotStyle(th: *const Theme, k: u32, head: u32, busy: bool) Style {
     return .{ .size = .{ .px(dot_px), .px(dot_px) }, .float = true, .offset = offsets[k], .radius = dot_px / 2, .fill = dotFill(th, k, head, busy) };
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// The spinner's `value` column: -1 while busy (an indeterminate progress bar has no current
+/// value), 0 when idle.
+pub fn spinnerValue(busy: bool) f32 {
+    return -@as(f32, @floatFromInt(@intFromBool(busy)));
+}
+
+/// The spinner is a progress bar (`a11y.Role.progress_bar`, past `types.Role`).
+pub fn setRole(t: *Tree, node: u32) void {
+    t.c.role[node] = @backingInt(a11y.Role.progress_bar);
+}
+
+/// Names the spinner after the text of `label` (a caption's row), as `aria-labelledby`.
+pub fn setName(s: *a11y.Semantics, node: u32, label: u32) void {
+    s.c.labelled_by[node] = label;
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A spinner, turning while `busy`. `id` names its timer, not a widget: it takes no input.
@@ -101,10 +119,11 @@ pub fn spinner(f: *Frame, th: *const Theme, id: Id, busy: bool) Node {
     if (busy) _ = f.timer(id, 1.0 / @as(f32, steps_per_second), .repeat);
     const head = phase(f.in.time);
     var s = spinnerStyle(th);
-    _ = &s;
+    s.value = spinnerValue(busy);
     const node = f.open(.none, s);
     for (0..dots) |k| _ = f.leaf(.none, dotStyle(th, @intCast(k), head, busy));
     f.close();
+    setRole(f.tree(), node.ix());
     return node;
 }
 
@@ -168,10 +187,11 @@ pub fn ComptimeSpinner(comptime State: type, comptime spec: Spec, comptime th: T
             const busy: bool = @field(state, n.bind.?);
             const head = phase(in.time);
             var s = spinnerStyle(&th);
-            _ = &s;
+            s.value = spinnerValue(busy);
             const node = tb.t.push(parent, .none, &s);
             for (0..dots) |k| _ = tb.t.push(node, .none, &dotStyle(&th, @intCast(k), head, busy));
             tb.t.seal(node);
+            setRole(&tb.t, node);
         }
     };
 }
@@ -239,6 +259,30 @@ fn headDrawn(t: *const Tree) u32 {
         }
     }
     return best;
+}
+
+test "spinner: role, value and a name from its caption" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    try testing.expectEqual(@backingInt(a11y.Role.progress_bar), t.c.role[node_row]);
+    try testing.expectEqual(@as(f32, -1), t.c.value[node_row]);
+    h.app.busy = false;
+    h.ui.signals.state.busy = false;
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(@as(f32, 0), t.c.value[node_row]);
+
+    var sbuf: [4096]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    const caption = node_row + 1 + dots;
+    setName(&sem, node_row, caption);
+    a11y.names(t, &sem);
+    try testing.expectEqual(t.c.text[caption], sem.c.name[node_row]);
 }
 
 test "check: what a comptime spinner's state must have" {
