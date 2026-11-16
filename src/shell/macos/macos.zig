@@ -50,6 +50,8 @@ const Runtime = struct {
     objc_registerClassPair: *const fn (Id) callconv(.c) void,
     class_addMethod: *const fn (Id, Sel, *const anyopaque, [*:0]const u8) callconv(.c) bool,
     class_addIvar: *const fn (Id, [*:0]const u8, usize, u8, [*:0]const u8) callconv(.c) bool,
+    class_addProtocol: *const fn (Id, Id) callconv(.c) bool,
+    objc_getProtocol: *const fn ([*:0]const u8) callconv(.c) ?Id,
     class_getInstanceVariable: *const fn (Id, [*:0]const u8) callconv(.c) ?*anyopaque,
     object_getIvar: *const fn (Id, *anyopaque) callconv(.c) ?*anyopaque,
     object_setIvar: *const fn (Id, *anyopaque, ?*anyopaque) callconv(.c) void,
@@ -138,6 +140,17 @@ const methods = .{
     .{ "cursorUpdate:", &cursorUpdate, "v@:@" },
     .{ "viewDidChangeBackingProperties", &viewDidChangeBackingProperties, "v@:" },
     .{ "insertText:", &insertText, "v@:@" },
+    // NSTextInputClient: the input method's view of the text.
+    .{ "insertText:replacementRange:", &insertTextReplacing, "v@:@{_NSRange=QQ}" },
+    .{ "setMarkedText:selectedRange:replacementRange:", &setMarkedText, "v@:@{_NSRange=QQ}{_NSRange=QQ}" },
+    .{ "unmarkText", &unmarkText, "v@:" },
+    .{ "hasMarkedText", &hasMarkedText, "c@:" },
+    .{ "markedRange", &markedRange, "{_NSRange=QQ}@:" },
+    .{ "selectedRange", &selectedRange, "{_NSRange=QQ}@:" },
+    .{ "validAttributesForMarkedText", &validAttributesForMarkedText, "@@:" },
+    .{ "attributedSubstringForProposedRange:actualRange:", &attributedSubstring, "@@:{_NSRange=QQ}^{_NSRange=QQ}" },
+    .{ "characterIndexForPoint:", &characterIndexForPoint, "Q@:{CGPoint=dd}" },
+    .{ "firstRectForCharacterRange:actualRange:", &firstRectForCharacterRange, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}" },
     .{ "doCommandBySelector:", &doCommandBySelector, "v@::" },
 } ++ events: {
     // Every mouse, key and scroll event goes to `onEvent`.
@@ -153,6 +166,8 @@ fn registerView() Error!void {
     inline for (methods) |m| {
         if (!rt.class_addMethod(cls, objc.sel(m[0]), @ptrCast(m[1]), m[2])) return error.ClassFailed;
     }
+    // Declared so `interpretKeyEvents:` treats the view as a text input client.
+    if (rt.objc_getProtocol("NSTextInputClient")) |p| _ = rt.class_addProtocol(cls, p);
     rt.objc_registerClassPair(cls);
     view_class = cls;
     shell_ivar = rt.class_getInstanceVariable(cls, "lcgr") orelse return error.ClassFailed;
@@ -193,7 +208,67 @@ fn onEvent(view: Id, _: Sel, e: Id) callconv(.c) void {
     if (kind == .key_down) ev.repeat = msg(bool, e, "isARepeat", .{});
     const m = shellOf(view);
     m.t.feed(.{ .event = ev });
-    if (kind == .key_down) msg(void, view, "interpretKeyEvents:", .{msg(Id, objc.class("NSArray"), "arrayWithObject:", .{e})});
+    if (kind != .key_down) return;
+    // While a widget wants text the input method sees the key (and may compose); otherwise
+    // the key's own characters are typed, and no input method runs.
+    if (m.applied.wants_text) {
+        msg(void, view, "interpretKeyEvents:", .{msg(Id, objc.class("NSArray"), "arrayWithObject:", .{e})});
+    } else if (msg(?Id, e, "characters", .{})) |s| m.t.feed(.{ .insert = utf8(s) });
+}
+
+pub const NSRange = extern struct { location: U, length: U };
+/// NSNotFound.
+const not_found: U = @as(U, std.math.maxInt(isize));
+
+fn insertTextReplacing(view: Id, _: Sel, text: Id, _: NSRange) callconv(.c) void {
+    shellOf(view).t.feed(.{ .insert = utf8(text) });
+}
+
+fn setMarkedText(view: Id, _: Sel, text: Id, selected: NSRange, _: NSRange) callconv(.c) void {
+    const sel: [2]u32 = .{ @intCast(@min(selected.location, std.math.maxInt(u32))), @intCast(@min(selected.length, std.math.maxInt(u32))) };
+    shellOf(view).t.feed(.{ .mark = .{ .text = utf8(text), .selected = sel } });
+}
+
+/// The input method gives up its composition: what was shown is committed.
+fn unmarkText(view: Id, _: Sel) callconv(.c) void {
+    const t = &shellOf(view).t;
+    t.commit(t.preedit[0..t.composition.len]);
+}
+
+fn hasMarkedText(view: Id, _: Sel) callconv(.c) bool {
+    return shellOf(view).t.marked();
+}
+
+fn markedRange(view: Id, _: Sel) callconv(.c) NSRange {
+    const t = &shellOf(view).t;
+    return if (t.marked()) .{ .location = 0, .length = t.composition.units } else .{ .location = not_found, .length = 0 };
+}
+
+/// The UI keeps its text to itself, so the input method sees an empty document with the caret
+/// at the end of the composition.
+fn selectedRange(view: Id, _: Sel) callconv(.c) NSRange {
+    return .{ .location = shellOf(view).t.composition.units, .length = 0 };
+}
+
+fn validAttributesForMarkedText(_: Id, _: Sel) callconv(.c) Id {
+    return msg(Id, objc.class("NSArray"), "array", .{});
+}
+
+fn attributedSubstring(_: Id, _: Sel, _: NSRange, _: ?*NSRange) callconv(.c) ?Id {
+    return null;
+}
+
+fn characterIndexForPoint(_: Id, _: Sel, _: NSPoint) callconv(.c) U {
+    return not_found;
+}
+
+/// Where the candidate window goes: the frame's `ime_rect`, on the screen.
+fn firstRectForCharacterRange(view: Id, _: Sel, range: NSRange, actual: ?*NSRange) callconv(.c) NSRect {
+    const m = shellOf(view);
+    if (actual) |a| a.* = range;
+    const r = translate.windowRect(m.applied.ime_rect, m.t.in.viewport[1]);
+    const in_window: NSRect = .{ .origin = .{ .x = r[0], .y = r[1] }, .size = .{ .width = r[2], .height = r[3] } };
+    return msgRect(m.window, "convertRectToScreen:", .{in_window});
 }
 
 /// Text a key typed. `text` is an NSString, or an NSAttributedString from an input method.
@@ -278,11 +353,13 @@ pub const Macos = struct {
         show: bool = true,
     };
 
-    /// Caller-owned storage: `text` and `events` one frame's typed text and key events, `glyphs` one quad per byte of text in a frame (at most the
+    /// Caller-owned storage: `text` and `events` one frame's typed text and key events,
+    /// `preedit` the longest input-method composition shown, `glyphs` one quad per byte of text in a frame (at most the
     /// renderer's 32768), `first` and `count` one row per text run.
     pub const Buffers = struct {
         text: []u8,
         events: []lcgr.input.Input.Event,
+        preedit: []u8,
         glyphs: []Quad,
         first: []u32,
         count: []u32,
@@ -309,7 +386,7 @@ pub const Macos = struct {
             .layer = .init(&dev, .{ .size = size, .scale = 1 }),
             .gfx = gfx,
             .frames = .init(dev.queue, gfx.desc.frames_in_flight),
-            .t = .init(.{ .text = buf.text, .events = buf.events }),
+            .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
         rt.object_setIvar(view, shell_ivar, m);
@@ -368,6 +445,15 @@ pub const Macos = struct {
     }
 
     pub fn apply(m: *Macos, p: *const Platform) void {
+        // The text field lost focus mid-composition: the input method drops it.
+        if (m.applied.wants_text and !p.wants_text and m.t.marked()) {
+            if (msg(?Id, m.view, "inputContext", .{})) |ic| msg(void, ic, "discardMarkedText", .{});
+            m.t.mark("", .{ 0, 0 });
+        }
+        // The candidate window follows the caret.
+        if (p.wants_text and !std.meta.eql(p.ime_rect, m.applied.ime_rect)) {
+            if (msg(?Id, m.view, "inputContext", .{})) |ic| msg(void, ic, "invalidateCharacterCoordinates", .{});
+        }
         // Shown now if the pointer is over the view; `cursorUpdate:` shows it on the way in.
         if (p.cursor != m.applied.cursor and m.t.in.pointer[0] >= 0) msg(void, m.cursors[@backingInt(p.cursor)], "set", .{});
         if (p.clipboard.len > 0) copy(p.clipboard);
@@ -454,12 +540,13 @@ const Fixture = struct {
     var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(lcgr.mem.column_align) = undefined;
     var text: [64]u8 = undefined;
     var events: [16]lcgr.input.Input.Event = undefined;
+    var preedit: [64]u8 = undefined;
     var glyphs: [512]Quad = undefined;
     var first: [256]u32 = undefined;
     var count: [256]u32 = undefined;
 
     fn open(m: *Macos) !void {
-        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .glyphs = &glyphs, .first = &first, .count = &count });
+        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -500,6 +587,30 @@ test "macos: copy then paste round-trips through the general pasteboard" {
     m.paste();
     try testing.expect(m.poll(&ev));
     try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
+}
+
+test "macos: the view is a text input client that composes and commits" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    var ev: Events = .{};
+    _ = m.poll(&ev);
+    try testing.expect(msg(bool, m.view, "conformsToProtocol:", .{rt.objc_getProtocol("NSTextInputClient").?}));
+    m.apply(&.{ .wants_text = true, .ime_rect = .{ .x0 = 10, .y0 = 20, .x1 = 40, .y1 = 60 } });
+    // What an input method calls, in order: compose, then commit.
+    msg(void, m.view, "setMarkedText:selectedRange:replacementRange:", .{ objc.string("\u{306b}"), NSRange{ .location = 1, .length = 0 }, NSRange{ .location = not_found, .length = 0 } });
+    try testing.expect(msg(bool, m.view, "hasMarkedText", .{}));
+    try testing.expectEqual(NSRange{ .location = 0, .length = 1 }, msg(NSRange, m.view, "markedRange", .{}));
+    _ = m.poll(&ev);
+    try testing.expectEqualStrings("\u{306b}", ev.composition.text);
+    msg(void, m.view, "insertText:replacementRange:", .{ objc.string("\u{65e5}"), NSRange{ .location = not_found, .length = 0 } });
+    _ = m.poll(&ev);
+    try testing.expectEqualStrings("\u{65e5}", ev.in.text);
+    try testing.expectEqualStrings("", ev.composition.text);
+    // The candidate window's rectangle is the ime_rect on the screen: same size.
+    var actual: NSRange = undefined;
+    const r = msgRect(m.view, "firstRectForCharacterRange:actualRange:", .{ NSRange{ .location = 0, .length = 0 }, &actual });
+    try testing.expectEqual(NSSize{ .width = 30, .height = 40 }, r.size);
 }
 
 test "macos: wake ends a wait with no timeout" {

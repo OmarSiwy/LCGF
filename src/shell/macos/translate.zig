@@ -12,6 +12,7 @@ const std = @import("std");
 const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
 const Cursor = @import("../../runtime/context.zig").Cursor;
+const Rect = @import("../../core/types.zig").Rect;
 
 /// The NSEvent types the translator reads, by their `NSEventType` values.
 pub const Kind = enum(u32) {
@@ -57,8 +58,11 @@ pub const Event = struct {
 pub const Record = union(enum) {
     /// An NSEvent the view received.
     event: Event,
-    /// `insertText:`: text typed, after the key's events.
+    /// `insertText:`: text typed, after the key's events, or what an input method committed.
     insert: []const u8,
+    /// `setMarkedText:selectedRange:replacementRange:`: the input method's composition, and the
+    /// selected range in it in UTF-16 units (location, length). Empty text ends it.
+    mark: Mark,
     /// windowDidResize: the content view's size, in points.
     resize: [2]f64,
     /// viewDidChangeBackingProperties: the window's `backingScaleFactor`, physical pixels per
@@ -69,6 +73,8 @@ pub const Record = union(enum) {
     /// windowShouldClose: the user asked to close the window.
     close,
 };
+
+pub const Mark = struct { text: []const u8, selected: [2]u32 = .{ 0, 0 } };
 
 /// `NSEventModifierFlags`: the device-independent modifiers.
 pub const flag_caps_lock: u64 = 1 << 16;
@@ -135,18 +141,23 @@ pub const Translator = struct {
     n_events: u32 = 0,
     /// Key events and text that did not fit the buffers, since `init`.
     dropped: u32 = 0,
+    /// The input method's composition as UTF-8, held until it changes or ends (`mark`).
+    preedit: []u8 = &.{},
+    composition: struct { len: u32 = 0, range: [2]u32 = .{ 0, 0 }, units: u32 = 0 } = .{},
 
-    pub const Buffers = struct { text: []u8, events: []Input.Event };
+    /// `preedit` holds the longest composition shown; a longer one is cut at a character.
+    pub const Buffers = struct { text: []u8, events: []Input.Event, preedit: []u8 = &.{} };
 
     pub fn init(buf: Buffers) Translator {
-        return .{ .text = buf.text, .events = buf.events };
+        return .{ .text = buf.text, .events = buf.events, .preedit = buf.preedit };
     }
 
     /// Reads one record.
     pub fn feed(t: *Translator, r: Record) void {
         switch (r) {
             .event => |e| t.event(e),
-            .insert => |s| t.insert(s),
+            .insert => |s| t.commit(s),
+            .mark => |k| t.mark(k.text, k.selected),
             .resize => |s| t.resize(s),
             .scale => |s| t.setScale(s),
             // Keys released while another window had the keyboard never send keyUp.
@@ -228,6 +239,40 @@ pub const Translator = struct {
         t.push(.{ .kind = kind, .mods = t.in.mods, .code = code });
     }
 
+    /// The composition (`setMarkedText:...`) as `Events.composition`: UTF-8, with the selected
+    /// range (UTF-16 units, as NSRange counts) as a byte range. Empty `text` ends it.
+    pub fn mark(t: *Translator, text: []const u8, selected: [2]u32) void {
+        var n: u32 = 0;
+        var units: u32 = 0;
+        var range: [2]u32 = .{ 0, 0 };
+        const lo = selected[0];
+        const hi = selected[0] +| selected[1];
+        var it = (std.unicode.Utf8View.init(text) catch return t.mark("", .{ 0, 0 })).iterator();
+        while (it.nextCodepointSlice()) |s| {
+            if (units <= lo) range[0] = n;
+            if (units <= hi) range[1] = n;
+            if (t.preedit.len - n < s.len) break;
+            @memcpy(t.preedit[n..][0..s.len], s);
+            n += @intCast(s.len);
+            units += @as(u32, if (s.len == 4) 2 else 1);
+        }
+        if (units <= lo) range[0] = n;
+        if (units <= hi) range[1] = n;
+        t.composition = .{ .len = n, .range = range, .units = units };
+    }
+
+    /// The composition is being shown (`hasMarkedText`).
+    pub fn marked(t: *const Translator) bool {
+        return t.composition.len > 0;
+    }
+
+    /// Text an input method committed (`insertText:replacementRange:`), or a key typed: typed,
+    /// and any composition ends.
+    pub fn commit(t: *Translator, utf8: []const u8) void {
+        t.insert(utf8);
+        t.composition = .{};
+    }
+
     /// Text typed (`insertText:`) as one `.text` event. Control characters are not text (their
     /// key events carry them); line ends become `\n`, tabs stay. Text that does not fit is
     /// dropped whole.
@@ -246,6 +291,9 @@ pub const Translator = struct {
             if (cp == '\n' and was_cr) continue;
             const out: []const u8 = if (cp == '\r') "\n" else s;
             if ((cp < 0x20 and cp != '\n' and cp != '\r' and cp != '\t') or cp == 0x7f) continue;
+            // AppKit's function-key characters (NSUpArrowFunctionKey and the rest), from
+            // `characters` when no input method is asked for.
+            if (cp >= 0xf700 and cp <= 0xf8ff) continue;
             if (t.text.len - t.n_text < out.len) {
                 t.n_text = at;
                 t.dropped += 1;
@@ -284,6 +332,7 @@ pub const Translator = struct {
         ev.in = t.in;
         ev.in.text = t.text[0..t.n_text];
         ev.in.events = t.events[0..t.n_events];
+        ev.composition = .{ .text = t.preedit[0..t.composition.len], .range = t.composition.range };
         t.in.wheel = .{ 0, 0 };
         t.in.scroll = .{ 0, 0 };
         t.n_text = 0;
@@ -302,6 +351,7 @@ pub const Translator = struct {
 ///     resign                 the window lost the keyboard
 ///     close                  the close button
 ///     insert héllo           insertText:, the rest of the line
+///     mark 1 0 にほ           setMarkedText: selected location and length, then the text
 ///     left_down 37 575       an NSEvent, by its `Kind` name. Mouse kinds: x y (window
 ///                            coordinates, origin bottom left); key_down, key_up, flags_changed:
 ///                            the virtual key code; scroll: dx dy.
@@ -348,6 +398,10 @@ pub const Replay = struct {
             .resign => .resign,
             .close => .close,
             .insert => return .{ .insert = l[@min(l.len, "insert ".len)..] },
+            .mark => {
+                const sel: [2]u32 = .{ try int(u32, it.next() orelse return error.Syntax), try int(u32, it.next() orelse return error.Syntax) };
+                return .{ .mark = .{ .text = it.rest(), .selected = sel } };
+            },
             .event => return error.Syntax,
         } else .{ .event = try event(std.meta.stringToEnum(Kind, name) orelse return error.Syntax, &it) };
         if (it.next() != null) return error.Syntax;
@@ -681,4 +735,81 @@ test "clipboard: pasted text is typed in one event, with its line ends" {
     _ = t.frame(&ev);
     try testing.expectEqualStrings("", ev.in.text);
     try testing.expectEqual(@as(u32, 1), t.dropped);
+}
+
+/// `r` (logical pixels, origin top left) as an NSRect in window coordinates (origin bottom
+/// left) of content `height` points tall: x, y, width, height. The input method puts its
+/// candidate window below it (`firstRectForCharacterRange:actualRange:`).
+pub fn windowRect(r: Rect, height: f32) [4]f64 {
+    return .{ r.x0, height - r.y1, r.x1 - r.x0, r.y1 - r.y0 };
+}
+
+test "ime: a composition is shown, converted, then committed as typed text" {
+    var text: [32]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var preedit: [32]u8 = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events, .preedit = &preedit });
+    var ev: Events = .{};
+    // Typing "nihon": the reading so far, caret at its end (3 units), nothing selected.
+    t.mark("\u{306b}\u{307b}\u{3093}", .{ 3, 0 });
+    _ = t.frame(&ev);
+    try testing.expect(t.marked());
+    try testing.expectEqualStrings("\u{306b}\u{307b}\u{3093}", ev.composition.text);
+    try testing.expectEqual([2]u32{ 9, 9 }, ev.composition.range);
+    try testing.expectEqualStrings("", ev.in.text);
+
+    // Space converts: two clauses, the first (U+65E5) selected.
+    t.mark("\u{65e5}\u{672c}", .{ 0, 1 });
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]u32{ 0, 3 }, ev.composition.range);
+    // Held: the next frame shows it again.
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.composition.text);
+
+    // A surrogate pair counts two UTF-16 units: the caret after it is at unit 3, byte 5.
+    t.mark("a\u{20bb7}b", .{ 3, 0 });
+    _ = t.frame(&ev);
+    try testing.expectEqual([2]u32{ 5, 5 }, ev.composition.range);
+    try testing.expectEqual(@as(u32, 4), t.composition.units);
+
+    // Return commits: the result is typed, the composition ends.
+    t.commit("\u{65e5}\u{672c}");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.in.text);
+    try testing.expectEqualStrings("", ev.composition.text);
+    try testing.expect(!t.marked());
+
+    // A range past the end is clamped to it; a composition longer than the buffer is cut at a
+    // character.
+    var small: [4]u8 = undefined;
+    t = .init(.{ .text = &text, .events = &events, .preedit = &small });
+    t.mark("\u{65e5}\u{672c}", .{ 1, 9 });
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}", ev.composition.text);
+    try testing.expectEqual([2]u32{ 3, 3 }, ev.composition.range);
+
+    // Function-key characters are not text.
+    t.insert("\u{f700}x");
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("x", ev.in.text);
+
+    try testing.expectEqual([4]f64{ 10, 540, 30, 40 }, windowRect(.{ .x0 = 10, .y0 = 20, .x1 = 40, .y1 = 60 }, 600));
+}
+
+test "ime: compositions replay from a recording" {
+    var preedit: [32]u8 = undefined;
+    var text: [32]u8 = undefined;
+    var events: [4]Input.Event = undefined;
+    var t: Translator = .init(.{ .text = &text, .events = &events, .preedit = &preedit });
+    var ev: Events = .{};
+    var buf: [4]Record = undefined;
+    var r: Replay = .{ .src = "frame\nmark 0 1 \u{65e5}\u{672c}\nframe\nmark 0 0\ninsert \u{65e5}\u{672c}\n" };
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.composition.text);
+    try testing.expectEqual([2]u32{ 0, 3 }, ev.composition.range);
+    for ((try r.next(&buf)).?) |m| t.feed(m);
+    _ = t.frame(&ev);
+    try testing.expectEqualStrings("", ev.composition.text);
+    try testing.expectEqualStrings("\u{65e5}\u{672c}", ev.in.text);
 }
