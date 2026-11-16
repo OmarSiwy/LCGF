@@ -58,6 +58,11 @@ pub const quad_shader = @import("render/shaders/quad.zig");
 pub const render_null = @import("render/null.zig");
 pub const context = @import("runtime/context.zig");
 pub const frame = @import("runtime/frame.zig");
+pub const text_lines = @import("text/layout/lines.zig");
+pub const text_spans = @import("text/layout/spans.zig");
+pub const text_query = @import("text/layout/query.zig");
+pub const text_stack = @import("text/layout/stack.zig");
+pub const text_layout_tests = @import("text/layout/tests.zig");
 
 test {
     std.testing.refAllDecls(@This());
