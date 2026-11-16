@@ -92,15 +92,14 @@ pub fn parts(th: *const Theme, f0: f32, f1: f32) [2 * thumb_rows]Style {
     // The floors keep an empty half from dividing by zero; its pieces are then empty too.
     const low = f0 / @max(mid, 1e-6);
     const high = (f1 - mid) / @max(1 - mid, 1e-6);
-    // Every width a fraction of its parent: a grow child inside a fraction-sized parent takes
-    // the track's room, not the half's.
+    // One fraction per pair; its sibling grows into the rest.
     return .{
         .{ .dir = .x, .size = .{ .pct(mid), .fill }, .role = .slider },
         .{ .size = .{ .pct(low), .fill } },
-        .{ .size = .{ .pct(1 - low), .fill }, .fill = th.accent },
-        .{ .dir = .x, .size = .{ .pct(1 - mid), .fill }, .role = .slider },
+        .{ .size = .{ .fill, .fill }, .fill = th.accent },
+        .{ .dir = .x, .size = .{ .fill, .fill }, .role = .slider },
         .{ .size = .{ .pct(high), .fill }, .fill = th.accent },
-        .{ .size = .{ .pct(1 - high), .fill } },
+        .{ .size = .{ .fill, .fill } },
     };
 }
 

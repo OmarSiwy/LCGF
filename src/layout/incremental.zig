@@ -111,6 +111,8 @@ pub fn refit(t: *Tree, tx: *const Texts, axis: Axis, root: u32) void {
     const last = c.end[root];
     @memset(c.fit[a][root..last], 0);
     @memset(c.grow_sum[a][root..last], 0);
+    @memset(c.pct_sum[a][root..last], 0);
+    @memset(c.pct_nat[a][root..last], 0);
     // A changed gap changes gap_total; nkids is structure and stays.
     for (c.gap_total[root..last], c.gap[root..last], c.nkids[root..last]) |*g, gap, kids| {
         g.* = gap * @max(kids - 1, 0);
@@ -220,6 +222,8 @@ fn clearScratch(t: *Tree, from: usize, to: usize) void {
     inline for (0..2) |a| {
         @memset(t.c.fit[a][from..to], 0);
         @memset(t.c.grow_sum[a][from..to], 0);
+        @memset(t.c.pct_sum[a][from..to], 0);
+        @memset(t.c.pct_nat[a][from..to], 0);
         @memset(t.c.used[a][from..to], 0);
     }
     @memset(t.c.cursor[from..to], 0);

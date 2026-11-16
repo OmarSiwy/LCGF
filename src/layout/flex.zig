@@ -160,7 +160,7 @@ pub const Flex = struct {
     pub inline fn secondRound(fx: *const Flex, t: *const Tree, a: u1, p: usize) void {
         const c = &t.c;
         const inner = @max(c.size[a][p] - c.pad_lo[a][p] - c.pad_hi[a][p], 0);
-        const free = @max(inner - c.fit[a][p] - c.gap_total[p], 0);
+        const free = @max(inner - c.pct_sum[a][p] * inner - (c.fit[a][p] + c.gap_total[p] - c.pct_nat[a][p]), 0);
         const per_weight = free * c.grow_inv[a][p];
         const opted = fx.c.regrow[p] * c.main[a][p];
         // `opted` is exactly 0 or 1, so the bound is a product with no compare: 0.18 compiles a
@@ -572,12 +572,12 @@ test "regrow: percent and floating children take no part in either round" {
     const c = t.push(root, .none, &.{ .size = .{ .fill, .fill } });
     s.fx.set(root, &.{ .regrow = true });
     s.runFlex(300, 50);
-    // grow_sum 2 (a, c): 150 each; a stops at 50, c takes 250; b is 60 regardless (a percentage
-    // is not counted in the free space, as in the one-round pass), f keeps its natural 0.
+    // b is 60 regardless and takes its 60 out of the free space; grow_sum 2 (a, c): 120 each;
+    // a stops at 50, c takes 190; f keeps its natural 0.
     try testing.expectEqual(50, s.size(a)[0]);
     try testing.expectEqual(60, s.size(b)[0]);
     try testing.expectEqual(0, s.size(f)[0]);
-    try testing.expectEqual(250, s.size(c)[0]);
+    try testing.expectEqual(190, s.size(c)[0]);
 }
 
 test "cross: a child's own alignment replaces the parent's across the main axis" {

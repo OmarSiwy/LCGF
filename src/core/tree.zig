@@ -209,6 +209,10 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             grow_sum: [2]Col(f32),
             /// 1 / grow_sum, filled by `fit` so `resolve` multiplies instead of dividing.
             grow_inv: [2]Col(f32),
+            /// The in-flow percentage children's fractions, summed, and their natural sizes,
+            /// summed: `resolve` counts each at its share of the parent, not at its content.
+            pct_sum: [2]Col(f32),
+            pct_nat: [2]Col(f32),
             used: [2]Col(f32),
             gap_total: Col(f32),
             cursor: Col(f32),
@@ -300,11 +304,11 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// The layout scratch columns: every layout run rewrites them before reading them
         /// (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing
         /// outside a layout run reads them.
-        pub const scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" };
+        pub const scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "pct_sum", "pct_nat", "used", "gap_total", "cursor" };
 
         /// `init`, except the `scratch` columns are `other`'s, not carved: two trees that are
         /// never laid out at the same time (the runtime front end's two generations) share them.
-        /// Saves 48 bytes per node of capacity (docs/perf/bytes.md). Slice storage only.
+        /// Saves 64 bytes per node of capacity (docs/perf/bytes.md). Slice storage only.
         pub fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self {
             comptime std.debug.assert(storage == .slice);
             std.debug.assert(cap > 0 and cap <= std.math.maxInt(Index) and cap == other.cap);
@@ -531,7 +535,7 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // Sum of one row over every column, the per-node cost before line rounding.
     // u32 links (with extra and scope), layout inputs, scratch, outputs, child clip, three u8
     // flags, look, role, value. The paint extras are a side table (`Extras`).
-    try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
+    try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (7 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
     try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 4 + 24 + 16, rowBytes(Tree.Extras));
 }
 
@@ -705,8 +709,8 @@ test "initSharing: a second tree shares the scratch columns and carves the rest"
     var carver: mem.Carver = .{ .buf = &buf };
     const a = Tree.init(&carver, cap);
     const b = Tree.initSharing(&carver, cap, &a);
-    // 7 scratch columns, 5 of them per axis: 12 columns of rows(cap) f32 not carved twice.
-    try testing.expectEqual(one + one - 12 * std.mem.alignForward(usize, Tree.rows(cap) * 4, mem.column_align), carver.off);
+    // 9 scratch columns, 7 of them per axis: 16 columns of rows(cap) f32 not carved twice.
+    try testing.expectEqual(one + one - 16 * std.mem.alignForward(usize, Tree.rows(cap) * 4, mem.column_align), carver.off);
     try testing.expectEqual(a.c.fit[0].ptr, b.c.fit[0].ptr);
     try testing.expectEqual(a.c.cursor.ptr, b.c.cursor.ptr);
     try testing.expect(a.c.rect[0].ptr != b.c.rect[0].ptr);

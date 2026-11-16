@@ -24,6 +24,9 @@ nothing outside one, and the two generations are never laid out at once. So the 
 now shares the first one's (`Tree.initSharing`, `Tree.scratch`), and `Frame.reuse` copies every
 column of a reused subtree but those (`mem.copyRowsExcept`).
 
+Since then `pct_sum` and `pct_nat` (two axes each, 16 bytes) joined the scratch, so a percentage
+child counts at its share of its parent in the free space: 64 shared bytes, 940 B per node.
+
 ## Where the rest is (per node, one tree generation)
 
 | group | bytes |

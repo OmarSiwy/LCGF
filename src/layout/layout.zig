@@ -35,6 +35,8 @@ pub fn prepare(t: *Tree) void {
         inline for (0..2) |a| {
             simd.storeF(c.fit[a], i, zero);
             simd.storeF(c.grow_sum[a], i, zero);
+            simd.storeF(c.pct_sum[a], i, zero);
+            simd.storeF(c.pct_nat[a], i, zero);
             simd.storeF(c.used[a], i, zero);
         }
         simd.storeF(c.cursor, i, zero);
@@ -66,7 +68,7 @@ pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
 
 /// `fit` over rows [first, last), any `first < last <= len`. Rows after `first` fold into their
 /// parents as in `fit`, last row first; row `first` gets its natural size and is not folded
-/// into its own parent. `fit` and `grow_sum` of the rows must be cleared and their text extents
+/// into its own parent. `fit`, `grow_sum`, `pct_sum` and `pct_nat` of the rows must be cleared and their text extents
 /// applied first, as `prepare` and `applyText` do for the whole tree.
 ///
 /// What the range must satisfy: every descendant at or past `last` of a row in (first, last)
@@ -104,6 +106,9 @@ inline fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
     const flow = t.c.flow;
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
+    const pct = t.c.pct[a];
+    const pct_sum = t.c.pct_sum[a];
+    const pct_nat = t.c.pct_nat[a];
 
     var i: u32 = last;
     while (i > first + 1) {
@@ -131,6 +136,9 @@ inline fn fitOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
         if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded);
         fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
+        // A percentage child takes its share of p, not its content (resolve's `free`).
+        pct_sum[p] += @max(pct[i], 0) * flow[i];
+        pct_nat[p] += b01(pct[i] >= 0) * nat * flow[i];
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
         if (flexed) baseline.fold(t, fx, i, p);
     }
@@ -200,6 +208,8 @@ inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) vo
     const grow = t.c.grow[a];
     const grow_inv = t.c.grow_inv[a];
     const pct = t.c.pct[a];
+    const pct_sum = t.c.pct_sum[a];
+    const pct_nat = t.c.pct_nat[a];
     const flow = t.c.flow;
     const shrink = t.c.shrink;
     const used = t.c.used[a];
@@ -209,7 +219,8 @@ inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) vo
         const p = parent[i];
         const nat = nat_[i];
         const main = main_[p];
-        const taken = fit_[p] + gap_total[p];
+        // What the children that are not percentages take; the percentages take pct_sum of inner.
+        const taken = fit_[p] + gap_total[p] - pct_nat[p];
         const fl = flow[i];
         // Every sizing mode is linear in the parent's inner size and its free space:
         //   s = k0 + k1 * inner + k2 * max(inner - taken, 0)
@@ -225,20 +236,24 @@ inline fn resolveOf(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) vo
         const k1 = has_pct * pct[i] + keep * fl * across;
         const k2 = keep * fl * main * grow[i] * grow_inv[p];
         const inner = @max(size[p] - lo[p] - hi[p], 0);
-        var s = k0 + k1 * inner + k2 * @max(inner - taken, 0);
+        const free = @max(inner - pct_sum[p] * inner - taken, 0);
+        var s = k0 + k1 * inner + k2 * free;
         // Flex only: margins are outside the node, so a stretched node fills `inner` less its
         // own; a grower may get a second-round share; a stretched child of a wrapping row fills
         // its line.
         const m = if (flexed) fx.margin(a, i) else 0;
         if (flexed) {
-            const first_round = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
+            const first_round = nat + grow[i] * grow_inv[p] * free;
             const line = wrap.lineCross(t, fx, a, i, p, inner);
             s += keep * fl * (main * fx.secondShare(t, a, i, p, first_round) + across * (line - m));
         }
-        // Shrinkable nodes give way when the parent has no room for them.
-        const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
+        // Shrinkable nodes give way when the parent has no room for them: inner less what the
+        // siblings take, room0 + room1 * inner (the node's own share, nat or pct, left out).
+        const room0 = main * (taken - keep * nat);
+        const room1 = main * (pct_sum[p] - has_pct * pct[i]);
+        const room = @max(inner - (room0 + room1 * inner) - (1 - main) * m, 0);
         var cut = shrink[i] * fl * @max(s - room, 0);
-        if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
+        if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken + pct_sum[p] * inner - inner) - cut);
         // A wrapping row breaks a line instead of shrinking along it.
         if (flexed) cut *= 1 - fx.c.wrap[p] * main;
         s -= cut;
@@ -829,4 +844,23 @@ test "resolve: pct(0) is zero of the parent, not the content's size" {
     t.seal(root);
     run(&t, &tx, .{ 200, 100 });
     try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 }, t.rect(pane));
+}
+
+test "resolve: a grower shares what its percentage siblings leave of the parent" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    const root = t.push(0, .none, &.{ .dir = .x });
+    const half = t.push(root, .none, &.{ .dir = .x, .size = .{ .pct(0.5), .fill } });
+    const part = t.push(half, .none, &.{ .size = .{ .pct(0.3), .fill } });
+    _ = t.push(part, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(part);
+    const rest = t.push(half, .none, &.{ .size = .{ .fill, .fill }, .shrink = true });
+    t.seal(half);
+    t.seal(root);
+    run(&t, &tx, .{ 400, 100 });
+    try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 200, .y1 = 100 }, t.rect(half));
+    try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 0, .x1 = 60, .y1 = 100 }, t.rect(part));
+    try testing.expectEqual(types.Rect{ .x0 = 60, .y0 = 0, .x1 = 200, .y1 = 100 }, t.rect(rest));
 }

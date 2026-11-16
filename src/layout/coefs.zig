@@ -45,9 +45,12 @@ pub const Child = extern struct {
     k0: f32,
     k1: f32,
     k2: f32,
-    /// `main[p] * (taken[p] - nat)` for a node that shrinks: the room its siblings leave it is
-    /// `inner - room`. -inf for a node that does not shrink, so the room is infinite.
+    /// `main[p] * (taken[p] - nat)` for a node that shrinks (no `nat` for a percentage): the
+    /// room its siblings leave it is `inner - (room + room_inner * inner)`. -inf for a node
+    /// that does not shrink, so the room is infinite.
     room: f32,
+    /// `main[p] * (pct_sum[p] - pct)`: the share of `inner` its percentage siblings take.
+    room_inner: f32,
     min: f32,
     max: f32,
     flow: f32,
@@ -58,8 +61,11 @@ pub const Child = extern struct {
 pub const Parent = extern struct {
     /// pad_lo + pad_hi
     pad: f32,
-    /// fit + gap_total: what the children take along the main axis before growing.
+    /// fit + gap_total - pct_nat: what the children that are not percentages take along the
+    /// main axis before growing.
     taken: f32,
+    /// pct_sum: the share of inner the percentage children take.
+    pct_sum: f32,
 };
 
 /// What place reads about a node as a parent, both axes.
@@ -118,7 +124,8 @@ pub fn coefs(t: *const Tree, k: *Coefs, axis: Axis) void {
         const p = @min(simd.loadU(c.parent, i), simd.u(t.len -| 1));
         const main = gather(c.main[a], p);
         const grow_inv = gather(c.grow_inv[a], p);
-        const taken = gather(c.fit[a], p) + gather(c.gap_total, p);
+        const taken = gather(c.fit[a], p) + gather(c.gap_total, p) - gather(c.pct_nat[a], p);
+        const pct_sum = gather(c.pct_sum[a], p);
         const nat = simd.loadF(c.nat[a], i);
         const grow = simd.loadF(c.grow[a], i);
         const pct = simd.loadF(c.pct[a], i);
@@ -131,15 +138,17 @@ pub fn coefs(t: *const Tree, k: *Coefs, axis: Axis) void {
         const k1 = has_pct * pct + keep * fl * across;
         const k2 = keep * fl * main * grow * grow_inv;
         const cut = (simd.loadF(c.shrink, i) * fl) > zero;
-        const room = @select(f32, cut, main * (taken - nat), simd.f(-inf));
+        const room = @select(f32, cut, main * (taken - keep * nat), simd.f(-inf));
+        const room_inner = main * (pct_sum - has_pct * pct);
         const min = simd.loadF(c.min[a], i);
         const max = simd.loadF(c.max[a], i);
         const pad = simd.loadF(c.pad_lo[a], i) + simd.loadF(c.pad_hi[a], i);
-        const own_taken = simd.loadF(c.fit[a], i) + simd.loadF(c.gap_total, i);
+        const own_taken = simd.loadF(c.fit[a], i) + simd.loadF(c.gap_total, i) - simd.loadF(c.pct_nat[a], i);
+        const own_pct = simd.loadF(c.pct_sum[a], i);
         // Columns to rows: a transpose, one row store per lane.
         inline for (0..W) |l| {
-            child[i + l] = .{ .k0 = k0[l], .k1 = k1[l], .k2 = k2[l], .room = room[l], .min = min[l], .max = max[l], .flow = fl[l], .parent = p[l] };
-            parent_row[i + l] = .{ .pad = pad[l], .taken = own_taken[l] };
+            child[i + l] = .{ .k0 = k0[l], .k1 = k1[l], .k2 = k2[l], .room = room[l], .room_inner = room_inner[l], .min = min[l], .max = max[l], .flow = fl[l], .parent = p[l] };
+            parent_row[i + l] = .{ .pad = pad[l], .taken = own_taken[l], .pct_sum = own_pct[l] };
         }
     }
 }
@@ -159,9 +168,9 @@ pub fn resolveK(t: *Tree, k: *const Coefs, axis: Axis, viewport: f32) void {
         const p = r.parent;
         const pr = parent_row[p];
         const inner = @max(size[p] - pr.pad, 0);
-        var s = r.k0 + r.k1 * inner + r.k2 * @max(inner - pr.taken, 0);
+        var s = r.k0 + r.k1 * inner + r.k2 * @max(inner - pr.pct_sum * inner - pr.taken, 0);
         // Shrinkable nodes give way when the parent has no room for them.
-        s -= @max(s - @max(inner - r.room, 0), 0);
+        s -= @max(s - @max(inner - (r.room + r.room_inner * inner), 0), 0);
         s = @min(@max(s, r.min), r.max);
         size[i] = s;
         used[p] += s * r.flow;
@@ -288,16 +297,18 @@ test "coefs: a px child, a filling child and a percentage child of one row" {
     coefs(&t, &k, .x);
     // px: its natural 40 and nothing else; fill: its share of the free space; half: half of inner.
     const x = k.c.child[0];
-    try testing.expectEqual(Child{ .k0 = 40, .k1 = 0, .k2 = 0, .room = -inf, .min = 40, .max = 40, .flow = 1, .parent = root }, x[px]);
+    try testing.expectEqual(Child{ .k0 = 40, .k1 = 0, .k2 = 0, .room = -inf, .room_inner = 0.5, .min = 40, .max = 40, .flow = 1, .parent = root }, x[px]);
     try testing.expectEqual(1, x[fill].k2);
     try testing.expectEqual(0.5, x[half].k1);
     try testing.expectEqual(0, x[half].k0);
-    // half shrinks: its siblings' natural 40 is what it cannot have.
+    // half shrinks: its siblings' natural 40 is what it cannot have, and no other percentage.
     try testing.expectEqual(40, x[half].room);
-    try testing.expectEqual(Parent{ .pad = 10, .taken = 40 }, k.c.parent[0][root]);
+    try testing.expectEqual(0, x[half].room_inner);
+    // taken leaves half's natural size out: it takes half of inner instead.
+    try testing.expectEqual(Parent{ .pad = 10, .taken = 40, .pct_sum = 0.5 }, k.c.parent[0][root]);
     resolveK(&t, &k, .x, 300);
     try testing.expectEqual(40, t.c.size[0][px]);
-    try testing.expectEqual(290 - 40, t.c.size[0][fill]);
+    try testing.expectEqual(290 - 40 - 145, t.c.size[0][fill]);
     try testing.expectEqual(145, t.c.size[0][half]);
     // Across a row, fill stretches to the inner height.
     layout.fit(&t, .y);
@@ -309,5 +320,5 @@ test "coefs: a px child, a filling child and a percentage child of one row" {
     placeK(&t, &k);
     try testing.expectEqual(5, t.c.pos[0][px]);
     try testing.expectEqual(45, t.c.pos[0][fill]);
-    try testing.expectEqual(295, t.c.pos[0][half]);
+    try testing.expectEqual(150, t.c.pos[0][half]);
 }
