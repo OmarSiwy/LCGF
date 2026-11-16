@@ -84,6 +84,21 @@
     "jcc": 8,
     "short_fwd": 0
   },
+  "p_path_fill": {
+    "back": 10,
+    "jcc": 23,
+    "short_fwd": 4
+  },
+  "p_path_flatten": {
+    "back": 3,
+    "jcc": 12,
+    "short_fwd": 1
+  },
+  "p_path_stroke": {
+    "back": 7,
+    "jcc": 14,
+    "short_fwd": 0
+  },
   "p_place": {
     "back": 1,
     "jcc": 3,

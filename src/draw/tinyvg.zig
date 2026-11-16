@@ -401,8 +401,14 @@ fn room(path: *const Path, verbs: usize, points: usize) Error!void {
 /// places it (`renderEllipse`, `renderCircle`): an ellipse is mapped to a circle (rotate by
 /// -rotation, scale y by rx / ry, shrink by the up-scale that makes the radii fit) and back.
 fn arc(path: *Path, p0: [2]f32, p1: [2]f32, rx: f32, ry: f32, rotation: f32, large: bool, turn_left: bool) Error!void {
-    // The SDK skips arcs to (almost) the same point.
+    // The SDK skips arcs to (almost) the same point. A radius that is not positive (zero, or
+    // negative or NaN from a corrupt file) draws a line, as in SVG.
     if (@abs(p0[0] - p1[0]) < 1e-5 and @abs(p0[1] - p1[1]) < 1e-5) return;
+    if (!(rx > 0) or !(ry > 0)) {
+        try room(path, 1, 1);
+        path.lineTo(p1[0], p1[1]);
+        return;
+    }
     const radius_min = std.math.hypot(p1[0] - p0[0], p1[1] - p0[1]) / 2;
     const radius_lim = std.math.hypot(rx, ry);
     const up = if (radius_lim < radius_min) radius_min / radius_lim else 1;
@@ -578,4 +584,35 @@ test "arc: a quarter circle as one cubic ending on its target" {
     try testing.expectApproxEqAbs(10, path.x[1], 1e-4);
     try testing.expectApproxEqAbs(5.5228, path.y[1], 1e-3);
     try testing.expectApproxEqAbs(5.5228, path.x[2], 1e-3);
+}
+
+test "decoding: corrupt bytes decode or fail, and every decoded path flattens and strokes" {
+    var t: paths.TestBuffers(64, 512) = .{};
+    var path = t.path();
+    var o: paths.TestBuffers(1024, 1 << 14) = .{};
+    var so: paths.TestBuffers(1024, 1 << 14) = .{};
+    var copy: [1024]u8 = undefined;
+    var drawn: usize = 0;
+    for ([_][]const u8{ icon_all, icon_565, icon_f32 }) |data| {
+        std.debug.assert(data.len <= copy.len);
+        for (0..data.len) |i| for ([_]u8{ 0x00, 0xff, data[i] ^ 0x80, data[i] +% 1 }) |v| {
+            @memcpy(copy[0..data.len], data);
+            copy[i] = v;
+            var img = parse(copy[0..data.len]) catch continue;
+            while (img.next(1.5, 3, 3, &path) catch null) |it| {
+                const tol = 0.25;
+                if (paths.flattenLen(&path, tol).points > o.lx.len) continue;
+                var l = o.polyline();
+                paths.flatten(&path, tol, &l);
+                _ = paths.bounds(&l);
+                var s = so.polyline();
+                const need = paths.strokeLen(&l, it.stroke(), tol);
+                if (need.points > s.x.len or need.contours > s.end.len) continue;
+                paths.stroke(&l, it.stroke(), tol, &s);
+                _ = paths.bounds(&s);
+                drawn += 1;
+            }
+        };
+    }
+    try testing.expect(drawn > 1000);
 }

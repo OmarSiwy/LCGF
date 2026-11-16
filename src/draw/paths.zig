@@ -122,11 +122,17 @@ pub const max_curve_steps = 1024;
 /// B'' = 2 (p0 - 2 p1 + p2); a cubic's |B''| is at most 6 max(|p0 - 2 p1 + p2|, |p1 - 2 p2 + p3|).
 /// `c` is p0..p3 as x, y pairs; a quadratic passes its control twice (p1 = p2).
 pub fn curveSteps(c: [8]f32, comptime quadratic: bool, tolerance: f32) u32 {
-    const d0 = std.math.hypot(c[0] - 2 * c[2] + c[4], c[1] - 2 * c[3] + c[5]);
-    const d1 = std.math.hypot(c[2] - 2 * c[4] + c[6], c[3] - 2 * c[5] + c[7]);
-    const d2 = if (quadratic) 2 * std.math.hypot(c[0] - 2 * c[2] + c[6], c[1] - 2 * c[3] + c[7]) else 6 * @max(d0, d1);
+    const d0 = len(c[0] - 2 * c[2] + c[4], c[1] - 2 * c[3] + c[5]);
+    const d1 = len(c[2] - 2 * c[4] + c[6], c[3] - 2 * c[5] + c[7]);
+    const d2 = if (quadratic) 2 * len(c[0] - 2 * c[2] + c[6], c[1] - 2 * c[3] + c[7]) else 6 * @max(d0, d1);
     const n = @ceil(@sqrt(d2 / (8 * tolerance)));
     return @intFromFloat(std.math.clamp(n, 1, max_curve_steps));
+}
+
+/// |(x, y)|. Not std.math.hypot: its inf and NaN cases compile to jumps, and an overflow to
+/// inf here only clamps a step count.
+inline fn len(x: f32, y: f32) f32 {
+    return @sqrt(x * x + y * y);
 }
 
 /// Rows `flatten` needs for `p` at `tolerance`: an upper bound on the points (plus the vector
@@ -244,7 +250,7 @@ const Flattener = struct {
         const o = f.out;
         o.x[o.points] = x;
         o.y[o.points] = y;
-        o.points += @intFromBool(x != f.cx or y != f.cy);
+        o.points += @intFromBool(x != f.cx) | @intFromBool(y != f.cy);
         f.cx = x;
         f.cy = y;
     }
@@ -254,8 +260,9 @@ const Flattener = struct {
         if (!f.open) return;
         const o = f.out;
         const last = o.points - 1;
-        const repeats = closed and last > f.first and o.x[last] == o.x[f.first] and o.y[last] == o.y[f.first];
-        o.points -= @intFromBool(repeats);
+        const repeats = @intFromBool(closed) & @intFromBool(last > f.first) &
+            @intFromBool(o.x[last] == o.x[f.first]) & @intFromBool(o.y[last] == o.y[f.first]);
+        o.points -= repeats;
         o.end[o.contours] = o.points;
         o.closed[o.contours] = closed;
         o.contours += 1;
@@ -412,7 +419,7 @@ pub fn stroke(l: *const Polyline, st: Stroke, tolerance: f32, out: *Polyline) vo
 }
 
 fn unit(dx: f32, dy: f32) [2]f32 {
-    const inv = 1 / @max(std.math.hypot(dx, dy), 1e-12);
+    const inv = 1 / @max(len(dx, dy), 1e-12);
     return .{ dx * inv, dy * inv };
 }
 
@@ -508,7 +515,11 @@ pub const Box = struct {
     h: u32 = 0,
 };
 
-/// The pixel box covering every point of `l`; empty for no points.
+/// Coordinates `bounds` clamps to, in px: a box stays a valid integer rectangle whatever the
+/// points (inf, NaN, or values from a corrupt file).
+pub const max_coord = 1 << 20;
+
+/// The pixel box covering every point of `l`, within +-`max_coord`; empty for no points.
 pub fn bounds(l: *const Polyline) Box {
     if (l.points == 0) return .{};
     var lo: [2]f32 = .{ std.math.inf(f32), std.math.inf(f32) };
@@ -517,14 +528,12 @@ pub fn bounds(l: *const Polyline) Box {
         lo = .{ @min(lo[0], x), @min(lo[1], y) };
         hi = .{ @max(hi[0], x), @max(hi[1], y) };
     }
-    const x0 = @floor(lo[0]);
-    const y0 = @floor(lo[1]);
-    return .{
-        .x = @intFromFloat(x0),
-        .y = @intFromFloat(y0),
-        .w = @intFromFloat(@ceil(hi[0]) - x0),
-        .h = @intFromFloat(@ceil(hi[1]) - y0),
-    };
+    const m: f32 = max_coord;
+    const x0 = @floor(std.math.clamp(lo[0], -m, m));
+    const y0 = @floor(std.math.clamp(lo[1], -m, m));
+    const x1 = @max(@ceil(std.math.clamp(hi[0], -m, m)), x0);
+    const y1 = @max(@ceil(std.math.clamp(hi[1], -m, m)), y0);
+    return .{ .x = @intFromFloat(x0), .y = @intFromFloat(y0), .w = @intFromFloat(x1 - x0), .h = @intFromFloat(y1 - y0) };
 }
 
 /// Which spans are inside: the winding number of a point, masked; inside when nonzero. The
@@ -610,7 +619,10 @@ pub fn fill(l: *const Polyline, b: Box, rule: Rule, scratch: Scratch, acc: []f32
             var was: f32 = 0;
             for (scratch.cross_x[0..n], scratch.cross_d[0..n]) |cx, cd| {
                 wind += cd;
-                const in = simd.b2f((wind & mask) != 0);
+                // 1 inside, 0 outside, as min(|masked winding|, 1) in floats: the census showed
+                // `b2f` of the compare, and the same min in integers, compiled to a jump on the
+                // winding here.
+                const in = @min(@abs(@as(f32, @floatFromInt(wind & mask))), 1);
                 const d = (in - was) * step;
                 was = in;
                 const x = std.math.clamp(cx, 0, w);
@@ -1051,4 +1063,93 @@ test "place and emit: a path image goes into the atlas and one batched quad per 
     try testing.expectEqual([4]f32{ 2, 1, 6, 4 }, d.quads[0].rect);
     try testing.expectEqual(atlas.uv(r1), d.quads[1].uv);
     try testing.expectEqual(types.Color.rgb(0, 255, 0).bitsOf(), d.quads[1].fill);
+}
+
+test "flatten: curve points match a scalar evaluation at every lane count" {
+    var t: TestBuffers(8, 4096) = .{};
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const r = prng.random();
+    for (0..64) |_| {
+        var c: [8]f32 = undefined;
+        for (&c) |*v| v.* = r.float(f32) * 200 - 100;
+        const quadratic = r.boolean();
+        var p = t.path();
+        p.moveTo(c[0], c[1]);
+        if (quadratic) p.quadTo(c[2], c[3], c[6], c[7]) else p.cubicTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+        var l = t.polyline();
+        const tol = 0.05;
+        flatten(&p, tol, &l);
+        const q = [8]f32{ c[0], c[1], c[2], c[3], c[2], c[3], c[6], c[7] };
+        const n = if (quadratic) curveSteps(q, true, tol) else curveSteps(c, false, tol);
+        try testing.expectEqual(n + 1, l.points);
+        for (1..n) |k| {
+            const u = @as(f32, @floatFromInt(k)) / @as(f32, @floatFromInt(n));
+            const s = 1 - u;
+            const b = if (quadratic)
+                [4]f32{ s * s, 2 * s * u, 0, u * u }
+            else
+                [4]f32{ s * s * s, 3 * s * s * u, 3 * s * u * u, u * u * u };
+            try testing.expectApproxEqAbs(b[0] * c[0] + b[1] * c[2] + b[2] * c[4] + b[3] * c[6], l.x[k], 1e-3);
+            try testing.expectApproxEqAbs(b[0] * c[1] + b[1] * c[3] + b[2] * c[5] + b[3] * c[7], l.y[k], 1e-3);
+        }
+    }
+}
+
+test "fill: total coverage is the polygon's area, and moves with it by whole pixels" {
+    var t: TestBuffers(8, 64) = .{};
+    var prng = std.Random.DefaultPrng.init(42);
+    const r = prng.random();
+    var acc: [64 * 64 + 64]f32 = undefined;
+    var img: [64 * 64 + 64]u8 = undefined;
+    var first: [64 * 64]u8 = undefined;
+    for (0..32) |_| {
+        // A convex polygon: points on an ellipse at sorted angles, at a random subpixel offset.
+        const cx = 20 + r.float(f32) * 4;
+        const cy = 20 + r.float(f32) * 4;
+        var angles: [7]f32 = undefined;
+        for (&angles) |*a| a.* = r.float(f32) * std.math.tau;
+        std.mem.sort(f32, &angles, {}, std.sort.asc(f32));
+        var area: f32 = 0;
+        var b0: Box = undefined;
+        for (0..2) |shift| {
+            const dx: f32 = @floatFromInt(shift * 7);
+            var p = t.path();
+            for (angles, 0..) |a, k| {
+                const x = cx + dx + 15 * @cos(a);
+                const y = cy + 9 * @sin(a);
+                if (k == 0) p.moveTo(x, y) else p.lineTo(x, y);
+            }
+            p.close();
+            var l = t.polyline();
+            flatten(&p, 0.25, &l);
+            area = @abs(testAreas(&l, &acc)[0]) / 2;
+            for ([_]Rule{ .nonzero, .even_odd }) |rule| {
+                const b, const px = testRender(&l, rule, t.scratch(), &acc, &img);
+                var sum: f32 = 0;
+                for (px) |v| sum += @floatFromInt(v);
+                // Rounding each pixel to a level and sampling 16 lines per row.
+                try testing.expectApproxEqAbs(area, sum / 255, 0.01 * area + 0.5);
+                if (shift == 0) {
+                    b0 = b;
+                    @memcpy(first[0..px.len], px);
+                } else {
+                    try testing.expectEqual(b0.x + 7, b.x);
+                    try testing.expectEqualSlices(u8, first[0..px.len], px);
+                }
+            }
+        }
+    }
+}
+
+test "bounds: clamped, so any points give a valid box" {
+    var t: TestBuffers(8, 64) = .{};
+    var l = t.polyline();
+    l.points = 2;
+    l.x[0] = std.math.nan(f32);
+    l.y[0] = std.math.inf(f32);
+    l.x[1] = -1e30;
+    l.y[1] = std.math.nan(f32);
+    const b = bounds(&l);
+    // NaN is skipped by min and max; inf and -1e30 clamp.
+    try testing.expectEqual(Box{ .x = -max_coord, .y = max_coord, .w = 0, .h = 0 }, b);
 }
