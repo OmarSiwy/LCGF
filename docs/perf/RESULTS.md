@@ -80,22 +80,34 @@ every node. docs/perf/vs.md has the breakdown.
 
 ## GPU back end: native Vulkan against wgpu-native
 
-The Vulkan back end (src/render/vk) and the wgpu back end over wgpu-native v29, on the same
-driver: Mesa 26.3 lavapipe (LLVM 21.1.8), ReleaseFast, offscreen targets. Commit 351c6c9
-(C0389); identical across three runs to 0.1 MB.
+The Vulkan back end (src/render/vk) and the wgpu back end over wgpu-native v29, the same scenes,
+ReleaseFast, offscreen targets. Source: docs/research/render-select.md (commit 13061c1), which
+re-measured C0389's numbers and corrected two of them.
 
-| | LCGR Vulkan | wgpu-native | Difference |
+CPU time per frame (medians):
+
+| Driver | LCGR Vulkan | wgpu-native | Ratio |
 |---|---|---|---|
-| Resident, device only | 68,908 KiB | 76,004 KiB | 7.1 MB less |
-| Resident, empty 800x600 frame | 74,052 KiB | 81,360 KiB | 7.3 MB less |
-| Resident, after 2,000 scene frames | 92,080 KiB | 105,936 KiB | 13.9 MB less |
-| CPU time per frame | 5.3 to 7.0 us | 34.6 to 44.8 us | about 6x less |
-| Idle wake-ups | 0 | 0 | |
+| NVIDIA RTX 4060 Laptop GPU (driver 595.71.05) | 5.8 us | 16.1 us | 2.8x less |
+| Mesa 26.3 lavapipe (software Vulkan) | 5.3 to 7.0 us | 34.6 to 44.8 us | about 6x less |
 
-lavapipe itself is about 67 MB of every resident number; the comparison isolates wgpu-native's
-own share. A hardware driver's baseline was not measured (no GPU driver in the dev shell).
+Whole frame on the RTX 4060, until the GPU is done: 36 us against 54 us.
 
-Reproduce: `nix develop .#golden -c ci/run.sh vk-probe`.
+Where wgpu's extra CPU goes (lavapipe, perf): allocation and object lifetimes 34% (a staging
+buffer per buffer write, GPU memory blocks, reference counts), wgpu-core's pass replay, submit
+and cleanup 24%, tracking and validation code 17%, extra driver calls 14%, back-end dispatch
+3.7%, the C layer and locks 3.1%.
+
+Resident memory, not yet in LCGR's favour everywhere:
+- wgpu as LCGR's wgpu host creates it today (every back end) starts its GL back end too, even
+  when it draws with Vulkan: +49 MB on lavapipe and +85 MB on NVIDIA over native Vulkan. A
+  Vulkan-only wgpu instance is +3.3 MB at start-up and +13 MB after drawing.
+- On NVIDIA, after drawing, native Vulkan is 5.8 MB larger than wgpu: its default capacities
+  map 13 MB more host-visible memory. Sizing that is open work; until then, do not claim lower
+  memory than wgpu on hardware.
+
+Reproduce: `nix develop .#golden -c ci/run.sh vk-probe` (lavapipe); the NVIDIA runs are
+described in docs/research/render-select.md.
 
 ## Size
 
