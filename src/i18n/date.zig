@@ -44,7 +44,7 @@ pub fn pattern(locale: plural.Locale, style: Style) []const u8 {
             .en, .pseudo => "MMMM d, y",
             .de => "d. MMMM y",
             .fr, .pl, .ar => "d MMMM y",
-            .ru => "d MMMM y 'г'.",
+            .ru => "d MMMM y\u{202f}'г'.",
             .ja => "y年M月d日",
         },
     };
@@ -135,13 +135,13 @@ test "short and long patterns per locale" {
     try expectDate("05/03/2026", .fr, .short, d);
     try expectDate("5 mars 2026", .fr, .long, d);
     try expectDate("05.03.2026", .ru, .short, d);
-    try expectDate("5 марта 2026 г.", .ru, .long, d);
+    try expectDate("5 марта 2026\u{202f}г.", .ru, .long, d);
     try expectDate("5.03.2026", .pl, .short, d);
     try expectDate("5 marca 2026", .pl, .long, d);
     try expectDate("2026/03/05", .ja, .short, d);
     try expectDate("2026年3月5日", .ja, .long, d);
-    try expectDate("\u{665}\u{200f}/\u{663}\u{200f}/\u{662}\u{660}\u{662}\u{666}", .ar, .short, d);
-    try expectDate("\u{665} مارس \u{662}\u{660}\u{662}\u{666}", .ar, .long, d);
+    try expectDate("5\u{200f}/3\u{200f}/2026", .ar, .short, d);
+    try expectDate("5 مارس 2026", .ar, .long, d);
     try expectDate("1/1/05", .en, .short, .{ .year = 2005, .month = 1, .day = 1 });
     var buf: [8]u8 = undefined;
     try testing.expectError(error.NoSpaceLeft, format(&buf, .en, .long, d));

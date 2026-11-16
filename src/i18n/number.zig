@@ -1,6 +1,6 @@
 //! Number formatting: decimal numbers with the locale's digits, decimal separator, digit grouping
-//! and minus sign. Symbols are CLDR's default numbering system for each locale (Arabic uses
-//! Arabic-Indic digits). Numbers are fixed point, `value / 10^frac_digits`, so formatting needs no
+//! and minus sign. Symbols are those of CLDR's default numbering system for each locale, checked
+//! against CLDR 49 by `zig build i18n-cldr` (src/i18n/cldr.zig). Numbers are fixed point, `value / 10^frac_digits`, so formatting needs no
 //! float printing and the visible fraction digits are exactly what the plural rules count.
 
 const std = @import("std");
@@ -22,12 +22,8 @@ pub fn symbols(locale: plural.Locale) Symbols {
         .fr => .{ .decimal = ",", .group = "\u{202f}", .minus = "-" },
         .ru => .{ .decimal = ",", .group = "\u{a0}", .minus = "-" },
         .pl => .{ .decimal = ",", .group = "\u{a0}", .minus = "-", .min_grouping = 2 },
-        .ar => .{
-            .decimal = "\u{66b}",
-            .group = "\u{66c}",
-            .minus = "\u{61c}-",
-            .digits = .{ "\u{660}", "\u{661}", "\u{662}", "\u{663}", "\u{664}", "\u{665}", "\u{666}", "\u{667}", "\u{668}", "\u{669}" },
-        },
+        // CLDR's default numbering system for "ar" is latn; the minus carries a left-to-right mark.
+        .ar => .{ .decimal = ".", .group = ",", .minus = "\u{200e}-" },
     };
 }
 
@@ -86,7 +82,7 @@ test "separators, grouping and minus per locale" {
     try expectFormat("1234", .pl, 1234, 0); // minimumGroupingDigits 2
     try expectFormat("12\u{a0}345", .pl, 12345, 0);
     try expectFormat("1,234", .ja, 1234, 0);
-    try expectFormat("\u{61c}-\u{661}\u{66c}\u{662}\u{663}\u{664}\u{66b}\u{665}", .ar, -12345, 1);
+    try expectFormat("\u{200e}-1,234.5", .ar, -12345, 1);
 }
 
 test "small values, padding of the fraction and extremes" {
