@@ -732,6 +732,27 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
+    // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgr and the Metal back end.
+    // UIKit, Core Foundation and Metal are opened at run time; without an iOS SDK nothing links
+    // here, so the example is a static library an app bundle links (ci/run.sh ios).
+    const ios_metal = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    });
+    for ([_][]const u8{ "stock", "example" }) |v|
+        ios_metal.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    const ios_example = b.addLibrary(.{ .name = "ios-example", .linkage = .static, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/ios/example.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = ios_metal } },
+    }) });
+    b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
