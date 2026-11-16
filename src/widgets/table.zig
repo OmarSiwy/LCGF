@@ -257,6 +257,38 @@ pub fn update(st: anytype, th: *const Theme, rows: u32, headers: []const Respons
     if (body.focused) keys(st, rows, in);
 }
 
+// ---- accessibility ---------------------------------------------------------------------------
+
+/// A header's `value`: its sort direction, 1 ascending, -1 descending, 0 when it does not sort
+/// (ARIA `aria-sort`).
+pub fn sortValue(sorted: bool, descending: bool) f32 {
+    const v = [4]f32{ 0, 0, 1, -1 };
+    return v[@as(u2, @intFromBool(descending)) | (@as(u2, @intFromBool(sorted)) << 1)];
+}
+
+/// Roles past `types.Role`, written to the tree's `role` column: the table a grid, the header
+/// row a row of column headers, each resize handle a separator (its value is the width), the
+/// body a row group of rows of cells.
+pub fn setRoles(t: *Tree, r: Rows) void {
+    const role = t.c.role;
+    role[r.box] = @backingInt(a11y.Role.grid);
+    role[r.box + 1] = @backingInt(a11y.Role.row);
+    for (0..r.cols) |k| {
+        role[r.header(k)] = @backingInt(a11y.Role.column_header);
+        role[r.handle(k)] = @backingInt(a11y.Role.separator);
+    }
+    role[r.body()] = @backingInt(a11y.Role.row_group);
+    for (0..r.rows) |i| {
+        role[r.row(i)] = @backingInt(a11y.Role.row);
+        for (0..r.cols) |k| role[r.cell(i, k)] = @backingInt(a11y.Role.cell);
+    }
+}
+
+/// The `selected` state of the active cell, for the bridge; run before `a11y.states`.
+pub fn setStates(s: *a11y.Semantics, r: Rows, row: u32, col: u32) void {
+    s.c.state[r.cell(row, col)] |= a11y.State.bitsOf(.{ .selected = true });
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A table of `cols` columns: `headers` (one per column) above `cells` (row-major), with `st`
@@ -283,12 +315,13 @@ pub fn table(f: *Frame, th: *const Theme, id: Id, comptime cols: usize, headers:
     for (headers, 0..) |s, k| {
         var hs = headerStyle(th, st.widths[k]);
         hs.fill = headerFill(th, hr[k]);
+        hs.value = sortValue(st.sort == k, st.descending);
         const h = f.open(headerId(id, k), hs);
         _ = f.interact(h, .button);
         _ = base.label(f, th, s);
         _ = f.leaf(.none, markStyle(th, st.widths[k], st.sort == k, st.descending));
         var gs = handleStyle(th, st.widths[k], gr[k]);
-        _ = &gs;
+        gs.value = st.widths[k];
         const g = f.leaf(handleId(id, cols, k), gs);
         _ = f.interact(g, .any);
         f.setCursor(.resize_h, gr[k].hovered or gr[k].held);
@@ -296,7 +329,7 @@ pub fn table(f: *Frame, th: *const Theme, id: Id, comptime cols: usize, headers:
     }
     f.close();
     var bs = bodyStyle(th);
-    _ = &bs;
+    bs.value = @floatFromInt(st.row);
     const body = f.open(id, bs);
     const r = f.interact(body, .button);
     for (order_buf[0..rows], 0..) |data_row, i| {
@@ -310,7 +343,7 @@ pub fn table(f: *Frame, th: *const Theme, id: Id, comptime cols: usize, headers:
     }
     f.close();
     f.close();
-    _ = box;
+    setRoles(f.tree(), .{ .box = box.ix(), .cols = cols, .rows = rows });
     return r;
 }
 
@@ -454,18 +487,19 @@ pub fn ComptimeTable(comptime S: type, comptime spec: Spec, comptime th: Theme) 
                 const gw = comptime widgetOf(std.fmt.comptimePrint("{s}_r{d}", .{ v.name, k }));
                 var hs = headerStyle(&th, st.widths[k]);
                 hs.fill = headerFill(&th, ui.pointer.response(hw, in));
+                hs.value = sortValue(st.sort == k, st.descending);
                 const h = tb.t.push(head, headerId(id, k), &hs);
                 list_zig.pushLabel(tb, h, &.{ .role = .label }, headers[k], &th);
                 _ = tb.t.push(h, .none, &markStyle(&th, st.widths[k], st.sort == k, st.descending));
                 var gs = handleStyle(&th, st.widths[k], ui.pointer.response(gw, in));
-                _ = &gs;
+                gs.value = st.widths[k];
                 _ = tb.t.push(h, handleId(id, v.cols, k), &gs);
                 tb.t.seal(h);
             }
             tb.t.seal(head);
             const focused = ui.pointer.response(comptime widgetOf(v.name), in).focused;
             var bs = bodyStyle(&th);
-            _ = &bs;
+            bs.value = @floatFromInt(st.row);
             const body = tb.t.push(box, id, &bs);
             for (order_buf, 0..) |data_row, i| {
                 const row = tb.t.push(body, .none, &rowStyle(&th));
@@ -478,6 +512,7 @@ pub fn ComptimeTable(comptime S: type, comptime spec: Spec, comptime th: Theme) 
             }
             tb.t.seal(body);
             tb.t.seal(box);
+            setRoles(&tb.t, .{ .box = box, .cols = v.cols, .rows = v.rows });
         }
 
         fn field(comptime name: []const u8) Sig.Field {
@@ -569,6 +604,47 @@ fn rowsOf(t: *const Tree) Rows {
     // The body carries the table's id; the table and its header row come before it.
     const body = t.find(.from("files"));
     return .{ .box = body - 2 - 4 * 3, .cols = 3, .rows = 5 };
+}
+
+test "table: roles, values and the active cell's state" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    _ = try h.frame(&in);
+    h.app.table.sort = 2;
+    h.app.table.row = 1;
+    h.app.table.col = 2;
+    h.ui.signals.state.table = h.app.table;
+    const out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const r = rowsOf(t);
+    try testing.expectEqual(t.find(.from("files")), r.body());
+    try testing.expectEqual(@backingInt(a11y.Role.grid), t.c.role[r.box]);
+    try testing.expectEqual(@backingInt(a11y.Role.row), t.c.role[r.box + 1]);
+    for (0..3) |k| {
+        try testing.expectEqual(@backingInt(a11y.Role.column_header), t.c.role[r.header(k)]);
+        try testing.expectEqual(@backingInt(a11y.Role.separator), t.c.role[r.handle(k)]);
+        try testing.expectEqual(sortValue(k == 2, false), t.c.value[r.header(k)]);
+        try testing.expectEqual(@as(f32, 96), t.c.value[r.handle(k)]);
+    }
+    try testing.expectEqual(@backingInt(a11y.Role.row_group), t.c.role[r.body()]);
+    try testing.expectEqual(@backingInt(a11y.Role.cell), t.c.role[r.cell(4, 2)]);
+    try testing.expectEqual(@as(f32, 1), t.c.value[r.body()]);
+    try testing.expectEqual(@as(f32, 1), sortValue(true, false));
+    try testing.expectEqual(@as(f32, -1), sortValue(true, true));
+
+    var sbuf: [8192]u8 align(@import("../core/mem.zig").column_align) = undefined;
+    var carver: @import("../core/mem.zig").Carver = .{ .buf = &sbuf };
+    var sem = a11y.Semantics.init(&carver, t.cap);
+    sem.clear();
+    setStates(&sem, r, 1, 2);
+    a11y.names(t, &sem);
+    const sel = a11y.State.bitsOf(.{ .selected = true });
+    try testing.expect(sem.c.state[r.cell(1, 2)] & sel != 0);
+    try testing.expect(sem.c.state[r.cell(1, 1)] & sel == 0);
+    // Cells and column headers are named by their text.
+    try testing.expectEqual(t.c.text[r.cell(1, 2) + 1], sem.c.name[r.cell(1, 2)]);
+    try testing.expectEqual(t.c.text[r.header(0) + 1], sem.c.name[r.header(0)]);
 }
 
 test "check: what a comptime table's state must have" {
