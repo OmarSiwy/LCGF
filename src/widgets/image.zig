@@ -20,6 +20,7 @@ const Style = types.Style;
 const Node = types.Node;
 const Texture = types.Texture;
 const Theme = base.Theme;
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec: what the image takes ---------------------------------------------------------------
 
@@ -126,6 +127,16 @@ pub fn tints(th: *const Theme) base.OnOff {
 // An image takes no input: its node senses nothing (no `Frame.interact`, no id), so the hit
 // test passes through it to what holds it, and focus and Tab never stop on it. A clickable
 // picture is a button holding an image.
+
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// Names the image at tree row `row` by the text of row `by` (`aria-labelledby`: its caption,
+/// the alt text a page shows) in the caller's semantic columns. An image is an `image` (the
+/// style's role) with no text of its own, value 0 and no states; without this it has no name,
+/// which is right for one that only decorates a labelled control (WAI-ARIA: `alt=""`).
+pub fn name(s: *a11y.Semantics, row: u32, by: u32) void {
+    s.c.labelled_by[row] = by;
+}
 
 // ---- runtime front end ------------------------------------------------------------------------
 
@@ -290,6 +301,35 @@ test "image: takes no input; a press on it goes to what holds it; tab order skip
     try testing.expect(out.comptime_.event != null and out.comptime_.event.? == .zoom);
     try check.expectInert(out.runtime.tree, &.{ rows.natural, rows.boxed, rows.thumb });
     try check.expectInert(out.comptime_.tree, &.{ rows.natural, rows.boxed, rows.thumb });
+}
+
+test "image: role image, named by its caption, value 0, no states, in both front ends" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 240 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    const caption = rows.natural - 1;
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        name(&sem, rows.natural, caption);
+        name(&sem, rows.boxed, caption);
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        for ([3]u32{ rows.natural, rows.boxed, rows.thumb }) |r| {
+            try testing.expectEqual(a11y.Role.image, @as(a11y.Role, @fromBackingInt(t.c.role[r])));
+            try testing.expectEqual(@as(f32, 0), t.c.value[r]);
+            try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
+        }
+        try testing.expectEqualStrings("Photo", check.nameOf(&sem, tx, str, rows.natural));
+        try testing.expectEqualStrings("Photo", check.nameOf(&sem, tx, str, rows.boxed));
+        // The thumbnail only decorates its button: no name.
+        try testing.expectEqual(types.none, sem.c.name[rows.thumb]);
+    }
 }
 
 test "checkImage: a size, a texture rect and a box" {
