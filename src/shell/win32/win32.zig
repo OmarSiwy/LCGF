@@ -91,6 +91,10 @@ const mwmo_inputavailable = 0x0004;
 const infinite: u32 = 0xffff_ffff;
 const dib_rgb_colors = 0;
 const tme_leave = 0x0002;
+const wm_setcursor = 0x0020;
+/// WM_SETCURSOR's hit-test code for the client area; the frame's codes keep the system's
+/// resize arrows.
+const ht_client = 1;
 /// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703): the system scales nothing,
 /// sends WM_DPICHANGED, and the client area is in physical pixels.
 const dpi_per_monitor_v2: isize = -4;
@@ -121,6 +125,8 @@ extern "user32" fn SetProcessDpiAwarenessContext(context: isize) callconv(.winap
 extern "user32" fn GetDpiForWindow(HWND) callconv(.winapi) u32;
 extern "user32" fn AdjustWindowRectExForDpi(*RECT, style: u32, menu: BOOL, ex_style: u32, dpi: u32) callconv(.winapi) BOOL;
 extern "user32" fn SetWindowPos(HWND, after: ?HWND, x: i32, y: i32, w: i32, h: i32, flags: u32) callconv(.winapi) BOOL;
+extern "user32" fn LoadCursorW(instance: ?HINSTANCE, name: usize) callconv(.winapi) ?HANDLE;
+extern "user32" fn SetCursor(?HANDLE) callconv(.winapi) ?HANDLE;
 extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -144,6 +150,10 @@ pub const Win32 = struct {
     background: Color = .rgb(0, 0, 0),
     /// The effects of the last frame, as `apply` received them.
     applied: Platform = .{},
+    /// The system cursors, by `Platform.cursor` (`translate.cursor_ids`), and the one shown
+    /// over the client area.
+    cursors: [translate.cursor_ids.len]?HANDLE = @splat(null),
+    cursor: ?HANDLE = null,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
@@ -187,6 +197,8 @@ pub const Win32 = struct {
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
+        for (&w.cursors, translate.cursor_ids) |*c, id| c.* = LoadCursorW(null, id);
+        w.cursor = w.cursors[@backingInt(context.Cursor.arrow)];
         w.hwnd = CreateWindowExW(0, class_name, opt.title, ws_overlappedwindow, cw_usedefault, cw_usedefault, cw_usedefault, cw_usedefault, null, null, instance, w) orelse return error.CreateWindow;
         // Now that the window has a monitor, size it: the logical size at that monitor's
         // scale, plus the frame at that DPI. Its WM_SIZE sets the viewport.
@@ -216,6 +228,10 @@ pub const Win32 = struct {
     }
 
     pub fn apply(w: *Win32, p: *const Platform) void {
+        const cursor = w.cursors[@backingInt(p.cursor)];
+        // Shown now if the pointer is over the client area; WM_SETCURSOR keeps it there.
+        if (cursor != w.cursor and w.t.in.pointer[0] >= 0) _ = SetCursor(cursor);
+        w.cursor = cursor;
         w.applied = p.*;
     }
 
@@ -272,6 +288,11 @@ pub const Win32 = struct {
                 w.blit(dc);
                 _ = EndPaint(hwnd, &ps);
                 return 0;
+            },
+            // Windows resets the cursor on every move; over the client it is the frame's.
+            wm_setcursor => if (@as(u16, @truncate(@as(usize, @bitCast(lp)))) == ht_client) {
+                _ = SetCursor(w.cursor);
+                return 1;
             },
             // The frame covers the whole client area: no erase, no flicker.
             wm_erasebkgnd => return 1,
@@ -371,4 +392,8 @@ test "win32: a real window runs the example from posted messages" {
     try testing.expectEqual(@as(u32, 4), app.layers);
     try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
     try testing.expectEqual(app.theme.panel, w.fb.at(80, 590));
+    // The arrow is back after leaving the slider, and it is the system's.
+    try testing.expectEqual(context.Cursor.arrow, w.applied.cursor);
+    try testing.expectEqual(LoadCursorW(null, translate.cursor_ids[0]), w.cursor);
+    try testing.expect(w.cursor != null);
 }

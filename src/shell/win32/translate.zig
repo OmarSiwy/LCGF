@@ -9,6 +9,7 @@
 const std = @import("std");
 const Input = @import("../../core/input.zig").Input;
 const Events = @import("../iface.zig").Events;
+const Cursor = @import("../../runtime/context.zig").Cursor;
 
 /// The window messages the translator reads, by their winuser.h values.
 pub const Wm = enum(u32) {
@@ -87,6 +88,20 @@ pub const hid: [256]u8 = table: {
     };
     for (ext) |e| t[0x80 | e[0]] = e[1];
     break :table t;
+};
+
+/// The system cursor (`IDC_*`, for `LoadCursorW`) of each `Platform.cursor`. Win32 has no
+/// grab hand, so `grab` is the four-way move arrow, as for dragging a whole object.
+pub const cursor_ids = ids: {
+    const n = @typeInfo(Cursor).@"enum".field_names.len;
+    var a: [n]u16 = undefined;
+    a[@backingInt(Cursor.arrow)] = 32512; // IDC_ARROW
+    a[@backingInt(Cursor.pointer)] = 32649; // IDC_HAND
+    a[@backingInt(Cursor.text)] = 32513; // IDC_IBEAM
+    a[@backingInt(Cursor.grab)] = 32646; // IDC_SIZEALL
+    a[@backingInt(Cursor.resize_h)] = 32644; // IDC_SIZEWE
+    a[@backingInt(Cursor.resize_v)] = 32645; // IDC_SIZENS
+    break :ids a;
 };
 
 pub const Translator = struct {
@@ -383,7 +398,11 @@ test "translate: the example's messages give the headless recording's input and 
     var app: example.App = .{};
     var ev: Events = .{};
     var frames: u32 = 0;
+    // The system cursor shown after each poll: the last frame's, as the shell applies it.
+    var shown: [15]u16 = undefined;
+    var cursor: u16 = cursor_ids[@backingInt(Cursor.arrow)];
     while (try msgs.next(&buf)) |frame_msgs| : (frames += 1) {
+        defer shown[frames] = cursor;
         t.begin();
         for (frame_msgs) |m| t.feed(m);
         try testing.expect(t.frame(&ev));
@@ -394,8 +413,12 @@ test "translate: the example's messages give the headless recording's input and 
         if (!ctx.needsFrame(&ev.in)) continue;
         var f = ctx.begin(&ev.in);
         app.build(&f, &ev);
-        _ = f.end(.{});
+        cursor = cursor_ids[@backingInt(f.end(.{}).platform.cursor)];
     }
+    // Over Reset, Add layer and the slider the hand shows; the headless shell's cursors.
+    const a = 32512;
+    const h = 32649;
+    try testing.expectEqualSlices(u16, &.{ a, a, a, h, h, h, h, h, h, a, a, a, a, a, a }, &shown);
     try testing.expectEqual(null, try want.next(.{ .text = &want_text, .events = &want_events, .contacts = &contacts }));
     try testing.expectEqual(@as(u32, 15), frames);
     // The headless shell's results (src/shell/headless.zig).
