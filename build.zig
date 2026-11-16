@@ -483,6 +483,27 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
+    // The web back end (src/render/web/): wasm32-freestanding modules and the JavaScript that
+    // loads them, installed together in zig-out/web/ for a browser (ci/run.sh web).
+    const web_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const web_optimize = b.option(std.builtin.OptimizeMode, "web-optimize", "Optimize mode of the web modules (default ReleaseSmall)") orelse .small;
+    const lcgr_web = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = web_target, .optimize = web_optimize });
+    lcgr_web.addOptions("build_options", options);
+    lcgr_web.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const web_step = b.step("web", "Build the web examples and their JavaScript into zig-out/web/ (ci/run.sh web)");
+    for ([_][]const u8{"hello"}) |name| {
+        const wasm = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("src/render/web/{s}.zig", .{name})),
+            .target = web_target,
+            .optimize = web_optimize,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr_web }},
+        }) });
+        wasm.entry = .disabled;
+        wasm.rdynamic = true;
+        web_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
+    }
+    web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/render/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
