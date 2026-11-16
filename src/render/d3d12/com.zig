@@ -191,6 +191,22 @@ pub const Device = opaque {
     }
 };
 
+/// ID3D12Device5, for `RemoveDevice`: the documented way to put a device in the removed state
+/// on purpose, which is how the recovery path is tested.
+pub const Device5 = opaque {
+    pub const iid = guid(0x8b4f173b, 0x2fea, 0x4b80, .{ 0x8f, 0x58, 0x43, 0x07, 0x19, 0x1a, 0xb9, 0x5d });
+    pub const Vtbl = c.ID3D12Device5Vtbl;
+    pub const Slot = enum(u8) { QueryInterface = 0, RemoveDevice = 58 };
+
+    /// Removes `d`; `error.Unsupported` when the runtime has no ID3D12Device5.
+    pub fn removeDevice(d: *Device) Error!void {
+        var d5: ?*Device5 = null;
+        try check(method(d, Slot.QueryInterface, fn (*Device, *const GUID, *?*Device5) callconv(.c) HRESULT)(d, &iid, &d5));
+        defer release(d5);
+        method(d5.?, Slot.RemoveDevice, fn (*Device5) callconv(.c) void)(d5.?);
+    }
+};
+
 pub const CommandQueue = opaque {
     pub const iid = guid(0x0ec870a6, 0x5d7e, 0x4c22, .{ 0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed });
     pub const Vtbl = c.ID3D12CommandQueueVtbl;
@@ -430,7 +446,7 @@ pub const Debug = opaque {
 };
 
 /// Every interface above, for the slot check.
-const interfaces = .{ Factory, Adapter, Device, CommandQueue, CommandAllocator, Fence, Resource, DescriptorHeap, RootSignature, PipelineState, GraphicsCommandList, SwapChain, Blob, Debug };
+const interfaces = .{ Factory, Adapter, Device, Device5, CommandQueue, CommandAllocator, Fence, Resource, DescriptorHeap, RootSignature, PipelineState, GraphicsCommandList, SwapChain, Blob, Debug };
 
 test "com: every vtable slot is the header's" {
     inline for (interfaces) |I| {

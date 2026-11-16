@@ -103,6 +103,7 @@ pub const Device = struct {
             done = d.fence.getCompletedValue();
         }
         if (done == std.math.maxInt(u64)) return error.DeviceLost;
+        try com.check(d.handle.getDeviceRemovedReason());
     }
 
     pub fn waitIdle(d: *Device) Error!void {
@@ -112,8 +113,22 @@ pub const Device = struct {
     }
 
     /// Why the device was lost, or S_OK while it works.
+    ///
+    /// DEVICE REMOVAL. A driver update, a GPU reset, a TDR or an unplugged eGPU removes the
+    /// device; every call then fails or does nothing, and the next present, fence wait or
+    /// submit returns `error.DeviceLost` (com.check maps DXGI_ERROR_DEVICE_REMOVED, _RESET and
+    /// _HUNG to it; `wait` sees the fence jump to UINT64_MAX). Nothing made from the device can
+    /// be reused: the host releases everything in reverse order (renderer, frames, swapchain,
+    /// textures, device; `deinit` does not wait on a lost device past the fence) and creates
+    /// them again on a new `Device.init`, against the same window. scenes.zig's
+    /// "device removal" test does exactly that.
     pub fn removedReason(d: *const Device) com.HRESULT {
         return d.handle.getDeviceRemovedReason();
+    }
+
+    /// Puts the device in the removed state (ID3D12Device5::RemoveDevice), to test recovery.
+    pub fn remove(d: *Device) Error!void {
+        try com.Device5.removeDevice(d.handle);
     }
 
     /// A committed buffer. `upload` puts it in an UPLOAD heap (CPU-written, GPU-read, in the
@@ -183,6 +198,8 @@ pub const Swapchain = struct {
     flags: u32,
     rtv_heap: *com.DescriptorHeap,
     rtv_stride: u32,
+    /// Buffers held: `count` except during a resize, which releases them all first.
+    held: u32 = 0,
 
     pub const max_buffers = 4;
 
@@ -235,14 +252,29 @@ pub const Swapchain = struct {
     }
 
     fn getBuffers(s: *Swapchain, d: *const Device) Error!void {
-        for (0..s.count) |i| {
-            s.buffers[i] = try s.handle.getBuffer(@intCast(i));
-            d.handle.createRenderTargetView(s.buffers[i], null, s.rtv(@intCast(i)));
+        while (s.held < s.count) : (s.held += 1) {
+            s.buffers[s.held] = try s.handle.getBuffer(s.held);
+            d.handle.createRenderTargetView(s.buffers[s.held], null, s.rtv(s.held));
         }
     }
 
+    /// New buffer sizes, after the window's client area changed (WM_SIZE). The GPU must be
+    /// done with every frame that drew into the old buffers (`Device.waitIdle`): DXGI only
+    /// resizes once nothing holds them, so this releases its own references first. The
+    /// renderer and frame.zig hold no buffer and need nothing; the next `prepare` takes the new
+    /// viewport. A zero size (a minimised window) is the host's to skip: DXGI would pick the
+    /// window's size instead.
+    pub fn resize(s: *Swapchain, d: *const Device, width: u32, height: u32) Error!void {
+        for (s.buffers[0..s.held]) |b| com.release(b);
+        s.held = 0;
+        try s.handle.resizeBuffers(s.count, width, height, s.format, s.flags);
+        s.width = width;
+        s.height = height;
+        try s.getBuffers(d);
+    }
+
     pub fn deinit(s: *Swapchain) void {
-        for (s.buffers[0..s.count]) |b| com.release(b);
+        for (s.buffers[0..s.held]) |b| com.release(b);
         com.release(s.rtv_heap);
         com.release(s.handle);
     }

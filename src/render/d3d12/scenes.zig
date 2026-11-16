@@ -51,6 +51,12 @@ pub const Player = struct {
     pub fn init(p: *Player, mode: Mode) !void {
         p.mode = mode;
         p.st = .{};
+        if (mode == .present) p.window = try .init(width, height, false);
+        try p.initGpu();
+    }
+
+    /// Everything made from a device, against the window `p` already has.
+    fn initGpu(p: *Player) !void {
         p.d = try Device.init(.{ .adapter = .warp });
         errdefer p.d.deinit();
         p.once = try host.Once.init(&p.d);
@@ -61,19 +67,29 @@ pub const Player = struct {
         p.gradient = try custom.Gradient.init(p.d.handle, c.DXGI_FORMAT_R8G8B8A8_UNORM);
         p.target = try host.Target.init(&p.d, width, height);
         p.readback = try host.Readback.init(&p.d, width, height);
-        if (mode == .present) {
-            p.window = try .init(width, height, false);
+        if (p.mode == .present) {
             p.chain = try .init(&p.d, p.window.hwnd, .{ .width = width, .height = height, .flags = frame.flags });
             p.frames = try .init(&p.d, &p.chain, 2);
         }
     }
 
     pub fn deinit(p: *Player) void {
+        p.deinitGpu();
+        if (p.mode == .present) p.window.deinit();
+    }
+
+    /// After `error.DeviceLost`: releases everything made from the lost device, in reverse
+    /// order, and makes it again on a new device, against the same window.
+    pub fn recover(p: *Player) !void {
+        p.deinitGpu();
+        try p.initGpu();
+    }
+
+    fn deinitGpu(p: *Player) void {
         p.d.waitIdle() catch {};
         if (p.mode == .present) {
             p.frames.deinit();
             p.chain.deinit();
-            p.window.deinit();
         }
         p.readback.deinit();
         p.target.deinit();
@@ -194,6 +210,48 @@ test "conformance: every scene matches its golden image, offscreen and presented
         defer p.deinit();
         try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });
     }
+}
+
+test "conformance: the scenes still match after the swapchain was resized away and back" {
+    var p: Player = undefined;
+    try p.init(.present);
+    defer p.deinit();
+    try p.d.waitIdle();
+    try p.chain.resize(&p.d, 64, 48);
+    try testing.expectEqual(@as(u64, 64), p.chain.buffers[0].getDesc().Width);
+    try testing.expectEqual(@as(u32, 48), p.chain.buffers[1].getDesc().Height);
+    // A frame at the small size: the loop and the renderer take the new buffers as they come.
+    const f = try p.frames.begin(&p.d, &p.chain);
+    f.list.omSetRenderTarget(f.rtv);
+    f.list.clearRenderTargetView(f.rtv, .{ 0, 0, 0, 1 });
+    try p.frames.present(&p.d, &p.chain, f, 0);
+    try p.d.waitIdle();
+    try p.chain.resize(&p.d, width, height);
+    try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });
+}
+
+test "conformance: everything made again on a new device, against the same window, draws the scenes" {
+    var p: Player = undefined;
+    try p.init(.present);
+    defer p.deinit();
+    try p.recover();
+    try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });
+}
+
+test "conformance: after device removal the next frame fails with DeviceLost, and recovery draws the scenes" {
+    var p: Player = undefined;
+    try p.init(.present);
+    defer p.deinit();
+    try p.d.remove();
+    if (p.d.removedReason() >= 0) {
+        // vkd3d (Wine) implements RemoveDevice as a no-op: removal cannot be caused there.
+        std.debug.print("skipped: this runtime's RemoveDevice does not remove the device\n", .{});
+        return error.SkipZigTest;
+    }
+    var px: [width * height * 4]u8 = undefined;
+    try testing.expectError(error.DeviceLost, p.draw(&conformance.scenes[0], &px));
+    try p.recover();
+    try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });
 }
 
 test "pixelsOff counts pixels with any channel more than 2 away" {
