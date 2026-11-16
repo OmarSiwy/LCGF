@@ -72,6 +72,7 @@ pub const widgets_base = @import("widgets/base.zig");
 pub const widgets_list = @import("widgets/list.zig");
 pub const widgets_vlist = @import("widgets/vlist.zig");
 pub const widgets_table = @import("widgets/table.zig");
+pub const widgets_tree = @import("widgets/tree.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 
