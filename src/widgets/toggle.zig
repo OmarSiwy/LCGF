@@ -47,10 +47,14 @@ pub fn toggleFill(th: *const Theme, pressed: bool, r: Response) Color {
 
 // ---- runtime front end ----------------------------------------------------------------------
 
-/// A toggle button named `id` over `value`, captioned by `str`.
+/// A toggle button named `id` over `value`, captioned by `str`. It flips when it fires as a
+/// button does (`button.activated`: a click, or Enter or Space while focused; WAI-ARIA APG
+/// button pattern, toggle button) and sets `clicked` then.
 pub fn toggle(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
     const node = f.open(id, button_zig.buttonStyle(th));
-    const r = f.interact(node, .button);
+    var r = f.interact(node, .button);
+    r.clicked = button_zig.activated(r.clicked, r.focused, f.in);
+    value.* = base.toggle(value.*, r.clicked);
     f.setFill(node, toggleFill(th, value.*, r));
     f.setCursor(.pointer, r.hovered);
     _ = label_zig.label(f, th, str);
@@ -146,6 +150,45 @@ test "toggle look: a button's face, filled by pressed and by hover, in both fron
     in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
     out = try h.frame(&in);
     try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[2].fill);
+}
+
+test "toggle input: click, Enter and Space up flip it; Space down does not, in both front ends" {
+    const h = &two;
+    h.init();
+    const k = base.keys;
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const b = t.rect(t.find(.from("bold")));
+    const i = t.rect(t.find(.from("italic")));
+    const enter = [_]Input.Event{.{ .kind = .press, .code = k.enter }};
+    const sdown = [_]Input.Event{.{ .kind = .press, .code = k.space }};
+    const sup = [_]Input.Event{.{ .kind = .release, .code = k.space }};
+    const Step = struct { at: types.Rect, left: bool = false, events: []const Input.Event = &.{}, bold: bool, italic: bool };
+    const steps = [_]Step{
+        .{ .at = b, .left = true, .bold = false, .italic = true },
+        .{ .at = b, .bold = true, .italic = true }, // click
+        .{ .at = b, .events = &enter, .bold = false, .italic = true },
+        .{ .at = b, .events = &sdown, .bold = false, .italic = true },
+        .{ .at = b, .events = &sup, .bold = true, .italic = true },
+        .{ .at = i, .left = true, .bold = true, .italic = true },
+        .{ .at = i, .bold = true, .italic = false },
+    };
+    const th = Theme.default;
+    for (steps) |st| {
+        in.pointer = .{ (st.at.x0 + st.at.x1) * 0.5, (st.at.y0 + st.at.y1) * 0.5 };
+        in.buttons.left = st.left;
+        in.events = st.events;
+        out = try h.frame(&in);
+        try testing.expectEqual(st.bold, h.app.bold);
+        try testing.expectEqual(st.italic, h.app.italic);
+        try testing.expectEqual(st.bold, h.ui.signals.state.bold);
+        try testing.expectEqual(st.italic, h.ui.signals.state.italic);
+        try testing.expectEqual(simd.b2f(st.bold), out.runtime.tree.c.value[2]);
+    }
+    // Pressed by the click and released over it: the accent under the pointer.
+    try testing.expectEqual(th.control_hot.bitsOf(), out.runtime.tree.c.look[4].fill);
+    try testing.expectEqual(th.accent.bitsOf(), out.runtime.tree.c.look[2].fill);
 }
 
 test {

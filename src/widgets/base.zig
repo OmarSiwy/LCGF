@@ -337,8 +337,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         .checkbox => ui.signals.set(field(n.bind.?), checkbox_zig.flip(@field(ui.signals.state, n.bind.?), true)),
                         .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
                         .radio_option => ui.signals.set(field(n.bind.?), n.index),
-                        .@"switch" => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
-                        .label, .col, .row, .button, .radio, .toggle => {},
+                        .@"switch", .toggle => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
+                        .label, .col, .row, .button, .radio => {},
                     }
                 },
             };
@@ -394,7 +394,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             const w = ui.focus orelse return null;
             switch (w) {
                 inline else => |tag| switch (comptime E.widget_kinds[E.slot(tag)]) {
-                    .button => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
+                    .button, .toggle => if (button_zig.activated(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     .checkbox, .@"switch" => if (checkbox_zig.toggled(false, true, in)) return @unionInit(E.Event, @tagName(tag), {}),
                     .radio_option => {
                         const k = comptime E.slot(tag);
