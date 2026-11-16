@@ -58,10 +58,11 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, offset: *f32) void {
 
 /// Ends the scroll area `open` started.
 pub fn close(f: *Frame, th: *const Theme, id: Id, offset: f32) void {
-    _ = th;
-    _ = id;
-    _ = offset;
     f.close();
+    f.close();
+    const g = Geometry.of(f.lastRect(id), f.lastRect(id.with(1)));
+    _ = f.open(.none, trackStyle(th));
+    _ = f.leaf(id.with(2), thumbStyle(th, g, offset));
     f.close();
     f.close();
 }
@@ -85,6 +86,21 @@ pub fn contentStyle(th: *const Theme) Style {
     return .{ .dir = .y, .size = .{ .fill, .fit } };
 }
 
+/// How wide the scroll bar is, logical pixels.
+pub const bar_px: f32 = 8;
+
+/// The scroll bar's track: beside the viewport, as tall as it, rounded.
+pub fn trackStyle(th: *const Theme) Style {
+    return .{ .size = .{ .px(bar_px), .fill }, .fill = th.control, .radius = bar_px / 2 };
+}
+
+/// The thumb: the viewport's share of the content, at the offset's share, floating in the
+/// track (whose height is the viewport's). When the content fits, it fills the track.
+pub fn thumbStyle(th: *const Theme, g: Geometry, offset: f32) Style {
+    const scale = g.view / @max(g.content, g.view, 1);
+    return .{ .float = true, .offset = .{ 0, offset * scale }, .size = .{ .px(bar_px), .px(g.view * scale) }, .fill = th.control_hot, .radius = bar_px / 2 };
+}
+
 /// The scroll area as a spec node.
 pub const ct = struct {
     /// A scroll area whose viewport is the widget `id`, scrolled by the f32 field `offset`,
@@ -94,7 +110,9 @@ pub const ct = struct {
         if (children.len == 0) @compileError("scroll area '" ++ @tagName(id) ++ "' holds nothing");
         var vp = spec_zig.col(viewportStyle(&th, 0), .{spec_zig.col(contentStyle(&th), children)});
         vp.id = @tagName(id);
-        var s = spec_zig.row(areaStyle(&th), .{vp});
+        const thumb: Spec = .{ .kind = .col, .id = @tagName(id) ++ "_thumb" };
+        const bar: Spec = .{ .kind = .col, .style = trackStyle(&th), .children = &.{thumb} };
+        var s = spec_zig.row(areaStyle(&th), .{ vp, bar });
         s.widget = Scroll(@tagName(id), @tagName(offset));
         return s;
     }
@@ -103,11 +121,14 @@ pub const ct = struct {
     /// area; in the tree (under the root) the viewport is `row + 2`, the content `row + 3`.
     fn Scroll(comptime id: [:0]const u8, comptime offset: []const u8) type {
         return struct {
+            const thumb = id ++ "_thumb";
+
             /// Measures last frame's viewport and content and clamps the offset to them.
             pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
                 _ = event;
                 _ = in;
                 const g = geometry(ui, row);
+                ui.keep(@This()).* = .{ g.view, g.content, 0, 0 };
                 const field = comptime @TypeOf(ui.*).field(offset);
                 ui.signals.set(field, clamp(@field(ui.signals.state, offset), g));
             }
@@ -129,6 +150,12 @@ pub const ct = struct {
                 inline for (n.children[0].children[0].children) |c| ui.push(c, content, next, in);
                 t.seal(content);
                 t.seal(vp);
+                const kept = ui.keep(@This());
+                const g: Geometry = .{ .view = kept[0], .content = kept[1] };
+                const bar = t.push(area, .none, &n.children[1].style);
+                _ = t.push(bar, .hash(thumb), &thumbStyle(&th, g, value));
+                next.* += 2;
+                t.seal(bar);
                 t.seal(area);
             }
         };
@@ -187,11 +214,13 @@ const Default = Page(.default);
 var harness: Default.Run = .{};
 
 /// Tree rows: root 0, frame 1, area 2, viewport 3, content 4, column 5, labels 6..11,
-/// checkbox 12..14.
+/// checkbox 12..14, track 15, thumb 16.
 const rows = struct {
     const area = 2;
     const viewport = 3;
     const content = 4;
+    const track = 15;
+    const thumb = 16;
 };
 
 test "scroll: both front ends clip the content and shift it by the clamped offset" {
@@ -200,7 +229,7 @@ test "scroll: both front ends clip the content and shift it by the clamped offse
     const in: Input = .{ .viewport = .{ 320, 200 } };
     var out = try h.frame(&in);
     var t = out.runtime.tree;
-    try testing.expectEqual(@as(u32, 15), t.len);
+    try testing.expectEqual(@as(u32, 17), t.len);
     const view = t.rect(rows.viewport);
     const content = t.rect(rows.content);
     try testing.expectEqual(@as(f32, 100), view.h());
@@ -219,6 +248,43 @@ test "scroll: both front ends clip the content and shift it by the clamped offse
     try testing.expectEqual(view.y1, out.runtime.tree.rect(rows.content).y1);
     // A label scrolled out of the viewport is not drawn.
     try testing.expectEqual(@as(u32, 0), out.runtime.tree.c.visible[6]);
+}
+
+test "scroll: a bar beside the viewport; the thumb is the visible share at the offset's share" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    _ = try h.frame(&in);
+    var out = try h.frame(&in);
+    var t = out.runtime.tree;
+    const th = Theme.default;
+    const view = t.rect(rows.viewport);
+    const content = t.rect(rows.content);
+    const track = t.rect(rows.track);
+    try testing.expectEqual(view.x1, track.x0);
+    try testing.expectEqual(bar_px, track.w());
+    try testing.expectEqual(view.h(), track.h());
+    try testing.expectEqual(th.control.bitsOf(), t.c.look[rows.track].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[rows.thumb].fill);
+    const scale = view.h() / content.h();
+    try testing.expectApproxEqAbs(view.h() * scale, t.rect(rows.thumb).h(), 0.5);
+    try testing.expectEqual(track.y0, t.rect(rows.thumb).y0);
+    // Scrolled to the end, the thumb sits at the bottom of the track.
+    h.app.offset = 1000;
+    h.ui.signals.state.offset = 1000;
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectApproxEqAbs(track.y1, t.rect(rows.thumb).y1, 0.5);
+    // In another theme alike.
+    const Light = Page(.{ .control = .rgb(200, 200, 205), .control_hot = .rgb(150, 150, 160), .panel = .rgb(240, 240, 240), .text = .rgb(20, 20, 20) });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    _ = try S.light.frame(&in);
+    in.pointer = .{ 1, 1 };
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(150, 150, 160).bitsOf(), lo.runtime.tree.c.look[rows.thumb].fill);
 }
 
 test {

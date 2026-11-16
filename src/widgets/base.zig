@@ -41,7 +41,7 @@
 //! `push(ui, n, parent, next, in)` to build the node, which must push one tree row per spec
 //! node of its subtree in row order, and before each frame its optional `step(ui, row, event,
 //! in)` to apply input to `ui.signals`. During `step`, once `ui.built` is set, `ui.tables.t`
-//! still holds last frame's laid-out tree to measure, and `ui.keep(row)` keeps what the widget
+//! still holds last frame's laid-out tree to measure, and `ui.keep(W)` keeps what the widget
 //! measured for its `push`.
 
 const std = @import("std");
@@ -427,9 +427,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
         /// them: while a widget is held, only it shows hover.
-        /// The floats the custom widget at spec row `row` keeps (`kept`).
-        pub fn keep(ui: *Self, comptime row: u32) *[4]f32 {
-            const k = comptime std.mem.indexOfScalar(u32, customRows(spec), row).?;
+        /// The floats the custom widget `W` (its `Spec.widget`) keeps (`kept`).
+        pub fn keep(ui: *Self, comptime W: type) *[4]f32 {
+            const k = comptime blk: {
+                for (customRows(spec), 0..) |row, k| if (nodeAt(spec, row).widget == W) break :blk k;
+                @compileError("no custom widget " ++ @typeName(W) ++ " in this spec");
+            };
             return &ui.kept[k];
         }
 
