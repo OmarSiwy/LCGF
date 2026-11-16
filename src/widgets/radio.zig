@@ -181,6 +181,37 @@ pub const ct = struct {
     }
 };
 
+// ---- example page -------------------------------------------------------------------------
+
+/// The radio group's example page: three quality levels on a panel, in both front ends. Its
+/// replay (testdata/radio.replay) clicks and uses the arrows; its golden images
+/// (tools/widgetgolden/ref/radio-*.png) show the selection moving.
+pub const Page = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .fill = th.panel };
+
+    pub const App = struct {
+        quality: u32 = 1,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = radio(f, &th, .from("quality"), &app.quality, &.{ "Low", "Medium", "High" });
+            f.close();
+        }
+    };
+    pub const State = struct {
+        quality: u32 = 1,
+        low: []const u8 = "Low",
+        medium: []const u8 = "Medium",
+        high: []const u8 = "High",
+    };
+    pub const spec = spec_zig.col(panel, .{ct.radio(th, .quality, .quality, .{ .low, .medium, .high })});
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
+    pub const replay = @embedFile("testdata/radio.replay");
+    /// Frames kept as golden images, by name: tools/widgetgolden/ref/radio-<name>.png.
+    pub const golden_frames = .{ .{ "rest", 0 }, .{ "clicked", 2 }, .{ "down", 3 } };
+};
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -360,6 +391,38 @@ test "radio a11y: a radio group of radios, named by their captions, the selected
     }
     // Ring and dot are presentational: the root, the group, three options and three captions.
     try testing.expectEqual(@as(u32, 8), x.out[0].len);
+}
+
+var page: Page.Run = .{};
+
+test "Page: the radio replay selects by click and arrows, focus following, in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &page;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var replay: Replay = .{ .src = Page.replay };
+    var quality: [8]u32 = undefined;
+    while (try replay.next(buf)) |in| {
+        const k = h.frames;
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.quality, h.ui.signals.state.quality);
+        quality[k] = h.app.quality;
+    }
+    try testing.expectEqual(@as(u32, 8), h.frames);
+    try testing.expectEqualSlices(u32, &.{ 1, 1, 2, 0, 1, 2, 2, 2 }, &quality);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try testing.expectEqual(null, h.ui.focus);
+    // The rects the replay's comment gives.
+    const t = &h.ctx.trees[h.ctx.cur];
+    for ([3][2]f32{ .{ 12, 30 }, .{ 36, 53 }, .{ 59, 77 } }, 0..) |y, i| {
+        const r = t.rect(3 + option_rows * @as(u32, @intCast(i)));
+        try testing.expectEqual(y, [2]f32{ r.y0, r.y1 });
+        try testing.expectEqual([2]f32{ 12, 28 }, [2]f32{ t.rect(4 + option_rows * @as(u32, @intCast(i))).x0, t.rect(4 + option_rows * @as(u32, @intCast(i))).x1 });
+    }
+    inline for (Page.golden_frames) |g| try testing.expect(g[1] < 8);
 }
 
 test {
