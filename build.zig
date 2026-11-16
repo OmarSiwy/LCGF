@@ -127,6 +127,33 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
+    // Compile-fail cases for the comptime front end's rules (src/comptime/compile_fail/): each
+    // file is built as an object and must fail with the message on its `//! expect: ` first line.
+    const compile_fail = b.step("ct-compile-fail", "Check each comptime rule rejects its compile-fail case");
+    {
+        const io = b.graph.io;
+        const sub = "src/comptime/compile_fail";
+        var dir = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer dir.close(io);
+        // The cases are read while configuring, so the configuration cache must know about them.
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = dir.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            b.dependOnFileContents(b.path(b.pathJoin(&.{ sub, entry.name })));
+            const text = dir.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch @panic("cannot read a compile-fail case");
+            const tag = "//! expect: ";
+            if (!std.mem.startsWith(u8, text, tag)) std.debug.panic("{s}/{s}: first line is not '{s}<message>'", .{ sub, entry.name, tag });
+            const case = b.addObject(.{ .name = b.dupe(entry.name[0 .. entry.name.len - 4]), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            }) });
+            case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
+            compile_fail.dependOn(&case.step);
+        }
+    }
     // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
     const font_fuzz = b.addRunArtifact(b.addExecutable(.{ .name = "font-fuzz", .root_module = b.createModule(.{
         .root_source_file = b.path("src/text/font/fuzz.zig"),
