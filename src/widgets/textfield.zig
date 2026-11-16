@@ -23,6 +23,7 @@ const edit = @import("../text/edit/edit.zig");
 const keyboard = @import("../interact/keyboard.zig");
 const Mono = @import("../text/protocol.zig").Mono;
 const Graphemes = @import("../text/unicode/grapheme.zig").Graphemes;
+const a11y = @import("../a11y/tree.zig");
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -136,7 +137,8 @@ pub fn padding(th: *const Theme) [4]f32 {
 }
 
 /// The box: as wide as it is given (at least 80), one line tall, inset (`control_held`), its
-/// border the accent while focused; it clips its text, scrolled by `scroll` px.
+/// border the accent while focused; it clips its text, scrolled by `scroll` px. Role text
+/// input (ARIA textbox).
 pub fn fieldStyle(th: *const Theme, focused: bool, scroll: f32) Style {
     const border = base.OnOff{ th.control_hot, th.accent };
     return .{
@@ -150,6 +152,7 @@ pub fn fieldStyle(th: *const Theme, focused: bool, scroll: f32) Style {
         .border_color = border[@intFromBool(focused)],
         .clip = true,
         .scroll = .{ scroll, 0 },
+        .role = .text_input,
     };
 }
 
@@ -257,6 +260,17 @@ pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in:
         const top = last.y0 + pad[1];
         s.input.request(.{ .x0 = cx, .y0 = top, .x1 = cx + 1, .y1 = top + lineHeight(th) }, .normal);
     }
+}
+
+// ---- accessibility --------------------------------------------------------------------------
+
+/// The semantics the tree columns cannot carry, for field `name` in either front end's tree:
+/// its name is the row `label` (its caption, `aria-labelledby`; `none` for none). The role is
+/// in the tree (text input, ARIA textbox); the text and placeholder are presentational.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void {
+    const f = t.find(name);
+    if (f == types.none or label == types.none) return;
+    s.c.labelled_by[f] = label;
 }
 
 // ---- runtime front end ----------------------------------------------------------------------
@@ -440,6 +454,7 @@ test "textfield: the page agrees in both front ends at rest" {
     const t = out.runtime.tree;
     // panel, two captions, two fields of four rows each.
     try testing.expectEqual(@as(u32, 1 + 1 + 2 + 8), t.len);
+    try testing.expectEqual(@backingInt(types.Role.text_input), t.c.role[t.find(.from("name"))]);
 }
 
 test "textfield look: an inset box one line tall, the placeholder dimmed, the caret only while focused" {
@@ -478,6 +493,39 @@ test "textfield look: an inset box one line tall, the placeholder dimmed, the ca
     const at: f32 = @floatFromInt(h.app.city.ed.caret);
     try testing.expectApproxEqAbs(t.rect(c).x0 + th.pad + at * advance(&th), t.rect(c + 3).x0, 0.5);
     try testing.expectEqual(@as(f32, 1), t.rect(c + 3).w());
+}
+
+var field_semantics: base.Semantic(16) = .{};
+
+test "textfield a11y: role text input named by its caption; text and caret presentational" {
+    const h = &page;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 140 } };
+    const out = try h.frame(&in);
+    const x = &field_semantics;
+    try x.run(h);
+    const t = out.runtime.tree;
+    const f = t.find(.from("name"));
+    const r = x.row(f).?;
+    try testing.expectEqual(@backingInt(a11y.Role.text_input), x.out[0].c.role[r]);
+    try testing.expectEqual(@backingInt(Id.from("name")), x.out[0].c.id[r]);
+    try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+    // Selection, text and caret are not exported.
+    for (1..4) |k| try testing.expectEqual(null, x.row(f + @as(u32, @intCast(k))));
+    // Named by its caption through `semantics`, in either front end's tree.
+    const check = @import("check.zig");
+    const ctx = &h.ctx;
+    const tb = &h.ui.tables;
+    const trees = [2]*const Tree{ t, &tb.t };
+    const txs = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &tb.tx };
+    const strs = [2][]const u8{ ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], tb.strings.buf[0..tb.strings.len] };
+    for (trees, txs, strs) |tree, tx, str| {
+        var sb: check.SemBuf = .{};
+        var sem = sb.init();
+        semantics(tree, &sem, .from("name"), f - 1);
+        a11y.names(tree, &sem);
+        try testing.expectEqualStrings("Name", check.nameOf(&sem, tx, str, f));
+    }
 }
 
 fn press(code: u8, mods: Input.Mods) Input.Event {
