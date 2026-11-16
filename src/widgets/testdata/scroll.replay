@@ -1,0 +1,42 @@
+# Recorded input for the scroll example page (widgets/scroll.zig, `Page`), at 320 x 200 in
+# the default theme: the viewport at 0..192 x 0..100 over 187 px of content (overflow 87), the
+# bar at 192..200. Keys are USB HID codes: 77 End, 75 Page Up, 81 Down (format: input.Replay).
+# 0: rest
+frame
+viewport 320 200
+dt 0.016
+pointer 300 190
+# 1: pointer over the viewport
+frame
+pointer 100 50
+# 2: wheel down one notch: offset 40, the thumb moves to 21.4..74.9
+frame
+wheel 0 -1
+# 3: hover the thumb
+frame
+pointer 196 48
+# 4: press it
+frame
+buttons left
+# 5: drag 10 px down: offset 40 + 10 * 187 / 100
+frame
+pointer 196 58
+# 6: release
+frame
+buttons
+# 7: press on the viewport, between widgets: it takes focus
+frame
+pointer 100 10
+buttons left
+# 8: release
+frame
+buttons
+# 9: End: offset 87
+frame
+press 77
+# 10: Page Up: back by a viewport, clamped to 0
+frame
+press 75
+# 11: Down: one line, 40
+frame
+press 81

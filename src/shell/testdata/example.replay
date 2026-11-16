@@ -1,0 +1,33 @@
+# The prototype example's host loop (prototype/example.zig "host loop") as a recording, for
+# src/shell/headless.zig. Positions are the example's layout at 800 x 600.
+frame
+viewport 800 600
+# Unchanged: the settle frame, then a frame with nothing to build.
+frame
+frame
+# Click Reset (8,8 .. 66,42).
+frame
+pointer 37 25
+frame
+buttons left
+frame
+buttons
+# Click Add layer (8,58 .. 100,91).
+frame
+pointer 54 74
+frame
+buttons left
+frame
+buttons
+# Hold the exposure slider (180 .. 792) at 75% of its track.
+frame
+pointer 639 25
+frame
+buttons left
+frame
+buttons
+# Leave everything; settle, then idle.
+frame
+pointer 400 400
+frame
+frame

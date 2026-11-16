@@ -11,7 +11,8 @@ const simd = @import("../core/simd.zig");
 pub fn opacity(t: *Tree) void {
     const c = &t.c;
     for (0..t.len) |i| {
-        // Both operands loaded, so the root test is a select, not a branch.
+        // Both operands loaded, so the root test is a select, not a branch. Seeding the root's
+        // row instead, as `transform` and `clip` do, measured slower here (docs/perf/chains.md).
         const up = c.alpha[c.parent[i]];
         c.alpha[i] = c.opacity[i] * simd.selF(i == 0, 1, up);
     }
@@ -24,14 +25,17 @@ pub fn transform(t: *Tree) void {
     const c = &t.c;
     const V6 = @Vector(6, f32);
     const identity: V6 = .{ 1, 0, 0, 1, 0, 0 };
+    // The root is its own parent: seeding its row with the value its parent would give (the
+    // identity) removes the `i == 0` select from the parent -> child chain (docs/perf/chains.md).
+    // Row 0 exists even in an empty tree (capacity > 0), so the seed needs no length test.
+    c.world[0] = identity;
     for (0..t.len) |i| {
         const m = c.transform[i];
         const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
         const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
         // Translate the centre to the origin, apply m, translate back.
         const l: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
-        const p: [6]f32 = @select(f32, @as(@Vector(6, bool), @splat(i == 0)), identity, @as(V6, c.world[c.parent[i]]));
-        c.world[i] = compose(p, l);
+        c.world[i] = compose(c.world[c.parent[i]], l);
     }
 }
 
@@ -44,9 +48,11 @@ pub fn clip(t: *Tree) void {
     const c = &t.c;
     const V4 = @Vector(4, f32);
     const zero: V4 = @splat(0);
+    // The root reads its own row as its parent's: start it square (see `transform`).
+    c.clip_radii[0] = zero;
     for (0..t.len) |i| {
-        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.look[i].border)), zero);
-        const up = @select(f32, @as(@Vector(4, bool), @splat(i == 0)), zero, @as(V4, c.clip_radii[c.parent[i]]));
+        const own = @max(@as(V4, c.radii[i]) - @as(V4, @splat(c.border[i])), zero);
+        const up: V4 = c.clip_radii[c.parent[i]];
         c.clip_radii[i] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, up);
     }
 }

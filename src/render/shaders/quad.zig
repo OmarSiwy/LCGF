@@ -54,6 +54,9 @@ pub const Variant = struct { name: []const u8, wgsl: [:0]const u8 };
 pub const variants = [_]Variant{
     .{ .name = "stock", .wgsl = wgsl },
     .{ .name = "example", .wgsl = shader(example_material) },
+    // The theme lane's example material (src/theme/sheen.wgsl), embedded by path so render code
+    // does not import the theme module.
+    .{ .name = "sheen", .wgsl = shader(@embedFile("../../theme/sheen.wgsl")) },
 };
 
 pub const Attr = struct { location: u32, offset: u32, format: []const u8 };

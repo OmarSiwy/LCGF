@@ -1,0 +1,27 @@
+[package]
+name = "vs-slint"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Slint with its software renderer and a minimal platform of our own (no window, no winit).
+# bench/vs/slint/main.rs says what is measured.
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts"] }
+# The image decoders the std-widgets style needs for its embedded icons; no slint feature turns
+# them on without a windowing back end.
+i-slint-core = { version = "=1.18.1", features = ["image-decoders", "svg"] }
+
+[[bin]]
+name = "vs-slint"
+path = "main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+
+[profile.small]
+inherits = "release"
+opt-level = "s"
+strip = true

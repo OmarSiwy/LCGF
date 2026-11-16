@@ -15,6 +15,13 @@ const Input = @import("../core/input.zig").Input;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
+const Signals = @import("signals.zig").Signals;
+const Anims = @import("../anim/anims.zig").Anims;
+const Tweens = @import("../anim/tweens.zig").Tweens;
+const Flips = @import("../anim/flip.zig").Flips;
+const Memos = @import("reuse.zig").Memos;
+const Levels = @import("../layout/levels.zig").Levels;
+const Settings = @import("../a11y/settings_data.zig").Settings;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -23,10 +30,19 @@ pub const Limits = struct {
     customs: u32 = 64,
     /// Bytes of text per frame.
     strings: u32 = 64 * 1024,
+    /// Springs alive at once (`Frame.animate`).
+    anims: u32 = 256,
+    /// Tweens alive at once (`Frame.tween`).
+    tweens: u32 = 128,
+    /// Nodes per frame that animate their layout (`Frame.animateLayout`).
+    flips: u32 = 64,
+    signals: u32 = 256,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
     /// Timers armed by `Frame.timer`.
     timers: u32 = 32,
+    /// Subtrees remembered by `Frame.reuse`.
+    memos: u32 = 128,
 };
 
 /// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
@@ -83,6 +99,10 @@ pub const Context = struct {
     strings: [2]Strings,
     cur: u1 = 0,
     draw: DrawList,
+    signals: Signals,
+    anims: Anims,
+    tweens: Tweens,
+    flips: Flips,
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
@@ -93,28 +113,42 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
-    /// How much the springs are still moving; 0 at rest. The anim lane's step writes it
-    /// (C0716-C0719); until then nothing moves.
+    /// The platform's accessibility settings; the host sets them, on change or every frame.
+    /// Under `reduced_motion` springs, tweens, transitions and sequences show their end state at
+    /// once and layout changes do not slide, so nothing keeps the host awake.
+    settings: Settings = .{},
+    /// How much the springs and tweens are still moving; 0 at rest. `begin` sets it from
+    /// `Anims.step` and `Tweens.step`.
     motion: f32 = 0,
-    /// Data behind a signal changed since the last frame. The signals lane's bump sets it
-    /// (C0238); `Frame.finish` clears it.
-    dirty: bool = false,
     timers: scheduler.Timers,
     /// Set from any thread to ask for a frame; see `scheduler.Wake`.
     waker: scheduler.Wake = .{},
+    /// Where each reusable subtree was built and from which signal versions (`Frame.reuse`).
+    memos: Memos,
+    /// Level-order index of the tree, rebuilt by `Frame.end` when no subtree is kept, so resolve
+    /// sweeps level by level (docs/perf/port-perf.md).
+    levels: Levels,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
     fn build(carver: *mem.Carver, limits: Limits) Context {
+        // The generations are never laid out at once, so they share layout scratch.
+        const first = Tree.init(carver, limits.nodes);
         return .{
             .limits = limits,
-            .trees = .{ Tree.init(carver, limits.nodes), Tree.init(carver, limits.nodes) },
+            .trees = .{ first, Tree.initSharing(carver, limits.nodes, &first) },
             .texts = .{ Texts.init(carver, limits.texts), Texts.init(carver, limits.texts) },
             .customs = .{ Customs.init(carver, limits.customs), Customs.init(carver, limits.customs) },
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
+            .signals = Signals.init(carver, limits.signals),
+            .anims = Anims.init(carver, limits.anims),
+            .tweens = Tweens.init(carver, limits.tweens),
+            .flips = Flips.init(carver, limits.flips),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
+            .memos = Memos.init(carver, limits.memos),
+            .levels = Levels.init(carver, limits.nodes),
         };
     }
 
@@ -153,11 +187,11 @@ pub const Context = struct {
         ctx.platform = .{};
         ctx.status = .{};
         ctx.frame +%= 1;
+        ctx.memos.kept_len = 0;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
-        // ponytail: springs are stepped here once the anim lane's table exists (C0716-C0719), as
-        // `ctx.motion = ctx.anims.step(in.dt)`; with no springs nothing moves.
-        ctx.motion = 0;
+        ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
+        ctx.flips.len = 0;
 
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
@@ -195,6 +229,17 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
+test "requiredBytes: 890 bytes per node of capacity (docs/perf/bytes.md)" {
+    // Two tree generations of 376 bytes a row less the 48 bytes of layout scratch they share,
+    // plus 170 bytes of draw list and 16 of level-order index (docs/perf/port-perf.md). A
+    // change here is a change to the recorded footprint.
+    var a = example_limits;
+    a.nodes = 4096;
+    var b = a;
+    b.nodes = 8192;
+    try testing.expectEqual(890 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+}
+
 test "init: carves every table from the caller's buffer, or refuses a short one" {
     const n = comptime Context.requiredBytes(example_limits);
     const S = struct {
@@ -212,6 +257,11 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     for (ctx.customs) |cu| try testing.expectEqual(example_limits.customs, cu.cap);
     for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
+    try testing.expectEqual(example_limits.signals, ctx.signals.cap);
+    try testing.expectEqual(example_limits.anims, ctx.anims.cap);
+    try testing.expectEqual(example_limits.tweens, ctx.tweens.cap);
+    try testing.expectEqual(example_limits.memos, ctx.memos.cap);
+    try testing.expect(@intFromPtr(ctx.memos.c.stamp.ptr + ctx.memos.c.stamp.len) <= hi);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
@@ -352,11 +402,15 @@ const example = struct {
         resets: u32 = 0,
         exposure: f32 = 1,
         wireframe: bool = false,
-        layers: u32 = 3,
+        glow: f32 = 0,
+        /// A signal, so the sidebar can be skipped while it does not change.
+        layers: @import("signals.zig").Cell(u32),
+        sidebar_builds: u32 = 0,
     };
 
-    /// The prototype's buildUi without its spring (`animate`, anim lane) and its sidebar reuse
-    /// (`reuse` over a signal, reuse lane): neither changes this test's frames.
+    const id_glow = types.Id.from("glow");
+
+    /// The prototype's buildUi.
     fn buildUi(f: *Frame, app: *App) void {
         const th = &app.theme;
         _ = f.open(types.Id.from("toolbar"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel });
@@ -366,14 +420,20 @@ const example = struct {
         }
         _ = checkbox(f, th, id_wire, &app.wireframe, "Wireframe");
         _ = slider(f, th, id_exposure, &app.exposure, 0, 4);
+        // A spring: eases toward its target and keeps the host awake until it lands.
+        app.glow = f.animate(id_glow, simd.b2f(app.wireframe), .{});
         f.close();
 
         _ = f.open(types.Id.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
-        _ = f.open(id_sidebar, .{ .size = .{ .px(160), .fill }, .pad = @splat(8), .gap = 4, .fill = th.panel });
-        if (button(f, th, id_add, "Add layer").clicked) app.layers += 1;
-        var name: [24]u8 = undefined;
-        for (0..app.layers) |i| _ = label(f, th, std.fmt.bufPrint(&name, "Layer {d}", .{i}) catch "?");
-        f.close();
+        // Rebuilt only when `layers` changes or the pointer is on one of its widgets.
+        if (!f.reuse(id_sidebar, &.{app.layers.signal})) {
+            app.sidebar_builds += 1;
+            _ = f.open(id_sidebar, .{ .size = .{ .px(160), .fill }, .pad = @splat(8), .gap = 4, .fill = th.panel });
+            if (button(f, th, id_add, "Add layer").clicked) app.layers.set(&f.ctx.signals, app.layers.get() + 1);
+            var name: [24]u8 = undefined;
+            for (0..app.layers.get()) |i| _ = label(f, th, std.fmt.bufPrint(&name, "Layer {d}", .{i}) catch "?");
+            f.close();
+        }
         _ = f.custom(id_viewport, .{ .size = .{ .fill, .fill } }, 0);
         f.close();
     }
@@ -415,7 +475,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     };
     const e = example;
     var ctx = try Context.init(&S.buffer, example_limits);
-    var app: e.App = .{};
+    var app: e.App = .{ .layers = .init(&ctx.signals, 3) };
     var in: Input = .{ .viewport = .{ 800, 600 } };
 
     try testing.expect(ctx.needsFrame(&in));
@@ -464,4 +524,299 @@ test "host loop: layout, draw list, click, drag, idle" {
     try testing.expectEqual(@as(f32, 3), out.tree.c.value[out.tree.find(e.id_exposure)]);
     in.buttons.left = false;
     _ = e.frame(&ctx, &app, &in);
+}
+
+test "signals: the sidebar is rebuilt only when it has to be" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    const e = example;
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var app: e.App = .{ .layers = .init(&ctx.signals, 3) };
+    var in: Input = .{ .viewport = .{ 800, 600 } };
+
+    var out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 1), app.sidebar_builds);
+    const before = out.tree.rect(out.tree.find(e.id_add));
+
+    // Unchanged dependencies: copied from last frame, same geometry, same text.
+    out = e.frame(&ctx, &app, &in);
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 1), app.sidebar_builds);
+    try testing.expectEqual(before, out.tree.rect(out.tree.find(e.id_add)));
+    try testing.expectEqual(@as(u32, 6), e.render(out.draw).texts);
+
+    // A changed signal wakes the host and rebuilds exactly once.
+    app.layers.set(&ctx.signals, 5);
+    try testing.expect(ctx.needsFrame(&in));
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 2), app.sidebar_builds);
+    try testing.expectEqual(@as(u32, 8), e.render(out.draw).texts);
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 2), app.sidebar_builds);
+
+    // The pointer on a widget inside the subtree forces rebuilds, so the click is seen; "Add
+    // layer" then changes the signal itself.
+    in.pointer = e.center(before);
+    _ = e.frame(&ctx, &app, &in);
+    in.buttons.left = true;
+    _ = e.frame(&ctx, &app, &in);
+    in.buttons.left = false;
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(u32, 6), app.layers.get());
+    const builds_while_hovering = app.sidebar_builds;
+    try testing.expect(builds_while_hovering > 2);
+
+    // Pointer leaves: one more rebuild clears the hover colour, then reuse resumes.
+    in.pointer = .{ 700, 500 };
+    _ = e.frame(&ctx, &app, &in);
+    _ = e.frame(&ctx, &app, &in);
+    const settled = app.sidebar_builds;
+    out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(settled, app.sidebar_builds);
+    try testing.expectEqual(@as(u32, 9), e.render(out.draw).texts);
+}
+
+test "springs keep the host awake until they land" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    const e = example;
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var app: e.App = .{ .layers = .init(&ctx.signals, 1) };
+    const in: Input = .{ .viewport = .{ 800, 600 } };
+
+    _ = e.frame(&ctx, &app, &in);
+    _ = e.frame(&ctx, &app, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    app.wireframe = true; // the glow spring now has a new target
+    var frames: u32 = 0;
+    var out = e.frame(&ctx, &app, &in);
+    try testing.expectEqual(@as(f32, 0), out.wake);
+    while (out.wake == 0 and frames < 600) : (frames += 1) out = e.frame(&ctx, &app, &in);
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(@as(f32, 1), app.glow);
+    try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "animate: a spring nobody asks for is dropped at the end of the frame" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var f = ctx.begin(&in);
+    try testing.expectEqual(@as(f32, 5), f.animate(types.Id.from("a"), 5, .{}));
+    _ = f.animate(types.Id.from("b"), 1, .{});
+    _ = f.end(.{});
+    try testing.expectEqual(@as(u32, 2), ctx.anims.len);
+    f = ctx.begin(&in);
+    // Retargeted: still at 5 this frame, moving from the next step on.
+    try testing.expectEqual(@as(f32, 5), f.animate(types.Id.from("a"), 0, .{}));
+    try testing.expect(ctx.motion > 0);
+    _ = f.end(.{});
+    try testing.expectEqual(@as(u32, 1), ctx.anims.len);
+    f = ctx.begin(&in);
+    try testing.expect(f.animate(types.Id.from("a"), 0, .{}) < 5);
+    _ = f.end(.{});
+}
+
+test "tween: wakes the host for its duration, lands, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 64.0 };
+    const id = types.Id.from("fade");
+    var target: f32 = 0;
+    var value: f32 = 0;
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        value = f.tween(id, target, 0.25, .out_cubic);
+        _ = f.end(.{});
+    }
+    try testing.expect(!ctx.needsFrame(&in));
+    target = 1;
+    var frames: u32 = 0;
+    while (frames < 100) : (frames += 1) {
+        var f = ctx.begin(&in);
+        value = f.tween(id, target, 0.25, .out_cubic);
+        const out = f.end(.{});
+        if (out.wake != 0) break;
+    }
+    // The frame that sets the target, then 16 steps of 1/64 s.
+    try testing.expectEqual(@as(u32, 16), frames);
+    try testing.expectEqual(@as(f32, 1), value);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "transition: a fill change on hover fades over its duration, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    var in: Input = .{ .viewport = .{ 200, 100 }, .pointer = .{ 150, 50 }, .dt = 1.0 / 64.0 };
+    const idle = types.Color.rgb(0, 0, 0);
+    const hot = types.Color.rgb(200, 100, 40);
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input) types.Color {
+            var f = c.begin(i);
+            const node = f.leaf(types.Id.from("btn"), .{ .size = .{ .px(100), .px(100) } });
+            const r = f.interact(node, .button);
+            const want = if (r.hovered) types.Color.rgb(200, 100, 40) else types.Color.rgb(0, 0, 0);
+            f.setFillAnimated(node, types.Id.from("btn"), want, .{ .seconds = 0.125, .ease = .linear });
+            const fill: types.Color = @bitCast(f.tree().c.look[node.ix()].fill);
+            _ = f.end(.{});
+            return fill;
+        }
+    };
+    // Start-up with the pointer away: the first fill is the target itself, no fade.
+    try testing.expectEqual(idle, Ui.frame(&ctx, &in));
+    _ = Ui.frame(&ctx, &in);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    in.pointer = .{ 50, 50 }; // onto the button
+    var last = Ui.frame(&ctx, &in); // hover is known this frame: the leg starts
+    var frames: u32 = 0;
+    while (ctx.needsFrame(&in) and frames < 100) : (frames += 1) {
+        const c = Ui.frame(&ctx, &in);
+        try testing.expect(c.r >= last.r and c.g >= last.g and c.b >= last.b);
+        last = c;
+    }
+    try testing.expectEqual(hot, last);
+    // 0.125 s at 64 Hz is 8 steps, plus the settle frame after the pointer moved.
+    try testing.expect(frames >= 8 and frames <= 10);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "sequence: plays its keys once on the frame clock, then the host sleeps" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 64.0 };
+    const keys = [_]@import("../anim/keyframes.zig").Key{
+        .{ .at = 0, .value = 0 },
+        .{ .at = 0.125, .value = 1, .ease = .out_quad },
+        .{ .at = 0.25, .value = 0, .ease = .in_quad },
+    };
+    const id = types.Id.from("pulse");
+    var seen: [32]f32 = undefined;
+    var frames: usize = 0;
+    while (frames < seen.len) : (frames += 1) {
+        var f = ctx.begin(&in);
+        seen[frames] = f.sequence(id, &keys);
+        if (f.end(.{}).wake != 0) break;
+    }
+    // Frame 1 is at t = 0; each later frame is 1/64 s on; t = 0.25 lands on frame 17.
+    try testing.expectEqual(@as(usize, 16), frames);
+    try testing.expectEqual(@as(f32, 0), seen[0]);
+    try testing.expectApproxEqAbs(@as(f32, 1), seen[8], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0), seen[16], 1e-5);
+    for (1..8) |k| try testing.expect(seen[k] > seen[k - 1]);
+    for (9..17) |k| try testing.expect(seen[k] < seen[k - 1]);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
+test "animateLayout: a node pushed down by a growing sibling slides there, then rests" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 200 } };
+    const card = types.Id.from("card");
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input, top: f32) Output {
+            var f = c.begin(i);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(top) } });
+            const node = f.open(types.Id.from("card"), .{ .size = .{ .fill, .px(40) } });
+            f.animateLayout(node, .{});
+            _ = f.leaf(types.Id.from("inside"), .{ .size = .{ .px(10), .px(10) } });
+            f.close();
+            return f.end(.{});
+        }
+    };
+    // First appearance: no slide.
+    var out = Ui.frame(&ctx, &in, 10);
+    try testing.expectEqual(@as(f32, 10), out.tree.rect(out.tree.find(card)).y0);
+    _ = Ui.frame(&ctx, &in, 10);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    // The sibling grows: the card's layout moves to y = 50, but it is shown where it was and
+    // slides down, its child with it.
+    out = Ui.frame(&ctx, &in, 50);
+    var y = out.tree.rect(out.tree.find(card)).y0;
+    try testing.expectEqual(@as(f32, 10), y);
+    try testing.expect(ctx.needsFrame(&in));
+    var frames: u32 = 0;
+    while (ctx.needsFrame(&in) and frames < 600) : (frames += 1) {
+        out = Ui.frame(&ctx, &in, 50);
+        const t = out.tree;
+        const now = t.rect(t.find(card)).y0;
+        try testing.expect(now >= y and now <= 50.5);
+        try testing.expectEqual(now, t.rect(t.find(types.Id.from("inside"))).y0);
+        y = now;
+    }
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(@as(f32, 50), y);
+    try testing.expectEqual(types.inf, out.wake);
+}
+
+test "reduced motion: every animation shows its end state in the frame it changes; idle at once" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    ctx.settings.reduced_motion = true;
+    const in: Input = .{ .viewport = .{ 100, 200 } };
+    const Key = @import("../anim/keyframes.zig").Key;
+    const keys = [_]Key{ .{ .at = 0, .value = 0 }, .{ .at = 0.5, .value = 7 } };
+    const Shown = struct { spring: f32, tween: f32, fill: types.Color, seq: f32, y: f32, out: Output };
+    const Ui = struct {
+        fn frame(c: *Context, i: *const Input, on: bool) Shown {
+            var f = c.begin(i);
+            var s: Shown = undefined;
+            s.spring = f.animate(types.Id.from("glow"), simd.b2f(on), .{});
+            s.tween = f.tween(types.Id.from("fade"), 10 * simd.b2f(on), 0.3, .in_out);
+            s.fill = f.transition(types.Id.from("fill"), if (on) types.Color.white else types.Color.black, .{});
+            s.seq = f.sequence(types.Id.from("pulse"), &keys);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(if (on) 50 else 10) } });
+            const card = f.leaf(types.Id.from("card"), .{ .size = .{ .fill, .px(20) } });
+            f.animateLayout(card, .{});
+            s.out = f.end(.{});
+            s.y = s.out.tree.rect(card.ix()).y0;
+            return s;
+        }
+    };
+    var s = Ui.frame(&ctx, &in, false);
+    try testing.expectEqual(@as(f32, 7), s.seq); // a sequence shows its last key
+    _ = Ui.frame(&ctx, &in, false);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    s = Ui.frame(&ctx, &in, true);
+    try testing.expectEqual(@as(f32, 1), s.spring);
+    try testing.expectEqual(@as(f32, 10), s.tween);
+    try testing.expectEqual(types.Color.white, s.fill);
+    try testing.expectEqual(@as(f32, 7), s.seq);
+    try testing.expectEqual(@as(f32, 50), s.y);
+    try testing.expectEqual(types.inf, s.out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
+
+    // Turned off again: the next change moves as usual.
+    ctx.settings.reduced_motion = false;
+    _ = Ui.frame(&ctx, &in, true);
+    s = Ui.frame(&ctx, &in, false);
+    try testing.expectEqual(@as(f32, 1), s.spring);
+    try testing.expectEqual(@as(f32, 50), s.y);
+    try testing.expectEqual(@as(f32, 0), s.out.wake);
 }
