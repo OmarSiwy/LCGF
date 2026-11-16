@@ -79,6 +79,16 @@
     "jcc": 2,
     "short_fwd": 0
   },
+  "p_levels_build": {
+    "back": 5,
+    "jcc": 13,
+    "short_fwd": 4
+  },
+  "p_levels_resolve": {
+    "back": 2,
+    "jcc": 5,
+    "short_fwd": 0
+  },
   "p_order": {
     "back": 7,
     "jcc": 17,
