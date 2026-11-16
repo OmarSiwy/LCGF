@@ -16,6 +16,7 @@ const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
 const scheduler = @import("scheduler.zig");
 const Signals = @import("signals.zig").Signals;
+const Anims = @import("../anim/anims.zig").Anims;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -24,6 +25,8 @@ pub const Limits = struct {
     customs: u32 = 64,
     /// Bytes of text per frame.
     strings: u32 = 64 * 1024,
+    /// Springs alive at once (`Frame.animate`).
+    anims: u32 = 256,
     signals: u32 = 256,
     /// Deepest nesting of open nodes.
     depth: u32 = 64,
@@ -86,6 +89,7 @@ pub const Context = struct {
     cur: u1 = 0,
     draw: DrawList,
     signals: Signals,
+    anims: Anims,
     /// Rows of the currently open nodes.
     stack: []u32,
     depth: u32 = 0,
@@ -114,6 +118,7 @@ pub const Context = struct {
             .strings = .{ .{ .buf = carver.slice(u8, limits.strings) }, .{ .buf = carver.slice(u8, limits.strings) } },
             .draw = DrawList.init(carver, limits.nodes, limits.texts, limits.customs),
             .signals = Signals.init(carver, limits.signals),
+            .anims = Anims.init(carver, limits.anims),
             .stack = carver.slice(u32, limits.depth),
             .timers = scheduler.Timers.init(carver, limits.timers),
         };
@@ -214,6 +219,7 @@ test "init: carves every table from the caller's buffer, or refuses a short one"
     for (ctx.strings) |s| try testing.expectEqual(example_limits.strings, s.buf.len);
     try testing.expectEqual(example_limits.depth, ctx.stack.len);
     try testing.expectEqual(example_limits.signals, ctx.signals.cap);
+    try testing.expectEqual(example_limits.anims, ctx.anims.cap);
     // The last column carved ends inside the buffer.
     try testing.expect(@intFromPtr(ctx.stack.ptr + ctx.stack.len) <= hi);
 
