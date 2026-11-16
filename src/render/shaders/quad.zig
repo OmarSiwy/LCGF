@@ -11,7 +11,7 @@ pub const stock_material = @embedFile("material.wgsl");
 /// The full quad shader around `material_fn`, a WGSL `fn material(in: Frag) -> vec4f`.
 /// `in.params` carries `Style.params`; `in.local` is the pixel offset from the quad's centre and
 /// `in.half` its half size, both in logical pixels. quad.wgsl's helpers (`gradient`, `nine_uv`,
-/// `rounded_box`, `tex`, `samp`, `globals`) are in scope.
+/// `nearest_uv`, `rounded_box`, `tex`, `samp`, `globals`) are in scope.
 pub fn shader(comptime material_fn: []const u8) [:0]const u8 {
     return @embedFile("quad.wgsl") ++ material_fn;
 }
