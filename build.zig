@@ -570,6 +570,30 @@ pub fn build(b: *std.Build) void {
     shell_wasm.rdynamic = true;
     web_step.dependOn(&b.addInstallArtifact(shell_wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/shell/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
+    // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgr. libobjc,
+    // Metal and QuartzCore are the platform's, opened at run time, so nothing is linked and it
+    // cross-compiles from Linux (ci/run.sh metal).
+    const metal_tests = b.addTest(.{ .name = "metal-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/metal.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // Draws the render conformance scenes as PNGs on a Mac (src/render/metal/play.zig).
+    const metal_play = b.addExecutable(.{ .name = "metal-play", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/play.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    // The committed MSL of the shipped shaders (src/render/shaders/gen/, from naga).
+    for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module }) |m| for ([_][]const u8{ "stock", "example" }) |v|
+        m.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
+    b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
+    b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
+    b.step("metal-play", "Build zig-out/bin/metal-play (draws the render conformance scenes with Metal)").dependOn(&b.addInstallArtifact(metal_play, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
