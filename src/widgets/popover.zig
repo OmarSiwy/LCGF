@@ -126,7 +126,7 @@ pub fn Popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open:
                 if (!@field(st, @tagName(open))) return null;
                 return .{ .style = scrimStyle(v.in.viewport) };
             }
-            if (comptime is.named(panel)) return .{ .style = panelStyle(&th, v.last.of(id)) };
+            if (comptime is.named(panel)) return .{ .style = panelStyle(&th, v.last.of(id)), .role = role };
             return plainPart(th, n, v.response);
         }
     };
@@ -240,6 +240,7 @@ pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool
     _ = f.interact(f.open(scrim, scrimStyle(f.in.viewport)), overlay_sense);
     const p = f.open(.from(partName(name, "panel")), panelStyle(th, f.lastRect(.from(name))));
     _ = f.interact(p, overlay_sense);
+    f.tree().c.role[p.ix()] = @backingInt(role);
     return true;
 }
 
@@ -250,6 +251,70 @@ pub const overlay_sense: types.Sense = .{ .hover = true, .click = true };
 pub fn end(f: *Frame) void {
     f.close();
     f.close();
+}
+
+// ---- accessibility ------------------------------------------------------------------------------
+
+/// The panel's role: a non-modal dialog (WAI-ARIA APG dialog pattern). Its value is 0.
+pub const role: a11y.Role = .dialog;
+
+/// The semantics of popover `name` the tree's columns cannot hold, written into `s` after
+/// `Semantics.clear` and before `a11y.names` and `a11y.states`: the trigger is expandable, and
+/// expanded while the panel is in `t` (`aria-expanded`); the panel is named by the trigger
+/// (`aria-labelledby`), so the dialog reads as "Details". Works on either front end's tree.
+pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8) void {
+    const trig = t.find(.from(name));
+    if (trig == none) return;
+    const panel = t.find(.from(partName(name, "panel")));
+    s.c.state[trig] |= a11y.State.bitsOf(.{ .expandable = true, .expanded = panel != none });
+    if (panel != none) s.c.labelled_by[panel] = trig;
+}
+
+/// Room for the accessibility export of a tree of up to `cap` rows: `a11y.Semantics` and an
+/// `a11y.Export` in one buffer, for a widget's tests and for applications that check one.
+pub fn Semantic(comptime cap: u32) type {
+    return struct {
+        const Self = @This();
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        s: a11y.Semantics = undefined,
+        out: a11y.Export = undefined,
+
+        fn carve(carver: *mem.Carver) struct { a11y.Semantics, a11y.Export } {
+            return .{ a11y.Semantics.init(carver, cap), a11y.Export.init(carver, cap) };
+        }
+        const bytes = blk: {
+            @setEvalBranchQuota(20_000);
+            var counter: mem.Carver = .{ .buf = null };
+            _ = carve(&counter);
+            break :blk counter.off;
+        };
+
+        /// Carves the columns and clears the inputs; write widget semantics into the result.
+        pub fn begin(x: *Self) *a11y.Semantics {
+            var carver: mem.Carver = .{ .buf = &x.buf };
+            x.s, x.out = carve(&carver);
+            x.s.clear();
+            return &x.s;
+        }
+
+        /// Names, states and the flat export of `t`, whose text runs are `tx` over `strings`.
+        pub fn finish(x: *Self, t: *const Tree, tx: *const Texts, strings: []const u8) *const a11y.Export {
+            a11y.names(t, &x.s);
+            a11y.states(t, &x.s);
+            a11y.flatten(t, tx, strings, &x.s, &x.out);
+            return &x.out;
+        }
+    };
+}
+
+/// Whether two exports say the same to assistive technology: rows, roles, states, values and
+/// names (by hash, as the front ends keep their bytes in different buffers).
+pub fn sameSemantics(a: *const a11y.Export, b: *const a11y.Export) bool {
+    const n = a.len;
+    if (n != b.len) return false;
+    return std.mem.eql(u8, a.c.role[0..n], b.c.role[0..n]) and std.mem.eql(u8, a.c.state[0..n], b.c.state[0..n]) and
+        std.mem.eql(f32, a.c.value[0..n], b.c.value[0..n]) and std.mem.eql(u32, a.c.name_hash[0..n], b.c.name_hash[0..n]) and
+        std.mem.eql(u32, a.c.parent[0..n], b.c.parent[0..n]);
 }
 
 // ---- comptime front end: a page whose widgets show and hide parts of themselves ---------------
@@ -623,6 +688,55 @@ test "Popover: click opens; a press inside keeps it; a press outside or Escape c
         .{ .aim = .{ .part = "details" }, .key = keys.escape, .open = false }, // Escape
         .{ .aim = .{ .part = "details" }, .key = keys.escape, .open = false }, // Escape when closed: nothing
     });
+}
+
+/// The export row of tree row `node`; `none` if it is not exported.
+pub fn exportRow(e: *const a11y.Export, node: u32) u32 {
+    for (0..e.len) |k| if (e.c.node[k] == node) return @intCast(k);
+    return none;
+}
+
+var sem: [2]Semantic(64) = .{ .{}, .{} };
+
+/// The accessibility export of the harness's last frame in each front end, with popover
+/// `name`'s semantics.
+fn exports(h: anytype, comptime name: []const u8, pair: anytype) [2]*const a11y.Export {
+    const rt = pair.runtime;
+    const cp = pair.comptime_;
+    semantics(rt.tree, sem[0].begin(), name);
+    semantics(cp.tree, sem[1].begin(), name);
+    return .{
+        sem[0].finish(rt.tree, rt.texts, h.ctx.strings[h.ctx.cur].buf),
+        sem[1].finish(cp.tree, &h.ui.tables.tx, h.ui.tables.strings.buf),
+    };
+}
+
+test "Popover: the panel is a dialog named by its trigger, which is expanded while it is open" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    var pair = try h.frame(&in);
+    var e = exports(h, "details", pair);
+    try testing.expect(sameSemantics(e[0], e[1]));
+    var trig = exportRow(e[0], pair.runtime.tree.find(.from("details")));
+    const trig_closed = e[0].c.state[trig];
+    try testing.expectEqual(@backingInt(a11y.Role.button), e[0].c.role[trig]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true }), trig_closed);
+    h.app.open = true;
+    h.ui.signals.set(.open, true);
+    _ = try h.frame(&in);
+    pair = try h.frame(&in);
+    e = exports(h, "details", pair);
+    try testing.expect(sameSemantics(e[0], e[1]));
+    trig = exportRow(e[0], pair.runtime.tree.find(.from("details")));
+    const dialog = exportRow(e[0], pair.runtime.tree.find(.from("details_panel")));
+    try testing.expectEqual(@backingInt(a11y.Role.dialog), e[0].c.role[dialog]);
+    try testing.expectEqual(a11y.State.bitsOf(.{ .expandable = true, .expanded = true }), e[0].c.state[trig]);
+    try testing.expectEqual(std.hash.Fnv1a_32.hash("Details"), e[0].c.name_hash[dialog]);
+    try testing.expectEqual(@as(f32, 0), e[0].c.value[dialog]);
+    // Its two labels are its children; the scrim (no role) is not exported.
+    try testing.expectEqual(@as(u32, 2), e[0].c.kids[dialog]);
+    try testing.expectEqual(e[0].c.parent[dialog + 1], dialog);
 }
 
 test "check: a popover's open field must be a bool" {
