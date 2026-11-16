@@ -112,31 +112,40 @@ pub const Timers = struct {
     }
 };
 
-/// True on the first frame at least `seconds` after the frame that first asked for timer `id`,
-/// which then restarts. Ask every frame for a repeating timer (a caret blink); stop asking to
-/// drop it (it is gone after the first frame that does not ask). `Output.wake` brings the host
-/// back in time, with no input:
+/// True on the first frame at least `seconds` after the frame that first asked for timer `id`.
+/// Ask for it every frame while you want it; a timer not asked for in a frame is dropped.
+/// `.repeat` restarts it when it fires (a caret blink); `.once` drops it when it fires, so a
+/// one-shot costs exactly one wakeup (asked again later, it starts over). `Output.wake` brings
+/// the host back in time, with no input:
 ///
-///     if (f.timer(.from("caret"), 0.5)) caret_on = !caret_on;
+///     if (f.timer(.from("caret"), 0.5, .repeat)) caret_on = !caret_on;
+///     if (toast and f.timer(.from("toast"), 3, .once)) toast = false;
 ///
 /// Past `Limits.timers` the last row is shared, so extra timers fire early or late, never out of
 /// bounds.
-pub fn timer(f: *Frame, id: Id, seconds: f32) bool {
+pub fn timer(f: *Frame, id: Id, seconds: f32, mode: TimerMode) bool {
     const ctx = f.ctx;
     const t = &ctx.timers;
     const k = @backingInt(id);
     const found = simd.find(t.c.id, t.len, k);
-    const is_new = found == none;
-    const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
-    t.len = @min(t.len + @intFromBool(is_new), t.cap);
+    const missing = found == none;
+    const i = simd.selU(missing, @min(t.len, t.cap - 1), found);
+    t.len = @min(t.len + @intFromBool(missing), t.cap);
+    // A one-shot that fired earlier this frame has no deadline left: asked again, it starts over.
+    const is_new = simd.orB(missing, t.c.at[i] == inf);
     const now = f.in.time;
     const at = selD(is_new, now + seconds, t.c.at[i]);
     const fired = now >= at;
+    const repeat = mode == .repeat;
+    const done = simd.andB(fired, !repeat);
     t.c.id[i] = k;
-    t.c.at[i] = selD(fired, now + seconds, at);
-    t.c.seen[i] = ctx.frame;
+    // A finished one-shot leaves no deadline and is not seen this frame, so `sweep` drops it.
+    t.c.at[i] = selD(fired, selD(repeat, now + seconds, inf), at);
+    t.c.seen[i] = ctx.frame -% @intFromBool(done);
     return fired;
 }
+
+pub const TimerMode = enum { once, repeat };
 
 /// Called by `begin`. Owes one extra frame after any input change, so state that this frame's
 /// events modify (a click handled after the widget was drawn) is visible without waiting for the
@@ -322,8 +331,8 @@ test "timer: fires once per period; the earliest deadline is the wake" {
     const S = struct {
         fn run(c: *Context, input: *const Input, out: *[2]bool) f32 {
             var f = c.begin(input);
-            out[0] = f.timer(.from("slow"), 2);
-            out[1] = f.timer(.from("fast"), 0.5);
+            out[0] = f.timer(.from("slow"), 2, .once);
+            out[1] = f.timer(.from("fast"), 0.5, .repeat);
             return f.end(.{}).wake;
         }
     };
@@ -340,12 +349,25 @@ test "timer: fires once per period; the earliest deadline is the wake" {
     // "fast" fires and restarts: next due at 11, before "slow" at 12.
     try testing.expectEqual(@as(f32, 0.5), S.run(&ctx, &in, &fired));
     try testing.expectEqual([2]bool{ false, true }, fired);
+    var f: Frame = undefined;
+    // The host overslept "fast" (due at 11): both fire at 12. The one-shot is gone; "fast"
+    // restarts at 12.5.
     in.time = 12;
-    _ = S.run(&ctx, &in, &fired);
+    try testing.expectEqual(@as(f32, 0.5), S.run(&ctx, &in, &fired));
     try testing.expectEqual([2]bool{ true, true }, fired);
+    try testing.expectEqual(@as(u32, 1), ctx.timers.len);
+    try testing.expectEqual(@as(f64, 12.5), ctx.timers.earliest());
+    // A one-shot asked again starts over, even in the frame it fired. ("fast" was not asked
+    // for in this frame, so it is gone.)
+    f = ctx.begin(&in);
+    try testing.expect(f.timer(.from("once"), 0, .once));
+    try testing.expect(!f.timer(.from("once"), 1, .once));
+    _ = f.end(.{});
+    try testing.expectEqual(@as(f64, 13), ctx.timers.earliest());
+    try testing.expectEqual(@as(u32, 1), ctx.timers.len);
 
     // Nobody asks any more: the timers are dropped and the host sleeps.
-    var f = ctx.begin(&in);
+    f = ctx.begin(&in);
     try testing.expectEqual(types.inf, f.end(.{}).wake);
     try testing.expectEqual(@as(u32, 0), ctx.timers.len);
     in.time = 100;
@@ -357,7 +379,7 @@ test "timer: past the limit the last row is shared, never written out of bounds"
     var ctx = try Fx.context();
     const in: Input = .{};
     var f = ctx.begin(&in);
-    for (0..5) |i| _ = f.timer(Id.from("t").with(@intCast(i)), 1);
+    for (0..5) |i| _ = f.timer(Id.from("t").with(@intCast(i)), 1, .once);
     try testing.expectEqual(@as(u32, 2), ctx.timers.len);
     _ = f.end(.{});
     try testing.expectEqual(@as(f64, 1), ctx.timers.earliest());
@@ -446,7 +468,7 @@ test "pace: idle, timer, once and display, strongest reason first" {
     const S = struct {
         fn run(c: *Context, input: *const Input, with_timer: bool, motion: f32) Output {
             var f = c.begin(input);
-            if (with_timer) _ = f.timer(.from("t"), 1);
+            if (with_timer) _ = f.timer(.from("t"), 1, .repeat);
             c.motion = motion;
             return f.end(.{});
         }
@@ -475,29 +497,116 @@ test "pace: idle, timer, once and display, strongest reason first" {
     try testing.expectEqual(Pace.display, S.run(&ctx, &in, false, 0.5).pace);
 }
 
-/// What an event-driven host did over `ticks` turns of its loop with no new input: frames it
-/// built (`needsFrame` held) and timed wakeups it would have armed (a finite `wake`).
-const Idle = struct { frames: u32 = 0, wakeups: u32 = 0 };
+/// The idle scene (target D5): a small UI with every scheduler feature in it, run by an
+/// event-driven host in the way the Dear ImGui wiki's power-save loop does it, with the clock
+/// simulated: build a frame only when `needsFrame` says so, otherwise block on events with
+/// `Output.wake` as the timeout.
+const IdleScene = struct {
+    ctx: Context,
+    in: Input = .{ .viewport = .{ 200, 100 } },
+    /// The last frame's answer: how long the host may block.
+    wake: f32 = 0,
+    pace: Pace = .once,
+    /// Frames built, and timeouts that expired (the host woke without an event).
+    frames: u32 = 0,
+    wakeups: u32 = 0,
+    // App state.
+    toast: bool = false,
+    results: u32 = 0,
+    box: *Mailbox(u32),
 
-fn idle(ctx: *Context, in: *Input, ticks: u32) Idle {
-    var r: Idle = .{};
-    for (0..ticks) |_| {
-        in.time += in.dt;
-        if (!ctx.needsFrame(in)) continue;
-        r.frames += 1;
-        r.wakeups += @intFromBool(frame(ctx, in) != types.inf);
+    const id_button = Id.from("button");
+    const id_toast = Id.from("toast");
+
+    fn build(s: *IdleScene) void {
+        var f = s.ctx.begin(&s.in);
+        _ = f.open(.none, .{ .dir = .x, .gap = 10 });
+        const b = f.leaf(id_button, .{ .size = .{ .px(40), .px(40) } });
+        _ = f.interact(b, .any);
+        // A toast that hides itself after 3 s: its timer is asked for only while it shows.
+        if (s.toast) {
+            _ = f.text("saved", .{});
+            if (f.timer(id_toast, 3, .once)) s.toast = false;
+        }
+        while (s.box.pop()) |v| s.results += v;
+        f.close();
+        const out = f.end(.{});
+        s.wake = out.wake;
+        s.pace = out.pace;
+        s.frames += 1;
     }
-    return r;
-}
+
+    /// No input for `seconds` of clock time. Fails on a busy loop.
+    fn wait(s: *IdleScene, seconds: f64) !void {
+        const until = s.in.time + seconds;
+        for (0..10_000) |_| {
+            if (s.ctx.needsFrame(&s.in)) {
+                s.build();
+                continue;
+            }
+            // Blocked on events: only the timeout can end the wait.
+            if (s.wake == types.inf or s.in.time + s.wake > until) {
+                s.in.time = until;
+                return;
+            }
+            s.in.time += s.wake;
+            s.wakeups += 1;
+        }
+        return error.BusyLoop;
+    }
+
+    fn expectIdle(s: *IdleScene, seconds: f64) !void {
+        const frames = s.frames;
+        const wakeups = s.wakeups;
+        try s.wait(seconds);
+        try testing.expectEqual(frames, s.frames);
+        try testing.expectEqual(wakeups, s.wakeups);
+        try testing.expectEqual(Pace.idle, s.pace);
+        try testing.expectEqual(types.inf, s.wake);
+    }
+};
 
 test "idle: zero frames and zero wakeups without input" {
     const Fx = Fixture(small);
-    var ctx = try Fx.context();
-    var in: Input = .{ .viewport = .{ 100, 100 } };
-    // Start-up: the first frame and its settle frame, which asks for no timed wake.
-    try testing.expectEqual(Idle{ .frames = 2, .wakeups = 1 }, idle(&ctx, &in, 2));
-    try testing.expectEqual(Idle{}, idle(&ctx, &in, 600));
-    // One input change: one frame and one settle frame, then idle again.
-    in.pointer = .{ 3, 3 };
-    try testing.expectEqual(Idle{ .frames = 2, .wakeups = 1 }, idle(&ctx, &in, 600));
+    var buf: [4]u32 = undefined;
+    var box: Mailbox(u32) = .init(&buf);
+    var s: IdleScene = .{ .ctx = try Fx.context(), .box = &box };
+
+    // Start-up: the first frame and its settle frame, then nothing for a minute.
+    try s.wait(1);
+    try testing.expectEqual(@as(u32, 2), s.frames);
+    try testing.expectEqual(@as(u32, 0), s.wakeups);
+    try s.expectIdle(60);
+
+    // The pointer comes to rest on the button: 2 frames (input, settle), then one timeout when
+    // the hover intent falls due, its frame, and idle again.
+    s.in.pointer = .{ 20, 20 };
+    s.frames = 0;
+    try s.wait(5);
+    try testing.expectEqual(@as(u32, 3), s.frames);
+    try testing.expectEqual(@as(u32, 1), s.wakeups);
+    try testing.expectEqual(@backingInt(IdleScene.id_button), s.ctx.inter.hover_intent);
+    try s.expectIdle(60);
+
+    // A one-shot timer: the toast hides itself 3 s later with one timeout, then idle.
+    s.toast = true;
+    s.ctx.dirty = true; // what a signal bump on the toast flag does
+    s.frames = 0;
+    s.wakeups = 0;
+    try s.wait(10);
+    try testing.expect(!s.toast);
+    try testing.expectEqual(@as(u32, 1), s.wakeups);
+    try testing.expectEqual(@as(u32, 0), s.ctx.timers.len);
+    try s.expectIdle(60);
+
+    // A background result: exactly one frame drains it, no timeout, then idle.
+    try testing.expect(box.push(7));
+    s.ctx.waker.post();
+    s.frames = 0;
+    s.wakeups = 0;
+    try s.wait(1);
+    try testing.expectEqual(@as(u32, 7), s.results);
+    try testing.expectEqual(@as(u32, 1), s.frames);
+    try testing.expectEqual(@as(u32, 0), s.wakeups);
+    try s.expectIdle(3600);
 }
