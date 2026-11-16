@@ -29,7 +29,10 @@ pub fn trail(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []con
     std.debug.assert(ids.len + 1 == titles.len);
     _ = f.open(.none, navStyle(th));
     for (ids, titles[0..ids.len]) |id, title| {
-        _ = f.open(id, linkStyle(th));
+        const link = f.open(id, linkStyle(th));
+        const r = f.interact(link, .button);
+        f.setFill(link, linkFill(th, r));
+        f.setCursor(.pointer, r.hovered);
         _ = f.textStyled(title, linkText(th), textStyle());
         f.close();
         _ = f.leaf(.none, dividerStyle(th));
@@ -39,16 +42,21 @@ pub fn trail(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []con
     return none;
 }
 
-/// The trail: its links and dividers in a row.
+/// The trail: its links and dividers in a row, spaced by the theme's gap.
 pub fn navStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .cross = .center };
+    return .{ .dir = .x, .cross = .center, .gap = th.gap };
 }
 
-/// A link: its title.
+/// A link: its title, slightly padded and rounded so its hover fill reads as a target.
 pub fn linkStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .dir = .x, .cross = .center };
+    return .{ .dir = .x, .cross = .center, .pad = .{ th.gap, 2, th.gap, 2 }, .radius = th.radius };
+}
+
+/// A link's fill by interaction state (`base.stateIndex`): none at rest, control-hot under
+/// the pointer, control-held while pressed.
+pub fn linkFill(th: *const Theme, r: types.Response) types.Color {
+    const fills: base.StateColors = .{ .transparent, th.control_hot, th.control_held, th.control_held };
+    return fills[base.stateIndex(r)];
 }
 
 /// A title's text node, as `Frame.text` makes it.
@@ -56,9 +64,9 @@ pub fn textStyle() Style {
     return .{ .role = .label };
 }
 
-/// A link's title.
+/// A link's title: the accent colour, as links are.
 pub fn linkText(th: *const Theme) TextStyle {
-    return base.labelText(th);
+    return .{ .px = th.text_px, .color = th.accent };
 }
 
 /// The current page's title.
@@ -66,10 +74,9 @@ pub fn currentText(th: *const Theme) TextStyle {
     return base.labelText(th);
 }
 
-/// The mark between two titles.
+/// The mark between two titles: a small dot in the outline colour.
 pub fn dividerStyle(th: *const Theme) Style {
-    _ = th;
-    return .{ .size = .{ .px(4), .px(4) } };
+    return .{ .size = .{ .px(4), .px(4) }, .radius = 2, .fill = th.control_hot };
 }
 
 /// The breadcrumb as a spec node.
@@ -111,13 +118,14 @@ pub const ct = struct {
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-                _ = in;
                 const th = @TypeOf(ui.*).theme;
                 const t = &ui.tables.t;
                 const nav = t.push(parent, .none, &n.style);
                 next.* += 1;
                 inline for (names, 0..) |name, k| {
-                    const link = t.push(nav, .hash(name), &n.children[2 * k].style);
+                    var ls = n.children[2 * k].style;
+                    ls.fill = linkFill(&th, ui.response(next.*, in));
+                    const link = t.push(nav, .hash(name), &ls);
                     text(ui, link, titles[k], &linkText(&th));
                     t.seal(link);
                     _ = t.push(nav, .none, &n.children[2 * k + 1].style);
@@ -198,6 +206,36 @@ test "breadcrumb: both front ends build links, dividers and the current page in 
     try testing.expect(t.rect(rows.divider[0]).x0 >= t.rect(rows.link[0]).x1);
     try testing.expect(t.rect(rows.current).x0 >= t.rect(rows.divider[1]).x1);
     try testing.expectEqual(none, h.ui.signals.state.activated);
+}
+
+test "breadcrumb: links in the accent colour with a hover fill, dots between; any theme alike" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    const th = Theme.default;
+    var t = out.runtime.tree;
+    const tx = out.runtime.texts;
+    try testing.expectEqual(th.accent.bitsOf(), tx.c.color[t.c.text[rows.link[0] + 1]]);
+    try testing.expectEqual(th.text.bitsOf(), tx.c.color[t.c.text[rows.current]]);
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[rows.divider[0]].fill);
+    try testing.expectEqual(types.Color.transparent.bitsOf(), t.c.look[rows.link[0]].fill);
+    try testing.expectEqual(t.rect(rows.link[0]).x1 + th.gap, t.rect(rows.divider[0]).x0);
+    const r = t.rect(rows.link[1]);
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    out = try h.frame(&in);
+    t = out.runtime.tree;
+    try testing.expectEqual(th.control_hot.bitsOf(), t.c.look[rows.link[1]].fill);
+    try testing.expectEqual(th.control_hot.bitsOf(), out.comptime_.tree.c.look[rows.link[1]].fill);
+
+    const Light = Page(.{ .accent = .rgb(0, 90, 200), .text = .rgb(20, 20, 20), .control_hot = .rgb(180, 180, 190), .gap = 10 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    _ = try S.light.frame(&in);
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(0, 90, 200).bitsOf(), lo.runtime.texts.c.color[lo.runtime.tree.c.text[rows.link[0] + 1]]);
 }
 
 test {
