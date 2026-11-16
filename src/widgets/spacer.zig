@@ -28,8 +28,13 @@ pub fn spacer(f: *Frame, axis: Axis) Node {
 /// theme; the axis picks the size by table index.
 pub fn style(axis: Axis) Style {
     const sizes = [2][2]types.Size{ .{ .fill, .px(0) }, .{ .px(0), .fill } };
-    return .{ .size = sizes[@backingInt(axis)] };
+    return .{ .size = sizes[@backingInt(axis)], .role = .none };
 }
+
+// ---- accessibility ------------------------------------------------------------------------
+
+// A spacer is presentational: role `none` (the style's), so `a11y.flatten` leaves it out of
+// the exported tree. It has no name, value 0 and no states.
 
 /// The spacer as a spec node.
 pub const ct = struct {
@@ -142,6 +147,44 @@ test "spacer: takes no input; hit testing and the tab order skip it" {
     try check.expectInert(out.runtime.tree, &.{ 7, 12 });
     // Only the three buttons are widgets in the comptime front end.
     try testing.expectEqual(3, Default.Ui.Events.widget_count);
+}
+
+test "spacer: role none, so not exported; no name, value 0, no states, in both front ends" {
+    const a11y = @import("../a11y/tree.zig");
+    const mem = @import("../core/mem.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    const Buf = struct {
+        const bytes = blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = a11y.Export.init(&counter, 32);
+            break :blk counter.off;
+        };
+        var buf: [bytes]u8 align(mem.column_align) = undefined;
+    };
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        var carver: mem.Carver = .{ .buf = &Buf.buf };
+        var ex = a11y.Export.init(&carver, 32);
+        a11y.flatten(t, tx, str, &sem, &ex);
+        for ([2]u32{ 7, 12 }) |r| {
+            try testing.expectEqual(@backingInt(a11y.Role.none), t.c.role[r]);
+            try testing.expectEqual(types.none, sem.c.name[r]);
+            try testing.expectEqual(@as(f32, 0), t.c.value[r]);
+            try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
+            for (ex.c.node[0..ex.len]) |node| try testing.expect(node != r);
+        }
+        // The buttons and labels around them are exported.
+        try testing.expect(ex.len >= 8);
+    }
 }
 
 test {
