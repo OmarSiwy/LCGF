@@ -55,6 +55,19 @@ fn rowBytes(comptime FT: type) comptime_int {
     };
 }
 
+const Look = tree.Look;
+
+/// A `Look` whose two colours are indices into the UI's palette (`Columns.palette`): 28 bytes
+/// instead of 32. `extern` for a fixed layout, as `Look` is.
+pub const PalettedLook = extern struct {
+    params: [4]f32,
+    radius: f32,
+    texture: u16,
+    material: u16,
+    fill: u8,
+    border_color: u8,
+};
+
 /// The row type of a column with `n` rows: `[]T` becomes `[n]T`, `[k][]T` becomes `[k][n]T`.
 fn Rows(comptime FT: type, comptime n: comptime_int) type {
     return switch (@typeInfo(FT)) {
@@ -93,6 +106,7 @@ pub fn Coord(comptime viewport: ?[2]f32) type {
 pub fn Columns(comptime spec: Spec, comptime options: Options) type {
     const n = flatten.count(spec);
     const info = @typeInfo(RuntimeColumns).@"struct";
+    @setEvalBranchQuota(1000 + 100 * n);
     const custom = any(spec, isCustom);
     const shows = any(spec, showsState);
     return struct {
@@ -122,16 +136,47 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             break :blk t;
         };
 
+        /// Every distinct colour of the constant `look` column (`fill` and `border_color`), in
+        /// order of first use. Empty when `look` is dynamic.
+        pub const palette: []const u32 = blk: {
+            if (classOf("look") != .constant) break :blk &.{};
+            @setEvalBranchQuota(10_000 + 600 * n);
+            var out: []const u32 = &.{};
+            for (pushed.c.look[0..n]) |l| for ([_]u32{ l.fill, l.border_color }) |c| {
+                if (std.mem.indexOfScalar(u32, out, c) == null) out = out ++ [_]u32{c};
+            };
+            break :blk out;
+        };
+        /// `look` stores palette indices (`PalettedLook`) when the palette fits a byte.
+        pub const paletted = classOf("look") == .constant and palette.len <= 256;
+        /// The palette, as the read-only table `PalettedLook` rows index.
+        pub const palette_table: [palette.len]u32 = palette[0..palette.len].*;
+
+        /// The rows of the read-only table of `name`: as `Rows`, except `look` when paletted.
+        fn TableRows(comptime name: []const u8) type {
+            return if (paletted and std.mem.eql(u8, name, "look")) [n]PalettedLook else Rows(@FieldType(RuntimeColumns, name), n);
+        }
+
         /// The read-only table of the constant column `name`: its `n` rows as `Tree.push` writes
-        /// them. A comptime constant, so it lives in read-only data, not in RAM the UI owns.
-        pub fn table(comptime name: []const u8) *const Rows(@FieldType(RuntimeColumns, name), n) {
+        /// them, `look` with its colours as palette indices when `paletted`. A comptime constant,
+        /// so it lives in read-only data, not in RAM the UI owns.
+        pub fn table(comptime name: []const u8) *const TableRows(name) {
             if (comptime classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic in this UI");
             return &struct {
-                const rows: Rows(@FieldType(RuntimeColumns, name), n) = blk: {
-                    @setEvalBranchQuota(10_000 + 100 * n);
+                const rows: TableRows(name) = blk: {
+                    @setEvalBranchQuota(10_000 + 100 * n + 10 * n * palette.len);
                     const col = @field(pushed.c, name);
-                    var out: Rows(@FieldType(RuntimeColumns, name), n) = undefined;
-                    switch (@typeInfo(@FieldType(RuntimeColumns, name))) {
+                    var out: TableRows(name) = undefined;
+                    if (TableRows(name) == [n]PalettedLook) {
+                        for (&out, col[0..n]) |*o, l| o.* = .{
+                            .params = l.params,
+                            .radius = l.radius,
+                            .texture = l.texture,
+                            .material = l.material,
+                            .fill = @intCast(std.mem.indexOfScalar(u32, palette, l.fill).?),
+                            .border_color = @intCast(std.mem.indexOfScalar(u32, palette, l.border_color).?),
+                        };
+                    } else switch (@typeInfo(@FieldType(RuntimeColumns, name))) {
                         .pointer => out = col[0..n].*,
                         else => for (&out, col) |*o, c| {
                             o.* = c[0..n].*;
@@ -142,6 +187,21 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             }.rows;
         }
 
+        /// Row `i` of the constant `look` column as paint reads it, from the palette when
+        /// `paletted`: two loads more than reading the full row.
+        pub fn look(i: usize) Look {
+            const l = table("look")[i];
+            if (!paletted) return l;
+            return .{
+                .params = l.params,
+                .fill = palette_table[l.fill],
+                .border_color = palette_table[l.border_color],
+                .radius = l.radius,
+                .texture = l.texture,
+                .material = l.material,
+            };
+        }
+
         pub fn classOf(comptime name: []const u8) Class {
             return class[std.meta.fieldIndex(RuntimeColumns, name) orelse @compileError("no column '" ++ name ++ "'")];
         }
@@ -149,9 +209,10 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
         /// Read-only bytes: the constant tables (`table`).
         pub const rodata_bytes = blk: {
             var b = 0;
-            for (info.field_types, class) |FT, c| {
-                if (c == .constant) b += @sizeOf(Rows(FT, n));
+            for (names, class) |name, c| {
+                if (c == .constant) b += @sizeOf(TableRows(name));
             }
+            if (paletted) b += @sizeOf(@TypeOf(palette_table));
             break :blk b;
         };
         /// The dynamic columns: one field per dynamic column of `Tree.Columns`, of the same name,
@@ -204,6 +265,10 @@ test "Columns: a custom widget builds its own rows, so every column is dynamic" 
 
 /// The constant table `name` of `C` equals the column of the runtime tree `t`, row for row.
 fn expectTable(comptime C: type, comptime name: []const u8, t: *const tree.Tree) !void {
+    if (comptime std.mem.eql(u8, name, "look")) {
+        for (0..C.node_count) |i| try testing.expectEqual(t.c.look[i], C.look(i));
+        return;
+    }
     const rows = C.table(name);
     const col = @field(t.c, name);
     if (comptime @typeInfo(@TypeOf(col)) == .pointer) {
@@ -239,13 +304,56 @@ test "Columns: every column is classified, and the two classes hold the runtime 
         const C = Columns(e.spec, e.options);
         var row: usize = 0;
         inline for (@typeInfo(RuntimeColumns).@"struct".field_types) |FT| row += rowBytes(FT);
-        // Equal up to the padding @sizeOf adds to Dynamic's end, and the bytes integer
-        // coordinates save in `rect` and `vis`.
-        const saved = 2 * 4 * C.node_count * (4 - @sizeOf(C.Coordinate));
+        // Equal up to the padding @sizeOf adds to Dynamic's end, the bytes integer coordinates
+        // save in `rect` and `vis`, and what the palette saves in `look`.
+        const palette_saved = if (C.paletted) C.node_count * 4 - 4 * C.palette.len else 0;
+        const saved = 2 * 4 * C.node_count * (4 - @sizeOf(C.Coordinate)) + palette_saved;
         try testing.expect(C.rodata_bytes + C.ram_bytes + saved >= C.node_count * row);
         try testing.expect(C.rodata_bytes + C.ram_bytes + saved < C.node_count * row + 16);
         try testing.expectEqual(@typeInfo(RuntimeColumns).@"struct".field_names.len, C.class.len);
     }
+}
+
+test "PalettedLook: 28 bytes, 4 fewer than Look" {
+    try testing.expectEqual(28, @sizeOf(PalettedLook));
+    try testing.expectEqual(32, @sizeOf(Look));
+}
+
+test "Columns.palette: every look reads back as Tree.push wrote it" {
+    inline for (examples.all) |e| {
+        const C = Columns(e.spec, e.options);
+        if (comptime C.paletted) {
+            const pushed_look = C.pushed.c.look;
+            for (0..C.node_count) |i| try testing.expectEqual(pushed_look[i], C.look(i));
+            try testing.expect(C.palette.len <= 256);
+        }
+    }
+    // The card: transparent, its fill and its border colour.
+    const Card = Columns(examples.static_card, .{});
+    try testing.expect(Card.paletted);
+    try testing.expectEqual(3, Card.palette.len);
+    try testing.expectEqual([5]PalettedLook, @TypeOf(Card.table("look").*));
+    // A custom widget makes look dynamic: no palette.
+    try testing.expect(!Columns(examples.custom, .{}).paletted);
+}
+
+/// `n` labels with `n` different fills.
+fn rainbow(comptime n: comptime_int) Spec {
+    @setEvalBranchQuota(1000 + 100 * n);
+    var kids: [n]Spec = undefined;
+    for (&kids, 0..) |*k, i| k.* = .{ .kind = .label, .bind = "x", .style = .{ .fill = .rgb(@intCast(i % 256), @intCast(i / 256), 1) } };
+    return spec_zig.row(.{}, kids);
+}
+
+// Container-level, so each is built in an evaluation of its own.
+const rainbow_255 = rainbow(255);
+const rainbow_256 = rainbow(256);
+
+test "Columns.palette: more than 256 colours keep full looks" {
+    // n fills and transparent (the root's fill, every border): n + 1 colours.
+    try testing.expect(!Columns(rainbow_256, .{}).paletted);
+    try testing.expect(Columns(rainbow_255, .{}).paletted);
+    try testing.expectEqual(256, Columns(rainbow_255, .{}).palette.len);
 }
 
 test "Coord: the smallest signed integer that holds the viewport, f32 without one" {
