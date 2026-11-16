@@ -75,6 +75,8 @@ pub fn Catalogue(comptime Key: type) type {
 pub fn check(comptime Key: type, comptime locale: rules.Locale, comptime messages: anytype) ?[]const u8 {
     comptime {
         const info = @typeInfo(Key).@"enum";
+        @setEvalBranchQuota(1000 + 100 * forms * info.field_names.len);
+        @setEvalBranchQuota(1000 + 100 * forms * info.field_names.len + 4 * templateBytes(messages));
         for (info.field_values, 0..) |v, k| {
             if (v != k) return "message key enum must number its keys 0 to n-1";
         }
@@ -103,6 +105,19 @@ pub fn check(comptime Key: type, comptime locale: rules.Locale, comptime message
         }
         return null;
     }
+}
+
+fn templateBytes(comptime messages: anytype) usize {
+    var bytes: usize = 0;
+    for (@typeInfo(@TypeOf(messages)).@"struct".field_names) |name| {
+        const m = @field(messages, name);
+        if (@typeInfo(@TypeOf(m)) == .pointer) {
+            bytes += m.len;
+        } else {
+            for (@typeInfo(@TypeOf(m)).@"struct".field_names) |form| bytes += @field(m, form).len;
+        }
+    }
+    return bytes;
 }
 
 /// A bit per placeholder `{0}` to `{9}` that `template` uses.

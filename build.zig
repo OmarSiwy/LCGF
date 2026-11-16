@@ -84,11 +84,12 @@ pub fn build(b: *std.Build) void {
     // tools/bench builds frames with the prototype core ("ui") and times the ported layout ("lcgr");
     // the rest moves to src/ as it is ported.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
+    const bench_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = bench_core }} });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast } },
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -108,12 +109,13 @@ pub fn build(b: *std.Build) void {
     const small_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseSmall });
     const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgr_small.addOptions("build_options", options);
+    const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small } },
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes } },
         }) });
         size_run.addArtifactArg(exe);
     }
@@ -230,6 +232,26 @@ pub fn build(b: *std.Build) void {
     fallback_run.has_side_effects = true;
     b.step("fallback-system", "Render the mixed-script sample from system fonts (ci/run.sh fallback-system)").dependOn(&fallback_run.step);
     b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
+
+    // The i18n tables against CLDR 49 JSON (lazy: fetched only for this step). Test-only, so a
+    // module of its own over lcgr; the tables themselves stay hand-written and tier 0.
+    const i18n_cldr = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/i18n/cldr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    if (b.lazyDependency("cldr_core", .{})) |core| {
+        i18n_cldr.root_module.addAnonymousImport("plurals.json", .{ .root_source_file = core.path("supplemental/plurals.json") });
+        i18n_cldr.root_module.addAnonymousImport("numberingSystems.json", .{ .root_source_file = core.path("supplemental/numberingSystems.json") });
+    }
+    for ([_][]const u8{ "en", "de", "fr", "ru", "pl", "ja", "ar" }) |l| {
+        if (b.lazyDependency("cldr_numbers", .{})) |numbers|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("numbers-{s}.json", .{l}), .{ .root_source_file = numbers.path(b.fmt("main/{s}/numbers.json", .{l})) });
+        if (b.lazyDependency("cldr_dates", .{})) |dates|
+            i18n_cldr.root_module.addAnonymousImport(b.fmt("gregorian-{s}.json", .{l}), .{ .root_source_file = dates.path(b.fmt("main/{s}/ca-gregorian.json", .{l})) });
+    }
+    b.step("i18n-cldr", "Check the i18n locale tables against CLDR 49").dependOn(&b.addRunArtifact(i18n_cldr).step);
 
     // Path golden images (src/draw/paths_golden.zig; ci/run.sh paths-golden compares them).
     const paths_golden = b.addRunArtifact(b.addExecutable(.{ .name = "paths-golden", .root_module = b.createModule(.{
