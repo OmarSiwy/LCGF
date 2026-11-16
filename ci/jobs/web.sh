@@ -7,7 +7,7 @@
 # golden at 0 bad pixels.
 zig build web
 out=zig-out/web-out; rm -rf "$out"
-pages="test_glue test_webgpu"
+pages="test_glue test_webgpu test_canvas"
 python3 src/render/web/browser.py --out "$out" zig-out/web $(for p in $pages; do echo "$p.html"; done)
 for p in $pages; do
     [ -d "$out/$p" ] || continue

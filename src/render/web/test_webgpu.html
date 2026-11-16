@@ -7,7 +7,7 @@
      atlas, and the host's own gradient pipeline at each custom command. browser.py --out writes
      the images; ci/jobs/web.sh compares them with src/render/conformance/*.png. -->
 <script type="module">
-import { load, webgpu } from "./lcgr.js";
+import { load, webgpu, canvas2d } from "./lcgr.js";
 import { readback, base64, standInAtlas } from "./test_util.js";
 
 window.lcgrTest = (async () => {
@@ -26,7 +26,7 @@ window.lcgrTest = (async () => {
             pass.setScissorRect(0, 0, scene.w, scene.h);
         },
     });
-    const ui = await load("scenes.wasm", webgpu, host);
+    const ui = await load("scenes.wasm", webgpu, canvas2d(document.createElement("canvas")), host);
     const { put, release } = ui.gpu;
 
     const texture = (w, h, px) => {

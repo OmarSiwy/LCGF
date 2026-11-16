@@ -148,3 +148,15 @@ export function webgpu(ui) {
     };
 }
 
+/// The 2D-canvas fallback for canvas.zig: `load(url, canvas2d(canvasElement))`. `present`
+/// copies the module's framebuffer onto the canvas, resizing the canvas to it.
+export function canvas2d(canvas) {
+    const ctx = canvas.getContext("2d");
+    return (ui) => ({
+        canvas_put(ptr, stride, w, h) {
+            if (canvas.width !== w || canvas.height !== h) [canvas.width, canvas.height] = [w, h];
+            const px = new Uint8ClampedArray(ui.exports.memory.buffer, ptr, stride * h * 4);
+            ctx.putImageData(new ImageData(px, stride, h), 0, 0, 0, 0, w, h);
+        },
+    });
+}

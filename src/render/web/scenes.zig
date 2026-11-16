@@ -1,5 +1,5 @@
 //! The render conformance scenes (src/render/conformance.zig) drawn in a browser: the wasm side
-//! of test_webgpu.html, which reads each scene back and compares it with its
+//! of test_webgpu.html and test_canvas.html, which read each scene back and compare it with its
 //! golden image (browser.py --out, tools/golden/golden.py; ci/jobs/web.sh).
 //!
 //! The host loop is the one of src/render/wgpu/play.zig, split where JS has to step in: JS owns
@@ -71,4 +71,47 @@ fn clamped(r: [4]f32) [4]u32 {
         @intFromFloat(std.math.clamp(r[2], r[0], w)),
         @intFromFloat(std.math.clamp(r[3], r[1], h)),
     };
+}
+
+// The 2D-canvas fallback (canvas.zig): the same scenes in software, presented with putImageData.
+
+const canvas = @import("canvas.zig");
+const sw = lcgr.render_sw;
+
+var pixels: [sw.Framebuffer.len(160, 120)]u32 = undefined;
+var atlas_px: [64 * 64]u32 = undefined;
+
+/// Draws scene `i` into the framebuffer and presents it on the page's canvas.
+export fn lcgr_canvas_scene(i: u32) void {
+    const s = &conformance.scenes[i];
+    st.load(s);
+    viewport = s.viewport;
+    // render.py's stand-in glyph atlas: every printable byte a 2x3 block of white.
+    atlas_px = @splat(0);
+    for (33..127) |byte| for (1..4) |y| for (1..3) |x| {
+        atlas_px[((byte >> 4) * 4 + y) * 64 + (byte & 15) * 4 + x] = 0xffff_ffff;
+    };
+    const w: u32 = @intFromFloat(s.viewport[0]);
+    const h: u32 = @intFromFloat(s.viewport[1]);
+    var c: canvas.Canvas = .init(&pixels, w, h);
+    c.gfx.images = &.{ sw.Image.white, .{ .pixels = &atlas_px, .width = 64, .height = 64 } };
+    var glyphs = st.glyphs();
+    glyphs.texture = @fromBackingInt(1);
+    c.gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
+    c.fb.clear(.black);
+    var k = iface.drawUntilCustom(&c.gfx, c.target(), &st.draw, 0);
+    while (k < st.draw.cmd_len) : (k = iface.drawUntilCustom(&c.gfx, c.target(), &st.draw, k + 1)) {
+        // The host's own draw: render.py's gradient over the custom rect, replacing what is there.
+        const b = clamped(st.draw.customs[st.draw.command(k).custom].rect);
+        for (b[1]..b[3]) |y| for (b[0]..b[2]) |x| {
+            const fx = @as(f32, @floatFromInt(x)) + 0.5;
+            const fy = @as(f32, @floatFromInt(y)) + 0.5;
+            c.fb.pixels[y * c.fb.stride + x] = c.fb.pack(.rgb(unorm(fx / s.viewport[0] * 0.5), unorm(0.25), unorm(fy / s.viewport[1] * 0.6)));
+        };
+    }
+    c.present();
+}
+
+fn unorm(x: f32) u8 {
+    return @intFromFloat(@round(std.math.clamp(x, 0, 1) * 255));
 }
