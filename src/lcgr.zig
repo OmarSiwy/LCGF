@@ -115,6 +115,7 @@ pub const widgets_toast = @import("widgets/toast.zig");
 pub const widgets_select = @import("widgets/select.zig");
 pub const widgets_combobox = @import("widgets/combobox.zig");
 pub const widgets_datepicker = @import("widgets/datepicker.zig");
+pub const widgets_image = @import("widgets/image.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const a11y_settings = @import("a11y/settings.zig");
 pub const settings_data = @import("a11y/settings_data.zig");
