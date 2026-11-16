@@ -149,11 +149,13 @@ export function webgpu(ui) {
 }
 
 /// The 2D-canvas fallback for canvas.zig: `load(url, canvas2d(canvasElement))`. `present`
-/// copies the module's framebuffer onto the canvas, resizing the canvas to it.
+/// copies the module's framebuffer onto the canvas, resizing the canvas to it. The 2D context
+/// is taken on the first present, so a page that draws with WebGPU instead can link this too.
 export function canvas2d(canvas) {
-    const ctx = canvas.getContext("2d");
+    let ctx = null; // taken at the first present: a canvas has one kind of context for life
     return (ui) => ({
         canvas_put(ptr, stride, w, h) {
+            ctx ??= canvas.getContext("2d");
             if (canvas.width !== w || canvas.height !== h) [canvas.width, canvas.height] = [w, h];
             const px = new Uint8ClampedArray(ui.exports.memory.buffer, ptr, stride * h * 4);
             ctx.putImageData(new ImageData(px, stride, h), 0, 0, 0, 0, w, h);

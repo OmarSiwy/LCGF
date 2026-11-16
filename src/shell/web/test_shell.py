@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The web shell in a real browser (ci/jobs/shell-web.sh): index.html, the shell example, in
-headless Chromium at 800 x 600.
+headless Chromium at 800 x 600. The pixel checks use the 2D-canvas back end (?backend=2d):
+headless Chromium cannot show a WebGPU canvas here. One group runs the replay with WebGPU.
 
     python3 src/shell/web/test_shell.py DIR
 
@@ -259,14 +260,25 @@ def timers(page):
     check("wake: one woken frame, built, then idle", (f2 - f1, state(page)[0] - builds) == (1, 1), f"{f2 - f1} frames, {state(page)[0] - builds} builds")
 
 
+def gpu(page):
+    """C0481: with WebGPU the page draws through the WebGPU back end and the replay ends the
+    same, with no WebGPU error."""
+    page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
+    check("webgpu: the page picked WebGPU", page.eval("window.lcgr.ui.exports.lcgr_backend()") == 1)
+    replay(page)
+    errors = page.eval("window.lcgr.errors")
+    check("webgpu: no WebGPU errors", not errors, errors)
+
+
 def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
-    # browser at the group's device pixel ratio.
-    for scale, tests in ((1, (attach,)), (1, (replay, keys, wheel, touch, cursor, clipboard, ime, timers)), (2, (dpr,))):
+    # browser at the group's device pixel ratio, with the group's back end.
+    for scale, query, tests in ((1, "?backend=2d", (attach,)), (1, "?backend=2d", (replay, keys, wheel, touch, cursor, clipboard, ime, timers)),
+                                (2, "?backend=2d", (dpr,)), (1, "", (gpu,))):
         b = browser.Browser(scale=scale)
         try:
-            page = b.open(server.url + "index.html")
+            page = b.open(server.url + "index.html" + query)
             page.metrics(800, 600, scale)
             for test in tests:
                 try:

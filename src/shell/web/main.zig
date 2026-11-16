@@ -1,7 +1,7 @@
 //! The shell example on the web: the example UI (src/shell/example.zig) in a browser page,
-//! through the web shell (web.zig) and drawn with the web back end's 2D-canvas path
-//! (src/render/web/canvas.zig). Built by `zig build web` into zig-out/web/shell.wasm; index.html
-//! is the page.
+//! through the web shell (web.zig) and drawn with the web back end (src/render/web/): WebGPU
+//! when the page set it up (`lcgr_webgpu_init`), else the 2D-canvas fallback. Built by
+//! `zig build web` into zig-out/web/shell.wasm; index.html is the page.
 const std = @import("std");
 const lcgr = @import("lcgr");
 const rweb = @import("render_web");
@@ -18,6 +18,8 @@ const imports = struct {
     extern "lcgr" fn shell_schedule(seconds: f32, pace: u32) void;
     extern "lcgr" fn shell_cursor(cursor: u32) void;
     extern "lcgr" fn shell_clipboard(ptr: [*]const u8, len: usize) void;
+    extern "lcgr" fn gpu_frame_begin() u32;
+    extern "lcgr" fn gpu_frame_end(pass: u32) void;
     extern "lcgr" fn shell_ime(on: bool, x0: f32, y0: f32, x1: f32, y1: f32) void;
 };
 
@@ -39,6 +41,14 @@ const host = struct {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });
         const glyphs: lcgr.render_iface.Glyphs = .{ .quads = glyph_quads[0..n], .first = &glyph_first, .count = &glyph_count };
         const scale = shell.in.scale;
+        if (gpu) |*g| {
+            // The page's pass draws into the canvas's current texture (index.html).
+            g.prepare(queue, out.draw, glyphs, shell.in.viewport, scale);
+            const pass = imports.gpu_frame_begin();
+            g.render(pass, out.draw);
+            imports.gpu_frame_end(pass);
+            return;
+        }
         // The framebuffer is the canvas's backing store, up to what `pixels` holds.
         const w = @max(@min(shell.pixels[0], max_w), 1);
         const h = @max(@min(shell.pixels[1], @as(u32, @intCast(pixels.len / sw.Framebuffer.len(w, 1)))), 1);
@@ -67,6 +77,21 @@ var glyph_count: [limits.texts]u32 = undefined;
 const max_w = 2560;
 var pixels: [sw.Framebuffer.len(max_w, 1600)]u32 = undefined;
 const background: lcgr.types.Color = .rgb(0, 0, 0);
+
+var gpu: ?rweb.webgpu.Renderer = null;
+var queue: u32 = 0;
+
+/// Draw with WebGPU from now on: the page's device, queue, its canvas format (0 rgba8unorm,
+/// 1 bgra8unorm), a 1x1 white texture view and a sampler.
+export fn lcgr_webgpu_init(device: u32, q: u32, format: u32, white: u32, sampler: u32) void {
+    queue = q;
+    gpu = .init(device, .{ .format = @fromBackingInt(@intCast(format)) }, white, sampler);
+}
+
+/// 1 when frames are drawn with WebGPU, 0 with the 2D canvas.
+export fn lcgr_backend() u32 {
+    return @intFromBool(gpu != null);
+}
 
 export fn lcgr_init() bool {
     ctx = context.Context.init(&buffer, limits) catch return false;

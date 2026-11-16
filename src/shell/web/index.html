@@ -3,8 +3,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lcgr: web shell example</title>
 <!-- The shell example (src/shell/example.zig) in a page: shell.wasm (main.zig) through the web
-     shell (web.zig, shell.js), drawn on the canvas. Serve zig-out/web/ over HTTP and open this
-     page; test_shell.py drives it in headless Chromium. -->
+     shell (web.zig, shell.js), drawn on the canvas with WebGPU when the browser gives an
+     adapter, else with the 2D-canvas fallback (?backend=2d forces it). Serve zig-out/web/ over
+     HTTP and open this page:
+
+         zig build web && python3 -m http.server -d zig-out/web
+
+     test_shell.py drives it in headless Chromium (ci/jobs/shell-web.sh). -->
 <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
     canvas { display: block; width: 100vw; height: 100vh; }
@@ -16,8 +21,37 @@ import { attach, shell } from "./shell.js";
 
 const canvas = document.getElementById("c");
 const page = {};
-const ui = await load("shell.wasm", webgpu, canvas2d(canvas), shell(page));
+const want2d = new URLSearchParams(location.search).get("backend") === "2d";
+const adapter = want2d ? null : await navigator.gpu?.requestAdapter();
+const device = adapter ? await adapter.requestDevice() : null;
+const errors = [];
+
+// The host's pass for each WebGPU frame: the canvas's current texture, cleared to black.
+let context = null, encoder = null;
+const frames = (ui) => ({
+    gpu_frame_begin() {
+        encoder = device.createCommandEncoder();
+        const view = context.getCurrentTexture().createView();
+        return ui.gpu.put(encoder.beginRenderPass({ colorAttachments: [{ view, loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }] }));
+    },
+    gpu_frame_end(p) {
+        ui.gpu.get(p).end();
+        ui.gpu.release(p);
+        device.queue.submit([encoder.finish()]);
+    },
+});
+const ui = await load("shell.wasm", webgpu, canvas2d(canvas), frames, shell(page));
 if (!ui.exports.lcgr_init()) throw new Error("lcgr_init: buffer too small");
+if (device) {
+    device.addEventListener("uncapturederror", (e) => errors.push(e.error.message));
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context = canvas.getContext("webgpu");
+    context.configure({ device, format, alphaMode: "opaque" });
+    const white = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+    const { put } = ui.gpu;
+    ui.exports.lcgr_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(white.createView()), put(device.createSampler({ magFilter: "nearest", minFilter: "nearest" })));
+}
 attach(ui, canvas, page);
-window.lcgr = { ui, page };
+window.lcgr = { ui, page, errors };
 </script>
