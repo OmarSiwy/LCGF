@@ -59,6 +59,7 @@ pub fn open(f: *Frame, th: *const Theme, id: Id, offset: *f32) void {
     offset.* = scrolled(offset.*, g, over, it.response(id.with(2)).held, it.delta[1], it.response(id).focused, f.in);
     _ = f.open(.none, areaStyle(th));
     const vp = f.open(id, viewportStyle(th, offset.*));
+    f.tree().c.role[vp.ix()] = view_role;
     _ = f.interact(vp, .{ .hover = true, .click = true, .focus = true });
     _ = f.open(id.with(1), contentStyle(th));
 }
@@ -144,13 +145,15 @@ pub fn scrolled(offset: f32, g: Geometry, over: bool, held: bool, dy: f32, focus
 
 // ---- accessibility ------------------------------------------------------------------------
 
-/// What assistive technology sees. The roles of src/a11y/tree.zig have no scroll view, so
-/// the viewport is a `group` holding the content, and the bar a `scroll_bar` whose value is
-/// the scroll position, 0 at the top to 1 at the end (`position`). `types.Role` has no
-/// scroll bar, so both front ends write that byte; the harness compares it and the value.
+/// What assistive technology sees. The viewport is a `scroll_view` holding the content, and
+/// the bar a `scroll_bar` whose value is the scroll position, 0 at the top to 1 at the end
+/// (`position`). `types.Role` has neither, so both front ends write those bytes; the harness
+/// compares them and the value.
 /// The area has no name of its own: label it with `Semantics.labelled_by` where a page
 /// gives it one. No states.
 pub const role: u8 = @backingInt(a11y.Role.scroll_bar);
+/// The viewport's role byte.
+pub const view_role: u8 = @backingInt(a11y.Role.scroll_view);
 
 /// How far through the content `offset` is, 0 to 1; 0 when the content fits.
 pub fn position(offset: f32, g: Geometry) f32 {
@@ -208,6 +211,7 @@ pub const ct = struct {
                 const value: f32 = @field(ui.signals.state, offset);
                 const area = t.push(parent, .none, &n.style);
                 const vp = t.push(area, .hash(id), &viewportStyle(&th, value));
+                t.c.role[vp] = view_role;
                 const content = t.push(vp, .none, &n.children[0].children[0].style);
                 next.* += 3;
                 inline for (n.children[0].children[0].children) |c| ui.push(c, content, next, in);
@@ -434,7 +438,7 @@ test "scroll: wheel, thumb drag and paging keys in both front ends" {
     try testing.expectEqual(h.app.offset, h.ui.signals.state.offset);
 }
 
-test "scroll: viewport group, bar scroll_bar valued by position, in both front ends" {
+test "scroll: viewport scroll_view, bar scroll_bar valued by position, in both front ends" {
     const check = @import("check.zig");
     const h = &harness;
     h.init();
@@ -451,7 +455,7 @@ test "scroll: viewport group, bar scroll_bar valued by position, in both front e
         var sem = sb.init();
         a11y.names(t, &sem);
         a11y.states(t, &sem);
-        try testing.expectEqual(a11y.Role.group, @as(a11y.Role, @fromBackingInt(t.c.role[rows.viewport])));
+        try testing.expectEqual(a11y.Role.scroll_view, @as(a11y.Role, @fromBackingInt(t.c.role[rows.viewport])));
         try testing.expectEqual(a11y.Role.scroll_bar, @as(a11y.Role, @fromBackingInt(t.c.role[rows.track])));
         try testing.expectApproxEqAbs(@as(f32, 0.5), t.c.value[rows.track], 1e-5);
         try testing.expectEqual(types.none, sem.c.name[rows.viewport]);

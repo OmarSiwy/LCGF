@@ -83,13 +83,15 @@ pub const Role = enum(u8) {
     content_info,
     form,
     search,
-    // ---- live regions (a status bar): `status` is a polite live region; politeness is
-    //      implied by the role, as ARIA's status implies aria-live="polite"
+    // ---- live regions (a status bar): `status` is a polite live region (`live`)
     status,
     // ---- added after the patterns above, so their bytes stay put
     /// A button that stays down until pressed again: ARIA's button with `aria-pressed`. Its
     /// value is the pressed state, as a checkbox's is its checked state (`checkable`).
     toggle_button,
+    /// A clipped viewport whose content scrolls (AccessKit's ScrollView; ARIA has none and
+    /// leaves it a group).
+    scroll_view,
 };
 
 comptime {
@@ -111,6 +113,20 @@ pub const from_content: [256]u32 = blk: {
         .tree_item,     .row,    .cell,      .column_header,      .row_header,      .tooltip,
         .toggle_button,
     }) |r| m[@backingInt(r)] = 0xffff_ffff;
+    break :blk m;
+};
+
+/// How a live region's changes are announced (`aria-live`).
+pub const Live = enum(u8) { off, polite, assertive };
+
+/// The politeness each role implies, as ARIA's roles do: `status` polite, `alert` assertive,
+/// off for the rest. Indexed by the raw role byte.
+// ponytail: by role only; add a per-node `aria-live` input to `Semantics` when a widget needs
+// a politeness its role does not imply.
+pub const live: [256]Live = blk: {
+    var m: [256]Live = @splat(.off);
+    m[@backingInt(Role.status)] = .polite;
+    m[@backingInt(Role.alert)] = .assertive;
     break :blk m;
 };
 
@@ -541,6 +557,14 @@ test "tree export: every role fits the tree's role column and the core roles kee
         t.c.role[box] = v;
         try testing.expectEqual(v, @backingInt(@as(Role, @fromBackingInt(t.c.role[box]))));
     }
+}
+
+test "tree export: a live region's politeness follows its role" {
+    try testing.expectEqual(Live.polite, live[@backingInt(Role.status)]);
+    try testing.expectEqual(Live.assertive, live[@backingInt(Role.alert)]);
+    try testing.expectEqual(Live.off, live[@backingInt(Role.group)]);
+    try testing.expectEqual(Live.off, live[@backingInt(Role.scroll_view)]);
+    try testing.expectEqual(Live.off, live[255]);
 }
 
 test "tree export: names come from labels, from content for the roles that take it, else own text" {

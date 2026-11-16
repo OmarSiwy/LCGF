@@ -183,7 +183,7 @@ test "statusbar: takes no input; hit testing and the tab order skip it" {
     try testing.expectEqual(1, Default.Ui.Events.widget_count);
 }
 
-test "statusbar: role status holding its texts, no name, value 0, no states, in both front ends" {
+test "statusbar: role status, a polite live region holding its texts, no name, value 0, no states, in both front ends" {
     const check = @import("check.zig");
     const h = &harness;
     h.init();
@@ -198,6 +198,7 @@ test "statusbar: role status holding its texts, no name, value 0, no states, in 
         a11y.names(t, &sem);
         a11y.states(t, &sem);
         try testing.expectEqual(a11y.Role.status, @as(a11y.Role, @fromBackingInt(t.c.role[rows.bar])));
+        try testing.expectEqual(a11y.Live.polite, a11y.live[t.c.role[rows.bar]]);
         try testing.expectEqual(types.none, sem.c.name[rows.bar]);
         try testing.expectEqual(@as(f32, 0), t.c.value[rows.bar]);
         try testing.expectEqual(@as(u8, 0), sem.c.state[rows.bar]);
