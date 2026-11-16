@@ -44,6 +44,7 @@ pub const ct = struct {
 
 const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
+const check = @import("check.zig");
 
 /// A toolbar row of two buttons, a spacer and a third button, and a column with a label, a
 /// spacer and a label at its foot.
@@ -120,6 +121,27 @@ test "spacer: takes the space left, pushing later siblings to the far end; paint
     // Drawn: the bar and three buttons; neither spacer has a quad.
     try testing.expectEqual(@as(u32, 4), out.runtime.draw.quad_len);
     try testing.expectEqual(types.Color.transparent.bitsOf(), t.c.look[7].fill);
+}
+
+test "spacer: takes no input; hit testing and the tab order skip it" {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 200 } };
+    var out = try h.frame(&in);
+    // Press and release in the middle of the bar's gap: nothing is held, focused or clicked.
+    const g = out.runtime.tree.rect(7);
+    in.pointer = .{ (g.x0 + g.x1) * 0.5, 20 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.active);
+    try testing.expectEqual(@as(?Default.Ui.Events.Widget, null), h.ui.pointer.pressed);
+    in.buttons.left = false;
+    out = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 0), h.ctx.inter.focus);
+    try testing.expectEqual(@as(u32, 0), h.app.closes);
+    try check.expectInert(out.runtime.tree, &.{ 7, 12 });
+    // Only the three buttons are widgets in the comptime front end.
+    try testing.expectEqual(3, Default.Ui.Events.widget_count);
 }
 
 test {
