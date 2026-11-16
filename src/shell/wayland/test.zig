@@ -32,6 +32,9 @@ pub const Fake = struct {
     logged: usize = 0,
     /// The descriptor of the client's last wl_data_offer.receive, for the test to write into.
     received: i32 = -1,
+    /// Keep frame callbacks unanswered (a hidden window), remembering the last.
+    hold_frames: bool = false,
+    held_frame: u32 = 0,
 
     const Buffer = struct { id: u32 = 0, offset: u32 = 0, width: u32 = 0, height: u32 = 0, stride: u32 = 0 };
 
@@ -101,7 +104,12 @@ pub const Fake = struct {
                 },
                 .surface => switch (m.opcode) {
                     1 => f.attached = arg0,
-                    3 => f.send(arg0, 0, .{@as(u32, 0)}), // frame: done at once
+                    3 => if (f.hold_frames) {
+                        f.held_frame = arg0;
+                    } else {
+                        f.send(arg0, 0, .{@as(u32, 0)}); // frame: done at once
+                        f.send(1, 1, .{arg0});
+                    },
                     6 => if (f.attached != 0) {
                         if (f.committed != 0 and f.committed != f.attached) f.send(f.committed, 0, .{});
                         f.committed = f.attached;
@@ -730,4 +738,93 @@ test "wayland: the input method follows wants_text, composes, then commits" {
     shell.apply(&.{});
     fake.pump(&shell);
     try testing.expect(fake.sent(.text_input, 2) != null); // disable
+}
+
+test "wayland: a held key repeats at the compositor's rate, and wait wakes for it" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &seat_globals);
+    _ = shell.poll(&ev);
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 2)});
+    fake.flush();
+    _ = shell.poll(&ev);
+    const k = shell.seat.keyboard;
+    sendKeymap(&fake, k, @embedFile("testdata/de.xkb"));
+    fake.send(k, 5, .{ @as(i32, 50), @as(i32, 40) }); // repeat_info: 50 per second after 40 ms
+    fake.send(k, 1, .{ fake.nextSerial(), shell.surface, wire.Array{ .bytes = &.{} } });
+    fake.send(k, 3, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 30), @as(u32, 1) }); // press A
+    fake.flush();
+    _ = shell.poll(&ev);
+    try testing.expectEqualStrings("a", ev.in.text);
+
+    // Nothing else is coming, yet the wait ends when the repeat is due.
+    const t0 = shell.clock();
+    shell.wait(lcgr.types.inf, .idle);
+    const slept = shell.clock() - t0;
+    try testing.expect(slept >= 0.03 and slept < 1);
+    _ = shell.poll(&ev);
+    try testing.expect(ev.in.text.len >= 1);
+    try testing.expectEqual(Input.Event{ .kind = .repeat, .code = 0x04 }, ev.in.events[0]);
+
+    // Released: no more repeats, and the wait sleeps its full time.
+    fake.send(k, 3, .{ fake.nextSerial(), @as(u32, 0), @as(u32, 30), @as(u32, 0) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    shell.wait(0.1, .timer);
+    _ = shell.poll(&ev);
+    try testing.expectEqual(@as(usize, 0), ev.in.events.len);
+}
+
+fn worker(shell: *Wayland) void {
+    var ts: linux.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+    _ = linux.nanosleep(&ts, null);
+    shell.wake();
+}
+
+test "wayland: wake from another thread ends a wait that would sleep forever" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &core_globals);
+    _ = shell.poll(&ev);
+    const t = try std.Thread.spawn(.{}, worker, .{&shell});
+    const t0 = shell.clock();
+    shell.wait(lcgr.types.inf, .idle);
+    t.join();
+    try testing.expect(shell.clock() - t0 < 5);
+    try testing.expect(shell.poll(&ev));
+    // The wake is used up: the next wait times out.
+    const t1 = shell.clock();
+    shell.wait(0.05, .timer);
+    try testing.expect(shell.clock() - t1 >= 0.04);
+}
+
+test "wayland: display pacing waits for the frame callback, and not forever" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &core_globals);
+    _ = shell.poll(&ev);
+    fake.configure(&shell, 800, 600);
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    try testing.expect(shell.frame_pending);
+    // The compositor showed the frame: the wait returns as soon as it says so.
+    fake.pump(&shell);
+    shell.wait(0, .display);
+    try testing.expect(!shell.frame_pending);
+    // A hidden window gets no callback: the wait gives up after display_limit.
+    fake.hold_frames = true;
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    const t0 = shell.clock();
+    shell.wait(0, .display);
+    const slept = shell.clock() - t0;
+    try testing.expect(shell.frame_pending);
+    try testing.expect(slept >= Wayland.display_limit * 0.9 and slept < 2);
 }

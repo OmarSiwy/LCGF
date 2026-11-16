@@ -10,6 +10,7 @@ const wire = @import("wire.zig");
 const xkb = @import("xkb.zig");
 const linux = std.os.linux;
 const Input = lcgr.input.Input;
+const inf = std.math.inf(f64);
 
 /// Linux button codes (linux/input-event-codes.h).
 const btn_left = 0x110;
@@ -45,6 +46,15 @@ pub const Seat = struct {
     /// ends between two polls is still seen.
     touches: [10]Input.Contact = undefined,
     ntouches: u32 = 0,
+    /// Key repeat is the client's job on Wayland: `wl_keyboard.repeat_info` gives the rate
+    /// (per second, 0 = off) and the delay (ms); the held key repeats from `repeat_at` (seconds
+    /// on the shell's clock) until it is released or focus leaves.
+    repeat_rate: i32 = 25,
+    repeat_delay: i32 = 600,
+    repeat_key: u32 = 0,
+    repeat_at: f64 = inf,
+    /// The shell's clock, set before events are handled.
+    now: f64 = 0,
 
     /// Starts a poll: clears the per-poll state and drops the fingers lifted in the last one.
     pub fn begin(s: *Seat) void {
@@ -142,6 +152,8 @@ pub const Seat = struct {
             },
             2 => { // leave
                 s.key_focus = 0;
+                s.repeat_key = 0;
+                s.repeat_at = inf;
                 s.held.keys = .{};
                 s.held.mods = .{};
                 s.mask = 0;
@@ -158,6 +170,10 @@ pub const Seat = struct {
                 s.mask = a.uint() | a.uint() | a.uint();
                 s.held.mods = xkb.mods(s.mask);
             },
+            5 => { // repeat_info: rate, delay
+                s.repeat_rate = a.int();
+                s.repeat_delay = a.int();
+            },
             else => {},
         }
     }
@@ -165,6 +181,15 @@ pub const Seat = struct {
     /// A key went down, up or repeated: held keys, a key event, and the text it types.
     pub fn key(s: *Seat, evdev: u32, kind: Input.Event.Kind) void {
         const code = xkb.hid(evdev);
+        // The last key pressed repeats, unless it is a modifier (HID 0xe0 to 0xe7).
+        if (kind == .press and s.repeat_rate > 0 and code < 0xe0) {
+            s.repeat_key = evdev;
+            s.repeat_at = s.now + @as(f64, @floatFromInt(s.repeat_delay)) / 1000;
+        }
+        if (kind == .release and evdev == s.repeat_key) {
+            s.repeat_key = 0;
+            s.repeat_at = inf;
+        }
         if (code != 0) {
             const bit = @as(u64, 1) << @as(u6, @truncate(code));
             s.held.keys.bits[code >> 6] = if (kind == .release) s.held.keys.bits[code >> 6] & ~bit else s.held.keys.bits[code >> 6] | bit;
@@ -181,6 +206,19 @@ pub const Seat = struct {
         @memcpy(s.text[s.text_len..][0..len], utf8[0..len]);
         s.push(.{ .kind = .text, .mods = s.held.mods, .at = s.text_len, .len = len });
         s.text_len += len;
+    }
+
+    /// Repeats of the held key that are due by `now`.
+    pub fn repeat(s: *Seat, now: f64) void {
+        if (s.repeat_rate <= 0) return;
+        const period = 1 / @as(f64, @floatFromInt(s.repeat_rate));
+        // A long stall (the window was hidden) types a few, not hundreds.
+        var n: u32 = 0;
+        while (s.repeat_key != 0 and s.repeat_at <= now and n < 8) : (n += 1) {
+            s.key(s.repeat_key, .repeat);
+            s.repeat_at += period;
+        }
+        s.repeat_at = @max(s.repeat_at, if (n == 8) now + period else s.repeat_at);
     }
 
     /// Committed text from outside the keyboard (an input method, a paste): typed text and a

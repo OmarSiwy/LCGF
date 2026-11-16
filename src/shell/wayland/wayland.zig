@@ -180,8 +180,10 @@ pub const Wayland = struct {
     cursor: context.Cursor = .arrow,
     cursor_serial: u32 = 0,
     cursor_device: u32 = 0,
-    /// Clock of `Input.time`: the first poll is time 0.
-    t0: ?linux.timespec = null,
+    /// Clock of `Input.time`: `init` is time 0.
+    t0: linux.timespec,
+    /// A frame was committed and its frame callback has not come yet.
+    frame_pending: bool = false,
     /// Wakes `wait` from another thread (`wake`).
     wake_fd: i32,
     woken: std.atomic.Value(bool) = .init(false),
@@ -221,6 +223,7 @@ pub const Wayland = struct {
             .size = options.size,
             .options = options,
             .glyphs = buf,
+            .t0 = monotonic(),
             .wake_fd = @intCast(@as(isize, @bitCast(linux.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK)))),
         };
         w.kinds[1] = .display;
@@ -238,7 +241,7 @@ pub const Wayland = struct {
         var w = init(fd, options, buf);
         while (!w.configured and !w.closed) {
             w.dispatch();
-            if (!w.configured and !w.closed) w.sleep(-1);
+            if (!w.configured and !w.closed) _ = w.sleep(-1);
         }
         if (w.err) |e| return e;
         return w;
@@ -252,26 +255,33 @@ pub const Wayland = struct {
     }
 
     /// Drains the socket into `ev`. False once the window is closed or the connection failed.
+    /// Events that arrived during a `wait` count toward this poll: per-poll input is cleared
+    /// after it is handed out, not before.
     pub fn poll(w: *Wayland, ev: *Events) bool {
         w.dispatch();
         w.data.bind(w);
         w.ime.bind(w);
         w.data.readPaste(w);
+        const t = w.clock();
+        w.seat.repeat(t);
         w.flush();
         _ = w.woken.swap(false, .acquire);
         w.drainWake();
         w.polls += 1;
         w.in.viewport = w.size;
         w.in.scale = w.scale;
-        const now = monotonic();
-        const t = elapsed(w.t0 orelse now, now);
-        if (w.t0 == null) w.t0 = now;
         w.in.dt = @floatCast(t - w.in.time);
         w.in.time = t;
         w.seat.fill(&w.in);
+        w.seat.begin();
         ev.in = w.in;
         ev.composition = w.ime.composition();
         return !w.closed;
+    }
+
+    /// Seconds since `init`.
+    pub fn clock(w: *const Wayland) f64 {
+        return elapsed(w.t0, monotonic());
     }
 
     /// Applies the frame's cursor through wp_cursor_shape_v1. A shape holds only while the
@@ -330,19 +340,38 @@ pub const Wayland = struct {
             w.request(w.surface, op.surface_set_buffer_scale, .{@as(i32, @intFromFloat(w.scale))});
         }
         w.request(w.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
+        // Ask when this frame is shown: `wait` paces animations to it.
+        w.request(w.surface, op.surface_frame, .{w.new(.frame)});
+        w.frame_pending = true;
         w.request(w.surface, op.surface_commit, .{});
         w.flush();
         w.presents += 1;
     }
 
-    /// Sleeps until the compositor sends something, `wake` is called, or `seconds` pass.
+    /// Sleeps until the compositor sends something, `wake` is called, `seconds` pass, or the
+    /// held key is due to repeat. With `pace == .display` it sleeps until the compositor's frame
+    /// callback says the last frame was shown instead (the display's refresh), at most
+    /// `display_limit` seconds, in case the window is hidden and no callback comes.
     pub fn wait(w: *Wayland, seconds: f32, pace: Pace) void {
-        _ = pace;
         w.flush();
-        if (w.closed or w.woken.load(.acquire)) return;
-        const ms: i32 = if (seconds >= 2_000_000) -1 else @intFromFloat(@ceil(@max(seconds, 0) * 1000));
-        w.sleep(ms);
+        const start = w.clock();
+        const display = pace == .display and w.frame_pending;
+        const limit: f64 = if (display) @max(seconds, display_limit) else seconds;
+        const until = @min(start + limit, w.seat.repeat_at);
+        while (!w.closed and !w.woken.load(.acquire)) {
+            const left = until - w.clock();
+            if (!(left > 0)) return;
+            const ms: i32 = if (left > 1e6) -1 else @intFromFloat(@ceil(left * 1000));
+            if (!w.sleep(ms)) return; // timed out
+            if (!display) return;
+            // Pacing: handle what came (input waits for the next poll), stop when the frame is.
+            w.dispatch();
+            if (!w.frame_pending) return;
+        }
     }
+
+    /// The longest a `.display` wait blocks for a frame callback.
+    pub const display_limit = 0.1;
 
     /// Thread-safe: ends a `wait` in progress and has the next `poll` report a frame.
     pub fn wake(w: *Wayland) void {
@@ -351,14 +380,16 @@ pub const Wayland = struct {
         _ = linux.write(w.wake_fd, std.mem.asBytes(&one), 8);
     }
 
-    fn sleep(w: *Wayland, ms: i32) void {
+    /// True when something is ready, false on timeout.
+    fn sleep(w: *Wayland, ms: i32) bool {
         var fds = [3]linux.pollfd{
             .{ .fd = w.conn.fd, .events = linux.POLL.IN, .revents = 0 },
             .{ .fd = w.wake_fd, .events = linux.POLL.IN, .revents = 0 },
             // A paste in progress (poll ignores -1).
             .{ .fd = w.data.paste_fd, .events = linux.POLL.IN, .revents = 0 },
         };
-        _ = linux.poll(&fds, fds.len, ms);
+        const rc = linux.poll(&fds, fds.len, ms);
+        return linux.errno(rc) != .SUCCESS or rc > 0;
     }
 
     fn drainWake(w: *Wayland) void {
@@ -368,7 +399,7 @@ pub const Wayland = struct {
 
     /// Reads and handles everything the compositor has sent, then sends what that produced.
     pub fn dispatch(w: *Wayland) void {
-        w.seat.begin();
+        w.seat.now = w.clock();
         while (!w.closed) {
             const more = w.conn.fill() catch |e| return w.fail(if (e == error.Overflow) error.Protocol else error.Disconnected);
             while (w.conn.next()) |m| w.handle(m);
@@ -471,6 +502,7 @@ pub const Wayland = struct {
             .text_input => w.ime.event(w, m.opcode, &a),
             .frame => if (m.opcode == 0) {
                 w.kinds[m.id] = .dead;
+                w.frame_pending = false;
             },
             else => {},
         }
