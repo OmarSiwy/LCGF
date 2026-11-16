@@ -15,6 +15,7 @@ const Signal = @import("signals.zig").Signal;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
+const incremental = @import("../layout/incremental.zig");
 const selU = simd.selU;
 const andB = simd.andB;
 const orB = simd.orB;
@@ -24,6 +25,10 @@ pub const Memos = struct {
     len: u32 = 0,
     cap: u32,
     c: Columns,
+    /// Root rows of this frame's copies whose layout `Frame.end` can skip
+    /// (`incremental.keepable`), ascending. Emptied by `Context.begin`.
+    kept: []u32,
+    kept_len: u32 = 0,
 
     pub const Columns = struct {
         id: []u32,
@@ -38,7 +43,7 @@ pub const Memos = struct {
     /// the id column in whole vectors.
     pub fn init(carver: *mem.Carver, cap: u32) Memos {
         std.debug.assert(cap > 0);
-        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
+        return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)), .kept = carver.slice(u32, simd.rows(cap)) };
     }
 };
 
@@ -164,6 +169,13 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     cu.len += cn;
 
     keepAlive(ctx, a, count, delta);
+
+    // Layout can skip the copy's interior if its root is a relayout boundary. Written always,
+    // counted only when keepable; past `cap` the last entry is replaced, and a subtree left
+    // off the list is simply laid out.
+    const m = &ctx.memos;
+    m.kept[@min(m.kept_len, m.cap - 1)] = n;
+    m.kept_len = @min(m.kept_len + @intFromBool(incremental.keepable(t, n)), m.cap);
 }
 
 /// SIMD. Whether a spring or tween asked for last frame from inside last frame's rows
@@ -259,6 +271,8 @@ const Scene = struct {
     outer: f32 = 0,
     inner: f32 = 0,
     inner_x: f32 = 0,
+    /// A px panel on both axes: a relayout boundary, so its copies skip layout.
+    fixed: bool = false,
 
     fn frame(s: *Scene, ctx: *Context, in: *const Input) Output {
         var f = ctx.begin(in);
@@ -267,7 +281,8 @@ const Scene = struct {
         for (0..s.lead) |_| _ = f.leaf(.none, .{ .size = .{ .px(10), .px(10) } });
         if (!f.reuse(id_panel, &.{s.sig})) {
             s.builds += 1;
-            _ = f.open(id_panel, .{ .size = .{ .px(100), .fill }, .pad = @splat(4), .gap = 2 });
+            const tall: types.Size = if (s.fixed) .px(120) else .fill;
+            _ = f.open(id_panel, .{ .size = .{ .px(100), tall }, .pad = @splat(4), .gap = 2 });
             s.inner_x = f.animate(.from("inner"), s.inner, .{});
             const item = f.leaf(id_item, .{ .size = .{ .fill, .px(20) } });
             const r = f.interact(item, .button);
@@ -438,6 +453,45 @@ test "reuse: a spring moving inside the subtree rebuilds it until it lands, then
     try testing.expectEqual(@as(f32, 50), s.inner_x);
     _ = s.frame(&ctx, &in);
     try testing.expect(s.inner_x > 0 and s.inner_x < 50);
+}
+
+test "reuse: a copy behind a relayout boundary skips layout and lands where a rebuild would" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 16, .customs = 4, .strings = 512, .signals = 4, .memos = 4, .depth = 8 });
+    var ctx = try Fx.context();
+    var s: Scene = .{ .sig = ctx.signals.create(), .fixed = true };
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = s.frame(&ctx, &in);
+    try testing.expectEqual(@as(u32, 0), ctx.memos.kept_len);
+    var out = s.frame(&ctx, &in);
+    try testing.expectEqual(@as(u32, 1), s.builds);
+    try testing.expectEqual(@as(u32, 1), ctx.memos.kept_len);
+    try testing.expectEqual(out.tree.find(id_panel), ctx.memos.kept[0]);
+
+    // Three 10 px leaves before it move the panel right by 30 px, then it stays: copied and
+    // kept each time, placed again only when it moved.
+    for ([_]u32{ 0, 3, 3 }) |lead| {
+        s.lead = lead;
+        out = s.frame(&ctx, &in);
+        try testing.expectEqual(@as(u32, 1), s.builds);
+        try testing.expectEqual(@as(u32, 1), ctx.memos.kept_len);
+        const copied = out.tree.rect(out.tree.find(id_item));
+        const copied_text = out.texts.c.avail[0];
+        // The same frame built from scratch.
+        ctx.signals.touch(s.sig);
+        out = s.frame(&ctx, &in);
+        try testing.expectEqual(@as(u32, 0), ctx.memos.kept_len);
+        try testing.expectEqual(out.tree.rect(out.tree.find(id_item)), copied);
+        try testing.expectEqual(out.texts.c.avail[0], copied_text);
+        try testing.expectEqual(@as(f32, @floatFromInt(10 * lead)), out.tree.rect(out.tree.find(id_panel)).x0);
+        s.builds = 1;
+    }
+
+    // A panel that is not a boundary is copied but laid out.
+    s.fixed = false;
+    ctx.signals.touch(s.sig);
+    _ = s.frame(&ctx, &in);
+    _ = s.frame(&ctx, &in);
+    try testing.expectEqual(@as(u32, 0), ctx.memos.kept_len);
 }
 
 test "reuse: no room for the copy means a rebuild, never an overflow" {

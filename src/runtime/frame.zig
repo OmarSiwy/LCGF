@@ -26,6 +26,7 @@ const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
+const incremental = @import("../layout/incremental.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
 
@@ -226,16 +227,20 @@ pub const Frame = struct {
         const tx = f.texts();
         t.seal(0);
         font.measure(tx);
-        layout.prepare(t);
-        layout.applyText(t, tx, .x);
-        layout.fit(t, .x);
-        layout.resolve(t, .x, f.in.viewport[0]);
+        // Subtrees `reuse` copied behind a relayout boundary are not laid out again (with none,
+        // each call is its `layout` form). A tree that ran out of rows may have lost them.
+        const m = &f.ctx.memos;
+        const kept = m.kept[0..simd.selU(t.overflow, 0, m.kept_len)];
+        incremental.prepareKept(t, kept);
+        incremental.applyTextKept(t, tx, .x, kept);
+        incremental.fitKept(t, .x, kept);
+        incremental.resolveKept(t, .x, f.in.viewport[0], kept);
         layout.textAvail(t, tx);
         font.wrap(tx);
-        layout.applyText(t, tx, .y);
-        layout.fit(t, .y);
-        layout.resolve(t, .y, f.in.viewport[1]);
-        layout.place(t);
+        incremental.applyTextKept(t, tx, .y, kept);
+        incremental.fitKept(t, .y, kept);
+        incremental.resolveKept(t, .y, f.in.viewport[1], kept);
+        incremental.placeKept(t, kept);
         // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);

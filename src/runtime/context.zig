@@ -180,6 +180,7 @@ pub const Context = struct {
         ctx.platform = .{};
         ctx.status = .{};
         ctx.frame +%= 1;
+        ctx.memos.kept_len = 0;
 
         ctx.inter.step(&ctx.trees[ctx.cur ^ 1], in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
