@@ -120,8 +120,15 @@ presented and the toolbar's colour is in the framebuffer.
   order, with the modifiers. The text a key typed comes from the platform's own keyboard layout
   and IME, as `.text` events, never from the scancode.
 - **IME.** When `Platform.wants_text` is set, show the input method or on-screen keyboard at
-  `Platform.ime_rect`; report the uncommitted composition in `Events.composition` and committed
-  text in `Input.text`.
+  `Platform.ime_rect`, laid out for `Platform.purpose` and told the field's text and caret
+  (`surrounding`, `selection`) where the platform takes them; report the uncommitted
+  composition in `Events.composition` and committed text in `Input.text`.
+- **Clipboard.** Put `Platform.clipboard` on the clipboard when it is non-empty; when
+  `Platform.paste` is set, type the clipboard's text into a later frame as a `.text` event.
+- **Mobile and system state.** `Input.safe_area` is what system bars and cutouts cover,
+  `Input.appearance` the dark mode and accent colour, and `Input.redraw` asks for one frame
+  after the shell lost its picture (back from the background). All are input: nothing beside
+  `poll` and `apply` is called by the host.
 - **Scale.** `Input.viewport` is in logical pixels and `Input.scale` is physical pixels per
   logical pixel; the back end draws at `viewport * scale`.
 - **Time.** `Input.time` and `Input.dt` drive timers, springs and long presses.

@@ -86,6 +86,10 @@ pub const Role = enum(u8) {
     // ---- live regions (a status bar): `status` is a polite live region; politeness is
     //      implied by the role, as ARIA's status implies aria-live="polite"
     status,
+    // ---- added after the patterns above, so their bytes stay put
+    /// A button that stays down until pressed again: ARIA's button with `aria-pressed`. Its
+    /// value is the pressed state, as a checkbox's is its checked state (`checkable`).
+    toggle_button,
 };
 
 comptime {
@@ -102,36 +106,48 @@ comptime {
 pub const from_content: [256]u32 = blk: {
     var m: [256]u32 = @splat(0);
     for ([_]Role{
-        .label,     .button, .checkbox,  .link,               .radio,           .@"switch",
-        .heading,   .option, .menu_item, .menu_item_checkbox, .menu_item_radio, .tab,
-        .tree_item, .row,    .cell,      .column_header,      .row_header,      .tooltip,
+        .label,         .button, .checkbox,  .link,               .radio,           .@"switch",
+        .heading,       .option, .menu_item, .menu_item_checkbox, .menu_item_radio, .tab,
+        .tree_item,     .row,    .cell,      .column_header,      .row_header,      .tooltip,
+        .toggle_button,
     }) |r| m[@backingInt(r)] = 0xffff_ffff;
     break :blk m;
 };
 
-/// States a node reports, one bit each, in `Semantics.Columns.state`. `checked` and
-/// `expanded` are meaningful only on roles that have them: `checked` on the checkable roles
-/// (`checkable`), `expanded` where `expandable` is set (a disclosure button, a tree item, a
-/// combobox), so a bridge can tell "collapsed" from "cannot expand".
+/// States a node reports, one bit each, in `Semantics.Columns.state`. `checked`, `pressed`,
+/// `mixed` and `expanded` are meaningful only on roles that have them: `checked` and `pressed`
+/// on the checkable roles (`checkable`), `mixed` on those too, `expanded` where `expandable` is
+/// set (a disclosure button, a tree item, a combobox), so a bridge can tell "collapsed" from
+/// "cannot expand", and "not checked" from "cannot be checked".
 pub const State = bitpack struct(u8) {
     checked: bool = false,
     expandable: bool = false,
     expanded: bool = false,
     selected: bool = false,
     disabled: bool = false,
-    _: u3 = 0,
+    /// Neither on nor off (`aria-checked` or `aria-pressed` "mixed"): a checkable role whose
+    /// value is strictly between 0 and 1, as a tri-state checkbox stores it (0.5). Set
+    /// instead of `checked` or `pressed`.
+    mixed: bool = false,
+    /// A toggle button that is down (`aria-pressed="true"`), from its value.
+    pressed: bool = false,
+    /// The current item of a set (`aria-current`), such as a breadcrumb's page. The
+    /// application's to set.
+    current: bool = false,
 
     pub inline fn bitsOf(st: State) u8 {
         return @bitCast(st);
     }
 };
 
-/// `State.checked` for the roles whose checked state is their `value` (as the core's checkbox
-/// stores it: 1 checked, 0 not), zero for the rest. Indexed by the raw role byte.
+/// The state bit a role's `value` turns on (as the core's checkbox stores it: 1 on, 0 off,
+/// between them mixed): `checked` for the checkable roles, `pressed` for a toggle button, zero
+/// for the rest. Indexed by the raw role byte.
 pub const checkable: [256]u8 = blk: {
     var m: [256]u8 = @splat(0);
     for ([_]Role{ .checkbox, .radio, .@"switch", .menu_item_checkbox, .menu_item_radio }) |r|
         m[@backingInt(r)] = State.bitsOf(.{ .checked = true });
+    m[@backingInt(Role.toggle_button)] = State.bitsOf(.{ .pressed = true });
     break :blk m;
 };
 
@@ -207,18 +223,24 @@ pub fn names(t: *const Tree, s: *Semantics) void {
     }
 }
 
-/// Completes `state` from the tree: a checkable role is checked when its `value` is not 0, and
-/// a node inside a disabled node is disabled (as `aria-disabled` applies to descendants).
-/// Adds bits, never clears them, so running it twice changes nothing.
+/// Completes `state` from the tree: a checkable role is mixed when its `value` is strictly
+/// between 0 and 1, else checked (a toggle button pressed) when it is not 0, and a node inside a
+/// disabled node is disabled (as `aria-disabled` applies to descendants). Adds bits, never
+/// clears them, so running it twice changes nothing.
 pub fn states(t: *const Tree, s: *Semantics) void {
     const c = &t.c;
     const st = s.c.state;
     const disabled = State.bitsOf(.{ .disabled = true });
+    const mixed = State.bitsOf(.{ .mixed = true });
     // Parents come before children, so a parent's state is final when its children read it.
     // The root is its own parent: reading it back changes nothing.
     for (0..t.len) |k| {
-        const on = -%@as(u8, @intFromBool(c.value[k] != 0));
-        st[k] |= (checkable[c.role[k]] & on) | (st[c.parent[k]] & disabled);
+        const v = c.value[k];
+        const bit = checkable[c.role[k]];
+        const half = -%(@as(u8, @intFromBool(v > 0)) & @intFromBool(v < 1));
+        const on = -%@as(u8, @intFromBool(v != 0)) & ~half;
+        const can = -%@as(u8, @intFromBool(bit != 0));
+        st[k] |= (bit & on) | (mixed & half & can) | (st[c.parent[k]] & disabled);
     }
 }
 
@@ -607,8 +629,17 @@ test "tree export: states come from the application, checkable values and disabl
     t.seal(panel);
     const item = t.push(root, .none, &.{});
     t.c.role[item] = @backingInt(Role.tree_item);
+    // A tri-state checkbox half way, a toggle button down, one up and one mixed, and a
+    // breadcrumb page the application marks current. (The slider at 0.5 is not mixed.)
+    const all = t.push(root, .none, &.{ .role = .checkbox, .value = 0.5 });
+    const bold = t.push(root, .none, &.{ .value = 1 });
+    const italic = t.push(root, .none, &.{ .value = 0 });
+    const some = t.push(root, .none, &.{ .value = 0.5 });
+    for ([_]u32{ bold, italic, some }) |k| t.c.role[k] = @backingInt(Role.toggle_button);
+    const page = t.push(root, .none, &.{ .role = .label });
     t.seal(root);
     try t.check();
+    s.c.state[page] = State.bitsOf(.{ .current = true });
 
     s.c.state[panel] = State.bitsOf(.{ .disabled = true });
     s.c.state[item] = State.bitsOf(.{ .expandable = true, .expanded = true, .selected = true });
@@ -629,9 +660,14 @@ test "tree export: states come from the application, checkable values and disabl
     try testing.expectEqual(State{ .disabled = true, .checked = true }, got(&s, radio));
     try testing.expectEqual(State{ .expandable = true, .expanded = true, .selected = true }, got(&s, item));
     try testing.expectEqual(State{}, got(&s, root));
+    try testing.expectEqual(State{ .mixed = true }, got(&s, all));
+    try testing.expectEqual(State{ .pressed = true }, got(&s, bold));
+    try testing.expectEqual(State{}, got(&s, italic));
+    try testing.expectEqual(State{ .mixed = true }, got(&s, some));
+    try testing.expectEqual(State{ .current = true }, got(&s, page));
     // Idempotent; and `clear` drops what the application set last frame.
-    const before: [10]u8 = s.c.state[0..10].*;
-    try testing.expectEqual(10, t.len);
+    const before: [15]u8 = s.c.state[0..15].*;
+    try testing.expectEqual(15, t.len);
     states(&t, &s);
     try testing.expectEqualSlices(u8, &before, s.c.state[0..t.len]);
     s.clear();

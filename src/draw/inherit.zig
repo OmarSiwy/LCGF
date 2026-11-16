@@ -21,7 +21,7 @@ inline fn up(t: *const Tree, n: u32) u32 {
 /// `opacity`, never its own output.
 pub fn opacity(t: *Tree) void {
     const x = &t.x;
-    for (1..t.xlen) |r| x.alpha[r] = x.opacity[r] * x.alpha[up(t, x.node[r])];
+    for (1..t.xlen) |r| x.row[r].alpha = x.row[r].opacity * x.row[up(t, x.node[r])].alpha;
 }
 
 /// `world` of every extras row = the inherited `world` after the row's `transform` about its
@@ -32,12 +32,12 @@ pub fn transform(t: *Tree) void {
     const x = &t.x;
     for (1..t.xlen) |r| {
         const i = x.node[r];
-        const m = x.transform[r];
+        const m = x.row[r].transform;
         const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
         const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
         // Translate the centre to the origin, apply m, translate back.
         const l: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
-        x.world[r] = compose(x.world[up(t, i)], l);
+        x.row[r].world = compose(x.row[up(t, i)].world, l);
     }
 }
 
@@ -53,9 +53,9 @@ pub fn clip(t: *Tree) void {
     const zero: V4 = @splat(0);
     for (1..t.xlen) |r| {
         const i = x.node[r];
-        const own = @max(@as(V4, x.radii[r]) - @as(V4, @splat(x.border[r])), zero);
-        const inherited: V4 = x.clip_radii[up(t, i)];
-        x.clip_radii[r] = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, inherited);
+        const own = @max(@as(V4, x.row[r].radii) - @as(V4, @splat(x.row[r].border)), zero);
+        const inherited: V4 = x.row[up(t, i)].clip_radii;
+        x.row[r].clip_radii = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, inherited);
     }
 }
 
@@ -68,17 +68,17 @@ pub fn all(t: *Tree) void {
 
 /// Opacity paint applies to node `i`, after `opacity`.
 pub fn alphaOf(t: *const Tree, i: u32) f32 {
-    return t.x.alpha[t.c.scope[i]];
+    return t.x.row[t.c.scope[i]].alpha;
 }
 
 /// Layout space to screen for node `i`, after `transform`.
 pub fn worldOf(t: *const Tree, i: u32) [6]f32 {
-    return t.x.world[t.c.scope[i]];
+    return t.x.row[t.c.scope[i]].world;
 }
 
 /// Corner radii of the clip node `i` hands its children, after `clip`.
 pub fn clipRadiiOf(t: *const Tree, i: u32) [4]f32 {
-    return t.x.clip_radii[t.c.scope[i]];
+    return t.x.row[t.c.scope[i]].clip_radii;
 }
 
 /// p after l: x -> p(l(x)).

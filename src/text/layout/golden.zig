@@ -204,7 +204,7 @@ pub fn draw(face: *const opentype.Face, p: *const Para, origin: [2]f32, img: []u
             try glyphAt(face, p.g.glyph[i], p.s.px[p.g.span[i]] / em, left + p.g.x[i] + p.g.x_offset[i], base, img, w);
         }
         if (k == p.l.len - 1 and p.l.ellipsis > 0)
-            try glyphAt(face, p.ellipsis_glyph, p.s.px[0] / em, left + p.l.width[k] - p.l.ellipsis, base, img, w);
+            try glyphAt(face, p.ellipsis_glyph, p.s.px[0] / em, left + p.l.ellipsis_x, base, img, w);
     }
 }
 

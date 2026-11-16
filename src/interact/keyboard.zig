@@ -159,8 +159,10 @@ pub const Composition = struct {
 };
 
 /// What the text input purpose is, so the host picks the right keyboard and IME behaviour
-/// (Iced 0.14 `input_method::Purpose`).
-pub const Purpose = enum(u8) { normal, secure, terminal };
+/// (Iced 0.14 `input_method::Purpose`, plus the content types the on-screen keyboards of
+/// iOS, Android, the web and Wayland's text-input-v3 lay out for). `secure` is a password:
+/// no IME, no suggestions, nothing learned.
+pub const Purpose = enum(u8) { normal, secure, terminal, number, phone, email, url };
 
 /// A request to the host for text input, as platform output (prototype/ui.zig
 /// `Platform.wants_text` and `ime_rect`): the focused text widget fills it during the frame;

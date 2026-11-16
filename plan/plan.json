@@ -1,7 +1,7 @@
 {
  "meta": {
-  "commits": 850,
-  "lanes": 142,
+  "commits": 851,
+  "lanes": 143,
   "waves": 82,
   "critical_path_commits": 82,
   "how_to_read": "A commit can start when every id in deps is merged. Commits in one lane are sequential. wave = 1 + the longest chain of prerequisites; commits in the same wave do not depend on each other."
@@ -1052,11 +1052,18 @@
     "C0160",
     "C0161",
     "C0162",
-    "C0163",
-    "C0164",
     "C0165",
     "C0166",
     "C0167"
+   ]
+  },
+  "ct-layout-text": {
+   "phase": "P03",
+   "home": "src/comptime/",
+   "commits": [
+    "C0851",
+    "C0163",
+    "C0164"
    ]
   },
   "ct-paint": {
@@ -6254,64 +6261,14 @@
    "unblocks": 1
   },
   {
-   "id": "C0163",
-   "title": "comptime: skip passes a UI cannot need (no grow, no wrap, no text)",
+   "id": "C0165",
+   "title": "comptime: unroll sweeps for small trees and measure code size",
    "lane": "ct-layout",
    "phase": "P03",
    "wave": 47,
    "critical": false,
    "deps": [
     "C0162"
-   ],
-   "look_at": [
-    {
-     "ref": "ui.zig",
-     "detail": "layout"
-    },
-    {
-     "ref": "comptime_ui_probe.zig",
-     "detail": "tables"
-    }
-   ],
-   "spec": [],
-   "targets": [
-    "C2"
-   ],
-   "done_when": "results equal the runtime layout; benchmark recorded",
-   "unblocks": 1
-  },
-  {
-   "id": "C0164",
-   "title": "comptime: generate a partial layout routine per dirty mask",
-   "lane": "ct-layout",
-   "phase": "P03",
-   "wave": 48,
-   "critical": false,
-   "deps": [
-    "C0163"
-   ],
-   "look_at": [
-    {
-     "ref": "Targets matrix",
-     "detail": "target C2"
-    }
-   ],
-   "spec": [],
-   "targets": [
-    "C2"
-   ],
-   "done_when": "results equal the runtime layout; benchmark recorded",
-   "unblocks": 1
-  },
-  {
-   "id": "C0165",
-   "title": "comptime: unroll sweeps for small trees and measure code size",
-   "lane": "ct-layout",
-   "phase": "P03",
-   "wave": 49,
-   "critical": false,
-   "deps": [
-    "C0164"
    ],
    "look_at": [
     {
@@ -6335,7 +6292,7 @@
    "title": "comptime: add equivalence tests against the runtime front end",
    "lane": "ct-layout",
    "phase": "P03",
-   "wave": 50,
+   "wave": 48,
    "critical": false,
    "deps": [
     "C0165"
@@ -6362,7 +6319,7 @@
    "title": "comptime: add layout benchmark for static UIs",
    "lane": "ct-layout",
    "phase": "P03",
-   "wave": 51,
+   "wave": 49,
    "critical": false,
    "deps": [
     "C0166"
@@ -6382,14 +6339,92 @@
     "C2"
    ],
    "done_when": "results equal the runtime layout; benchmark recorded",
-   "unblocks": 8
+   "unblocks": 9
+  },
+  {
+   "id": "C0851",
+   "title": "comptime: measure label text through the text protocol in the comptime front end",
+   "lane": "ct-layout-text",
+   "phase": "P03",
+   "wave": 50,
+   "critical": false,
+   "deps": [
+    "C0167",
+    "C0294"
+   ],
+   "look_at": [
+    {
+     "ref": "ui.zig",
+     "detail": "layout"
+    },
+    {
+     "ref": "comptime_ui_probe.zig",
+     "detail": "tables"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "C2"
+   ],
+   "done_when": "results equal the runtime layout; the skipped passes and partial routines measured",
+   "unblocks": 1
+  },
+  {
+   "id": "C0163",
+   "title": "comptime: skip passes a UI cannot need (no grow, no wrap, no text)",
+   "lane": "ct-layout-text",
+   "phase": "P03",
+   "wave": 51,
+   "critical": false,
+   "deps": [
+    "C0851"
+   ],
+   "look_at": [
+    {
+     "ref": "ui.zig",
+     "detail": "layout"
+    },
+    {
+     "ref": "comptime_ui_probe.zig",
+     "detail": "tables"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "C2"
+   ],
+   "done_when": "results equal the runtime layout; the skipped passes and partial routines measured",
+   "unblocks": 1
+  },
+  {
+   "id": "C0164",
+   "title": "comptime: generate a partial layout routine per dirty mask",
+   "lane": "ct-layout-text",
+   "phase": "P03",
+   "wave": 52,
+   "critical": false,
+   "deps": [
+    "C0163"
+   ],
+   "look_at": [
+    {
+     "ref": "Targets matrix",
+     "detail": "target C2"
+    }
+   ],
+   "spec": [],
+   "targets": [
+    "C2"
+   ],
+   "done_when": "results equal the runtime layout; the skipped passes and partial routines measured",
+   "unblocks": 1
   },
   {
    "id": "C0168",
    "title": "comptime: emit static quad templates as read-only data",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 52,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0167",
@@ -6413,7 +6448,7 @@
    "title": "comptime: compute batches at compile time",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 53,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0168"
@@ -6436,7 +6471,7 @@
    "title": "comptime: sort quads by texture and material within a layer",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 54,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0169"
@@ -6459,7 +6494,7 @@
    "title": "comptime: generate a patch list per state field (which quad fields change)",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 55,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0170"
@@ -6482,7 +6517,7 @@
    "title": "comptime: upload only patched quad ranges",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 56,
+   "wave": 54,
    "critical": false,
    "deps": [
     "C0171"
@@ -6505,7 +6540,7 @@
    "title": "comptime: add draw-list equivalence tests",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 57,
+   "wave": 55,
    "critical": false,
    "deps": [
     "C0172"
@@ -6528,7 +6563,7 @@
    "title": "comptime: add paint benchmark for static UIs",
    "lane": "ct-paint",
    "phase": "P03",
-   "wave": 58,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0173"
@@ -6706,7 +6741,7 @@
    "title": "comptime: add list(max, template) with a run-time count",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 52,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0167"
@@ -6733,7 +6768,7 @@
    "title": "comptime: add when(condition, subtree) with reserved rows",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 53,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0181"
@@ -6760,7 +6795,7 @@
    "title": "comptime: add switch-like alternatives sharing rows",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 54,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0182"
@@ -6787,7 +6822,7 @@
    "title": "comptime: virtualise list templates by scroll offset",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 55,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0183"
@@ -6810,7 +6845,7 @@
    "title": "comptime: extend dirty masks to dynamic ranges",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 56,
+   "wave": 54,
    "critical": false,
    "deps": [
     "C0184"
@@ -6837,7 +6872,7 @@
    "title": "comptime: add tests for count changes",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 57,
+   "wave": 55,
    "critical": false,
    "deps": [
     "C0185"
@@ -6864,7 +6899,7 @@
    "title": "comptime: document what must stay dynamic and why",
    "lane": "ct-dynamic",
    "phase": "P03",
-   "wave": 58,
+   "wave": 56,
    "critical": false,
    "deps": [
     "C0186"
@@ -6891,7 +6926,7 @@
    "title": "comptime: derive feature flags from the spec (text, radius, border, image)",
    "lane": "ct-features",
    "phase": "P03",
-   "wave": 59,
+   "wave": 57,
    "critical": false,
    "deps": [
     "C0174"
@@ -6914,7 +6949,7 @@
    "title": "comptime: specialise the quad shader by feature flags",
    "lane": "ct-features",
    "phase": "P03",
-   "wave": 60,
+   "wave": 58,
    "critical": false,
    "deps": [
     "C0188"
@@ -6937,7 +6972,7 @@
    "title": "comptime: compile out unused paint paths in the software renderer",
    "lane": "ct-features",
    "phase": "P03",
-   "wave": 61,
+   "wave": 59,
    "critical": false,
    "deps": [
     "C0189"
@@ -6960,7 +6995,7 @@
    "title": "comptime: subset the glyph atlas to static strings",
    "lane": "ct-features",
    "phase": "P03",
-   "wave": 62,
+   "wave": 60,
    "critical": false,
    "deps": [
     "C0190"
@@ -6983,7 +7018,7 @@
    "title": "comptime: record binary size per feature set",
    "lane": "ct-features",
    "phase": "P03",
-   "wave": 63,
+   "wave": 61,
    "critical": false,
    "deps": [
     "C0191"
@@ -7107,7 +7142,7 @@
    "title": "bench: measure compile time for 100, 1,000 and 10,000 node specs",
    "lane": "ct-budget",
    "phase": "P03",
-   "wave": 52,
+   "wave": 50,
    "critical": false,
    "deps": [
     "C0167"
@@ -7130,7 +7165,7 @@
    "title": "bench: measure RAM and read-only bytes against the runtime front end",
    "lane": "ct-budget",
    "phase": "P03",
-   "wave": 53,
+   "wave": 51,
    "critical": false,
    "deps": [
     "C0197"
@@ -7153,7 +7188,7 @@
    "title": "bench: measure edit-rebuild time with incremental compilation",
    "lane": "ct-budget",
    "phase": "P03",
-   "wave": 54,
+   "wave": 52,
    "critical": false,
    "deps": [
     "C0198"
@@ -7176,7 +7211,7 @@
    "title": "docs: write guidance on when to use which front end",
    "lane": "ct-budget",
    "phase": "P03",
-   "wave": 55,
+   "wave": 53,
    "critical": false,
    "deps": [
     "C0199"
@@ -9454,7 +9489,7 @@
     "G6"
    ],
    "done_when": "tests pass",
-   "unblocks": 2
+   "unblocks": 3
   },
   {
    "id": "C0296",
@@ -24005,6 +24040,7 @@
     "C0143",
     "C0151",
     "C0159",
+    "C0164",
     "C0167",
     "C0174",
     "C0180",

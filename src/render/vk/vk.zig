@@ -18,6 +18,8 @@ pub const host = @import("host.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
 pub const custom = @import("custom.zig");
+pub const setup = @import("setup.zig");
+pub const Setup = setup.Setup;
 pub const scenes = @import("scenes.zig");
 
 test {

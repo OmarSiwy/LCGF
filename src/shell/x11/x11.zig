@@ -25,7 +25,6 @@ const Platform = context.Platform;
 const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const sw = lcgr.render_sw;
-const render = lcgr.render_iface;
 const Quad = lcgr.draw_list.Quad;
 const Mono = lcgr.protocol.Mono;
 const Color = lcgr.types.Color;
@@ -656,7 +655,7 @@ pub const Window = struct {
     t0: f64,
     pixels: []u32,
     fb: sw.Framebuffer,
-    gfx: sw.Software = .{},
+    gfx: sw.Setup = .{},
     font: Mono = .{},
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
@@ -1003,10 +1002,10 @@ pub const Window = struct {
         return true;
     }
 
-    /// Asks for the clipboard's text. It arrives in a later `poll` as typed text (a `.text` event
-    /// and `Input.text`), as `keyboard.Clipboard.paste` expects; nothing arrives when the
-    /// clipboard is empty or holds no text. Text longer than a frame's text buffer is dropped.
-    pub fn requestPaste(w: *Window) void {
+    /// Asks for the clipboard's text (`Platform.paste`). It arrives in a later `poll` as typed
+    /// text (a `.text` event and `Input.text`); nothing arrives when the clipboard is empty or
+    /// holds no text. Text longer than a frame's text buffer is dropped.
+    fn requestPaste(w: *Window) void {
         const a = w.conn.atoms;
         _ = w.conn.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.CLIPBOARD, a.UTF8_STRING, a.LCGR_PASTE });
         w.conn.flush() catch {};
@@ -1020,11 +1019,13 @@ pub const Window = struct {
         if (wire.get(u32, r, 12) == 0) w.frames[w.cur].typedBytes(r[32..][0..len]);
     }
 
-    /// Sets the cursor the frame asks for, when it changed, and puts the text the frame copied
-    /// on the clipboard (the CLIPBOARD selection, owned by this window).
+    /// Sets the cursor the frame asks for, when it changed, puts the text the frame copied on
+    /// the clipboard (the CLIPBOARD selection, owned by this window) and asks for the
+    /// clipboard's text when the frame pastes. XIM has no input purpose or surrounding text.
     pub fn apply(w: *Window, p: *const Platform) void {
         w.applied = p.*;
         w.applyIme(p);
+        if (p.paste) w.requestPaste();
         if (p.clipboard.len > 0) {
             const c = w.conn;
             c.clip_len = @min(p.clipboard.len, c.clip.len);
@@ -1059,9 +1060,7 @@ pub const Window = struct {
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, w.scale);
-        w.fb.clear(w.background);
-        render.render(&w.gfx, .{ .fb = &w.fb, .scissor = w.fb.all() }, out.draw);
+        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.scale);
         w.send() catch {};
         w.presented = true;
         w.last_present = now();
@@ -1440,7 +1439,7 @@ test "x11: copy in one application, paste in another" {
     const text = "h\xc3\xa9llo, X11 \xe2\x9c\x93";
     wa.apply(&.{ .clipboard = text });
     try a.sync();
-    wb.requestPaste();
+    wb.apply(&.{ .paste = true });
     var ev: Events = .{};
     for (0..2000) |_| {
         try testing.expect(wa.poll(&ev));
@@ -1473,7 +1472,7 @@ test "x11: copy in one application, paste in another" {
         if (a.clip_owner == 0) break;
         a.waitReadable(0.005);
     } else return error.ClearNeverArrived;
-    wa.requestPaste();
+    wa.apply(&.{ .paste = true });
     for (0..2000) |_| {
         try testing.expect(wb.poll(&ev));
         try testing.expect(wa.poll(&ev));

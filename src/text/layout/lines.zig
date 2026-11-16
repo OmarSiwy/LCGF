@@ -90,8 +90,11 @@ pub const Lines = struct {
     extra: []f32,
     len: u32 = 0,
     /// Written by `ellipsize`: the advance of the ellipsis that ends the last line (counted in
-    /// its `width`, drawn at `x + width - ellipsis`), 0 when the text was not cut.
+    /// its `width`), 0 when the text was not cut.
     ellipsis: f32 = 0,
+    /// Where the ellipsis is drawn, px from the last line's left edge (`x`): after the ink,
+    /// or, once `reorder` has run, before it in a right-to-left paragraph.
+    ellipsis_x: f32 = 0,
 };
 
 /// Where lines sit in a box `width` px wide. `factor` is 0 for the start, 0.5 for the centre,
@@ -233,6 +236,7 @@ pub fn ellipsize(lines: *Lines, g: *const Glyphs, text: []const u8, width: f32, 
         lines.end[k] = end;
         measure(lines, k, g, text);
     }
+    lines.ellipsis_x = lines.width[k];
     lines.width[k] += ellipsis;
     lines.hard[k] = 1;
     lines.ellipsis = ellipsis;
@@ -320,12 +324,14 @@ pub const BidiScratch = struct {
 /// Call after `place`: resolves the bidi levels of the text (UAX #9 to L1, per line), writes
 /// `Glyphs.level`, and rewrites `Glyphs.x` so each line's glyphs sit in display order (L2).
 /// A bidi paragraph is a run of lines up to one ended by a mandatory break (`Lines.hard`),
-/// its direction `a.direction` (pass the `Align` given to `place`). The ink keeps its place and width;
+/// its direction `a.direction` (pass the `Align` given to `place`). The ink keeps its width;
 /// the hanging glyphs after it sit past its end in the paragraph's direction (left of the
-/// ink, at negative x, in a right-to-left paragraph). Lines without right-to-left text keep
-/// the x `place` gave them. `error.NoSpace` when a paragraph or line is longer than `s`; the
+/// ink, at negative x, in a right-to-left paragraph). A line of a right-to-left paragraph is
+/// mirrored in the box (`Lines.x`), so its start is the box's right edge; in an unbounded
+/// box it stays at 0. Lines of left-to-right paragraphs without right-to-left text keep the
+/// x `place` gave them. `error.NoSpace` when a paragraph or line is longer than `s`; the
 /// lines before it are reordered.
-pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScratch) error{NoSpace}!void {
+pub fn reorder(lines: *Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScratch) error{NoSpace}!void {
     var k: u32 = 0;
     while (k < lines.len) {
         var last = k;
@@ -356,26 +362,30 @@ pub fn reorder(lines: *const Lines, g: *Glyphs, text: []const u8, a: Align, s: B
                 while (cp + 1 < c1 and s.at[cp + 1] <= g.cluster[i]) cp += 1;
                 g.level[i] = s.levels[cp];
             }
-            try visualLine(lines, g, text, k, para, s.order);
+            try visualLine(lines, g, text, k, para, a.width, s.order);
             c = c1;
         }
     }
 }
 
-/// Lays line `k` out in display order from its glyphs' levels.
-fn visualLine(lines: *const Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, order: []u32) error{NoSpace}!void {
+/// Lays line `k` out in display order from its glyphs' levels, in a box `box` px wide.
+fn visualLine(lines: *Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, box: f32, order: []u32) error{NoSpace}!void {
     const first = lines.first[k];
     const n = lines.ink[k] - first;
     if (n > order.len) return error.NoSpace;
     bidi.reorder(g.level[first..lines.ink[k]], order[0..n]);
     const extra = lines.extra[k];
-    var pen: f32 = 0;
+    const rtl = para & 1 == 1;
+    // The ellipsis ends the last line in its direction: on the left of a right-to-left one.
+    const cut = rtl and k + 1 == lines.len and lines.ellipsis > 0;
+    if (cut) lines.ellipsis_x = 0;
+    var pen: f32 = if (cut) lines.ellipsis else 0;
     for (order[0..n]) |o| {
         const i = first + o;
         g.x[i] = pen;
         pen += g.advance[i] + extra * space01(text, g.cluster[i]);
     }
-    const rtl = para & 1 == 1;
+    if (rtl and box < std.math.inf(f32)) lines.x[k] = box - lines.x[k] - pen;
     var back: f32 = 0;
     for (lines.ink[k]..lines.end[k]) |i| {
         const w = g.advance[i] + extra * space01(text, g.cluster[i]);
@@ -527,6 +537,44 @@ test "reorder: right-to-left runs and paragraphs in display order, spaces hang a
     try testing.expectEqualSlices(f32, &.{ 10, 0, 20, 30, 40, 50, 60 }, t.g.x[0..7]);
 }
 
+test "reorder: start is the right edge of a right-to-left paragraph, end the left" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(BidiScratch, 32);
+    const m: Metrics = .{ .ascent = 8, .descent = 2 };
+    var t: golden.Para = .{};
+    // "אב cd " | "ג" in a 60 px box: 50 and 10 px of ink.
+    const rtl = "\u{5D0}\u{5D1} cd \u{5D2}";
+    t.fixed(rtl, 10);
+    try breakLines(&t.g, rtl, 60, &t.l);
+    try testing.expectEqual(2, t.l.len);
+    for ([_]f32{ 0, 0.5, 1 }, [_][2]f32{ .{ 10, 50 }, .{ 5, 25 }, .{ 0, 0 } }) |factor, want| {
+        const a: Align = .{ .width = 60, .factor = factor };
+        place(&t.l, &t.g, rtl, &.{m}, a);
+        try reorder(&t.l, &t.g, rtl, a, s);
+        try testing.expectEqualSlices(f32, &want, t.l.x[0..2]);
+    }
+    // Justified: the first line fills the box either way.
+    const j: Align = .{ .width = 60, .justify = true };
+    place(&t.l, &t.g, rtl, &.{m}, j);
+    try reorder(&t.l, &t.g, rtl, j, s);
+    try testing.expectEqualSlices(f32, &.{ 0, 50 }, t.l.x[0..2]);
+    // A left-to-right paragraph keeps its start on the left; an unbounded box keeps 0.
+    const ltr = "ab \u{5D0}";
+    t.fixed(ltr, 10);
+    try breakLines(&t.g, ltr, 60, &t.l);
+    place(&t.l, &t.g, ltr, &.{m}, .{ .width = 60 });
+    try reorder(&t.l, &t.g, ltr, .{ .width = 60 }, s);
+    try testing.expectEqual(0, t.l.x[0]);
+    t.fixed(rtl, 10);
+    const inf = std.math.inf(f32);
+    try breakLines(&t.g, rtl, inf, &t.l);
+    place(&t.l, &t.g, rtl, &.{m}, .{ .width = inf });
+    try reorder(&t.l, &t.g, rtl, .{ .width = inf }, s);
+    try testing.expectEqual(0, t.l.x[0]);
+}
+
 test "golden: aligned and justified paragraphs match the reference" {
     try golden.expectScene(.center);
     try golden.expectScene(.end);
@@ -551,6 +599,7 @@ test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
     try testing.expectEqual(35, t.l.width[0]);
     try testing.expectEqual(1, t.l.hard[0]);
     try testing.expectEqual(15, t.l.ellipsis);
+    try testing.expectEqual(20, t.l.ellipsis_x); // after "aa"
     // Text that does not wrap: one line, cut where it overflows.
     try breakLines(&t.g, text, std.math.inf(f32), &t.l);
     ellipsize(&t.l, &t.g, text, 75, 1, 15);
@@ -561,6 +610,27 @@ test "ellipsize: extra lines are dropped and the last one ends in an ellipsis" {
     ellipsize(&t.l, &t.g, text, 10, 1, 15);
     try testing.expectEqual(0, t.l.ink[0]);
     try testing.expectEqual(15, t.l.width[0]);
+}
+
+test "ellipsize: a right-to-left line ends in an ellipsis on its left" {
+    const mem = @import("../../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(BidiScratch, 32);
+    var t: golden.Para = .{};
+    // "אב גד" cut to "אב" and the ellipsis in a 40 px box: on screen, from the right edge,
+    // alef, bet, then the ellipsis, the hanging space past it.
+    const text = "\u{5D0}\u{5D1} \u{5D2}\u{5D3}";
+    t.fixed(text, 10);
+    try breakLines(&t.g, text, std.math.inf(f32), &t.l);
+    ellipsize(&t.l, &t.g, text, 40, 1, 15);
+    try testing.expectEqual(2, t.l.ink[0]);
+    const a: Align = .{ .width = 40 };
+    place(&t.l, &t.g, text, &.{.{ .ascent = 8, .descent = 2 }}, a);
+    try reorder(&t.l, &t.g, text, a, s);
+    try testing.expectEqual(5, t.l.x[0]);
+    try testing.expectEqual(0, t.l.ellipsis_x);
+    try testing.expectEqualSlices(f32, &.{ 25, 15, -10 }, t.g.x[0..3]);
 }
 
 test "golden: clamped and truncated paragraphs match the reference" {

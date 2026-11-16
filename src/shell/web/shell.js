@@ -27,8 +27,11 @@ export function shell(page) {
         shell_cursor(c) {
             page.canvas.style.cursor = cursors[c] ?? "default";
         },
-        shell_ime(on, x0, y0, x1, y1) {
-            page.ime(on, x0, y0, x1, y1);
+        shell_ime(on, x0, y0, x1, y1, purpose) {
+            page.ime(on, x0, y0, x1, y1, purpose);
+        },
+        shell_paste() {
+            page.paste();
         },
         shell_clipboard(ptr, len) {
             // Decoded now: the bytes are only valid during the call. writeText is asynchronous
@@ -39,6 +42,10 @@ export function shell(page) {
         },
     });
 }
+
+/// The textarea's `inputmode` for keyboard.Purpose, in its order: normal, secure, terminal,
+/// number, phone, email, url.
+const inputModes = ["text", "text", "text", "decimal", "tel", "email", "url"];
 
 /// CSS cursors of context.Cursor, in its order: arrow, pointer, text, grab, resize_h, resize_v.
 export const cursors = ["default", "pointer", "text", "grab", "ew-resize", "ns-resize"];
@@ -227,11 +234,12 @@ function forward(ui, canvas, on, frame, page) {
     canvas.after(input);
     page.input = input;
     const bytes = (s) => new TextEncoder().encode(s).length;
-    page.ime = (on, x0, y0, x1, y1) => {
+    page.ime = (on, x0, y0, x1, y1, purpose) => {
         if (!on) {
             if (document.activeElement === input) canvas.focus({ preventScroll: true });
             return;
         }
+        input.inputMode = inputModes[purpose] ?? "text";
         const r = canvas.getBoundingClientRect();
         const h = Math.max(y1 - y0, 1);
         Object.assign(input.style, { left: `${r.left + x0}px`, top: `${r.top + y0}px`, width: `${Math.max(x1 - x0, 1)}px`, height: `${h}px`, fontSize: `${h}px` });
@@ -252,6 +260,14 @@ function forward(ui, canvas, on, frame, page) {
     const keyup = (e) => {
         x.lcgr_key(1, hid[e.code] ?? 0, mods(e));
         frame();
+    };
+    // A widget's paste (`Platform.paste`): the async clipboard, which the browser may refuse
+    // (no focus, no permission); the text then never arrives, as with an empty clipboard.
+    page.paste = () => {
+        navigator.clipboard?.readText().then((text) => {
+            if (text) typed(text, 0);
+            frame();
+        }, (e) => console.warn("lcgr: paste refused:", e.message));
     };
     // Paste: the browser hands the text over in the paste event (Ctrl+V or Cmd+V, which are
     // left to the browser above, or the context menu); it arrives as typed text.

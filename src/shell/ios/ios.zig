@@ -41,7 +41,6 @@ const Output = context.Output;
 const Pace = lcgr.scheduler.Pace;
 const objc = metal.objc;
 const text_input = @import("text_input.zig");
-const present_ = metal.present;
 const Id = objc.Id;
 const Sel = objc.Sel;
 const msg = objc.msg;
@@ -301,10 +300,7 @@ fn appRun(_: Id, _: Sel) callconv(.c) void {
 pub const Ios = struct {
     t: translate.Translator = .{},
     view: Id,
-    dev: metal.device.Device,
-    layer: metal.device.Layer,
-    gfx: metal.Renderer,
-    frames: present_.Frames,
+    gpu: metal.Setup,
     font: Mono = .{},
     glyphs: Buffers,
     /// What `present` clears to before drawing.
@@ -322,7 +318,7 @@ pub const Ios = struct {
     touches: [translate.max_contacts]?Id = @splat(null),
     /// Text input as last applied: whether the view is first responder (keyboard up), and
     /// the rect (points) the IME's candidates and the text-selection UI anchor to.
-    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{} } = .{},
+    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{}, purpose: lcgr.keyboard.Purpose = .normal } = .{},
     /// The IME's marked text (retained, an NSString) and the UTF-16 range it selects: the
     /// whole document UITextInput sees (text_input).
     marked: ?Id = null,
@@ -345,16 +341,9 @@ pub const Ios = struct {
     /// the shell must not move afterwards (UIKit's callbacks point at it).
     pub fn init(s: *Ios, buf: Buffers) Error!void {
         const view = app.view orelse return error.NoView;
-        var dev = try metal.device.Device.init();
-        errdefer dev.deinit();
-        // The view's own layer is the CAMetalLayer (`layerClass`); configure it as Layer.init would.
-        const layer = msg(Id, view, "layer", .{});
-        msg(void, layer, "setDevice:", .{dev.device});
-        msg(void, layer, "setPixelFormat:", .{metal.mtl.PixelFormat.bgra8_unorm});
-        msg(void, layer, "setFramebufferOnly:", .{@as(objc.BOOL, true)});
-        msg(void, layer, "setOpaque:", .{@as(objc.BOOL, true)});
-        var gfx = try metal.Renderer.init(dev.device, .{});
-        errdefer gfx.deinit();
+        // The view's own layer is the CAMetalLayer (`layerClass`).
+        var gpu = try metal.Setup.init(msg(Id, view, "layer", .{}));
+        errdefer gpu.deinit();
         var ctx: CFRunLoopSourceContext = .{ .perform = &performWake };
         const run_loop = fns.CFRunLoopGetMain();
         const source = fns.CFRunLoopSourceCreate(null, 0, &ctx) orelse return error.RunLoop;
@@ -363,10 +352,7 @@ pub const Ios = struct {
         s.* = .{
             .t = .init(.{ .text = buf.text, .events = buf.events }),
             .view = view,
-            .dev = dev,
-            .layer = .{ .layer = layer, .format = .bgra8_unorm },
-            .gfx = gfx,
-            .frames = .init(dev.queue, gfx.desc.frames_in_flight),
+            .gpu = gpu,
             .glyphs = buf,
             .source = source,
             .run_loop = run_loop,
@@ -378,9 +364,7 @@ pub const Ios = struct {
 
     pub fn deinit(s: *Ios) void {
         app.shell = null;
-        s.frames.deinit();
-        s.gfx.deinit();
-        s.dev.deinit();
+        s.gpu.deinit();
     }
 
     /// Reads the view's bounds, scale and safe area into the translator.
@@ -390,18 +374,6 @@ pub const Ios = struct {
         s.t.setScale(@floatCast(msg(CGFloat, s.view, "contentScaleFactor", .{})));
         const i = msg(UIEdgeInsets, s.view, "safeAreaInsets", .{});
         s.t.setInsets(@floatCast(i.top), @floatCast(i.left), @floatCast(i.bottom), @floatCast(i.right));
-    }
-
-    /// True once after the app returned from the background: build a frame (post the
-    /// context's waker), since frames built while it was away were not presented.
-    pub fn resumed(s: *Ios) bool {
-        return s.t.takeResumed();
-    }
-
-    /// The safe area as root padding (`Style.pad`): what the notch, the Dynamic Island and
-    /// the home indicator cover.
-    pub fn safeArea(s: *const Ios) [4]f32 {
-        return s.t.safe;
     }
 
     fn touch(s: *Ios, view: Id, ui: Id) void {
@@ -446,12 +418,20 @@ pub const Ios = struct {
         return s.t.frame(ev);
     }
 
-    /// Applies a frame's effects: text the frame copies goes to the general pasteboard; while
-    /// a widget wants text the view is first responder, which brings up the soft keyboard (or
-    /// takes a hardware keyboard's text), and its IME anchors at `ime_rect`.
+    /// Applies a frame's effects: text the frame copies goes to the general pasteboard, and a
+    /// paste reads it; while a widget wants text the view is first responder, which brings up
+    /// the soft keyboard (or takes a hardware keyboard's text) laid out for `purpose`, and its
+    /// IME anchors at `ime_rect`.
     pub fn apply(s: *Ios, p: *const Platform) void {
         if (p.clipboard.len > 0) s.copy(p.clipboard);
+        if (p.paste) s.paste();
         s.text.rect = p.ime_rect;
+        if (p.purpose != s.text.purpose) {
+            s.text.purpose = p.purpose;
+            // UIKit reads the traits when the view becomes first responder; already one, it
+            // reads them again here.
+            if (s.text.wants) msg(void, s.view, "reloadInputViews", .{});
+        }
         if (p.wants_text != s.text.wants) {
             s.text.wants = p.wants_text;
             if (p.wants_text) {
@@ -473,10 +453,9 @@ pub const Ios = struct {
         msg(void, generalPasteboard(), "setString:", .{str});
     }
 
-    /// Types the pasteboard's text into the next frame, as `keyboard.Clipboard.paste` asks the
-    /// host to: call it after a frame whose widgets requested a paste. iOS may ask the user
-    /// first ("Allow Paste") and returns nothing if they decline.
-    pub fn paste(s: *Ios) void {
+    /// Types the pasteboard's text into the next frame (`Platform.paste`). iOS may ask the
+    /// user first ("Allow Paste") and returns nothing if they decline.
+    fn paste(s: *Ios) void {
         const pool = objc.Pool.push();
         defer pool.pop();
         const str = msg(?Id, generalPasteboard(), "string", .{}) orelse return;
@@ -491,18 +470,10 @@ pub const Ios = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const in = &s.t.in;
-        _ = s.layer.resize(in.viewport, in.scale);
-        const cmd = s.frames.begin();
         const g = s.glyphs;
         const n = s.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        s.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, in.viewport, in.scale);
-        const drawable = present_.nextDrawable(s.layer.layer) orelse return;
         const c = s.background;
-        const pass = present_.beginPass(cmd, present_.drawableTexture(drawable), .{ unit(c.r), unit(c.g), unit(c.b), 1 });
-        s.gfx.render(pass, out.draw);
-        present_.endPass(pass);
-        s.frames.present(cmd, drawable, null);
-        s.presents += 1;
+        if (s.gpu.draw(out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, in.viewport, in.scale, .{ unit(c.r), unit(c.g), unit(c.b), 1 })) s.presents += 1;
     }
 
     fn unit(v: u8) f64 {

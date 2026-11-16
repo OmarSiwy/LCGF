@@ -15,6 +15,8 @@ pub const present = @import("present.zig");
 pub const custom = @import("custom.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const setup = @import("setup.zig");
+pub const Setup = setup.Setup;
 
 test {
     std.testing.refAllDecls(@This());

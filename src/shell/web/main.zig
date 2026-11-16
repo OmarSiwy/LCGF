@@ -20,7 +20,8 @@ const imports = struct {
     extern "lcgr" fn shell_clipboard(ptr: [*]const u8, len: usize) void;
     extern "lcgr" fn gpu_frame_begin() u32;
     extern "lcgr" fn gpu_frame_end(pass: u32) void;
-    extern "lcgr" fn shell_ime(on: bool, x0: f32, y0: f32, x1: f32, y1: f32) void;
+    extern "lcgr" fn shell_ime(on: bool, x0: f32, y0: f32, x1: f32, y1: f32, purpose: u32) void;
+    extern "lcgr" fn shell_paste() void;
 };
 
 /// The page, as web.zig's `host`.
@@ -34,8 +35,11 @@ const host = struct {
     pub fn clipboard(text: []const u8) void {
         imports.shell_clipboard(text.ptr, text.len);
     }
-    pub fn ime(on: bool, r: lcgr.types.Rect) void {
-        imports.shell_ime(on, r.x0, r.y0, r.x1, r.y1);
+    pub fn paste() void {
+        imports.shell_paste();
+    }
+    pub fn ime(on: bool, r: lcgr.types.Rect, purpose: lcgr.keyboard.Purpose) void {
+        imports.shell_ime(on, r.x0, r.y0, r.x1, r.y1, @backingInt(purpose));
     }
     pub fn present(out: *const Output) void {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });

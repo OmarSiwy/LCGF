@@ -146,8 +146,8 @@ pub const View = struct {
     }
 };
 
-/// Columns for `visual`, each as long as the longest line it moves over in code points, plus
-/// one row (`mem.Carver.columns` carves them all at once). A longer line moves logically.
+/// Columns for `visual`, each as long as the longest paragraph it moves over in code points,
+/// plus one row (`mem.Carver.columns` carves them all at once). A longer one moves logically.
 pub const BidiScratch = struct {
     cps: []u21,
     orig: []property.BidiClass,
@@ -166,37 +166,56 @@ pub const BidiScratch = struct {
 
 /// Left and Right in visual order (UAX #9 L1, L2), for a line with right-to-left text in it:
 /// the caret at `at` moves to the stop next to it on screen in direction `dir` (+1 right, -1
-/// left), not to the next offset. Lines are those between newlines, each a bidi paragraph.
+/// left), not to the next offset. A bidi paragraph runs between newlines. The line is the
+/// laid-out line holding the caret when `view` is given (the layout of `text`, as
+/// `lines.reorder` left it), else the paragraph: L1 puts the spaces that end a wrapped line
+/// at the paragraph's level, so moves follow what `reorder` drew.
 ///
 /// Each caret stop has one place on screen, taken from the grapheme after it: the left edge of
-/// a left-to-right grapheme, the right edge of a right-to-left one (at the line's end, the
-/// trailing edge of the last grapheme). A move goes to the stop whose place is the nearest one
-/// in `dir`, so repeated moves visit places strictly left to right, never stall, and stop at
-/// the line's visual end; past it they go to the next line in the paragraph's direction, or
-/// the previous line against it. Two offsets with one place (at a direction change) are one
-/// stop. `base` is the paragraph's direction, as given to `lines.reorder`. Returns null when
-/// the line is all left to right (logical moves are the same) or too long for `s`.
-pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, s: BidiScratch) ?u32 {
-    const from = lineStart(text, at);
-    const to = lineEnd(text, at);
-    // Graphemes of the line and their code points.
+/// a left-to-right grapheme, the right edge of a right-to-left one (at the paragraph's end, the
+/// trailing edge of the last grapheme; a wrapped line's end is the next line's start). A move
+/// goes to the stop whose place is the nearest one in `dir`, so repeated moves visit places
+/// strictly left to right, never stall, and stop at the line's visual end; past it they go to
+/// the next line in the paragraph's direction, or the previous line against it. Two offsets
+/// with one place (at a direction change) are one stop. `base` is the paragraph's direction,
+/// as given to `lines.reorder`. Returns null when the line is all left to right (logical
+/// moves are the same) or its paragraph is too long for `s`.
+pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, view: ?View, s: BidiScratch) ?u32 {
+    const p_from = lineStart(text, at);
+    const p_to = lineEnd(text, at);
+    var from = p_from;
+    var to = p_to;
+    if (view) |v| {
+        const k = query.caret(v.l, v.g, v.text, at).line;
+        from = @max(v.l.start[k], p_from);
+        if (k + 1 < v.l.len) to = @min(v.l.start[k + 1], p_to);
+    }
+    const wrapped = to < p_to;
+    // The paragraph's code points; the line's are `c0..c1`.
+    var n: u32 = 0;
+    var c0: u32 = 0;
+    var c1: u32 = 0;
+    var pos: u32 = p_from;
+    while (pos < p_to) : (n += 1) {
+        if (n >= s.cps.len) return null;
+        c0 += @intFromBool(pos < from);
+        c1 += @intFromBool(pos < to);
+        const d = utf8.decode(text, pos);
+        s.cps[n] = d.cp;
+        pos += d.len;
+    }
+    // Graphemes of the line and their first code points.
     var it: Graphemes = .{ .text = text[from..to] };
-    var n: u32 = 0; // code points
-    var ng: u32 = 0; // graphemes
-    var pos: u32 = from;
+    var ng: u32 = 0;
+    var cp = c0;
+    pos = from;
     while (it.next()) |e| {
         if (ng + 1 >= s.start.len) return null;
         s.start[ng] = pos;
-        s.first[ng] = n;
+        s.first[ng] = cp;
         ng += 1;
         const end = from + @as(u32, @intCast(e));
-        while (pos < end) {
-            if (n >= s.cps.len) return null;
-            const d = utf8.decode(text, pos);
-            s.cps[n] = d.cp;
-            n += 1;
-            pos += d.len;
-        }
+        while (pos < end) : (cp += 1) pos += utf8.decode(text, pos).len;
     }
     s.start[ng] = to;
     const orig = s.orig[0..n];
@@ -204,7 +223,7 @@ pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, s: BidiS
     const scratch: bidi.Scratch = .{ .cls = s.cls, .next = s.next, .pair = s.pair };
     const para = bidi.baseLevel(orig, scratch, base);
     bidi.resolve(orig, s.cps[0..n], para, s.levels, scratch);
-    bidi.lineLevels(orig, s.levels[0..n], para);
+    bidi.lineLevels(orig[c0..c1], s.levels[c0..c1], para);
     var odd = para;
     for (s.first[0..ng], s.glevel[0..ng]) |f, *l| {
         l.* = s.levels[f];
@@ -214,14 +233,16 @@ pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, s: BidiS
     bidi.reorder(s.glevel[0..ng], s.order);
     for (s.order[0..ng], 0..) |g, v| s.inv[g] = @intCast(v);
 
+    // A wrapped line's end is a stop of the next line.
+    const stops = s.start[0 .. ng + @intFromBool(!wrapped)];
     var here: u32 = 0;
-    for (s.start[0 .. ng + 1], 0..) |off, b| {
+    for (stops, 0..) |off, b| {
         if (off == at) here = place(s, ng, @intCast(b));
     }
     // The nearest place in `dir`, and the stop holding it.
     var best: ?u32 = null;
     var best_place: u32 = 0;
-    for (s.start[0 .. ng + 1], 0..) |off, b| {
+    for (stops, 0..) |off, b| {
         const p = place(s, ng, @intCast(b));
         const ahead = if (dir > 0) p > here else p < here;
         const nearer = best == null or (if (dir > 0) p < best_place else p > best_place);
@@ -231,10 +252,11 @@ pub fn visual(text: []const u8, at: u32, dir: i2, base: bidi.Direction, s: BidiS
         }
     }
     if (best) |b| return b;
-    // At the line's visual end: on to the next line along the paragraph's direction.
+    // At the line's visual end: on to the next line along the paragraph's direction (the
+    // previous one's last stop is before its last grapheme).
     const forward = (dir > 0) == (para & 1 == 0);
-    if (forward) return if (to < text.len) to + 1 else at;
-    return if (from > 0) from - 1 else at;
+    if (forward) return if (wrapped) to else if (to < text.len) to + 1 else at;
+    return if (from == p_from and from > 0) from - 1 else if (from > 0) prevGrapheme(text, from) else at;
 }
 
 /// Where stop `b` (0 to `ng`) of the line is on screen, as a boundary between visual
@@ -322,7 +344,7 @@ test "wordAt: the segment under a double click" {
 fn walk(text: []const u8, from: u32, dir: i2, steps: []u32, s: BidiScratch) void {
     var at = from;
     for (steps) |*st| {
-        at = visual(text, at, dir, .auto, s) orelse at;
+        at = visual(text, at, dir, .auto, null, s) orelse at;
         st.* = at;
     }
 }
@@ -350,16 +372,16 @@ test "visual: Right and Left in screen order over mixed directions" {
     walk(rtl, 5, 1, &got2, s);
     try testing.expectEqualSlices(u32, &.{ 6, 7, 4, 2, 0, 0 }, &got2);
     // All left to right: no visual move, the caller moves logically.
-    try testing.expectEqual(null, visual("abc", 1, 1, .auto, s));
+    try testing.expectEqual(null, visual("abc", 1, 1, .auto, null, s));
     // Too long for the scratch: logical too.
-    try testing.expectEqual(null, visual("\u{5D0}bcdefghijklmnopqrstu", 0, 1, .auto, s));
+    try testing.expectEqual(null, visual("\u{5D0}bcdefghijklmnopqrstu", 0, 1, .auto, null, s));
     // Past the visual end of a line: on to the next line, or back to the previous one.
     const two = "a\u{5D0}\nb";
-    try testing.expectEqual(4, visual(two, 1, 1, .auto, s).?);
-    try testing.expectEqual(0, visual(two, 3, -1, .auto, s).?);
+    try testing.expectEqual(4, visual(two, 1, 1, .auto, null, s).?);
+    try testing.expectEqual(0, visual(two, 3, -1, .auto, null, s).?);
     // A given direction: "abc" in a right-to-left paragraph is all left to right but its
     // line ends are swapped, so Right from the end goes on to the previous line.
-    try testing.expectEqual(null, visual("abc", 1, 1, .ltr, s));
-    try testing.expectEqual(2, visual("abc", 1, 1, .rtl, s).?);
-    try testing.expectEqual(1, visual("a\nbc", 4, 1, .rtl, s).?);
+    try testing.expectEqual(null, visual("abc", 1, 1, .ltr, null, s));
+    try testing.expectEqual(2, visual("abc", 1, 1, .rtl, null, s).?);
+    try testing.expectEqual(1, visual("a\nbc", 4, 1, .rtl, null, s).?);
 }

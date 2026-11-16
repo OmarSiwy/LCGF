@@ -9,13 +9,14 @@
 //!
 //!   fn poll(*S, *Events) bool
 //!        Drains the platform's pending events into `ev` without blocking: held state (pointer,
-//!        buttons, keys, viewport, scale) is updated in place, per-frame state (wheel, scroll,
-//!        typed text, key events, contacts, a drop) is replaced. False once the shell has no more
+//!        buttons, keys, viewport, scale, safe area, appearance) is updated in place, per-frame
+//!        state (wheel, scroll, typed text, key events, contacts, a drop, redraw) is replaced. False once the shell has no more
 //!        frames to give (the window closed, the recording ended); the shell says why itself.
 //!        Slices in `ev` point into the shell's own buffers and stay valid until the next `poll`.
 //!   fn apply(*S, *const Platform) void
 //!        Applies a frame's platform effects: the cursor shape, showing the on-screen keyboard or
-//!        IME at `ime_rect`, setting the clipboard. Called once per built frame, after `end`.
+//!        IME at `ime_rect` for `purpose` around `surrounding`, setting the clipboard and asking
+//!        for its text (`paste`). Called once per built frame, after `end`.
 //!   fn present(*S, *const Output) void
 //!        Shows the frame: draws `out.draw` with the shell's back end and presents it. A host that
 //!        renders itself (its own GPU pass, custom draws) skips this and uses `out.draw` directly.

@@ -40,15 +40,17 @@ pub fn main() !void {
     });
     defer shell.deinit();
     var ctx = try context.Context.init(&ctx_buffer, limits);
-    var app: lcgr.shell_example.App = .{ .theme = lcgr.theme.widgets(&shell.appearance.tokens()) };
-    shell.background = app.theme.panel;
+    var app: lcgr.shell_example.App = .{};
+    // Restyled for the system's appearance on the first frame and whenever it changes; a
+    // change is input, so the frame that sees it is built.
+    var styled: ?lcgr.input.Input.Appearance = null;
 
     var ev: Events = .{};
     while (shell.poll(&ev)) {
-        if (shell.appearanceChanged()) |a| {
-            app.theme = lcgr.theme.widgets(&a.tokens());
+        if (!std.meta.eql(styled, ev.in.appearance)) {
+            styled = ev.in.appearance;
+            app.theme = lcgr.theme.widgets(&lcgr.theme.forAppearance(ev.in.appearance));
             shell.background = app.theme.panel;
-            ctx.waker.post();
         }
         if (ctx.needsFrame(&ev.in)) {
             var f = ctx.begin(&ev.in);

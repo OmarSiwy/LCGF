@@ -1,10 +1,10 @@
 //! Toggle button: a button that stays pressed until it is pressed again (bold, mute, pin).
 //! Tier 2, written against the public API of tiers 0 and 1 (the recipe in base.zig).
 //!
-//! Accessibility: role button (ARIA has no toggle-button role: it is a button with
-//! `aria-pressed`), named by its caption, value 1 while pressed and 0 released. a11y/tree.zig
-//! has no pressed state bit and does not derive `checked` for buttons, so the value is the
-//! only place a bridge finds "pressed" (AccessKit `Toggled` on a button).
+//! Accessibility: role toggle button (`a11y.Role.toggle_button`: ARIA's button with
+//! `aria-pressed`, AccessKit's button with `Toggled`), named by its caption, value 1 while
+//! pressed and 0 released, from which a11y/tree.zig `states` sets `pressed`. `types.Role` has
+//! no toggle button, so both front ends write the byte over the button's role.
 //!
 //! State: the application's `bool`, true while pressed. The runtime front end takes a pointer
 //! to it; the comptime front end binds a `bool` field, checked while compiling. The caption is
@@ -26,6 +26,10 @@ const Response = types.Response;
 const Frame = @import("../runtime/frame.zig").Frame;
 const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
+const a11y = @import("../a11y/tree.zig");
+
+/// The role byte both front ends write (`types.Role` stops at `text_input`).
+const role: u8 = @backingInt(a11y.Role.toggle_button);
 
 // ---- spec -----------------------------------------------------------------------------------
 
@@ -66,6 +70,7 @@ pub fn toggle(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8
     _ = label_zig.label(f, th, str);
     f.close();
     f.tree().c.value[node.ix()] = simd.b2f(value.*);
+    f.tree().c.role[node.ix()] = role;
     return r;
 }
 
@@ -102,6 +107,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
             s.fill = toggleFill(&@TypeOf(ui.*).theme, value, ui.response(row, in));
             s.value = simd.b2f(value);
             const i = ui.tables.t.push(parent, .hash(name), &s);
+            ui.tables.t.c.role[i] = role;
             ui.push(n.children[0], i, next, in);
             ui.tables.t.seal(i);
         }
@@ -273,8 +279,7 @@ test "toggle input: click, Enter and Space up flip it; Space down does not, in b
 
 var toggle_semantics: base.Semantic(16) = .{};
 
-test "toggle a11y: role button, named by its caption, pressed as its value, in both front ends" {
-    const a11y = @import("../a11y/tree.zig");
+test "toggle a11y: role toggle button, named by its caption, pressed from its value, in both front ends" {
     const h = &two;
     h.init();
     const in: Input = .{ .viewport = .{ 200, 60 } };
@@ -283,12 +288,12 @@ test "toggle a11y: role button, named by its caption, pressed as its value, in b
     try x.run(h);
     for ([2]u32{ 2, 4 }, [2][]const u8{ "B", "I" }, [2]bool{ false, true }) |node, name, pressed| {
         const r = x.row(node).?;
-        try testing.expectEqual(@backingInt(a11y.Role.button), x.out[0].c.role[r]);
+        try testing.expectEqual(@backingInt(a11y.Role.toggle_button), x.out[0].c.role[r]);
         try testing.expectEqualStrings(name, x.name(0, r));
         try testing.expectEqualStrings(name, x.name(1, r));
         try testing.expectEqual(simd.b2f(pressed), x.out[0].c.value[r]);
-        // No state bit says "pressed" (a gap of the a11y tree): the value does.
-        try testing.expectEqual(@as(u8, 0), x.out[0].c.state[r]);
+        const st: a11y.State = .{ .pressed = pressed };
+        try testing.expectEqual(st.bitsOf(), x.out[0].c.state[r]);
     }
 }
 

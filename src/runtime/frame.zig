@@ -138,6 +138,14 @@ pub const Frame = struct {
         p.cursor = @fromBackingInt(@as(u8, @truncate(simd.selU(when, @backingInt(cursor), @backingInt(p.cursor)))));
     }
 
+    /// Makes `node` a focus scope (`focus.Scopes`): `group` for a composite widget that is one
+    /// Tab stop with arrows inside (a toolbar, a radio group), `trap` for a modal layer that
+    /// keeps focus among its descendants. Read by the next frame's focus step.
+    pub fn focusScope(f: *Frame, node: Node, kind: u8) void {
+        f.ctx.scopes.c.kind[node.ix()] = kind;
+        f.ctx.scoped = true;
+    }
+
     pub const timer = scheduler.timer;
     pub const reuse = @import("reuse.zig").reuse;
 

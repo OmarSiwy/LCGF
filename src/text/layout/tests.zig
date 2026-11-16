@@ -197,20 +197,22 @@ test "text-edit's screen-order caret sits on the glyph it moved to over reordere
     for (texts) |text| {
         p.fixed(text, 10);
         try lines.breakLines(&p.g, text, std.math.inf(f32), &p.l);
-        lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, .{});
-        try lines.reorder(&p.l, &p.g, text, .{}, s);
+        // In a box as wide as the line, so it starts at 0 in either direction.
+        const a: lines.Align = .{ .width = @floatFromInt(p.g.len * 10) };
+        lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, a);
+        try lines.reorder(&p.l, &p.g, text, a, s);
         const v: moves.View = .{ .l = &p.l, .g = &p.g, .text = text };
         // From the left end, Right moves the drawn caret strictly rightwards, each time onto
         // the glyph moves.visual placed the stop at, up to the right end; Left walks back.
         // (Two offsets at a direction change are one stop, so a step can cross two glyphs.)
         const right: f32 = @floatFromInt(p.g.len * 10);
         var at: u32 = 0;
-        for (0..2 * p.g.len) |_| at = moves.visual(text, at, -1, .auto, ms).?;
+        for (0..2 * p.g.len) |_| at = moves.visual(text, at, -1, .auto, v, ms).?;
         try testing.expectEqual(0, v.x(at));
         var prev: f32 = 0;
         var steps: u32 = 0;
         while (prev < right) : (steps += 1) {
-            at = moves.visual(text, at, 1, .auto, ms).?;
+            at = moves.visual(text, at, 1, .auto, v, ms).?;
             try testing.expect(v.x(at) > prev);
             try expectOnGlyph(&p, text, at);
             prev = v.x(at);
@@ -218,11 +220,52 @@ test "text-edit's screen-order caret sits on the glyph it moved to over reordere
         try testing.expectEqual(right, prev);
         try testing.expect(steps + 2 >= p.g.len);
         while (prev > 0) {
-            at = moves.visual(text, at, -1, .auto, ms).?;
+            at = moves.visual(text, at, -1, .auto, v, ms).?;
             try testing.expect(v.x(at) < prev);
             try expectOnGlyph(&p, text, at);
             prev = v.x(at);
         }
+    }
+}
+
+test "text-edit's screen-order moves follow the wrapped lines reorder drew" {
+    const mem = @import("../../core/mem.zig");
+    const moves = @import("../edit/moves.zig");
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    const s = carver.columns(lines.BidiScratch, 32);
+    const ms = carver.columns(moves.BidiScratch, 32);
+    var p: golden.Para = .{};
+    // "abc אב גד" in 70 px: "abc אב " | "גד". Unwrapped, the space after bet sits between two
+    // right-to-left letters and goes with them; ending line 0, L1 puts it at the paragraph's
+    // level, right of the Hebrew: "abc בא ".
+    const text = "abc \u{5D0}\u{5D1} \u{5D2}\u{5D3}";
+    p.fixed(text, 10);
+    try lines.breakLines(&p.g, text, 70, &p.l);
+    try testing.expectEqual(2, p.l.len);
+    const a: lines.Align = .{ .width = 70 };
+    lines.place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, a);
+    try lines.reorder(&p.l, &p.g, text, a, s);
+    const v: moves.View = .{ .l = &p.l, .g = &p.g, .text = text };
+    // Right from the start: over "abc ", onto the Hebrew from its left (after bet, then after
+    // alef, the right edge of the ink), then to the next line.
+    const want = [_]u32{ 1, 2, 3, 6, 4, 9 };
+    var at: u32 = 0;
+    var prev: f32 = 0;
+    for (want, 0..) |w, i| {
+        at = moves.visual(text, at, 1, .auto, v, ms).?;
+        try testing.expectEqual(w, at);
+        if (i + 1 < want.len) {
+            try testing.expect(v.x(at) > prev);
+            try expectOnGlyph(&p, text, at);
+            prev = v.x(at);
+        }
+    }
+    // And back: Left over line 1's Hebrew to its left end, then to line 0's last stop (before
+    // its hanging space, the right edge of its ink) and leftwards.
+    for ([_]u32{ 11, 13, 8, 6, 3, 2, 1, 0 }) |w| {
+        at = moves.visual(text, at, -1, .auto, v, ms).?;
+        try testing.expectEqual(w, at);
     }
 }
 

@@ -653,7 +653,7 @@ test "wayland: copy offers the UI's text, paste types the selection's" {
     try testing.expectEqual(@as(u8, 1), shell.data.offer(offer).?.mimes);
 
     // Paste: receive into a pipe; the text is typed in the poll that reads its end.
-    try testing.expect(shell.paste());
+    shell.apply(&.{ .paste = true });
     fake.pump(&shell);
     try testing.expect(fake.received >= 0);
     _ = linux.write(fake.received, "w\xc3\xb6rld", 6);
@@ -675,7 +675,7 @@ test "wayland: copy offers the UI's text, paste types the selection's" {
     fake.send(shell.data.device, 5, .{offer + 1});
     fake.flush();
     _ = shell.poll(&ev);
-    try testing.expect(shell.paste());
+    shell.apply(&.{ .paste = true });
     fake.pump(&shell);
     // The compositor forwards the receive to the source: this client.
     fake.send(own, 1, .{ @as([]const u8, "UTF8_STRING"), wire.Fd{ .fd = fake.received } });
@@ -691,7 +691,8 @@ test "wayland: nothing to paste" {
     fake.start(&shell, &(seat_globals ++ [_][]const u8{"wl_data_device_manager"}));
     var ev: Events = .{};
     _ = shell.poll(&ev);
-    try testing.expect(!shell.paste());
+    shell.apply(&.{ .paste = true });
+    try testing.expect(shell.data.paste_fd < 0);
 }
 
 test "wayland: the input method follows wants_text, composes, then commits" {
@@ -746,6 +747,39 @@ test "wayland: the input method follows wants_text, composes, then commits" {
     shell.apply(&.{});
     fake.pump(&shell);
     try testing.expect(fake.sent(.text_input, 2) != null); // disable
+}
+
+test "wayland: the input method gets the field's purpose and surrounding text" {
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &(seat_globals ++ [_][]const u8{"zwp_text_input_manager_v3"}));
+    _ = shell.poll(&ev);
+    fake.pump(&shell);
+    const ti = shell.ime.text_input;
+    fake.send(ti, 0, .{shell.windows[0].surface}); // enter
+    fake.flush();
+    _ = shell.poll(&ev);
+
+    // A password field: hidden and sensitive, purpose password; its text and caret go along.
+    const field: lcgr.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
+    fake.logged = 0;
+    shell.apply(&.{ .wants_text = true, .ime_rect = field, .purpose = .secure, .surrounding = "abc", .selection = .{ 1, 3 } });
+    fake.pump(&shell);
+    const ct = fake.sent(.text_input, 5).?;
+    try testing.expectEqual([2]u32{ 0xc0, 8 }, [2]u32{ ct.arg0, ct.arg1 });
+    const st = fake.sent(.text_input, 3).?; // set_surrounding_text: "abc" and its NUL
+    try testing.expectEqual(@as(u32, 4), st.arg0);
+    try testing.expectEqual(std.mem.readInt(u32, "abc\x00", .little), st.arg1);
+
+    // An email field next, same text: only the content type goes again.
+    fake.logged = 0;
+    shell.apply(&.{ .wants_text = true, .ime_rect = field, .purpose = .email, .surrounding = "abc", .selection = .{ 1, 3 } });
+    fake.pump(&shell);
+    try testing.expectEqual(@as(u32, 6), fake.sent(.text_input, 5).?.arg1);
+    try testing.expect(fake.sent(.text_input, 3) == null);
+    try testing.expect(fake.sent(.text_input, 1) == null); // still enabled
 }
 
 test "wayland: a held key repeats at the compositor's rate, and wait wakes for it" {
