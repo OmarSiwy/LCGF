@@ -511,6 +511,30 @@ pub fn build(b: *std.Build) void {
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
     }
 
+    // The Gompute back end (src/render/gompute/): kernels written in Zig, compiled to PTX and HSACO
+    // and embedded, launched through Gompute's run-time driver loader (build.zig.zon, lazy).
+    // Device targets are pinned, not Gompute's `.auto` (which probes the build machine's GPU).
+    const gompute_step = b.step("gompute", "Test the Gompute back end: kernels on the CPU, and on CUDA when a driver and card are present");
+    if (b.lazyDependency("gompute", .{ .target = target, .optimize = optimize })) |gompute_dep| {
+        if (b.lazyImport(@This(), "gompute")) |gompute_build| {
+            const k = gompute_build.addKernels(b, gompute_dep, .{
+                .root_source_file = b.path("src/render/gompute/kernels.zig"),
+                .target = target,
+                .optimize = optimize,
+                .cuda = .{ .gpu = .{ .name = "sm_75" }, .sass = false },
+                .hip = .{ .gpu = .{ .name = "gfx1100" } },
+            });
+            const gompute_tests = b.addTest(.{ .root_module = b.createModule(.{
+                .root_source_file = b.path("src/render/gompute/gompute.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "gompute", .module = k.gompute } },
+            }) });
+            gompute_step.dependOn(&b.addRunArtifact(gompute_tests).step);
+        }
+    }
+
     // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
     const gles_tests = b.addTest(.{ .root_module = b.createModule(.{
