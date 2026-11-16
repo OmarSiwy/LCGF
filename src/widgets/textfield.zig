@@ -22,6 +22,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const edit = @import("../text/edit/edit.zig");
 const keyboard = @import("../interact/keyboard.zig");
 const Mono = @import("../text/protocol.zig").Mono;
+const Graphemes = @import("../text/unicode/grapheme.zig").Graphemes;
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -203,12 +204,69 @@ pub fn shown(s: anytype, th: *const Theme, hint: []const u8) Shown {
     };
 }
 
+// ---- behaviour ------------------------------------------------------------------------------
+
+/// The grapheme boundary of `t` nearest to `x` advances from its start (a click), clamped.
+pub fn stopNear(t: []const u8, x: f32) u32 {
+    const b: usize = @intFromFloat(std.math.clamp(@round(x), 0, @as(f32, @floatFromInt(t.len))));
+    var it: Graphemes = .{ .text = t };
+    var last: u32 = 0;
+    while (it.next()) |e| {
+        if (e > b) break;
+        last = @intCast(e);
+    }
+    return last;
+}
+
+/// The scroll that keeps x `x` (the caret) inside a view `view` px wide, moving as little as
+/// it can from `scroll`, never past the content's end (`content` px) or its start.
+pub fn reveal(scroll: f32, x: f32, view: f32, content: f32) f32 {
+    const in_view = @max(@min(scroll, x), x + 1 - view);
+    return @max(@min(in_view, content + 1 - view), 0);
+}
+
+/// Applies a frame's input to field `s` (a `*Text(cap)`) named `id`, laid out last frame at
+/// `last` (zero before the first frame): while the pointer holds the field, the caret follows
+/// it (a press also moves the anchor, unless Shift is held); while focused, its keys, typed text
+/// and the IME's composition go to the editor (`Editor.update`), with Enter submitting. Then the
+/// view scrolls to the caret, and a focused field asks for text input at it. Both front ends
+/// call this with what they know of the frame.
+pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void {
+    const ed = s.editor();
+    ed.mode.single_line = true;
+    s.clipboard.reset();
+    s.input.reset();
+    const adv = advance(th);
+    const pad = padding(th);
+    const x0 = last.x0 + pad[0];
+    if (r.held) {
+        const at = stopNear(ed.text(), (in.pointer[0] - x0 + s.scroll) / adv);
+        ed.caret = at;
+        if (!s.held and !in.mods.shift) ed.anchor = at;
+        ed.goal = std.math.nan(f32);
+        ed.run = .none;
+    }
+    s.held = r.held;
+    const k: keyboard.Keyboard = .{ .in = in, .target = if (r.focused) @backingInt(id) else 0, .taken = 0 };
+    s.result = ed.update(&k, id, .{ .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
+    const x = @as(f32, @floatFromInt(ed.shownCaret())) * adv;
+    const view = last.w() - pad[0] - pad[2];
+    if (view > 0) s.scroll = reveal(s.scroll, x, view, @as(f32, @floatFromInt(ed.text().len)) * adv);
+    if (r.focused) {
+        const cx = x0 - s.scroll + x;
+        const top = last.y0 + pad[1];
+        s.input.request(.{ .x0 = cx, .y0 = top, .x1 = cx + 1, .y1 = top + lineHeight(th) }, .normal);
+    }
+}
+
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns its
-/// response.
+/// response; what the input did to the text is `s.result`.
 pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
     const r0 = f.ctx.inter.response(id);
+    behave(s, th, id, r0, f.lastRect(id), f.in);
+    platform(f, s);
     const node = f.open(id, fieldStyle(th, r0.focused, s.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -220,11 +278,22 @@ pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const 
     return r;
 }
 
+/// Copies what field `s` asks of the host this frame to the runtime front end's `Platform`.
+pub fn platform(f: *Frame, s: anytype) void {
+    const p = &f.ctx.platform;
+    if (s.input.wants_text) {
+        p.wants_text = true;
+        p.ime_rect = s.input.rect;
+    }
+    if (s.clipboard.set.len > 0) p.clipboard = s.clipboard.set;
+}
+
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
     /// A text field named `id` over the `Text(cap)` field `bind`, showing the string field
-    /// `hint` while empty.
+    /// `hint` while empty. Its events carry the `edit.Result` of a frame that changed the text
+    /// or submitted it.
     pub fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec {
         var s = spec_zig.row(fieldStyle(&th, false, 0), .{ Spec{ .kind = .col }, Spec{ .kind = .label }, Spec{ .kind = .col } });
         s.id = @tagName(id);
@@ -235,10 +304,11 @@ pub const ct = struct {
 };
 
 /// The comptime text field named `name` over field `bind`, placeholder field `hint`
-/// (`Spec.widget`): the same rows as `textfield`.
+/// (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
 pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type {
     return struct {
         pub const focusable = true;
+        pub const Payload = edit.Result;
 
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             return textfield_zig.bindError(State, field, hint);
@@ -258,6 +328,16 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             pushText(ui, i, v.str, textStyle(th, v.hint));
             _ = t.push(i, .none, &caretStyle(th, v.caret, 0, focused));
             t.seal(i);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const r = base.ctResponse(ui, row, event, in);
+            const last: Rect = if (ui.built) ui.tables.t.rect(row + 1) else .{};
+            const s = &@field(ui.signals.state, bind);
+            behave(s, &Ui.theme, .hash(name), r, last, in);
+            if (!(s.result.changed or s.result.submitted)) return null;
+            return @unionInit(Ui.Events.Event, name, s.result);
         }
     };
 }
@@ -343,9 +423,10 @@ test "bindError: a text field binds a Text(cap) and a string placeholder" {
     }));
 }
 
-test "ct.textfield: a focusable widget" {
+test "ct.textfield: a focusable widget whose events carry an edit.Result" {
     const E = Page.Ui.Events;
     try testing.expectEqual(2, E.widget_count);
+    try testing.expectEqual(edit.Result, @FieldType(E.Event, "name"));
     try testing.expectEqualSlices(E.Widget, &.{ .name, .city }, E.focus_order);
 }
 
@@ -397,6 +478,161 @@ test "textfield look: an inset box one line tall, the placeholder dimmed, the ca
     const at: f32 = @floatFromInt(h.app.city.ed.caret);
     try testing.expectApproxEqAbs(t.rect(c).x0 + th.pad + at * advance(&th), t.rect(c + 3).x0, 0.5);
     try testing.expectEqual(@as(f32, 1), t.rect(c + 3).w());
+}
+
+fn press(code: u8, mods: Input.Mods) Input.Event {
+    return .{ .kind = .press, .code = code, .mods = mods };
+}
+
+/// Runs `in` through `h` and checks that both front ends' fields hold the same text, caret,
+/// anchor and scroll.
+fn both(h: *Page.Run, in: *const Input) !Page.Run.Pair {
+    const out = try h.frame(in);
+    const st = &h.ui.signals.state;
+    inline for (.{ "name", "city" }) |f| {
+        const a = &@field(h.app, f);
+        const b = &@field(st, f);
+        try testing.expectEqualStrings(a.text(), b.text());
+        try testing.expectEqual([3]u32{ a.ed.caret, a.ed.anchor, @intFromBool(a.result.submitted) }, [3]u32{ b.ed.caret, b.ed.anchor, @intFromBool(b.result.submitted) });
+        try testing.expectEqual(a.scroll, b.scroll);
+        try testing.expectEqual(a.input, b.input);
+    }
+    return out;
+}
+
+test "textfield input: click to focus, type, select by drag and keys, Enter, in both front ends" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    var out = try both(h, &in);
+    const t = out.runtime.tree;
+    const name = t.rect(t.find(.from("name")));
+    const city = t.rect(t.find(.from("city")));
+    const adv = advance(&Theme.default);
+    const y = (name.y0 + name.y1) * 0.5;
+    // Keys before the field is focused go nowhere.
+    var txt = "ab".*;
+    const typed = [_]Input.Event{.{ .kind = .text, .at = 0, .len = 2 }};
+    in.text = &txt;
+    in.events = &typed;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("", h.app.name.text());
+    // Press on Name: focused, the host is asked for text at the caret.
+    in.events = &.{};
+    in.pointer = .{ name.x0 + 40, y };
+    in.buttons.left = true;
+    out = try both(h, &in);
+    try testing.expect(out.runtime.platform.wants_text);
+    try testing.expectEqual(name.x0 + Theme.default.pad, out.runtime.platform.ime_rect.x0);
+    in.buttons.left = false;
+    _ = try both(h, &in);
+    // Type "hello world"; Enter submits and inserts nothing.
+    var hello = "hello world".*;
+    const ev = [_]Input.Event{ .{ .kind = .text, .at = 0, .len = 11 }, press(0x28, .{}) };
+    in.text = &hello;
+    in.events = &ev;
+    out = try both(h, &in);
+    try testing.expectEqualStrings("hello world", h.app.name.text());
+    try testing.expect(h.app.name.result.submitted);
+    try testing.expectEqual(@as(?Page.Ui.Events.Event, .{ .name = .{ .changed = true, .submitted = true } }), out.comptime_.event);
+    try testing.expectEqual(name.x0 + Theme.default.pad + 11 * adv, out.runtime.platform.ime_rect.x0);
+    // Shift+Home selects to the start; Shift+Right then Right collapse.
+    const sel = [_]Input.Event{ press(0x4a, .{ .shift = true }), press(0x4f, .{ .shift = true }) };
+    in.events = &sel;
+    in.text = "";
+    _ = try both(h, &in);
+    try testing.expectEqual([2]u32{ 1, 11 }, h.app.name.ed.selection());
+    // Ctrl+C copies the selection for the host.
+    const copy = [_]Input.Event{press(0x06, .{ .ctrl = true })};
+    in.events = &copy;
+    out = try both(h, &in);
+    try testing.expectEqualStrings("ello world", h.app.name.clipboard.set);
+    try testing.expectEqualStrings("ello world", out.runtime.platform.clipboard);
+    in.events = &.{};
+    // Drag from the 2nd byte to the 5th: "llo" selected, caret at 5.
+    in.pointer = .{ name.x0 + Theme.default.pad + 2 * adv, y };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.pointer[0] += 3 * adv;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    _ = try both(h, &in);
+    try testing.expectEqual([2]u32{ 2, 5 }, h.app.name.ed.selection());
+    try testing.expectEqual(@as(u32, 5), h.app.name.ed.caret);
+    // Backspace removes it.
+    const bs = [_]Input.Event{press(0x2a, .{})};
+    in.events = &bs;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("he world", h.app.name.text());
+    // Clicking City moves focus: Name's keys stop, City's caret goes to the click.
+    in.events = &.{};
+    in.pointer = .{ city.x0 + Theme.default.pad + 1.2 * adv, (city.y0 + city.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    in.events = &bs;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("slo", h.app.city.text());
+    try testing.expectEqualStrings("he world", h.app.name.text());
+}
+
+test "textfield input: the IME's composition shows at the caret until it commits" {
+    const h = &page;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 140 } };
+    const out = try both(h, &in);
+    const t = out.runtime.tree;
+    const city = t.rect(t.find(.from("city")));
+    in.pointer = .{ city.x1 - 2, (city.y0 + city.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    h.app.city.ime = .{ .text = "ka", .range = .{ 0, 2 } };
+    h.ui.signals.state.city.ime = h.app.city.ime;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("Osloka", h.app.city.text());
+    try testing.expect(h.app.city.ed.composing());
+    // Committed as typed text: the preedit leaves, the text stays.
+    h.app.city.ime = .{};
+    h.ui.signals.state.city.ime = .{};
+    var ka = "\u{304b}".*;
+    const ev = [_]Input.Event{.{ .kind = .text, .at = 0, .len = ka.len }};
+    in.text = &ka;
+    in.events = &ev;
+    _ = try both(h, &in);
+    try testing.expectEqualStrings("Oslo\u{304b}", h.app.city.text());
+    try testing.expect(!h.app.city.ed.composing());
+}
+
+test "textfield input: a long text scrolls to keep the caret in view" {
+    const S = struct {
+        var h: Page.Run = .{};
+    };
+    const h = &S.h;
+    h.init();
+    var in: Input = .{ .viewport = .{ 160, 140 } };
+    const out = try both(h, &in);
+    const t = out.runtime.tree;
+    const name = t.rect(t.find(.from("name")));
+    in.pointer = .{ name.x0 + 4, (name.y0 + name.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try both(h, &in);
+    in.buttons.left = false;
+    var long = "abcdefghijklmnopqrstuvwxyz0123456789".*;
+    const ev = [_]Input.Event{.{ .kind = .text, .at = 0, .len = long.len }};
+    in.text = &long;
+    in.events = &ev;
+    _ = try both(h, &in);
+    const th = Theme.default;
+    const view = name.w() - 2 * th.pad;
+    const end = 36 * advance(&th);
+    try testing.expectEqual(end + 1 - view, h.app.name.scroll);
+    // Home scrolls back to the start.
+    in.text = "";
+    const home = [_]Input.Event{press(0x4a, .{})};
+    in.events = &home;
+    _ = try both(h, &in);
+    try testing.expectEqual(@as(f32, 0), h.app.name.scroll);
 }
 
 test {
