@@ -150,9 +150,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
 
 // ---- look: one function per part, called by both front ends -------------------------------
 
-pub fn labelText(th: *const Theme) TextStyle {
-    return .{ .px = th.text_px, .color = th.text };
-}
+pub const labelText = label_zig.labelText;
 
 pub fn buttonStyle(th: *const Theme) Style {
     return .{ .dir = .x, .pad = @splat(th.pad), .radius = th.radius, .main = .center, .cross = .center, .role = .button };
