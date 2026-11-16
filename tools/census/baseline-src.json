@@ -243,5 +243,10 @@
     "jcc": 7,
     "back": 4,
     "short_fwd": 1
+  },
+  "p_a11y_diff": {
+    "jcc": 8,
+    "back": 4,
+    "short_fwd": 0
   }
 }

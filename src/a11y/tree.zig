@@ -314,6 +314,56 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
     out.len = w;
 }
 
+/// What changed in the semantic tree since last frame, in the form a bridge sends to the
+/// platform (an AccessKit `TreeUpdate`): the rows to send again and the ids to drop.
+pub const Changes = struct {
+    /// Export rows of this frame that are new or differ from last frame, in tree order, so a
+    /// parent is sent before its children.
+    updated: []u32,
+    updated_len: u32 = 0,
+    /// Ids of last frame's rows that are gone.
+    removed: []u32,
+    removed_len: u32 = 0,
+
+    /// Room for a tree of `cap` nodes, plus the spare row that filtering writes to.
+    pub fn init(carver: *mem.Carver, cap: u32) Changes {
+        return .{ .updated = carver.slice(u32, cap + 1), .removed = carver.slice(u32, cap + 1) };
+    }
+};
+
+/// Compares this frame's export with last frame's by id. A row is updated when it is new or
+/// any of its role, state, value, name, rect, parent or child list differ; a child added or
+/// removed changes its parent's `kids_hash`, so the parent is sent with its new child list.
+/// Each row is written to the output and the cursor advances by 0 or 1.
+pub fn diff(cur: *const Export, prev: *const Export, ch: *Changes) void {
+    const a = &cur.c;
+    const b = &prev.c;
+    // ponytail: one SIMD `find` per row, O(n * m / lanes) compares. Index last frame's ids in a
+    // caller-owned hash table if trees of many thousand nodes need this every frame.
+    var w: u32 = 0;
+    for (0..cur.len) |r| {
+        const m = simd.find(b.id, prev.len, a.id[r]);
+        const q = @min(m, prev.cap); // the spare row when absent; `m == none` decides then
+        var same = m != none;
+        same = simd.andB(same, a.role[r] == b.role[q]);
+        same = simd.andB(same, a.state[r] == b.state[q]);
+        same = simd.andB(same, @as(u32, @bitCast(a.value[r])) == @as(u32, @bitCast(b.value[q])));
+        same = simd.andB(same, a.name_hash[r] == b.name_hash[q]);
+        same = simd.andB(same, a.kids_hash[r] == b.kids_hash[q]);
+        same = simd.andB(same, a.id[@min(a.parent[r], cur.cap)] == b.id[@min(b.parent[q], prev.cap)]);
+        inline for (0..4) |e|
+            same = simd.andB(same, @as(u32, @bitCast(a.rect[e][r])) == @as(u32, @bitCast(b.rect[e][q])));
+        w = simd.emit(u32, ch.updated, w, @intCast(r), !same);
+    }
+    ch.updated_len = w;
+    w = 0;
+    for (0..prev.len) |r| {
+        const gone = simd.find(a.id, cur.len, b.id[r]) == none;
+        w = simd.emit(u32, ch.removed, w, b.id[r], gone);
+    }
+    ch.removed_len = w;
+}
+
 const testing = std.testing;
 
 /// A semantic column set of `cap` rows in a caller-owned buffer, for tests.
@@ -508,13 +558,16 @@ fn FrameFixture(comptime cap: u32) type {
         str: Strings = undefined,
         s: Semantics = undefined,
         out: [2]Export = undefined,
+        ch: Changes = undefined,
 
         fn carve(f: ?*Self, carver: *mem.Carver) void {
             const t = Tree.init(carver, cap);
             const tx = Texts.init(carver, cap);
             const s = Semantics.init(carver, cap);
             const out = [2]Export{ Export.init(carver, cap), Export.init(carver, cap) };
+            const ch = Changes.init(carver, cap);
             if (f) |x| {
+                x.ch = ch;
                 x.t = t;
                 x.tx = tx;
                 x.s = s;
@@ -619,4 +672,90 @@ test "tree export: flat arrays in tree order, presentational nodes skipped, pare
         for (0..a) |b| try testing.expect(o.id[a] != o.id[b]);
         try testing.expect(a == 0 or o.parent[a] < a);
     }
+}
+
+test "tree export: diff against last frame emits only the rows that changed and the ids that went" {
+    var f: FrameFixture(32) = .{};
+    f.init();
+    const Scene = struct {
+        checked: bool = false,
+        label: []const u8 = "Save",
+        extra: bool = false,
+        x1: f32 = 50,
+
+        fn build(sc: @This(), fx: *FrameFixture(32)) void {
+            fx.reset();
+            const t = &fx.t;
+            const root = t.push(0, types.Id.from("app"), &.{ .role = .group });
+            const save = t.push(root, types.Id.from("save"), &.{ .role = .button });
+            _ = fx.text(save, sc.label);
+            t.seal(save);
+            t.c.rect[2][save] = sc.x1;
+            const bold = t.push(root, types.Id.from("bold"), &.{ .role = .checkbox, .value = simd.b2f(sc.checked) });
+            _ = fx.text(bold, "Bold");
+            t.seal(bold);
+            if (sc.extra) t.seal(t.push(root, types.Id.from("extra"), &.{ .role = .button }));
+            t.seal(root);
+        }
+    };
+    const id = struct {
+        fn of(e: *const Export, r: u32) u32 {
+            return e.c.id[r];
+        }
+    }.of;
+    const updated = struct {
+        fn ids(e: *const Export, ch: *const Changes, out: []u32) []u32 {
+            for (ch.updated[0..ch.updated_len], 0..) |r, k| out[k] = e.c.id[r];
+            return out[0..ch.updated_len];
+        }
+    }.ids;
+    var buf: [32]u32 = undefined;
+
+    // First frame against an empty last frame: everything is new.
+    var gen: u1 = 0;
+    f.out[1].len = 0;
+    (Scene{}).build(&f);
+    var e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqual(e.len, f.ch.updated_len);
+    try testing.expectEqual(0, f.ch.removed_len);
+
+    // The same scene again: nothing.
+    gen ^= 1;
+    (Scene{}).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqual(0, f.ch.updated_len);
+    try testing.expectEqual(0, f.ch.removed_len);
+
+    // Checking the box changes its state only.
+    gen ^= 1;
+    (Scene{ .checked = true }).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqualSlices(u32, &.{@backingInt(types.Id.from("bold"))}, updated(e, &f.ch, &buf));
+
+    // A new label text renames the button and its text leaf; a wider button sends the button.
+    gen ^= 1;
+    (Scene{ .checked = true, .label = "Store", .x1 = 60 }).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqualSlices(u32, &.{ id(e, 1), id(e, 2) }, updated(e, &f.ch, &buf));
+    try testing.expectEqual(@backingInt(types.Id.from("save")), id(e, 1));
+
+    // A new child: the child and its parent, whose child list changed.
+    gen ^= 1;
+    (Scene{ .checked = true, .label = "Store", .x1 = 60, .extra = true }).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqualSlices(u32, &.{ @backingInt(types.Id.from("app")), @backingInt(types.Id.from("extra")) }, updated(e, &f.ch, &buf));
+    try testing.expectEqual(0, f.ch.removed_len);
+
+    // And removing it: the parent again, and the child's id to drop.
+    gen ^= 1;
+    (Scene{ .checked = true, .label = "Store", .x1 = 60 }).build(&f);
+    e = f.run(gen);
+    diff(e, &f.out[gen ^ 1], &f.ch);
+    try testing.expectEqualSlices(u32, &.{@backingInt(types.Id.from("app"))}, updated(e, &f.ch, &buf));
+    try testing.expectEqualSlices(u32, &.{@backingInt(types.Id.from("extra"))}, f.ch.removed[0..f.ch.removed_len]);
 }
