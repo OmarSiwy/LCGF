@@ -32,7 +32,25 @@ pub const Call = union(enum) {
     group: struct { index: u32, texture: types.Texture },
     vertex_buffer: Buffer,
     draw: struct { vertices: u32, instances: u32, first_instance: u32 },
+    /// Pushed by the host (not the back end) where its own draws ran: pass state unknown.
+    host,
 };
+
+/// True when every draw after a `host` call is preceded, since that call, by a pipeline, both
+/// bind groups and a vertex buffer: the full state rebinding iface.zig requires.
+pub fn rebindsAfterHost(calls: []const Call) bool {
+    const all: u4 = 0b1111;
+    var set: u4 = all; // nothing foreign has run yet
+    for (calls) |call| switch (call) {
+        .host => set = 0,
+        .pipeline => set |= 0b0001,
+        .group => |g| set |= @as(u4, 0b0010) << @intCast(@min(g.index, 1)),
+        .vertex_buffer => set |= 0b1000,
+        .draw => if (set != all) return false,
+        .write => {},
+    };
+    return true;
+}
 
 /// Caller-owned call log. Calls past `calls.len` overwrite the last row; `len` keeps counting,
 /// so `len > calls.len` means the log was too short.
@@ -118,6 +136,33 @@ test "null: one upload per buffer, one draw per command, state rebound every tim
         .{ .vertex_buffer = .glyphs },
         .{ .draw = .{ .vertices = 4, .instances = 3, .first_instance = 0 } },
     }, log.recorded()[5..10]);
+}
+
+test "null: full state is rebound after the host's custom draw" {
+    var st: conformance.Storage = .{};
+    const scene = &conformance.scenes[3];
+    try testing.expectEqualStrings("custom", scene.name);
+    st.load(scene);
+    var calls: [64]Call = undefined;
+    var log: Log = .{ .calls = &calls };
+    var gfx: Null = .{};
+    gfx.prepare(&log, &st.draw, st.glyphs(), scene.viewport, 1);
+    // The host's loop: its own draw at each stop, marked in the log.
+    var i = iface.drawUntilCustom(&gfx, &log, &st.draw, 0);
+    while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, &log, &st.draw, i + 1)) log.push(.host);
+    try testing.expectEqual(3 + 5 + 1 + 5, log.len);
+    try testing.expectEqual(Call.host, log.recorded()[8]);
+    try testing.expect(rebindsAfterHost(log.recorded()));
+}
+
+test "null: rebindsAfterHost rejects a draw that trusts state from before the host's draw" {
+    const draw: Call = .{ .draw = .{ .vertices = 4, .instances = 1, .first_instance = 0 } };
+    const full = [_]Call{ .{ .pipeline = .solid }, .{ .group = .{ .index = 0, .texture = .white } }, .{ .group = .{ .index = 1, .texture = .white } }, .{ .vertex_buffer = .quads } };
+    try testing.expect(rebindsAfterHost(&(full ++ .{ draw, draw, .host } ++ full ++ .{draw})));
+    // Only the vertex buffer rebound after the host: a caching back end.
+    try testing.expect(!rebindsAfterHost(&(full ++ .{ draw, .host, Call{ .vertex_buffer = .quads }, draw })));
+    // Group 1 missing.
+    try testing.expect(!rebindsAfterHost(&(.{.host} ++ full[0..2].* ++ .{ full[3], draw })));
 }
 
 test "null: a short log keeps counting and never writes past its end" {

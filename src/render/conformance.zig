@@ -213,8 +213,11 @@ test "conformance: the null back end draws every scene as declared" {
         var gfx: null_backend.Null = .{};
         gfx.prepare(&log, &st.draw, st.glyphs(), s.viewport, 1);
         log.len = 0;
-        iface.render(&gfx, &log, &st.draw);
+        // The host's loop, marking where its own draw ran; full state must be rebound after it.
+        var i = iface.drawUntilCustom(&gfx, &log, &st.draw, 0);
+        while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, &log, &st.draw, i + 1)) log.push(.host);
         try testing.expect(log.len <= calls.len);
+        try testing.expect(null_backend.rebindsAfterHost(log.recorded()));
         // Each draw reads the instance buffer bound last.
         var got: [16]Draw = undefined;
         var n: usize = 0;

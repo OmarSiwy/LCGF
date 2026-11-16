@@ -16,6 +16,14 @@
 //!   fn drawText(*const B, B.Pass, run: u32) void
 //!        One instanced draw of run `run`'s glyph quads (`Glyphs.first[run]`, `count[run]`).
 //!
+//! Full state rebinding (required). `drawBatch` and `drawText` set every piece of pass state
+//! they depend on, on every call: pipeline, every bind group, the vertex buffer, and scissor or
+//! viewport if they use them. A back end must not skip a bind because it set the same object
+//! for the previous draw: the host's draws between two UI draws (route 2 below) may have changed
+//! anything, and the back end is not told when. Ported from prototype `Renderer.bind`, which
+//! rebinds per draw for this reason. The cost is four state calls per draw, and draws are one
+//! per command, not per node. `null.rebindsAfterHost` checks a recorded call stream for it.
+//!
 //! Custom commands are not a back-end call: the back end never sees them. The host draws them
 //! with its own pipeline, between the UI's draws, by stopping at each one (`drawUntilCustom`).
 //! `render` is the diagonal for frames with no custom draws, or ones the host skips.
@@ -41,7 +49,7 @@
 //!      any node. It is then an ordinary quad: clipped, rounded, batched, layered like the rest.
 //!      Costs a texture and a pass; the only route whose output the UI can transform or reuse.
 //!
-//! After an inline draw the pass may be in any state.
+//! After an inline draw the pass may be in any state; full state rebinding above makes that safe.
 
 const std = @import("std");
 const types = @import("../core/types.zig");
