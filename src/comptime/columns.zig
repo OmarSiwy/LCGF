@@ -14,6 +14,7 @@ const spec_zig = @import("spec.zig");
 const flatten = @import("flatten.zig");
 const Spec = spec_zig.Spec;
 const Id = @import("../core/types.zig").Id;
+const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
 
 pub const Class = enum { constant, dynamic };
@@ -72,14 +73,32 @@ fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
     t.seal(i);
 }
 
-/// The column split of the UI declared by `spec`.
-pub fn Columns(comptime spec: Spec) type {
+/// Columns that hold screen coordinates snapped to whole pixels: the layout outputs `rect` and
+/// `vis`. With a declared viewport they are stored as `Coord` instead of f32.
+const coordinate_columns = [_][]const u8{ "rect", "vis" };
+
+/// The integer type for coordinates on a screen of at most `viewport` px: the smallest of
+/// i8, i16 and i32 that holds -m..m for the larger side m, so a rect may start as far left
+/// or above the screen as the screen is wide or high. f32 without a viewport. The probe's
+/// `Runtime.rect` is i16, enough for the screens it targets.
+pub fn Coord(comptime viewport: ?[2]f32) type {
+    const vp = viewport orelse return f32;
+    const m: comptime_int = @intFromFloat(@ceil(@max(vp[0], vp[1])));
+    for ([_]type{ i8, i16, i32 }) |T| if (m <= std.math.maxInt(T)) return T;
+    @compileError(std.fmt.comptimePrint("viewport side {d} px does not fit i32", .{m}));
+}
+
+/// The column split of the UI declared by `spec`. `options.viewport`, the fixed screen the UI
+/// runs on (validate.Options), picks the coordinate type.
+pub fn Columns(comptime spec: Spec, comptime options: Options) type {
     const n = flatten.count(spec);
     const info = @typeInfo(RuntimeColumns).@"struct";
     const custom = any(spec, isCustom);
     const shows = any(spec, showsState);
     return struct {
         pub const node_count = n;
+        /// The type of `rect` and `vis` rows in `Dynamic`: `Coord(options.viewport)`.
+        pub const Coordinate = Coord(options.viewport);
         /// The names of `Tree.Columns`, in declaration order.
         pub const names = info.field_names;
 
@@ -146,7 +165,7 @@ pub fn Columns(comptime spec: Spec) type {
             for (names, info.field_types, class) |name, FT, c| {
                 if (c != .dynamic) continue;
                 dyn_names = dyn_names ++ [_][]const u8{name};
-                dyn_types = dyn_types ++ [_]type{Rows(FT, n)};
+                dyn_types = dyn_types ++ [_]type{if (contains(&coordinate_columns, name)) [4][n]Coordinate else Rows(FT, n)};
             }
             const nm = dyn_names[0..dyn_names.len].*;
             const ty = dyn_types[0..dyn_types.len].*;
@@ -164,7 +183,7 @@ const testing = std.testing;
 const examples = @import("examples.zig");
 
 test "Columns: the probe's mixer keeps structure and style constant, layout and value dynamic" {
-    const C = Columns(examples.mixer);
+    const C = Columns(examples.mixer, .{});
     inline for (.{ "id", "parent", "end", "nkids", "min", "max", "grow", "pad_lo", "gap", "main", "look", "role", "clips", "sense", "text" }) |name|
         try testing.expectEqual(Class.constant, C.classOf(name));
     inline for (.{ "fit", "nat", "used", "size", "pos", "rect", "vis", "child_clip", "visible", "value" }) |name|
@@ -172,13 +191,13 @@ test "Columns: the probe's mixer keeps structure and style constant, layout and 
 }
 
 test "Columns: value is constant when nothing shows a state field in it" {
-    const C = Columns(examples.static_card);
+    const C = Columns(examples.static_card, .{});
     try testing.expectEqual(Class.constant, C.classOf("value"));
     try testing.expectEqual(Class.dynamic, C.classOf("rect"));
 }
 
 test "Columns: a custom widget builds its own rows, so every column is dynamic" {
-    const C = Columns(examples.custom);
+    const C = Columns(examples.custom, .{});
     for (C.class) |c| try testing.expectEqual(Class.dynamic, c);
     try testing.expectEqual(0, C.rodata_bytes);
 }
@@ -194,7 +213,7 @@ fn expectTable(comptime C: type, comptime name: []const u8, t: *const tree.Tree)
 
 test "Columns.table: every constant table equals the column Tree.push builds at run time" {
     inline for (examples.all) |e| {
-        const C = Columns(e.spec);
+        const C = Columns(e.spec, e.options);
         var buf: [1 << 16]u8 align(64) = undefined;
         var carver: @import("../core/mem.zig").Carver = .{ .buf = &buf };
         var t = tree.Tree.init(&carver, C.node_count);
@@ -207,7 +226,7 @@ test "Columns.table: every constant table equals the column Tree.push builds at 
 }
 
 test "Columns.table: the mixer's tables hold the probe's structure and its style" {
-    const C = Columns(examples.mixer);
+    const C = Columns(examples.mixer, .{});
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, C.table("parent"));
     try testing.expectEqualSlices(u32, &.{ 8, 2, 5, 4, 5, 8, 7, 8 }, C.table("end"));
     try testing.expectEqualSlices(f32, &.{ 3, 0, 2, 0, 0, 2, 0, 0 }, C.table("nkids"));
@@ -217,18 +236,36 @@ test "Columns.table: the mixer's tables hold the probe's structure and its style
 
 test "Columns: every column is classified, and the two classes hold the runtime rows" {
     inline for (examples.all) |e| {
-        const C = Columns(e.spec);
+        const C = Columns(e.spec, e.options);
         var row: usize = 0;
         inline for (@typeInfo(RuntimeColumns).@"struct".field_types) |FT| row += rowBytes(FT);
-        // Equal up to the padding @sizeOf adds to Dynamic's end.
-        try testing.expect(C.rodata_bytes + C.ram_bytes >= C.node_count * row);
-        try testing.expect(C.rodata_bytes + C.ram_bytes < C.node_count * row + 16);
+        // Equal up to the padding @sizeOf adds to Dynamic's end, and the bytes integer
+        // coordinates save in `rect` and `vis`.
+        const saved = 2 * 4 * C.node_count * (4 - @sizeOf(C.Coordinate));
+        try testing.expect(C.rodata_bytes + C.ram_bytes + saved >= C.node_count * row);
+        try testing.expect(C.rodata_bytes + C.ram_bytes + saved < C.node_count * row + 16);
         try testing.expectEqual(@typeInfo(RuntimeColumns).@"struct".field_names.len, C.class.len);
     }
 }
 
+test "Coord: the smallest signed integer that holds the viewport, f32 without one" {
+    try testing.expectEqual(f32, Coord(null));
+    try testing.expectEqual(i8, Coord(.{ 96, 64 }));
+    try testing.expectEqual(i8, Coord(.{ 127, 127 }));
+    try testing.expectEqual(i16, Coord(.{ 128, 64 }));
+    try testing.expectEqual(i16, Coord(.{ 320, 240 }));
+    try testing.expectEqual(i16, Coord(.{ 1920, 32767 }));
+    try testing.expectEqual(i32, Coord(.{ 32768, 10 }));
+    // The probe's i16, for a 320x240 settings page.
+    const S = Columns(examples.settings, .{ .viewport = .{ 320, 240 } });
+    try testing.expectEqual([4][S.node_count]i16, @FieldType(S.Dynamic, "rect"));
+    try testing.expectEqual([4][S.node_count]i16, @FieldType(S.Dynamic, "vis"));
+    // Other layout outputs stay f32: they feed the next frame's arithmetic.
+    try testing.expectEqual([2][S.node_count]f32, @FieldType(S.Dynamic, "size"));
+}
+
 test "Columns.Dynamic: one exact array per dynamic column, nothing for constant ones" {
-    const C = Columns(examples.mixer);
+    const C = Columns(examples.mixer, .{});
     const D = C.Dynamic;
     try testing.expectEqual([2][8]f32, @FieldType(D, "size"));
     try testing.expectEqual([4][8]f32, @FieldType(D, "rect"));
