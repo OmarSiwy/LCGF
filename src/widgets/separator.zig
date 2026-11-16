@@ -26,11 +26,12 @@ pub fn separator(f: *Frame, th: *const Theme, orientation: Orientation) Node {
     return f.leaf(.none, style(th, orientation));
 }
 
-/// The rule's node: it fills its parent along its length and is 1 px thick.
+/// The rule's node: it fills its parent along its length and is 1 px thick, painted in the
+/// theme's outline colour (`control_hot`, as a group box's frame and a checkbox's box). The
+/// orientation picks the size by table index.
 pub fn style(th: *const Theme, orientation: Orientation) Style {
-    _ = th;
     const sizes = [2][2]types.Size{ .{ .fill, .px(1) }, .{ .px(1), .fill } };
-    return .{ .size = sizes[@backingInt(orientation)] };
+    return .{ .size = sizes[@backingInt(orientation)], .fill = th.control_hot };
 }
 
 /// The separator as a spec node.
@@ -104,6 +105,25 @@ test "separator: both front ends build the rule across its parent, 1 px thick" {
     try testing.expectEqual(@as(f32, 1), v_rule.w());
     try testing.expectEqual(row_r.y0, v_rule.y0);
     try testing.expectEqual(row_r.y1, v_rule.y1);
+}
+
+test "separator: painted in the theme's outline colour, in any theme, alike in both front ends" {
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    try testing.expectEqual(Theme.default.control_hot.bitsOf(), out.runtime.tree.c.look[3].fill);
+    try testing.expectEqual(Theme.default.control_hot.bitsOf(), out.comptime_.tree.c.look[7].fill);
+    // Two quads in the draw list are the rules (the column and the row are unpainted).
+    try testing.expectEqual(@as(u32, 2), out.runtime.draw.quad_len);
+
+    const Light = Page(.{ .control_hot = .rgb(120, 120, 130), .text = .rgb(20, 20, 20), .text_px = 18 });
+    const S = struct {
+        var light: Light.Run = .{};
+    };
+    S.light.init();
+    const lo = try S.light.frame(&in);
+    try testing.expectEqual(types.Color.rgb(120, 120, 130).bitsOf(), lo.runtime.tree.c.look[3].fill);
 }
 
 test {
