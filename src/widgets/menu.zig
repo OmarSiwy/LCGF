@@ -117,9 +117,11 @@ pub fn Menu(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @E
             return checkMenu(State, def, menu_name);
         }
 
+        /// The trigger, the scrim and the items' responses, then the keys, through `advance`.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            var hits: Hits = .{ .toggle = v.responseOf(id).clicked, .outside = v.responseOf(partName(id, "scrim")).pressed };
+            inline for (0..comptime def.count()) |k| hits.add(k, v.responseOf(partName(id, def.name(k))));
+            sig.set(menu, advance(def, @field(sig.state, menu_name), hits, v.in.events));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -141,10 +143,9 @@ pub fn Menu(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @E
 
 /// Whether item `k` (in the one sequence) is highlighted: the active item of its list.
 pub fn highlighted(comptime def: Def, st: MenuState, k: u8) bool {
-    _ = def;
-    _ = st;
-    _ = k;
-    return false;
+    const n_top: u8 = def.items.len;
+    if (k < n_top) return st.active == k;
+    return st.sub and st.sub_active == k - n_top;
 }
 
 fn named(comptime n: Spec, comptime want: []const u8) bool {
@@ -202,6 +203,92 @@ pub fn itemFills(th: *const Theme) base.OnOff {
     return .{ .transparent, th.control_hot };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// What the pointer did to a menu this frame, from its widgets' responses.
+pub const Hits = struct {
+    /// The trigger was clicked.
+    toggle: bool = false,
+    /// The pointer went down on the scrim, outside the lists.
+    outside: bool = false,
+    /// The item clicked, in the one sequence, or `no_item`.
+    clicked: u8 = no_item,
+    /// The item under the pointer, or `no_item`.
+    hovered: u8 = no_item,
+
+    /// Notes item `k`'s response.
+    pub fn add(h: *Hits, k: u8, r: Response) void {
+        if (r.clicked) h.clicked = k;
+        if (r.hovered) h.hovered = k;
+    }
+};
+
+/// One frame of a menu (APG menu button and menu). The trigger's click toggles it, opening on
+/// the first item; a press outside closes it. While it is open: the pointer reaching an item
+/// highlights it (reaching the submenu's item opens the submenu); Down and Up move the
+/// highlight in its list, wrapping, Home and End go to the ends; Right on the submenu's item
+/// opens the submenu and Left closes it; Enter, Space or a click choose the highlighted item,
+/// which closes the menu (or opens the submenu, for its item); Escape closes the submenu, else
+/// the menu. Keys are read in order; a closed menu ignores them.
+pub fn advance(comptime def: Def, st: MenuState, hits: Hits, evs: []const Input.Event) MenuState {
+    const n_top: u8 = def.items.len;
+    const n_sub: u8 = def.sub.len;
+    const sub_at: u8 = def.sub_at orelse no_item;
+    var s = st;
+    s.chosen = 0;
+    if (hits.toggle) s = if (st.open) .{} else .{ .open = true };
+    if (hits.outside) return .{};
+    if (!s.open) return s;
+    if (hits.hovered != s.hover) {
+        const k = hits.hovered;
+        if (k < n_top) {
+            s.active = k;
+            s.sub = k == sub_at;
+            s.sub_active = 0;
+        } else if (k != no_item) s.sub_active = k - n_top;
+        s.hover = k;
+    }
+    if (hits.clicked != no_item) s = choose(sub_at, s, hits.clicked);
+    for (evs) |e| {
+        if (!s.open) break;
+        if (e.kind != .press and e.kind != .repeat) continue;
+        const k = popover.keys;
+        const in_sub = s.sub;
+        const n = if (in_sub) n_sub else n_top;
+        const at = if (in_sub) &s.sub_active else &s.active;
+        switch (e.code) {
+            k.down => at.* = (at.* + 1) % n,
+            k.up => at.* = (at.* + n - 1) % n,
+            k.home => at.* = 0,
+            k.end => at.* = n - 1,
+            k.right => if (!in_sub and s.active == sub_at) {
+                s.sub = true;
+                s.sub_active = 0;
+            },
+            k.left => s.sub = false,
+            k.escape => s = if (in_sub) blk: {
+                var t = s;
+                t.sub = false;
+                break :blk t;
+            } else .{},
+            k.enter, k.space => s = choose(sub_at, s, if (in_sub) n_top + s.sub_active else s.active),
+            else => {},
+        }
+    }
+    return s;
+}
+
+/// Choosing item `k`: the submenu's item opens the submenu, any other closes the menu and is
+/// reported in `chosen`.
+fn choose(sub_at: u8, st: MenuState, k: u8) MenuState {
+    if (k != sub_at) return .{ .chosen = k + 1 };
+    var s = st;
+    s.active = k;
+    s.sub = true;
+    s.sub_active = 0;
+    return s;
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// The trigger: a button named `name` showing `text`.
@@ -214,13 +301,19 @@ pub fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []c
 /// chosen this frame plus one, or 0 (also left in `st.chosen`).
 pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8) u8 {
     std.debug.assert(texts.len == def.count());
+    // Every response is asked for before anything is built, so the state the rows show is
+    // the frame's final state, as in the comptime front end.
+    const inter = &f.ctx.inter;
+    var hits: Hits = .{ .toggle = inter.response(.from(name)).clicked, .outside = inter.response(.from(partName(name, "scrim"))).pressed };
+    inline for (0..comptime def.count()) |k| hits.add(k, inter.response(.from(partName(name, def.name(k)))));
+    st.* = advance(def, st.*, hits, f.in.events);
     if (!st.open) return st.chosen;
-    _ = f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport));
-    _ = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
+    _ = f.interact(f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name)))), popover.overlay_sense);
     inline for (0..def.items.len) |k| buildItem(f, th, name, def, st, k, texts[k]);
     f.close();
     if (def.sub_at) |at| if (st.sub) {
-        _ = f.open(.from(partName(name, "sub")), subStyle(th, f.lastRect(.from(partName(name, def.items[at])))));
+        _ = f.interact(f.open(.from(partName(name, "sub")), subStyle(th, f.lastRect(.from(partName(name, def.items[at]))))), popover.overlay_sense);
         inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st, k, texts[k]);
         f.close();
     };
@@ -229,7 +322,7 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
 }
 
 fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *const MenuState, comptime k: u8, text: []const u8) void {
-    _ = f.open(.from(partName(name, def.name(k))), itemStyle(th, highlighted(def, st.*, k)));
+    _ = f.interact(f.open(.from(partName(name, def.name(k))), itemStyle(th, highlighted(def, st.*, k))), popover.overlay_sense);
     _ = base.label(f, th, text);
     f.close();
 }
@@ -343,6 +436,100 @@ test "Menu: another theme restyles both front ends alike" {
     try testing.expectEqual(light.panel.bitsOf(), t.c.look[t.find(.from("file_sub"))].fill);
     // Items are as wide as their list.
     try testing.expectEqual(t.rect(t.find(.from("file_new"))).w(), t.rect(t.find(.from("file_quit"))).w());
+}
+
+test "advance: keys move, open the submenu, choose and close" {
+    const k = popover.keys;
+    const press = struct {
+        fn ev(comptime codes: []const u8) [codes.len]Input.Event {
+            var out: [codes.len]Input.Event = undefined;
+            for (&out, codes) |*e, c| e.* = .{ .kind = .press, .code = c };
+            return out;
+        }
+    }.ev;
+    var st: MenuState = advance(file_menu, .{}, .{ .toggle = true }, &.{});
+    try testing.expectEqual(MenuState{ .open = true }, st);
+    st = advance(file_menu, st, .{}, &press(&.{ k.down, k.down, k.down, k.down, k.down }));
+    try testing.expectEqual(@as(u8, 1), st.active); // wrapped past Quit
+    st = advance(file_menu, st, .{}, &press(&.{ k.end, k.up, k.right }));
+    try testing.expect(st.sub and st.active == 2 and st.sub_active == 0);
+    st = advance(file_menu, st, .{}, &press(&.{ k.up, k.escape }));
+    try testing.expect(st.open and !st.sub and st.sub_active == 1);
+    st = advance(file_menu, st, .{}, &press(&.{ k.enter, k.down, k.space }));
+    try testing.expectEqual(MenuState{ .chosen = 6 }, st); // Recent opened the submenu, Scene 2 chosen
+    st = advance(file_menu, st, .{}, &press(&.{k.down}));
+    try testing.expectEqual(MenuState{}, st); // closed: keys ignored, chosen is one frame
+    // The pointer: reaching an item highlights it once; a click chooses.
+    st = advance(file_menu, .{ .open = true }, .{ .hovered = 3 }, &.{});
+    try testing.expectEqual(@as(u8, 3), st.active);
+    st = advance(file_menu, st, .{ .hovered = 3 }, &press(&.{k.up}));
+    try testing.expectEqual(@as(u8, 2), st.active);
+    st = advance(file_menu, st, .{ .hovered = 2 }, &.{});
+    try testing.expect(st.sub);
+    st = advance(file_menu, st, .{ .hovered = 4, .clicked = 4 }, &.{});
+    try testing.expectEqual(@as(u8, 5), st.chosen);
+    try testing.expectEqual(MenuState{}, advance(file_menu, .{ .open = true }, .{ .outside = true }, &.{}));
+    try testing.expectEqual(MenuState{ .open = true }, advance(file_menu, .{ .open = true, .active = 1 }, .{}, &press(&.{ k.left, k.home })));
+}
+
+const Aim = union(enum) { part: []const u8, at: [2]f32 };
+const Step = struct { aim: Aim, left: bool = false, key: ?u8 = null };
+
+/// Runs `script` through both front ends, aiming at last frame's rects, with the menu state
+/// equal in both after every step; returns the state and what was chosen after each step.
+fn runScript(comptime n: usize, script: [n]Step) ![n]MenuState {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var last = (try h.frame(&in)).runtime.tree;
+    var out: [n]MenuState = undefined;
+    for (script, &out) |st, *o| {
+        in.pointer = switch (st.aim) {
+            .at => |p| p,
+            .part => |name| blk: {
+                const r = last.rect(last.find(.hash(name)));
+                break :blk .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            },
+        };
+        in.buttons.left = st.left;
+        in.events = &.{};
+        if (st.key) |k| {
+            ev[0] = .{ .kind = .press, .code = k };
+            in.events = &ev;
+        }
+        last = (try h.frame(&in)).runtime.tree;
+        try testing.expectEqual(h.app.menu, h.ui.signals.state.menu);
+        try testing.expectEqual(h.app.chosen, h.app.menu.chosen);
+        o.* = h.app.menu;
+    }
+    return out;
+}
+
+test "Menu: pointer and keys in both front ends" {
+    const k = popover.keys;
+    const s = try runScript(12, .{
+        .{ .aim = .{ .part = "file" }, .left = true },
+        .{ .aim = .{ .part = "file" } }, // open
+        .{ .aim = .{ .part = "file_open" } }, // highlight Open
+        .{ .aim = .{ .part = "file_open" }, .key = k.down }, // Recent
+        .{ .aim = .{ .part = "file_open" }, .key = k.right }, // submenu
+        .{ .aim = .{ .part = "file_scene2" } }, // highlight Scene 2
+        .{ .aim = .{ .part = "file_scene2" }, .left = true },
+        .{ .aim = .{ .part = "file_scene2" } }, // chosen: item 5, closed
+        .{ .aim = .{ .part = "file" }, .left = true },
+        .{ .aim = .{ .part = "file" } }, // open again
+        .{ .aim = .{ .part = "file" }, .key = k.escape }, // closed
+        .{ .aim = .{ .at = .{ 390, 290 } } },
+    });
+    try testing.expect(!s[0].open and s[1].open);
+    try testing.expectEqual(@as(u8, 1), s[2].active);
+    try testing.expectEqual(@as(u8, 2), s[3].active);
+    try testing.expect(s[4].sub and !s[3].sub);
+    try testing.expectEqual(@as(u8, 1), s[5].sub_active);
+    try testing.expectEqual(MenuState{ .chosen = 6 }, s[7]);
+    try testing.expect(s[9].open and !s[10].open);
+    try testing.expectEqual(MenuState{}, s[11]);
 }
 
 test "checkMenu: the state field, the item fields and the submenu" {
