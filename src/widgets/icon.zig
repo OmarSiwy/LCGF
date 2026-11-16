@@ -67,8 +67,10 @@ pub const ct = struct {
 const testing = std.testing;
 const Input = @import("../core/input.zig").Input;
 
-/// A 16 px icon before a label, and a 24 px icon inside a button.
-fn Page(comptime th: Theme) type {
+/// The example page: a 16 px icon before a label, and a 24 px icon inside a button, in both
+/// front ends, in theme `th`. The icons use the white texture (a solid square), the stand-in
+/// before an application atlas: the golden image renderer has no icon atlas.
+pub fn Page(comptime th: Theme) type {
     const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
     const line: Style = .{ .dir = .x, .gap = th.gap, .cross = .center };
     return struct {
@@ -106,6 +108,15 @@ fn Page(comptime th: Theme) type {
         pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     };
 }
+
+/// Input for `Page(.default)` at 320 x 200, one commented line per frame.
+pub const replay = @embedFile("testdata/icon.replay");
+
+/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/icon-<name>.png).
+pub const golden_frames = .{
+    .{ "rest", 0 },
+    .{ "hover", 3 },
+};
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
@@ -206,6 +217,36 @@ test "icon: role image, named by the text it is given, value 0, no states, in bo
         try testing.expectEqualStrings("Documents", check.nameOf(&sem, tx, str, rows.small));
         try testing.expectEqual(types.none, sem.c.name[rows.large]);
     }
+}
+
+test "icon: the example replay gives the same frames in both front ends" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    var rp: Replay = .{ .src = replay };
+    var clicks: [6]bool = undefined;
+    var fills: [6]u32 = undefined;
+    while (try rp.next(buf)) |in| {
+        const k = h.frames;
+        const out = try h.frame(in);
+        clicks[k] = if (out.comptime_.event) |e| e == .save else false;
+        fills[k] = out.runtime.tree.c.look[rows.button].fill;
+        // The icons keep their look whatever the pointer does.
+        try testing.expectEqual(Theme.default.text.bitsOf(), out.runtime.tree.c.look[rows.large].fill);
+    }
+    try testing.expectEqual(@as(u32, 6), h.frames);
+    try testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true }, &clicks);
+    try testing.expectEqual(@as(u32, 1), h.app.saves);
+    const c = Theme.default.controlFills();
+    try testing.expectEqualSlices(u32, &.{ c[0].bitsOf(), c[0].bitsOf(), c[0].bitsOf(), c[1].bitsOf(), c[3].bitsOf(), c[1].bitsOf() }, &fills);
+}
+
+test "golden_frames: name frames the icon replay has" {
+    inline for (golden_frames) |g| try testing.expect(g[1] < 6);
 }
 
 test {
