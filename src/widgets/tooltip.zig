@@ -69,9 +69,10 @@ pub fn Tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip
             return checkTip(State, tip_name);
         }
 
+        /// Rests or resets the timer from the target's hover; Escape hides.
         pub fn step(sig: anytype, v: anytype) void {
-            _ = sig;
-            _ = v;
+            const hovered = v.responseOf(@tagName(target)).hovered;
+            sig.set(tip, advance(@field(sig.state, tip_name), hovered, v.in.dt, popover.keyPressed(v.in, popover.keys.escape)));
         }
 
         pub fn part(comptime n: Spec, st: anytype, v: anytype) ?Part {
@@ -100,13 +101,22 @@ pub fn bubbleStyle(th: *const Theme, at: Rect) Style {
     };
 }
 
+// ---- behaviour: a pure function of the state and what happened --------------------------------
+
+/// One frame of a tooltip: while the target is hovered the timer runs, and the tooltip shows
+/// once it reaches `delay`; leaving the target resets it. Escape hides a shown tooltip until
+/// the pointer leaves the target (APG: Escape dismisses the tooltip).
+pub fn advance(tip: Tip, hovered: bool, dt: f32, escape: bool) Tip {
+    const rested = simd.selF(hovered, tip.rested + dt, 0);
+    const dismissed = simd.andB(hovered, simd.orB(tip.dismissed, simd.andB(escape, tip.shown)));
+    return .{ .rested = rested, .dismissed = dismissed, .shown = simd.andB(simd.andB(hovered, !dismissed), rested >= delay) };
+}
+
 // ---- runtime front end ------------------------------------------------------------------------
 
 /// Steps `tip` by one frame from the target's response `r`.
 pub fn update(f: *const Frame, tip: *Tip, r: Response) void {
-    _ = f;
-    _ = r;
-    _ = tip;
+    tip.* = advance(tip.*, r.hovered, f.in.dt, popover.keyPressed(f.in, popover.keys.escape));
 }
 
 /// Builds the bubble of the tooltip of `target` showing `text`, if it is shown. Call it at the
@@ -162,14 +172,24 @@ fn Page(comptime th: Theme) type {
 const Default = Page(.default);
 var harness: Default.Run = .{};
 
+/// Starts harness `h`, then rests the pointer on the button for a frame as long as the delay:
+/// the tree of the frame the bubble shows in.
+fn showTip(h: anytype) !*const @import("../core/tree.zig").Tree {
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 }, .dt = delay };
+    const first = (try h.frame(&in)).runtime.tree;
+    try testing.expectEqual(@as(u32, 6), first.len);
+    const r = first.rect(first.find(.from("save")));
+    in.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+    const t = (try h.frame(&in)).runtime.tree;
+    try testing.expect(h.app.tip.shown);
+    return t;
+}
+
 test "Tooltip: the page agrees in both front ends, hidden and shown" {
     const h = &harness;
     h.init();
-    const in: Input = .{ .viewport = .{ 400, 300 } };
-    try testing.expectEqual(@as(u32, 6), (try h.frame(&in)).runtime.tree.len);
-    h.app.tip.shown = true;
-    h.ui.signals.set(.tip, .{ .shown = true });
-    const t = (try h.frame(&in)).runtime.tree;
+    const t = try showTip(h);
     try testing.expectEqual(@as(u32, 8), t.len);
     // The bubble hangs below the button.
     const at = t.rect(t.find(.from("save")));
@@ -194,14 +214,63 @@ test "Tooltip: another theme restyles both front ends alike" {
     const S = struct {
         var h: Page(light).Run = .{};
     };
-    S.h.init();
-    const in: Input = .{ .viewport = .{ 400, 300 } };
-    _ = try S.h.frame(&in);
-    S.h.app.tip.shown = true;
-    S.h.ui.signals.set(.tip, .{ .shown = true });
-    const t = (try S.h.frame(&in)).runtime.tree;
+    const t = try showTip(&S.h);
     try testing.expectEqual(light.control_held.bitsOf(), t.c.look[6].fill);
     try testing.expectEqual(t.rect(t.find(.from("save"))).y1 + 10, t.rect(6).y0);
+}
+
+test "advance: the timer, the delay and Escape" {
+    var t: Tip = .{};
+    t = advance(t, true, 0.25, false);
+    try testing.expect(!t.shown);
+    t = advance(t, true, 0.25, false);
+    try testing.expect(t.shown);
+    try testing.expectEqual(@as(f32, 0.5), t.rested);
+    t = advance(t, true, 0.25, true);
+    try testing.expect(!t.shown and t.dismissed);
+    t = advance(t, true, 0.25, false);
+    try testing.expect(!t.shown and t.dismissed);
+    t = advance(t, false, 0.25, false);
+    try testing.expectEqual(Tip{}, t);
+    // Escape before it shows does nothing.
+    t = advance(t, true, 0.25, true);
+    t = advance(t, true, 0.25, false);
+    try testing.expect(t.shown);
+}
+
+/// Runs `script` (pointer on the button or away, Escape or not, `dt` per frame) through both
+/// front ends and requires the tooltip's state after each step in both.
+fn expectScript(script: []const struct { on: bool, esc: bool = false, shown: bool }) !void {
+    const h = &harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 }, .dt = 0.2 };
+    var ev: [1]Input.Event = .{.{ .kind = .press, .code = popover.keys.escape }};
+    const t = (try h.frame(&in)).runtime.tree;
+    const r = t.rect(t.find(.from("save")));
+    for (script) |st| {
+        in.pointer = if (st.on) .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 } else .{ 390, 290 };
+        in.events = if (st.esc) &ev else &.{};
+        _ = try h.frame(&in);
+        try testing.expectEqual(h.app.tip, h.ui.signals.state.tip);
+        try testing.expectEqual(st.shown, h.app.tip.shown);
+    }
+}
+
+test "Tooltip: shows after resting on the target, hides on leaving and on Escape" {
+    try expectScript(&.{
+        .{ .on = true, .shown = false }, // 0.2 s
+        .{ .on = true, .shown = false }, // 0.4 s
+        .{ .on = true, .shown = true }, // 0.6 s: past the delay
+        .{ .on = true, .shown = true },
+        .{ .on = false, .shown = false }, // left: hidden, timer reset
+        .{ .on = true, .shown = false },
+        .{ .on = true, .shown = false },
+        .{ .on = true, .shown = true },
+        .{ .on = true, .esc = true, .shown = false }, // Escape
+        .{ .on = true, .shown = false }, // stays hidden while on the target
+        .{ .on = false, .shown = false },
+        .{ .on = true, .shown = false },
+    });
 }
 
 test "checkTip: the tip field must be a Tip" {
