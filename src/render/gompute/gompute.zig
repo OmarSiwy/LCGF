@@ -20,6 +20,7 @@ const Quad = draw_list.Quad;
 const DrawList = draw_list.DrawList;
 const Frame = kernels.Frame;
 const Image = kernels.Image;
+const sw = lcgr.render_sw;
 
 /// The pass: the frame's quads in paint order, each with its texture, in caller-owned rows.
 pub const Recorder = struct {
@@ -104,6 +105,141 @@ pub fn rasterCpu(t: Target, rec: *const Recorder, images: []const Image, texels:
     for (0..@as(usize, t.stride) * t.height) |i| kernels.raster(f, rec.quads.ptr, rec.tex.ptr, images.ptr, texels.ptr, bins.idx.ptr, bins.count.ptr, t.px.ptr, i);
 }
 
+/// The kernels on a GPU: CUDA or HIP, chosen at compile time. Owns the device buffers it creates
+/// (sized once by `Capacity`); the host owns the loop and calls `clear`, `draw` and `download`.
+/// `init` fails with Gompute's `error.InitFailed` or `error.NoDevice` on a machine without the
+/// driver or a card: take the CPU path (`rasterCpu`) or another back end then.
+pub fn Device(comptime backend: g.Backend) type {
+    return struct {
+        const Self = @This();
+        const Raw = g.RawKernel("lcgr_raster", backend);
+        pub const Buffer = Raw.Buffer;
+
+        fill_k: g.RawKernel("lcgr_fill", backend),
+        bin_k: g.RawKernel("lcgr_bin", backend),
+        raster_k: Raw,
+        cap: Capacity,
+        quads: Buffer,
+        tex: Buffer,
+        images: Buffer,
+        texels: Buffer,
+        bin_idx: Buffer,
+        bin_count: Buffer,
+        /// The framebuffer, `cap.stride * cap.height` pixels, on the device.
+        px: Buffer,
+
+        pub const Capacity = struct {
+            width: u32,
+            height: u32,
+            /// Row pitch in pixels (>= width).
+            stride: u32,
+            quads: u32,
+            images: u32,
+            texels: u32,
+            bin_cap: u32 = 64,
+            /// Device address of a framebuffer the caller owns and keeps alive (`stride * height`
+            /// pixels; Vulkan external memory, vulkan.zig); null allocates one.
+            framebuffer: ?u64 = null,
+        };
+
+        pub fn init(ordinal: c_int, cap: Capacity) !Self {
+            var d: Self = undefined;
+            d.cap = cap;
+            d.fill_k = try .init(ordinal);
+            errdefer d.fill_k.deinit();
+            d.bin_k = try .init(ordinal);
+            errdefer d.bin_k.deinit();
+            d.raster_k = try .init(ordinal);
+            errdefer d.raster_k.deinit();
+            const sizes = [_]usize{
+                @as(usize, cap.quads) * @sizeOf(Quad),
+                @as(usize, cap.quads) * 4,
+                @as(usize, cap.images) * @sizeOf(Image),
+                @as(usize, cap.texels) * 4,
+                Bins.len(cap.width, cap.height, cap.bin_cap) * 4,
+                Bins.len(cap.width, cap.height, 1) * 4,
+                @as(usize, cap.stride) * cap.height * 4,
+            };
+            const bufs = [_]*Buffer{ &d.quads, &d.tex, &d.images, &d.texels, &d.bin_idx, &d.bin_count, &d.px };
+            const own = if (cap.framebuffer != null) bufs.len - 1 else bufs.len;
+            if (cap.framebuffer) |addr| {
+                const Handle = @FieldType(Buffer, "handle");
+                d.px = .{ .handle = if (comptime @typeInfo(Handle) == .int) addr else @ptrFromInt(addr), .bytes = sizes[6], .ordinal = ordinal };
+            }
+            for (bufs[0..own], sizes[0..own], 0..) |b, n, k| {
+                b.* = d.raster_k.alloc(@max(n, 4)) catch |err| {
+                    for (bufs[0..k]) |done| done.free();
+                    return err;
+                };
+            }
+            return d;
+        }
+
+        pub fn deinit(d: *Self) void {
+            for ([_]*Buffer{ &d.quads, &d.tex, &d.images, &d.texels, &d.bin_idx, &d.bin_count }) |b| b.free();
+            if (d.cap.framebuffer == null) d.px.free();
+            d.raster_k.deinit();
+            d.bin_k.deinit();
+            d.fill_k.deinit();
+        }
+
+        /// Uploads the texture table and its texels; once, or whenever they change.
+        pub fn setImages(d: *Self, images: []const Image, texels: []const u32) !void {
+            std.debug.assert(images.len <= d.cap.images and texels.len <= d.cap.texels);
+            try d.images.upload(images.ptr, images.len * @sizeOf(Image));
+            try d.texels.upload(texels.ptr, texels.len * 4);
+        }
+
+        /// Queues a clear of the device framebuffer to `value` (framebuffer byte order).
+        pub fn clear(d: *Self, value: u32) !void {
+            var len: u32 = d.cap.stride * d.cap.height;
+            var v = value;
+            try d.fill_k.launch(grid(len), .{ .x = kernels.block }, 0, &.{ d.px.argPtr(), g.interface.arg(&len), g.interface.arg(&v) });
+        }
+
+        /// Uploads what `rec` holds and queues `bin` and `raster` over the device framebuffer.
+        /// Returns once queued; `download` (or `synchronize`) waits.
+        pub fn draw(d: *Self, rec: *const Recorder, red: u32, scale: f32) !void {
+            std.debug.assert(rec.len <= d.cap.quads);
+            if (rec.len == 0) return;
+            try d.quads.upload(rec.quads.ptr, rec.len * @sizeOf(Quad));
+            try d.tex.upload(rec.tex.ptr, rec.len * 4);
+            var f: Frame = .init(d.cap.width, d.cap.height, d.cap.stride, red, scale, rec.len, d.cap.bin_cap);
+            try d.bin_k.launch(grid(f.tiles()), .{ .x = kernels.block }, 0, &.{ g.interface.arg(&f), d.quads.argPtr(), d.bin_idx.argPtr(), d.bin_count.argPtr() });
+            try d.raster_k.launch(grid(@as(usize, f.stride) * f.height), .{ .x = kernels.block }, 0, &.{
+                g.interface.arg(&f), d.quads.argPtr(), d.tex.argPtr(), d.images.argPtr(), d.texels.argPtr(), d.bin_idx.argPtr(), d.bin_count.argPtr(), d.px.argPtr(),
+            });
+        }
+
+        /// Waits for the queued work and copies the framebuffer into `px` (`stride * height`).
+        pub fn download(d: *Self, px: []u32) !void {
+            std.debug.assert(px.len >= @as(usize, d.cap.stride) * d.cap.height);
+            try d.raster_k.synchronize();
+            try d.px.download(px.ptr, @as(usize, d.cap.stride) * d.cap.height * 4);
+        }
+
+        /// Presents by read-back: waits for the queued work and copies the frame into `fb`, a
+        /// software-back-end framebuffer that a shell presents as it presents sw's. CUDA has
+        /// no presentation of its own (CUDA programming guide, graphics interop). `fb` must have
+        /// this device's width, height and stride, and the byte order `draw` was given (`red`).
+        /// Read-back into pinned memory (`raster_k.allocPinned`) is faster; DECISION.md.
+        pub fn present(d: *Self, fb: *sw.Framebuffer) !void {
+            std.debug.assert(fb.width == d.cap.width and fb.height == d.cap.height and fb.stride == d.cap.stride);
+            try d.download(fb.pixels);
+        }
+
+        /// Copies `px` (`stride * height`) into the device framebuffer: how a host's inline custom
+        /// draw, done on the CPU between `download` and this, gets back under the UI drawn later.
+        pub fn upload(d: *Self, px: []const u32) !void {
+            try d.px.upload(px.ptr, @as(usize, d.cap.stride) * d.cap.height * 4);
+        }
+
+        pub fn synchronize(d: *Self) !void {
+            try d.raster_k.synchronize();
+        }
+    };
+}
+
 /// Blocks of `kernels.block` threads covering `n` items.
 pub fn grid(n: usize) g.Dim3 {
     return g.Dim3.linear(n, kernels.block);
@@ -111,7 +247,6 @@ pub fn grid(n: usize) g.Dim3 {
 
 const testing = std.testing;
 const conformance = lcgr.render_conformance;
-const sw = lcgr.render_sw;
 
 test "fill: the CPU path and, when present, the CUDA device write the same pixels" {
     var cpu: [1000]u32 = @splat(0);
@@ -211,4 +346,97 @@ test "raster: every conformance scene on the CPU path matches the software back 
         overflowed = overflowed or std.mem.max(u32, bin_count[0..frame(t, &rec, bins).tiles()]) >= cap;
     };
     try testing.expect(overflowed);
+}
+
+test "device: CUDA draws every conformance scene with the CPU path's pixels; HIP compiles" {
+    std.testing.refAllDecls(Device(.hip)); // no AMD card here: compile-only
+    if (comptime !g.available(.cuda)) return;
+    const w = 160;
+    const h = 120;
+    const stride = 160;
+    const glyph_atlas = atlas();
+    var texels: [1 + 64 * 64]u32 = undefined;
+    texels[0] = 0xffff_ffff;
+    @memcpy(texels[1..], &glyph_atlas);
+    const images = [_]Image{ .{ .first = 0, .width = 1, .height = 1 }, .{ .first = 1, .width = 64, .height = 64 } };
+    var dev = Device(.cuda).init(0, .{ .width = w, .height = h, .stride = stride, .quads = 64, .images = 2, .texels = texels.len, .bin_cap = 4 }) catch |err| switch (err) {
+        error.InitFailed, error.NoDevice => return, // no driver or no card
+        else => return err,
+    };
+    defer dev.deinit();
+    try dev.setImages(&images, &texels);
+
+    var rq: [64]Quad = undefined;
+    var rt: [64]u32 = undefined;
+    var bin_idx: [Bins.len(w, h, 4)]u32 = undefined;
+    var bin_count: [Bins.len(w, h, 1)]u32 = undefined;
+    const bins: Bins = .{ .idx = &bin_idx, .count = &bin_count, .cap = 4 };
+    var cpu: [stride * h]u32 = undefined;
+    var gpu: [stride * h]u32 = undefined;
+    const black = lcgr.types.Color.black.bitsOf();
+    for (&conformance.scenes) |*scene| {
+        var st: conformance.Storage = .{};
+        st.load(scene);
+        var glyphs = st.glyphs();
+        glyphs.texture = @fromBackingInt(1);
+        var gc: Gompute = .{};
+        gc.prepare({}, &st.draw, glyphs, scene.viewport, 1);
+        const t: Target = .{ .px = &cpu, .width = w, .height = h, .stride = stride };
+
+        fillCpu(&cpu, black);
+        try dev.clear(black);
+        var rec: Recorder = .{ .quads = &rq, .tex = &rt };
+        var j = iface.drawUntilCustom(&gc, &rec, &st.draw, 0);
+        while (j < st.draw.cmd_len) : (j = iface.drawUntilCustom(&gc, &rec, &st.draw, j + 1)) {
+            const rect = st.draw.customs[st.draw.command(j).custom].rect;
+            rasterCpu(t, &rec, &images, &texels, bins);
+            hostGradient(&cpu, stride, w, h, rect);
+            // The host's draw on the CPU between two GPU segments: down, draw, up.
+            try dev.draw(&rec, 0, 1);
+            try dev.download(&gpu);
+            hostGradient(&gpu, stride, w, h, rect);
+            try dev.upload(&gpu);
+            rec.len = 0;
+        }
+        rasterCpu(t, &rec, &images, &texels, bins);
+        try dev.draw(&rec, 0, 1);
+        try dev.download(&gpu);
+        try testing.expectEqualSlices(u32, &cpu, &gpu);
+    }
+}
+
+test "present: CUDA's frame read back into a software framebuffer is the software back end's frame" {
+    if (comptime !g.available(.cuda)) return;
+    const w = 160;
+    const h = 120;
+    const scene = &conformance.scenes[0];
+    var st: conformance.Storage = .{};
+    st.load(scene);
+
+    var ref_px: [sw.Framebuffer.len(w, h)]u32 = undefined;
+    var ref = sw.Framebuffer.init(&ref_px, w, h, .bgra8);
+    ref.clear(.black);
+    var s: sw.Software = .{};
+    s.prepare({}, &st.draw, st.glyphs(), scene.viewport, 1);
+    iface.render(&s, .{ .fb = &ref, .scissor = ref.all() }, &st.draw);
+
+    const white = [_]Image{.{ .first = 0, .width = 1, .height = 1 }};
+    var dev = Device(.cuda).init(0, .{ .width = w, .height = h, .stride = ref.stride, .quads = 8, .images = 1, .texels = 1 }) catch |err| switch (err) {
+        error.InitFailed, error.NoDevice => return,
+        else => return err,
+    };
+    defer dev.deinit();
+    try dev.setImages(&white, &.{0xffff_ffff});
+    var rq: [8]Quad = undefined;
+    var rt: [8]u32 = undefined;
+    var rec: Recorder = .{ .quads = &rq, .tex = &rt };
+    var gc: Gompute = .{};
+    gc.prepare({}, &st.draw, st.glyphs(), scene.viewport, 1);
+    iface.render(&gc, &rec, &st.draw);
+    var mine_px: [sw.Framebuffer.len(w, h)]u32 = undefined;
+    var mine = sw.Framebuffer.init(&mine_px, w, h, .bgra8);
+    try dev.clear(mine.pack(.black));
+    try dev.draw(&rec, 16, 1); // BGRA8: red at bit 16
+    try dev.present(&mine);
+    for (0..h) |y| for (0..w) |x| try testing.expectEqual(ref.at(@intCast(x), @intCast(y)), mine.at(@intCast(x), @intCast(y)));
 }

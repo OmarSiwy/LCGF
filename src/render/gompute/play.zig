@@ -1,13 +1,15 @@
 //! Draws a dumped frame with the Gompute back end and writes it as a PNG, for comparison with the
 //! GPU golden images (ci/jobs/gompute-golden.sh):
 //!
-//!     gompute-play DIR OUT.png [RRGGBB]
+//!     gompute-play DIR OUT.png [RRGGBB] [cpu|cuda]
 //!
 //! DIR is what conformance-dump or draw-dump wrote (quads.bin, glyphs.bin, cmds.txt), read as
 //! src/render/sw/play.zig reads it: the same stand-in glyph atlas as texture 1, the same host
 //! gradient for custom commands, the size from cmds.txt (800x600 without a `size` line) and the
-//! clear colour from the argument (black). The frame is drawn on the CPU path; the time per frame
-//! (median of 15) goes to stdout, next to the software back end's for the same frame.
+//! clear colour from the argument (black). The frame is drawn on the CPU path, or with the
+//! kernels on CUDA device 0 and read back; the time per frame (median of 15; for CUDA from the
+//! clear to the GPU being done, without the read-back) goes to stdout, next to the software back
+//! end's for the same frame.
 const std = @import("std");
 const lcgr = @import("lcgr");
 const gc = @import("gompute.zig");
@@ -22,6 +24,7 @@ pub fn main(init: std.process.Init) !void {
     const dir_path = args.next() orelse return error.Usage;
     const out_path = args.next() orelse return error.Usage;
     const clear: Color = if (args.next()) |hex| .hex((try std.fmt.parseInt(u32, hex, 16) << 8) | 0xff) else .black;
+    const mode = std.meta.stringToEnum(enum { cpu, cuda }, args.next() orelse "cpu") orelse return error.Usage;
 
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.openDir(io, dir_path, .{});
@@ -56,12 +59,19 @@ pub fn main(init: std.process.Init) !void {
     const bins: gc.Bins = .{ .idx = try gpa.alloc(u32, gc.Bins.len(w, h, cap)), .count = try gpa.alloc(u32, gc.Bins.len(w, h, 1)), .cap = cap };
     var rec: gc.Recorder = .{ .quads = try gpa.alloc(Quad, quads.len + glyph_quads.len), .tex = try gpa.alloc(u32, quads.len + glyph_quads.len) };
 
+    var dev: ?gc.Device(.cuda) = null;
+    if (mode == .cuda) {
+        dev = try gc.Device(.cuda).init(0, .{ .width = w, .height = h, .stride = stride, .quads = @intCast(rec.quads.len), .images = images.len, .texels = texels.len, .bin_cap = cap });
+        try dev.?.setImages(&images, &texels);
+    }
+    defer if (dev) |*d| d.deinit();
+
     var total: usize = 0;
     var times: [15]u64 = undefined;
     for (&times) |*ns| {
         total = 0;
         const t0 = std.Io.Timestamp.now(io, .awake);
-        gc.fillCpu(px, clear.bitsOf());
+        if (dev) |*d| try d.clear(clear.bitsOf()) else gc.fillCpu(px, clear.bitsOf());
         rec.len = 0;
         lines.reset();
         while (lines.next()) |line| {
@@ -79,7 +89,11 @@ pub fn main(init: std.process.Init) !void {
                 rec.append(glyph_quads[@intFromFloat(v[0])..][0..n], @fromBackingInt(1));
                 total += n;
             } else if (std.mem.eql(u8, key, "custom")) {
-                gc.rasterCpu(t, &rec, &images, &texels, bins);
+                if (dev) |*d| {
+                    // The host draws on the CPU: read back, draw, upload.
+                    try d.draw(&rec, 0, 1);
+                    try d.download(px);
+                } else gc.rasterCpu(t, &rec, &images, &texels, bins);
                 rec.len = 0;
                 // The host's own pipeline: a gradient over the scissored rect, replacing what is there.
                 const wf: f32 = @floatFromInt(w);
@@ -89,16 +103,21 @@ pub fn main(init: std.process.Init) !void {
                     const fy = @as(f32, @floatFromInt(y)) + 0.5;
                     px[y * stride + x] = Color.rgb(unorm(fx / wf * 0.5), unorm(0.25), unorm(fy / hf * 0.6)).bitsOf();
                 };
+                if (dev) |*d| try d.upload(px);
             }
         }
-        gc.rasterCpu(t, &rec, &images, &texels, bins);
+        if (dev) |*d| {
+            try d.draw(&rec, 0, 1);
+            try d.synchronize();
+        } else gc.rasterCpu(t, &rec, &images, &texels, bins);
         ns.* = @intCast(t0.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds());
     }
     std.mem.sort(u64, &times, {}, std.sort.asc(u64));
+    if (dev) |*d| try d.download(px);
     const sw_us = try swFrameUs(io, gpa, cmds, quads, glyph_quads, texels[1..], w, h, clear);
     var buf: [256]u8 = undefined;
     var out = std.Io.File.stdout().writerStreaming(io, &buf);
-    try out.interface.print("{s}: {d}x{d}, {d} quads, gompute cpu {d} us/frame, sw {d} us/frame\n", .{ dir_path, w, h, total, times[times.len / 2] / 1000, sw_us });
+    try out.interface.print("{s}: {d}x{d}, {d} quads, gompute {t} {d} us/frame, sw {d} us/frame\n", .{ dir_path, w, h, total, mode, times[times.len / 2] / 1000, sw_us });
     try out.interface.flush();
 
     try writePng(io, gpa, out_path, px, stride, w, h);
