@@ -751,7 +751,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = ios_metal } },
     }) });
-    b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
+    b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios; --replay runs the input replay test)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
 
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);

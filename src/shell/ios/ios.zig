@@ -328,6 +328,11 @@ pub const Ios = struct {
     marked: ?Id = null,
     selected: [2]usize = .{ 0, 0 },
     input_delegate: ?Id = null,
+    /// A recording of UIKit events (translate.Replay) fed to the translator one frame per
+    /// `poll` instead of waiting for the user: the input replay test on a device.
+    recording: ?translate.Replay = null,
+    /// Why `poll` ended a recording early: a bad line (`recording.line`).
+    err: ?translate.Replay.Error = null,
     tokenizer: ?Id = null,
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame; `first` and `count`
@@ -431,6 +436,13 @@ pub const Ios = struct {
         while (fns.CFRunLoopRunInMode(default_mode, 0, true) == run_handled_source) {}
         _ = s.woken.swap(false, .acq_rel);
         s.polls += 1;
+        if (s.recording) |*r| {
+            const more = r.next(&s.t) catch |e| blk: {
+                s.err = e;
+                break :blk false;
+            };
+            if (!more) return false;
+        }
         return s.t.frame(ev);
     }
 
@@ -501,7 +513,7 @@ pub const Ios = struct {
     /// refresh. Returns at once after a `wake`, or when the translator owes a frame (a tap's
     /// release). In the background it waits for the next event only.
     pub fn wait(s: *Ios, seconds: f32, pace: Pace) void {
-        if (s.woken.load(.acquire) or s.t.pending()) return;
+        if (s.woken.load(.acquire) or s.t.pending() or s.recording != null) return;
         // In the background no frame is shown, so animations and timers wait for the return.
         const secs: f64 = if (!s.t.visible()) std.math.inf(f64) else if (pace == .display) 1 / s.hz else seconds;
         if (!(secs > 0)) return;
