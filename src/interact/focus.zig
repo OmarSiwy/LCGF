@@ -35,13 +35,20 @@ pub const Keymap = struct {
 /// the tree it is scanned with; the caller keeps it with that tree (last frame's, for `step`).
 pub const Scopes = struct {
     c: Columns,
+    /// Written by `scan`: the open modal layer, the last row whose `kind` has `trap`, or
+    /// `none`. Later rows are on top, so a dialog opened from a dialog is the one in front.
+    modal: u32 = none,
 
     /// `kind` bits.
     pub const group: u8 = 1;
+    /// A modal layer (dialog, sheet, open menu): while it is in the tree, focus stays among
+    /// its descendants, as the WAI-ARIA APG modal dialog pattern asks.
+    pub const trap: u8 = 2;
 
     pub const Columns = struct {
-        /// Set by the caller: `group` for a node whose focusable descendants are one composite
-        /// widget (WAI-ARIA APG): Tab enters and leaves it as one stop, arrows move inside.
+        /// Set by the caller, bits: `group` for a node whose focusable descendants are one
+        /// composite widget (WAI-ARIA APG): Tab enters and leaves it as one stop, arrows move
+        /// inside. `trap` for a modal layer.
         kind: []u8,
         /// Written by `scan`: the row of the nearest group above the node, or `none`.
         group: []u32,
@@ -63,10 +70,11 @@ pub const Scopes = struct {
     }
 };
 
-/// Fills `group`, `lead` and `stop` from `kind`, `parent`, `sense` and `id`. One forward sweep
+/// Fills `group`, `lead`, `stop` and `trap` from `kind`, `parent`, `sense` and `id`. One forward sweep
 /// (a child needs its parent's group), run once the tree is built. Rows outside groups write
 /// their lead to a spare row, so the sweep has no branch on the group.
 pub fn scan(t: *const Tree, sc: *Scopes) void {
+    sc.modal = none;
     if (t.len == 0) return;
     const c = &sc.c;
     const parent = t.c.parent;
@@ -75,6 +83,7 @@ pub fn scan(t: *const Tree, sc: *Scopes) void {
     c.group[0] = none;
     c.lead[0] = none;
     c.stop[0] = @intFromBool(simd.andB((t.c.sense[0] & focusable) != 0, t.c.id[0] != 0));
+    var trap = pick(u32, (c.kind[0] & Scopes.trap) != 0, 0, none);
     for (1..t.len) |i| {
         const p = parent[i];
         const g = pick(u32, (c.kind[p] & Scopes.group) != 0, p, c.group[p]);
@@ -85,7 +94,9 @@ pub fn scan(t: *const Tree, sc: *Scopes) void {
         // `i` when able, else all ones: rows rise, so the first able row stays the minimum.
         c.lead[slot] = @min(c.lead[slot], @as(u32, @intCast(i)) | -%@as(u32, @intFromBool(!able)));
         c.stop[i] = @intFromBool(simd.andB(able, simd.orB(g == none, c.lead[slot] == i)));
+        trap = pick(u32, (c.kind[i] & Scopes.trap) != 0, @intCast(i), trap);
     }
+    sc.modal = trap;
 }
 
 /// Keyboard-focus state carried from frame to frame. Plain data; the caller owns it and calls
@@ -99,6 +110,9 @@ pub const Focus = struct {
     keys: Keymap = .{},
     /// Left button last frame, to see presses.
     left: bool = false,
+    /// Focus at the end of the last step, to put back when the pointer takes focus out of a
+    /// modal layer.
+    last: u32 = 0,
 
     /// Advances by one frame. Run after `Interaction.step` on the same input and tree: `prev`
     /// is last frame's tree, which the keys move focus through. Tab moves to the next node
@@ -111,12 +125,30 @@ pub const Focus = struct {
     /// focusable rows (Right and Down forward, Left and Up back, wrapping) and Home and End go
     /// to its first and last, as the WAI-ARIA APG keyboard interface asks of composite widgets.
     /// Outside a group, arrows and Home/End leave focus alone for the focused widget to use.
+    ///
+    /// While a modal layer is open (`Scopes.modal`) focus stays inside it: Tab and Shift+Tab
+    /// wrap among its stops, and focus found outside it (the layer just opened, or a click
+    /// behind it) moves in, back to where it was in the layer, else to its first stop, else
+    /// to nothing.
     pub fn step(s: *Focus, it: *Interaction, prev: *const Tree, sc: *const Scopes, in: *const Input) void {
         const press = simd.andB(in.buttons.left, !s.left);
         const focusable: u8 = @bitCast(types.Sense{ .focus = true });
         const k = s.keys;
         const c = &sc.c;
         const last = prev.cap - 1;
+        // The rows focus may be in: the open layer's descendants, or the whole tree.
+        const trapped = sc.modal != none;
+        const lo_t = pick(u32, trapped, sc.modal +% 1, 0);
+        const hi_t = pick(u32, trapped, prev.c.end[@min(sc.modal, last)], prev.len);
+        {
+            const cur = simd.find(prev.c.id, prev.len, it.focus);
+            const was = simd.find(prev.c.id, prev.len, s.last);
+            const first = seek(prev, c.stop, 1, lo_t, hi_t, lo_t -% 1, false);
+            const to = pick(u32, (was -% lo_t) < (hi_t -% lo_t), was, first);
+            const id = pick(u32, to != none, prev.c.id[@min(to, last)], 0);
+            const out = (cur -% lo_t) >= (hi_t -% lo_t);
+            it.focus = pick(u32, simd.andB(trapped, out), id, it.focus);
+        }
         var key = false;
         for (in.events) |e| {
             const down = simd.orB(e.kind == .press, e.kind == .repeat);
@@ -128,7 +160,7 @@ pub const Focus = struct {
             const in_group = g != none;
             // Tab: from inside a group, as if from its lead, so Shift+Tab leaves it too.
             const from_tab = pick(u32, in_group, c.lead[gr], cur);
-            const to_tab = seek(prev, c.stop, 1, 0, prev.len, from_tab, e.mods.shift);
+            const to_tab = seek(prev, c.stop, 1, lo_t, hi_t, from_tab, e.mods.shift);
             // Arrows: the group's rows [g + 1, end[g]); an empty range outside a group.
             const lo = g +% 1;
             const hi = pick(u32, in_group, prev.c.end[gr], 0);
@@ -147,6 +179,7 @@ pub const Focus = struct {
         // A key after a press shows the ring; a press after a key hides it.
         s.visible = simd.andB(simd.orB(s.visible, key), !press);
         s.left = in.buttons.left;
+        s.last = it.focus;
     }
 
     /// Where to draw the focus ring this frame: the focused node's rect in `t`, grown by
@@ -476,4 +509,103 @@ test "scan: groups, leads and Tab stops, with nested and inert rows" {
     try testing.expectEqual(1, c.lead[0]);
     try testing.expectEqual(4, c.lead[2]);
     try testing.expectEqualSlices(u8, &.{ 0, 1, 0, 0, 1, 0, 0 }, c.stop[0..7]);
+}
+
+/// root { name, ok, [dialog (trap) { field, yes, no }] }, 40 x 20 leaves stacked down; the
+/// dialog is a float over the top of the window.
+const Dialog = struct {
+    raw: [64 * 1024]u8 align(mem.column_align) = undefined,
+    t: Tree = undefined,
+    sc: Scopes = undefined,
+
+    const name = Id.from("name");
+    const ok = Id.from("ok");
+    const dialog = Id.from("dialog");
+    const field = Id.from("field");
+    const yes = Id.from("yes");
+    const no = Id.from("no");
+
+    fn build(f: *Dialog, open: bool) void {
+        const layout = @import("../layout/layout.zig");
+        const Texts = @import("../core/texts.zig").Texts;
+        var carver: mem.Carver = .{ .buf = &f.raw };
+        f.t = Tree.init(&carver, 16);
+        var tx = Texts.init(&carver, 1);
+        f.sc = Scopes.init(&carver, 16);
+        const t = &f.t;
+        const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+        f.leaf(root, name);
+        f.leaf(root, ok);
+        if (open) {
+            const d = t.push(root, dialog, &.{ .float = true, .offset = .{ 100, 0 } });
+            f.sc.c.kind[d] = Scopes.trap;
+            for ([_]Id{ field, yes, no }) |id| f.leaf(d, id);
+            t.seal(d);
+        }
+        t.seal(root);
+        layout.run(t, &tx, .{ 200, 200 });
+    }
+    fn leaf(f: *Dialog, parent: u32, id: Id) void {
+        const n = f.t.push(parent, id, &.{ .size = .{ .px(40), .px(20) } });
+        f.t.seal(n);
+        f.t.c.sense[n] = @bitCast(Sense.button);
+    }
+};
+
+test "walkthrough: a modal layer keeps focus inside it until it closes" {
+    var f: Dialog = .{};
+    var w: Walk = .{};
+    const D = Dialog;
+    f.build(false);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\press 43
+    );
+    // The dialog opens: focus moves to its first stop with no key, then Tab and Shift+Tab
+    // wrap inside it.
+    f.build(true);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\frame
+        \\press 43
+        \\frame
+        \\press 43
+        \\press 43
+        \\frame
+        \\press 43 shift
+        \\# a click on "name" behind the dialog: focus goes back to "no"
+        \\frame
+        \\pointer 10 10
+        \\buttons left
+        \\frame
+        \\buttons
+        \\# a click on "yes" in the dialog takes focus as usual
+        \\frame
+        \\pointer 110 30
+        \\buttons left
+    );
+    try testing.expectEqualSlices(u32, &.{
+        bi(D.name), bi(D.field), bi(D.yes), bi(D.field), bi(D.no), bi(D.no), bi(D.no), bi(D.yes),
+    }, w.focus[0..w.n]);
+    try testing.expectEqual(3, f.sc.modal);
+    // Closed again: Tab reaches the rows behind it.
+    f.build(false);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\press 43
+    );
+    try testing.expectEqual(bi(D.name), w.focus[w.n - 1]);
+}
+
+test "step: a modal layer with nothing focusable leaves nothing focused" {
+    var f: Dialog = .{};
+    f.build(true);
+    for (4..7) |r| f.t.c.sense[r] = 0;
+    var w: Walk = .{};
+    w.it.focus = bi(Dialog.name);
+    try w.run(&f.t, &f.sc,
+        \\frame
+        \\press 43
+    );
+    try testing.expectEqual(0, w.focus[0]);
 }
