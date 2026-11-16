@@ -43,6 +43,17 @@ pub const Signals = struct {
     pub fn touch(s: *Signals, sig: Signal) void {
         s.bump(sig, true);
     }
+
+    /// Fingerprint (FNV-1a) of a dependency list at its current versions. Equal stamps mean
+    /// none of `deps` changed in between (barring a 64-bit collision). Order matters.
+    pub fn stamp(s: *const Signals, deps: []const Signal) u64 {
+        var h: u64 = 0xcbf2_9ce4_8422_2325;
+        for (deps) |dep| {
+            const i = @backingInt(dep);
+            h = (h ^ ((@as(u64, i) << 32) | s.version[i])) *% 0x0000_0100_0000_01b3;
+        }
+        return h;
+    }
 };
 
 /// A value paired with its signal. Nothing here the caller could not write with `Signals.bump`;
@@ -65,6 +76,43 @@ pub fn Cell(comptime T: type) type {
             const changed = !std.meta.eql(self.value, value);
             self.value = value;
             signals.bump(self.signal, changed);
+        }
+    };
+}
+
+/// A value computed from other signals (a memo), with its own signal and the stamp of the
+/// inputs it was last computed from. There is no compute callback: the caller asks `stale` and,
+/// if so, computes and `set`s, so the work runs at most once per change of its inputs:
+///
+///     if (total.stale(&signals, &deps)) total.set(&signals, &deps, a.get() + b.get());
+///
+/// Its own signal is bumped only when the new value differs, so a recompute that lands on the
+/// same value leaves everything downstream valid.
+pub fn Derived(comptime T: type) type {
+    return struct {
+        cell: Cell(T),
+        /// `Signals.stamp` of the inputs at the last `set`.
+        stamp: u64,
+
+        const Self = @This();
+
+        pub fn init(signals: *Signals, deps: []const Signal, value: T) Self {
+            return .{ .cell = .init(signals, value), .stamp = signals.stamp(deps) };
+        }
+        pub fn get(self: *const Self) T {
+            return self.cell.value;
+        }
+        pub fn signal(self: *const Self) Signal {
+            return self.cell.signal;
+        }
+        /// An input changed since the last `set`.
+        pub fn stale(self: *const Self, signals: *const Signals, deps: []const Signal) bool {
+            return signals.stamp(deps) != self.stamp;
+        }
+        /// Stores a value computed from `deps` at their current versions.
+        pub fn set(self: *Self, signals: *Signals, deps: []const Signal, value: T) void {
+            self.stamp = signals.stamp(deps);
+            self.cell.set(signals, value);
         }
     };
 }
@@ -135,4 +183,66 @@ test "Cell: set bumps its signal only when the value changes" {
     try testing.expectEqual(@as(u32, 1), s.version[@backingInt(n.signal)]);
     try testing.expectEqual(@as(u32, 0), s.version[@backingInt(p.signal)]);
     try testing.expect(s.dirty);
+}
+
+test "stamp: changes with any dependency's version, and with the list" {
+    var s = fixture(4);
+    const a = s.create();
+    const b = s.create();
+    const ab = s.stamp(&.{ a, b });
+    try testing.expectEqual(ab, s.stamp(&.{ a, b }));
+    try testing.expect(ab != s.stamp(&.{a}));
+    try testing.expect(ab != s.stamp(&.{ b, a }));
+    try testing.expect(s.stamp(&.{}) != ab);
+    s.bump(b, false);
+    try testing.expectEqual(ab, s.stamp(&.{ a, b }));
+    s.touch(b);
+    try testing.expect(ab != s.stamp(&.{ a, b }));
+}
+
+test "Derived: recomputed once per input change; downstream sees only real changes" {
+    var s = fixture(8);
+    var a: Cell(i32) = .init(&s, 2);
+    var b: Cell(i32) = .init(&s, 3);
+    const deps = [_]Signal{ a.signal, b.signal };
+    var sum: Derived(i32) = .init(&s, &deps, a.get() + b.get());
+    // A second level reads the first through its signal.
+    var sign: Derived(bool) = .init(&s, &.{sum.signal()}, sum.get() > 0);
+    var computes: u32 = 0;
+
+    const Step = struct {
+        fn run(sg: *Signals, x: *Cell(i32), y: *Cell(i32), d: *Derived(i32), e: *Derived(bool), n: *u32) void {
+            const in = [_]Signal{ x.signal, y.signal };
+            if (d.stale(sg, &in)) {
+                n.* += 1;
+                d.set(sg, &in, x.get() + y.get());
+            }
+            const up = [_]Signal{d.signal()};
+            if (e.stale(sg, &up)) e.set(sg, &up, d.get() > 0);
+        }
+    };
+
+    Step.run(&s, &a, &b, &sum, &sign, &computes);
+    try testing.expectEqual(@as(u32, 0), computes);
+
+    a.set(&s, 4);
+    b.set(&s, 1);
+    Step.run(&s, &a, &b, &sum, &sign, &computes);
+    Step.run(&s, &a, &b, &sum, &sign, &computes);
+    try testing.expectEqual(@as(u32, 1), computes);
+    try testing.expectEqual(@as(i32, 5), sum.get());
+
+    // Inputs changed, sum did not: the second level keeps its stamp and its signal.
+    const sign_version = s.version[@backingInt(sign.signal())];
+    const sum_stamp = sign.stamp;
+    a.set(&s, 3);
+    b.set(&s, 2);
+    Step.run(&s, &a, &b, &sum, &sign, &computes);
+    try testing.expectEqual(@as(u32, 2), computes);
+    try testing.expectEqual(sum_stamp, sign.stamp);
+
+    a.set(&s, -9);
+    Step.run(&s, &a, &b, &sum, &sign, &computes);
+    try testing.expect(!sign.get());
+    try testing.expectEqual(sign_version + 1, s.version[@backingInt(sign.signal())]);
 }
