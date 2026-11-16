@@ -73,6 +73,7 @@ pub const widgets_popover = @import("widgets/popover.zig");
 pub const widgets_tooltip = @import("widgets/tooltip.zig");
 pub const widgets_menu = @import("widgets/menu.zig");
 pub const widgets_menubar = @import("widgets/menubar.zig");
+pub const widgets_contextmenu = @import("widgets/contextmenu.zig");
 pub const a11y_tree = @import("a11y/tree.zig");
 pub const render_sw = @import("render/sw/sw.zig");
 pub const png = @import("assets/png.zig");
