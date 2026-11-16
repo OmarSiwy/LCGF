@@ -110,5 +110,42 @@ pub fn main(init: std.process.Init) !void {
         }
         try w.print("{s:<10} {d:>5} {d:>14} {d:>14} {d:>12}\n", .{ e.name, n, median(&rt), median(&lo), median(&ct) });
     };
+    // Partial routines (C0164): the dashboard after one tile's text changes, laid out in full
+    // against the routine for that field's dirty mask, and against the routine for the title
+    // (above every fixed-size box: the whole tree).
+    {
+        const P = lcgr.ct_layout.Plain(examples.dash, .{});
+        var vp: [2]f32 = .{ 400, 200 };
+        std.mem.doNotOptimizeAway(&vp);
+        const spans: [P.label_count]lcgr.strings.Span = @splat(.{ .start = 0, .bytes = label_bytes });
+        var scratch: P.Scratch = undefined;
+        var ram: P.Cols.Dynamic = undefined;
+        P.run(&scratch, &ram, vp, &spans, font);
+        var full: [batches]u64 = undefined;
+        var tile: [batches]u64 = undefined;
+        var title: [batches]u64 = undefined;
+        for (&full, &tile, &title) |*f, *t, *h| {
+            const t0 = std.Io.Timestamp.now(io, .awake);
+            for (0..frames) |_| {
+                P.run(&scratch, &ram, vp, &spans, font);
+                std.mem.doNotOptimizeAway(&ram);
+            }
+            const t1 = std.Io.Timestamp.now(io, .awake);
+            for (0..frames) |_| {
+                P.relayout("a", &scratch, &ram, &spans, font);
+                std.mem.doNotOptimizeAway(&ram);
+            }
+            const t2 = std.Io.Timestamp.now(io, .awake);
+            for (0..frames) |_| {
+                P.relayout("title", &scratch, &ram, &spans, font);
+                std.mem.doNotOptimizeAway(&ram);
+            }
+            const t3 = std.Io.Timestamp.now(io, .awake);
+            f.* = @intCast(@divTrunc(t0.durationTo(t1).toNanoseconds(), frames));
+            t.* = @intCast(@divTrunc(t1.durationTo(t2).toNanoseconds(), frames));
+            h.* = @intCast(@divTrunc(t2.durationTo(t3).toNanoseconds(), frames));
+        }
+        try w.print("dash ({d} nodes) partial relayout ns: full {d}, tile a {d}, title {d}\n", .{ P.Cols.node_count, median(&full), median(&tile), median(&title) });
+    }
     try w.flush();
 }

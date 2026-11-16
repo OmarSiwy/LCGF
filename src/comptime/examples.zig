@@ -55,6 +55,18 @@ pub const badge = s.col(.{ .size = .{ .px(96), .px(64) }, .pad = @splat(2), .gap
     s.named(s.slider(.level, .level), "Level"),
 });
 
+/// A dashboard: a title over a row of fixed-size tiles, each a label showing its own field and
+/// a bar, and a slider. Each tile is a relayout boundary (ct_layout.Plain.relayout).
+pub const Dash = struct { title: []const u8 = "", a: []const u8 = "", b: []const u8 = "", c: []const u8 = "", level: f32 = 0 };
+fn tile(comptime field: @EnumLiteral()) Spec {
+    return s.col(.{ .size = .{ .px(90), .px(40) }, .pad = @splat(4), .clip = true }, .{ s.label(field), s.col(.{ .size = .{ .fill, .px(4) } }, .{}) });
+}
+pub const dash = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
+    s.label(.title),
+    s.row(.{ .gap = 6 }, .{ tile(.a), tile(.b), tile(.c) }),
+    s.named(s.slider(.level, .level), "Level"),
+});
+
 /// A row whose middle node is a custom widget that builds its own rows.
 pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
@@ -64,9 +76,15 @@ pub const all = [_]Example{
     .{ .name = "card", .State = Card, .spec = static_card },
     .{ .name = "settings", .State = Settings, .spec = settings, .options = .{ .viewport = .{ 320, 240 } } },
     .{ .name = "badge", .State = Badge, .spec = badge, .options = .{ .viewport = .{ 96, 64 } } },
+    .{ .name = "dash", .State = Dash, .spec = dash },
     .{ .name = "custom", .State = Custom, .spec = custom },
 };
 
 test "examples: every example passes validation" {
-    inline for (all) |e| comptime @import("validate.zig").check(e.State, e.spec, e.options);
+    // One evaluation for all the checks: each raises the quota for its own spec, but the
+    // branches add up across them, so the sum is raised here.
+    comptime {
+        @setEvalBranchQuota(1_000_000);
+        for (all) |e| @import("validate.zig").check(e.State, e.spec, e.options);
+    }
 }
