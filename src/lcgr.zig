@@ -58,6 +58,7 @@ pub const quad_shader = @import("render/shaders/quad.zig");
 pub const render_null = @import("render/null.zig");
 pub const context = @import("runtime/context.zig");
 pub const frame = @import("runtime/frame.zig");
+pub const scheduler = @import("runtime/scheduler.zig");
 
 test {
     std.testing.refAllDecls(@This());

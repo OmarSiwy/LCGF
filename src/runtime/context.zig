@@ -14,6 +14,7 @@ const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 const Frame = @import("frame.zig").Frame;
+const scheduler = @import("scheduler.zig");
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
 pub const Limits = struct {
@@ -88,6 +89,12 @@ pub const Context = struct {
     /// Frames still owed after the last input change.
     settle: u32 = 0,
     last_stamp: u64 = 0,
+    /// How much the springs are still moving; 0 at rest. The anim lane's step writes it
+    /// (C0716-C0719); until then nothing moves.
+    motion: f32 = 0,
+    /// Data behind a signal changed since the last frame. The signals lane's bump sets it
+    /// (C0238); `Frame.finish` clears it.
+    dirty: bool = false,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -118,6 +125,8 @@ pub const Context = struct {
         var carver: mem.Carver = .{ .buf = buffer };
         return build(&carver, limits);
     }
+
+    pub const needsFrame = scheduler.needsFrame;
 
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
@@ -400,7 +409,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     var app: e.App = .{};
     var in: Input = .{ .viewport = .{ 800, 600 } };
 
-    // (`ctx.needsFrame` is the scheduler lane's, C0251; `wake` below is the same answer.)
+    try testing.expect(ctx.needsFrame(&in));
     var out = e.frame(&ctx, &app, &in);
     try testing.expect(out.status.ok());
 
@@ -423,6 +432,7 @@ test "host loop: layout, draw list, click, drag, idle" {
     try testing.expectEqual(@as(f32, 0), out.wake);
     out = e.frame(&ctx, &app, &in);
     try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ctx.needsFrame(&in));
 
     // Click: press and release over the button, found by last frame's geometry.
     in.pointer = e.center(out.tree.rect(out.tree.find(e.id_reset)));
