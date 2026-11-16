@@ -183,6 +183,15 @@ pub fn build(b: *std.Build) void {
             exe.root_module.addIncludePath(clay.path(""));
             vs_clay.dependOn(&b.addInstallArtifact(exe, .{}).step);
         }
+        // Clay's layout alone, built as src/render/web/layout.zig is (zig-out/web/clay-layout.wasm).
+        const wasm = b.addExecutable(.{ .name = "clay-layout", .root_module = b.createModule(.{
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = .ReleaseSmall,
+        }) });
+        wasm.root_module.addCSourceFile(.{ .file = b.path("bench/vs/clay/layout.c"), .flags = &.{"-std=gnu99"} });
+        wasm.root_module.addIncludePath(clay.path(""));
+        wasm.entry = .disabled; // its one export is named in the source: no --export-dynamic
+        vs_clay.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     }
     const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
     vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
