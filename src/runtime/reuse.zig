@@ -104,7 +104,7 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
 
 /// Appends last frame's rows [a, b) of the tree, [k0, k1) of the texts and [c0, c1) of the
 /// customs to this frame's tables, under the open node, and moves every link by how far its
-/// target moved. The bytes of each text run are copied into this frame's strings.
+/// target moved (SIMD over the copied rows). The bytes of each text run are copied into this frame's strings.
 fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) void {
     const ctx = f.ctx;
     const t = f.tree();
@@ -118,15 +118,21 @@ fn copySubtree(f: *Frame, a: u32, b: u32, k0: u32, k1: u32, c0: u32, c1: u32) vo
     const delta = n -% a;
 
     mem.copyRows(Tree.Columns, &t.c, n, &prev.c, a, count);
-    const text_shift = tx.len -% k0;
-    const custom_shift = cu.len -% c0;
-    for (n..n + count) |i| {
-        t.c.parent[i] +%= delta;
-        t.c.end[i] +%= delta;
-        const ti = t.c.text[i];
-        t.c.text[i] = selU(ti != none, ti +% text_shift, ti);
-        const ci = t.c.custom[i];
-        t.c.custom[i] = selU(ci != none, ci +% custom_shift, ci);
+    // Rebase links, `lanes` rows per step. The last vector may run past the subtree into rows
+    // that are not in use yet; the next push rewrites them. `n + count <= cap`, so it stays
+    // inside the padded columns (`simd.rows`).
+    const text_shift = simd.u(tx.len -% k0);
+    const custom_shift = simd.u(cu.len -% c0);
+    const shift = simd.u(delta);
+    const nil = simd.u(none);
+    var i: usize = n;
+    while (i < n + count) : (i += simd.lanes) {
+        simd.storeU(t.c.parent, i, simd.loadU(t.c.parent, i) +% shift);
+        simd.storeU(t.c.end, i, simd.loadU(t.c.end, i) +% shift);
+        const ti = simd.loadU(t.c.text, i);
+        simd.storeU(t.c.text, i, @select(u32, ti != nil, ti +% text_shift, ti));
+        const ci = simd.loadU(t.c.custom, i);
+        simd.storeU(t.c.custom, i, @select(u32, ci != nil, ci +% custom_shift, ci));
     }
     const parent = ctx.stack[ctx.depth - 1];
     t.c.parent[n] = parent;
