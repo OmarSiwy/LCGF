@@ -21,9 +21,11 @@ const Glyphs = lines_.Glyphs;
 /// A caret stop: a byte offset and the caret's x, px from the paragraph's left edge.
 pub const Stop = struct { offset: u32, x: f32 };
 
-/// The caret stops of line `k`, left to right: the grapheme boundaries of its text, each at
-/// the x of the cluster it starts, or a share of the cluster it falls inside. Shaping may give
-/// a combining mark its own cluster; the boundary walk skips it, as src/text/shape/cluster.zig
+/// The caret stops of line `k` in text order (left to right unless `lines.reorder` moved
+/// glyphs): the grapheme boundaries of its text, each at the leading edge of the cluster it
+/// starts (its left edge, the right edge of a right-to-left one), or a share of the cluster it
+/// falls inside; the line's end at the trailing edge of its last cluster. Shaping may give a
+/// combining mark its own cluster; the boundary walk skips it, as src/text/shape/cluster.zig
 /// does. An iterator over the columns: no scratch.
 pub const Stops = struct {
     l: *const Lines,
@@ -37,11 +39,15 @@ pub const Stops = struct {
     stop: u32,
     /// Next glyph after the open cluster.
     i: u32,
-    /// The open cluster (`cs == ce` when none is left): text range, x and width.
+    /// The open cluster (`cs == ce` when none is left): text range, left edge, width, and 1.0
+    /// when it is right to left.
     cs: u32 = 0,
     ce: u32 = 0,
     cx: f32,
     cw: f32 = 0,
+    rtl: f32 = 0,
+    /// The trailing edge of the last cluster closed.
+    tail: f32,
     started: bool = false,
     /// The line's end is still to come.
     final: bool,
@@ -59,6 +65,7 @@ pub const Stops = struct {
             .stop = stop,
             .i = l.first[k],
             .cx = l.x[k],
+            .tail = l.x[k],
             .final = k + 1 == l.len or l.end[k] == l.ink[k],
         };
         s.open();
@@ -76,34 +83,39 @@ pub const Stops = struct {
             return;
         }
         s.cs = g.cluster[s.i];
+        s.rtl = @floatFromInt(g.level[s.i] & 1);
         const extra = s.l.extra[s.k];
+        var left = std.math.inf(f32);
         while (s.i < end and g.cluster[s.i] == s.cs) : (s.i += 1) {
+            left = @min(left, g.x[s.i]);
             s.cw += g.advance[s.i] + extra * @as(f32, @floatFromInt(@intFromBool(lines_.isSpace(s.text, g.cluster[s.i]))));
         }
+        s.cx = s.l.x[s.k] + left;
         s.ce = byteAt(g, s.text, s.i);
     }
 
     pub fn next(s: *Stops) ?Stop {
         if (!s.started) {
             s.started = true;
-            return .{ .offset = s.base, .x = s.cx };
+            return .{ .offset = s.base, .x = s.cx + s.cw * s.rtl };
         }
         const b = if (s.it.next()) |e| s.base + @as(u32, @intCast(e)) else s.stop;
         // Move past the clusters that end at or before this boundary.
         while (s.cs < s.ce and s.ce <= b) {
-            s.cx += s.cw;
+            s.tail = s.cx + s.cw * (1 - s.rtl);
             s.open();
         }
         if (b >= s.stop) {
             if (!s.final) return null;
             s.final = false;
-            return .{ .offset = s.stop, .x = s.cx };
+            return .{ .offset = s.stop, .x = s.tail };
         }
-        if (b == s.cs) return .{ .offset = b, .x = s.cx };
-        // Inside a cluster of several graphemes: an equal share of its width per grapheme.
+        if (b == s.cs) return .{ .offset = b, .x = s.cx + s.cw * s.rtl };
+        // Inside a cluster of several graphemes: an equal share of its width per grapheme,
+        // from its leading edge.
         const before = graphemes(s.text[s.cs..b]);
         const all = graphemes(s.text[s.cs..s.ce]);
-        return .{ .offset = b, .x = s.cx + s.cw * before / all };
+        return .{ .offset = b, .x = s.cx + s.cw * (s.rtl + (1 - 2 * s.rtl) * before / all) };
     }
 };
 
