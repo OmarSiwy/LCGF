@@ -218,6 +218,17 @@ pub fn build(b: *std.Build) void {
     }
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
+    // Developer tools (src/devtools/): outside the tiers (timing reads the host's std.Io clock),
+    // so a module of its own over lcgr, never imported by it.
+    const devtools = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/devtools/devtools.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+    }) });
+    devtools.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
+    b.step("devtools", "Test the inspector and developer tools (ci/run.sh devtools)").dependOn(&b.addRunArtifact(devtools).step);
+
     // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
     // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
     const fallback_system = b.addTest(.{ .root_module = b.createModule(.{

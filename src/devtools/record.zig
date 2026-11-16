@@ -9,7 +9,7 @@
 //! and typed text containing a newline (cut at the newline).
 
 const std = @import("std");
-const Input = @import("../core/input.zig").Input;
+const Input = @import("lcgr").input.Input;
 
 pub const Recorder = struct {
     buf: []u8,
@@ -90,7 +90,7 @@ pub const Recorder = struct {
     }
 };
 
-const Replay = @import("../core/input.zig").Replay;
+const Replay = @import("lcgr").input.Replay;
 
 test "Recorder: every kind of input comes back from Replay as it went in" {
     const ev = [_]Input.Event{

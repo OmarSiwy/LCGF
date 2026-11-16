@@ -3,8 +3,11 @@
 //! panel in the bottom-right corner, built from the same `Frame` calls and widgets as any UI.
 //! Nothing in the core knows it exists: it reads only plain data the core already exposes.
 //!
-//! The application builds it last, after its own UI, in the same frame:
+//! It lives in the `devtools` module (src/devtools/devtools.zig), not in `lcgr`. The
+//! application builds it last, after its own UI, in the same frame:
 //!
+//!     var insp: devtools.Inspector = .{};   // const devtools = @import("devtools");
+//!     ...
 //!     app.build(&f, &ev);
 //!     insp.build(&f);
 //!     const out = f.end(.{});
@@ -19,16 +22,16 @@
 //! the application underneath.
 
 const std = @import("std");
-const types = @import("../core/types.zig");
-const Frame = @import("../runtime/frame.zig").Frame;
-const Tree = @import("../core/tree.zig").Tree;
-const w = @import("../widgets/base.zig");
+const types = @import("lcgr").types;
+const Frame = @import("lcgr").frame.Frame;
+const Tree = @import("lcgr").tree.Tree;
+const w = @import("lcgr").widgets_base;
 const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
 const batches = @import("batches.zig");
 const changes = @import("changes.zig");
 const Recorder = @import("record.zig").Recorder;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
+const DrawList = @import("lcgr").draw_list.DrawList;
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -281,14 +284,14 @@ fn roleName(t: *const Tree, i: u32) []const u8 {
 // ---- tests: the inspector inside the example (src/shell/example.zig) -----------------------
 
 const testing = std.testing;
-const mem = @import("../core/mem.zig");
-const Input = @import("../core/input.zig").Input;
-const Quad = @import("../draw/draw_list.zig").Quad;
-const context = @import("../runtime/context.zig");
-const sw = @import("../render/sw/sw.zig");
-const iface = @import("../shell/iface.zig");
-const Headless = @import("../shell/headless.zig").Headless;
-const example = @import("../shell/example.zig");
+const mem = @import("lcgr").mem;
+const Input = @import("lcgr").input.Input;
+const Quad = @import("lcgr").draw_list.Quad;
+const context = @import("lcgr").context;
+const sw = @import("lcgr").render_sw;
+const iface = @import("lcgr").shell_iface;
+const Headless = @import("lcgr").shell_headless.Headless;
+const example = @import("lcgr").shell_example;
 
 /// The example with the inspector built after it: what an application does to get one.
 pub const ExampleHost = struct {
@@ -335,7 +338,7 @@ fn shows(out: *const context.Output, needle: []const u8) bool {
 test "inspector runs inside the example: the recording does what it did without it" {
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ExampleHost = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     iface.run(&shell, &ctx, &host);
     try testing.expectEqual(null, shell.err);
     // The same results as src/shell/headless.zig's test without the inspector.
@@ -359,7 +362,7 @@ test "inspector runs inside the example: the recording does what it did without 
 test "inspector runs inside the example with layout and clip rects drawn" {
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ExampleHost = .{ .insp = .{ .show_rects = true, .show_clips = true } };
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     iface.run(&shell, &ctx, &host);
     try testing.expectEqual(null, shell.err);
     try testing.expectEqual(@as(u32, 13), host.app.builds);
@@ -446,7 +449,7 @@ test "timing.end: the same frames as Frame.end, with every pass timed" {
     var timed = try context.Context.init(&Fixture.ctx_buffer2, example_limits);
     var app_a: example.App = .{};
     var app_b: example.App = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     var ev: iface.Events = .{};
     var tm: timing.Timings = .{};
     while (shell.poll(&ev)) {
@@ -470,7 +473,7 @@ test "timing.end: the same frames as Frame.end, with every pass timed" {
 test "inspector runs inside the example with per-pass times shown" {
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ExampleHost = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     var ev: iface.Events = .{};
     var last: ?context.Output = null;
     // `iface.run`'s loop written out, with the clock between the passes.
@@ -502,7 +505,7 @@ test "inspector runs inside the example with per-pass times shown" {
 test "inspector runs inside the example and logs what reached it" {
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ExampleHost = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     iface.run(&shell, &ctx, &host);
     try testing.expectEqual(@as(u32, 1), host.app.resets);
     try testing.expectEqual(@as(u32, 4), host.app.layers);
@@ -541,7 +544,7 @@ test "inspector runs inside the example and counts its draw batches and overdraw
     // The example alone: the draw list the inspector should describe.
     var alone = try context.Context.init(&Fixture.ctx_buffer2, example_limits);
     var app: example.App = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     iface.run(&shell, &alone, &app);
     const d = &alone.draw;
     var area: f32 = 0;
@@ -552,7 +555,7 @@ test "inspector runs inside the example and counts its draw batches and overdraw
 
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ExampleHost = .{ .insp = .{ .show_overdraw = true } };
-    shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    shell = Fixture.shell(@embedFile("example.replay"));
     iface.run(&shell, &ctx, &host);
     try testing.expectEqual(@as(u32, 1), host.app.resets);
     try testing.expectEqual(@as(u32, 4), host.app.layers);
@@ -576,7 +579,7 @@ test "inspector runs inside the example and counts its draw batches and overdraw
 const ReuseHost = struct {
     app: example.App = .{},
     insp: Inspector = .{},
-    layers: ?@import("../runtime/signals.zig").Signal = null,
+    layers: ?@import("lcgr").runtime_signals.Signal = null,
     shown: u32 = 0,
     /// This frame's decision for the badge, kept before the inspector clears its log.
     decided: changes.Decision = .other,
@@ -602,7 +605,7 @@ const ReuseHost = struct {
 test "inspector runs inside the example and shows signal changes and reuse decisions" {
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var host: ReuseHost = .{};
-    var shell = Fixture.shell(@embedFile("../shell/testdata/example.replay"));
+    var shell = Fixture.shell(@embedFile("example.replay"));
     var ev: iface.Events = .{};
     var seen: [16][2]u32 = undefined;
     var decided: [16]changes.Decision = undefined;
@@ -657,7 +660,7 @@ test "inspector runs inside the example, records the session, and the recording 
     var first_text: [4096]u8 = undefined;
     var second_text: [4096]u8 = undefined;
     var first: Run = .{};
-    try first.go(@embedFile("../shell/testdata/example.replay"), &first_text);
+    try first.go(@embedFile("example.replay"), &first_text);
     const recorded = first.host.insp.recorder.?;
     try testing.expect(!recorded.full);
     // Built frames are recorded; the two idle polls built nothing.

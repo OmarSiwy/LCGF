@@ -5,10 +5,10 @@
 //! is part of the value.
 
 const std = @import("std");
-const types = @import("../core/types.zig");
-const Input = @import("../core/input.zig").Input;
-const Interaction = @import("../interact/interaction.zig").Interaction;
-const Tree = @import("../core/tree.zig").Tree;
+const types = @import("lcgr").types;
+const Input = @import("lcgr").input.Input;
+const Interaction = @import("lcgr").interaction.Interaction;
+const Tree = @import("lcgr").tree.Tree;
 
 pub const EventLog = struct {
     /// Lines kept; older ones are overwritten.

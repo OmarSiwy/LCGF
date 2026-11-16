@@ -5,9 +5,9 @@
 //! with paint's own test.
 
 const std = @import("std");
-const Tree = @import("../core/tree.zig").Tree;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
-const Quad = @import("../draw/draw_list.zig").Quad;
+const Tree = @import("lcgr").tree.Tree;
+const DrawList = @import("lcgr").draw_list.DrawList;
+const Quad = @import("lcgr").draw_list.Quad;
 
 pub const Stats = struct {
     quads: u32 = 0,

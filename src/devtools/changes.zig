@@ -6,11 +6,11 @@
 //! changes for it.
 
 const std = @import("std");
-const types = @import("../core/types.zig");
-const simd = @import("../core/simd.zig");
-const Frame = @import("../runtime/frame.zig").Frame;
-const Signals = @import("../runtime/signals.zig").Signals;
-const Signal = @import("../runtime/signals.zig").Signal;
+const types = @import("lcgr").types;
+const simd = @import("lcgr").simd;
+const Frame = @import("lcgr").frame.Frame;
+const Signals = @import("lcgr").runtime_signals.Signals;
+const Signal = @import("lcgr").runtime_signals.Signal;
 const none = types.none;
 const Id = types.Id;
 

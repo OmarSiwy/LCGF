@@ -1,9 +1,14 @@
 //! Per-pass timers for the inspector (docs/CHECKS.md, "Benchmark": the per-pass means). The core
 //! has no clock and no hook between its passes, so timing is the host's job: it copies the body
 //! of `Frame.end` (whose comment invites exactly that) with a lap between the passes. `end` below
-//! is that copy. It reads the clock through the host's `std.Io`, which puts this file outside
-//! the tiers (docs/ARCHITECTURE.md), next to the shells; `Timings` itself is plain data the
-//! inspector shows.
+//! is that copy. It reads the clock through the host's `std.Io`, which is why src/devtools/ is
+//! a module of its own over `lcgr` (docs/ARCHITECTURE.md, adapters); `Timings` itself is plain
+//! data the inspector shows.
+//!
+//! `end` mirrors `Frame.end` (src/runtime/frame.zig) call for call. When `Frame.end` changes,
+//! change `end` with it: the test "timing.end: the same frames as Frame.end, with every pass
+//! timed" (src/devtools/inspector.zig) compares the two with `sameDraw` and `wake` on every
+//! frame of the example's replay, and fails on a drift.
 //!
 //!     var clock: timing.Clock = .start(io);
 //!     var f = ctx.begin(&in);
@@ -15,13 +20,13 @@
 //!     insp.timings = tm;   // shown next frame
 
 const std = @import("std");
-const simd = @import("../core/simd.zig");
-const Frame = @import("../runtime/frame.zig").Frame;
-const Output = @import("../runtime/context.zig").Output;
-const Mono = @import("../text/protocol.zig").Mono;
-const layout = @import("../layout/layout.zig");
-const incremental = @import("../layout/incremental.zig");
-const flip = @import("../anim/flip.zig");
+const simd = @import("lcgr").simd;
+const Frame = @import("lcgr").frame.Frame;
+const Output = @import("lcgr").context.Output;
+const Mono = @import("lcgr").protocol.Mono;
+const layout = @import("lcgr").layout;
+const incremental = @import("lcgr").incremental;
+const flip = @import("lcgr").flip;
 
 /// The steps of one frame, in order. `layout_x` and `layout_y` are prepare, text, fit and
 /// resolve on each axis; `wrap` is text width handed down and the font's wrap; `place` includes
