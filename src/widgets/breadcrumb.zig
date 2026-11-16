@@ -21,6 +21,7 @@ const Theme = base.Theme;
 const none = types.none;
 const simd = @import("../core/simd.zig");
 const keys = @import("keys.zig");
+const a11y = @import("../a11y/tree.zig");
 
 // ---- spec ---------------------------------------------------------------------------------
 
@@ -29,12 +30,14 @@ const keys = @import("keys.zig");
 /// this frame, or `none`.
 pub fn trail(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8) u32 {
     std.debug.assert(ids.len + 1 == titles.len);
-    _ = f.open(.none, navStyle(th));
+    const nav = f.open(.none, navStyle(th));
+    f.tree().c.role[nav.ix()] = role.nav;
     var clicked: u32 = none;
     var focused: u32 = none;
     for (ids, titles[0..ids.len], 0..) |id, title, k| {
         const link = f.open(id, linkStyle(th));
         const r = f.interact(link, .button);
+        f.tree().c.role[link.ix()] = role.link;
         clicked = simd.selU(r.clicked, @intCast(k), clicked);
         focused = simd.selU(r.focused, @intCast(k), focused);
         f.setFill(link, linkFill(th, r));
@@ -84,6 +87,19 @@ pub fn currentText(th: *const Theme) TextStyle {
 pub fn dividerStyle(th: *const Theme) Style {
     return .{ .size = .{ .px(4), .px(4) }, .radius = 2, .fill = th.control_hot };
 }
+
+// ---- accessibility ------------------------------------------------------------------------
+
+/// What assistive technology sees (WAI-ARIA APG breadcrumb pattern): the trail is a
+/// `navigation` landmark, each earlier page a `link` named by its title (from content), and
+/// the current page static text. `types.Role` has neither navigation nor link, so both
+/// front ends write the bytes. The pattern's `aria-current="page"` on the last item has no
+/// bit in `a11y.State`, so it is not exported. The trail has no name of its own (a page
+/// labels it, as "Breadcrumb", with `Semantics.labelled_by`), value 0 and no states.
+pub const role = struct {
+    pub const nav: u8 = @backingInt(a11y.Role.navigation);
+    pub const link: u8 = @backingInt(a11y.Role.link);
+};
 
 // ---- behaviour ----------------------------------------------------------------------------
 
@@ -144,11 +160,13 @@ pub const ct = struct {
                 const th = @TypeOf(ui.*).theme;
                 const t = &ui.tables.t;
                 const nav = t.push(parent, .none, &n.style);
+                t.c.role[nav] = role.nav;
                 next.* += 1;
                 inline for (names, 0..) |name, k| {
                     var ls = n.children[2 * k].style;
                     ls.fill = linkFill(&th, ui.response(next.*, in));
                     const link = t.push(nav, .hash(name), &ls);
+                    t.c.role[link] = role.link;
                     text(ui, link, titles[k], &linkText(&th));
                     t.seal(link);
                     _ = t.push(nav, .none, &n.children[2 * k + 1].style);
@@ -320,6 +338,34 @@ test "breadcrumb: a click or Enter follows a link; every link is a tab stop; bot
     _ = try h.frame(&in);
     try testing.expectEqual(none, h.app.activated);
     try testing.expectEqual(none, h.ui.signals.state.activated);
+}
+
+test "breadcrumb: navigation holding links named by their titles, in both front ends" {
+    const check = @import("check.zig");
+    const h = &harness;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const out = try h.frame(&in);
+    var sb: check.SemBuf = undefined;
+    const trees = [2]*const @import("../core/tree.zig").Tree{ out.runtime.tree, out.comptime_.tree };
+    const texts = [2]*const @import("../core/texts.zig").Texts{ out.runtime.texts, &h.ui.tables.tx };
+    const strings = [2][]const u8{ h.ctx.strings[h.ctx.cur].buf, h.ui.tables.strings.buf };
+    for (trees, texts, strings) |t, tx, str| {
+        var sem = sb.init();
+        a11y.names(t, &sem);
+        a11y.states(t, &sem);
+        try testing.expectEqual(a11y.Role.navigation, @as(a11y.Role, @fromBackingInt(t.c.role[rows.nav])));
+        try testing.expectEqual(none, sem.c.name[rows.nav]);
+        try testing.expectEqual(@as(f32, 0), t.c.value[rows.nav]);
+        for (rows.link, [2][]const u8{ "Home", "Docs" }) |r, title| {
+            try testing.expectEqual(a11y.Role.link, @as(a11y.Role, @fromBackingInt(t.c.role[r])));
+            try testing.expectEqualStrings(title, check.nameOf(&sem, tx, str, r));
+            try testing.expectEqual(@as(u8, 0), sem.c.state[r]);
+        }
+        try testing.expectEqual(a11y.Role.label, @as(a11y.Role, @fromBackingInt(t.c.role[rows.current])));
+        try testing.expectEqualStrings("Widgets", check.nameOf(&sem, tx, str, rows.current));
+        try testing.expectEqual(a11y.Role.none, @as(a11y.Role, @fromBackingInt(t.c.role[rows.divider[0]])));
+    }
 }
 
 test {
