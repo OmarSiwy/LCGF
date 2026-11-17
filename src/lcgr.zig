@@ -173,3 +173,8 @@ pub const i18n_date = @import("i18n/date.zig");
 pub const i18n_bundle = @import("i18n/bundle.zig");
 pub const i18n_pseudo = @import("i18n/pseudo.zig");
 pub const ct_interop = @import("comptime/interop.zig");
+
+pub const embedded_fixed = @import("embedded/fixed.zig");
+pub const embedded_framebuffer = @import("embedded/framebuffer.zig");
+pub const embedded_font = @import("embedded/font.zig");
+pub const embedded_spi = @import("embedded/spi.zig");
