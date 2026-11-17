@@ -156,6 +156,78 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             break :blk out;
         };
 
+        pub const Dirty = std.bit_set.Static(m);
+        /// Payload fields independent of visibility, batch keys, layout and inherited styles.
+        /// RGB preserves template alpha. Material data preserves the static feature selector.
+        pub const Target = enum { fill_rgb, border_rgb, material_data, uv };
+
+        pub fn Binding(comptime State: type) type {
+            return struct { field: std.meta.FieldEnum(State), node: u32, target: Target };
+        }
+
+        /// Resolve state fields to template indices while compiling. A field setter visits
+        /// just its own entries. For clipped layouts, advance through visibility once to
+        /// translate sorted template indices into the compacted draw list.
+        pub fn Patches(comptime State: type, comptime bindings: []const Binding(State)) type {
+            const Field = std.meta.FieldEnum(State);
+            const Entry = struct { template: u32, target: Target };
+            for (bindings, 0..) |b, k| {
+                if (std.mem.indexOfScalar(u32, &painted, b.node) == null)
+                    @compileError("paint binding must target a painted node");
+                const Value = switch (b.target) {
+                    .fill_rgb, .border_rgb => types.Color,
+                    .material_data => [3]f32,
+                    .uv => [4]f32,
+                };
+                if (@FieldType(State, @tagName(b.field)) != Value)
+                    @compileError("invalid paint binding type for field '" ++ @tagName(b.field) ++ "'");
+                for (bindings[0..k]) |prev| if (prev.node == b.node and prev.target == b.target)
+                    @compileError("multiple paint bindings write one quad field");
+            }
+            return struct {
+                pub fn list(comptime field: Field) []const Entry {
+                    comptime var entries: []const Entry = &.{};
+                    inline for (painted, 0..) |i, k| inline for (bindings) |b| {
+                        if (b.node == i and b.field == field)
+                            entries = entries ++ [_]Entry{.{ .template = k, .target = b.target }};
+                    };
+                    return entries;
+                }
+
+                pub fn apply(comptime field: Field, state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void {
+                    const value = @field(state, @tagName(field));
+                    var cursor: usize = 0;
+                    var visible: usize = 0;
+                    inline for (comptime list(field)) |entry| {
+                        const k = entry.template;
+                        const row: ?usize = if (d.quad_len == m) k else blk: {
+                            for (node[cursor..k]) |i| visible += ram.visible[i];
+                            cursor = k;
+                            break :blk if (ram.visible[node[k]] != 0) visible else null;
+                        };
+                        if (row) |i| {
+                            const q = &d.quads[i];
+                            switch (entry.target) {
+                                .fill_rgb => q.fill = (q.fill & 0xff000000) | (value.bitsOf() & 0xffffff),
+                                .border_rgb => q.border_color = (q.border_color & 0xff000000) | (value.bitsOf() & 0xffffff),
+                                .material_data => q.params[1..4].* = value,
+                                .uv => q.uv = value,
+                            }
+                            dirty.set(i);
+                        }
+                    }
+                }
+
+                /// Rebuild after layout/visibility changes or before the first upload.
+                pub fn rebuild(state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void {
+                    emit(ram, d);
+                    inline for (@typeInfo(State).@"struct".field_names) |name|
+                        apply(@field(Field, name), state, ram, d, dirty);
+                    dirty.* = .full;
+                }
+            };
+        }
+
         /// One frame's draw list from the layout outputs in `ram`: every template whose node is
         /// visible, with its rect and its parent's clip; then the commands: `batches` when every
         /// template is visible, else `paint.encode` over the ops (a hidden quad shifts the
@@ -229,6 +301,10 @@ fn sortByKey(comptime C: type, comptime spec: Spec, comptime options: Options, c
     const apart = struct {
         fn f(a: u32, b: u32, comptime gr: [n]u32, sc: anytype) bool {
             if (gr[a] == none or gr[a] != gr[b]) return false;
+            const shadow = @backingInt(@import("../draw/features.zig").Kind.shadow);
+            for ([_]u32{ a, b }) |i| {
+                if (@as(u32, @bitCast(p.c.look[i].params[0])) == shadow) return false;
+            }
             for (0..2) |ax| {
                 const a0 = sc.pos[ax][a];
                 const b0 = sc.pos[ax][b];
@@ -453,4 +529,44 @@ test "sortByKey: quads join their key's batch only past quads they cannot overla
     try testing.expectEqualSlices(u32, &.{ 2, 3, 4 }, &P.node);
     try testing.expectEqual(3, P.batch_count);
     try expectSamePaint(.{ .name = "stacked", .State = struct {}, .spec = stacked }, .{ 100, 100 });
+}
+
+test "Paint.Patches: per-field lists target visible compacted instances" {
+    const P = Paint(tiles, .{});
+    const L = ct_layout.Layout(tiles, .{});
+    const State = struct { color: types.Color, sample: [4]f32, unrelated: bool };
+    const Patch = P.Patches(State, &.{
+        .{ .field = .color, .node = 3, .target = .fill_rgb },
+        .{ .field = .color, .node = 4, .target = .fill_rgb },
+        .{ .field = .sample, .node = 3, .target = .uv },
+    });
+    try testing.expectEqual(2, Patch.list(.color).len);
+    try testing.expectEqual(0, Patch.list(.unrelated).len);
+    var buf: [1 << 14]u8 align(64) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, P.quad_count, 0, 0);
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    var dirty: P.Dirty = .empty;
+    var state: State = .{ .color = .rgba(10, 20, 30, 0), .sample = .{ 1, 2, 3, 4 }, .unrelated = false };
+    L.run(&scratch, &ram, .{ 30, 20 });
+    Patch.rebuild(&state, &ram, &d, &dirty);
+    try testing.expectEqual(types.Color.rgb(10, 20, 30).bitsOf(), d.quads[2].fill);
+    try testing.expectEqual(state.sample, d.quads[2].uv);
+    dirty = .empty;
+    state.color = .white;
+    Patch.apply(.color, &state, &ram, &d, &dirty);
+    try testing.expectEqual(1, dirty.count());
+    try testing.expect(dirty.isSet(2));
+    try testing.expectEqual(types.Color.white.bitsOf(), d.quads[2].fill);
+}
+
+test "sortByKey: shadow expansion preserves the original painter order" {
+    const features = @import("../draw/features.zig");
+    const spec = comptime sp.row(.{ .gap = 2 }, .{
+        tile(.{ .fill = .white }),
+        tile(.{ .fill = .white, .texture = @fromBackingInt(1), .params = features.shadow(5) }),
+        tile(.{ .fill = .white }),
+    });
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, &Paint(spec, .{}).node);
 }
