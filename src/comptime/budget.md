@@ -19,3 +19,23 @@ Measured on 2026-11-17 with an i9-14900HX and the repository's pinned Zig, targe
 x86_64-linux, x86_64_v3, ReleaseSmall. Times are medians of five compiler processes,
 each with a fresh local cache and a shared toolchain cache. The CI compile-time
 gate separately measures semantic analysis without object emission.
+
+## Layout storage
+
+`zig build ct-sizes` calculates the constant column sizes, the size of a retained
+`Cols.Dynamic` and the per-frame `Layout.Scratch` separately. The runtime column is
+the amount actually carved by `Tree.init` at the same node capacity. Its buffer
+includes layout workspace. State, strings supplied by the caller, draw lists and
+renderer allocations fall outside this comparison. Read-only bytes count declared
+tables, so linker elimination can make the final image smaller.
+
+| Example | Nodes | Read-only bytes | Retained RAM | Layout scratch | Runtime tree RAM |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Mixer | 8 | 410 | 808 | 4,864 | 7,360 |
+| Card | 5 | 492 | 488 | 2,368 | 6,400 |
+| Settings | 32 | 3,275 | 2,720 | 5,472 | 18,304 |
+| Badge | 3 | 273 | 280 | 2,432 | 6,400 |
+| Dashboard | 13 | 1,063 | 1,524 | 3,344 | 11,328 |
+
+Measured on the same x86-64 host with the default SIMD width. The custom widget
+example builds its rows at runtime and uses the runtime tree for layout.
