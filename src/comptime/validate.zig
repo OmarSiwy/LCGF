@@ -75,6 +75,20 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
         for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
         ids.* = ids.* ++ [_]Named{.{ .id = name, .path = path }};
     }
+    if (s.region) |r| {
+        if (!hasField(State, r.bind)) @compileError(at ++ "no state field '" ++ r.bind ++ "' for " ++ @tagName(r.kind));
+        const T = @FieldType(State, r.bind);
+        const valid = switch (r.kind) {
+            .list => @typeInfo(T) == .int,
+            .choice => @typeInfo(T) == .int or @typeInfo(T) == .@"enum",
+            .when => T == bool,
+        };
+        if (!valid) @compileError(at ++ @tagName(r.kind) ++ " selector has incompatible type " ++ @typeName(T));
+        if (r.window) |w| {
+            if (!hasField(State, w.scroll) or @FieldType(State, w.scroll) != f32)
+                @compileError(at ++ "virtual list needs an f32 scroll field '" ++ w.scroll ++ "'");
+        }
+    }
     if (s.bind) |field| {
         if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }

@@ -45,6 +45,8 @@ pub const Region = struct {
     /// The state field: a list's count (an integer), a `when`'s condition (a bool), a
     /// `choice`'s alternative (an enum or an integer).
     bind: []const u8,
+    /// A windowed list binds its pixel offset and uses a fixed item height.
+    window: ?struct { scroll: []const u8, height: f32 } = null,
 };
 
 pub const RegionKind = enum(u8) {
@@ -110,6 +112,25 @@ pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
 pub fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec {
     const copies: [max]Spec = @splat(template);
     return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(copies), .region = .{ .kind = .list, .bind = @tagName(count) } };
+}
+
+/// A clipped vertical list of `visible` fixed-height items. One extra copy holds a
+/// partially visible item. For each copy the selection exposes its index in the data
+/// as `first + copy`; only the remainder of the scroll offset moves the retained rows.
+pub fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec {
+    if (visible == 0 or visible == std.math.maxInt(u32)) @compileError("virtualList needs a positive visible row count with room for one extra copy");
+    const view_height = @as(f32, @floatFromInt(visible)) * height;
+    if (!(height > 0) or !std.math.isFinite(view_height)) @compileError("virtualList needs a positive finite item and viewport height");
+    // A conditional root may disappear. Its enclosing item still occupies one logical row.
+    const conditional = if (template.region) |r| r.kind == .when else false;
+    var item = if (conditional) col(.{ .size = .{ .fill, .fit } }, .{template}) else template;
+    item.style.size[1] = .px(height);
+    item.style.min[1] = height;
+    item.style.max[1] = height;
+    item.style.float = false;
+    var out = list(count, visible + 1, .{ .clip = true, .size = .{ .fill, .px(view_height) } }, item);
+    out.region.?.window = .{ .scroll = @tagName(scroll), .height = height };
+    return out;
 }
 
 /// `subtree`, live only while the bool state field `condition` is true: `when(.advanced,

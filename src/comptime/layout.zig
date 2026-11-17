@@ -103,7 +103,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         var w: [info.field_names.len]bool = undefined;
         for (info.field_names, C.class, &w) |name, c, *x|
             x.* = (c == .dynamic and !(isPrecomputed(name) and !live)) or std.mem.eql(u8, name, "sense") or
-                (live and masked(name));
+                (live and masked(name)) or (D.has_windows and std.mem.eql(u8, name, "scroll"));
         break :blk w;
     };
     return struct {
@@ -234,6 +234,12 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             var v = view(scratch);
             if (live) {
                 applyMask(scratch, &D.mask(sel));
+                if (D.has_windows) {
+                    scratch.scroll = C.pushed.c.scroll;
+                    inline for (D.regions, sel) |region, selected| {
+                        if (region.window != null) scratch.scroll[1][region.row] = selected.offset;
+                    }
+                }
                 layout.prepare(&v);
             } else clear(scratch);
             layout.fit(&v, .x);

@@ -74,9 +74,14 @@ pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
     }),
 });
 
+/// A hundred thousand logical rows use five physical copies of the template.
+pub const Feed = struct { count: u32 = 100_000, scroll: f32 = 0 };
+pub const feed = s.col(.{}, .{s.virtualList(.count, .scroll, 4, 12, s.col(.{ .size = .{ .fill, .fit } }, .{}))});
+
 /// The examples with dynamic regions.
 pub const dynamic = [_]Example{
     .{ .name = "todo", .State = Todo, .spec = todo },
+    .{ .name = "feed", .State = Feed, .spec = feed },
 };
 
 pub const all = [_]Example{

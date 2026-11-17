@@ -32,11 +32,27 @@ pub const Info = struct {
     stride: u32,
     /// List copies or choice alternatives reserved; 0 for a `when`.
     max: u32,
+    window: @FieldType(spec_zig.Region, "window") = null,
 };
 
 /// One region's run-time input: a list's count, a `when`'s condition as 0 or 1, a `choice`'s
 /// alternative.
-pub const Select = struct { n: u32 = 0 };
+pub const Select = struct {
+    n: u32 = 0,
+    /// The first logical item and pixel offset within it for a virtual list.
+    first: u32 = 0,
+    offset: f32 = 0,
+};
+
+fn selectWindow(count: u32, visible: u32, height: f32, scroll: f32) Select {
+    // f64 represents every u32 row index exactly, including the end of a very large list.
+    const h: f64 = height;
+    const max_scroll = @as(f64, @floatFromInt(count -| visible)) * h;
+    const px = @min(@max(@as(f64, scroll), 0), max_scroll);
+    const first: u32 = @intFromFloat(@floor(px / h));
+    const offset: f32 = @floatCast(px - @as(f64, @floatFromInt(first)) * h);
+    return .{ .first = first, .offset = offset, .n = @min(count - first, visible + @intFromBool(offset > 0)) };
+}
 
 fn collect(comptime s: Spec, comptime next: *comptime_int, comptime out: *[]const Info) void {
     const i = next.*;
@@ -44,6 +60,7 @@ fn collect(comptime s: Spec, comptime next: *comptime_int, comptime out: *[]cons
     if (s.region) |r| out.* = out.* ++ [_]Info{.{
         .kind = r.kind,
         .bind = r.bind,
+        .window = r.window,
         .row = i,
         .end = i + flatten.count(s),
         .stride = if (r.kind != .list or s.children.len == 0) 0 else flatten.count(s.children[0]),
@@ -101,6 +118,9 @@ pub fn Regions(comptime spec: Spec) type {
     return struct {
         pub const count = found.len;
         pub const regions: [count]Info = found[0..count].*;
+        pub const has_windows = for (regions) |r| {
+            if (r.window != null) break true;
+        } else false;
         /// One `Select` per region, in `regions` order.
         pub const Selection = [count]Select;
         /// One word per padded row: all ones live, zero dead.
@@ -144,10 +164,14 @@ pub fn Regions(comptime spec: Spec) type {
             var out: Selection = undefined;
             inline for (regions, &out) |r, *o| {
                 const v = @field(state, r.bind);
-                o.n = if (r.kind == .choice and @typeInfo(@TypeOf(v)) == .int)
+                const value = if (r.kind == .choice and @typeInfo(@TypeOf(v)) == .int)
                     std.math.cast(u32, v) orelse std.math.maxInt(u32)
                 else
                     number(v);
+                o.* = if (r.window) |w|
+                    selectWindow(value, r.max - 1, w.height, @field(state, w.scroll))
+                else
+                    .{ .n = value };
             }
             return out;
         }
@@ -216,7 +240,10 @@ fn pushLive(t: anytype, comptime s: Spec, parent: u32, sel: []const Select, next
     const id: Id = if (s.id) |name| .hash(name) else .none;
     const i = t.push(parent, id, &s.style);
     const k = next.*;
-    if (s.region != null) next.* += 1;
+    if (s.region) |region| {
+        if (region.window != null) t.c.scroll[1][i] = sel[k].offset;
+        next.* += 1;
+    }
     inline for (s.children, 0..) |c, ci| {
         const in_list = if (s.region) |r| switch (r.kind) {
             .list => ci < sel[k].n,
@@ -341,4 +368,33 @@ test "nested choices share geometry, and the following sibling has its own row" 
         const sel = L.Regions.select(State, &.{ .outer = outer, .inner = inner });
         try expectLive(L, ui, sel, .{ 16, 20 });
     };
+}
+
+test "virtual list maps a bounded window onto a large data set and clips fractional rows" {
+    const P = ct_layout.Plain(examples.feed, .{});
+    const L = ct_layout.Layout(examples.feed, .{});
+    try testing.expectEqual(2 + 4 + 1, L.Cols.node_count);
+    const Case = struct { count: u32, scroll: f32, first: u32, n: u32, offset: f32 };
+    for ([_]Case{
+        .{ .count = 100_000, .scroll = -12, .first = 0, .n = 4, .offset = 0 },
+        .{ .count = 100_000, .scroll = 600_004.5, .first = 50_000, .n = 5, .offset = 4.5 },
+        .{ .count = 100_000, .scroll = 1_200_000, .first = 99_996, .n = 4, .offset = 0 },
+        .{ .count = 2, .scroll = 88, .first = 0, .n = 2, .offset = 0 },
+        .{ .count = 0, .scroll = 99, .first = 0, .n = 0, .offset = 0 },
+        .{ .count = 0xffffffff, .scroll = std.math.inf(f32), .first = 0xfffffffb, .n = 4, .offset = 0 },
+    }) |c| {
+        const sel = P.Regions.select(examples.Feed, &.{ .count = c.count, .scroll = c.scroll });
+        try testing.expectEqual(Select{ .n = c.n, .first = c.first, .offset = c.offset }, sel[0]);
+        const viewport = [2]f32{ 80, 72 };
+        try expectLive(P, examples.feed, sel, viewport);
+        try expectLive(L, examples.feed, sel, viewport);
+        if (c.offset > 0) {
+            var scratch: L.Scratch = undefined;
+            var ram: L.Cols.Dynamic = undefined;
+            L.runLive(&scratch, &ram, viewport, sel);
+            try testing.expectEqual(-c.offset, ram.pos[1][2]);
+            try testing.expectEqual(0, ram.vis[1][2]);
+            try testing.expectEqual(48, ram.vis[3][6]);
+        }
+    }
 }
