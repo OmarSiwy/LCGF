@@ -111,7 +111,7 @@ const fb_h = 240;
 /// A board whose panel is memory: each flush copies its area into `panel`.
 const Panel = struct {
     panel: sw.Framebuffer,
-    areas: [64]Area = undefined,
+    areas: [fb_h]Area = undefined,
     n: u32 = 0,
 
     pub fn flush(p: *Panel, a: Area, pixels: []const u32, stride: u32) void {
@@ -164,6 +164,16 @@ test "flush: a line buffer, band by band, shows the same pixels as a whole frame
     // The frame is not blank: the sidebar's panel and a button face are there.
     try testing.expectEqual(app.theme.panel, board.panel.at(80, 230));
     try testing.expectEqual(app.theme.control, board.panel.at(12, 74));
+
+    // A single row reused for the entire screen, with no scratch beyond that row.
+    board.n = 0;
+    @memset(&Fixture.panel, 0xdead_beef);
+    const single: Display = .init(Fixture.lines[0..Display.len(fb_w, 1)], fb_w, fb_h, 1, .rgba8);
+    try testing.expectEqual(fb_h, flush(&single, &gfx, out.draw, bg, &board));
+    try testing.expectEqualSlices(u32, &Fixture.full, &Fixture.panel);
+    for (board.areas[0..board.n], 0..) |a, y| {
+        try testing.expectEqual(Area{ .x0 = 0, .y0 = @intCast(y), .x1 = fb_w, .y1 = @intCast(y + 1) }, a);
+    }
 
     // A band that does not divide the height: the last band is short.
     board.n = 0;

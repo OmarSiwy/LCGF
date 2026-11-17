@@ -33,7 +33,7 @@ pub const panic = std.debug.no_panic;
 
 pub const width = 320;
 pub const height = 240;
-pub const rows = 8;
+pub const rows = 1;
 pub const limits: context.Limits = .{ .nodes = 8, .texts = 4, .customs = 1, .strings = 64, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .depth = 4, .timers = 1, .memos = 1 };
 
 pub const id_add = Id.from("add");
