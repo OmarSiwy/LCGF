@@ -855,7 +855,14 @@ pub fn build(b: *std.Build) void {
         const m = accesskit_tests.root_module;
         m.addObjectFile(ak.path(ak_lib.?));
         switch (ak_os) {
-            .macos => for ([_][]const u8{ "AppKit", "Foundation" }) |f| m.linkFramework(f, .{}),
+            .macos => {
+                if (b.graph.environ_map.get("SDKROOT")) |sdk| {
+                    const root: std.Build.LazyPath = .{ .cwd_relative = sdk };
+                    m.addSystemFrameworkPath(root.path(b, "System/Library/Frameworks"));
+                    m.addLibraryPath(root.path(b, "usr/lib"));
+                }
+                for ([_][]const u8{ "AppKit", "Foundation" }) |f| m.linkFramework(f, .{});
+            },
             .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
             // Rust panics unwind: libunwind is Zig's own, built for the target.
             else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
