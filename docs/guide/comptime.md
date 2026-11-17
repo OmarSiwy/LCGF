@@ -221,3 +221,26 @@ complete example.
   recurse once per level, and about 2,000 levels is the compiler's stack limit (measured in
   `src/comptime/flatten.zig`).
 - `ComptimeUi` keeps 1,024 bytes for strings and measures labels with the monospace `Mono` font.
+
+## Choosing a front end
+
+Use a comptime spec when you know the screen's structure while writing the program.
+For a settings page, declare the rows and bindings once, then change the bound
+values as input arrives. A fixed display size can also reduce the width of stored
+coordinates. The 32-node settings example uses 2,720 bytes for retained columns,
+5,472 bytes for layout scratch and 3,275 bytes for constant tables. An exact-capacity
+runtime tree for those nodes takes 18,304 bytes. Budget the caller's text storage,
+state and draw list in addition to these figures.
+
+Use the runtime front end for a document editor, an inspector for an unknown
+schema or a plugin that supplies widget structure at runtime. Size the context
+for the largest visible frame and use its usage report to check those limits.
+For a long homogeneous list, keep only visible rows in memory. For a fixed
+toolbar around an open-ended document, the mixed example (`zig build ct-mixed`)
+shows how to host either front end inside the other and route input to its region.
+
+Spec size also affects iteration time. Moving one label between rows took about
+32 ms to rebuild at 1,000 nodes and 261 ms at 10,000 nodes on the measured host.
+Measure a representative edit before committing a generated screen of that size
+to a single spec. The fixture, memory accounting and commands are in the
+[front-end budget](../../src/comptime/budget.md).

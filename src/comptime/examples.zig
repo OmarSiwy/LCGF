@@ -71,6 +71,31 @@ pub const dash = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
 pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
 
+/// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, and a footer shown
+/// while `footer` is set, then a status line in one of two forms (`mode`). Dynamic examples
+/// use `runLive` with the frame's selection.
+pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3, footer: bool = true, mode: Mode = .brief };
+pub const Mode = enum(u8) { brief, detailed };
+pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
+    s.row(.{ .gap = 8 }, .{ s.label(.title), s.col(.{ .size = .{ .px(30), .px(10) } }, .{}) }),
+    s.list(.len, 8, .{ .gap = 2 }, s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) })),
+    s.when(.footer, s.row(.{ .gap = 8, .pad = @splat(2) }, .{ s.label(.title), s.col(.{ .size = .{ .px(40), .px(12) } }, .{}) })),
+    s.choice(.mode, .{}, .{
+        s.col(.{ .size = .{ .px(16), .px(16) } }, .{}),
+        s.row(.{ .gap = 4, .size = .{ .fill, .fit } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(6) } }, .{}), s.col(.{ .size = .{ .px(24), .px(24) } }, .{}) }),
+    }),
+});
+
+/// A hundred thousand logical rows use five physical copies of the template.
+pub const Feed = struct { count: u32 = 100_000, scroll: f32 = 0 };
+pub const feed = s.col(.{}, .{s.virtualList(.count, .scroll, 4, 12, s.col(.{ .size = .{ .fill, .fit } }, .{}))});
+
+/// The examples with dynamic regions.
+pub const dynamic = [_]Example{
+    .{ .name = "todo", .State = Todo, .spec = todo },
+    .{ .name = "feed", .State = Feed, .spec = feed },
+};
+
 pub const all = [_]Example{
     .{ .name = "mixer", .State = Mixer, .spec = mixer },
     .{ .name = "card", .State = Card, .spec = static_card },
@@ -79,6 +104,10 @@ pub const all = [_]Example{
     .{ .name = "dash", .State = Dash, .spec = dash },
     .{ .name = "custom", .State = Custom, .spec = custom },
 };
+
+test "examples: every dynamic example passes validation" {
+    inline for (dynamic) |e| comptime @import("validate.zig").check(e.State, e.spec, e.options);
+}
 
 test "examples: every example passes validation" {
     // One evaluation for all the checks: each raises the quota for its own spec, but the

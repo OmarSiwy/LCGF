@@ -1,4 +1,4 @@
-# Comptime flatten tables (plan C0134) and constant column tables (C0145) live in read-only data. src/comptime/rodata_probe.zig
+# Comptime flatten tables (plan C0134), constant column tables (C0145) and quad templates (C0168) live in read-only data. src/comptime/rodata_probe.zig
 # exports one ro_* function per table, each reading it at a run-time row; every relocation an
 # ro_* function makes must point into a .rodata* section. rw_control reads a mutable copy and
 # must point into .data or .bss, so a check that cannot tell the two apart fails too.
@@ -19,7 +19,7 @@ for opt in ReleaseSmall ReleaseFast; do
             if (fn == "rw_control" && sec ~ /^\.(data|bss)/) rw = 1
         }
         END {
-            split("ro_parent ro_end ro_depth ro_level_order ro_level_start ro_col_pad ro_col_gap ro_col_look", want, " ")
+            split("ro_parent ro_end ro_depth ro_level_order ro_level_start ro_col_pad ro_col_gap ro_col_look ro_quad_template", want, " ")
             for (k in want) if (!n_ro[want[k]]) { print opt ": " want[k] " reads no table"; bad = 1 }
             if (!rw) { print opt ": rw_control does not read writable data"; bad = 1 }
             if (bad) exit 1

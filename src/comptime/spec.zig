@@ -34,6 +34,28 @@ pub const Spec = struct {
     /// Accessible name: what a screen reader says for this node. Interactive widgets need one
     /// (validate.zig); set it with `named`.
     name: ?[]const u8 = null,
+    /// Set on a node whose rows are reserved but live only when run-time state says so
+    /// (`list`); null for a node that always exists. dynamic.zig reads it.
+    region: ?Region = null,
+};
+
+/// What makes a node's rows dynamic, and the state field that decides which are live.
+pub const Region = struct {
+    kind: RegionKind,
+    /// The state field: a list's count (an integer), a `when`'s condition (a bool), a
+    /// `choice`'s alternative (an enum or an integer).
+    bind: []const u8,
+    /// A windowed list binds its pixel offset and uses a fixed item height.
+    window: ?struct { scroll: []const u8, height: f32 } = null,
+};
+
+pub const RegionKind = enum(u8) {
+    /// A container with `max` copies of a template; the first `count` are live.
+    list,
+    /// A subtree, itself included, that is live only while its condition holds.
+    when,
+    /// A container of alternatives of which only the selected one is live.
+    choice,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -79,6 +101,57 @@ pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
     var out = s;
     out.name = name;
     return out;
+}
+
+/// A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which
+/// the first `count` are live, `count` being the run-time value of the integer state field
+/// bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`. Every copy's rows are reserved, so the
+/// tables stay read-only and the row count exact; a dead copy takes no space, is not drawn and
+/// is not hit (dynamic.zig). A count past `max` shows `max`. Every copy shows the same fields:
+/// what differs per item is run-time data the caller keeps by copy index.
+pub fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec {
+    const copies: [max]Spec = @splat(template);
+    return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(copies), .region = .{ .kind = .list, .bind = @tagName(count) } };
+}
+
+/// A clipped vertical list of `visible` fixed-height items. One extra copy holds a
+/// partially visible item. For each copy the selection exposes its index in the data
+/// as `first + copy`; only the remainder of the scroll offset moves the retained rows.
+pub fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec {
+    if (visible == 0 or visible == std.math.maxInt(u32)) @compileError("virtualList needs a positive visible row count with room for one extra copy");
+    const view_height = @as(f32, @floatFromInt(visible)) * height;
+    if (!(height > 0) or !std.math.isFinite(view_height)) @compileError("virtualList needs a positive finite item and viewport height");
+    // A conditional root may disappear. Its enclosing item still occupies one logical row.
+    const conditional = if (template.region) |r| r.kind == .when else false;
+    var item = if (conditional) col(.{ .size = .{ .fill, .fit } }, .{template}) else template;
+    item.style.size[1] = .px(height);
+    item.style.min[1] = height;
+    item.style.max[1] = height;
+    item.style.float = false;
+    var out = list(count, visible + 1, .{ .clip = true, .size = .{ .fill, .px(view_height) } }, item);
+    out.region.?.window = .{ .scroll = @tagName(scroll), .height = height };
+    return out;
+}
+
+/// `subtree`, live only while the bool state field `condition` is true: `when(.advanced,
+/// col(...))`. Its rows are reserved either way; while the condition is false they take no
+/// space, are not drawn and are not hit, and the parent lays out as if it had no such child.
+/// A node has one region: to make a list conditional, wrap it in a `col`.
+pub fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec {
+    if (subtree.region != null) @compileError("when: the subtree already has a region; wrap it in a col");
+    var out = subtree;
+    out.region = .{ .kind = .when, .bind = @tagName(condition) };
+    return out;
+}
+
+/// A container (laid out by `style`) of `alternatives`, of which only the one at the index of
+/// the state field `selector` (an enum, by its value, or an integer) is live: `choice(.mode,
+/// .{}, .{ compact, detailed })`. The alternatives share the container's place in its parent:
+/// the parent always has one child there, sized as the live alternative. Static tables describe all
+/// alternatives. Their retained geometry shares the space of the largest alternative. A
+/// selector past the last alternative shows none.
+pub fn choice(comptime selector: @EnumLiteral(), comptime style: Style, comptime alternatives: anytype) Spec {
+    return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(alternatives), .region = .{ .kind = .choice, .bind = @tagName(selector) } };
 }
 
 // ---- tests -------------------------------------------------------------------------------------

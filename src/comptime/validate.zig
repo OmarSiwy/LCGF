@@ -75,6 +75,20 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
         for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
         ids.* = ids.* ++ [_]Named{.{ .id = name, .path = path }};
     }
+    if (s.region) |r| {
+        if (!hasField(State, r.bind)) @compileError(at ++ "no state field '" ++ r.bind ++ "' for " ++ @tagName(r.kind));
+        const T = @FieldType(State, r.bind);
+        const valid = switch (r.kind) {
+            .list => @typeInfo(T) == .int,
+            .choice => @typeInfo(T) == .int or @typeInfo(T) == .@"enum",
+            .when => T == bool,
+        };
+        if (!valid) @compileError(at ++ @tagName(r.kind) ++ " selector has incompatible type " ++ @typeName(T));
+        if (r.window) |w| {
+            if (!hasField(State, w.scroll) or @FieldType(State, w.scroll) != f32)
+                @compileError(at ++ "virtual list needs an f32 scroll field '" ++ w.scroll ++ "'");
+        }
+    }
     if (s.bind) |field| {
         if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }
@@ -102,15 +116,16 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
 fn minSize(comptime s: Spec, comptime path: []const u8) [2]f32 {
     var content: [2]f32 = .{ 0, 0 };
     const main = @backingInt(s.style.dir);
+    const choice = if (s.region) |r| r.kind == .choice else false;
     var flow: usize = 0;
     for (s.children, 0..) |c, i| {
         const m = minSize(c, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }));
         if (c.style.float) continue;
         flow += 1;
-        content[main] += m[main];
+        content[main] = if (choice) @max(content[main], m[main]) else content[main] + m[main];
         content[1 - main] = @max(content[1 - main], m[1 - main]);
     }
-    if (flow > 1) content[main] += s.style.gap * @as(f32, @floatFromInt(flow - 1));
+    if (!choice and flow > 1) content[main] += s.style.gap * @as(f32, @floatFromInt(flow - 1));
     content[0] += s.style.pad[0] + s.style.pad[2];
     content[1] += s.style.pad[1] + s.style.pad[3];
     var out: [2]f32 = undefined;
