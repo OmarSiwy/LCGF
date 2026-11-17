@@ -77,20 +77,21 @@ pub const Display = struct {
 /// per logical pixel. Returns the number of areas flushed.
 pub fn flush(d: *const Display, gfx: anytype, draw: *const DrawList, background: Color, board: anytype) u32 {
     var areas: u32 = 0;
-    var y0: u32 = 0;
-    while (y0 < d.height) : (y0 += d.rows) {
-        const y1 = @min(y0 + d.rows, d.height);
-        var fb = d.band(y0);
-        for (0..damage.max_rects) |k| {
-            const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ d.width, d.height }, gfx.scale);
-            const a: Area = .{ .x0 = r[0], .y0 = @max(r[1], y0), .x1 = r[0] + r[2], .y1 = @min(r[1] + r[3], y1) };
-            if (a.x0 >= a.x1 or a.y0 >= a.y1) continue;
+    for (0..draw.damage.count()) |k| {
+        const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ d.width, d.height }, gfx.scale);
+        if (r[2] == 0) continue;
+        const end = r[1] + r[3];
+        var y = r[1];
+        while (y < end) {
+            const a: Area = .{ .x0 = r[0], .y0 = y, .x1 = r[0] + r[2], .y1 = y + @min(d.rows, end - y) };
+            var fb = d.band(y);
             const box: [4]u32 = .{ a.x0, a.y0, a.x1, a.y1 };
             fb.fill(box, background);
             render.render(gfx, .{ .fb = &fb, .scissor = box }, draw);
-            const at = @as(usize, a.y0 - y0) * d.stride + a.x0;
-            board.flush(a, d.pixels[at .. at + @as(usize, a.h() - 1) * d.stride + a.w()], d.stride);
+            const len = @as(usize, a.h() - 1) * d.stride + a.w();
+            board.flush(a, d.pixels[a.x0..][0..len], d.stride);
             areas += 1;
+            y = a.y1;
         }
     }
     return areas;

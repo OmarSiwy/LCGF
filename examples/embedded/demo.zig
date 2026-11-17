@@ -117,8 +117,41 @@ pub fn run() bool {
     state = .{};
     board = .{};
     var shell: Shell = .init(&board, &board.clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
-    lcgr.shell_iface.run(&shell, &ctx, &state);
+    var ev: Events = .{};
+    var previous: ?struct { count: u32, fill: u32 } = null;
+    while (shell.poll(&ev)) {
+        if (ctx.needsFrame(&ev.in)) {
+            const count_shown = state.count;
+            var frame = ctx.begin(&ev.in);
+            state.build(&frame, &ev);
+            const out = frame.end(.{});
+            const button = out.tree.find(id_add);
+            const fill = out.tree.c.look[button].fill;
+            if (previous) |last| {
+                // The fixed panel has two changing areas. The label can grow a digit but
+                // never shrinks, and the button occupies the same box on every frame.
+                ctx.draw.damage = .empty;
+                const counter_changed = last.count != count_shown;
+                const button_changed = last.fill != fill;
+                const button_box = out.tree.rect(button).array();
+                if (counter_changed or button_changed)
+                    setRect(&ctx.draw.damage, 0, if (counter_changed) out.draw.runs[0].rect else button_box);
+                if (counter_changed and button_changed) setRect(&ctx.draw.damage, 1, button_box);
+            }
+            previous = .{ .count = count_shown, .fill = fill };
+            shell.apply(&out.platform);
+            shell.present(&out);
+        }
+        shell.wait(lcgr.scheduler.wake(&ctx, &ev.in), lcgr.scheduler.pace(&ctx));
+    }
     return true;
+}
+
+fn setRect(region: *lcgr.damage.Region, comptime slot: usize, box: [4]f32) void {
+    region.x0[slot] = box[0];
+    region.y0[slot] = box[1];
+    region.x1[slot] = box[2];
+    region.y1[slot] = box[3];
 }
 
 fn start() callconv(.c) noreturn {
@@ -133,5 +166,6 @@ comptime {
 test "demo: three taps count to three" {
     try std.testing.expect(run());
     try std.testing.expectEqual(@as(u32, 3), state.count);
-    try std.testing.expect(board.sent >= width * height);
+    try std.testing.expect(board.sent > width * height);
+    try std.testing.expect(board.sent < 2 * width * height);
 }
