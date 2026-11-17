@@ -5,7 +5,7 @@
 //!
 //! The passes take any tree-shaped value. `View` gives them one: `len`, and in `c` one field per
 //! column of `Tree.Columns`, each a pointer to an array of `simd.rows(n)` rows (the padding
-//! contract), and the border column of `Tree.Extras` in `x`.
+//! contract), and the `row` column of `Tree.Extras` (finalize reads `border` from it) in `x`.
 //!   - constant columns point at read-only tables, the rows `Tree.push` writes
 //!     (`columns.Columns.pushed`); a dropped column at one shared table of its single value;
 //!   - columns a frame writes point into `Scratch`, the caller's per-frame memory: the layout
