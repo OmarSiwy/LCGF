@@ -8,9 +8,16 @@
 # fetches them and AccessKit's 68 MB archive, and takes ~20 s.
 zig build accesskit-smoke
 pkgs="nixpkgs#dbus nixpkgs#at-spi2-core nixpkgs#orca nixpkgs#python3 nixpkgs#xvfb-run nixpkgs#systemd"
-spi=$(nix build --inputs-from . nixpkgs#at-spi2-core --no-link --print-out-paths)
+# The packaged config includes /etc/dbus-1/session.conf if present. Loading both on
+# NixOS opens two listen sockets; AccessKit needs the address of one private bus.
+config=/etc/dbus-1/session.conf
+if [[ ! -r "$config" ]]; then
+    dbus=$(nix build --inputs-from . nixpkgs#dbus^out --no-link --print-out-paths)
+    config="$dbus/share/dbus-1/session.conf"
+fi
+spi=$(nix build --inputs-from . nixpkgs#at-spi2-core^out --no-link --print-out-paths)
 rm -rf zig-out/accesskit-smoke
 # shellcheck disable=SC2086
 nix shell --inputs-from . $pkgs -c env -u WAYLAND_DISPLAY -u DISPLAY \
-    xvfb-run -a dbus-run-session -- \
+    xvfb-run -a dbus-run-session --config-file="$config" -- \
     python3 src/a11y/accesskit/smoke.py "$PWD/zig-out/bin/accesskit-smoke" "$spi" zig-out/accesskit-smoke
