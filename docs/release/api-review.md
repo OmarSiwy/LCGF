@@ -25,3 +25,20 @@ The review uses the five characteristics in the [design guide](../DESIGN.md). Ea
 - `Context`, `Frame`, text spans, glyph images and draw commands have frame or backing-buffer lifetimes. Consumers retaining an output for later work must retain or copy its borrowed data.
 
 The executable examples behind these findings include the runtime and comptime guides, the headless custom host loop, the byte-identical renderer-selection probes, the mixed-front-end example and the fixed-panel SPI replay. The docs and relevant build targets exercise their normal calling paths.
+
+## Names and module boundaries
+
+The public names distinguish data (`Tree.Columns`, `DrawList`, `Glyphs`), individual operations (`prepare`, `fit`, `resolve`, `place`, `finalize`) and orchestration (`Frame.end`, `shell_iface.run`). The frame's `finish` accepts completed layout through the frame's own columns. GPU calls use the underlying backend's type names for queues and passes. The short names `x`, `y`, `w`, `h` and `uv` denote axes, dimensions and texture coordinates in those domains. Widths on the wire and storage owners remain explicit in their types.
+
+Tracing relative imports across the directories identified these boundaries:
+
+| Source | Finding |
+|---|---|
+| `a11y/settings_data.zig`, `a11y/settings.zig` | The former holds tier-0 preferences used by runtime and animation. The latter is a tier-2 adapter that maps them into spec, widget and theme values. The directory contains multiple tiers. |
+| `widgets/image.zig` | Its image descriptor accepts a texture, UV and size directly. Convenience constructors import the atlas and embedded-image data types. This is a source dependency on the assets family; callers can still supply their own pixels and handles. |
+| `theme/theme.zig` | The sheen material imports the shader source composer. The theme supplies material data; the renderer owns pipeline and device resources. This is a dependency on shader representation. |
+| `comptime/interop.zig` | The composition step reads public draw-list commands, regions and strings. Each front end can emit its list independently. The host owns the destination list. |
+| `anim/anims.zig` | Imports from the widgets and comptime-spec families occur in spring integration tests. The spring stepping loop uses columns and has no widget dependency. |
+| `shell/*`, `render/*`, `embedded/*` | Platform and device lifetimes sit here. The software renderer uses the embedded coordinate conversion when selected; both paths consume the same draw-list layout. |
+
+The `render_sw` and `shell_baremetal_*` namespaces identify platform/backend APIs at the package root. `lcgr_render` selects a backend at compile time. The implementation can move behind these names while callers keep their imports. Public test fixtures and diagnostic names are identified separately in the compatibility policy.
