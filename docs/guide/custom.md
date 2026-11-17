@@ -1,5 +1,9 @@
 # Custom rendering
 
+For custom content written once with WebGPU handles and WGSL, see the experimental
+[WebGPU custom drawing guide](webgpu-custom.md). The routes below operate on the
+application’s current rendering pass and textures.
+
 The UI never owns the GPU. You create the device, the queue, the render pass and the target;
 the back end only creates its own buffers and pipelines from your device, and the frame reaches
 it as a `DrawList` of three kinds of command: `quads` (one instanced draw of a batch sharing a
