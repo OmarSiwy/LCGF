@@ -34,9 +34,7 @@ pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
 /// Row `row`'s rect (x0, y0, x1, y1) in a comptime layout's RAM (`Columns.Dynamic`), as f32
 /// whatever the coordinate type.
 pub fn rectOf(ram: anytype, row: usize) [4]f32 {
-    var r: [4]f32 = undefined;
-    inline for (&r, 0..) |*x, k| x.* = toF32(ram.rect[k][row]);
-    return r;
+    return coordinates(ram, row, "rect");
 }
 
 /// The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's
@@ -44,10 +42,22 @@ pub fn rectOf(ram: anytype, row: usize) [4]f32 {
 /// runtime tree. Judge the pointer against it through `regionInput`.
 pub fn widgetRects(comptime E: type, ram: anytype) E.Rects {
     var r: E.Rects = .{};
-    for (0..4) |side| {
-        for (E.widget_nodes, 0..) |node, k| r.c[side][k] = toF32(ram.vis[side][node]);
+    for (E.widget_nodes, 0..) |node, k| {
+        const box = coordinates(ram, node, "vis");
+        inline for (0..4) |side| r.c[side][k] = box[side];
     }
     return r;
+}
+
+/// Shared slots hold the selected alternative's geometry. An invisible descriptor
+/// yields an empty box so a hidden hosted region or widget cannot claim that geometry.
+fn coordinates(ram: anytype, row: usize, comptime col: []const u8) [4]f32 {
+    const shared = @hasField(@TypeOf(ram.*), "geometry_slots");
+    const slot = if (shared) ram.geometry_slots.by_node[row] else row;
+    var box: [4]f32 = undefined;
+    inline for (&box, 0..) |*x, k| x.* = toF32(@field(ram, col)[k][slot]);
+    if (!shared) return box;
+    return @select(f32, @as(@Vector(4, bool), @splat(ram.visible[row] != 0)), @as(@Vector(4, f32), box), @as(@Vector(4, f32), @splat(0)));
 }
 
 fn toF32(x: anytype) f32 {

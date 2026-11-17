@@ -45,6 +45,12 @@ export fn ro_col_look(i: u32) u32 {
     return Card.table("look")[i % Card.node_count].fill;
 }
 
+// Quad templates (lcgr.ct_paint): the rows paint copies each frame.
+const P = lcgr.ct_paint.Paint(lcgr.ct_paint.tiles, .{});
+export fn ro_quad_template(i: u32) u32 {
+    return P.templates[i % P.quad_count].fill;
+}
+
 var ram_copy: [F.node_count]F.Index = F.end;
 export fn rw_control(i: u32) u8 {
     ram_copy[i % F.node_count] +%= 1;
