@@ -13,7 +13,7 @@ const mem = @import("../../core/mem.zig");
 const shaping = @import("shape.zig");
 
 pub const Cache = struct {
-    /// Slots - 1; the slot count is a power of two.
+    /// Slots - 1. Index from bit 1 because generated keys reserve bit 0 for the empty marker.
     mask: u32,
     per_slot: u32,
     /// Per slot: the key (0 marks an empty slot; `key` never returns 0) and the glyph count.
@@ -59,7 +59,7 @@ pub const Cache = struct {
     /// The cached run of key `k`, as a view of its slot (valid until the slot is replaced), or
     /// null.
     pub fn get(c: *const Cache, k: u64) ?shaping.Run {
-        const s: usize = @intCast(k & c.mask); // mask < slot count, so it fits a 32-bit usize
+        const s: usize = @intCast((k >> 1) & c.mask); // mask < slot count, so it fits a 32-bit usize
         if (c.keys[s] != k) return null;
         return c.slot(s, c.lens[s]);
     }
@@ -68,7 +68,7 @@ pub const Cache = struct {
     /// nothing, when the run is longer than a slot.
     pub fn put(c: *Cache, k: u64, run: *const shaping.Run) bool {
         if (run.len > c.per_slot) return false;
-        const s: usize = @intCast(k & c.mask);
+        const s: usize = @intCast((k >> 1) & c.mask);
         const dst = c.slot(s, run.len);
         @memcpy(dst.glyph, run.glyph[0..run.len]);
         @memcpy(dst.cluster, run.cluster[0..run.len]);
@@ -174,6 +174,26 @@ test "font and features are part of the key, the pixel size is not" {
     try std.testing.expectEqual(4, with.len); // ffi ligature
     const without = try cache.shape(&shaper, 0, "office", .{ .liga = false }, &scratch);
     try std.testing.expectEqual(6, without.len);
+}
+
+test "both slots hold shaped runs and a collision replaces only one" {
+    const shaper: shaping.Shaper = .init(try Face.parse(shaping.test_font, 0));
+    var fx: Fixture(2, 8) = .{};
+    var cache = fx.cache();
+    var cols: shaping.TestRun = .{};
+    var scratch = cols.run();
+    const type_key = Cache.key("Type", 0, .{});
+    const avta_key = Cache.key("AVTa", 0, .{});
+    _ = try cache.shape(&shaper, 0, "Type", .{}, &scratch);
+    _ = try cache.shape(&shaper, 0, "AVTa", .{}, &scratch);
+    try std.testing.expect(cache.get(type_key) != null);
+    try expectSameRun(&scratch, &cache.get(avta_key).?);
+
+    // "office" maps to the same slot as "Type".
+    _ = try cache.shape(&shaper, 0, "office", .{}, &scratch);
+    try std.testing.expect(cache.get(type_key) == null);
+    try std.testing.expect(cache.get(avta_key) != null);
+    try expectSameRun(&scratch, &cache.get(Cache.key("office", 0, .{})).?);
 }
 
 test "a new key evicts the slot; long runs are not cached" {
