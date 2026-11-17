@@ -17,6 +17,8 @@ A Zig GUI framework with runtime and comptime front ends over shared layout, int
 
 Use `nix develop -c zig build test` to run the framework tests and `nix develop -c zig build docs` to regenerate the declaration index and verify the guides. Run `nix develop -c zig build embedded-sim` to replay the counter on the simulated SPI board.
 
+Post-release design work is tracked in [TODO.md](TODO.md).
+
 ## Original development plan
 
 The following handoff records how the implementation plan was set up.
