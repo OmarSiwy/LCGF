@@ -51,7 +51,11 @@ pub const Anims = struct {
         const k = @backingInt(id);
         const guess = @min(a.next, a.len -| 1);
         const hit = simd.andB(guess < a.len, a.c.id[guess] == k);
-        const i = a.place(k, initial, if (hit) guess else simd.find(a.c.id, a.len, k));
+        if (hit) {
+            a.next = guess + 1;
+            return guess;
+        }
+        const i = a.place(k, initial, simd.find(a.c.id, a.len, k));
         a.next = i + 1;
         return i;
     }
