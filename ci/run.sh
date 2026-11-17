@@ -18,6 +18,14 @@ cd "$(dirname "$0")/.."
 # reference behaviour and must keep passing (CLAUDE.md).
 both() { zig build "$@" && (cd prototype && zig build "$@"); }
 
+# Native binaries that load the golden shell's Mesa must use its glibc loader too.
+golden_build() {
+    local -a linker=()
+    local path="${NIX_CC:-}/nix-support/dynamic-linker"
+    if [[ -f "$path" ]]; then linker+=("-Ddynamic-linker=$(<"$path")"); fi
+    zig build "${linker[@]}" "$@"
+}
+
 header() { sed -n "s/^# $2: *//p" "ci/jobs/$1.sh" | head -n1; }
 names() { for f in ci/jobs/*.sh; do basename "$f" .sh; done; }
 

@@ -7,6 +7,8 @@
 # every render conformance scene, offscreen and through the swapchain, against its golden;
 # d3d12-play writes the same frames as PNGs and tools/golden/golden.py compares them, the check
 # every back end's job applies.
+# DXGI also opens a display for offscreen device creation. Keep one X server for all Wine calls.
+if [[ -z "${DISPLAY:-}" ]]; then exec xvfb-run -a ci/run.sh d3d12; fi
 zig build d3d12 --summary all
 export WINEPREFIX="${WINEPREFIX:-$PWD/zig-out/wineprefix}" WINEDEBUG="${WINEDEBUG:--all}"
 export WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe="
