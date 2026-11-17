@@ -10,12 +10,12 @@
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas. Custom
 //! commands are drawn by the host's own program between the UI's draws (custom.zig).
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const gles = @import("gles.zig");
 const gl = gles.gl;
 const host = gles.host;
-const conformance = lcgr.render_conformance;
-const iface = lcgr.render_iface;
+const conformance = lcgf.render_conformance;
+const iface = lcgf.render_iface;
 
 var st: conformance.Storage = .{};
 
@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
     var gradient = try gles.custom.Gradient.init(&h.gl);
     defer gradient.deinit();
     if (es2) {
-        const scratch = try gpa.alignedAlloc(u8, .of(lcgr.draw_list.Quad), gles.es2.scratchBytes(.{}));
+        const scratch = try gpa.alignedAlloc(u8, .of(lcgf.draw_list.Quad), gles.es2.scratchBytes(.{}));
         var gfx = try gles.es2.Renderer.init(&h.gl, .{}, scratch);
         defer gfx.deinit();
         try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas, 64, 64));
@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, gradient: *const gles.custom.Gradient, atlas: lcgr.types.Texture) !void {
+fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, gradient: *const gles.custom.Gradient, atlas: lcgf.types.Texture) !void {
     for (&conformance.scenes) |*s| {
         st.load(s);
         const w: u32 = @intFromFloat(s.viewport[0]);
@@ -97,5 +97,5 @@ fn png(gpa: std.mem.Allocator, w: u32, h: u32, rgba: []const u8) ![]const u8 {
         try raw.append(gpa, 0);
         try raw.appendSlice(gpa, rgba[y * w * 4 ..][0 .. w * 4]);
     }
-    return lcgr.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
+    return lcgf.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
 }

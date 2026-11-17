@@ -1,5 +1,5 @@
 # The back-end selector costs nothing (src/render/select.zig): for every back end, the probe
-# (src/render/select_probe.zig) built through lcgr_render and by importing the back end's own
+# (src/render/select_probe.zig) built through lcgf_render and by importing the back end's own
 # module must have byte-identical code: the same .text size and SHA-256. Back ends that only
 # run elsewhere are cross-compiled: Metal for aarch64-macos, Direct3D 12 for x86_64-windows,
 # web for wasm32. The objects are ReleaseFast and stripped; only the code section is compared
@@ -66,7 +66,7 @@ for spec in sw: vk: gles: wgpu:-Dwgpu-native=v29 metal:-Dtarget=aarch64-macos d3
     zig build render-probe -Drender="$kind" $args
     sel=$(text zig-out/render-probe/selector.o); dir=$(text zig-out/render-probe/direct.o)
     if [ "$sel" != "$dir" ]; then
-        echo "FAIL $kind: .text through lcgr_render ($sel) differs from the direct import ($dir)"
+        echo "FAIL $kind: .text through lcgf_render ($sel) differs from the direct import ($dir)"
         exit 1
     fi
     echo "ok   $kind ${args:-native}: .text $sel, identical"

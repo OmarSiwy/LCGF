@@ -9,19 +9,19 @@
 //! tier-0 passes until the comptime paint (lane ct-paint) lands.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const s = lcgr.spec;
-const w = lcgr.widgets_base;
-const interop = lcgr.ct_interop;
-const mem = lcgr.mem;
-const Context = lcgr.context.Context;
-const Limits = lcgr.context.Limits;
-const Frame = lcgr.frame.Frame;
-const Input = lcgr.input.Input;
-const DrawList = lcgr.draw_list.DrawList;
-const Id = lcgr.types.Id;
-const Rect = lcgr.types.Rect;
-const Mono = lcgr.protocol.Mono;
+const lcgf = @import("lcgf");
+const s = lcgf.spec;
+const w = lcgf.widgets_base;
+const interop = lcgf.ct_interop;
+const mem = lcgf.mem;
+const Context = lcgf.context.Context;
+const Limits = lcgf.context.Limits;
+const Frame = lcgf.frame.Frame;
+const Input = lcgf.input.Input;
+const DrawList = lcgf.draw_list.DrawList;
+const Id = lcgf.types.Id;
+const Rect = lcgf.types.Rect;
+const Mono = lcgf.protocol.Mono;
 
 const th: w.Theme = .default;
 const font: Mono = .{};

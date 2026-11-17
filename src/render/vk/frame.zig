@@ -184,8 +184,8 @@ const testing = std.testing;
 const pass = @import("pass.zig");
 const host = @import("host.zig");
 const Renderer = @import("renderer.zig").Renderer;
-const lcgr = @import("lcgr");
-const conformance = lcgr.render_conformance;
+const lcgf = @import("lcgf");
+const conformance = lcgf.render_conformance;
 
 test "frame: frames in flight acquire, clear and present a headless swapchain" {
     var h: swapchain.Headless = undefined;

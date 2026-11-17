@@ -12,17 +12,17 @@
 //! This file is the root of the `host` module (build.zig), shared by every example.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const context = lcgr.context;
-const sw = lcgr.render_sw;
-const render = lcgr.render_iface;
-const Quad = lcgr.draw_list.Quad;
-const Replay = lcgr.input.Replay;
-const Input = lcgr.input.Input;
-const Color = lcgr.types.Color;
-const Mono = lcgr.protocol.Mono;
-pub const Events = lcgr.shell_iface.Events;
-pub const CustomDraw = lcgr.draw_list.CustomDraw;
+const lcgf = @import("lcgf");
+const context = lcgf.context;
+const sw = lcgf.render_sw;
+const render = lcgf.render_iface;
+const Quad = lcgf.draw_list.Quad;
+const Replay = lcgf.input.Replay;
+const Input = lcgf.input.Input;
+const Color = lcgf.types.Color;
+const Mono = lcgf.protocol.Mono;
+pub const Events = lcgf.shell_iface.Events;
+pub const CustomDraw = lcgf.draw_list.CustomDraw;
 
 /// Caller-owned rows for the glyph quads of one frame.
 pub const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
@@ -57,7 +57,7 @@ pub const smoke_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 
 /// A smoke run: an application driven by a recording at 800 x 600, every built frame drawn.
 pub const Smoke = struct {
-    var ctx_buffer: [context.Context.requiredBytes(smoke_limits)]u8 align(lcgr.mem.column_align) = undefined;
+    var ctx_buffer: [context.Context.requiredBytes(smoke_limits)]u8 align(lcgf.mem.column_align) = undefined;
     var pixels: [sw.Framebuffer.len(smoke_w, smoke_h)]u32 = undefined;
     var quads: [4096]Quad = undefined;
     var first: [smoke_limits.texts]u32 = undefined;
@@ -96,7 +96,7 @@ pub const Smoke = struct {
     }
 
     /// Where the node `id` was laid out in the last built frame.
-    pub fn rect(s: *const Smoke, id: lcgr.types.Id) lcgr.types.Rect {
+    pub fn rect(s: *const Smoke, id: lcgf.types.Id) lcgf.types.Rect {
         const t = s.out.?.tree;
         return t.rect(t.find(id));
     }
@@ -118,6 +118,6 @@ pub fn clicks(buf: []u8, points: []const [2]f32) ![]const u8 {
 }
 
 /// The centre of a rect, to click it.
-pub fn center(r: lcgr.types.Rect) [2]f32 {
+pub fn center(r: lcgf.types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
 }

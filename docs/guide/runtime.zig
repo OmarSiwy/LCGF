@@ -3,25 +3,25 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 
 // -- memory
-const Context = lcgr.context.Context;
-const limits: lcgr.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const Context = lcgf.context.Context;
+const limits: lcgf.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 // -- end
 
 // -- build
-const Frame = lcgr.frame.Frame;
-const Id = lcgr.types.Id;
-const w = lcgr.widgets_base;
+const Frame = lcgf.frame.Frame;
+const Id = lcgf.types.Id;
+const w = lcgf.widgets_base;
 
 const App = struct {
     theme: w.Theme = .default,
     resets: u32 = 0,
     wireframe: bool = false,
     exposure: f32 = 1,
-    layers: lcgr.runtime_signals.Cell(u32),
+    layers: lcgf.runtime_signals.Cell(u32),
     sidebar_builds: u32 = 0,
 
     fn build(app: *App, f: *Frame) void {
@@ -52,7 +52,7 @@ const App = struct {
 
 // -- widget
 /// A widget is a function over `Frame`: build its nodes, ask what input did to them.
-fn swatch(f: *Frame, id: Id, color: *lcgr.types.Color, other: lcgr.types.Color) bool {
+fn swatch(f: *Frame, id: Id, color: *lcgf.types.Color, other: lcgf.types.Color) bool {
     const node = f.leaf(id, .{ .size = .{ .px(24), .px(24) }, .radius = 4, .fill = color.*, .role = .button });
     const r = f.interact(node, .button);
     f.setCursor(.pointer, r.hovered);
@@ -61,7 +61,7 @@ fn swatch(f: *Frame, id: Id, color: *lcgr.types.Color, other: lcgr.types.Color) 
 }
 // -- end
 
-fn center(r: lcgr.types.Rect) [2]f32 {
+fn center(r: lcgf.types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
 }
 
@@ -69,12 +69,12 @@ test "host loop: init, frames, idle, click" {
     // -- init
     var ctx = try Context.init(&buffer, limits);
     var app: App = .{ .layers = .init(&ctx.signals, 3) };
-    var in: lcgr.input.Input = .{ .viewport = .{ 800, 600 } };
+    var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
     // -- end
     var frames: u32 = 0;
     var customs: u32 = 0;
     var viewport: [4]f32 = @splat(0);
-    var out: lcgr.context.Output = undefined;
+    var out: lcgf.context.Output = undefined;
     for (0..3) |_| {
         // -- loop
         if (ctx.needsFrame(&in)) {
@@ -96,7 +96,7 @@ test "host loop: init, frames, idle, click" {
     }
     // One frame, one settle frame, then idle.
     try testing.expectEqual(2, frames);
-    try testing.expectEqual(lcgr.types.inf, out.wake);
+    try testing.expectEqual(lcgf.types.inf, out.wake);
     try testing.expect(out.status.ok());
     try testing.expectEqual([4]f32{ 160, 50, 800, 600 }, viewport);
     try testing.expectEqual(1, app.sidebar_builds);
@@ -131,11 +131,11 @@ test "host loop: init, frames, idle, click" {
 
 test "a widget of your own" {
     const S = struct {
-        var buf: [Context.requiredBytes(.{ .nodes = 16, .texts = 4, .customs = 1 })]u8 align(lcgr.mem.column_align) = undefined;
+        var buf: [Context.requiredBytes(.{ .nodes = 16, .texts = 4, .customs = 1 })]u8 align(lcgf.mem.column_align) = undefined;
     };
     var ctx = try Context.init(&S.buf, .{ .nodes = 16, .texts = 4, .customs = 1 });
-    var color: lcgr.types.Color = .rgb(200, 0, 0);
-    var in: lcgr.input.Input = .{ .viewport = .{ 100, 100 }, .pointer = .{ 12, 12 } };
+    var color: lcgf.types.Color = .rgb(200, 0, 0);
+    var in: lcgf.input.Input = .{ .viewport = .{ 100, 100 }, .pointer = .{ 12, 12 } };
     var clicked = false;
     for ([_]bool{ false, true, false }) |down| {
         in.buttons.left = down;
@@ -144,5 +144,5 @@ test "a widget of your own" {
         _ = f.end(.{});
     }
     try testing.expect(clicked);
-    try testing.expectEqual(lcgr.types.Color.rgb(0, 0, 200), color);
+    try testing.expectEqual(lcgf.types.Color.rgb(0, 0, 200), color);
 }

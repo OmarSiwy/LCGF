@@ -7,7 +7,7 @@
 //! Iteration `i` draws from a PRNG seeded with `seed + i`, so a crash prints the command that
 //! reruns that one iteration. Mutation beats random bytes here: a random file almost never gets
 //! past the table directory, a mutated one reaches cmap, glyf, kern and GPOS with bad offsets.
-//! Not exported from src/lcgr.zig: it has a `main` and does I/O, which tier 0 may not. Its
+//! Not exported from src/lcgf.zig: it has a `main` and does I/O, which tier 0 may not. Its
 //! `exercise` and `mutate` are tier 0, and opentype.zig runs them in `zig build test`.
 
 const std = @import("std");

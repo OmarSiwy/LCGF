@@ -129,7 +129,7 @@ both are ~540-600 us, dominated by rasterising [M].
 | wgpu-core: registry lookups (`Registry::get`, `Storage::get`) | 72 | 0 | 3.5% |
 | wgpu-native C FFI entry points | 47 | 0 | 2.3% |
 | locks (libc mutex/futex, parking_lot) | 55 | 39 | 0.8% |
-| LCGR's own code (probe loop, `drawUntilCustom`, vk back end) | 16 | 67 | -2.5% |
+| LCGF's own code (probe loop, `drawUntilCustom`, vk back end) | 16 | 67 | -2.5% |
 | **total** | **2504** | **464** | 2040 extra = 5.4x |
 
 The five buckets the brief asked for, from that table [M], with the inlined block [I] assigned
@@ -141,7 +141,7 @@ where its callees say it belongs:
 | ... plus the inlined wgpu-core block | +23.9% | `encode_render_pass` replays every recorded command with validation and usage-scope merging; `submit`/`maintain` walk trackers [S] |
 | Allocation and lifetime churn | 34.3% | malloc/free, drops, Arc, Vec, hash maps, gpu-allocator, memcpy |
 | Driver (extra calls wgpu makes) | 13.7% | per-write `vkCreateBuffer`/`vkDestroyBuffer`, command pool resets, pipeline barriers |
-| wgpu-hal Vulkan encode | 7.3% | the equivalent of LCGR's own recording, which is 67 samples natively |
+| wgpu-hal Vulkan encode | 7.3% | the equivalent of LCGF's own recording, which is 67 samples natively |
 | FFI and locking | 3.1% | C entry 2.3 + locks 0.8 |
 | Dispatch | 3.7% | hal dyn shims |
 
@@ -157,7 +157,7 @@ where its callees say it belongs:
 | the draws (`drawUntilCustom` -> `wgpuRenderPassEncoderSetPipeline/SetBindGroup/SetVertexBuffer/Draw`) | 3.4% | recording is cheap: since v27 wgpu records the pass and encodes it at `finish` [S] |
 | `wgpuDevicePoll` | 2.8% | |
 
-What this says [I]: wgpu's per-frame cost is not on the draw calls LCGR issues but on the frame's
+What this says [I]: wgpu's per-frame cost is not on the draw calls LCGF issues but on the frame's
 fixed overhead: a deferred re-encode of the pass, one staging buffer per `write_buffer`, and the
 release of every per-submission tracker and temporary resource. That cost is per frame and per
 upload, not per draw, so a UI frame with few draws pays it almost
@@ -194,7 +194,7 @@ Size and memory of the single-back-end build [M] (`size`, text segment; resident
 
 So compiling out the other back ends saves 2.3 MB of file size and no CPU [M], and saves resident
 memory only because they are then not initialised; restricting the instance at run time gets the
-same resident numbers from the stock archive [M]. LCGR's shaders are WGSL
+same resident numbers from the stock archive [M]. LCGF's shaders are WGSL
 (`src/render/wgpu/native.zig:125`), so `wgsl` must stay.
 
 By crate, sized text symbols (`nm -S -C`, grouped by crate path) [M]:
@@ -246,7 +246,7 @@ agree to 0.1 MB.
   Lavapipe backs device memory with memfd host pages, so the touched part is resident; on the
   NVIDIA driver it is VRAM, and wgpu Vulkan-only is **5.8 MB smaller** than native vk after
   drawing (83.6 against 89.5 MB) [M]. That difference is `nvidiactl` mappings: 22.7 MB for vk-probe
-  against 9.7 MB for wgpu [M], i.e. LCGR's vk back end maps more host-visible memory at its default
+  against 9.7 MB for wgpu [M], i.e. LCGF's vk back end maps more host-visible memory at its default
   capacities (`max_quads = 16 * 1024` per frame slot, `src/render/vk/renderer.zig:73`) than wgpu
   does [I].
 - **The library's own pages: +3.0 MB at start-up, +5.5 MB after drawing** (naga and wgpu-core
@@ -281,20 +281,20 @@ Pitfalls they hit, from the same sources:
 
 - **Shader variants per back end.** sokol and bgfx compile shaders offline per back end; wgpu and
   Dawn carry a translator (naga, Tint) at run time, which is a third of wgpu-native's code [M].
-  LCGR already translates offline with a pinned naga-cli (`flake.nix`), so a selector needs no
+  LCGF already translates offline with a pinned naga-cli (`flake.nix`), so a selector needs no
   run-time translator [I].
 - **Surface and swapchain setup** is the platform-specific part every engine leaves outside the
   draw API or splits per OS: sokol in `sokol_app`/`sokol_glue`, bgfx in its per-back-end
   `rendererCreate(Init)` with the native window handle, Zed per OS crate [S].
 - **Fallback that initialises too much.** wgpu's instance initialises every enabled back end
   before choosing one, and pays 46-85 MB here for a GL driver it never uses [M]. bgfx initialises
-  one at a time and only tries the next if creation fails [S]. A LCGR `Fallback` must do the latter.
+  one at a time and only tries the next if creation fails [S]. A LCGF `Fallback` must do the latter.
 - **Feature levels.** bgfx's scoring and Zed's adapter ranking (prefer Vulkan/Metal/DX12 over GL,
   lower limits on GL) [S wgpu_context.rs:456, 612-622] exist because the fallback API has fewer
-  features; LCGR's GLES path already has an ES2 variant for the same reason
+  features; LCGF's GLES path already has an ES2 variant for the same reason
   (`src/render/gles/es2.zig`).
 
-## 5. For LCGR
+## 5. For LCGF
 
 **What a selector must own, per back end, for an app that brings no device** [S the files named;
 I for the grouping]. The shells already contain this code, hard-wired: Wayland draws with `sw`
@@ -373,9 +373,9 @@ Do not build:
   resident memory the same as the instance fix gives for free [M]. It would add a Rust toolchain to
   the build for nothing.
 - **A runtime-dispatch layer over the native back ends.** The measured dispatch cost inside wgpu is
-  3.7% of its overhead [M]; LCGR's own vk back end is 5.6 us per frame against wgpu's 32 us on
+  3.7% of its overhead [M]; LCGF's own vk back end is 5.6 us per frame against wgpu's 32 us on
   lavapipe and 5.8 against 16.1 on NVIDIA (medians) [M]; the gap is wgpu's tracking, staging and lifetime
-  work, which a dispatch layer in LCGR would not add but also would not remove. There is nothing to
+  work, which a dispatch layer in LCGF would not add but also would not remove. There is nothing to
   win and per-draw indirection to lose.
 - **`Fallback` until a target needs it.** The only case is Linux with no Vulkan driver (old
   GPUs, some VMs); add `Fallback(.{vk, gles})` then, initialising GL only after Vulkan fails.

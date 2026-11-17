@@ -11,17 +11,17 @@
 //! (src/render/shaders/gen/stock.spv): the same source and vertex layout every back end uses.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const loader = @import("loader.zig");
 const device_mod = @import("device.zig");
 const c = loader.c;
 const Error = loader.Error;
 const check = loader.check;
 const Device = device_mod.Device;
-const types = lcgr.types;
-const draw_list = lcgr.draw_list;
-const quad_shader = lcgr.quad_shader;
-const iface = lcgr.render_iface;
+const types = lcgf.types;
+const draw_list = lcgf.draw_list;
+const quad_shader = lcgf.quad_shader;
+const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
 
@@ -63,7 +63,7 @@ pub const quad_attrs: [quad_shader.attrs.len]c.VkVertexInputAttributeDescription
     break :blk out;
 };
 
-pub const Globals = lcgr.render_null.Globals;
+pub const Globals = lcgf.render_null.Globals;
 pub const Glyphs = iface.Glyphs;
 
 pub const Desc = struct {
@@ -427,7 +427,7 @@ fn createPipeline(d: *const Device, layout: c.VkPipelineLayout, spirv: []const u
 
 const testing = std.testing;
 const host = @import("host.zig");
-const conformance = lcgr.render_conformance;
+const conformance = lcgf.render_conformance;
 
 test "renderer: quad pipelines build from the committed SPIR-V on a real device" {
     var h: host.Host = undefined;

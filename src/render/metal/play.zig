@@ -9,13 +9,13 @@
 //! target is managed storage, synchronised by a blit before it is read, so the same code runs
 //! on Apple silicon and on Intel Macs with a discrete GPU.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const metal = @import("metal.zig");
 const objc = metal.objc;
 const mtl = metal.mtl;
 const present = metal.present;
-const conformance = lcgr.render_conformance;
-const iface = lcgr.render_iface;
+const conformance = lcgf.render_conformance;
+const iface = lcgf.render_iface;
 const Id = objc.Id;
 const U = objc.NSUInteger;
 
@@ -113,5 +113,5 @@ fn png(gpa: std.mem.Allocator, w: u32, h: u32, rgba: []const u8) ![]const u8 {
         try raw.append(gpa, 0);
         try raw.appendSlice(gpa, rgba[y * w * 4 ..][0 .. w * 4]);
     }
-    return lcgr.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
+    return lcgf.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
 }

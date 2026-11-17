@@ -4,18 +4,18 @@
 //! viewport shows the shell's background.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const Win32 = @import("win32.zig").Win32;
-const context = lcgr.context;
-const scheduler = lcgr.scheduler;
-const Events = lcgr.shell_iface.Events;
-const Quad = lcgr.draw_list.Quad;
-const Event = lcgr.input.Input.Event;
+const context = lcgf.context;
+const scheduler = lcgf.scheduler;
+const Events = lcgf.shell_iface.Events;
+const Quad = lcgf.draw_list.Quad;
+const Event = lcgf.input.Input.Event;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 // Static, so the program allocates nothing: the frame buffer covers a 2560 x 1600 client.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
-var pixels: [lcgr.render_sw.Framebuffer.len(2560, 1600)]u32 = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+var pixels: [lcgf.render_sw.Framebuffer.len(2560, 1600)]u32 = undefined;
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
@@ -27,7 +27,7 @@ var ends: [64]u32 = undefined;
 
 pub fn main() !void {
     var shell: Win32 = undefined;
-    try shell.init(.{ .title = std.unicode.utf8ToUtf16LeStringLiteral("LCGR example") }, .{
+    try shell.init(.{ .title = std.unicode.utf8ToUtf16LeStringLiteral("LCGF example") }, .{
         .text = &text,
         .events = &events,
         .preedit = &preedit,
@@ -40,16 +40,16 @@ pub fn main() !void {
     });
     defer shell.deinit();
     var ctx = try context.Context.init(&ctx_buffer, limits);
-    var app: lcgr.shell_example.App = .{};
+    var app: lcgf.shell_example.App = .{};
     // Restyled for the system's appearance on the first frame and whenever it changes; a
     // change is input, so the frame that sees it is built.
-    var styled: ?lcgr.input.Input.Appearance = null;
+    var styled: ?lcgf.input.Input.Appearance = null;
 
     var ev: Events = .{};
     while (shell.poll(&ev)) {
         if (!std.meta.eql(styled, ev.in.appearance)) {
             styled = ev.in.appearance;
-            app.theme = lcgr.theme.widgets(&lcgr.theme.forAppearance(ev.in.appearance));
+            app.theme = lcgf.theme.widgets(&lcgf.theme.forAppearance(ev.in.appearance));
             shell.background = app.theme.panel;
         }
         if (ctx.needsFrame(&ev.in)) {

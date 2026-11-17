@@ -1,5 +1,5 @@
 //! expect: derived fields of derived_cycle.State form a cycle
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
 const State = struct {
     a: f32 = 0,
@@ -14,5 +14,5 @@ const State = struct {
 };
 
 comptime {
-    _ = @import("lcgr").signals.Signals(State, s.label(.a)).topo_order;
+    _ = @import("lcgf").signals.Signals(State, s.label(.a)).topo_order;
 }

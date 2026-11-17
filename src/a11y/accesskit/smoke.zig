@@ -16,22 +16,22 @@
 //! read the result.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const bridge = @import("bridge.zig");
-const a11y = lcgr.a11y_tree;
-const example = lcgr.shell_example;
-const Context = lcgr.context.Context;
-const tf = lcgr.widgets_textfield;
+const a11y = lcgf.a11y_tree;
+const example = lcgf.shell_example;
+const Context = lcgf.context.Context;
+const tf = lcgf.widgets_textfield;
 
-const search = lcgr.widgets_search;
+const search = lcgf.widgets_search;
 
-const id_title = lcgr.types.Id.from("title");
-const id_find = lcgr.types.Id.from("find");
-const id_notes = lcgr.types.Id.from("notes");
-const textarea = lcgr.widgets_textarea;
+const id_title = lcgf.types.Id.from("title");
+const id_find = lcgf.types.Id.from("find");
+const id_notes = lcgf.types.Id.from("notes");
+const textarea = lcgf.widgets_textarea;
 
-const limits: lcgr.context.Limits = .{ .nodes = 1024, .texts = 256 };
-var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const limits: lcgf.context.Limits = .{ .nodes = 1024, .texts = 256 };
+var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var host: bridge.Host(1024) = .{};
 
 pub fn main(init: std.process.Init) !void {
@@ -44,12 +44,12 @@ pub fn main(init: std.process.Init) !void {
     const w = &stdout.interface;
 
     var ctx = try Context.init(&ctx_buffer, limits);
-    host.init("LCGR example", &ctx, null);
+    host.init("LCGF example", &ctx, null);
     var app: example.App = .{};
     var title: tf.Text(32) = .init("Untitled");
     var find: tf.Text(32) = .init("zig");
     var notes: tf.Text(64) = .init("Buy milk");
-    var ev: lcgr.shell_iface.Events = .{};
+    var ev: lcgf.shell_iface.Events = .{};
     ev.in.viewport = .{ 800, 600 };
 
     const ak = bridge.unix.Adapter.init(&host.b);
@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
     try w.writeAll("ready\n");
     try w.flush();
 
-    const tour = [_]lcgr.types.Id{ example.id_reset, example.id_wire, example.id_exposure, id_title, id_find, id_notes };
+    const tour = [_]lcgf.types.Id{ example.id_reset, example.id_wire, example.id_exposure, id_title, id_find, id_notes };
     const names = [_][]const u8{ "reset", "wireframe", "exposure", "title", "find", "notes" };
     var acts_buf: [bridge.Bridge.queue_len + 1]a11y.Action = undefined;
     var seen: example.App = app;
@@ -85,11 +85,11 @@ pub fn main(init: std.process.Init) !void {
             var f = ctx.begin(&ev.in);
             a11y.apply(&ctx.inter, acts_buf[0..n]);
             app.build(&f, &ev);
-            const caption = lcgr.widgets_base.label(&f, &app.theme, "Title");
+            const caption = lcgf.widgets_base.label(&f, &app.theme, "Title");
             _ = tf.textfield(&f, &app.theme, id_title, &title, "Document title");
-            const find_caption = lcgr.widgets_base.label(&f, &app.theme, "Find");
+            const find_caption = lcgf.widgets_base.label(&f, &app.theme, "Find");
             _ = search.search(&f, &app.theme, id_find, &find, "Search");
-            const notes_caption = lcgr.widgets_base.label(&f, &app.theme, "Notes");
+            const notes_caption = lcgf.widgets_base.label(&f, &app.theme, "Notes");
             _ = textarea.textarea(&f, &app.theme, id_notes, &notes, 3, "");
             const out = f.end(.{});
             app.semantics(out.tree, &host.s, &ctx.strings[ctx.cur]);

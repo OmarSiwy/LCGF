@@ -4,13 +4,13 @@
 //! filled once on the first frame.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const vlist = lcgr.widgets_vlist;
-const Frame = lcgr.frame.Frame;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const vlist = lcgf.widgets_vlist;
+const Frame = lcgf.frame.Frame;
+const types = lcgf.types;
 const Id = types.Id;
-const Events = lcgr.shell_iface.Events;
+const Events = lcgf.shell_iface.Events;
 
 pub const rows = 100_000;
 pub const visible = 20;

@@ -5,16 +5,16 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
-const Context = lcgr.context.Context;
-const Frame = lcgr.frame.Frame;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const Frame = lcgf.frame.Frame;
+const types = lcgf.types;
 
-const limits: lcgr.context.Limits = .{ .nodes = 32, .texts = 4, .customs = 4 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const limits: lcgf.context.Limits = .{ .nodes = 32, .texts = 4, .customs = 4 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 // -- material
-const quad_shader = lcgr.quad_shader;
+const quad_shader = lcgf.quad_shader;
 var materials: quad_shader.Materials = .{};
 const stripes_wgsl = quad_shader.shader(quad_shader.example_material);
 // -- end
@@ -42,8 +42,8 @@ fn build(f: *Frame, video: types.Texture, stripes: types.Material) void {
 
 test "custom rendering: texture, inline draw and material in one pass" {
     var ctx = try Context.init(&buffer, limits);
-    var in: lcgr.input.Input = .{ .viewport = .{ 640, 200 } };
-    const null_ = lcgr.render_null;
+    var in: lcgf.input.Input = .{ .viewport = .{ 640, 200 } };
+    const null_ = lcgf.render_null;
     var calls: [64]null_.Call = undefined;
     var log: null_.Log = .{ .calls = &calls };
     const queue = &log;
@@ -64,8 +64,8 @@ test "custom rendering: texture, inline draw and material in one pass" {
     // -- loop
     gfx.prepare(queue, draw, .{}, in.viewport, 1); // uploads, before the pass begins
     // Route 1, under: your draws here are behind the UI.
-    var i = lcgr.render_iface.drawUntilCustom(&gfx, pass, draw, 0);
-    while (i < draw.cmd_len) : (i = lcgr.render_iface.drawUntilCustom(&gfx, pass, draw, i + 1)) {
+    var i = lcgf.render_iface.drawUntilCustom(&gfx, pass, draw, 0);
+    while (i < draw.cmd_len) : (i = lcgf.render_iface.drawUntilCustom(&gfx, pass, draw, i + 1)) {
         const c = draw.customs[draw.command(i).custom];
         pass.push(.host); // your pipeline: scissor to c.clip, draw into c.rect
         scene.draws += 1;

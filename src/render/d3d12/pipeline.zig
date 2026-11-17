@@ -12,11 +12,11 @@
 //! sampler heap. The conformance goldens and every back end sample nearest.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const com = @import("com.zig");
 const c = com.c;
 const Error = com.Error;
-const quad_shader = lcgr.quad_shader;
+const quad_shader = lcgf.quad_shader;
 
 pub const root_globals = 0;
 pub const root_texture = 1;

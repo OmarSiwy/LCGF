@@ -14,15 +14,15 @@ on Zig 0.17.1, micro4.zig on Zig 0.18.0-dev.1151; all on a loaded machine.
 Build one from the repository root, pinned to one core:
 
 ```
-nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgr -Mmain=docs/perf/layout-latency/micro.zig \
-    --dep build_options -Mlcgr=src/lcgr.zig -Mbuild_options=docs/perf/layout-latency/opts.zig -femit-bin=zig-out/micro
+nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgf -Mmain=docs/perf/layout-latency/micro.zig \
+    --dep build_options -Mlcgf=src/lcgf.zig -Mbuild_options=docs/perf/layout-latency/opts.zig -femit-bin=zig-out/micro
 taskset -c 4 zig-out/micro
 ```
 
-micro4.zig also needs the lane's start as module `lcgr_old`: `git archive 99d3b1e^ src | tar -x -C
+micro4.zig also needs the lane's start as module `lcgf_old`: `git archive 99d3b1e^ src | tar -x -C
 OLD`, `sed -i 's/packed struct/bitpack struct/' OLD/src/core/*.zig` (the only change Zig 0.18
 needs there), and a root `OLD/src/old_root.zig` exporting `mem`, `tree` and `layout`; then add
-`--dep lcgr_old` to main and `--dep build_options -Mlcgr_old=OLD/src/old_root.zig` to the command.
+`--dep lcgf_old` to main and `--dep build_options -Mlcgf_old=OLD/src/old_root.zig` to the command.
 
 `micro.tpl` is the template `micro.zig` was generated from. C0122 recorded the prefetch result
 and kept no prefetch: it is slower at every distance on both Zig versions.

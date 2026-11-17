@@ -1,10 +1,10 @@
-//! The imports every LCGR wasm module gets from lcgr.js (`load`): a log line and a panic, both
+//! The imports every LCGF wasm module gets from lcgf.js (`load`): a log line and a panic, both
 //! as (pointer, length) into the module's memory. wasm32-freestanding only.
 const std = @import("std");
 
 const imports = struct {
-    extern "lcgr" fn log(ptr: [*]const u8, len: usize) void;
-    extern "lcgr" fn panic(ptr: [*]const u8, len: usize) noreturn;
+    extern "lcgf" fn log(ptr: [*]const u8, len: usize) void;
+    extern "lcgf" fn panic(ptr: [*]const u8, len: usize) noreturn;
 };
 
 pub fn log(s: []const u8) void {

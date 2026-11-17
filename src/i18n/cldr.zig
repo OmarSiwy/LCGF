@@ -7,10 +7,10 @@
 //! Every mismatch is printed (file, key, ours, CLDR) before the test fails.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const plural = lcgr.i18n_plural;
-const number = lcgr.i18n_number;
-const date = lcgr.i18n_date;
+const lcgf = @import("lcgf");
+const plural = lcgf.i18n_plural;
+const number = lcgf.i18n_number;
+const date = lcgf.i18n_date;
 
 const Json = std.json.Value;
 const testing = std.testing;

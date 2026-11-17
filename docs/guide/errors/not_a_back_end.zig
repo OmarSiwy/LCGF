@@ -7,5 +7,5 @@ const MyBackEnd = struct {
 };
 
 comptime {
-    @import("lcgr").render_iface.check(MyBackEnd);
+    @import("lcgf").render_iface.check(MyBackEnd);
 }

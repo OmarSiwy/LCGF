@@ -2,7 +2,7 @@
 //!
 //!     shaders-dump OUT     ->  OUT/<variant>.wgsl, OUT/layout.txt (stride, attr lines as cmds.txt)
 const std = @import("std");
-const gfx = @import("lcgr").quad_shader;
+const gfx = @import("lcgf").quad_shader;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;

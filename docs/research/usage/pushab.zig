@@ -1,8 +1,8 @@
 //! docs/research/usage-report.md, question 2: docs/perf/build/push.zig's pushRow scene built
-//! by two copies of lcgr in one process, interleaved rep by rep: "a" is the tree, "b" the tree
+//! by two copies of lcgf in one process, interleaved rep by rep: "a" is the tree, "b" the tree
 //! with prototype.diff applied. Build (B = a copy of src/ with the diff applied):
 //!   zig build-exe -O ReleaseFast -mcpu native --dep a --dep b -Mmain=docs/research/usage/pushab.zig \
-//!     --dep build_options -Ma=src/lcgr.zig --dep build_options -Mb=B/src/lcgr.zig \
+//!     --dep build_options -Ma=src/lcgf.zig --dep build_options -Mb=B/src/lcgf.zig \
 //!     -Mbuild_options=docs/perf/build/opts.zig -femit-bin=pushab && taskset -c 8 ./pushab
 const std = @import("std");
 const A = @import("a");
@@ -13,10 +13,10 @@ fn now() u64 {
     _ = linux.clock_gettime(.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
-fn Bench(comptime lcgr: type) type {
+fn Bench(comptime lcgf: type) type {
     return struct {
-        const Style = lcgr.types.Style;
-        const Template = lcgr.tree.Template;
+        const Style = lcgf.types.Style;
+        const Template = lcgf.tree.Template;
         /// The seven styles of the bench scene's row, read at run time.
         var styles = [_]Style{
             .{ .size = .{ .px(1280), .px(8000) } },
@@ -28,13 +28,13 @@ fn Bench(comptime lcgr: type) type {
             .{ .size = .{ .fill, .px(4) }, .fill = .rgb(90, 90, 90), .radius = 2 },
         };
 
-        pub fn scene(t: *lcgr.tree.Tree, comptime rows: bool) void {
+        pub fn scene(t: *lcgf.tree.Tree, comptime rows: bool) void {
             var r: [styles.len]Template = undefined;
             if (rows) for (&r, &styles) |*d, *s| {
                 d.* = .from(s);
             };
             const P = struct {
-                fn n(tt: *lcgr.tree.Tree, p: u32, k: usize, rr: *const [styles.len]Template) u32 {
+                fn n(tt: *lcgf.tree.Tree, p: u32, k: usize, rr: *const [styles.len]Template) u32 {
                     return if (rows) tt.pushRow(p, .none, &rr[k]) else tt.push(p, .none, &styles[k]);
                 }
             };

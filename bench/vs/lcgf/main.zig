@@ -1,7 +1,7 @@
-//! The scenes of bench/scenes/ on LCGR, for the comparison of docs/perf/vs.md. The driver is
+//! The scenes of bench/scenes/ on LCGF, for the comparison of docs/perf/vs.md. The driver is
 //! bench/vs/harness.h's, line for line (arguments, 3,000 polls on the monotonic clock, median
 //! and p99, `--idle` and its "ready" line), so every row runs the same loop; only the frame is
-//! LCGR's. A frame asks `Context.needsFrame` first, as an LCGR host does, and builds only when it
+//! LCGF's. A frame asks `Context.needsFrame` first, as an LCGF host does, and builds only when it
 //! says yes (list and springs always build: their state changes outside `Input`). It does what
 //! the Clay harness does and nothing else; the per-pass benchmark and its checks are tools/bench.
 //!
@@ -9,7 +9,7 @@
 //! context's buffer is mapped on first use, as Clay mallocs its arena: memory the scenes never
 //! touch never becomes resident.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const scenes = @import("scenes");
 const linux = std.os.linux;
 
@@ -17,7 +17,7 @@ pub const panic = std.debug.no_panic;
 /// No thread-local signal stack (std's default is 256 KB, cleared at start-up).
 pub const std_options: std.Options = .{ .signal_stack_size = null };
 
-const Context = lcgr.context.Context;
+const Context = lcgf.context.Context;
 /// Nodes per scene in harness.h's order: its `vs_capacity`, which every harness sizes for.
 const capacity = [_]u32{ 256, 256, 256, 2048, 256, 256 };
 const polls = 3000;
@@ -25,18 +25,18 @@ const polls = 3000;
 var ctx: Context = undefined;
 /// Static, as harness.h's: a frame of 24 KB would be probed page by page even under `--idle`.
 var samples: [polls]u64 = undefined;
-var in: lcgr.input.Input = .{};
-const th: lcgr.widgets_base.Theme = .{};
+var in: lcgf.input.Input = .{};
+const th: lcgf.widgets_base.Theme = .{};
 
 /// Builds poll `k` of `s`: the commands and quads drawn, or 0 when no frame was needed.
 fn frame(scene: usize, k: u32) u64 {
     const s = &scenes.vs[scene];
     if (k == 0) {
         const n = capacity[scene];
-        const limits: lcgr.context.Limits = .{ .nodes = n, .texts = n, .strings = 32 * 1024, .anims = n };
+        const limits: lcgf.context.Limits = .{ .nodes = n, .texts = n, .strings = 32 * 1024, .anims = n };
         const bytes = Context.requiredBytes(limits);
         const p = linux.mmap(null, bytes, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
-        const buf: [*]align(lcgr.mem.column_align) u8 = @ptrFromInt(p);
+        const buf: [*]align(lcgf.mem.column_align) u8 = @ptrFromInt(p);
         ctx = Context.initZeroed(buf[0..bytes], limits) catch unreachable;
     }
     s.input(&in, k);
@@ -111,7 +111,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     var o: Out = .{};
     if (idle) {
         const out = frame(scene, 0);
-        o.str("ready framework=lcgr out=");
+        o.str("ready framework=lcgf out=");
         o.int(out);
         o.str("\n");
         o.flush();
@@ -130,7 +130,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         built += @intFromBool(out != 0);
     }
     std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
-    o.str("framework=lcgr scene=");
+    o.str("framework=lcgf scene=");
     o.str(s.name);
     o.str(" frames=");
     o.int(built);

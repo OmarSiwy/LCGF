@@ -4,11 +4,11 @@
 //! zig-out/bin/example-hello, this application in an X11 window (examples/window.zig).
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const Frame = lcgr.frame.Frame;
-const Id = lcgr.types.Id;
-const Events = lcgr.shell_iface.Events;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const Frame = lcgf.frame.Frame;
+const Id = lcgf.types.Id;
+const Events = lcgf.shell_iface.Events;
 
 pub const id_panel = Id.from("hello");
 pub const id_wave = Id.from("wave");

@@ -44,7 +44,7 @@ def make(src, out):
     sub.subset(font)
     for rec in list(font["name"].names):
         if rec.nameID in (1, 4, 6):
-            s = rec.toUnicode().replace("Noto Sans", "LcgrFallback Sans").replace("NotoSans", "LcgrFallbackSans")
+            s = rec.toUnicode().replace("Noto Sans", "LcgfFallback Sans").replace("NotoSans", "LcgfFallbackSans")
             font["name"].setName(s, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     font.save(out)
 

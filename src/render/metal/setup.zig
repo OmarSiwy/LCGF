@@ -7,13 +7,13 @@
 //!     g.draw(&draw, glyphs, viewport, scale, clear); // per frame
 //!     g.deinit();
 
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
 const device = @import("device.zig");
 const present = @import("present.zig");
 const renderer = @import("renderer.zig");
-const DrawList = lcgr.draw_list.DrawList;
+const DrawList = lcgf.draw_list.DrawList;
 const Id = objc.Id;
 const msg = objc.msg;
 

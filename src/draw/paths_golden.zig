@@ -4,14 +4,14 @@
 //!
 //!   zig build paths-golden -- OUT.bin
 //!
-//! A tool, not part of the package: not exported from src/lcgr.zig. Each shape is rasterised,
+//! A tool, not part of the package: not exported from src/lcgf.zig. Each shape is rasterised,
 //! placed in a coverage atlas and emitted as a quad into a draw list (paths.place, paths.emit);
 //! at the end of a scene `composite` draws the list's quads in command order the way the stock
 //! quad material does (fill times the atlas sample, nearest texel, premultiplied over), which is
 //! the compositing make.py specifies.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const paths = lcgr.paths;
+const lcgf = @import("lcgf");
+const paths = lcgf.paths;
 
 const scenes = @embedFile("testdata/paths/scenes.txt");
 /// The TinyVG files scenes.txt names (testdata/paths/tvg.py writes them).
@@ -108,7 +108,7 @@ pub fn main(init: std.process.Init) !void {
             } else return error.UnknownTvgFile;
             var v: [3]f32 = undefined;
             for (&v) |*x| x.* = try std.fmt.parseFloat(f32, tok.next().?);
-            var image = try lcgr.tinyvg.parse(data);
+            var image = try lcgf.tinyvg.parse(data);
             while (try image.next(v[2], v[0], v[1], &path)) |item| {
                 if (item.fill) |c| draw(bufs, &path, .{ .rule = item.rule, .color = rgba(c) }, frame, &acc, &img);
                 if (item.line) |c| draw(bufs, &path, .{ .stroke = item.stroke(), .color = rgba(c) }, frame, &acc, &img);
@@ -162,7 +162,7 @@ const Buffers = struct {
     }
 };
 
-fn rgba(c: lcgr.types.Color) [4]u8 {
+fn rgba(c: lcgf.types.Color) [4]u8 {
     return .{ c.r, c.g, c.b, c.a };
 }
 
@@ -171,19 +171,19 @@ const Frame = struct {
     pixels: [atlas_side * atlas_side]u8,
     sky: [3][atlas_side]u32,
     atlas: paths.Atlas,
-    buf: [bytes]u8 align(lcgr.mem.column_align),
-    list: lcgr.draw_list.DrawList,
+    buf: [bytes]u8 align(lcgf.mem.column_align),
+    list: lcgf.draw_list.DrawList,
 
-    const texture: lcgr.types.Texture = @fromBackingInt(1);
+    const texture: lcgf.types.Texture = @fromBackingInt(1);
     const bytes = blk: {
-        var counter: lcgr.mem.Carver = .{ .buf = null };
-        _ = lcgr.draw_list.DrawList.init(&counter, max_shapes, 0, 0);
+        var counter: lcgf.mem.Carver = .{ .buf = null };
+        _ = lcgf.draw_list.DrawList.init(&counter, max_shapes, 0, 0);
         break :blk counter.off;
     };
 
     fn init(f: *Frame) void {
         f.atlas = .init(atlas_side, atlas_side, &f.pixels, .{ .x = &f.sky[0], .y = &f.sky[1], .w = &f.sky[2] });
-        var carver: lcgr.mem.Carver = .{ .buf = &f.buf };
+        var carver: lcgf.mem.Carver = .{ .buf = &f.buf };
         f.list = .init(&carver, max_shapes, 0, 0);
     }
 
@@ -210,7 +210,7 @@ fn draw(bufs: *Buffers, path: *const paths.Path, s: Shape, frame: *Frame, acc: [
     paths.fill(&l, b, s.rule, bufs.scratch(), acc);
     paths.coverage(acc, img, @as(usize, b.w) * b.h);
     const r = paths.place(&frame.atlas, b, img).?;
-    const color: lcgr.types.Color = .rgba(s.color[0], s.color[1], s.color[2], s.color[3]);
+    const color: lcgf.types.Color = .rgba(s.color[0], s.color[1], s.color[2], s.color[3]);
     paths.emit(&frame.list, b, frame.atlas.uv(r), Frame.texture, color, paths.no_clip);
 }
 
@@ -223,7 +223,7 @@ fn composite(frame: *const Frame, w: u32, h: u32, canvas: [][3]f32) void {
         const batch = d.command(@intCast(ci)).quads;
         std.debug.assert(batch.texture == Frame.texture);
         for (d.quads[batch.first..][0..batch.count]) |q| {
-            const fill: lcgr.types.Color = @bitCast(q.fill);
+            const fill: lcgf.types.Color = @bitCast(q.fill);
             const rgb = [3]f32{ @floatFromInt(fill.r), @floatFromInt(fill.g), @floatFromInt(fill.b) };
             const alpha = @as(f32, @floatFromInt(fill.a)) / 255;
             const x0: i32 = @intFromFloat(q.rect[0]);

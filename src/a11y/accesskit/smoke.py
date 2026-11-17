@@ -105,7 +105,7 @@ apps = call("org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root", "org.a
 if len(apps) != 1:
     fail("expected one application on the bus, got %r" % apps)
 walk(apps[0][0], apps[0][1], 0)
-for name, role in [("LCGR example", "frame"), ("Reset", "push button"), ("Wireframe", "check box"), ("Add layer", "push button"), ("Layer 0", "label"), ("Title", "entry"), ("Notes", "entry")]:
+for name, role in [("LCGF example", "frame"), ("Reset", "push button"), ("Wireframe", "check box"), ("Add layer", "push button"), ("Layer 0", "label"), ("Title", "entry"), ("Notes", "entry")]:
     if nodes.get(name, ("missing",))[0] != role:
         fail("%r: expected role %r, got %r" % (name, role, nodes.get(name)))
 print("ok   tree: window, buttons, check box and labels with their names and roles")
@@ -142,7 +142,7 @@ print("ok   actions: AT-SPI clicks on Reset and Wireframe ran in the example")
 # 3. Orca, while the example moves focus round Reset, Wireframe and Exposure.
 orca_log = os.path.join(out, "orca.log")
 start(["orca", "--debug", "--debug-file=" + orca_log], "orca.out")
-expected = ["'LCGR example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled", "'Find entry zig", "'Notes entry Buy milk"]
+expected = ["'LCGF example'", "'Reset button'", "'Wireframe check box checked'", "'Exposure slider 1 25 percent", "'Title entry Untitled", "'Find entry zig", "'Notes entry Buy milk"]
 spoken = []
 
 

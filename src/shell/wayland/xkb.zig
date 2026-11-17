@@ -10,7 +10,7 @@
 //! xkbcommon-keysyms.h, and read `xkb_types` for each key's levels.
 
 const std = @import("std");
-const Input = @import("lcgr").input.Input;
+const Input = @import("lcgf").input.Input;
 
 /// Evdev keycodes this map covers; XKB keycodes are evdev + 8.
 pub const keys = 256;

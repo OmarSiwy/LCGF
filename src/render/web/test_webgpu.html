@@ -1,16 +1,16 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>lcgr: WebGPU conformance</title>
+<title>lcgf: WebGPU conformance</title>
 <!-- Draws every render conformance scene with the WebGPU back end (webgpu.zig, scenes.wasm) and
      reads each back. The host side mirrors src/render/wgpu/play.zig and render.py, which drew
      the goldens: an RGBA8 target cleared to black, nearest sampling, scale 1, the stand-in glyph
      atlas, and the host's own gradient pipeline at each custom command. browser.py --out writes
      the images; ci/jobs/web.sh compares them with src/render/conformance/*.png. -->
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgr.js";
+import { load, webgpu, canvas2d } from "./lcgf.js";
 import { readback, base64, standInAtlas } from "./test_util.js";
 
-window.lcgrTest = (async () => {
+window.lcgfTest = (async () => {
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
     const errors = [];
@@ -35,11 +35,11 @@ window.lcgrTest = (async () => {
         return t.createView();
     };
     const sampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
-    ui.exports.lcgr_webgpu_init(put(device), put(device.queue), 0, put(texture(1, 1, new Uint8Array([255, 255, 255, 255]))), put(sampler), put(texture(64, 64, standInAtlas())));
+    ui.exports.lcgf_webgpu_init(put(device), put(device.queue), 0, put(texture(1, 1, new Uint8Array([255, 255, 255, 255]))), put(sampler), put(texture(64, 64, standInAtlas())));
 
     const images = {};
-    for (let i = 0; i < ui.exports.lcgr_scene_count(); i++) {
-        const size = ui.exports.lcgr_scene_size(i);
+    for (let i = 0; i < ui.exports.lcgf_scene_count(); i++) {
+        const size = ui.exports.lcgf_scene_size(i);
         const name = ui.logs.at(-1);
         const w = size & 0xffff, h = size >>> 16;
         const module = device.createShaderModule({ code: `
@@ -50,11 +50,11 @@ window.lcgrTest = (async () => {
         scene = { w, h, pipe: device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] } }) };
 
         const target = device.createTexture({ size: [w, h], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-        ui.exports.lcgr_scene_prepare(i);
+        ui.exports.lcgf_scene_prepare(i);
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }] });
         const p = put(pass);
-        ui.exports.lcgr_scene_draw(p);
+        ui.exports.lcgf_scene_draw(p);
         release(p);
         pass.end();
         device.queue.submit([encoder.finish()]);

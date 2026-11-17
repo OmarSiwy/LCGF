@@ -1,8 +1,8 @@
 //! docs/research/usage-report.md, edge cases: runs the shell example 30 frames under several
 //! Limits against src/ with prototype.diff applied, and prints peak / given, frames hit, first.
-//! Build as docs/perf/build/bytes.zig, with -Mlcgr pointing at the patched copy.
+//! Build as docs/perf/build/bytes.zig, with -Mlcgf pointing at the patched copy.
 const std = @import("std");
-const l = @import("lcgr");
+const l = @import("lcgf");
 const Context = l.context.Context;
 const names = [_][]const u8{ "nodes", "texts", "customs", "strings", "anims", "tweens", "flips", "signals", "depth", "timers", "memos" };
 fn one(comptime lim: l.context.Limits, label: []const u8) !void {

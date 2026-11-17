@@ -14,16 +14,16 @@
 //!                      running the example with its own context
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const wire = @import("wire.zig");
 const Wayland = @import("wayland.zig").Wayland;
-const context = lcgr.context;
-const scheduler = lcgr.scheduler;
-const Events = lcgr.shell_iface.Events;
+const context = lcgf.context;
+const scheduler = lcgf.scheduler;
+const Events = lcgf.shell_iface.Events;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
-var ctx_buffers: [3][context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
-var glyphs: [4096]lcgr.draw_list.Quad = undefined;
+var ctx_buffers: [3][context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+var glyphs: [4096]lcgf.draw_list.Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
 
@@ -45,11 +45,11 @@ pub fn main(init: std.process.Init) !void {
 
     const env = init.minimal.environ;
     const fd = try wire.connect(env.getPosix("XDG_RUNTIME_DIR") orelse "/tmp", env.getPosix("WAYLAND_DISPLAY") orelse "wayland-0");
-    var shell = try Wayland.connect(fd, .{ .title = "lcgr example" }, .{ .glyphs = &glyphs, .first = &first, .count = &count });
+    var shell = try Wayland.connect(fd, .{ .title = "lcgf example" }, .{ .glyphs = &glyphs, .first = &first, .count = &count });
     defer shell.deinit();
     var n: usize = 1;
     if (multi) {
-        _ = shell.openWindow(.{ .title = "lcgr second window", .size = .{ 400, 300 } });
+        _ = shell.openWindow(.{ .title = "lcgf second window", .size = .{ 400, 300 } });
         // No constraint adjustment: weston 16's headless back end (no seat) crashes in
         // weston_desktop_xdg_positioner_get_geometry when asked to slide or flip a popup.
         _ = shell.openPopup(.{ .parent = 0, .anchor = .{ .x0 = 8, .y0 = 8, .x1 = 66, .y1 = 42 }, .size = .{ 300, 120 }, .adjust = 0 });
@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var ctxs: [3]context.Context = undefined;
-    var apps: [3]lcgr.shell_example.App = @splat(.{});
+    var apps: [3]lcgf.shell_example.App = @splat(.{});
     for (ctxs[0..n], ctx_buffers[0..n]) |*c, *b| c.* = try context.Context.init(b, limits);
     var evs: [3]Events = @splat(.{});
     // iface.run's body for each window, with a way out when idle: half a second without
@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init) !void {
     var idle_since: ?f64 = null;
     while (shell.pollWindows(evs[0..n])) {
         var built = false;
-        var wake: f32 = lcgr.types.inf;
+        var wake: f32 = lcgf.types.inf;
         var pace: scheduler.Pace = .idle;
         for (0..n) |k| {
             const win = shell.windows[k];
@@ -126,6 +126,6 @@ pub fn main(init: std.process.Init) !void {
     if (shell.err != null) std.process.exit(1);
 }
 
-fn rgb(c: lcgr.types.Color) u32 {
+fn rgb(c: lcgf.types.Color) u32 {
     return (@as(u32, c.r) << 16) | (@as(u32, c.g) << 8) | c.b;
 }

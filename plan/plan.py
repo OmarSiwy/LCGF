@@ -241,7 +241,7 @@ Rules for every commit in this brief:
   6. Stay inside the lane's home unless the commit itself requires otherwise. No new dependency
      without it being named in docs/DEPENDENCIES.md.
   7. Do not start commits that are not in this brief.
-  8. Export each new src/ file from the package root src/lcgr.zig with one `pub const` line
+  8. Export each new src/ file from the package root src/lcgf.zig with one `pub const` line
      (docs/ARCHITECTURE.md). Add a CI job as a new file ci/jobs/<name>.sh (CONTRIBUTING.md).
      Import `none` and `inf` from src/core/types.zig; do not redefine shared constants.
 

@@ -5,12 +5,12 @@
 //! is called back: each reader compares versions when it runs.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const signals = lcgr.runtime_signals;
-const Frame = lcgr.frame.Frame;
-const Id = lcgr.types.Id;
-const Events = lcgr.shell_iface.Events;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const signals = lcgf.runtime_signals;
+const Frame = lcgf.frame.Frame;
+const Id = lcgf.types.Id;
+const Events = lcgf.shell_iface.Events;
 
 pub const id_dec = Id.from("dec");
 pub const id_inc = Id.from("inc");

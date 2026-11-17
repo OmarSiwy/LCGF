@@ -44,8 +44,8 @@ next `custom` command and returns its index; you draw that one and continue afte
 ```zig
 gfx.prepare(queue, draw, .{}, in.viewport, 1); // uploads, before the pass begins
 // Route 1, under: your draws here are behind the UI.
-var i = lcgr.render_iface.drawUntilCustom(&gfx, pass, draw, 0);
-while (i < draw.cmd_len) : (i = lcgr.render_iface.drawUntilCustom(&gfx, pass, draw, i + 1)) {
+var i = lcgf.render_iface.drawUntilCustom(&gfx, pass, draw, 0);
+while (i < draw.cmd_len) : (i = lcgf.render_iface.drawUntilCustom(&gfx, pass, draw, i + 1)) {
     const c = draw.customs[draw.command(i).custom];
     pass.push(.host); // your pipeline: scissor to c.clip, draw into c.rect
     scene.draws += 1;
@@ -79,7 +79,7 @@ thin functions over your wgpu binding (`Binding` in `src/render/wgpu/wgpu.zig` l
   `quad_shader.shader(fn_source)`, where `fn_source` is a WGSL `fn material(in: Frag) -> vec4f`:
 
 ```zig
-const quad_shader = lcgr.quad_shader;
+const quad_shader = lcgf.quad_shader;
 var materials: quad_shader.Materials = .{};
 const stripes_wgsl = quad_shader.shader(quad_shader.example_material);
 ```

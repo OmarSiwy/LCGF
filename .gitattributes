@@ -1,3 +1,3 @@
 # Every lane adds one export line here; keep both sides instead of conflicting.
-src/lcgr.zig merge=union
+src/lcgf.zig merge=union
 src/census_probes.zig merge=union

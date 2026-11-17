@@ -8,7 +8,7 @@
 //! reruns that one iteration. Mutations land past the signature, and most of the time every
 //! chunk CRC is recomputed afterwards: random edits almost always break a CRC, and a decoder
 //! that stops at the CRC check never gets its inflate, filters or bit unpacking exercised.
-//! Not exported from src/lcgr.zig: it has a `main` and does I/O. Its `exercise` and `mutate`
+//! Not exported from src/lcgf.zig: it has a `main` and does I/O. Its `exercise` and `mutate`
 //! do neither, and png.zig runs them in `zig build test`.
 
 const std = @import("std");

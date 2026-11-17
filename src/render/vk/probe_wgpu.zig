@@ -8,11 +8,11 @@
 //! Lives with the Vulkan back end because lane render-vk owns the comparison; it uses
 //! src/render/wgpu/native.zig unchanged, as a module (build.zig, -Dwgpu-native).
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const native = @import("wgpu_native");
 const host = native.host;
 const c = native.c;
-const conformance = lcgr.render_conformance;
+const conformance = lcgf.render_conformance;
 
 pub const frames = 2000;
 

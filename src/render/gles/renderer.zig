@@ -17,16 +17,16 @@
 //! drawing next with the default vertex array must not edit (or draw through) it.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const gl = @import("gl.zig");
 const program = @import("program.zig");
-const types = lcgr.types;
-const draw_list = lcgr.draw_list;
-const quad_shader = lcgr.quad_shader;
-const iface = lcgr.render_iface;
+const types = lcgf.types;
+const draw_list = lcgf.draw_list;
+const quad_shader = lcgf.quad_shader;
+const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 
-pub const Globals = lcgr.render_null.Globals;
+pub const Globals = lcgf.render_null.Globals;
 pub const Glyphs = iface.Glyphs;
 pub const max_materials = quad_shader.max_materials;
 
@@ -232,8 +232,8 @@ test "renderer: a draw after the host's own state still lands where it should" {
     defer h.deinit();
     var r = try Renderer.init(&h.gl, &h.gl3, .{ .max_quads = 4, .max_glyphs = 4 });
     defer r.deinit();
-    var st: lcgr.render_conformance.Storage = .{};
-    st.load(&lcgr.render_conformance.scenes[0]); // rects: a full-target panel first
+    var st: lcgf.render_conformance.Storage = .{};
+    st.load(&lcgf.render_conformance.scenes[0]); // rects: a full-target panel first
     var t = try host.Target.init(&h, 160, 120);
     defer t.deinit(&h);
     r.prepare({}, &st.draw, st.glyphs(), .{ 160, 120 }, 1);

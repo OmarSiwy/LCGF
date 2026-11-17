@@ -4,7 +4,7 @@
 # events (translate.zig, the input replay tests) is tested by `zig build test` on every host,
 # here included. The check below is what the device's loader needs: the entry point exported,
 # and only the system's libraries needed. On a device, the example started with the intent
-# extra lcgr.replay runs the same recording through the real activity and swapchain and logs
+# extra lcgf.replay runs the same recording through the real activity and swapchain and logs
 # its result; no job does that yet (it needs the Android SDK to package an APK, and an
 # emulator or a device).
 for mode in Debug ReleaseFast; do

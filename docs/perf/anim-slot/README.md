@@ -4,7 +4,7 @@ The program behind the numbers in commit a2a356d ("Make Anims.slot O(1) in a ste
 so they can be reproduced. `zig build bench -- --scene springs` cannot measure this: tools/bench
 builds its frames with `prototype/ui.zig`. `springs.zig` runs the same scene
 (bench/scenes/springs.zig: a 40 x 25 grid of bars, 1,000 `Frame.animate` calls per frame,
-targets flipping every 30 frames, 3,000 frames) on lcgr's `Context` and prints the median and p99
+targets flipping every 30 frames, 3,000 frames) on lcgf's `Context` and prints the median and p99
 of the build only (`begin` to the last `close`; layout and paint are not timed).
 
 | Build | Median build, three alternated runs | p99 |
@@ -17,13 +17,13 @@ Zig 0.18.0-dev.1151, ReleaseFast, `-mcpu native` (8 lanes), pinned to one core, 
 Build and run from the repository root:
 
 ```
-nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgr -Mmain=docs/perf/anim-slot/springs.zig \
-    --dep build_options -Mlcgr=src/lcgr.zig -Mbuild_options=docs/perf/anim-slot/opts.zig -femit-bin=zig-out/springs
+nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgf -Mmain=docs/perf/anim-slot/springs.zig \
+    --dep build_options -Mlcgf=src/lcgf.zig -Mbuild_options=docs/perf/anim-slot/opts.zig -femit-bin=zig-out/springs
 taskset -c 4 zig-out/springs
 ```
 
 For "before", extract the old tree (`git archive 3001d5a src | tar -x -C OLD`) and pass
-`-Mlcgr=OLD/src/lcgr.zig` instead; nothing else changes.
+`-Mlcgf=OLD/src/lcgf.zig` instead; nothing else changes.
 
 ## Tweens
 

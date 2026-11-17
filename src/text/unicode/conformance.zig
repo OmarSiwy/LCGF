@@ -2,8 +2,8 @@
 //! A separate test step because they take seconds, not milliseconds, in Debug.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const property = lcgr.unicode_property;
+const lcgf = @import("lcgf");
+const property = lcgf.unicode_property;
 
 const grapheme_test = @embedFile("GraphemeBreakTest.txt");
 const word_test = @embedFile("WordBreakTest.txt");
@@ -154,17 +154,17 @@ fn lineStart(file: []const u8, line: usize) usize {
 }
 
 test "GraphemeBreakTest.txt" {
-    try expectBoundaries(lcgr.unicode_grapheme.Graphemes, grapheme_test);
+    try expectBoundaries(lcgf.unicode_grapheme.Graphemes, grapheme_test);
 }
 
 test "WordBreakTest.txt" {
-    try expectBoundaries(lcgr.unicode_word.Words, word_test);
+    try expectBoundaries(lcgf.unicode_word.Words, word_test);
 }
 
 /// LineBreaks yields opportunities; the test files mark every opportunity, mandatory or not.
 const LineOffsets = struct {
     text: []const u8,
-    it: ?lcgr.unicode_line.LineBreaks = null,
+    it: ?lcgf.unicode_line.LineBreaks = null,
 
     fn next(s: *LineOffsets) ?usize {
         if (s.it == null) s.it = .{ .text = s.text };
@@ -176,7 +176,7 @@ test "LineBreakTest.txt" {
     try expectBoundaries(LineOffsets, line_test);
 }
 
-const bidi = lcgr.unicode_bidi;
+const bidi = lcgf.unicode_bidi;
 const bidi_test = @embedFile("BidiTest.txt");
 const bidi_character_test = @embedFile("BidiCharacterTest.txt");
 
@@ -333,7 +333,7 @@ test "Scripts.txt: every code point" {
 
 test "script runs: one script each, Common only where nothing else" {
     const text = "1. Hello, Κόσμε (мир) — こんにちは「世界」! مرحبا 123 שָׁלוֹם\u{301}";
-    var it = lcgr.unicode_script.Scripts{ .text = text };
+    var it = lcgf.unicode_script.Scripts{ .text = text };
     var start: usize = 0;
     var runs: usize = 0;
     var prev: ?property.Script = null;
@@ -342,7 +342,7 @@ test "script runs: one script each, Common only where nothing else" {
         try std.testing.expect(prev == null or prev.? != r.script);
         var i = start;
         while (i < r.end) {
-            const d = lcgr.unicode_utf8.decode(text, i);
+            const d = lcgf.unicode_utf8.decode(text, i);
             const s = property.script(d.cp);
             if (s != .Common and s != .Inherited) try std.testing.expectEqual(s, r.script);
             i += d.len;

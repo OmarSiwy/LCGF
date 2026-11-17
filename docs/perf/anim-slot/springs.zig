@@ -1,19 +1,19 @@
-//! The bench springs scene (bench/scenes/springs.zig) on the ported lcgr Context: median and p99
+//! The bench springs scene (bench/scenes/springs.zig) on the ported lcgf Context: median and p99
 //! build time of 1,000 Frame.animate calls per frame. See README.md.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Context = lcgr.context.Context;
-const limits: lcgr.context.Limits = .{ .nodes = 2048, .anims = 1024 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const limits: lcgf.context.Limits = .{ .nodes = 2048, .anims = 1024 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 pub fn main() !void {
     var ctx = try Context.init(&buffer, limits);
     var samples: [3000]u64 = undefined;
-    const base = lcgr.types.Id.from("springs");
+    const base = lcgf.types.Id.from("springs");
     const targets = [2]f32{ 4, 40 };
     var sink: f32 = 0;
     for (0..3000) |tick| {
-        const in: lcgr.input.Input = .{ .viewport = .{ 1280, 800 }, .dt = 1.0 / 60.0 };
+        const in: lcgf.input.Input = .{ .viewport = .{ 1280, 800 }, .dt = 1.0 / 60.0 };
         var f = ctx.begin(&in);
         var t0: std.os.linux.timespec = undefined;
         _ = std.os.linux.clock_gettime(.MONOTONIC, &t0);
@@ -35,5 +35,5 @@ pub fn main() !void {
         _ = f.end(.{});
     }
     std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
-    std.debug.print("lcgr springs: build median {d:.1} us, p99 {d:.1} us (sink {d})\n", .{ @as(f64, @floatFromInt(samples[1500])) / 1000, @as(f64, @floatFromInt(samples[2970])) / 1000, sink });
+    std.debug.print("lcgf springs: build median {d:.1} us, p99 {d:.1} us (sink {d})\n", .{ @as(f64, @floatFromInt(samples[1500])) / 1000, @as(f64, @floatFromInt(samples[2970])) / 1000, sink });
 }

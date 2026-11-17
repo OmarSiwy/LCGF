@@ -299,7 +299,7 @@ pub const Swapchain = struct {
 pub const Window = struct {
     hwnd: c.HWND,
 
-    const class_name = std.unicode.utf8ToUtf16LeStringLiteral("lcgr-d3d12");
+    const class_name = std.unicode.utf8ToUtf16LeStringLiteral("lcgf-d3d12");
 
     pub fn init(width: u32, height: u32, show: bool) Error!Window {
         const instance = c.GetModuleHandleW(null);

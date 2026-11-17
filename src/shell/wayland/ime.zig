@@ -9,13 +9,13 @@
 //! need it; add it as an `Input.Event` kind when a text widget can apply it.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const wire = @import("wire.zig");
 const Wayland = @import("wayland.zig").Wayland;
-const Composition = lcgr.keyboard.Composition;
-const Purpose = lcgr.keyboard.Purpose;
-const Platform = lcgr.context.Platform;
-const Rect = lcgr.types.Rect;
+const Composition = lcgf.keyboard.Composition;
+const Purpose = lcgf.keyboard.Purpose;
+const Platform = lcgf.context.Platform;
+const Rect = lcgf.types.Rect;
 
 const op = struct {
     const manager_get_text_input = 1;

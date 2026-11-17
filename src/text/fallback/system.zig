@@ -2,14 +2,14 @@
 //! chain (fallback.zig): the caller loads each file found, parses the face, and lists it.
 //!
 //! Outside the tiers: it calls the platform's font API (DirectWrite, Core Text, fontconfig;
-//! docs/DEPENDENCIES.md), so it is its own module over `lcgr` (`zig build fallback-system`),
-//! never imported by the core and not exported from src/lcgr.zig, like the HarfBuzz adapter.
+//! docs/DEPENDENCIES.md), so it is its own module over `lcgf` (`zig build fallback-system`),
+//! never imported by the core and not exported from src/lcgf.zig, like the HarfBuzz adapter.
 //! Every back end has the same three calls: `init`, `deinit`, and
 //! `find(cp, path_buffer) !?Found`.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 
 /// A face found for a character: its file, in the caller's buffer, and its index in the file
 /// (non-zero only in collections). Core Text gives no index: it sets `name`, the face's
@@ -29,13 +29,13 @@ pub const Discovery = switch (builtin.os.tag) {
 // script, and every character must come out as a real glyph (not .notdef) of a face whose
 // cmap, read by src/text/font/, has it, with ink in every run.
 
-const Face = lcgr.opentype.Face;
-const Script = lcgr.unicode_property.Script;
+const Face = lcgf.opentype.Face;
+const Script = lcgf.unicode_property.Script;
 
 test "a mixed-script sample renders with system fonts" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    const sample = lcgr.fallback.test_sample;
+    const sample = lcgf.fallback.test_sample;
     const letters = [_]u21{ 'H', 0x532, 0x10D2, 0x3B1 };
     const scripts = [_]Script{ .Latin, .Armenian, .Georgian, .Greek };
     var d = try Discovery.init();
@@ -50,16 +50,16 @@ test "a mixed-script sample renders with system fonts" {
         std.debug.print("U+{X:0>4} {s} {}\n", .{ cp, found.path, found.index });
         files[k] = try std.Io.Dir.cwd().readFileAlloc(io, found.path, gpa, .limited(64 << 20));
         loaded += 1;
-        const index = if (found.name.len > 0) (try lcgr.fallback.faceByName(files[k], found.name)) orelse return error.NoSuchFace else found.index;
-        faces[k] = try .parse(files[k], try lcgr.opentype.faceOffset(files[k], index));
+        const index = if (found.name.len > 0) (try lcgf.fallback.faceByName(files[k], found.name)) orelse return error.NoSuchFace else found.index;
+        faces[k] = try .parse(files[k], try lcgf.opentype.faceOffset(files[k], index));
         try std.testing.expect(faces[k].cmap.glyph(cp) != 0);
     }
-    const chain: lcgr.fallback.Chain = .{ .faces = &faces, .script = &scripts, .face = &.{ 0, 1, 2, 3 }, .default = &.{ 0, 1, 2, 3 } };
-    var rcols: lcgr.fallback.TestRuns = .{};
+    const chain: lcgf.fallback.Chain = .{ .faces = &faces, .script = &scripts, .face = &.{ 0, 1, 2, 3 }, .default = &.{ 0, 1, 2, 3 } };
+    var rcols: lcgf.fallback.TestRuns = .{};
     var runs = rcols.runs();
-    try lcgr.fallback.resolve(&chain, sample, &runs);
+    try lcgf.fallback.resolve(&chain, sample, &runs);
 
-    const raster = lcgr.raster;
+    const raster = lcgf.raster;
     var xs: [4096]f32 = undefined;
     var ys: [4096]f32 = undefined;
     var on: [4096]bool = undefined;
@@ -70,14 +70,14 @@ test "a mixed-script sample renders with system fonts" {
     for (runs.end[0..runs.len], runs.face[0..runs.len]) |end, fi| {
         defer start = end;
         const face = faces[fi];
-        var scols: lcgr.shape.TestRun = .{};
+        var scols: lcgf.shape.TestRun = .{};
         var run = scols.run();
-        try lcgr.shape.Shaper.init(face).shape(sample[start..end], &run, .{});
+        try lcgf.shape.Shaper.init(face).shape(sample[start..end], &run, .{});
         const scale = 24 / @as(f32, @floatFromInt(face.units_per_em));
         var ink: u64 = 0;
         for (run.glyph[0..run.len]) |g| {
             try std.testing.expect(g != 0);
-            var o: lcgr.opentype.Outline = .{ .x = &xs, .y = &ys, .on = &on, .ends = &ends };
+            var o: lcgf.opentype.Outline = .{ .x = &xs, .y = &ys, .on = &on, .ends = &ends };
             try face.outline(g, &o);
             const b = raster.box(&o, scale, 0);
             if (b.w == 0) continue;

@@ -1,5 +1,5 @@
 //! expect: derived field 'gain' needs compute: fn (*const derived_compute.State) f32
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
 const State = struct {
     volume: f32 = 0,
@@ -11,5 +11,5 @@ const State = struct {
 };
 
 comptime {
-    _ = @import("lcgr").signals.Signals(State, s.label(.gain)).topo_order;
+    _ = @import("lcgf").signals.Signals(State, s.label(.gain)).topo_order;
 }

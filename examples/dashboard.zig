@@ -5,14 +5,14 @@
 //! with plain fills into the software framebuffer; a GPU host would issue its own draws there.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const sw = lcgr.render_sw;
-const Frame = lcgr.frame.Frame;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const sw = lcgf.render_sw;
+const Frame = lcgf.frame.Frame;
+const types = lcgf.types;
 const Id = types.Id;
 const Color = types.Color;
-const Events = lcgr.shell_iface.Events;
+const Events = lcgf.shell_iface.Events;
 const host = @import("host");
 
 pub const days = 14;

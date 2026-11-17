@@ -59,8 +59,8 @@ static VsInput vs_input(int scene, uint32_t k) {
     return in;
 }
 
-// Capacity per scene, for every harness that sizes its tables (Clay's max element count, LCGR's
-// node limit): LCGR's node count of the scene rounded up to a power of two, at least 256. An
+// Capacity per scene, for every harness that sizes its tables (Clay's max element count, LCGF's
+// node limit): LCGF's node count of the scene rounded up to a power of two, at least 256. An
 // application sizes its tables for its own UI; one fixed number would favour whichever library
 // touches less of an unused capacity.
 static const uint32_t vs_capacity[VS_SCENES] = {256, 256, 256, 2048, 256, 256};

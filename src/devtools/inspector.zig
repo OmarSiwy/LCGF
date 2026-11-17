@@ -3,7 +3,7 @@
 //! panel in the bottom-right corner, built from the same `Frame` calls and widgets as any UI.
 //! Nothing in the core knows it exists: it reads only plain data the core already exposes.
 //!
-//! It lives in the `devtools` module (src/devtools/devtools.zig), not in `lcgr`. The
+//! It lives in the `devtools` module (src/devtools/devtools.zig), not in `lcgf`. The
 //! application builds it last, after its own UI, in the same frame:
 //!
 //!     var insp: devtools.Inspector = .{};   // const devtools = @import("devtools");
@@ -22,17 +22,17 @@
 //! the application underneath.
 
 const std = @import("std");
-const types = @import("lcgr").types;
-const Frame = @import("lcgr").frame.Frame;
-const Tree = @import("lcgr").tree.Tree;
-const a11y = @import("lcgr").a11y_tree;
-const w = @import("lcgr").widgets_base;
+const types = @import("lcgf").types;
+const Frame = @import("lcgf").frame.Frame;
+const Tree = @import("lcgf").tree.Tree;
+const a11y = @import("lcgf").a11y_tree;
+const w = @import("lcgf").widgets_base;
 const timing = @import("timing.zig");
 const EventLog = @import("log.zig").EventLog;
 const batches = @import("batches.zig");
 const changes = @import("changes.zig");
 const Recorder = @import("record.zig").Recorder;
-const DrawList = @import("lcgr").draw_list.DrawList;
+const DrawList = @import("lcgf").draw_list.DrawList;
 const none = types.none;
 const Id = types.Id;
 const Color = types.Color;
@@ -289,14 +289,14 @@ fn roleName(t: *const Tree, i: u32) []const u8 {
 // ---- tests: the inspector inside the example (src/shell/example.zig) -----------------------
 
 const testing = std.testing;
-const mem = @import("lcgr").mem;
-const Input = @import("lcgr").input.Input;
-const Quad = @import("lcgr").draw_list.Quad;
-const context = @import("lcgr").context;
-const sw = @import("lcgr").render_sw;
-const iface = @import("lcgr").shell_iface;
-const Headless = @import("lcgr").shell_headless.Headless;
-const example = @import("lcgr").shell_example;
+const mem = @import("lcgf").mem;
+const Input = @import("lcgf").input.Input;
+const Quad = @import("lcgf").draw_list.Quad;
+const context = @import("lcgf").context;
+const sw = @import("lcgf").render_sw;
+const iface = @import("lcgf").shell_iface;
+const Headless = @import("lcgf").shell_headless.Headless;
+const example = @import("lcgf").shell_example;
 
 /// The example with the inspector built after it: what an application does to get one.
 pub const ExampleHost = struct {
@@ -457,21 +457,21 @@ const RolesApp = struct {
     offset: f32 = 0,
 
     pub fn build(app: *RolesApp, f: *Frame, _: *const iface.Events) void {
-        const lcgr = @import("lcgr");
+        const lcgf = @import("lcgf");
         const th = w.Theme.default;
         _ = f.open(.from("page"), .{ .dir = .y, .size = .{ .fill, .fill }, .gap = 4 });
-        lcgr.widgets_tabs.open(f, &th, &.{.from("tab-a")}, &app.tab, &.{"A"});
-        _ = lcgr.widgets_tabs.panel(f, &th, app.tab, 0);
+        lcgf.widgets_tabs.open(f, &th, &.{.from("tab-a")}, &app.tab, &.{"A"});
+        _ = lcgf.widgets_tabs.panel(f, &th, app.tab, 0);
         f.close();
-        lcgr.widgets_tabs.close(f);
-        _ = lcgr.widgets_breadcrumb.trail(f, &th, &.{.from("home")}, &.{ "Home", "Here" });
-        _ = lcgr.widgets_toggle.toggle(f, &th, .from("bold"), &app.bold, "B");
+        lcgf.widgets_tabs.close(f);
+        _ = lcgf.widgets_breadcrumb.trail(f, &th, &.{.from("home")}, &.{ "Home", "Here" });
+        _ = lcgf.widgets_toggle.toggle(f, &th, .from("bold"), &app.bold, "B");
         _ = f.open(.none, .{ .size = .{ .fill, .px(60) } });
-        lcgr.widgets_scroll.open(f, &th, .from("view"), &app.offset);
+        lcgf.widgets_scroll.open(f, &th, .from("view"), &app.offset);
         _ = w.label(f, &th, "Line");
-        lcgr.widgets_scroll.close(f, &th, .from("view"), app.offset);
+        lcgf.widgets_scroll.close(f, &th, .from("view"), app.offset);
         f.close();
-        _ = lcgr.widgets_statusbar.bar(f, &th, &.{"Ready"});
+        _ = lcgf.widgets_statusbar.bar(f, &th, &.{"Ready"});
         f.close();
     }
 };
@@ -649,7 +649,7 @@ test "inspector runs inside the example and counts its draw batches and overdraw
 const ReuseHost = struct {
     app: example.App = .{},
     insp: Inspector = .{},
-    layers: ?@import("lcgr").runtime_signals.Signal = null,
+    layers: ?@import("lcgf").runtime_signals.Signal = null,
     shown: u32 = 0,
     /// This frame's decision for the badge, kept before the inspector clears its log.
     decided: changes.Decision = .other,

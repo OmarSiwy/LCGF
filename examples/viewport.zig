@@ -6,14 +6,14 @@
 //! pass before the UI's in the same command buffer.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const sw = lcgr.render_sw;
-const Frame = lcgr.frame.Frame;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const sw = lcgf.render_sw;
+const Frame = lcgf.frame.Frame;
+const types = lcgf.types;
 const Id = types.Id;
 const Color = types.Color;
-const Events = lcgr.shell_iface.Events;
+const Events = lcgf.shell_iface.Events;
 
 pub const id_panel = Id.from("controls");
 pub const id_light = Id.from("light");

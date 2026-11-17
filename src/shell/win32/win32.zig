@@ -4,7 +4,7 @@
 //! without blocking and returns, `wait` is the only call that sleeps.
 //!
 //! Outside the tiers (it calls user32, gdi32 and kernel32), so it is a module of its own over
-//! `lcgr` (`zig build win32`, `zig build win32-build`), never imported by the core. The OS
+//! `lcgf` (`zig build win32`, `zig build win32-build`), never imported by the core. The OS
 //! declarations are written by hand (docs/DEPENDENCIES.md: small APIs need no header
 //! translation), with the types of the Win32 API documentation. Everything that does not call
 //! the OS, the reading of each message, is translate.zig, tested on every host.
@@ -15,19 +15,19 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
-const translate = lcgr.shell_win32_translate;
-const iface = lcgr.shell_iface;
-const sw = lcgr.render_sw;
-const context = lcgr.context;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const Color = lcgr.types.Color;
+const lcgf = @import("lcgf");
+const translate = lcgf.shell_win32_translate;
+const iface = lcgf.shell_iface;
+const sw = lcgf.render_sw;
+const context = lcgf.context;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
-const Input = lcgr.input.Input;
+const Input = lcgf.input.Input;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
+const Pace = lcgf.scheduler.Pace;
 
 comptime {
     if (builtin.os.tag != .windows) @compileError("src/shell/win32 is the Windows shell; build it with -Dtarget=x86_64-windows");
@@ -183,7 +183,7 @@ extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 extern "gdi32" fn SetDIBitsToDevice(HDC, x: i32, y: i32, w: u32, h: u32, sx: i32, sy: i32, start: u32, lines: u32, bits: *const anyopaque, info: *const BITMAPINFOHEADER, usage: u32) callconv(.winapi) c_int;
 
-const class_name = std.unicode.utf8ToUtf16LeStringLiteral("lcgr.win32");
+const class_name = std.unicode.utf8ToUtf16LeStringLiteral("lcgf.win32");
 
 // ---- The shell ------------------------------------------------------------------------------
 
@@ -219,7 +219,7 @@ pub const Win32 = struct {
 
     pub const Options = struct {
         /// UTF-16, as the window title is shown.
-        title: [*:0]const u16 = std.unicode.utf8ToUtf16LeStringLiteral("LCGR"),
+        title: [*:0]const u16 = std.unicode.utf8ToUtf16LeStringLiteral("LCGF"),
         /// Client size in logical pixels; the window is this times the monitor's scale.
         size: [2]u32 = .{ 800, 600 },
         /// False for a window that stays hidden (tests).
@@ -234,7 +234,7 @@ pub const Win32 = struct {
     /// what arrives, and the frame handed out).
     pub const Buffers = struct {
         text: []u8,
-        events: []lcgr.input.Input.Event,
+        events: []lcgf.input.Input.Event,
         preedit: []u8,
         names: []u8,
         ends: []u32,
@@ -431,7 +431,7 @@ pub const Win32 = struct {
         _ = GetClientRect(w.hwnd, &r);
         const width: u32 = @intCast(@max(r.right - r.left, 0));
         const height: u32 = @intCast(@max(r.bottom - r.top, 0));
-        const rows: u32 = @intCast(@min(height, w.pixels.len / @max(lcgr.simd.padded(width), 1)));
+        const rows: u32 = @intCast(@min(height, w.pixels.len / @max(lcgf.simd.padded(width), 1)));
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
@@ -564,21 +564,21 @@ comptime {
 // ---- Tests: on Windows only (`zig build win32`) ---------------------------------------------
 
 const testing = std.testing;
-const mem = lcgr.mem;
-const example = lcgr.shell_example;
+const mem = lcgf.mem;
+const example = lcgf.shell_example;
 
 const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 const Fixture = struct {
     var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
     var pixels: [sw.Framebuffer.len(1024, 768)]u32 = undefined;
     var text: [64]u8 = undefined;
-    var events: [16]lcgr.input.Input.Event = undefined;
+    var events: [16]lcgf.input.Input.Event = undefined;
     var preedit: [64]u8 = undefined;
     var names: [512]u8 = undefined;
     var ends: [16]u32 = undefined;
     // A second window's own text, events and composition; pixels and glyphs are shared.
     var text2: [64]u8 = undefined;
-    var events2: [16]lcgr.input.Input.Event = undefined;
+    var events2: [16]lcgf.input.Input.Event = undefined;
     var preedit2: [64]u8 = undefined;
     var names2: [512]u8 = undefined;
     var ends2: [16]u32 = undefined;

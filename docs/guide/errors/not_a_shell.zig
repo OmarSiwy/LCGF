@@ -7,5 +7,5 @@ const MyShell = struct {
 };
 
 comptime {
-    @import("lcgr").shell_iface.check(MyShell);
+    @import("lcgf").shell_iface.check(MyShell);
 }

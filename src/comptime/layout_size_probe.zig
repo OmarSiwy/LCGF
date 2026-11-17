@@ -4,9 +4,9 @@
 //! over the rows; a copy of the pass body made for this measurement only). `nm --size-sort` gives
 //! each function's code size; `main` times the place pair. Its own module root.
 
-const lcgr = @import("lcgr");
-const ex = lcgr.ct_examples;
-const PlainOf = lcgr.ct_layout.PlainOf;
+const lcgf = @import("lcgf");
+const ex = lcgf.ct_examples;
+const PlainOf = lcgf.ct_layout.PlainOf;
 
 fn Probe(comptime e: ex.Example, comptime unroll: bool) type {
     return struct {
@@ -14,8 +14,8 @@ fn Probe(comptime e: ex.Example, comptime unroll: bool) type {
         var scratch: P.Scratch = undefined;
         var ram: P.Cols.Dynamic = undefined;
         fn run(w: f32, h: f32) callconv(.c) void {
-            const spans: [P.label_count]lcgr.strings.Span = @splat(.{ .start = 0, .bytes = 12 });
-            P.runText(&scratch, &ram, .{ w, h }, &spans, lcgr.protocol.Mono{});
+            const spans: [P.label_count]lcgf.strings.Span = @splat(.{ .start = 0, .bytes = 12 });
+            P.runText(&scratch, &ram, .{ w, h }, &spans, lcgf.protocol.Mono{});
         }
     };
 }
@@ -27,7 +27,7 @@ fn PlaceProbe(comptime e: ex.Example) type {
         var scratch: P.Scratch = undefined;
         fn rolled() callconv(.c) void {
             var v = P.view(&scratch);
-            lcgr.layout.place(&v);
+            lcgf.layout.place(&v);
         }
         /// layout.placeOf's body for a non-flex tree, one copy per row.
         fn unrolled() callconv(.c) void {
@@ -52,9 +52,9 @@ fn PlaceProbe(comptime e: ex.Example) type {
 }
 
 /// A column of `k` rows, each a label and a slider: 2k + 1 nodes.
-fn rows(comptime k: usize) lcgr.spec.Spec {
+fn rows(comptime k: usize) lcgf.spec.Spec {
     @setEvalBranchQuota(1000 + 200 * k);
-    const s = lcgr.spec;
+    const s = lcgf.spec;
     var kids: [k]s.Spec = undefined;
     for (&kids) |*r| r.* = s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.x), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) });
     return s.col(.{ .pad = @splat(4), .gap = 2 }, kids);

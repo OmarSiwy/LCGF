@@ -5,11 +5,11 @@
 //! is part of the value.
 
 const std = @import("std");
-const types = @import("lcgr").types;
-const Input = @import("lcgr").input.Input;
-const Interaction = @import("lcgr").interaction.Interaction;
-const Tree = @import("lcgr").tree.Tree;
-const a11y = @import("lcgr").a11y_tree;
+const types = @import("lcgf").types;
+const Input = @import("lcgf").input.Input;
+const Interaction = @import("lcgf").interaction.Interaction;
+const Tree = @import("lcgf").tree.Tree;
+const a11y = @import("lcgf").a11y_tree;
 
 pub const EventLog = struct {
     /// Lines kept; older ones are overwritten.

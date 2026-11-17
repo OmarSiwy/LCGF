@@ -1,23 +1,23 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>lcgr: 2D-canvas conformance</title>
+<title>lcgf: 2D-canvas conformance</title>
 <!-- Draws every render conformance scene with the 2D-canvas fallback (canvas.zig: the software
      back end, presented with putImageData) and reads the canvas back with getImageData.
      browser.py --out writes the images; ci/jobs/web.sh compares them with the goldens. -->
 <canvas id="c"></canvas>
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgr.js";
+import { load, webgpu, canvas2d } from "./lcgf.js";
 import { base64 } from "./test_util.js";
 
-window.lcgrTest = (async () => {
+window.lcgfTest = (async () => {
     const canvas = document.getElementById("c");
     const ui = await load("scenes.wasm", webgpu, canvas2d(canvas), () => ({ host_custom() {} }));
     const ctx = canvas.getContext("2d");
     const images = {};
-    for (let i = 0; i < ui.exports.lcgr_scene_count(); i++) {
-        const size = ui.exports.lcgr_scene_size(i);
+    for (let i = 0; i < ui.exports.lcgf_scene_count(); i++) {
+        const size = ui.exports.lcgf_scene_size(i);
         const name = ui.logs.at(-1);
-        ui.exports.lcgr_canvas_scene(i);
+        ui.exports.lcgf_canvas_scene(i);
         const w = size & 0xffff, h = size >>> 16;
         images[name] = { w, h, rgba: base64(ctx.getImageData(0, 0, w, h).data) };
     }

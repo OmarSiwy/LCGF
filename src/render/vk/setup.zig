@@ -17,9 +17,9 @@ const swapchain = @import("swapchain.zig");
 const frame = @import("frame.zig");
 const pass = @import("pass.zig");
 const renderer = @import("renderer.zig");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const c = loader.c;
-const DrawList = lcgr.draw_list.DrawList;
+const DrawList = lcgf.draw_list.DrawList;
 const Glyphs = renderer.Glyphs;
 
 /// The device and what is drawn with: made once, kept while windows come and go.

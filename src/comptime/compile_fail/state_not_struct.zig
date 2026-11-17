@@ -1,6 +1,6 @@
 //! expect: state must be a struct, not u32
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
 comptime {
-    @import("lcgr").validate.check(u32, s.label(.x), .{});
+    @import("lcgf").validate.check(u32, s.label(.x), .{});
 }

@@ -9,22 +9,22 @@
 
 const std = @import("std");
 const linux = std.os.linux;
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const x11 = @import("x11");
 const host = @import("host");
 const example = @import("example");
-const context = lcgr.context;
-const scheduler = lcgr.scheduler;
-const sw = lcgr.render_sw;
-const wire = lcgr.shell_x11_wire;
-const Quad = lcgr.draw_list.Quad;
+const context = lcgf.context;
+const scheduler = lcgf.scheduler;
+const sw = lcgf.render_sw;
+const wire = lcgf.shell_x11_wire;
+const Quad = lcgf.draw_list.Quad;
 
 const limits: context.Limits = if (@hasDecl(example, "limits")) example.limits else .{ .nodes = 1024, .texts = 256 };
 const max_w = 1920;
 const max_h = 1200;
 
 var conn: x11.Connection = .{};
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var pixels: [sw.Framebuffer.len(max_w, max_h)]u32 = undefined;
 var glyphs: [8192]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
@@ -37,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
     const name = std.fs.path.basename(args.next() orelse "example");
-    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgr.types.inf;
+    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgf.types.inf;
 
     const display = env.get("DISPLAY") orelse return error.NoDisplay;
     var auth_path_buf: [512]u8 = undefined;

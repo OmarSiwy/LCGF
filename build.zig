@@ -1,4 +1,4 @@
-//! Build file for LCGR. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
+//! Build file for LCGF. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
 //!
 //! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
@@ -11,12 +11,12 @@ pub fn build(b: *std.Build) void {
     options.addOption(?u32, "lanes", b.option(u32, "lanes", "SIMD lanes per vector (default: the target's)"));
 
     // The package root. Every lane exports its file from here, so one module sees them all.
-    const lcgr = b.addModule("lcgr", .{
-        .root_source_file = b.path("src/lcgr.zig"),
+    const lcgf = b.addModule("lcgf", .{
+        .root_source_file = b.path("src/lcgf.zig"),
         .target = target,
         .optimize = optimize,
     });
-    lcgr.addOptions("build_options", options);
+    lcgf.addOptions("build_options", options);
 
     // Unicode property tables, generated on the host from the UCD files (src/text/unicode/gen.zig).
     const ucd_gen = b.addRunArtifact(b.addExecutable(.{ .name = "ucd-gen", .root_module = b.createModule(.{
@@ -28,12 +28,12 @@ pub fn build(b: *std.Build) void {
     const ucd = b.dependency("ucd", .{});
     for ([_][]const u8{ "auxiliary/GraphemeBreakProperty", "emoji/emoji-data", "DerivedCoreProperties", "auxiliary/WordBreakProperty", "LineBreak", "EastAsianWidth", "extracted/DerivedGeneralCategory", "extracted/DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
         ucd_gen.addFileArg(ucd.path(b.fmt("{s}.txt", .{f})));
-    lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
 
-    const lib = b.addLibrary(.{ .name = "lcgr", .root_module = lcgr });
+    const lib = b.addLibrary(.{ .name = "lcgf", .root_module = lcgf });
     b.getInstallStep().dependOn(&lib.step);
 
-    const tests = b.addTest(.{ .root_module = lcgr });
+    const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // For targets this machine cannot run (ci/run.sh cross).
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/text/unicode/conformance.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     for ([_][]const u8{ "auxiliary/GraphemeBreakTest", "auxiliary/WordBreakTest", "auxiliary/LineBreakTest", "BidiTest", "BidiCharacterTest", "Scripts" }) |f|
         conformance.root_module.addAnonymousImport(b.fmt("{s}.txt", .{std.fs.path.basename(f)}), .{ .root_source_file = ucd.path(b.fmt("{s}.txt", .{f})) });
@@ -53,19 +53,19 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/text/layout/conformance.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     text_conformance.root_module.addAnonymousImport("BidiCharacterTest.txt", .{ .root_source_file = ucd.path("BidiCharacterTest.txt") });
     b.step("text-conformance", "Lay out and reorder BidiCharacterTest lines").dependOn(&b.addRunArtifact(text_conformance).step);
 
     // The package root built ReleaseFast, for the branch census and the benchmark.
-    const lcgr_fast = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseFast });
-    lcgr_fast.addOptions("build_options", options);
+    const lcgf_fast = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseFast });
+    lcgf_fast.addOptions("build_options", options);
     const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
         .root_source_file = b.path("src/census_probes.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) });
     b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
 
@@ -74,7 +74,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tools/drawgolden/dump.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
     const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
     draw_dump.addPassthruArgs();
@@ -85,25 +85,25 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tools/widgetgolden/dump.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) }));
     widget_dump.addPassthruArgs();
     b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
 
-    // tools/bench times lcgr's runtime front end ("lcgr"); `--core=prototype` builds frames with the
-    // prototype core ("ui") and lays them out and paints them with lcgr, as before.
+    // tools/bench times lcgf's runtime front end ("lcgf"); `--core=prototype` builds frames with the
+    // prototype core ("ui") and lays them out and paints them with lcgf, as before.
     const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
     const bench_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = bench_core }} });
-    // The same scenes against lcgr's runtime front end (the default; tools/bench/src_ui.zig). A
+    // The same scenes against lcgf's runtime front end (the default; tools/bench/src_ui.zig). A
     // file belongs to one module per compilation, so this module roots a copy of bench/scenes/.
     const src_scenes_root = b.addWriteFiles().addCopyDirectory(b.path("bench/scenes"), "scenes", .{}).path(b, "scenes.zig");
-    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }} });
+    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
     const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgr", .module = lcgr_fast }, .{ .name = "scenes", .module = bench_scenes }, .{ .name = "src_scenes", .module = bench_src_scenes } },
+        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_scenes }, .{ .name = "src_scenes", .module = bench_src_scenes } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -117,7 +117,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("bench/gates/latency.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) }));
     b.step("gates-latency", "Print input-to-photon latency of the example, headless (bench/gates/)").dependOn(&gates_latency.step);
 
@@ -129,34 +129,34 @@ pub fn build(b: *std.Build) void {
     }) });
     const size_run = b.addRunArtifact(size_tool);
     const small_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseSmall });
-    const lcgr_small = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = .ReleaseSmall });
-    lcgr_small.addOptions("build_options", options);
+    const lcgf_small = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseSmall });
+    lcgf_small.addOptions("build_options", options);
     const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
-    const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr_small }} });
+    const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
-    // The reference row of docs/perf/vs.md: bench/vs/lcgr/, harness.h's driver over LCGR's
+    // The reference row of docs/perf/vs.md: bench/vs/lcgf/, harness.h's driver over LCGF's
     // frame, fast and small (bench/vs/measure.py).
-    const vs_lcgr = b.step("vs-lcgr", "Build the LCGR row of the comparison (bench/vs/lcgr/)");
-    vs_lcgr.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
-    for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgr", "vs-lcgr-small" }) |mode, name| {
-        const core = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = target, .optimize = mode });
+    const vs_lcgf = b.step("vs-lcgf", "Build the LCGF row of the comparison (bench/vs/lcgf/)");
+    vs_lcgf.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
+    for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgf", "vs-lcgf-small" }) |mode, name| {
+        const core = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = mode });
         core.addOptions("build_options", options);
-        const ui_mod = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgr", .module = core }} });
+        const ui_mod = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = core }} });
         const scenes_mod = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
         const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
-            .root_source_file = b.path("bench/vs/lcgr/main.zig"),
+            .root_source_file = b.path("bench/vs/lcgf/main.zig"),
             .target = target,
             .optimize = mode,
-            .imports = &.{ .{ .name = "lcgr", .module = core }, .{ .name = "scenes", .module = scenes_mod } },
+            .imports = &.{ .{ .name = "lcgf", .module = core }, .{ .name = "scenes", .module = scenes_mod } },
         }) });
-        vs_lcgr.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        vs_lcgf.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
     for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgr", .module = lcgr_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
+            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgf", .module = lcgf_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
     }
@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) void {
     if (b.lazyDependency("clay", .{})) |clay| {
         // vs-clay links glibc dynamically (Clay's fastest frames; libc's code is not in its
         // loaded bytes); vs-clay-static is static against musl, for resident memory and start-up
-        // beside the LCGR row, a static binary without libc: neither then pays for a dynamic C
+        // beside the LCGF row, a static binary without libc: neither then pays for a dynamic C
         // library's loading and pages (bench/vs/measure.py --startup).
         var musl = target.query;
         musl.abi = .musl;
@@ -226,7 +226,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/render/conformance/dump.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("conformance-dump", "Build zig-out/bin/conformance-dump (writes the render conformance scenes)").dependOn(&b.addInstallArtifact(conformance_dump, .{}).step);
     // The software renderer drawing a dumped frame as a PNG (src/render/sw/play.zig, ci/run.sh sw-golden).
@@ -234,7 +234,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/render/sw/play.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) });
     b.step("sw-play", "Build zig-out/bin/sw-play (draws a dumped frame in software)").dependOn(&b.addInstallArtifact(sw_play, .{}).step);
 
@@ -243,7 +243,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/render/shaders/dump.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("shaders-dump", "Build zig-out/bin/shaders-dump (writes every shader variant)").dependOn(&b.addInstallArtifact(shaders_dump, .{}).step);
 
@@ -266,7 +266,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/rodata_probe.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("ct-rodata", "Build the object the read-only-data check reads").dependOn(&b.addInstallFile(ct_rodata.getEmittedBin(), "ct_rodata.o").step);
     // Read-only and RAM bytes of each example comptime UI (ci/jobs/ct-sizes.sh).
@@ -274,7 +274,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/sizes.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) }));
     b.step("ct-sizes", "Print read-only and RAM bytes of each example comptime UI").dependOn(&ct_sizes.step);
     // Layout time of each example comptime UI against the runtime tree (ReleaseFast).
@@ -282,7 +282,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/layout_bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) }));
     b.step("ct-layout-bench", "Time comptime layout against the runtime tree per example").dependOn(&ct_layout_bench.step);
     // Both front ends in one program and one draw list (C0193-C0196): its tests, then the program.
@@ -290,7 +290,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/mixed.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
     const ct_mixed_step = b.step("ct-mixed", "Run the mixed front-end example (src/comptime/mixed.zig) and its tests");
     ct_mixed_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_mixed_mod })).step);
@@ -301,7 +301,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/layout_size_probe.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) });
     const ct_layout_size_run = b.addRunArtifact(ct_layout_size);
     ct_layout_size_run.step.dependOn(&b.addInstallArtifact(ct_layout_size, .{}).step);
@@ -327,7 +327,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+                .imports = &.{.{ .name = "lcgf", .module = lcgf }},
             }) });
             case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
             compile_fail.dependOn(&case.step);
@@ -338,7 +338,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/comptime/setter_probe.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("ct-setter", "Build the object the setter-shape check reads").dependOn(&b.addInstallFile(ct_setter.getEmittedBin(), "ct_setter.o").step);
     // Font parser fuzzing (src/text/font/fuzz.zig): seeded mutation loop for a set time.
@@ -359,13 +359,13 @@ pub fn build(b: *std.Build) void {
     b.step("png-fuzz", "Fuzz the PNG decoder: -- [seconds] [seed] [first]").dependOn(&png_fuzz.step);
 
     // The optional HarfBuzz adapter: outside the tiers (it links a C library), so a module of
-    // its own over lcgr, never imported by it.
+    // its own over lcgf, never imported by it.
     const harfbuzz = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/text/shape/harfbuzz.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // HarfBuzz 13.2.1 from build.zig.zon (lazy: fetched only for this step), compiled from its
     // single-file amalgamation; no system library.
@@ -381,24 +381,24 @@ pub fn build(b: *std.Build) void {
     b.step("harfbuzz", "Test the HarfBuzz shaping adapter (HarfBuzz built from source)").dependOn(&b.addRunArtifact(harfbuzz).step);
 
     // Developer tools (src/devtools/): outside the tiers (timing reads the host's std.Io clock),
-    // so a module of its own over lcgr, never imported by it.
+    // so a module of its own over lcgf, never imported by it.
     const devtools = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/devtools/devtools.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     devtools.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
     b.step("devtools", "Test the inspector and developer tools (ci/run.sh devtools)").dependOn(&b.addRunArtifact(devtools).step);
 
     // System font discovery for the fallback chain (src/text/fallback/system.zig): outside the
-    // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgr.
+    // tiers (DirectWrite, Core Text, fontconfig), a module of its own over lcgf.
     const fallback_system = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/text/fallback/system.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = target.result.os.tag != .windows,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     const fallback_run = b.addRunArtifact(fallback_system);
     // Its result depends on the installed fonts, which the cache cannot see.
@@ -407,12 +407,12 @@ pub fn build(b: *std.Build) void {
     b.step("fallback-system-build", "Compile the system font discovery tests without running them").dependOn(&fallback_system.step);
 
     // The i18n tables against CLDR 49 JSON (lazy: fetched only for this step). Test-only, so a
-    // module of its own over lcgr; the tables themselves stay hand-written and tier 0.
+    // module of its own over lcgf; the tables themselves stay hand-written and tier 0.
     const i18n_cldr = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/i18n/cldr.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     if (b.lazyDependency("cldr_core", .{})) |core| {
         i18n_cldr.root_module.addAnonymousImport("plurals.json", .{ .root_source_file = core.path("supplemental/plurals.json") });
@@ -431,20 +431,20 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/draw/paths_golden.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) }));
     paths_golden.addPassthruArgs();
     b.step("paths-golden", "Draw the path scenes for the golden check: -- OUT.bin").dependOn(&paths_golden.step);
 
     // The wgpu-native back end (src/render/wgpu/native.zig): outside the tiers, a module of its
-    // own over lcgr. wgpu-native's release archive for the target (build.zig.zon, lazy), its
+    // own over lcgf. wgpu-native's release archive for the target (build.zig.zon, lazy), its
     // headers translated here (@cImport is gone), its static library linked.
     const wgpu_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/render/wgpu/native.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // Draws the render conformance scenes as PNGs (src/render/wgpu/play.zig).
     const wgpu_play = b.addExecutable(.{ .name = "wgpu-play", .root_module = b.createModule(.{
@@ -452,7 +452,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // The wgpu side of the Vulkan back end's probe (src/render/vk/probe_wgpu.zig), over the
     // wgpu back end's native.zig as a module.
@@ -461,14 +461,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     const wgpu_native_mod = b.createModule(.{
         .root_source_file = b.path("src/render/wgpu/native.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
     vk_probe_wgpu.root_module.addImport("wgpu_native", wgpu_native_mod);
     // The wgpu-native major to build against: one archive per major and host target in
@@ -494,7 +494,7 @@ pub fn build(b: *std.Build) void {
         wgpu_h.addIncludePath(wgpu_native.path("include"));
         const wgpu_c = wgpu_h.createModule();
         vk_probe_wgpu.root_module.addImport("wgpu_c", wgpu_c);
-        // wgpu_native_mod carries its own link inputs, for vk-probe-wgpu and lcgr_render.
+        // wgpu_native_mod carries its own link inputs, for vk-probe-wgpu and lcgf_render.
         for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module, wgpu_native_mod }) |m| {
             m.addImport("wgpu_c", wgpu_c);
             m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
@@ -510,7 +510,7 @@ pub fn build(b: *std.Build) void {
         vk_probe_wgpu_step.dependOn(&b.addInstallArtifact(vk_probe_wgpu, .{}).step);
     }
 
-    // The Vulkan back end (src/render/vk/vk.zig): a module of its own over lcgr. Khronos
+    // The Vulkan back end (src/render/vk/vk.zig): a module of its own over lcgf. Khronos
     // Vulkan-Headers (build.zig.zon, lazy) translated with VK_NO_PROTOTYPES; the loader is the
     // platform's libvulkan, opened at run time, so nothing Vulkan is linked.
     const vk_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -518,7 +518,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // Draws the render conformance scenes as PNGs (src/render/vk/play.zig).
     const vk_play = b.addExecutable(.{ .name = "vk-play", .root_module = b.createModule(.{
@@ -526,7 +526,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // Memory and frame-time probe against the wgpu back end (src/render/vk/probe.zig).
     const vk_probe = b.addExecutable(.{ .name = "vk-probe", .root_module = b.createModule(.{
@@ -534,7 +534,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
     const vk_play_step = b.step("vk-play", "Build zig-out/bin/vk-play (draws the render conformance scenes with Vulkan) and vk-probe");
@@ -559,25 +559,25 @@ pub fn build(b: *std.Build) void {
 
     // The render back end an application builds against (src/render/select.zig): one, chosen
     // at compile time, no dispatch. `auto` is the target's own API.
-    const render = switch (b.option(RenderOption, "render", "Render back end of the lcgr_render module (default auto: the target's own API)") orelse .auto) {
+    const render = switch (b.option(RenderOption, "render", "Render back end of the lcgf_render module (default auto: the target's own API)") orelse .auto) {
         .auto => autoRender(target.result),
         inline else => |k| @field(Render, @tagName(k)),
     };
     const render_options = b.addOptions();
     render_options.addOption(Render, "render", render);
-    const lcgr_render = b.addModule("lcgr_render", .{
+    const lcgf_render = b.addModule("lcgf_render", .{
         .root_source_file = b.path("src/render/select.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
-    lcgr_render.addOptions("render_options", render_options);
-    if (renderBackend(b, render, target, optimize, lcgr, wgpu_native_mod)) |m| lcgr_render.addImport("render_backend", m);
-    const render_check = b.addObject(.{ .name = "render-select", .root_module = lcgr_render });
-    b.step("render", "Compile the lcgr_render module for -Drender and -Dtarget (src/render/select.zig)").dependOn(&render_check.step);
+    lcgf_render.addOptions("render_options", render_options);
+    if (renderBackend(b, render, target, optimize, lcgf, wgpu_native_mod)) |m| lcgf_render.addImport("render_backend", m);
+    const render_check = b.addObject(.{ .name = "render-select", .root_module = lcgf_render });
+    b.step("render", "Compile the lcgf_render module for -Drender and -Dtarget (src/render/select.zig)").dependOn(&render_check.step);
     if (render == .wgpu and !wgpu_supported) render_check.step.dependOn(&b.addFail("-Drender=wgpu needs -Dwgpu-native=v27 or v29 on a target with an archive").step);
     // The selector's zero-cost check (src/render/select_probe.zig, ci/run.sh render-select):
-    // one probe object through lcgr_render and one through the back end's own module,
+    // one probe object through lcgf_render and one through the back end's own module,
     // ReleaseFast and stripped, in zig-out/render-probe/.
     const render_probe_step = b.step("render-probe", "Build the -Drender probe through the selector and directly into zig-out/render-probe/");
     render_probe_step.dependOn(&render_check.step);
@@ -589,25 +589,25 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = .ReleaseFast,
             .strip = true,
-            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+            .imports = &.{.{ .name = "lcgf", .module = lcgf }},
         });
         m.addOptions("probe_options", probe_options);
-        if (selector) m.addImport("lcgr_render", lcgr_render) else {
+        if (selector) m.addImport("lcgf_render", lcgf_render) else {
             m.addOptions("render_options", render_options);
-            if (renderBackend(b, render, target, optimize, lcgr, wgpu_native_mod)) |backend| m.addImport("render_backend", backend);
+            if (renderBackend(b, render, target, optimize, lcgf, wgpu_native_mod)) |backend| m.addImport("render_backend", backend);
         }
         const obj = b.addObject(.{ .name = "probe", .root_module = m });
         render_probe_step.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("render-probe/{s}.o", .{if (selector) "selector" else "direct"})).step);
     }
 
-    // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgr. EGL and
+    // The GL ES back end (src/render/gles/gles.zig): a module of its own over lcgf. EGL and
     // GL ES are the platform's, opened at run time, so nothing GL is linked.
     const gles_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/render/gles/gles.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // Draws the render conformance scenes as PNGs (src/render/gles/play.zig).
     const gles_play = b.addExecutable(.{ .name = "gles-play", .root_module = b.createModule(.{
@@ -615,7 +615,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // The committed GLSL ES 3.0 of the shipped shaders (src/render/shaders/gen/, from naga).
     for ([_]*std.Build.Module{ gles_tests.root_module, gles_play.root_module }) |m| {
@@ -626,7 +626,7 @@ pub fn build(b: *std.Build) void {
     b.step("gles", "Test the GL ES back end on a real driver (ci/run.sh gles)").dependOn(&b.addRunArtifact(gles_tests).step);
     b.step("gles-play", "Build zig-out/bin/gles-play (draws the render conformance scenes with GL ES)").dependOn(&b.addInstallArtifact(gles_play, .{}).step);
 
-    // The bare-metal example (src/shell/baremetal/firmware.zig), a module of its own over lcgr:
+    // The bare-metal example (src/shell/baremetal/firmware.zig), a module of its own over lcgf:
     // its test runs it here, and it is built as a freestanding executable for two
     // microcontrollers (ci/run.sh baremetal).
     const baremetal_step = b.step("baremetal", "Run the bare-metal example and build it for Cortex-M7 and RV32IMAC");
@@ -634,7 +634,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     baremetal_step.dependOn(&b.addRunArtifact(firmware_test).step);
     for ([_]struct { []const u8, std.Target.Query }{
@@ -642,14 +642,14 @@ pub fn build(b: *std.Build) void {
         .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } }, // RV32IMAC
     }) |mcu| {
         const mcu_target = b.resolveTargetQuery(mcu[1]);
-        const mcu_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
-        mcu_lcgr.addOptions("build_options", options);
-        mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const mcu_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
+        mcu_lcgf.addOptions("build_options", options);
+        mcu_lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
         const firmware = b.addExecutable(.{ .name = b.fmt("firmware-{s}", .{mcu[0]}), .root_module = b.createModule(.{
             .root_source_file = b.path("src/shell/baremetal/firmware.zig"),
             .target = mcu_target,
             .optimize = .ReleaseSmall,
-            .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
+            .imports = &.{.{ .name = "lcgf", .module = mcu_lcgf }},
         }) });
         firmware.entry = .{ .symbol_name = "_start" };
         baremetal_step.dependOn(&b.addInstallArtifact(firmware, .{}).step);
@@ -661,7 +661,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("examples/embedded/demo.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     embedded_step.dependOn(&b.addRunArtifact(embedded_test).step);
     for ([_]struct { []const u8, std.Target.Query }{
@@ -669,15 +669,15 @@ pub fn build(b: *std.Build) void {
         .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } },
     }) |mcu| {
         const mcu_target = b.resolveTargetQuery(mcu[1]);
-        const mcu_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
-        mcu_lcgr.addOptions("build_options", options);
-        mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const mcu_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = mcu_target, .optimize = .ReleaseSmall });
+        mcu_lcgf.addOptions("build_options", options);
+        mcu_lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
         const demo = b.addExecutable(.{ .name = b.fmt("embedded-demo-{s}", .{mcu[0]}), .root_module = b.createModule(.{
             .root_source_file = b.path("examples/embedded/demo.zig"),
             .target = mcu_target,
             .optimize = .ReleaseSmall,
             .strip = false,
-            .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
+            .imports = &.{.{ .name = "lcgf", .module = mcu_lcgf }},
         }) });
         demo.entry = .{ .symbol_name = "_start" };
         embedded_step.dependOn(&b.addInstallArtifact(demo, .{}).step);
@@ -686,36 +686,36 @@ pub fn build(b: *std.Build) void {
     // loads them, installed together in zig-out/web/ for a browser (ci/run.sh web).
     const web_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
     const web_optimize = b.option(std.builtin.OptimizeMode, "web-optimize", "Optimize mode of the web modules (default ReleaseSmall)") orelse .small;
-    const lcgr_web = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = web_target, .optimize = web_optimize });
-    lcgr_web.addOptions("build_options", options);
-    lcgr_web.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const lcgf_web = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = web_target, .optimize = web_optimize });
+    lcgf_web.addOptions("build_options", options);
+    lcgf_web.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const web_step = b.step("web", "Build the web examples and their JavaScript into zig-out/web/ (ci/run.sh web)");
     for ([_][]const u8{ "hello", "scenes", "layout" }) |name| {
         const wasm = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/render/web/{s}.zig", .{name})),
             .target = web_target,
             .optimize = web_optimize,
-            .imports = &.{.{ .name = "lcgr", .module = lcgr_web }},
+            .imports = &.{.{ .name = "lcgf", .module = lcgf_web }},
         }) });
         wasm.entry = .disabled;
         wasm.rdynamic = true;
         web_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     }
     web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/render/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
-    // The web shell's example (src/shell/web/): the shell from lcgr, the back end as a module.
-    const render_web = b.createModule(.{ .root_source_file = b.path("src/render/web/web.zig"), .target = web_target, .optimize = web_optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr_web }} });
+    // The web shell's example (src/shell/web/): the shell from lcgf, the back end as a module.
+    const render_web = b.createModule(.{ .root_source_file = b.path("src/render/web/web.zig"), .target = web_target, .optimize = web_optimize, .imports = &.{.{ .name = "lcgf", .module = lcgf_web }} });
     const shell_wasm = b.addExecutable(.{ .name = "shell", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/web/main.zig"),
         .target = web_target,
         .optimize = web_optimize,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr_web }, .{ .name = "render_web", .module = render_web } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_web }, .{ .name = "render_web", .module = render_web } },
     }) });
     shell_wasm.entry = .disabled;
     shell_wasm.rdynamic = true;
     web_step.dependOn(&b.addInstallArtifact(shell_wasm, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
     web_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/shell/web"), .install_dir = .{ .custom = "web" }, .install_subdir = "", .include_extensions = &.{ ".js", ".html" } }).step);
 
-    // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgr. libobjc,
+    // The Metal back end (src/render/metal/metal.zig): a module of its own over lcgf. libobjc,
     // Metal and QuartzCore are the platform's, opened at run time, so nothing is linked and it
     // cross-compiles from Linux (ci/run.sh metal).
     const metal_tests = b.addTest(.{ .name = "metal-test", .root_module = b.createModule(.{
@@ -723,7 +723,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // Draws the render conformance scenes as PNGs on a Mac (src/render/metal/play.zig).
     const metal_play = b.addExecutable(.{ .name = "metal-play", .root_module = b.createModule(.{
@@ -731,7 +731,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     // The committed MSL of the shipped shaders (src/render/shaders/gen/, from naga).
     for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module }) |m| for ([_][]const u8{ "stock", "example" }) |v|
@@ -740,14 +740,14 @@ pub fn build(b: *std.Build) void {
     b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
     b.step("metal-play", "Build zig-out/bin/metal-play (draws the render conformance scenes with Metal)").dependOn(&b.addInstallArtifact(metal_play, .{}).step);
 
-    // The Direct3D 12 back end (src/render/d3d12/d3d12.zig): a module of its own over lcgr, always
+    // The Direct3D 12 back end (src/render/d3d12/d3d12.zig): a module of its own over lcgf, always
     // built for x86_64-windows (ci/run.sh d3d12 runs it under Wine). Zig's own MinGW-w64 headers
     // are translated for the structs and constants (com.zig checks its hand-written vtable slots
     // against them); d3d12, dxgi and d3dcompiler_47 are linked from Zig's MinGW import libraries.
     const win = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu });
-    const lcgr_win = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = win, .optimize = optimize });
-    lcgr_win.addOptions("build_options", options);
-    lcgr_win.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const lcgf_win = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = win, .optimize = optimize });
+    lcgf_win.addOptions("build_options", options);
+    lcgf_win.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const d3d12_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c.h"), .target = win, .optimize = optimize, .link_libc = true });
     const d3d12_c = d3d12_h.createModule();
     const d3d12_tests = b.addTest(.{ .name = "d3d12-test", .root_module = b.createModule(.{
@@ -755,7 +755,7 @@ pub fn build(b: *std.Build) void {
         .target = win,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
     }) });
     // Draws the render conformance scenes as PNGs (src/render/d3d12/play.zig).
     const d3d12_play = b.addExecutable(.{ .name = "d3d12-play", .root_module = b.createModule(.{
@@ -763,7 +763,7 @@ pub fn build(b: *std.Build) void {
         .target = win,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
     }) });
     for ([_]*std.Build.Module{ d3d12_tests.root_module, d3d12_play.root_module }) |m| {
         for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
@@ -778,7 +778,7 @@ pub fn build(b: *std.Build) void {
     d3d12_step.dependOn(&b.addInstallArtifact(d3d12_play, .{}).step);
 
     // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
-    // lcgr. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
+    // lcgf. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
     // libraries per target; its few calls are declared by hand (c.zig), so no header is
     // translated.
     const accesskit_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -786,7 +786,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     const accesskit_step = b.step("accesskit", "Test the AccessKit bridge against AccessKit's C library (ci/run.sh accesskit)");
     const accesskit_build_step = b.step("accesskit-build", "Compile and link the AccessKit bridge tests without running them");
@@ -826,7 +826,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .link_libc = true,
-                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+                .imports = &.{.{ .name = "lcgf", .module = lcgf }},
             }) });
             smoke.root_module.addObjectFile(ak.path(ak_lib.?));
             for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| smoke.root_module.linkSystemLibrary(l, .{});
@@ -836,34 +836,34 @@ pub fn build(b: *std.Build) void {
         accesskit_build_step.dependOn(&accesskit_tests.step);
     }
 
-    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgr, Linux only. Its
-    // tests that need a server run when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11).
+    // The X11 shell (src/shell/x11/x11.zig): a module of its own over lcgf, Linux only. Its
+    // tests that need a server run when LCGF_X11_TEST_DISPLAY names one (ci/run.sh x11).
     const x11_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/x11/x11.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     x11_tests.root_module.addAnonymousImport("example.replay", .{ .root_source_file = b.path("src/shell/testdata/example.replay") });
     const x11_run = b.addRunArtifact(x11_tests);
     x11_run.has_side_effects = true; // the result depends on the X server, not only on the inputs
-    b.step("x11", "Test the X11 shell (on a server when LCGR_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
+    b.step("x11", "Test the X11 shell (on a server when LCGF_X11_TEST_DISPLAY is set; ci/run.sh x11)").dependOn(&x11_run.step);
     // The example application in an X11 window (src/shell/x11/example.zig).
     const x11_example = b.addExecutable(.{ .name = "x11-example", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/x11/example.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
 
-    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgr. user32, gdi32
+    // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgf. user32, gdi32
     // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
     const win32_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/win32/win32.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("win32", "Test the Win32 shell on Windows").dependOn(&b.addRunArtifact(win32_tests).step);
     b.step("win32-build", "Compile the Win32 shell's tests without running them (ci/run.sh win32)").dependOn(&win32_tests.step);
@@ -872,24 +872,24 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/shell/win32/example.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("win32-example", "Build zig-out/bin/win32-example.exe, the example in a Win32 window").dependOn(&b.addInstallArtifact(win32_example, .{}).step);
 
-    // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgr and the Metal back end.
+    // The iOS shell (src/shell/ios/ios.zig) and its example, over lcgf and the Metal back end.
     // UIKit, Core Foundation and Metal are opened at run time; without an iOS SDK nothing links
     // here, so the example is a static library an app bundle links (ci/run.sh ios).
-    const ios_metal = renderBackend(b, .metal, target, optimize, lcgr, wgpu_native_mod).?;
+    const ios_metal = renderBackend(b, .metal, target, optimize, lcgf, wgpu_native_mod).?;
     const ios_example = b.addLibrary(.{ .name = "ios-example", .linkage = .static, .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/ios/example.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = ios_metal } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "metal", .module = ios_metal } },
     }) });
     b.step("ios-build", "Build zig-out/lib/libios-example.a, the example in the iOS shell (-Dtarget=aarch64-ios; --replay runs the input replay test)").dependOn(&b.addInstallArtifact(ios_example, .{}).step);
 
-    // The Android shell (src/shell/android/android.zig) and its example, over lcgr and the
+    // The Android shell (src/shell/android/android.zig) and its example, over lcgf and the
     // Vulkan back end: a shared library a NativeActivity loads. There is no NDK here, so the
     // Android libraries are linked through stubs: empty shared libraries named libandroid.so,
     // liblog.so, libdl.so, libm.so and libc.so (libc's defines `abort` and `pthread_create`,
@@ -917,13 +917,13 @@ pub fn build(b: *std.Build) void {
             }) });
             sysroot_tool.addFileArg(stub.getEmittedBin());
         }
-        const android_vk = renderBackend(b, .vk, target, optimize, lcgr, wgpu_native_mod).?;
+        const android_vk = renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod).?;
         const android_example = b.addLibrary(.{ .name = "android-example", .linkage = .dynamic, .root_module = b.createModule(.{
             .root_source_file = b.path("src/shell/android/example.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "vk", .module = android_vk } },
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk", .module = android_vk } },
         }) });
         android_example.setLibCFile(sysroot.path(b, "libc.txt"));
         android_example.root_module.addLibraryPath(sysroot);
@@ -931,28 +931,28 @@ pub fn build(b: *std.Build) void {
         android_step.dependOn(&b.addInstallArtifact(android_example, .{}).step);
     } else android_step.dependOn(&b.addFail("android-build needs -Dtarget=aarch64-linux-android").step);
 
-    // The Wayland shell (src/shell/wayland/): a module of its own over lcgr, Linux only. Its
+    // The Wayland shell (src/shell/wayland/): a module of its own over lcgf, Linux only. Its
     // tests run against a fake compositor on a socket pair; wayland-example opens a real window.
     const wayland_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/wayland/wayland.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("wayland", "Test the Wayland shell against a fake compositor (ci/run.sh wayland)").dependOn(&b.addRunArtifact(wayland_tests).step);
     const wayland_example = b.addExecutable(.{ .name = "wayland-example", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/wayland/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("wayland-example", "Build zig-out/bin/wayland-example (the example in a Wayland window)").dependOn(&b.addInstallArtifact(wayland_example, .{}).step);
 
-    // docs/: the API index, generated from the files src/lcgr.zig exports (docs/api/apiindex.py,
+    // docs/: the API index, generated from the files src/lcgf.zig exports (docs/api/apiindex.py,
     // zig-out/docs/API.md; ci/run.sh docs). It reads src/ itself, so it runs every time.
     const api_index = b.addSystemCommand(&.{"python3"});
     api_index.addFileArg(b.path("docs/api/apiindex.py"));
-    api_index.addFileArg(b.path("src/lcgr.zig"));
+    api_index.addFileArg(b.path("src/lcgf.zig"));
     api_index.has_side_effects = true;
     const docs_step = b.step("docs", "Generate zig-out/docs/API.md and test the guides' examples");
     docs_step.dependOn(&b.addInstallFile(api_index.addOutputFileArg("API.md"), "docs/API.md").step);
@@ -962,15 +962,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("docs/guide/guides.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
-    // docs/guide/backends.zig draws through the selector: its own lcgr_render, with sw, so the
+    // docs/guide/backends.zig draws through the selector: its own lcgf_render, with sw, so the
     // example runs without a GPU whatever -Drender says.
     const guide_render_options = b.addOptions();
     guide_render_options.addOption(Render, "render", .sw);
-    const guide_render = b.createModule(.{ .root_source_file = b.path("src/render/select.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    const guide_render = b.createModule(.{ .root_source_file = b.path("src/render/select.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
     guide_render.addOptions("render_options", guide_render_options);
-    guide_tests.root_module.addImport("lcgr_render", guide_render);
+    guide_tests.root_module.addImport("lcgf_render", guide_render);
     docs_step.dependOn(&b.addRunArtifact(guide_tests).step);
     const snippets = b.addSystemCommand(&.{"python3"});
     snippets.addFileArg(b.path("docs/guide/snippets.py"));
@@ -996,7 +996,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(b.pathJoin(&.{ sub, entry.name })),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+                .imports = &.{.{ .name = "lcgf", .module = lcgf }},
             }) });
             case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
             docs_step.dependOn(&case.step);
@@ -1006,49 +1006,49 @@ pub fn build(b: *std.Build) void {
     // The examples (examples/): their smoke tests, and each one in an X11 window
     // (examples/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
     const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
-    const examples_host = b.createModule(.{ .root_source_file = b.path("examples/host.zig"), .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    const examples_host = b.createModule(.{ .root_source_file = b.path("examples/host.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
     const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("examples/examples.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = examples_host } },
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
-    const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
     for ([_][]const u8{ "hello", "counter", "form", "list", "dashboard", "viewport", "texture" }) |name| {
-        const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "host", .module = examples_host } } });
+        const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = examples_host } } });
         const exe = b.addExecutable(.{ .name = b.fmt("example-{s}", .{name}), .root_module = b.createModule(.{
             .root_source_file = b.path("examples/window.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "x11", .module = examples_x11 }, .{ .name = "host", .module = examples_host }, .{ .name = "example", .module = app } },
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "x11", .module = examples_x11 }, .{ .name = "host", .module = examples_host }, .{ .name = "example", .module = app } },
         }) });
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
     // The microcontroller demo (examples/mcu.zig) also links for a Cortex-M7 with no OS.
     const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
-    const m7_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = m7, .optimize = .ReleaseSmall });
-    m7_lcgr.addOptions("build_options", options);
-    m7_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    const m7_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = m7, .optimize = .ReleaseSmall });
+    m7_lcgf.addOptions("build_options", options);
+    m7_lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const mcu_exe = b.addExecutable(.{ .name = "example-mcu-cortex-m7", .root_module = b.createModule(.{
         .root_source_file = b.path("examples/mcu.zig"),
         .target = m7,
         .optimize = .ReleaseSmall,
-        .imports = &.{.{ .name = "lcgr", .module = m7_lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = m7_lcgf }},
     }) });
     mcu_exe.entry = .{ .symbol_name = "_start" };
     examples_step.dependOn(&b.addInstallArtifact(mcu_exe, .{ .dest_dir = .{ .override = .{ .custom = "mcu" } } }).step);
 
-    // The macOS shell (src/shell/macos/macos.zig): a module of its own over lcgr and the Metal
+    // The macOS shell (src/shell/macos/macos.zig): a module of its own over lcgf and the Metal
     // back end. AppKit, Metal and libobjc are opened at run time, so nothing is linked and it
     // cross-compiles from Linux (ci/run.sh shell-macos); build with -Dtarget=aarch64-macos.
-    const macos_metal = renderBackend(b, .metal, target, optimize, lcgr, wgpu_native_mod).?;
+    const macos_metal = renderBackend(b, .metal, target, optimize, lcgf, wgpu_native_mod).?;
     const macos_tests = b.addTest(.{ .name = "macos-test", .root_module = b.createModule(.{
         .root_source_file = b.path("src/shell/macos/macos.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "metal", .module = macos_metal } },
     }) });
     b.step("macos", "Test the macOS shell on macOS").dependOn(&b.addRunArtifact(macos_tests).step);
     b.step("macos-build", "Compile and link the macOS shell's tests without running them (ci/run.sh shell-macos)").dependOn(&b.addInstallArtifact(macos_tests, .{}).step);
@@ -1058,7 +1058,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{ .{ .name = "lcgr", .module = lcgr }, .{ .name = "metal", .module = macos_metal } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "metal", .module = macos_metal } },
     }) });
     b.step("macos-example", "Build zig-out/bin/macos-example, the example in a macOS window").dependOn(&b.addInstallArtifact(macos_example, .{}).step);
 
@@ -1084,9 +1084,9 @@ fn autoRender(t: std.Target) Render {
 }
 
 /// The module of render back end `kind` for `target`, with the generated sources it embeds
-/// (src/render/shaders/gen/) and its C headers translated. Null for sw, which is part of lcgr.
+/// (src/render/shaders/gen/) and its C headers translated. Null for sw, which is part of lcgf.
 /// `wgpu` is the given module (it needs the -Dwgpu-native archive).
-fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, lcgr: *std.Build.Module, wgpu: *std.Build.Module) ?*std.Build.Module {
+fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, lcgf: *std.Build.Module, wgpu: *std.Build.Module) ?*std.Build.Module {
     const root = switch (kind) {
         .sw => return null,
         .wgpu => return wgpu,
@@ -1101,7 +1101,7 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
         .target = target,
         .optimize = optimize,
         .link_libc = kind != .web,
-        .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
     const shader = struct {
         fn add(mb: *std.Build, mod: *std.Build.Module, comptime name: []const u8, comptime file: []const u8) void {

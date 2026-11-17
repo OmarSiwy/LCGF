@@ -11,12 +11,12 @@ of all of them to `zig-out/docs/API.md`.
 
 | File | What it gives you |
 |---|---|
-| `src/comptime/spec.zig` (`lcgr.spec`) | `Spec` and the builders `col`, `row`, `label`, `checkbox`, `slider`, `named` |
-| `src/comptime/validate.zig` (`lcgr.validate`) | `check`: mistakes in a spec become compile errors |
-| `src/comptime/flatten.zig` (`lcgr.flatten`) | `Flat(spec)`: the structure as read-only tables |
-| `src/comptime/signals.zig` (`lcgr.signals`) | `Signals(State, spec)`: dirty masks, setters, derived fields, effects |
-| `src/comptime/events.zig` (`lcgr.events`) | `Events(spec)`: the `Widget` enum, hit testing, pointer and keyboard events |
-| `src/widgets/base.zig` (`lcgr.widgets_base`) | `ComptimeUi(State, spec, theme)`: all of the above running the reference widgets, one call per frame |
+| `src/comptime/spec.zig` (`lcgf.spec`) | `Spec` and the builders `col`, `row`, `label`, `checkbox`, `slider`, `named` |
+| `src/comptime/validate.zig` (`lcgf.validate`) | `check`: mistakes in a spec become compile errors |
+| `src/comptime/flatten.zig` (`lcgf.flatten`) | `Flat(spec)`: the structure as read-only tables |
+| `src/comptime/signals.zig` (`lcgf.signals`) | `Signals(State, spec)`: dirty masks, setters, derived fields, effects |
+| `src/comptime/events.zig` (`lcgf.events`) | `Events(spec)`: the `Widget` enum, hit testing, pointer and keyboard events |
+| `src/widgets/base.zig` (`lcgf.widgets_base`) | `ComptimeUi(State, spec, theme)`: all of the above running the reference widgets, one call per frame |
 
 ## State and spec
 
@@ -24,7 +24,7 @@ The state is a plain struct with defaults. The spec is a tree of builder calls; 
 are enum literals, so a widget is named `.mute` and its field `.muted`.
 
 ```zig
-const s = lcgr.spec;
+const s = lcgf.spec;
 
 const Mixer = struct {
     title: []const u8 = "Mixer",
@@ -40,7 +40,7 @@ const mixer = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
 });
 
 comptime {
-    lcgr.validate.check(Mixer, mixer, .{});
+    lcgf.validate.check(Mixer, mixer, .{});
 }
 ```
 
@@ -57,7 +57,7 @@ such as `col > row[1] > slider[0]: ...`.
 a flattened spec from a tree built at run time. The index type is the smallest that fits:
 
 ```zig
-const F = lcgr.flatten.Flat(mixer);
+const F = lcgf.flatten.Flat(mixer);
 try testing.expectEqual(8, F.node_count);
 try testing.expectEqual(u4, F.Index);
 try testing.expectEqualSlices(F.Index, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &F.parent);
@@ -70,7 +70,7 @@ a slider keeps its size, so changing its value only repaints it, while a label's
 its size, so it is laid out again with its ancestors.
 
 ```zig
-const S = lcgr.signals.Signals(Mixer, mixer);
+const S = lcgf.signals.Signals(Mixer, mixer);
 var rt: S.Runtime = .{};
 _ = rt.takeDirty(); // every node starts dirty: the first frame does everything
 
@@ -129,7 +129,7 @@ Every node with an id becomes a tag of `Events(spec).Widget`, valued by its row.
 is an exhaustive switch:
 
 ```zig
-const E = lcgr.events.Events(mixer);
+const E = lcgf.events.Events(mixer);
 try testing.expectEqual(4, @backingInt(E.Widget.volume)); // the tag's value is its row
 const hit: E.Widget = .mute;
 const label = switch (hit) { // a widget missing here is a compile error
@@ -161,7 +161,7 @@ Its nodes flatten exactly like the same nodes written inline.
 `src/widgets/base.zig`. Their builders live in `widgets_base.ct` and take the theme:
 
 ```zig
-const w = lcgr.widgets_base;
+const w = lcgf.widgets_base;
 const th: w.Theme = .default;
 
 const Toolbar = struct {

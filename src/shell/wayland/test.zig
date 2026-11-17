@@ -5,18 +5,18 @@
 //! instead of carrying a protocol description.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const wire = @import("wire.zig");
 const wl = @import("wayland.zig");
 const Wayland = wl.Wayland;
 const linux = std.os.linux;
 const testing = std.testing;
-const context = lcgr.context;
-const iface = lcgr.shell_iface;
+const context = lcgf.context;
+const iface = lcgf.shell_iface;
 const Events = iface.Events;
-const example = lcgr.shell_example;
-const Color = lcgr.types.Color;
-const Input = lcgr.input.Input;
+const example = lcgf.shell_example;
+const Color = lcgf.types.Color;
+const Input = lcgf.input.Input;
 
 /// A request the client sent, for assertions.
 pub const Request = struct { kind: wl.Kind, id: u32, opcode: u16, arg0: u32, arg1: u32 };
@@ -158,8 +158,8 @@ const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 
 /// Everything the example and the shell need, static.
 pub const Fixture = struct {
-    var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
-    var glyphs: [512]lcgr.draw_list.Quad = undefined;
+    var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+    var glyphs: [512]lcgf.draw_list.Quad = undefined;
     var first: [limits.texts]u32 = undefined;
     var count: [limits.texts]u32 = undefined;
 
@@ -218,7 +218,7 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     try testing.expect(shell.windows[0].configured);
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
     try testing.expect(out.status.ok());
-    try testing.expectEqual(lcgr.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
+    try testing.expectEqual(lcgf.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
 
     // The committed buffer holds the frame: the same pixels the headless shell checks.
     try testing.expectEqual([2]u32{ 800, 600 }, fake.committedSize());
@@ -239,7 +239,7 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     fake.pump(&shell);
     try testing.expectEqual(presents + 1, shell.presents);
     try testing.expectEqual([2]u32{ 1024, 768 }, fake.committedSize());
-    try testing.expectEqual(lcgr.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 1024, .y1 = 768 }, out.tree.rect(out.tree.find(example.id_viewport)));
+    try testing.expectEqual(lcgf.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 1024, .y1 = 768 }, out.tree.rect(out.tree.find(example.id_viewport)));
     try testing.expectEqual(th.panel, fake.pixel(80, 760));
 
     // Close: the shell has no more frames.
@@ -481,7 +481,7 @@ test "wayland: fractional scale 1.5 draws 1200 x 900 pixels shown at 800 x 600" 
     try testing.expectEqual(@as(f32, 1.5), ev.in.scale);
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
     // Layout stays logical; the buffer is physical, and the viewport maps it back.
-    try testing.expectEqual(lcgr.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
+    try testing.expectEqual(lcgf.types.Rect{ .x0 = 160, .y0 = 50, .x1 = 800, .y1 = 600 }, out.tree.rect(out.tree.find(example.id_viewport)));
     try testing.expectEqual([2]u32{ 1200, 900 }, fake.committedSize());
     const dest = fake.sent(.viewport, 2).?;
     try testing.expectEqual([2]u32{ 800, 600 }, [2]u32{ dest.arg0, dest.arg1 });
@@ -708,7 +708,7 @@ test "wayland: the input method follows wants_text, composes, then commits" {
     try testing.expectEqual(shell.globals.get(.wl_seat), fake.sent(.text_input_manager, 1).?.arg1);
 
     // Not focused yet: a request waits for enter.
-    const field: lcgr.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
+    const field: lcgf.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
     fake.logged = 0;
     shell.apply(&.{ .wants_text = true, .ime_rect = field });
     fake.pump(&shell);
@@ -763,7 +763,7 @@ test "wayland: the input method gets the field's purpose and surrounding text" {
     _ = shell.poll(&ev);
 
     // A password field: hidden and sensitive, purpose password; its text and caret go along.
-    const field: lcgr.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
+    const field: lcgf.types.Rect = .{ .x0 = 10, .y0 = 20, .x1 = 210, .y1 = 44 };
     fake.logged = 0;
     shell.apply(&.{ .wants_text = true, .ime_rect = field, .purpose = .secure, .surrounding = "abc", .selection = .{ 1, 3 } });
     fake.pump(&shell);
@@ -803,7 +803,7 @@ test "wayland: a held key repeats at the compositor's rate, and wait wakes for i
 
     // Nothing else is coming, yet the wait ends when the repeat is due.
     const t0 = shell.clock();
-    shell.wait(lcgr.types.inf, .idle);
+    shell.wait(lcgf.types.inf, .idle);
     const slept = shell.clock() - t0;
     try testing.expect(slept >= 0.03 and slept < 1);
     _ = shell.poll(&ev);
@@ -834,7 +834,7 @@ test "wayland: wake from another thread ends a wait that would sleep forever" {
     _ = shell.poll(&ev);
     const t = try std.Thread.spawn(.{}, worker, .{&shell});
     const t0 = shell.clock();
-    shell.wait(lcgr.types.inf, .idle);
+    shell.wait(lcgf.types.inf, .idle);
     t.join();
     try testing.expect(shell.clock() - t0 < 5);
     try testing.expect(shell.poll(&ev));
@@ -943,7 +943,7 @@ test "wayland: a popup below its anchor, placed and closed by the compositor" {
     fake.configure(&shell, 800, 600);
     _ = shell.pollWindows(evs[0..1]);
     fake.logged = 0;
-    const anchor: lcgr.types.Rect = .{ .x0 = 8, .y0 = 8, .x1 = 66, .y1 = 42 };
+    const anchor: lcgf.types.Rect = .{ .x0 = 8, .y0 = 8, .x1 = 66, .y1 = 42 };
     const k = shell.openPopup(.{ .parent = 0, .anchor = anchor, .size = .{ 300, 120 } }).?;
     fake.pump(&shell);
     // The positioner: size, anchor rect, below-left anchor growing right, then get_popup on

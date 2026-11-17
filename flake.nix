@@ -1,5 +1,5 @@
 {
-  description = "LCGR: Lightweight Comptime Graphics Renderer";
+  description = "LCGF: Lightweight Comptime Graphics Framework";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

@@ -233,7 +233,7 @@ threads, `sw.tile`).
 ## C0425: the decision
 
 **Keep Gompute, as an optional offscreen and heavy-effects back end; not as a presenting renderer
-and not as a replacement for any graphics back end.** It stays out of lcgr.zig, behind the lazy
+and not as a replacement for any graphics back end.** It stays out of lcgf.zig, behind the lazy
 `zig build gompute` steps, and nothing else depends on it.
 
 Why keep it, from the numbers above:

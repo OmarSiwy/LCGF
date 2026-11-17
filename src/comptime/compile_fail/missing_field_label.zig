@@ -1,5 +1,5 @@
 //! expect: col > label[0]: state missing_field_label.State has no field 'tilte'
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
 /// A declaration is not a field: binding to it is still an error.
 const State = struct {
@@ -8,5 +8,5 @@ const State = struct {
 };
 
 comptime {
-    @import("lcgr").validate.check(State, s.col(.{}, .{s.label(.tilte)}), .{ .require_names = false });
+    @import("lcgf").validate.check(State, s.col(.{}, .{s.label(.tilte)}), .{ .require_names = false });
 }

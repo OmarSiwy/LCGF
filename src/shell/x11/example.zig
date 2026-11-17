@@ -8,21 +8,21 @@
 //! for 2 on Xvfb). Prints how many frames it built and drew.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const x11 = @import("x11.zig");
-const context = lcgr.context;
-const scheduler = lcgr.scheduler;
-const sw = lcgr.render_sw;
-const Quad = lcgr.draw_list.Quad;
-const example = lcgr.shell_example;
-const Events = lcgr.shell_iface.Events;
+const context = lcgf.context;
+const scheduler = lcgf.scheduler;
+const sw = lcgf.render_sw;
+const Quad = lcgf.draw_list.Quad;
+const example = lcgf.shell_example;
+const Events = lcgf.shell_iface.Events;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 const max_w = 1920;
 const max_h = 1200;
 
 var conn: x11.Connection = .{};
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var pixels: [sw.Framebuffer.len(max_w, max_h)]u32 = undefined;
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
     _ = args.next();
-    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgr.types.inf;
+    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgf.types.inf;
 
     const display = env.get("DISPLAY") orelse return error.NoDisplay;
     var auth_path_buf: [512]u8 = undefined;
@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var w: x11.Window = undefined;
-    try w.open(&conn, 800, 600, "lcgr example", .{ .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
+    try w.open(&conn, 800, 600, "lcgf example", .{ .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
     defer w.close();
     var ctx = try context.Context.init(&ctx_buffer, limits);
     var app: example.App = .{};

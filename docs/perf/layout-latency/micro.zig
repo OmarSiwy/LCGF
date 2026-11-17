@@ -1,8 +1,8 @@
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Tree = lcgr.tree.Tree;
-const L = lcgr.layout;
-const K = lcgr.coefs;
+const lcgf = @import("lcgf");
+const Tree = lcgf.tree.Tree;
+const L = lcgf.layout;
+const K = lcgf.coefs;
 const linux = std.os.linux;
 fn now() u64 {
     var ts: linux.timespec = undefined;
@@ -11,7 +11,7 @@ fn now() u64 {
 }
 var raw: [8 << 20]u8 align(64) = undefined;
 pub fn main() !void {
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
     var t = Tree.init(&carver, 4096);
     var k = K.Coefs.init(&carver, 4096);
     // The bench scene's shape: 330 rows of 11 nodes under a column.
@@ -45,8 +45,8 @@ pub fn main() !void {
             L.fit(&t, .y);
             const t0 = now();
             if (v == 0) {
-                lcgr.layout_check.resolveRef(&t, .x, 1280);
-                lcgr.layout_check.resolveRef(&t, .y, 8000);
+                lcgf.layout_check.resolveRef(&t, .x, 1280);
+                lcgf.layout_check.resolveRef(&t, .y, 8000);
                 L.place(&t);
             } else {
                 K.coefs(&t, &k, .x);

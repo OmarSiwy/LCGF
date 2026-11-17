@@ -88,7 +88,7 @@ The comptime front end keeps the structure in read-only data (`ci/run.sh ct-roda
 `.rodata` in ReleaseSmall and ReleaseFast) and only the state and dirty masks in RAM:
 
 ```zig
-const S = lcgr.signals.Signals(Mixer, mixer);
+const S = lcgf.signals.Signals(Mixer, mixer);
 try testing.expectEqual(32, @sizeOf(Mixer));
 try testing.expectEqual(u8, S.Mask); // 8 nodes, one bit each
 try testing.expectEqual(40, @sizeOf(S.Runtime)); // the state, two masks, padding
@@ -111,7 +111,7 @@ RV32IMAC, with 663,680 bytes of bss (its framebuffer and buffers, all static).
   per-row data (a table's cells, a list's items) is fastest the same way.
 - **Explicit SIMD.** Passes over independent rows use `@Vector` over columns padded to whole
   vectors (`simd.rows`, `simd.padded`). `-Dlanes=N` forces the lane count; CI tests 2, 4, 8 and 16.
-- **No data-dependent branch in a per-row loop.** Use the selects in `lcgr.simd`; the census above
+- **No data-dependent branch in a per-row loop.** Use the selects in `lcgf.simd`; the census above
   is the check, and `docs/CHECKS.md` section 2 records where Zig 0.18 turned a select back into a
   branch and how that was removed.
 - **Text.** Measuring is the expensive part of real text. `protocol.Cache` and

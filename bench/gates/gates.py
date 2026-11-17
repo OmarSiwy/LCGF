@@ -13,10 +13,10 @@
     python3 bench/gates/gates.py table [--write]  the published table in bench/gates/README.md
     python3 bench/gates/gates.py --self-test
 
-DIR holds one bench/vs/measure.py JSON per framework, lcgr.json among them (ci/jobs/gates-vs.sh
-writes them). A comparison gate holds on a scene when LCGR is no worse than the best other
+DIR holds one bench/vs/measure.py JSON per framework, lcgf.json among them (ci/jobs/gates-vs.sh
+writes them). A comparison gate holds on a scene when LCGF is no worse than the best other
 framework. The recorded file says which gates held when it was last measured and by how much
-LCGR missed the others. CI fails when a gate regresses: one that held no longer holds, one that
+LCGF missed the others. CI fails when a gate regresses: one that held no longer holds, one that
 did not hold misses by more than TOLERANCE more than it did, or a recorded framework is missing.
 A gate that newly holds is printed so it can be recorded. A gate that does not hold is a finding
 (docs/GATES.md), printed every run; the threshold is never moved to make it hold.
@@ -41,17 +41,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDED = os.path.join(HERE, "recorded.json")
 TOLERANCE = 0.5  # timings move by about a third between runs on one machine (docs/CHECKS.md)
 SIZE_GROWTH = 0.02  # docs/GATES.md: growth above 2% fails CI
-MEMORY_TOLERANCE = 0.1  # LCGR measured 12,476 and 12,104 KiB in two gates-vs runs (3%)
+MEMORY_TOLERANCE = 0.1  # LCGF measured 12,476 and 12,104 KiB in two gates-vs runs (3%)
 # The idle scene is gated by frames built and wake-ups (the idle gate), not by frame time.
 TIMED_SCENES = ("form", "list", "text", "springs", "resize")
 
 
 def versus(values, recorded, tolerance):
-    """One comparison gate. values {framework: number, lower is better}, "lcgr" among them;
+    """One comparison gate. values {framework: number, lower is better}, "lcgf" among them;
     recorded {"held", "ratio"} or None. Returns (entry, status, failed)."""
-    others = {n: v for n, v in values.items() if n != "lcgr"}
+    others = {n: v for n, v in values.items() if n != "lcgf"}
     best = min(others, key=others.get)
-    ratio = values["lcgr"] / others[best] if others[best] else float("inf")
+    ratio = values["lcgf"] / others[best] if others[best] else float("inf")
     entry = {"held": ratio <= 1, "ratio": round(ratio, 3), "best": best, "values": values}
     if recorded is None:
         return entry, "not recorded", True
@@ -74,20 +74,20 @@ def results(d):
         with open(path) as f:
             r = json.load(f)
         out[r["name"]] = r
-    if "lcgr" not in out:
-        sys.exit(f"gates: no lcgr.json in {d}")
+    if "lcgf" not in out:
+        sys.exit(f"gates: no lcgf.json in {d}")
     return out
 
 
 def check_frame(runs, recorded):
-    """Frame CPU time: per scene, the median frame of LCGR against the fastest other framework."""
+    """Frame CPU time: per scene, the median frame of LCGF against the fastest other framework."""
     failed, rows, entries = False, [], {}
     for scene in TIMED_SCENES:
         values = {n: r["scenes"][scene]["median_us"] for n, r in runs.items()}
         e, status, f = versus(values, recorded.get(scene), TOLERANCE)
         entries[scene] = e
         failed |= f
-        rows.append(f"{scene:<8} lcgr {values['lcgr']:9.1f} us  best {e['best']:<8} {values[e['best']]:9.1f} us  x{e['ratio']:<6} {status}")
+        rows.append(f"{scene:<8} lcgf {values['lcgf']:9.1f} us  best {e['best']:<8} {values[e['best']]:9.1f} us  x{e['ratio']:<6} {status}")
     return entries, rows, failed
 
 
@@ -98,7 +98,7 @@ def check_rss(runs, recorded):
     harness opens a device."""
     values = {n: r["rss_kib"] for n, r in runs.items()}
     e, status, failed = versus(values, recorded.get("idle"), MEMORY_TOLERANCE)
-    row = f"idle     lcgr {values['lcgr']:9.0f} KiB best {e['best']:<8} {values[e['best']]:9.0f} KiB x{e['ratio']:<6} {status}"
+    row = f"idle     lcgf {values['lcgf']:9.0f} KiB best {e['best']:<8} {values[e['best']]:9.0f} KiB x{e['ratio']:<6} {status}"
     return {"idle": e}, [row], failed
 
 
@@ -120,10 +120,10 @@ def measure_first_frame(exe, runs=11):
 
 
 def check_first_frame(runs, recorded):
-    """Time to first frame (measure_first_frame), LCGR against the lightest other framework."""
+    """Time to first frame (measure_first_frame), LCGF against the lightest other framework."""
     values = {n: r["first_frame_ms"] for n, r in runs.items()}
     e, status, failed = versus(values, recorded.get("idle"), TOLERANCE)
-    row = f"idle     lcgr {values['lcgr']:9.2f} ms  best {e['best']:<8} {values[e['best']]:9.2f} ms  x{e['ratio']:<6} {status}"
+    row = f"idle     lcgf {values['lcgf']:9.2f} ms  best {e['best']:<8} {values[e['best']]:9.2f} ms  x{e['ratio']:<6} {status}"
     return {"idle": e}, [row], failed
 
 
@@ -221,11 +221,11 @@ def spec_source(nodes):
     of 9 labels) with the comptime front end (src/comptime/flatten.zig), and exporting a read of
     one table so the flatten is analysed."""
     rows = ", ".join("s.row(.{}, .{" + ", ".join(["s.label(.t)"] * 9) + "})" for _ in range(nodes // 10))
-    return f"""const lcgr = @import("lcgr");
-const s = lcgr.spec;
+    return f"""const lcgf = @import("lcgf");
+const s = lcgf.spec;
 const F = blk: {{
     @setEvalBranchQuota(100_000_000);
-    break :blk lcgr.flatten.Flat(s.col(.{{}}, .{{{rows}}}));
+    break :blk lcgf.flatten.Flat(s.col(.{{}}, .{{{rows}}}));
 }};
 export fn probe(i: u32) u32 {{
     return F.parent[i % F.node_count];
@@ -255,8 +255,8 @@ def compile_times(d, runs):
             cache = os.path.join(d, f"cache{n}-{k}")
             subprocess.run(["rm", "-rf", cache], check=True)
             cmd = ["zig", "build-obj", "-fno-emit-bin", "-OReleaseFast", "--cache-dir", cache,
-                   "--dep", "lcgr", f"-Mroot={src}",
-                   "--dep", "build_options", f"-Mlcgr={os.path.join(root, 'src', 'lcgr.zig')}",
+                   "--dep", "lcgf", f"-Mroot={src}",
+                   "--dep", "build_options", f"-Mlcgf={os.path.join(root, 'src', 'lcgf.zig')}",
                    f"-Mbuild_options={os.path.join(d, 'options.zig')}"]
             t0 = time.perf_counter()
             subprocess.run(cmd, check=True)
@@ -296,13 +296,13 @@ def check_census(src):
 
 README = os.path.join(HERE, "README.md")
 BEGIN, END = "<!-- gates table: generated by gates.py table --write -->", "<!-- end of gates table -->"
-NAMES = {"lcgr": "LCGR", "clay": "Clay", "imgui": "Dear ImGui", "lvgl": "LVGL", "egui": "egui",
+NAMES = {"lcgf": "LCGF", "clay": "Clay", "imgui": "Dear ImGui", "lvgl": "LVGL", "egui": "egui",
          "iced": "Iced", "slint": "Slint", "qtquick": "Qt Quick"}
 
 
 def table(rec):
     """The recorded measurements as Markdown: the comparison per framework, then every gate."""
-    names = ["lcgr"] + rec["frameworks"]
+    names = ["lcgf"] + rec["frameworks"]
     rows = [("frame", s, f"Frame CPU time, {s} (median us)", "{:,.1f}") for s in TIMED_SCENES]
     rows += [("rss", "idle", "Resident memory after one idle frame (KiB)", "{:,.0f}"),
              ("first-frame", "idle", "Time to first frame (ms)", "{:,.2f}")]
@@ -311,7 +311,7 @@ def table(rec):
     for kind, key, label, fmt in rows:
         e = rec[kind][key]
         verdict = "held" if e["held"] else f"not met: x{e['ratio']} of {NAMES.get(e['best'], e['best'])}"
-        low = min(e["values"].values())  # the lowest of the row, LCGR included, in bold
+        low = min(e["values"].values())  # the lowest of the row, LCGF included, in bold
         cells = [("**" + fmt.format(e["values"][n]) + "**") if e["values"][n] == low else fmt.format(e["values"][n]) for n in names]
         out.append(f"| {label} | " + " | ".join(cells) + f" | {verdict} |")
     out += ["", "| Gate | Budget or rule | Recorded |", "|---|---|---|"]
@@ -354,13 +354,13 @@ def run_compare(kind, d, record):
     missing = frameworks_missing(runs, rec)
     check, timed = CHECKS[kind]
     entries, rows, failed = check(runs, rec.get(kind, {}))
-    print(f"gate {kind}: LCGR against {', '.join(n for n in runs if n != 'lcgr')}")
+    print(f"gate {kind}: LCGF against {', '.join(n for n in runs if n != 'lcgf')}")
     print("\n".join(rows))
     load = max(max(r["load_before"], r["load_after"]) for r in runs.values())
     if record:
         print(f"gates: load up to {load} on {os.cpu_count()} CPUs during the measurement")
         rec[kind] = entries
-        rec["frameworks"] = sorted(n for n in runs if n != "lcgr")
+        rec["frameworks"] = sorted(n for n in runs if n != "lcgf")
         with open(RECORDED, "w") as f:
             json.dump(rec, f, indent=1)
             f.write("\n")
@@ -377,31 +377,31 @@ def run_compare(kind, d, record):
 
 def self_test():
     # A gate that held and still holds, one that held and no longer does.
-    assert versus({"lcgr": 9, "a": 10, "b": 20}, {"held": True, "ratio": 0.9}, 0.5)[2] is False
-    e, s, f = versus({"lcgr": 11, "a": 10, "b": 20}, {"held": True, "ratio": 0.9}, 0.5)
+    assert versus({"lcgf": 9, "a": 10, "b": 20}, {"held": True, "ratio": 0.9}, 0.5)[2] is False
+    e, s, f = versus({"lcgf": 11, "a": 10, "b": 20}, {"held": True, "ratio": 0.9}, 0.5)
     assert f and s.startswith("REGRESSED") and e["held"] is False and e["ratio"] == 1.1 and e["best"] == "a", (e, s)
     # A gate that did not hold: a finding while it misses by about as much, a failure when worse.
-    assert versus({"lcgr": 30, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[2] is False
-    assert versus({"lcgr": 40, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[2] is True
-    assert versus({"lcgr": 5, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[1] == "now holds: record it"
-    assert versus({"lcgr": 5, "a": 10}, None, 0.5)[2] is True
+    assert versus({"lcgf": 30, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[2] is False
+    assert versus({"lcgf": 40, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[2] is True
+    assert versus({"lcgf": 5, "a": 10}, {"held": False, "ratio": 2.5}, 0.5)[1] == "now holds: record it"
+    assert versus({"lcgf": 5, "a": 10}, None, 0.5)[2] is True
     # Frame gate over measure.py results.
     def run(name, *medians):
         return {"name": name, "load_before": 0, "load_after": 0,
                 "scenes": {s: {"median_us": m} for s, m in zip(TIMED_SCENES, medians)}}
-    runs = {"lcgr": run("lcgr", 10, 10, 10, 10, 10), "a": run("a", 20, 20, 5, 20, 20)}
+    runs = {"lcgf": run("lcgf", 10, 10, 10, 10, 10), "a": run("a", 20, 20, 5, 20, 20)}
     entries, _, failed = check_frame(runs, {})
     assert failed and [entries[s]["held"] for s in TIMED_SCENES] == [True, True, False, True, True]
     _, _, failed = check_frame(runs, entries)
     assert not failed
-    runs["lcgr"]["scenes"]["form"]["median_us"] = 30
+    runs["lcgf"]["scenes"]["form"]["median_us"] = 30
     _, rows, failed = check_frame(runs, entries)
     assert failed and "REGRESSED" in rows[0], rows
     for r, kib in zip(runs.values(), (900, 1000)):
         r["rss_kib"] = kib
     entries, _, failed = check_rss(runs, {})
     assert failed and entries["idle"]["held"]
-    runs["lcgr"]["rss_kib"] = 1001
+    runs["lcgf"]["rss_kib"] = 1001
     _, rows, failed = check_rss(runs, entries)
     assert failed and "REGRESSED" in rows[0], rows
     assert frameworks_missing(runs, {"frameworks": ["a", "b"]}) == ["b"]
@@ -416,7 +416,7 @@ def self_test():
         r["first_frame_ms"] = ms
     entries, _, failed = check_first_frame(runs, {})
     assert (entries["idle"]["held"], entries["idle"]["ratio"]) == (True, 0.5)
-    runs["lcgr"]["first_frame_ms"] = 3.0
+    runs["lcgf"]["first_frame_ms"] = 3.0
     assert check_first_frame(runs, entries)[2] is True
     ok = "scene=idle core=src nodes=200 frames=2 polls=3000\nidle      0 wake-ups in 2 s  (0.0/s)\n"
     assert check_idle(ok) == []
@@ -442,7 +442,7 @@ def self_test():
         assert check_census(d) == ["a/census_probe_b.zig"]
     rec = {"frameworks": ["a"], "frame": {}, "size": {"x": {"loaded": 1, "bss": 2}}, "latency_us": 3,
            "compile_time_s": {"100": 0.1}}
-    for kind, values in (("frame", {"lcgr": 1.0, "a": 2.0}), ("rss", {"lcgr": 3, "a": 2}), ("first-frame", {"lcgr": 1, "a": 1})):
+    for kind, values in (("frame", {"lcgf": 1.0, "a": 2.0}), ("rss", {"lcgf": 3, "a": 2}), ("first-frame", {"lcgf": 1, "a": 1})):
         for key in (TIMED_SCENES if kind == "frame" else ("idle",)):
             rec.setdefault(kind, {})[key] = versus(values, None, 0)[0]
     t = table(rec)

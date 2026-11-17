@@ -2,7 +2,7 @@
 //! (bench/scenes/rows.zig, the scene of docs/CHECKS.md section 3, so the numbers compare).
 //! Linux only: it reads the monotonic clock through std.os.linux.
 //!
-//! Every pass times lcgr's runtime front end (src/runtime/): `Context.begin` (settle, hit test,
+//! Every pass times lcgf's runtime front end (src/runtime/): `Context.begin` (settle, hit test,
 //! spring and tween step) is begin+hit, the scene building through `Frame` and the reference
 //! widgets (src/widgets/base.zig) is build, the body of `Frame.end` split at each pass is layout,
 //! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four, over the
@@ -12,7 +12,7 @@
 //!
 //! `--core=prototype` keeps the old numbers reproducible: frames are begun and built by the
 //! prototype core ("ui", prototype/ui.zig), its tree and text columns are copied (untimed) into
-//! src/ tables, laid out and painted there by lcgr's tier-0 passes, and copied back for the
+//! src/ tables, laid out and painted there by lcgf's tier-0 passes, and copied back for the
 //! prototype's untimed `Frame.finish`.
 //!
 //! A second scene times the grid passes (src/layout/grid.zig): one grid of 16 columns and 250
@@ -30,7 +30,7 @@
 //!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
 const ui = @import("ui");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const scenes = @import("scenes");
 const src_scenes = @import("src_scenes");
 const linux = std.os.linux;
@@ -53,33 +53,33 @@ const pass_names = [_][]const u8{
 };
 comptime {
     // The copies below move whole vectors of rows, so both cores must pad alike.
-    std.debug.assert(ui.simd.lanes == lcgr.simd.lanes);
+    std.debug.assert(ui.simd.lanes == lcgf.simd.lanes);
 }
 
-const Tree = lcgr.tree.Tree;
-const Texts = lcgr.texts.Texts;
-const Customs = lcgr.customs.Customs;
-const DrawList = lcgr.draw_list.DrawList;
+const Tree = lcgf.tree.Tree;
+const Texts = lcgf.texts.Texts;
+const Customs = lcgf.customs.Customs;
+const DrawList = lcgf.draw_list.DrawList;
 const src_bytes = blk: {
     @setEvalBranchQuota(20_000);
-    var counter: lcgr.mem.Carver = .{ .buf = null };
+    var counter: lcgf.mem.Carver = .{ .buf = null };
     _ = Tree.init(&counter, limits.nodes);
     _ = Texts.init(&counter, limits.texts);
-    _ = lcgr.coefs.Coefs.init(&counter, limits.nodes);
-    _ = lcgr.levels.Levels.init(&counter, limits.nodes);
-    _ = lcgr.incremental.Dirty.init(&counter, limits.nodes);
-    _ = lcgr.flex.Flex.init(&counter, limits.nodes);
+    _ = lcgf.coefs.Coefs.init(&counter, limits.nodes);
+    _ = lcgf.levels.Levels.init(&counter, limits.nodes);
+    _ = lcgf.incremental.Dirty.init(&counter, limits.nodes);
+    _ = lcgf.flex.Flex.init(&counter, limits.nodes);
     _ = Customs.init(&counter, limits.customs);
     _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
     break :blk counter.off;
 };
-var src_buffer: [src_bytes]u8 align(lcgr.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
+var src_buffer: [src_bytes]u8 align(lcgf.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
 
-const Context = lcgr.context.Context;
-const ctx_limits: lcgr.context.Limits = .{ .nodes = limits.nodes, .texts = limits.texts, .strings = limits.strings, .anims = limits.anims };
-var ctx_buffer: [Context.requiredBytes(ctx_limits)]u8 align(lcgr.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
+const Context = lcgf.context.Context;
+const ctx_limits: lcgf.context.Limits = .{ .nodes = limits.nodes, .texts = limits.texts, .strings = limits.strings, .anims = limits.anims };
+var ctx_buffer: [Context.requiredBytes(ctx_limits)]u8 align(lcgf.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
 
-/// Copies the first `lcgr.simd.rows(len)` rows of every column of `from` into the column of the
+/// Copies the first `lcgf.simd.rows(len)` rows of every column of `from` into the column of the
 /// same name in `to`. The column sets have the same names and row sizes, except `look`, which
 /// is copied field by field (src reorders it and keeps the border width in its own column). Columns only src/ has (paint inputs added after the port, such
 /// as `uv`) are left as they are; the caller gives them the values the prototype implies.
@@ -127,7 +127,7 @@ fn protoExtras(st: *Tree, pt: *const ui.Tree) void {
 }
 
 fn copyRows(to: anytype, from: anytype, len: u32) void {
-    const n = @min(lcgr.simd.rows(len), to.len);
+    const n = @min(lcgf.simd.rows(len), to.len);
     @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
 }
 
@@ -137,13 +137,13 @@ const grid_cols = 16;
 const grid_rows = grid_items / grid_cols;
 const grid_pass_names = [_][]const u8{ "grid.place", "grid.fit.x", "grid.resolve.x", "grid.fit.y", "grid.resolve.y" };
 var grid_samples: [grid_pass_names.len][grid_frames]u64 = undefined;
-const grid_cap: lcgr.grid.Grids.Capacity = .{ .grids = 1, .tracks = grid_cols + grid_rows, .items = grid_items, .cells = grid_items };
+const grid_cap: lcgf.grid.Grids.Capacity = .{ .grids = 1, .tracks = grid_cols + grid_rows, .items = grid_items, .cells = grid_items };
 const grid_bytes = blk: {
     @setEvalBranchQuota(20_000);
-    var counter: lcgr.mem.Carver = .{ .buf = null };
+    var counter: lcgf.mem.Carver = .{ .buf = null };
     _ = Tree.init(&counter, grid_items + 2);
     _ = Texts.init(&counter, 1);
-    _ = lcgr.grid.Grids.init(&counter, grid_cap);
+    _ = lcgf.grid.Grids.init(&counter, grid_cap);
     break :blk counter.off;
 };
 comptime {
@@ -154,16 +154,16 @@ comptime {
 /// Times the grid passes on a 4,000-item grid, in `buffer` (run after the frame loops): columns cycle through fixed, fit and fraction
 /// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
 fn gridBench() void {
-    var carver: lcgr.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
+    var carver: lcgf.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
     var t = Tree.init(&carver, grid_items + 2);
     var tx = Texts.init(&carver, 1);
-    var gs = lcgr.grid.Grids.init(&carver, grid_cap);
+    var gs = lcgf.grid.Grids.init(&carver, grid_cap);
     const root = t.push(0, .none, &.{ .size = .{ .px(1280), .fit } });
     const g = t.push(root, .none, &.{ .size = .{ .fill, .fit } });
-    var cols: [grid_cols]lcgr.grid.Track = undefined;
-    const kinds = [4]lcgr.grid.Track{ .px(40), .fit, .fr(1), .fr(2) };
+    var cols: [grid_cols]lcgf.grid.Track = undefined;
+    const kinds = [4]lcgf.grid.Track{ .px(40), .fit, .fr(1), .fr(2) };
     for (&cols, 0..) |*c, i| c.* = kinds[i % 4];
-    const rows_: [grid_rows]lcgr.grid.Track = @splat(.fit);
+    const rows_: [grid_rows]lcgf.grid.Track = @splat(.fit);
     const k = gs.grid(g, &cols, &rows_);
     gs.gaps(k, .{ 4, 2 });
     for (0..grid_items) |i| {
@@ -177,20 +177,20 @@ fn gridBench() void {
     for (0..grid_frames) |f| {
         var m: [grid_pass_names.len + 1]u64 = undefined;
         m[0] = now();
-        lcgr.grid.autoPlace(&gs);
+        lcgf.grid.autoPlace(&gs);
         m[1] = now();
-        lcgr.layout.prepare(&t);
-        lcgr.layout.applyText(&t, &tx, .x);
-        lcgr.grid.fit(&t, &gs, .x);
+        lcgf.layout.prepare(&t);
+        lcgf.layout.applyText(&t, &tx, .x);
+        lcgf.grid.fit(&t, &gs, .x);
         m[2] = now();
-        lcgr.grid.resolve(&t, &gs, .x, 1280);
+        lcgf.grid.resolve(&t, &gs, .x, 1280);
         m[3] = now();
-        lcgr.layout.applyText(&t, &tx, .y);
-        lcgr.grid.fit(&t, &gs, .y);
+        lcgf.layout.applyText(&t, &tx, .y);
+        lcgf.grid.fit(&t, &gs, .y);
         m[4] = now();
-        lcgr.grid.resolve(&t, &gs, .y, 8000);
+        lcgf.grid.resolve(&t, &gs, .y, 8000);
         m[5] = now();
-        lcgr.layout.place(&t);
+        lcgf.layout.place(&t);
         for (0..grid_pass_names.len) |p| grid_samples[p][f] = m[p + 1] - m[p];
     }
 }
@@ -235,24 +235,24 @@ const incr_samples = samples[pass_names.len..];
 const flex_names = [_][]const u8{ "flex", "lines" };
 const flex_samples = samples[pass_names.len + incr_names.len ..];
 
-fn flexWrap(t: *Tree, tx: *Texts, fx: *lcgr.flex.Flex, viewport: [2]f32) void {
+fn flexWrap(t: *Tree, tx: *Texts, fx: *lcgf.flex.Flex, viewport: [2]f32) void {
     for (0..t.len) |i| fx.c.wrap[i] = t.c.main[0][i];
     const narrow: [2]f32 = .{ 400, viewport[1] };
     for (&flex_samples[0], &flex_samples[1]) |*whole, *lines| {
         const t0 = now();
-        lcgr.layout.runFlex(t, fx, tx, narrow);
+        lcgf.layout.runFlex(t, fx, tx, narrow);
         const t1 = now();
-        lcgr.wrap.wrap(t, fx);
+        lcgf.wrap.wrap(t, fx);
         lines.* = now() - t1;
         whole.* = t1 - t0;
     }
 }
 
-fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f32) void {
-    lcgr.layout.run(t, tx, viewport);
+fn incremental(t: *Tree, tx: *Texts, d: *lcgf.incremental.Dirty, viewport: [2]f32) void {
+    lcgf.layout.run(t, tx, viewport);
     for (&incr_samples[0]) |*s| {
         const t0 = now();
-        lcgr.layout.run(t, tx, viewport);
+        lcgf.layout.run(t, tx, viewport);
         s.* = now() - t0;
     }
     // The 12 x 12 accent leaf of the middle row.
@@ -273,7 +273,7 @@ fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f3
                 t.c.min[1][i] = t.c.size[1][i];
                 t.c.max[1][i] = t.c.size[1][i];
             }
-            lcgr.layout.run(t, tx, viewport);
+            lcgf.layout.run(t, tx, viewport);
         }
         for (&incr_samples[v], 0..) |*s, k| {
             const h: f32 = if (k % 2 == 0) 14 else 12;
@@ -281,7 +281,7 @@ fn incremental(t: *Tree, tx: *Texts, d: *lcgr.incremental.Dirty, viewport: [2]f3
             t.c.max[1][leaf] = h;
             d.mark(leaf, .y);
             const t0 = now();
-            lcgr.incremental.update(t, tx, d, viewport);
+            lcgf.incremental.update(t, tx, d, viewport);
             s.* = now() - t0;
         }
     }
@@ -394,9 +394,9 @@ fn prototypeFirst(index: usize) !*const ui.DrawList {
     return f.end(.{}).draw;
 }
 
-/// lcgr's runtime front end, end to end: `Context.begin`, the scene through `Frame`, the body of
+/// lcgf's runtime front end, end to end: `Context.begin`, the scene through `Frame`, the body of
 /// `Frame.end` with a mark between passes, and `Frame.finish`.
-fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run {
+fn runSrc(index: usize, polls: u32, buf: []align(lcgf.mem.column_align) u8) !Run {
     const scene = src_scenes.all[index];
     const S = struct {
         var ctx: Context = undefined;
@@ -404,10 +404,10 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
     const ctx = &S.ctx;
     // A static buffer in bss (or fresh huge pages), used once: zero already.
     ctx.* = try Context.initZeroed(buf, ctx_limits);
-    const th: lcgr.widgets_base.Theme = .{};
-    var in: lcgr.input.Input = .{};
-    const font: lcgr.protocol.Mono = .{};
-    const inc = lcgr.incremental;
+    const th: lcgf.widgets_base.Theme = .{};
+    var in: lcgf.input.Input = .{};
+    const font: lcgf.protocol.Mono = .{};
+    const inc = lcgf.incremental;
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
@@ -430,33 +430,33 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
         font.measure(tx);
         m.mark(4);
         const memos = &ctx.memos;
-        const kept = memos.kept[0..lcgr.simd.selU(t.overflow, 0, memos.kept_len)];
+        const kept = memos.kept[0..lcgf.simd.selU(t.overflow, 0, memos.kept_len)];
         inc.prepareKept(t, kept);
         m.mark(5);
         inc.applyTextKept(t, tx, .x, kept);
         inc.fitKept(t, .x, kept);
         m.mark(6);
         const lv = &ctx.levels;
-        if (kept.len == 0) lcgr.levels.build(t, lv);
-        lcgr.frame.resolve(t, lv, .x, in.viewport[0], kept);
+        if (kept.len == 0) lcgf.levels.build(t, lv);
+        lcgf.frame.resolve(t, lv, .x, in.viewport[0], kept);
         m.mark(7);
-        lcgr.layout.textAvail(t, tx);
+        lcgf.layout.textAvail(t, tx);
         font.wrap(tx);
         m.mark(8);
         inc.applyTextKept(t, tx, .y, kept);
         inc.fitKept(t, .y, kept);
         m.mark(9);
-        lcgr.frame.resolve(t, lv, .y, in.viewport[1], kept);
+        lcgf.frame.resolve(t, lv, .y, in.viewport[1], kept);
         m.mark(10);
         inc.placeKept(t, kept);
         m.mark(11);
-        if (!ctx.settings.reduced_motion) ctx.motion = @max(ctx.motion, lcgr.flip.apply(t, f.prevTree(), &ctx.flips, &ctx.anims, ctx.frame));
-        lcgr.layout.finalize(t);
+        if (!ctx.settings.reduced_motion) ctx.motion = @max(ctx.motion, lcgf.flip.apply(t, f.prevTree(), &ctx.flips, &ctx.anims, ctx.frame));
+        lcgf.layout.finalize(t);
         m.mark(12);
         const out = f.finish();
         m.mark(13);
         // Differential check, untimed: the first frame draws what the prototype's first frame
-        // draws. Not under --idle (one poll), whose memory and start-up are LCGR's alone.
+        // draws. Not under --idle (one poll), whose memory and start-up are LCGF's alone.
         if (r.built == 0 and polls > 1) try sameDrawList(try prototypeFirst(index), out.draw);
         r.sink +%= out.draw.cmd_len + out.draw.quad_len;
         r.nodes = t.len;
@@ -472,13 +472,13 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgr.mem.column_align) u8) !Run
     return r;
 }
 
-/// The prototype front end; layout and paint by lcgr's tier-0 passes over copied columns.
-fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align) u8, st: *Tree, stx: *Texts, sk: *lcgr.coefs.Coefs, slv: *lcgr.levels.Levels, scu: *Customs, sd: *DrawList) !Run {
+/// The prototype front end; layout and paint by lcgf's tier-0 passes over copied columns.
+fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align) u8, st: *Tree, stx: *Texts, sk: *lcgf.coefs.Coefs, slv: *lcgf.levels.Levels, scu: *Customs, sd: *DrawList) !Run {
     const scene = scenes.all[index];
     var ctx = try ui.Context.init(proto_buf, limits);
     const th: ui.Theme = .{};
     var in: ui.Input = .{};
-    const font: lcgr.protocol.Mono = .{};
+    const font: lcgf.protocol.Mono = .{};
     var r: Run = .{};
     for (0..polls) |k| {
         scene.input(&in, @intCast(k));
@@ -510,29 +510,29 @@ fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align
         m.mark(3);
         font.measure(tx);
         m.mark(4);
-        lcgr.layout.prepare(t);
+        lcgf.layout.prepare(t);
         m.mark(5);
-        lcgr.layout.applyText(t, tx, .x);
-        lcgr.layout.fit(t, .x);
+        lcgf.layout.applyText(t, tx, .x);
+        lcgf.layout.fit(t, .x);
         m.mark(6);
         // Level-order resolve (C0849); the order is rebuilt every frame and timed here.
-        lcgr.levels.build(t, slv);
-        lcgr.levels.resolve(t, slv, .x, in.viewport[0]);
+        lcgf.levels.build(t, slv);
+        lcgf.levels.resolve(t, slv, .x, in.viewport[0]);
         m.mark(7);
-        lcgr.layout.textAvail(t, tx);
+        lcgf.layout.textAvail(t, tx);
         font.wrap(tx);
         m.mark(8);
-        lcgr.layout.applyText(t, tx, .y);
-        lcgr.layout.fit(t, .y);
+        lcgf.layout.applyText(t, tx, .y);
+        lcgf.layout.fit(t, .y);
         m.mark(9);
-        lcgr.levels.resolve(t, slv, .y, in.viewport[1]);
+        lcgf.levels.resolve(t, slv, .y, in.viewport[1]);
         m.mark(10);
-        lcgr.coefs.placeRows(t, sk);
-        lcgr.coefs.placeK(t, sk);
+        lcgf.coefs.placeRows(t, sk);
+        lcgf.coefs.placeK(t, sk);
         m.mark(11);
-        lcgr.layout.finalize(t);
+        lcgf.layout.finalize(t);
         m.mark(12);
-        lcgr.paint.emit(t, tx, scu, strings.buf[0..strings.len], sd);
+        lcgf.paint.emit(t, tx, scu, strings.buf[0..strings.len], sd);
         m.mark(13);
         copyColumns(&pt.c, &st.c, pt.len);
         copyColumns(&ptx.c, &stx.c, ptx.len);
@@ -584,14 +584,14 @@ pub fn main(init: std.process.Init) !void {
     const scene = scenes.all[index];
 
     if (counters) try openCounters();
-    const src_buf: []align(lcgr.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
-    var carver: lcgr.mem.Carver = .{ .buf = src_buf, .zeroed = true };
+    const src_buf: []align(lcgf.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
+    var carver: lcgf.mem.Carver = .{ .buf = src_buf, .zeroed = true };
     var st = Tree.init(&carver, limits.nodes);
     var stx = Texts.init(&carver, limits.texts);
-    var sk = lcgr.coefs.Coefs.init(&carver, limits.nodes);
-    var slv = lcgr.levels.Levels.init(&carver, limits.nodes);
-    var sdirty = lcgr.incremental.Dirty.init(&carver, limits.nodes);
-    var sflex = lcgr.flex.Flex.init(&carver, limits.nodes);
+    var sk = lcgf.coefs.Coefs.init(&carver, limits.nodes);
+    var slv = lcgf.levels.Levels.init(&carver, limits.nodes);
+    var sdirty = lcgf.incremental.Dirty.init(&carver, limits.nodes);
+    var sflex = lcgf.flex.Flex.init(&carver, limits.nodes);
     var scu = Customs.init(&carver, limits.customs);
     var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     const polls: u32 = if (idle) 1 else scene.frames;
@@ -661,10 +661,10 @@ pub fn main(init: std.process.Init) !void {
     // in paint order, after merging across text, and the opaque quads a depth back end draws
     // first in one call.
     const sd_last = run.draw;
-    const plain = lcgr.order.counts(sd_last);
-    lcgr.order.mergeAcrossText(sd_last);
-    const merged = lcgr.order.counts(sd_last);
-    lcgr.order.depthOrder(sd_last);
+    const plain = lcgf.order.counts(sd_last);
+    lcgf.order.mergeAcrossText(sd_last);
+    const merged = lcgf.order.counts(sd_last);
+    lcgf.order.depthOrder(sd_last);
     try w.print("batches   quads={d} text={d} custom={d} merged: quads={d} text={d} custom={d} opaque={d} of {d} quads\n", .{ plain.quads, plain.text, plain.custom, merged.quads, merged.text, merged.custom, sd_last.opaque_len, sd_last.quad_len });
     try w.flush();
 

@@ -83,7 +83,7 @@ def subset_font(src):
     sub.subset(font)
     for rec in list(font["name"].names):
         if rec.nameID in (1, 4, 6):
-            s = rec.toUnicode().replace("Noto Sans", "LcgrLayout Sans").replace("NotoSans", "LcgrLayoutSans")
+            s = rec.toUnicode().replace("Noto Sans", "LcgfLayout Sans").replace("NotoSans", "LcgfLayoutSans")
             font["name"].setName(s, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     font.save(FONT)
 

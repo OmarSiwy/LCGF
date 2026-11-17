@@ -2,7 +2,7 @@
 # guides (docs/guide/*.md), whose examples run as tests and whose zig blocks must be pieces of
 # them, and whose catalogued compile errors must be what the cases in docs/guide/errors/ print.
 zig build docs
-grep -q '^## `lcgr.simd`' zig-out/docs/API.md
+grep -q '^## `lcgf.simd`' zig-out/docs/API.md
 # Control: a case that compiles must fail the step, so the error harness can fail.
 control=docs/guide/errors/zz_control.zig
 trap 'rm -f "$control"' EXIT

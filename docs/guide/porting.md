@@ -44,10 +44,10 @@ const ToyShell = struct {
     fb: sw.Framebuffer,
     gfx: sw.Software = .{},
     /// Room for one frame's glyph quads, and where each text run's start (Mono.quads).
-    glyphs: []lcgr.draw_list.Quad,
+    glyphs: []lcgf.draw_list.Quad,
     first: []u32,
     count: []u32,
-    cursor: lcgr.context.Cursor = .arrow,
+    cursor: lcgf.context.Cursor = .arrow,
     presents: u32 = 0,
 
     /// Drains pending events without blocking. Held state (pointer, buttons, viewport) stays
@@ -69,23 +69,23 @@ const ToyShell = struct {
     }
 
     /// The effects a frame asks for: here only the cursor shape.
-    pub fn apply(s: *ToyShell, p: *const lcgr.context.Platform) void {
+    pub fn apply(s: *ToyShell, p: *const lcgf.context.Platform) void {
         s.cursor = p.cursor;
     }
 
     /// Draws the frame with the software back end: text as `Mono` glyph quads on the white
     /// texture (solid cells; a real shell rasterises glyphs, docs/guide/text.md). Custom
     /// commands are skipped: they are the host's.
-    pub fn present(s: *ToyShell, out: *const lcgr.context.Output) void {
+    pub fn present(s: *ToyShell, out: *const lcgf.context.Output) void {
         s.presents += 1;
-        const n = (lcgr.protocol.Mono{}).quads(out.draw, s.glyphs, .{ .first = s.first, .count = s.count });
+        const n = (lcgf.protocol.Mono{}).quads(out.draw, s.glyphs, .{ .first = s.first, .count = s.count });
         s.gfx.prepare({}, out.draw, .{ .quads = s.glyphs[0..n], .first = s.first, .count = s.count }, .{ 0, 0 }, 1);
         s.fb.clear(.rgb(0, 0, 0));
-        lcgr.render_iface.render(&s.gfx, .{ .fb = &s.fb, .scissor = s.fb.all() }, out.draw);
+        lcgf.render_iface.render(&s.gfx, .{ .fb = &s.fb, .scissor = s.fb.all() }, out.draw);
     }
 
     /// Blocks until the next event or `seconds`; the queue is always ready, so it returns.
-    pub fn wait(_: *ToyShell, seconds: f32, pace: lcgr.scheduler.Pace) void {
+    pub fn wait(_: *ToyShell, seconds: f32, pace: lcgf.scheduler.Pace) void {
         _ = seconds;
         _ = pace;
     }
@@ -104,7 +104,7 @@ application, `shell_example.App` (the prototype's `buildUi`), so its tests compa
 
 ```zig
 var ctx = try Context.init(&ctx_buffer, limits);
-var app: lcgr.shell_example.App = .{};
+var app: lcgf.shell_example.App = .{};
 var toy: ToyShell = .{ .queue = &queue, .fb = .init(&pixels, 320, 240, .rgba8), .glyphs = &glyphs, .first = &first, .count = &count };
 shell.run(&toy, &ctx, &app); // poll, build when needed, apply, present, wait; until poll is false
 ```
@@ -144,8 +144,8 @@ The existing shells are the reference for each kind of platform: `src/shell/x11/
 `src/shell/win32/` for desktop window systems, `src/shell/web/` for the browser, `src/shell/baremetal/`
 for a board with no OS (its header follows LVGL's driver model: flush, input, tick), and
 `src/shell/headless.zig` for tests. The part of a shell that calls a platform API
-(`src/shell/x11/x11.zig`, `src/shell/win32/win32.zig`) is built as its own module over `lcgr` in
-`build.zig` and is not exported from `src/lcgr.zig`, so the core never imports it; the pure parts
+(`src/shell/x11/x11.zig`, `src/shell/win32/win32.zig`) is built as its own module over `lcgf` in
+`build.zig` and is not exported from `src/lcgf.zig`, so the core never imports it; the pure parts
 (the X11 wire format, the Win32 message translation) are exported and tested with the core.
 
 ## A new render back end

@@ -1,21 +1,21 @@
 //! 250 colour transitions per frame (`Frame.transition`, four tweens each: 1,000 `Tweens.slot`
-//! calls), on the ported lcgr Context: median and p99 build time. Every 30 frames each swatch's
+//! calls), on the ported lcgf Context: median and p99 build time. Every 30 frames each swatch's
 //! target colour flips. See README.md.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Context = lcgr.context.Context;
-const Color = lcgr.types.Color;
-const limits: lcgr.context.Limits = .{ .nodes = 1024, .tweens = 1024 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const Color = lcgf.types.Color;
+const limits: lcgf.context.Limits = .{ .nodes = 1024, .tweens = 1024 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 pub fn main() !void {
     var ctx = try Context.init(&buffer, limits);
     var samples: [3000]u64 = undefined;
-    const base = lcgr.types.Id.from("swatches");
+    const base = lcgf.types.Id.from("swatches");
     const colors = [2]Color{ .rgb(20, 40, 200), .rgb(240, 180, 10) };
     var sink: u32 = 0;
     for (0..3000) |tick| {
-        const in: lcgr.input.Input = .{ .viewport = .{ 1280, 800 }, .dt = 1.0 / 60.0 };
+        const in: lcgf.input.Input = .{ .viewport = .{ 1280, 800 }, .dt = 1.0 / 60.0 };
         var f = ctx.begin(&in);
         var t0: std.os.linux.timespec = undefined;
         _ = std.os.linux.clock_gettime(.MONOTONIC, &t0);
@@ -37,5 +37,5 @@ pub fn main() !void {
         _ = f.end(.{});
     }
     std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
-    std.debug.print("lcgr transitions: build median {d:.1} us, p99 {d:.1} us (sink {d})\n", .{ @as(f64, @floatFromInt(samples[1500])) / 1000, @as(f64, @floatFromInt(samples[2970])) / 1000, sink });
+    std.debug.print("lcgf transitions: build median {d:.1} us, p99 {d:.1} us (sink {d})\n", .{ @as(f64, @floatFromInt(samples[1500])) / 1000, @as(f64, @floatFromInt(samples[2970])) / 1000, sink });
 }

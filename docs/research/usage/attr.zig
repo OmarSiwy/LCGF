@@ -1,9 +1,9 @@
 //! docs/research/usage-report.md, questions 3 to 5. Build as docs/perf/build/bytes.zig:
-//!   zig build-exe -O ReleaseFast --dep lcgr -Mmain=docs/research/usage/attr.zig --dep build_options \
-//!     -Mlcgr=src/lcgr.zig -Mbuild_options=docs/perf/build/opts.zig -femit-bin=attr && ./attr
+//!   zig build-exe -O ReleaseFast --dep lcgf -Mmain=docs/research/usage/attr.zig --dep build_options \
+//!     -Mlcgf=src/lcgf.zig -Mbuild_options=docs/perf/build/opts.zig -femit-bin=attr && ./attr
 const std = @import("std");
 const builtin = @import("builtin");
-const l = @import("lcgr");
+const l = @import("lcgf");
 const mem = l.mem;
 const simd = l.simd;
 const Limits = l.context.Limits;

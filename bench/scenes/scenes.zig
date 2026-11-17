@@ -1,5 +1,5 @@
 //! Benchmark scenes for tools/bench: one harness, many scenes (`zig build bench -- --scene NAME`).
-//! A scene sets each frame's input and builds the frame through module "ui": lcgr's runtime front
+//! A scene sets each frame's input and builds the frame through module "ui": lcgf's runtime front
 //! end (tools/bench/src_ui.zig) or, under `--core=prototype`, the prototype core. The harness
 //! runs and times every pass the same way for each scene.
 const ui = @import("ui");

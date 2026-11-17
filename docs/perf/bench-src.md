@@ -1,24 +1,24 @@
-# The bench on lcgr's front end
+# The bench on lcgf's front end
 
-tools/bench now times lcgr's runtime front end end to end: `Context.begin` is begin+hit, the
+tools/bench now times lcgf's runtime front end end to end: `Context.begin` is begin+hit, the
 scene building through `Frame` and the reference widgets (src/widgets/base.zig) is build, the
 body of `Frame.end` split at each pass is layout, and `Frame.finish` is paint. Every scene of
 bench/scenes/ builds against either core from one source: the build roots a second copy of the
-directory with module `ui` set to tools/bench/src_ui.zig, which names lcgr's `Frame`,
+directory with module `ui` set to tools/bench/src_ui.zig, which names lcgf's `Frame`,
 `Input`, `Theme`, `Id`, `Color` and widgets. `--core=prototype` runs the old path.
 
 What each core times:
 
 | pass | `--core=src` (default) | `--core=prototype` |
 |---|---|---|
-| begin+hit | `lcgr.context.Context.begin` | prototype `Context.begin` |
-| build | the scene on `lcgr.frame.Frame` and lcgr widgets | the scene on the prototype `Frame` and widgets |
-| layout | `Frame.end`'s passes (`incremental.*Kept`, `flip.apply`, `finalize`) | lcgr tier-0 passes (`levels`, `coefs`) over columns copied untimed from the prototype |
-| paint | `Frame.finish` (`paint.emit` plus sweeps and status) | `lcgr.paint.emit` only; the prototype's `finish` runs untimed |
+| begin+hit | `lcgf.context.Context.begin` | prototype `Context.begin` |
+| build | the scene on `lcgf.frame.Frame` and lcgf widgets | the scene on the prototype `Frame` and widgets |
+| layout | `Frame.end`'s passes (`incremental.*Kept`, `flip.apply`, `finalize`) | lcgf tier-0 passes (`levels`, `coefs`) over columns copied untimed from the prototype |
+| paint | `Frame.finish` (`paint.emit` plus sweeps and status) | `lcgf.paint.emit` only; the prototype's `finish` runs untimed |
 
 First-frame draw-list check: with `--core=src` the first frame's draw list must equal the
 prototype's own first frame of the same scene (prototype front end, layout and paint); with
-`--core=prototype` it is the old check (lcgr paint of the copied tables against the prototype's
+`--core=prototype` it is the old check (lcgf paint of the copied tables against the prototype's
 paint). Both hold for all seven scenes (rows, form, list, text, springs, resize, idle), and each
 scene's sink (draw commands plus quads over all frames) is the same under both cores.
 

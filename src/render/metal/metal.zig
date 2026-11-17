@@ -1,6 +1,6 @@
 //! The Metal back end, for macOS and iOS (docs/DEPENDENCIES.md). Outside the tiers and not
-//! exported from lcgr.zig: it calls a platform API (Metal and QuartzCore through the
-//! Objective-C runtime, opened at run time), so it is a module of its own over lcgr
+//! exported from lcgf.zig: it calls a platform API (Metal and QuartzCore through the
+//! Objective-C runtime, opened at run time), so it is a module of its own over lcgf
 //! (`zig build metal`), never imported by it. Tests that need a device skip off macOS;
 //! ci/jobs/metal.sh runs the rest and cross-compiles everything for aarch64-macos.
 

@@ -9,10 +9,10 @@
 //! paragraphs there (P1), so the second must come out as if alone.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const lines = lcgr.text_lines;
-const bidi = lcgr.unicode_bidi;
-const Para = lcgr.text_layout_tests.golden.Para;
+const lcgf = @import("lcgf");
+const lines = lcgf.text_lines;
+const bidi = lcgf.unicode_bidi;
+const Para = lcgf.text_layout_tests.golden.Para;
 
 /// RLI, RLE, alef, "a", then U+2029: five code points, five glyphs, one line of its own.
 const before = "\u{2067}\u{202B}\u{5D0}a\u{2029}";
@@ -25,8 +25,8 @@ const Case = struct {
 };
 
 test "BidiCharacterTest.txt: reordered lines draw in visual order" {
-    var raw: [64 * 1024]u8 align(lcgr.mem.column_align) = undefined;
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
+    var raw: [64 * 1024]u8 align(lcgf.mem.column_align) = undefined;
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
     const s = carver.columns(lines.BidiScratch, 256);
     var p: Para = .{};
     var want: [256]u8 = undefined;

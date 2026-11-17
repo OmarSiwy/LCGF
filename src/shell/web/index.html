@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lcgr: web shell example</title>
+<title>lcgf: web shell example</title>
 <!-- The shell example (src/shell/example.zig) in a page: shell.wasm (main.zig) through the web
      shell (web.zig, shell.js), drawn on the canvas with WebGPU when the browser gives an
      adapter, else with the 2D-canvas fallback (?backend=2d forces it). Serve zig-out/web/ over
@@ -16,7 +16,7 @@
 </style>
 <canvas id="c"></canvas>
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgr.js";
+import { load, webgpu, canvas2d } from "./lcgf.js";
 import { attach, shell } from "./shell.js";
 
 const canvas = document.getElementById("c");
@@ -41,7 +41,7 @@ const frames = (ui) => ({
     },
 });
 const ui = await load("shell.wasm", webgpu, canvas2d(canvas), frames, shell(page));
-if (!ui.exports.lcgr_init()) throw new Error("lcgr_init: buffer too small");
+if (!ui.exports.lcgf_init()) throw new Error("lcgf_init: buffer too small");
 if (device) {
     device.addEventListener("uncapturederror", (e) => errors.push(e.error.message));
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -50,8 +50,8 @@ if (device) {
     const white = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
     const { put } = ui.gpu;
-    ui.exports.lcgr_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(white.createView()), put(device.createSampler({ magFilter: "nearest", minFilter: "nearest" })));
+    ui.exports.lcgf_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(white.createView()), put(device.createSampler({ magFilter: "nearest", minFilter: "nearest" })));
 }
 attach(ui, canvas, page);
-window.lcgr = { ui, page, errors };
+window.lcgf = { ui, page, errors };
 </script>

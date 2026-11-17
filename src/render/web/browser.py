@@ -5,7 +5,7 @@
 
 Serves DIR (zig-out/web) over HTTP on a free local port, opens each PAGE in a real headless
 Chromium with WebGPU enabled (SwiftShader's Vulkan, so no GPU is needed), and awaits the page's
-`window.lcgrTest`: a promise of `{ok, ...}`. Prints each result as one JSON line; exit status 1
+`window.lcgfTest`: a promise of `{ok, ...}`. Prints each result as one JSON line; exit status 1
 if any page failed, threw, logged an uncaught error, or did not finish in time. A result's
 `images` ({name: {w, h, rgba: base64}}) are written as OUT/<page>/<name>.png (with --out) and
 left out of the printed line.
@@ -69,7 +69,7 @@ class Browser:
         exe = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
         if not exe:
             raise Error("no chromium on PATH (nix develop .#web)")
-        self.profile = tempfile.mkdtemp(prefix="lcgr-web-")
+        self.profile = tempfile.mkdtemp(prefix="lcgf-web-")
         to_chrome, self._w = os.pipe()
         self._r, from_chrome = os.pipe()
 
@@ -182,9 +182,9 @@ class Page:
         return out
 
     def result(self, timeout=60):
-        """Awaits `window.lcgrTest`; adds any uncaught errors to the result."""
-        self.wait("window.lcgrTest !== undefined", timeout)
-        r = self.eval("window.lcgrTest", timeout)
+        """Awaits `window.lcgfTest`; adds any uncaught errors to the result."""
+        self.wait("window.lcgfTest !== undefined", timeout)
+        r = self.eval("window.lcgfTest", timeout)
         errs = self.errors()
         if errs:
             r = {**(r or {}), "ok": False, "errors": errs}

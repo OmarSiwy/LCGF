@@ -1,8 +1,8 @@
 # Choosing a render back end
 
-LCGR draws a frame's `DrawList` with one of seven back ends: software, Vulkan, Metal,
+LCGF draws a frame's `DrawList` with one of seven back ends: software, Vulkan, Metal,
 Direct3D 12, GL ES, web (WebGPU in the browser) and wgpu. A build compiles exactly one of them
-for the `lcgr_render` module, picked by a build option:
+for the `lcgf_render` module, picked by a build option:
 
 ```
 zig build -Drender=auto     # the default: the target's own API
@@ -17,7 +17,7 @@ zig build -Drender=vk       # or sw, metal, d3d12, gles, web, wgpu (wgpu also ne
 | wasm32 | `web` |
 | freestanding (microcontrollers) | `sw` |
 
-Nothing chooses at run time and nothing dispatches: `lcgr_render.Renderer` is the selected back
+Nothing chooses at run time and nothing dispatches: `lcgf_render.Renderer` is the selected back
 end's own type, so a call through it compiles to the same machine code as one through a direct
 import. `ci/run.sh render-select` checks that for every back end by comparing the two builds'
 `.text` byte for byte.
@@ -27,17 +27,17 @@ and runs. The docs build selects `sw`, so the example draws into a framebuffer w
 
 ## One frame, any back end
 
-`lcgr_render` exposes the back end (`backend`), its renderer (`Renderer`), what the renderer
+`lcgf_render` exposes the back end (`backend`), its renderer (`Renderer`), what the renderer
 records into (`Pass`) and uploads through (`Queue`), and which one it is (`kind`). Code written
 against those names compiles for whichever back end the build selected:
 
 ```zig
-const render = @import("lcgr_render");
+const render = @import("lcgf_render");
 
 /// One frame on whichever back end the build selected: the same code for all of them.
-fn drawFrame(gfx: *render.Renderer, queue: render.Queue, pass: render.Pass, draw: *const DrawList, glyphs: lcgr.render_iface.Glyphs, viewport: [2]f32, scale: f32) void {
+fn drawFrame(gfx: *render.Renderer, queue: render.Queue, pass: render.Pass, draw: *const DrawList, glyphs: lcgf.render_iface.Glyphs, viewport: [2]f32, scale: f32) void {
     gfx.prepare(queue, draw, glyphs, viewport, scale); // uploads, before the pass begins
-    lcgr.render_iface.render(gfx, pass, draw);
+    lcgf.render_iface.render(gfx, pass, draw);
 }
 ```
 
@@ -60,7 +60,7 @@ written for one back end, or for each behind the same switch.
 
 ## When you bring no device
 
-`lcgr_render.Setup` makes what an application without its own GPU code needs, moved from the
+`lcgf_render.Setup` makes what an application without its own GPU code needs, moved from the
 shells that use it:
 
 | Back end | Setup | Used by |
@@ -82,7 +82,7 @@ the Vulkan back end spends 2.8 times less CPU per frame on an NVIDIA RTX 4060 an
 less on lavapipe, and after drawing it is about 1 MB smaller in resident memory than a
 Vulkan-only wgpu instance on NVIDIA.
 
-Pick `wgpu` when your application already uses wgpu and wants LCGR to draw into its passes.
+Pick `wgpu` when your application already uses wgpu and wants LCGF to draw into its passes.
 Pick `gles` for devices with no Vulkan driver (old GPUs, some virtual machines); it has an ES2
 path for the oldest. Pick `sw` for microcontrollers, or for the smallest memory footprint where
 a GPU driver's own tens of megabytes cost more than drawing on the CPU.
