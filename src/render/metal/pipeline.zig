@@ -43,7 +43,8 @@ pub fn quad(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
 pub fn descriptor(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
     var err: ?Id = null;
     const library = msg(?Id, device, "newLibraryWithSource:options:error:", .{ objc.string(source), @as(?Id, null), &err }) orelse {
-        logError("compiling MSL", err);
+        // Caller-supplied material source can be rejected and replaced.
+        std.log.warn("metal: compiling MSL: {s}", .{errorText(err)});
         return error.ShaderCompile;
     };
     defer objc.release(library);
@@ -64,7 +65,7 @@ pub fn descriptor(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
 pub fn create(device: Id, pd: Id) Error!Id {
     var err: ?Id = null;
     return msg(?Id, device, "newRenderPipelineStateWithDescriptor:error:", .{ pd, &err }) orelse {
-        logError("creating a pipeline", err);
+        std.log.err("metal: creating a pipeline: {s}", .{errorText(err)});
         return error.PipelineFailed;
     };
 }
@@ -87,9 +88,8 @@ fn instanceLayout() Id {
     return vd;
 }
 
-fn logError(what: []const u8, err: ?Id) void {
-    const text: [*:0]const u8 = if (err) |e| msg([*:0]const u8, msg(Id, e, "localizedDescription", .{}), "UTF8String", .{}) else "no error object";
-    std.log.err("metal: {s}: {s}", .{ what, text });
+fn errorText(err: ?Id) [*:0]const u8 {
+    return if (err) |e| msg([*:0]const u8, msg(Id, e, "localizedDescription", .{}), "UTF8String", .{}) else "no error object";
 }
 
 const testing = std.testing;
