@@ -131,6 +131,14 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
     const shows = any(spec, showsState);
     return struct {
         pub const node_count = n;
+        pub const slots = @import("dynamic.zig").Slots(spec);
+        pub const slot_count = slots.count;
+
+        /// Retained geometry for descriptor `i`. Visibility and bound inputs use descriptor order.
+        pub inline fn slot(i: usize) usize {
+            return if (slot_count == n) i else slots.by_node[i];
+        }
+
         /// The type of `rect` and `vis` rows in `Dynamic`: `Coord(options.viewport)`.
         pub const Coordinate = Coord(options.viewport);
         /// The names of `Tree.Columns`, in declaration order.
@@ -334,9 +342,10 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             break :blk b;
         };
         /// The dynamic columns: one field per dynamic column of `Tree.Columns`, of the same name,
-        /// with exactly one row per node (`[n]T`, `[k][n]T`), as the probe's `Runtime.rect` is
-        /// `[n][4]i16`. No capacity and no overflow path: the node count is exact. Not padded to
-        /// whole vectors (`simd.rows`); a pass that reads them with vectors needs the padding.
+        /// with exact row counts. Geometry uses `slot_count` rows, shared by choice
+        /// alternatives; input and visibility use one per descriptor. The caller checks
+        /// descriptor visibility before looking up the geometry slot. Per-pass vector
+        /// padding lives in layout scratch.
         pub const Dynamic = blk: {
             @setEvalBranchQuota(10_000);
             var dyn_names: []const []const u8 = &.{};
@@ -344,7 +353,8 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             for (names, info.field_types, class, dropped) |name, FT, c, d| {
                 if (c != .dynamic or d) continue;
                 dyn_names = dyn_names ++ [_][]const u8{name};
-                dyn_types = dyn_types ++ [_]type{if (contains(&coordinate_columns, name)) [4][n]Coordinate else Rows(FT, n)};
+                const rows = if (!custom and contains(&outputs, name) and !std.mem.eql(u8, name, "visible")) slot_count else n;
+                dyn_types = dyn_types ++ [_]type{if (contains(&coordinate_columns, name)) [4][rows]Coordinate else Rows(FT, rows)};
             }
             const nm = dyn_names[0..dyn_names.len].*;
             const ty = dyn_types[0..dyn_types.len].*;

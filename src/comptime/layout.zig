@@ -31,6 +31,7 @@ const simd = @import("../core/simd.zig");
 const tree = @import("../core/tree.zig");
 const layout = @import("../layout/layout.zig");
 const columns = @import("columns.zig");
+const dynamic = @import("dynamic.zig");
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
@@ -79,6 +80,13 @@ fn isPrecomputed(comptime name: []const u8) bool {
     return std.mem.eql(u8, name, "gap_total");
 }
 
+/// Columns a UI with dynamic regions rewrites each frame from their tables and the live mask
+/// (`applyMask`).
+fn masked(comptime name: []const u8) bool {
+    for ([_][]const u8{ "max", "flow", "nkids" }) |m| if (std.mem.eql(u8, m, name)) return true;
+    return false;
+}
+
 /// A read-only array of `rows` copies of `v`. Generic instantiation memoizes it, so every dropped
 /// column with the same type and value shares one table.
 fn splat(comptime T: type, comptime rows: usize, comptime v: T) *const [rows]T {
@@ -120,12 +128,16 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
     const R = simd.rows(n);
     const info = @typeInfo(RuntimeColumns).@"struct";
     for (C.class) |c| if (c != .dynamic) break else @compileError("every column is dynamic (a custom widget builds its rows at run time): lay it out with the runtime tree");
+    const D = dynamic.Regions(spec);
+    const live = D.count > 0;
     // Columns a frame writes: the dynamic ones but those precomputed below, and `sense`
-    // (finalize clears its padding rows).
+    // (finalize clears its padding rows). With dynamic regions, also the columns the live mask
+    // is ANDed into (`masked`), and `gap_total` again, which then follows the live child count.
     const writes = blk: {
         var w: [info.field_names.len]bool = undefined;
         for (info.field_names, C.class, &w) |name, c, *x|
-            x.* = (c == .dynamic and !isPrecomputed(name)) or std.mem.eql(u8, name, "sense");
+            x.* = (c == .dynamic and !(isPrecomputed(name) and !live)) or std.mem.eql(u8, name, "sense") or
+                (live and masked(name)) or (D.has_windows and std.mem.eql(u8, name, "scroll"));
         break :blk w;
     };
     const labels = labelRows(spec);
@@ -133,6 +145,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
     const tx_info = @typeInfo(Texts.Columns).@"struct";
     return struct {
         pub const Cols = C;
+        pub const Regions = D;
         /// Label k is node `label_rows[k]`; its text is span k of `run`'s `spans`.
         pub const label_rows = labels;
         pub const label_count = labels.len;
@@ -150,6 +163,10 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             for (tx_info.field_names, tx_info.field_types) |name, FT| {
                 names = names ++ [_][]const u8{"tx_" ++ name};
                 types = types ++ [_]type{[RT]@typeInfo(FT).pointer.child};
+            }
+            if (C.slot_count != n) {
+                names = names ++ [_][]const u8{"slot_source"};
+                types = types ++ [_]type{[C.slot_count]u32};
             }
             const nm = names[0..names.len].*;
             const ty = types[0..types.len].*;
@@ -280,7 +297,18 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         /// run with the text extents, `font` wraps, then finalize, and the kept outputs go to
         /// `ram`. `font` is anything with the text protocol's `measure` and `wrap` (`Mono`).
         pub fn runText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
-            passesText(scratch, viewport, spans, font);
+            if (D.count != 0) @compileError("select dynamic regions with runLiveText");
+            runLiveText(scratch, ram, viewport, .{}, spans, font);
+        }
+
+        /// Geometry-only layout with a selection for this frame.
+        pub fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void {
+            runLiveText(scratch, ram, viewport, sel, &@as([label_count]Span, @splat(.{})), {});
+        }
+
+        /// Measures every declared label and lays out the selected rows.
+        pub fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
+            passesLiveText(scratch, viewport, sel, spans, font);
             var v = view(scratch);
             layout.finalize(&v);
             keep(scratch, ram);
@@ -334,7 +362,9 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             const first = span.?[0];
             const last = span.?[1];
             // The whole tree: the routine for a field shown above every fixed-size box.
-            if (first == 0) {
+            // A live layout already holds the selected flow and maximum sizes; the span
+            // passes also handle the whole tree while preserving its root viewport.
+            if (first == 0 and !live) {
                 const vp: [2]f32 = .{ scratch.size[0][0], scratch.size[1][0] };
                 return runText(scratch, ram, vp, spans, font);
             }
@@ -366,6 +396,11 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 
         /// Every pass but `finalize`, which leaves sizes and positions in `scratch`.
         pub fn passesText(scratch: *Scratch, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
+            if (live) @compileError("select dynamic regions with passesLiveText");
+            passesLiveText(scratch, viewport, .{}, spans, font);
+        }
+
+        pub fn passesLiveText(scratch: *Scratch, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
@@ -373,16 +408,52 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             var tx: Texts = if (measure) texts(scratch, spans) else undefined;
             // Passes the UI cannot need are not compiled in (`needs`).
             if (measure) font.measure(&tx);
-            clear(scratch);
+            if (live) {
+                applyMask(scratch, &D.mask(sel));
+                if (D.has_windows) {
+                    scratch.scroll = C.pushed.c.scroll;
+                    inline for (D.regions, sel) |region, selected| {
+                        if (region.window != null) scratch.scroll[1][region.row] = selected.offset;
+                    }
+                }
+                layout.prepare(&v);
+            } else clear(scratch);
+            // resolve assigns the viewport directly to the root, bypassing its masked maximum.
+            const root_when = if (spec.region) |r| r.kind == .when else false;
+            const shown = if (root_when) sel[0].n != 0 else true;
             if (measure) layout.applyText(&v, &tx, .x);
             layout.fit(&v, .x);
-            layout.resolve(&v, .x, viewport[0]);
+            layout.resolve(&v, .x, simd.selF(shown, viewport[0], 0));
             if (measure and needs.wrap) layout.textAvail(&v, &tx);
             if (measure and needs.wrap) font.wrap(&tx);
             if (measure) layout.applyText(&v, &tx, .y);
             layout.fit(&v, .y);
-            layout.resolve(&v, .y, viewport[1]);
+            layout.resolve(&v, .y, simd.selF(shown, viewport[1], 0));
             layout.place(&v);
+        }
+
+        /// Writes the masked columns from their tables: a dead row (mask 0) gets `max` 0 on both
+        /// axes, `flow` 0 and `sense` 0, and `nkids` counts in-flow live children only. Bit ANDs
+        /// with the mask, no select; `nkids` is a scatter-add over the parent column.
+        fn applyMask(scratch: *Scratch, m: *const D.Mask) void {
+            setSlotSources(scratch, m);
+            const t = &C.pushed.c;
+            for (0..R) |i| {
+                inline for (0..2) |a| scratch.max[a][i] = @bitCast(@as(u32, @bitCast(t.max[a][i])) & m[i]);
+                scratch.flow[i] = @bitCast(@as(u32, @bitCast(t.flow[i])) & m[i]);
+                scratch.sense[i] &= @truncate(m[i]);
+            }
+            scratch.nkids = @splat(0);
+            for (1..n) |j| scratch.nkids[t.parent[j]] += scratch.flow[j];
+        }
+
+        fn setSlotSources(scratch: *Scratch, m: *const D.Mask) void {
+            if (C.slot_count == n) return;
+            scratch.slot_source = C.slots.defaults;
+            for (C.slots.by_node, m[0..n], 0..) |slot, live_mask, i| {
+                const src = &scratch.slot_source[slot];
+                src.* = simd.selU(live_mask != 0, @intCast(i), src.*);
+            }
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
@@ -395,15 +466,20 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                     const src = &@field(scratch, name);
                     const dst = &@field(ram.*, name);
                     if (comptime @typeInfo(@FieldType(RuntimeColumns, name)) == .array) {
-                        inline for (0..dst.len) |k| convert(&dst[k], src[k][0..n]);
-                    } else convert(dst, src[0..n]);
+                        inline for (0..dst.len) |k| convert(scratch, &dst[k], src[k][0..n]);
+                    } else convert(scratch, dst, src[0..n]);
                 }
             }
         }
 
-        fn convert(dst: anytype, src: anytype) void {
+        fn convert(scratch: *const Scratch, dst: anytype, src: anytype) void {
             const T = @typeInfo(@TypeOf(dst.*)).array.child;
-            if (comptime T == C.Coordinate and @typeInfo(T) == .int) {
+            const narrow = T == C.Coordinate and @typeInfo(T) == .int;
+            if (dst.len != n) {
+                for (dst, scratch.slot_source) |*d, i| {
+                    d.* = if (narrow) @intFromFloat(std.math.clamp(src[i], @as(f32, std.math.minInt(T)), @as(f32, std.math.maxInt(T)))) else src[i];
+                }
+            } else if (narrow) {
                 const lo: f32 = std.math.minInt(T);
                 const hi: f32 = std.math.maxInt(T);
                 for (dst, src) |*d, s| d.* = @intFromFloat(@min(@max(s, lo), hi));
@@ -418,7 +494,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 /// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
 /// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
 /// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
-fn FoldPlan(comptime C: type, comptime labels: []const u32) type {
+fn FoldPlan(comptime C: type, comptime labels: []const u32, comptime D: type) type {
     const n = C.node_count;
     const c = C.pushed.c;
     return struct {
@@ -442,7 +518,7 @@ fn FoldPlan(comptime C: type, comptime labels: []const u32) type {
             for (1..n) |i| {
                 const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] < 0 and c.pct[1][i] < 0 and
                     (c.shrink[i] == 0 or c.flow[i] == 0);
-                out[i] = !has_label[i] and (out[c.parent[i]] or own);
+                out[i] = !D.volatile_rows[i] and !has_label[i] and (out[c.parent[i]] or own);
             }
             break :blk out;
         };
@@ -496,13 +572,17 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
     const P = Plain(spec, options);
     const C = P.Cols;
     const n = C.node_count;
-    const plan = FoldPlan(C, P.label_rows);
+    const D = P.Regions;
+    const plan = FoldPlan(C, P.label_rows, D);
     if (plan.folded_rows == 0) return struct {
         pub const Cols = C;
         pub const Scratch = P.Scratch;
         pub const label_count = P.label_count;
         pub const folded_rows = 0;
         pub const run = P.run;
+        pub const Regions = D;
+        pub const runLive = P.runLive;
+        pub const runLiveText = P.runLiveText;
         pub const runText = P.runText;
         pub const relayout = P.relayout;
         pub const dirtySpan = P.dirtySpan;
@@ -510,6 +590,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
     const R = simd.rows(n);
     return struct {
         pub const Cols = C;
+        pub const Regions = D;
         /// Rows laid out while compiling.
         pub const folded_rows = plan.folded_rows;
 
@@ -521,7 +602,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
             var scratch: P.Scratch = undefined;
             // No folded row is a label or holds one, so the label text does not matter here.
             const none: [P.label_count]Span = @splat(.{ .start = 0, .bytes = 0 });
-            P.passesText(&scratch, .{ 1000, 1000 }, &none, Mono{});
+            P.passesLiveText(&scratch, .{ 1000, 1000 }, @splat(.{}), &none, Mono{});
             break :blk .{ .size = scratch.size, .pos = scratch.pos };
         };
 
@@ -567,7 +648,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         };
 
         /// Per-frame memory: the skeleton's and the whole tree's.
-        pub const Scratch = struct { skel: S.Scratch, full: P.Scratch };
+        pub const Scratch = struct { skel: S.Scratch, full: P.Scratch, selection: D.Selection };
 
         /// Labels never fold, so the skeleton has the same labels, in the same order.
         pub const label_count = P.label_count;
@@ -576,7 +657,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         /// are `Plain`'s; the skeleton's rows are not the UI's).
         pub fn relayout(comptime field: []const u8, scratch: *Scratch, ram: *C.Dynamic, spans: *const [label_count]Span, font: anytype) void {
             if (comptime P.dirtySpan(field) == null) return;
-            runText(scratch, ram, .{ scratch.full.size[0][0], scratch.full.size[1][0] }, spans, font);
+            runLiveText(scratch, ram, .{ scratch.full.size[0][0], scratch.full.size[1][0] }, scratch.selection, spans, font);
         }
 
         /// Geometry-only layout. Label extents are zero unless supplied through runText.
@@ -585,8 +666,20 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         }
 
         pub fn runText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void {
+            if (D.count != 0) @compileError("select dynamic regions with runLiveText");
+            runLiveText(scratch, ram, viewport, .{}, spans, font);
+        }
+
+        /// Geometry-only layout with a selection for this frame.
+        pub fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void {
+            runLiveText(scratch, ram, viewport, sel, &@as([label_count]Span, @splat(.{})), {});
+        }
+
+        /// Measures every declared label and lays out the selected rows.
+        pub fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
             comptime std.debug.assert(S.label_count == label_count);
-            S.passesText(&scratch.skel, viewport, spans, font);
+            scratch.selection = sel;
+            S.passesLiveText(&scratch.skel, viewport, sel, spans, font);
             const sk = &scratch.skel;
             const full = &scratch.full;
             for (0..n) |j| {
@@ -597,6 +690,11 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
                 }
             }
             full.sense = C.pushed.c.sense;
+            if (D.count > 0) {
+                const m = D.mask(sel);
+                P.setSlotSources(full, &m);
+                for (&full.sense, m) |*x, k| x.* &= @truncate(k);
+            }
             var v = P.view(full);
             layout.finalize(&v);
             P.keep(full, ram);
