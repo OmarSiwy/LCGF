@@ -891,10 +891,19 @@ test "macos: a worker thread ends a wait, and the clock runs" {
     try testing.expect(m.poll(&ev));
     try testing.expect(ev.in.time > t0);
     try testing.expect(ev.in.dt > 0);
-    // A timer's wait ends by itself.
-    const c2 = metal.present.mediaTime();
-    m.wait(0.02, .timer);
-    try testing.expect(metal.present.mediaTime() - c2 >= 0.015);
+    // A queued AppKit event may legitimately end a timer wait early. Verify it
+    // was left for poll, drain it, then require one uninterrupted timed wait.
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const past = msg(Id, objc.class("NSDate"), "distantPast", .{});
+    for (0..64) |_| {
+        const start = metal.present.mediaTime();
+        m.wait(0.02, .timer);
+        if (metal.present.mediaTime() - start >= 0.015) break;
+        const pending = msg(?Id, app(), "nextEventMatchingMask:untilDate:inMode:dequeue:", .{ ns_event_mask_any, past, default_mode, false });
+        try testing.expect(pending != null);
+        try testing.expect(m.poll(&ev));
+    } else return error.TimerDidNotExpire;
 }
 
 /// Posts a recorded frame's NSEvents to the application and polls: what the view receives is
