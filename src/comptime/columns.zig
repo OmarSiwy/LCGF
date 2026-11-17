@@ -131,6 +131,7 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
     const shows = any(spec, showsState);
     return struct {
         pub const node_count = n;
+        pub const specification = spec;
         pub const slots = @import("dynamic.zig").Slots(spec);
         pub const slot_count = slots.count;
 
@@ -356,9 +357,18 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
                 const rows = if (!custom and contains(&outputs, name) and !std.mem.eql(u8, name, "visible")) slot_count else n;
                 dyn_types = dyn_types ++ [_]type{if (contains(&coordinate_columns, name)) [4][rows]Coordinate else Rows(FT, rows)};
             }
+            // Generic consumers receive only a Dynamic pointer. A comptime field supplies
+            // its descriptor map without storing an index or pointer in the RAM object.
+            const shared = !custom and slot_count != n;
+            if (shared) {
+                dyn_names = dyn_names ++ [_][]const u8{"geometry_slots"};
+                dyn_types = dyn_types ++ [_]type{type};
+            }
             const nm = dyn_names[0..dyn_names.len].*;
             const ty = dyn_types[0..dyn_types.len].*;
-            break :blk @Struct(.auto, null, &nm, &ty, &@splat(.{}));
+            var attrs: [nm.len]std.lang.Type.Struct.FieldAttributes = @splat(.{});
+            if (shared) attrs[nm.len - 1] = .{ .@"comptime" = true, .default_value_ptr = &slots };
+            break :blk @Struct(.auto, null, &nm, &ty, &attrs);
         };
 
         /// RAM bytes: one `Dynamic`.

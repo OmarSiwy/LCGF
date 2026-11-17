@@ -400,6 +400,10 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             passesLiveText(scratch, viewport, .{}, spans, font);
         }
 
+        pub fn passesLive(scratch: *Scratch, viewport: [2]f32, sel: D.Selection) void {
+            passesLiveText(scratch, viewport, sel, &@as([label_count]Span, @splat(.{})), {});
+        }
+
         pub fn passesLiveText(scratch: *Scratch, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
             // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
             scratch.sense = C.pushed.c.sense;
@@ -494,7 +498,9 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 /// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
 /// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
 /// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
-fn FoldPlan(comptime C: type, comptime labels: []const u32, comptime D: type) type {
+pub fn FoldPlan(comptime C: type) type {
+    const labels = labelRows(C.specification);
+    const D = dynamic.Regions(C.specification);
     const n = C.node_count;
     const c = C.pushed.c;
     return struct {
@@ -522,7 +528,7 @@ fn FoldPlan(comptime C: type, comptime labels: []const u32, comptime D: type) ty
             }
             break :blk out;
         };
-        const root: [n]bool = blk: {
+        pub const root: [n]bool = blk: {
             @setEvalBranchQuota(10_000 + 100 * n);
             var out: [n]bool = undefined;
             for (0..n) |i| out[i] = indep[i] and !indep[c.parent[i]] and c.end[i] - i > 1;
@@ -573,7 +579,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
     const C = P.Cols;
     const n = C.node_count;
     const D = P.Regions;
-    const plan = FoldPlan(C, P.label_rows, D);
+    const plan = FoldPlan(C);
     if (plan.folded_rows == 0) return struct {
         pub const Cols = C;
         pub const Scratch = P.Scratch;
