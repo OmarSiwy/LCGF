@@ -56,7 +56,8 @@ const pass: render.Pass = switch (render.kind) {
 ```
 
 Custom draws (the inline route in `custom.md`) use your own pipeline in that pass, so they are
-written for one back end, or for each behind the same switch.
+written for one back end, or for each behind the same switch. The experimental hosts
+can also composite a texture drawn through a shared WebGPU callback. [WebGPU custom drawing](webgpu-custom.md)
 
 ## When you bring no device
 
