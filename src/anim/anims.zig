@@ -420,3 +420,41 @@ test "declared slider spring drives painted frames and honours reduced motion" {
     try testing.expectEqual(types.inf, landed.wake);
     try testing.expect(!ui.needsAnimationFrame());
 }
+
+test "comptime springs keep the host awake until they land" {
+    const w = @import("../widgets/base.zig");
+    const Spec = @import("../comptime/spec.zig").Spec;
+    const Input = @import("../core/input.zig").Input;
+    const State = struct {
+        wireframe: bool = false,
+        pub const springs = .{ .wireframe = Spring{} };
+    };
+    const Glow = struct {
+        pub fn push(ui: anytype, comptime node: Spec, parent: u32, next: *u32, _: *const Input) void {
+            var style = node.style;
+            style.size[0] = .px(100 * ui.animated(.wireframe));
+            _ = ui.tables.t.push(parent, .none, &style);
+            next.* += 1;
+        }
+    };
+    const Ui = w.ComptimeUi(State, .{ .kind = .col, .style = .{ .size = .{ .fit, .px(8) }, .fill = .rgb(255, 255, 255) }, .widget = Glow }, .{});
+    const in: Input = .{ .viewport = .{ 800, 600 } };
+    var ui: Ui = .{};
+    _ = ui.frame(&in);
+    _ = ui.frame(&in);
+    try testing.expect(!ui.needsAnimationFrame());
+
+    ui.signals.set(.wireframe, true);
+    var frames: u32 = 0;
+    var out = ui.frame(&in);
+    try testing.expectEqual(0, out.wake);
+    while (out.wake == 0 and frames < 600) : (frames += 1) {
+        try testing.expect(ui.needsAnimationFrame());
+        out = ui.frame(&in);
+        try testing.expectEqual(100 * ui.animated(.wireframe), out.tree.c.size[0][1]);
+    }
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(1, ui.animated(.wireframe));
+    try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ui.needsAnimationFrame());
+}
