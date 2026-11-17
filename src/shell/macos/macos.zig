@@ -524,6 +524,8 @@ pub const Macos = struct {
             .frames = .init(dev.queue, gfx.desc.frames_in_flight),
             .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit, .names = buf.names, .ends = buf.ends }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
+            // Attaching the view can synchronously deliver viewDidChangeEffectiveAppearance.
+            .appearance = readAppearance(),
         };
         rt.object_setIvar(view, shell_ivar, m);
         inline for (translate.cursor_names, &m.cursors) |name, *c| c.* = msg(Id, objc.class("NSCursor"), name, .{});
@@ -542,7 +544,6 @@ pub const Macos = struct {
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
         m.start = metal.present.mediaTime();
-        m.appearance = readAppearance();
         const center = msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{});
         msg(void, center, "addObserver:selector:name:object:", .{ view, objc.sel("systemColorsDidChange:"), system_colors_changed, @as(?Id, null) });
         if (opt.show) {
@@ -738,7 +739,11 @@ const Fixture = struct {
     var count: [256]u32 = undefined;
 
     fn open(m: *Macos) !void {
-        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .glyphs = &glyphs, .first = &first, .count = &count });
+        try openWith(m, .{ .show = false });
+    }
+
+    fn openWith(m: *Macos, options: Macos.Options) !void {
+        try m.init(options, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -890,10 +895,19 @@ test "macos: a worker thread ends a wait, and the clock runs" {
     try testing.expect(m.poll(&ev));
     try testing.expect(ev.in.time > t0);
     try testing.expect(ev.in.dt > 0);
-    // A timer's wait ends by itself.
-    const c2 = metal.present.mediaTime();
-    m.wait(0.02, .timer);
-    try testing.expect(metal.present.mediaTime() - c2 >= 0.015);
+    // A queued AppKit event may legitimately end a timer wait early. Verify it
+    // was left for poll, drain it, then require one uninterrupted timed wait.
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const past = msg(Id, objc.class("NSDate"), "distantPast", .{});
+    for (0..64) |_| {
+        const start = metal.present.mediaTime();
+        m.wait(0.02, .timer);
+        if (metal.present.mediaTime() - start >= 0.015) break;
+        const pending = msg(?Id, app(), "nextEventMatchingMask:untilDate:inMode:dequeue:", .{ ns_event_mask_any, past, default_mode, false });
+        try testing.expect(pending != null);
+        try testing.expect(m.poll(&ev));
+    } else return error.TimerDidNotExpire;
 }
 
 /// Posts a recorded frame's NSEvents to the application and polls: what the view receives is
@@ -923,12 +937,21 @@ fn replayFrame(m: *Macos, r: *translate.Replay, ev: *Events) !?bool {
         } else m.t.feed(rec),
         else => m.t.feed(rec),
     };
-    return m.poll(ev);
+    const open = m.poll(ev);
+    for (records) |rec| switch (rec) {
+        .event => |e| if (e.kind == .moved) {
+            try testing.expectEqual([2]f32{ @floatCast(e.at[0]), ev.in.viewport[1] - @as(f32, @floatCast(e.at[1])) }, ev.in.pointer);
+        },
+        else => {},
+    };
+    return open;
 }
 
 test "macos: a real window runs the example from posted events" {
     var m: Macos = undefined;
-    try Fixture.open(&m);
+    // AppKit routes mouseMoved: to the key window's responder. Hidden windows
+    // accept synthetic button events but miss the hover frames in the recording.
+    try Fixture.openWith(&m, .{});
     defer m.deinit();
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var app_: lcgf.shell_example.App = .{};
