@@ -2,7 +2,7 @@
 
 The package exposes the namespaces declared in `src/lcgf.zig` and the separately selected `lcgf_render` module. Run `zig build docs` for the declaration index in `zig-out/docs/API.md`. Its entries include storage fields, methods and constants. Generic namespaces also expose declarations chosen by their type arguments. The source and compiler determine those declarations for a particular instantiation.
 
-The [published declaration index](../api/API.md) covers 171 exported files. The generator indexed 2,552 functions and constants at publication. The renderer selector additionally exposes `Kind`, `kind`, `backend`, `Renderer`, `Pass`, `Queue` and the backend-specific `Setup`.
+The [published declaration index](../api/API.md) covers 171 exported files. The generator indexed 2,558 functions and constants at publication. The renderer selector additionally exposes `Kind`, `kind`, `backend`, `Renderer`, `Pass`, `Queue` and the backend-specific `Setup`.
 
 The review uses the five characteristics in the [design guide](../DESIGN.md). Each row covers the public declarations in the named source directories, including nested member types and constants.
 
@@ -46,4 +46,4 @@ Tracing relative imports across the directories identified these boundaries:
 The `render_sw` and `shell_baremetal_*` namespaces identify platform/backend APIs at the package root. `lcgf_render` selects a backend at compile time. The implementation can move behind these names while callers keep their imports. Public test fixtures and diagnostic names are identified separately in the compatibility policy.
 
 
-The dynamic and paint APIs added at integration follow the same front-end ownership rules. `Regions(spec).Selection` comes from application state. `Slots(spec)` describes alternative geometry storage. `Paint(spec, options)` holds immutable templates and batch ordering at compile time and updates caller-owned draw lists and dirty state. The host runs live layout, paint and mixed-region composition in its own frame order.
+The dynamic and paint APIs added at integration follow the same front-end ownership rules. `Regions(spec).Selection` comes from application state. `Slots(spec)` describes alternative geometry storage. `Paint(spec, options)` holds immutable templates and batch ordering at compile time and updates caller-owned draw lists and dirty state. Measured labels borrow the same spans as layout and refer to caller-owned string bytes in draw order. The host runs live layout, paint and mixed-region composition in its own frame order.

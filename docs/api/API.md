@@ -1132,6 +1132,7 @@ Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comm
 - `Cols = C`
 - `quad_count = m`: Nodes that can paint a quad: the most quads a frame emits.
 - `node: [m]u32 = painted`: Row k: the node of template k, in paint order.
+- `label_count = labels.len`
 - `Batches = struct { first: [nb]u32, count: [nb]u32, key: [nb]u32 }`: The commands when every template is visible, as `paint.encode` would build them: consecutive templates with equal keys form one batch.
 - `batch_count = nb`
 - `Dirty = std.bit_set.Static(m)`
@@ -1139,6 +1140,8 @@ Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comm
 - `fn Binding(comptime State: type) type`
 - `fn Patches(comptime State: type, comptime bindings: []const Binding(State)) type`: Resolve state fields to template indices while compiling.
 - `fn emit(ram: *const C.Dynamic, d: *DrawList) void`: One frame's draw list from the layout outputs in `ram`: every template whose node is visible, with its rect and its parent's clip; then the commands: `batches` when every template is visible, else `paint.encode` over the ops (a hidden quad shifts the batches after it and may join its neighbours).
+- `fn emitText(ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void`: Paint a measured layout from its original spans, indexed in `strings`.
+- `fn emitLiveText(ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void`: As in runtime paint, clipped live labels retain runs and only visible labels emit commands.
 
 ### `Paint(..).Patches(..)` (generic struct)
 Resolve state fields to template indices while compiling.
@@ -1146,6 +1149,8 @@ Resolve state fields to template indices while compiling.
 - `fn list(comptime field: Field) []const Entry`
 - `fn apply(comptime field: Field, state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void`
 - `fn rebuild(state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void`: Rebuild after layout/visibility changes or before the first upload.
+- `fn rebuildText(state: *const State, ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *Dirty) void`: Rebuild a measured frame and then apply its state-bound quad fields.
+- `fn rebuildLiveText(state: *const State, ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *…`
 
 ## `lcgf.ct_examples` (src/comptime/examples.zig)
 
@@ -1487,6 +1492,7 @@ paint: tree and side lists in, draw list out, in three linear sweeps.
 - `fn emit(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, d: *DrawList) void`: Tree and side lists in, draw list out.
 - `fn emitLayered(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, ly: *const Layers, d: *DrawList) void`: `emit` with nodes painted in stacking-layer order: `ly.c.order` as written by `overlay.order`, so a raised node and its subtree draw over every row of a lower layer.
 - `fn encode(d: *DrawList) void`: Sweep 3 alone: `d.op[0..op_len]` -> commands by run-length encoding.
+- `fn fade(color: u32, alpha: f32) u32`: `color` (rgba8, alpha in the top byte) with its alpha times `alpha`, rounded.
 
 ## `lcgf.damage` (src/draw/damage.zig)
 
