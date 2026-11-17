@@ -61,14 +61,17 @@ pub fn class(comptime name: [:0]const u8) Id {
     return @ptrCast(fns.objc_getClass(name) orelse std.debug.panic("objc: no class {s}", .{name}));
 }
 
-/// The selector for `name`, registered once per name.
+/// One cache per selector. Objective-C interns names, so concurrent first lookups
+/// can publish the same selector. The cached path only loads the pointer.
 pub fn sel(comptime name: [:0]const u8) Sel {
-    const cache = struct {
-        var s: ?Sel = null;
+    const Cache = struct {
+        const key = name;
+        var stored = std.atomic.Value(?Sel).init(null);
     };
-    if (cache.s) |s| return s;
-    cache.s = fns.sel_registerName(name);
-    return cache.s.?;
+    if (Cache.stored.load(.monotonic)) |s| return s;
+    const registered = fns.sel_registerName(Cache.key);
+    Cache.stored.store(registered, .monotonic);
+    return registered;
 }
 
 /// The C signature of `objc_msgSend` for a message with `Args` to a receiver, returning `R`.
@@ -138,4 +141,28 @@ test "objc: messages reach a real runtime" {
     defer pool.pop();
     const s = string("metal");
     try testing.expectEqual(@as(NSUInteger, 5), msg(NSUInteger, s, "length", .{}));
+}
+
+test "selectors cache each name independently" {
+    const Registrar = struct {
+        var calls: usize = 0;
+        fn intern(name: [*:0]const u8) callconv(.c) Sel {
+            calls += 1;
+            return @ptrCast(@constCast(name));
+        }
+    };
+    if (builtin.os.tag == .macos) {
+        try load();
+    } else {
+        fns.sel_registerName = Registrar.intern;
+    }
+    defer if (builtin.os.tag != .macos) {
+        fns.sel_registerName = undefined;
+    };
+    const a = sel("lcgfTestFirst:");
+    const b = sel("lcgfTestSecond:");
+    try testing.expect(a != b);
+    try testing.expectEqual(a, sel("lcgfTestFirst:"));
+    try testing.expectEqual(b, sel("lcgfTestSecond:"));
+    if (builtin.os.tag != .macos) try testing.expectEqual(2, Registrar.calls);
 }
