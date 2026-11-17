@@ -524,6 +524,8 @@ pub const Macos = struct {
             .frames = .init(dev.queue, gfx.desc.frames_in_flight),
             .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit, .names = buf.names, .ends = buf.ends }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
+            // Attaching the view can synchronously deliver viewDidChangeEffectiveAppearance.
+            .appearance = readAppearance(),
         };
         rt.object_setIvar(view, shell_ivar, m);
         inline for (translate.cursor_names, &m.cursors) |name, *c| c.* = msg(Id, objc.class("NSCursor"), name, .{});
@@ -542,7 +544,6 @@ pub const Macos = struct {
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
         m.start = metal.present.mediaTime();
-        m.appearance = readAppearance();
         const center = msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{});
         msg(void, center, "addObserver:selector:name:object:", .{ view, objc.sel("systemColorsDidChange:"), system_colors_changed, @as(?Id, null) });
         if (opt.show) {
