@@ -119,8 +119,7 @@ pub const Anims = struct {
     }
 
     /// Drops springs nobody asked for in frame `frame` (`seen` differs). Branch-free stream
-    /// compaction (`simd.compact`): every row is copied to the write cursor, which advances only
-    /// for kept rows, and the rows freed at the end are zeroed so `step` sees them inert.
+    /// compaction (`simd.compact`) keeps their order and zeroes the freed rows so `step` sees them inert.
     pub fn sweep(a: *Anims, frame: u32) void {
         a.len = simd.compact(a.c, a.len, a.c.seen, frame);
         a.next = 0;

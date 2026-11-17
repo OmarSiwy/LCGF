@@ -365,9 +365,9 @@
     "short_fwd": 0
   },
   "p_sweep": {
-    "back": 1,
-    "jcc": 3,
-    "short_fwd": 0
+    "back": 3,
+    "jcc": 11,
+    "short_fwd": 1
   },
   "p_text_avail": {
     "back": 2,

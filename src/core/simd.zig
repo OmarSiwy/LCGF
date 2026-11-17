@@ -128,10 +128,18 @@ pub inline fn emit(comptime T: type, out: []T, w: u32, v: T, keep: bool) u32 {
 
 /// Stream compaction over a set of columns: keeps, in order, the rows `r` of
 /// every slice field of `cols` for which `key[r] == want`, and returns the
-/// new length. Every row is copied to the write cursor, which advances only
-/// for kept rows. Rows from the new length up to `len` are zeroed so batch
+/// new length. Rows from the new length up to `len` are zeroed so batch
 /// passes over the padding see inert rows. `key` may be one of the columns.
 pub fn compact(cols: anytype, len: u32, key: []const u32, want: u32) u32 {
+    // Steady frames keep every row. A mismatch in the first vector skips the
+    // rest of the key scan on churn. The last vector overlaps for unpadded slices.
+    if (len >= lanes and @reduce(.And, loadU(key, 0) == u(want))) {
+        const last = len - lanes;
+        var difference = loadU(key, last) ^ u(want);
+        var i: usize = lanes;
+        while (i < last) : (i += lanes) difference |= loadU(key, i) ^ u(want);
+        if (@reduce(.Or, difference) == 0) return len;
+    }
     const names = @typeInfo(@TypeOf(cols)).@"struct".field_names;
     var w: u32 = 0;
     for (0..len) |r| {
@@ -310,6 +318,30 @@ test "compact keeps matching rows in order and zeroes the rest" {
         try testing.expectEqual(@as(u32, 0), seen[r]);
     }
     try testing.expectEqual(@as(u32, 0), compact(cols, len, cols.seen, 8));
+}
+
+test "compact preserves a retained prefix and checks the final partial vector" {
+    var seen: [2 * lanes + 1]u32 = undefined;
+    var id: [seen.len]u32 = undefined;
+    for (0..seen.len + 1) |n| {
+        // Drop one row at each position, then keep them all when drop == n.
+        for (0..n + 1) |drop| {
+            for (seen[0..n], id[0..n], 0..) |*key, *value, i| {
+                key.* = @intFromBool(i != drop);
+                value.* = @intCast(i + 1);
+            }
+            const cols = .{ .id = id[0..n], .seen = seen[0..n] };
+            const kept = compact(cols, @intCast(n), cols.seen, 1);
+            try testing.expectEqual(n - @intFromBool(drop < n), kept);
+            for (cols.id[0..kept], 0..) |value, i| {
+                try testing.expectEqual(i + 1 + @intFromBool(i >= drop), value);
+            }
+            if (drop < n) {
+                try testing.expectEqual(0, cols.id[kept]);
+                try testing.expectEqual(0, cols.seen[kept]);
+            }
+        }
+    }
 }
 
 // Scalar reference implementations: the obvious loop with an early exit or an `if`.
