@@ -10,12 +10,12 @@ and runs. The example is the prototype's `buildUi` (`prototype/example.zig`) on 
 
 | File | What it gives you |
 |---|---|
-| `src/runtime/context.zig` (`lcgr.context`) | `Context` (what outlives a frame), `Limits`, `Output`, `Platform`, `Status` |
-| `src/runtime/frame.zig` (`lcgr.frame`) | `Frame`: building, input queries, `end` |
-| `src/runtime/signals.zig` (`lcgr.runtime_signals`) | `Signals`, `Cell`, `Derived`, `Effect` |
-| `src/runtime/reuse.zig` (`lcgr.reuse`) | `Frame.reuse`: skip subtrees whose signals did not change |
-| `src/runtime/scheduler.zig` (`lcgr.scheduler`) | `needsFrame`, `wake`, `Pace`, timers |
-| `src/widgets/` (`lcgr.widgets_*`) | ready widgets, each a function over `Frame` |
+| `src/runtime/context.zig` (`lcgf.context`) | `Context` (what outlives a frame), `Limits`, `Output`, `Platform`, `Status` |
+| `src/runtime/frame.zig` (`lcgf.frame`) | `Frame`: building, input queries, `end` |
+| `src/runtime/signals.zig` (`lcgf.runtime_signals`) | `Signals`, `Cell`, `Derived`, `Effect` |
+| `src/runtime/reuse.zig` (`lcgf.reuse`) | `Frame.reuse`: skip subtrees whose signals did not change |
+| `src/runtime/scheduler.zig` (`lcgf.scheduler`) | `needsFrame`, `wake`, `Pace`, timers |
+| `src/widgets/` (`lcgf.widgets_*`) | ready widgets, each a function over `Frame` |
 
 ## Memory: one buffer, sized by you
 
@@ -23,9 +23,9 @@ Every capacity is a field of `Limits`, and `Context.requiredBytes` gives the byt
 runs at compile time, so the buffer can be static:
 
 ```zig
-const Context = lcgr.context.Context;
-const limits: lcgr.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const Context = lcgf.context.Context;
+const limits: lcgf.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 ```
 
 `Context.init` carves every column from that buffer and never allocates again; a buffer that is
@@ -36,26 +36,26 @@ is written out of bounds, and the frame's `Output.status` says which limit was h
 ```zig
 var ctx = try Context.init(&buffer, limits);
 var app: App = .{ .layers = .init(&ctx.signals, 3) };
-var in: lcgr.input.Input = .{ .viewport = .{ 800, 600 } };
+var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
 ```
 
 ## Building a frame
 
 The UI is a function of your state. Containers are `open` ... `close`; ids are hashed names
 (`Id.from("reset")`, or `.from("reset")` where the type is known), and the widgets in
-`lcgr.widgets_*` are functions that build a few nodes and return what input did to them:
+`lcgf.widgets_*` are functions that build a few nodes and return what input did to them:
 
 ```zig
-const Frame = lcgr.frame.Frame;
-const Id = lcgr.types.Id;
-const w = lcgr.widgets_base;
+const Frame = lcgf.frame.Frame;
+const Id = lcgf.types.Id;
+const w = lcgf.widgets_base;
 
 const App = struct {
     theme: w.Theme = .default,
     resets: u32 = 0,
     wireframe: bool = false,
     exposure: f32 = 1,
-    layers: lcgr.runtime_signals.Cell(u32),
+    layers: lcgf.runtime_signals.Cell(u32),
     sidebar_builds: u32 = 0,
 
     fn build(app: *App, f: *Frame) void {
@@ -141,7 +141,7 @@ app.layers.set(&ctx.signals, 5); // wakes the host: needsFrame is now true
 no dependency changed, the pointer is not over it or holding something in it, and nothing in it
 animates. The caller then skips building it. Otherwise it returns false and the caller builds the
 subtree, whose root must carry the same id. In the example the sidebar is built once and then
-copied until `layers` changes. `Derived(T)` and `Effect` in `lcgr.runtime_signals` cover values
+copied until `layers` changes. `Derived(T)` and `Effect` in `lcgf.runtime_signals` cover values
 computed from signals and work that is due once per frame in which an input changed.
 
 ## A widget of your own
@@ -150,7 +150,7 @@ A widget is a function over `Frame`, written with the same calls the built-in wi
 
 ```zig
 /// A widget is a function over `Frame`: build its nodes, ask what input did to them.
-fn swatch(f: *Frame, id: Id, color: *lcgr.types.Color, other: lcgr.types.Color) bool {
+fn swatch(f: *Frame, id: Id, color: *lcgf.types.Color, other: lcgf.types.Color) bool {
     const node = f.leaf(id, .{ .size = .{ .px(24), .px(24) }, .radius = 4, .fill = color.*, .role = .button });
     const r = f.interact(node, .button);
     f.setCursor(.pointer, r.hovered);

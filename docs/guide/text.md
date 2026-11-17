@@ -67,13 +67,13 @@ rows, each keeping only the rows whose `font` names it:
 const Squares = struct {
     id: types.Font,
 
-    fn measure(font: Squares, tx: *lcgr.texts.Texts) void {
+    fn measure(font: Squares, tx: *lcgf.texts.Texts) void {
         const c = &tx.c;
         for (0..tx.len) |k| {
             const mine = c.font[k] == @backingInt(font.id);
             const w: f32 = @as(f32, @floatFromInt(c.bytes[k])) * c.px[k];
-            c.w[k] = lcgr.simd.selF(mine, w, c.w[k]);
-            c.h[k] = lcgr.simd.selF(mine, c.px[k], c.h[k]);
+            c.w[k] = lcgf.simd.selF(mine, w, c.w[k]);
+            c.h[k] = lcgf.simd.selF(mine, c.px[k], c.h[k]);
         }
     }
 };
@@ -92,7 +92,7 @@ const mono: Mono = .{ .advance = 0.5, .line = 1.2 };
 
 var f = ctx.begin(&in);
 _ = f.open(.from("page"), .{ .size = .{ .px(100), .fit } });
-const title = f.text("LCGR", .{ .px = 20, .font = squares.id });
+const title = f.text("LCGF", .{ .px = 20, .font = squares.id });
 const body = f.text("twenty-four characters!!", .{ .px = 10, .wrap = true });
 f.close();
 ```
@@ -107,11 +107,11 @@ takes them as `render_iface.Glyphs`: glyph quads, where run k's start and count 
 atlas texture. `Mono.quads` makes them for a 16 x 16 byte-indexed atlas:
 
 ```zig
-var quads: [64]lcgr.draw_list.Quad = undefined;
+var quads: [64]lcgf.draw_list.Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
 const n = mono.quads(out.draw, &quads, .{ .first = &first, .count = &count });
-const glyphs: lcgr.render_iface.Glyphs = .{
+const glyphs: lcgf.render_iface.Glyphs = .{
     .quads = quads[0..n],
     .first = &first,
     .count = &count,

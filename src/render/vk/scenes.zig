@@ -12,7 +12,7 @@
 //! With `samples` above 1 the pass draws into a multisampled image resolved into the target.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const loader = @import("loader.zig");
 const device_mod = @import("device.zig");
 const swapchain = @import("swapchain.zig");
@@ -22,8 +22,8 @@ const host = @import("host.zig");
 const custom = @import("custom.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const c = loader.c;
-const conformance = lcgr.render_conformance;
-const iface = lcgr.render_iface;
+const conformance = lcgf.render_conformance;
+const iface = lcgf.render_iface;
 
 pub const Mode = enum { offscreen, present };
 
@@ -45,7 +45,7 @@ pub const Player = struct {
     format: c.VkFormat,
     gfx: Renderer,
     gradient: custom.Gradient,
-    atlas_handle: lcgr.types.Texture,
+    atlas_handle: lcgf.types.Texture,
     st: conformance.Storage,
 
     /// Fills `p` in place (the renderer keeps a pointer to its device).
@@ -201,11 +201,11 @@ test "conformance: every scene matches its golden image, offscreen and presented
         try p.init(mode, samples);
         defer p.deinit();
         for (&conformance.scenes, goldens) |*s, png| {
-            const info = try lcgr.png.info(png);
+            const info = try lcgf.png.info(png);
             try testing.expectEqual(bytes, info.pixelBytes());
             const scratch = try testing.allocator.alloc(u8, info.scratchBytes());
             defer testing.allocator.free(scratch);
-            _ = try lcgr.png.decode(png, want, scratch);
+            _ = try lcgf.png.decode(png, want, scratch);
             try p.draw(s, px);
             const off = pixelsOff(px, want);
             if (off != 0) std.debug.print("{s} {t} x{d}: {d} pixels off\n", .{ s.name, mode, samples, off });
@@ -217,13 +217,13 @@ test "conformance: every scene matches its golden image, offscreen and presented
 test "conformance: 4x multisampling resolves, changing only edges that cut pixels" {
     // A quad whose edges fall between pixel centres: at 1x the pixels whose centre lies outside
     // it are never shaded; at 4x some of their samples are covered, so they get partial colour.
-    const q: lcgr.draw_list.Quad = .{
+    const q: lcgf.draw_list.Quad = .{
         .rect = .{ 10.25, 10.25, 20.75, 20.75 },
         .clip = .{ -1e6, -1e6, 1e6, 1e6 },
         .params = .{ 0, 0, 0, 0 },
         .uv = .{ 0, 0, 1, 1 },
-        .fill = lcgr.types.Color.white.bitsOf(),
-        .border_color = lcgr.types.Color.transparent.bitsOf(),
+        .fill = lcgf.types.Color.white.bitsOf(),
+        .border_color = lcgf.types.Color.transparent.bitsOf(),
         .radii = @splat(0),
         .opacity = 1,
         .border = 0,

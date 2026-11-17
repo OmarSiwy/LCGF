@@ -5,7 +5,7 @@
 # captured with weston-screenshooter: every pixel of the frame the shell committed that is on
 # screen must be in the capture unchanged. Then a second toplevel and a popup at output scale 2.
 zig build wayland-example
-dir=$(mktemp -d "${TMPDIR:-/tmp}/lcgr-wl.XXXX") # short: socket paths are at most 108 bytes
+dir=$(mktemp -d "${TMPDIR:-/tmp}/lcgf-wl.XXXX") # short: socket paths are at most 108 bytes
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$dir"' EXIT
 example=$PWD/zig-out/bin/wayland-example
 

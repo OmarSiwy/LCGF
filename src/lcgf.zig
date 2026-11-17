@@ -1,4 +1,4 @@
-//! LCGR: Lightweight Comptime Graphics Renderer. The package root.
+//! LCGF: Lightweight Comptime Graphics Framework. The package root.
 //!
 //! Each file under src/ is exported here as `pub const name = @import("dir/name.zig");`.
 //! A file that is not exported is not compiled and its tests do not run.

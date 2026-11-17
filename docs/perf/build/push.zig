@@ -4,10 +4,10 @@
 //! The styles are runtime values (a theme read through a pointer), as widgets build them.
 //! Min and median of 4,000 reps, alternated.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const linux = std.os.linux;
-const Style = lcgr.types.Style;
-const Template = lcgr.tree.Template;
+const Style = lcgf.types.Style;
+const Template = lcgf.tree.Template;
 fn now() u64 {
     var ts: linux.timespec = undefined;
     _ = linux.clock_gettime(.MONOTONIC, &ts);
@@ -26,13 +26,13 @@ var styles = [_]Style{
     .{ .size = .{ .fill, .px(4) }, .fill = .rgb(90, 90, 90), .radius = 2 },
 };
 
-fn scene(t: *lcgr.tree.Tree, comptime rows: bool) void {
+fn scene(t: *lcgf.tree.Tree, comptime rows: bool) void {
     var r: [styles.len]Template = undefined;
     if (rows) for (&r, &styles) |*d, *s| {
         d.* = .from(s);
     };
     const P = struct {
-        fn n(tt: *lcgr.tree.Tree, p: u32, k: usize, rr: *const [styles.len]Template) u32 {
+        fn n(tt: *lcgf.tree.Tree, p: u32, k: usize, rr: *const [styles.len]Template) u32 {
             return if (rows) tt.pushRow(p, .none, &rr[k]) else tt.push(p, .none, &styles[k]);
         }
     };
@@ -60,8 +60,8 @@ fn scene(t: *lcgr.tree.Tree, comptime rows: bool) void {
 }
 
 pub fn main() !void {
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
-    var t = lcgr.tree.Tree.init(&carver, 4096);
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
+    var t = lcgf.tree.Tree.init(&carver, 4096);
     const reps = 4000;
     var s: [2][reps]u64 = undefined;
     for (0..reps) |k| {

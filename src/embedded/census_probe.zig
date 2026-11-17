@@ -1,8 +1,8 @@
 //! Branch-census probe for the embedded profile's per-pixel loops (docs/CHECKS.md section 2),
 //! built into `zig build census-src-obj` through src/census_probes.zig. Not exported from
-//! src/lcgr.zig.
-const lcgr = @import("lcgr");
-const fb = lcgr.embedded_framebuffer;
+//! src/lcgf.zig.
+const lcgf = @import("lcgf");
+const fb = lcgf.embedded_framebuffer;
 
 /// A row of sw pixels to RGB565.
 export fn p_embedded_rgb565(dst: [*]u16, src: [*]const u32, n: u32) void {

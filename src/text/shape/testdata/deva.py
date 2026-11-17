@@ -37,7 +37,7 @@ def main(src):
     sub.subset(font)
     for rec in list(font["name"].names):
         if rec.nameID in (1, 4, 6):
-            s = rec.toUnicode().replace("Noto Sans", "LcgrDeva Sans").replace("NotoSans", "LcgrDevaSans")
+            s = rec.toUnicode().replace("Noto Sans", "LcgfDeva Sans").replace("NotoSans", "LcgfDevaSans")
             font["name"].setName(s, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     # Instancing leaves overlapping contours (flagged OVERLAP_SIMPLE). FreeType renders those
     # oversampled; src/text/raster/ sums coverage and over-covers where overlapping edges share

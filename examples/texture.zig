@@ -8,16 +8,16 @@
 //! host's to add); it shows what it would show at rest.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const sw = lcgr.render_sw;
-const context = lcgr.context;
-const Frame = lcgr.frame.Frame;
-const Input = lcgr.input.Input;
-const Quad = lcgr.draw_list.Quad;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const sw = lcgf.render_sw;
+const context = lcgf.context;
+const Frame = lcgf.frame.Frame;
+const Input = lcgf.input.Input;
+const Quad = lcgf.draw_list.Quad;
+const types = lcgf.types;
 const Id = types.Id;
-const Events = lcgr.shell_iface.Events;
+const Events = lcgf.shell_iface.Events;
 const host = @import("host");
 const hello = @import("hello.zig");
 
@@ -28,7 +28,7 @@ pub const id_tilt = Id.from("tilt");
 pub const screen_texture: types.Texture = @fromBackingInt(1);
 
 const inner_limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .signals = 4, .memos = 4 };
-var inner_buffer: [context.Context.requiredBytes(inner_limits)]u8 align(lcgr.mem.column_align) = undefined;
+var inner_buffer: [context.Context.requiredBytes(inner_limits)]u8 align(lcgf.mem.column_align) = undefined;
 var tex_pixels: [sw.Framebuffer.len(tex_w, tex_h)]u32 = undefined;
 var quads: [256]Quad = undefined;
 var first: [inner_limits.texts]u32 = undefined;

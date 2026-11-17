@@ -5,8 +5,8 @@
 //! Built freestanding for a Cortex-M7 and an RV32IMAC (`zig build embedded`) without the
 //! standard library's I/O: the root `panic` traps instead of printing (std's default panic
 //! writes to stderr through `std.Io`), and nothing else reaches std beyond what tier 0 uses.
-//! `_start` runs the scripted taps and then idles. Its own module root over `lcgr`, so it is not
-//! exported from src/lcgr.zig.
+//! `_start` runs the scripted taps and then idles. Its own module root over `lcgf`, so it is not
+//! exported from src/lcgf.zig.
 //!
 //! It runs on the bare-metal shell with the software back end compiled for the one feature kind
 //! its UI uses (`kinds`, `sw.SoftwareOf`): the other shading loops, and the gradients' `sin` and
@@ -14,18 +14,18 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const context = lcgr.context;
-const Frame = lcgr.frame.Frame;
-const Quad = lcgr.draw_list.Quad;
-const Id = lcgr.types.Id;
-const Events = lcgr.shell_iface.Events;
-const input = lcgr.shell_baremetal_input;
-const tick = lcgr.shell_baremetal_tick;
-const flushing = lcgr.shell_baremetal_flush;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const context = lcgf.context;
+const Frame = lcgf.frame.Frame;
+const Quad = lcgf.draw_list.Quad;
+const Id = lcgf.types.Id;
+const Events = lcgf.shell_iface.Events;
+const input = lcgf.shell_baremetal_input;
+const tick = lcgf.shell_baremetal_tick;
+const flushing = lcgf.shell_baremetal_flush;
 /// The feature kinds the UI draws: a label and a button are solid quads.
-pub const kinds: []const lcgr.features.Kind = &.{.solid};
+pub const kinds: []const lcgf.features.Kind = &.{.solid};
 
 /// No stderr, no stack trace, no `std.Io`: a panic is a trap, which a debugger catches.
 pub const panic = std.debug.no_panic;
@@ -103,7 +103,7 @@ pub const Board = struct {
         return script[b.at - 1];
     }
     pub fn flush(b: *Board, a: flushing.Area, pixels: []const u32, stride: u32) void {
-        const display: lcgr.embedded_spi.Display(Transport) = .{ .bus = &b.bus, .scratch = &b.row };
+        const display: lcgf.embedded_spi.Display(Transport) = .{ .bus = &b.bus, .scratch = &b.row };
         display.write(a, pixels, stride, .rgba8) catch unreachable;
         b.sent += a.w() * a.h();
     }
@@ -113,7 +113,7 @@ pub const Board = struct {
 };
 
 // Static RAM, all of it.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var lines: [flushing.Display.len(width, rows)]u32 = undefined;
 var glyphs: [32]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
@@ -131,7 +131,7 @@ pub fn run() bool {
 
 pub fn runBoard(device: anytype, clock: *const tick.Tick, app: *App) bool {
     var ctx = context.Context.init(&ctx_buffer, limits) catch return false;
-    const Shell = lcgr.shell_baremetal_shell.BaremetalOf(@TypeOf(device.*), kinds);
+    const Shell = lcgf.shell_baremetal_shell.BaremetalOf(@TypeOf(device.*), kinds);
     var shell: Shell = .init(device, clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
     var ev: Events = .{};
     var previous: ?struct { count: u32, fill: u32 } = null;
@@ -158,12 +158,12 @@ pub fn runBoard(device: anytype, clock: *const tick.Tick, app: *App) bool {
             shell.apply(&out.platform);
             shell.present(&out);
         }
-        shell.wait(lcgr.scheduler.wake(&ctx, &ev.in), lcgr.scheduler.pace(&ctx));
+        shell.wait(lcgf.scheduler.wake(&ctx, &ev.in), lcgf.scheduler.pace(&ctx));
     }
     return true;
 }
 
-fn setRect(region: *lcgr.damage.Region, comptime slot: usize, box: [4]f32) void {
+fn setRect(region: *lcgf.damage.Region, comptime slot: usize, box: [4]f32) void {
     region.x0[slot] = box[0];
     region.y0[slot] = box[1];
     region.x1[slot] = box[2];

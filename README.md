@@ -1,4 +1,4 @@
-# GUI framework: handoff package
+# LCGF (Lightweight Comptime Graphics Framework)
 
 Everything an agent needs to work through the 848-commit plan without the conversation it came from.
 Unzip this as the root of a new repository.

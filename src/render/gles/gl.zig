@@ -3,8 +3,8 @@
 //! `eglGetProcAddress` into a table. GL calls act on the context current on the calling thread.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const draw_list = lcgr.draw_list;
+const lcgf = @import("lcgf");
+const draw_list = lcgf.draw_list;
 const egl = @import("egl.zig");
 
 pub const Enum = u32;

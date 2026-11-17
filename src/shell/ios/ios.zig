@@ -5,7 +5,7 @@
 //! loop inside UIKit.
 //!
 //! Outside the tiers (it calls UIKit, Core Foundation and Metal), so it is a module of its own
-//! over `lcgr` and the Metal back end (`zig build ios-build -Dtarget=aarch64-ios`), never
+//! over `lcgf` and the Metal back end (`zig build ios-build -Dtarget=aarch64-ios`), never
 //! imported by the core. UIKit is reached through the Objective-C runtime (the Metal back end's
 //! objc.zig, plus the class-building calls below) and Core Foundation through hand-written
 //! extern declarations opened at run time, so nothing is linked but libSystem. Everything that
@@ -22,23 +22,23 @@
 //!         var shell: ios.Ios = undefined;
 //!         shell.init(buffers) catch return;
 //!         defer shell.deinit();
-//!         lcgr.shell_iface.run(&shell, &ctx, &app);
+//!         lcgf.shell_iface.run(&shell, &ctx, &app);
 //!     }
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const metal = @import("metal");
-const translate = lcgr.shell_ios_translate;
-const iface = lcgr.shell_iface;
-const context = lcgr.context;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const Color = lcgr.types.Color;
+const translate = lcgf.shell_ios_translate;
+const iface = lcgf.shell_iface;
+const context = lcgf.context;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
+const Pace = lcgf.scheduler.Pace;
 const objc = metal.objc;
 const text_input = @import("text_input.zig");
 const Id = objc.Id;
@@ -173,7 +173,7 @@ pub var app: App = .{};
 pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn {
     load() catch |e| std.debug.panic("ios: {t}", .{e});
     app.entry = entry;
-    app.view_class = defineClass("UIView", "LcgrView", &[_]Method{
+    app.view_class = defineClass("UIView", "LcgfView", &[_]Method{
         .{ .sel = "layerClass", .imp = &viewLayerClass, .types = "#@:", .meta = true },
         .{ .sel = "layoutSubviews", .imp = &viewLayout, .types = "v@:" },
         .{ .sel = "safeAreaInsetsDidChange", .imp = &viewInsets, .types = "v@:" },
@@ -188,15 +188,15 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
     for ([_][*:0]const u8{ "UIKeyInput", "UITextInput" }) |name| {
         if (fns.objc_getProtocol(name)) |proto| _ = fns.class_addProtocol(app.view_class, proto);
     }
-    text_input.position_class = defineClassWith("UITextPosition", "LcgrTextPosition", &.{}, &.{"o"});
-    text_input.range_class = defineClassWith("UITextRange", "LcgrTextRange", &.{
+    text_input.position_class = defineClassWith("UITextPosition", "LcgfTextPosition", &.{}, &.{"o"});
+    text_input.range_class = defineClassWith("UITextRange", "LcgfTextRange", &.{
         .{ .sel = "start", .imp = &text_input.rangeStart, .types = "@@:" },
         .{ .sel = "end", .imp = &text_input.rangeEnd, .types = "@@:" },
         .{ .sel = "isEmpty", .imp = &text_input.rangeEmpty, .types = "B@:" },
     }, &.{ "a", "b" });
-    _ = defineClass("UIResponder", "LcgrAppDelegate", &.{
+    _ = defineClass("UIResponder", "LcgfAppDelegate", &.{
         .{ .sel = "application:didFinishLaunchingWithOptions:", .imp = &appLaunched, .types = "B@:@@" },
-        .{ .sel = "lcgrRun", .imp = &appRun, .types = "v@:" },
+        .{ .sel = "lcgfRun", .imp = &appRun, .types = "v@:" },
         .{ .sel = "applicationWillResignActive:", .imp = &appInactive, .types = "v@:@" },
         .{ .sel = "applicationDidEnterBackground:", .imp = &appBackground, .types = "v@:@" },
         .{ .sel = "applicationWillEnterForeground:", .imp = &appInactive, .types = "v@:@" },
@@ -204,7 +204,7 @@ pub fn start(argc: c_int, argv: ?[*]?[*:0]u8, entry: *const fn () void) noreturn
         .{ .sel = "applicationWillTerminate:", .imp = &appTerminate, .types = "v@:@" },
     });
     const pool = objc.Pool.push();
-    const delegate = objc.string("LcgrAppDelegate");
+    const delegate = objc.string("LcgfAppDelegate");
     _ = fns.UIApplicationMain(argc, argv, null, delegate);
     pool.pop();
     std.process.exit(0);
@@ -272,7 +272,7 @@ fn appLaunched(self: Id, _: Sel, _: Id, _: ?Id) callconv(.c) bool {
     app.window = window;
     app.view = view;
     // The host loop runs from the run loop, after launching has finished.
-    msg(void, self, "performSelector:withObject:afterDelay:", .{ objc.sel("lcgrRun"), @as(?Id, null), @as(f64, 0) });
+    msg(void, self, "performSelector:withObject:afterDelay:", .{ objc.sel("lcgfRun"), @as(?Id, null), @as(f64, 0) });
     return true;
 }
 
@@ -318,7 +318,7 @@ pub const Ios = struct {
     touches: [translate.max_contacts]?Id = @splat(null),
     /// Text input as last applied: whether the view is first responder (keyboard up), and
     /// the rect (points) the IME's candidates and the text-selection UI anchor to.
-    text: struct { wants: bool = false, rect: lcgr.types.Rect = .{}, purpose: lcgr.keyboard.Purpose = .normal } = .{},
+    text: struct { wants: bool = false, rect: lcgf.types.Rect = .{}, purpose: lcgf.keyboard.Purpose = .normal } = .{},
     /// The IME's marked text (retained, an NSString) and the UTF-16 range it selects: the
     /// whole document UITextInput sees (text_input).
     marked: ?Id = null,
@@ -335,7 +335,7 @@ pub const Ios = struct {
     /// one row per text run.
     /// `text` and `events` hold what arrives between polls and the frame handed out (half each):
     /// pasted and, later, typed text.
-    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32, text: []u8, events: []lcgr.input.Input.Event };
+    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32, text: []u8, events: []lcgf.input.Input.Event };
 
     /// The shell over the view the application delegate opened. Call from `start`'s `entry`;
     /// the shell must not move afterwards (UIKit's callbacks point at it).

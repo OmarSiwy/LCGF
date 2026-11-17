@@ -6,9 +6,9 @@
 //! The drawing is scenes.zig's `Player`: offscreen into an RGBA8 image, or present through a
 //! headless swapchain; SAMPLES (default 1) above 1 resolves a multisampled target.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const scenes = @import("scenes.zig");
-const conformance = lcgr.render_conformance;
+const conformance = lcgf.render_conformance;
 
 var player: scenes.Player = undefined;
 
@@ -44,5 +44,5 @@ fn png(gpa: std.mem.Allocator, w: u32, h: u32, rgba: []const u8) ![]const u8 {
         try raw.append(gpa, 0);
         try raw.appendSlice(gpa, rgba[y * w * 4 ..][0 .. w * 4]);
     }
-    return lcgr.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
+    return lcgf.png.encodeForTest(gpa, w, h, 8, .rgba, false, &.{}, raw.items);
 }

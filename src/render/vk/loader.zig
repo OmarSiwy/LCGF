@@ -135,7 +135,7 @@ pub const SurfaceFns = struct {
 };
 
 pub const InstanceDesc = struct {
-    app_name: [:0]const u8 = "lcgr",
+    app_name: [:0]const u8 = "lcgf",
     /// Instance extensions the host needs: VK_KHR_surface plus its platform's surface extension
     /// (the shell knows which), or none for offscreen rendering.
     extensions: []const [*:0]const u8 = &.{},
@@ -158,7 +158,7 @@ pub const Instance = struct {
         const app: c.VkApplicationInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pApplicationName = desc.app_name.ptr,
-            .pEngineName = "lcgr",
+            .pEngineName = "lcgf",
             .apiVersion = api_version,
         };
         var handle: c.VkInstance = null;
@@ -218,7 +218,7 @@ test "loader: an instance without extensions has no surface functions" {
 test "loader: an unknown extension is reported, not crashed on" {
     var lib = try Library.open();
     defer lib.close();
-    try testing.expectError(error.MissingExtension, Instance.init(&lib, .{ .extensions = &.{"VK_LCGR_not_an_extension"} }));
+    try testing.expectError(error.MissingExtension, Instance.init(&lib, .{ .extensions = &.{"VK_LCGF_not_an_extension"} }));
 }
 
 test "check: success codes pass, failures map to errors" {

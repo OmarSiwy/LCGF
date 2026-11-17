@@ -1,8 +1,8 @@
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Tree = lcgr.tree.Tree;
-const L = lcgr.layout;
-const K = lcgr.coefs;
+const lcgf = @import("lcgf");
+const Tree = lcgf.tree.Tree;
+const L = lcgf.layout;
+const K = lcgf.coefs;
 const linux = std.os.linux;
 fn now() u64 {
     var ts: linux.timespec = undefined;
@@ -11,7 +11,7 @@ fn now() u64 {
 }
 var raw: [8 << 20]u8 align(64) = undefined;
 pub fn main() !void {
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
     var t = Tree.init(&carver, 4096);
     var k = K.Coefs.init(&carver, 4096);
     // The bench scene's shape: 330 rows of 11 nodes under a column.
@@ -67,8 +67,8 @@ pub fn main() !void {
 fn us(x: u64) f64 {
     return @as(f64, @floatFromInt(x)) / 1000;
 }
-const W = lcgr.simd.lanes;
-const F = lcgr.simd.F;
+const W = lcgf.simd.lanes;
+const F = lcgf.simd.F;
 const N = 4096 + 64;
 var depth: [N]u32 = undefined;
 var order: [N]u32 = undefined; // new -> old
@@ -130,7 +130,7 @@ fn permute(t: *const Tree, k: *const K.Coefs) u32 {
     }
     return n;
 }
-inline fn gather(col: []const f32, idx: lcgr.simd.U) F {
+inline fn gather(col: []const f32, idx: lcgf.simd.U) F {
     var v: F = undefined;
     inline for (0..W) |l| v[l] = col[idx[l]];
     return v;
@@ -145,7 +145,7 @@ noinline fn levelResolve(n: u32, comptime with_used: bool) void {
         const end = start[d + 1];
         while (j < end) : (j += W) {
             // the last vector of a level runs into the next level; its lanes are rewritten later
-            const p: lcgr.simd.U = lpar[j..][0..W].*;
+            const p: lcgf.simd.U = lpar[j..][0..W].*;
             const ps = gather(&lsize, p);
             const inner = @max(ps - gather(&lpad, p), zero);
             const k0: F = lk0[j..][0..W].*;

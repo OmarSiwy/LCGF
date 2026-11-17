@@ -1,5 +1,5 @@
 //! Three-column, five-row bitmaps for the panel. Bits in a row run from left to right.
-const font = @import("lcgr").embedded_font;
+const font = @import("lcgf").embedded_font;
 pub const Counter = font.Subset(3, 5, "? 0123456789ACdnout+-", &.{
     .{ 7, 1, 3, 0, 2 }, .{ 0, 0, 0, 0, 0 },
     .{ 7, 5, 5, 5, 7 }, .{ 2, 6, 2, 2, 7 },

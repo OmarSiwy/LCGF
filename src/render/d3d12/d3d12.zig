@@ -1,5 +1,5 @@
-//! The Direct3D 12 back end. Outside the tiers and not exported from lcgr.zig: it calls a
-//! platform API, so it is a module of its own over lcgr, built for x86_64-windows
+//! The Direct3D 12 back end. Outside the tiers and not exported from lcgf.zig: it calls a
+//! platform API, so it is a module of its own over lcgf, built for x86_64-windows
 //! (`zig build d3d12`), never imported by it. COM through hand-written vtables (com.zig).
 //!
 //! The tests need Windows, or Wine with a Vulkan driver for its vkd3d (ci/jobs/d3d12.sh: Mesa

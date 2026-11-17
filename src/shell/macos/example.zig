@@ -7,17 +7,17 @@
 //! built.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const Macos = @import("macos.zig").Macos;
-const context = lcgr.context;
-const scheduler = lcgr.scheduler;
-const Events = lcgr.shell_iface.Events;
-const Quad = lcgr.draw_list.Quad;
-const Event = lcgr.input.Input.Event;
+const context = lcgf.context;
+const scheduler = lcgf.scheduler;
+const Events = lcgf.shell_iface.Events;
+const Quad = lcgf.draw_list.Quad;
+const Event = lcgf.input.Input.Event;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 // Static, so the program allocates nothing.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
@@ -32,10 +32,10 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
     _ = args.next();
-    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgr.types.inf;
+    const seconds: f32 = if (args.next()) |s| try std.fmt.parseFloat(f32, s) else lcgf.types.inf;
 
     var shell: Macos = undefined;
-    try shell.init(.{ .title = "LCGR example" }, .{
+    try shell.init(.{ .title = "LCGF example" }, .{
         .text = &text,
         .events = &events,
         .preedit = &preedit,
@@ -47,14 +47,14 @@ pub fn main(init: std.process.Init) !void {
     });
     defer shell.deinit();
     var ctx = try context.Context.init(&ctx_buffer, limits);
-    var app: lcgr.shell_example.App = .{ .theme = lcgr.theme.widgets(&shell.appearance.tokens()) };
+    var app: lcgf.shell_example.App = .{ .theme = lcgf.theme.widgets(&shell.appearance.tokens()) };
     shell.background = app.theme.panel;
 
     const t0 = std.Io.Timestamp.now(io, .awake);
     var ev: Events = .{};
     while (shell.poll(&ev)) {
         if (shell.appearanceChanged()) |a| {
-            app.theme = lcgr.theme.widgets(&a.tokens());
+            app.theme = lcgf.theme.widgets(&a.tokens());
             shell.background = app.theme.panel;
             ctx.waker.post();
         }

@@ -4,15 +4,15 @@
 //! the shaping cache, measuring and rasterising work unchanged on its output.
 //!
 //! Outside the tiers: it links the C library HarfBuzz, so it is its own module over
-//! `lcgr` (`zig build harfbuzz`; HarfBuzz 13.2.1 is a lazy build.zig.zon dependency built
+//! `lcgf` (`zig build harfbuzz`; HarfBuzz 13.2.1 is a lazy build.zig.zon dependency built
 //! from source), never
-//! imported by the core and not exported from src/lcgr.zig. The C API is declared by hand
+//! imported by the core and not exported from src/lcgf.zig. The C API is declared by hand
 //! below (docs/DEPENDENCIES.md: small APIs need no header translation). HarfBuzz allocates
 //! internally; the adapter keeps one face, font and buffer and reuses them.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Run = lcgr.shape.Run;
+const lcgf = @import("lcgf");
+const Run = lcgf.shape.Run;
 
 const hb_blob_t = opaque {};
 const hb_face_t = opaque {};
@@ -106,7 +106,7 @@ const baseline = 36;
 test "the adapter gives HarfBuzz's glyphs in the shaper's columns" {
     var hb: HarfBuzz = .init(deva, 0);
     defer hb.deinit();
-    var cols: lcgr.shape.TestRun = .{};
+    var cols: lcgf.shape.TestRun = .{};
     var run = cols.run();
     try hb.shape(sample, &run);
     // deva-hb.txt: gid,cluster,advance,x_offset,y_offset per glyph.
@@ -124,10 +124,10 @@ test "the adapter gives HarfBuzz's glyphs in the shaper's columns" {
     // The i-matra (U+093F, after HA in the text) is drawn before HA and shares its cluster;
     // the built-in shaper, which does not reorder, keeps text order.
     try std.testing.expectEqual(run.cluster[0], run.cluster[1]);
-    const face = try lcgr.opentype.Face.parse(deva, 0);
-    var plain_cols: lcgr.shape.TestRun = .{};
+    const face = try lcgf.opentype.Face.parse(deva, 0);
+    var plain_cols: lcgf.shape.TestRun = .{};
     var plain = plain_cols.run();
-    try lcgr.shape.shape(&face, sample, &plain);
+    try lcgf.shape.shape(&face, sample, &plain);
     try std.testing.expectEqual(face.cmap.glyph(0x939), plain.glyph[0]);
     try std.testing.expect(plain.glyph[0] != run.glyph[0]);
     try std.testing.expect(plain.len != run.len);
@@ -136,12 +136,12 @@ test "the adapter gives HarfBuzz's glyphs in the shaper's columns" {
 test "a complex-script sample renders through the adapter" {
     var hb: HarfBuzz = .init(deva, 0);
     defer hb.deinit();
-    var cols: lcgr.shape.TestRun = .{};
+    var cols: lcgf.shape.TestRun = .{};
     var run = cols.run();
     try hb.shape(sample, &run);
 
-    const raster = lcgr.raster;
-    const face = try lcgr.opentype.Face.parse(deva, 0);
+    const raster = lcgf.raster;
+    const face = try lcgf.opentype.Face.parse(deva, 0);
     const scale = @as(f32, px) / @as(f32, @floatFromInt(face.units_per_em));
     var img: [picture_w * picture_h]u8 = @splat(0);
     var ocols: raster.TestOutline = .{};

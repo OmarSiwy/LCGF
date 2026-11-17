@@ -11,18 +11,18 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const context = lcgr.context;
-const sw = lcgr.render_sw;
-const Frame = lcgr.frame.Frame;
-const Input = lcgr.input.Input;
-const Quad = lcgr.draw_list.Quad;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const context = lcgf.context;
+const sw = lcgf.render_sw;
+const Frame = lcgf.frame.Frame;
+const Input = lcgf.input.Input;
+const Quad = lcgf.draw_list.Quad;
+const types = lcgf.types;
 const Id = types.Id;
-const Events = lcgr.shell_iface.Events;
-const Sim = lcgr.shell_baremetal_sim.Sim;
-const Shell = lcgr.shell_baremetal_shell.Baremetal(Sim);
+const Events = lcgf.shell_iface.Events;
+const Sim = lcgf.shell_baremetal_sim.Sim;
+const Shell = lcgf.shell_baremetal_shell.Baremetal(Sim);
 
 pub const width = 320;
 pub const height = 240;
@@ -81,8 +81,8 @@ pub const recording =
 ;
 
 // Static RAM, all of it.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
-var lines: [lcgr.shell_baremetal_flush.Display.len(width, rows)]u32 = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+var lines: [lcgf.shell_baremetal_flush.Display.len(width, rows)]u32 = undefined;
 var panel: [sw.Framebuffer.len(width, height)]u32 = undefined;
 var glyphs: [128]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
@@ -101,7 +101,7 @@ pub fn run() bool {
     state = .{};
     sim = .init(recording, .{ .text = &text, .events = &events, .contacts = &contacts }, .init(&panel, width, height, .rgba8));
     var shell: Shell = .init(&sim, &sim.clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
-    lcgr.shell_iface.run(&shell, &ctx, &state);
+    lcgf.shell_iface.run(&shell, &ctx, &state);
     return sim.err == null;
 }
 

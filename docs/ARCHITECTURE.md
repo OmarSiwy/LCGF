@@ -41,18 +41,18 @@ commands that the host reads and answers.
 
 ## The package root
 
-`src/lcgr.zig` is the root of the `lcgr` module. Each file under `src/` is exported there with one
+`src/lcgf.zig` is the root of the `lcgf` module. Each file under `src/` is exported there with one
 line, `pub const name = @import("dir/name.zig");`. `zig build test` runs every test reachable from
 the root, so a file that is not exported is neither compiled nor tested. Adding that line is the
 only edit a lane makes outside its home.
 
 **Adapters are the exception.** Code that calls a platform API or a C library on behalf of a tier
 (system font discovery in `src/text/fallback/`, the HarfBuzz shaping adapter in `src/text/shape/`)
-lives next to the tier-0 code it serves but is built as its own module over `lcgr` and is *not*
-exported from `src/lcgr.zig`, so the core never imports it.
+lives next to the tier-0 code it serves but is built as its own module over `lcgf` and is *not*
+exported from `src/lcgf.zig`, so the core never imports it.
 
 ## How the rule is checked
 
 - Tier 0 files import only `std` and other tier-0 files; review rejects anything else.
 - The cross-compile CI job builds the core for targets with no OS support it could lean on.
-- Renderers and shells are built as separate modules that import `lcgr`, never the reverse.
+- Renderers and shells are built as separate modules that import `lcgf`, never the reverse.

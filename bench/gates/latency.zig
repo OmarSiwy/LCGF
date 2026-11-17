@@ -9,26 +9,26 @@
 //!
 //! bench/gates/gates.py latency checks that line against bench/gates/recorded.json.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Headless = lcgr.shell_headless.Headless;
-const Events = lcgr.shell_iface.Events;
-const Context = lcgr.context.Context;
-const App = lcgr.shell_example.App;
-const Input = lcgr.input.Input;
-const Quad = lcgr.draw_list.Quad;
-const Framebuffer = lcgr.render_sw.Framebuffer;
+const lcgf = @import("lcgf");
+const Headless = lcgf.shell_headless.Headless;
+const Events = lcgf.shell_iface.Events;
+const Context = lcgf.context.Context;
+const App = lcgf.shell_example.App;
+const Input = lcgf.input.Input;
+const Quad = lcgf.draw_list.Quad;
+const Framebuffer = lcgf.render_sw.Framebuffer;
 
 const toggles = 2000;
 const head = "frame\nviewport 800 600\nframe\nframe\n";
 const pair = "frame\npointer 37 25\nframe\npointer 400 400\n";
-const limits: lcgr.context.Limits = .{ .nodes = 1024, .texts = 256 };
+const limits: lcgf.context.Limits = .{ .nodes = 1024, .texts = 256 };
 const fb_w = 800;
 const fb_h = 600;
 /// Inside Reset's face (8,8 .. 66,42), left of its label.
 const probe_x = 10;
 const probe_y = 25;
 
-var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var pixels: [Framebuffer.len(fb_w, fb_h)]u32 = undefined;
 var glyphs: [512]Quad = undefined;
 var first: [limits.texts]u32 = undefined;

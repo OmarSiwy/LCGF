@@ -3,7 +3,7 @@
 //! drains AppKit's event queue without blocking and returns, `wait` is the only call that sleeps
 //! (no `[NSApp run]`).
 //!
-//! Outside the tiers (it calls AppKit), so it is a module of its own over `lcgr` and the Metal
+//! Outside the tiers (it calls AppKit), so it is a module of its own over `lcgf` and the Metal
 //! back end (`zig build macos`, `zig build macos-build`), never imported by the core. AppKit is
 //! reached the way src/render/metal/objc.zig reaches Metal: libobjc and the frameworks are opened
 //! at run time and every message goes through `objc_msgSend`, so the shell cross-compiles from
@@ -11,25 +11,25 @@
 //! is translate.zig, tested on every host.
 //!
 //! AppKit delivers events by calling methods on a view. The shell registers one NSView subclass
-//! at run time (`LCGRView`, as GPUI's `GPUIView`) whose methods find their `Macos` through an
+//! at run time (`LCGFView`, as GPUI's `GPUIView`) whose methods find their `Macos` through an
 //! instance variable and hand the event to the translator, so `init` builds the shell in place
 //! and it must not move afterwards. The view is also the window's delegate.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const metal = @import("metal");
 const objc = metal.objc;
-const translate = lcgr.shell_macos_translate;
-const iface = lcgr.shell_iface;
-const context = lcgr.context;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const Color = lcgr.types.Color;
+const translate = lcgf.shell_macos_translate;
+const iface = lcgf.shell_iface;
+const context = lcgf.context;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
+const Pace = lcgf.scheduler.Pace;
 const Id = objc.Id;
 const Sel = objc.Sel;
 const U = objc.NSUInteger;
@@ -145,7 +145,7 @@ fn msgRect(target: Id, comptime selector: [:0]const u8, args: anytype) NSRect {
     return @call(.auto, f, .{ target, objc.sel(selector) } ++ args);
 }
 
-/// The method of `LCGRView` for each selector, with its type encoding (`v@:@`: returns void,
+/// The method of `LCGFView` for each selector, with its type encoding (`v@:@`: returns void,
 /// takes self, _cmd and one object).
 const methods = .{
     .{ "acceptsFirstResponder", &acceptsFirstResponder, "c@:" },
@@ -183,8 +183,8 @@ const methods = .{
 };
 
 fn registerView() Error!void {
-    const cls = rt.objc_allocateClassPair(objc.class("NSView"), "LCGRView", 0) orelse return error.ClassFailed;
-    if (!rt.class_addIvar(cls, "lcgr", @sizeOf(usize), std.math.log2(@alignOf(usize)), "^v")) return error.ClassFailed;
+    const cls = rt.objc_allocateClassPair(objc.class("NSView"), "LCGFView", 0) orelse return error.ClassFailed;
+    if (!rt.class_addIvar(cls, "lcgf", @sizeOf(usize), std.math.log2(@alignOf(usize)), "^v")) return error.ClassFailed;
     inline for (methods) |m| {
         if (!rt.class_addMethod(cls, objc.sel(m[0]), @ptrCast(m[1]), m[2])) return error.ClassFailed;
     }
@@ -192,13 +192,13 @@ fn registerView() Error!void {
     if (rt.objc_getProtocol("NSTextInputClient")) |p| _ = rt.class_addProtocol(cls, p);
     rt.objc_registerClassPair(cls);
     view_class = cls;
-    shell_ivar = rt.class_getInstanceVariable(cls, "lcgr") orelse return error.ClassFailed;
+    shell_ivar = rt.class_getInstanceVariable(cls, "lcgf") orelse return error.ClassFailed;
 }
 
 /// NSApp's delegate: Quit asks it first, and it says no (NSTerminateCancel), so the host's loop
 /// ends instead of `exit` being called under it.
 fn registerDelegate(a: Id) Error!void {
-    const cls = rt.objc_allocateClassPair(objc.class("NSObject"), "LCGRAppDelegate", 0) orelse return error.ClassFailed;
+    const cls = rt.objc_allocateClassPair(objc.class("NSObject"), "LCGFAppDelegate", 0) orelse return error.ClassFailed;
     if (!rt.class_addMethod(cls, objc.sel("applicationShouldTerminate:"), @ptrCast(&applicationShouldTerminate), "Q@:@")) return error.ClassFailed;
     rt.objc_registerClassPair(cls);
     // Kept for the life of the process: NSApp holds its delegate weakly.
@@ -478,7 +478,7 @@ pub const Macos = struct {
     start: f64 = 0,
 
     pub const Options = struct {
-        title: [:0]const u8 = "LCGR",
+        title: [:0]const u8 = "LCGF",
         /// Content size in points (logical pixels).
         size: [2]u32 = .{ 800, 600 },
         /// False for a window that stays hidden (tests).
@@ -492,7 +492,7 @@ pub const Macos = struct {
     /// renderer's 32768), `first` and `count` one row per text run.
     pub const Buffers = struct {
         text: []u8,
-        events: []lcgr.input.Input.Event,
+        events: []lcgf.input.Input.Event,
         preedit: []u8,
         names: []u8,
         ends: []u32,
@@ -640,7 +640,7 @@ pub const Macos = struct {
     /// asks for a frame, since nothing in `Input` changed:
     ///
     ///     if (shell.appearanceChanged()) |a| {
-    ///         app.theme = lcgr.theme.widgets(&a.tokens());
+    ///         app.theme = lcgf.theme.widgets(&a.tokens());
     ///         ctx.waker.post();
     ///     }
     pub fn appearanceChanged(m: *Macos) ?translate.Appearance {
@@ -723,11 +723,11 @@ const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 const Fixture = struct {
     // A second window's own text, events and composition; glyphs are shared.
     var text2: [64]u8 = undefined;
-    var events2: [16]lcgr.input.Input.Event = undefined;
+    var events2: [16]lcgf.input.Input.Event = undefined;
     var preedit2: [64]u8 = undefined;
-    var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(lcgr.mem.column_align) = undefined;
+    var ctx_buffer: [context.Context.requiredBytes(example_limits)]u8 align(lcgf.mem.column_align) = undefined;
     var text: [64]u8 = undefined;
-    var events: [16]lcgr.input.Input.Event = undefined;
+    var events: [16]lcgf.input.Input.Event = undefined;
     var preedit: [64]u8 = undefined;
     var names: [512]u8 = undefined;
     var ends: [16]u32 = undefined;
@@ -931,7 +931,7 @@ test "macos: a real window runs the example from posted events" {
     try Fixture.open(&m);
     defer m.deinit();
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
-    var app_: lcgr.shell_example.App = .{};
+    var app_: lcgf.shell_example.App = .{};
     var r: translate.Replay = .{ .src = @embedFile("testdata/example.events") };
     var ev: Events = .{};
     var frames: u32 = 0;

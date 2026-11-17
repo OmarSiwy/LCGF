@@ -3,7 +3,7 @@
 //! shell contract of src/shell/iface.zig: `poll` turns the server's events into `Input`,
 //! `present` draws the frame with the software back end and sends the pixels with PutImage.
 //!
-//! A module of its own over `lcgr` (`zig build x11`), like the GL ES back end, because it calls
+//! A module of its own over `lcgf` (`zig build x11`), like the GL ES back end, because it calls
 //! Linux directly (socket, poll); the core never imports it.
 //!
 //! Two types, so that one connection serves several windows: `Connection` (the socket and what
@@ -13,22 +13,22 @@
 
 const std = @import("std");
 const linux = std.os.linux;
-const lcgr = @import("lcgr");
-const wire = lcgr.shell_x11_wire;
-const keys = lcgr.shell_x11_keys;
-const xim = lcgr.shell_x11_xim;
-const Input = lcgr.input.Input;
-const iface = lcgr.shell_iface;
+const lcgf = @import("lcgf");
+const wire = lcgf.shell_x11_wire;
+const keys = lcgf.shell_x11_keys;
+const xim = lcgf.shell_x11_xim;
+const Input = lcgf.input.Input;
+const iface = lcgf.shell_iface;
 const Events = iface.Events;
-const context = lcgr.context;
+const context = lcgf.context;
 const Platform = context.Platform;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
-const sw = lcgr.render_sw;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const Color = lcgr.types.Color;
-const inf = lcgr.types.inf;
+const Pace = lcgf.scheduler.Pace;
+const sw = lcgf.render_sw;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
+const inf = lcgf.types.inf;
 
 pub const Error = error{
     UnsupportedDisplay,
@@ -55,7 +55,7 @@ pub const Atoms = struct {
     TARGETS: u32 = 0,
     TEXT: u32 = 0,
     /// Where a paste is delivered, on the requesting window.
-    LCGR_PASTE: u32 = 0,
+    LCGF_PASTE: u32 = 0,
     /// The XIM transport's ClientMessage types.
     _XIM_XCONNECT: u32 = 0,
     _XIM_PROTOCOL: u32 = 0,
@@ -72,7 +72,7 @@ pub const Atoms = struct {
     XdndActionCopy: u32 = 0,
     @"text/uri-list": u32 = 0,
     /// Where dropped data is delivered, on the target window.
-    LCGR_DROP: u32 = 0,
+    LCGF_DROP: u32 = 0,
 };
 
 /// Predefined atoms.
@@ -595,7 +595,7 @@ pub const Ime = struct {
         var seqs: [8]u16 = undefined;
         for (&seqs, 0..) |*s, i| {
             var name: [16]u8 = undefined;
-            const n = std.fmt.bufPrint(&name, "_LCGR_XIM{d}", .{i}) catch unreachable;
+            const n = std.fmt.bufPrint(&name, "_LCGF_XIM{d}", .{i}) catch unreachable;
             s.* = c.send(wire.internAtomSize(n), wire.internAtom, .{n});
         }
         for (seqs, &ime.props) |s, *p| p.* = wire.get(u32, try c.reply(s), 8);
@@ -671,17 +671,17 @@ pub const Window = struct {
         source: u32 = 0,
         root: [2]i16 = .{ 0, 0 },
         moved: bool = false,
-        /// The data was asked for, is in LCGR_DROP, and was read into `drop_names`.
+        /// The data was asked for, is in LCGF_DROP, and was read into `drop_names`.
         asked: bool = false,
         arrived: bool = false,
         read: bool = false,
         dropped: bool = false,
-        files: lcgr.gestures.Files = .{},
+        files: lcgf.gestures.Files = .{},
     } = .{},
     /// The dragged files' paths, back to back, and where each ends.
     drop_names: [4096]u8 = undefined,
     drop_ends: [64]u32 = undefined,
-    /// A SelectionNotify said the pasted text is in LCGR_PASTE; `poll` reads it.
+    /// A SelectionNotify said the pasted text is in LCGF_PASTE; `poll` reads it.
     paste_ready: bool = false,
     /// The cursor the window shows, so `apply` sends only changes.
     cursor: ?context.Cursor = null,
@@ -832,7 +832,7 @@ pub const Window = struct {
             wire.destroy_notify => w.is_open = false,
             wire.selection_notify => {
                 const a = w.conn.atoms;
-                if (wire.get(u32, m, 12) == a.CLIPBOARD and wire.get(u32, m, 20) == a.LCGR_PASTE) w.paste_ready = true;
+                if (wire.get(u32, m, 12) == a.CLIPBOARD and wire.get(u32, m, 20) == a.LCGF_PASTE) w.paste_ready = true;
                 if (wire.get(u32, m, 12) == a.XdndSelection) w.dnd.arrived = true;
             },
             wire.client_message => {
@@ -922,7 +922,7 @@ pub const Window = struct {
             // The files are asked for while they hover, so widgets can tell whether to accept.
             if (!d.asked) {
                 d.asked = true;
-                _ = c.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.XdndSelection, a.@"text/uri-list", a.LCGR_DROP });
+                _ = c.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.XdndSelection, a.@"text/uri-list", a.LCGF_DROP });
             }
             // Accepted as a copy anywhere in the window; the application decides what to do.
             const l = [5]u32{ w.id, 1, 0, 0, a.XdndActionCopy };
@@ -949,7 +949,7 @@ pub const Window = struct {
             d.arrived = false;
             // An empty or refused conversion reads as no files.
             const words: u32 = @intCast(@min(w.drop_names.len, c.in.len - 32) / 4);
-            const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGR_DROP, true, words }));
+            const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGF_DROP, true, words }));
             const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
             const n = wire.uriListPaths(r[32..][0..len], &w.drop_names, &w.drop_ends);
             d.files.names = w.drop_names[0..if (n == 0) 0 else w.drop_ends[n - 1]];
@@ -1007,14 +1007,14 @@ pub const Window = struct {
     /// holds no text. Text longer than a frame's text buffer is dropped.
     fn requestPaste(w: *Window) void {
         const a = w.conn.atoms;
-        _ = w.conn.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.CLIPBOARD, a.UTF8_STRING, a.LCGR_PASTE });
+        _ = w.conn.send(wire.convert_selection_size, wire.convertSelection, .{ w.id, a.CLIPBOARD, a.UTF8_STRING, a.LCGF_PASTE });
         w.conn.flush() catch {};
     }
 
     fn readPaste(w: *Window) Error!void {
         const c = w.conn;
         const words: u32 = @intCast(@min(w.frames[0].text.len, c.in.len - 32) / 4);
-        const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGR_PASTE, true, words }));
+        const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ w.id, c.atoms.LCGF_PASTE, true, words }));
         const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
         if (wire.get(u32, r, 12) == 0) w.frames[w.cur].typedBytes(r[32..][0..len]);
     }
@@ -1112,17 +1112,17 @@ comptime {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tests on a real X server. They run only when LCGR_X11_TEST_DISPLAY names one (ci/run.sh x11
+// Tests on a real X server. They run only when LCGF_X11_TEST_DISPLAY names one (ci/run.sh x11
 // starts Xvfb for them): they create windows and move the pointer with XTEST, which must never
 // happen on the desktop of whoever runs `zig build x11`.
 
 const testing = std.testing;
-const mem = lcgr.mem;
-const example = lcgr.shell_example;
-const Replay = lcgr.input.Replay;
+const mem = lcgf.mem;
+const example = lcgf.shell_example;
+const Replay = lcgf.input.Replay;
 
 fn testDisplay() ![]const u8 {
-    return testing.environ.getPosix("LCGR_X11_TEST_DISPLAY") orelse error.SkipZigTest;
+    return testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse error.SkipZigTest;
 }
 
 const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
@@ -1183,7 +1183,7 @@ test "x11: the example runs from the input recording, and the window shows it" {
     defer c.close();
     const xtest = try c.extension("XTEST");
     var w: Window = undefined;
-    try w.open(c, fb_w, fb_h, "lcgr x11 test", Fixture.buffers);
+    try w.open(c, fb_w, fb_h, "lcgf x11 test", Fixture.buffers);
     defer w.close();
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var app: example.App = .{};
@@ -1452,7 +1452,7 @@ test "x11: copy in one application, paste in another" {
     try testing.expectEqual(Input.Event.Kind.text, ev.in.events[0].kind);
 
     // The owner lists its targets.
-    _ = b.send(wire.convert_selection_size, wire.convertSelection, .{ wb.id, b.atoms.CLIPBOARD, b.atoms.TARGETS, b.atoms.LCGR_PASTE });
+    _ = b.send(wire.convert_selection_size, wire.convertSelection, .{ wb.id, b.atoms.CLIPBOARD, b.atoms.TARGETS, b.atoms.LCGF_PASTE });
     for (0..2000) |_| {
         _ = wa.poll(&ev);
         try b.pump();
@@ -1460,7 +1460,7 @@ test "x11: copy in one application, paste in another" {
         b.waitReadable(0.005);
     } else return error.TargetsNeverArrived;
     wb.paste_ready = false;
-    const r = try b.reply(b.send(wire.get_property_size, wire.getProperty, .{ wb.id, b.atoms.LCGR_PASTE, true, 16 }));
+    const r = try b.reply(b.send(wire.get_property_size, wire.getProperty, .{ wb.id, b.atoms.LCGF_PASTE, true, 16 }));
     try testing.expectEqual(@as(u32, atom_atom), wire.get(u32, r, 8));
     const want = [_]u32{ b.atoms.TARGETS, b.atoms.UTF8_STRING, atom_string, b.atoms.TEXT };
     try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&want), r[32..][0..16]);
@@ -1693,7 +1693,7 @@ test "x11: IME over XIM: compose, commit, keys it does not use, spot and focus" 
             var server: Connection = .{};
         };
         var fake: FakeIme = .{ .conn = &S.server, .owner = 0, .major = major };
-        try fake.start(display, "lcgrtest");
+        try fake.start(display, "lcgftest");
         defer S.server.close();
 
         const c = &Fixture.conn;
@@ -1705,7 +1705,7 @@ test "x11: IME over XIM: compose, commit, keys it does not use, spot and focus" 
         defer w.close();
         _ = c.send(wire.set_input_focus_size, wire.setInputFocus, .{w.id});
         try testing.expectError(error.NoInputMethod, c.openIme("nosuchim", "en_US"));
-        try c.openIme("lcgrtest", "en_US");
+        try c.openIme("lcgftest", "en_US");
 
         var ev: Events = .{};
         const Until = struct {

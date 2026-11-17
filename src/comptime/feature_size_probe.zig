@@ -1,5 +1,5 @@
 //! Linked size probe. Every entry point takes runtime data so the linker keeps the renderer.
-const ui = @import("lcgr");
+const ui = @import("lcgf");
 const sw = ui.render_sw;
 const mode = @import("probe_options").mode;
 

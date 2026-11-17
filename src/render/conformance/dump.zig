@@ -3,11 +3,11 @@
 //!     conformance-dump OUT     ->  OUT/<scene>/{quad.wgsl, quads.bin, glyphs.bin, cmds.txt}
 //!
 //! The same files as prototype/dump.zig, plus `size W H` in cmds.txt. The shader and vertex
-//! layout are src/render/shaders/quad.zig's (`lcgr.quad_shader`).
+//! layout are src/render/shaders/quad.zig's (`lcgf.quad_shader`).
 const std = @import("std");
-const lcgr = @import("lcgr");
-const gfx = lcgr.quad_shader;
-const conformance = lcgr.render_conformance;
+const lcgf = @import("lcgf");
+const gfx = lcgf.quad_shader;
+const conformance = lcgf.render_conformance;
 
 var st: conformance.Storage = .{};
 

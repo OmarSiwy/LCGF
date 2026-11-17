@@ -1,6 +1,6 @@
 # Why src was slower than the prototype, per pass
 
-docs/perf/bench-src.md found lcgr's runtime front end 17% slower per frame than the prototype
+docs/perf/bench-src.md found lcgf's runtime front end 17% slower per frame than the prototype
 path on the rows scene (334.5 against 286.0 us). This note gives the cause of each pass's gap,
 what was fixed, and what is left with its cost measured.
 
@@ -11,7 +11,7 @@ median of the per-run medians, in us. Before = 9b7071d, after = this commit.
 
 ## Layout: fixed
 
-The prototype path's layout is not the prototype's own: it times lcgr's fastest tier-0 passes,
+The prototype path's layout is not the prototype's own: it times lcgf's fastest tier-0 passes,
 `levels.build` + `levels.resolve` (level-order SIMD resolve, C0849) and `coefs.placeRows` +
 `coefs.placeK`. `Frame.end` ran the incremental `*Kept` forms, whose resolve is the row-by-row
 `layout.resolveSpan` even when nothing is kept. Pass by pass on rows (single pinned runs):

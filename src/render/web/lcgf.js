@@ -1,9 +1,9 @@
-// The JavaScript side of LCGR on the web: loads a wasm32-freestanding module and gives it the
-// functions it imports (module "lcgr"). Nothing else: no framework, no build step, no bundler.
+// The JavaScript side of LCGF on the web: loads a wasm32-freestanding module and gives it the
+// functions it imports (module "lcgf"). Nothing else: no framework, no build step, no bundler.
 //
-//     import { load } from "./lcgr.js";
+//     import { load } from "./lcgf.js";
 //     const ui = await load("hello.wasm");
-//     ui.exports.lcgr_hello(800, 600);
+//     ui.exports.lcgf_hello(800, 600);
 //
 // The wasm side owns its memory and its loop (docs/DESIGN.md); JS only reads what it is told
 // to read (a pointer and a length) and calls the platform for it. Each feature adds its
@@ -53,12 +53,12 @@ export async function load(url, ...parts) {
         panic(ptr, len) {
             const msg = ui.str(ptr, len);
             ui.logs.push("panic: " + msg);
-            throw new Error("lcgr panic: " + msg);
+            throw new Error("lcgf panic: " + msg);
         },
     };
     for (const part of parts) Object.assign(env, part(ui));
     const bytes = typeof url === "string" ? await (await fetch(url)).arrayBuffer() : url;
-    const { instance } = await WebAssembly.instantiate(bytes, { lcgr: env });
+    const { instance } = await WebAssembly.instantiate(bytes, { lcgf: env });
     ui.instance = instance;
     ui.exports = instance.exports;
     return ui;

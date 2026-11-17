@@ -20,22 +20,22 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
 const msl = @import("msl.zig");
 const pipeline = @import("pipeline.zig");
 const texture = @import("texture.zig");
 const custom = @import("custom.zig");
-const types = lcgr.types;
-const draw_list = lcgr.draw_list;
-const quad_shader = lcgr.quad_shader;
-const iface = lcgr.render_iface;
+const types = lcgf.types;
+const draw_list = lcgf.draw_list;
+const quad_shader = lcgf.quad_shader;
+const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 const Id = objc.Id;
 const U = objc.NSUInteger;
 
-pub const Globals = lcgr.render_null.Globals;
+pub const Globals = lcgf.render_null.Globals;
 pub const Glyphs = iface.Glyphs;
 pub const max_materials = quad_shader.max_materials;
 
@@ -224,8 +224,8 @@ pub fn RendererOver(comptime Encoder: type) type {
 
 const testing = std.testing;
 const dev_mod = @import("device.zig");
-const null_backend = lcgr.render_null;
-const conformance = lcgr.render_conformance;
+const null_backend = lcgf.render_null;
+const conformance = lcgf.render_conformance;
 
 /// Stands in for the encoder off macOS: logs the calls a draw makes in the null back end's
 /// terms (so conformance's checks apply) and notes a draw issued without the full state.

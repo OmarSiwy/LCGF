@@ -130,11 +130,11 @@ fn nameHas(name: []const u8, ps: []const u8) bool {
 test faceByName {
     const ttc = @embedFile("../font/testdata/test.ttc");
     // Expected: fontTools TTCollection on test.ttc, nameID 6 of each face.
-    try std.testing.expectEqual(0, try faceByName(ttc, "LcgrTest-Sans-Regular"));
-    try std.testing.expectEqual(1, try faceByName(ttc, "LcgrTest-Sans-Bold"));
-    try std.testing.expectEqual(null, try faceByName(ttc, "LcgrTest-Sans"));
-    try std.testing.expectEqual(null, try faceByName(ttc, "LcgrTest-Sans-Bolder"));
-    try std.testing.expectEqual(0, try faceByName(test_latin, "LcgrFallbackSans-Regular"));
+    try std.testing.expectEqual(0, try faceByName(ttc, "LcgfTest-Sans-Regular"));
+    try std.testing.expectEqual(1, try faceByName(ttc, "LcgfTest-Sans-Bold"));
+    try std.testing.expectEqual(null, try faceByName(ttc, "LcgfTest-Sans"));
+    try std.testing.expectEqual(null, try faceByName(ttc, "LcgfTest-Sans-Bolder"));
+    try std.testing.expectEqual(0, try faceByName(test_latin, "LcgfFallbackSans-Regular"));
 }
 
 /// Columns for a few test runs.

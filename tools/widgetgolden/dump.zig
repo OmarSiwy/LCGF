@@ -14,58 +14,58 @@
 //! line per page in `pages` below. ci/jobs/widget-golden.sh renders each one and compares it
 //! with tools/widgetgolden/ref/<frame>.png.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const Quad = lcgr.draw_list.Quad;
-const Replay = lcgr.input.Replay;
-const Input = lcgr.input.Input;
-const gfx = lcgr.quad_shader;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const Quad = lcgf.draw_list.Quad;
+const Replay = lcgf.input.Replay;
+const Input = lcgf.input.Input;
+const gfx = lcgf.quad_shader;
 
 /// Each widget page: frame-name prefix, page type (with `Run`), replay, golden frames.
 const pages = .{
     .{ "", w.Reference(.default), w.reference_replay, w.golden_frames },
-    .{ "card-", lcgr.widgets_card.Page(.default), lcgr.widgets_card.replay, lcgr.widgets_card.golden_frames },
-    .{ "label-", lcgr.widgets_label.Page, lcgr.widgets_label.Page.replay, lcgr.widgets_label.Page.golden_frames },
-    .{ "button-", lcgr.widgets_button.Page, lcgr.widgets_button.Page.replay, lcgr.widgets_button.Page.golden_frames },
-    .{ "checkbox-", lcgr.widgets_checkbox.Page, lcgr.widgets_checkbox.Page.replay, lcgr.widgets_checkbox.Page.golden_frames },
-    .{ "radio-", lcgr.widgets_radio.Page, lcgr.widgets_radio.Page.replay, lcgr.widgets_radio.Page.golden_frames },
-    .{ "switch-", lcgr.widgets_switch.Page, lcgr.widgets_switch.Page.replay, lcgr.widgets_switch.Page.golden_frames },
-    .{ "toggle-", lcgr.widgets_toggle.Page, lcgr.widgets_toggle.Page.replay, lcgr.widgets_toggle.Page.golden_frames },
-    .{ "slider-", lcgr.widgets_slider.Page, lcgr.widgets_slider.Page.replay, lcgr.widgets_slider.Page.golden_frames },
-    .{ "range-", lcgr.widgets_range.Page, lcgr.widgets_range.Page.replay, lcgr.widgets_range.Page.golden_frames },
-    .{ "chip-", lcgr.widgets_chip.Page, lcgr.widgets_chip.Page.replay, lcgr.widgets_chip.Page.golden_frames },
-    .{ "separator-", lcgr.widgets_separator.Page(.default), lcgr.widgets_separator.replay, lcgr.widgets_separator.golden_frames },
-    .{ "spacer-", lcgr.widgets_spacer.Page(.default), lcgr.widgets_spacer.replay, lcgr.widgets_spacer.golden_frames },
-    .{ "accordion-", lcgr.widgets_accordion.Page(.default), lcgr.widgets_accordion.replay, lcgr.widgets_accordion.golden_frames },
-    .{ "tabs-", lcgr.widgets_tabs.Page(.default), lcgr.widgets_tabs.replay, lcgr.widgets_tabs.golden_frames },
-    .{ "splitter-", lcgr.widgets_splitter.Page(.default), lcgr.widgets_splitter.replay, lcgr.widgets_splitter.golden_frames },
-    .{ "scroll-", lcgr.widgets_scroll.Page(.default), lcgr.widgets_scroll.replay, lcgr.widgets_scroll.golden_frames },
-    .{ "toolbar-", lcgr.widgets_toolbar.Page(.default), lcgr.widgets_toolbar.replay, lcgr.widgets_toolbar.golden_frames },
-    .{ "breadcrumb-", lcgr.widgets_breadcrumb.Page(.default), lcgr.widgets_breadcrumb.replay, lcgr.widgets_breadcrumb.golden_frames },
-    .{ "icon-", lcgr.widgets_icon.Page(.default), lcgr.widgets_icon.replay, lcgr.widgets_icon.golden_frames },
-    .{ "statusbar-", lcgr.widgets_statusbar.Page(.default), lcgr.widgets_statusbar.replay, lcgr.widgets_statusbar.golden_frames },
-    .{ "list-", lcgr.widgets_list.Page, lcgr.widgets_list.Page.replay, lcgr.widgets_list.Page.golden_frames },
-    .{ "vlist-", lcgr.widgets_vlist.Page, lcgr.widgets_vlist.Page.replay, lcgr.widgets_vlist.Page.golden_frames },
-    .{ "table-", lcgr.widgets_table.Page, lcgr.widgets_table.Page.replay, lcgr.widgets_table.Page.golden_frames },
-    .{ "tree-", lcgr.widgets_tree.Page, lcgr.widgets_tree.Page.replay, lcgr.widgets_tree.Page.golden_frames },
-    .{ "progress-", lcgr.widgets_progress.Page, lcgr.widgets_progress.Page.replay, lcgr.widgets_progress.Page.golden_frames },
-    .{ "spinner-", lcgr.widgets_spinner.Page, lcgr.widgets_spinner.Page.replay, lcgr.widgets_spinner.Page.golden_frames },
-    .{ "colorpicker-", lcgr.widgets_colorpicker.Page, lcgr.widgets_colorpicker.Page.replay, lcgr.widgets_colorpicker.Page.golden_frames },
-    .{ "image-", lcgr.widgets_image.Page(.default), lcgr.widgets_image.replay, lcgr.widgets_image.golden_frames },
-    .{ "", lcgr.widgets_popover.golden, lcgr.widgets_popover.golden.src, lcgr.widgets_popover.golden.frames },
-    .{ "", lcgr.widgets_tooltip.golden, lcgr.widgets_tooltip.golden.src, lcgr.widgets_tooltip.golden.frames },
-    .{ "", lcgr.widgets_menu.golden, lcgr.widgets_menu.golden.src, lcgr.widgets_menu.golden.frames },
-    .{ "", lcgr.widgets_menubar.golden, lcgr.widgets_menubar.golden.src, lcgr.widgets_menubar.golden.frames },
-    .{ "", lcgr.widgets_contextmenu.golden, lcgr.widgets_contextmenu.golden.src, lcgr.widgets_contextmenu.golden.frames },
-    .{ "", lcgr.widgets_dialog.golden, lcgr.widgets_dialog.golden.src, lcgr.widgets_dialog.golden.frames },
-    .{ "", lcgr.widgets_toast.golden, lcgr.widgets_toast.golden.src, lcgr.widgets_toast.golden.frames },
-    .{ "", lcgr.widgets_select.golden, lcgr.widgets_select.golden.src, lcgr.widgets_select.golden.frames },
-    .{ "", lcgr.widgets_combobox.golden, lcgr.widgets_combobox.golden.src, lcgr.widgets_combobox.golden.frames },
-    .{ "", lcgr.widgets_datepicker.golden, lcgr.widgets_datepicker.golden.src, lcgr.widgets_datepicker.golden.frames },
-    .{ "search-", lcgr.widgets_search.Page, lcgr.widgets_search.Page.replay, lcgr.widgets_search.Page.golden_frames },
-    .{ "number-", lcgr.widgets_number.Page, lcgr.widgets_number.Page.replay, lcgr.widgets_number.Page.golden_frames },
-    .{ "textarea-", lcgr.widgets_textarea.Page, lcgr.widgets_textarea.Page.replay, lcgr.widgets_textarea.Page.golden_frames },
-    .{ "textfield-", lcgr.widgets_textfield.Page, lcgr.widgets_textfield.Page.replay, lcgr.widgets_textfield.Page.golden_frames },
+    .{ "card-", lcgf.widgets_card.Page(.default), lcgf.widgets_card.replay, lcgf.widgets_card.golden_frames },
+    .{ "label-", lcgf.widgets_label.Page, lcgf.widgets_label.Page.replay, lcgf.widgets_label.Page.golden_frames },
+    .{ "button-", lcgf.widgets_button.Page, lcgf.widgets_button.Page.replay, lcgf.widgets_button.Page.golden_frames },
+    .{ "checkbox-", lcgf.widgets_checkbox.Page, lcgf.widgets_checkbox.Page.replay, lcgf.widgets_checkbox.Page.golden_frames },
+    .{ "radio-", lcgf.widgets_radio.Page, lcgf.widgets_radio.Page.replay, lcgf.widgets_radio.Page.golden_frames },
+    .{ "switch-", lcgf.widgets_switch.Page, lcgf.widgets_switch.Page.replay, lcgf.widgets_switch.Page.golden_frames },
+    .{ "toggle-", lcgf.widgets_toggle.Page, lcgf.widgets_toggle.Page.replay, lcgf.widgets_toggle.Page.golden_frames },
+    .{ "slider-", lcgf.widgets_slider.Page, lcgf.widgets_slider.Page.replay, lcgf.widgets_slider.Page.golden_frames },
+    .{ "range-", lcgf.widgets_range.Page, lcgf.widgets_range.Page.replay, lcgf.widgets_range.Page.golden_frames },
+    .{ "chip-", lcgf.widgets_chip.Page, lcgf.widgets_chip.Page.replay, lcgf.widgets_chip.Page.golden_frames },
+    .{ "separator-", lcgf.widgets_separator.Page(.default), lcgf.widgets_separator.replay, lcgf.widgets_separator.golden_frames },
+    .{ "spacer-", lcgf.widgets_spacer.Page(.default), lcgf.widgets_spacer.replay, lcgf.widgets_spacer.golden_frames },
+    .{ "accordion-", lcgf.widgets_accordion.Page(.default), lcgf.widgets_accordion.replay, lcgf.widgets_accordion.golden_frames },
+    .{ "tabs-", lcgf.widgets_tabs.Page(.default), lcgf.widgets_tabs.replay, lcgf.widgets_tabs.golden_frames },
+    .{ "splitter-", lcgf.widgets_splitter.Page(.default), lcgf.widgets_splitter.replay, lcgf.widgets_splitter.golden_frames },
+    .{ "scroll-", lcgf.widgets_scroll.Page(.default), lcgf.widgets_scroll.replay, lcgf.widgets_scroll.golden_frames },
+    .{ "toolbar-", lcgf.widgets_toolbar.Page(.default), lcgf.widgets_toolbar.replay, lcgf.widgets_toolbar.golden_frames },
+    .{ "breadcrumb-", lcgf.widgets_breadcrumb.Page(.default), lcgf.widgets_breadcrumb.replay, lcgf.widgets_breadcrumb.golden_frames },
+    .{ "icon-", lcgf.widgets_icon.Page(.default), lcgf.widgets_icon.replay, lcgf.widgets_icon.golden_frames },
+    .{ "statusbar-", lcgf.widgets_statusbar.Page(.default), lcgf.widgets_statusbar.replay, lcgf.widgets_statusbar.golden_frames },
+    .{ "list-", lcgf.widgets_list.Page, lcgf.widgets_list.Page.replay, lcgf.widgets_list.Page.golden_frames },
+    .{ "vlist-", lcgf.widgets_vlist.Page, lcgf.widgets_vlist.Page.replay, lcgf.widgets_vlist.Page.golden_frames },
+    .{ "table-", lcgf.widgets_table.Page, lcgf.widgets_table.Page.replay, lcgf.widgets_table.Page.golden_frames },
+    .{ "tree-", lcgf.widgets_tree.Page, lcgf.widgets_tree.Page.replay, lcgf.widgets_tree.Page.golden_frames },
+    .{ "progress-", lcgf.widgets_progress.Page, lcgf.widgets_progress.Page.replay, lcgf.widgets_progress.Page.golden_frames },
+    .{ "spinner-", lcgf.widgets_spinner.Page, lcgf.widgets_spinner.Page.replay, lcgf.widgets_spinner.Page.golden_frames },
+    .{ "colorpicker-", lcgf.widgets_colorpicker.Page, lcgf.widgets_colorpicker.Page.replay, lcgf.widgets_colorpicker.Page.golden_frames },
+    .{ "image-", lcgf.widgets_image.Page(.default), lcgf.widgets_image.replay, lcgf.widgets_image.golden_frames },
+    .{ "", lcgf.widgets_popover.golden, lcgf.widgets_popover.golden.src, lcgf.widgets_popover.golden.frames },
+    .{ "", lcgf.widgets_tooltip.golden, lcgf.widgets_tooltip.golden.src, lcgf.widgets_tooltip.golden.frames },
+    .{ "", lcgf.widgets_menu.golden, lcgf.widgets_menu.golden.src, lcgf.widgets_menu.golden.frames },
+    .{ "", lcgf.widgets_menubar.golden, lcgf.widgets_menubar.golden.src, lcgf.widgets_menubar.golden.frames },
+    .{ "", lcgf.widgets_contextmenu.golden, lcgf.widgets_contextmenu.golden.src, lcgf.widgets_contextmenu.golden.frames },
+    .{ "", lcgf.widgets_dialog.golden, lcgf.widgets_dialog.golden.src, lcgf.widgets_dialog.golden.frames },
+    .{ "", lcgf.widgets_toast.golden, lcgf.widgets_toast.golden.src, lcgf.widgets_toast.golden.frames },
+    .{ "", lcgf.widgets_select.golden, lcgf.widgets_select.golden.src, lcgf.widgets_select.golden.frames },
+    .{ "", lcgf.widgets_combobox.golden, lcgf.widgets_combobox.golden.src, lcgf.widgets_combobox.golden.frames },
+    .{ "", lcgf.widgets_datepicker.golden, lcgf.widgets_datepicker.golden.src, lcgf.widgets_datepicker.golden.frames },
+    .{ "search-", lcgf.widgets_search.Page, lcgf.widgets_search.Page.replay, lcgf.widgets_search.Page.golden_frames },
+    .{ "number-", lcgf.widgets_number.Page, lcgf.widgets_number.Page.replay, lcgf.widgets_number.Page.golden_frames },
+    .{ "textarea-", lcgf.widgets_textarea.Page, lcgf.widgets_textarea.Page.replay, lcgf.widgets_textarea.Page.golden_frames },
+    .{ "textfield-", lcgf.widgets_textfield.Page, lcgf.widgets_textfield.Page.replay, lcgf.widgets_textfield.Page.golden_frames },
 };
 /// A texture a page samples, RGBA8 (`Color` bits, premultiplied), row by row.
 const Texture = struct { id: u16, w: u32, h: u32, pixels: []const u32 };
@@ -83,7 +83,7 @@ fn photo() Texture {
         @setEvalBranchQuota(400_000);
         var out: [tw * th]u32 = undefined;
         for (0..th) |y| for (0..tw) |x| {
-            const c: lcgr.types.Color = if (x >= 64 or y >= 48)
+            const c: lcgf.types.Color = if (x >= 64 or y >= 48)
                 .rgb(255, 0, 255)
             else if ((@as(i32, x) - 46) * (@as(i32, x) - 46) + (@as(i32, y) - 12) * (@as(i32, y) - 12) < 50)
                 .rgb(255, 214, 90)

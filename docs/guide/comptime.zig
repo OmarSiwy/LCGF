@@ -3,11 +3,11 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
-const Input = lcgr.input.Input;
+const lcgf = @import("lcgf");
+const Input = lcgf.input.Input;
 
 // -- state and spec
-const s = lcgr.spec;
+const s = lcgf.spec;
 
 const Mixer = struct {
     title: []const u8 = "Mixer",
@@ -23,13 +23,13 @@ const mixer = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
 });
 
 comptime {
-    lcgr.validate.check(Mixer, mixer, .{});
+    lcgf.validate.check(Mixer, mixer, .{});
 }
 // -- end
 
 test "tables: structure is a compile-time constant" {
     // -- flat
-    const F = lcgr.flatten.Flat(mixer);
+    const F = lcgf.flatten.Flat(mixer);
     try testing.expectEqual(8, F.node_count);
     try testing.expectEqual(u4, F.Index);
     try testing.expectEqualSlices(F.Index, &.{ 0, 0, 0, 2, 2, 0, 5, 5 }, &F.parent);
@@ -39,7 +39,7 @@ test "tables: structure is a compile-time constant" {
 
 test "signals: a setter is a store and an OR" {
     // -- signals
-    const S = lcgr.signals.Signals(Mixer, mixer);
+    const S = lcgf.signals.Signals(Mixer, mixer);
     var rt: S.Runtime = .{};
     _ = rt.takeDirty(); // every node starts dirty: the first frame does everything
 
@@ -71,7 +71,7 @@ const Channel = struct {
 
 test "derived fields and effects" {
     const channel = comptime s.row(.{}, .{ s.slider(.v, .volume), s.checkbox(.m, .muted), s.label(.gain) });
-    const S = lcgr.signals.Signals(Channel, channel);
+    const S = lcgf.signals.Signals(Channel, channel);
     var saves: u32 = 0;
     var meter: f32 = -1;
     // -- effects
@@ -91,7 +91,7 @@ test "derived fields and effects" {
 
 test "events: widgets are an enum" {
     // -- widget
-    const E = lcgr.events.Events(mixer);
+    const E = lcgf.events.Events(mixer);
     try testing.expectEqual(4, @backingInt(E.Widget.volume)); // the tag's value is its row
     const hit: E.Widget = .mute;
     const label = switch (hit) { // a widget missing here is a compile error
@@ -111,12 +111,12 @@ fn channelRow(comptime mute: @EnumLiteral(), comptime muted: @EnumLiteral(), com
 test "components: a function returning a Spec is the same nodes inline" {
     const a = comptime s.col(.{}, .{ channelRow(.mute, .muted, .volume), s.label(.title) });
     const b = comptime s.col(.{}, .{ s.row(.{ .gap = 8 }, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }), s.label(.title) });
-    try testing.expectEqual(lcgr.flatten.Flat(b).parent, lcgr.flatten.Flat(a).parent);
-    try testing.expectEqual(lcgr.flatten.Flat(b).end, lcgr.flatten.Flat(a).end);
+    try testing.expectEqual(lcgf.flatten.Flat(b).parent, lcgf.flatten.Flat(a).parent);
+    try testing.expectEqual(lcgf.flatten.Flat(b).end, lcgf.flatten.Flat(a).end);
 }
 
 // -- frame
-const w = lcgr.widgets_base;
+const w = lcgf.widgets_base;
 const th: w.Theme = .default;
 
 const Toolbar = struct {

@@ -14,9 +14,9 @@
 //! and WebGPU has no swizzle to fix that in the view. The cost is 4 bytes per atlas pixel.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const c = @import("wgpu_c");
-const Atlas = lcgr.raster_atlas.Atlas;
+const Atlas = lcgf.raster_atlas.Atlas;
 
 pub const GlyphTexture = struct {
     texture: c.WGPUTexture,

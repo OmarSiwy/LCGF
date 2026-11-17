@@ -8,10 +8,10 @@
 //! glyph atlas as texture 1, the same host gradient for custom commands, the size from
 //! cmds.txt (800x600 without a `size` line) and the clear colour from the argument (black).
 const std = @import("std");
-const lcgr = @import("lcgr");
-const sw = lcgr.render_sw;
-const Quad = lcgr.draw_list.Quad;
-const Color = lcgr.types.Color;
+const lcgf = @import("lcgf");
+const sw = lcgf.render_sw;
+const Quad = lcgf.draw_list.Quad;
+const Color = lcgf.types.Color;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     for (33..127) |byte| for (1..4) |y| for (1..3) |x| {
         atlas[((byte >> 4) * 4 + y) * 64 + (byte & 15) * 4 + x] = 0xffff_ffff;
     };
-    const atlas_tex: lcgr.types.Texture = @fromBackingInt(1);
+    const atlas_tex: lcgf.types.Texture = @fromBackingInt(1);
     const s: sw.Software = .{
         .quads = quads,
         .glyphs = .{ .quads = glyph_quads, .first = first.items, .count = count.items, .texture = atlas_tex },
@@ -71,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
         for (&v) |*x| x.* = std.fmt.parseFloat(f32, f.next() orelse "0") catch 0;
         if (std.mem.eql(u8, key, "quads")) {
             // Texture 0 is white, any other the stand-in atlas.
-            const tex: lcgr.types.Texture = if (v[2] == 0) .white else atlas_tex;
+            const tex: lcgf.types.Texture = if (v[2] == 0) .white else atlas_tex;
             s.drawBatch(t, .{ .first = @intFromFloat(v[0]), .count = @intFromFloat(v[1]), .texture = tex, .material = .solid });
         } else if (std.mem.eql(u8, key, "text")) {
             s.drawText(t, run);

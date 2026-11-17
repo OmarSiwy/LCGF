@@ -107,7 +107,7 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
 - **wgpu**: the portable back end, and the route for applications that want raw wgpu. The host owns
   device, queue and pass; see the header of `prototype/ui_wgpu.zig` for the five kinds of raw access.
 - **One per build.** `-Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu` picks the back end the
-  `lcgr_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on
+  `lcgf_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on
   Apple, Direct3D 12 on Windows, Vulkan on Linux and Android, web on wasm32, software on
   freestanding). Only that back end is compiled and nothing dispatches: its `.text` is
   byte-identical to a direct import (ci/jobs/render-select.sh). The host still owns device,

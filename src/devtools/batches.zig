@@ -5,9 +5,9 @@
 //! with paint's own test.
 
 const std = @import("std");
-const Tree = @import("lcgr").tree.Tree;
-const DrawList = @import("lcgr").draw_list.DrawList;
-const Quad = @import("lcgr").draw_list.Quad;
+const Tree = @import("lcgf").tree.Tree;
+const DrawList = @import("lcgf").draw_list.DrawList;
+const Quad = @import("lcgf").draw_list.Quad;
 
 pub const Stats = struct {
     quads: u32 = 0,
@@ -27,7 +27,7 @@ pub fn quadsOf(t: *const Tree, rows: u32) u32 {
     var q: u32 = 0;
     for (0..rows) |i| {
         const look = t.c.look[i];
-        q += @intFromBool(t.c.visible[i] != 0 and ((look.fill | look.border_color) >> 24) != 0 and @import("lcgr").inherit.alphaOf(t, @intCast(i)) > 0);
+        q += @intFromBool(t.c.visible[i] != 0 and ((look.fill | look.border_color) >> 24) != 0 and @import("lcgf").inherit.alphaOf(t, @intCast(i)) > 0);
     }
     return q;
 }

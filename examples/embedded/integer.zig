@@ -5,7 +5,7 @@ const builtin = @import("builtin");
 const demo = @import("demo.zig");
 const assets = @import("panel_assets");
 pub const panic = std.debug.no_panic;
-const Area = @import("lcgr").shell_baremetal_flush.Area;
+const Area = @import("lcgf").shell_baremetal_flush.Area;
 const all: Area = .{ .x0 = 0, .y0 = 0, .x1 = demo.width, .y1 = demo.height };
 const button: Area = .{ .x0 = assets.button[0], .y0 = assets.button[1], .x1 = assets.button[0] + assets.button[2], .y1 = assets.button[1] + assets.button[3] };
 const label: Area = .{ .x0 = 0, .y0 = 0, .x1 = demo.width, .y1 = button.y0 };

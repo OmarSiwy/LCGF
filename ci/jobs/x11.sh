@@ -13,6 +13,6 @@ trap 'kill $xvfb; rm -rf "$dir"' EXIT
 for _ in $(seq 100); do [ -s "$dir/display" ] && break; sleep 0.1; done
 display=":$(cat "$dir/display")"
 for mode in Debug ReleaseFast; do
-    LCGR_X11_TEST_DISPLAY="$display" zig build x11 -Doptimize="$mode" --summary all
+    LCGF_X11_TEST_DISPLAY="$display" zig build x11 -Doptimize="$mode" --summary all
 done
 DISPLAY="$display" XAUTHORITY=/dev/null XMODIFIERS= zig-out/bin/x11-example 2

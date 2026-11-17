@@ -11,13 +11,13 @@
 //! (most ES 2 GPUs have 16); `init` fails with `error.TooFewAttributes` below that.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const gl = @import("gl.zig");
 const program = @import("program.zig");
-const types = lcgr.types;
-const draw_list = lcgr.draw_list;
-const quad_shader = lcgr.quad_shader;
-const iface = lcgr.render_iface;
+const types = lcgf.types;
+const draw_list = lcgf.draw_list;
+const quad_shader = lcgf.quad_shader;
+const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 
 pub const vert = @embedFile("es2/quad.vert");
@@ -236,8 +236,8 @@ test "es2: the GLSL ES 1.00 program links on a real driver and draws past the ho
     defer testing.allocator.free(scratch);
     var r = try Renderer.init(&h.gl, .{ .max_quads = 4, .max_glyphs = 4 }, scratch);
     defer r.deinit();
-    var st: lcgr.render_conformance.Storage = .{};
-    st.load(&lcgr.render_conformance.scenes[0]); // rects: a full-target panel first
+    var st: lcgf.render_conformance.Storage = .{};
+    st.load(&lcgf.render_conformance.scenes[0]); // rects: a full-target panel first
     var t = try host.Target.init(&h, 160, 120);
     defer t.deinit(&h);
     r.prepare({}, &st.draw, st.glyphs(), .{ 160, 120 }, 1);

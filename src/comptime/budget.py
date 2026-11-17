@@ -26,8 +26,8 @@ def fixture(nodes, *, short_last=False):
 
 
 def arguments(directory, source):
-    return ["--dep", "lcgr", f"-Mroot={source}", "--dep", "build_options",
-            f"-Mlcgr={ROOT / 'src/lcgr.zig'}", f"-Mbuild_options={directory / 'options.zig'}"]
+    return ["--dep", "lcgf", f"-Mroot={source}", "--dep", "build_options",
+            f"-Mlcgf={ROOT / 'src/lcgf.zig'}", f"-Mbuild_options={directory / 'options.zig'}"]
 
 
 def section_sizes(obj):

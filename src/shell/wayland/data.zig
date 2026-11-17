@@ -12,7 +12,7 @@
 const std = @import("std");
 const wire = @import("wire.zig");
 const Wayland = @import("wayland.zig").Wayland;
-const Files = @import("lcgr").gestures.Files;
+const Files = @import("lcgf").gestures.Files;
 const linux = std.os.linux;
 
 /// MIME types this client reads and offers, one bit each.

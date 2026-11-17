@@ -48,9 +48,9 @@ def make(src, family, style):
 
 
 d = sys.argv[1]
-regular = make(f"{d}/LiberationSans-Regular.ttf", "LcgrTest Sans", "Regular")
+regular = make(f"{d}/LiberationSans-Regular.ttf", "LcgfTest Sans", "Regular")
 regular.save("test.ttf")
-bold = make(f"{d}/LiberationSans-Bold.ttf", "LcgrTest Sans", "Bold")
+bold = make(f"{d}/LiberationSans-Bold.ttf", "LcgfTest Sans", "Bold")
 coll = TTCollection()
 coll.fonts = [TTFont("test.ttf"), bold]
 coll.save("test.ttc")

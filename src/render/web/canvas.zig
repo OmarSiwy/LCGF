@@ -1,5 +1,5 @@
 //! The 2D-canvas fallback: the software back end (src/render/sw/) draws into a framebuffer in the
-//! module's memory and `present` copies it onto a `<canvas>` with `putImageData` (lcgr.js
+//! module's memory and `present` copies it onto a `<canvas>` with `putImageData` (lcgf.js
 //! `canvas2d`). For browsers without WebGPU, or where a GPU context is not worth it: the pixels
 //! are the software renderer's, which match the GPU goldens (ci/jobs/sw-golden.sh).
 //!
@@ -11,11 +11,11 @@
 //!
 //! The framebuffer is RGBA8 in memory order, ImageData's layout, so `present` is one copy with
 //! no conversion. wasm32-freestanding only.
-const lcgr = @import("lcgr");
-const sw = lcgr.render_sw;
+const lcgf = @import("lcgf");
+const sw = lcgf.render_sw;
 
 const imports = struct {
-    extern "lcgr" fn canvas_put(pixels: [*]const u32, stride: u32, width: u32, height: u32) void;
+    extern "lcgf" fn canvas_put(pixels: [*]const u32, stride: u32, width: u32, height: u32) void;
 };
 
 pub const Canvas = struct {

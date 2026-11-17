@@ -8,19 +8,19 @@
 //!
 //! On a real board, replace `Sim` with a board whose `read` polls the touch controller and the
 //! encoder, whose `flush` writes the area to the panel, and whose `idle` executes `wfi`; and call
-//! `clock.inc` from a timer interrupt. This file is the root of its own module over `lcgr`
-//! (docs/ARCHITECTURE.md, adapters), so it is not exported from src/lcgr.zig.
+//! `clock.inc` from a timer interrupt. This file is the root of its own module over `lcgf`
+//! (docs/ARCHITECTURE.md, adapters), so it is not exported from src/lcgf.zig.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
-const context = lcgr.context;
-const sw = lcgr.render_sw;
-const Input = lcgr.input.Input;
-const Quad = lcgr.draw_list.Quad;
-const Sim = lcgr.shell_baremetal_sim.Sim;
-const Shell = lcgr.shell_baremetal_shell.Baremetal(Sim);
-const App = lcgr.shell_example.App;
+const lcgf = @import("lcgf");
+const context = lcgf.context;
+const sw = lcgf.render_sw;
+const Input = lcgf.input.Input;
+const Quad = lcgf.draw_list.Quad;
+const Sim = lcgf.shell_baremetal_sim.Sim;
+const Shell = lcgf.shell_baremetal_shell.Baremetal(Sim);
+const App = lcgf.shell_example.App;
 
 pub const width = 320;
 pub const height = 240;
@@ -28,8 +28,8 @@ pub const rows = 20;
 const limits: context.Limits = .{ .nodes = 128, .texts = 32 };
 
 // Static RAM, all of it. `panel` stands for the display's own memory.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
-var lines: [lcgr.shell_baremetal_flush.Display.len(width, rows)]u32 = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+var lines: [lcgf.shell_baremetal_flush.Display.len(width, rows)]u32 = undefined;
 var panel: [sw.Framebuffer.len(width, height)]u32 = undefined;
 var glyphs: [256]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
@@ -48,7 +48,7 @@ pub fn run() bool {
     app = .{};
     sim = .init(@embedFile("testdata/firmware.replay"), .{ .text = &text, .events = &events, .contacts = &contacts }, .init(&panel, width, height, .rgba8));
     var shell: Shell = .init(&sim, &sim.clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
-    lcgr.shell_iface.run(&shell, &ctx, &app);
+    lcgf.shell_iface.run(&shell, &ctx, &app);
     return sim.err == null;
 }
 

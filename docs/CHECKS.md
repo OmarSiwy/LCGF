@@ -161,7 +161,7 @@ python3 mkindex.py         # rewrites API.md from ui.zig and ui_wgpu.zig
 164 public functions and constants. Regenerate it when the public surface changes.
 
 For the package, `zig build docs` writes `zig-out/docs/API.md` with the same scanner
-(`docs/api/apiindex.py`) over every file `src/lcgr.zig` exports; nothing generated is committed.
+(`docs/api/apiindex.py`) over every file `src/lcgf.zig` exports; nothing generated is committed.
 `ci/run.sh docs` runs it.
 
 ## 6. Compiler facts

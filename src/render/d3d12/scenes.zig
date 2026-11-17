@@ -12,7 +12,7 @@
 //!              just before it is presented: the pixels a window shows.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const com = @import("com.zig");
 const device_mod = @import("device.zig");
 const host = @import("host.zig");
@@ -22,8 +22,8 @@ const Renderer = @import("renderer.zig").Renderer;
 const c = com.c;
 const Device = device_mod.Device;
 const transition = device_mod.transition;
-const conformance = lcgr.render_conformance;
-const iface = lcgr.render_iface;
+const conformance = lcgf.render_conformance;
+const iface = lcgf.render_iface;
 
 pub const Mode = enum { offscreen, present };
 
@@ -38,7 +38,7 @@ pub const Player = struct {
     white: *com.Resource,
     atlas: *com.Resource,
     gfx: Renderer,
-    atlas_handle: lcgr.types.Texture,
+    atlas_handle: lcgf.types.Texture,
     gradient: custom.Gradient,
     target: host.Target,
     readback: host.Readback,
@@ -190,11 +190,11 @@ pub fn expectGoldens(p: *Player, names: []const []const u8) !void {
         for (names) |n| {
             if (std.mem.eql(u8, n, s.name)) break;
         } else continue;
-        const info = try lcgr.png.info(png);
+        const info = try lcgf.png.info(png);
         try testing.expectEqual(@as(usize, bytes), info.pixelBytes());
         const scratch = try testing.allocator.alloc(u8, info.scratchBytes());
         defer testing.allocator.free(scratch);
-        _ = try lcgr.png.decode(png, want, scratch);
+        _ = try lcgf.png.decode(png, want, scratch);
         try p.draw(s, px);
         const off = pixelsOff(px, want);
         std.debug.print("{s} {t}: {d} pixels off\n", .{ s.name, p.mode, off });

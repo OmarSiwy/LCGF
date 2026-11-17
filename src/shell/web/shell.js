@@ -1,8 +1,8 @@
-// The web shell's page side (src/shell/web/web.zig): attaches a loaded LCGR module to a
+// The web shell's page side (src/shell/web/web.zig): attaches a loaded LCGF module to a
 // <canvas>, forwards what happens to the canvas through the module's exports, and runs its
-// frames from requestAnimationFrame. Load the module with src/render/web/lcgr.js first:
+// frames from requestAnimationFrame. Load the module with src/render/web/lcgf.js first:
 //
-//     import { load, webgpu, canvas2d } from "./lcgr.js";
+//     import { load, webgpu, canvas2d } from "./lcgf.js";
 //     import { attach, shell } from "./shell.js";
 //     const canvas = document.querySelector("canvas");
 //     const page = {};
@@ -13,10 +13,10 @@
 // and its buttons, touch and pen pointer events are `Input.contacts`, wheel events `wheel` or
 // `scroll`, key events `Input.keys` and `events` with USB HID codes, typed characters `text`.
 //
-// The module runs one frame per animation frame it asked for (`lcgr_frame`), and asks for the
+// The module runs one frame per animation frame it asked for (`lcgf_frame`), and asks for the
 // next one itself (`shell_schedule`): at once while something moves, after a timer for a
 // deadline, and not at all while idle, so an idle page costs nothing. Every forwarded event and
-// a resize ask for a frame; `lcgr_wake` (main.zig) asks from outside the UI.
+// a resize ask for a frame; `lcgf_wake` (main.zig) asks from outside the UI.
 
 /// The imports web.zig's host needs. `page` is filled by `attach`.
 export function shell(page) {
@@ -38,7 +38,7 @@ export function shell(page) {
             // and may be refused (no focus, no permission); the copy is then lost, as in a
             // native app whose clipboard is busy.
             const text = ui.str(ptr, len);
-            navigator.clipboard?.writeText(text).catch((e) => console.warn("lcgr: copy refused:", e.message));
+            navigator.clipboard?.writeText(text).catch((e) => console.warn("lcgf: copy refused:", e.message));
         },
     });
 }
@@ -60,7 +60,7 @@ export function attach(ui, canvas, page = {}) {
     const run = (ms) => {
         pending = 0;
         page.frames++;
-        x.lcgr_frame(ms);
+        x.lcgf_frame(ms);
     };
     const frame = () => {
         if (!pending) pending = requestAnimationFrame(run);
@@ -89,7 +89,7 @@ export function attach(ui, canvas, page = {}) {
         const dpr = window.devicePixelRatio || 1;
         const [w, h] = device ?? [Math.round(r.width * dpr), Math.round(r.height * dpr)];
         if (canvas.width !== w || canvas.height !== h) [canvas.width, canvas.height] = [w, h];
-        x.lcgr_resize(r.width, r.height, dpr, w, h);
+        x.lcgf_resize(r.width, r.height, dpr, w, h);
         frame();
     };
     const observer = new ResizeObserver(([entry]) => {
@@ -123,7 +123,7 @@ export function attach(ui, canvas, page = {}) {
     page.on = on;
     forward(ui, canvas, on, frame, page);
     on(window, "pagehide", () => {
-        x.lcgr_close();
+        x.lcgf_close();
         page.stop();
     });
     page.stop = () => {
@@ -178,51 +178,51 @@ function forward(ui, canvas, on, frame, page) {
         const [px, py] = at(e);
         const kind = e.pointerType === "touch" ? 0 : e.buttons & 32 ? 2 : 1; // 32: eraser button
         const deg = Math.PI / 180;
-        x.lcgr_contact(e.pointerId, kind, down, px, py, e.pressure > 0 ? e.pressure : e.pointerType === "touch" ? 1 : 0, (e.tiltX || 0) * deg, (e.tiltY || 0) * deg);
+        x.lcgf_contact(e.pointerId, kind, down, px, py, e.pressure > 0 ? e.pressure : e.pointerType === "touch" ? 1 : 0, (e.tiltX || 0) * deg, (e.tiltY || 0) * deg);
     };
     canvas.style.touchAction = "none"; // the page does not pan or zoom under a finger
     canvas.tabIndex = 0; // focusable, so keys reach it
     canvas.style.outline = "none";
     on(canvas, "pointermove", (e) => {
-        x.lcgr_mods(mods(e));
-        if (e.pointerType === "mouse") x.lcgr_pointer(...at(e));
+        x.lcgf_mods(mods(e));
+        if (e.pointerType === "mouse") x.lcgf_pointer(...at(e));
         else contact(e, e.buttons !== 0);
         frame();
     });
     on(canvas, "pointerdown", (e) => {
         canvas.focus({ preventScroll: true });
         canvas.setPointerCapture(e.pointerId); // a drag keeps reporting outside the canvas
-        x.lcgr_mods(mods(e));
+        x.lcgf_mods(mods(e));
         if (e.pointerType === "mouse") {
-            x.lcgr_pointer(...at(e));
-            x.lcgr_button(e.button, true);
+            x.lcgf_pointer(...at(e));
+            x.lcgf_button(e.button, true);
         } else contact(e, true);
         e.preventDefault();
         frame();
     });
     const up = (e) => {
-        if (e.pointerType === "mouse") x.lcgr_button(e.button, false);
-        else x.lcgr_lift(e.pointerId);
+        if (e.pointerType === "mouse") x.lcgf_button(e.button, false);
+        else x.lcgf_lift(e.pointerId);
         frame();
     };
     on(canvas, "pointerup", up);
     on(canvas, "pointercancel", up);
     on(canvas, "pointerleave", (e) => {
-        if (e.pointerType === "mouse") x.lcgr_leave();
-        else x.lcgr_lift(e.pointerId);
+        if (e.pointerType === "mouse") x.lcgf_leave();
+        else x.lcgf_lift(e.pointerId);
         frame();
     });
     on(canvas, "contextmenu", (e) => e.preventDefault());
     on(canvas, "wheel", (e) => {
-        x.lcgr_mods(mods(e));
-        x.lcgr_wheel(e.deltaX, e.deltaY, e.deltaMode);
+        x.lcgf_mods(mods(e));
+        x.lcgf_wheel(e.deltaX, e.deltaY, e.deltaMode);
         e.preventDefault(); // the page does not scroll
         frame();
     }, { passive: false });
 
     const typed = (s, m) => {
-        const n = ui.put(s, x.lcgr_text_buffer(), x.lcgr_text_capacity());
-        x.lcgr_typed(n, m);
+        const n = ui.put(s, x.lcgf_text_buffer(), x.lcgf_text_capacity());
+        x.lcgf_typed(n, m);
     };
     // Text input and the IME go through a hidden <textarea>: while a widget wants text
     // (`shell_ime`), it has focus at the caret's rect, so the IME's candidate window and the
@@ -247,7 +247,7 @@ function forward(ui, canvas, on, frame, page) {
     };
     const keydown = (e) => {
         if (e.isComposing || e.keyCode === 229) return; // the IME's own keys
-        x.lcgr_key(e.repeat ? 2 : 0, hid[e.code] ?? 0, mods(e));
+        x.lcgf_key(e.repeat ? 2 : 0, hid[e.code] ?? 0, mods(e));
         const printable = [...e.key].length === 1 && !e.ctrlKey && !e.metaKey;
         // On the canvas, a printable key without Ctrl or Cmd is typed text; in the text input
         // the input event brings it (and the IME may change it), so it is let through.
@@ -258,7 +258,7 @@ function forward(ui, canvas, on, frame, page) {
         frame();
     };
     const keyup = (e) => {
-        x.lcgr_key(1, hid[e.code] ?? 0, mods(e));
+        x.lcgf_key(1, hid[e.code] ?? 0, mods(e));
         frame();
     };
     // A widget's paste (`Platform.paste`): the async clipboard, which the browser may refuse
@@ -267,7 +267,7 @@ function forward(ui, canvas, on, frame, page) {
         navigator.clipboard?.readText().then((text) => {
             if (text) typed(text, 0);
             frame();
-        }, (e) => console.warn("lcgr: paste refused:", e.message));
+        }, (e) => console.warn("lcgf: paste refused:", e.message));
     };
     // Paste: the browser hands the text over in the paste event (Ctrl+V or Cmd+V, which are
     // left to the browser above, or the context menu); it arrives as typed text.
@@ -280,7 +280,7 @@ function forward(ui, canvas, on, frame, page) {
     // Keys held when focus leaves both never see their keyup: release them.
     const focusout = (e) => {
         if (e.relatedTarget === canvas || e.relatedTarget === input) return;
-        x.lcgr_blur();
+        x.lcgf_blur();
         frame();
     };
     for (const t of [canvas, input]) {
@@ -294,8 +294,8 @@ function forward(ui, canvas, on, frame, page) {
     // the composition ends and its text is typed; plain input (no IME) is typed as it comes.
     const compose = () => {
         const v = input.value;
-        const n = ui.put(v, x.lcgr_text_buffer(), x.lcgr_text_capacity());
-        x.lcgr_compose(n, Math.min(bytes(v.slice(0, input.selectionStart)), n), Math.min(bytes(v.slice(0, input.selectionEnd)), n));
+        const n = ui.put(v, x.lcgf_text_buffer(), x.lcgf_text_capacity());
+        x.lcgf_compose(n, Math.min(bytes(v.slice(0, input.selectionStart)), n), Math.min(bytes(v.slice(0, input.selectionEnd)), n));
         frame();
     };
     on(input, "compositionstart", () => (input.value = ""));
@@ -306,7 +306,7 @@ function forward(ui, canvas, on, frame, page) {
         frame();
     });
     on(input, "compositionend", (e) => {
-        x.lcgr_compose(0, 0, 0);
+        x.lcgf_compose(0, 0, 0);
         if (e.data) typed(e.data, 0);
         input.value = "";
         frame();

@@ -3,10 +3,10 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
-const shell = lcgr.shell_iface;
-const sw = lcgr.render_sw;
-const Context = lcgr.context.Context;
+const lcgf = @import("lcgf");
+const shell = lcgf.shell_iface;
+const sw = lcgf.render_sw;
+const Context = lcgf.context.Context;
 
 /// The pretend platform: what its event queue delivers. A real one is a window system's
 /// messages (WM_*, xcb events, Wayland events, DOM events, a touch controller's registers).
@@ -27,10 +27,10 @@ const ToyShell = struct {
     fb: sw.Framebuffer,
     gfx: sw.Software = .{},
     /// Room for one frame's glyph quads, and where each text run's start (Mono.quads).
-    glyphs: []lcgr.draw_list.Quad,
+    glyphs: []lcgf.draw_list.Quad,
     first: []u32,
     count: []u32,
-    cursor: lcgr.context.Cursor = .arrow,
+    cursor: lcgf.context.Cursor = .arrow,
     presents: u32 = 0,
 
     /// Drains pending events without blocking. Held state (pointer, buttons, viewport) stays
@@ -52,23 +52,23 @@ const ToyShell = struct {
     }
 
     /// The effects a frame asks for: here only the cursor shape.
-    pub fn apply(s: *ToyShell, p: *const lcgr.context.Platform) void {
+    pub fn apply(s: *ToyShell, p: *const lcgf.context.Platform) void {
         s.cursor = p.cursor;
     }
 
     /// Draws the frame with the software back end: text as `Mono` glyph quads on the white
     /// texture (solid cells; a real shell rasterises glyphs, docs/guide/text.md). Custom
     /// commands are skipped: they are the host's.
-    pub fn present(s: *ToyShell, out: *const lcgr.context.Output) void {
+    pub fn present(s: *ToyShell, out: *const lcgf.context.Output) void {
         s.presents += 1;
-        const n = (lcgr.protocol.Mono{}).quads(out.draw, s.glyphs, .{ .first = s.first, .count = s.count });
+        const n = (lcgf.protocol.Mono{}).quads(out.draw, s.glyphs, .{ .first = s.first, .count = s.count });
         s.gfx.prepare({}, out.draw, .{ .quads = s.glyphs[0..n], .first = s.first, .count = s.count }, .{ 0, 0 }, 1);
         s.fb.clear(.rgb(0, 0, 0));
-        lcgr.render_iface.render(&s.gfx, .{ .fb = &s.fb, .scissor = s.fb.all() }, out.draw);
+        lcgf.render_iface.render(&s.gfx, .{ .fb = &s.fb, .scissor = s.fb.all() }, out.draw);
     }
 
     /// Blocks until the next event or `seconds`; the queue is always ready, so it returns.
-    pub fn wait(_: *ToyShell, seconds: f32, pace: lcgr.scheduler.Pace) void {
+    pub fn wait(_: *ToyShell, seconds: f32, pace: lcgf.scheduler.Pace) void {
         _ = seconds;
         _ = pace;
     }
@@ -82,10 +82,10 @@ comptime {
 }
 // -- end
 
-const limits: lcgr.context.Limits = .{ .nodes = 1024, .texts = 256 };
-var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const limits: lcgf.context.Limits = .{ .nodes = 1024, .texts = 256 };
+var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var pixels: [sw.Framebuffer.len(320, 240)]u32 = undefined;
-var glyphs: [512]lcgr.draw_list.Quad = undefined;
+var glyphs: [512]lcgf.draw_list.Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
 
@@ -100,12 +100,12 @@ test "a new shell runs the shells' example application" {
     };
     // -- run
     var ctx = try Context.init(&ctx_buffer, limits);
-    var app: lcgr.shell_example.App = .{};
+    var app: lcgf.shell_example.App = .{};
     var toy: ToyShell = .{ .queue = &queue, .fb = .init(&pixels, 320, 240, .rgba8), .glyphs = &glyphs, .first = &first, .count = &count };
     shell.run(&toy, &ctx, &app); // poll, build when needed, apply, present, wait; until poll is false
     // -- end
     try testing.expectEqual(1, app.resets);
-    try testing.expectEqual(lcgr.context.Cursor.pointer, toy.cursor);
+    try testing.expectEqual(lcgf.context.Cursor.pointer, toy.cursor);
     try testing.expectEqual(4, toy.presents);
     // The toolbar's panel colour reached the framebuffer.
     try testing.expectEqual(app.theme.panel, toy.fb.at(300, 4));

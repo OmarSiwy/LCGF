@@ -5,7 +5,7 @@
 //! (as android_native_app_glue arranges, without the glue), where `poll` drains that thread's
 //! ALooper without blocking and `wait` blocks in it.
 //!
-//! Outside the tiers (it calls libandroid and Vulkan), so it is a module of its own over `lcgr`
+//! Outside the tiers (it calls libandroid and Vulkan), so it is a module of its own over `lcgf`
 //! and the Vulkan back end (`zig build android-build -Dtarget=aarch64-linux-android`), never
 //! imported by the core. The NDK is not used: the NativeActivity and input declarations below
 //! are written by hand from the NDK's headers' documentation (native_activity.h, looper.h,
@@ -21,24 +21,24 @@
 //!         var shell: android.Android = undefined;
 //!         shell.init(buffers) catch return;
 //!         defer shell.deinit();
-//!         lcgr.shell_iface.run(&shell, &ctx, &app);
+//!         lcgf.shell_iface.run(&shell, &ctx, &app);
 //!     }
 
 const std = @import("std");
 const builtin = @import("builtin");
 const root = @import("root");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const vk = @import("vk");
-const translate = lcgr.shell_android_translate;
-const iface = lcgr.shell_iface;
-const context = lcgr.context;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const Color = lcgr.types.Color;
+const translate = lcgf.shell_android_translate;
+const iface = lcgf.shell_iface;
+const context = lcgf.context;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
+const Pace = lcgf.scheduler.Pace;
 const c = vk.c;
 const jni = @import("jni.zig");
 
@@ -142,7 +142,7 @@ const log_info = 4;
 fn logError(comptime fmt: []const u8, args: anytype) void {
     var buf: [256]u8 = undefined;
     const s = std.fmt.bufPrintSentinel(&buf, fmt, args, 0) catch return;
-    _ = __android_log_write(log_error, "lcgr", s);
+    _ = __android_log_write(log_error, "lcgf", s);
 }
 
 // ---- The activity: callbacks on the main thread, the host loop on its own -----------------------
@@ -398,7 +398,7 @@ pub const Android = struct {
 
     /// Caller-owned storage: one glyph quad per byte of text in a frame (`first` and `count`
     /// one row per text run); `text` and `events` hold typed text, half arriving, half shown.
-    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32, text: []u8, events: []lcgr.input.Input.Event };
+    pub const Buffers = struct { glyphs: []Quad, first: []u32, count: []u32, text: []u8, events: []lcgf.input.Input.Event };
 
     /// The shell, on the thread that runs `androidMain`. It must not move afterwards.
     pub fn init(s: *Android, buf: Buffers) error{NoLooper}!void {
@@ -483,7 +483,7 @@ pub const Android = struct {
     }
 
     /// The activity was started with the boolean intent extra `name` set
-    /// (`adb shell am start ... --ez lcgr.replay true`): `getIntent().getBooleanExtra`.
+    /// (`adb shell am start ... --ez lcgf.replay true`): `getIntent().getBooleanExtra`.
     pub fn intentFlag(s: *Android, name: [*:0]const u8) bool {
         const e = s.env orelse return false;
         const activity = activityObject() orelse return false;
@@ -495,11 +495,11 @@ pub const Android = struct {
         return e.callBool(intent, get, &.{ jni.obj(e.ascii(name)), .{ .z = 0 } });
     }
 
-    /// Writes a line to the system log (logcat, tag `lcgr`), at info level.
+    /// Writes a line to the system log (logcat, tag `lcgf`), at info level.
     pub fn log(_: *Android, comptime fmt: []const u8, args: anytype) void {
         var buf: [256]u8 = undefined;
         const line = std.fmt.bufPrintSentinel(&buf, fmt, args, 0) catch return;
-        _ = __android_log_write(log_info, "lcgr", line);
+        _ = __android_log_write(log_info, "lcgf", line);
     }
 
     fn makeTarget(s: *Android, window: *ANativeWindow) void {
@@ -515,7 +515,7 @@ pub const Android = struct {
         const surface = if (s.gpu) |*g| try createSurface(&g.instance, window) else blk: {
             s.gpu = @as(Gpu, undefined);
             errdefer s.gpu = null;
-            break :blk try s.gpu.?.init("lcgr-android", &instance_extensions, window, createSurface);
+            break :blk try s.gpu.?.init("lcgf-android", &instance_extensions, window, createSurface);
         };
         const g = &s.gpu.?;
         errdefer vk.swapchain.destroySurface(&g.instance, surface);

@@ -8,19 +8,19 @@
 //! (one reset, four layers, exposure 3), 1 when not.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const ios = @import("ios.zig");
-const context = lcgr.context;
-const Quad = lcgr.draw_list.Quad;
+const context = lcgf.context;
+const Quad = lcgf.draw_list.Quad;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 // Static, so the program allocates nothing.
-var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
 var text: [512]u8 = undefined;
-var events: [128]lcgr.input.Input.Event = undefined;
+var events: [128]lcgf.input.Input.Event = undefined;
 var replay = false;
 
 export fn main(argc: c_int, argv: ?[*]?[*:0]u8) c_int {
@@ -39,12 +39,12 @@ fn run() void {
     defer shell.deinit();
     if (replay) shell.recording = .{ .src = @embedFile("testdata/example.uikit") };
     var ctx = context.Context.init(&ctx_buffer, limits) catch std.process.exit(1);
-    var app: lcgr.shell_example.App = .{};
+    var app: lcgf.shell_example.App = .{};
     shell.background = app.theme.panel;
     // iface.run's loop, with the root padded by the safe area; the panel colour behind it
     // fills the corners and the strip under the home indicator. A change of the safe area,
     // or a return from the background (`Input.redraw`), is input: it builds a frame.
-    var ev: lcgr.shell_iface.Events = .{};
+    var ev: lcgf.shell_iface.Events = .{};
     while (shell.poll(&ev)) {
         if (ctx.needsFrame(&ev.in)) {
             var f = ctx.begin(&ev.in);
@@ -56,7 +56,7 @@ fn run() void {
             shell.apply(&out.platform);
             shell.present(&out);
         }
-        shell.wait(lcgr.scheduler.wake(&ctx, &ev.in), lcgr.scheduler.pace(&ctx));
+        shell.wait(lcgf.scheduler.wake(&ctx, &ev.in), lcgf.scheduler.pace(&ctx));
     }
     if (!replay) return;
     const ok = shell.err == null and app.resets == 1 and app.layers == 4 and @abs(app.exposure - 3) < 0.01;

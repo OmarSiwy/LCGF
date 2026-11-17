@@ -11,12 +11,12 @@
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const native = @import("native.zig");
 const host = native.host;
 const c = native.c;
-const conformance = lcgr.render_conformance;
-const iface = lcgr.render_iface;
+const conformance = lcgf.render_conformance;
+const iface = lcgf.render_iface;
 
 var st: conformance.Storage = .{};
 
@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
     // byte a 2x3 block. Packed into a coverage atlas and uploaded like a real one.
     var atlas_px: [64 * 64]u8 = undefined;
     var sky: [3][64]u32 = undefined;
-    var atlas = lcgr.raster_atlas.Atlas.init(64, 64, &atlas_px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
+    var atlas = lcgf.raster_atlas.Atlas.init(64, 64, &atlas_px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
     for (33..127) |byte| atlas.put(.{ .x = @intCast((byte & 15) * 4 + 1), .y = @intCast((byte >> 4) * 4 + 1), .w = 2, .h = 3 }, &@as([6]u8, @splat(255)));
     var atlas_tex = native.glyphs.GlyphTexture.init(h.device, 64, 64);
     defer atlas_tex.deinit();

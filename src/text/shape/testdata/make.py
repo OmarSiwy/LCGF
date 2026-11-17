@@ -48,7 +48,7 @@ def main(src):
     sub.subset(font)
     for rec in list(font["name"].names):
         if rec.nameID in (1, 4, 6):
-            s = rec.toUnicode().replace("Noto Sans", "LcgrShape Sans").replace("NotoSans", "LcgrShapeSans")
+            s = rec.toUnicode().replace("Noto Sans", "LcgfShape Sans").replace("NotoSans", "LcgfShapeSans")
             font["name"].setName(s, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
     font.save("shape.ttf")
 

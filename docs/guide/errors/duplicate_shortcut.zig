@@ -1,7 +1,7 @@
 //! expect: two shortcuts on key 22 with the same modifiers
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
-const E = @import("lcgr").events.Events(s.row(.{}, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }));
+const E = @import("lcgf").events.Events(s.row(.{}, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }));
 
 comptime {
     _ = E.Shortcuts(&.{

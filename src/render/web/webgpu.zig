@@ -1,5 +1,5 @@
 //! The WebGPU back end: the wgpu back end's renderer (src/render/wgpu/wgpu.zig `Renderer`) over
-//! the browser's WebGPU, reached through imports that lcgr.js `webgpu` provides. Every GPU object
+//! the browser's WebGPU, reached through imports that lcgf.js `webgpu` provides. Every GPU object
 //! is a `u32` handle into a JS table; the WebGPU calls themselves are in JS, one line each.
 //!
 //!     const Gfx = webgpu.Renderer;
@@ -11,20 +11,20 @@
 //! target, as on every back end (src/render/iface.zig): it registers them with `ui.gpu.put` and
 //! hands the handles in. wasm32-freestanding only.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const wgpu = lcgr.render_wgpu;
+const lcgf = @import("lcgf");
+const wgpu = lcgf.render_wgpu;
 
 const imports = struct {
-    extern "lcgr" fn gpu_create_buffer(device: u32, size: u32, use: u32) u32;
-    extern "lcgr" fn gpu_release(handle: u32) void;
-    extern "lcgr" fn gpu_write_buffer(queue: u32, buffer: u32, offset: u32, ptr: [*]const u8, len: usize) void;
-    extern "lcgr" fn gpu_create_pipeline(device: u32, wgsl: [*]const u8, wgsl_len: usize, vs: [*]const u8, vs_len: usize, fs: [*]const u8, fs_len: usize, format: u32, samples: u32, stride: u32, attrs: [*]const [3]u32, attrs_len: usize) u32;
-    extern "lcgr" fn gpu_globals_group(device: u32, buffer: u32) u32;
-    extern "lcgr" fn gpu_texture_group(device: u32, view: u32, sampler: u32) u32;
-    extern "lcgr" fn gpu_set_pipeline(pass: u32, pipeline: u32) void;
-    extern "lcgr" fn gpu_set_bind_group(pass: u32, index: u32, group: u32) void;
-    extern "lcgr" fn gpu_set_vertex_buffer(pass: u32, slot: u32, buffer: u32, offset: u32, size: u32) void;
-    extern "lcgr" fn gpu_draw(pass: u32, vertices: u32, instances: u32, first_vertex: u32, first_instance: u32) void;
+    extern "lcgf" fn gpu_create_buffer(device: u32, size: u32, use: u32) u32;
+    extern "lcgf" fn gpu_release(handle: u32) void;
+    extern "lcgf" fn gpu_write_buffer(queue: u32, buffer: u32, offset: u32, ptr: [*]const u8, len: usize) void;
+    extern "lcgf" fn gpu_create_pipeline(device: u32, wgsl: [*]const u8, wgsl_len: usize, vs: [*]const u8, vs_len: usize, fs: [*]const u8, fs_len: usize, format: u32, samples: u32, stride: u32, attrs: [*]const [3]u32, attrs_len: usize) u32;
+    extern "lcgf" fn gpu_globals_group(device: u32, buffer: u32) u32;
+    extern "lcgf" fn gpu_texture_group(device: u32, view: u32, sampler: u32) u32;
+    extern "lcgf" fn gpu_set_pipeline(pass: u32, pipeline: u32) void;
+    extern "lcgf" fn gpu_set_bind_group(pass: u32, index: u32, group: u32) void;
+    extern "lcgf" fn gpu_set_vertex_buffer(pass: u32, slot: u32, buffer: u32, offset: u32, size: u32) void;
+    extern "lcgf" fn gpu_draw(pass: u32, vertices: u32, instances: u32, first_vertex: u32, first_instance: u32) void;
 };
 
 /// The binding `wgpu.Renderer` is generic over (src/render/wgpu/wgpu.zig `Binding`).
@@ -37,7 +37,7 @@ pub const Binding = struct {
     pub const BindGroup = u32;
     pub const TextureView = u32;
     pub const Sampler = u32;
-    /// The JS side names them by `@tagName` order: lcgr.js `formats`.
+    /// The JS side names them by `@tagName` order: lcgf.js `formats`.
     pub const TextureFormat = enum(u32) { rgba8unorm, bgra8unorm };
 
     pub fn createBuffer(d: Device, size: u64, use: wgpu.BufferUse) Buffer {
@@ -50,7 +50,7 @@ pub const Binding = struct {
         imports.gpu_write_buffer(q, b, @intCast(offset), bytes.ptr, bytes.len);
     }
     pub fn createPipeline(d: Device, desc: *const wgpu.Renderer(Binding).PipelineDesc) Pipeline {
-        // Attribute rows as (location, offset, format index into lcgr.js `attr_formats`).
+        // Attribute rows as (location, offset, format index into lcgf.js `attr_formats`).
         var attrs: [wgpu.quad_attrs.len][3]u32 = undefined;
         for (desc.attrs, attrs[0..desc.attrs.len]) |a, *row| row.* = .{ a.location, a.offset, @backingInt(a.format) };
         return imports.gpu_create_pipeline(d, desc.wgsl.ptr, desc.wgsl.len, desc.vertex_entry.ptr, desc.vertex_entry.len, desc.fragment_entry.ptr, desc.fragment_entry.len, @backingInt(desc.format), desc.sample_count, desc.instance_stride, &attrs, desc.attrs.len);
@@ -81,5 +81,5 @@ pub const Binding = struct {
 pub const Renderer = wgpu.Renderer(Binding);
 
 comptime {
-    lcgr.render_iface.check(Renderer);
+    lcgf.render_iface.check(Renderer);
 }

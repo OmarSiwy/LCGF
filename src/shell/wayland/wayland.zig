@@ -19,28 +19,28 @@
 //! calls act on the main window, slot 0, and `pollWindows`, `applyWindow` and
 //! `presentWindow` on any.
 //!
-//! Linux only (sockets, memfd, eventfd). Built as its own module over `lcgr` (`zig build
-//! wayland`), not exported from src/lcgr.zig, like the GL ES back end.
+//! Linux only (sockets, memfd, eventfd). Built as its own module over `lcgf` (`zig build
+//! wayland`), not exported from src/lcgf.zig, like the GL ES back end.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const wire = @import("wire.zig");
 const Seat = @import("input.zig").Seat;
 const Data = @import("data.zig").Data;
 const Ime = @import("ime.zig").Ime;
 const linux = std.os.linux;
-const iface = lcgr.shell_iface;
+const iface = lcgf.shell_iface;
 const Events = iface.Events;
-const context = lcgr.context;
+const context = lcgf.context;
 const Platform = context.Platform;
 const Output = context.Output;
-const Pace = lcgr.scheduler.Pace;
-const Input = lcgr.input.Input;
-const Quad = lcgr.draw_list.Quad;
-const Mono = lcgr.protocol.Mono;
-const sw = lcgr.render_sw;
-const Color = lcgr.types.Color;
+const Pace = lcgf.scheduler.Pace;
+const Input = lcgf.input.Input;
+const Quad = lcgf.draw_list.Quad;
+const Mono = lcgf.protocol.Mono;
+const sw = lcgf.render_sw;
+const Color = lcgf.types.Color;
 
 /// Object ids the client allocates are below this; the compositor's start at 0xff000000.
 pub const max_objects = 256;
@@ -223,7 +223,7 @@ pub const PopupOptions = struct {
     /// The parent window's slot.
     parent: u32,
     /// What the popup is for (a menu button, a combo box), in the parent's logical pixels.
-    anchor: lcgr.types.Rect,
+    anchor: lcgf.types.Rect,
     size: [2]f32,
     /// Take the seat's input until the popup closes (a menu). Needs a recent input event.
     grab: bool = false,
@@ -279,8 +279,8 @@ pub const Wayland = struct {
     pub const Error = error{ Disconnected, Protocol, MissingGlobal, OutOfIds, OutOfMemory };
 
     pub const Options = struct {
-        title: []const u8 = "lcgr",
-        app_id: []const u8 = "lcgr",
+        title: []const u8 = "lcgf",
+        app_id: []const u8 = "lcgf",
         /// Logical size until the compositor picks one.
         size: [2]f32 = .{ 800, 600 },
     };
@@ -801,7 +801,7 @@ pub const Wayland = struct {
         win.shm = .{};
         const stride: u32 = @intCast(sw.Framebuffer.len(px[0], 1) * 4);
         const one = std.mem.alignForward(usize, @as(usize, stride) * px[1], 64);
-        const fd_rc = linux.memfd_create("lcgr-wayland", linux.MFD.CLOEXEC);
+        const fd_rc = linux.memfd_create("lcgf-wayland", linux.MFD.CLOEXEC);
         if (linux.errno(fd_rc) != .SUCCESS) return error.OutOfMemory;
         const fd: i32 = @intCast(fd_rc);
         if (linux.errno(linux.ftruncate(fd, @intCast(one * 2))) != .SUCCESS) {

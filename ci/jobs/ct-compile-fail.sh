@@ -9,11 +9,11 @@ n=$(ls "$dir"/*.zig | wc -l)
 control="$dir/zz_control.zig"
 trap 'rm -f "$control"' EXIT
 control_must_fail() {
-    printf '%s\n' "//! expect: $1" 'const s = @import("lcgr").spec;' '' 'comptime {' "    $2" '}' > "$control"
+    printf '%s\n' "//! expect: $1" 'const s = @import("lcgf").spec;' '' 'comptime {' "    $2" '}' > "$control"
     if zig build ct-compile-fail >/dev/null 2>&1; then echo "control '$1' passed: the harness cannot fail"; exit 1; fi
 }
-control_must_fail "duplicate widget id 'a'" '@import("lcgr").validate.check(struct { a: f32 }, s.slider(.a, .a), .{ .require_names = false });'
-control_must_fail "duplicate widget id 'b'" '@import("lcgr").validate.check(struct { a: f32 }, s.row(.{}, .{ s.slider(.a, .a), s.slider(.a, .a) }), .{ .require_names = false });'
+control_must_fail "duplicate widget id 'a'" '@import("lcgf").validate.check(struct { a: f32 }, s.slider(.a, .a), .{ .require_names = false });'
+control_must_fail "duplicate widget id 'b'" '@import("lcgf").validate.check(struct { a: f32 }, s.row(.{}, .{ s.slider(.a, .a), s.slider(.a, .a) }), .{ .require_names = false });'
 rm -f "$control"
 zig build ct-compile-fail
 echo "$n compile-fail cases match; both controls fail"

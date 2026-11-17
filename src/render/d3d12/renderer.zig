@@ -9,21 +9,21 @@
 //!              descriptor heap below.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const com = @import("com.zig");
 const device_mod = @import("device.zig");
 const pipeline = @import("pipeline.zig");
 const c = com.c;
 const Error = com.Error;
 const Device = device_mod.Device;
-const types = lcgr.types;
-const draw_list = lcgr.draw_list;
-const quad_shader = lcgr.quad_shader;
-const iface = lcgr.render_iface;
+const types = lcgf.types;
+const draw_list = lcgf.draw_list;
+const quad_shader = lcgf.quad_shader;
+const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
 
-pub const Globals = lcgr.render_null.Globals;
+pub const Globals = lcgf.render_null.Globals;
 pub const Glyphs = iface.Glyphs;
 
 pub const Desc = struct {
@@ -243,7 +243,7 @@ comptime {
 }
 
 const testing = std.testing;
-const conformance = lcgr.render_conformance;
+const conformance = lcgf.render_conformance;
 const host = @import("host.zig");
 
 test "renderer: prepare writes each frame into its own slot of the mapped upload heap" {

@@ -1,5 +1,5 @@
-//! The Vulkan back end. Outside the tiers and not exported from lcgr.zig: it calls a platform
-//! API through translated headers (`vk_c`), so it is a module of its own over lcgr
+//! The Vulkan back end. Outside the tiers and not exported from lcgf.zig: it calls a platform
+//! API through translated headers (`vk_c`), so it is a module of its own over lcgf
 //! (`zig build vk`), never imported by it. The tests run on a real Vulkan implementation
 //! (Mesa lavapipe in `nix develop .#golden`, ci/jobs/vk.sh).
 //!

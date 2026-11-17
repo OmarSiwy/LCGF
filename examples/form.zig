@@ -6,15 +6,15 @@
 //! w-textfield) is not merged yet, so the example builds the field from tier-0 parts.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
-const w = lcgr.widgets_base;
-const Editor = lcgr.text_edit.Editor;
-const Keyboard = lcgr.keyboard.Keyboard;
-const Frame = lcgr.frame.Frame;
-const types = lcgr.types;
+const lcgf = @import("lcgf");
+const w = lcgf.widgets_base;
+const Editor = lcgf.text_edit.Editor;
+const Keyboard = lcgf.keyboard.Keyboard;
+const Frame = lcgf.frame.Frame;
+const types = lcgf.types;
 const Id = types.Id;
 const Color = types.Color;
-const Events = lcgr.shell_iface.Events;
+const Events = lcgf.shell_iface.Events;
 
 pub const id_name = Id.from("name");
 pub const id_age = Id.from("age");

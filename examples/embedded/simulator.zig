@@ -1,13 +1,13 @@
 //! Run with `zig build embedded-sim`. The simulator replays touch input into
 //! the real board loop and decodes the SPI bytes into a memory-backed panel.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const demo = @import("demo.zig");
-const Sim = lcgr.shell_baremetal_sim.Sim;
-const Input = lcgr.input.Input;
-const Area = lcgr.shell_baremetal_flush.Area;
-const sw = lcgr.render_sw;
-const fb = lcgr.embedded_framebuffer;
+const Sim = lcgf.shell_baremetal_sim.Sim;
+const Input = lcgf.input.Input;
+const Area = lcgf.shell_baremetal_flush.Area;
+const sw = lcgf.render_sw;
+const fb = lcgf.embedded_framebuffer;
 
 const Controller = struct {
     panel: sw.Framebuffer,
@@ -83,14 +83,14 @@ const Board = struct {
     font_pixels: Font.Pixels = undefined,
     wire: [64]u8 = undefined,
 
-    pub fn read(b: *Board) ?lcgr.shell_baremetal_input.Sample {
+    pub fn read(b: *Board) ?lcgf.shell_baremetal_input.Sample {
         return b.sim.read();
     }
     pub fn idle(b: *Board) bool {
         return b.sim.idle();
     }
     pub fn flush(b: *Board, a: Area, pixels: []const u32, stride: u32) void {
-        const display: lcgr.embedded_spi.Display(Controller) = .{ .bus = &b.controller, .scratch = &b.wire };
+        const display: lcgf.embedded_spi.Display(Controller) = .{ .bus = &b.controller, .scratch = &b.wire };
         display.write(a, pixels, stride, .rgba8) catch unreachable;
     }
 };

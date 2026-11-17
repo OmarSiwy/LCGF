@@ -1,10 +1,10 @@
-# LCGR beside other GUI libraries
+# LCGF beside other GUI libraries
 
 The six scenes of `bench/scenes/` (form, list, text, springs, resize, idle) ported to each framework
 under `bench/vs/<name>/`, and measured with the same probes: frame time over 3,000 frames,
 resident memory and idle wake-ups from `tools/bench/probe.py`, and loaded bytes (text + rodata +
 data) from `tools/bench/size.zig`. `bench/vs/measure.py` runs it all; `ci/jobs/vs-<name>.sh` runs it
-for one framework beside the LCGR row (`nix develop -c ci/run.sh vs-clay`). No job is in `all`.
+for one framework beside the LCGF row (`nix develop -c ci/run.sh vs-clay`). No job is in `all`.
 
 Every number here is from one machine (32 CPUs, Linux, no GPU used) and the medians of 5 runs; the
 1-minute load average during the run is given with each table. Timings never compare across
@@ -14,7 +14,7 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 
 | Row | Frame timed | Text | Notes |
 |---|---|---|---|
-| LCGR | `bench/vs/lcgr/main.zig`: harness.h's driver in Zig, a static binary without libc; every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes; list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
+| LCGF | `bench/vs/lcgf/main.zig`: harness.h's driver in Zig, a static binary without libc; every poll asks `Context.needsFrame`, then begin + hit test, build, layout, paint into the draw list when it says yes; list and springs build every poll | monospace measure (0.6 em per byte), text runs are not split into glyphs | the reference row |
 | Clay 0.14 | `Clay_BeginLayout`, declarations, `Clay_EndLayout` (layout and render commands) | the same monospace measure, word wrap by Clay | Clay has no widgets or animation: they are built from elements, springs are the prototype's step |
 | Dear ImGui 1.93.0 | input, `NewFrame`, ImGui's own widgets, `Render` (vertex and index buffers), null back end | default font (ProggyClean) at 14 and 20 px, every glyph laid out into vertices | springs are the prototype's step (no animation API) |
 | egui 0.37.0 | `Context::run_ui` (input, egui's own widgets, layout, shapes) and `Context::tessellate` (meshes), no eframe, no window | default fonts at 14 and 20 px, every glyph tessellated into vertices | springs are the prototype's step (egui's animation helpers are tweens) |
@@ -23,19 +23,19 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 | Qt Quick 6.12.0 | retained, bindings and scene graph: QML made once; per frame the changes (mouse move, ListView `contentY`, bar widths, window size), then `grabWindow`: polish (layout), scene graph sync and render with the software back end into an image | system fonts, 14 and 20 px, rasterised | includes rasterisation; `grabWindow` renders every frame, so the idle row uses Qt's own render loop instead (frames swapped) |
 | LVGL 9.6.0 | retained: objects made once; per frame the changes (pointer read, list rows recycled, bar widths, resolution), then `lv_refr_now`: layout and software redraw of the invalidated areas into a 32-bit partial buffer | Montserrat 14 and 20 px, rasterised | includes rasterisation; LVGL's own `layout` line (changes + `lv_obj_update_layout`) is given below |
 
-None of these rows rasterises except LVGL, Slint and Qt Quick. Draw output per frame differs in kind (LCGR quads and
+None of these rows rasterises except LVGL, Slint and Qt Quick. Draw output per frame differs in kind (LCGF quads and
 text runs, Clay render commands, ImGui and egui vertices, Iced layers), so the `out=` counts in the harness output are not comparable
 across rows.
 
 ## Frame time (median / p99, microseconds)
 
-Each column was measured in its own `ci/run.sh vs-<name>` run, beside an LCGR row of that run
-(the LCGR medians of each run are in the next table: LCGR changed between runs as lanes merged,
-springs most). The LCGR column here is from the Clay run. For LVGL and Slint the timings cover every
+Each column was measured in its own `ci/run.sh vs-<name>` run, beside an LCGF row of that run
+(the LCGF medians of each run are in the next table: LCGF changed between runs as lanes merged,
+springs most). The LCGF column here is from the Clay run. For LVGL and Slint the timings cover every
 poll, and the idle row counts the polls that redrew anything; for egui and Iced it counts the frames an
 eframe or iced_winit host would have run.
 
-| Scene | LCGR | Clay | Dear ImGui | LVGL (layout only) | egui | Iced | Slint | Qt Quick |
+| Scene | LCGF | Clay | Dear ImGui | LVGL (layout only) | egui | Iced | Slint | Qt Quick |
 |---|---|---|---|---|---|---|---|---|
 | form | 16.7 / 19.6 | 28.0 / 39.3 | 15.8 / 23.2 | 0.9 / 1.2 (0.8) | 216.1 / 291.8 | 21.6 / 24.6 | 46.0 / 379.1 | 114.2 / 117.7 |
 | list | 12.3 / 15.0 | 21.7 / 27.0 | 11.1 / 19.5 | 795.9 / 905.7 (421) | 242.3 / 259.1 | 212.4 / 311.9 | 2,216.6 / 2,551.7 | 203.5 / 208.5 |
@@ -44,7 +44,7 @@ eframe or iced_winit host would have run.
 | resize | 17.6 / 26.1 | 29.4 / 36.7 | 92.9 / 151.8 | 1,970.1 / 3,514.8 (1,039) | 281.3 / 331.2 | 141.2 / 240.5 | 2,534.9 / 4,710.9 | 313.7 / 1,879.4 |
 | idle: frames built of 3,000 polls | 2 | 3,000 | 3,000 | 1 | 3 | 1 | 1 | 2 |
 
-LCGR frame medians (us) in each run, and the load average (1 minute, 32 CPUs) during it:
+LCGF frame medians (us) in each run, and the load average (1 minute, 32 CPUs) during it:
 
 | Run | Load | form | list | text | springs | resize |
 |---|---|---|---|---|---|---|
@@ -58,10 +58,10 @@ LCGR frame medians (us) in each run, and the load average (1 minute, 32 CPUs) du
 
 ## Memory, idle and size
 
-LCGR from the Clay run; in the egui run it was 12,312 KiB resident and 269,459 + 11,785,924 bytes,
+LCGF from the Clay run; in the egui run it was 12,312 KiB resident and 269,459 + 11,785,924 bytes,
 after the benchmark gained more columns.
 
-| | LCGR | Clay | Dear ImGui | LVGL | egui | Iced | Slint | Qt Quick |
+| | LCGF | Clay | Dear ImGui | LVGL | egui | Iced | Slint | Qt Quick |
 |---|---|---|---|---|---|---|---|---|
 | Resident after one idle frame | 8,048 KiB | 2,096 KiB | 3,844 KiB | 3,540 KiB | 6,884 KiB | 6,024 KiB | 15,176 KiB | 70,440 KiB |
 | Idle wake-ups per second | 0 | 0 | 0 | 30 | 0 | 0 | 0 | 0 |
@@ -76,46 +76,46 @@ libraries, so its executable is only the harness: once idle it maps 107 shared l
 
 ## What these numbers do and do not say
 
-- The LCGR row is the benchmark tool itself: it carries two cores (the prototype builds the frame,
+- The LCGF row is the benchmark tool itself: it carries two cores (the prototype builds the frame,
   the ported `src/` core lays it out and paints) and a static buffer for each, sized for 4,096 nodes.
-  Its resident memory, bss and binary size are therefore upper bounds for LCGR, not its footprint;
+  Its resident memory, bss and binary size are therefore upper bounds for LCGF, not its footprint;
   a real example program replaces them when one exists.
-- Idle wake-ups: LCGR, Clay and Dear ImGui have no event loop of their own, so their harnesses
+- Idle wake-ups: LCGF, Clay and Dear ImGui have no event loop of their own, so their harnesses
   block on stdin after the first frame, and zero is what any host that sleeps on input gets. The
   egui and Iced harnesses do the same: their wake-ups would come from eframe's or iced_winit's
-  window loop, which needs a window this machine's CI cannot open. The row that says something is "frames built": LCGR's
+  window loop, which needs a window this machine's CI cannot open. The row that says something is "frames built": LCGF's
   `Context.needsFrame` skips all but two of the 3,000 unchanged polls; egui asks for 3 frames
   (`repaint_delay` zero after the first two) and then none, Iced 1 (no redraw request after it); Clay and ImGui have no such query
   (ImGui leaves idling to the application), so the host must detect "nothing changed" itself or
   build every poll.
 - Springs: Clay has no animation; the harness steps the 1,000 springs in plain C (as
-  `bench/vs/harness.h` does for every framework without one), while LCGR's time includes its
+  `bench/vs/harness.h` does for every framework without one), while LCGF's time includes its
   animation table (`Frame.animate`: a slot lookup per call and the stepped spring columns).
-- Text: Clay word-wraps and caches word widths across frames; LCGR's monospace wrap is arithmetic.
+- Text: Clay word-wraps and caches word widths across frames; LCGF's monospace wrap is arithmetic.
   Neither shapes text or emits glyph quads. ImGui lays out real glyph advances and writes four
-  vertices per glyph (12,984 vertices in the text scene), work LCGR leaves to its renderer: that is
+  vertices per glyph (12,984 vertices in the text scene), work LCGF leaves to its renderer: that is
   most of ImGui's text and resize time.
 - LVGL is retained and redraws only what changed. In the form and text scenes the moving pointer
   changes no style (the default theme has no hover styles), so a poll costs about a microsecond and
   nothing is drawn after the first frame. Where everything changes (list scrolled 997 px a frame,
   1,000 bar widths, a resize) it relayouts and re-rasterises the window, and its time is mostly
-  software rendering plus a layout that alone takes 12 to 60 times LCGR's whole frame. Its idle
+  software rendering plus a layout that alone takes 12 to 60 times LCGF's whole frame. Its idle
   host loop (`lv_timer_handler`, then sleep until the next timer) wakes 30 times a second for the
   display refresh and input read timers (LV_DEF_REFR_PERIOD 33 ms). Its bss is mostly the 1/10-screen
   draw buffer the harness gives it (952,320 bytes). Springs: 1,882 of 3,000 frames redrew; the rest had
   no bar width change after rounding to whole pixels.
 - LVGL's list recycles 35 row objects and sets each one's text, position and background colour
   every frame (local style), as an LVGL list over 100,000 rows has to.
-- Form: ImGui's text fields are `InputText` widgets; LCGR's form scene draws a bordered box with a
+- Form: ImGui's text fields are `InputText` widgets; LCGF's form scene draws a bordered box with a
   label (no editing state), so ImGui does a little more there.
-- Clay culls render commands outside the window (73 in the text scene); LCGR paints every node in
+- Clay culls render commands outside the window (73 in the text scene); LCGF paints every node in
   the tree.
 - egui shapes and tessellates real text (its default fonts, embedded in the binary: most of its
   3.9 MB) and rebuilds every widget with its hover and focus state each frame; its list re-lays out
   each "Row N" label, since the texts change as the list scrolls.
 - Iced keeps state between its rebuilt views: each text widget's shaped paragraph lives in the
   widget tree and is reused while its content and bounds stay the same, which is why form and text
-  cost about what LCGR's do. Where texts or sizes change every frame (the list's "Row N" labels, a
+  cost about what LCGF's do. Where texts or sizes change every frame (the list's "Row N" labels, a
   resize re-wrapping every paragraph, 1,000 bar widths) it re-shapes or re-lays out, and the time
   goes up 7 to 10 times (resize against text, list against form). The list scrolls a `scrollable`
   over the visible rows between two spacers, moved by the `scroll_to` operation each frame.
@@ -137,10 +137,10 @@ libraries, so its executable is only the harness: once idle it maps 107 shared l
 
 ## Pointer moves that change nothing (form, text)
 
-Until the perf-gaps branch the LCGR row built every poll, while LVGL, Slint and Qt Quick time
+Until the perf-gaps branch the LCGF row built every poll, while LVGL, Slint and Qt Quick time
 every poll and redraw only what changed. In form and text the only input is the pointer
 moving: LVGL (no hover styles in its default theme) redrew nothing after the first frame and a
-poll cost about a microsecond, against 16 to 18 us for an LCGR rebuild: the x22.6 and x17.9 of
+poll cost about a microsecond, against 16 to 18 us for an LCGF rebuild: the x22.6 and x17.9 of
 the gates were that, not slower passes. `Frame.reuse` could not have applied: a reused subtree
 still copies its rows, lays out what is not kept and paints every node, and no scene uses it.
 
@@ -156,9 +156,9 @@ outside `Input` (the per-pass benchmark's pointer, the scroll position, the spri
 
 ## Resident memory and time to first frame
 
-Two causes, found on the perf-gaps branch, made the LCGR row 12,104 KiB and 4.72 ms against
+Two causes, found on the perf-gaps branch, made the LCGF row 12,104 KiB and 4.72 ms against
 Clay's 2,140 KiB and 0.67 ms. First, the harness: `--idle` ran the untimed differential check
-against the prototype core, which builds a whole prototype context (3.3 MB) beside LCGR's;
+against the prototype core, which builds a whole prototype context (3.3 MB) beside LCGF's;
 it now runs only in timed runs. Second, the library: `mem.Carver` cleared every column it
 carved, so a context made every byte of its capacity resident (4.4 MB for 4,096 nodes) and
 paid for clearing it before the first frame. Clay mallocs its arena (8,192 elements by default)
@@ -182,27 +182,27 @@ springs frame splits into build 30 us, layout 33 us and paint 13 us (1,042 nodes
 is flat: `Tree.push` 26% (about 20 ns a node, store-bound over its columns, as
 docs/perf/port-perf.md found), `paint.emit` 16%, the scene's `animate` calls and styles 15%,
 `levels.resolve` 13%, `fitSpan` 10%, `place` 7%. No function has a hotspot to remove. ImGui
-puts each bar at its cursor in one pass and writes four vertices; LCGR runs the eight-pass flex
+puts each bar at its cursor in one pass and writes four vertices; LCGF runs the eight-pass flex
 layout over every node and paints from the laid-out columns. Closing x1.32 needs fewer
 passes or fewer columns written per node, which is a layout and tree design change, not a fix
 in this branch.
 
-## The LCGR row's harness, and capacity
+## The LCGF row's harness, and capacity
 
-Until the perf-gaps branch the LCGR row was the per-pass benchmark (`tools/bench`): it carried
+Until the perf-gaps branch the LCGF row was the per-pass benchmark (`tools/bench`): it carried
 the prototype core, the differential check against it, static buffers for 4,096 nodes and
-std's formatting, so its size (280 KB loaded, 11.8 MB bss) said little about LCGR.
-`bench/vs/lcgr/main.zig` now does what the Clay harness does and nothing else: harness.h's
-driver, LCGR's frame, its context in a mapped buffer as Clay's arena is malloced.
+std's formatting, so its size (280 KB loaded, 11.8 MB bss) said little about LCGF.
+`bench/vs/lcgf/main.zig` now does what the Clay harness does and nothing else: harness.h's
+driver, LCGF's frame, its context in a mapped buffer as Clay's arena is malloced.
 
 Fair in both directions, two more changes:
 
 - Capacity per scene (harness.h `vs_capacity`): every harness that sizes its tables does so
-  for the scene, LCGR's node count rounded up to a power of two, at least 256 (Clay's max
-  element count, LCGR's limits). A fixed capacity favours whichever library touches less of
-  what it does not use: at 4,096 LCGR's first frame touches one page per column (684 KiB
+  for the scene, LCGF's node count rounded up to a power of two, at least 256 (Clay's max
+  element count, LCGF's limits). A fixed capacity favours whichever library touches less of
+  what it does not use: at 4,096 LCGF's first frame touches one page per column (684 KiB
   resident), at 256 it is 388 KiB; Clay moves less (448 -> 376 KiB, static).
-- The LCGR row has no libc. Clay's resident memory and start-up are measured on
+- The LCGF row has no libc. Clay's resident memory and start-up are measured on
   `vs-clay-static`, built static against musl (`measure.py --startup`), so neither row pays for
   a dynamic C library; its frame times stay on the glibc build (musl's snprintf and memcpy made
   its text frame 31 -> 48 us), and its size on the dynamic build (libc not in its bytes).
@@ -212,7 +212,7 @@ Fair in both directions, two more changes:
 - Idle wake-ups for egui and Iced: their event loops (eframe, iced_winit) need a window, and the
   harnesses run without one; the "frames built" row stands in for them.
 - GPU paths: every row runs on the CPU. The GPU back ends (wgpu for egui, Iced and Slint, the RHI
-  for Qt Quick, ImGui's and Clay's renderers) are not measured, and neither is LCGR's.
-- The cost of drawing pixels for the immediate-mode rows and LCGR: their frames stop at the draw
+  for Qt Quick, ImGui's and Clay's renderers) are not measured, and neither is LCGF's.
+- The cost of drawing pixels for the immediate-mode rows and LCGF: their frames stop at the draw
   list, while LVGL, Slint and Qt Quick rasterise in theirs. The two groups compare within
   themselves; across groups only the scenes where little changes (form, text, idle) say much.

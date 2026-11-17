@@ -6,7 +6,7 @@
 //! A browser never lets wasm block, so the loop is the host page's and each animation frame runs
 //! one turn of `iface.run`'s body (route 2 of src/shell/iface.zig, "Embedding"):
 //!
-//!     export fn lcgr_frame(ms: f64) void {           // shell.js calls it from requestAnimationFrame
+//!     export fn lcgf_frame(ms: f64) void {           // shell.js calls it from requestAnimationFrame
 //!         shell.time(ms / 1000);
 //!         if (!shell.poll(&ev)) return;
 //!         if (ctx.needsFrame(&ev.in)) { ...build; shell.apply(&out.platform); shell.present(&out); }
@@ -293,7 +293,7 @@ pub fn Web(comptime host: type) type {
         /// The next `poll` gives a frame even with no event, and the page runs one soon. The
         /// flag is atomic so the contract's "any thread" holds; a page has one thread (wasm
         /// threads need cross-origin isolation), so the caller is its own event loop: a fetch or
-        /// a worker's message that posted a result (main.zig `lcgr_wake`).
+        /// a worker's message that posted a result (main.zig `lcgf_wake`).
         pub fn wake(s: *Self) void {
             s.woken.store(true, .release);
             host.schedule(0, .once);
@@ -357,7 +357,7 @@ comptime {
 const example_limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
 var example_buffer: [context.Context.requiredBytes(example_limits)]u8 align(mem.column_align) = undefined;
 
-/// One animation frame of the example, as lcgr_frame runs it.
+/// One animation frame of the example, as lcgf_frame runs it.
 fn animationFrame(shell: anytype, ctx: *context.Context, app: *example.App, ms: f64) void {
     var ev: Events = .{};
     shell.time(ms / 1000);

@@ -10,8 +10,8 @@ rows) from seven runtime styles, 4,000 reps alternated; median per frame; five p
 alternated, pinned to CPU 4 (P-core, i9-14900HX), load average 4.2 to 4.9 on 32 CPUs:
 
 ```
-nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgr -Mmain=docs/perf/build/push.zig \
-    --dep build_options -Mlcgr=src/lcgr.zig -Mbuild_options=docs/perf/build/opts.zig -femit-bin=zig-out/push
+nix develop -c zig build-exe -O ReleaseFast -mcpu native --dep lcgf -Mmain=docs/perf/build/push.zig \
+    --dep build_options -Mlcgf=src/lcgf.zig -Mbuild_options=docs/perf/build/opts.zig -femit-bin=zig-out/push
 taskset -c 4 zig-out/push
 ```
 

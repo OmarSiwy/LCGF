@@ -3,11 +3,11 @@
 //! premultiplied blending, the same state as prototype/ui_wgpu.zig `createPipeline`.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
 const msl = @import("msl.zig");
-const quad_shader = lcgr.quad_shader;
+const quad_shader = lcgf.quad_shader;
 const Id = objc.Id;
 const msg = objc.msg;
 const U = objc.NSUInteger;

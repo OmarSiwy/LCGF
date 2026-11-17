@@ -1,5 +1,5 @@
 //! The render back end chosen at compile time: `zig build -Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu`,
-//! module `lcgr_render` (build.zig). `auto` is the target's own API: Metal on macOS and iOS,
+//! module `lcgf_render` (build.zig). `auto` is the target's own API: Metal on macOS and iOS,
 //! Direct3D 12 on Windows, Vulkan on Linux and Android, WebGPU on wasm32, software on
 //! freestanding. Only the chosen back end is compiled and nothing dispatches: `Renderer` is
 //! that back end's type, so a call through it is the same machine code as one through a direct
@@ -10,7 +10,7 @@
 //! command list, `void` for GL ES, a framebuffer target for software. Code that records its own
 //! draws (custom commands) is written against one back end, or switches on `kind` at comptime.
 
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const options = @import("render_options");
 
 pub const Kind = @TypeOf(options.render);
@@ -18,9 +18,9 @@ pub const Kind = @TypeOf(options.render);
 pub const kind: Kind = options.render;
 
 /// The back end's module: src/render/vk/vk.zig, metal/metal.zig, d3d12/d3d12.zig,
-/// gles/gles.zig, web/web.zig, wgpu/native.zig, or `lcgr.render_sw`.
+/// gles/gles.zig, web/web.zig, wgpu/native.zig, or `lcgf.render_sw`.
 pub const backend = switch (kind) {
-    .sw => lcgr.render_sw,
+    .sw => lcgf.render_sw,
     else => @import("render_backend"),
 };
 
@@ -40,5 +40,5 @@ pub const Queue = Renderer.Queue;
 pub const Setup = backend.Setup;
 
 comptime {
-    lcgr.render_iface.check(Renderer);
+    lcgf.render_iface.check(Renderer);
 }

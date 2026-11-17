@@ -13,7 +13,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
 const pipeline = @import("pipeline.zig");
@@ -24,7 +24,7 @@ const U = objc.NSUInteger;
 /// `scale`, rows from the top (Metal's own scissor space) and inside the target, as Metal
 /// requires. Pixels the rect covers partly are included; an empty result has zero size. The
 /// same rect as the Vulkan and GL ES back ends' `customScissor`.
-pub fn scissor(extent: [2]u32, scale: f32, custom: lcgr.draw_list.CustomDraw) mtl.ScissorRect {
+pub fn scissor(extent: [2]u32, scale: f32, custom: lcgf.draw_list.CustomDraw) mtl.ScissorRect {
     const w: f32 = @floatFromInt(extent[0]);
     const h: f32 = @floatFromInt(extent[1]);
     const x0 = std.math.clamp(@floor(@max(custom.rect[0], custom.clip[0]) * scale), 0, w);

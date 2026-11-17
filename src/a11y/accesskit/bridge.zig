@@ -1,6 +1,6 @@
 //! The AccessKit bridge: hands the semantic tree (`a11y.Export`, src/a11y/tree.zig) to the
 //! platform through AccessKit's C interface. An adapter outside the tiers (docs/ARCHITECTURE.md):
-//! built as its own module over `lcgr` (`zig build accesskit`), never imported by the core.
+//! built as its own module over `lcgf` (`zig build accesskit`), never imported by the core.
 //!
 //! The host runs the tier-0 passes (`names`, `states`, `flatten`) after each frame, then calls
 //! `frame` here and the platform adapter's `update`. AccessKit calls back only into this file,
@@ -10,15 +10,15 @@
 //! AccessKit requires after such an answer.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const c = @import("c.zig");
-const a11y = lcgr.a11y_tree;
-const simd = lcgr.simd;
-const mem = lcgr.mem;
-const none = lcgr.types.none;
+const a11y = lcgf.a11y_tree;
+const simd = lcgf.simd;
+const mem = lcgf.mem;
+const none = lcgf.types.none;
 const Export = a11y.Export;
 const Role = a11y.Role;
-const scheduler = lcgr.scheduler;
+const scheduler = lcgf.scheduler;
 
 /// The platform adapters: each takes the bridge and the shell's window.
 pub const windows = @import("windows.zig");
@@ -224,7 +224,7 @@ pub const Bridge = struct {
         const cur = b.cur.?;
         const u = c.accesskit_tree_update_with_capacity_and_focus(cur.len + 1, b.focusId());
         const info = c.accesskit_tree_info_new(root_id);
-        c.accesskit_tree_info_set_toolkit_name_with_length(info, "lcgr", 4);
+        c.accesskit_tree_info_set_toolkit_name_with_length(info, "lcgf", 4);
         c.accesskit_tree_update_set_tree_info(u, info);
         c.accesskit_tree_update_push_node(u, root_id, b.rootNode());
         for (0..cur.len) |r| b.push(u, @intCast(r));
@@ -421,9 +421,9 @@ pub const Bridge = struct {
 };
 
 const testing = std.testing;
-const Tree = lcgr.tree.Tree;
-const Texts = lcgr.texts.Texts;
-const Strings = lcgr.strings.Strings;
+const Tree = lcgf.tree.Tree;
+const Texts = lcgf.texts.Texts;
+const Strings = lcgf.strings.Strings;
 
 /// A frame's columns for the tests: tree, text runs, bytes, semantics, two exports, changes and
 /// a bridge over a buffer.
@@ -538,7 +538,7 @@ test "accesskit: the whole tree goes out after activation, rooted at the window"
     f.init();
     f.reset();
     buildToolbar(&f, true, 1.5);
-    f.end(@backingInt(lcgr.types.Id.from("reset")));
+    f.end(@backingInt(lcgf.types.Id.from("reset")));
     // Activation answers "not ready" and marks the next update as the whole tree.
     try testing.expectEqual(null, Bridge.activate(&f.b));
     try testing.expect(f.b.full.load(.acquire));
@@ -565,9 +565,9 @@ test "accesskit: the whole tree goes out after activation, rooted at the window"
     try expectHas(d, "SetValue");
     try expectHas(d, "Increment");
     try expectHas(d, "Decrement");
-    try expectHas(d, "\"lcgr\"");
+    try expectHas(d, "\"lcgf\"");
     var idbuf: [32]u8 = undefined;
-    try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{@backingInt(lcgr.types.Id.from("reset"))}));
+    try expectHas(d, try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{@backingInt(lcgf.types.Id.from("reset"))}));
 
     // A screen reader's increment and decrement arrive as set_value rows a step from the value.
     var req: c.ActionRequest = .{ .action = .increment, .target_tree = @splat(0), .target_node = idOf("exposure"), .data = .{ .has_value = false, .value = undefined } };
@@ -598,7 +598,7 @@ fn pushedIds(u: *c.TreeUpdate, out: []c.NodeId) ![]c.NodeId {
 }
 
 fn idOf(comptime name: []const u8) c.NodeId {
-    return @backingInt(lcgr.types.Id.from(name));
+    return @backingInt(lcgf.types.Id.from(name));
 }
 
 test "accesskit: later frames send only the rows that changed, and the window when its rows do" {
@@ -625,7 +625,7 @@ test "accesskit: later frames send only the rows that changed, and the window wh
     // The checkbox unticked and the slider moved: those two rows, in tree order.
     f.reset();
     buildToolbar(&f, false, 2);
-    f.end(@backingInt(lcgr.types.Id.from("exposure")));
+    f.end(@backingInt(lcgf.types.Id.from("exposure")));
     u = Bridge.factory(&f.b).?;
     try testing.expectEqualSlices(c.NodeId, &.{ idOf("wireframe"), idOf("exposure") }, try pushedIds(u, &ids));
     const d = debugText(u, &buf);
@@ -776,7 +776,7 @@ pub fn Host(comptime cap: u32) type {
             break :blk counter.off;
         };
         /// `ctx`'s waker is posted with each request; `wake` interrupts the shell's wait.
-        pub fn init(h: *Self, title: []const u8, ctx: *lcgr.context.Context, wake: ?Bridge.Wake) void {
+        pub fn init(h: *Self, title: []const u8, ctx: *lcgf.context.Context, wake: ?Bridge.Wake) void {
             var carver: mem.Carver = .{ .buf = &h.buf };
             carve(h, &carver, title);
             h.b.waker = &ctx.waker;
@@ -785,7 +785,7 @@ pub fn Host(comptime cap: u32) type {
         /// After `Frame.end`: exports the frame `ctx` just built and stores it in the bridge.
         /// Semantic inputs (`labelled_by`, application states) are set on `h.s` while building
         /// and cleared here for the next frame.
-        pub fn frame(h: *Self, ctx: *const lcgr.context.Context, out: *const lcgr.context.Output) void {
+        pub fn frame(h: *Self, ctx: *const lcgf.context.Context, out: *const lcgf.context.Output) void {
             std.debug.assert(out.tree.len <= cap);
             const str = &ctx.strings[ctx.cur];
             h.gen +%= 1;
@@ -801,9 +801,9 @@ pub fn Host(comptime cap: u32) type {
 }
 
 test "accesskit: action requests reach the example as the user's own input" {
-    const example = lcgr.shell_example;
-    const Context = lcgr.context.Context;
-    const limits: lcgr.context.Limits = .{ .nodes = 256, .texts = 64 };
+    const example = lcgf.shell_example;
+    const Context = lcgf.context.Context;
+    const limits: lcgf.context.Limits = .{ .nodes = 256, .texts = 64 };
     const S = struct {
         var ctx_buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
         var host: Host(256) = .{};
@@ -816,12 +816,12 @@ test "accesskit: action requests reach the example as the user's own input" {
     const h = &S.host;
     h.init("Example", &ctx, .{ .ctx = null, .f = S.wake });
     var app: example.App = .{};
-    var ev: lcgr.shell_iface.Events = .{};
+    var ev: lcgf.shell_iface.Events = .{};
     ev.in.viewport = .{ 800, 600 };
     var acts_buf: [Bridge.queue_len]a11y.Action = undefined;
 
     const Step = struct {
-        fn run(cx: *Context, ap: *example.App, e: *lcgr.shell_iface.Events, hh: *Host(256), buf: []a11y.Action) void {
+        fn run(cx: *Context, ap: *example.App, e: *lcgf.shell_iface.Events, hh: *Host(256), buf: []a11y.Action) void {
             const acts = hh.b.drain(buf);
             var f = cx.begin(&e.in);
             a11y.apply(&cx.inter, acts);

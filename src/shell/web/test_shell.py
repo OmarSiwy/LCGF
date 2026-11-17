@@ -27,16 +27,16 @@ def check(name, ok, detail=""):
 def state(page):
     """builds, resets, layers, exposure * 1000, panel colour, polls, scale * 1000, backing store
     width and height (main.zig)."""
-    return page.eval("[...Array(9).keys()].map(i => window.lcgr.ui.exports.lcgr_example_state(i) >>> 0)")
+    return page.eval("[...Array(9).keys()].map(i => window.lcgf.ui.exports.lcgf_example_state(i) >>> 0)")
 
 
 def settle(page):
     """Waits until the page asks for no more frames (idle), then returns the frame count."""
     page.eval("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     for _ in range(100):
-        before = page.eval("window.lcgr.page.frames")
+        before = page.eval("window.lcgf.page.frames")
         page.eval("new Promise(r => setTimeout(r, 100))")
-        if page.eval("window.lcgr.page.frames") == before:
+        if page.eval("window.lcgf.page.frames") == before:
             return before
     raise browser.Error("the page never went idle")
 
@@ -54,14 +54,14 @@ def rgba(word):
 
 def attach(page):
     """C0474: the example runs on the canvas from animation frames, and goes idle."""
-    page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
+    page.wait("window.lcgf && window.lcgf.ui.exports.lcgf_example_state(0) > 0")
     frames = settle(page)
     builds, _, _, _, panel, polls = state(page)[:6]
     check("attach: frames ran and the example was built", frames > 0 and builds > 0, f"{frames} frames, {builds} builds, {polls} polls")
     check("attach: the sidebar shows the theme's panel colour", pixel(page, 80, 590) == rgba(panel), list(pixel(page, 80, 590)))
     check("attach: the custom viewport is left to the host (black)", pixel(page, 400, 300) == bytes([0, 0, 0, 255]))
     page.eval("new Promise(r => setTimeout(r, 500))")
-    check("attach: idle, no animation frames", page.eval("window.lcgr.page.frames") == frames)
+    check("attach: idle, no animation frames", page.eval("window.lcgf.page.frames") == frames)
 
 
 def frame(page):
@@ -99,9 +99,9 @@ def replay(page):
 def seen(page):
     """presses, releases, last code, last mods, text length, wheel y, scroll y (x1000),
     contacts, contact x (x1000), keys held, composition length, its range; and the text typed
-    (main.zig `lcgr_seen`)."""
-    v = page.eval("[...Array(13).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(i))")
-    text = bytes(page.eval(f"[...Array({v[4]}).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(100 + i))")).decode()
+    (main.zig `lcgf_seen`)."""
+    v = page.eval("[...Array(13).keys()].map(i => window.lcgf.ui.exports.lcgf_seen(i))")
+    text = bytes(page.eval(f"[...Array({v[4]}).keys()].map(i => window.lcgf.ui.exports.lcgf_seen(100 + i))")).decode()
     return v, text
 
 
@@ -148,7 +148,7 @@ def touch(page):
 def dpr(page):
     """C0476, in a browser at devicePixelRatio 2: the frame is drawn at twice the pixels, maps one
     to one onto the screen, and still lines up with the CSS layout and the pointer."""
-    page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
+    page.wait("window.lcgf && window.lcgf.ui.exports.lcgf_example_state(0) > 0")
     settle(page)
     st = state(page)
     check("dpr 2: scale 2, backing store 1600 x 1200", st[6:9] == [2000, 1600, 1200], st[6:9])
@@ -193,8 +193,8 @@ def clipboard(page):
     origin = page.eval("location.origin")
     page.browser.send("Browser.grantPermissions", {"origin": origin, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
     page.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
-    copied = page.eval("""(async () => { const x = window.lcgr.ui.exports;
-        x.lcgr_test_copy(window.lcgr.ui.put("copied \u2713", x.lcgr_text_buffer(), x.lcgr_text_capacity()));
+    copied = page.eval("""(async () => { const x = window.lcgf.ui.exports;
+        x.lcgf_test_copy(window.lcgf.ui.put("copied \u2713", x.lcgf_text_buffer(), x.lcgf_text_capacity()));
         await new Promise(r => setTimeout(r, 100));
         return navigator.clipboard.readText(); })()""")
     check("clipboard: copy reaches the clipboard", copied == "copied \u2713", repr(copied))
@@ -215,14 +215,14 @@ def ime(page):
     composition reaches the frame with its range, and its commit arrives as typed text."""
     mouse(page, "mousePressed", 400, 300, True)  # focus the canvas
     mouse(page, "mouseReleased", 400, 300)
-    page.eval("window.lcgr.ui.exports.lcgr_test_ime(true, 200, 100, 201, 118)")
-    where = page.eval("(() => { const i = window.lcgr.page.input; return [document.activeElement === i, i.style.left, i.style.top, i.style.height]; })()")
+    page.eval("window.lcgf.ui.exports.lcgf_test_ime(true, 200, 100, 201, 118)")
+    where = page.eval("(() => { const i = window.lcgf.page.input; return [document.activeElement === i, i.style.left, i.style.top, i.style.height]; })()")
     check("ime: the hidden input has focus at the caret", where == [True, "200px", "100px", "18px"], where)
     before = seen(page)[1]
     page.send("Input.imeSetComposition", {"text": "\u306b\u307b", "selectionStart": 1, "selectionEnd": 2})
     frame(page)
     v = seen(page)[0]
-    comp = bytes(page.eval(f"[...Array({v[10]}).keys()].map(i => window.lcgr.ui.exports.lcgr_seen(200 + i))")).decode()
+    comp = bytes(page.eval(f"[...Array({v[10]}).keys()].map(i => window.lcgf.ui.exports.lcgf_seen(200 + i))")).decode()
     check("ime: composing \u306b\u307b, second character highlighted", (comp, v[11], v[12]) == ("\u306b\u307b", 3, 6), f"{comp!r} {v[11]}..{v[12]}")
     page.send("Input.insertText", {"text": "\u65e5\u672c"})
     frame(page)
@@ -233,7 +233,7 @@ def ime(page):
     frame(page)
     v, text = seen(page)
     check("ime: a plain key in the text input is typed once, its key event kept", text[len(before):] == "\u65e5\u672cx" and v[2] == 0x1b, f"{text[len(before):]!r}, last code {v[2]:#x}")
-    page.eval("window.lcgr.ui.exports.lcgr_test_ime(false, 0, 0, 0, 0)")
+    page.eval("window.lcgf.ui.exports.lcgf_test_ime(false, 0, 0, 0, 0)")
     focus = page.eval("document.activeElement.tagName")
     check("ime: off again, the canvas has focus", focus == "CANVAS", focus)
 
@@ -244,18 +244,18 @@ def timers(page):
     timeout here, a fetch or a worker's message in an app) runs exactly one frame."""
     mouse(page, "mouseMoved", 400, 400)  # away from every widget: no hover deadline
     settle(page)
-    page.eval("window.lcgr.ui.exports.lcgr_test_blink(0.25)")
-    f0 = page.eval("window.lcgr.page.frames")
+    page.eval("window.lcgf.ui.exports.lcgf_test_blink(0.25)")
+    f0 = page.eval("window.lcgf.page.frames")
     page.eval("new Promise(r => setTimeout(r, 2000))")
-    frames = page.eval("window.lcgr.page.frames") - f0
-    blinks = page.eval("window.lcgr.ui.exports.lcgr_test_blinks()")
+    frames = page.eval("window.lcgf.page.frames") - f0
+    blinks = page.eval("window.lcgf.ui.exports.lcgf_test_blinks()")
     check("timers: 2 s of a 0.25 s timer: about 8 fires, about as many frames", 6 <= blinks <= 9 and frames <= 2 * blinks + 4, f"{blinks} fires, {frames} frames")
-    page.eval("window.lcgr.ui.exports.lcgr_test_blink(0)")
+    page.eval("window.lcgf.ui.exports.lcgf_test_blink(0)")
     f1 = settle(page)
     page.eval("new Promise(r => setTimeout(r, 600))")
-    check("timers: stopped, idle again", page.eval("window.lcgr.page.frames") == f1)
+    check("timers: stopped, idle again", page.eval("window.lcgf.page.frames") == f1)
     builds = state(page)[0]
-    page.eval("new Promise(r => setTimeout(() => { window.lcgr.ui.exports.lcgr_wake(); r(); }, 50))")
+    page.eval("new Promise(r => setTimeout(() => { window.lcgf.ui.exports.lcgf_wake(); r(); }, 50))")
     f2 = settle(page)
     check("wake: one woken frame, built, then idle", (f2 - f1, state(page)[0] - builds) == (1, 1), f"{f2 - f1} frames, {state(page)[0] - builds} builds")
 
@@ -263,10 +263,10 @@ def timers(page):
 def gpu(page):
     """C0481: with WebGPU the page draws through the WebGPU back end and the replay ends the
     same, with no WebGPU error."""
-    page.wait("window.lcgr && window.lcgr.ui.exports.lcgr_example_state(0) > 0")
-    check("webgpu: the page picked WebGPU", page.eval("window.lcgr.ui.exports.lcgr_backend()") == 1)
+    page.wait("window.lcgf && window.lcgf.ui.exports.lcgf_example_state(0) > 0")
+    check("webgpu: the page picked WebGPU", page.eval("window.lcgf.ui.exports.lcgf_backend()") == 1)
     replay(page)
-    errors = page.eval("window.lcgr.errors")
+    errors = page.eval("window.lcgf.errors")
     check("webgpu: no WebGPU errors", not errors, errors)
 
 

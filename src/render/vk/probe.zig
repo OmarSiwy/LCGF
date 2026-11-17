@@ -14,12 +14,12 @@
 //! Offscreen targets stand in for a window in both probes, so both measure the same thing on a
 //! machine with no display: wgpu-native has no headless surface.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const vk = @import("vk.zig");
 const c = vk.c;
 const host = vk.host;
 const pass = vk.pass;
-const conformance = lcgr.render_conformance;
+const conformance = lcgf.render_conformance;
 
 pub const frames = 2000;
 

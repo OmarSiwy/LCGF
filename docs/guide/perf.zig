@@ -4,9 +4,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
-const Context = lcgr.context.Context;
-const s = lcgr.spec;
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const s = lcgf.spec;
 
 test "memory: bytes per node of capacity" {
     // -- bytes
@@ -25,7 +25,7 @@ const mixer = s.col(.{ .pad = @splat(8), .gap = 4 }, .{
 
 test "memory: the comptime front end keeps state and two masks" {
     // -- comptime
-    const S = lcgr.signals.Signals(Mixer, mixer);
+    const S = lcgf.signals.Signals(Mixer, mixer);
     try testing.expectEqual(32, @sizeOf(Mixer));
     try testing.expectEqual(u8, S.Mask); // 8 nodes, one bit each
     try testing.expectEqual(40, @sizeOf(S.Runtime)); // the state, two masks, padding

@@ -24,7 +24,7 @@ Every claim carries one tag:
 2. **Cost.** Turning each table's `overflow` bool into a `lost` counter adds 2 instructions to
    `Tree.pushRow` (`xor`, `add` to memory) and no conditional jump anywhere: the census of all
    117 probes has the same `jcc` counts, and `--baseline tools/census/baseline-src.json` passes
-   [M]. Building the 3,961-node bench tree, two copies of lcgr interleaved in one process: +0.0 to
+   [M]. Building the 3,961-node bench tree, two copies of lcgf interleaved in one process: +0.0 to
    +0.6 us on 108 us (at most 0.5%), inside the noise at load 14 [M]. The per-frame fold is one
    16-lane max, compare and select.
 3. **Attribution.** Exact and automatic: run `Context.build` with a counting carver and record
@@ -49,7 +49,7 @@ Every claim carries one tag:
    microcontroller, `std.debug.print` does not compile for `freestanding` [M], so the print is
    gated at compile time and a shell may supply its own sink.
 
-7. **Quiet by default (owner's later decision).** `-Dlcgr-usage=never` is the default. Keep the
+7. **Quiet by default (owner's later decision).** `-Dlcgf-usage=never` is the default. Keep the
    recording compiled in and gate only the printing: compiling it out saves one instruction per
    push, a per-frame fold below the noise, 770 bytes of ReleaseSmall code and 200 bytes of
    `Context`, and costs `ctx.usage()` in some builds plus a build-option branch in every tier-0
@@ -91,7 +91,7 @@ The probes are in `docs/research/usage/`:
   `Tree`, `Texts`, `Customs`, `Strings`, `Anims`, `Tweens`; an unclamped open-node counter and its
   peak in `Frame.open`/`close`; the fold in `Frame.finish`. Additive (it keeps `overflow`), so
   its cost is an upper bound on the design's.
-- `pushab.zig`: `docs/perf/build/push.zig`'s `pushRow` scene against two copies of lcgr in one
+- `pushab.zig`: `docs/perf/build/push.zig`'s `pushRow` scene against two copies of lcgf in one
   binary (this checkout and the patched copy), alternating rep by rep, 20,000 reps, 5 processes.
 - `peak.zig`: the shell example (`src/shell/example.zig`) for 30 frames under several `Limits`,
   against the patched copy, printing peak, given, frames hit and the first.
@@ -131,7 +131,7 @@ What carries over [I]:
   measure memory that grows. A fixed table that keeps counting rejected pushes ("wanted N") is
   the new piece, and it costs one add (question 2).
 - **Silence by default is what gets ignored.** Clay's default handler is empty and warns once;
-  issue #102 is a user finding the cap the hard way. LCGR's `Output.status` has the same shape:
+  issue #102 is a user finding the cap the hard way. LCGF's `Output.status` has the same shape:
   data the host may never read. The owner first chose to print by default, then (see "Decision
   change") to stay quiet unless the build asks; with the report off, the widened `Status` and
   `ctx.usage()` are what a host has, so a shell or the inspector should surface them.
@@ -423,7 +423,7 @@ changes with `build`.
 | `src/runtime/frame.zig:63-68` (`close`) | never pops the root | `open = @max(open, 2) - 1` |
 | `src/runtime/frame.zig:263-283` (`finish`) | `status` from the bools, after the sweeps | before the sweeps: build `want: Counts` with an `inline for` over `Limit` and an exhaustive `switch` (`.nodes => t.len + t.lost`, ..., `.depth => ctx.open_peak`); `given` from `limits`; fold; `status` from the mask |
 | `src/shell/iface.zig:107-120` (`run`) | returns | after the loop, `usage.report(shell, ctx)` (below) |
-| `build.zig:10-11` | `lanes` option | `options.addOption(UsageMode, "usage", b.option(UsageMode, "lcgr-usage", "Print the usage report when run returns: never (default), auto, always") orelse .never)` |
+| `build.zig:10-11` | `lanes` option | `options.addOption(UsageMode, "usage", b.option(UsageMode, "lcgf-usage", "Print the usage report when run returns: never (default), auto, always") orelse .never)` |
 
 `want` for each limit: nodes, texts, customs, flips: `len + lost` of this frame's table. strings:
 `len + lost` (bytes). anims, tweens, timers, memos: `len + lost` before the sweep. signals:
@@ -449,7 +449,7 @@ the real numbers with the margin removed.)
 prototype; suggested limits as `suggest` defines them; bytes are `partBytes` of each) [M]:
 
 ```
-lcgr usage: 30 frames, no limit hit. Peaks are of the frames that ran.
+lcgf usage: 30 frames, no limit hit. Peaks are of the frames that ran.
 limit         peak / given     use  suggested  frames hit (first)
 nodes           18 / 1024       2%         24
 texts            7 / 256        3%         16
@@ -483,7 +483,7 @@ buffer                            given  suggested
 suggested: .{ .nodes = 24, .texts = 16, .customs = 8, .strings = 64, .anims = 8, .tweens = 8, .flips = 8, .signals = 8, .depth = 16, .timers = 8, .memos = 8 }
 ```
 
-When a limit was hit, the first line is `lcgr usage: 30 frames, 3 limits hit (first: frame 1).
+When a limit was hit, the first line is `lcgf usage: 30 frames, 3 limits hit (first: frame 1).
 Frames that hit a limit were incomplete; their peaks may be low, so run again with the suggested
 limits.`, and the row reads `nodes           18 / 16       113%         24  30 (1)`. Use is
 `ceil(peak * 100 / given)` so any use shows at least 1%. Plain digits, no grouping (`std.fmt`
@@ -503,7 +503,7 @@ that never animates uses 0% of `anims` forever [M]. Two readings that do what it
   25%.
 
 Decided: **bytes**. The owner left the choice to the lead, who took the recommended reading. The
-owner also decided the report is **quiet by default**: `-Dlcgr-usage=never` is the default, and
+owner also decided the report is **quiet by default**: `-Dlcgf-usage=never` is the default, and
 `auto` or `always` turn it on in every build mode, ReleaseFast and ReleaseSmall included.
 
 ### Tests to write
@@ -529,7 +529,7 @@ In `src/runtime/context.zig` and `src/runtime/frame.zig` unless named:
 8. "report: the exact text" in `src/shell/usage.zig`: a fixed `Usage` written into
    `std.Io.Writer.fixed`, compared with the expected string, once without hits and once with.
 9. "run prints once when the shell is done": in `src/shell/iface.zig`, the `Manual` shell with a
-   `report` declaration captures the text; under `-Dlcgr-usage=never` it is not called.
+   `report` declaration captures the text; under `-Dlcgf-usage=never` it is not called.
 10. The bare-metal build (`ci/run.sh baremetal`) still links, for Cortex-M7 and RV32IMAC.
 11. Census: `tools/census/baseline-src.json` unchanged.
 
@@ -545,7 +545,7 @@ below 0.5%.
 
 ## Decision change: quiet by default
 
-The owner changed the default: `-Dlcgr-usage=never` is the default; `auto` (prints when a limit
+The owner changed the default: `-Dlcgf-usage=never` is the default; `auto` (prints when a limit
 was hit or use was under 25%) and `always` turn the report on, in every build mode. Two ways to
 build `never`, both designed and measured here.
 
@@ -597,7 +597,7 @@ report only when the option is `auto` or `always`; test 9 checks that under `nev
 `report` is not called and `std.debug.print` is not referenced (the ReleaseSmall `.text` of the
 headless example is unchanged by the feature beyond the recording, +770 B or less); add test 12,
 "usage: recorded under never": `ctx.usage()` after frames that hit a limit gives the counts with
-`-Dlcgr-usage=never`. Re-measure `frameab.zig` and `pushab.zig` at load under 8 before quoting
+`-Dlcgf-usage=never`. Re-measure `frameab.zig` and `pushab.zig` at load under 8 before quoting
 anything finer than "under 0.1 us per frame, under 0.5% of build".
 
 ## Sources

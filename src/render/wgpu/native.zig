@@ -1,7 +1,7 @@
 //! The wgpu-native binding for `Renderer(gpu)` (src/render/wgpu/wgpu.zig `Binding`): thin
 //! functions over wgpu-native's C API, whose headers build.zig translates (`wgpu_c`; Zig 0.17
-//! removed @cImport). Outside the tiers and not exported from lcgr.zig: it links a C library,
-//! so it is a module of its own over lcgr (`zig build wgpu`), never imported by it.
+//! removed @cImport). Outside the tiers and not exported from lcgf.zig: it links a C library,
+//! so it is a module of its own over lcgf (`zig build wgpu`), never imported by it.
 //!
 //!     var ctx = native.Context.init(device);
 //!     var gfx = native.Renderer.init(&ctx, .{ .format = ... }, white_view, sampler);
@@ -10,12 +10,12 @@
 //! pipeline shares (group 0 globals, group 1 texture and sampler).
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 pub const c = @import("wgpu_c");
 pub const host = @import("host.zig");
 pub const surface = @import("surface.zig");
 pub const glyphs = @import("glyphs.zig");
-const wgpu = lcgr.render_wgpu;
+const wgpu = lcgf.render_wgpu;
 
 /// The wgpu back end over wgpu-native.
 pub const Renderer = wgpu.Renderer(@This());
@@ -204,8 +204,8 @@ test {
 
 /// Draws `scene` into a fresh `width` x `height` target (viewport the same, scale 1) and reads
 /// it back; the caller frees the pixels.
-fn drawScene(h: *const host.Host, gfx: *Renderer, scene: *const lcgr.render_conformance.Scene, width: u32, height: u32) ![]u8 {
-    var st: lcgr.render_conformance.Storage = .{};
+fn drawScene(h: *const host.Host, gfx: *Renderer, scene: *const lcgf.render_conformance.Scene, width: u32, height: u32) ![]u8 {
+    var st: lcgf.render_conformance.Storage = .{};
     st.load(scene);
     var target = host.Target.init(h, width, height, c.WGPUTextureFormat_RGBA8Unorm);
     defer target.deinit();
@@ -262,7 +262,7 @@ test "native: every shader variant builds a quad pipeline with the documented la
     var ctx = Context.init(h.device);
     defer ctx.deinit();
     // A validation error panics through the host's uncaptured-error callback.
-    for (lcgr.quad_shader.variants) |v| {
+    for (lcgf.quad_shader.variants) |v| {
         const pipe = createPipeline(&ctx, &.{ .wgsl = v.wgsl, .format = c.WGPUTextureFormat_BGRA8Unorm, .sample_count = 1 });
         defer c.wgpuRenderPipelineRelease(pipe);
         try testing.expect(pipe != null);
@@ -280,7 +280,7 @@ test "native: a resize changes only the viewport; the same renderer draws every 
     defer white.deinit();
     var gfx = Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm }, white.view, sampler);
     defer gfx.deinit();
-    const scene = &lcgr.render_conformance.scenes[0]; // rects, 160 x 120, drawn from (0, 0)
+    const scene = &lcgf.render_conformance.scenes[0]; // rects, 160 x 120, drawn from (0, 0)
 
     const before = try drawScene(&h, &gfx, scene, 160, 120);
     defer testing.allocator.free(before);
@@ -301,20 +301,20 @@ test "native: a resize changes only the viewport; the same renderer draws every 
 /// A draw list of one quad batch holding `q`, in its own memory (must not move after `init`).
 const OneQuad = struct {
     const bytes = blk: {
-        var counter: lcgr.mem.Carver = .{ .buf = null };
-        _ = lcgr.draw_list.DrawList.init(&counter, 1, 1, 1);
+        var counter: lcgf.mem.Carver = .{ .buf = null };
+        _ = lcgf.draw_list.DrawList.init(&counter, 1, 1, 1);
         break :blk counter.off;
     };
-    buf: [bytes]u8 align(lcgr.mem.column_align),
-    draw: lcgr.draw_list.DrawList,
+    buf: [bytes]u8 align(lcgf.mem.column_align),
+    draw: lcgf.draw_list.DrawList,
 
-    fn init(one: *OneQuad, q: lcgr.draw_list.Quad, texture: lcgr.types.Texture) void {
-        var carver: lcgr.mem.Carver = .{ .buf = &one.buf };
-        one.draw = lcgr.draw_list.DrawList.init(&carver, 1, 1, 1);
+    fn init(one: *OneQuad, q: lcgf.draw_list.Quad, texture: lcgf.types.Texture) void {
+        var carver: lcgf.mem.Carver = .{ .buf = &one.buf };
+        one.draw = lcgf.draw_list.DrawList.init(&carver, 1, 1, 1);
         const d = &one.draw;
         d.quads[0] = q;
         d.quad_len = 1;
-        d.cmd.kind[0] = @backingInt(lcgr.draw_list.DrawList.Kind.quads);
+        d.cmd.kind[0] = @backingInt(lcgf.draw_list.DrawList.Kind.quads);
         d.cmd.first[0] = 0;
         d.cmd.count[0] = 1;
         d.cmd.key[0] = @as(u32, @backingInt(texture)) << 16;
@@ -346,7 +346,7 @@ test "native: registered textures are sampled by handle, and setTexture swaps on
 
     // One 4x4 quad, white fill, showing texture t: each texel covers 2x2 pixels.
     var one: OneQuad = undefined;
-    one.init(.{ .rect = .{ 0, 0, 4, 4 }, .clip = .{ -1e6, -1e6, 1e6, 1e6 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = lcgr.types.Color.white.bitsOf(), .border_color = 0, .border = 0, .opacity = 1 }, t);
+    one.init(.{ .rect = .{ 0, 0, 4, 4 }, .clip = .{ -1e6, -1e6, 1e6, 1e6 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = lcgf.types.Color.white.bitsOf(), .border_color = 0, .border = 0, .opacity = 1 }, t);
     const d = &one.draw;
 
     for ([_]*const [16]u8{ &checker_px, &flipped_px }, 0..) |want, round| {
@@ -372,7 +372,7 @@ test "native: the glyph texture uploads only what the atlas changed" {
     defer h.deinit();
     var px: [32 * 16]u8 = undefined;
     var sky: [3][32]u32 = undefined;
-    var atlas = lcgr.raster_atlas.Atlas.init(32, 16, &px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
+    var atlas = lcgf.raster_atlas.Atlas.init(32, 16, &px, .{ .x = &sky[0], .y = &sky[1], .w = &sky[2] });
     var tex = glyphs.GlyphTexture.init(h.device, 32, 16);
     defer tex.deinit();
     try testing.expectEqual(@as(u32, 32 * 16), tex.upload(h.queue, &atlas)); // cleared: all of it
@@ -401,7 +401,7 @@ test "native: multisampling resolves into the target and changes only edge pixel
         .params = @splat(0),
         .uv = .{ 0, 0, 1, 1 },
         .radii = @splat(0),
-        .fill = lcgr.types.Color.white.bitsOf(),
+        .fill = lcgf.types.Color.white.bitsOf(),
         .border_color = 0,
         .border = 0,
         .opacity = 1,

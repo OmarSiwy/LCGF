@@ -1,11 +1,11 @@
 //! C0849: resolve (both axes) + place per frame on the benchmark's tree shape, three ways:
-//!   start   the lane's start: layout.resolve and layout.place of src/ at 99d3b1e^ (module lcgr_old)
+//!   start   the lane's start: layout.resolve and layout.place of src/ at 99d3b1e^ (module lcgf_old)
 //!   coefs   coefs + resolveK per axis, placeRows + placeK (the depth-first K form)
 //!   levels  levels.build once, levels.resolve per axis, placeRows + placeK
 //! fit runs untimed before each axis, as in micro.zig. Min and mean of 4,000 reps.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const old = @import("lcgr_old");
+const lcgf = @import("lcgf");
+const old = @import("lcgf_old");
 const linux = std.os.linux;
 fn now() u64 {
     var ts: linux.timespec = undefined;
@@ -40,17 +40,17 @@ fn scene(t: anytype) void {
 }
 
 pub fn main() !void {
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
-    var t = lcgr.tree.Tree.init(&carver, 4096);
-    var k = lcgr.coefs.Coefs.init(&carver, 4096);
-    var lv = lcgr.levels.Levels.init(&carver, 4096);
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
+    var t = lcgf.tree.Tree.init(&carver, 4096);
+    var k = lcgf.coefs.Coefs.init(&carver, 4096);
+    var lv = lcgf.levels.Levels.init(&carver, 4096);
     var carver_old: old.mem.Carver = .{ .buf = &raw_old };
     var ot = old.tree.Tree.init(&carver_old, 4096);
     scene(&t);
     scene(&ot);
-    const L = lcgr.layout;
-    const K = lcgr.coefs;
-    const V = lcgr.levels;
+    const L = lcgf.layout;
+    const K = lcgf.coefs;
+    const V = lcgf.levels;
     const OL = old.layout;
     const reps = 4000;
     var best: [3]u64 = @splat(std.math.maxInt(u64));

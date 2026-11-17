@@ -1,5 +1,5 @@
 //! expect: derived field 'gain' reads itself
-const s = @import("lcgr").spec;
+const s = @import("lcgf").spec;
 
 const State = struct {
     gain: f32 = 0,
@@ -10,5 +10,5 @@ const State = struct {
 };
 
 comptime {
-    _ = @import("lcgr").signals.Signals(State, s.label(.gain)).topo_order;
+    _ = @import("lcgf").signals.Signals(State, s.label(.gain)).topo_order;
 }

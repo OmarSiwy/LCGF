@@ -2,7 +2,7 @@
 //! the bench scene's tree shape (330 rows of 12 nodes, 3,961 rows), laid out once. Median of
 //! 4,000 reps each. Build as docs/perf/build/push.zig, against the tree to measure.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const linux = std.os.linux;
 fn now() u64 {
     var ts: linux.timespec = undefined;
@@ -12,9 +12,9 @@ fn now() u64 {
 var raw: [8 << 20]u8 align(64) = undefined;
 
 pub fn main() !void {
-    var carver: lcgr.mem.Carver = .{ .buf = &raw };
-    var t = lcgr.tree.Tree.init(&carver, 4096);
-    var tx = lcgr.texts.Texts.init(&carver, 16);
+    var carver: lcgf.mem.Carver = .{ .buf = &raw };
+    var t = lcgf.tree.Tree.init(&carver, 4096);
+    var tx = lcgf.texts.Texts.init(&carver, 16);
     const root = t.push(0, .none, &.{ .size = .{ .px(1280), .px(8000) } });
     for (0..330) |_| {
         const row = t.push(root, .none, &.{ .dir = .x, .size = .{ .fill, .fit }, .gap = 6, .pad = @splat(2), .cross = .center });
@@ -35,16 +35,16 @@ pub fn main() !void {
         t.seal(row);
     }
     t.seal(root);
-    lcgr.layout.run(&t, &tx, .{ 1280, 8000 });
+    lcgf.layout.run(&t, &tx, .{ 1280, 8000 });
     const reps = 4000;
     var s: [3][reps]u64 = undefined;
     for (0..reps) |k| {
         inline for (0..3) |v| {
             const t0 = now();
             switch (v) {
-                0 => lcgr.inherit.opacity(&t),
-                1 => lcgr.inherit.transform(&t),
-                else => lcgr.inherit.clip(&t),
+                0 => lcgf.inherit.opacity(&t),
+                1 => lcgf.inherit.transform(&t),
+                else => lcgf.inherit.clip(&t),
             }
             s[v][k] = now() - t0;
         }

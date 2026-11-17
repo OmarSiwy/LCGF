@@ -1,8 +1,8 @@
 //! Branch-census probe for src/draw/paths.zig (docs/CHECKS.md section 2): one exported function
 //! per pass, built into `zig build census-src-obj` through src/census_probes.zig. Not exported
-//! from src/lcgr.zig.
-const lcgr = @import("lcgr");
-const paths = lcgr.paths;
+//! from src/lcgf.zig.
+const lcgf = @import("lcgf");
+const paths = lcgf.paths;
 
 export fn p_path_flatten(p: *const paths.Path, out: *paths.Polyline) void {
     paths.flatten(p, 0.25, out);

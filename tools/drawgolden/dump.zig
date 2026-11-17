@@ -3,21 +3,21 @@
 //!
 //!     zig build draw-dump -- <scene> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
-//! The shader and instance layout are src/render/shaders/quad.zig's (`lcgr.quad_shader`). ci/jobs/draw-golden.sh renders every scene
+//! The shader and instance layout are src/render/shaders/quad.zig's (`lcgf.quad_shader`). ci/jobs/draw-golden.sh renders every scene
 //! and compares it with tools/drawgolden/ref/<scene>.png.
 const std = @import("std");
-const lcgr = @import("lcgr");
-const Tree = lcgr.tree.Tree;
-const Texts = lcgr.texts.Texts;
-const Customs = lcgr.customs.Customs;
-const DrawList = lcgr.draw_list.DrawList;
-const Quad = lcgr.draw_list.Quad;
-const Style = lcgr.types.Style;
-const Color = lcgr.types.Color;
-const Id = lcgr.types.Id;
-const features = lcgr.features;
+const lcgf = @import("lcgf");
+const Tree = lcgf.tree.Tree;
+const Texts = lcgf.texts.Texts;
+const Customs = lcgf.customs.Customs;
+const DrawList = lcgf.draw_list.DrawList;
+const Quad = lcgf.draw_list.Quad;
+const Style = lcgf.types.Style;
+const Color = lcgf.types.Color;
+const Id = lcgf.types.Id;
+const features = lcgf.features;
 
-const gfx = lcgr.quad_shader;
+const gfx = lcgf.quad_shader;
 
 /// gpu.py draws an 800x600 target.
 const viewport = [2]f32{ 800, 600 };
@@ -29,7 +29,7 @@ const Scene = struct {
     cu: Customs,
     d: DrawList,
 
-    fn carve(carver: *lcgr.mem.Carver) Scene {
+    fn carve(carver: *lcgf.mem.Carver) Scene {
         return .{
             .t = Tree.init(carver, cap),
             .tx = Texts.init(carver, 4),
@@ -39,7 +39,7 @@ const Scene = struct {
     }
     const bytes = blk: {
         @setEvalBranchQuota(10_000);
-        var counter: lcgr.mem.Carver = .{ .buf = null };
+        var counter: lcgf.mem.Carver = .{ .buf = null };
         _ = carve(&counter);
         break :blk counter.off;
     };
@@ -83,7 +83,7 @@ fn shadows(t: *Tree) void {
 /// nearest sampling): the whole atlas, a UV rect of rows 2 to 7 tinted, one cell, and a rounded
 /// image.
 fn images(t: *Tree) void {
-    const atlas: lcgr.types.Texture = @fromBackingInt(1);
+    const atlas: lcgf.types.Texture = @fromBackingInt(1);
     Scene.row(t, &.{
         .{ .fill = .white, .texture = atlas },
         .{ .fill = .rgb(120, 200, 255), .texture = atlas, .uv = .{ 0, 0.125, 1, 0.5 } },
@@ -95,7 +95,7 @@ fn images(t: *Tree) void {
 /// One 4x4-texel atlas cell (byte 33: texels x 1-2, y 1-3 set) cut one texel in from every side
 /// and drawn with 12-pixel borders at three sizes: the border cells keep 12 pixels.
 fn nineSlices(t: *Tree) void {
-    const atlas: lcgr.types.Texture = @fromBackingInt(1);
+    const atlas: lcgf.types.Texture = @fromBackingInt(1);
     _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(20), .gap = 20 });
     const sizes = [_][2]f32{ .{ 160, 120 }, .{ 60, 60 }, .{ 300, 40 } };
     for (sizes) |wh| _ = t.push(0, .none, &.{
@@ -210,7 +210,7 @@ const scenes = .{
     .{ "rounded-clip", roundedClip },
 };
 
-var buf: [Scene.bytes]u8 align(lcgr.mem.column_align) = undefined;
+var buf: [Scene.bytes]u8 align(lcgf.mem.column_align) = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -220,7 +220,7 @@ pub fn main(init: std.process.Init) !void {
     const name = args.next() orelse return error.Usage;
     const out_path = args.next() orelse return error.Usage;
 
-    var carver: lcgr.mem.Carver = .{ .buf = &buf };
+    var carver: lcgf.mem.Carver = .{ .buf = &buf };
     var sc = Scene.carve(&carver);
     var found = false;
     inline for (scenes) |s| {
@@ -230,11 +230,11 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     if (!found) return error.UnknownScene;
-    lcgr.layout.run(&sc.t, &sc.tx, viewport);
-    lcgr.inherit.opacity(&sc.t);
-    lcgr.inherit.transform(&sc.t);
-    lcgr.inherit.clip(&sc.t);
-    lcgr.paint.emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
+    lcgf.layout.run(&sc.t, &sc.tx, viewport);
+    lcgf.inherit.opacity(&sc.t);
+    lcgf.inherit.transform(&sc.t);
+    lcgf.inherit.clip(&sc.t);
+    lcgf.paint.emit(&sc.t, &sc.tx, &sc.cu, "", &sc.d);
 
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.createDirPathOpen(io, out_path, .{});

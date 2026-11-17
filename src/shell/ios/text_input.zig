@@ -3,7 +3,7 @@
 //!
 //! The document UIKit sees is only the IME's marked text: the text being edited lives in the
 //! application's widgets, which the core owns, so the view holds nothing else. Positions are
-//! UTF-16 offsets into the marked text (LcgrTextPosition), ranges two of them (LcgrTextRange).
+//! UTF-16 offsets into the marked text (LcgfTextPosition), ranges two of them (LcgfTextRange).
 //! What the IME does arrives at the translator: committed text through `insertText:`, the
 //! composition through `setMarkedText:selectedRange:`, the delete key through
 //! `deleteBackward`. Its candidate window and the caret anchor at `Platform.ime_rect`.
@@ -17,7 +17,7 @@
 //! text and replaceRange edits sent back as input. Not done: it needs a device to test on.
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const metal = @import("metal");
 const ios = @import("ios.zig");
 const objc = metal.objc;
@@ -35,7 +35,7 @@ pub var range_class: Id = undefined;
 
 const rect_types = "{CGRect={CGPoint=dd}{CGSize=dd}}";
 
-/// The view's UIKeyInput and UITextInput methods, added to LcgrView.
+/// The view's UIKeyInput and UITextInput methods, added to LcgfView.
 pub const methods = [_]ios.Method{
     .{ .sel = "canBecomeFirstResponder", .imp = &yes, .types = "B@:" },
     .{ .sel = "keyboardType", .imp = &keyboardType, .types = "q@:" },
@@ -138,7 +138,7 @@ fn ignore(_: Id, _: Sel, _: ?Id) callconv(.c) void {}
 
 /// UIKeyboardType for each `Purpose`: default 0, URL 3, phone pad 5, email address 7, decimal
 /// pad 8 (digits and the decimal point), ASCII capable 1 for a terminal.
-const keyboard_types = std.enums.EnumArray(lcgr.keyboard.Purpose, objc.NSInteger).init(.{
+const keyboard_types = std.enums.EnumArray(lcgf.keyboard.Purpose, objc.NSInteger).init(.{
     .normal = 0,
     .secure = 0,
     .terminal = 1,

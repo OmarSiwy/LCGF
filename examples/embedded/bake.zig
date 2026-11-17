@@ -1,34 +1,34 @@
 //! Build-host renderer for the fixed counter panel. Store only the pixels
 //! that differ from its base frame for each button state and decimal cell.
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const demo = @import("demo.zig");
 const width = demo.width;
 const height = demo.height;
 const Font = demo.Board.Font;
-const sw = lcgr.render_sw;
-const panel = lcgr.embedded_framebuffer;
-const Theme = lcgr.widgets_base.Theme;
+const sw = lcgf.render_sw;
+const panel = lcgf.embedded_framebuffer;
+const Theme = lcgf.widgets_base.Theme;
 const blank = "Count           ";
 
-var memory: [lcgr.context.Context.requiredBytes(demo.limits)]u8 align(lcgr.mem.column_align) = undefined;
+var memory: [lcgf.context.Context.requiredBytes(demo.limits)]u8 align(lcgf.mem.column_align) = undefined;
 var rgba: [sw.Framebuffer.len(width, height)]u32 = undefined;
 var base: [width * height]u16 = undefined;
 pub var current: [width * height]u16 = undefined;
 
 pub fn render(caption: []const u8, face: usize) ![4]u32 {
-    var ctx = try lcgr.context.Context.init(&memory, demo.limits);
+    var ctx = try lcgf.context.Context.init(&memory, demo.limits);
     var theme: Theme = .default;
     theme.control = theme.controlFills()[face];
-    const in: lcgr.input.Input = .{ .viewport = .{ width, height } };
+    const in: lcgf.input.Input = .{ .viewport = .{ width, height } };
     var f = ctx.begin(&in);
     _ = demo.counter(&f, &theme, caption);
     const out = f.end(.{});
-    var quads: [32]lcgr.draw_list.Quad = undefined;
+    var quads: [32]lcgf.draw_list.Quad = undefined;
     var first: [demo.limits.texts]u32 = undefined;
     var count: [demo.limits.texts]u32 = undefined;
-    const spans: lcgr.protocol.Mono.Glyphs = .{ .first = &first, .count = &count };
-    const n = (lcgr.protocol.Mono{}).quads(out.draw, &quads, spans);
+    const spans: lcgf.protocol.Mono.Glyphs = .{ .first = &first, .count = &count };
+    const n = (lcgf.protocol.Mono{}).quads(out.draw, &quads, spans);
     Font.remap(out.draw, quads[0..n], spans);
     var atlas: Font.Pixels = undefined;
     const images = [_]sw.Image{ .white, Font.image(&atlas) };
@@ -36,9 +36,9 @@ pub fn render(caption: []const u8, face: usize) ![4]u32 {
     gfx.prepare({}, out.draw, .{ .quads = quads[0..n], .first = &first, .count = &count, .texture = @fromBackingInt(1) }, .{ 0, 0 }, 1);
     var fb: sw.Framebuffer = .init(&rgba, width, height, .rgba8);
     fb.clear(.black);
-    lcgr.render_iface.render(&gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
+    lcgf.render_iface.render(&gfx, .{ .fb = &fb, .scissor = fb.all() }, out.draw);
     for (0..height) |y| panel.convert(.rgb565, current[y * width ..], rgba[y * fb.stride ..], width, .rgba8);
-    return lcgr.damage.Region.scissor(out.tree.rect(out.tree.find(demo.id_add)).array(), .{ width, height }, 1);
+    return lcgf.damage.Region.scissor(out.tree.rect(out.tree.find(demo.id_add)).array(), .{ width, height }, 1);
 }
 
 fn emit(w: *std.Io.Writer, name: []const u8) !void {

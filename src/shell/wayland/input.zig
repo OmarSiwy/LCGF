@@ -5,11 +5,11 @@
 //! codes the widgets use, and typed text comes from the compositor's keymap (`xkb.Keymap`).
 
 const std = @import("std");
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const wire = @import("wire.zig");
 const xkb = @import("xkb.zig");
 const linux = std.os.linux;
-const Input = lcgr.input.Input;
+const Input = lcgf.input.Input;
 const inf = std.math.inf(f64);
 
 /// Linux button codes (linux/input-event-codes.h).

@@ -660,7 +660,7 @@
    Compiling slint v1.18.1
    Compiling vs-slint v0.0.0 (/home/omare/Documents/Projects/GUI/gui-framework/.worktrees/perf-gaps/bench/vs/slint)
     Finished `small` profile [optimized] target(s) in 1m 21s
-lcgr: medians of 5 runs, load 5.20 -> 4.79
+lcgf: medians of 5 runs, load 5.20 -> 4.79
 scene    frames median us    p99 us
 form        908       0.1      15.3
 list       3000      11.6      19.1
@@ -669,7 +669,7 @@ springs    3000      74.6     127.4
 resize     3000      16.7      19.5
 idle          2       0.1       0.1
 resident 436 KiB (peak 436 KiB), idle 0.0 wake-ups/s, binary 59755 B loaded + 34176 B bss
-lcgr: first frame 0.32 ms
+lcgf: first frame 0.32 ms
 clay: medians of 5 runs, load 4.73 -> 4.78
 scene    frames median us    p99 us
 form       3000      28.6      38.5
@@ -740,14 +740,14 @@ resize     3000    2623.2    4951.1
 idle          1       0.2       0.2
 resident 15008 KiB (peak 15008 KiB), idle 0.0 wake-ups/s, binary 8016231 B loaded + 2312 B bss
 slint: first frame 26.64 ms
-gate frame: LCGR against clay, egui, iced, imgui, lvgl, qtquick, slint
-form     lcgr       0.1 us  best lvgl           0.7 us  x0.143  now holds: record it
-list     lcgr      11.6 us  best imgui         11.0 us  x1.055  NOT MET (finding; recorded x1.127)
-text     lcgr       0.1 us  best lvgl           1.0 us  x0.1    now holds: record it
-springs  lcgr      74.6 us  best imgui         52.6 us  x1.418  NOT MET (finding; recorded x1.42)
-resize   lcgr      16.7 us  best clay          34.3 us  x0.487  held
-gate rss: LCGR against clay, egui, iced, imgui, lvgl, qtquick, slint
-idle     lcgr       436 KiB best clay           420 KiB x1.038  NOT MET (finding; recorded x5.656)
-gate first-frame: LCGR against clay, egui, iced, imgui, lvgl, qtquick, slint
-idle     lcgr      0.32 ms  best clay          0.31 ms  x1.026  NOT MET (finding; recorded x7.101)
+gate frame: LCGF against clay, egui, iced, imgui, lvgl, qtquick, slint
+form     lcgf       0.1 us  best lvgl           0.7 us  x0.143  now holds: record it
+list     lcgf      11.6 us  best imgui         11.0 us  x1.055  NOT MET (finding; recorded x1.127)
+text     lcgf       0.1 us  best lvgl           1.0 us  x0.1    now holds: record it
+springs  lcgf      74.6 us  best imgui         52.6 us  x1.418  NOT MET (finding; recorded x1.42)
+resize   lcgf      16.7 us  best clay          34.3 us  x0.487  held
+gate rss: LCGF against clay, egui, iced, imgui, lvgl, qtquick, slint
+idle     lcgf       436 KiB best clay           420 KiB x1.038  NOT MET (finding; recorded x5.656)
+gate first-frame: LCGF against clay, egui, iced, imgui, lvgl, qtquick, slint
+idle     lcgf      0.32 ms  best clay          0.31 ms  x1.026  NOT MET (finding; recorded x7.101)
 exit=0

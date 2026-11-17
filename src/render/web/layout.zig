@@ -2,22 +2,22 @@
 //! runtime front end with layout and paint and no widgets, no renderer and no text. A toolbar,
 //! a sidebar and a filling view, like the shell example's frame; size.py measures the module
 //! (ci/jobs/web-size.sh).
-const lcgr = @import("lcgr");
+const lcgf = @import("lcgf");
 const js = @import("js.zig");
-const context = lcgr.context;
-const Id = lcgr.types.Id;
+const context = lcgf.context;
+const Id = lcgf.types.Id;
 
 pub const panic = js.panic;
 
 const limits: context.Limits = .{ .nodes = 64, .texts = 4, .customs = 1 };
-var buffer: [context.Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+var buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 var ctx: context.Context = undefined;
 
 /// Lays out one frame at `width` x `height`; returns the view's width, 0 if the buffer is too
 /// small.
-export fn lcgr_layout(width: f32, height: f32) f32 {
+export fn lcgf_layout(width: f32, height: f32) f32 {
     ctx = context.Context.init(&buffer, limits) catch return 0;
-    const in: lcgr.input.Input = .{ .viewport = .{ width, height } };
+    const in: lcgf.input.Input = .{ .viewport = .{ width, height } };
     var f = ctx.begin(&in);
     _ = f.open(.from("root"), .{ .size = .{ .fill, .fill } });
     _ = f.leaf(.from("toolbar"), .{ .size = .{ .fill, .px(50) }, .fill = .rgb(40, 40, 48) });

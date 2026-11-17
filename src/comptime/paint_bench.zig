@@ -1,7 +1,7 @@
 //! Static paint only: layout is complete before the timers start. Run with
 //! zig build ct-paint-bench. Each result is the median of 15 batches of 2,000 frames.
 const std = @import("std");
-const ui = @import("lcgr");
+const ui = @import("lcgf");
 const DrawList = ui.draw_list.DrawList;
 const Spec = ui.spec.Spec;
 const batches = 15;

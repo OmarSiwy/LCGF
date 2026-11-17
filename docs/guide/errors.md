@@ -130,7 +130,7 @@ expected type '[]align(64) u8', found '*[4096]u8'
 
 `Context.init` takes a buffer aligned to `mem.column_align` (64 bytes, a cache line), so every
 column starts on a cache line. Declare it with the alignment:
-`var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;`.
+`var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;`.
 
 ## Back ends and shells
 

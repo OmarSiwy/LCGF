@@ -1,6 +1,6 @@
-// Clay's side of the "layout alone" wasm size (src/render/web/layout.zig is LCGR's): the same
+// Clay's side of the "layout alone" wasm size (src/render/web/layout.zig is LCGF's): the same
 // three-box frame (a toolbar, a sidebar and a filling view), laid out into render commands, one
-// exported function returning the view's width. Built like LCGR's module (wasm32-freestanding,
+// exported function returning the view's width. Built like LCGF's module (wasm32-freestanding,
 // ReleaseSmall, no entry, only that export), not with CLAY_WASM, which exports Clay's whole API.
 #define CLAY_IMPLEMENTATION
 #include "clay.h"

@@ -3,14 +3,14 @@
 
 const std = @import("std");
 const testing = std.testing;
-const lcgr = @import("lcgr");
-const Context = lcgr.context.Context;
-const types = lcgr.types;
-const layout = lcgr.layout;
-const Mono = lcgr.protocol.Mono;
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const types = lcgf.types;
+const layout = lcgf.layout;
+const Mono = lcgf.protocol.Mono;
 
-const limits: lcgr.context.Limits = .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256 };
-var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = undefined;
+const limits: lcgf.context.Limits = .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 // -- font
 /// A display face whose every byte is a square: 1 em wide, 1 em tall. It serves only the runs
@@ -18,13 +18,13 @@ var buffer: [Context.requiredBytes(limits)]u8 align(lcgr.mem.column_align) = und
 const Squares = struct {
     id: types.Font,
 
-    fn measure(font: Squares, tx: *lcgr.texts.Texts) void {
+    fn measure(font: Squares, tx: *lcgf.texts.Texts) void {
         const c = &tx.c;
         for (0..tx.len) |k| {
             const mine = c.font[k] == @backingInt(font.id);
             const w: f32 = @as(f32, @floatFromInt(c.bytes[k])) * c.px[k];
-            c.w[k] = lcgr.simd.selF(mine, w, c.w[k]);
-            c.h[k] = lcgr.simd.selF(mine, c.px[k], c.h[k]);
+            c.w[k] = lcgf.simd.selF(mine, w, c.w[k]);
+            c.h[k] = lcgf.simd.selF(mine, c.px[k], c.h[k]);
         }
     }
 };
@@ -32,14 +32,14 @@ const Squares = struct {
 
 test "two fonts on the measure protocol, then glyph quads" {
     var ctx = try Context.init(&buffer, limits);
-    const in: lcgr.input.Input = .{ .viewport = .{ 400, 300 } };
+    const in: lcgf.input.Input = .{ .viewport = .{ 400, 300 } };
     // -- build
     const squares: Squares = .{ .id = @fromBackingInt(1) };
     const mono: Mono = .{ .advance = 0.5, .line = 1.2 };
 
     var f = ctx.begin(&in);
     _ = f.open(.from("page"), .{ .size = .{ .px(100), .fit } });
-    const title = f.text("LCGR", .{ .px = 20, .font = squares.id });
+    const title = f.text("LCGF", .{ .px = 20, .font = squares.id });
     const body = f.text("twenty-four characters!!", .{ .px = 10, .wrap = true });
     f.close();
     // -- end
@@ -69,11 +69,11 @@ test "two fonts on the measure protocol, then glyph quads" {
     try testing.expectEqual(types.Rect{ .x0 = 0, .y0 = 20, .x1 = 100, .y1 = 44 }, out.tree.rect(body.ix()));
 
     // -- quads
-    var quads: [64]lcgr.draw_list.Quad = undefined;
+    var quads: [64]lcgf.draw_list.Quad = undefined;
     var first: [limits.texts]u32 = undefined;
     var count: [limits.texts]u32 = undefined;
     const n = mono.quads(out.draw, &quads, .{ .first = &first, .count = &count });
-    const glyphs: lcgr.render_iface.Glyphs = .{
+    const glyphs: lcgf.render_iface.Glyphs = .{
         .quads = quads[0..n],
         .first = &first,
         .count = &count,
@@ -87,19 +87,19 @@ test "two fonts on the measure protocol, then glyph quads" {
 }
 
 /// Stands for a real shaper: fills one run's extent.
-fn shape(tx: *lcgr.texts.Texts, k: u32) void {
+fn shape(tx: *lcgf.texts.Texts, k: u32) void {
     tx.c.w[k] = @as(f32, @floatFromInt(tx.c.bytes[k])) * tx.c.px[k] * 0.6;
     tx.c.h[k] = tx.c.px[k] * 1.25;
 }
 
 test "the extents cache: measure only what was not seen" {
     var ctx = try Context.init(&buffer, limits);
-    const in: lcgr.input.Input = .{ .viewport = .{ 400, 300 } };
+    const in: lcgf.input.Input = .{ .viewport = .{ 400, 300 } };
     const S = struct {
-        var cache_buf: [4096]u8 align(lcgr.mem.column_align) = undefined;
+        var cache_buf: [4096]u8 align(lcgf.mem.column_align) = undefined;
     };
-    var carver: lcgr.mem.Carver = .{ .buf = &S.cache_buf };
-    var cache = lcgr.protocol.Cache.init(&carver, 16);
+    var carver: lcgf.mem.Carver = .{ .buf = &S.cache_buf };
+    var cache = lcgf.protocol.Cache.init(&carver, 16);
     cache.clear();
     var measured: u32 = 0;
     for (0..2) |_| {
