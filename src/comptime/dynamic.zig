@@ -1,16 +1,31 @@
-//! Dynamic regions: the parts of a comptime UI whose rows exist only when run-time state says
-//! so (`spec.list`, `spec.when`, `spec.choice`). Tier 1.
+//! Runtime selections for a compile-time UI.
 //!
-//! A region's rows are all reserved: the flattened tables hold every row it could ever need,
-//! so they stay read-only and the row count exact. Each frame a selection (`Selection`, read
-//! from the state with `select`) gives every region a number, and `mask` turns it into one
-//! mask per row: all ones for a live row, zero for a dead one. Layout ANDs the mask into the
-//! rows it reads (src/comptime/layout.zig): a dead row is out of flow, at most 0 px on both
-//! axes, and senses nothing, so it takes no space, is not drawn (zero area is not visible) and
-//! is not hit. The live rows then lay out exactly as a runtime tree built with only them
-//! (the tests below). This is `Frame.reuse`'s idea turned around: instead of copying a
-//! subtree's rows from last frame, every row a subtree can have is already there, and a frame
-//! only decides which of them count.
+//! The spec fixes the hierarchy, styles, list capacities and the descriptions of all choice
+//! alternatives. These live in read-only tables indexed by descriptor. State supplies the
+//! list length, condition, choice index and virtual scroll offset for a frame:
+//!
+//!     const sel = L.Regions.select(State, &state);
+//!     L.runLive(&scratch, &ram, viewport, sel);
+//!
+//! Each region restricts a contiguous range of descriptors. Nested restrictions intersect.
+//! A hidden row's maximum size, flow and hit senses become zero; the layout pass recomputes
+//! the number of live children for spacing. A conditional root also releases its viewport.
+//! The reusable, SIMD-padded layout scratch covers every descriptor so the same tier-0
+//! passes can follow the original parent indices. Geometry in and above regions can change
+//! with the selection; independent static siblings can still fold at compile time.
+//!
+//! Choice alternatives use overlapping slots in retained geometry, starting at the same slot.
+//! The next sibling follows the largest alternative. Input values, visibility and signal dirty
+//! bits remain descriptor-indexed. To paint a descriptor `i`, first check `ram.visible[i]`,
+//! then read its geometry at `L.Cols.slot(i)`. Several descriptors can name the same slot,
+//! but at most one of them is live in a frame.
+//!
+//! A bounded list reserves its maximum number of template copies. A virtual list reserves
+//! the number of fixed-height rows on screen plus one for fractional scrolling. The feed
+//! example displays four rows: its enclosing root, list and five item slots total seven
+//! descriptors for 100,000 items. The application owns the data; live copy `k` of region
+//! `r` shows data item `sel[r].first + k`. Only `sel[r].offset` pixels are scrolled inside
+//! the clipped container, so each frame lays out small coordinates even far into the list.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");

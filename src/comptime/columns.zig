@@ -342,9 +342,10 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
             break :blk b;
         };
         /// The dynamic columns: one field per dynamic column of `Tree.Columns`, of the same name,
-        /// with exactly one row per node (`[n]T`, `[k][n]T`), as the probe's `Runtime.rect` is
-        /// `[n][4]i16`. No capacity and no overflow path: the node count is exact. Not padded to
-        /// whole vectors (`simd.rows`); a pass that reads them with vectors needs the padding.
+        /// with exact row counts. Geometry uses `slot_count` rows, shared by choice
+        /// alternatives; input and visibility use one per descriptor. The caller checks
+        /// descriptor visibility before looking up the geometry slot. Per-pass vector
+        /// padding lives in layout scratch.
         pub const Dynamic = blk: {
             @setEvalBranchQuota(10_000);
             var dyn_names: []const []const u8 = &.{};

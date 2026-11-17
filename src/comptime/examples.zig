@@ -60,8 +60,8 @@ pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
 
 /// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, and a footer shown
-/// while `footer` is set, then a status line in one of two forms (`mode`). Not in `all`: a UI with dynamic regions is laid out with `runLive`
-/// and a selection.
+/// while `footer` is set, then a status line in one of two forms (`mode`). Dynamic examples
+/// use `runLive` with the frame's selection.
 pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3, footer: bool = true, mode: Mode = .brief };
 pub const Mode = enum(u8) { brief, detailed };
 pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
