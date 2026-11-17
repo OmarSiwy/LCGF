@@ -285,6 +285,13 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
     }) }));
     b.step("ct-layout-bench", "Time comptime layout against the runtime tree per example").dependOn(&ct_layout_bench.step);
+    const ct_paint_bench = b.addRunArtifact(b.addExecutable(.{ .name = "ct-paint-bench", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/comptime/paint_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgr", .module = lcgr_fast }},
+    }) }));
+    b.step("ct-paint-bench", "Time full static paint and single-field patches against runtime paint").dependOn(&ct_paint_bench.step);
     // Code size of comptime layout, table-driven against unrolled (C0165): installs
     // zig-out/bin/ct-layout-size for `nm --size-sort` and runs it for the timings.
     const ct_layout_size = b.addExecutable(.{ .name = "ct-layout-size", .root_module = b.createModule(.{
