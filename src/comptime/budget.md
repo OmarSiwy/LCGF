@@ -39,3 +39,14 @@ tables, so linker elimination can make the final image smaller.
 
 Measured on the same x86-64 host with the default SIMD width. The custom widget
 example builds its rows at runtime and uses the runtime tree for layout.
+
+## Editing a spec
+
+On the same machine, `python3 src/comptime/edit_budget.py` measured 12.68 ms,
+32.19 ms and 260.63 ms at 100, 1,000 and 10,000 nodes respectively.
+The script keeps a Debug x86-64 compiler running with `-fincremental -fno-llvm`
+and moves a label between rows five times after the initial build. Each time runs
+from the update request to a linked executable. The script runs that executable
+and checks node 10's parent to detect a stale result. The reported median excludes
+both writing the source file and running the probe. The cold-build table above
+uses a different optimization mode and produces an object.

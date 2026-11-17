@@ -14,9 +14,14 @@ sys.path.insert(0, str(ROOT / "bench/gates"))
 from gates import SPEC_SIZES, spec_source
 
 
-def fixture(nodes):
+def fixture(nodes, *, short_last=False):
     # The gate counts descendants. Remove one label to include the root in this report.
-    source = spec_source(nodes).replace("s.label(.t), ", "", 1)
+    source = spec_source(nodes)
+    leaf = "s.label(.t), "
+    split = source.rpartition if short_last else source.partition
+    left, removed, right = split(leaf)
+    assert removed
+    source = left + right
     return source + f'comptime {{ if (F.node_count != {nodes}) @compileError("wrong node count"); }}\n'
 
 
