@@ -43,17 +43,22 @@ pub const App = struct {
     count: u32 = 0,
 
     pub fn build(app: *App, f: *Frame, _: *const Events) void {
-        const th = &app.theme;
-        _ = f.open(.from("panel"), .{ .size = .{ .fill, .fill }, .pad = @splat(8), .gap = 8, .fill = th.panel });
         var buf: [16]u8 = undefined;
-        _ = w.label(f, th, decimal(&buf, "Count ", app.count));
-        if (w.button(f, th, id_add, "Add").clicked) app.count += 1;
-        f.close();
+        if (counter(f, &app.theme, decimal(&buf, "Count ", app.count))) app.count += 1;
     }
 };
 
+/// Both builds use this widget tree. The fixed panel bakes its paint on the host.
+pub fn counter(f: *Frame, th: *const w.Theme, caption: []const u8) bool {
+    _ = f.open(.from("panel"), .{ .size = .{ .fill, .fill }, .pad = @splat(8), .gap = 8, .fill = th.panel });
+    _ = w.label(f, th, caption);
+    const clicked = w.button(f, th, id_add, "Add").clicked;
+    f.close();
+    return clicked;
+}
+
 /// `prefix` followed by `n` in decimal, in `buf`.
-fn decimal(buf: []u8, comptime prefix: []const u8, n: u32) []const u8 {
+pub fn decimal(buf: []u8, comptime prefix: []const u8, n: u32) []const u8 {
     @memcpy(buf[0..prefix.len], prefix);
     var digits: [10]u8 = undefined;
     var k: usize = digits.len;
@@ -71,7 +76,7 @@ fn decimal(buf: []u8, comptime prefix: []const u8, n: u32) []const u8 {
 
 /// Three taps on the button (at its place in the layout at 320 x 240), each a press and a release.
 const tap: input.Touch = .{ .pos = .{ 20, 40 }, .down = true };
-const script = [_]input.Sample{ .{}, .{}, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{} };
+pub const script = [_]input.Sample{ .{}, .{}, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{} };
 
 /// The board: scripted touches, 16 ms apart, and an RGB565 panel. `flush` converts each row of
 /// the band (`embedded_framebuffer.convert`) and folds it into `sum` where a real board would
@@ -162,7 +167,7 @@ fn start() callconv(.c) noreturn {
 }
 
 comptime {
-    if (builtin.os.tag == .freestanding) @export(&start, .{ .name = "_start" });
+    if (builtin.os.tag == .freestanding and @import("root") == @This()) @export(&start, .{ .name = "_start" });
 }
 
 test "demo: three taps count to three" {

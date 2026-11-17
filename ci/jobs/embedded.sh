@@ -20,3 +20,12 @@ for fixed in false true; do
         fi
     done
 done
+
+# The prepainted fixed panel performs only integer work on the MCU.
+zig build embedded -Dno-float=true --summary all
+if grep -E '^[[:space:]]+v[a-z]+([.[:space:]])' zig-out/asm/embedded-cortex-m7.s ||
+   grep -E '^[[:space:]]+f(add|sub|mul|div|sqrt|min|max|sgnj|class|eq|lt|le|cvt|mv|madd|msub|nmadd|nmsub|lw|sw|ld|sd)([.[:space:]])' zig-out/asm/embedded-rv32imac.s ||
+   nm zig-out/bin/embedded-demo-{cortex-m7,rv32imac} | grep -E '__([a-z]*(sf|df)[a-z0-9]*|aeabi_[df][a-z]+)$'; then
+    echo "floating-point operation in the integer firmware"
+    exit 1
+fi

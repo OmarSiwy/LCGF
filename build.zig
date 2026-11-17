@@ -649,12 +649,27 @@ pub fn build(b: *std.Build) void {
     // The embedded profile's demo (examples/embedded/demo.zig): its test runs here, and it is
     // linked freestanding, unstripped so its symbols can be checked (ci/run.sh embedded).
     const embedded_step = b.step("embedded", "Run the embedded demo and link it for microcontrollers");
+    const no_float = b.option(bool, "no-float", "Bake the fixed embedded panel and render it with integer-only firmware") orelse false;
+    const embedded_root = b.path(if (no_float) "examples/embedded/integer.zig" else "examples/embedded/demo.zig");
+    const baked = if (no_float) blk: {
+        const host_lcgr = b.createModule(.{ .root_source_file = b.path("src/lcgr.zig"), .target = b.graph.host, .optimize = .ReleaseFast });
+        host_lcgr.addOptions("build_options", options);
+        host_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const bake = b.addRunArtifact(b.addExecutable(.{ .name = "bake-embedded-panel", .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/embedded/bake.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .imports = &.{.{ .name = "lcgr", .module = host_lcgr }},
+        }) }));
+        break :blk bake.addOutputFileArg("panel_assets.zig");
+    } else null;
     const embedded_test = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/embedded/demo.zig"),
+        .root_source_file = embedded_root,
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
+    if (baked) |asset| embedded_test.root_module.addAnonymousImport("panel_assets", .{ .root_source_file = asset });
     embedded_step.dependOn(&b.addRunArtifact(embedded_test).step);
     const embedded_unit = b.addTest(.{ .name = "embedded-test", .root_module = lcgr, .filters = &.{"embedded"} });
     embedded_step.dependOn(&b.addRunArtifact(embedded_unit).step);
@@ -667,12 +682,16 @@ pub fn build(b: *std.Build) void {
         mcu_lcgr.addOptions("build_options", options);
         mcu_lcgr.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
         const demo = b.addExecutable(.{ .name = b.fmt("embedded-demo-{s}", .{mcu[0]}), .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/embedded/demo.zig"),
+            .root_source_file = embedded_root,
             .target = mcu_target,
             .optimize = .ReleaseSmall,
             .strip = false,
             .imports = &.{.{ .name = "lcgr", .module = mcu_lcgr }},
         }) });
+        if (baked) |asset| {
+            demo.root_module.addAnonymousImport("panel_assets", .{ .root_source_file = asset });
+            embedded_step.dependOn(&b.addInstallFile(demo.getEmittedAsm(), b.fmt("asm/embedded-{s}.s", .{mcu[0]})).step);
+        }
         demo.entry = .{ .symbol_name = "_start" };
         embedded_step.dependOn(&b.addInstallArtifact(demo, .{}).step);
     }
