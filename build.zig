@@ -308,6 +308,21 @@ pub fn build(b: *std.Build) void {
     const ct_layout_size_run = b.addRunArtifact(ct_layout_size);
     ct_layout_size_run.step.dependOn(&b.addInstallArtifact(ct_layout_size, .{}).step);
     b.step("ct-layout-size", "Time and install comptime layout, table-driven and unrolled").dependOn(&ct_layout_size_run.step);
+    const ct_feature_sizes = b.step("ct-feature-sizes", "Link stripped renderer feature variants for the size comparison");
+    for ([_][]const u8{ "plain", "caption", "full" }, 0..) |name, mode| {
+        const size_probe = b.createModule(.{
+            .root_source_file = b.path("src/comptime/feature_size_probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .imports = &.{.{ .name = "lcgr", .module = lcgr }},
+        });
+        const opt = b.addOptions();
+        opt.addOption(u8, "mode", @intCast(mode));
+        size_probe.addOptions("probe_options", opt);
+        const lib_probe = b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = size_probe });
+        ct_feature_sizes.dependOn(&b.addInstallFile(lib_probe.getEmittedBin(), b.fmt("ct-feature-sizes/{s}.so", .{name})).step);
+    }
     // Compile-fail cases for the comptime front end's rules (src/comptime/compile_fail/): each
     // file is built as an object and must fail with the message on its `//! expect: ` first line.
     const compile_fail = b.step("ct-compile-fail", "Check each comptime rule rejects its compile-fail case");

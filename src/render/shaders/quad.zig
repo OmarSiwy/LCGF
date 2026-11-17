@@ -19,6 +19,73 @@ pub fn shader(comptime material_fn: []const u8) [:0]const u8 {
 /// The stock shader: `Style.material = .solid`.
 pub const wgsl = shader(stock_material);
 
+const Usage = @import("../../draw/features.zig").Usage;
+const stock_source = @embedFile("quad.wgsl");
+
+// Reuse whole module-scope functions from the stock WGSL; their closing braces are unindented.
+fn function(comptime name: []const u8) []const u8 {
+    const start = std.mem.indexOf(u8, stock_source, "fn " ++ name ++ "(").?;
+    const end = std.mem.indexOfPos(u8, stock_source, start, "\n}").? + 2;
+    return stock_source[start..end] ++ "\n";
+}
+
+/// The stock shader with only the helpers needed by this UI. A text run samples an atlas
+/// even when none of the UI's other quads use images. The instance and bind layouts are shared.
+pub fn stockFor(comptime use: Usage) [:0]const u8 {
+    return comptime result: {
+        if (std.meta.eql(use, Usage.all)) break :result wgsl;
+        @setEvalBranchQuota(500000);
+        const tex = use.image or use.text;
+        const grad = use.kinds.contains(.linear) or use.kinds.contains(.radial);
+        const nine = tex and use.kinds.contains(.nine_slice);
+        const pattern = use.border and (use.kinds.contains(.dashed) or use.kinds.contains(.dotted));
+        const shadow = use.kinds.contains(.shadow);
+        const head = stock_source[0..std.mem.indexOf(u8, stock_source, "@vertex").?];
+        const vs = function("vs");
+        const grow = "select(0.0, 3.0 * bitcast<f32>(inst.params.y), inst.params.x == k_shadow)";
+        const vertex = if (shadow) vs else blk: {
+            const at = std.mem.indexOf(u8, vs, grow).?;
+            break :blk vs[0..at] ++ "0.0" ++ vs[at + grow.len ..];
+        };
+        const constants = stock_source[std.mem.indexOf(u8, stock_source, "const k_linear").?..std.mem.indexOf(u8, stock_source, "// Gradients:").?];
+        const helpers = function("rounded_box") ++
+            (if (use.radius) function("corner_radius") else "") ++
+            (if (tex or pattern) function("rect_pos") ++ function("floor_div") else "") ++
+            (if (tex) function("texel_centre") ++ function("nearest_uv") else "") ++
+            (if (grad) function("gradient") else "") ++
+            (if (nine) function("nine_axis") ++ function("nine_uv") else "") ++
+            (if (pattern) function("border_pattern") else "") ++
+            (if (shadow) function("shadow_coverage") else "");
+        const mat = (if (grad) "gradient(in)" else "in.fill") ++
+            (if (nine) " * textureSample(tex, samp, select(nearest_uv(in), nine_uv(in), in.params.x == k_nine))" else if (tex) " * textureSample(tex, samp, nearest_uv(in))" else "");
+        break :result head ++ constants ++ "@vertex\n" ++ vertex ++ helpers ++
+            "@fragment fn fs(in: Frag) -> @location(0) vec4f {\n" ++
+            "let r = " ++ (if (use.radius) "corner_radius(in.local, in.half, in.radii)" else "0.0") ++ ";\n" ++
+            "let d = rounded_box(in.local, in.half, r) * globals.scale;\n" ++
+            "let shape = clamp(0.5 - d, 0.0, 1.0);\n" ++
+            "let material = " ++ mat ++ ";\n" ++
+            (if (use.border)
+                "let inner = clamp(0.5 - (d + in.border * globals.scale), 0.0, 1.0);\n" ++
+                    "let edge = (1.0 - mix(1.0, inner, step(0.001, in.border)))" ++
+                    (if (pattern) " * border_pattern(in)" else "") ++ ";\nlet painted = mix(material, in.border_color, edge);\n"
+            else
+                "let painted = material;\n") ++
+            (if (shadow)
+                "let shadow = in.params.x == k_shadow;\nlet color = select(painted, in.fill, shadow);\n" ++
+                    "let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), shadow);\n"
+            else
+                "let color = painted;\nlet cover = shape;\n") ++
+            "let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);\n" ++
+            (if (use.radius)
+                "let delta = in.pixel - (in.clip.xy + in.clip.zw) * 0.5;\nlet half = (in.clip.zw - in.clip.xy) * 0.5;\n" ++
+                    "let clip_d = rounded_box(delta, half, corner_radius(delta, half, in.clip_radii)) * globals.scale;\n" ++
+                    "let rounded = select(1.0, clamp(0.5 - clip_d, 0.0, 1.0), any(in.clip_radii > vec4f(0.0)));\n"
+            else
+                "let rounded = 1.0;\n") ++
+            "let alpha = cover * inside.x * inside.y * rounded * in.opacity;\nreturn vec4f(color.rgb * color.a, color.a) * alpha;\n}\n";
+    };
+}
+
 /// An example user material (example_material.wgsl): diagonal stripes.
 pub const example_material = @embedFile("example_material.wgsl");
 
@@ -159,4 +226,14 @@ test "the WGSL feature codes match features.Kind" {
         const decl = try std.fmt.bufPrint(&buf, "const {s} = {d}u;", .{ name, @backingInt(kind) });
         try std.testing.expectEqual(1, std.mem.count(u8, src, decl));
     }
+}
+
+test "stockFor preserves the full shader and removes unused material helpers" {
+    try std.testing.expectEqualStrings(wgsl, stockFor(.all));
+    const plain = stockFor(.{});
+    const text = stockFor(.{ .text = true });
+    try std.testing.expect(plain.len < wgsl.len);
+    for ([_][]const u8{ "fn gradient(", "fn corner_radius(", "fn nine_uv(", "textureSample(", "fn border_pattern(" }) |disabled|
+        try std.testing.expect(std.mem.indexOf(u8, plain, disabled) == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "textureSample(") != null);
 }

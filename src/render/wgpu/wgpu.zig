@@ -131,6 +131,10 @@ pub fn Renderer(comptime gpu: type) type {
 
         /// `white` is a 1x1 opaque white texture; it becomes `Texture.white`.
         pub fn init(device: gpu.Device, desc: Desc, white: gpu.TextureView, sampler: gpu.Sampler) Self {
+            return initFor(.all, device, desc, white, sampler);
+        }
+
+        pub fn initFor(comptime use: @import("../../draw/features.zig").Usage, device: gpu.Device, desc: Desc, white: gpu.TextureView, sampler: gpu.Sampler) Self {
             const globals = gpu.createBuffer(device, @sizeOf(Globals), .uniform);
             var self: Self = .{
                 .desc = desc,
@@ -139,7 +143,7 @@ pub fn Renderer(comptime gpu: type) type {
                 .globals = globals,
                 .globals_group = gpu.globalsBindGroup(device, globals),
             };
-            _ = self.addMaterial(device, quad_shader.wgsl); // Material.solid
+            _ = self.addMaterial(device, quad_shader.stockFor(use)); // Material.solid
             _ = self.addTexture(device, white, sampler); // Texture.white
             return self;
         }

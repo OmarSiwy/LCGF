@@ -138,10 +138,20 @@ pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
     return SoftwareCoords(kinds, false);
 }
 
-/// The bare-metal profile can quantize rectangle and clip coordinates to Q12.4
-/// before rasterization. The draw-list layout shared by back ends stays the same.
+/// Quantize bare-metal rectangle and clip coordinates to Q12.4 when requested.
 pub fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_point: bool) type {
-    comptime std.debug.assert(std.mem.indexOfScalar(features.Kind, kinds, .solid) != null);
+    var use = features.Usage.all;
+    use.kinds = .initMany(kinds);
+    return Renderer(use, fixed_point);
+}
+
+/// Software renderer for the features collected from a comptime UI.
+pub fn SoftwareFor(comptime use: features.Usage) type {
+    return Renderer(use, false);
+}
+
+fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
+    comptime std.debug.assert(use.kinds.contains(.solid));
     return struct {
         const Self = @This();
         pub const Queue = void;
@@ -149,24 +159,26 @@ pub fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_poin
 
         /// The frame's quads and glyphs, borrowed from the caller until the frame is drawn.
         quads: []const Quad = &.{},
-        glyphs: iface.Glyphs = .{},
+        glyphs: if (use.text) iface.Glyphs else void = if (use.text) .{} else {},
         /// Indexed by `types.Texture`; row 0 is `Image.white`.
-        images: []const Image = &.{Image.white},
+        images: if (use.image or use.text) []const Image else void = if (use.image or use.text) &.{Image.white} else {},
         /// Physical pixels per logical pixel.
         scale: f32 = 1,
 
         /// Nothing to upload: the back end reads the caller's rows in place.
         pub fn prepare(s: *Self, _: void, draw: *const DrawList, glyphs: iface.Glyphs, _: [2]f32, scale: f32) void {
             s.quads = draw.quads[0..draw.quad_len];
-            s.glyphs = glyphs;
+            if (use.text) s.glyphs = glyphs;
             s.scale = scale;
         }
 
         pub fn drawBatch(s: *const Self, t: Target, batch: draw_list.Batch) void {
-            s.drawQuads(t, s.quads[batch.first..][0..batch.count], s.images[@backingInt(batch.texture)]);
+            const img = if (use.image) s.images[@backingInt(batch.texture)] else Image.white;
+            s.drawQuads(t, s.quads[batch.first..][0..batch.count], img);
         }
 
         pub fn drawText(s: *const Self, t: Target, run: u32) void {
+            if (!use.text) return;
             const g = s.glyphs;
             const r = g.span(run);
             s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
@@ -189,8 +201,8 @@ pub fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_poin
                 // One loop per feature; unknown codes draw as solid, as the shader's selects do.
                 const code: u32 = @bitCast(q.params[0]);
                 switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
-                    inline else => |kind| if (comptime std.mem.indexOfScalar(features.Kind, kinds, kind) != null)
-                        shade(kind, t, q, img, s.scale)
+                    inline else => |kind| if (comptime use.kinds.contains(kind))
+                        shadeFor(use, kind, t, q, img, s.scale)
                     else
                         t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), missing_kind),
                 }
@@ -368,6 +380,10 @@ inline fn pack(c: [4]F, red: u5) U {
 
 /// Shades `q` into `t` with the stock material's `kind` loop: quad.wgsl `vs` and `fs` per pixel.
 pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
+    shadeFor(.all, kind, t, q, img, scale);
+}
+
+fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;
@@ -458,7 +474,7 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             const lx = qx - simd.f(cx);
             const ly = qy - simd.f(cy);
 
-            const r = cornerRadius(lx, ly, hx, hy, q.radii);
+            const r = if (use.radius) cornerRadius(lx, ly, hx, hy, q.radii) else simd.f(0);
             const dist = roundedBox(lx, ly, hx, hy, r) * simd.f(scale);
             const shape = sat(simd.f(0.5) - dist);
             const inner = sat(simd.f(0.5) - (dist + simd.f(border * scale)));
@@ -506,10 +522,10 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
                 cover = simd.f(0.5) - simd.f(0.5) * erf;
                 color = base;
             } else {
-                const tex = sample(img, tu, tv);
+                const tex: [4]F = if (use.image or use.text) sample(img, tu, tv) else @splat(simd.f(1));
                 inline for (0..4) |i| {
                     const m = base[i] * tex[i];
-                    color[i] = m + (simd.f(edge[i]) - m) * on_border;
+                    color[i] = if (use.border) m + (simd.f(edge[i]) - m) * on_border else m;
                 }
             }
 
@@ -518,7 +534,7 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
             const tcx = sx - simd.f(ccx);
             const tcy = sy - simd.f(ccy);
             const clip_d = roundedBox(tcx, tcy, chx, chy, cornerRadius(tcx, tcy, chx, chy, q.clip_radii)) * simd.f(scale);
-            const rounded = @select(f32, rounded_clip, sat(simd.f(0.5) - clip_d), simd.f(1));
+            const rounded = if (use.radius) @select(f32, rounded_clip, sat(simd.f(0.5) - clip_d), simd.f(1)) else simd.f(1);
             const alpha = @select(f32, inside & geo, cover * rounded * simd.f(q.opacity), simd.f(0));
 
             // Premultiplied source over the framebuffer.
@@ -698,5 +714,41 @@ test "tiles: bands drawn on separate threads give the single-threaded frame" {
         for (&threads, 0..) |*th, k| th.* = try std.Thread.spawn(.{}, drawBand, .{ &s, &b, &st.draw, @as(u32, @intCast(k)), 4 });
         for (threads) |th| th.join();
         for (0..120) |y| try testing.expectEqualSlices(u32, a.pixels[y * a.stride ..][0..160], b.pixels[y * b.stride ..][0..160]);
+    }
+}
+
+test "SoftwareFor: pixel equivalence of specialized paint paths" {
+    inline for (comptime .{
+        features.Usage{},
+        features.Usage{ .radius = true },
+        features.Usage{ .border = true, .radius = true, .kinds = .initMany(&.{ .solid, .dotted }) },
+        features.Usage{ .image = true, .kinds = .initMany(&.{ .solid, .linear }) },
+    }) |use| {
+        var test_frame: Frame(16, 8) = .{};
+        var reference_frame: Frame(16, 8) = .{};
+        var fb = test_frame.fb(.rgba8);
+        var ref = reference_frame.fb(.rgba8);
+        fb.clear(.black);
+        ref.clear(.black);
+        var q = testQuad(.{ 0.25, 0.5, 13.25, 7 }, .rgba(10, 90, 220, 160));
+        q.clip = .{ 1, 0, 12.5, 7 };
+        if (use.radius) {
+            q.radii = .{ 2, 3, 1, 0 };
+            q.clip_radii = .{ 3, 1, 4, 2 };
+        }
+        if (use.border) {
+            q.border = 2;
+            q.border_color = Color.white.bitsOf();
+            q.params = features.dotted(1);
+        }
+        if (use.image) q.params = features.linear(.white, 0.5);
+        const imgs = [_]Image{ Image.white, .{ .pixels = &.{ 0xfffefdfc, 0xff030201 }, .width = 2, .height = 1 } };
+        const batch: draw_list.Batch = .{ .first = 0, .count = 1, .material = .solid, .texture = @fromBackingInt(@intFromBool(use.image)) };
+        const full: Software = .{ .quads = &.{q}, .images = &imgs };
+        var small: SoftwareFor(use) = .{ .quads = &.{q} };
+        if (comptime use.image) small.images = &imgs;
+        full.drawBatch(.{ .fb = &ref, .scissor = ref.all() }, batch);
+        small.drawBatch(.{ .fb = &fb, .scissor = fb.all() }, batch);
+        try testing.expectEqualSlices(u32, ref.pixels, fb.pixels);
     }
 }

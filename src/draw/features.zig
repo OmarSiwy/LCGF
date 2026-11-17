@@ -14,6 +14,25 @@ const Color = types.Color;
 /// What `params.x` selects in the stock material. `solid` is all-zero params, the default.
 pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6 };
 
+/// Features a renderer must support for one statically described UI.
+pub const Usage = struct {
+    text: bool = false,
+    radius: bool = false,
+    border: bool = false,
+    image: bool = false,
+    kinds: std.enums.EnumSet(Kind) = .initOne(.solid),
+
+    pub const all: Usage = .{ .text = true, .radius = true, .border = true, .image = true, .kinds = .full };
+
+    pub fn kindList(comptime self: Usage) []const Kind {
+        comptime var list: []const Kind = &.{};
+        inline for (std.enums.values(Kind)) |kind| if (comptime self.kinds.contains(kind)) {
+            list = list ++ [_]Kind{kind};
+        };
+        return list;
+    }
+};
+
 /// `Style.params` for a linear gradient from the node's `fill` to `to`. `angle` is in radians:
 /// 0 runs left to right, pi/2 top to bottom (y points down). The gradient spans the two corners
 /// the direction meets, as CSS `linear-gradient` does.
