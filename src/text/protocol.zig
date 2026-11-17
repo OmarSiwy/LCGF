@@ -128,7 +128,7 @@ pub const Mono = struct {
 /// misses; `store` records them. Direct-mapped, one entry per slot: a new key evicts the old one.
 /// Tier 0: the table is carved from the caller's buffer and never grows.
 pub const Cache = struct {
-    /// Slots - 1; the slot count is a power of two.
+    /// Slots - 1. Index from bit 1 because generated keys reserve bit 0 for the empty marker.
     mask: u32,
     c: Columns,
 
@@ -167,7 +167,7 @@ pub const Cache = struct {
         var n: u32 = 0;
         for (0..tx.len) |k| {
             const want = key(strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] }), c.font[k], c.px[k]);
-            const slot: usize = @intCast(want & cache.mask); // mask < slot count, so it fits a 32-bit usize
+            const slot: usize = @intCast((want >> 1) & cache.mask); // mask < slot count, so it fits a 32-bit usize
             const hit = cache.c.key[slot] == want;
             c.w[k] = simd.selF(hit, cache.c.w[slot], c.w[k]);
             c.h[k] = simd.selF(hit, cache.c.h[slot], c.h[k]);
@@ -183,7 +183,7 @@ pub const Cache = struct {
         const c = &tx.c;
         for (rows) |k| {
             const want = key(strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] }), c.font[k], c.px[k]);
-            const slot: usize = @intCast(want & cache.mask); // mask < slot count, so it fits a 32-bit usize
+            const slot: usize = @intCast((want >> 1) & cache.mask); // mask < slot count, so it fits a 32-bit usize
             cache.c.key[slot] = want;
             cache.c.w[slot] = c.w[k];
             cache.c.h[slot] = c.h[k];
@@ -328,6 +328,33 @@ test "Cache: misses are measured once, hits come back without measuring" {
     frame.build(&tx, &strings);
     cache.clear();
     try testing.expectEqual(4, cache.lookup(&tx, &strings, &misses));
+}
+
+test "Cache: both slots hold measured extents and a collision replaces only one" {
+    var fx: Fixture(3) = .{};
+    var tx = fx.texts();
+    var buf: [32]u8 = undefined;
+    var strings: Strings = .{ .buf = &buf };
+    for ([_][]const u8{ "Type", "AVTa", "hello" }, 0..) |s, i|
+        _ = tx.push(@intCast(i), strings.add(s), &.{ .px = 10 });
+    var cache_buf: [cache_bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &cache_buf };
+    var cache = Cache.init(&carver, 2);
+    var misses: [3]u32 = undefined;
+    tx.c.w[0..3].* = .{ 15, 19, 25 };
+    tx.c.h[0..3].* = .{ 10, 11, 12 };
+    cache.store(&tx, &strings, &.{ 0, 1 });
+    @memset(tx.c.w[0..2], 0);
+    @memset(tx.c.h[0..2], 0);
+    try testing.expectEqual(1, cache.lookup(&tx, &strings, &misses));
+    try testing.expectEqual(2, misses[0]);
+    try testing.expectEqualSlices(f32, &.{ 15, 19 }, tx.c.w[0..2]);
+    try testing.expectEqualSlices(f32, &.{ 10, 11 }, tx.c.h[0..2]);
+
+    // "hello" maps to the same slot as "Type".
+    cache.store(&tx, &strings, misses[0..1]);
+    try testing.expectEqual(1, cache.lookup(&tx, &strings, &misses));
+    try testing.expectEqual(0, misses[0]);
 }
 
 test "Cache: key separates bytes, font and size, and is never the empty marker" {
