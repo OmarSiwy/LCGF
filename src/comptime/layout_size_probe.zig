@@ -14,7 +14,8 @@ fn Probe(comptime e: ex.Example, comptime unroll: bool) type {
         var scratch: P.Scratch = undefined;
         var ram: P.Cols.Dynamic = undefined;
         fn run(w: f32, h: f32) callconv(.c) void {
-            P.run(&scratch, &ram, .{ w, h });
+            const spans: [P.label_count]lcgr.strings.Span = @splat(.{ .start = 0, .bytes = 12 });
+            P.runText(&scratch, &ram, .{ w, h }, &spans, lcgr.protocol.Mono{});
         }
     };
 }
