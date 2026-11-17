@@ -4,7 +4,7 @@
 const lcgr = @import("lcgr");
 const sw = lcgr.render_sw;
 
-/// Opaque spans: masked whole-vector stores.
+/// Opaque spans use masked edge stores and whole-vector interior stores.
 export fn p_sw_fill(fb: *sw.Framebuffer, box: *const [4]u32, c: u32) void {
     fb.fill(box.*, @bitCast(c));
 }

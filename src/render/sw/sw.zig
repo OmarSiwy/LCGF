@@ -9,8 +9,8 @@
 //! per quad there is one, picking the loop compiled for its feature (what a GPU back end does
 //! with one pipeline and a uniform branch).
 //!
-//! Framebuffer rows are padded to whole vectors, so every span is whole vectors with a mask for
-//! the pixels outside the quad or the scissor; there is no scalar tail.
+//! Framebuffer rows are padded to whole vectors, so shading uses whole vectors with a mask for
+//! the pixels outside the quad or the scissor.
 
 const std = @import("std");
 const simd = @import("../../core/simd.zig");
@@ -76,14 +76,24 @@ pub const Framebuffer = struct {
     /// Sets every pixel of `box` (x0, y0, x1, y1, clamped to the framebuffer) to `c`.
     pub fn fill(fb: *Framebuffer, box: [4]u32, c: Color) void {
         const b = clampBox(box, fb.all());
-        const v: U = @splat(fb.pack(c));
-        for (b[1]..b[3]) |y| {
-            const row = fb.pixels[y * fb.stride ..][0..fb.stride];
-            var x = std.mem.alignBackward(u32, b[0], W);
-            while (x < b[2]) : (x += W) {
-                const in = spanMask(x, b[0], b[2]);
-                row[x..][0..W].* = @select(u32, in, v, @as(U, row[x..][0..W].*));
-            }
+        if (b[0] == b[2]) return;
+        const color: U = @splat(fb.pack(c));
+        const head = std.mem.alignBackward(u32, b[0], W);
+        const tail = std.mem.alignBackward(u32, b[2] - 1, W);
+        // For a single-vector span both masks select the same pixels.
+        const head_mask = spanMask(head, b[0], b[2]);
+        const tail_mask = spanMask(tail, b[0], b[2]);
+        const stride: usize = fb.stride;
+        const end = stride * b[3];
+        var start = stride * b[1];
+        while (start < end) : (start += stride) {
+            const row = fb.pixels[start..][0..stride];
+            const first = row[head..][0..W];
+            first.* = @select(u32, head_mask, color, @as(U, first.*));
+            var x = head + W;
+            while (x < tail) : (x += W) row[x..][0..W].* = color;
+            const last = row[tail..][0..W];
+            last.* = @select(u32, tail_mask, color, @as(U, last.*));
         }
     }
 
@@ -534,11 +544,17 @@ test "framebuffer: RGBA8 and BGRA8 byte order, rows padded to whole vectors" {
     for ([_]Format{ .rgba8, .bgra8 }) |format| {
         var fb = f.fb(format);
         try testing.expectEqual(simd.padded(5), fb.stride);
+        @memset(fb.pixels, 0xfeedbeef);
         fb.clear(.rgba(1, 2, 3, 4));
+        fb.fill(.{ 9, 0, 12, 3 }, .rgba(99, 99, 99, 99)); // clipped to an empty span
         fb.fill(.{ 1, 1, 9, 2 }, .rgba(10, 20, 30, 40));
         try testing.expectEqual(Color.rgba(1, 2, 3, 4), fb.at(0, 1));
         try testing.expectEqual(Color.rgba(10, 20, 30, 40), fb.at(4, 1));
         try testing.expectEqual(Color.rgba(1, 2, 3, 4), fb.at(1, 2));
+        for (0..fb.height) |y| {
+            const padding = fb.pixels[y * fb.stride ..][fb.width..fb.stride];
+            for (padding) |p| try testing.expectEqual(0xfeedbeef, p);
+        }
         const bytes: [4]u8 = @bitCast(fb.pixels[fb.stride + 1]);
         const want: [4]u8 = if (format == .rgba8) .{ 10, 20, 30, 40 } else .{ 30, 20, 10, 40 };
         try testing.expectEqual(want, bytes);
