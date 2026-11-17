@@ -265,6 +265,12 @@ fn toF32(x: anytype) f32 {
 /// get the runtime rows' sizes, positions, rects and visibility; every dead row is 0 px and
 /// not visible.
 fn expectLive(comptime L: type, comptime s: Spec, sel: L.Regions.Selection, viewport: [2]f32) !void {
+    var scratch: L.Scratch = undefined;
+    var ram: L.Cols.Dynamic = undefined;
+    return expectLiveFrame(L, s, sel, viewport, &scratch, &ram);
+}
+
+fn expectLiveFrame(comptime L: type, comptime s: Spec, sel: L.Regions.Selection, viewport: [2]f32, scratch: *L.Scratch, ram: *L.Cols.Dynamic) !void {
     const C = L.Cols;
     var buf: [1 << 17]u8 align(64) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
@@ -274,10 +280,15 @@ fn expectLive(comptime L: type, comptime s: Spec, sel: L.Regions.Selection, view
     pushLive(&t, s, 0, &sel, &next);
     layout.run(&t, &tx, viewport);
 
-    var scratch: L.Scratch = undefined;
-    var ram: C.Dynamic = undefined;
-    L.runLive(&scratch, &ram, viewport, sel);
+    L.runLive(scratch, ram, viewport, sel);
     const m = L.Regions.mask(sel);
+    var live_slot: [C.slot_count]bool = @splat(false);
+    for (m[0..C.node_count], 0..) |mask, i| {
+        if (mask != 0) live_slot[C.slot(i)] = true;
+    }
+    for (live_slot, 0..) |live, slot| {
+        if (!live) inline for (0..2) |a| try testing.expectEqual(0, ram.size[a][slot]);
+    }
     var r: u32 = 0;
     for (0..C.node_count) |i| {
         if (m[i] == 0) {
@@ -396,5 +407,35 @@ test "virtual list maps a bounded window onto a large data set and clips fractio
             try testing.expectEqual(0, ram.vis[1][2]);
             try testing.expectEqual(48, ram.vis[3][6]);
         }
+    }
+}
+
+test "reusing frame storage across growth, removal, and choice changes matches rebuilding" {
+    inline for (.{ ct_layout.Plain(examples.todo, .{}), ct_layout.Layout(examples.todo, .{}) }) |L| {
+        var scratch: L.Scratch = undefined;
+        var ram: L.Cols.Dynamic = undefined;
+        for ([_]examples.Todo{
+            .{ .len = 8, .footer = true, .mode = .detailed },
+            .{ .len = 0, .footer = false, .mode = .brief },
+            .{ .len = 1, .footer = true, .mode = .detailed },
+            .{ .len = 99, .footer = false, .mode = .brief },
+            .{ .len = 4, .footer = true, .mode = .detailed },
+        }) |state| {
+            try expectLiveFrame(L, examples.todo, L.Regions.select(examples.Todo, &state), .{ 240, 180 }, &scratch, &ram);
+        }
+    }
+}
+
+test "a conditional root releases its viewport when hidden, then reuses it" {
+    const s = spec_zig;
+    const ui = s.when(.show, s.col(.{}, .{s.col(.{ .size = .{ .px(20), .px(12) } }, .{})}));
+    const P = ct_layout.Plain(ui, .{});
+    var scratch: P.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    for ([_]bool{ true, false, true }) |show| {
+        P.runLive(&scratch, &ram, .{ 80, 60 }, .{.{ .n = @intFromBool(show) }});
+        try testing.expectEqual(if (show) @as(f32, 80) else 0, ram.size[0][0]);
+        try testing.expectEqual(if (show) @as(f32, 60) else 0, ram.size[1][0]);
+        for (ram.visible) |v| try testing.expectEqual(show, v != 0);
     }
 }

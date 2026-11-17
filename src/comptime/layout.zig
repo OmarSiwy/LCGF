@@ -242,10 +242,13 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                 }
                 layout.prepare(&v);
             } else clear(scratch);
+            // resolve assigns the viewport directly to the root, bypassing its masked maximum.
+            const root_when = if (spec.region) |r| r.kind == .when else false;
+            const shown = if (root_when) sel[0].n != 0 else true;
             layout.fit(&v, .x);
-            layout.resolve(&v, .x, viewport[0]);
+            layout.resolve(&v, .x, simd.selF(shown, viewport[0], 0));
             layout.fit(&v, .y);
-            layout.resolve(&v, .y, viewport[1]);
+            layout.resolve(&v, .y, simd.selF(shown, viewport[1], 0));
             layout.place(&v);
         }
 
