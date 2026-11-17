@@ -34,7 +34,7 @@ pub fn units(comptime format: Format, width: u32) u32 {
 }
 
 /// Pixel `p` of a framebuffer in `src` byte order as a colour.
-inline fn color(p: u32, src: sw.Format) Color {
+pub inline fn color(p: u32, src: sw.Format) Color {
     const c: Color = @bitCast(p);
     return if (src == .rgba8) c else .{ .r = c.b, .g = c.g, .b = c.r, .a = c.a };
 }

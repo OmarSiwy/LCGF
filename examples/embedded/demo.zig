@@ -78,17 +78,24 @@ pub fn decimal(buf: []u8, comptime prefix: []const u8, n: u32) []const u8 {
 const tap: input.Touch = .{ .pos = .{ 20, 40 }, .down = true };
 pub const script = [_]input.Sample{ .{}, .{}, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{} };
 
-/// The board: scripted touches, 16 ms apart, and an RGB565 panel. `flush` converts each row of
-/// the band (`embedded_framebuffer.convert`) and folds it into `sum` where a real board would
-/// send it to the panel's controller.
+/// A stand-in for the SPI peripheral. A board supplies its own three pin/write operations.
+const Transport = struct {
+    sum: u32 = 0,
+    pub fn select(_: *Transport, _: bool) void {}
+    pub fn dataMode(_: *Transport, _: bool) void {}
+    pub fn write(bus: *Transport, bytes: []const u8) error{}!void {
+        for (bytes) |byte| bus.sum = bus.sum *% 31 +% byte;
+    }
+};
+
 pub const Board = struct {
     pub const Font = @import("font.zig").Counter;
     font_pixels: Font.Pixels = undefined,
     clock: tick.Tick = .{},
     at: usize = 0,
-    sum: u32 = 0,
+    bus: Transport = .{},
     sent: u32 = 0,
-    row: [width]u16 = undefined,
+    row: [width * 2]u8 = undefined,
 
     pub fn read(b: *Board) ?input.Sample {
         if (b.at == script.len) return null;
@@ -97,10 +104,8 @@ pub const Board = struct {
         return script[b.at - 1];
     }
     pub fn flush(b: *Board, a: flushing.Area, pixels: []const u32, stride: u32) void {
-        for (0..a.h()) |y| {
-            lcgr.embedded_framebuffer.convert(.rgb565, &b.row, pixels[y * stride ..], a.w(), .rgba8);
-            for (b.row[0..a.w()]) |p| b.sum = (b.sum *% 31) +% p;
-        }
+        const display: lcgr.embedded_spi.Display(Transport) = .{ .bus = &b.bus, .scratch = &b.row };
+        display.write(a, pixels, stride, .rgba8) catch unreachable;
         b.sent += a.w() * a.h();
     }
     pub fn idle(_: *Board) bool {
