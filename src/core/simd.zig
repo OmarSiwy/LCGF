@@ -20,7 +20,9 @@ const build_options = @import("build_options");
 const none = @import("types.zig").none;
 
 /// f32/u32 lanes per vector.
-pub const lanes: comptime_int = build_options.lanes orelse (std.simd.suggestVectorLength(f32) orelse 4);
+const builtin = @import("builtin");
+const small_mcu = builtin.os.tag == .freestanding and (builtin.cpu.arch == .thumb or builtin.cpu.arch == .riscv32);
+pub const lanes: comptime_int = build_options.lanes orelse (std.simd.suggestVectorLength(f32) orelse if (small_mcu) 1 else 4);
 comptime {
     // `padded` rounds with alignForward, which needs a power of two.
     if (!std.math.isPowerOfTwo(lanes)) @compileError("-Dlanes must be a power of two");

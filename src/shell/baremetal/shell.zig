@@ -51,6 +51,7 @@ pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../
     comptime checkBoard(Board);
     return struct {
         const Self = @This();
+        const subset = @hasDecl(Board, "Font");
 
         board: *Board,
         tick: *const tick.Tick,
@@ -59,6 +60,8 @@ pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../
         scale: f32,
         gfx: sw.SoftwareCoords(kinds, @hasDecl(@import("build_options"), "fixed_point") and @import("build_options").fixed_point) = .{},
         font: Mono = .{},
+        /// A board with a bitmap Font supplies its atlas backing in board.font_pixels.
+        font_images: if (subset) [2]sw.Image else void,
         glyphs: Buffers,
         reader: input.Reader = .{},
         clock: tick.Clock,
@@ -93,6 +96,7 @@ pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../
                 .display = .init(buf.pixels, width, height, rows, format),
                 .scale = scale,
                 .glyphs = buf,
+                .font_images = if (subset) .{ .white, Board.Font.image(&board.font_pixels) } else {},
                 .clock = .init(now),
                 .polled_at = now,
             };
@@ -120,7 +124,11 @@ pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../
             s.presents += 1;
             const g = s.glyphs;
             const n = s.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-            s.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, s.scale);
+            if (subset) {
+                s.gfx.images = &s.font_images;
+                Board.Font.remap(out.draw, g.glyphs[0..n], .{ .first = g.first, .count = g.count });
+            }
+            s.gfx.prepare({}, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count, .texture = if (subset) @fromBackingInt(1) else .white }, .{ 0, 0 }, s.scale);
             s.flushed += flushing.flush(&s.display, &s.gfx, out.draw, s.background, s.board);
         }
 

@@ -77,6 +77,8 @@ const script = [_]input.Sample{ .{}, .{}, .{ .touch = tap }, .{ .touch = .{ .pos
 /// the band (`embedded_framebuffer.convert`) and folds it into `sum` where a real board would
 /// send it to the panel's controller.
 pub const Board = struct {
+    pub const Font = @import("font.zig").Counter;
+    font_pixels: Font.Pixels = undefined,
     clock: tick.Tick = .{},
     at: usize = 0,
     sum: u32 = 0,
