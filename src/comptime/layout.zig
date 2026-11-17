@@ -120,6 +120,10 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                 names = names ++ [_][]const u8{name};
                 types = types ++ [_]type{Padded(FT, R)};
             };
+            if (C.slot_count != n) {
+                names = names ++ [_][]const u8{"slot_source"};
+                types = types ++ [_]type{[C.slot_count]u32};
+            }
             const nm = names[0..names.len].*;
             const ty = types[0..types.len].*;
             break :blk @Struct(.auto, null, &nm, &ty, &@splat(.{}));
@@ -243,6 +247,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         /// axes, `flow` 0 and `sense` 0, and `nkids` counts in-flow live children only. Bit ANDs
         /// with the mask, no select; `nkids` is a scatter-add over the parent column.
         fn applyMask(scratch: *Scratch, m: *const D.Mask) void {
+            setSlotSources(scratch, m);
             const t = &C.pushed.c;
             for (0..R) |i| {
                 inline for (0..2) |a| scratch.max[a][i] = @bitCast(@as(u32, @bitCast(t.max[a][i])) & m[i]);
@@ -251,6 +256,15 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             }
             scratch.nkids = @splat(0);
             for (1..n) |j| scratch.nkids[t.parent[j]] += scratch.flow[j];
+        }
+
+        fn setSlotSources(scratch: *Scratch, m: *const D.Mask) void {
+            if (C.slot_count == n) return;
+            scratch.slot_source = C.slots.defaults;
+            for (C.slots.by_node, m[0..n], 0..) |slot, live_mask, i| {
+                const src = &scratch.slot_source[slot];
+                src.* = simd.selU(live_mask != 0, @intCast(i), src.*);
+            }
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
@@ -263,15 +277,20 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                     const src = &@field(scratch, name);
                     const dst = &@field(ram.*, name);
                     if (comptime @typeInfo(@FieldType(RuntimeColumns, name)) == .array) {
-                        inline for (0..dst.len) |k| convert(&dst[k], src[k][0..n]);
-                    } else convert(dst, src[0..n]);
+                        inline for (0..dst.len) |k| convert(scratch, &dst[k], src[k][0..n]);
+                    } else convert(scratch, dst, src[0..n]);
                 }
             }
         }
 
-        fn convert(dst: anytype, src: anytype) void {
+        fn convert(scratch: *const Scratch, dst: anytype, src: anytype) void {
             const T = @typeInfo(@TypeOf(dst.*)).array.child;
-            if (comptime T == C.Coordinate and @typeInfo(T) == .int) {
+            const narrow = T == C.Coordinate and @typeInfo(T) == .int;
+            if (dst.len != n) {
+                for (dst, scratch.slot_source) |*d, i| {
+                    d.* = if (narrow) @intFromFloat(std.math.clamp(src[i], @as(f32, std.math.minInt(T)), @as(f32, std.math.maxInt(T)))) else src[i];
+                }
+            } else if (narrow) {
                 const lo: f32 = std.math.minInt(T);
                 const hi: f32 = std.math.maxInt(T);
                 for (dst, src) |*d, s| d.* = @intFromFloat(@min(@max(s, lo), hi));
@@ -445,6 +464,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
             full.sense = C.pushed.c.sense;
             if (D.count > 0) {
                 const m = D.mask(sel);
+                P.setSlotSources(full, &m);
                 for (&full.sense, m) |*x, k| x.* &= @truncate(k);
             }
             var v = P.view(full);

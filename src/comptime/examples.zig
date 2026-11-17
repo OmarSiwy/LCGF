@@ -60,13 +60,18 @@ pub const Custom = struct { level: f32 = 0 };
 pub const custom = s.row(.{}, .{ s.label(.level), Spec{ .kind = .col, .widget = struct {} }, s.label(.level) });
 
 /// A to-do page: a heading, a list of up to 8 rows of which `len` are shown, and a footer shown
-/// while `footer` is set. Not in `all`: a UI with dynamic regions is laid out with `runLive`
+/// while `footer` is set, then a status line in one of two forms (`mode`). Not in `all`: a UI with dynamic regions is laid out with `runLive`
 /// and a selection.
-pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3, footer: bool = true };
+pub const Todo = struct { title: []const u8 = "Today", len: u32 = 3, footer: bool = true, mode: Mode = .brief };
+pub const Mode = enum(u8) { brief, detailed };
 pub const todo = s.col(.{ .pad = @splat(4), .gap = 4 }, .{
     s.row(.{ .gap = 8 }, .{ s.label(.title), s.col(.{ .size = .{ .px(30), .px(10) } }, .{}) }),
     s.list(.len, 8, .{ .gap = 2 }, s.row(.{ .gap = 4, .size = .{ .fill, .px(20) } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(8) } }, .{}) })),
     s.when(.footer, s.row(.{ .gap = 8, .pad = @splat(2) }, .{ s.label(.title), s.col(.{ .size = .{ .px(40), .px(12) } }, .{}) })),
+    s.choice(.mode, .{}, .{
+        s.col(.{ .size = .{ .px(16), .px(16) } }, .{}),
+        s.row(.{ .gap = 4, .size = .{ .fill, .fit } }, .{ s.label(.title), s.col(.{ .size = .{ .fill, .px(6) } }, .{}), s.col(.{ .size = .{ .px(24), .px(24) } }, .{}) }),
+    }),
 });
 
 /// The examples with dynamic regions.

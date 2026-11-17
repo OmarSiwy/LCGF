@@ -42,7 +42,8 @@ pub const Spec = struct {
 /// What makes a node's rows dynamic, and the state field that decides which are live.
 pub const Region = struct {
     kind: RegionKind,
-    /// The state field: a list's count (an integer), a `when`'s condition (a bool).
+    /// The state field: a list's count (an integer), a `when`'s condition (a bool), a
+    /// `choice`'s alternative (an enum or an integer).
     bind: []const u8,
 };
 
@@ -51,6 +52,8 @@ pub const RegionKind = enum(u8) {
     list,
     /// A subtree, itself included, that is live only while its condition holds.
     when,
+    /// A container of alternatives of which only the selected one is live.
+    choice,
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
@@ -118,6 +121,16 @@ pub fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec {
     var out = subtree;
     out.region = .{ .kind = .when, .bind = @tagName(condition) };
     return out;
+}
+
+/// A container (laid out by `style`) of `alternatives`, of which only the one at the index of
+/// the state field `selector` (an enum, by its value, or an integer) is live: `choice(.mode,
+/// .{}, .{ compact, detailed })`. The alternatives share the container's place in its parent:
+/// the parent always has one child there, sized as the live alternative. Static tables describe all
+/// alternatives. Their retained geometry shares the space of the largest alternative. A
+/// selector past the last alternative shows none.
+pub fn choice(comptime selector: @EnumLiteral(), comptime style: Style, comptime alternatives: anytype) Spec {
+    return .{ .kind = if (style.dir == .x) .row else .col, .style = style, .children = kids(alternatives), .region = .{ .kind = .choice, .bind = @tagName(selector) } };
 }
 
 // ---- tests -------------------------------------------------------------------------------------
