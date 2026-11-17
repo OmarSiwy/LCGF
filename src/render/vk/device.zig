@@ -209,6 +209,11 @@ pub const Device = struct {
             .enabledExtensionCount = @intFromBool(presents),
             .ppEnabledExtensionNames = &extensions,
         }, null, &handle));
+        return fromOwnedHandle(instance, p, presents, handle);
+    }
+
+    /// Load dispatch for a freshly created device and take ownership of its handle.
+    pub inline fn fromOwnedHandle(instance: *const loader.Instance, p: Pick, presents: bool, handle: c.VkDevice) Error!Device {
         const get = instance.fns.vkGetDeviceProcAddr;
         const fns = load(DeviceFns, get, handle) catch |e| {
             if (@as(c.PFN_vkDestroyDevice, @ptrCast(get.?(handle, "vkDestroyDevice")))) |destroy| destroy(handle, null);
