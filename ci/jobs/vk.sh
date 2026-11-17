@@ -5,7 +5,7 @@
 # one of them draws every render conformance scene offscreen and through a headless swapchain,
 # without and with 4x multisampling, against its golden. vk-play writes the same frames as PNGs
 # and tools/golden/golden.py compares them, the check every back end's job applies.
-zig build vk vk-play --summary all
+golden_build vk vk-play --summary all
 for mode in offscreen present; do
     for samples in 1 4; do
         out=zig-out/vk/$mode-x$samples; rm -rf "$out"

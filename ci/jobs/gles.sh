@@ -5,7 +5,7 @@
 # gles-play draws the render conformance scenes with the instanced GL ES 3 renderer and the
 # GL ES 2 path, each compared with its golden image. `custom` is drawn by the host's own
 # program between the UI's draws (custom.zig).
-zig build gles gles-play --summary all
+golden_build gles gles-play --summary all
 for mode in es3 es2; do
     out=zig-out/gles/$mode; rm -rf "$out"
     zig-out/bin/gles-play "$out" "$mode"

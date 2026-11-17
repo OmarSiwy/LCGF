@@ -6,7 +6,7 @@
 # commands by the host's own pipeline), without and with 4x multisampling, compared with its
 # golden image.
 for v in v27 v29; do
-    zig build wgpu wgpu-play -Dwgpu-native=$v --summary all
+    golden_build wgpu wgpu-play -Dwgpu-native=$v --summary all
     for samples in 1 4; do
         out=zig-out/wgpu/$v-x$samples; rm -rf "$out"
         zig-out/bin/wgpu-play "$out" "$samples"
