@@ -406,6 +406,11 @@ fn expectSameDraw(a: *const DrawList, b: *const DrawList) !void {
     try testing.expectEqualSlices(u8, a.quadBytes(), b.quadBytes());
     try testing.expectEqual(a.run_len, b.run_len);
     try testing.expectEqual(a.custom_len, b.custom_len);
+    try testing.expectEqualSlices(u8, a.strings, b.strings);
+    try testing.expectEqual(a.op_len, b.op_len);
+    try testing.expectEqualSlices(u8, a.op.kind[0..a.op_len], b.op.kind[0..b.op_len]);
+    try testing.expectEqualSlices(u32, a.op.key[0..a.op_len], b.op.key[0..b.op_len]);
+    try testing.expectEqualSlices(u32, a.op.ref[0..a.op_len], b.op.ref[0..b.op_len]);
     try testing.expectEqual(a.cmd_len, b.cmd_len);
     for (0..a.cmd_len) |k| try testing.expectEqual(a.command(@intCast(k)), b.command(@intCast(k)));
 }
@@ -569,4 +574,60 @@ test "sortByKey: shadow expansion preserves the original painter order" {
         tile(.{ .fill = .white }),
     });
     try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, &Paint(spec, .{}).node);
+}
+
+test "paint patches across clipped, resized and unchanged frames match the runtime tree" {
+    const P = Paint(tiles, .{});
+    const L = ct_layout.Layout(tiles, .{});
+    const State = struct { color: types.Color, sample: [4]f32, material: [3]f32 };
+    const Patch = P.Patches(State, &.{
+        .{ .node = 2, .field = .color, .target = .fill_rgb },
+        .{ .node = 3, .field = .color, .target = .fill_rgb },
+        .{ .node = 9, .field = .color, .target = .border_rgb },
+        .{ .node = 3, .field = .sample, .target = .uv },
+        .{ .node = 5, .field = .material, .target = .material_data },
+    });
+    var buf: [1 << 16]u8 align(64) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = tree.Tree.init(&carver, P.Cols.node_count);
+    var tx = Texts.init(&carver, 1);
+    var cu = Customs.init(&carver, 1);
+    var want = DrawList.init(&carver, P.Cols.node_count, 1, 1);
+    var got = DrawList.init(&carver, P.quad_count, 0, 0);
+    pushAll(&t, tiles, 0);
+    var order = P.order;
+    const ly: Layers = .{ .c = .{ .own = &.{}, .layer = &.{}, .order = &order } };
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    var state: State = .{ .color = .white, .sample = .{ 0, 0, 1, 1 }, .material = .{ 1, 2, 3 } };
+    var dirty: P.Dirty = .empty;
+    var uploaded: [P.quad_count]Quad = undefined;
+    for ([_][2]f32{ .{ 800, 600 }, .{ 30, 20 }, .{ 1, 1 }, .{ 800, 600 } }) |vp| {
+        L.run(&scratch, &ram, vp);
+        layout.run(&t, &tx, vp);
+        Patch.rebuild(&state, &ram, &got, &dirty);
+        for (0..3) |frame| {
+            if (frame == 1) {
+                state.color = .rgb(state.color.b +% 15, state.color.r +% 37, state.color.g);
+                state.sample[0] += 0.125;
+                state.material[1] += 2.5;
+                Patch.apply(.sample, &state, &ram, &got, &dirty);
+                Patch.apply(.material, &state, &ram, &got, &dirty);
+                Patch.apply(.color, &state, &ram, &got, &dirty);
+            }
+            for ([_]u32{ 2, 3 }) |i| t.c.look[i].fill = state.color.bitsOf();
+            t.c.look[9].border_color = state.color.bitsOf();
+            t.x.row[t.c.extra[3]].uv = state.sample;
+            t.c.look[5].params[1..4].* = state.material;
+            paint.emitLayered(&t, &tx, &cu, "", &ly, &want);
+            try expectSameDraw(&want, &got);
+
+            var changed = dirty.iterator(.{});
+            while (changed.next()) |i| {
+                if (i < got.quad_len) uploaded[i] = got.quads[i];
+            }
+            try testing.expectEqualSlices(u8, want.quadBytes(), std.mem.sliceAsBytes(uploaded[0..got.quad_len]));
+            dirty = .empty;
+        }
+    }
 }
