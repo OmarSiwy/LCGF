@@ -117,5 +117,5 @@
     },
     .fingerprint = 0x9448dbd37b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
-    .paths = .{ "build.zig", "build.zig.zon", "src", "bench/vs/lvgl/sources.zig", "docs/guide/errors", "LICENSE" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "bench/vs/lvgl/sources.zig", "LICENSE" },
 }

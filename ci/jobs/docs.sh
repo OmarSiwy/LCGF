@@ -3,6 +3,7 @@
 # them, and whose catalogued compile errors must be what the cases in docs/guide/errors/ print.
 zig build docs
 grep -q '^## `lcgf.simd`' zig-out/docs/API.md
+cmp docs/api/API.md zig-out/docs/API.md
 # Control: a case that compiles must fail the step, so the error harness can fail.
 control=docs/guide/errors/zz_control.zig
 trap 'rm -f "$control"' EXIT

@@ -1,7 +1,25 @@
 # LCGF (Lightweight Comptime Graphics Framework)
 
-Everything an agent needs to work through the 848-commit plan without the conversation it came from.
-Unzip this as the root of a new repository.
+A Zig GUI framework with runtime and comptime front ends over shared layout, interaction and draw-list data. The application owns its buffers, frame loop and graphics resources.
+
+## Documentation
+
+| To | Start here |
+|---|---|
+| Add the package and select a renderer | [Package options](docs/release/package.md) |
+| Build a UI | [Runtime guide](docs/guide/runtime.md), [comptime guide](docs/guide/comptime.md) |
+| Integrate a renderer, platform or custom drawing | [Backends](docs/guide/backends.md), [porting](docs/guide/porting.md), [custom rendering](docs/guide/custom.md) |
+| Work with text or diagnose a compile error | [Text guide](docs/guide/text.md), [compiler errors](docs/guide/errors.md) |
+| Look up a declaration | [Public API index](docs/api/API.md), [ownership and API review](docs/release/api-review.md) |
+| Compare frameworks | [Measured comparison and methodology](docs/perf/vs.md), [gate results](docs/perf/RESULTS.md), [capability matrix](docs/TARGETS.md) |
+| Reproduce performance and footprint measurements | [Performance guide](docs/guide/perf.md), [CI checks](docs/CHECKS.md) |
+| Find release information | [Changelog](CHANGELOG.md), [compatibility policy](docs/release/compatibility.md), [dependency licences](docs/release/licenses.md) |
+
+Use `nix develop -c zig build test` to run the framework tests and `nix develop -c zig build docs` to regenerate the declaration index and verify the guides. Run `nix develop -c zig build embedded-sim` to replay the counter on the simulated SPI board.
+
+## Original development plan
+
+The following handoff records how the implementation plan was set up.
 
 ## What is here
 
