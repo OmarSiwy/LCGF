@@ -9,7 +9,23 @@ Machine for every number below unless a section says otherwise: Intel Core i9-14
 benchmark pinned to one CPU. Timings are medians. "Load" is the 1-minute load average during
 the run; above about 8 (a quarter of the CPUs) timings on this machine inflate by up to 40%.
 
-Last measured: 2026-11-16.
+## Hosted release comparison, 2026-11-17
+
+On GitHub's Linux runner, the eight-framework benchmark at `d9013ce` put LCGF
+ahead on the form, text and resize scenes and on resident memory. Three targets
+still missed. The CI job passed its regression checks. Each target below compares
+the two frameworks in the same run. [Full comparison log](https://github.com/OmarSiwy/LCGF/actions/runs/44192098538/job/134423947139)
+
+| Measurement | LCGF | Fastest or smallest other framework | Target |
+|---|---:|---:|---|
+| List frame | 15.6 µs | Dear ImGui, 15.4 µs | Open |
+| Springs frame | 99.0 µs | Dear ImGui, 75.3 µs | Open |
+| First frame | 0.49 ms | Clay, 0.48 ms | Open |
+| Idle resident memory | 396 KiB | Clay, 416 KiB | Met |
+
+The November 16 owner-machine run below remains the recorded regression baseline.
+The release plan requires pushed, verified tags for the two early milestones and
+three months of passing gate evidence for 1.0. [Milestone criteria](../../plan/plan.json)
 
 ## Against other GUI libraries
 
