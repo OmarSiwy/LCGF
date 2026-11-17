@@ -57,7 +57,7 @@ pub fn BaremetalOf(comptime Board: type, comptime kinds: []const @import("../../
         display: flushing.Display,
         /// Physical pixels per logical pixel.
         scale: f32,
-        gfx: sw.SoftwareOf(kinds) = .{},
+        gfx: sw.SoftwareCoords(kinds, @hasDecl(@import("build_options"), "fixed_point") and @import("build_options").fixed_point) = .{},
         font: Mono = .{},
         glyphs: Buffers,
         reader: input.Reader = .{},

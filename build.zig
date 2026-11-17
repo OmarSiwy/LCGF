@@ -10,6 +10,8 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(?u32, "lanes", b.option(u32, "lanes", "SIMD lanes per vector (default: the target's)"));
 
+    options.addOption(bool, "fixed_point", b.option(bool, "fixed-point", "Embedded panel coordinates in signed Q12.4") orelse false);
+
     // The package root. Every lane exports its file from here, so one module sees them all.
     const lcgr = b.addModule("lcgr", .{
         .root_source_file = b.path("src/lcgr.zig"),
@@ -654,6 +656,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgr", .module = lcgr }},
     }) });
     embedded_step.dependOn(&b.addRunArtifact(embedded_test).step);
+    const embedded_unit = b.addTest(.{ .name = "embedded-test", .root_module = lcgr, .filters = &.{"embedded"} });
+    embedded_step.dependOn(&b.addRunArtifact(embedded_unit).step);
     for ([_]struct { []const u8, std.Target.Query }{
         .{ "cortex-m7", .{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } } },
         .{ "rv32imac", .{ .cpu_arch = .riscv32, .os_tag = .freestanding, .cpu_model = .{ .explicit = &std.Target.riscv.cpu.sifive_e31 } } },

@@ -135,6 +135,12 @@ pub const missing_kind: Color = .rgb(255, 0, 255);
 /// draws only solid quads leaves out the gradients' `sin`/`cos`, the shadow's `exp`, nine-slice
 /// and the border patterns. A quad of a kind left out is filled with `missing_kind`.
 pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
+    return SoftwareCoords(kinds, false);
+}
+
+/// The bare-metal profile can quantize rectangle and clip coordinates to Q12.4
+/// before rasterization. The draw-list layout shared by back ends stays the same.
+pub fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_point: bool) type {
     comptime std.debug.assert(std.mem.indexOfScalar(features.Kind, kinds, .solid) != null);
     return struct {
         const Self = @This();
@@ -167,7 +173,15 @@ pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
         }
 
         fn drawQuads(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
-            for (quads) |*q| {
+            for (quads) |*source| {
+                var local: Quad = undefined;
+                const q = if (fixed_point) q: {
+                    const fixed = @import("../../embedded/fixed.zig");
+                    local = source.*;
+                    local.rect = fixed.decode(fixed.encode(local.rect));
+                    local.clip = fixed.decode(fixed.encode(local.clip));
+                    break :q &local;
+                } else source;
                 if (opaqueRect(q, img, s.scale)) {
                     t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
                     continue;
