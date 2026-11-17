@@ -19,7 +19,7 @@ const types = lcgf.types;
 const Id = types.Id;
 const Events = lcgf.shell_iface.Events;
 const host = @import("host");
-const hello = @import("hello.zig");
+const panel_id = Id.from("hello");
 
 pub const tex_w = 320;
 pub const tex_h = 200;
@@ -34,9 +34,27 @@ var quads: [256]Quad = undefined;
 var first: [inner_limits.texts]u32 = undefined;
 var count: [inner_limits.texts]u32 = undefined;
 
+/// The offscreen scene uses the same greeting as the hello application.
+const Greeting = struct {
+    theme: w.Theme = .default,
+    waves: u32 = 0,
+
+    fn build(greeting: *Greeting, f: *Frame, _: *const Events) void {
+        const th = &greeting.theme;
+        _ = f.open(.from("center"), .{ .size = .{ .fill, .fill }, .main = .center, .cross = .center });
+        _ = f.open(panel_id, .{ .pad = @splat(16), .gap = 8, .cross = .center, .fill = th.panel, .radius = th.radius });
+        _ = w.label(f, th, "Hello, window");
+        if (w.button(f, th, .from("wave"), "Wave").clicked) greeting.waves += 1;
+        var buf: [32]u8 = undefined;
+        _ = w.label(f, th, std.fmt.bufPrint(&buf, "Waved {d} times", .{greeting.waves}) catch "?");
+        f.close();
+        f.close();
+    }
+};
+
 pub const App = struct {
     theme: w.Theme = .default,
-    inner: hello.App = .{},
+    inner: Greeting = .{},
     inner_ctx: ?context.Context = null,
     inner_in: Input = .{ .viewport = .{ tex_w, tex_h } },
     tex: sw.Framebuffer = undefined,
@@ -65,7 +83,7 @@ pub const App = struct {
             const out = inner.end(.{});
             host.draw(&app.inner, &app.gfx, &app.tex, .{ .quads = &quads, .first = &first, .count = &count }, &out, 1, app.theme.control_held);
             app.renders += 1;
-            app.inner_panel = out.tree.rect(out.tree.find(hello.id_panel));
+            app.inner_panel = out.tree.rect(out.tree.find(panel_id));
         }
 
         // The outer UI: a slider for the tilt, and the card showing the texture.

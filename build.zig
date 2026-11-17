@@ -1133,34 +1133,28 @@ pub fn build(b: *std.Build) void {
     }
 
     // The examples (examples/): their smoke tests, and each one in an X11 window
-    // (examples/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
+    // (src/example/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
     const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
-    const examples_host = b.createModule(.{ .root_source_file = b.path("examples/host.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
+    const desktop = DesktopExamples.init(b, b.path("."), lcgf, target, optimize);
     const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/examples.zig"),
+        .root_source_file = b.path("examples/tests.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = examples_host } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = desktop.host } },
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
-    const examples_x11 = b.createModule(.{ .root_source_file = b.path("src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
     for ([_][]const u8{ "hello", "counter", "form", "list", "dashboard", "viewport", "texture" }) |name| {
-        const app = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})), .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = examples_host } } });
-        const exe = b.addExecutable(.{ .name = b.fmt("example-{s}", .{name}), .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/window.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "x11", .module = examples_x11 }, .{ .name = "host", .module = examples_host }, .{ .name = "example", .module = app } },
-        }) });
+        const app = desktop.app(b.path(b.fmt("examples/{s}/app.zig", .{name})));
+        const exe = desktop.executable(app, b.fmt("example-{s}", .{name}));
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
-    // The microcontroller demo (examples/mcu.zig) also links for a Cortex-M7 with no OS.
+    // The microcontroller demo (examples/mcu/app.zig) also links for a Cortex-M7 with no OS.
     const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
     const m7_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = m7, .optimize = .ReleaseSmall });
     m7_lcgf.addOptions("build_options", options);
     m7_lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const mcu_exe = b.addExecutable(.{ .name = "example-mcu-cortex-m7", .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/mcu.zig"),
+        .root_source_file = b.path("examples/mcu/app.zig"),
         .target = m7,
         .optimize = .ReleaseSmall,
         .imports = &.{.{ .name = "lcgf", .module = m7_lcgf }},
@@ -1265,3 +1259,64 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
     }
     return m;
 }
+
+/// Wire a standalone desktop example to the package's shared X11 runner and replay harness.
+pub fn buildDesktopExample(b: *std.Build, name: []const u8) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const pkg = b.dependency("lcgf", .{ .target = target, .optimize = optimize, .render = .sw });
+    const desktop = DesktopExamples.init(b, pkg.path("."), pkg.module("lcgf"), target, optimize);
+    const app = desktop.app(b.path("app.zig"));
+    const exe = desktop.executable(app, name);
+    b.installArtifact(exe);
+    const run = b.addRunArtifact(exe);
+    run.addPassthruArgs();
+    b.step("run", "Open the example in an X11 window").dependOn(&run.step);
+    b.step("test", "Run the headless replay tests").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app })).step);
+}
+
+const DesktopExamples = struct {
+    b: *std.Build,
+    lcgf: *std.Build.Module,
+    host: *std.Build.Module,
+    x11: *std.Build.Module,
+    window: std.Build.LazyPath,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+
+    fn init(b: *std.Build, root: std.Build.LazyPath, lcgf: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) DesktopExamples {
+        const imports: []const std.Build.Module.Import = &.{.{ .name = "lcgf", .module = lcgf }};
+        return .{
+            .b = b,
+            .lcgf = lcgf,
+            .host = b.createModule(.{ .root_source_file = root.path(b, "src/example/host.zig"), .imports = imports }),
+            .x11 = b.createModule(.{ .root_source_file = root.path(b, "src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = imports }),
+            .window = root.path(b, "src/example/window.zig"),
+            .target = target,
+            .optimize = optimize,
+        };
+    }
+
+    fn app(d: DesktopExamples, source: std.Build.LazyPath) *std.Build.Module {
+        return d.b.createModule(.{
+            .root_source_file = source,
+            .target = d.target,
+            .optimize = d.optimize,
+            .imports = &.{ .{ .name = "lcgf", .module = d.lcgf }, .{ .name = "host", .module = d.host } },
+        });
+    }
+
+    fn executable(d: DesktopExamples, application: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
+        return d.b.addExecutable(.{ .name = name, .root_module = d.b.createModule(.{
+            .root_source_file = d.window,
+            .target = d.target,
+            .optimize = d.optimize,
+            .imports = &.{
+                .{ .name = "lcgf", .module = d.lcgf },
+                .{ .name = "x11", .module = d.x11 },
+                .{ .name = "host", .module = d.host },
+                .{ .name = "example", .module = application },
+            },
+        }) });
+    }
+};

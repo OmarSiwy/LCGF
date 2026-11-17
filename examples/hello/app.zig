@@ -1,7 +1,7 @@
 //! Hello window: the smallest application. One panel in the middle of the window with a
 //! greeting and a button, built from the public widgets the way prototype/example.zig `buildUi`
 //! builds its toolbar. `zig build examples` runs the smoke test below and builds
-//! zig-out/bin/example-hello, this application in an X11 window (examples/window.zig).
+//! zig-out/bin/example-hello, this application in an X11 window (src/example/window.zig).
 
 const std = @import("std");
 const lcgf = @import("lcgf");

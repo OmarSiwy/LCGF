@@ -1,4 +1,4 @@
-//! Runs one example (the `example` module, any examples/<name>.zig) in an X11 window:
+//! Runs one example (the `example` module, any examples/<name>/app.zig) in an X11 window:
 //!
 //!     zig build examples && zig-out/bin/example-<name> [seconds]
 //!

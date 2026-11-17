@@ -125,3 +125,8 @@ test "mcu: the thermostat runs its recording on the simulator board" {
     // buffer (104,256 bytes at 8 lanes), within a Cortex-M7's 512 KB of SRAM with room to spare.
     try std.testing.expect(@sizeOf(@TypeOf(ctx_buffer)) + @sizeOf(@TypeOf(lines)) < 128 * 1024);
 }
+
+pub fn main() !void {
+    if (!run()) return error.SimulationFailed;
+    std.debug.print("Thermostat target {d} tenths of a degree, heating {}, {d} pixels sent\n", .{ state.target, state.heating, sim.sent });
+}

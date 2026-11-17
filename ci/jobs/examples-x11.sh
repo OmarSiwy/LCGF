@@ -1,6 +1,6 @@
 # shell: golden
 # all: no
-# Every example in an X11 window on Xvfb for 1 second (examples/window.zig): it must present
+# Every example in an X11 window on Xvfb for 1 second (src/example/window.zig): it must present
 # at least one frame with no server error. -noreset and -displayfd as in ci/jobs/x11.sh.
 zig build examples --summary all
 dir=$(mktemp -d)
