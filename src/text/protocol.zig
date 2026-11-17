@@ -85,6 +85,11 @@ pub const Mono = struct {
     /// of `out`. Returns the number of quads written; stops quietly when `out` is full (the last
     /// row is then overwritten in place, never past the end).
     pub fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32 {
+        return font.quadsFor(FullGrid, d, out, glyphs) catch unreachable;
+    }
+
+    /// The same metrics and geometry, with UVs from a static atlas subset.
+    pub fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32 {
         std.debug.assert(out.len >= 1);
         var n: u32 = 0;
         const last: u32 = @intCast(out.len - 1);
@@ -96,15 +101,13 @@ pub const Mono = struct {
             for (d.strings[r.start..][0..r.bytes], 0..) |byte, j| {
                 const col: f32 = @floatFromInt(j % per_line);
                 const row: f32 = @floatFromInt(j / per_line);
-                const u: f32 = @floatFromInt(byte & 15);
-                const v: f32 = @floatFromInt(byte >> 4);
                 const x = r.rect[0] + col * adv;
                 const y = r.rect[1] + row * line;
                 out[n] = .{
                     .rect = .{ x, y, x + adv, y + line },
                     .clip = r.clip,
                     .params = .{ 0, 0, 0, 0 },
-                    .uv = .{ u / 16.0, v / 16.0, (u + 1) / 16.0, (v + 1) / 16.0 },
+                    .uv = try Grid.uv(byte),
                     .fill = r.color,
                     .border_color = 0,
                     .radii = @splat(0),
@@ -119,6 +122,76 @@ pub const Mono = struct {
         return n;
     }
 };
+
+fn cellUv(index: u8, comptime columns: usize, comptime rows: usize) [4]f32 {
+    const x: f32 = @floatFromInt(@as(usize, index) % columns);
+    const y: f32 = @floatFromInt(@as(usize, index) / columns);
+    const w: f32 = @floatFromInt(columns);
+    const h: f32 = @floatFromInt(rows);
+    return .{ x / w, y / h, (x + 1) / w, (y + 1) / h };
+}
+
+const FullGrid = struct {
+    fn uv(byte: u8) error{}![4]f32 {
+        return cellUv(byte, 16, 16);
+    }
+};
+
+/// Pack only the byte cells referenced by a static vocabulary, using the same pixels and
+/// glyph metrics as Mono's 16x16 atlas. Pass the resulting type to Mono.quadsFor.
+pub fn StaticAtlas(comptime strings: []const []const u8) type {
+    const table: struct { map: [256]u8, count: usize } = comptime blk: {
+        var map: [256]u8 = @splat(255);
+        var seen: std.bit_set.Static(256) = .empty;
+        var n: usize = 0;
+        var quota: usize = 10000;
+        for (strings) |str| {
+            quota += 20 * (str.len + 1);
+            @setEvalBranchQuota(quota);
+            for (str) |byte| {
+                if (seen.isSet(byte)) continue;
+                seen.set(byte);
+                map[byte] = @intCast(n);
+                n += 1;
+            }
+        }
+        break :blk .{ .map = map, .count = n };
+    };
+    return struct {
+        const lookup = table.map;
+        pub const count = table.count;
+        pub const columns = @min(count, 16);
+        pub const rows = (count + 15) / 16;
+
+        pub fn uv(byte: u8) error{GlyphOutsideSubset}![4]f32 {
+            if (count == 0) return error.GlyphOutsideSubset;
+            const index = lookup[byte];
+            if (count < 256 and index == 255) return error.GlyphOutsideSubset;
+            return cellUv(index, columns, rows);
+        }
+
+        /// Copy each referenced cell's scanlines from the full source atlas at compile time.
+        /// The caller embeds the returned pixels directly. Unoccupied trailing cells are zero.
+        pub fn pixels(comptime Pixel: type, comptime cell: [2]usize, comptime full: []const Pixel) [columns * rows * cell[0] * cell[1]]Pixel {
+            return comptime blk: {
+                if (cell[0] == 0 or cell[1] == 0 or full.len != 256 * cell[0] * cell[1])
+                    @compileError("expected a 16x16 atlas of equally sized nonempty glyph cells");
+                const len = columns * rows * cell[0] * cell[1];
+                @setEvalBranchQuota(4000 + 20 * len);
+                var out: [len]Pixel = @splat(0);
+                if (count > 0) for (table.map, 0..) |slot, byte| {
+                    if (count < 256 and slot == 255) continue;
+                    for (0..cell[1]) |line| {
+                        const src = ((byte / 16 * cell[1] + line) * 16 + byte % 16) * cell[0];
+                        const dst = ((@as(usize, slot) / columns * cell[1] + line) * columns + @as(usize, slot) % columns) * cell[0];
+                        @memcpy(out[dst..][0..cell[0]], full[src..][0..cell[0]]);
+                    }
+                };
+                break :blk out;
+            };
+        }
+    };
+}
 
 /// Remembers measured extents across frames, keyed by a hash of the run's bytes, its font and
 /// its size, so an expensive shaper measures only text it has not seen. Font-agnostic: it sits
@@ -433,3 +506,30 @@ const cache_bytes = blk: {
     _ = Cache.init(&counter, 16);
     break :blk counter.off;
 };
+
+test "StaticAtlas: subset pixels and glyph UVs select the same cells as the full atlas" {
+    const Subset = StaticAtlas(&.{ "ABA", "ZA", "\xff" });
+    const full = comptime blk: {
+        var out: [256 * 4]u16 = undefined;
+        for (&out, 0..) |*px, i| px.* = @intCast(i);
+        break :blk out;
+    };
+    const packed_pixels = Subset.pixels(u16, .{ 2, 2 }, &full);
+    try testing.expectEqual(4, Subset.count);
+    try testing.expectEqual(16, packed_pixels.len);
+    var run = [_]draw_list.TextRun{.{ .rect = .{ 0, 0, 40, 12 }, .clip = .{ 0, 0, 40, 12 }, .start = 0, .bytes = 4, .px = 10, .color = 0xffffffff, .font = 0 }};
+    var d = testList(&run, "BZA\xff");
+    var out: [5]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    try testing.expectEqual(4, try (Mono{}).quadsFor(Subset, &d, &out, .{ .first = &first, .count = &count }));
+    for (d.strings, out[0..4]) |byte, q| {
+        const dst: usize = @intFromFloat(q.uv[0] * 8);
+        const src = (@as(usize, byte / 16) * 32 + byte % 16) * 2;
+        for (0..2) |line|
+            try testing.expectEqualSlices(u16, full[src + line * 32 ..][0..2], packed_pixels[dst + line * 8 ..][0..2]);
+    }
+    d.strings = "XXXX";
+    try testing.expectError(error.GlyphOutsideSubset, (Mono{}).quadsFor(Subset, &d, &out, .{ .first = &first, .count = &count }));
+    try testing.expectError(error.GlyphOutsideSubset, StaticAtlas(&.{}).uv('a'));
+}
