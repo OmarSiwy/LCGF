@@ -6,6 +6,8 @@
 # spirv-val and the GLSL ES by glslangValidator.
 src/render/shaders/translate.sh
 python3 src/render/shaders/validate.py zig-out/shaders
+zig-out/bin/shaders-dump zig-out/ct-shaders --specialized
+python3 src/render/shaders/validate.py zig-out/ct-shaders
 stale() { echo "src/render/shaders/gen is stale: run src/render/shaders/translate.sh and commit" >&2; exit 1; }
 git diff --exit-code --stat -- src/render/shaders/gen || stale
 [ -z "$(git ls-files --others -- src/render/shaders/gen)" ] || stale

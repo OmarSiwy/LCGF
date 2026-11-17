@@ -16,7 +16,17 @@ pub fn main(init: std.process.Init) !void {
     defer dir.close(io);
 
     var name: [64]u8 = undefined;
-    for (gfx.variants) |v|
+    const specialized = [_]gfx.Variant{
+        .{ .name = "solid", .wgsl = gfx.stockFor(.{}) },
+        .{ .name = "text", .wgsl = gfx.stockFor(.{ .text = true }) },
+        .{ .name = "rounded-border", .wgsl = gfx.stockFor(.{ .radius = true, .border = true }) },
+        .{ .name = "stock-features", .wgsl = gfx.stockFor(.{ .radius = true, .border = true, .image = true, .kinds = .full }) },
+    };
+    const variants: []const gfx.Variant = if (args.next()) |mode| blk: {
+        if (!std.mem.eql(u8, mode, "--specialized")) return error.UnknownArgument;
+        break :blk &specialized;
+    } else &gfx.variants;
+    for (variants) |v|
         try dir.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.wgsl", .{v.name}), .data = v.wgsl });
     var text: [1024]u8 = undefined;
     var w = std.Io.Writer.fixed(&text);

@@ -4,12 +4,12 @@ const spec_zig = @import("spec.zig");
 const features = @import("../draw/features.zig");
 
 pub fn usage(comptime spec: spec_zig.Spec) features.Usage {
-    comptime {
+    return comptime blk: {
         @setEvalBranchQuota(1000 + 40 * @import("flatten.zig").count(spec));
         var out: features.Usage = .{};
         collect(spec, &out);
-        return out;
-    }
+        break :blk out;
+    };
 }
 
 fn collect(comptime spec: spec_zig.Spec, out: *features.Usage) void {
