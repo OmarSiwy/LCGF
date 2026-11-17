@@ -95,26 +95,12 @@ pub const Anims = struct {
     /// and slower than 1e-2 per second snaps onto it and stops. Returns how much is still
     /// moving; 0 means every spring is at rest and no further frames are needed.
     pub fn step(a: *Anims, dt: f32) f32 {
-        const c = &a.c;
-        const h = simd.f(@min(dt, 1.0 / 30.0));
-        const zero = simd.f(0);
-        var motion = zero;
+        const h = @min(dt, 1.0 / 30.0);
+        var motion = simd.f(0);
         const n = simd.padded(a.len);
         var i: usize = 0;
-        while (i < n) : (i += simd.lanes) {
-            const x = simd.loadF(c.x, i);
-            const v = simd.loadF(c.v, i);
-            const target = simd.loadF(c.target, i);
-            const acc = simd.loadF(c.stiffness, i) * (target - x) - simd.loadF(c.damping, i) * v;
-            const v1 = v + acc * h;
-            const x1 = x + v1 * h;
-            const left = @abs(target - x1);
-            const speed = @abs(v1);
-            const rest = (left < simd.f(1e-3)) & (speed < simd.f(1e-2));
-            simd.storeF(c.x, i, @select(f32, rest, target, x1));
-            simd.storeF(c.v, i, @select(f32, rest, zero, v1));
-            motion = @max(motion, @select(f32, rest, zero, left + speed));
-        }
+        while (i < n) : (i += simd.lanes)
+            motion = @max(motion, stepVector(simd.lanes, &a.c, i, h));
         return @reduce(.Max, motion);
     }
 
@@ -125,6 +111,94 @@ pub const Anims = struct {
         a.next = 0;
     }
 };
+
+/// One full SIMD group or the exact final group of a compile-time table.
+inline fn stepVector(comptime width: usize, c: anytype, i: usize, dt: f32) @Vector(width, f32) {
+    const V = @Vector(width, f32);
+    const h: V = @splat(dt);
+    const zero: V = @splat(0);
+    const x: V = c.x[i..][0..width].*;
+    const v: V = c.v[i..][0..width].*;
+    const target: V = c.target[i..][0..width].*;
+    const k: V = c.stiffness[i..][0..width].*;
+    const d: V = c.damping[i..][0..width].*;
+    const v1 = v + (k * (target - x) - d * v) * h;
+    const x1 = x + v1 * h;
+    const left = @abs(target - x1);
+    const speed = @abs(v1);
+    const rest = (left < @as(V, @splat(1e-3))) & (speed < @as(V, @splat(1e-2)));
+    c.x[i..][0..width].* = @select(f32, rest, target, x1);
+    c.v[i..][0..width].* = @select(f32, rest, zero, v1);
+    return @select(f32, rest, zero, left + speed);
+}
+
+/// A generated UI declares its animated bool and f32 target fields with
+/// `pub const springs = .{ .volume = Spring{}, .glow = Spring{} };`.
+/// Each declaration has an exact position, velocity and previous target. Constants
+/// live in read-only tables. The ordinary runtime table uses the same integration step.
+pub fn BoundSprings(comptime State: type) type {
+    const decl = if (@hasDecl(State, "springs")) State.springs else .{};
+    const names = @typeInfo(@TypeOf(decl)).@"struct".field_names;
+    const n = names.len;
+    const Coefficients = struct { stiffness: [n]f32, damping: [n]f32 };
+    const config: Coefficients = comptime blk: {
+        var k: [n]f32 = undefined;
+        var d: [n]f32 = undefined;
+        for (names, &k, &d) |name, *stiffness, *damping| {
+            const T = @FieldType(State, name);
+            if (T != f32 and T != bool) @compileError("spring target '" ++ name ++ "' needs an f32 or bool field");
+            const spring: Spring = @field(decl, name);
+            stiffness.* = spring.stiffness;
+            damping.* = spring.damping;
+        }
+        break :blk .{ .stiffness = k, .damping = d };
+    };
+    return struct {
+        const Self = @This();
+        pub const count = n;
+        const coefficients = config;
+        x: [n]f32 = @splat(0),
+        v: [n]f32 = @splat(0),
+        target: [n]f32 = @splat(0),
+
+        inline fn goal(state: *const State, comptime name: []const u8) f32 {
+            const field_value = @field(state, name);
+            return if (@TypeOf(field_value) == bool) simd.b2f(field_value) else field_value;
+        }
+
+        /// A declared field's position, or the raw target for a field drawn directly.
+        pub fn value(s: *const Self, state: *const State, comptime name: []const u8) f32 {
+            if (comptime std.meta.fieldIndex(@TypeOf(decl), name)) |slot| return s.x[slot];
+            return goal(state, name);
+        }
+
+        pub fn pending(s: *const Self, state: *const State) bool {
+            var active = false;
+            inline for (names, 0..) |name, i|
+                active = simd.orB(active, simd.orB(s.x[i] != goal(state, name), s.v[i] != 0));
+            return active;
+        }
+
+        /// The runtime frame steps the previous targets, then receives this frame's target.
+        pub fn frame(s: *Self, state: *const State, dt: f32, first: bool, reduced_motion: bool) void {
+            if (n == 0) return;
+            var next: [n]f32 = undefined;
+            inline for (names, &next) |name, *t| t.* = goal(state, name);
+            if (first or reduced_motion) {
+                s.x = next;
+                s.v = @splat(0);
+            } else {
+                const columns = .{ .x = &s.x, .v = &s.v, .target = &s.target, .stiffness = &coefficients.stiffness, .damping = &coefficients.damping };
+                const h = @min(dt, 1.0 / 30.0);
+                const full = n - n % simd.lanes;
+                var i: usize = 0;
+                while (i < full) : (i += simd.lanes) _ = stepVector(simd.lanes, columns, i, h);
+                if (full != n) _ = stepVector(n - full, columns, full, h);
+            }
+            s.target = next;
+        }
+    };
+}
 
 const testing = std.testing;
 
@@ -285,4 +359,102 @@ test "slot: the row after the last one is tried first; any order still finds the
     try testing.expectEqual(@as(u32, 6), a.len);
     // The same lookups by scan agree.
     for (0..6) |k| try testing.expectEqual(rows[k], a.slotScan(Id.from("s").with(@intCast(k)), 0));
+}
+
+test "comptime spring rows are exact and use runtime SIMD dynamics through the last lane" {
+    const State = struct {
+        a: f32 = 0,
+        b: bool = false,
+        c: f32 = 1,
+        pub const springs = .{ .a = Spring{}, .b = Spring{ .damping = 12 }, .c = Spring{ .stiffness = 220 } };
+    };
+    const Bound = BoundSprings(State);
+    try testing.expectEqual(0, @sizeOf(BoundSprings(struct {})));
+    try testing.expectEqual([3]f32, @FieldType(Bound, "x"));
+    try testing.expectEqual([3]f32, @FieldType(Bound, "v"));
+    var bound: Bound = .{};
+    var state: State = .{};
+    bound.frame(&state, 0, true, false);
+    var rt = fixture(3);
+    inline for (.{ "a", "b", "c" }, 0..) |name, i| {
+        _ = rt.slot(.hash(name), bound.x[i]);
+        const cfg = @field(State.springs, name);
+        rt.c.stiffness[i] = cfg.stiffness;
+        rt.c.damping[i] = cfg.damping;
+        rt.c.target[i] = bound.x[i];
+    }
+    state = .{ .a = 2, .b = true, .c = -3 };
+    bound.frame(&state, 1.0 / 60.0, false, false);
+    @memcpy(rt.c.target[0..3], &bound.target);
+    for (0..180) |_| {
+        _ = rt.step(1.0 / 60.0);
+        bound.frame(&state, 1.0 / 60.0, false, false);
+        try testing.expectEqualSlices(f32, rt.c.x[0..3], &bound.x);
+        try testing.expectEqualSlices(f32, rt.c.v[0..3], &bound.v);
+    }
+    try testing.expect(!bound.pending(&state));
+}
+
+test "declared slider spring drives painted frames and honours reduced motion" {
+    const w = @import("../widgets/base.zig");
+    const theme = w.Theme{};
+    const State = struct {
+        volume: f32 = 0.25,
+        pub const springs = .{ .volume = Spring{} };
+    };
+    const Ui = w.ComptimeUi(State, w.ct.slider(theme, .knob, .volume), theme);
+    const input: @import("../core/input.zig").Input = .{};
+    var ui: Ui = .{};
+    const initial = ui.frame(&input);
+    try testing.expectEqual(0.25, initial.tree.c.value[1]);
+    try testing.expectEqual(types.inf, initial.wake);
+    ui.signals.set(.volume, 1);
+    try testing.expect(ui.needsAnimationFrame());
+    const changed = ui.frame(&input);
+    try testing.expectEqual(0, changed.wake);
+    try testing.expectEqual(0.25, changed.tree.c.value[1]);
+    const next = ui.frame(&input);
+    try testing.expect(next.tree.c.value[1] > 0.25 and next.tree.c.value[1] < 1);
+    const landed = ui.frameWithSettings(&input, &.{ .reduced_motion = true });
+    try testing.expectEqual(1, landed.tree.c.value[1]);
+    try testing.expectEqual(types.inf, landed.wake);
+    try testing.expect(!ui.needsAnimationFrame());
+}
+
+test "comptime springs keep the host awake until they land" {
+    const w = @import("../widgets/base.zig");
+    const Spec = @import("../comptime/spec.zig").Spec;
+    const Input = @import("../core/input.zig").Input;
+    const State = struct {
+        wireframe: bool = false,
+        pub const springs = .{ .wireframe = Spring{} };
+    };
+    const Glow = struct {
+        pub fn push(ui: anytype, comptime node: Spec, parent: u32, next: *u32, _: *const Input) void {
+            var style = node.style;
+            style.size[0] = .px(100 * ui.animated(.wireframe));
+            _ = ui.tables.t.push(parent, .none, &style);
+            next.* += 1;
+        }
+    };
+    const Ui = w.ComptimeUi(State, .{ .kind = .col, .style = .{ .size = .{ .fit, .px(8) }, .fill = .rgb(255, 255, 255) }, .widget = Glow }, .{});
+    const in: Input = .{ .viewport = .{ 800, 600 } };
+    var ui: Ui = .{};
+    _ = ui.frame(&in);
+    _ = ui.frame(&in);
+    try testing.expect(!ui.needsAnimationFrame());
+
+    ui.signals.set(.wireframe, true);
+    var frames: u32 = 0;
+    var out = ui.frame(&in);
+    try testing.expectEqual(0, out.wake);
+    while (out.wake == 0 and frames < 600) : (frames += 1) {
+        try testing.expect(ui.needsAnimationFrame());
+        out = ui.frame(&in);
+        try testing.expectEqual(100 * ui.animated(.wireframe), out.tree.c.size[0][1]);
+    }
+    try testing.expect(frames > 5 and frames < 600);
+    try testing.expectEqual(1, ui.animated(.wireframe));
+    try testing.expectEqual(types.inf, out.wake);
+    try testing.expect(!ui.needsAnimationFrame());
 }

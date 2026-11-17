@@ -339,12 +339,14 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pub const Events = E;
 
         pub const Signals = S;
+        pub const Springs = @import("../anim/anims.zig").BoundSprings(State);
         /// The theme the page was built with, for widgets that build their own rows.
         pub const theme = th;
 
         buf: [bytes]u8 align(mem.column_align) = undefined,
         tables: Tables = undefined,
         signals: S.Runtime = .{},
+        springs: Springs = .{},
         pointer: E.Pointer = .{},
         /// Last frame's widget rects, which this frame's input is judged against.
         rects: E.Rects = .{},
@@ -388,12 +390,27 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             break :blk counter.off;
         };
 
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event };
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf };
+
+        /// True while a declared spring moves or its target has changed since the last frame.
+        pub fn needsAnimationFrame(ui: *const Self) bool {
+            return ui.springs.pending(&ui.signals.state);
+        }
+
+        /// The displayed value of a bool/f32 field, interpolated if State declares a spring for it.
+        pub fn animated(ui: *const Self, comptime target: S.Field) f32 {
+            return ui.springs.value(&ui.signals.state, @tagName(target));
+        }
 
         /// Steps input against last frame's rects, applies each widget's behaviour to the state,
         /// then builds, lays out and paints the frame. A button's click is returned as `event`
         /// for the caller to act on; checkboxes and sliders have already written their field.
         pub fn frame(ui: *Self, in: *const Input) Output {
+            return ui.frameWithSettings(in, &.{});
+        }
+
+        /// Uses the same accessibility settings as the runtime context.
+        pub fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output {
             const press = in.buttons.left and !ui.pointer.down;
             var event = E.pointer(&ui.pointer, &ui.rects, in);
             if (press) ui.focus = ui.pointer.pressed;
@@ -421,6 +438,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 }
             }
 
+            ui.springs.frame(&ui.signals.state, in.dt, !ui.built, settings.reduced_motion);
             var carver: mem.Carver = .{ .buf = &ui.buf };
             ui.tables = Tables.carve(&carver);
             const tb = &ui.tables;
@@ -456,7 +474,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
             }
             ui.built = true;
-            return .{ .draw = &tb.d, .tree = t, .event = event };
+            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf) };
         }
 
         /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom
@@ -484,7 +502,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     tb.t.seal(i);
                 },
                 .slider => {
-                    const value: f32 = @field(state, n.bind.?);
+                    const value = ui.animated(field(n.bind.?));
                     var s = n.style;
                     s.value = value;
                     const i = tb.t.push(parent, .hash(n.id.?), &s);
