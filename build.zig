@@ -99,7 +99,7 @@ pub fn build(b: *std.Build) void {
             m.addObjectFile(wgpu_native.path("lib/libwgpu_native.a"));
             switch (target.result.os.tag) {
                 .macos => for ([_][]const u8{ "Metal", "QuartzCore", "Foundation" }) |f| m.linkFramework(f, .{}),
-                .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+                .windows => for ([_][]const u8{ "d3dcompiler_47", "ws2_32", "userenv", "bcrypt", "ntdll", "opengl32", "user32", "gdi32", "ole32", "oleaut32", "propsys", "runtimeobject", "unwind" }) |l| m.linkSystemLibrary(l, .{ .use_pkg_config = .no }),
                 // Rust panics unwind: libunwind is Zig's own, built for the target.
                 else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
             }
@@ -819,7 +819,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf_win }, .{ .name = "d3d12_c", .module = d3d12_c } },
     }) });
     for ([_]*std.Build.Module{ d3d12_tests.root_module, d3d12_play.root_module }) |m| {
-        for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
+        for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{ .use_pkg_config = .no });
         // The committed HLSL of the shipped shaders (src/render/shaders/gen/, from naga).
         for ([_][]const u8{ "stock", "example" }) |v|
             m.addAnonymousImport(b.fmt("{s}_hlsl", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.hlsl", .{v})) });
@@ -867,7 +867,7 @@ pub fn build(b: *std.Build) void {
         m.addObjectFile(ak.path(ak_lib.?));
         switch (ak_os) {
             .macos => for ([_][]const u8{ "AppKit", "Foundation" }) |f| m.linkFramework(f, .{}),
-            .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
+            .windows => for ([_][]const u8{ "uiautomationcore", "user32", "oleaut32", "ole32", "ntdll", "userenv", "ws2_32", "bcrypt", "unwind" }) |l| m.linkSystemLibrary(l, .{ .use_pkg_config = .no }),
             // Rust panics unwind: libunwind is Zig's own, built for the target.
             else => for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |l| m.linkSystemLibrary(l, .{}),
         }
@@ -1183,7 +1183,7 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
             shader.add(b, m, "hlsl", "hlsl");
             const d3d12_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c.h"), .target = target, .optimize = optimize, .link_libc = true });
             m.addImport("d3d12_c", d3d12_h.createModule());
-            for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{});
+            for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{ .use_pkg_config = .no });
         },
         .sw, .wgpu, .web => {},
     }
