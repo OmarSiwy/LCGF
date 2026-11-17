@@ -190,8 +190,29 @@ pub fn Renderer(comptime gpu: type) type {
         /// encoder is locked while a pass is open.
         pub fn prepare(self: *Self, queue: gpu.Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
             const quad_bytes = draw.quadBytes();
-            const glyph_bytes = std.mem.sliceAsBytes(glyphs.quads);
             gpu.writeBuffer(queue, self.quads, 0, quad_bytes[0..@min(quad_bytes.len, @as(usize, self.desc.max_quads) * quad_stride)]);
+            self.prepareFrame(queue, glyphs, viewport, scale);
+        }
+
+        /// Upload the rows touched since the last frame on this buffer. Pass the full dirty
+        /// mask from Patches.rebuild after layout, or when this buffer first receives the UI.
+        /// The caller clears the mask after all consumers have uploaded it.
+        pub fn preparePatched(self: *Self, queue: gpu.Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32, dirty: anytype) void {
+            const limit = @min(draw.quad_len, self.desc.max_quads);
+            var it = dirty.iterator(.{});
+            var next = it.next();
+            while (next) |first| {
+                if (first >= limit) break;
+                var end = first + 1;
+                next = it.next();
+                while (next == end and end < limit) : (next = it.next()) end += 1;
+                gpu.writeBuffer(queue, self.quads, first * quad_stride, std.mem.sliceAsBytes(draw.quads[first..end]));
+            }
+            self.prepareFrame(queue, glyphs, viewport, scale);
+        }
+
+        fn prepareFrame(self: *Self, queue: gpu.Queue, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            const glyph_bytes = std.mem.sliceAsBytes(glyphs.quads);
             gpu.writeBuffer(queue, self.glyph_quads, 0, glyph_bytes[0..@min(glyph_bytes.len, @as(usize, self.desc.max_glyphs) * quad_stride)]);
             gpu.writeBuffer(queue, self.globals, 0, std.mem.asBytes(&Globals{ .viewport = viewport, .scale = scale }));
             self.glyphs = glyphs;
@@ -246,7 +267,7 @@ const Mock = struct {
         group: struct { index: u32, group: u32 },
         vertex_buffer: struct { buffer: u32, size: u64 },
         draw: struct { vertices: u32, instances: u32, first_instance: u32 },
-        write: struct { buffer: u32, bytes: usize },
+        write: struct { buffer: u32, offset: u64, bytes: usize },
     };
     const Log = struct {
         calls: [256]Call = undefined,
@@ -271,8 +292,7 @@ const Mock = struct {
         _ = b;
     }
     pub fn writeBuffer(q: Queue, b: Buffer, offset: u64, bytes: []const u8) void {
-        _ = offset;
-        q.push(.{ .write = .{ .buffer = b, .bytes = bytes.len } });
+        q.push(.{ .write = .{ .buffer = b, .offset = offset, .bytes = bytes.len } });
     }
     pub fn createPipeline(d: Device, desc: *const Renderer(Mock).PipelineDesc) Pipeline {
         std.debug.assert(desc.instance_stride == 136 and desc.attrs.len == 12);
@@ -414,4 +434,36 @@ test "quad_attrs follow the shader's layout of Quad" {
         try testing.expectEqual(a.offset, b.offset);
         try testing.expectEqualStrings(a.format, @tagName(b.format));
     }
+}
+
+test "renderer: patched uploads coalesce adjacent rows, cap ranges and skip clean frames" {
+    var log: Mock.Log = .{};
+    var gfx = Renderer(Mock).init(&log, .{ .format = .bgra8unorm, .max_quads = 5 }, 1, 2);
+    defer gfx.deinit();
+    var rows: [8]Quad = undefined;
+    var draw: DrawList = undefined;
+    draw.quads = &rows;
+    draw.quad_len = rows.len;
+    const Dirty = std.bit_set.Static(8);
+    var dirty: Dirty = .empty;
+    for ([_]usize{ 1, 2, 4, 5, 6 }) |i| dirty.set(i);
+    gfx.preparePatched(&log, &draw, .{}, .{ 100, 100 }, 1, &dirty);
+    try testing.expectEqual(4, log.len);
+    try testing.expectEqual(gfx.quads, log.calls[0].write.buffer);
+    try testing.expectEqual(quad_stride, log.calls[0].write.offset);
+    try testing.expectEqual(2 * quad_stride, log.calls[0].write.bytes);
+    try testing.expectEqual(4 * quad_stride, log.calls[1].write.offset);
+    try testing.expectEqual(quad_stride, log.calls[1].write.bytes);
+    log.len = 0;
+    dirty = .full;
+    draw.quad_len = 3;
+    gfx.preparePatched(&log, &draw, .{}, .{ 100, 100 }, 1, &dirty);
+    try testing.expectEqual(3, log.len);
+    try testing.expectEqual(3 * quad_stride, log.calls[0].write.bytes);
+    log.len = 0;
+    dirty = .empty;
+    gfx.preparePatched(&log, &draw, .{}, .{ 100, 100 }, 1, &dirty);
+    try testing.expectEqual(2, log.len);
+    try testing.expectEqual(gfx.glyph_quads, log.calls[0].write.buffer);
+    try testing.expectEqual(gfx.globals, log.calls[1].write.buffer);
 }
