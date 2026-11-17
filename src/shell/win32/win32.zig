@@ -137,6 +137,7 @@ extern "user32" fn DefWindowProcW(HWND, u32, usize, isize) callconv(.winapi) isi
 extern "user32" fn PeekMessageW(*MSG, ?HWND, min: u32, max: u32, remove: u32) callconv(.winapi) BOOL;
 extern "user32" fn TranslateMessage(*const MSG) callconv(.winapi) BOOL;
 extern "user32" fn DispatchMessageW(*const MSG) callconv(.winapi) isize;
+extern "user32" fn SendMessageW(HWND, u32, usize, isize) callconv(.winapi) isize;
 extern "user32" fn PostMessageW(?HWND, u32, usize, isize) callconv(.winapi) BOOL;
 extern "user32" fn MsgWaitForMultipleObjectsEx(count: u32, handles: ?[*]const HANDLE, ms: u32, wake_mask: u32, flags: u32) callconv(.winapi) u32;
 extern "user32" fn SetWindowLongPtrW(HWND, index: c_int, value: isize) callconv(.winapi) isize;
@@ -695,7 +696,8 @@ test "win32: the appearance is read from the registry and follows a setting chan
     try testing.expectEqual(readAppearance(), ev.in.appearance);
     // A setting change rereads it: a stale value is put right in the next frame.
     w.t.in.appearance.dark = !w.t.in.appearance.dark;
-    _ = PostMessageW(w.hwnd, wm_settingchange, 0, 0);
+    // WM_SETTINGCHANGE carries a pointer and Windows delivers it synchronously.
+    _ = SendMessageW(w.hwnd, wm_settingchange, 0, 0);
     _ = w.poll(&ev);
     try testing.expectEqual(readAppearance(), ev.in.appearance);
 }
