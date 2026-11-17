@@ -174,3 +174,4 @@ pub const i18n_bundle = @import("i18n/bundle.zig");
 pub const i18n_pseudo = @import("i18n/pseudo.zig");
 
 pub const embedded_fixed = @import("embedded/fixed.zig");
+pub const embedded_framebuffer = @import("embedded/framebuffer.zig");

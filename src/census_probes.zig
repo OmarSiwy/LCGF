@@ -12,4 +12,5 @@ comptime {
     _ = @import("core/census_probe.zig");
     _ = @import("anim/census_probe.zig");
     _ = @import("runtime/census_probe.zig");
+    _ = @import("embedded/census_probe.zig");
 }

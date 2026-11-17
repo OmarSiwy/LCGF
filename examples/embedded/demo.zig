@@ -73,13 +73,15 @@ fn decimal(buf: []u8, comptime prefix: []const u8, n: u32) []const u8 {
 const tap: input.Touch = .{ .pos = .{ 20, 40 }, .down = true };
 const script = [_]input.Sample{ .{}, .{}, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{ .touch = tap }, .{ .touch = .{ .pos = tap.pos } }, .{} };
 
-/// The board: scripted touches, 16 ms apart; `flush` folds every pixel into `sum` where a real
-/// board would send it to the panel.
+/// The board: scripted touches, 16 ms apart, and an RGB565 panel. `flush` converts each row of
+/// the band (`embedded_framebuffer.convert`) and folds it into `sum` where a real board would
+/// send it to the panel's controller.
 pub const Board = struct {
     clock: tick.Tick = .{},
     at: usize = 0,
     sum: u32 = 0,
     sent: u32 = 0,
+    row: [width]u16 = undefined,
 
     pub fn read(b: *Board) ?input.Sample {
         if (b.at == script.len) return null;
@@ -88,9 +90,10 @@ pub const Board = struct {
         return script[b.at - 1];
     }
     pub fn flush(b: *Board, a: flushing.Area, pixels: []const u32, stride: u32) void {
-        for (0..a.h()) |y| for (pixels[y * stride ..][0..a.w()]) |p| {
-            b.sum = (b.sum *% 31) +% p;
-        };
+        for (0..a.h()) |y| {
+            lcgr.embedded_framebuffer.convert(.rgb565, &b.row, pixels[y * stride ..], a.w(), .rgba8);
+            for (b.row[0..a.w()]) |p| b.sum = (b.sum *% 31) +% p;
+        }
         b.sent += a.w() * a.h();
     }
     pub fn idle(_: *Board) bool {
