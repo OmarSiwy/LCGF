@@ -26,7 +26,6 @@ const tick = lcgr.shell_baremetal_tick;
 const flushing = lcgr.shell_baremetal_flush;
 /// The feature kinds the UI draws: a label and a button are solid quads.
 pub const kinds: []const lcgr.features.Kind = &.{.solid};
-const Shell = lcgr.shell_baremetal_shell.BaremetalOf(Board, kinds);
 
 /// No stderr, no stack trace, no `std.Io`: a panic is a trap, which a debugger catches.
 pub const panic = std.debug.no_panic;
@@ -125,17 +124,22 @@ pub var state: App = .{};
 
 /// Runs the script to its end. False when the context does not fit its buffer.
 pub fn run() bool {
-    var ctx = context.Context.init(&ctx_buffer, limits) catch return false;
     state = .{};
     board = .{};
-    var shell: Shell = .init(&board, &board.clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
+    return runBoard(&board, &board.clock, &state);
+}
+
+pub fn runBoard(device: anytype, clock: *const tick.Tick, app: *App) bool {
+    var ctx = context.Context.init(&ctx_buffer, limits) catch return false;
+    const Shell = lcgr.shell_baremetal_shell.BaremetalOf(@TypeOf(device.*), kinds);
+    var shell: Shell = .init(device, clock, width, height, rows, .rgba8, 1, .{ .pixels = &lines, .glyphs = &glyphs, .first = &first, .count = &count });
     var ev: Events = .{};
     var previous: ?struct { count: u32, fill: u32 } = null;
     while (shell.poll(&ev)) {
         if (ctx.needsFrame(&ev.in)) {
-            const count_shown = state.count;
+            const count_shown = app.count;
             var frame = ctx.begin(&ev.in);
-            state.build(&frame, &ev);
+            app.build(&frame, &ev);
             const out = frame.end(.{});
             const button = out.tree.find(id_add);
             const fill = out.tree.c.look[button].fill;

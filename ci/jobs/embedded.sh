@@ -24,3 +24,5 @@ if grep -E '^[[:space:]]+v[a-z]+([.[:space:]])' zig-out/asm/embedded-cortex-m7.s
     echo "floating-point operation in the integer firmware"
     exit 1
 fi
+
+zig build embedded-sim --summary all

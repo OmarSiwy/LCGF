@@ -14,9 +14,9 @@ const blank = "Count           ";
 var memory: [lcgr.context.Context.requiredBytes(demo.limits)]u8 align(lcgr.mem.column_align) = undefined;
 var rgba: [sw.Framebuffer.len(width, height)]u32 = undefined;
 var base: [width * height]u16 = undefined;
-var current: [width * height]u16 = undefined;
+pub var current: [width * height]u16 = undefined;
 
-fn render(caption: []const u8, face: usize) ![4]u32 {
+pub fn render(caption: []const u8, face: usize) ![4]u32 {
     var ctx = try lcgr.context.Context.init(&memory, demo.limits);
     var theme: Theme = .default;
     theme.control = theme.controlFills()[face];

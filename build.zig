@@ -649,6 +649,10 @@ pub fn build(b: *std.Build) void {
     // The embedded profile's demo (examples/embedded/demo.zig): its test runs here, and it is
     // linked freestanding, unstripped so its symbols can be checked (ci/run.sh embedded).
     const embedded_step = b.step("embedded", "Run the embedded demo and link it for microcontrollers");
+    const sim_step = b.step("embedded-sim", "Replay the counter board on a simulated SPI display");
+    const sim_module = b.createModule(.{ .root_source_file = b.path("examples/embedded/simulator.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "lcgr", .module = lcgr }} });
+    sim_step.dependOn(&b.addRunArtifact(b.addExecutable(.{ .name = "embedded-simulator", .root_module = sim_module })).step);
+    sim_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = sim_module })).step);
     const no_float = b.option(bool, "no-float", "Bake the fixed embedded panel and render it with integer-only firmware") orelse false;
     const embedded_root = b.path(if (no_float) "examples/embedded/integer.zig" else "examples/embedded/demo.zig");
     const baked = if (no_float) blk: {

@@ -1,0 +1,18 @@
+# Three taps on Add, with a settle frame after release.
+frame
+viewport 320 240
+frame
+frame
+pointer 20 40
+buttons left
+frame
+buttons
+frame
+buttons left
+frame
+buttons
+frame
+buttons left
+frame
+buttons
+frame
