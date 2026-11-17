@@ -64,6 +64,21 @@ pub fn build(t: *const Tree, lv: *Levels) void {
     if (n == 0) return;
     const parent = t.c.parent;
     const depth = lv.c.depth;
+    // The rank table already contains the previous row/parent pairs. Animated dimensions,
+    // colors and IDs can change without changing this index. Compare every parent exactly.
+    if (n >= W and lv.count > 0 and lv.c.start[lv.count] == n) {
+        var difference = simd.u(0);
+        var k: usize = 0;
+        while (true) {
+            const rows = simd.loadU(lv.c.order, k);
+            var parents: U = undefined;
+            inline for (0..W) |l| parents[l] = parent[rows[l]];
+            difference |= parents ^ simd.loadU(lv.c.parent, k);
+            if (k + W == n) break;
+            k = @min(k + W, n - W);
+        }
+        if (@reduce(.Or, difference) == 0) return;
+    }
     const start = lv.c.start;
     // Counting sort with the counts one slot up, so the scatter's cursors end as the starts:
     // count of depth d at start[d + 2], prefix sums, then start[d + 1] advances from the first
@@ -119,6 +134,30 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
     for (1..lv.count) |d| {
         const end = lv.c.start[d + 1];
         var j: usize = lv.c.start[d];
+        // A whole level of positive, fixed-size children takes its clamped bounds on this axis.
+        // Skip parent geometry and coefficient gathers, preserving the scalar order of used.
+        const low = c.min[a];
+        const high = c.max[a];
+        if (end - j >= W and low[lv.c.order[j]] == high[lv.c.order[j]]) {
+            var fixed: @Vector(W, bool) = @splat(true);
+            var k = j;
+            while (true) {
+                const rows = simd.loadU(lv.c.order, k);
+                const lo = gather(low, rows);
+                fixed &= (lo > zero) & (lo == gather(high, rows));
+                if (k + W == end) break;
+                // Overlap the last full vector so no row from another level enters the test.
+                k = @min(k + W, end - W);
+            }
+            if (@reduce(.And, fixed)) {
+                while (j < end) : (j += 1) {
+                    const row = lv.c.order[j];
+                    size[row] = low[row];
+                    used[lv.c.parent[j]] += low[row] * c.flow[row];
+                }
+                continue;
+            }
+        }
         // The last vector runs into the next level (or the padding ranks). Its extra lanes
         // write sizes that the next level rewrites, and add nothing to `used`.
         while (j < end) : (j += W) {
@@ -182,6 +221,20 @@ test "build: every node once, level by level, depth-first within a level" {
     try testing.expectEqualSlices(u32, &.{ 0, 1, 5, 2, 3, 6, 4 }, lv.c.order[0..7]);
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 1, 1, 5, 3 }, lv.c.parent[0..7]);
     try testing.expectEqualSlices(u32, &.{ 0, 1, 3, 6, 7 }, lv.c.start[0..5]);
+
+    // Build the cache even at 16 lanes, then reparent row 6 without changing the count.
+    while (t.len < W) _ = t.push(root, .none, &.{});
+    t.seal(root);
+    build(&t, &lv);
+    const old_end = lv.c.start[2];
+    t.c.parent[6] = root;
+    t.c.end[e] = 6;
+    t.c.nkids[e] -= 1;
+    t.c.nkids[root] += 1;
+    build(&t, &lv);
+    try testing.expectEqual(old_end + 1, lv.c.start[2]);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 5, 6 }, lv.c.order[0..4]);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, lv.c.parent[0..4]);
 }
 
 test "resolve: coefs.resolveK's sizes and used, and so placeK's positions, bit for bit, on random trees" {
@@ -192,8 +245,16 @@ test "resolve: coefs.resolveK's sizes and used, and so placeK's positions, bit f
     var lv = Levels.init(&carver, 1000);
     var prng: std.Random.DefaultPrng = .init(0x1e7e1);
     var want: [6][1000]f32 = undefined;
-    for (0..200) |_| {
+    for (0..200) |iteration| {
         check.randomTree(&t, prng.random(), 1 + prng.random().uintLessThan(u32, t.cap));
+        // Exercise fixed levels, including partly filled SIMD tails, mixed with general Y sizing.
+        if (iteration % 2 == 0) {
+            for (0..t.len) |i| {
+                const width: f32 = @floatFromInt(1 + i % 71);
+                t.c.min[0][i] = width;
+                t.c.max[0][i] = width;
+            }
+        }
         const n = t.len;
         // Reference: the depth-first passes.
         layout.prepare(&t);

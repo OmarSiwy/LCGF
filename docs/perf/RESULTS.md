@@ -27,6 +27,47 @@ The November 16 owner-machine run below remains the recorded regression baseline
 The release plan requires pushed, verified tags for the two early milestones and
 three months of passing gate evidence for 1.0. [Milestone criteria](../../plan/plan.json)
 
+## Runtime layout, November 17 follow-up
+
+The springs scene rebuilds 1,000 bars with animated pixel widths. The runtime can reuse its
+level-order index whenever every row has the same parent as in the stored index. A complete
+level of children whose positive lower and upper size bounds match needs only those sizes and
+an in-order sum into each parent. Size and parent checks run afresh for each frame. Both paths
+use the existing columns. [Implementation and differential tests](../../src/layout/levels.zig)
+
+| CPU 30, base `c3fcfaf` | Base | With layout change | Comparison |
+|---|---:|---:|---:|
+| Springs, µs/frame | 184.20 | 162.15 | 136.75, Dear ImGui |
+| First frame, ms | 0.549 | 0.562 | 0.587, static Clay |
+
+The paint change in `c3fcfaf` is in both binaries. The layout change saved a median **20.15 µs**
+within paired springs runs and won 11 of 12 pairs. ImGui won all 12 rounds. The first-frame
+result favored LCGF over static Clay in 15 of 19 rounds. The layout change itself added a
+median 0.008 ms within startup pairs. Another comparison on CPU 2 with base `eebd5ab` measured
+LCGF at 0.58 ms and Clay at 0.41 ms when the frameworks ran sequentially. Startup remains an
+open target across runs.
+
+Tests used the tools and machine above. The paired harnesses shared CPU 30, an efficiency core
+without a sibling thread. Alternate rounds reversed execution order. Each springs sample is
+the median of 3,000 frames, and each startup sample is the median of 11 process launches with
+`--idle --scene idle`. One-minute load was above the timing gate's threshold of eight. The
+three spring binaries had p99 values around 3 ms in the `c3fcfaf` run. These are loaded
+workstation timings. Build `vs-lcgf vs-imgui vs-clay` in both checkouts and compare with
+`bench/vs/measure.py`'s `frame` and `bench/gates/gates.py`'s `measure_first_frame`.
+[Paired samples, µs](bench-src/levels-nov17.tsv)
+
+On the earlier base `eebd5ab`, the same change took springs from 173.35 to 156.15 µs
+(12/12 pairs), list from 31.2 to 29.0 µs and resize from 35.95 to 35.75 µs. The per-pass
+harness (`zig build bench -- --core=src --scene springs`) measured springs layout at
+83.30 → 63.85 µs. Its 3,961-node rows control measured 614.95 → 593.00 µs for the full frame
+and 290.30 → 272.35 µs for layout, over 12 alternating pairs each.
+
+The original two-generation tree experiment (`f656a84`) saves 129 bytes per node of capacity
+when ported onto `eebd5ab`. All three existing tests for a reused subtree moving later in the
+tree observed two builds where their contract expects one. That change also shares style
+columns reachable through `Frame.prevTree()` with the current tree. The measured layout
+change preserves the separate previous-frame data and all subtree reuse tests.
+
 ## Against other GUI libraries
 
 The same five scenes built in eight libraries, each through its own API, on the CPU, no window
