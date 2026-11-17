@@ -70,8 +70,10 @@ pub const Frame = struct {
 
     /// A node with no children. Same as `open` then `close`.
     pub fn leaf(f: *Frame, id: Id, style: Style) Node {
+        const ctx = f.ctx;
         const n = f.open(id, style);
-        f.close();
+        // push set the leaf's end when it created the row. Only pop the open slot.
+        ctx.depth = @max(ctx.depth, 2) - 1;
         return n;
     }
 
@@ -379,6 +381,27 @@ test "open: nesting past the depth limit is reported, not written out of bounds"
     // The next frame starts clean.
     _ = ctx.begin(&in);
     try testing.expect(ctx.status.ok());
+}
+
+test "leaf at the depth limit pops the replaced slot before the next sibling" {
+    const Fx = Fixture(.{ .nodes = 4, .texts = 1, .customs = 1, .strings = 16, .depth = 3 });
+    var ctx = try Fx.context();
+    var f = ctx.begin(&.{});
+    const panel = f.open(.from("panel"), .{});
+    const row = f.open(.from("row"), .{});
+    const child = f.leaf(.from("child"), .{});
+    const t = f.tree();
+    try testing.expect(ctx.status.depth);
+    try testing.expectEqual(2, ctx.depth);
+    try testing.expectEqual(row.ix(), t.c.parent[child.ix()]);
+    try testing.expectEqual(t.len, t.c.end[child.ix()]);
+
+    // The tree is full too. The sibling replaces the final row under the panel.
+    const sibling = f.leaf(.from("sibling"), .{});
+    try testing.expect(t.overflow);
+    try testing.expectEqual(child, sibling);
+    try testing.expectEqual(panel.ix(), t.c.parent[sibling.ix()]);
+    try testing.expectEqual(t.len, t.c.end[sibling.ix()]);
 }
 
 test "text: copies the bytes and links the leaf to its run" {
