@@ -21,6 +21,7 @@ const encode = @import("../draw/paint.zig").encode;
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const Quad = draw_list.Quad;
+const none = @import("../core/types.zig").none;
 const DrawList = draw_list.DrawList;
 
 const V4 = @Vector(4, f32);
@@ -56,7 +57,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     };
 
     // The rows that paint a quad, in row order: `paint.emit`'s condition without `visible`.
-    const painted: []const u32 = blk: {
+    const in_row_order: []const u32 = blk: {
         @setEvalBranchQuota(10_000 + 200 * n);
         var rows: []const u32 = &.{};
         for (0..n) |i| {
@@ -65,7 +66,8 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         }
         break :blk rows;
     };
-    const m = painted.len;
+    const m = in_row_order.len;
+    const painted: [m]u32 = sortByKey(C, spec, options, in_row_order[0..m].*);
     const nb = blk: {
         var b = 0;
         for (painted, 0..) |i, k| {
@@ -80,8 +82,24 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// Nodes that can paint a quad: the most quads a frame emits.
         pub const quad_count = m;
 
-        /// Row k: the node of template k.
-        pub const node: [m]u32 = painted[0..m].*;
+        /// Row k: the node of template k, in paint order.
+        pub const node: [m]u32 = painted;
+        /// Every row in the order this UI paints them: `node`, then the rows that paint
+        /// nothing. `paint.emitLayered` with this order gives the same draw list as `emit`.
+        pub const order: [n]u32 = blk: {
+            @setEvalBranchQuota(10_000 + 20 * n * m);
+            var out: [n]u32 = undefined;
+            var k = 0;
+            for (painted) |i| {
+                out[k] = i;
+                k += 1;
+            }
+            for (0..n) |i| if (std.mem.indexOfScalar(u32, &painted, i) == null) {
+                out[k] = i;
+                k += 1;
+            };
+            break :blk out;
+        };
         /// Row k: the node whose `child_clip` clips template k, its parent.
         pub const clip_node: [m]u32 = blk: {
             var out: [m]u32 = undefined;
@@ -180,6 +198,71 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     };
 }
 
+/// `rows` (the nodes that paint, in row order) reordered so that equal batch keys follow each
+/// other where that cannot change the picture. A comptime UI has one stacking layer (it has no
+/// overlay), so the order within it is row order, and a quad may move before an earlier one
+/// only when their rects provably never overlap: both lie in one subtree that `Layout` folds
+/// (its positions relative to the subtree's root and its sizes are the same in every viewport)
+/// and their rects, from the compiler's layout, are at least 1 px apart on some axis (a margin
+/// for rounding and antialiased edges). Clips only shrink what a quad covers. Greedy: emit the
+/// earliest quad that may go next with the key of the one just emitted, else the earliest
+/// that may go next. Quads with the same key keep their order, so do any two that may overlap.
+fn sortByKey(comptime C: type, comptime spec: Spec, comptime options: Options, comptime rows: anytype) @TypeOf(rows) {
+    const m = rows.len;
+    if (m < 3) return rows;
+    // With one batch key the input is already in its final order.
+    if (for (rows[1..]) |r| {
+        if (keyOf(C.pushed.c.look[r]) != keyOf(C.pushed.c.look[rows[0]])) break false;
+    } else true) return rows;
+    const n = C.node_count;
+    const p = C.pushed;
+    const plan = @import("layout.zig").FoldPlan(C);
+    @setEvalBranchQuota(100_000 + 1_000 * n + 50 * m * m * m);
+    // The fold root each row lies under (itself for a root), or `none`.
+    var group: [n]u32 = @splat(none);
+    for (0..n) |i| if (plan.root[i]) for (i..p.c.end[i]) |j| {
+        group[j] = i;
+    };
+    const P = @import("layout.zig").Plain(spec, options);
+    var scratch: P.Scratch = undefined;
+    P.passes(&scratch, .{ 1000, 1000 });
+    const apart = struct {
+        fn f(a: u32, b: u32, comptime gr: [n]u32, sc: anytype) bool {
+            if (gr[a] == none or gr[a] != gr[b]) return false;
+            for (0..2) |ax| {
+                const a0 = sc.pos[ax][a];
+                const b0 = sc.pos[ax][b];
+                if (a0 + sc.size[ax][a] + 1 <= b0 or b0 + sc.size[ax][b] + 1 <= a0) return true;
+            }
+            return false;
+        }
+    }.f;
+    var out: [m]u32 = undefined;
+    var done: [m]bool = @splat(false);
+    var last: u32 = none;
+    for (&out) |*o| {
+        var pick: u32 = none;
+        var first_ready: u32 = none;
+        for (0..m) |k| {
+            if (done[k]) continue;
+            const ready = for (0..k) |j| {
+                if (!done[j] and !apart(rows[j], rows[k], group, &scratch)) break false;
+            } else true;
+            if (!ready) continue;
+            if (first_ready == none) first_ready = k;
+            if (keyOf(p.c.look[rows[k]]) == last) {
+                pick = k;
+                break;
+            }
+        }
+        if (pick == none) pick = first_ready;
+        done[pick] = true;
+        o.* = rows[pick];
+        last = keyOf(p.c.look[rows[pick]]);
+    }
+    return out;
+}
+
 fn keyOf(look: tree.Look) u32 {
     return (@as(u32, look.texture) << 16) | look.material;
 }
@@ -201,6 +284,7 @@ const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const types = @import("../core/types.zig");
 const Id = types.Id;
+const Layers = @import("../layout/overlay.zig").Layers;
 
 /// A clipping, rounded, bordered panel of tiles on two textures and two materials, one faded,
 /// one unfilled, one floated: every template field and both visibility cases.
@@ -250,8 +334,9 @@ fn expectSameDraw(a: *const DrawList, b: *const DrawList) !void {
     for (0..a.cmd_len) |k| try testing.expectEqual(a.command(@intCast(k)), b.command(@intCast(k)));
 }
 
-/// Paints `e` with the runtime tree (`Tree.push`, `layout.run`, `paint.emit`) and with
-/// `Layout` and `Paint`, and requires the same draw list.
+/// Paints `e` with the runtime tree (`Tree.push`, `layout.run`, `paint.emitLayered` in
+/// `Paint.order`: row order but for the quads `sortByKey` moved) and with `Layout` and
+/// `Paint`, and requires the same draw list.
 fn expectSamePaint(comptime e: examples.Example, viewport: [2]f32) !void {
     const L = ct_layout.Layout(e.spec, e.options);
     const P = Paint(e.spec, e.options);
@@ -265,7 +350,17 @@ fn expectSamePaint(comptime e: examples.Example, viewport: [2]f32) !void {
     var got = DrawList.init(&carver, P.quad_count, 0, 0);
     pushAll(&t, e.spec, 0);
     layout.run(&t, &tx, viewport);
-    paint.emit(&t, &tx, &cu, "", &want);
+    // Independent painter-order oracle: every inversion must be disjoint in the actual
+    // runtime layout. Equal commands in a shared order alone cannot establish this.
+    for (P.node, 0..) |i, k| for (P.node[k + 1 ..]) |j| {
+        if (i < j or t.c.visible[i] == 0 or t.c.visible[j] == 0) continue;
+        const a = t.rect(i);
+        const b = t.rect(j);
+        try testing.expect(a.x1 <= b.x0 or b.x1 <= a.x0 or a.y1 <= b.y0 or b.y1 <= a.y0);
+    };
+    var order = P.order;
+    const ly: Layers = .{ .c = .{ .own = &.{}, .layer = &.{}, .order = &order } };
+    paint.emitLayered(&t, &tx, &cu, "", &ly, &want);
 
     var scratch: L.Scratch = undefined;
     var ram: C.Dynamic = undefined;
@@ -278,9 +373,10 @@ test "Paint.templates: one read-only quad per node that can paint, every field b
     const P = Paint(tiles, .{});
     // The panel and seven tiles: not the rows, the unfilled tile or the transparent one.
     try testing.expectEqual(8, P.quad_count);
-    try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 4, 5, 7, 9, 11 }, &P.node);
-    try testing.expectEqual([4]f32{ 0, 0, 0.5, 0.5 }, P.templates[2].uv);
-    try testing.expectEqual(3 << 16, P.keys[2]);
+    // In paint order: the second white tile of the first row is sorted before the textured one.
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 4, 3, 5, 7, 9, 11 }, &P.node);
+    try testing.expectEqual([4]f32{ 0, 0, 0.5, 0.5 }, P.templates[3].uv);
+    try testing.expectEqual(3 << 16, P.keys[3]);
     try testing.expectEqual(2, P.keys[4]);
     try testing.expectEqual([4]f32{ 1, 2, 3, 4 }, P.templates[4].params);
     // The faded row's tiles take its opacity; the corner radii fill in from `radius`.
@@ -321,10 +417,10 @@ test "Paint.emit: a node outside its parent's clip paints nothing" {
 
 test "Paint.batches: the commands of a frame with every quad visible, computed while compiling" {
     const P = Paint(tiles, .{});
-    // Keys in paint order: white, white, texture 3, white, material 2, texture 3, white, white.
-    try testing.expectEqual(6, P.batch_count);
-    try testing.expectEqualSlices(u32, &.{ 0, 2, 3, 4, 5, 6 }, &P.batches.first);
-    try testing.expectEqualSlices(u32, &.{ 2, 1, 1, 1, 1, 2 }, &P.batches.count);
+    // Keys in paint order: white x3, texture 3, material 2, texture 3, white x2.
+    try testing.expectEqual(5, P.batch_count);
+    try testing.expectEqualSlices(u32, &.{ 0, 3, 4, 5, 6 }, &P.batches.first);
+    try testing.expectEqualSlices(u32, &.{ 3, 1, 1, 1, 2 }, &P.batches.count);
     const L = ct_layout.Layout(tiles, .{});
     var buf: [1 << 14]u8 align(64) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
@@ -339,4 +435,22 @@ test "Paint.batches: the commands of a frame with every quad visible, computed w
     encode(&d);
     try testing.expectEqual(P.batch_count, d.cmd_len);
     try testing.expectEqual(table, d.command(1));
+}
+
+test "sortByKey: quads join their key's batch only past quads they cannot overlap" {
+    // In row order the tiles give 6 batches; sorted, the first row's two white tiles run on
+    // into the panel's batch. The textured tile of the second row stays after the first row's
+    // material tile: they lie in different folded subtrees, so nothing proves them apart.
+    try testing.expectEqual(5, Paint(tiles, .{}).batch_count);
+    // Overlapping tiles (floated onto each other) keep row order: white, texture, white.
+    const tex: types.Texture = @fromBackingInt(3);
+    const stacked = comptime sp.col(.{}, .{sp.row(.{}, .{
+        tile(.{ .fill = .white }),
+        tile(.{ .fill = .white, .texture = tex, .float = true, .offset = .{ 4, 4 } }),
+        tile(.{ .fill = .white, .float = true, .offset = .{ 8, 8 } }),
+    })});
+    const P = Paint(stacked, .{});
+    try testing.expectEqualSlices(u32, &.{ 2, 3, 4 }, &P.node);
+    try testing.expectEqual(3, P.batch_count);
+    try expectSamePaint(.{ .name = "stacked", .State = struct {}, .spec = stacked }, .{ 100, 100 });
 }

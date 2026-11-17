@@ -248,7 +248,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 /// (the terms `resolve` multiplies by the parent's inner size or free space). The root always
 /// takes the viewport. Positions inside such a subtree, relative to its root, are fixed too. A
 /// fold root is a maximal such row with at least one descendant: folding a leaf saves nothing.
-fn FoldPlan(comptime C: type) type {
+pub fn FoldPlan(comptime C: type) type {
     const n = C.node_count;
     const c = C.pushed.c;
     return struct {
@@ -263,7 +263,7 @@ fn FoldPlan(comptime C: type) type {
             }
             break :blk out;
         };
-        const root: [n]bool = blk: {
+        pub const root: [n]bool = blk: {
             @setEvalBranchQuota(10_000 + 100 * n);
             var out: [n]bool = undefined;
             for (0..n) |i| out[i] = indep[i] and !indep[c.parent[i]] and c.end[i] - i > 1;
