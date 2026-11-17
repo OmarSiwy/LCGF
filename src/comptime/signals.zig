@@ -119,6 +119,22 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
         /// ones `sizedByValue`, with ancestors; or the bound nodes alone.
         const Reach = enum { ancestors, layout, nodes };
 
+        fn addAncestors(comptime m: *Mask, comptime node: usize) void {
+            var a = node;
+            while (true) : (a = F.parent[a]) {
+                m.* = withBit(m.*, a);
+                if (a == 0) break;
+            }
+        }
+
+        /// Changing the selection can reveal or remove any reserved descriptor. Their
+        /// dirty bits refer to logical descriptors even where choice geometry shares slots.
+        fn addRegion(comptime masks: *[field_count]Mask, comptime name: []const u8, comptime node: usize) void {
+            const m = &masks[@backingInt(fieldNamed(name))];
+            addAncestors(m, node);
+            for (node + 1..F.end[node]) |i| m.* = withBit(m.*, i);
+        }
+
         /// For each state field, the nodes `reach` takes of the bindings to it.
         fn bindMasks(comptime reach: Reach) [field_count]Mask {
             // Per node: the walk, a field lookup and an ancestor walk up to `levels` steps.
@@ -134,16 +150,16 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
         fn bindWalk(comptime node: Spec, comptime reach: Reach, comptime next: *usize, comptime masks: *[field_count]Mask) void {
             const i = next.*;
             next.* += 1;
+            if (reach != .nodes) if (node.region) |region| {
+                addRegion(masks, region.bind, i);
+                if (region.window) |window| addRegion(masks, window.scroll, i);
+            };
             if (node.bind) |name| {
                 const m = &masks[@backingInt(fieldNamed(name))];
                 switch (reach) {
                     .nodes => m.* = withBit(m.*, i),
                     .ancestors, .layout => if (reach == .ancestors or sizedByValue(node.kind)) {
-                        var a: usize = i;
-                        while (true) : (a = F.parent[a]) {
-                            m.* = withBit(m.*, a);
-                            if (a == 0) break;
-                        }
+                        addAncestors(m, i);
                     },
                 }
             }
@@ -730,4 +746,46 @@ test "effects: a change makes its watchers pending, and the caller runs them by 
     plain.set(.volume, 1);
     try testing.expectEqual(null, plain.takeEffect());
     try testing.expectEqual(0, @sizeOf(App.Pending));
+}
+
+test "dynamic selectors invalidate their reserved range and ancestors across mask words" {
+    const e = @import("examples.zig");
+    const S = Signals(e.Todo, e.todo);
+    const Regions = @import("dynamic.zig").Regions(e.todo);
+    var rt: S.Runtime = .{};
+    _ = rt.takeDirty();
+    inline for (Regions.regions, .{ S.Field.len, S.Field.footer, S.Field.mode }, .{ @as(u32, 2), true, e.Mode.detailed }) |region, field, value| {
+        rt.set(field, value);
+        const dirty = rt.takeDirty();
+        try std.testing.expectEqual(S.empty, S.paint_masks[@backingInt(field)]);
+        try std.testing.expectEqual(dirty.layout, dirty.paint);
+        for (0..@import("flatten.zig").count(e.todo)) |i| {
+            try std.testing.expectEqual(i == 0 or (i >= region.row and i < region.end), S.isSet(dirty.layout, i));
+        }
+    }
+}
+
+test "batched scroll and derived list count invalidate the same bounded window" {
+    const e = @import("examples.zig");
+    const State = struct {
+        pages: u32 = 1,
+        count: u32 = 10,
+        scroll: f32 = 0,
+        pub const derived = .{ .count = .{ .from = .{.pages}, .compute = itemCount } };
+        fn itemCount(state: *const @This()) u32 {
+            return state.pages * 10;
+        }
+    };
+    const S = Signals(State, e.feed);
+    var rt: S.Runtime = .{};
+    _ = rt.takeDirty();
+    rt.stage(.pages, 10);
+    rt.commit();
+    try std.testing.expectEqual(100, rt.state.count);
+    const count_dirty = rt.takeDirty();
+    rt.stage(.scroll, 16);
+    rt.commit();
+    try std.testing.expectEqual(count_dirty, rt.takeDirty());
+    try std.testing.expectEqual(S.full, count_dirty.layout);
+    try std.testing.expectEqual(S.empty, rt.takeDirty().layout);
 }
