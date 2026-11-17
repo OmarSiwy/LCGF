@@ -35,6 +35,10 @@ pub fn build(b: *std.Build) void {
     const lib = b.addLibrary(.{ .name = "lcgf", .root_module = lcgf });
     b.getInstallStep().dependOn(&lib.step);
 
+    const custom_draw_scene = b.createModule(.{
+        .root_source_file = b.path("src/render/custom_draw_scene.zig"),
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+    });
     // The wgpu-native back end (src/render/wgpu/native.zig): outside the tiers, a module of its
     // own over lcgf. wgpu-native's release archive for the target (build.zig.zon, lazy), its
     // headers translated here (@cImport is gone), its static library linked.
@@ -596,6 +600,49 @@ pub fn build(b: *std.Build) void {
             for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
                 m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
         }
+        // Research executables are separate link targets. Normal renderers have no guest dependency.
+        const guest_headers = b.option([]const u8, "guest-headers", "Directory containing webgpu/wgpu.h for the Vulkan custom-draw experiment");
+        const guest_library = b.option([]const u8, "guest-library", "Patched Vulkan-only wgpu-native archive for the custom-draw experiment");
+        const experiment = b.step("custom-draw-probe", "Build matched native and optional WebGPU custom-draw probes (Linux)");
+        if (guest_headers) |headers| {
+            const include: std.Build.LazyPath = .{ .cwd_relative = headers };
+            const translation = b.addTranslateC(.{ .root_source_file = include.path(b, "webgpu/wgpu.h"), .target = target, .optimize = optimize });
+            translation.addIncludePath(include);
+            for ([_]bool{ false, true }) |enabled| {
+                if (enabled and guest_library == null) continue;
+                const features = b.addOptions();
+                features.addOption(bool, "enabled", enabled);
+                const bindings = b.createModule(.{
+                    .root_source_file = b.path("src/render/wgpu/native.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                    .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "wgpu_c", .module = translation.createModule() } },
+                });
+                if (enabled) {
+                    bindings.addObjectFile(.{ .cwd_relative = guest_library.? });
+                    for ([_][]const u8{ "m", "dl", "pthread", "unwind" }) |syslib| bindings.linkSystemLibrary(syslib, .{});
+                }
+                const guest_probe = b.addExecutable(.{ .name = if (enabled) "custom-draw-webgpu" else "custom-draw-native", .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/render/vk/probe_guest.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                    .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk_c", .module = vk_c }, .{ .name = "wgpu_native", .module = bindings } },
+                }) });
+                const app = b.createModule(.{
+                    .root_source_file = b.path("src/render/wgpu/custom_draw_sample.zig"),
+                    .imports = &.{.{ .name = "wgpu_native", .module = bindings }},
+                });
+                guest_probe.root_module.addImport("custom_draw_scene", custom_draw_scene);
+                guest_probe.root_module.addImport("custom_draw_sample", app);
+                guest_probe.root_module.addOptions("custom_draw", features);
+                for ([_][]const u8{ "stock", "example" }) |shader| guest_probe.root_module.addAnonymousImport(b.fmt("{s}_spv", .{shader}), .{
+                    .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.spv", .{shader})),
+                });
+                experiment.dependOn(&b.addInstallArtifact(guest_probe, .{}).step);
+            }
+        } else experiment.dependOn(&b.addFail("supply -Dguest-headers=<v29 include directory>").step);
         vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
@@ -786,8 +833,29 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
+    const metal_custom = b.addExecutable(.{ .name = "metal-webgpu-probe", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/metal/probe_webgpu.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "wgpu_native", .module = wgpu_native_mod } },
+    }) });
+    metal_custom.root_module.addImport("custom_draw_scene", custom_draw_scene);
+    metal_custom.root_module.addImport("custom_draw_sample", b.createModule(.{
+        .root_source_file = b.path("src/render/wgpu/custom_draw_sample.zig"),
+        .imports = &.{.{ .name = "wgpu_native", .module = wgpu_native_mod }},
+    }));
+    const metal_custom_step = b.step("metal-webgpu-probe", "Build the shared WebGPU callback experiment on macOS with -Dwgpu-native=v29");
+    if (target.result.os.tag == .macos and wgpu_version == .v29) {
+        if (b.graph.environ_map.get("SDKROOT")) |sdk| {
+            const root: std.Build.LazyPath = .{ .cwd_relative = sdk };
+            metal_custom.root_module.addFrameworkPath(root.path(b, "System/Library/Frameworks"));
+            metal_custom.root_module.addLibraryPath(root.path(b, "usr/lib"));
+        }
+        metal_custom_step.dependOn(&b.addInstallArtifact(metal_custom, .{}).step);
+    } else metal_custom_step.dependOn(&b.addFail("requires a macOS target and -Dwgpu-native=v29").step);
     // The committed MSL of the shipped shaders (src/render/shaders/gen/, from naga).
-    for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module }) |m| for ([_][]const u8{ "stock", "example" }) |v|
+    for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module, metal_custom.root_module }) |m| for ([_][]const u8{ "stock", "example" }) |v|
         m.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
     b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
     b.step("metal-build", "Build the Metal back end's tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(metal_tests, .{}).step);
@@ -857,12 +925,13 @@ pub fn build(b: *std.Build) void {
         .windows => if (target.result.abi == .msvc) b.fmt("lib/windows/{s}/msvc/static/accesskit.lib", .{arch}) else b.fmt("lib/windows/{s}/mingw/static/libaccesskit.a", .{arch}),
         else => null,
     } else null;
-    if (ak_lib == null) {
-        const fail = b.addFail("AccessKit's archive has no static library for this target");
+    const enable_accesskit = b.option(bool, "accesskit", "Resolve the optional AccessKit dependency") orelse true;
+    if (!enable_accesskit or ak_lib == null) {
+        const fail = b.addFail(if (!enable_accesskit) "enable -Daccesskit for the AccessKit steps" else "AccessKit's archive has no static library for this target");
         accesskit_step.dependOn(&fail.step);
         accesskit_build_step.dependOn(&fail.step);
     }
-    if (if (ak_lib != null) b.lazyDependency("accesskit", .{}) else null) |ak| {
+    if (if (enable_accesskit and ak_lib != null) b.lazyDependency("accesskit", .{}) else null) |ak| {
         const m = accesskit_tests.root_module;
         m.addObjectFile(ak.path(ak_lib.?));
         switch (ak_os) {

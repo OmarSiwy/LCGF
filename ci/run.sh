@@ -45,6 +45,8 @@ all)
 --matrix)
     sep=""; printf '['
     for j in $(names); do
+        # The dedicated experiment branch requests only the native Apple hardware job.
+        if [[ ${GITHUB_REF:-} == refs/heads/experiment/metal-custom-draw && $j != metal-webgpu ]]; then continue; fi
         s=$(header "$j" shell); r=$(header "$j" runner)
         printf '%s{"job":"%s","shell":"%s","runner":"%s-latest"}' "$sep" "$j" "${s:-default}" "${r:-ubuntu}"; sep=,
     done

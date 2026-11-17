@@ -1,0 +1,236 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 3e218bb..946fe9f 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1171,6 +1171,7 @@ dependencies = [
+ name = "wgpu-native"
+ version = "0.0.0"
+ dependencies = [
++ "ash",
+  "bindgen",
+  "bitflags",
+  "log",
+diff --git a/Cargo.toml b/Cargo.toml
+index dde9a8c..c8f743b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -123,6 +123,7 @@ version = "1"
+ optional = true
+ 
+ [dependencies]
++ash = "0.38"
+ raw-window-handle = "0.6.0"
+ paste = "1"
+ log = "0.4"
+diff --git a/src/interop.rs b/src/interop.rs
+new file mode 100644
+index 0000000..6b180e8
+--- /dev/null
++++ b/src/interop.rs
+@@ -0,0 +1,194 @@
++//! LCGR research patch (docs/research/wgpu-interop.md): a WGPUDevice as a guest on a VkDevice the
++//! host created and owns, a WGPUTexture over a host VkImage, and an explicit hand-off transition.
++//! Vulkan only; everything here is wgpu-hal / wgpu-core API that exists at v29, made reachable
++//! from C.
++use crate::{native, ErrorSinkRaw, QueueId, TextureData, WGPUDeviceImpl, WGPUTextureImpl, DEFAULT_DEVICE_LOST_HANDLER};
++use ash::vk;
++use parking_lot::Mutex;
++use std::{ffi::CStr, os::raw::c_char, sync::Arc};
++
++#[repr(C)]
++pub struct WGPUVulkanImport {
++    pub get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr,
++    pub instance: vk::Instance,
++    pub api_version: u32,
++    pub physical_device: vk::PhysicalDevice,
++    /// Null for `wgpuVulkanDeviceRequirements`.
++    pub device: vk::Device,
++    pub queue_family_index: u32,
++    pub queue_index: u32,
++    pub device_extension_count: usize,
++    pub device_extensions: *const *const c_char,
++}
++
++/// What the host must enable on its VkDevice for wgpu to run on it.
++#[repr(C)]
++pub struct WGPUVulkanRequirements {
++    pub extension_count: usize,
++    pub extensions: [*const c_char; 32],
++    pub features: vk::PhysicalDeviceFeatures,
++    pub timeline_semaphore: vk::Bool32,
++    pub robust_image_access: vk::Bool32,
++}
++
++unsafe fn hal_adapter(imp: &WGPUVulkanImport) -> (hal::vulkan::Instance, hal::ExposedAdapter<hal::api::Vulkan>) {
++    let static_fn = ash::StaticFn { get_instance_proc_addr: imp.get_instance_proc_addr };
++    let entry = ash::Entry::from_static_fn(static_fn.clone());
++    let raw = ash::Instance::load(&static_fn, imp.instance);
++    let instance = hal::vulkan::Instance::from_raw(
++        entry,
++        raw,
++        imp.api_version,
++        0,
++        None,
++        Vec::new(),
++        wgt::InstanceFlags::empty(),
++        wgt::MemoryBudgetThresholds::default(),
++        false,
++        Some(Box::new(|| {})), // the host owns the VkInstance
++    )
++    .expect("hal instance from raw");
++    let adapter = instance.expose_adapter(imp.physical_device).expect("adapter for this VkPhysicalDevice");
++    (instance, adapter)
++}
++
++#[no_mangle]
++pub unsafe extern "C" fn wgpuVulkanDeviceRequirements(imp: &WGPUVulkanImport, out: &mut WGPUVulkanRequirements) {
++    let (_instance, exposed) = hal_adapter(imp);
++    let exts = exposed.adapter.required_device_extensions(wgt::Features::empty());
++    let feats = exposed.adapter.physical_device_features(&exts, wgt::Features::empty());
++    assert!(exts.len() <= out.extensions.len());
++    out.extension_count = exts.len();
++    for (o, e) in out.extensions.iter_mut().zip(exts.iter()) {
++        *o = e.as_ptr();
++    }
++    out.features = feats.get_core();
++    // ponytail: the pNext members are private in wgpu-hal; on a 1.2+/1.3 device wgpu asks for
++    // these two when the device supports them, so the host enables them when supported.
++    out.timeline_semaphore = vk::TRUE;
++    out.robust_image_access = vk::TRUE;
++}
++
++#[no_mangle]
++pub unsafe extern "C" fn wgpuCreateDeviceFromVulkan(imp: &WGPUVulkanImport) -> native::WGPUDevice {
++    let (instance, exposed) = hal_adapter(imp);
++    let raw_device = ash::Device::load(exposed.adapter.shared_instance().raw_instance().fp_v1_0(), imp.device);
++    let mut exts: Vec<&'static CStr> = Vec::new();
++    for i in 0..imp.device_extension_count {
++        let p = *imp.device_extensions.add(i);
++        exts.push(CStr::from_ptr(p)); // ponytail: host keeps the names alive for the device's life
++    }
++    let limits = exposed.capabilities.limits.clone();
++    let open = exposed
++        .adapter
++        .device_from_raw(
++            raw_device,
++            Some(Box::new(|| {})), // the host owns the VkDevice
++            &exts,
++            wgt::Features::empty(),
++            &limits,
++            &wgt::MemoryHints::Performance,
++            imp.queue_family_index,
++            imp.queue_index,
++        )
++        .expect("device_from_raw");
++    let context = Arc::new(wgc::global::Global::from_hal_instance::<hal::api::Vulkan>("lcgr-guest", instance));
++    let adapter_id = context.create_adapter_from_hal(exposed.into(), None);
++    let desc = wgt::DeviceDescriptor { required_limits: limits, ..Default::default() };
++    let (device_id, queue_id) = context
++        .create_device_from_hal(adapter_id, open.into(), &desc, None, None)
++        .expect("create_device_from_hal");
++    let device = Arc::new_cyclic(|device| {
++        let error_sink = Arc::new(Mutex::new(ErrorSinkRaw::new(DEFAULT_DEVICE_LOST_HANDLER, device.clone())));
++        WGPUDeviceImpl {
++            context: context.clone(),
++            id: device_id,
++            queue: Arc::new(QueueId { context: context.clone(), id: queue_id }),
++            error_sink,
++        }
++    });
++    Arc::into_raw(device)
++}
++
++/// A texture over `image`, which the host owns (memory and handle). Its usage tracking starts
++/// as uninitialised: wgpu's first use discards the contents.
++#[no_mangle]
++pub unsafe extern "C" fn wgpuDeviceCreateTextureFromVkImage(
++    device: native::WGPUDevice,
++    image: vk::Image,
++    descriptor: &native::WGPUTextureDescriptor,
++) -> native::WGPUTexture {
++    let device = device.as_ref().expect("invalid device");
++    let format = crate::conv::map_texture_format(descriptor.format).expect("format");
++    let size = crate::conv::map_extent3d(&descriptor.size);
++    let hal_desc = hal::TextureDescriptor {
++        label: None,
++        size,
++        mip_level_count: descriptor.mipLevelCount,
++        sample_count: descriptor.sampleCount,
++        dimension: wgt::TextureDimension::D2,
++        format,
++        usage: wgt::TextureUses::empty(),
++        memory_flags: hal::MemoryFlags::empty(),
++        view_formats: Vec::new(),
++    };
++    let hal_texture = {
++        let hal_device = device.context.device_as_hal::<hal::api::Vulkan>(device.id).expect("vulkan device");
++        hal_device.texture_from_raw(image, &hal_desc, Some(Box::new(|| {})), hal::vulkan::TextureMemory::External)
++    };
++    let desc = wgt::TextureDescriptor {
++        label: None,
++        size,
++        mip_level_count: descriptor.mipLevelCount,
++        sample_count: descriptor.sampleCount,
++        dimension: wgt::TextureDimension::D2,
++        format,
++        usage: crate::conv::from_u64_bits(descriptor.usage).expect("usage"),
++        view_formats: Vec::new(),
++    };
++    let (id, error) = device.context.create_texture_from_hal(Box::new(hal_texture), device.id, &desc, None);
++    assert!(error.is_none(), "create_texture_from_hal: {error:?}");
++    Arc::into_raw(Arc::new(WGPUTextureImpl {
++        context: device.context.clone(),
++        id,
++        error_sink: device.error_sink.clone(),
++        surface_id: None,
++        has_surface_presented: Arc::default(),
++        data: TextureData {
++            usage: descriptor.usage,
++            dimension: descriptor.dimension,
++            size: descriptor.size,
++            format: descriptor.format,
++            mip_level_count: descriptor.mipLevelCount,
++            sample_count: descriptor.sampleCount,
++        },
++    }))
++}
++
++/// Records a transition of the whole texture to the state `usage` names (one bit:
++/// TextureBinding, RenderAttachment, CopySrc or CopyDst), so the host knows the layout wgpu leaves
++/// it in once the encoder's commands have run.
++#[no_mangle]
++pub unsafe extern "C" fn wgpuCommandEncoderTransitionTexture(
++    encoder: native::WGPUCommandEncoder,
++    texture: native::WGPUTexture,
++    usage: native::WGPUTextureUsage,
++) {
++    let encoder = encoder.as_ref().expect("invalid encoder");
++    let texture = texture.as_ref().expect("invalid texture");
++    let state = match usage {
++        native::WGPUTextureUsage_TextureBinding => wgt::TextureUses::RESOURCE,
++        native::WGPUTextureUsage_RenderAttachment => wgt::TextureUses::COLOR_TARGET,
++        native::WGPUTextureUsage_CopySrc => wgt::TextureUses::COPY_SRC,
++        native::WGPUTextureUsage_CopyDst => wgt::TextureUses::COPY_DST,
++        _ => panic!("one usage bit"),
++    };
++    encoder
++        .context
++        .command_encoder_transition_resources(
++            encoder.id,
++            std::iter::empty(),
++            std::iter::once(wgt::TextureTransition { texture: texture.id, selector: None, state }),
++        )
++        .expect("transition_resources");
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index ba92673..36f3dc7 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,6 +31,7 @@ use wgc::{
+ use crate::conv::map_primitive_state;
+ 
+ pub mod conv;
++pub mod interop;
+ pub mod logging;
+ pub mod unimplemented;
+ pub mod utils;
