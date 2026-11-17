@@ -27,10 +27,10 @@ pub const root_texture = 1;
 pub fn naga(comptime hlsl: []const u8) [:0]const u8 {
     comptime {
         const first = "SamplerState nagaSamplerHeap[2048]";
-        const last = "static const SamplerState samp = nagaSamplerHeap[nagaGroup1SamplerIndexArray[1]];\n";
+        const last = "static const SamplerState samp = nagaSamplerHeap[nagaGroup1SamplerIndexArray[1]];";
         const a = std.mem.indexOf(u8, hlsl, first) orelse @compileError("no naga sampler heap in the HLSL");
-        const b = (std.mem.indexOf(u8, hlsl, last) orelse @compileError("no naga sampler index in the HLSL")) + last.len;
-        return hlsl[0..a] ++ "SamplerState samp : register(s0, space1);\n" ++ hlsl[b..] ++ "\x00";
+        const b = (std.mem.findPos(u8, hlsl, a + first.len, last) orelse @compileError("no naga sampler index in the HLSL")) + last.len;
+        return hlsl[0..a] ++ "SamplerState samp : register(s0, space1);" ++ hlsl[b..] ++ "\x00";
     }
 }
 
@@ -197,6 +197,13 @@ pub fn quad(d: *com.Device, root: *com.RootSignature, format: c.DXGI_FORMAT, hls
 
 const testing = std.testing;
 const Device = @import("device.zig").Device;
+
+test "pipeline: the sampler declaration retains Windows HLSL line endings" {
+    const hlsl = comptime naga("SamplerState nagaSamplerHeap[2048];\r\n" ++
+        "static const SamplerState samp = nagaSamplerHeap[nagaGroup1SamplerIndexArray[1]];\r\n" ++
+        "float4 shade();\r\n");
+    try std.testing.expect(std.mem.startsWith(u8, hlsl, "SamplerState samp : register(s0, space1);\r\nfloat4 shade();\r\n"));
+}
 
 test "pipeline: naga's sampler heap becomes one static sampler" {
     try testing.expect(std.mem.indexOf(u8, stock_hlsl, "nagaSamplerHeap") == null);
