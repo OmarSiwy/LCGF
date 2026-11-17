@@ -226,16 +226,18 @@ fn clearScratch(t: *Tree, from: usize, to: usize) void {
 }
 
 /// `layout.applyText` for the runs outside the kept subtrees (roots included: a root's fit is
-/// its copied total). Runs are in node order, so each gap's runs are one range.
+/// its copied total). Runs and kept ranges are in node order, so one cursor visits each run once.
 pub fn applyTextKept(t: *Tree, tx: *const Texts, axis: Axis, kept: []const u32) void {
     const extents = [2][]const f32{ tx.c.w, tx.c.h };
     const src = extents[@backingInt(axis)];
     const dst = t.c.fit[@backingInt(axis)];
     var k: u32 = 0;
     for (kept) |r| {
-        const k1 = simd.rank(tx.c.node, tx.len, r);
-        for (tx.c.node[k..k1], src[k..k1]) |node, extent| dst[node] = extent;
-        k = simd.rank(tx.c.node, tx.len, t.c.end[r]);
+        while (k < tx.len and tx.c.node[k] < r) : (k += 1) {
+            dst[tx.c.node[k]] = src[k];
+        }
+        const end = t.c.end[r];
+        while (k < tx.len and tx.c.node[k] < end) : (k += 1) {}
     }
     for (tx.c.node[k..tx.len], src[k..tx.len]) |node, extent| dst[node] = extent;
 }
@@ -726,6 +728,31 @@ fn keptFrames(seed: u64, trees: u32, changes: u32) ![2]u32 {
         }
     }
     return counts;
+}
+
+test "applyTextKept: runs at adjacent kept roots and their exclusive ends" {
+    var raw: [32 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 8);
+    const root = t.push(0, .none, &.{});
+    _ = t.push(root, .none, &.{});
+    const a = t.push(root, .none, &.{});
+    _ = t.push(a, .none, &.{});
+    t.seal(a);
+    const b = t.push(root, .none, &.{});
+    _ = t.push(root, .none, &.{});
+    t.seal(root);
+    for (1..t.len) |node| {
+        const k = tx.push(@intCast(node), .{}, &.{});
+        tx.c.w[k] = @floatFromInt(node);
+        tx.c.h[k] = tx.c.w[k] + 10;
+    }
+    for (t.c.fit) |fit| @memset(fit[0..t.len], -1);
+    applyTextKept(&t, &tx, .x, &.{ a, b });
+    applyTextKept(&t, &tx, .y, &.{ a, b });
+    try testing.expectEqualSlices(f32, &.{ -1, 1, -1, -1, -1, 5 }, t.c.fit[0][0..t.len]);
+    try testing.expectEqualSlices(f32, &.{ -1, 11, -1, -1, -1, 15 }, t.c.fit[1][0..t.len]);
 }
 
 test "runKept: kept subtrees, moved or not, give the columns of a full layout" {
