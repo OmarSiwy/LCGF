@@ -158,11 +158,16 @@ Reproduce: `nix develop .#web -c ci/run.sh web-size`, `nix develop -c ci/run.sh 
 
 ## Exactness
 
-Not speed, but the numbers behind "every back end draws the same frame":
+The four render conformance scenes cover rectangles, clipping, text and a custom draw. Each
+golden comparison allows a difference of up to two levels per RGBA channel and requires every
+pixel to pass.
 
-- Every render conformance scene matches its golden image at 0 pixels off on wgpu, Vulkan,
-  GL ES 3, GL ES 2, the software renderer, WebGPU and the 2D canvas in headless Chromium 157,
-  and Direct3D 12 under Wine (vkd3d on lavapipe). Metal is built but has not run on a device.
+- All four scenes match their goldens on wgpu, Vulkan, GL ES 3, GL ES 2, the software renderer,
+  WebGPU and the 2D canvas in headless Chromium 157, and Direct3D 12 under Wine (vkd3d on lavapipe).
+- Native Direct3D 12 on Windows WARP passed all eight comparisons, one offscreen and one
+  presented image per scene. All 19,200 pixels in each image met the tolerance. [Windows CI job](https://github.com/OmarSiwy/LCGF/actions/runs/44198445015/job/134446056650)
+- On macOS, Metal rendered all four scenes on an Apple Paravirtual device. All 19,200 pixels
+  in each image met the tolerance. The subsequent AccessKit link step failed in that run. [macOS CI job](https://github.com/OmarSiwy/LCGF/actions/runs/44198445015/job/134446052065)
 - Widget pages: 127 golden frames at 0 pixels off (`ci/run.sh widget-golden`).
 - Bidirectional text: 45,832 lines of Unicode's BidiCharacterTest laid out in the file's
   visual order with its levels (7d498b9, C0850; `zig build text-conformance`).
