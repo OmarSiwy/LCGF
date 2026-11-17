@@ -8,7 +8,7 @@
 //! fully transparent), in paint order, and a frame only copies the template and writes the two
 //! rectangles from the layout outputs in `Dynamic`. Rows that paint nothing cost nothing.
 //!
-//! Layout can measure text runs; this emitter builds quads. Custom draws use the runtime
+//! `emitText` interleaves measured labels with the quads in draw order. Custom draws use the runtime
 //! front end (a custom widget makes every column dynamic). A transform needs the laid-out rect for its centre: a spec with one is a
 //! compile error.
 
@@ -20,6 +20,7 @@ const encode = @import("../draw/paint.zig").encode;
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const Quad = draw_list.Quad;
+const Span = @import("../core/strings.zig").Span;
 const none = @import("../core/types.zig").none;
 const DrawList = draw_list.DrawList;
 
@@ -31,6 +32,8 @@ const identity: [6]f32 = .{ 1, 0, 0, 1, 0, 0 };
 pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     const C = columns.Columns(spec, options);
     const n = C.node_count;
+    const D = @import("dynamic.zig").Regions(spec);
+    const labels = @import("layout.zig").labelRows(spec);
     const p = C.pushed;
     for ([_][]const u8{ "look", "extra", "scope", "clips" }) |name|
         if (C.classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic (a custom widget builds its rows at run time): paint it with the runtime tree");
@@ -83,20 +86,45 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
 
         /// Row k: the node of template k, in paint order.
         pub const node: [m]u32 = painted;
-        /// Every row in the order this UI paints them: `node`, then the rows that paint
-        /// nothing. `paint.emitLayered` with this order gives the same draw list as `emit`.
+        /// Every descriptor in paint order. Sorted quads occupy the original quad
+        /// positions; other rows and the labels they paint keep their original positions.
         pub const order: [n]u32 = blk: {
             @setEvalBranchQuota(10_000 + 20 * n * m);
             var out: [n]u32 = undefined;
             var k = 0;
-            for (painted) |i| {
-                out[k] = i;
-                k += 1;
+            for (&out, 0..) |*row, i| {
+                row.* = i;
+                if (k < m and in_row_order[k] == i) {
+                    row.* = painted[k];
+                    k += 1;
+                }
             }
-            for (0..n) |i| if (std.mem.indexOfScalar(u32, &painted, i) == null) {
-                out[k] = i;
-                k += 1;
-            };
+            break :blk out;
+        };
+
+        pub const label_count = labels.len;
+        const Label = struct { node: u32, parent: u32, quad_end: u32, padding: [4]f32, color: u32 };
+        // A subtree containing a label cannot fold. Its text is a boundary in the
+        // sorted quad stream, including the label's own background before its run.
+        const label_plans: [label_count]Label = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            var out: [label_count]Label = undefined;
+            var k = 0;
+            var l = 0;
+            for (order) |row| {
+                if (k < m and painted[k] == row) k += 1;
+                if (l < labels.len and row == labels[l]) {
+                    out[l] = .{
+                        .node = row,
+                        .parent = p.c.parent[row],
+                        .quad_end = k,
+                        .padding = .{ p.c.pad_lo[0][row], p.c.pad_lo[1][row], -p.c.pad_hi[0][row], -p.c.pad_hi[1][row] },
+                        .color = paint.fade((types.TextStyle{}).color.bitsOf(), inh.alpha[p.c.scope[row]]),
+                    };
+                    l += 1;
+                }
+            }
+            std.debug.assert(l == label_count);
             break :blk out;
         };
         /// Row k: the node whose `child_clip` clips template k, its parent.
@@ -220,6 +248,21 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                 /// Rebuild after layout/visibility changes or before the first upload.
                 pub fn rebuild(state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void {
                     emit(ram, d);
+                    applyAll(state, ram, d, dirty);
+                }
+
+                /// Rebuild a measured frame and then apply its state-bound quad fields.
+                pub fn rebuildText(state: *const State, ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *Dirty) void {
+                    emitText(ram, spans, strings, d);
+                    applyAll(state, ram, d, dirty);
+                }
+
+                pub fn rebuildLiveText(state: *const State, ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *Dirty) void {
+                    emitLiveText(ram, sel, spans, strings, d);
+                    applyAll(state, ram, d, dirty);
+                }
+
+                fn applyAll(state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void {
                     inline for (@typeInfo(State).@"struct".field_names) |name|
                         apply(@field(Field, name), state, ram, d, dirty);
                     dirty.* = .full;
@@ -233,32 +276,90 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// batches after it and may join its neighbours). `d` comes from
         /// `DrawList.init(carver, quad_count, 0, 0)` or larger.
         pub fn emit(ram: *const C.Dynamic, d: *DrawList) void {
-            var q: u32 = 0;
-            for (0..m) |k| {
-                const i = node[k];
-                var quad = templates[k];
-                const slot = C.slot(i);
-                quad.rect = .{ f32Of(ram.rect[0][slot]), f32Of(ram.rect[1][slot]), f32Of(ram.rect[2][slot]), f32Of(ram.rect[3][slot]) };
-                quad.clip = clipOf(ram, clip_node[k]);
-                d.quads[q] = quad;
-                d.op.kind[q] = @backingInt(DrawList.Kind.quads);
-                d.op.key[q] = keys[k];
-                d.op.ref[q] = q;
-                q += ram.visible[i];
-            }
-            d.quad_len = q;
-            d.op_len = q;
+            var cursor: Cursor = .{};
+            emitQuads(ram, d, 0, m, &cursor);
+            d.quad_len = cursor.quad;
+            d.op_len = cursor.op;
             d.run_len = 0;
             d.custom_len = 0;
             d.strings = "";
             // Once per frame, not per row.
-            if (q == m) {
+            if (cursor.quad == m) {
                 @memset(d.cmd.kind[0..nb], @backingInt(DrawList.Kind.quads));
                 @memcpy(d.cmd.first[0..nb], &batches.first);
                 @memcpy(d.cmd.count[0..nb], &batches.count);
                 @memcpy(d.cmd.key[0..nb], &batches.key);
                 d.cmd_len = nb;
             } else encode(d);
+        }
+
+        const Cursor = struct { quad: u32 = 0, op: u32 = 0 };
+
+        inline fn rectOf(ram: *const C.Dynamic, descriptor: u32) V4 {
+            const slot = C.slot(descriptor);
+            return .{ f32Of(ram.rect[0][slot]), f32Of(ram.rect[1][slot]), f32Of(ram.rect[2][slot]), f32Of(ram.rect[3][slot]) };
+        }
+
+        inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
+            for (first..end) |k| {
+                const i = node[k];
+                var quad = templates[k];
+                quad.rect = rectOf(ram, i);
+                quad.clip = clipOf(ram, clip_node[k]);
+                d.quads[cursor.quad] = quad;
+                d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
+                d.op.key[cursor.op] = keys[k];
+                d.op.ref[cursor.op] = cursor.quad;
+                cursor.quad += ram.visible[i];
+                cursor.op += ram.visible[i];
+            }
+        }
+
+        /// Paint a measured layout from its original spans, indexed in `strings`.
+        /// The caller provides storage for `quad_count` quads and `label_count` runs.
+        pub fn emitText(ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void {
+            if (D.count != 0) @compileError("paint a dynamic measured layout with emitLiveText");
+            emitLiveText(ram, .{}, spans, strings, d);
+        }
+
+        /// As in runtime paint, clipped live labels retain runs and only visible labels
+        /// emit commands. The selection is the one used by Layout.runLiveText.
+        pub fn emitLiveText(ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void {
+            if (label_count == 0) {
+                emit(ram, d);
+                d.strings = strings;
+                return;
+            }
+            const mask = D.mask(sel);
+            const style: types.TextStyle = .{};
+            var cursor: Cursor = .{};
+            var first: u32 = 0;
+            var r: u32 = 0;
+            for (label_plans, spans) |label, span| {
+                emitQuads(ram, d, first, label.quad_end, &cursor);
+                first = label.quad_end;
+                d.runs[r] = .{
+                    .rect = rectOf(ram, label.node) + @as(V4, label.padding),
+                    .clip = clipOf(ram, label.parent),
+                    .start = span.start,
+                    .bytes = span.bytes,
+                    .px = style.px,
+                    .color = label.color,
+                    .font = @backingInt(style.font),
+                };
+                d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
+                d.op.key[cursor.op] = 0;
+                d.op.ref[cursor.op] = r;
+                cursor.op += ram.visible[label.node];
+                r += @intFromBool(mask[label.node] != 0);
+            }
+            emitQuads(ram, d, first, m, &cursor);
+            d.quad_len = cursor.quad;
+            d.op_len = cursor.op;
+            d.run_len = r;
+            d.custom_len = 0;
+            d.strings = strings;
+            encode(d);
         }
 
         /// The clip `paint.emit` gives node `i`'s children, as x0, y0, x1, y1. With no clipping
@@ -404,7 +505,7 @@ fn pushAll(t: anytype, comptime s: Spec, parent: u32) void {
 fn expectSameDraw(a: *const DrawList, b: *const DrawList) !void {
     try testing.expectEqual(a.quad_len, b.quad_len);
     try testing.expectEqualSlices(u8, a.quadBytes(), b.quadBytes());
-    try testing.expectEqual(a.run_len, b.run_len);
+    try testing.expectEqualSlices(draw_list.TextRun, a.runs[0..a.run_len], b.runs[0..b.run_len]);
     try testing.expectEqual(a.custom_len, b.custom_len);
     try testing.expectEqualSlices(u8, a.strings, b.strings);
     try testing.expectEqual(a.op_len, b.op_len);
@@ -681,4 +782,83 @@ test "shared choice slots paint and hit only the active hosted region" {
             },
         }
     }
+}
+
+fn pushMeasured(t: *tree.Tree, tx: *Texts, comptime s: Spec, parent: u32, spans: []const Span) void {
+    const row = t.push(parent, if (s.id) |name| .hash(name) else .none, &s.style);
+    if (s.kind == .label) t.c.text[row] = tx.push(row, spans[tx.len], &.{});
+    inline for (s.children) |child| pushMeasured(t, tx, child, row, spans);
+    t.seal(row);
+}
+
+fn expectRuntimeText(comptime s: Spec, spans: []const Span, strings: []const u8, viewport: [2]f32, got: *const DrawList) !void {
+    var buf: [64 * 1024]u8 align(64) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = tree.Tree.init(&carver, @import("flatten.zig").count(s));
+    var tx = Texts.init(&carver, 4);
+    var cu = Customs.init(&carver, 1);
+    var expected = DrawList.init(&carver, t.cap, tx.cap, 0);
+    pushMeasured(&t, &tx, s, 0, spans);
+    (@import("../text/protocol.zig").Mono{}).measure(&tx);
+    layout.run(&t, &tx, viewport);
+    paint.emit(&t, &tx, &cu, strings, &expected);
+    try expectSameDraw(&expected, got);
+}
+
+test "measured paint interleaves text and quads across clipping, shared choices and RGB patches" {
+    const Scene = struct {
+        const strings = "firstsecond";
+        const spans = [2]Span{ .{ .bytes = 5 }, .{ .start = 5, .bytes = 6 } };
+        const panel: types.Style = .{ .clip = true, .opacity = 0.5, .pad = @splat(1), .border = 1 };
+        const before = tile(.{ .fill = .white });
+        const after = tile(.{ .fill = .white, .texture = @fromBackingInt(2) });
+        const a: Spec = .{ .kind = .label, .bind = "a", .style = .{ .fill = .rgb(0, 0, 80), .pad = @splat(2) } };
+        const b: Spec = .{ .kind = .label, .bind = "b", .style = .{ .opacity = 0.5, .pad = .{ 3, 1, 4, 1 } } };
+        fn page(comptime middle: Spec, comptime last: Spec) Spec {
+            return sp.row(.{ .clip = true, .gap = 1 }, .{ before, middle, last });
+        }
+    };
+    const ui = Scene.page(sp.choice(.mode, Scene.panel, .{ Scene.a, Scene.b }), Scene.after);
+    const L = ct_layout.Layout(ui, .{});
+    const P = Paint(ui, .{});
+    const State = struct { tint: types.Color = .white };
+    const Patch = P.Patches(State, &.{.{ .node = 5, .field = .tint, .target = .fill_rgb }});
+    const Mono = @import("../text/protocol.zig").Mono;
+    var buf: [32768]u8 align(64) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, P.quad_count, P.label_count, 0);
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    const tinted = comptime blk: {
+        var last = Scene.after;
+        last.style.fill = .rgb(80, 60, 40);
+        break :blk last;
+    };
+    inline for (.{ 0, 1, 2 }) |mode| {
+        const alt = comptime switch (mode) {
+            0 => sp.col(Scene.panel, .{Scene.a}),
+            1 => sp.col(Scene.panel, .{Scene.b}),
+            else => sp.col(Scene.panel, .{}),
+        };
+        const live_spans = Scene.spans[@min(mode, 2)..@min(mode + 1, 2)];
+        for ([_][2]f32{ .{ 240, 100 }, .{ 12, 12 } }) |viewport| {
+            const sel: L.Regions.Selection = .{.{ .n = mode }};
+            L.runLiveText(&scratch, &ram, viewport, sel, &Scene.spans, Mono{});
+            var dirty: P.Dirty = .empty;
+            Patch.rebuildLiveText(&.{}, &ram, sel, &Scene.spans, Scene.strings, &d, &dirty);
+            try expectRuntimeText(Scene.page(alt, Scene.after), live_spans, Scene.strings, viewport, &d);
+            Patch.apply(.tint, &.{ .tint = tinted.style.fill }, &ram, &d, &dirty);
+            try expectRuntimeText(Scene.page(alt, tinted), live_spans, Scene.strings, viewport, &d);
+        }
+    }
+
+    const plain = Scene.page(sp.col(Scene.panel, .{Scene.a}), Scene.after);
+    const LP = ct_layout.Layout(plain, .{});
+    const PP = Paint(plain, .{});
+    var plain_scratch: LP.Scratch = undefined;
+    var plain_ram: LP.Cols.Dynamic = undefined;
+    const vp = [2]f32{ 240, 100 };
+    LP.runText(&plain_scratch, &plain_ram, vp, Scene.spans[0..1], Mono{});
+    PP.emitText(&plain_ram, Scene.spans[0..1], Scene.strings, &d);
+    try expectRuntimeText(plain, Scene.spans[0..1], Scene.strings, vp, &d);
 }

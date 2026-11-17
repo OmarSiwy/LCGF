@@ -152,7 +152,7 @@ pub fn encode(d: *DrawList) void {
 }
 
 /// `color` (rgba8, alpha in the top byte) with its alpha times `alpha`, rounded. Exact for 1.
-inline fn fade(color: u32, alpha: f32) u32 {
+pub inline fn fade(color: u32, alpha: f32) u32 {
     const a: f32 = @floatFromInt(color >> 24);
     const scaled: u32 = @intFromFloat(@round(a * std.math.clamp(alpha, 0, 1)));
     return (color & 0x00ff_ffff) | (scaled << 24);
