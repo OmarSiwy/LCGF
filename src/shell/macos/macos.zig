@@ -739,7 +739,11 @@ const Fixture = struct {
     var count: [256]u32 = undefined;
 
     fn open(m: *Macos) !void {
-        try m.init(.{ .show = false }, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .glyphs = &glyphs, .first = &first, .count = &count });
+        try openWith(m, .{ .show = false });
+    }
+
+    fn openWith(m: *Macos, options: Macos.Options) !void {
+        try m.init(options, .{ .text = &text, .events = &events, .preedit = &preedit, .names = &names, .ends = &ends, .glyphs = &glyphs, .first = &first, .count = &count });
     }
 };
 
@@ -933,12 +937,21 @@ fn replayFrame(m: *Macos, r: *translate.Replay, ev: *Events) !?bool {
         } else m.t.feed(rec),
         else => m.t.feed(rec),
     };
-    return m.poll(ev);
+    const open = m.poll(ev);
+    for (records) |rec| switch (rec) {
+        .event => |e| if (e.kind == .moved) {
+            try testing.expectEqual([2]f32{ @floatCast(e.at[0]), ev.in.viewport[1] - @as(f32, @floatCast(e.at[1])) }, ev.in.pointer);
+        },
+        else => {},
+    };
+    return open;
 }
 
 test "macos: a real window runs the example from posted events" {
     var m: Macos = undefined;
-    try Fixture.open(&m);
+    // AppKit routes mouseMoved: to the key window's responder. Hidden windows
+    // accept synthetic button events but miss the hover frames in the recording.
+    try Fixture.openWith(&m, .{});
     defer m.deinit();
     var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
     var app_: lcgr.shell_example.App = .{};
