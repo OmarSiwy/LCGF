@@ -76,7 +76,11 @@ pub const Tweens = struct {
         const k = @backingInt(id);
         const guess = @min(t.next, t.len -| 1);
         const hit = simd.andB(guess < t.len, c.id[guess] == k);
-        const found = if (hit) guess else simd.find(c.id, t.len, k);
+        if (hit) {
+            t.next = guess + 1;
+            return guess;
+        }
+        const found = simd.find(c.id, t.len, k);
         const is_new = found == none;
         const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
         t.len = @min(t.len + @intFromBool(is_new), t.cap);
