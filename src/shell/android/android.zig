@@ -161,7 +161,6 @@ const Shared = struct {
     /// Bumped by every change; `acked` reaches it once the shell's thread has applied them.
     posted: u32 = 0,
     acked: u32 = 0,
-    resized: bool = false,
     destroyed: bool = false,
     /// The content rect (`onContentRectChanged`), window pixels; null before the first.
     content: ?ARect = null,
@@ -208,9 +207,6 @@ fn setWindow(s: *Shared) void {
 fn setQueue(s: *Shared) void {
     s.queue = pending_queue;
 }
-fn setResized(s: *Shared) void {
-    s.resized = true;
-}
 fn setDestroyed(s: *Shared) void {
     s.destroyed = true;
 }
@@ -252,7 +248,8 @@ var pending_content: ARect = undefined;
 fn setContent(s: *Shared) void {
     s.content = pending_content;
 }
-fn setConfiguration(_: *Shared) void {}
+// The shell samples window dimensions and density after waking.
+fn wakeOnly(_: *Shared) void {}
 
 fn onNativeWindowCreated(_: Act, w: *ANativeWindow) callconv(.c) void {
     pending_window = w;
@@ -263,7 +260,7 @@ fn onNativeWindowDestroyed(_: Act, _: *ANativeWindow) callconv(.c) void {
     post(setWindow, true);
 }
 fn onNativeWindowResized(_: Act, _: *ANativeWindow) callconv(.c) void {
-    post(setResized, false);
+    post(wakeOnly, false);
 }
 fn onInputQueueCreated(_: Act, q: *AInputQueue) callconv(.c) void {
     pending_queue = q;
@@ -283,7 +280,7 @@ fn onContentRectChanged(_: Act, r: *const ARect) callconv(.c) void {
 /// The density may have changed (moved to another display, display size changed in Settings):
 /// every posted change re-reads it.
 fn onConfigurationChanged(_: Act) callconv(.c) void {
-    post(setConfiguration, false);
+    post(wakeOnly, false);
 }
 
 /// The library's entry point: Android calls it on the main thread when the activity is
@@ -471,7 +468,6 @@ pub const Android = struct {
         // A recording sets its own window, density and content rect.
         if (s.recording == null) if (shared.activity) |a| s.t.setDensity(density(a));
         if (s.recording == null) if (shared.content) |r| s.t.setContent(@floatFromInt(r.left), @floatFromInt(r.top), @floatFromInt(r.right), @floatFromInt(r.bottom));
-        shared.resized = false;
         s.seen = shared.posted;
         shared.acked = s.seen;
         broadcast();
