@@ -133,6 +133,8 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
 pub fn encode(d: *DrawList) void {
     const o = d.op_len;
     var n: u32 = 0;
+    var first: u32 = 0;
+    var count: u32 = 0;
     var prev_kind: u8 = 0xff;
     var prev_key: u32 = 0;
     for (0..o) |j| {
@@ -143,8 +145,10 @@ pub fn encode(d: *DrawList) void {
         const k = n - 1; // the first op always breaks, so n >= 1 here
         d.cmd.kind[k] = kind;
         d.cmd.key[k] = key;
-        d.cmd.first[k] = simd.selU(brk != 0, d.op.ref[j], d.cmd.first[k]);
-        d.cmd.count[k] = d.cmd.count[k] * (1 - brk) + 1;
+        first = simd.selU(brk != 0, d.op.ref[j], first);
+        count = simd.selU(brk != 0, 0, count) + 1;
+        d.cmd.first[k] = first;
+        d.cmd.count[k] = count;
         prev_kind = kind;
         prev_key = key;
     }
@@ -280,7 +284,7 @@ test "sweep 3: equal-key quads merge, a key change or a text or custom op breaks
 }
 
 test "sweep 3: a repaint into a used draw list gives the same commands" {
-    // `count` accumulates from the previous row's value, so stale rows must not leak in.
+    // A reused list holds the preceding frame's batch counts. Repainting must overwrite them.
     var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
     var sc: Scene = .build(&buf);
     const first = sc.d.command(0);
