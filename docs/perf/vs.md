@@ -1,14 +1,8 @@
 # LCGF beside other GUI libraries
 
-The six scenes of `bench/scenes/` (form, list, text, springs, resize, idle) ported to each framework
-under `bench/vs/<name>/`, and measured with the same probes: frame time over 3,000 frames,
-resident memory and idle wake-ups from `tools/bench/probe.py`, and loaded bytes (text + rodata +
-data) from `tools/bench/size.zig`. `bench/vs/measure.py` runs it all; `ci/jobs/vs-<name>.sh` runs it
-for one framework beside the LCGF row (`nix develop -c ci/run.sh vs-clay`). No job is in `all`.
+Each default-branch run measures LCGF and eleven alternatives on the same Linux runner. The generated tables identify the measured revision and show all results, including ties and losses. [Latest CI comparison](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md) · [Raw data](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/measurements.json)
 
-Every number here is from one machine (32 CPUs, Linux, no GPU used) and the medians of 5 runs; the
-1-minute load average during the run is given with each table. Timings never compare across
-machines, and differ by tens of percent between runs on a machine shared with other builds.
+Reproduce the suite from the repository root with `nix develop .#vs -c ci/run.sh gates-vs`. The job runs five repetitions of 3,000 polls for form, list, text, springs, resize and idle. It separately measures process launch to first frame, idle and peak resident memory, idle wake-ups, executable sections, mapped shared libraries and three mapped-window resize operations. The local output is `zig-out/comparison/README.md` and `zig-out/comparison/measurements.json`. Pull requests retain the same report as a CI artifact. The historical tables below give measurements from earlier revisions.
 
 ## What a frame is in each harness
 
@@ -22,12 +16,14 @@ machines, and differ by tens of percent between runs on a machine shared with ot
 | Slint 1.18.1 | retained, lazy bindings: components made once; per frame the property changes (pointer event, ListView `content-y`, bar widths, window size), then `draw_if_needed` on a `MinimalSoftwareWindow`: bindings, layout and software redraw of the dirty region into a 32-bit buffer | system fonts, 14 and 20 px, rasterised | includes rasterisation; layout is evaluated lazily during rendering, so there is no layout-only time |
 | Qt Quick 6.12.0 | retained, bindings and scene graph: QML made once; per frame the changes (mouse move, ListView `contentY`, bar widths, window size), then `grabWindow`: polish (layout), scene graph sync and render with the software back end into an image | system fonts, 14 and 20 px, rasterised | includes rasterisation; `grabWindow` renders every frame, so the idle row uses Qt's own render loop instead (frames swapped) |
 | LVGL 9.6.0 | retained: objects made once; per frame the changes (pointer read, list rows recycled, bar widths, resolution), then `lv_refr_now`: layout and software redraw of the invalidated areas into a 32-bit partial buffer | Montserrat 14 and 20 px, rasterised | includes rasterisation; LVGL's own `layout` line (changes + `lv_obj_update_layout`) is given below |
+| Nuklear 4.13.4 | Immediate-mode controls and layout, followed by traversal of the native command stream | host-supplied monospace advances | clips the list to the visible range |
+| microui 2.02 | Immediate-mode controls, layout and traversal of its native command list | host-supplied monospace advances | uses fixed-height virtual rows |
+| GTK 4 | Native retained controls, a virtualized `GtkListView`, GTK allocation and a GSK snapshot. Event dispatch can also paint | Pango and system fonts | changed pointer positions require an X11 round trip. Idle uses the GLib event loop |
+| Qt Widgets | Native widgets, a virtualized `QListView`, layout and software paint into a pixmap | system fonts at 14 and 20 px | idle uses the native event loop |
 
-None of these rows rasterises except LVGL, Slint and Qt Quick. Draw output per frame differs in kind (LCGF quads and
-text runs, Clay render commands, ImGui and egui vertices, Iced layers), so the `out=` counts in the harness output are not comparable
-across rows.
+The output counter records work in each adapter's own units. A draw command, a glyph mesh and a complete image represent different amounts of rendering. Use the pixel-verified window test below to compare presentation of the same image across all twelve frameworks.
 
-## Frame time (median / p99, microseconds)
+## Historical eight-framework frame time (median / p99, microseconds)
 
 Each column was measured in its own `ci/run.sh vs-<name>` run, beside an LCGF row of that run
 (the LCGF medians of each run are in the next table: LCGF changed between runs as lanes merged,
@@ -225,14 +221,11 @@ Xvfb display. LCGF uses the X11 host and software renderer shared by its desktop
 Every framework lays out the same centered 64 × 64 rectangle. The background changes
 with window width so stale rows and frames from the previous size are detectable.
 
-Qt Quick uses its XCB platform and software scene graph. Clay emits rectangle commands,
-and ImGui and egui emit meshes. Their comparison hosts rasterize those commands with
-Cairo. LVGL, Iced and Slint use their own software rasterizers. These six clients share
-an Xlib image uploader. Consequently the numbers include each configured renderer and
+Qt Quick uses XCB and its software scene graph. Qt Widgets paints its native widget backing store and GTK 4 paints its native drawing area with Cairo. Clay, Nuklear and microui emit rectangle commands, and ImGui and egui emit meshes. Their hosts rasterize the output with Cairo. LVGL, Iced and Slint use their own software rasterizers. These eight clients share an Xlib image uploader. Consequently the numbers include each configured renderer and
 presentation path. An application using a different backend can have different latency.
 
 The observer times an X11 resize request through completion of the first server-side
-snapshot whose RGB values match the requested geometry at **every pixel**. A corner
+snapshot whose RGB values match the requested geometry at **every pixel**. Clients with a 32-bit ARGB visual must also present opaque alpha at every pixel. A corner
 probe avoids repeated full-size reads while the previous frame is showing.
 Times include a server-side copy and synchronization round trip. The observer then reads
 the frozen image and verifies it outside the timed interval. The raw JSON gives this

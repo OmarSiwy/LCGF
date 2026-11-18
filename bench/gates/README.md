@@ -52,13 +52,12 @@ CPU count; budgets recorded on one machine (latency, compile time) are not appli
 runners, since timings never compare across machines (`docs/CHECKS.md`). Comparison gates
 measure every framework in the same run, so they compare on any machine.
 
-What the numbers do not say:
+CI publishes each complete default-branch comparison, including results that miss a release target. The recorded budgets above change only when the project re-records them. [Latest measured tables](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md) · [Machine-readable results](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/measurements.json)
 
-- The LCGF row of the comparison is the benchmark tool (`tools/bench/bench.zig`), which carries
-  two cores and static buffers for 4,096 nodes: its memory, size and start-up are upper bounds
-  until an example program replaces it.
-- LVGL, Slint and Qt Quick rasterise in their frames and redraw only what changed; the others,
-  LCGF included, stop at a draw list. LVGL's form and text frames redraw nothing.
+Measurement boundaries
+
+- The LCGF comparison driver uses one production context sized for the scene. Idle RSS measures touched pages after its first frame.
+- The scene adapters end at different stages, from a native command list to a software-rendered image. Every toolkit also runs a separate mapped resize test with a common pixel oracle. [Adapter boundaries](../../docs/perf/vs.md)
 - Latency excludes the platform: no window, input queue or display scan-out.
 
 To re-record after a deliberate change: run the measurement (`ci/run.sh gates-vs`, then

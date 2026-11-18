@@ -4,6 +4,8 @@ The measured numbers, in one place, with the conditions they were taken under an
 that produced each one. Every number here comes from a tool in docs/CHECKS.md and can be
 reproduced with the command given under it. Where LCGF is not the fastest, this file says so.
 
+CI compares LCGF with eleven alternatives in the same Linux job. The generated report identifies the source revision, runner, run and fastest measured alternative for each active scene. It includes startup, executable and shared-library sizes, memory, idle wake-ups and window resize latency. Each successful measurement on the default branch updates the tables automatically. [Latest comparison](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md) · [Raw JSON](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/measurements.json) · [Methodology](vs.md)
+
 Machine for every number below unless a section says otherwise: Intel Core i9-14900HX
 (32 hardware threads), 31 GiB RAM, Linux 7.0.10, Zig 0.18.0-dev.1151+8dfb7a7cc, ReleaseFast,
 benchmark pinned to one CPU. Timings are medians. "Load" is the 1-minute load average during

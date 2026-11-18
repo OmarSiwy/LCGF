@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches-ignore: [benchmark-results]
   pull_request:
 
 jobs:
@@ -36,7 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: list
-        run: echo "matrix=$(ci/run.sh --matrix)" >> "$GITHUB_OUTPUT"
+        run: |
+          matrix=$(ci/run.sh --matrix | jq -c '[.[] | select(.job != "gates-vs")]')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   test:
     needs: jobs
@@ -61,3 +64,44 @@ jobs:
       - if: runner.os == 'Windows'
         shell: bash
         run: ci/run.sh ${{ matrix.job }}
+
+  gates-vs:
+    if: github.ref != 'refs/heads/experiment/metal-custom-draw'
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop .#vs -c ci/run.sh gates-vs
+      - name: Save comparison measurements
+        id: upload
+        if: ${{ !cancelled() && hashFiles('zig-out/comparison/README.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-comparison-${{ github.run_attempt }}
+          path: zig-out/comparison/
+          if-no-files-found: error
+      - name: Show measured results
+        if: ${{ !cancelled() && hashFiles('zig-out/comparison/README.md') != '' }}
+        run: sed '/^\[Raw measurements/d' zig-out/comparison/README.md >> "$GITHUB_STEP_SUMMARY"
+
+  publish-benchmarks:
+    needs: gates-vs
+    if: ${{ !cancelled() && needs.gates-vs.outputs.artifact != '' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: publish-benchmark-results
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.gates-vs.outputs.artifact }}
+          merge-multiple: true
+          path: comparison
+      - name: Update the measured results branch
+        run: bench/vs/publish.sh comparison

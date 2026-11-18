@@ -12,7 +12,7 @@ A Zig GUI framework with runtime and comptime front ends over shared layout, int
 | Integrate a renderer, platform or custom drawing | [Backends](docs/guide/backends.md), [porting](docs/guide/porting.md), [custom rendering](docs/guide/custom.md) |
 | Work with text or diagnose a compile error | [Text guide](docs/guide/text.md), [compiler errors](docs/guide/errors.md) |
 | Look up a declaration | [Public API index](docs/api/API.md), [ownership and API review](docs/release/api-review.md) |
-| Compare frameworks | [Measured comparison and methodology](docs/perf/vs.md), [gate results](docs/perf/RESULTS.md), [capability matrix](docs/TARGETS.md) |
+| Compare frameworks | [Latest twelve-framework CI results](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md), [workloads and methodology](docs/perf/vs.md), [historical results](docs/perf/RESULTS.md), [capability matrix](docs/TARGETS.md) |
 | Reproduce performance and footprint measurements | [Performance guide](docs/guide/perf.md), [CI checks](docs/CHECKS.md) |
 | Find release information | [Changelog](CHANGELOG.md), [compatibility policy](docs/release/compatibility.md), [dependency licences](docs/release/licenses.md) |
 

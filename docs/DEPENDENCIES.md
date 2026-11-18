@@ -33,4 +33,4 @@ the API (GPU drivers, windowing, accessibility); CI-only tools come from the Nix
 | A scriptable wgpu host (for example wgpu-py) | CI | tools-golden | CI only | Draws dumped frames and reads pixels back. | Used for the earlier shader and layout check. |
 | objdump | CI | tools-census | CI only | Counts conditional jumps in hot loops. |  |
 | OS performance counters (perf or equivalent) | CI | tools-bench, optimise | CI only | Cache misses, wakeups, resident memory. |  |
-| Clay, Dear ImGui, egui, Slint, LVGL, Iced, Qt Quick | Comparison only | vs-* lanes, gates | CI only | The same scenes are measured on each; never linked into the product. |  |
+| Clay, Dear ImGui, egui, Slint, LVGL, Iced, Qt Quick, Nuklear, microui, GTK 4, Qt Widgets | Comparison only | vs-* lanes, gates | CI only | The same scenes are measured on each; never linked into the product. |  |
