@@ -323,7 +323,11 @@ pub const op = struct {
     pub const get_input_focus = 43;
     pub const translate_coordinates = 40;
     pub const open_font = 45;
+    pub const create_pixmap = 53;
+    pub const free_pixmap = 54;
     pub const create_gc = 55;
+    pub const free_gc = 60;
+    pub const copy_area = 62;
     pub const put_image = 72;
     pub const get_image = 73;
     pub const create_glyph_cursor = 94;
@@ -673,6 +677,29 @@ pub fn getInputFocus(b: *Buf) void {
     b.head(op.get_input_focus, 0, 1);
 }
 
+pub const create_pixmap_size = 16;
+
+pub fn createPixmap(b: *Buf, id: u32, drawable: u32, width: u16, height: u16, depth: u8) void {
+    b.head(op.create_pixmap, depth, create_pixmap_size / 4);
+    b.int(u32, id);
+    b.int(u32, drawable);
+    b.int(u16, width);
+    b.int(u16, height);
+}
+
+pub const copy_area_size = 28;
+
+/// Copies the complete frame from the pixmap to the window, origin to origin.
+pub fn copyArea(b: *Buf, src: u32, dst: u32, gc: u32, width: u16, height: u16) void {
+    b.head(op.copy_area, 0, copy_area_size / 4);
+    b.int(u32, src);
+    b.int(u32, dst);
+    b.int(u32, gc);
+    b.zeros(8);
+    b.int(u16, width);
+    b.int(u16, height);
+}
+
 pub const create_gc_size = 20;
 
 /// A graphics context for PutImage, without GraphicsExpose events.
@@ -921,6 +948,8 @@ test "requests: lengths match the bytes written" {
         .{ get_property_size, getProperty, .{ 1, 2, false, 3 } },
         .{ get_input_focus_size, getInputFocus, .{} },
         .{ create_gc_size, createGc, .{ 1, 2 } },
+        .{ create_pixmap_size, createPixmap, .{ 1, 2, 640, 480, 24 } },
+        .{ copy_area_size, copyArea, .{ 1, 2, 3, 640, 480 } },
         .{ put_image_head, putImage, .{ 1, 2, 0, 0, 0, 0, 24 } },
         .{ get_image_size, getImage, .{ 1, 0, 0, 1, 1 } },
         .{ queryExtensionSize("XTEST"), queryExtension, .{"XTEST"} },

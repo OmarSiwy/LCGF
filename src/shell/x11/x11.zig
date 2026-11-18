@@ -36,7 +36,7 @@ pub const Error = error{
     ConnectionClosed,
     /// The server answered a request with an error (`Connection.last_error`).
     RequestFailed,
-    /// A reply larger than the read buffer.
+    /// A reply exceeds the read buffer, or image data cannot fit a core X11 request.
     MessageTooLarge,
     NoExtension,
     /// `openIme`: no input method server of that name.
@@ -633,6 +633,10 @@ pub const Window = struct {
     conn: *Connection,
     id: u32,
     gc: u32,
+    // Server-owned pixels from the last upload. Expose can repaint with a single copy.
+    pixmap: u32 = 0,
+    pixmap_width: u16 = 0,
+    pixmap_height: u16 = 0,
     /// Size in physical pixels, from the last ConfigureNotify.
     width: u16,
     height: u16,
@@ -647,7 +651,7 @@ pub const Window = struct {
     is_open: bool = true,
     /// An Expose arrived: the window's pixels have to be sent again.
     damaged: bool = false,
-    presented: bool = false,
+    presented_size: [2]u16 = .{ 0, 0 },
     /// Clock time of the last `present`, for `wait`'s display pacing.
     last_present: f64 = 0,
     /// Set by `wake`; makes the next `poll` report a frame.
@@ -766,6 +770,8 @@ pub const Window = struct {
         for (&c.windows) |*slot| {
             if (slot.* == w) slot.* = null;
         }
+        if (w.pixmap != 0) _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.free_pixmap, w.pixmap });
+        _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.free_gc, w.gc });
         _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.destroy_window, w.id });
         c.flush() catch {};
         w.is_open = false;
@@ -978,7 +984,8 @@ pub const Window = struct {
         const c = w.conn;
         c.pump() catch return false;
         if (!w.is_open) return false;
-        if (w.damaged and w.presented) w.send() catch return false;
+        if (w.damaged and w.pixmap != 0 and std.meta.eql(w.presented_size, [2]u16{ w.width, w.height }))
+            w.showPixmap() catch return false;
         if (w.paste_ready) {
             w.paste_ready = false;
             w.readPaste() catch return false;
@@ -1051,37 +1058,90 @@ pub const Window = struct {
         }
     }
 
+    /// Fit caller-owned, growable storage to the latest ConfigureNotify size. Keep the list
+    /// alive until close, then deinitialize it with the same allocator. Smaller frames reuse capacity.
+    pub fn fitPixels(w: *Window, storage: *std.ArrayList(u32), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+        if (w.fb.width == w.width and w.fb.height == w.height and w.fb.pixels.ptr == storage.items.ptr and w.fb.pixels.len == storage.items.len) return;
+        try storage.resize(allocator, sw.Framebuffer.len(w.width, w.height));
+        w.pixels = storage.items;
+        w.fb = .init(w.pixels, w.width, w.height, .bgra8);
+        // Padded rows travel on the wire. Drawing only initializes the visible columns.
+        const stride = w.fb.stride;
+        if (stride != w.width) for (0..w.height) |y| {
+            @memset(w.pixels[y * stride + w.width .. (y + 1) * stride], 0);
+        };
+    }
+
     /// Draws the frame in software and sends it.
     pub fn present(w: *Window, out: *const Output) void {
-        w.presents += 1;
         const width: u32 = w.width;
+        if (width == 0 or w.height == 0) return;
         // A window larger than the pixel buffer draws as many whole rows as fit.
         const rows: u32 = @intCast(@min(w.height, w.pixels.len / sw.Framebuffer.len(width, 1)));
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
         w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.scale);
-        w.send() catch {};
-        w.presented = true;
-        w.last_present = now();
+        w.presentPixels() catch {};
     }
 
-    /// Sends the framebuffer with PutImage, in strips that fit the server's request size. Rows
-    /// are `stride` pixels; the padding past `width` falls outside the window and is clipped.
-    fn send(w: *Window) Error!void {
+    /// Upload a host-drawn framebuffer offscreen, then show the complete frame in one request.
+    /// The server clips SIMD padding at the right edge of the pixmap.
+    pub fn presentPixels(w: *Window) Error!void {
         const c = w.conn;
         const fb = &w.fb;
         if (fb.width == 0 or fb.height == 0) return;
-        const row_bytes = @as(usize, fb.stride) * 4;
-        const max_bytes = @as(usize, c.setup.max_request) * 4 - wire.put_image_head;
-        const strip: u32 = @intCast(@max(1, @min(max_bytes / row_bytes, 0xffff)));
-        var y: u32 = 0;
-        while (y < fb.height) : (y += strip) {
-            const h = @min(strip, fb.height - y);
-            _ = c.send(wire.put_image_head, wire.putImage, .{ w.id, w.gc, @as(u16, @intCast(fb.stride)), @as(u16, @intCast(h)), 0, @as(i16, @intCast(y)), c.setup.root_depth });
-            try c.flush();
-            try c.writeAll(std.mem.sliceAsBytes(fb.pixels[y * fb.stride ..][0 .. h * fb.stride]));
+        const width: u16 = @intCast(fb.width);
+        const height: u16 = @intCast(fb.height);
+        if (w.pixmap_width != width or w.pixmap_height != height) {
+            if (w.pixmap == 0) {
+                w.pixmap = c.id();
+            } else {
+                _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.free_pixmap, w.pixmap });
+            }
+            _ = c.send(wire.create_pixmap_size, wire.createPixmap, .{ w.pixmap, w.id, width, height, c.setup.root_depth });
+            w.pixmap_width = width;
+            w.pixmap_height = height;
         }
+        if (c.setup.max_request <= wire.put_image_head / 4) return error.MessageTooLarge;
+        const max_pixels = @as(usize, c.setup.max_request) - wire.put_image_head / 4;
+        if (fb.stride <= max_pixels and fb.stride <= std.math.maxInt(u16)) {
+            const rows: u32 = @intCast(@min(max_pixels / fb.stride, height));
+            var y: u32 = 0;
+            while (y < height) : (y += rows) {
+                const h = @min(rows, height - y);
+                try w.uploadPixels(0, y, fb.stride, h, fb.pixels[y * fb.stride ..][0 .. h * fb.stride]);
+            }
+        } else {
+            // Even one padded row can exceed a small server's request limit.
+            for (0..height) |y| {
+                const row = fb.pixels[y * fb.stride ..][0..width];
+                var x: usize = 0;
+                while (x < width) {
+                    const n = @min(max_pixels, width - x);
+                    try w.uploadPixels(@intCast(x), @intCast(y), @intCast(n), 1, row[x..][0..n]);
+                    x += n;
+                }
+            }
+        }
+        try w.showPixmap();
+        w.presents += 1;
+        w.presented_size = .{ w.width, w.height };
+        w.last_present = now();
+    }
+
+    fn uploadPixels(w: *Window, x: u32, y: u32, width: u32, height: u32, pixels: []const u32) Error!void {
+        const c = w.conn;
+        const dst_x = std.math.cast(i16, x) orelse return error.MessageTooLarge;
+        const dst_y = std.math.cast(i16, y) orelse return error.MessageTooLarge;
+        _ = c.send(wire.put_image_head, wire.putImage, .{ w.pixmap, w.gc, @as(u16, @intCast(width)), @as(u16, @intCast(height)), dst_x, dst_y, c.setup.root_depth });
+        try c.flush();
+        try c.writeAll(std.mem.sliceAsBytes(pixels));
+    }
+
+    fn showPixmap(w: *Window) Error!void {
+        _ = w.conn.send(wire.copy_area_size, wire.copyArea, .{ w.pixmap, w.id, w.gc, w.pixmap_width, w.pixmap_height });
+        try w.conn.flush();
     }
 
     /// Blocks until the server sends something, `wake` is called, or `seconds` pass (`inf`: no
@@ -1224,6 +1284,48 @@ test "x11: the example runs from the input recording, and the window shows it" {
     try testing.expectEqual(th.control, try pixel(&w, 12, 74));
     try testing.expectEqual(w.background, try pixel(&w, 400, 300));
     try testing.expectEqual(th.text, try pixel(&w, 20, 70));
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
+test "x11: grow and shrink a padded custom framebuffer, then present the entire image" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    var storage: std.ArrayList(u32) = .empty;
+    defer storage.deinit(testing.allocator);
+    var w: Window = undefined;
+    try w.open(c, 80, 60, "resizable pixels", Fixture.buffers);
+    defer w.close();
+    const server = struct {
+        fn resize(b: *wire.Buf, window: u32, width: u16, height: u16) void {
+            b.head(wire.op.configure_window, 0, 5);
+            b.int(u32, window);
+            b.int(u16, (1 << 2) | (1 << 3));
+            b.zeros(2);
+            b.int(u32, width);
+            b.int(u32, height);
+        }
+    };
+    for ([_][2]u16{ .{ 2520, 1420 }, .{ 643, 403 }, .{ 2523, 1421 } }) |size| {
+        _ = c.send(20, server.resize, .{ w.id, size[0], size[1] });
+        try c.sync();
+        var ev: Events = .{};
+        try testing.expect(w.poll(&ev));
+        try testing.expectEqual(size, [2]u16{ w.width, w.height });
+        try w.fitPixels(&storage, testing.allocator);
+        w.fb.clear(.black);
+        const marker = Color.rgb(20, 80, 240);
+        const x = w.fb.width - 1;
+        const y = w.fb.height - 1;
+        w.fb.fill(.{ x, y, x + 1, y + 1 }, marker);
+        w.fb.fill(.{ 17, 19, 18, 20 }, marker);
+        try w.presentPixels();
+        try testing.expectEqual(marker, try pixel(&w, 17, 19));
+        // A 1024x768 CI screen clips the window, but the backing pixmap contains the full frame.
+        const reply = try c.reply(c.send(wire.get_image_size, wire.getImage, .{ w.pixmap, @as(i16, @intCast(x)), @as(i16, @intCast(y)), 1, 1 }));
+        try testing.expectEqualDeep([3]u8{ marker.b, marker.g, marker.r }, reply[32..35].*);
+    }
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
 

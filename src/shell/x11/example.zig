@@ -12,18 +12,14 @@ const lcgf = @import("lcgf");
 const x11 = @import("x11.zig");
 const context = lcgf.context;
 const scheduler = lcgf.scheduler;
-const sw = lcgf.render_sw;
 const Quad = lcgf.draw_list.Quad;
 const example = lcgf.shell_example;
 const Events = lcgf.shell_iface.Events;
 
 const limits: context.Limits = .{ .nodes = 1024, .texts = 256 };
-const max_w = 1920;
-const max_h = 1200;
 
 var conn: x11.Connection = .{};
 var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
-var pixels: [sw.Framebuffer.len(max_w, max_h)]u32 = undefined;
 var glyphs: [4096]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
@@ -46,8 +42,10 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.startsWith(u8, m, "@im=")) conn.openIme(m[4..], "en_US") catch {};
     }
 
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(init.gpa);
     var w: x11.Window = undefined;
-    try w.open(&conn, 800, 600, "lcgf example", .{ .pixels = &pixels, .glyphs = &glyphs, .first = &first, .count = &count });
+    try w.open(&conn, 800, 600, "lcgf example", .{ .pixels = pixels.items, .glyphs = &glyphs, .first = &first, .count = &count });
     defer w.close();
     var ctx = try context.Context.init(&ctx_buffer, limits);
     var app: example.App = .{};
@@ -57,6 +55,7 @@ pub fn main(init: std.process.Init) !void {
     var ev: Events = .{};
     while (w.poll(&ev)) {
         if (ctx.needsFrame(&ev.in)) {
+            try w.fitPixels(&pixels, init.gpa);
             var f = ctx.begin(&ev.in);
             app.build(&f, &ev);
             const out = f.end(.{});
