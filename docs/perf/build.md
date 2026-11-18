@@ -30,6 +30,4 @@ arithmetic, is what is left (C0804).
 Census: `p_tree_push` went from 163 to 253 instructions (the template is built on the stack, then
 copied), 0 jumps before and after; `p_tree_push_row` is 162 instructions, 0 jumps.
 
-`tools/bench`'s `build` pass still times the prototype's `Tree.push` (frames are built with
-prototype/ui.zig until the runtime front end has the widgets the scene uses), so it does not move:
-the micro-benchmark is the measurement.
+At the revision measured here, the `build` pass called the prototype's `Tree.push`, so the table reports the production microbenchmark. The current `zig build bench` uses the production runtime front end.

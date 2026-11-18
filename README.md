@@ -20,19 +20,15 @@ Use `nix develop -c zig build test` to run the framework tests and `nix develop 
 
 Post-release design work is tracked in [TODO.md](TODO.md).
 
-## Original development plan
-
-The following handoff records how the implementation plan was set up.
-
 ## What is here
 
 | Path | What it is |
 |---|---|
-| `CLAUDE.md` | The brief every agent reads first: rules, commands, how progress is recorded. |
+| `CLAUDE.md` | Repository conventions and verification commands. |
 | `docs/ZIG_0_17_1.md` | What changed in Zig, verified on the compiler. The single most useful file for an agent. |
 | `docs/DESIGN.md` | Architecture, the four rules, settled decisions, and the three decisions that are yours. |
 | `docs/CHECKS.md` | How to repeat every measurement, with the recorded output. |
-| `docs/TARGETS.md`, `GATES.md`, `DEPENDENCIES.md`, `REFERENCES.md` | The 30 targets and the framework comparison, the release gates, the dependency list, and implementation references. |
+| `docs/TARGETS.md`, `GATES.md`, `DEPENDENCIES.md`, `REFERENCES.md` | Framework targets, release gates, dependencies and implementation references. |
 | `tools/zigcheck/` | 70 compile checks behind the Zig notes. Run it on your machine first. |
 | `.claude/skills/` | The two design guides the API follows (system API design, data-oriented design). |
 

@@ -1,7 +1,7 @@
 # Architecture
 
 How the code is layered, and the one rule that keeps the layers apart. The decisions behind it are
-in `docs/DESIGN.md`; the working code it came from is the header of `prototype/ui.zig`.
+in the design guide. The original implementation records how these tiers evolved. [Design](DESIGN.md) · [Archived source](https://github.com/OmarSiwy/LCGF/blob/b6c1319/prototype/ui.zig)
 
 ## The tier rule
 
@@ -19,7 +19,7 @@ read and write the core's data, and the core never imports them.
 Two consequences:
 
 - **Granularity.** Every tier-1 or tier-2 call can be replaced by a few tier-0 calls. The test
-  `tier 0 alone` in `prototype/example.zig` keeps that true; the ported core keeps an equivalent.
+  `tier 0 alone: no Context, caller sequences the passes` in `src/layout/layout.zig` exercises that contract.
 - **Portability.** Because tier 0 touches no OS, it builds for any target Zig supports, including
   freestanding ones (the embedded profile).
 

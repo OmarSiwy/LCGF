@@ -167,7 +167,7 @@ function parameter shadows declaration of 'lanes'
 ```
 
 No local or parameter may have the name of a declaration in the same file. Rename the local, or
-give the top-level alias another name (`prototype/ui.zig` uses `W` for `simd.lanes`).
+give the top-level alias another name, such as `W` for `simd.lanes`.
 
 ```text
 extern structs cannot contain fields of type '@Vector(4, f32)'

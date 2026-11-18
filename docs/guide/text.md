@@ -3,8 +3,7 @@
 The core never calls into a font. There is no `measure(node)` hook, no shaper interface and no
 re-measure loop that layout drives. Text runs are rows of a side list, `Texts`, and a font is
 anything that reads some of its columns and writes others, at two points you sequence. That is
-the whole protocol; the header of `src/text/protocol.zig` (from the fonts section of
-`prototype/ui.zig`) gives the reasons: a callback per run is an indirect call per row, hides the
+the whole protocol. As the header of `src/text/protocol.zig` explains, a callback per run is an indirect call per row, hides the
 loop from SIMD and hands control flow to the framework, while columns let one font measure every
 run in one vector loop, let a real shaper run elsewhere or cache by string, and let a test write
 the numbers by hand.
