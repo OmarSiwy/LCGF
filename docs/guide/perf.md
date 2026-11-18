@@ -77,7 +77,7 @@ try testing.expectEqual(924 * 4096, large - small); // 924 bytes per node
 
 Two tree generations (this frame's, and last frame's for hit testing and reuse) take most of it;
 `docs/perf/bytes.md` breaks the row down. At the default `Limits` (4,096 nodes, 1,024 text runs,
-64 KB of text per frame) the buffer is 4,118,144 bytes; sized for the prototype's example (1,024
+64 KB of text per frame) the buffer is 4,118,144 bytes; sized for the original example (1,024
 nodes, 256 runs) it is 1,161,344. Size the limits to your UI: a limit hit in a frame is reported
 in `Output.status`, never written past.
 
@@ -99,9 +99,7 @@ instructions in ReleaseFast, ReleaseSmall and ReleaseSafe).
 
 ## Size
 
-`zig build size` (ReleaseSmall, x86-64 Linux): the prototype's frame dumper is 24,218 bytes of
-text and 9,920 of rodata; the benchmark, which links the whole runtime front end, the widgets and
-every scene, is 203,439 bytes of text and 52,404 of rodata. The bare-metal example
+Run `nix develop -c zig build size -Dtarget=x86_64-linux -Dcpu=x86_64_v3` for the current ReleaseSmall section sizes of the production frame dumper and benchmark. At e703492 the original dumper measured 24,218 bytes of text and 9,920 bytes of rodata, and the benchmark measured 203,439 and 52,404 bytes, respectively. [Historical sources](https://github.com/OmarSiwy/LCGF/tree/e703492) The bare-metal example
 (`ci/run.sh baremetal`, no OS) links to 113,478 bytes of text for Cortex-M7 and 203,862 for
 RV32IMAC, with 663,680 bytes of bss (its framebuffer and buffers, all static).
 

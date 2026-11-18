@@ -1,5 +1,7 @@
 # The bench on lcgf's front end
 
+This report records the comparison made while both front ends were available. To reproduce its two-core commands, use the archived checkout. The current command, `nix develop -c zig build bench`, measures the production runtime and verifies its first frame against `Frame.end`. [Archived benchmark](https://github.com/OmarSiwy/LCGF/blob/b6c1319/tools/bench/bench.zig)
+
 tools/bench now times lcgf's runtime front end end to end: `Context.begin` is begin+hit, the
 scene building through `Frame` and the reference widgets (src/widgets/base.zig) is build, the
 body of `Frame.end` split at each pass is layout, and `Frame.finish` is paint. Every scene of

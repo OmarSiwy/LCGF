@@ -1,11 +1,11 @@
 # Design
 
 What is being built, the decisions already taken, and why. Read this before changing structure.
-The working code these decisions came from is in `prototype/`.
+The initial implementation is preserved in the project history. [Archived prototype](https://github.com/OmarSiwy/LCGF/tree/b6c1319/prototype)
 
 ## Goal
 
-A GUI framework in Zig 0.17.1 that is lighter and faster than the frameworks in `docs/TARGETS.md`
+A GUI framework in Zig that is lighter and faster than the frameworks in `docs/TARGETS.md`
 while giving the application full control, down to the GPU pass. "Better" is not a matter of opinion
 here: `docs/GATES.md` lists what is measured, against which frameworks, and by which tool. A claim
 that no gate measures is not a claim this project makes.
@@ -37,15 +37,8 @@ A tier may use the tiers before it and nothing after it.
 | 2 | Conveniences written only against the public API of tiers 0 and 1: widgets, themes, reuse, animation helpers. | `src/widgets/`, `src/theme/` |
 | outside | Renderers consume a `DrawList`. Shells produce `Input` and present frames. Neither is imported by tiers 0 to 2. | `src/render/*/`, `src/shell/*/` |
 
-Each lane of the plan has a home (`plan.py lane <name>` prints it). Lanes with different homes do not
-touch the same files, which is what lets them run in parallel. Lanes of one family share a directory
-(`layout-*`, `ct-*`, `draw-*`, `a11y-*`): they add their own files where they can, but some will have
-to edit a shared pass. Keep those edits small and rebase often; a merge conflict inside a family is
-expected. A commit that needs a file in a *different* family's home means the plan is missing a
-dependency: report it.
-
 Granularity rule (from the API guide): every tier-1 or tier-2 call must be replaceable by a few
-tier-0 calls, and the test `tier 0 alone` in `prototype/example.zig` keeps that true.
+tier-0 calls, and the test `tier 0 alone` in `src/layout/layout.zig` exercises that contract.
 
 ## The four rules, and how each is checked
 
@@ -74,10 +67,9 @@ public function arrives together with the test that uses it.
 
 **Runtime** (`Context`, `Frame`): the tree is rebuilt each frame by calling `open` / `leaf` / `close`.
 Handles any data-driven UI. Signals and `Frame.reuse` let unchanged subtrees be copied instead of
-rebuilt. This is what `prototype/ui.zig` implements.
+rebuilt. See `src/runtime/context.zig` and `src/runtime/frame.zig`.
 
-**Comptime** (`Ui(State, spec)`): the UI is a compile-time value. `prototype/comptime_ui_probe.zig`
-proves the mechanism on 0.17.1. What it buys:
+**Comptime** (`Ui(State, spec)`): the UI is a compile-time value. The current implementation lives in `src/comptime/`. The original Zig 0.17.1 probe established its storage model. [Archived probe](https://github.com/OmarSiwy/LCGF/blob/b6c1319/prototype/comptime_ui_probe.zig)
 
 - Structure and style become read-only tables; only state, dynamic rectangles and a dirty mask are in
   RAM. The probe's 8-node UI needs 104 bytes.
@@ -105,7 +97,7 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
 - **Vulkan, Metal, Direct3D 12, GL ES, web**: thin native back ends. They exist because the overhead
   worth removing is the abstraction and validation layer above the GPU API, not the API.
 - **wgpu**: the portable back end, and the route for applications that want raw wgpu. The host owns
-  device, queue and pass; see the header of `prototype/ui_wgpu.zig` for the five kinds of raw access.
+  the device, queue and pass. The production interface documents five kinds of raw access. [wgpu backend](../src/render/wgpu/wgpu.zig)
 - **One per build.** `-Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu` picks the back end the
   `lcgf_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on
   Apple, Direct3D 12 on Windows, Vulkan on Linux and Android, web on wasm32, software on
@@ -130,7 +122,7 @@ virtual dispatch for per-node behaviour; hiding data behind accessors; methods t
 node at a time; splitting a batch loop into small per-row functions. Organise code by operation over
 many rows, not by object.
 
-Commit C0002 writes this up as `CODE_STANDARD.md`; until then this section is the standard.
+See the [code standard](CODE_STANDARD.md) for implementation and review rules.
 
 ## Decisions that are settled
 
@@ -147,15 +139,9 @@ Do not reopen these inside a commit. If one looks wrong, say so in your report.
 - One `DrawList` format for every renderer. Renderers are generic over a small binding namespace.
 - Accessibility is a column set (`role`, `value`) on the same tree, bridged outside the core.
 
-## For the owner to decide (agents: ask, do not choose)
-
-- The licence (commit C0001 needs it).
-- The project and package name (`build.zig.zon` `.name`).
-- Where CI runs.
-
 ## Numbers from the prototype
 
-Measured on one 2.1 GHz Xeon VM core, ReleaseFast, 8 lanes; re-run them with `docs/CHECKS.md`.
+These historical measurements used one 2.1 GHz Xeon VM core, ReleaseFast and eight SIMD lanes. Current checks run against the production package. [Archived prototype](https://github.com/OmarSiwy/LCGF/tree/b6c1319/prototype) · [Production checks](CHECKS.md)
 
 | What | Value |
 |---|---|

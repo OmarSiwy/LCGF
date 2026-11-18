@@ -100,7 +100,7 @@ comptime {
 ```
 
 `shell_iface.run` is the whole host loop over those five calls. Every shell runs the same
-application, `shell_example.App` (the prototype's `buildUi`), so its tests compare like with like:
+application, `shell_example.App` in `src/shell/example.zig`, so its tests exercise the same UI.
 
 ```zig
 var ctx = try Context.init(&ctx_buffer, limits);

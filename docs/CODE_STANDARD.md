@@ -48,6 +48,6 @@ public API of tiers 0 and 1.
   filtering is "write always, advance by 0 or 1". Only loop control may branch.
 - **Measure before claiming.** A performance or size statement carries a number from a tool in
   `docs/CHECKS.md`.
-- **Port, do not redesign.** Code that cites `prototype/` keeps the prototype's results.
+- **Preserve behavior.** When changing a ported pass, retain the behavior captured by its regression tests and golden fixtures. The original source remains available for comparison. [Archived prototype](https://github.com/OmarSiwy/LCGF/tree/b6c1319/prototype)
 
 A commit that breaks one of these needs a measured reason in its message.

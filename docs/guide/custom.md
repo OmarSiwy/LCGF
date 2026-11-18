@@ -12,9 +12,7 @@ Because you own the pass, raw GPU access needs no callback and no back-end hook.
 
 Every code block below is a piece of `docs/guide/custom.zig`, which `zig build docs` compiles
 and runs against `render_null.Null`, the back end that records the calls a GPU back end makes.
-The contract and the three routes are written up in the header of `src/render/iface.zig`; the
-wgpu back end's header (`src/render/wgpu/wgpu.zig`, from `prototype/ui_wgpu.zig`) lists the five
-kinds of raw access below.
+The renderer interface describes three ways to interleave custom drawing with UI commands. The wgpu backend documents the five kinds of raw access below. [Renderer interface](../../src/render/iface.zig) · [wgpu backend](../../src/render/wgpu/wgpu.zig)
 
 | Access | How |
 |---|---|

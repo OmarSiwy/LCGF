@@ -1,42 +1,22 @@
 # Checks
 
-The checks that were run on the prototype, how to repeat them, and what they printed. In the plan,
-"Checks run earlier" refers to this file. Lanes `tools-*` turn these into CI jobs; until then, run
-them by hand from `prototype/`.
-
-The recorded numbers below were taken with Zig 0.17.1 on x86-64 Linux; the project now uses 0.18.0-dev.1151+8dfb7a7cc (see section 2 for the census on it). Timings came from a shared VM and move by
-about a third between runs: compare runs on one machine, never across machines.
+Run these commands from the repository root. Nix supplies the pinned Zig and the tools each CI job uses. Sections 2 and 3 also retain the original prototype measurements on Zig 0.17.1 and x86-64 Linux. For comparisons, run both revisions on the same machine. [Archived prototype source](https://github.com/OmarSiwy/LCGF/tree/b6c1319/prototype)
 
 ## 1. Tests (the test matrix)
 
+```sh
+nix develop -c ci/run.sh debug
+nix develop -c ci/run.sh release-safe
+nix develop -c ci/run.sh release-fast
+nix develop -c ci/run.sh cross
 ```
-cd prototype
-zig build test                                   # Debug, native CPU
-zig build test -Doptimize=ReleaseSafe
-zig build test -Doptimize=ReleaseFast
-zig build test -Dcpu=x86_64                      # 4 lanes
-zig build test -Dcpu=x86_64_v3                   # 8 lanes
-zig build cross                                  # compile only: aarch64-linux, aarch64-macos,
-                                                 # x86_64-windows, wasm32-wasi, riscv64-linux
-```
-
-Expected: every step succeeds. `comptime_ui_probe.zig` prints its sizes to stderr
-(`nodes=8 Index=u4 Runtime bytes=104 (state 32 + rects 64 + mask 1)`); the build runner echoes that
-line and it is not a failure.
-
-Lane counts 2 and 16 were checked by editing `simd.lanes` in a scratch copy of `ui.zig` (the std
-width query never returns 16; see `ZIG_0_17_1.md`). All tests passed at both. The first `simd`
-commit should make the lane count a build option so CI can do this without editing a file.
-
-For the package that option exists: `-Dlanes=N` forces the lane count, and each cell of the
-matrix is a CI job, one file in `ci/jobs/` (`nix develop -c ci/run.sh <job>`):
 
 | Job | What it runs |
 |---|---|
-| `debug`, `release-safe`, `release-fast` | `zig build test` in each mode, for the root package and the prototype |
-| `lanes-4`, `lanes-8` | the tests of both at the lane count a CPU gives: `-Dcpu=x86_64` (SSE2, 4) and `-Dcpu=x86_64_v3` (AVX2, 8) |
+| `debug`, `release-safe`, `release-fast` | `zig build test` on the production package in each mode |
+| `lanes-4`, `lanes-8` | the production tests at the lane count suggested by each CPU: `-Dcpu=x86_64` (SSE2, 4) and `-Dcpu=x86_64_v3` (AVX2, 8) |
 | `lanes-2`, `lanes-16` | the root package's tests at a lane count no x86-64 CPU query gives, forced with `-Dlanes=N` |
-| `cross` | `zig build test-build` for aarch64-linux, aarch64-macos, x86_64-windows, wasm32-wasi and riscv64-linux, and the prototype's `cross` |
+| `cross` | `zig build test-build` for aarch64-linux, aarch64-macos, x86_64-windows, wasm32-wasi and riscv64-linux |
 | `windows`, `macos` | what only that OS can show, on a GitHub runner of it (header `# runner: windows` or `# runner: macos`; outside `all`) |
 
 A job's header lines choose how it runs: `# shell: <name>` the Nix dev shell (`golden` has
@@ -45,14 +25,11 @@ wgpu-py on lavapipe, Xvfb, weston and Wine), `# all: no` leaves it out of `ci/ru
 
 ## 2. Branch census
 
-```
-cd prototype
-zig build census-obj -Dcpu=x86_64_v3
-python3 census.py zig-out/asm_probe.o
+```sh
+nix develop -c ci/run.sh census-src
 ```
 
-`asm_probe.zig` exports one function per pass; `census.py` disassembles them with `objdump` and
-counts conditional jumps. Backward jumps are loop control. Recorded output:
+The job builds `src/census_probes.zig` for `x86_64_v3`, disassembles the object with `objdump` and checks conditional jumps against `tools/census/baseline-src.json`. Backward jumps usually control loops. The table below records the original prototype census.
 
 ```
 function      insns  jcc  back  fwd short-fwd   vec
@@ -103,26 +80,23 @@ turns a select into a branch around a load when one operand is a field loaded on
 select (masks, `simd.selU`, `b2f` products and bit selects alike). An `if` whose body starts with
 `@branchHint(.unpredictable)` marks the select `!unpredictable` and it stays a cmov (`pick` in
 `src/interact/interaction.zig`). When even that fails, select the address and then load
-(`step`'s id under the pointer: the real row or a constant zero id). No per-row loop
-gained a jump; `tools/census/baseline.json` and `baseline-src.json` are recorded on this build.
+(`step`'s id under the pointer: the real row or a constant zero id). The recorded disassembly showed no additional per-row jump. The production limits live in `tools/census/baseline-src.json`.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
 one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
 the same branches as a plain `if` (13 jumps, no cmov); with both operands already loaded for the
 compare it is a cmov. Those branches span 0x36 bytes, past the census's 32-byte short-forward rule,
-so they show only in the `jcc` column. The per-pass census against `tools/census/baseline.json` is
-the gate, not the use of `simd` helpers. Prefer whole-vector selects (`@select` over `F`/`U`) in
+so they show only in the `jcc` column. The production gate checks the per-pass counts in `tools/census/baseline-src.json`. Prefer whole-vector selects (`@select` over `F`/`U`) in
 batch loops.
 
 ## 3. Benchmark
 
-```
-cd prototype
-zig build bench        # Linux only: it reads the monotonic clock through std.os.linux
+```sh
+nix develop -c zig build bench
+nix develop -c zig build bench -- --scene springs --counters
 ```
 
-A 330-row scene: 3,961 nodes, 1,320 text runs, 3,000 frames. Two recorded runs on the same VM core
-(2.1 GHz Xeon, 8 lanes):
+The Linux benchmark reports median and p99 per pass. The default rows scene builds 3,961 nodes and 1,320 text runs per frame for 3,000 frames. Use `--scene` to select form, list, text, springs, resize or idle. The following numbers came from two runs of the original prototype on the same 2.1 GHz Xeon VM core with eight SIMD lanes.
 
 | Pass | Run A (median) | Run B (median) |
 |---|---|---|
@@ -132,37 +106,23 @@ A 330-row scene: 3,961 nodes, 1,320 text runs, 3,000 frames. Two recorded runs o
 | paint | 31 µs | 43 µs |
 | whole frame | about 0.34 ms | about 0.46 ms |
 
-The benchmark also prints a mean per layout pass (`measure`, `prepare`, `fit`, `resolve`, `wrap`,
-`place`, `finalize`). `resolve` and `place` are the largest; they are the scalar, parent-following
-passes.
+The production benchmark also reports individual layout passes and polling time. The rows scene adds incremental layout, flex and grid measurements.
 
 ## 4. GPU pixel check
 
-```
-cd prototype
-zig build dump
-./zig-out/bin/dump 3>quad.wgsl 4>quads.bin 5>glyphs.bin 6>cmds.txt
-python3 render.py          # needs the Python package wgpu and any adapter (a software one is fine)
+```sh
+nix develop .#golden -c ci/run.sh golden
 ```
 
-`dump` builds one frame and writes the shader text, the instance bytes and the command list exactly
-as the renderer declares them. `render.py` draws that with a real wgpu device, including a host
-pipeline for the `custom` command, reads the pixels back and compares eight of them. Recorded on
-llvmpipe: all eight `ok`, 13 draw calls, picture in `wgpu-check.png`. This is the check that the WGSL
-is valid and that `quad_attrs` matches the layout of `ui.Quad`.
+`tools/golden/dump.zig` builds the toolbar and custom viewport with the production runtime. Mesa lavapipe renders the dumped draw commands, including the host pipeline for the custom viewport. The job checks individual pixels and compares the entire frame with `tools/golden/reference.png`, the image from the original fixture.
 
 ## 5. API index
 
-```
-cd prototype
-python3 mkindex.py         # rewrites API.md from ui.zig and ui_wgpu.zig
+```sh
+nix develop -c ci/run.sh docs
 ```
 
-164 public functions and constants. Regenerate it when the public surface changes.
-
-For the package, `zig build docs` writes `zig-out/docs/API.md` with the same scanner
-(`docs/api/apiindex.py`) over every file `src/lcgf.zig` exports; nothing generated is committed.
-`ci/run.sh docs` runs it.
+`zig build docs` writes the public declarations exported by `src/lcgf.zig` to `zig-out/docs/API.md`. CI compares the result with the checked-in `docs/api/API.md` and verifies the guide examples.
 
 ## 6. Compiler facts
 

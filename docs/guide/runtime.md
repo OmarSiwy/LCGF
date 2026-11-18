@@ -6,7 +6,7 @@ The runtime front end rebuilds the tree every frame from your own data: you call
 (`docs/guide/comptime.md`) is for UIs whose shape is fixed when you compile.
 
 Every code block below is a piece of `docs/guide/runtime.zig`, which `zig build docs` compiles
-and runs. The example is the prototype's `buildUi` (`prototype/example.zig`) on the package.
+and runs. The example builds a toolbar through the production package. It follows the original `buildUi` fixture. [Archived example](https://github.com/OmarSiwy/LCGF/blob/b6c1319/prototype/example.zig)
 
 | File | What it gives you |
 |---|---|

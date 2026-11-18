@@ -1,8 +1,7 @@
 # Spring slot lookup
 
 The program behind the numbers in commit a2a356d ("Make Anims.slot O(1) in a steady frame"), kept
-so they can be reproduced. `zig build bench -- --scene springs` cannot measure this: tools/bench
-builds its frames with `prototype/ui.zig`. `springs.zig` runs the same scene
+so they can be reproduced. At that revision the frame benchmark built its UI with the prototype. Today `nix develop -c zig build bench -- --scene springs` measures the production runtime. `springs.zig` runs the same scene
 (bench/scenes/springs.zig: a 40 x 25 grid of bars, 1,000 `Frame.animate` calls per frame,
 targets flipping every 30 frames, 3,000 frames) on lcgf's `Context` and prints the median and p99
 of the build only (`begin` to the last `close`; layout and paint are not timed).
