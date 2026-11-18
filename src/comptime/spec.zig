@@ -94,6 +94,21 @@ pub fn label(comptime caption: anytype) Spec {
     return .{ .kind = .label, .text = bytes };
 }
 
+/// Frame string bytes for all declared literals, plus the caller's budget when a bound
+/// label or a widget hook can append runtime text. Literal-only pages need exactly their bytes.
+pub fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32 {
+    var bytes: u32 = 0;
+    var dynamic = false;
+    countStrings(tree, &bytes, &dynamic);
+    return bytes + if (dynamic) dynamic_bytes else 0;
+}
+
+fn countStrings(comptime n: Spec, bytes: *u32, dynamic: *bool) void {
+    if (n.text) |str| bytes.* += @intCast(str.len);
+    if (n.widget != null or (n.kind == .label and n.bind != null)) dynamic.* = true;
+    for (n.children) |c| countStrings(c, bytes, dynamic);
+}
+
 /// Check the two sources before emitting a label. Custom widget internals may supply their own text.
 pub fn labelError(comptime s: Spec) ?[]const u8 {
     if (s.bind == null and s.text == null) return "a label needs a literal or a bound field";

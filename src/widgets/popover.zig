@@ -398,7 +398,7 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
                 };
             }
         };
-        const string_bytes = 1024;
+        const string_bytes = spec_zig.stringCapacity(spec, 1024);
         const bytes = blk: {
             @setEvalBranchQuota(20_000);
             var counter: mem.Carver = .{ .buf = null };

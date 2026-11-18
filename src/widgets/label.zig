@@ -332,3 +332,25 @@ test "a literal label draws its resolved text style with empty state" {
     h.init();
     _ = try h.frame(&.{ .viewport = .{ 200, 100 } });
 }
+
+test "long UTF-8 literal button text retains its style and leaves space for bindings" {
+    const th: Theme = .default;
+    const body = comptime blk: {
+        const units: [800][2]u8 = @splat("Ω".*);
+        break :blk @as([1600]u8, @bitCast(units));
+    };
+    const spec = comptime blk: {
+        var button = @import("button.zig").ct.button(th, .save, &body);
+        var caption = button.children[0];
+        caption.text_style = .{ .px = 18, .color = .rgb(20, 40, 60) };
+        const children = [1]spec_zig.Spec{caption};
+        button.children = &children;
+        break :blk spec_zig.col(.{}, .{ button, ct.label(th, .detail) });
+    };
+    const State = struct { detail: []const u8 = "extra" };
+    var ui: base.ComptimeUi(State, spec, th) = .{};
+    const out = ui.frame(&.{ .viewport = .{ 300, 150 } });
+    try testing.expectEqualStrings(body ++ "extra", out.draw.strings);
+    try testing.expectEqual(@as(f32, 18), out.draw.runs[0].px);
+    try testing.expect(!ui.tables.strings.overflow);
+}
