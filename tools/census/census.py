@@ -9,9 +9,8 @@ with the prefix, its conditional jumps. A backward jump is loop control. A short
 forward jump inside a per-row loop is a branch the data can mispredict: the gate
 is that per-row loops contain loop-control jumps only (docs/CHECKS.md section 2).
 
-Today OBJ is prototype/zig-out/asm_probe.o (`zig build census-obj -Dcpu=x86_64_v3`
-in prototype/). To census src/, build an object that exports one function per
-pass under a common prefix and pass that object and prefix.
+Build the production probes with `zig build census-src-obj -Dcpu=x86_64_v3`
+and pass `zig-out/census_src.o` and `--baseline tools/census/baseline-src.json`.
 
 --baseline FILE fails (exit 1) when a function has more conditional jumps,
 backward jumps or short forward jumps than FILE records, or when the functions

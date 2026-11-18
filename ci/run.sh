@@ -5,18 +5,13 @@
 #   nix develop -c ci/run.sh all       every job not marked `# all: no`
 #   ci/run.sh --matrix                 the job list as JSON, for the workflow
 #
-# A job is one file, ci/jobs/<name>.sh, run from the repository root with
-# `both` defined. A lane adds a job by adding a file; nothing else changes.
+# Each job in ci/jobs/<name>.sh runs from the repository root.
 # Header lines a job may have:
 #   # shell: <name>   the flake dev shell it needs (default: default)
 #   # all: no         left out of `all` (slow, or needs another shell)
 #   # runner: <os>    the GitHub runner: windows or macos (default: ubuntu)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-# Each test job runs the root package and the prototype, whose tests are the
-# reference behaviour and must keep passing (CLAUDE.md).
-both() { zig build "$@" && (cd prototype && zig build "$@"); }
 
 # Native binaries that load the golden shell's Mesa must use its glibc loader too.
 golden_build() {

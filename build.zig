@@ -1,4 +1,4 @@
-//! Build file for LCGF. Zig 0.18.0-dev.1151+8dfb7a7cc (prototype/build.zig is the verified example of this API).
+//! Build file for LCGF. Zig 0.18.0-dev.1151+8dfb7a7cc.
 //!
 //! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
@@ -193,20 +193,15 @@ pub fn build(b: *std.Build) void {
     widget_dump.addPassthruArgs();
     b.step("widget-dump", "Dump a reference-widget frame: -- <frame> <dir>").dependOn(&widget_dump.step);
 
-    // tools/bench times lcgf's runtime front end ("lcgf"); `--core=prototype` builds frames with the
-    // prototype core ("ui") and lays them out and paints them with lcgf, as before.
-    const bench_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseFast });
-    const bench_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = bench_core }} });
-    // The same scenes against lcgf's runtime front end (the default; tools/bench/src_ui.zig). A
-    // file belongs to one module per compilation, so this module roots a copy of bench/scenes/.
-    const src_scenes_root = b.addWriteFiles().addCopyDirectory(b.path("bench/scenes"), "scenes", .{}).path(b, "scenes.zig");
+    // The benchmark and comparison harnesses drive the production runtime.
+    const src_scenes_root = b.path("bench/scenes/scenes.zig");
     const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
     const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "ui", .module = bench_core }, .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_scenes }, .{ .name = "src_scenes", .module = bench_src_scenes } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_src_scenes } },
     }) });
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
@@ -224,17 +219,14 @@ pub fn build(b: *std.Build) void {
     }) }));
     b.step("gates-latency", "Print input-to-photon latency of the example, headless (bench/gates/)").dependOn(&gates_latency.step);
 
-    // Section sizes per example, built ReleaseSmall. Linux (ELF64) only. Until examples/ exists the
-    // examples are the prototype's frame dumper and the benchmark.
+    // Section sizes of the software frame dumper and benchmark (ReleaseSmall, ELF64).
     const size_tool = b.addExecutable(.{ .name = "size", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/bench/size.zig"),
         .target = b.graph.host,
     }) });
     const size_run = b.addRunArtifact(size_tool);
-    const small_core = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig"), .target = target, .optimize = .ReleaseSmall });
     const lcgf_small = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgf_small.addOptions("build_options", options);
-    const small_scenes = b.createModule(.{ .root_source_file = b.path("bench/scenes/scenes.zig"), .imports = &.{.{ .name = "ui", .module = small_core }} });
     const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
     // The reference row of docs/perf/vs.md: bench/vs/lcgf/, harness.h's driver over LCGF's
@@ -254,14 +246,17 @@ pub fn build(b: *std.Build) void {
         }) });
         vs_lcgf.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
-    for ([_][2][]const u8{ .{ "dump", "prototype/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
+    for ([_][2][]const u8{ .{ "golden-dump", "tools/golden/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,
             .optimize = .ReleaseSmall,
-            .imports = &.{ .{ .name = "ui", .module = small_core }, .{ .name = "lcgf", .module = lcgf_small }, .{ .name = "scenes", .module = small_scenes }, .{ .name = "src_scenes", .module = small_src_scenes } },
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf_small }, .{ .name = "scenes", .module = small_src_scenes } },
         }) });
         size_run.addArtifactArg(exe);
+        if (std.mem.eql(u8, ex[0], "golden-dump")) {
+            b.step("golden-dump", "Build the production GPU pixel-check fixture").dependOn(&b.addInstallArtifact(exe, .{}).step);
+        }
     }
     b.step("size", "Print text, rodata, data and bss of each example (Linux)").dependOn(&size_run.step);
     const size_tests = b.addTest(.{ .root_module = size_tool.root_module });
@@ -365,12 +360,12 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("shaders-dump", "Build zig-out/bin/shaders-dump (writes every shader variant)").dependOn(&b.addInstallArtifact(shaders_dump, .{}).step);
 
-    // Fuzz entry points (tools/fuzz). They drive the prototype core until it is ported to src/.
+    // Fuzz the production frame, layout and hit-test paths.
     const fuzz_mod = b.createModule(.{
         .root_source_file = b.path("tools/fuzz/fuzz.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "ui", .module = b.createModule(.{ .root_source_file = b.path("prototype/ui.zig") }) }},
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     });
     const fuzz_tests = b.addTest(.{ .root_module = fuzz_mod });
     b.step("fuzz", "Run the fuzz tests (add --fuzz=N to fuzz)").dependOn(&b.addRunArtifact(fuzz_tests).step);

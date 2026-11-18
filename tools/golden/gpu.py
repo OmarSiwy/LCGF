@@ -4,7 +4,7 @@ check eight of them and write the frame as a PNG for tools/golden/golden.py.
 
     python3 tools/golden/gpu.py DIR OUT.png
 
-DIR holds what a dump tool wrote (prototype/dump.zig today): quad.wgsl, quads.bin, glyphs.bin,
+DIR holds what a dump tool wrote (tools/golden/dump.zig for the toolbar scene): quad.wgsl, quads.bin, glyphs.bin,
 cmds.txt, and the textures the frame samples: a `texture ID W H FILE` line in cmds.txt per
 RGBA8 file in DIR, bound as texture ID. Texture 0 is white; an id with no file, and every text
 run, gets the stand-in glyph atlas below. Ported from prototype/render.py; the drawing and the
