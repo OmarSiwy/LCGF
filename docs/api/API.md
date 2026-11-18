@@ -1568,7 +1568,7 @@ inherit: paint inputs that a node passes down to its subtree, resolved in one pa
 - `fn opacity(t: *Tree) void`: `alpha` of every extras row = its `opacity` times the inherited row's `alpha`: the opacity paint applies to the row's node and the nodes that take its scope.
 - `fn transform(t: *Tree) void`: `world` of every extras row = the inherited `world` after the row's `transform` about its node's centre: what maps the node's layout rect to the screen.
 - `fn clip(t: *Tree) void`: `clip_radii` of every extras row: the corner radii of the clip its node hands its children.
-- `fn all(t: *Tree) void`: The three sweeps, as `paint.emit` runs them.
+- `fn all(t: *Tree) void`: Resolves opacity, transform and clip together in parent order.
 - `fn alphaOf(t: *const Tree, i: u32) f32`: Opacity paint applies to node `i`, after `opacity`.
 - `fn worldOf(t: *const Tree, i: u32) [6]f32`: Layout space to screen for node `i`, after `transform`.
 - `fn clipRadiiOf(t: *const Tree, i: u32) [4]f32`: Corner radii of the clip node `i` hands its children, after `clip`.
