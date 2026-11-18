@@ -32,8 +32,8 @@ m() {
     taskset -c "$cpu" python3 bench/gates/gates.py measure-first-frame "zig-out/gates/$1.json" "${4:-$2}"
 }
 m lcgf zig-out/bin/vs-lcgf zig-out/bin/vs-lcgf-small
-m clay zig-out/bin/vs-clay zig-out/bin/vs-clay-small zig-out/bin/vs-clay-static
-for n in imgui lvgl qtquick nuklear microui gtk4 qtwidgets; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small"; done
+for n in clay nuklear microui; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small" "zig-out/bin/vs-$n-static"; done
+for n in imgui lvgl qtquick gtk4 qtwidgets; do m "$n" "zig-out/bin/vs-$n" "zig-out/bin/vs-$n-small"; done
 for n in egui iced slint; do m "$n" "zig-out/cargo/release/vs-$n" "zig-out/cargo/small/vs-$n"; done
 # Complete the measurement and preserve it even if a release target regresses.
 bench/vs/window-resize/run.sh

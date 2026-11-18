@@ -4,6 +4,8 @@ Each default-branch run measures LCGF and eleven alternatives on the same Linux 
 
 Reproduce the suite from the repository root with `nix develop .#vs -c ci/run.sh gates-vs`. The job starts a private Xvfb display and runs five repetitions of 3,000 polls for form, list, text, springs, resize and idle. It separately measures process launch to first frame, idle and peak resident memory, idle wake-ups, executable sections, mapped shared libraries and three mapped-window resize operations. The local output is `zig-out/comparison/README.md` and `zig-out/comparison/measurements.json`. Pull requests retain the same report as a CI artifact. The historical tables below give measurements from earlier revisions.
 
+LCGF, Clay, Nuklear and microui use static builds for cold startup and idle RSS. The active frame timings and mapped library counts use their speed builds. The size column uses separately optimized small executables. This lets readers distinguish touched pages, executable sections and the shared libraries a distributor may need to ship.
+
 ## What a frame is in each harness
 
 | Row | Frame timed | Text | Notes |

@@ -106,7 +106,7 @@ def render(runs, resize, meta):
               "Startup is the median of 11 launches to the first completed frame. Idle RSS and the peak observed through the first idle frame include "
               "touched shared pages. Executable bytes sum text, read-only data and initialized data in the size build. "
               "Mapped libraries are the on-disk sizes of shared objects mapped by the speed build at idle. "
-              "Clay uses a separate static build for startup, RSS and idle wake-ups. BSS is zero-initialized address space.", ""]
+              "Clay, Nuklear and microui use static musl builds for startup, idle RSS and idle wake-ups. BSS is zero-initialized address space.", ""]
     lines += table(["Framework", "Startup ms", "Idle RSS KiB", "Peak RSS KiB", "Wake-ups/s",
                     "Executable bytes", "BSS bytes", "Mapped library bytes"],
                    [[name, f"{runs[k]['first_frame_ms']:.3f}", runs[k]["rss_kib"], runs[k]["peak_kib"],
