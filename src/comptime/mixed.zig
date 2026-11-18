@@ -57,19 +57,6 @@ const list_limits: Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings 
 
 const list_id: Id = .from("list");
 
-/// The comptime node a runtime `Frame` fills: a custom draw (`Spec.widget`), so the draw list
-/// keeps its place for `compose`.
-const Region = struct {
-    pub fn push(ui: anytype, comptime n: s.Spec, parent: u32, next: *u32, in: *const Input) void {
-        _ = in;
-        next.* += 1;
-        const tb = &ui.tables;
-        const i = tb.t.push(parent, list_id, &n.style);
-        tb.t.c.custom[i] = tb.cu.push(i, list_id, 0);
-        tb.t.seal(i);
-    }
-};
-
 const Toolbar = struct {
     add_text: []const u8 = "Add",
     show: bool = true,
@@ -80,7 +67,7 @@ const page_a = s.col(.{ .size = .{ .fill, .fill } }, .{
         w.ct.button(th, .add, .add_text),
         w.ct.checkbox(th, .show_box, .show, .show_text),
     }),
-    s.Spec{ .kind = .col, .style = .{ .size = .{ .fill, .fill } }, .widget = Region },
+    interop.region(.list, .{ .size = .{ .fill, .fill } }),
 });
 
 const item_names = [_][]const u8{ "Item 0", "Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7" };
@@ -103,6 +90,7 @@ const PageA = struct {
         if (top.event) |e| switch (e) {
             .add => p.items = @min(p.items + 1, item_names.len),
             .show_box => {}, // the checkbox has written `show`
+            .list => {}, // the embedded list handles its own pointer events
         };
         const region = rect4(top.tree.rect(top.tree.find(list_id)));
         const sub = interop.regionInput(in, region);

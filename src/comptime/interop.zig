@@ -26,8 +26,14 @@ const DrawList = draw_list.DrawList;
 /// from the comptime layout like any node's; `id` makes it a tag of `Events(spec).Widget`, whose
 /// value is its row.
 pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
+    return canvas(id, style, 0);
+}
+
+/// A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
+pub fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec {
     var out = spec_zig.col(style, .{});
     out.id = @tagName(id);
+    out.custom = data;
     return out;
 }
 

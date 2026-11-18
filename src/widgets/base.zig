@@ -337,6 +337,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     // One root row (the runtime front end's) above the spec's rows.
     const rows: u32 = flatten.count(spec) + 1;
     const runs: u32 = @max(labelCount(spec), 1);
+    const customs = comptime customCapacity(spec);
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -379,9 +380,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 return .{
                     .t = Tree.init(carver, rows),
                     .tx = Texts.init(carver, runs),
-                    .cu = Customs.init(carver, 1),
+                    .cu = Customs.init(carver, customs),
                     .strings = .{ .buf = carver.slice(u8, string_bytes) },
-                    .d = DrawList.init(carver, rows, runs, 1),
+                    .d = DrawList.init(carver, rows, runs, customs),
                 };
             }
         };
@@ -485,6 +486,15 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// `next` past them.
         pub fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
+            if (comptime n.custom) |data| {
+                const id = Id.hash(n.id orelse @compileError("a custom draw needs an id"));
+                const tb = &ui.tables;
+                next.* += 1;
+                const i = tb.t.push(parent, id, &n.style);
+                tb.t.c.custom[i] = tb.cu.push(i, id, data);
+                tb.t.seal(i);
+                return;
+            }
             const tb = &ui.tables;
             const state = &ui.signals.state;
             next.* += 1;
@@ -564,6 +574,23 @@ fn customWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32
     if (n.widget != null) rows.* = rows.* ++ .{next.*};
     next.* += 1;
     for (n.children) |c| customWalk(c, next, rows);
+}
+
+/// Built-in markers reserve exactly one command. Widget hooks can declare their own
+/// `custom_slots`; unannotated hooks share the original single spare slot on a page.
+fn customCapacity(comptime n: Spec) u32 {
+    var known: u32 = 0;
+    var spare = false;
+    countCustoms(n, &known, &spare);
+    return @max(1, known + @intFromBool(spare));
+}
+
+fn countCustoms(comptime n: Spec, known: *u32, spare: *bool) void {
+    if (n.custom != null) known.* += 1;
+    if (n.widget) |W_| {
+        if (@hasDecl(W_, "custom_slots")) known.* += W_.custom_slots else spare.* = true;
+    }
+    for (n.children) |child| countCustoms(child, known, spare);
 }
 
 /// Spec nodes in `n`'s subtree that show text.
@@ -1153,4 +1180,26 @@ test "Spec.widget: a custom widget's focusable, Payload and step event, end to e
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
+}
+
+test "multiple host draw markers keep their ids, clip and paint order" {
+    const interop = @import("../comptime/interop.zig");
+    const size: Style = comptime .{ .size = .{ .px(60), .px(20) } };
+    const page = comptime spec_zig.col(.{ .size = .{ .px(40), .px(50) }, .clip = true }, .{
+        interop.region(.list, size),
+        interop.canvas(.preview, size, 17),
+    });
+    var ui: ComptimeUi(struct {}, page, .default) = .{};
+    const out = ui.frame(&.{ .viewport = .{ 100, 100 } });
+    try std.testing.expectEqual(2, ui.tables.cu.cap);
+    try std.testing.expectEqual(2, out.draw.custom_len);
+    try std.testing.expectEqual(2, out.draw.cmd_len);
+    for ([_][]const u8{ "list", "preview" }, 0..) |name, k| {
+        const cmd = out.draw.command(@intCast(k));
+        const item = out.draw.customs[cmd.custom];
+        try std.testing.expectEqual(@backingInt(Id.hash(name)), item.id);
+        try std.testing.expectEqual(@as(u64, if (k == 0) 0 else 17), item.data);
+        try std.testing.expectEqual(@as(f32, 40), item.clip[2]);
+        try std.testing.expectEqual(@as(f32, @floatFromInt(k * 20)), item.rect[1]);
+    }
 }

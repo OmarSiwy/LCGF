@@ -35,6 +35,8 @@ pub const Spec = struct {
     /// calls instead of building the node as its kind (src/widgets/base.zig, `ComptimeUi`).
     /// Null for plain nodes. Being a type, it keeps `Spec` a compile-time-only value.
     widget: ?type = null,
+    /// Draw-list payload for a host-rendered leaf (ct_interop.canvas or region).
+    custom: ?u64 = null,
     /// Accessible name: what a screen reader says for this node. Interactive widgets need one
     /// (validate.zig); set it with `named`.
     name: ?[]const u8 = null,
