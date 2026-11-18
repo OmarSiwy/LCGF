@@ -347,8 +347,8 @@ class Compiler:
             for widget, fn, fields, at in self.handlers:
                 callback = "handlers" + "".join("." + ident(k) for k in fn.split("."))
                 path = ", ".join(quoted(k) for k in fields)
-                lines += [f'            if (@hasField(@TypeOf(event), {quoted(widget)}) and event == .{ident(widget)}) {{', f'                var writer = Writer(.{{ {path} }}){{ .runtime = &self.ui.signals }};',
-                          f'                {callback}(&writer);']
+                lines += [f'            if (@hasField(@TypeOf(event), {quoted(widget)}) and event == .{ident(widget)}) {{', f'                const writer: *Writer(.{{ {path} }}) = @ptrCast(&self.ui.signals);',
+                          f'                {callback}(writer);']
                 if fields:
                     lines.append('                out.wake = 0;')
                 lines.append('            }')
