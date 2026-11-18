@@ -5,6 +5,7 @@
 const Context = @import("context.zig").Context;
 const Input = @import("../core/input.zig").Input;
 const Tree = @import("../core/tree.zig").Tree;
+const Template = @import("../core/tree.zig").Template;
 const Texts = @import("../core/texts.zig").Texts;
 const types = @import("../core/types.zig");
 const simd = @import("../core/simd.zig");
@@ -31,6 +32,12 @@ const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
 const scheduler = @import("scheduler.zig");
 
+// Ordinary text leaves differ only in whether they may shrink to wrap.
+const label_rows = [2]Template{
+    .from(&.{ .role = .label }),
+    .from(&.{ .role = .label, .shrink = true }),
+};
+
 /// One frame under construction. Cheap to copy: two pointers.
 pub const Frame = struct {
     ctx: *Context,
@@ -51,7 +58,11 @@ pub const Frame = struct {
     /// Starts a node. Everything created until the matching `close` is its child.
     pub fn open(f: *Frame, id: Id, style: Style) Node {
         const ctx = f.ctx;
-        const i = f.tree().push(ctx.stack[ctx.depth - 1], id, &style);
+        return f.enter(f.tree().push(ctx.stack[ctx.depth - 1], id, &style));
+    }
+
+    fn enter(f: *Frame, i: u32) Node {
+        const ctx = f.ctx;
         // Too deep: the deepest slot is reused, so the stack is never written out of bounds.
         const d = @min(ctx.depth, ctx.limits.depth - 1);
         ctx.status.depth = simd.orB(ctx.status.depth, ctx.depth >= ctx.limits.depth);
@@ -70,22 +81,29 @@ pub const Frame = struct {
 
     /// A node with no children. Same as `open` then `close`.
     pub fn leaf(f: *Frame, id: Id, style: Style) Node {
-        const ctx = f.ctx;
-        const n = f.open(id, style);
+        return f.finishLeaf(f.open(id, style));
+    }
+
+    fn finishLeaf(f: *Frame, n: Node) Node {
         // push set the leaf's end when it created the row. Only pop the open slot.
-        ctx.depth = @max(ctx.depth, 2) - 1;
+        f.ctx.depth = @max(f.ctx.depth, 2) - 1;
         return n;
     }
 
     /// A text leaf. The bytes are copied, so `str` may be a temporary.
     pub fn text(f: *Frame, str: []const u8, ts: TextStyle) Node {
-        return f.textStyled(str, ts, .{ .shrink = ts.wrap, .role = .label });
+        const ctx = f.ctx;
+        const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
+        return f.attachText(f.finishLeaf(f.enter(i)), str, ts);
     }
 
     /// `text` with full control over the leaf (padding, sizing, background).
     pub fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node {
+        return f.attachText(f.leaf(.none, style), str, ts);
+    }
+
+    fn attachText(f: *Frame, n: Node, str: []const u8, ts: TextStyle) Node {
         const ctx = f.ctx;
-        const n = f.leaf(.none, style);
         const span = ctx.strings[ctx.cur].add(str);
         f.tree().c.text[n.ix()] = f.texts().push(n.ix(), span, &ts);
         return n;
@@ -428,6 +446,31 @@ test "text: copies the bytes and links the leaf to its run" {
     const m = f.textStyled("x", .{}, .{ .pad = @splat(4) });
     try testing.expectEqual(@as(u32, 1), t.c.text[m.ix()]);
     try testing.expectEqual(@as(f32, 4), t.c.pad_lo[0][m.ix()]);
+}
+
+test "ordinary labels retain the styled leaf's rows at the stack and storage limits" {
+    const limits: @import("context.zig").Limits = .{ .nodes = 4, .texts = 2, .customs = 1, .strings = 4, .depth = 2 };
+    const Fx = Fixture(limits);
+    var actual_buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var actual_ctx = try Context.init(&actual_buf, limits);
+    var expected_ctx = try Fx.context();
+    var actual = actual_ctx.begin(&.{});
+    var expected = expected_ctx.begin(&.{});
+    _ = actual.open(.from("panel"), .{ .clip = true });
+    _ = expected.open(.from("panel"), .{ .clip = true });
+    for ([_]bool{ false, true, false, true }) |wrap| {
+        const a = actual.text("abc", .{ .wrap = wrap });
+        const b = expected.textStyled("abc", .{ .wrap = wrap }, .{ .shrink = wrap, .role = .label });
+        try testing.expectEqual(a, b);
+        try testing.expectEqual(actual_ctx.depth, expected_ctx.depth);
+        try testing.expectEqualSlices(u32, actual_ctx.stack, expected_ctx.stack);
+        try testing.expectEqual(actual_ctx.status, expected_ctx.status);
+        const ac = &actual.tree().c;
+        const bc = &expected.tree().c;
+        inline for (.{ "parent", "end", "role", "sense", "scope", "look", "text", "shrink" }) |name| {
+            try testing.expectEqual(@field(bc, name)[b.ix()], @field(ac, name)[a.ix()]);
+        }
+    }
 }
 
 test "custom: links the leaf to a row carrying its id and data" {
