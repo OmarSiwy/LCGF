@@ -134,58 +134,46 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
     for (1..lv.count) |d| {
         const end = lv.c.start[d + 1];
         var j: usize = lv.c.start[d];
-        // A whole level of positive, fixed-size children takes its clamped bounds on this axis.
-        // Skip parent geometry and coefficient gathers, preserving the scalar order of used.
-        const low = c.min[a];
-        const high = c.max[a];
-        if (end - j >= W and low[lv.c.order[j]] == high[lv.c.order[j]]) {
-            var fixed: @Vector(W, bool) = @splat(true);
-            var k = j;
-            while (true) {
-                const rows = simd.loadU(lv.c.order, k);
-                const lo = gather(low, rows);
-                fixed &= (lo > zero) & (lo == gather(high, rows));
-                if (k + W == end) break;
-                // Overlap the last full vector so no row from another level enters the test.
-                k = @min(k + W, end - W);
-            }
-            if (@reduce(.And, fixed)) {
-                while (j < end) : (j += 1) {
-                    const row = lv.c.order[j];
-                    size[row] = low[row];
-                    used[lv.c.parent[j]] += low[row] * c.flow[row];
-                }
-                continue;
-            }
-        }
-        // The last vector runs into the next level (or the padding ranks). Its extra lanes
-        // write sizes that the next level rewrites, and add nothing to `used`.
+        // The last vector may include the next level or padding. Its extra lanes add
+        // nothing to used, and any sizes in the next level are overwritten there.
         while (j < end) : (j += W) {
             const i = simd.loadU(lv.c.order, j);
             const p = simd.loadU(lv.c.parent, j);
-            // Parent side, as coefs gathers it and resolveK reads its Parent row.
-            const main = gather(c.main[a], p);
-            const grow_inv = gather(c.grow_inv[a], p);
-            const taken = gather(c.fit[a], p) + gather(c.gap_total, p);
-            const pad = gather(c.pad_lo[a], p) + gather(c.pad_hi[a], p);
-            // Child side: coefs' Child row.
-            const nat = gather(c.nat[a], i);
-            const grow = gather(c.grow[a], i);
-            const pct = gather(c.pct[a], i);
+            const low = gather(c.min[a], i);
+            const high = gather(c.max[a], i);
             const fl = gather(c.flow, i);
-            const has_pct = @select(f32, pct >= zero, one, zero);
-            const keep = one - has_pct;
-            const across = (one - main) * @select(f32, grow > zero, one, zero);
-            const k0 = nat * keep * (one - fl * across);
-            const k1 = has_pct * pct + keep * fl * across;
-            const k2 = keep * fl * main * grow * grow_inv;
-            const cut = (gather(c.shrink, i) * fl) > zero;
-            const room = @select(f32, cut, main * (taken - nat), simd.f(-inf));
-            // resolveK's step.
-            const inner = @max(gather(size, p) - pad, zero);
-            var s = k0 + k1 * inner + k2 * @max(inner - taken, zero);
-            s -= @max(s - @max(inner - room, zero), zero);
-            s = @min(@max(s, gather(c.min[a], i)), gather(c.max[a], i));
+            const s = blk: {
+                if (@reduce(.And, (low > zero) & (low == high))) break :blk low;
+
+                const nat = gather(c.nat[a], i);
+                const grow = gather(c.grow[a], i);
+                const pct = gather(c.pct[a], i);
+                const shrink = gather(c.shrink, i);
+                const taken = gather(c.fit[a], p) + gather(c.gap_total, p);
+                const pad = gather(c.pad_lo[a], p) + gather(c.pad_hi[a], p);
+                const inner = @max(gather(size, p) - pad, zero);
+                const free = @max(inner - taken, zero);
+
+                // fit already clamped the natural size. With both parent coefficients
+                // zero and no shrinking, the general expression returns it exactly.
+                // Positive finite values preserve signed zero and avoid zero times infinity.
+                const natural = (nat > zero) & (nat < simd.f(inf)) & (grow == zero) &
+                    (pct == simd.f(-1)) & (shrink == zero) & (inner < simd.f(inf)) & (free < simd.f(inf));
+                if (@reduce(.And, natural)) break :blk nat;
+
+                const main = gather(c.main[a], p);
+                const grow_inv = gather(c.grow_inv[a], p);
+                const has_pct = @select(f32, pct >= zero, one, zero);
+                const keep = one - has_pct;
+                const across = (one - main) * @select(f32, grow > zero, one, zero);
+                const k0 = nat * keep * (one - fl * across);
+                const k1 = has_pct * pct + keep * fl * across;
+                const k2 = keep * fl * main * grow * grow_inv;
+                const room = @select(f32, shrink * fl > zero, main * (taken - nat), simd.f(-inf));
+                var resolved = k0 + k1 * inner + k2 * free;
+                resolved -= @max(resolved - @max(inner - room, zero), zero);
+                break :blk @min(@max(resolved, low), high);
+            };
             scatter(size, i, s);
             const in_level = simd.iota + simd.u(@intCast(j)) < simd.u(end);
             const u = @select(f32, in_level, s * fl, zero);
@@ -291,5 +279,46 @@ test "resolve: coefs.resolveK's sizes and used, and so placeK's positions, bit f
             try testing.expectEqualSlices(u32, @ptrCast(want[4 + a][0..n]), @ptrCast(t.c.pos[a][0..n]));
         }
         try testing.expectEqualSlices(u32, @ptrCast(want_cursor[0..n]), @ptrCast(t.c.cursor[0..n]));
+    }
+}
+
+test "intrinsic and fixed rows match the general resolve, including non-finite parent geometry" {
+    const n = 2 * W + 4;
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, n);
+    var k = coefs.Coefs.init(&carver, n);
+    var lv = Levels.init(&carver, n);
+    const root = t.push(0, .none, &.{ .dir = .x });
+    for (1..n) |i| {
+        const extent: f32 = @floatFromInt(1 + i % 11);
+        _ = t.push(root, .none, if (i % 2 == 0)
+            &.{ .size = .{ .px(extent), .fit } }
+        else
+            &.{ .pad = .{ extent, 0, 0, 0 } });
+    }
+    t.seal(root);
+    build(&t, &lv);
+
+    const Case = struct { viewport: f32, pad: f32 = 0, taken: f32 = 0 };
+    for ([_]Case{
+        .{ .viewport = 800 },                .{ .viewport = -0.0 },              .{ .viewport = inf },
+        .{ .viewport = -inf },               .{ .viewport = std.math.nan(f32) }, .{ .viewport = 800, .pad = -inf },
+        .{ .viewport = 800, .taken = -inf },
+    }) |case| {
+        layout.prepare(&t);
+        layout.fit(&t, .x);
+        t.c.nat[0][n - 1] = -0.0;
+        t.c.pad_lo[0][root] = case.pad;
+        t.c.fit[0][root] = case.taken;
+
+        coefs.coefs(&t, &k, .x);
+        coefs.resolveK(&t, &k, .x, case.viewport);
+        const sizes = t.c.size[0][0..n].*;
+        const used = t.c.used[0][0..n].*;
+        @memset(t.c.used[0], 0);
+        resolve(&t, &lv, .x, case.viewport);
+        try testing.expectEqualSlices(u32, @ptrCast(&sizes), @ptrCast(t.c.size[0][0..n]));
+        try testing.expectEqualSlices(u32, @ptrCast(&used), @ptrCast(t.c.used[0][0..n]));
     }
 }
