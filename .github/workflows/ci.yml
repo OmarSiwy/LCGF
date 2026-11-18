@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches-ignore: [benchmark-results]
+    tags: ["**"]
   pull_request:
 
 jobs:
