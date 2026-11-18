@@ -11,6 +11,20 @@ Machine for every number below unless a section says otherwise: Intel Core i9-14
 benchmark pinned to one CPU. Timings are medians. "Load" is the 1-minute load average during
 the run; above about 8 (a quarter of the CPUs) timings on this machine inflate by up to 40%.
 
+## Frame implementation experiments, November 17
+
+The local trials ran alternating builds on a pinned CPU. Each invocation used the normal frame driver for 3,000 polls. The table gives the median of the paired changes in microseconds. Negative values mean the candidate finished sooner. These were development runs on a shared machine with a load average of 38–43.
+
+| Change | List median / p99 | Springs median / p99 | Resize median / p99 |
+|---|---:|---:|---:|
+| Ordinary label templates, 20 pairs on CPU 2 | −3.95 / −5.65 | −22.2 / −33.4 | −6.05 / −7.90 |
+| Intrinsic SIMD resolution after the label change, 20 pairs on CPU 2 | −0.30 / −0.25 | −0.35 / −5.90 | −0.75 / −0.70 |
+| Same layout comparison, 21 pairs on CPU 8 | −0.40 / −0.20 | −1.90 / −1.90 | −0.40 / −0.50 |
+
+The label change improved the list median in 17 of 20 pairs. The layout change improved it in 11 of 20 and 17 of 21 pairs on the two CPUs. The fixed-target branch census for `p_levels_resolve` fell from 13 conditional jumps to 7. Both revisions passed the branch and executable-size budgets. [Label implementation](https://github.com/OmarSiwy/LCGF/commit/5a1ac9a) · [Layout implementation](https://github.com/OmarSiwy/LCGF/commit/500b83e)
+
+Initializing groups of tree link fields ahead of use changed the springs median by −0.2 µs across 11 pairs, with six wins. Including padding, scroll and offsets added 12.3 µs to springs and 6.6 µs to list. Both versions raised `p_tree_push` from one to two conditional jumps and increased the size build. The existing row initialization remains in use.
+
 ## Hosted release comparison, 2026-11-17
 
 On GitHub's Linux runner, the eight-framework benchmark at `d9013ce` put LCGF
