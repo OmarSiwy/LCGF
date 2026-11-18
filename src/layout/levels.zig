@@ -123,6 +123,10 @@ inline fn scatter(col: []f32, idx: U, v: F) void {
 /// sweep, the same algebra in the same order. Call after `layout.fit(t, axis)` and `build`;
 /// `used` must be zero (layout.prepare clears it).
 pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
+    resolveGroups(t, lv, axis, viewport, true);
+}
+
+inline fn resolveGroups(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32, comptime shortcuts: bool) void {
     const a = @backingInt(axis);
     if (t.len == 0) return;
     const c = &t.c;
@@ -143,7 +147,7 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
             const high = gather(c.max[a], i);
             const fl = gather(c.flow, i);
             const s = blk: {
-                if (@reduce(.And, (low > zero) & (low == high))) break :blk low;
+                if (shortcuts and @reduce(.And, (low > zero) & (low == high))) break :blk low;
 
                 const nat = gather(c.nat[a], i);
                 const grow = gather(c.grow[a], i);
@@ -159,7 +163,7 @@ pub fn resolve(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32) void {
                 // Positive finite values preserve signed zero and avoid zero times infinity.
                 const natural = (nat > zero) & (nat < simd.f(inf)) & (grow == zero) &
                     (pct == simd.f(-1)) & (shrink == zero) & (inner < simd.f(inf)) & (free < simd.f(inf));
-                if (@reduce(.And, natural)) break :blk nat;
+                if (shortcuts and @reduce(.And, natural)) break :blk nat;
 
                 const main = gather(c.main[a], p);
                 const grow_inv = gather(c.grow_inv[a], p);
@@ -287,7 +291,6 @@ test "intrinsic and fixed rows match the general resolve, including non-finite p
     var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &raw };
     var t = Tree.init(&carver, n);
-    var k = coefs.Coefs.init(&carver, n);
     var lv = Levels.init(&carver, n);
     const root = t.push(0, .none, &.{ .dir = .x });
     for (1..n) |i| {
@@ -312,8 +315,9 @@ test "intrinsic and fixed rows match the general resolve, including non-finite p
         t.c.pad_lo[0][root] = case.pad;
         t.c.fit[0][root] = case.taken;
 
-        coefs.coefs(&t, &k, .x);
-        coefs.resolveK(&t, &k, .x, case.viewport);
+        // Compare the same SIMD operations at this target width. Scalar min/max
+        // can choose the opposite signed zero on SSE2 for this non-finite input.
+        resolveGroups(&t, &lv, .x, case.viewport, false);
         const sizes = t.c.size[0][0..n].*;
         const used = t.c.used[0][0..n].*;
         @memset(t.c.used[0], 0);
