@@ -94,7 +94,7 @@ pub fn expand(expanded: bool, clicked: bool, focused: bool, in: *const Input) bo
 
 /// What assistive technology sees of a section (WAI-ARIA APG accordion pattern): the section
 /// is a `group`, its header a `button` named by its title (from content) whose value is 1
-/// while expanded, and the panel a `region`. `types.Role` has no region, so both front ends
+/// while expanded, and the panel a `region`. Both front ends
 /// write that byte to the role column.
 pub const region: u8 = @backingInt(a11y.Role.region);
 

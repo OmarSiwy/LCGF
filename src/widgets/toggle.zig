@@ -28,7 +28,7 @@ const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
 const a11y = @import("../a11y/tree.zig");
 
-/// The role byte both front ends write (`types.Role` stops at `text_input`).
+/// The toggle-button role byte both front ends write.
 const role: u8 = @backingInt(a11y.Role.toggle_button);
 
 // ---- spec -----------------------------------------------------------------------------------

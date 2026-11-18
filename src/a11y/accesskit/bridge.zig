@@ -335,6 +335,7 @@ pub const Bridge = struct {
         if (st.disabled) c.accesskit_node_set_disabled(n);
         if (st.read_only) c.accesskit_node_set_read_only(n);
         // `focused` needs nothing here: AccessKit takes focus from the update (`focusId`).
+        if (b.cur.?.headingLevel(r)) |level| c.accesskit_node_set_level(n, level);
         if (of.value) c.accesskit_node_set_numeric_value(n, e.value[r]);
         const lo = e.range[0][r];
         const hi = e.range[1][r];
@@ -881,4 +882,40 @@ test "accesskit: action requests reach the example as the user's own input" {
     var idbuf: [32]u8 = undefined;
     try expectHas(debugText(next, &buf), try std.fmt.bufPrint(&idbuf, "focus: #{d}", .{id_exp}));
     c.accesskit_tree_update_free(next);
+}
+
+test "accesskit: native landmark and heading specs retain ancestry, caption and rank" {
+    const spec = lcgf.spec;
+    const page = comptime spec.landmark(.main, .{}, .{
+        spec.landmark(.navigation, .{ .dir = .x }, .{}),
+        spec.landmark(.article, .{}, .{spec.heading(3, "Installation")}),
+    });
+    var ui: lcgf.widgets_base.ComptimeUi(struct {}, page, .default) = .{};
+    _ = ui.frame(&.{ .viewport = .{ 500, 300 } });
+    var f: Fixture(32) = .{};
+    f.init();
+    f.reset();
+    f.t = ui.tables.t;
+    f.tx = ui.tables.tx;
+    f.str = ui.tables.strings;
+    f.end(0);
+    const tree = &f.out[f.gen];
+    try testing.expectEqual(5, tree.len);
+    for ([_]Role{ .group, .main, .navigation, .article, .heading }, 0..) |role, i| {
+        try testing.expectEqual(@backingInt(role), tree.c.role[i]);
+    }
+    try testing.expectEqualSlices(u32, &.{ none, 0, 1, 1, 3 }, tree.c.parent[0..5]);
+    try testing.expectEqual(null, tree.headingLevel(3));
+    try testing.expectEqual(@as(?usize, 3), tree.headingLevel(4));
+
+    _ = Bridge.activate(&f.b);
+    const update = Bridge.factory(&f.b).?;
+    defer c.accesskit_tree_update_free(update);
+    var buf: [8192]u8 = undefined;
+    const debug = debugText(update, &buf);
+    try expectHas(debug, "Navigation");
+    try expectHas(debug, "Article");
+    try expectHas(debug, "Heading");
+    try expectHas(debug, "Installation");
+    try expectHas(debug, "level: 3");
 }

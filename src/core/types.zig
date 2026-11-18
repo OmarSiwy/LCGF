@@ -301,7 +301,27 @@ test "Response: bits are in declaration order and can be assembled from masks" {
 }
 
 /// What a node is to assistive technology. One byte per node; the accessibility tree reads it.
-pub const Role = enum(u8) { none, group, label, button, checkbox, slider, image, text_input };
+pub const Role = enum(u8) {
+    none,
+    group,
+    label,
+    button,
+    checkbox,
+    slider,
+    image,
+    text_input,
+    // Keep the existing accessibility wire bytes; a11y/tree.zig verifies every field.
+    heading = 17,
+    article = 18,
+    region = 48,
+    banner = 49,
+    navigation = 50,
+    main = 51,
+    complementary = 52,
+    content_info = 53,
+    form = 54,
+    search = 55,
+};
 
 test "Role: one byte, none is the zero default" {
     try std.testing.expectEqual(1, @sizeOf(Role));
@@ -362,6 +382,7 @@ pub const Style = struct {
     uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics
     role: Role = .none,
+    /// Role-specific value: a control's value/state, or a heading level (1..6, 0 unspecified).
     value: f32 = 0,
 };
 

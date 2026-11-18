@@ -93,7 +93,7 @@ pub fn dividerStyle(th: *const Theme) Style {
 
 /// What assistive technology sees (WAI-ARIA APG breadcrumb pattern): the trail is a
 /// `navigation` landmark, each earlier page a `link` named by its title (from content), and
-/// the current page static text. `types.Role` has neither navigation nor link, so both
+/// the current page static text. Both
 /// front ends write the bytes. The pattern's `aria-current="page"` on the last item is
 /// `a11y.State.current`, an application state: `semantics` sets it. The trail has no name of
 /// its own (a page labels it, as "Breadcrumb", with `Semantics.labelled_by`) and value 0.

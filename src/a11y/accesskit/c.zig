@@ -135,6 +135,7 @@ pub extern fn accesskit_node_set_character_lengths(node: *Node, length: usize, v
 pub extern fn accesskit_node_set_placeholder_with_length(node: *Node, value: [*]const u8, length: usize) void;
 pub extern fn accesskit_node_set_bounds(node: *Node, value: Rect) void;
 pub extern fn accesskit_node_set_transform(node: *Node, value: Affine) void;
+pub extern fn accesskit_node_set_level(node: *Node, value: usize) void;
 pub extern fn accesskit_node_set_numeric_value(node: *Node, value: f64) void;
 pub extern fn accesskit_node_set_toggled(node: *Node, value: Toggled) void;
 pub extern fn accesskit_node_set_expanded(node: *Node, value: bool) void;

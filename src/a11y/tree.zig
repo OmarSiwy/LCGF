@@ -15,8 +15,8 @@ const Span = @import("../core/strings.zig").Span;
 const Interaction = @import("../interact/interaction.zig").Interaction;
 
 /// What a node is to assistive technology: the roles the WAI-ARIA Authoring Practices patterns
-/// use. One byte, stored in `Tree.Columns.role`. The first eight are `types.Role` with the same
-/// values, so a `Style.role` written by a front end reads back as the same role here; the rest
+/// use. One byte, stored in `Tree.Columns.role`. Each role exposed by `types.Role` has the same
+/// value here, so a `Style.role` reads back as the same role; additional widget roles
 /// are written to the column directly (`t.c.role[i] = @backingInt(Role.tab)`).
 pub const Role = enum(u8) {
     // ---- types.Role: none is presentational (not exported), label is static text,
@@ -99,7 +99,7 @@ pub const Role = enum(u8) {
 
 /// The name of the role in a raw role byte, as in `Role` (`"tab"`, `"toggle_button"`), or
 /// `"unknown"` for a byte no role has. For tools that print a tree's role column: the column
-/// holds every `Role`, past `types.Role`'s eight, so reading it as `types.Role` is invalid.
+/// holds every `Role`, beyond `types.Role`, so reading it as `types.Role` is invalid.
 pub fn roleName(byte: u8) []const u8 {
     const table = comptime blk: {
         var m: [256][]const u8 = @splat("unknown");
@@ -110,7 +110,7 @@ pub fn roleName(byte: u8) []const u8 {
 }
 
 comptime {
-    // `types.Role` is a prefix of `Role`, value for value.
+    // The roles exposed directly in Style retain their platform-neutral export bytes.
     const core = @typeInfo(types.Role).@"enum";
     for (core.field_names, core.field_values) |name, v| {
         std.debug.assert(@backingInt(@field(Role, name)) == v);
@@ -330,6 +330,15 @@ pub const Export = struct {
     len: u32 = 0,
     cap: u32,
     c: Columns,
+
+    /// Semantic rank of an HTML-style heading. Other roles reuse the value
+    /// column for control values; a heading with no specified rank stores 0.
+    pub fn headingLevel(e: *const Export, row: usize) ?usize {
+        if (e.c.role[row] != @backingInt(Role.heading)) return null;
+        const rank = e.c.value[row];
+        if (!(rank >= 1 and rank <= 6 and @floor(rank) == rank)) return null;
+        return @intFromFloat(rank);
+    }
 
     pub const Columns = struct {
         /// Stable across frames: the node's `Id`, or for an anonymous node one derived from its

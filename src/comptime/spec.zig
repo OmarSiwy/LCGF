@@ -94,6 +94,27 @@ pub fn label(comptime caption: anytype) Spec {
     return .{ .kind = .label, .text = bytes };
 }
 
+/// Document containers whose role is independent of their layout direction.
+pub const Landmark = enum { group, article, region, banner, navigation, main, complementary, content_info, form, search };
+
+/// Preserve the layout and children while exposing this row's document role.
+/// Named landmarks can be labelled through the accessibility tree's labelled_by relation.
+pub fn landmark(comptime role: Landmark, comptime style: Style, comptime children: anytype) Spec {
+    var s = style;
+    s.role = @field(types.Role, @tagName(role));
+    return if (s.dir == .x) row(s, children) else col(s, children);
+}
+
+/// A document heading whose accessibility name is its displayed literal or bound text.
+/// The level is exported on the same row as the text, independent of its visual size.
+pub fn heading(comptime level: u8, comptime caption: anytype) Spec {
+    if (level < 1 or level > 6) @compileError("a heading level must be between 1 and 6");
+    var s = label(caption);
+    s.style.role = .heading;
+    s.style.value = @floatFromInt(level);
+    return s;
+}
+
 /// Frame string bytes for all declared literals, plus the caller's budget when a bound
 /// label or a widget hook can append runtime text. Literal-only pages need exactly their bytes.
 pub fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32 {
@@ -418,4 +439,20 @@ test "parameters: a tuple of ids sets the child count" {
     try std.testing.expectEqual(3, comptime nodeOf(s, "c"));
     try std.testing.expectEqual(0b1001, comptime bindMask(s, "c"));
     try std.testing.expectEqual(0, (comptime faders(.{})).children.len);
+}
+
+test "document semantics: landmark roles share existing row kinds and headings accept bound or literal text" {
+    inline for (std.enums.values(Landmark)) |role| {
+        const tree = comptime landmark(role, .{ .dir = .x }, .{});
+        try std.testing.expectEqual(@field(types.Role, @tagName(role)), tree.style.role);
+        try std.testing.expectEqual(Kind.row, tree.kind);
+    }
+    const h1 = comptime heading(1, "Start");
+    const h6 = comptime heading(6, .title);
+    try std.testing.expectEqual(Kind.label, h1.kind);
+    try std.testing.expectEqual(types.Role.heading, h1.style.role);
+    try std.testing.expectEqual(1, h1.style.value);
+    try std.testing.expectEqual(6, h6.style.value);
+    try std.testing.expectEqualStrings("Start", h1.text.?);
+    try std.testing.expectEqualStrings("title", h6.bind.?);
 }
