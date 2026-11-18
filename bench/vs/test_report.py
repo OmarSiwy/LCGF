@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 
-from measure import parse_frame, summarize_scene
+from measure import measure_scene, parse_frame, summarize_scene
 from report import FRAMEWORKS, RESIZES, SCENES, read_samples, render
 
 
@@ -28,11 +29,29 @@ class ComparisonReportTest(unittest.TestCase):
         self.assertEqual(variable["frames"], 2)
         self.assertEqual([v["frames"] for v in variable["samples"]], [0, 2, 2])
 
+    def test_held_scene_memory_and_invalid_protocol(self):
+        header = "scene=text frames=1 polls=3000\npass median us p99 us\nframe 0.1 1.2"
+        measured = f"import sys; print('diagnostic\\n' * 6); print({header!r}); print('scene complete', flush=True); sys.stdin.read()"
+        sample = measure_scene([sys.executable, "-c", measured], "text", True)
+        self.assertGreater(sample["rss_kib"], 0)
+        self.assertGreaterEqual(sample["peak_kib"], sample["rss_kib"])
+        # A harness without the hold protocol remains usable for standalone timings.
+        legacy = [sys.executable, "-c", f"print({header!r})"]
+        self.assertNotIn("rss_kib", measure_scene(legacy, "text"))
+        with self.assertRaisesRegex(ValueError, "complete scene result"):
+            measure_scene(legacy, "text", True)
+        with self.assertRaisesRegex(TimeoutError, "timed out"):
+            measure_scene([sys.executable, "-c", "import sys; sys.stdin.read()"], "text", True, timeout=.1)
+        for bad in (dict(peak_kib=1), dict(rss_kib=None), dict(peak_kib=True)):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "memory readings"):
+                summarize_scene("lcgf", "text", [sample, sample | bad])
+
     def test_complete_run_and_incomplete_negative_controls(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             for key in FRAMEWORKS:
-                measurement = dict(frames=3000, median_us=2 if key == "lcgf" else 1, p99_us=3)
+                measurement = dict(frames=3000, median_us=2 if key == "lcgf" else 1, p99_us=3,
+                                   rss_kib=4096, peak_kib=8192)
                 sample = dict(name=key, runs=5, idle_seconds=2, load_before=1, load_after=2,
                               rss_kib=100, peak_kib=200, loaded_bytes=300, bss_bytes=0,
                               library_bytes=0, first_frame_ms=0.4, idle_wakeups_per_s=0,
@@ -49,9 +68,11 @@ class ComparisonReportTest(unittest.TestCase):
             output = render(runs, windows, meta)
             self.assertIn("| 2.000 |", output)
             self.assertIn("Qt Widgets", output)
+            self.assertIn("4,096 / 8,192", output)
             old = runs["lcgf"]["scenes"]["list"]
             lcgf_path = directory / "lcgf.json"
             for changed in ({k: v for k, v in old.items() if k != "samples"},
+                            {k: v for k, v in old.items() if k != "peak_kib"},
                             old | dict(samples=old["samples"][:4]), old | dict(median_us=2.5)):
                 runs["lcgf"]["scenes"]["list"] = changed
                 lcgf_path.write_text(json.dumps(runs["lcgf"]))

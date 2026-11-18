@@ -91,15 +91,30 @@ fn eql(a: [*:0]const u8, b: []const u8) bool {
     return std.mem.eql(u8, std.mem.span(a), b);
 }
 
+fn blockOnStdin() void {
+    var byte: [1]u8 = undefined;
+    while (true) {
+        const n = linux.read(0, &byte, 1);
+        switch (linux.errno(n)) {
+            .SUCCESS => if (n == 0) return,
+            .INTR => continue,
+            else => return,
+        }
+    }
+}
+
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
     var scene: usize = 0;
     var idle = false;
+    var hold = false;
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         if (eql(argv[i], "--idle")) {
             idle = true;
             scene = scenes.vs.len - 1;
+        } else if (eql(argv[i], "--hold-after-scene")) {
+            hold = true;
         } else if (eql(argv[i], "--scene") and i + 1 < argv.len) {
             i += 1;
             scene = for (scenes.vs, 0..) |s, n| {
@@ -107,6 +122,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             } else return 2;
         } else return 2;
     }
+    if (hold and idle) return 2;
     const s = &scenes.vs[scene];
     var o: Out = .{};
     if (idle) {
@@ -115,8 +131,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         o.int(out);
         o.str("\n");
         o.flush();
-        var byte: [1]u8 = undefined;
-        while (@as(isize, @bitCast(linux.read(0, &byte, 1))) > 0) {}
+        blockOnStdin();
         return 0;
     }
     var sink: u64 = 0;
@@ -142,6 +157,8 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     o.us(samples[polls / 2]);
     o.us(samples[polls * 99 / 100]);
     o.str("\n");
+    if (hold) o.str("scene complete\n");
     o.flush();
+    if (hold) blockOnStdin();
     return 0;
 }

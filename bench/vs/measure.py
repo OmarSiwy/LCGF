@@ -19,9 +19,11 @@ import json
 import math
 import os
 import re
+import select
 import statistics
 import subprocess
 import sys
+import time
 
 SCENES = ["form", "list", "text", "springs", "resize", "idle"]
 
@@ -58,12 +60,67 @@ def parse_frame(out, scene):
     return dict(frames=int(header[2]), median_us=float(timing[1]), p99_us=float(timing[2]))
 
 
+def measure_scene(command, scene, footprint=False, timeout=600):
+    cmd = [*command, "--scene", scene]
+    if not footprint:
+        out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+        return parse_frame(out, scene)
+
+    # The result marker is written after every timed poll. Keep this exact process
+    # alive until Linux has reported its resident pages and process high-water mark.
+    with subprocess.Popen([*cmd, "--hold-after-scene"], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as child:
+        deadline = time.monotonic() + timeout
+        data = bytearray()
+        try:
+            while b"\nscene complete\n" not in data:
+                if len(data) > 65536:
+                    raise ValueError(f"{scene}: harness did not return a complete scene result")
+                remaining = max(0, deadline - time.monotonic())
+                if not select.select([child.stdout], [], [], remaining)[0]:
+                    raise TimeoutError(f"{scene}: timed out waiting for scene completion")
+                chunk = os.read(child.stdout.fileno(), 4096)
+                if not chunk:
+                    raise ValueError(f"{scene}: harness did not return a complete scene result")
+                data.extend(chunk)
+                # An adapter can print diagnostics before it finishes a long scene.
+                # The shared driver always flushes the timings and marker together.
+                if b"\nframe " in data:
+                    deadline = min(deadline, time.monotonic() + 5)
+            sample = parse_frame(data.decode(), scene)
+            with open(f"/proc/{child.pid}/status") as status:
+                for line in status:
+                    field, _, value = line.partition(":")
+                    if field in ("VmRSS", "VmHWM"):
+                        kib, unit = value.split()
+                        if unit != "kB":
+                            raise ValueError(f"unexpected {field} unit {unit}")
+                        sample["rss_kib" if field == "VmRSS" else "peak_kib"] = int(kib)
+            if "rss_kib" not in sample or "peak_kib" not in sample:
+                raise ValueError(f"{scene}: missing process memory readings")
+            # Closing stdin acknowledges the sample. Drain any trailing adapter output.
+            child.communicate(timeout=10)
+            if child.returncode:
+                raise subprocess.CalledProcessError(child.returncode, child.args)
+            return sample
+        finally:
+            if child.poll() is None:
+                child.kill()
+
+
 def summarize_scene(name, scene, samples):
     for s in samples:
         validate_scene(name, scene, s["frames"], s["median_us"], s["p99_us"])
-    return dict(frames=statistics.median_low(s["frames"] for s in samples),
-                median_us=statistics.median(s["median_us"] for s in samples),
-                p99_us=statistics.median(s["p99_us"] for s in samples), samples=samples)
+    result = dict(frames=statistics.median_low(s["frames"] for s in samples),
+                  median_us=statistics.median(s["median_us"] for s in samples),
+                  p99_us=statistics.median(s["p99_us"] for s in samples), samples=samples)
+    if any("rss_kib" in s or "peak_kib" in s for s in samples):
+        for sample in samples:
+            rss, peak = sample.get("rss_kib"), sample.get("peak_kib")
+            if type(rss) is not int or type(peak) is not int or not 0 < rss <= peak:
+                raise ValueError(f"{name}/{scene}: invalid process memory readings {rss!r}/{peak!r}")
+        for field in ("rss_kib", "peak_kib"):
+            result[field] = statistics.median(s[field] for s in samples)
+    return result
 
 
 def probe(cmd, seconds):
@@ -110,6 +167,8 @@ def main():
     ap.add_argument("--seconds", type=float, default=2.0, help="idle window of each probe")
     ap.add_argument("--libraries", action="store_true",
                     help="also sum the shared libraries mapped when idle (for frameworks that ship as them)")
+    ap.add_argument("--scene-memory", action="store_true",
+                    help="sample the speed build's resident and peak KiB after each scene (requires --hold-after-scene)")
     ap.add_argument("--json", help="also write the numbers here")
     a = ap.parse_args()
 
@@ -117,10 +176,7 @@ def main():
         ap.error("--runs and --seconds must be positive")
     r = {"name": a.name, "runs": a.runs, "idle_seconds": a.seconds, "load_before": load(), "scenes": {}}
     for scene in SCENES:
-        runs = []
-        for _ in range(a.runs):
-            out = subprocess.run([a.exe, "--scene", scene], check=True, capture_output=True, text=True).stdout
-            runs.append(parse_frame(out, scene))
+        runs = [measure_scene([a.exe], scene, a.scene_memory) for _ in range(a.runs)]
         r["scenes"][scene] = summarize_scene(a.name, scene, runs)
     probes = [probe([a.startup or a.exe, "--idle", "--scene", "idle"], a.seconds) for _ in range(a.runs)]
     r["rss_kib"] = statistics.median(p[0] for p in probes)

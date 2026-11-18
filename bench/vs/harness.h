@@ -10,6 +10,7 @@
 // A harness defines vs_frame (build, lay out and emit one frame of a scene) and vs_idle.
 #ifndef VS_HARNESS_H
 #define VS_HARNESS_H
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -116,18 +117,29 @@ static uint64_t vs_frame(int scene, uint32_t k);
 // Idles as the framework's host loop would, until stdin closes.
 static void vs_idle(void);
 
+// Blocks on stdin until it closes: the host loop of a library that has no event loop of its own,
+// as tools/bench/bench.zig --idle does.
+static void vs_block_on_stdin(void) {
+    char byte;
+    ssize_t n;
+    do { n = read(0, &byte, 1); } while (n > 0 || (n < 0 && errno == EINTR));
+}
+
 // The framework's name and version, printed in the header line.
 static int vs_main(int argc, char **argv, const char *framework) {
-    int scene = VS_FORM, idle = 0;
+    int scene = VS_FORM, idle = 0, hold = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--idle")) {
             idle = 1, scene = VS_IDLE;
+        } else if (!strcmp(argv[i], "--hold-after-scene")) {
+            hold = 1;
         } else if (!strcmp(argv[i], "--scene") && i + 1 < argc) {
             const char *name = argv[++i];
             for (scene = 0; scene < VS_SCENES && strcmp(vs_scene_names[scene], name); scene++) {}
             if (scene == VS_SCENES) return fprintf(stderr, "unknown scene %s\n", name), 2;
-        } else return fprintf(stderr, "usage: %s [--scene NAME] [--idle]\n", argv[0]), 2;
+        } else return fprintf(stderr, "usage: %s [--scene NAME] [--idle | --hold-after-scene]\n", argv[0]), 2;
     }
+    if (hold && idle) return 2;
     if (idle) {
         uint64_t out = vs_frame(scene, 0);
         printf("ready framework=%s out=%llu\n", framework, (unsigned long long)out);
@@ -151,14 +163,12 @@ static int vs_main(int argc, char **argv, const char *framework) {
            (unsigned long long)built, VS_FRAMES, (unsigned long long)out, (unsigned long long)sink);
     printf("%-10s %9s %9s\n", "pass", "median us", "p99 us");
     printf("%-10s %9.1f %9.1f\n", "frame", samples[VS_FRAMES / 2] / 1000.0, samples[VS_FRAMES * 99 / 100] / 1000.0);
+    if (hold) {
+        puts("scene complete");
+        fflush(stdout);
+        vs_block_on_stdin();
+    }
     return 0;
-}
-
-// Blocks on stdin until it closes: the host loop of a library that has no event loop of its own,
-// as tools/bench/bench.zig --idle does.
-static void vs_block_on_stdin(void) {
-    char byte;
-    while (read(0, &byte, 1) > 0) {}
 }
 
 #ifdef __cplusplus

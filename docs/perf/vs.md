@@ -2,6 +2,8 @@
 
 Each default-branch run measures LCGF and eleven alternatives on the same Linux runner. The generated tables identify the measured revision and show all results, including ties and losses. [Latest CI comparison](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md) · [Raw data](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/measurements.json)
 
+CI samples each speed-build process immediately after its 3,000 timed polls. The harness flushes its result and waits on stdin while the collector reads `VmRSS` and `VmHWM` from the child’s `/proc/PID/status`. The workload memory table reports median end-of-scene and peak resident KiB across launches. The idle-startup probe uses a separate process after one frame.
+
 Reproduce the suite from the repository root with `nix develop .#vs -c ci/run.sh gates-vs`. The job starts a private Xvfb display and runs five repetitions of 3,000 polls for form, list, text, springs, resize and idle. It separately measures process launch to first frame, idle and peak resident memory, idle wake-ups, executable sections, mapped shared libraries and three mapped-window resize operations. The local output is `zig-out/comparison/README.md` and `zig-out/comparison/measurements.json`. Pull requests retain the same report as a CI artifact. The historical tables below give measurements from earlier revisions.
 
 LCGF, Clay, Nuklear and microui use static builds for cold startup and idle RSS. The active frame timings and mapped library counts use their speed builds. The size column uses separately optimized small executables. This lets readers distinguish touched pages, executable sections and the shared libraries a distributor may need to ship.

@@ -32,7 +32,8 @@ def read_samples(directory, resize_file):
             raise ValueError(f"invalid repetitions for {key}")
         for scene, values in sample["scenes"].items():
             samples = values.get("samples")
-            if (not isinstance(samples, list) or len(samples) != sample["runs"]
+            if ("rss_kib" not in values or "peak_kib" not in values
+                    or not isinstance(samples, list) or len(samples) != sample["runs"]
                     or summarize_scene(key, scene, samples) != values):
                 raise ValueError(f"{key}/{scene}: inconsistent run summaries")
         for field in ("rss_kib", "peak_kib", "loaded_bytes", "bss_bytes", "library_bytes",
@@ -102,6 +103,13 @@ def render(runs, resize, meta):
     lines += table(["Framework", *[s.title() for s in SCENES]],
                    [[name, *[runs[key]["scenes"][scene]["frames"] for scene in SCENES]]
                     for key, name in FRAMEWORKS.items()])
+    lines += ["## Resident memory by workload", "",
+              "Each cell shows end-of-scene RSS / peak RSS in KiB. Each run launches a fresh speed-build process. "
+              "Linux reports its resident pages after 3,000 polls and the highest resident count since launch. "
+              "Both columns are medians across runs and include resident shared pages.", ""]
+    lines += table(["Framework", *[s.title() for s in SCENES]],
+                   [[name, *[f"{row['rss_kib']:,} / {row['peak_kib']:,}" for row in
+                             (runs[key]["scenes"][scene] for scene in SCENES)]] for key, name in FRAMEWORKS.items()])
     lines += ["## Startup and footprint", "",
               "Startup is the median of 11 launches to the first completed frame. Idle RSS and the peak observed through the first idle frame include "
               "touched shared pages. Executable bytes sum text, read-only data and initialized data in the size build. "

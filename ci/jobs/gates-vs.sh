@@ -28,7 +28,7 @@ cpu=$(python3 -c 'import os; cpus=os.sched_getaffinity(0); print(2 if 2 in cpus 
 # Pinned to one CPU, every framework on the same one.
 # The fourth argument, when given, is the build measured for resident memory and start-up.
 m() {
-    taskset -c "$cpu" python3 bench/vs/measure.py --libraries --name "$1" --exe "$2" --small "$3" --startup "${4:-$2}" --json "zig-out/gates/$1.json"
+    taskset -c "$cpu" python3 bench/vs/measure.py --scene-memory --libraries --name "$1" --exe "$2" --small "$3" --startup "${4:-$2}" --json "zig-out/gates/$1.json"
     taskset -c "$cpu" python3 bench/gates/gates.py measure-first-frame "zig-out/gates/$1.json" "${4:-$2}"
 }
 m lcgf zig-out/bin/vs-lcgf zig-out/bin/vs-lcgf-small

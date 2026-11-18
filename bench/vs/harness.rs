@@ -93,7 +93,14 @@ impl Springs {
 /// Blocks on stdin until it closes: the host loop of a library without an event loop of its own.
 pub fn block_on_stdin() {
     let mut byte = [0u8; 1];
-    while matches!(std::io::stdin().read(&mut byte), Ok(n) if n > 0) {}
+    loop {
+        match std::io::stdin().read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (),
+            Err(_) => break,
+        }
+    }
 }
 
 /// Parses `--scene NAME` / `--idle`, then times `frame` (which returns what it emitted, zero for a
@@ -101,17 +108,20 @@ pub fn block_on_stdin() {
 pub fn main(framework: &str, mut frame: impl FnMut(usize, u32) -> u64, idle: impl FnOnce()) {
     let mut scene = FORM;
     let mut is_idle = false;
+    let mut hold = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--idle" => (is_idle, scene) = (true, IDLE),
+            "--hold-after-scene" => hold = true,
             "--scene" => {
                 let name = args.next().expect("--scene NAME");
                 scene = SCENES.iter().position(|s| *s == name).unwrap_or_else(|| panic!("unknown scene {name}"));
             }
-            _ => panic!("usage: [--scene NAME] [--idle]"),
+            _ => panic!("usage: [--scene NAME] [--idle | --hold-after-scene]"),
         }
     }
+    assert!(!(hold && is_idle), "--idle and --hold-after-scene are mutually exclusive");
     let mut out = std::io::stdout().lock();
     if is_idle {
         let n = frame(scene, 0);
@@ -135,4 +145,9 @@ pub fn main(framework: &str, mut frame: impl FnMut(usize, u32) -> u64, idle: imp
     writeln!(out, "framework={framework} scene={} frames={built} polls={FRAMES} out={last} sink={sink}", SCENES[scene]).unwrap();
     writeln!(out, "{:<10} {:>9} {:>9}", "pass", "median us", "p99 us").unwrap();
     writeln!(out, "{:<10} {:9.1} {:9.1}", "frame", us(n / 2), us(n * 99 / 100)).unwrap();
+    if hold {
+        writeln!(out, "scene complete").unwrap();
+        out.flush().unwrap();
+        block_on_stdin();
+    }
 }
