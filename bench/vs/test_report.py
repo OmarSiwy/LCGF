@@ -32,11 +32,11 @@ class ComparisonReportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             for key in FRAMEWORKS:
+                measurement = dict(frames=3000, median_us=2 if key == "lcgf" else 1, p99_us=3)
                 sample = dict(name=key, runs=5, idle_seconds=2, load_before=1, load_after=2,
                               rss_kib=100, peak_kib=200, loaded_bytes=300, bss_bytes=0,
                               library_bytes=0, first_frame_ms=0.4, idle_wakeups_per_s=0,
-                              scenes={s: dict(frames=3000, median_us=2 if key == "lcgf" else 1,
-                                              p99_us=3) for s in SCENES})
+                              scenes={s: summarize_scene(key, s, [measurement] * 5) for s in SCENES})
                 (directory / f"{key}.json").write_text(json.dumps(sample))
             resize = dict(rounds=1, samples={
                 k: [dict(round=1, kind=knd, latency_ms=1, readback_ms=.1) for knd in RESIZES]
@@ -50,16 +50,17 @@ class ComparisonReportTest(unittest.TestCase):
             self.assertIn("| 2.000 |", output)
             self.assertIn("Qt Widgets", output)
             old = runs["lcgf"]["scenes"]["list"]
-            runs["lcgf"]["scenes"]["list"] = old | dict(samples=[old] * 4)
             lcgf_path = directory / "lcgf.json"
-            lcgf_path.write_text(json.dumps(runs["lcgf"]))
-            with self.assertRaisesRegex(ValueError, "inconsistent run summaries"):
+            for changed in ({k: v for k, v in old.items() if k != "samples"},
+                            old | dict(samples=old["samples"][:4]), old | dict(median_us=2.5)):
+                runs["lcgf"]["scenes"]["list"] = changed
+                lcgf_path.write_text(json.dumps(runs["lcgf"]))
+                with self.assertRaisesRegex(ValueError, "inconsistent run summaries"):
+                    read_samples(directory, path)
+            runs["lcgf"]["scenes"]["list"] = old
+            lcgf_path.write_text(json.dumps(runs["lcgf"] | dict(idle_seconds=1)))
+            with self.assertRaisesRegex(ValueError, "different repetition counts or idle durations"):
                 read_samples(directory, path)
-            runs["lcgf"]["scenes"]["list"] = old | dict(median_us=2.5, samples=[old] * 5)
-            lcgf_path.write_text(json.dumps(runs["lcgf"]))
-            with self.assertRaisesRegex(ValueError, "inconsistent run summaries"):
-                read_samples(directory, path)
-            runs["lcgf"]["scenes"]["list"] = old | dict(samples=[old] * 5)
             lcgf_path.write_text(json.dumps(runs["lcgf"]))
             resize["samples"]["gtk4"].pop()
             path.write_text(json.dumps(resize))

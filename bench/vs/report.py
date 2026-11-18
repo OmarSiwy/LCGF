@@ -10,7 +10,7 @@ import platform
 import statistics
 import subprocess
 
-from measure import SCENES, summarize_scene, validate_scene
+from measure import SCENES, summarize_scene
 
 FRAMEWORKS = json.loads(Path(__file__).with_name("frameworks.json").read_text())
 RESIZES = ("grow", "shrink", "drag-settle")
@@ -31,18 +31,19 @@ def read_samples(directory, resize_file):
         if type(sample["runs"]) is not int or sample["runs"] < 1 or number(sample["idle_seconds"]) <= 0:
             raise ValueError(f"invalid repetitions for {key}")
         for scene, values in sample["scenes"].items():
-            validate_scene(key, scene, values["frames"], values["median_us"], values["p99_us"])
-            if "samples" in values:
-                samples = values["samples"]
-                if len(samples) != sample["runs"] or summarize_scene(key, scene, samples) != values:
-                    raise ValueError(f"{key}/{scene}: inconsistent run summaries")
+            samples = values.get("samples")
+            if (not isinstance(samples, list) or len(samples) != sample["runs"]
+                    or summarize_scene(key, scene, samples) != values):
+                raise ValueError(f"{key}/{scene}: inconsistent run summaries")
         for field in ("rss_kib", "peak_kib", "loaded_bytes", "bss_bytes", "library_bytes",
                       "idle_wakeups_per_s", "first_frame_ms", "load_before", "load_after"):
             number(sample[field])
         runs[key] = sample
+    if len({(r["runs"], r["idle_seconds"]) for r in runs.values()}) != 1:
+        raise ValueError("frameworks measured with different repetition counts or idle durations")
     resize = json.loads(resize_file.read_text())
     rounds = resize["rounds"]
-    if not isinstance(rounds, int) or rounds < 1 or set(resize["samples"]) != set(FRAMEWORKS):
+    if type(rounds) is not int or rounds < 1 or set(resize["samples"]) != set(FRAMEWORKS):
         raise ValueError("incomplete window-resize comparison")
     for key, rows in resize["samples"].items():
         if [(row["round"], row["kind"]) for row in rows] != [
@@ -64,8 +65,7 @@ def render(runs, resize, meta):
     repo = meta["repository"]
     revision = f"[`{sha[:10]}`](https://github.com/{repo}/commit/{sha})" if repo else f"`{sha[:10]}`"
     source = f" [CI run]({meta['run_url']})" if meta["run_url"] else ""
-    run_counts = sorted({r["runs"] for r in runs.values()})
-    repetitions = "/".join(str(count) for count in run_counts)
+    repetitions = runs["lcgf"]["runs"]
     lines = ["# GUI framework benchmark results", "",
              f"Measured {meta['utc']} at {revision}.{source}", "",
              f"{meta['cpu_model']}, {meta['system']}. Frame harnesses used CPU {meta['cpu']}. "
