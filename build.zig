@@ -3,6 +3,8 @@
 //! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
 
+pub const addMarkup = @import("tools/decomposer/integration.zig").addMarkup;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -132,6 +134,7 @@ pub fn build(b: *std.Build) void {
     // A downstream application consumes the modules and library above. The
     // benchmarks, SDK probes, docs and examples belong to this repository.
     if (!b.isRoot()) return;
+    @import("tools/decomposer/integration.zig").steps(b, lcgf, target, optimize);
 
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");

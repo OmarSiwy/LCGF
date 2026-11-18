@@ -1,0 +1,7 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 4px;
+}
+.panel > p { color: #123456; font-size: 18px }
