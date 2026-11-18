@@ -73,7 +73,8 @@ pub fn checkOpen(comptime State: type, comptime name: []const u8, comptime open:
 /// `null` if every label of `spec` shows a string field of `State`, else the compile error.
 pub fn checkLabels(comptime State: type, comptime spec: Spec) ?[]const u8 {
     if (spec.kind == .label) {
-        const f = spec.bind orelse return "a label without a field";
+        if (spec_zig.labelError(spec)) |msg| return msg;
+        const f = spec.bind orelse return null;
         if (!@hasField(State, f)) return "label: state " ++ @typeName(State) ++ " has no field '" ++ f ++ "'";
         if (@FieldType(State, f) != []const u8) return "label: field '" ++ f ++ "' must be a []const u8";
     }
@@ -93,7 +94,7 @@ pub fn Popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open:
         pub const panel_name = panel;
 
         /// The button that opens and closes the popover, showing the string field `text`.
-        pub fn button(comptime text: @EnumLiteral()) Spec {
+        pub fn button(comptime text: anytype) Spec {
             return base.ct.button(th, name, text);
         }
 
@@ -474,7 +475,7 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
             ui.tree_row[row] = i;
             switch (n.kind) {
                 .label => {
-                    const span = tb.strings.add(@field(ui.signals.state, n.bind.?));
+                    const span = tb.strings.add(spec_zig.labelBytes(n, &ui.signals.state));
                     tb.t.c.text[i] = tb.tx.push(i, span, &base.labelText(&th));
                 },
                 .row, .col => inline for (n.children) |c| ui.push(c, i, next, v),
@@ -549,15 +550,13 @@ pub fn Example(comptime th: Theme) type {
 
         pub const State = struct {
             open: bool = false,
-            details_text: []const u8 = "Details",
             layer: []const u8 = "Layer 0",
             exposure: []const u8 = "Exposure 0.25",
-            gamma: []const u8 = "Gamma 2.2",
         };
         pub const P = Popover(th, .details, .open);
         pub const spec = spec_zig.col(.{}, .{
-            spec_zig.row(toolbar_style, .{ P.button(.details_text), base.ct.label(th, .layer) }),
-            P.layer(.{ base.ct.label(th, .exposure), base.ct.label(th, .gamma) }),
+            spec_zig.row(toolbar_style, .{ P.button("Details"), base.ct.label(th, .layer) }),
+            P.layer(.{ base.ct.label(th, .exposure), base.ct.label(th, "Gamma 2.2") }),
         });
         pub const Ui = ComptimePage(State, spec, th, P);
         pub const limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 };

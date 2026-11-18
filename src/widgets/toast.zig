@@ -62,7 +62,7 @@ pub fn Toast(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: 
         /// The layer and the toast showing the string field `text`. Put it last in the page's
         /// root so it is drawn above the rest. The layer has no id (it takes no pointer
         /// input); it is told apart by its binding to `field`.
-        pub fn layer(comptime text: @EnumLiteral()) Spec {
+        pub fn layer(comptime text: anytype) Spec {
             var t = spec_zig.row(.{}, .{base.ct.label(th, text)});
             t.id = id;
             return .{ .kind = .col, .bind = field_name, .children = &.{t} };

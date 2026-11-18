@@ -89,7 +89,7 @@ pub const ct = struct {
     /// .remove_text)` or `ct.chip(th, .draft, .draft_text, null)`. The chip itself is no
     /// widget; its remove button is the widget `<id>.remove`, a button (void event, focus
     /// stop) whose click asks the application to remove the chip.
-    pub fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral(), comptime remove: ?@EnumLiteral()) Spec {
+    pub fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime remove: ?@EnumLiteral()) Spec {
         const caption = label_zig.ct.label(th, text);
         const kids: []const Spec = if (remove) |r| &.{ caption, .{
             .kind = .row,

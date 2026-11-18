@@ -96,7 +96,7 @@ pub fn Menu(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @E
     const menu_name = @tagName(menu);
     return struct {
         /// The button that opens and closes the menu, showing the string field `text`.
-        pub fn button(comptime text: @EnumLiteral()) Spec {
+        pub fn button(comptime text: anytype) Spec {
             return base.ct.button(th, name, text);
         }
 

@@ -157,6 +157,7 @@ pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime na
 /// and its subtree is its own (it may bind its nodes differently), so it is not walked.
 fn checkBindings(comptime State: type, comptime n: Spec) void {
     comptime {
+        if (n.widget == null and n.kind == .label) if (spec_zig.labelError(n)) |msg| @compileError(msg);
         if (n.bind) |name| {
             const err: ?[]const u8 = if (n.widget) |W_|
                 (if (@hasDecl(W_, "bindError")) W_.bindError(State, name) else null)
@@ -291,21 +292,23 @@ pub fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32
 /// state struct of `ComptimeUi` must have them, with the types noted (a compile error if not).
 /// A comptime slider's value runs 0 to 1, the range of its `Event` payload.
 pub const ct = struct {
-    /// Text showing the string field `text`.
-    pub fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec {
+    /// A literal string or the value of a string field.
+    pub fn label(comptime th: Theme, comptime text: anytype) Spec {
         _ = th;
-        return .{ .kind = .label, .bind = @tagName(text), .style = .{ .role = .label } };
+        var node = spec_zig.label(text);
+        node.style = .{ .role = .label };
+        return node;
     }
 
     /// A button named `id` showing the string field `text`; its click is its event.
-    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec {
         var s = spec_zig.row(buttonStyle(&th), .{ct.label(th, text)});
         s.id = @tagName(id);
         return s;
     }
 
     /// A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
-    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec {
         var s = spec_zig.row(checkboxStyle(&th), .{ Spec{ .kind = .col }, ct.label(th, text) });
         s.kind = .checkbox;
         s.id = @tagName(id);
@@ -488,7 +491,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             switch (n.kind) {
                 .label => {
                     const i = tb.t.push(parent, .none, &n.style);
-                    const span = tb.strings.add(@field(state, n.bind.?));
+                    const span = tb.strings.add(spec_zig.labelBytes(n, state));
                     tb.t.c.text[i] = tb.tx.push(i, span, &labelText(&th));
                 },
                 .checkbox => {

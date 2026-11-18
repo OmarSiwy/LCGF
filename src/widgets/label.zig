@@ -55,9 +55,11 @@ pub fn label(f: *Frame, th: *const Theme, str: []const u8) Node {
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// Text showing the string field `text`: `ct.label(th, .title)`.
-    pub fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec {
-        return .{ .kind = .label, .bind = @tagName(text), .style = labelStyle(&th) };
+    /// A literal string or a bound string field: `ct.label(th, "Title")` or `ct.label(th, .title)`.
+    pub fn label(comptime th: Theme, comptime text: anytype) Spec {
+        var node = spec_zig.label(text);
+        node.style = labelStyle(&th);
+        return node;
     }
 };
 
@@ -287,4 +289,29 @@ test "Page: the label replay draws frame 0 in every frame, in both front ends" {
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
+}
+
+test "literal and bound captions share rendering and only the bound label needs a signal" {
+    const th: Theme = .default;
+    const button = @import("button.zig");
+    const spec = comptime spec_zig.col(.{}, .{ ct.label(th, "Title"), ct.label(th, .message), button.ct.button(th, .save, "Save") });
+    const State = struct { message: []const u8 = "Message" };
+    const Ui = base.ComptimeUi(State, spec, th);
+    const App = struct {
+        pub fn build(_: *@This(), f: *Frame) void {
+            _ = f.open(.none, spec.style);
+            _ = label(f, &th, "Title");
+            _ = label(f, &th, "Message");
+            _ = button.button(f, &th, .from("save"), "Save");
+            f.close();
+        }
+    };
+    var h: base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 256, .depth = 8 }) = undefined;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 200, 100 } });
+    try testing.expectEqualStrings("TitleMessageSave", h.ui.tables.d.strings);
+    try testing.expectEqual(@as(Ui.Signals.Mask, 0b00101), Ui.Signals.dirty_masks[0]);
+    comptime @import("../comptime/validate.zig").check(State, spec, .{});
+    const popover = @import("popover.zig");
+    try testing.expectEqual(null, comptime popover.checkLabels(State, spec));
 }

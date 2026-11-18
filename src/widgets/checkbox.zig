@@ -123,7 +123,7 @@ pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []cons
 pub const ct = struct {
     /// A checkbox named `id` over the `bool` or `Check` field `bind`, captioned by the string
     /// field `text`: `ct.checkbox(th, .wire, .wireframe, .wire_text)`.
-    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec {
         // Box (with its dash), caption: the rows the front ends push, so rows keep spec order.
         const box: Spec = .{ .kind = .col, .children = &.{Spec{ .kind = .col }} };
         var s = spec_zig.row(checkboxStyle(&th), .{ box, label_zig.ct.label(th, text) });

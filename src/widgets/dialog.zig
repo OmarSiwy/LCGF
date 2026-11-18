@@ -73,13 +73,13 @@ pub fn Dialog(comptime th: Theme, comptime name: @EnumLiteral(), comptime field:
     const field_name = @tagName(field);
     return struct {
         /// The button that opens the dialog, showing the string field `text`.
-        pub fn button(comptime text: @EnumLiteral()) Spec {
+        pub fn button(comptime text: anytype) Spec {
             return base.ct.button(th, name, text);
         }
 
         /// The backdrop and the dialog showing the string fields `title` and `message`, then
         /// its buttons. Put it last in the page's root so it is drawn above the rest.
-        pub fn layer(comptime title: @EnumLiteral(), comptime message: @EnumLiteral()) Spec {
+        pub fn layer(comptime title: anytype, comptime message: anytype) Spec {
             var buttons: [def.buttons.len]Spec = undefined;
             for (&buttons, def.buttons) |*s, b| {
                 // As `base.ct.button` builds one, from a name instead of an enum literal.

@@ -23,6 +23,8 @@ pub const Spec = struct {
     id: ?[:0]const u8 = null,
     /// Name of the state field this node shows; builders take it as an enum literal (`.volume`).
     bind: ?[]const u8 = null,
+    /// Literal bytes of a label. A bound label reads its bytes from the state instead.
+    text: ?[]const u8 = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     children: []const Spec = &.{},
@@ -81,9 +83,24 @@ pub fn row(comptime style: Style, comptime children: anytype) Spec {
     return .{ .kind = .row, .style = s, .children = kids(children) };
 }
 
-/// Text showing the state field `bind`: `label(.title)`.
-pub fn label(comptime bind: @EnumLiteral()) Spec {
-    return .{ .kind = .label, .bind = @tagName(bind) };
+/// A literal caption (`label("Save")`) or a bound string field (`label(.title)`).
+pub fn label(comptime caption: anytype) Spec {
+    if (@TypeOf(caption) == @EnumLiteral()) return .{ .kind = .label, .bind = @tagName(caption) };
+    const bytes: []const u8 = caption;
+    return .{ .kind = .label, .text = bytes };
+}
+
+/// Check the two sources before emitting a label. Custom widget internals may supply their own text.
+pub fn labelError(comptime s: Spec) ?[]const u8 {
+    if (s.bind == null and s.text == null) return "a label needs a literal or a bound field";
+    if (s.bind != null and s.text != null) return "a label cannot have both literal text and a bound field";
+    return null;
+}
+
+/// Resolve a label's source at compile time. A literal has no state field or signal mask.
+pub inline fn labelBytes(comptime s: Spec, state: anytype) []const u8 {
+    if (comptime labelError(s)) |msg| @compileError(msg);
+    return if (comptime s.text) |bytes| bytes else @field(state, s.bind.?);
 }
 
 /// A checkbox named `id`, showing and toggling the bool field `bind`: `checkbox(.mute, .muted)`.

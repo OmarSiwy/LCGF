@@ -68,7 +68,7 @@ pub const ct = struct {
     /// A button named `id` showing the string field `text`; its click is its event:
     /// `ct.button(th, .reset, .reset_text)`. A `Widget` with a `void` event, built and
     /// stepped by `Comptime` (`Spec.widget`).
-    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec {
         var s = spec_zig.row(buttonStyle(&th), .{label_zig.ct.label(th, text)});
         s.id = @tagName(id);
         s.widget = Comptime(@tagName(id));

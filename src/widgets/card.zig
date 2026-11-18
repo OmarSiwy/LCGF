@@ -59,8 +59,8 @@ pub const ct = struct {
     /// A card or group box titled by the string field `title`, holding `children` (a tuple of
     /// specs). It takes no input, so it has no id. Mistakes are compile errors: an empty
     /// `children`, or a `title` that is not a string field of the state struct (`ComptimeUi`).
-    pub fn card(comptime th: Theme, comptime variant: Variant, comptime title: @EnumLiteral(), comptime children: anytype) Spec {
-        if (children.len == 0) @compileError("card '" ++ @tagName(title) ++ "' holds nothing; give it at least one child");
+    pub fn card(comptime th: Theme, comptime variant: Variant, comptime title: anytype, comptime children: anytype) Spec {
+        if (children.len == 0) @compileError("card holds nothing; give it at least one child");
         return spec_zig.col(style(&th, variant), .{base.ct.label(th, title)} ++ children);
     }
 };

@@ -61,7 +61,7 @@ pub fn Tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip
         /// The bubble showing the string field `text`. Put it last in the page's root so it is
         /// drawn above the rest. It has no id, so it takes no pointer input; it is told apart
         /// by its binding to `tip`.
-        pub fn bubble(comptime text: @EnumLiteral()) Spec {
+        pub fn bubble(comptime text: anytype) Spec {
             return .{ .kind = .col, .bind = tip_name, .children = &.{base.ct.label(th, text)} };
         }
 

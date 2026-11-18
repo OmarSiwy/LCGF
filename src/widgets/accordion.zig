@@ -116,7 +116,7 @@ pub const ct = struct {
     /// `children` (a tuple of specs) while the bool field `expanded` is set. Mistakes are
     /// compile errors: an empty `children`, an `expanded` that is not a bool field or a
     /// `title` that is not a string field of the state struct.
-    pub fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: @EnumLiteral(), comptime children: anytype) Spec {
+    pub fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime children: anytype) Spec {
         if (children.len == 0) @compileError("accordion section '" ++ @tagName(id) ++ "' has an empty panel");
         var head = spec_zig.row(headerStyle(&th), .{ Spec{ .kind = .col }, base.ct.label(th, title) });
         head.id = @tagName(id);

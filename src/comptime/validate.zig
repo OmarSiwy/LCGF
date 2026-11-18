@@ -26,7 +26,7 @@ pub fn check(comptime State: type, comptime spec: Spec, comptime options: Option
         @setEvalBranchQuota(1000 + branches_per_node * n + 4 * n * n);
         if (@typeInfo(State) != .@"struct") @compileError("state must be a struct, not " ++ @typeName(State));
         var ids: []const Named = &.{};
-        walk(State, spec, options, @tagName(spec.kind), &ids);
+        walk(State, spec, options, @tagName(spec.kind), &ids, false);
         if (options.viewport) |vp| {
             const need = minSize(spec, @tagName(spec.kind));
             if (need[0] > vp[0] or need[1] > vp[1]) @compileError(std.fmt.comptimePrint(
@@ -69,7 +69,7 @@ fn hasField(comptime State: type, comptime name: []const u8) bool {
     return false;
 }
 
-fn walk(comptime State: type, comptime s: Spec, comptime options: Options, comptime path: []const u8, comptime ids: *[]const Named) void {
+fn walk(comptime State: type, comptime s: Spec, comptime options: Options, comptime path: []const u8, comptime ids: *[]const Named, comptime widget_owned: bool) void {
     const at = path ++ ": ";
     if (s.id) |name| {
         for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
@@ -89,6 +89,7 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
                 @compileError(at ++ "virtual list needs an f32 scroll field '" ++ w.scroll ++ "'");
         }
     }
+    if (s.kind == .label and (!widget_owned or s.text != null) and s.widget == null) if (spec_zig.labelError(s)) |msg| @compileError(at ++ msg);
     if (s.bind) |field| {
         if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }
@@ -102,7 +103,7 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
     };
     if (options.require_names and interactive and (s.name orelse "").len == 0)
         @compileError(at ++ @tagName(s.kind) ++ " '" ++ (s.id orelse "") ++ "' has no accessible name; give it one with spec.named(..., \"Name\")");
-    for (s.children, 0..) |c, i| walk(State, c, options, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }), ids);
+    for (s.children, 0..) |c, i| walk(State, c, options, std.fmt.comptimePrint("{s} > {t}[{d}]", .{ path, c.kind, i }), ids, widget_owned or s.widget != null);
 }
 
 /// The smallest size `s` can take, in px per axis, from what the spec fixes: `px` sizes, `min`,

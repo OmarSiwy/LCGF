@@ -94,7 +94,7 @@ pub fn expose(t: *Tree, row: u32, on: bool) void {
 pub const ct = struct {
     /// A switch named `id` over the `bool` field `bind`, captioned by the string field `text`:
     /// `ct.@"switch"(th, .vsync, .vsync, .vsync_text)`.
-    pub fn @"switch"(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn @"switch"(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec {
         // Track (with its knob), caption: the rows the front ends push, in spec order.
         const track: Spec = .{ .kind = .col, .children = &.{Spec{ .kind = .col }} };
         var s = spec_zig.row(switchStyle(&th), .{ track, label_zig.ct.label(th, text) });

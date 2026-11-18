@@ -79,7 +79,7 @@ pub fn toggle(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8
 pub const ct = struct {
     /// A toggle button named `id` over the `bool` field `bind`, captioned by the string field
     /// `text`: `ct.toggle(th, .bold, .bold, .bold_text)`.
-    pub fn toggle(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec {
+    pub fn toggle(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec {
         var s = spec_zig.row(button_zig.buttonStyle(&th), .{label_zig.ct.label(th, text)});
         s.id = @tagName(id);
         s.bind = @tagName(bind);
