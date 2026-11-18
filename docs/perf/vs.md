@@ -2,7 +2,7 @@
 
 Each default-branch run measures LCGF and eleven alternatives on the same Linux runner. The generated tables identify the measured revision and show all results, including ties and losses. [Latest CI comparison](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md) · [Raw data](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/measurements.json)
 
-Reproduce the suite from the repository root with `nix develop .#vs -c ci/run.sh gates-vs`. The job runs five repetitions of 3,000 polls for form, list, text, springs, resize and idle. It separately measures process launch to first frame, idle and peak resident memory, idle wake-ups, executable sections, mapped shared libraries and three mapped-window resize operations. The local output is `zig-out/comparison/README.md` and `zig-out/comparison/measurements.json`. Pull requests retain the same report as a CI artifact. The historical tables below give measurements from earlier revisions.
+Reproduce the suite from the repository root with `nix develop .#vs -c ci/run.sh gates-vs`. The job starts a private Xvfb display and runs five repetitions of 3,000 polls for form, list, text, springs, resize and idle. It separately measures process launch to first frame, idle and peak resident memory, idle wake-ups, executable sections, mapped shared libraries and three mapped-window resize operations. The local output is `zig-out/comparison/README.md` and `zig-out/comparison/measurements.json`. Pull requests retain the same report as a CI artifact. The historical tables below give measurements from earlier revisions.
 
 ## What a frame is in each harness
 

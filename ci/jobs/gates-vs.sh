@@ -4,9 +4,9 @@
 # every harness of bench/vs/ as the ci/jobs/vs-*.sh jobs do, measures each with
 # bench/vs/measure.py beside the LCGF row, then fails when a gate regresses against
 # bench/gates/recorded.json. Timings are measured and compared in this one run, on one machine.
-# Keep the GTK display server outside every timed process start.
-if [[ -z ${DISPLAY:-} ]]; then
-    xvfb-run -a -s "-screen 0 1920x1080x24 -noreset" ci/run.sh gates-vs
+# Keep the GTK display server outside every timed process start and isolate pointer events.
+if [[ ${LCGF_VS_PRIVATE_DISPLAY:-0} != 1 ]]; then
+    xvfb-run -a -s "-screen 0 1920x1080x24 -noreset" env LCGF_VS_PRIVATE_DISPLAY=1 ci/run.sh gates-vs
     exit
 fi
 python3 -m unittest discover -s bench/vs -p test_report.py
