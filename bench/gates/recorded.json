@@ -103,9 +103,9 @@
   }
  },
  "size": {
-  "dump": {
-   "loaded": 34232,
-   "bss": 1107984
+  "golden-dump": {
+   "loaded": 65160,
+   "bss": 1498944
   },
   "bench": {
    "loaded": 283456,

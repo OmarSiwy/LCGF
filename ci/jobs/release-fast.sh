@@ -1,1 +1,1 @@
-both test -Doptimize=ReleaseFast
+zig build test -Doptimize=ReleaseFast

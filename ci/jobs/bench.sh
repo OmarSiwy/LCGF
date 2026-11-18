@@ -6,8 +6,7 @@ python3 tools/bench/compare.py --self-test
 # The baseline is from the owner's machine (docs/CHECKS.md: never compare timings across machines),
 # so on GitHub runners the table is printed but does not fail the job.
 # Timings mean nothing on a loaded machine (many lanes building at once): print, do not fail,
-# when the 1-minute load average is above a quarter of the CPU count (every pass, the
-# prototype included, measured ~40% slower at load ~10 on 32 CPUs).
+# when the 1-minute load average is above a quarter of the CPU count.
 busy=$(awk -v n="$(nproc)" '{ print ($1 > n / 4) }' /proc/loadavg)
 [ "$busy" = 1 ] && echo "bench: load $(cut -d' ' -f1 /proc/loadavg) on $(nproc) CPUs, gate not applied"
 python3 tools/bench/compare.py tools/bench/baseline.json zig-out/bench.json || [ -n "${GITHUB_ACTIONS-}" ] || [ "$busy" = 1 ]

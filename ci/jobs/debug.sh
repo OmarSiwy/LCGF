@@ -1,1 +1,1 @@
-both test
+zig build test

@@ -1,11 +1,7 @@
 //! Fuzz entry points: hostile input streams and style values driven through whole frames.
 //!
-//! The model is the prototype test "running out of rows is reported, not fatal": whatever the host
-//! or the caller hands in (NaN, infinities, huge sizes, unbalanced open/close, too many rows), a
-//! frame must end without a crash.
-//!
-//! The core is imported as the named module "ui". Today build.zig points it at prototype/ui.zig;
-//! when the core lands in src/, point the module there and keep these entry points.
+//! Drives production runtime frames through input, layout, hit testing and paint, including
+//! NaN, infinities, huge sizes, unbalanced open/close and exhausted table capacity.
 //!
 //! Each entry point takes a value source `s` with four methods (`value`, `valueRangeLessThan`,
 //! `slice`, `eosWeightedSimple`). Two sources exist:
@@ -16,44 +12,66 @@
 //!                                                  seeded random loop (`Rng`), bounded by time;
 //!                                                  this is the CI job (ci/run.sh fuzz)
 //!
-//! Why two: on 0.17.1 the built-in fuzzer stops after a number of iterations, not a time, and the
-//! build still exits 0 when a fuzzed test crashes. The seeded loop runs for a set time, exits
-//! non-zero on a crash and prints the iteration that reproduces it.
+//! The seeded loop runs for a set time, exits non-zero on a crash and prints the iteration
+//! that reproduces it.
 const std = @import("std");
-const ui = @import("ui");
+const lcgf = @import("lcgf");
+const Context = lcgf.context.Context;
+const Input = lcgf.input.Input;
+const Id = lcgf.types.Id;
+const widgets = lcgf.widgets_base;
 const Smith = std.testing.Smith;
 
 // Small limits so the overflow paths (rows, texts, strings, depth) are reached quickly.
-const limits: ui.Limits = .{ .nodes = 64, .texts = 16, .customs = 4, .strings = 256, .anims = 8, .signals = 8, .memos = 4, .depth = 8 };
-var buffer: [ui.Context.requiredBytes(limits)]u8 align(ui.mem.column_align) = undefined;
+const limits: lcgf.context.Limits = .{ .nodes = 64, .texts = 16, .customs = 4, .strings = 256, .anims = 8, .signals = 8, .memos = 4, .depth = 8 };
+var buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 /// One frame's worth of host input. `text` backs `Input.text`.
-fn input(s: anytype, text: []u8) ui.Input {
+fn input(s: anytype, text: []u8) Input {
     return .{
         .time = s.value(f64),
         .dt = s.value(f32),
         .viewport = s.value([2]f32),
         .scale = s.value(f32),
         .pointer = s.value([2]f32),
-        .buttons = s.value(ui.Input.Buttons),
+        .buttons = s.value(Input.Buttons),
         .wheel = s.value([2]f32),
-        .mods = s.value(ui.Input.Mods),
+        .mods = s.value(Input.Mods),
         .keys = .{ .bits = s.value([4]u64) },
         .text = text[0..s.slice(text)],
     };
 }
 
-/// Walks the draw list the way a renderer does, so every command is decoded.
-fn drain(out: ui.Output) !void {
-    try std.testing.expect(out.tree.len <= limits.nodes);
-    for (0..out.draw.cmd_len) |i| _ = out.draw.command(@intCast(i));
-    _ = out.draw.quadBytes();
+/// Check real rows only. Unbalanced opens may leave unfinished subtrees at frame end.
+fn checkFrame(out: lcgf.context.Output, pointer: [2]f32) !void {
+    const tree = out.tree;
+    try std.testing.expect(tree.len > 0 and tree.len <= limits.nodes);
+    try std.testing.expectEqual(0, tree.c.parent[0]);
+    var expected_hit = lcgf.types.none;
+    const sense_mask: u8 = @bitCast(lcgf.types.Sense.any);
+    for (0..tree.len) |i| {
+        if (i != 0) try std.testing.expect(tree.c.parent[i] < i);
+        try std.testing.expect(i < tree.c.end[i] and tree.c.end[i] <= tree.len);
+        const vis = tree.c.vis;
+        if (tree.c.sense[i] & sense_mask != 0 and
+            pointer[0] >= vis[0][i] and pointer[0] < vis[2][i] and
+            pointer[1] >= vis[1][i] and pointer[1] < vis[3][i]) expected_hit = @intCast(i);
+    }
+    try std.testing.expectEqual(expected_hit, lcgf.hit.at(tree, pointer[0], pointer[1], .any));
+
+    const draw = out.draw;
+    for (0..draw.cmd_len) |i| switch (draw.command(@intCast(i))) {
+        .quads => |batch| try std.testing.expect(batch.first + batch.count <= draw.quad_len),
+        .text => |index| try std.testing.expect(index < draw.run_len),
+        .custom => |index| try std.testing.expect(index < draw.custom_len),
+    };
+    try std.testing.expectEqual(draw.quad_len * @sizeOf(lcgf.draw_list.Quad), draw.quadBytes().len);
 }
 
 /// Entry point: many frames of arbitrary host input over a fixed UI.
 pub fn inputStream(s: anytype) !void {
-    var ctx = try ui.Context.init(&buffer, limits);
-    const th: ui.Theme = .{};
+    var ctx = try Context.init(&buffer, limits);
+    const th: widgets.Theme = .{};
     var flag = false;
     var level: f32 = 0;
     var text: [32]u8 = undefined;
@@ -61,20 +79,20 @@ pub fn inputStream(s: anytype) !void {
         const in = input(s, &text);
         _ = ctx.needsFrame(&in);
         var f = ctx.begin(&in);
-        _ = f.open(ui.Id.from("fuzz.row"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .clip = true });
-        _ = ui.widgets.button(&f, &th, ui.Id.from("fuzz.button"), "button");
-        _ = ui.widgets.checkbox(&f, &th, ui.Id.from("fuzz.check"), &flag, "check");
-        _ = ui.widgets.slider(&f, &th, ui.Id.from("fuzz.slider"), &level, 0, 1);
-        _ = f.animate(ui.Id.from("fuzz.spring"), level, .{});
+        _ = f.open(Id.from("fuzz.row"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .clip = true });
+        _ = widgets.button(&f, &th, Id.from("fuzz.button"), "button");
+        _ = widgets.checkbox(&f, &th, Id.from("fuzz.check"), &flag, "check");
+        _ = widgets.slider(&f, &th, Id.from("fuzz.slider"), &level, 0, 1);
+        _ = f.animate(Id.from("fuzz.spring"), level, .{});
         f.close();
-        try drain(f.end(.{}));
+        try checkFrame(f.end(.{}), in.pointer);
     }
 }
 
 /// Entry point: arbitrary trees of arbitrary styles, built in any call order, under arbitrary input.
 pub fn styleValues(s: anytype) !void {
-    var ctx = try ui.Context.init(&buffer, limits);
-    const th: ui.Theme = .{};
+    var ctx = try Context.init(&buffer, limits);
+    const th: widgets.Theme = .{};
     var text: [32]u8 = undefined;
     var label: [48]u8 = undefined;
     var flag = false;
@@ -83,22 +101,22 @@ pub fn styleValues(s: anytype) !void {
         const in = input(s, &text);
         var f = ctx.begin(&in);
         while (!s.eosWeightedSimple(32, 1)) {
-            const id: ui.Id = @fromBackingInt(s.value(u32));
+            const id: Id = @fromBackingInt(s.value(u32));
             switch (s.valueRangeLessThan(u8, 0, 10)) {
-                0 => _ = f.open(id, s.value(ui.Style)),
+                0 => _ = f.open(id, s.value(lcgf.types.Style)),
                 1 => f.close(),
-                2 => _ = f.leaf(id, s.value(ui.Style)),
-                3 => _ = f.textStyled(label[0..s.slice(&label)], s.value(ui.TextStyle), s.value(ui.Style)),
-                4 => _ = f.custom(id, s.value(ui.Style), s.value(u64)),
-                5 => _ = f.interact(f.open(id, s.value(ui.Style)), s.value(ui.Sense)),
-                6 => _ = f.animate(id, s.value(f32), s.value(ui.Spring)),
-                7 => _ = ui.widgets.button(&f, &th, id, label[0..s.slice(&label)]),
-                8 => _ = ui.widgets.checkbox(&f, &th, id, &flag, label[0..s.slice(&label)]),
-                9 => _ = ui.widgets.slider(&f, &th, id, &level, s.value(f32), s.value(f32)),
+                2 => _ = f.leaf(id, s.value(lcgf.types.Style)),
+                3 => _ = f.textStyled(label[0..s.slice(&label)], s.value(lcgf.types.TextStyle), s.value(lcgf.types.Style)),
+                4 => _ = f.custom(id, s.value(lcgf.types.Style), s.value(u64)),
+                5 => _ = f.interact(f.open(id, s.value(lcgf.types.Style)), s.value(lcgf.types.Sense)),
+                6 => _ = f.animate(id, s.value(f32), s.value(lcgf.anims.Spring)),
+                7 => _ = widgets.button(&f, &th, id, label[0..s.slice(&label)]),
+                8 => _ = widgets.checkbox(&f, &th, id, &flag, label[0..s.slice(&label)]),
+                9 => _ = widgets.slider(&f, &th, id, &level, s.value(f32), s.value(f32)),
                 else => unreachable,
             }
         }
-        try drain(f.end(.{}));
+        try checkFrame(f.end(.{}), in.pointer);
     }
 }
 

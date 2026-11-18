@@ -1,5 +1,4 @@
-//! The names bench/scenes/ build with, taken from lcgf's runtime front end (src/runtime/) and
-//! reference widgets (src/widgets/base.zig), so the same scene source builds against either core.
+//! Runtime frame, input and widget types shared by the benchmark scenes.
 const lcgf = @import("lcgf");
 
 pub const Frame = lcgf.frame.Frame;

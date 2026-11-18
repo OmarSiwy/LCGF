@@ -8,31 +8,23 @@
 //! and `Frame.finish` (paint and bookkeeping) is paint. `frame` is the sum of the four, over the
 //! frames built; `poll` times every poll, `Context.needsFrame` included, as a host polls (every
 //! scene but rows builds only the frames needsFrame asks for: bench/scenes/scenes.zig). The
-//! first frame's draw list must equal the prototype's own first frame of the same scene.
-//!
-//! `--core=prototype` keeps the old numbers reproducible: frames are begun and built by the
-//! prototype core ("ui", prototype/ui.zig), its tree and text columns are copied (untimed) into
-//! src/ tables, laid out and painted there by lcgf's tier-0 passes, and copied back for the
-//! prototype's untimed `Frame.finish`.
+//! first frame's draw list is checked against the normal `Frame.end` entry point.
 //!
 //! A second scene times the grid passes (src/layout/grid.zig): one grid of 16 columns and 250
 //! rows holding 4,000 auto-placed items, laid out `grid_frames` times.
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
-//!   zig build bench -- --core=prototype  the same with the prototype front end
 //!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
 //!   zig build bench -- --scene NAME    run another scene of bench/scenes/ (frame passes only)
 //!   zig build bench -- --counters      also count cycles, instructions, L1D and LLC read misses
 //!                                      per pass (perf_event_open; pin to one core with taskset)
-//!   zig build bench -- --huge          put both column buffers in 2 MB transparent huge pages
+//!   zig build bench -- --huge          put benchmark columns in 2 MB transparent huge pages
 //!                                      (mmap + madvise; docs/perf/huge-pages.md)
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
 //!                                      (bench --idle under tools/bench/probe.py)
 const std = @import("std");
-const ui = @import("ui");
 const lcgf = @import("lcgf");
 const scenes = @import("scenes");
-const src_scenes = @import("src_scenes");
 const linux = std.os.linux;
 
 /// No 256 KB thread-local signal stack (std's default, for stack traces on a crash): start.zig
@@ -42,94 +34,18 @@ pub const std_options: std.Options = .{ .signal_stack_size = null };
 const rows = scenes.rows.count;
 const frames = 3000;
 
-const limits: ui.Limits = .{ .nodes = 4096, .texts = 2048, .strings = 128 * 1024, .anims = 1024 };
-var buffer: [ui.Context.requiredBytes(limits)]u8 align(ui.mem.column_align) = undefined;
-
 /// Frame passes first, then the layout passes that make up `layout`.
 const pass_names = [_][]const u8{
     "begin+hit", "build",     "layout", "paint",     "frame",
     "measure",   "prepare",   "fit.x",  "resolve.x", "wrap",
     "fit.y",     "resolve.y", "place",  "finalize",
 };
-comptime {
-    // The copies below move whole vectors of rows, so both cores must pad alike.
-    std.debug.assert(ui.simd.lanes == lcgf.simd.lanes);
-}
-
 const Tree = lcgf.tree.Tree;
 const Texts = lcgf.texts.Texts;
-const Customs = lcgf.customs.Customs;
 const DrawList = lcgf.draw_list.DrawList;
-const src_bytes = blk: {
-    @setEvalBranchQuota(20_000);
-    var counter: lcgf.mem.Carver = .{ .buf = null };
-    _ = Tree.init(&counter, limits.nodes);
-    _ = Texts.init(&counter, limits.texts);
-    _ = lcgf.coefs.Coefs.init(&counter, limits.nodes);
-    _ = lcgf.levels.Levels.init(&counter, limits.nodes);
-    _ = lcgf.incremental.Dirty.init(&counter, limits.nodes);
-    _ = lcgf.flex.Flex.init(&counter, limits.nodes);
-    _ = Customs.init(&counter, limits.customs);
-    _ = DrawList.init(&counter, limits.nodes, limits.texts, limits.customs);
-    break :blk counter.off;
-};
-var src_buffer: [src_bytes]u8 align(lcgf.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
-
 const Context = lcgf.context.Context;
-const ctx_limits: lcgf.context.Limits = .{ .nodes = limits.nodes, .texts = limits.texts, .strings = limits.strings, .anims = limits.anims };
-var ctx_buffer: [Context.requiredBytes(ctx_limits)]u8 align(lcgf.mem.column_align) = @splat(0); // bss in every mode: carved with `zeroed` (Context.initZeroed)
-
-/// Copies the first `lcgf.simd.rows(len)` rows of every column of `from` into the column of the
-/// same name in `to`. The column sets have the same names and row sizes, except `look`, which
-/// is copied field by field (src reorders it and keeps the border width in its own column). Columns only src/ has (paint inputs added after the port, such
-/// as `uv`) are left as they are; the caller gives them the values the prototype implies.
-fn copyColumns(to: anytype, from: anytype, len: u32) void {
-    inline for (@typeInfo(@TypeOf(to.*)).@"struct".field_names) |name| {
-        if (comptime !@hasField(@TypeOf(from.*), name)) continue;
-        if (comptime std.mem.eql(u8, name, "look")) {
-            // src's Look is reordered and has no border (its own column, C0801): copy the
-            // fields both rows have, by name.
-            for (@field(to, name)[0..len], @field(from, name)[0..len]) |*d, sr| {
-                inline for (@typeInfo(@TypeOf(d.*)).@"struct".field_names) |f| {
-                    if (comptime @hasField(@TypeOf(sr), f)) @field(d, f) = @field(sr, f);
-                }
-            }
-            continue;
-        }
-        if (@typeInfo(@TypeOf(@field(to, name))) == .array) {
-            inline for (&@field(to, name), &@field(from, name)) |d, s| copyRows(d, s, len);
-        } else copyRows(@field(to, name), @field(from, name), len);
-    }
-}
-/// The extras rows the prototype's tree implies: one per node with a border or a clip (it has
-/// no other paint extras), each with the whole texture, one radius, no opacity and no transform.
-fn protoExtras(st: *Tree, pt: *const ui.Tree) void {
-    st.xlen = 1;
-    for (0..pt.len) |i| {
-        const own = pt.c.look[i].border != 0 or pt.c.clips[i] != 0;
-        const up = if (i == 0) 0 else st.c.scope[pt.c.parent[i]];
-        if (!own) {
-            st.c.extra[i] = 0;
-            st.c.scope[i] = up;
-            continue;
-        }
-        const r = st.xlen;
-        st.xlen += 1;
-        st.c.extra[i] = r;
-        st.c.scope[i] = r;
-        st.x.node[r] = @intCast(i);
-        st.x.row[r].border = pt.c.look[i].border;
-        st.x.row[r].uv = .{ 0, 0, 1, 1 };
-        st.x.row[r].radii = @splat(pt.c.look[i].radius);
-        st.x.row[r].opacity = 1;
-        st.x.row[r].transform = .{ 1, 0, 0, 1, 0, 0 };
-    }
-}
-
-fn copyRows(to: anytype, from: anytype, len: u32) void {
-    const n = @min(lcgf.simd.rows(len), to.len);
-    @memcpy(std.mem.sliceAsBytes(to[0..n]), std.mem.sliceAsBytes(from[0..n]));
-}
+const limits: lcgf.context.Limits = .{ .nodes = 4096, .texts = 2048, .strings = 128 * 1024, .anims = 1024 };
+var ctx_buffer: [Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = @splat(0);
 
 const grid_frames = 1000;
 const grid_items = 4000;
@@ -146,15 +62,20 @@ const grid_bytes = blk: {
     _ = lcgf.grid.Grids.init(&counter, grid_cap);
     break :blk counter.off;
 };
-comptime {
-    // The grid scene borrows the prototype core's buffer, whose frames are done by then.
-    std.debug.assert(grid_bytes <= buffer.len);
-}
+const layout_bytes = blk: {
+    @setEvalBranchQuota(20_000);
+    var counter: lcgf.mem.Carver = .{ .buf = null };
+    _ = lcgf.flex.Flex.init(&counter, limits.nodes);
+    _ = lcgf.incremental.Dirty.init(&counter, limits.nodes);
+    break :blk counter.off;
+};
+// The grid's tables are dead before the flex and incremental passes reuse their storage.
+var rows_buffer: [@max(grid_bytes, layout_bytes)]u8 align(lcgf.mem.column_align) = @splat(0);
 
-/// Times the grid passes on a 4,000-item grid, in `buffer` (run after the frame loops): columns cycle through fixed, fit and fraction
+/// Times the grid passes on a 4,000-item grid after the frame loops: columns cycle through fixed, fit and fraction
 /// tracks, rows are fit tracks, items differ in natural width so the fit tracks have work.
-fn gridBench() void {
-    var carver: lcgf.mem.Carver = .{ .buf = buffer[0..grid_bytes] };
+fn gridBench(buf: []align(lcgf.mem.column_align) u8) void {
+    var carver: lcgf.mem.Carver = .{ .buf = buf };
     var t = Tree.init(&carver, grid_items + 2);
     var tx = Texts.init(&carver, 1);
     var gs = lcgf.grid.Grids.init(&carver, grid_cap);
@@ -192,26 +113,6 @@ fn gridBench() void {
         m[5] = now();
         lcgf.layout.place(&t);
         for (0..grid_pass_names.len) |p| grid_samples[p][f] = m[p + 1] - m[p];
-    }
-}
-
-fn sameDrawList(want: *const ui.DrawList, got: *const DrawList) !void {
-    const eql = std.mem.eql;
-    const bytes = std.mem.sliceAsBytes;
-    if (want.quad_len != got.quad_len or want.run_len != got.run_len or
-        want.custom_len != got.custom_len or want.cmd_len != got.cmd_len) return error.PaintDiffers;
-    // Quads field by field: src's row has per-corner radii where the prototype has one radius.
-    for (want.quads[0..want.quad_len], got.quads[0..got.quad_len]) |w, g| {
-        if (!eql(u8, bytes(&[4][4]f32{ w.rect, w.clip, w.params, w.uv }), bytes(&[4][4]f32{ g.rect, g.clip, g.params, g.uv })) or
-            w.fill != g.fill or w.border_color != g.border_color or w.border != g.border or
-            !eql(f32, &@as([4]f32, @splat(w.radius)), &g.radii)) return error.PaintDiffers;
-    }
-    if (!eql(u8, bytes(want.runs[0..want.run_len]), bytes(got.runs[0..got.run_len])) or
-        !eql(u8, bytes(want.customs[0..want.custom_len]), bytes(got.customs[0..got.custom_len])) or
-        !eql(u8, want.strings, got.strings)) return error.PaintDiffers;
-    const n = want.cmd_len;
-    inline for (.{ "kind", "first", "count", "key" }) |name| {
-        if (!eql(@typeInfo(@TypeOf(@field(want.cmd, name))).pointer.child, @field(want.cmd, name)[0..n], @field(got.cmd, name)[0..n])) return error.PaintDiffers;
     }
 }
 
@@ -352,9 +253,6 @@ fn us(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1000.0;
 }
 
-/// Which front end builds the frames.
-const Core = enum { src, prototype };
-
 /// What a frame loop leaves for the report: counts, and the last frame's tables.
 const Run = struct {
     built: usize = 0,
@@ -378,32 +276,29 @@ fn record(m: *const Marks, b: usize) void {
     for (0..4) |p| m.count(4, spans[p][0], spans[p][1]);
 }
 
-/// The prototype's own first frame of scene `index` (its front end, layout and paint), for the
-/// draw-list check of the src front end.
-fn prototypeFirst(index: usize) !*const ui.DrawList {
-    const S = struct {
-        var ctx: ui.Context = undefined;
-    };
-    const ctx = &S.ctx;
-    ctx.* = try ui.Context.init(&buffer, limits);
-    const th: ui.Theme = .{};
-    var in: ui.Input = .{};
-    scenes.all[index].input(&in, 0);
-    var f = ctx.begin(&in);
-    scenes.all[index].build(&f, &th);
-    return f.end(.{}).draw;
+/// Checks the measured pass sequence against the ordinary host entry point, outside the timers.
+fn checkFirstFrame(scene: scenes.Scene, in: *const lcgf.input.Input, got: *const DrawList) !void {
+    const allocator = std.heap.page_allocator;
+    const storage = try allocator.alignedAlloc(u8, .fromByteUnits(lcgf.mem.column_align), ctx_buffer.len);
+    defer allocator.free(storage);
+    var ctx = try Context.init(storage, limits);
+    var f = ctx.begin(in);
+    scene.build(&f, &.{});
+    const want = f.end(.{}).draw;
+    if (!lcgf.widgets_base.sameDraw(want, got) or !std.mem.eql(u8, want.strings, got.strings) or
+        !std.mem.eql(u8, std.mem.sliceAsBytes(want.customs[0..want.custom_len]), std.mem.sliceAsBytes(got.customs[0..got.custom_len])))
+        return error.PaintDiffers;
 }
 
 /// lcgf's runtime front end, end to end: `Context.begin`, the scene through `Frame`, the body of
 /// `Frame.end` with a mark between passes, and `Frame.finish`.
-fn runSrc(index: usize, polls: u32, buf: []align(lcgf.mem.column_align) u8) !Run {
-    const scene = src_scenes.all[index];
+fn runScene(scene: scenes.Scene, polls: u32, buf: []align(lcgf.mem.column_align) u8) !Run {
     const S = struct {
         var ctx: Context = undefined;
     };
     const ctx = &S.ctx;
     // A static buffer in bss (or fresh huge pages), used once: zero already.
-    ctx.* = try Context.initZeroed(buf, ctx_limits);
+    ctx.* = try Context.initZeroed(buf, limits);
     const th: lcgf.widgets_base.Theme = .{};
     var in: lcgf.input.Input = .{};
     const font: lcgf.protocol.Mono = .{};
@@ -455,9 +350,8 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgf.mem.column_align) u8) !Run
         m.mark(12);
         const out = f.finish();
         m.mark(13);
-        // Differential check, untimed: the first frame draws what the prototype's first frame
-        // draws. Not under --idle (one poll), whose memory and start-up are LCGF's alone.
-        if (r.built == 0 and polls > 1) try sameDrawList(try prototypeFirst(index), out.draw);
+        // The one-poll startup and idle probe uses only the measured context.
+        if (r.built == 0 and polls > 1) try checkFirstFrame(scene, &in, out.draw);
         r.sink +%= out.draw.cmd_len + out.draw.quad_len;
         r.nodes = t.len;
         r.texts = tx.len;
@@ -472,87 +366,6 @@ fn runSrc(index: usize, polls: u32, buf: []align(lcgf.mem.column_align) u8) !Run
     return r;
 }
 
-/// The prototype front end; layout and paint by lcgf's tier-0 passes over copied columns.
-fn runPrototype(index: usize, polls: u32, proto_buf: []align(ui.mem.column_align) u8, st: *Tree, stx: *Texts, sk: *lcgf.coefs.Coefs, slv: *lcgf.levels.Levels, scu: *Customs, sd: *DrawList) !Run {
-    const scene = scenes.all[index];
-    var ctx = try ui.Context.init(proto_buf, limits);
-    const th: ui.Theme = .{};
-    var in: ui.Input = .{};
-    const font: lcgf.protocol.Mono = .{};
-    var r: Run = .{};
-    for (0..polls) |k| {
-        scene.input(&in, @intCast(k));
-        const p0 = now();
-        if (!scene.every and !ctx.needsFrame(&in)) {
-            poll_samples[k] = now() - p0;
-            continue;
-        }
-        var m: Marks = .{};
-        m.mark(0);
-        var f = ctx.begin(&in); // includes the SIMD hit test and spring step
-        m.mark(1);
-        scene.build(&f, &th);
-        m.mark(2);
-        const pt = f.tree();
-        const ptx = f.texts();
-        pt.seal(0);
-        st.len = pt.len;
-        stx.len = ptx.len;
-        copyColumns(&st.c, &pt.c, pt.len);
-        protoExtras(st, pt);
-        copyColumns(&stx.c, &ptx.c, ptx.len);
-        const pcu = &f.ctx.customs[f.ctx.cur];
-        scu.len = pcu.len;
-        copyColumns(&scu.c, &pcu.c, pcu.len);
-        const strings = &f.ctx.strings[f.ctx.cur];
-        const t = st;
-        const tx = stx;
-        m.mark(3);
-        font.measure(tx);
-        m.mark(4);
-        lcgf.layout.prepare(t);
-        m.mark(5);
-        lcgf.layout.applyText(t, tx, .x);
-        lcgf.layout.fit(t, .x);
-        m.mark(6);
-        // Level-order resolve (C0849); the order is rebuilt every frame and timed here.
-        lcgf.levels.build(t, slv);
-        lcgf.levels.resolve(t, slv, .x, in.viewport[0]);
-        m.mark(7);
-        lcgf.layout.textAvail(t, tx);
-        font.wrap(tx);
-        m.mark(8);
-        lcgf.layout.applyText(t, tx, .y);
-        lcgf.layout.fit(t, .y);
-        m.mark(9);
-        lcgf.levels.resolve(t, slv, .y, in.viewport[1]);
-        m.mark(10);
-        lcgf.coefs.placeRows(t, sk);
-        lcgf.coefs.placeK(t, sk);
-        m.mark(11);
-        lcgf.layout.finalize(t);
-        m.mark(12);
-        lcgf.paint.emit(t, tx, scu, strings.buf[0..strings.len], sd);
-        m.mark(13);
-        copyColumns(&pt.c, &st.c, pt.len);
-        copyColumns(&ptx.c, &stx.c, ptx.len);
-        const out = f.finish();
-        // Differential check, untimed: the ported paint must emit the prototype's draw list.
-        if (r.built == 0) try sameDrawList(out.draw, sd);
-        r.sink +%= sd.cmd_len + sd.quad_len;
-        r.nodes = t.len;
-        r.texts = tx.len;
-        record(&m, r.built);
-        poll_samples[k] = m.t[13] - p0;
-        r.built += 1;
-    }
-    r.viewport = in.viewport;
-    r.tree = st;
-    r.texts_table = stx;
-    r.draw = sd;
-    return r;
-}
-
 pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
@@ -561,7 +374,6 @@ pub fn main(init: std.process.Init) !void {
     var idle = false;
     var counters = false;
     var huge = false;
-    var core: Core = .src;
     var index: usize = 0;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--idle")) {
@@ -571,7 +383,7 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--counters")) {
             counters = true;
         } else if (std.mem.startsWith(u8, arg, "--core=")) {
-            core = std.meta.stringToEnum(Core, arg["--core=".len..]) orelse return error.UnknownCore;
+            if (!std.mem.eql(u8, arg, "--core=src")) return error.UnknownCore;
         } else if (std.mem.eql(u8, arg, "--json")) {
             json_path = args.next() orelse return error.MissingPath;
         } else if (std.mem.eql(u8, arg, "--scene")) {
@@ -584,25 +396,8 @@ pub fn main(init: std.process.Init) !void {
     const scene = scenes.all[index];
 
     if (counters) try openCounters();
-    const src_buf: []align(lcgf.mem.column_align) u8 = if (huge) try hugeBuffer(src_buffer.len) else &src_buffer;
-    var carver: lcgf.mem.Carver = .{ .buf = src_buf, .zeroed = true };
-    var st = Tree.init(&carver, limits.nodes);
-    var stx = Texts.init(&carver, limits.texts);
-    var sk = lcgf.coefs.Coefs.init(&carver, limits.nodes);
-    var slv = lcgf.levels.Levels.init(&carver, limits.nodes);
-    var sdirty = lcgf.incremental.Dirty.init(&carver, limits.nodes);
-    var sflex = lcgf.flex.Flex.init(&carver, limits.nodes);
-    var scu = Customs.init(&carver, limits.customs);
-    var sd = DrawList.init(&carver, limits.nodes, limits.texts, limits.customs);
     const polls: u32 = if (idle) 1 else scene.frames;
-    const bytes = switch (core) {
-        .src => ctx_buffer.len,
-        .prototype => buffer.len,
-    };
-    const run = switch (core) {
-        .src => try runSrc(index, polls, if (huge) try hugeBuffer(ctx_buffer.len) else &ctx_buffer),
-        .prototype => try runPrototype(index, polls, if (huge) try hugeBuffer(buffer.len) else &buffer, &st, &stx, &sk, &slv, &scu, &sd),
-    };
+    const run = try runScene(scene, polls, if (huge) try hugeBuffer(ctx_buffer.len) else &ctx_buffer);
     const built = run.built;
     // Target D5: with input that never changes, only the first frame and its settle frame are built.
     if (scene.idle and built > 2) return error.WorkWhileIdle;
@@ -621,14 +416,18 @@ pub fn main(init: std.process.Init) !void {
     // The incremental and flex passes are measured on the rows scene only, on the last frame's tree.
     const is_rows = index == 0;
     if (is_rows) {
-        gridBench();
-        flexWrap(run.tree, run.texts_table, &sflex, run.viewport);
-        incremental(run.tree, run.texts_table, &sdirty, run.viewport);
+        const scratch = if (huge) try hugeBuffer(rows_buffer.len) else &rows_buffer;
+        gridBench(scratch);
+        var carver: lcgf.mem.Carver = .{ .buf = scratch };
+        var flex = lcgf.flex.Flex.init(&carver, limits.nodes);
+        var dirty = lcgf.incremental.Dirty.init(&carver, limits.nodes);
+        flexWrap(run.tree, run.texts_table, &flex, run.viewport);
+        incremental(run.tree, run.texts_table, &dirty, run.viewport);
     }
     const names: []const []const u8 = if (is_rows) &all_names else &pass_names;
     // incremental and flexWrap fill all `frames` samples, the frame loop `built` of them.
     for (samples[0..names.len], 0..) |*s, p| std.mem.sort(u64, s[0..if (p < pass_names.len) built else frames], {}, std.sort.asc(u64));
-    try w.print("scene={s} core={t} nodes={d} texts={d} frames={d} polls={d} lanes={d} bytes={d} sink={d}\n", .{ scene.name, core, run.nodes, run.texts, built, polls, ui.simd.lanes, bytes, run.sink });
+    try w.print("scene={s} core=src nodes={d} texts={d} frames={d} polls={d} lanes={d} bytes={d} sink={d}\n", .{ scene.name, run.nodes, run.texts, built, polls, lcgf.simd.lanes, ctx_buffer.len, run.sink });
     try w.print("{s:<10} {s:>9} {s:>9}\n", .{ "pass", "median us", "p99 us" });
     for (names, samples[0..names.len], 0..) |name, *s, p| {
         const n = if (p < pass_names.len) built else frames;
@@ -671,7 +470,7 @@ pub fn main(init: std.process.Init) !void {
     const path = json_path orelse return;
     var json_buf: [4096]u8 = undefined;
     var j = std.Io.Writer.fixed(&json_buf);
-    try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ run.nodes, run.texts, built, ui.simd.lanes });
+    try j.print("{{\"nodes\": {d}, \"texts\": {d}, \"frames\": {d}, \"lanes\": {d}, \"passes\": {{", .{ run.nodes, run.texts, built, lcgf.simd.lanes });
     for (names, samples[0..names.len], 0..) |name, *s, p| {
         const n = if (p < pass_names.len) built else frames;
         try j.print("{s}\n  \"{s}\": {{\"median_us\": {d:.1}, \"p99_us\": {d:.1}}}", .{ if (p == 0) "" else ",", name, us(s[n / 2]), us(s[n * 99 / 100]) });

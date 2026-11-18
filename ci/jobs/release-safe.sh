@@ -1,1 +1,1 @@
-both test -Doptimize=ReleaseSafe
+zig build test -Doptimize=ReleaseSafe
