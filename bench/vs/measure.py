@@ -4,7 +4,7 @@
     python3 bench/vs/measure.py --name clay --exe zig-out/bin/vs-clay --small zig-out/bin/vs-clay-small
 
 For every scene of bench/scenes/ it runs `EXE --scene NAME` RUNS times and keeps the median of the
-per-run frame medians and p99s (each run times 3,000 frames). Then it runs tools/bench/probe.py on
+per-run poll medians and p99s (each run times 3,000 polls). Then it runs tools/bench/probe.py on
 `EXE --idle --scene idle` (resident memory after one frame and wake-ups while idle, median of RUNS)
 and tools/bench/size.zig on SMALL (bytes of text, rodata and data: what the binary loads, without
 symbols or debug info). The 1-minute load average is printed before and after: timings taken on a
@@ -16,6 +16,7 @@ the LCGF benchmark itself (zig build vs-lcgf), which gives the reference row.
 """
 import argparse
 import json
+import math
 import os
 import re
 import statistics
@@ -25,19 +26,44 @@ import sys
 SCENES = ["form", "list", "text", "springs", "resize", "idle"]
 
 
+POLLS = 3000
+
+
 def load():
     with open("/proc/loadavg") as f:
         return float(f.read().split()[0])
 
 
-def frame(cmd):
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-    built = int(re.search(r"\bframes=(\d+)", out).group(1))
-    # LCGF's `poll` line times every poll as the other harnesses' `frame` lines do; its `frame`
-    # line covers only the frames built.
-    line = lambda name: re.search(rf"^{name}\s+([\d.]+)\s+([\d.]+)", out, re.M)
-    med, p99 = (line("poll") or line("frame")).groups()
-    return built, float(med), float(p99)
+def validate_scene(name, scene, built, med, p99):
+    if type(built) is not int or not 0 <= built <= POLLS or (scene != "idle" and built == 0):
+        raise ValueError(f"{name}/{scene}: invalid output frame count {built!r}")
+    # These immediate-mode adapters emit a visible command list on every poll.
+    if name in ("microui", "nuklear", "clay") and built != POLLS:
+        raise ValueError(f"{name}/{scene}: expected {POLLS} frames, saw {built}")
+    if (any(type(t) not in (int, float) or not math.isfinite(t) for t in (med, p99))
+            or not 0 <= med <= p99):
+        raise ValueError(f"{name}/{scene}: invalid median/p99 {med!r}/{p99!r}")
+
+
+def parse_frame(out, scene):
+    header = re.search(r"^.*\bscene=([^\s]+).*?\bframes=(\d+)\s+polls=(\d+)(?:\s|$)", out, re.M)
+    if not header or header[1] != scene or int(header[3]) != POLLS:
+        raise ValueError(f"{scene}: expected a measurement of {POLLS} polls for this scene")
+    # LCGF's diagnostic bench prints both timings. Use every poll for comparisons.
+    def line(name):
+        return re.search(rf"^{name}\s+([\d.]+)\s+([\d.]+)(?:\s|$)", out, re.M)
+    timing = line("poll") or line("frame")
+    if not timing:
+        raise ValueError(f"{scene}: missing median/p99 timing")
+    return dict(frames=int(header[2]), median_us=float(timing[1]), p99_us=float(timing[2]))
+
+
+def summarize_scene(name, scene, samples):
+    for s in samples:
+        validate_scene(name, scene, s["frames"], s["median_us"], s["p99_us"])
+    return dict(frames=statistics.median_low(s["frames"] for s in samples),
+                median_us=statistics.median(s["median_us"] for s in samples),
+                p99_us=statistics.median(s["p99_us"] for s in samples), samples=samples)
 
 
 def probe(cmd, seconds):
@@ -56,7 +82,11 @@ def libraries(cmd):
         p.kill()
         sys.exit("measure: expected a 'ready' line")
     with open(f"/proc/{p.pid}/maps") as f:
-        paths = {line.split()[-1] for line in f if ".so" in line.split()[-1]}
+        paths = set()
+        for line in f:
+            fields = line.rstrip().split(maxsplit=5)
+            if len(fields) == 6 and fields[5].startswith("/") and ".so" in os.path.basename(fields[5]):
+                paths.add(fields[5].replace(r"\040", " "))
     p.stdin.close()
     p.wait(timeout=5)
     return len(paths), sum(os.path.getsize(path) for path in paths)
@@ -83,14 +113,15 @@ def main():
     ap.add_argument("--json", help="also write the numbers here")
     a = ap.parse_args()
 
-    r = {"name": a.name, "load_before": load(), "scenes": {}}
+    if a.runs < 1 or not math.isfinite(a.seconds) or a.seconds <= 0:
+        ap.error("--runs and --seconds must be positive")
+    r = {"name": a.name, "runs": a.runs, "idle_seconds": a.seconds, "load_before": load(), "scenes": {}}
     for scene in SCENES:
-        runs = [frame([a.exe, "--scene", scene]) for _ in range(a.runs)]
-        r["scenes"][scene] = {
-            "frames": runs[0][0],
-            "median_us": statistics.median(x[1] for x in runs),
-            "p99_us": statistics.median(x[2] for x in runs),
-        }
+        runs = []
+        for _ in range(a.runs):
+            out = subprocess.run([a.exe, "--scene", scene], check=True, capture_output=True, text=True).stdout
+            runs.append(parse_frame(out, scene))
+        r["scenes"][scene] = summarize_scene(a.name, scene, runs)
     probes = [probe([a.startup or a.exe, "--idle", "--scene", "idle"], a.seconds) for _ in range(a.runs)]
     r["rss_kib"] = statistics.median(p[0] for p in probes)
     r["peak_kib"] = statistics.median(p[1] for p in probes)
