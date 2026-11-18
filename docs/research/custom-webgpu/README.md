@@ -1,4 +1,4 @@
-# Direct WebGPU custom drawing on LCGR's Vulkan renderer
+# Direct WebGPU custom drawing with native Vulkan and Metal
 
 **Keep WebGPU optional at build time and cache each custom drawing until the application marks it dirty.** The application gets an ordinary WebGPU device and queue for setup. On a redraw it gets a command encoder and a texture view. It can create its own pipelines, bind groups and WGSL shaders. The host owns submission of the supplied encoder. The sample callback issues the standard WebGPU draw commands directly. [Application code](../../../src/render/wgpu/custom_draw_sample.zig)
 
@@ -10,7 +10,7 @@ On November 17, 2026 the patched Rust library and both Zig executables were buil
 
 - Four successive WebGPU clear colors, a textured WGSL draw, and reuse of that texture on the next scene all matched, with **zero differing pixels**. There were five redraws across six frames.
 - **2,000 consecutive textured redraws** with synchronization validation enabled completed with zero validation errors. Omitting the final image transition in a control run produced `VUID-vkCmdDraw-None-09600`. In the recovered prototype the HAL also requested the swapchain device extension on its headless device. The probe now enables the corresponding surface instance extension.
-- The fresh NVIDIA run could not create a Vulkan instance. The session had no hardware device nodes. NVIDIA timing below comes from the earlier hardware run. Metal, D3D12, GLES, resize, multiple frames in flight, and device-loss recovery are open.
+- The fresh NVIDIA run could not create a Vulkan instance. The session had no hardware device nodes. NVIDIA timing below comes from the earlier hardware run. D3D12, GLES, resize, multiple frames in flight, and device-loss recovery are open. The Metal follow-up below uses a different sharing path.
 
 The root test, Vulkan test and formatting steps passed (1,201 tests). The prototype suite passed all 10 tests.
 
@@ -61,7 +61,7 @@ The historical TSV contains 120 rows, five rounds of twelve library/mode combina
 
 Keep the pinned patch on the research branch. The four C entry points import a native device, import an image, query creation requirements and transition a texture. Only the framework calls them. The patch uses internal wgpu APIs, assumes a feature chain for these adapters and has fatal error paths. A production version needs capability negotiation, recoverable errors and an ownership contract for shared handles, submissions and destruction. The pinned public C interface does not expose this Vulkan import path. [Pinned upstream header](https://github.com/gfx-rs/wgpu-native/blob/v29.0.1.1/ffi/wgpu.h) · [Research patch](wgpu-native.patch)
 
-My next experiment would run the same application callback on Metal and check the cached/redrawn cases on hardware. A shared application API is plausible across native backends. Each backend still needs its own verified resource-sharing and synchronization implementation. A software-only build can continue to omit the WebGPU dependency.
+The Vulkan and Metal probes now run the same application callback. Each backend still needs its own verified resource-sharing and synchronization implementation. A software-only build can continue to omit the WebGPU dependency.
 
 ## Reproduce on Linux x86-64
 
@@ -106,3 +106,13 @@ done
 The Metal probe uses the same [application callback](../../../src/render/wgpu/custom_draw_sample.zig). It borrows the Metal device and texture exposed by stock wgpu-native v29. LCGF creates a second command queue on that device and draws the UI with its native Metal renderer. Before sampling a changed texture it waits for WebGPU submission completion. The probe also finishes each native frame before it allows the next write to that texture. A cached frame issues only Metal commands.
 
 On macOS, `ci/run.sh metal-webgpu` in the development shell checks four colors, a patterned WGSL draw and its reuse against full native reference frames. It then times five alternating rounds of 200 frames in each state. These serialized timings include the CPU completion waits. The hosted job logs the Metal device, pixel result and per-round frame times. [Metal probe](../../../src/render/metal/probe_webgpu.zig)
+
+On the hosted macOS runner, all six composed frames matched the native reference pixel for pixel. The device identified itself as `Apple Paravirtual device`. Each value below is the mean wall time per frame for 200 serialized frames. The median round took **1.07 ms cached** and **10.01 ms redrawn**. Physical Mac GPU performance and overlapping frames remain unmeasured. [macOS CI run and logs](https://github.com/OmarSiwy/LCGF/actions/runs/44203217905/job/134462447430)
+
+| Round | Cached (µs) | Redrawn (µs) |
+|---:|---:|---:|
+| 1 | 1798.77 | 10661.83 |
+| 2 | 1169.84 | 10418.92 |
+| 3 | 1071.01 | 8348.32 |
+| 4 | 916.99 | 10013.77 |
+| 5 | 704.10 | 9723.94 |
