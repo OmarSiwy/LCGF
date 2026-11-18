@@ -219,15 +219,20 @@ class Compiler:
             return "." + ident(name) if name in self.writes else "@field(defaults, " + quoted(name) + ")"
         return quoted(text)
 
-    def emit(self, n, ancestors=()):
+    def emit(self, n, ancestors=(), parent_style=None):
         tag, a = n["tag"], attrs(n)
         if tag in METADATA:
             return None
         computed = self.styles[id(n)]
-        block = tag in BOXES or tag in HEADINGS or tag == "p"
-        defaults = (".fill" if block else ".fit", ".fill" if tag in ("html", "body") else ".fit")
+        if computed.flex and tag not in BOXES:
+            self.fail(n, f"display:flex on <{tag}> requires an anonymous native flex item for its content")
+        block = tag in BOXES or tag in HEADINGS or tag == "p" or computed.display == "block"
+        auto_width = ".fill" if block and not (parent_style and parent_style.flex) else ".fit"
+        defaults = (auto_width, ".fill" if tag in ("html", "body") else ".fit")
+        if tag == "hr":
+            defaults = (".fill", ".px(1)")
         fields = dict(emit_style(computed, size_defaults=defaults))
-        if block:
+        if block and tag != "hr":
             fields.setdefault("size", ".{ " + ", ".join(defaults) + " }")
         text = {"wrap": "true", **computed.text}
         children = [c for c in n["children"] if c["kind"] == "element"]
@@ -258,14 +263,14 @@ class Compiler:
             inline_content = []
             for c in n["children"]:
                 if c["kind"] == "element":
-                    ref = self.emit(c, ancestors + (tag,))
+                    ref = self.emit(c, ancestors + (tag,), computed)
                     if ref:
                         field = attrs(c).get("data-zig-if")
                         if field and field not in self.writes:
                             inner.append((ref, field))
                         else:
                             inner.append((ref, None))
-                        inline_content.append(c["tag"] in {"span", "button", "input"})
+                        inline_content.append(c["tag"] in {"span", "button", "input"} and self.styles[id(c)].display is None)
                 elif c["kind"] == "text" and SPACE.sub(" ", c["text"]).strip(" "):
                     cap = self.caption(c, c["text"])
                     value = f"lcgf.widgets_label.ct.label(theme, {cap})"

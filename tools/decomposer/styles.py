@@ -46,6 +46,7 @@ class Location:
 class Computed:
     axis: str = "y"
     flex: bool = False
+    display: str | None = None
     flex_container: bool = False  # also true on the markup language's native row/col
     fields: dict = field(default_factory=dict)
     text: dict = field(default_factory=dict)
@@ -608,6 +609,7 @@ def lower(node, parent, rem, properties, initial_font=14):
 
     if "display" in props:
         display = checked("display", lambda v: one_of(v, ["flex", "block"]))
+        st.display = display
         if tag in METADATA:
             properties["display"][1].error(f"display: {display} would render the nonvisual <{tag}> element")
         if display == "flex":

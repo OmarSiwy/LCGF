@@ -51,6 +51,19 @@ class FeatureCatalog(unittest.TestCase):
         with self.assertRaises(ValueError):
             mapping.destination("unknown category", "feature", "")
 
+    def test_every_gap_property_is_rejected_even_on_an_unmatched_selector(self):
+        from styles import StyleError, compute_styles
+        root = {"kind": "element", "tag": "html", "attrs": [], "children": []}
+        for kind, name, status, *_ in mapping.inventory():
+            if kind != "property" or status != "gap":
+                continue
+            with self.subTest(property=name):
+                # Feed the parser protocol directly so every catalog property is checked.
+                rule = {"selector": ".absent", "declarations": [{"name": name, "value": "initial"}]}
+                with self.assertRaises(StyleError) as raised:
+                    compute_styles(root, [("page.css", "")], lambda _: {"rules": [rule]})
+                self.assertIn(name, str(raised.exception))
+
     def test_html_and_css_decisions_are_contextual(self):
         for kind, name, scope in [("attribute", "href", "link"), ("attribute", "value", "input"),
                                   ("element", "h3", ""), ("element", "main", ""),

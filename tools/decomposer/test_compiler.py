@@ -31,6 +31,7 @@ class CompilerTests(unittest.TestCase):
             ('<style>@media (width > 30px) {p{color:red}}</style>', "@"),
             ('<p style="columns:2">columns', "columns"),
             ('<input type=password>', "password"),
+            ('<p style="display:flex">text</p>', "anonymous"),
             ('<p><span>inline</span></p>', "inline"),
             ('<svg><circle/></svg>', "svg"),
             ('<button id=b data-zig-click="toggle" data-zig-writes="123">Toggle</button>', "data-zig-writes"),
@@ -56,6 +57,24 @@ class CompilerTests(unittest.TestCase):
             self.assertIn(value, page)
         self.assertNotIn('@import("handlers")', page)
         self.assertIn(r'colors\ one.css', (self.root / "page.d").read_text())
+
+    def test_every_gap_element_fails_in_standard_document_mode(self):
+        from compiler import Compiler, CompileError
+        from mapping import ELEMENT_GAPS
+        page = self.root / "missing.html"
+        for entry in ELEMENT_GAPS:
+            name = "custom-widget" if entry == "autonomous custom elements" else entry
+            with self.subTest(element=name):
+                page.write_text(f"<!doctype html><body><{name}>")
+                with self.assertRaises(CompileError) as raised:
+                    Compiler(os.environ["DECOMPOSER_PARSER"], page, []).generate()
+                self.assertIn(str(page), str(raised.exception))
+
+    def test_block_spans_and_separator_thickness(self):
+        result = self.run_cli('<!doctype html><span style="display:block">One</span>'
+                              '<span>Two</span><hr style="width:32px">')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(".px(32), .px(1)", self.output.read_text())
 
     def test_semantic_containers_follow_their_ancestry(self):
         src = ('<!doctype html><header><h1>Overview</h1></header><main>'
