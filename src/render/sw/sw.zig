@@ -97,6 +97,41 @@ pub const Framebuffer = struct {
         }
     }
 
+    fn solid(fb: *Framebuffer, box: [4]u32, c: Color) void {
+        if (c.a == 255) fb.fill(box, c) else fb.blend(box, c);
+    }
+
+    /// A solid translucent rectangle with full pixel coverage. Each pair of
+    /// 8-bit channels is multiplied in parallel in two independent u16 fields.
+    fn blend(fb: *Framebuffer, box: [4]u32, c: Color) void {
+        const b = clampBox(box, fb.all());
+        if (b[0] == b[2]) return;
+        const a: u32 = c.a;
+        const source = fb.pack(.rgba(c.r, c.g, c.b, 255));
+        const mask = simd.u(0x00ff00ff);
+        const rb = simd.u((source & 0x00ff00ff) * a);
+        const ga = simd.u(((source >> 8) & 0x00ff00ff) * a);
+        const inv = simd.u(255 - a);
+        for (b[1]..b[3]) |y| {
+            const row = fb.pixels[y * fb.stride ..][0..fb.stride];
+            var x = std.mem.alignBackward(u32, b[0], W);
+            while (x < b[2]) : (x += W) {
+                const old: U = row[x..][0..W].*;
+                const lo = rb + (old & mask) * inv;
+                const hi = ga + ((old >> @splat(8)) & mask) * inv;
+                const result = div255(lo) | (div255(hi) << @splat(8));
+                row[x..][0..W].* = @select(u32, spanMask(x, b[0], b[2]), result, old);
+            }
+        }
+    }
+
+    /// round(x / 255), independently in both 16-bit fields, for 0 <= x <= 255².
+    inline fn div255(x: U) U {
+        const bias = x + simd.u(0x00800080);
+        const mask = simd.u(0x00ff00ff);
+        return ((bias + ((bias >> @splat(8)) & mask)) >> @splat(8)) & mask;
+    }
+
     pub fn clear(fb: *Framebuffer, c: Color) void {
         fb.fill(fb.all(), c);
     }
@@ -194,8 +229,30 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
                     local.clip = fixed.decode(fixed.encode(local.clip));
                     break :q &local;
                 } else source;
-                if (opaqueRect(q, img, s.scale)) {
-                    t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), @bitCast(q.fill));
+                if (solidRect(q, img, s.scale)) {
+                    const box = clampBox(coveredPixels(q, s.scale), t.scissor);
+                    const color: Color = @bitCast(q.fill);
+                    const radius = @reduce(.Max, @as(@Vector(4, f32), q.radii));
+                    if (use.radius and radius > 0) {
+                        // Only the four corner squares need the distance shader.
+                        const center = clampBox(toPixels(.{
+                            @ceil((q.rect[0] + radius) * s.scale),
+                            @ceil((q.rect[1] + radius) * s.scale),
+                            (q.rect[2] - radius) * s.scale,
+                            (q.rect[3] - radius) * s.scale,
+                        }), box);
+                        for ([_][2]u32{ .{ box[1], center[1] }, .{ center[3], box[3] } }) |band| {
+                            if (band[0] == band[1]) continue;
+                            for ([_][2]u32{ .{ box[0], center[0] }, .{ center[2], box[2] } }) |corner| {
+                                if (corner[0] == corner[1]) continue;
+                                shadeFor(use, .solid, .{ .fb = t.fb, .scissor = .{ corner[0], band[0], corner[1], band[1] } }, q, img, s.scale);
+                            }
+                            t.fb.solid(.{ center[0], band[0], center[2], band[1] }, color);
+                        }
+                        t.fb.solid(.{ box[0], center[1], box[2], center[3] }, color);
+                    } else {
+                        t.fb.solid(box, color);
+                    }
                     continue;
                 }
                 // One loop per feature; unknown codes draw as solid, as the shader's selects do.
@@ -263,18 +320,17 @@ inline fn spanMask(x: u32, x0: u32, x1: u32) B {
     return (xs >= simd.u(x0)) & (xs < simd.u(x1));
 }
 
-/// True when `q` covers whole pixels with one opaque colour: no feature, texture, transform,
-/// rounding, border or translucency, and edges on pixel boundaries. Its pixels are then the
-/// colour itself, exactly as the shader would write them, and need no shading or blending.
-fn opaqueRect(q: *const Quad, img: Image, scale: f32) bool {
+/// True when `q` covers whole pixels with one colour: no feature, texture, transform,
+/// rounded clip or border, and edges on pixel boundaries. Its own rounded corners need shading.
+fn solidRect(q: *const Quad, img: Image, scale: f32) bool {
     const r: @Vector(4, f32) = q.rect;
     const s: @Vector(4, f32) = r * @as(@Vector(4, f32), @splat(scale));
     const zero: @Vector(4, f32) = @splat(0);
     const xform: [6]f32 = q.xform;
     return @as(u32, @bitCast(q.params[0])) == 0 and img.pixels.ptr == Image.white.pixels.ptr and
         std.mem.eql(f32, &xform, &.{ 1, 0, 0, 1, 0, 0 }) and
-        @reduce(.And, @as(@Vector(4, f32), q.radii) <= zero) and @reduce(.And, @as(@Vector(4, f32), q.clip_radii) <= zero) and
-        q.border < 0.001 and q.opacity == 1 and (q.fill >> 24) == 255 and @reduce(.And, @floor(s) == s);
+        @reduce(.And, @as(@Vector(4, f32), q.clip_radii) <= zero) and
+        q.border < 0.001 and q.opacity == 1 and @reduce(.And, @floor(s) == s);
 }
 
 /// Pixels whose centres lie in `q.rect` and inside `q.clip` (the shader's `step` tests).
@@ -618,7 +674,7 @@ test "opaque rects: filled exactly, cut by the clip's pixel centres and the scis
     fb.clear(.black);
     var q = testQuad(.{ 2, 1, 14, 7 }, .rgb(200, 100, 50));
     q.clip = .{ 3.4, 0, 12.5, 6 };
-    try testing.expect(opaqueRect(&q, Image.white, 1));
+    try testing.expect(solidRect(&q, Image.white, 1));
     const s: Software = .{ .quads = &.{q} };
     s.drawBatch(.{ .fb = &fb, .scissor = .{ 0, 0, 16, 5 } }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
     // Centres 3.5 .. 12.5 are inside the clip (its edges are inclusive), rows 1 .. 4 inside the scissor.
@@ -642,6 +698,27 @@ test "blend: premultiplied over, and a shaded rect matches the opaque fill" {
     q.fill = Color.rgb(9, 99, 199).bitsOf();
     shade(.solid, t, &q, Image.white, 1);
     for (0..4) |y| for (0..8) |x| try testing.expectEqual(Color.rgb(9, 99, 199), fb.at(@intCast(x), @intCast(y)));
+}
+
+test "solid fills and corner bands agree with the shader through a partial scissor" {
+    var fast: Frame(33, 23) = .{};
+    var slow: Frame(33, 23) = .{};
+    for ([_]Format{ .rgba8, .bgra8 }) |format| {
+        var fb = fast.fb(format);
+        var reference = slow.fb(format);
+        const scissor = [4]u32{ 3, 3, 30, 20 };
+        for ([_]u8{ 0, 1, 126, 127, 128, 254, 255 }) |alpha| {
+            var q = testQuad(.{ 1, 1, 15, 11 }, .rgba(233, 81, 106, alpha));
+            q.radii = .{ 0, 1, 2, 3 };
+            q.clip = .{ 0.75, 0.5, 14.25, 11 };
+            const gfx: Software = .{ .scale = 2 };
+            for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
+            @memcpy(reference.pixels, fb.pixels);
+            gfx.drawQuads(.{ .fb = &fb, .scissor = scissor }, &.{q}, Image.white);
+            shade(.solid, .{ .fb = &reference, .scissor = scissor }, &q, Image.white, 2);
+            try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
+        }
+    }
 }
 
 test "shade: a quad that starts right of the scissor, off a lane boundary, draws nothing" {
