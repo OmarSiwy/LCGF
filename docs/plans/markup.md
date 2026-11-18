@@ -1,5 +1,11 @@
 # Markup front end: plan
 
+The implementation uses the standard HTML tree builder and a build-time CSS cascade.
+Only fields named by explicit Zig writers become runtime document state. The current
+authoring syntax, diagnosed gaps and feature inventory are in the
+[Decomposer guide](../../tools/decomposer/README.md). The widget-fragment grammar and
+widget mappings below record the original proposal and outstanding design work.
+
 The proposed host tool compiles HTML structure and CSS styling to ordinary Zig that calls
 LCGF’s existing widgets. Application code owns typed state, handlers and effects. The same
 generated module serves the normal build and the inspectable standalone project export.
