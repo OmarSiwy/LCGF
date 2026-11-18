@@ -25,6 +25,8 @@ The label change improved the list median in 17 of 20 pairs. The layout change i
 
 Initializing groups of tree link fields ahead of use changed the springs median by −0.2 µs across 11 pairs, with six wins. Including padding, scroll and offsets added 12.3 µs to springs and 6.6 µs to list. Both versions raised `p_tree_push` from one to two conditional jumps and increased the size build. The existing row initialization remains in use.
 
+Grouping sibling placement preserved the original floating-point order and improved springs in 12 of 13 pairs, with a median paired gain of 13.0 µs. It increased `p_place` from three conditional jumps to five. A SIMD variant stayed inside the branch budget but slowed list by 0.5 µs across 15 pairs, with 11 slower pairs. Neither candidate qualified for integration.
+
 ## Hosted release comparison, 2026-11-17
 
 On GitHub's Linux runner, the eight-framework benchmark at `d9013ce` put LCGF
