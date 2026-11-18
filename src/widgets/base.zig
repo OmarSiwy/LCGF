@@ -492,7 +492,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 .label => {
                     const i = tb.t.push(parent, .none, &n.style);
                     const span = tb.strings.add(spec_zig.labelBytes(n, state));
-                    tb.t.c.text[i] = tb.tx.push(i, span, &labelText(&th));
+                    tb.t.c.text[i] = tb.tx.push(i, span, &(n.text_style orelse labelText(&th)));
                 },
                 .checkbox => {
                     const value: bool = @field(state, n.bind.?);

@@ -25,6 +25,8 @@ pub const Spec = struct {
     bind: ?[]const u8 = null,
     /// Literal bytes of a label. A bound label reads its bytes from the state instead.
     text: ?[]const u8 = null,
+    /// Fully resolved text style for this label; null inherits the page theme.
+    text_style: ?types.TextStyle = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     children: []const Spec = &.{},

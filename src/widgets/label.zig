@@ -315,3 +315,20 @@ test "literal and bound captions share rendering and only the bound label needs 
     const popover = @import("popover.zig");
     try testing.expectEqual(null, comptime popover.checkLabels(State, spec));
 }
+
+test "a literal label draws its resolved text style with empty state" {
+    const th: Theme = .default;
+    const spec = comptime blk: {
+        var n = ct.label(th, "Heading");
+        n.text_style = .{ .px = 21, .color = .rgb(10, 30, 90) };
+        break :blk n;
+    };
+    const App = struct {
+        pub fn build(_: *@This(), f: *Frame) void {
+            _ = f.textStyled("Heading", spec.text_style.?, spec.style);
+        }
+    };
+    var h: base.Harness(App, base.ComptimeUi(struct {}, spec, th), .{ .nodes = 8, .texts = 2 }) = undefined;
+    h.init();
+    _ = try h.frame(&.{ .viewport = .{ 200, 100 } });
+}

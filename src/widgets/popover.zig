@@ -476,7 +476,7 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
             switch (n.kind) {
                 .label => {
                     const span = tb.strings.add(spec_zig.labelBytes(n, &ui.signals.state));
-                    tb.t.c.text[i] = tb.tx.push(i, span, &base.labelText(&th));
+                    tb.t.c.text[i] = tb.tx.push(i, span, &(n.text_style orelse base.labelText(&th)));
                 },
                 .row, .col => inline for (n.children) |c| ui.push(c, i, next, v),
                 .checkbox, .slider => @compileError("ComptimePage builds rows, columns and labels; use base.ComptimeUi for checkboxes and sliders"),
