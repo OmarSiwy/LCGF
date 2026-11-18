@@ -2,12 +2,21 @@
 name = "vs-egui"
 version = "0.0.0"
 edition = "2024"
+default-run = "vs-egui"
 publish = false
 
 # egui alone (no eframe, no window): Context::run builds and lays out a frame, tessellate turns its
 # shapes into meshes. bench/vs/egui/main.rs says what is and is not measured.
 [dependencies]
 egui = { version = "=0.37.0", default-features = false, features = ["default_fonts"] }
+
+[features]
+window-resize = []
+
+[[bin]]
+name = "resize-egui"
+path = "../window-resize/egui.rs"
+required-features = ["window-resize"]
 
 [[bin]]
 name = "vs-egui"

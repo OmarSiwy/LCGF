@@ -1272,6 +1272,7 @@ dependencies = [
  "iced_runtime",
  "iced_tiny_skia",
  "iced_widget",
+ "tiny-skia",
 ]
 
 [[package]]

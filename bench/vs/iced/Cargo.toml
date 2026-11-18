@@ -2,6 +2,7 @@
 name = "vs-iced"
 version = "0.0.0"
 edition = "2024"
+default-run = "vs-iced"
 publish = false
 
 # Iced's runtime pieces without a window: iced_runtime's UserInterface builds, updates and draws a
@@ -13,6 +14,16 @@ iced_tiny_skia = "=0.14.0"
 iced_core = "=0.14.0"
 # iced_widget needs a renderer feature on iced_renderer to compile in release mode.
 iced_renderer = { version = "=0.14.0", features = ["tiny-skia"] }
+
+tiny-skia = { version = "=0.11.4", default-features = false, optional = true }
+
+[features]
+window-resize = ["dep:tiny-skia"]
+
+[[bin]]
+name = "resize-iced"
+path = "../window-resize/iced.rs"
+required-features = ["window-resize"]
 
 [[bin]]
 name = "vs-iced"

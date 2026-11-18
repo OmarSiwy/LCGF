@@ -216,3 +216,38 @@ Fair in both directions, two more changes:
 - The cost of drawing pixels for the immediate-mode rows and LCGF: their frames stop at the draw
   list, while LVGL, Slint and Qt Quick rasterise in theirs. The two groups compare within
   themselves; across groups only the scenes where little changes (form, text, idle) say much.
+
+## Window resize latency
+
+Run `nix develop .#vs -c bench/vs/window-resize/run.sh` on Linux. The same comparison
+runs in `ci/run.sh gates-vs`. It opens one mapped window at a time on a private 24-bit
+Xvfb display. LCGF uses the X11 host and software renderer shared by its desktop examples.
+Every framework lays out the same centered 64 × 64 rectangle. The background changes
+with window width so stale rows and frames from the previous size are detectable.
+
+Qt Quick uses its XCB platform and software scene graph. Clay emits rectangle commands,
+and ImGui and egui emit meshes. Their comparison hosts rasterize those commands with
+Cairo. LVGL, Iced and Slint use their own software rasterizers. These six clients share
+an Xlib image uploader. Consequently the numbers include each configured renderer and
+presentation path. An application using a different backend can have different latency.
+
+The observer times an X11 resize request through completion of the first server-side
+snapshot whose RGB values match the requested geometry at **every pixel**. A corner
+probe avoids repeated full-size reads while the previous frame is showing.
+Times include a server-side copy and synchronization round trip. The observer then reads
+the frozen image and verifies it outside the timed interval. The raw JSON gives this
+readback duration separately. This measures server-visible software presentation. Physical display scanout,
+a desktop compositor and GPU swapchains are outside the measurement.
+
+Each client completes 25 measured rounds in five blocks, with a warm-up at the start
+of each block. The order of frameworks rotates between blocks. Each round includes:
+
+- **Grow** from 800 × 600 to 2514 × 1420.
+- **Shrink** from 2514 × 1420 to 900 × 676.
+- **Drag-settle** from the last resize request to the correct 2514 × 1420 image, after
+  five intermediate sizes sent roughly 8 ms apart. Intermediate frames may coalesce.
+
+The table reports median and nearest-rank p95 milliseconds separately for each operation.
+Missing, stale or partially painted frames fail the run after five seconds. The result
+file is `zig-out/window-resize.json`. The existing `resize` scene above continues to
+measure text reflow and frame construction. [Window fixtures and observer](../../bench/vs/window-resize)

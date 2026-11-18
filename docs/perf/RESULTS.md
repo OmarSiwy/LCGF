@@ -27,6 +27,32 @@ The November 16 owner-machine run below remains the recorded regression baseline
 The release plan requires pushed, verified tags for the two early milestones and
 three months of passing gate evidence for 1.0. [Milestone criteria](../../plan/plan.json)
 
+## Visible window resize, November 17
+
+All eight clients rendered the correct image in all 600 measured resizes on a private
+24-bit Xvfb display. Each cell gives **p50 / p95 in milliseconds** over 25 samples.
+Grow requests 2514 × 1420 from 800 × 600. Shrink requests 900 × 676 from that large
+size. Drag-settle starts at the last request in a rapid sequence and ends when the
+server has a fully correct image for the large size.
+
+| Framework | Grow | Shrink | Drag-settle |
+|---|---:|---:|---:|
+| LCGF | 16.07 / 24.91 | 4.56 / 7.41 | 15.60 / 21.77 |
+| Clay | 10.92 / 13.45 | 4.04 / 6.26 | 11.54 / 17.93 |
+| Dear ImGui | 11.58 / 13.68 | 4.03 / 7.74 | 10.73 / 15.90 |
+| egui | 11.91 / 15.86 | 3.92 / 7.31 | 10.15 / 18.07 |
+| Iced | 11.70 / 14.76 | 3.91 / 5.68 | 12.06 / 16.71 |
+| LVGL | 11.98 / 16.15 | 4.17 / 6.47 | 10.54 / 22.38 |
+| Slint | 15.64 / 17.86 | 4.21 / 5.67 | 19.31 / 23.90 |
+| Qt Quick | 19.20 / 27.18 | 8.64 / 11.47 | 31.05 / 42.33 |
+
+The LCGF fixture used the desktop example host and ReleaseFast renderer at `2042650`.
+Clients used CPU 0 and the observer used CPU 31. The shared workstation's one-minute
+load ranged from 19.0 to 20.2. LCGF took longer to grow than six of the other clients.
+Each successful observation includes a server-side copy and synchronization. Reading the
+frozen image back to the observer happens after the timestamp. Physical display and
+compositor latency require a separate measurement. [Method and rendering backends](vs.md#window-resize-latency) · [All samples](bench-src/window-resize-nov17.tsv)
+
 ## Runtime layout, November 17 follow-up
 
 The springs scene rebuilds 1,000 bars with animated pixel widths. The runtime can reuse its

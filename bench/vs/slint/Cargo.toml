@@ -2,6 +2,7 @@
 name = "vs-slint"
 version = "0.0.0"
 edition = "2024"
+default-run = "vs-slint"
 publish = false
 
 # Slint with its software renderer and a minimal platform of our own (no window, no winit).
@@ -11,6 +12,14 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 # The image decoders the std-widgets style needs for its embedded icons; no slint feature turns
 # them on without a windowing back end.
 i-slint-core = { version = "=1.18.1", features = ["image-decoders", "svg"] }
+
+[features]
+window-resize = []
+
+[[bin]]
+name = "resize-slint"
+path = "../window-resize/slint.rs"
+required-features = ["window-resize"]
 
 [[bin]]
 name = "vs-slint"

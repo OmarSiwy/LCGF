@@ -28,3 +28,5 @@ for n in egui iced slint; do m "$n" "zig-out/cargo/release/vs-$n" "zig-out/cargo
 python3 bench/gates/gates.py frame zig-out/gates
 python3 bench/gates/gates.py rss zig-out/gates
 python3 bench/gates/gates.py first-frame zig-out/gates
+# End-to-end window latency, with a correctness check for each presented size.
+bench/vs/window-resize/run.sh

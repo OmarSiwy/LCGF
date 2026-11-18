@@ -267,9 +267,13 @@ pub fn build(b: *std.Build) void {
     // Competitor harnesses (bench/vs/, docs/perf/vs.md, ci/jobs/vs-*.sh): `zig build vs-NAME`
     // installs zig-out/bin/vs-NAME (ReleaseFast, timed), vs-NAME-small (ReleaseSmall, sized) and
     // the size tool. Each framework is a lazy dependency, fetched only for its own step.
+    const resize_adapters = b.step("vs-resize-adapters", "Build the native comparison adapters for bench/vs/window-resize/build.sh");
     const vs_clay = b.step("vs-clay", "Build the Clay comparison harness (bench/vs/clay/)");
     vs_clay.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     if (b.lazyDependency("clay", .{})) |clay| {
+        const adapter = resizeAdapter(b, resize_adapters, target, "clay", false);
+        adapter.addCSourceFile(.{ .file = b.path("bench/vs/window-resize/clay.c"), .flags = &.{"-std=gnu99"} });
+        adapter.addIncludePath(clay.path(""));
         // vs-clay links glibc dynamically (Clay's fastest frames; libc's code is not in its
         // loaded bytes); vs-clay-static is static against musl, for resident memory and start-up
         // beside the LCGF row, a static binary without libc: neither then pays for a dynamic C
@@ -296,10 +300,16 @@ pub fn build(b: *std.Build) void {
     const vs_imgui = b.step("vs-imgui", "Build the Dear ImGui comparison harness (bench/vs/imgui/)");
     vs_imgui.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
     if (b.lazyDependency("imgui", .{})) |imgui| {
+        const imgui_sources: []const []const u8 = &.{ "imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp", "imgui_tables.cpp", "backends/imgui_impl_null.cpp" };
+        const adapter = resizeAdapter(b, resize_adapters, target, "imgui", true);
+        adapter.addCSourceFile(.{ .file = b.path("bench/vs/window-resize/imgui.cpp"), .flags = &.{"-std=c++17"} });
+        adapter.addCSourceFiles(.{ .root = imgui.path(""), .files = imgui_sources, .flags = &.{"-std=c++17"} });
+        adapter.addIncludePath(imgui.path(""));
+        adapter.addIncludePath(imgui.path("backends"));
         for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-imgui", "vs-imgui-small" }) |mode, name| {
             const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libcpp = true }) });
             exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/imgui/main.cpp"), .flags = &.{"-std=c++17"} });
-            exe.root_module.addCSourceFiles(.{ .root = imgui.path(""), .files = &.{ "imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp", "imgui_tables.cpp", "backends/imgui_impl_null.cpp" }, .flags = &.{"-std=c++17"} });
+            exe.root_module.addCSourceFiles(.{ .root = imgui.path(""), .files = imgui_sources, .flags = &.{"-std=c++17"} });
             exe.root_module.addIncludePath(imgui.path(""));
             exe.root_module.addIncludePath(imgui.path("backends"));
             vs_imgui.dependOn(&b.addInstallArtifact(exe, .{}).step);
@@ -311,6 +321,11 @@ pub fn build(b: *std.Build) void {
         // LVGL's defaults (LV_CONF_SKIP, no lv_conf.h) plus: 32-bit colour, Montserrat 20 for the
         // headings, and the C library's malloc instead of LVGL's fixed 64 KiB pool.
         const flags: []const []const u8 = &.{ "-std=gnu99", "-DLV_CONF_SKIP", "-DLV_COLOR_DEPTH=32", "-DLV_FONT_MONTSERRAT_20=1", "-DLV_USE_STDLIB_MALLOC=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_STRING=LV_STDLIB_CLIB", "-DLV_USE_STDLIB_SPRINTF=LV_STDLIB_CLIB" };
+        const adapter = resizeAdapter(b, resize_adapters, target, "lvgl", false);
+        adapter.addCSourceFile(.{ .file = b.path("bench/vs/window-resize/lvgl.c"), .flags = flags });
+        adapter.addCSourceFiles(.{ .root = lvgl.path(""), .files = &@import("bench/vs/lvgl/sources.zig").files, .flags = flags });
+        adapter.addIncludePath(lvgl.path("include"));
+        adapter.addIncludePath(lvgl.path("src"));
         for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lvgl", "vs-lvgl-small" }) |mode, name| {
             const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{ .target = target, .optimize = mode, .link_libc = true }) });
             exe.root_module.addCSourceFile(.{ .file = b.path("bench/vs/lvgl/main.c"), .flags = flags });
@@ -1137,6 +1152,9 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
     examples_step.dependOn(&b.addInstallFile(b.path("src/example/font/LICENSE.txt"), "share/licenses/examples/DejaVu.txt").step);
     const desktop = DesktopExamples.init(b, b.path("."), lcgf, target, optimize);
+    const resize_app = desktop.app(b.path("bench/vs/window-resize/lcgf.zig"));
+    const resize_exe = desktop.executable(resize_app, "resize-lcgf");
+    b.step("vs-window-resize", "Build the LCGF window repaint benchmark").dependOn(&b.addInstallArtifact(resize_exe, .{}).step);
     const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("examples/tests.zig"),
         .target = target,
@@ -1322,3 +1340,11 @@ const DesktopExamples = struct {
         }) });
     }
 };
+
+// Native comparison sources are supplied by Zig's pinned package dependencies.
+fn resizeAdapter(b: *std.Build, step: *std.Build.Step, target: std.Build.ResolvedTarget, name: []const u8, cpp: bool) *std.Build.Module {
+    const module = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true, .link_libcpp = cpp });
+    const lib = b.addLibrary(.{ .name = b.fmt("resize-{s}-adapter", .{name}), .root_module = module });
+    step.dependOn(&b.addInstallArtifact(lib, .{}).step);
+    return module;
+}

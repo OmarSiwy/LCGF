@@ -108,6 +108,9 @@
             pkgs.cargo
             pkgs.rustc
             pkgs.pkg-config
+            pkgs.libx11
+            pkgs.cairo
+            pkgs.xvfb
             pkgs.qt6.qtbase
             pkgs.qt6.qtdeclarative
           ];
