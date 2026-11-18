@@ -18,7 +18,9 @@ sources and replay tests. Use the repository's pinned Zig
 
 From a project directory, `zig build` installs the application, `zig build run`
 runs it and `zig build test` runs its headless checks. The seven desktop programs
-use the software renderer and Linux/X11. The board projects run on a host
+use the software renderer and Linux/X11. Their shared host embeds the printable
+ASCII glyphs from DejaVu Sans Mono. It installs the font license alongside each
+standalone executable under `share/licenses/`. The board projects run on a host
 simulator. Their READMEs list the firmware targets and options.
 
 ## Use a project outside this checkout

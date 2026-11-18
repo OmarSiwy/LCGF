@@ -1135,6 +1135,7 @@ pub fn build(b: *std.Build) void {
     // The examples (examples/): their smoke tests, and each one in an X11 window
     // (src/example/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
     const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
+    examples_step.dependOn(&b.addInstallFile(b.path("src/example/font/LICENSE.txt"), "share/licenses/examples/DejaVu.txt").step);
     const desktop = DesktopExamples.init(b, b.path("."), lcgf, target, optimize);
     const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("examples/tests.zig"),
@@ -1269,6 +1270,7 @@ pub fn buildDesktopExample(b: *std.Build, name: []const u8) void {
     const app = desktop.app(b.path("app.zig"));
     const exe = desktop.executable(app, name);
     b.installArtifact(exe);
+    b.getInstallStep().dependOn(&b.addInstallFile(pkg.path("src/example/font/LICENSE.txt"), b.fmt("share/licenses/{s}/DejaVu.txt", .{name})).step);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Open the example in an X11 window").dependOn(&run.step);

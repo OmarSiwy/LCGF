@@ -15,12 +15,12 @@ const std = @import("std");
 const lcgf = @import("lcgf");
 const context = lcgf.context;
 const sw = lcgf.render_sw;
-const render = lcgf.render_iface;
 const Quad = lcgf.draw_list.Quad;
 const Replay = lcgf.input.Replay;
 const Input = lcgf.input.Input;
 const Color = lcgf.types.Color;
 const Mono = lcgf.protocol.Mono;
+const atlas = @import("font.zig");
 pub const Events = lcgf.shell_iface.Events;
 pub const CustomDraw = lcgf.draw_list.CustomDraw;
 
@@ -32,16 +32,21 @@ pub const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 pub fn draw(app: anytype, gfx: *sw.Software, fb: *sw.Framebuffer, g: Glyphs, out: *const context.Output, scale: f32, background: Color) void {
     const App = @TypeOf(app.*);
     const font: Mono = .{};
-    const n = font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
+    const n = font.quadsFor(atlas, out.draw, g.quads, .{ .first = g.first, .count = g.count }) catch unreachable;
     if (@hasDecl(App, "images")) gfx.images = app.images();
     gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, scale);
+    // The same prepared geometry, with the glyph run's texture bound to the
+    // font. An application can keep using its entire runtime image table.
+    var text = gfx.*;
+    text.images = &.{atlas.image};
     fb.clear(background);
     if (@hasDecl(App, "under")) app.under(fb);
     const pass: sw.Target = .{ .fb = fb, .scissor = fb.all() };
-    var i = render.drawUntilCustom(gfx, pass, out.draw, 0);
-    while (i < out.draw.cmd_len) : (i = render.drawUntilCustom(gfx, pass, out.draw, i + 1)) {
-        if (@hasDecl(App, "drawCustom")) app.drawCustom(fb, &out.draw.customs[out.draw.command(i).custom]);
-    }
+    for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
+        .quads => |batch| gfx.drawBatch(pass, batch),
+        .text => |run| text.drawText(pass, run),
+        .custom => |row| if (@hasDecl(App, "drawCustom")) app.drawCustom(fb, &out.draw.customs[row]),
+    };
 }
 
 /// Pixel box of a logical rect at `scale`, clamped at 0.

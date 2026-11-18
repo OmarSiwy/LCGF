@@ -44,6 +44,16 @@ test "hello: builds, draws a centred panel, and a click on Wave counts" {
     try testing.expectApproxEqAbs(@as(f32, 300), (panel.y0 + panel.y1) / 2, 0.5);
     try testing.expectEqual(app.theme.panel, s.at(@intFromFloat(panel.x0 + 4), @intFromFloat(panel.y0 + 4)));
 
+    // The H has two stems, a crossbar and panel-coloured space between the stems.
+    const title = s.out.?.draw.runs[0].rect;
+    const x: u32 = @intFromFloat(title[0]);
+    const y: u32 = @intFromFloat(title[1]);
+    try testing.expect(s.at(x + 2, y + 5).r > 128);
+    try testing.expect(s.at(x + 7, y + 5).r > 100);
+    try testing.expect(s.at(x + 4, y + 8).r > 128);
+    try testing.expectEqual(app.theme.panel, s.at(x + 4, y + 5));
+    try testing.expectEqual(app.theme.panel, s.at(x + 4, y + 10));
+
     var rec: [256]u8 = undefined;
     const click = try host.clicks(&rec, &.{host.center(s.rect(id_wave))});
     app = .{};

@@ -96,7 +96,7 @@ pub const App = struct {
         f.close();
     }
 
-    /// Texture 0 is white (glyphs and plain quads), texture 1 the inner UI's pixels.
+    /// Texture 0 is white for plain quads, texture 1 holds the inner UI's pixels.
     pub fn images(app: *App) []const sw.Image {
         app.image_rows = .{ sw.Image.white, .{ .pixels = app.tex.pixels, .width = app.tex.stride, .height = tex_h } };
         return &app.image_rows;
@@ -112,6 +112,12 @@ test "texture: the hello UI is drawn into a texture and shown on a card" {
     // The texture holds the hello panel at its centre.
     const p = app.inner_panel;
     try testing.expectEqual(app.inner.theme.panel, app.tex.at(@intFromFloat(p.x0 + 4), @intFromFloat(p.y0 + 4)));
+    // The same H is rasterized inside this offscreen surface.
+    const title = app.inner_ctx.?.draw.runs[0].rect;
+    const x: u32 = @intFromFloat(title[0]);
+    const y: u32 = @intFromFloat(title[1]);
+    try testing.expect(app.tex.at(x + 4, y + 8).r > 128);
+    try testing.expectEqual(app.inner.theme.panel, app.tex.at(x + 4, y + 5));
     // The card's centre (the transform keeps it in place) shows the texture's centre.
     const r = s.rect(id_card);
     const mid = host.center(r);
