@@ -2,6 +2,12 @@
     .name = .lcgf,
     .version = "0.0.0",
     .dependencies = .{
+        // Build-host HTML5/CSS reader used by the Decomposer.
+        .lexbor = .{
+            .url = "https://github.com/lexbor/lexbor/archive/refs/tags/v3.0.1.tar.gz",
+            .hash = "N-V-__8AABbVvAJ6W3IAOXu1CuKXDihBIiJuvDPd8NDcYyWf",
+            .lazy = true,
+        },
         .ucd = .{
             .url = "https://www.unicode.org/Public/16.0.0/ucd/UCD.zip",
             .hash = "N-V-__8AALTJcQJ3hosujokSgxYTsa3q1mDZ2dasYhuJwaOV",
@@ -117,5 +123,5 @@
     },
     .fingerprint = 0x9448dbd37b36f47d,
     .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
-    .paths = .{ "build.zig", "build.zig.zon", "src", "bench/vs/lvgl/sources.zig", "LICENSE" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "tools/decomposer", "bench/vs/lvgl/sources.zig", "LICENSE" },
 }
