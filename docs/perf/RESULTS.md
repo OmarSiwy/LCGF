@@ -27,6 +27,8 @@ Initializing groups of tree link fields ahead of use changed the springs median 
 
 Grouping sibling placement preserved the original floating-point order and improved springs in 12 of 13 pairs, with a median paired gain of 13.0 µs. It increased `p_place` from three conditional jumps to five. A SIMD variant stayed inside the branch budget but slowed list by 0.5 µs across 15 pairs, with 11 slower pairs. Neither candidate qualified for integration.
 
+The quad-only paint path reduced the springs median from 81.4 to 80.1 µs on CPU 28, winning all 21 pairs. The median paired change was −1.4 µs for springs, 0.0 µs for list and +0.1 µs for resize. On CPU 12, springs improved in 14 of 15 pairs and the list and resize medians stayed level. Nine paired counter runs measured 11.3% fewer paint instructions and 3.4% fewer whole-frame cycles on springs. The optimized build passed 1,205 tests and all 83 branch checks. The normal and layered paint probes used 12 and 13 conditional jumps respectively, each within its budget of 14.
+
 ## Hosted release comparison, 2026-11-17
 
 On GitHub's Linux runner, the eight-framework benchmark at `d9013ce` put LCGF
