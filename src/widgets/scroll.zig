@@ -190,7 +190,7 @@ pub const ct = struct {
                 const E = @TypeOf(ui.*).Events;
                 const g = geometry(ui, row);
                 const kept = ui.keep(@This());
-                const over = ui.built and inside(ui.tables.t.rect(row + 2), in.pointer);
+                const over = ui.built and inside(ui.lastRect(row + 1), in.pointer);
                 const held = ui.pointer.pressed == @field(E.Widget, thumb);
                 const dy = in.pointer[1] - kept[2];
                 kept.* = .{ g.view, g.content, in.pointer[1], 0 };
@@ -201,8 +201,7 @@ pub const ct = struct {
 
             fn geometry(ui: anytype, comptime row: u32) Geometry {
                 if (!ui.built) return .{};
-                const t = &ui.tables.t;
-                return .of(t.rect(row + 2), t.rect(row + 3));
+                return .of(ui.lastRect(row + 1), ui.lastRect(row + 2));
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {

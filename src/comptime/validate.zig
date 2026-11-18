@@ -69,26 +69,30 @@ fn hasField(comptime State: type, comptime name: []const u8) bool {
     return false;
 }
 
+/// Validate the runtime inputs of a declared region before building either frontend.
+pub fn regionError(comptime State: type, comptime r: spec_zig.Region) ?[]const u8 {
+    if (!hasField(State, r.bind)) return "no state field '" ++ r.bind ++ "' for " ++ @tagName(r.kind);
+    const T = @FieldType(State, r.bind);
+    const valid = switch (r.kind) {
+        .list => @typeInfo(T) == .int,
+        .choice => @typeInfo(T) == .int or @typeInfo(T) == .@"enum",
+        .when => T == bool,
+    };
+    if (!valid) return @tagName(r.kind) ++ " selector has incompatible type " ++ @typeName(T);
+    if (r.window) |w| {
+        if (!hasField(State, w.scroll) or @FieldType(State, w.scroll) != f32)
+            return "virtual list needs an f32 scroll field '" ++ w.scroll ++ "'";
+    }
+    return null;
+}
+
 fn walk(comptime State: type, comptime s: Spec, comptime options: Options, comptime path: []const u8, comptime ids: *[]const Named, comptime widget_owned: bool) void {
     const at = path ++ ": ";
     if (s.id) |name| {
         for (ids.*) |seen| if (std.mem.eql(u8, seen.id, name)) @compileError(at ++ "duplicate widget id '" ++ name ++ "', first used at " ++ seen.path);
         ids.* = ids.* ++ [_]Named{.{ .id = name, .path = path }};
     }
-    if (s.region) |r| {
-        if (!hasField(State, r.bind)) @compileError(at ++ "no state field '" ++ r.bind ++ "' for " ++ @tagName(r.kind));
-        const T = @FieldType(State, r.bind);
-        const valid = switch (r.kind) {
-            .list => @typeInfo(T) == .int,
-            .choice => @typeInfo(T) == .int or @typeInfo(T) == .@"enum",
-            .when => T == bool,
-        };
-        if (!valid) @compileError(at ++ @tagName(r.kind) ++ " selector has incompatible type " ++ @typeName(T));
-        if (r.window) |w| {
-            if (!hasField(State, w.scroll) or @FieldType(State, w.scroll) != f32)
-                @compileError(at ++ "virtual list needs an f32 scroll field '" ++ w.scroll ++ "'");
-        }
-    }
+    if (s.region) |r| if (regionError(State, r)) |msg| @compileError(at ++ msg);
     if (s.kind == .label and (!widget_owned or s.text != null) and s.widget == null) if (spec_zig.labelError(s)) |msg| @compileError(at ++ msg);
     if (s.bind) |field| {
         if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");

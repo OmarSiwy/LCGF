@@ -227,7 +227,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
                 var along: f32 = 0;
                 if (res.held and ui.built) {
                     // Last frame's tree is still in the tables while input is applied.
-                    const rect = ui.tables.t.rect(row + 1);
+                    const rect = ui.lastRect(row);
                     along = (in.pointer[0] - rect.x0) / @max(rect.w(), 1);
                 }
                 v = step_(v, i, res.held, along, res.focused, r.lo, r.hi, in);

@@ -179,7 +179,7 @@ pub const ct = struct {
                 const held = ui.pointer.pressed == me;
                 // The container's rect in last frame's tree (row + 1, under the root). Read only
                 // while held, which needs a laid-out frame to have been pressed.
-                const at = if (held) along(ui.tables.t.rect(row + 1), axis, in.pointer) else 0;
+                const at = if (held) along(ui.lastRect(row), axis, in.pointer) else 0;
                 const field = comptime @TypeOf(ui.*).field(split);
                 ui.signals.set(field, resize(@field(ui.signals.state, split), held, at, ui.focus == me, in));
             }

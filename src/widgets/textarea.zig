@@ -351,7 +351,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
         pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
             const Ui = @TypeOf(ui.*);
             const r = base.ctResponse(ui, row, event, in);
-            const last: Rect = if (ui.built) ui.tables.t.rect(row + 1) else .{};
+            const last: Rect = ui.lastRect(row);
             const s = &@field(ui.signals.state, bind);
             behave(s, &Ui.theme, .hash(name), r, last, rows, in);
             if (!s.result.changed) return null;

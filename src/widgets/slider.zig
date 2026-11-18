@@ -167,7 +167,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             var v: f32 = @field(ui.signals.state, bind);
             if (r.held and ui.built) {
                 // Last frame's tree is still in the tables while input is applied.
-                const rect = ui.tables.t.rect(row + 1);
+                const rect = ui.lastRect(row);
                 v = base.slide(v, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), range.lo, range.hi);
             }
             if (r.focused) v = keyed(v, range.lo, range.hi, in) orelse v;

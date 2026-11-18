@@ -157,6 +157,7 @@ pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime na
 /// and its subtree is its own (it may bind its nodes differently), so it is not walked.
 fn checkBindings(comptime State: type, comptime n: Spec) void {
     comptime {
+        if (n.region) |r| if (@import("../comptime/validate.zig").regionError(State, r)) |msg| @compileError(msg);
         if (n.widget == null and n.kind == .label) if (spec_zig.labelError(n)) |msg| @compileError(msg);
         if (n.bind) |name| {
             const err: ?[]const u8 = if (n.widget) |W_|
@@ -336,8 +337,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     const S = signals.Signals(State, spec);
     // One root row (the runtime front end's) above the spec's rows.
     const rows: u32 = flatten.count(spec) + 1;
+    @setEvalBranchQuota(1000 + 100 * rows);
     const runs: u32 = @max(labelCount(spec), 1);
     const customs = comptime customCapacity(spec);
+    const Regions = @import("../comptime/dynamic.zig").Regions(spec);
+    const dynamic = Regions.count != 0;
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -367,6 +371,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// A frame has been built: from then on, during `step`, `tables.t` is last frame's
         /// laid-out tree.
         built: bool = false,
+        /// A dynamic page omits inactive subtrees; each live descriptor maps to its packed tree row.
+        tree_rows: [if (dynamic) rows - 1 else 0]u32 = @splat(types.none),
+        window_selection: [if (Regions.has_windows) Regions.count else 0]@import("../comptime/dynamic.zig").Select = undefined,
         font: Mono = .{},
 
         const Tables = struct {
@@ -415,11 +422,36 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Uses the same accessibility settings as the runtime context.
         pub fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output {
+            const active = if (dynamic) Regions.mask(Regions.select(State, &ui.signals.state)) else {};
+            if (dynamic and E.widget_count > 0) {
+                for (E.widget_nodes, 0..) |row, slot| if (active[row] == 0) {
+                    for (&ui.rects.c) |*side| side[slot] = 0;
+                };
+                if (ui.focus) |w| if (active[@backingInt(w)] == 0) {
+                    ui.focus = null;
+                };
+                if (ui.pointer.pressed) |w| if (active[@backingInt(w)] == 0) {
+                    ui.pointer.pressed = null;
+                };
+            }
             const press = in.buttons.left and !ui.pointer.down;
             var event = E.pointer(&ui.pointer, &ui.rects, in);
             if (press) ui.focus = ui.pointer.pressed;
             // Tab and Shift+Tab, as `Context.begin` moves `Interaction.focus`.
-            E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
+            if (dynamic and E.focus_order.len > 0) {
+                for (in.events) |e| {
+                    if (e.code != (focus.Keymap{}).tab or (e.kind != .press and e.kind != .repeat)) continue;
+                    var w = ui.focus;
+                    ui.focus = null;
+                    for (0..E.focus_order.len) |_| {
+                        w = E.nextFocus(w, e.mods.shift);
+                        if (active[@backingInt(w.?)] != 0) {
+                            ui.focus = w;
+                            break;
+                        }
+                    }
+                }
+            } else E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);
@@ -437,8 +469,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 // A step may return an event of its own (a key that activates the widget),
                 // which the frame reports when the pointer made none.
                 if (comptime @hasDecl(W_, "step")) {
-                    const got = W_.step(ui, row, event, in);
-                    if (@TypeOf(got) == ?E.Event) event = event orelse got;
+                    if (!dynamic or (active[row] != 0 and (!ui.built or ui.tree_rows[row] != types.none))) {
+                        const got = W_.step(ui, row, event, in);
+                        if (@TypeOf(got) == ?E.Event) event = event orelse got;
+                    }
                 }
             }
 
@@ -452,6 +486,25 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             tb.strings.reset();
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
+            if (dynamic) {
+                // Input handlers can change selectors. Use their final values to build this frame.
+                const selection = Regions.select(State, &ui.signals.state);
+                const live = Regions.mask(selection);
+                if (Regions.has_windows) ui.window_selection = selection;
+                var tree_row: u32 = 1;
+                for (&ui.tree_rows, live[0 .. rows - 1]) |*dest, bit| {
+                    dest.* = if (bit != 0) tree_row else types.none;
+                    tree_row += @intFromBool(bit != 0);
+                }
+                if (E.widget_count > 0) {
+                    if (ui.focus) |w| if (live[@backingInt(w)] == 0) {
+                        ui.focus = null;
+                    };
+                    if (ui.pointer.pressed) |w| if (live[@backingInt(w)] == 0) {
+                        ui.pointer.pressed = null;
+                    };
+                }
+            }
             var next: u32 = 0;
             ui.push(spec, 0, &next, in);
             tb.t.seal(0);
@@ -475,7 +528,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
             ui.rects = .{};
             for (0..4) |side| {
-                for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
+                for (E.widget_nodes, 0..) |node, k| {
+                    const row = ui.treeRow(node);
+                    if (!dynamic or row != types.none) ui.rects.c[side][k] = t.c.vis[side][row];
+                }
             }
             ui.built = true;
             return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf) };
@@ -485,6 +541,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// widget pushes its own rows, one per node of its subtree in row order, and advances
         /// `next` past them.
         pub fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            if (dynamic and ui.tree_rows[next.*] == types.none) {
+                next.* += comptime flatten.count(n);
+                return;
+            }
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             if (comptime n.custom) |data| {
                 const id = Id.hash(n.id orelse @compileError("a custom draw needs an id"));
@@ -525,6 +585,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 },
                 .row, .col => {
                     var s = n.style;
+                    if (comptime n.region != null and n.region.?.window != null) {
+                        for (Regions.regions, ui.window_selection) |region, sel| {
+                            if (region.row == next.* - 1) s.scroll[1] = sel.offset;
+                        }
+                    }
                     // A container with an id is a button.
                     if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
                     const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
@@ -543,6 +608,19 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 @compileError("no custom widget " ++ @typeName(W) ++ " in this spec");
             };
             return &ui.kept[k];
+        }
+
+        /// Current tree row of a spec descriptor, or types.none when its subtree is inactive.
+        pub inline fn treeRow(ui: *const Self, row: u32) u32 {
+            return if (dynamic) ui.tree_rows[row] else row + 1;
+        }
+
+        /// During a widget step, geometry of a descriptor in the last completed frame.
+        pub fn lastRect(ui: *const Self, row: u32) types.Rect {
+            if (!ui.built) return .{};
+            const tree_row = ui.treeRow(row);
+            if (dynamic and tree_row == types.none) return .{};
+            return ui.tables.t.rect(tree_row);
         }
 
         pub fn response(ui: *const Self, row: u32, in: *const Input) Response {
@@ -1202,4 +1280,59 @@ test "multiple host draw markers keep their ids, clip and paint order" {
         try std.testing.expectEqual(@as(f32, 40), item.clip[2]);
         try std.testing.expectEqual(@as(f32, @floatFromInt(k * 20)), item.rect[1]);
     }
+}
+
+test "dynamic widget pages compact inactive when, list and choice subtrees" {
+    const th: Theme = .default;
+    const button_zig = @import("button.zig");
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.when(.show, button_zig.ct.button(th, .first, "First")),
+        spec_zig.list(.count, 3, .{}, spec_zig.label("item")),
+        spec_zig.choice(.tab, .{}, .{ spec_zig.label("A"), spec_zig.label("B") }),
+        button_zig.ct.button(th, .last, "Last"),
+    });
+    const State = struct { show: bool = true, count: i8 = 2, tab: u8 = 0 };
+    const Ui = ComptimeUi(State, spec, th);
+    const App = struct {
+        state: State = .{},
+        pub fn build(app: *@This(), f: *Frame) void {
+            _ = f.open(.none, .{});
+            if (app.state.show) _ = button_zig.button(f, &th, .from("first"), "First");
+            _ = f.open(.none, .{});
+            for (0..@intCast(std.math.clamp(app.state.count, 0, 3))) |_| _ = f.textStyled("item", labelText(&th), .{});
+            f.close();
+            _ = f.open(.none, .{});
+            if (app.state.tab < 2) _ = f.textStyled(if (app.state.tab == 0) "A" else "B", labelText(&th), .{});
+            f.close();
+            _ = button_zig.button(f, &th, .from("last"), "Last");
+            f.close();
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 32, .texts = 16, .strings = 256, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    _ = try h.frame(&in);
+    for ([_]State{ .{ .show = false, .count = -1, .tab = 1 }, .{ .show = true, .count = 7, .tab = 9 }, .{} }) |state| {
+        h.app.state = state;
+        h.ui.signals.state = state;
+        _ = try h.frame(&in);
+    }
+    h.ui.focus = .first;
+    h.ui.signals.set(.show, false);
+    const out = h.ui.frame(&.{ .viewport = in.viewport, .events = &.{.{ .code = (focus.Keymap{}).tab, .kind = .press }} });
+    try std.testing.expectEqual(Ui.Events.Widget.last, h.ui.focus.?);
+    try std.testing.expectEqualStrings("itemitemALast", out.draw.strings);
+    const last = out.tree.rect(out.tree.find(.from("last")));
+    try std.testing.expectEqual(Ui.Events.Widget.last, Ui.Events.at(&h.ui.rects, last.x0 + 1, last.y0 + 1).?);
+}
+
+test "a widget page virtual list keeps the clipped fractional row" {
+    const spec = comptime spec_zig.virtualList(.count, .scroll, 2, 20, spec_zig.label("row"));
+    const State = struct { count: u32 = 10, scroll: f32 = 65 };
+    var ui: ComptimeUi(State, spec, .default) = .{};
+    const out = ui.frame(&.{ .viewport = .{ 200, 120 } });
+    try std.testing.expectEqual(3, ui.window_selection[0].first);
+    try std.testing.expectEqual(3, out.draw.run_len);
+    try std.testing.expectEqual(@as(f32, -5), out.draw.runs[0].rect[1]);
+    try std.testing.expectEqual(@as(f32, 40), out.draw.runs[0].clip[3]);
 }

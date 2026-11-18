@@ -231,7 +231,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const clear = base.ctResponse(ui, row + 5, event, in);
             if (clear.clicked and s.text().len > 0) ui.focus = @field(Ui.Events.Widget, name);
             const r = base.ctResponse(ui, row + 1, event, in);
-            const last: Rect = if (ui.built) ui.tables.t.rect(row + 2) else .{};
+            const last: Rect = ui.lastRect(row + 1);
             behave(s, &Ui.theme, .hash(name), r, clear.clicked, last, in);
             if (!(s.result.changed or s.result.submitted)) return null;
             return @unionInit(Ui.Events.Event, name, s.result);
