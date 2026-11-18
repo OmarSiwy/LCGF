@@ -63,7 +63,7 @@ class CascadeTests(unittest.TestCase):
                                  ("width", "2rem"), ("height", "2em"), ("font-size", "150%")))
         st = got[id(title)]
         self.assertEqual(st.text["px"], "30")
-        self.assertEqual(styles.emit_style(st)["size"], ".{ .px(40), .px(60) }")
+        self.assertEqual(styles.emit_style(st)["size"], ".{ .px(44), .px(66) }")
         self.assertEqual(st.fields["pad"], ".{ 2, 3, 2, 3 }")
 
     def test_cycles_fallback_and_overridden_invalid_variable(self):
@@ -85,8 +85,8 @@ class CascadeTests(unittest.TestCase):
         child = element("div")
         root = element("main", child)
         got = compile_rules(root, rule("main", ("display", "flex"), ("--panel", "rebeccapurple"),
-                                      ("gap", "10px 20px")), rule("div", ("width", "40%"),
-                                      ("position", "absolute"), ("left", "-2px"), ("overflow", "hidden"),
+                                      ("gap", "10px 20px")), rule("div", ("width", "40%"), ("box-sizing", "border-box"),
+                                      ("position", "absolute"), ("left", "-2px"), ("top", "0"), ("overflow", "hidden"),
                                       ("border", "2px solid hsl(120 100% 25%)"), ("border-radius", "1px 2px 3px")))
         self.assertTrue(got[id(root)].flex)
         self.assertFalse(got[id(child)].flex)
@@ -94,14 +94,14 @@ class CascadeTests(unittest.TestCase):
         self.assertEqual(got[id(root)].fields["gap"], "20")
         self.assertEqual(got[id(root)].theme["panel"], ".hex(0x663399ff)")
         fields = styles.emit_style(got[id(child)])
-        self.assertEqual(fields, {"size": ".{ .pct(0.4), .fill }", "float": "true", "offset": ".{ -2, 0 }",
+        self.assertEqual(fields, {"size": ".{ .pct(0.4), .fit }", "min": ".{ 4, 0 }", "pad": ".{ 2, 2, 2, 2 }", "float": "true", "offset": ".{ -2, 0 }",
                                   "clip": "true", "border": "2", "border_color": ".hex(0x008000ff)",
                                   "radii": ".{ 1, 2, 3, 2 }"})
 
     def test_flex_parent_axis_and_shorthand_order(self):
         item = element("div")
         outer = element("div", item)
-        st = compile_rules(outer, rule(":root", ("flex-direction", "column")),
+        st = compile_rules(outer, rule(":root", ("display", "flex"), ("flex-direction", "column")),
                            rule(":root > div", ("flex", "2"), ("flex-grow", "3")))[id(item)]
         self.assertEqual(styles.emit_style(st, (".fill", ".fit"))["size"], ".{ .fill, .grow(3) }")
         self.assertEqual(st.fields["shrink"], "true")
@@ -136,6 +136,64 @@ class CascadeTests(unittest.TestCase):
                             ("background", "linear-gradient(red, blue)"), ("padding", "env(foo)")):
             with self.subTest(prop=prop), self.assertRaises(styles.StyleError):
                 compile_rules(element("main"), rule("main", (prop, value)))
+
+    def test_unmatched_and_overridden_unsupported_values_get_locations(self):
+        for invalid in (("display", "grid"), ("width", "calc(100% - 2px)"),
+                        ("width", "var(--size, 2vh)"), ("transform", "rotateX(var(--angle))"),
+                        ("background", "url(example.png)"), ("border-style", "dashed")):
+            name, value = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(styles.StyleError):
+                compile_rules(element("main"), rule(".absent", (name, value)))
+        with self.assertRaisesRegex(styles.StyleError, "unsupported CSS function"):
+            compile_rules(element("p"), rule("p", ("width", "min(10px, 50%)"), ("width", "30px")))
+        p = element("p")
+        got = compile_rules(p, rule("p", ("width", "var(--unused)"), ("width", "30px")))[id(p)]
+        self.assertEqual(styles.emit_style(got)["size"], ".{ .px(30), .fit }")
+
+    def test_inactive_flex_context_does_not_change_block_layout(self):
+        root = element("div", element("p"))
+        for selector, key, val in (("div", "flex-direction", "row"), ("p", "flex-grow", "1"),
+                                   ("p", "align-self", "stretch"), ("div", "gap", "2px")):
+            with self.subTest(key=key), self.assertRaisesRegex(styles.StyleError, "flex"):
+                compile_rules(root, rule(selector, (key, val)))
+        child = root["children"][0]
+        got = compile_rules(root, rule("div", ("display", "flex")), rule("p", ("height", "fit-content")))
+        self.assertEqual(got[id(child)].sizes, [".fit", ".fit"])
+
+    def test_border_presence_and_standard_box_dimensions(self):
+        p = element("p")
+        st = compile_rules(p, rule("p", ("border-width", "4px"), ("width", "50px")))[id(p)]
+        self.assertEqual(st.fields["border"], "0")
+        self.assertEqual(st.sizes[0], ".px(50)")
+        st = compile_rules(p, rule("p", ("border-style", "solid"), ("width", "50px"),
+                                   ("padding", "2px")))[id(p)]
+        self.assertEqual(st.fields["border_color"], "theme.text")
+        self.assertEqual(st.sizes[0], ".px(60)")
+        self.assertEqual(st.fields["pad"], ".{ 5, 5, 5, 5 }")
+        with self.assertRaisesRegex(styles.StyleError, "additive size"):
+            compile_rules(p, rule("p", ("padding", "4px"), ("width", "50%")))
+
+    def test_absolute_containing_block_and_insets(self):
+        inner = element("aside")
+        middle = element("div", inner)
+        root = element("main", middle)
+        rule_abs = rule("aside", ("position", "absolute"), ("top", "7px"), ("left", "5px"))
+        with self.assertRaisesRegex(styles.StyleError, "containing block"):
+            compile_rules(root, rule_abs)
+        got = compile_rules(root, rule("div", ("position", "relative"), ("padding", "3px")), rule_abs)
+        self.assertEqual(got[id(inner)].fields["offset"], ".{ 2, 4 }")
+
+    def test_substituted_tokens_and_comments(self):
+        p = element("p")
+        result = compile_rules(p, rule("p", ("--note", '"var(--undefined)"'), ("padding", "2px/**/ 3px")))
+        self.assertEqual(result[id(p)].variables["--note"], '"var(--undefined)"')
+        self.assertEqual(result[id(p)].fields["pad"], ".{ 3, 2, 3, 2 }")
+        with self.assertRaises(styles.StyleError):
+            compile_rules(p, rule("p", ("--n", "2"), ("width", "var(--n)px")))
+        with self.assertRaisesRegex(styles.StyleError, "requires a unit"):
+            compile_rules(p, rule(".absent", ("width", "5")))
+        result = compile_rules(p, rule(":root", ("--text-px", "20px"), ("width", "2em")))
+        self.assertEqual(result[id(p)].sizes[0], ".px(40)")
 
     def test_offsets_are_byte_based_and_use_inline_or_embedded_filename(self):
         html = '<main>é\n<style>p { margin: 1px }</style></main>'

@@ -3,7 +3,7 @@
 compute_styles(element, [(filename, css[, html_byte_offset])], parse_css) consumes
 Lexbor's JSON. Pass html_path/html_source to locate inline declarations.
 The id(element)-indexed result contains Zig expressions in .fields, .text and
-.theme. emit_style(style, size_defaults) fills in missing axes of a .size pair.
+.theme. currentColor can refer to the generated page's theme.text. emit_style(style, size_defaults) fills in missing axes of a .size pair.
 No generated code parses CSS or changes application state.
 """
 
@@ -46,6 +46,7 @@ class Location:
 class Computed:
     axis: str = "y"
     flex: bool = False
+    flex_container: bool = False  # also true on the markup language's native row/col
     fields: dict = field(default_factory=dict)
     text: dict = field(default_factory=dict)
     theme: dict = field(default_factory=dict)
@@ -53,6 +54,8 @@ class Computed:
     variables: dict = field(default_factory=dict)
     font_px: float = 14
     stretch: bool = False
+    containing_block: bool = False
+    padding: tuple = (0, 0, 0, 0)
 
 
 def emit_style(computed, size_defaults=(".fit", ".fit")):
@@ -81,6 +84,7 @@ INHERITED = {"color", "font-size", "white-space"}
 # This is both the compiler's allow-list and the CLI's --mappings source.
 PROPERTY_TARGETS = {}
 for names, target in (
+    ("box-sizing", "content-box or border-box converted to native outer dimensions"),
     ("width height", "Style.size[x or y], logical length, percentage or fit"),
     ("min-width min-height", "Style.min[x or y]"),
     ("max-width max-height", "Style.max[x or y]"),
@@ -93,7 +97,7 @@ for names, target in (
     ("align-self", "Style.size[parent cross axis] for stretch"),
     ("align-items", "Style.cross, or stretch an auto-sized child on the cross axis"),
     ("justify-content", "Style.main"),
-    ("position", "Style.float for absolute positioning"),
+    ("position", "Style.float for absolute, or a static/relative containing block"),
     ("left top", "Style.offset when absolutely positioned"),
     ("overflow", "Style.clip"),
     ("background background-color", "Style.fill (single color; excludes widget-owned backgrounds)"),
@@ -190,9 +194,12 @@ def matches(selector, ancestry):
 
 def var_parts(value):
     """Yield literal strings or (variable name, fallback token sequence) pairs."""
-    pos = 0
-    for_start = re.compile(r"(?<![-\w])var\(", re.I)
-    while match := for_start.search(value, pos):
+    pos, scan = 0, 0
+    for_start = re.compile(QUOTED + r"|(?P<var>(?<![-\w])var\()", re.I)
+    while match := for_start.search(value, scan):
+        if not match.group("var"):
+            scan = match.end()
+            continue
         yield value[pos:match.start()]
         start = match.end()
         level, comma, quote = 1, None, None
@@ -221,7 +228,7 @@ def var_parts(value):
         if not CUSTOM.fullmatch(name):
             raise ValueError("var() requires a custom property name")
         yield (name, None if comma is None else value[comma + 1:i].strip())
-        pos = i + 1
+        pos = scan = i + 1
     yield value[pos:]
 
 
@@ -237,7 +244,9 @@ def expand_vars(value, lookup):
             if fallback is None:
                 raise ValueError(f"undefined or cyclic CSS variable {name}")
             result = expand_vars(fallback, lookup)
-        output.append(result)
+        # Substitution inserts CSS tokens: a number from var(--n) cannot fuse
+        # with a following "px" identifier to manufacture a dimension token.
+        output.extend((" ", result, " "))
     return "".join(output).strip()
 
 
@@ -291,6 +300,12 @@ def custom_properties(inherited, local):
     return values
 
 
+def one_of(value, options):
+    if value.lower() not in options:
+        raise ValueError(f"cannot represent {value!r}; expected one of {', '.join(options)}")
+    return value.lower()
+
+
 def number(value, units=("",)):
     m = COMPONENT.fullmatch(value.strip().lower())
     if not m or (m[2] or "") not in units:
@@ -304,8 +319,12 @@ def px(value, em, rem, signed=False):
     n, unit = number(value, ("", "px", "em", "rem", "pt", "pc", "in", "cm", "mm", "q"))
     if n < 0 and not signed:
         raise ValueError("a nonnegative length is required")
-    return n * {"": 1, "px": 1, "em": em, "rem": rem, "pt": 96/72, "pc": 16,
-                "in": 96, "cm": 96/2.54, "mm": 96/25.4, "q": 96/101.6}[unit]
+    if not unit and n != 0:
+        raise ValueError("a nonzero CSS length requires a unit")
+    result = n * {"": 1, "px": 1, "em": em, "rem": rem, "pt": 96/72, "pc": 16,
+                  "in": 96, "cm": 96/2.54, "mm": 96/25.4, "q": 96/101.6}[unit]
+    fmt(result)
+    return result
 
 
 def alpha_value(s):
@@ -468,9 +487,87 @@ def affine(value, em, rem):
     return array(map(fmt, (a, b, c, d, e, f)))
 
 
-def lower(node, parent, rem, properties):
+# Validate source declarations even when their selectors match no elements or
+# a later declaration supersedes them. Resolution of var() still belongs to
+# the winning element. Custom property values themselves are opaque token lists.
+QUOTED = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')"""
+CSS_COMMENTS = re.compile(QUOTED + r"|/\*.*?\*/", re.S)
+COLOR_FUNCTIONS = {"rgb", "rgba", "hsl", "hsla"}
+TRANSFORMS = {"matrix", "rotate", "scale", "scalex", "scaley", "skew", "skewx", "skewy",
+              "translate", "translatex", "translatey"}
+KEYWORDS = {
+    "box-sizing": ("border-box", "content-box"),
+    "align-items": ("start", "end", "flex-start", "flex-end", "center", "stretch"),
+    "align-self": ("auto", "stretch"),
+    "justify-content": ("start", "end", "flex-start", "flex-end", "center"),
+    "display": ("flex", "block"), "flex-direction": ("row", "column"),
+    "flex-shrink": ("0", "1"), "overflow": ("hidden", "clip", "visible"),
+    "position": ("static", "absolute", "relative"),
+    "border-style": ("none", "hidden", "solid"),
+    "white-space": ("normal", "nowrap"),
+    "transform-origin": ("center", "center center", "50% 50%"),
+}
+
+
+def preflight(name, value):
+    if not value:
+        raise ValueError("empty property value")
+    if name.startswith("--"):
+        return
+    shape = re.sub(QUOTED, '""', value)
+    functions = {m[1].lower() for m in re.finditer(r"([-\w]+)\(", shape)}
+    allowed = COLOR_FUNCTIONS if name in ("color", "background", "background-color", "border", "border-color") else set()
+    if name == "transform":
+        allowed = TRANSFORMS
+    unsupported = functions - allowed - {"var"}
+    if unsupported:
+        raise ValueError(f"unsupported CSS function {min(unsupported)}()")
+    if "var" in functions:
+        list(var_parts(value))  # verify argument syntax without looking up missing variables
+        if name in ("width", "height", "flex-basis", "flex", "font-size", "transform",
+                    "top", "left", "gap", "row-gap", "column-gap") or name.startswith(("padding", "min-", "max-", "border")):
+            units = {"px", "em", "rem", "pt", "pc", "in", "cm", "mm", "q"}
+            if name in ("transform", "border", "border-color"):
+                units.update(("deg", "rad", "turn", "grad"))
+            for unit in re.finditer(rf"(?<![-\w#.]){NUMBER}([a-zA-Z]+)\b", shape):
+                if unit[1].lower() not in units:
+                    raise ValueError(f"unsupported CSS unit {unit[1]}")
+        return
+    if name in INHERITED and value.lower() in ("inherit", "unset"):
+        return
+    for key, raw in longhands(name, value).items():
+        v = raw.lower()
+        if key in KEYWORDS:
+            one_of(v, KEYWORDS[key])
+        elif key in ("color", "background-color", "border-color"):
+            if v != "currentcolor":
+                color(v)
+        elif key in ("width", "height", "flex-basis"):
+            if v not in ("auto", "fit-content"):
+                if v.endswith("%"):
+                    if number(v, ("%",))[0] < 0:
+                        raise ValueError("negative dimension")
+                else:
+                    px(v, 14, 14)
+        elif key in ("max-width", "max-height") and v == "none":
+            continue
+        elif key == "font-size" and v.endswith("%"):
+            if number(v, ("%",))[0] < 0:
+                raise ValueError("negative font size")
+        elif key == "flex-grow":
+            if number(v)[0] < 0:
+                raise ValueError("negative grow weight")
+        elif key == "opacity":
+            alpha_value(v)
+        elif key == "transform":
+            affine(v, 14, 14)
+        else:
+            px(v, 14, 14, signed=key in ("left", "top"))
+
+
+def lower(node, parent, rem, properties, initial_font=14):
     tag = node["tag"].lower()
-    st = Computed(axis="x" if tag == "row" else "y")
+    st = Computed(axis="x" if tag == "row" else "y", containing_block=parent is None, font_px=initial_font)
     if parent:
         st.text = parent.text.copy()
         st.font_px = parent.font_px
@@ -481,11 +578,6 @@ def lower(node, parent, rem, properties):
             return func(props[name])
         except ValueError as err:
             properties[name][1].error(f"{name}: {err}")
-
-    def one_of(value, options):
-        if value.lower() not in options:
-            raise ValueError(f"cannot represent {value!r}; expected one of {', '.join(options)}")
-        return value.lower()
 
     def length(v, signed=False):
         return fmt(px(v, st.font_px, rem, signed))
@@ -511,9 +603,7 @@ def lower(node, parent, rem, properties):
 
     def tint(value):
         if value.lower() == "currentcolor":
-            if "color" not in st.text:
-                raise ValueError("currentColor requires a resolved text color")
-            return st.text["color"]
+            return st.text.get("color", "theme.text")
         return color(value)
 
     if "display" in props:
@@ -527,6 +617,19 @@ def lower(node, parent, rem, properties):
             st.stretch = True
         if tag in ("row", "col") and "flex-direction" not in props and st.axis != ("x" if tag == "row" else "y"):
             properties["display"][1].error(f"display direction contradicts <{tag}>")
+    st.flex_container = st.flex or (tag in ("row", "col") and "display" not in props)
+    if tag == "row" and props.get("display", "").lower() == "block":
+        properties["display"][1].error("display: block contradicts the native row container")
+    if not st.flex_container:
+        for k in ("flex-direction", "justify-content", "align-items", "row-gap", "column-gap"):
+            if k in props:
+                properties[k][1].error(f"{k} requires display: flex on this native container")
+    in_flow = props.get("position", "static").lower() != "absolute"
+    flex_item = parent is not None and parent.flex_container and in_flow
+    if not flex_item:
+        for k in ("flex-grow", "flex-basis", "flex-shrink", "align-self"):
+            if k in props:
+                properties[k][1].error(f"{k} requires an in-flow child of a flex container")
     if "flex-direction" in props:
         v = checked("flex-direction", lambda v: one_of(v, ["row", "column"]))
         st.axis = "x" if v == "row" else "y"
@@ -535,19 +638,44 @@ def lower(node, parent, rem, properties):
         st.fields["dir"] = "." + st.axis
     main = int(parent.axis == "y") if parent else 1
     cross = 1 - main
-    def size(value):
+    # Native dimensions include the insets. CSS content-box sizes exclude both
+    # padding and border. The native border is paint-only, so include it in
+    # the layout padding for either box-sizing mode.
+    border = 0.0
+    if any(k in props for k in ("border-style", "border-width", "border-color")):
+        if props.get("border-style", "none").lower() == "solid":
+            border = float(checked("border-width", length)) if "border-width" in props else 3.0
+            st.fields["border_color"] = checked("border-color", tint) if "border-color" in props else tint("currentcolor")
+        st.fields["border"] = fmt(border)
+    pads = ("padding-left", "padding-top", "padding-right", "padding-bottom")
+    st.padding = tuple(float(checked(k, length)) if k in props else 0.0 for k in pads)
+    insets = tuple(p + border for p in st.padding)
+    if border or any(k in props for k in pads):
+        st.fields["pad"] = array([fmt(v) for v in insets])
+    totals = (insets[0] + insets[2], insets[1] + insets[3])
+    content_box = props.get("box-sizing", "content-box").lower() == "content-box"
+
+    def outer(value, dim):
+        n = float(length(value))
+        return fmt(n + totals[dim] if content_box else max(n, totals[dim]))
+
+    def size(value, dim):
         if value.lower() in ("auto", "fit-content"):
             return ".fit"
         if value.endswith("%"):
             n = number(value, ("%",))[0]
             if n < 0:
                 raise ValueError("negative dimension")
+            if content_box and totals[dim]:
+                raise ValueError("a percentage plus padding or border needs a dynamic additive size; use box-sizing: border-box")
+            if not in_flow and parent and (parent.padding[dim] or parent.padding[dim + 2]):
+                raise ValueError("absolute percentage size refers to the parent's padding box")
             return ".pct(" + fmt(n / 100) + ")"
-        return ".px(" + length(value) + ")"
+        return ".px(" + outer(value, dim) + ")"
 
     for i, key in enumerate(("width", "height")):
         if key in props:
-            st.sizes[i] = checked(key, size)
+            st.sizes[i] = checked(key, lambda v: size(v, i))
     for axis in ("min", "max"):
         pair = ["0" if axis == "min" else "lcgf.types.inf"] * 2
         present = False
@@ -555,7 +683,10 @@ def lower(node, parent, rem, properties):
             key = f"{axis}-{dim}"
             if key in props:
                 present = True
-                pair[i] = checked(key, lambda v: "lcgf.types.inf" if v.lower() == "none" and axis == "max" else length(v))
+                pair[i] = checked(key, lambda v: "lcgf.types.inf" if v.lower() == "none" and axis == "max" else outer(v, i))
+            elif axis == "min" and totals[i] and (st.sizes[i] or "").startswith(".pct("):
+                present = True
+                pair[i] = fmt(totals[i])
         if present:
             st.fields[axis] = array(pair)
     grow = checked("flex-grow", lambda v: number(v)[0]) if "flex-grow" in props else 0
@@ -563,12 +694,17 @@ def lower(node, parent, rem, properties):
     if grow < 0:
         properties["flex-grow"][1].error("flex-grow requires a nonnegative weight")
     if grow:
-        if basis not in ("0", "0%", "0px") and (basis or st.sizes[main] is not None):
+        intrinsic = any(c.get("kind") == "element" or c.get("text", "").strip() for c in node.get("children", []))
+        if totals[main]:
+            properties["flex-grow"][1].error("native grow weights cannot reserve an additive padding or border size")
+        if basis not in ("0", "0%", "0px") and (intrinsic or basis or st.sizes[main] is not None):
             properties["flex-grow"][1].error("native grow with a fixed or content-based main-axis basis is not representable")
         st.sizes[main] = ".grow(" + fmt(grow) + ")"
     elif basis and basis != "auto":
-        st.sizes[main] = checked("flex-basis", size)
-    if "min-width" in props and checked("min-width", length) == "0":
+        st.sizes[main] = checked("flex-basis", lambda v: size(v, main))
+    if flex_item:
+        if st.sizes[main] is None:
+            st.sizes[main] = ".fit"
         st.fields["shrink"] = "true"
     if "flex-shrink" in props:
         value = checked("flex-shrink", lambda v: one_of(v, ["0", "1"]))
@@ -577,8 +713,8 @@ def lower(node, parent, rem, properties):
         self_align = checked("align-self", lambda v: one_of(v, ["stretch", "auto"]))
     else:
         self_align = "auto"
-    if self_align == "stretch" or (parent and parent.stretch and self_align == "auto"):
-        if st.sizes[cross] in (None, ".fit"):
+    if flex_item and (self_align == "stretch" or (parent.stretch and self_align == "auto")):
+        if props.get(("width", "height")[cross], "auto").lower() == "auto":
             st.sizes[cross] = ".fill"
     for name, field_name in (("align-items", "cross"), ("justify-content", "main")):
         if name in props:
@@ -592,9 +728,6 @@ def lower(node, parent, rem, properties):
                 if name == "align-items":
                     st.stretch = False
                 st.fields[field_name] = "." + v.removeprefix("flex-")
-    pads = ["padding-left", "padding-top", "padding-right", "padding-bottom"]
-    if any(k in props for k in pads):
-        st.fields["pad"] = array([checked(k, length) if k in props else "0" for k in pads])
     gaps = {k: checked(k, length) for k in ("row-gap", "column-gap") if k in props}
     if gaps:
         # Single-line native layout has one gap along the main axis.
@@ -602,43 +735,43 @@ def lower(node, parent, rem, properties):
     if "overflow" in props:
         v = checked("overflow", lambda v: one_of(v, ["hidden", "clip", "visible"]))
         st.fields["clip"] = "false" if v == "visible" else "true"
+    position = props.get("position", "static").lower()
+    if position != "static":
+        st.containing_block = True
     if "position" in props:
-        v = checked("position", lambda v: one_of(v, ["static", "absolute"]))
-        st.fields["float"] = "true" if v == "absolute" else "false"
-    if "left" in props or "top" in props:
+        st.fields["float"] = "true" if position == "absolute" else "false"
+    if position == "absolute":
+        if parent and not parent.containing_block:
+            properties["position"][1].error("absolute layout needs the immediate native parent to establish its containing block")
+        if "left" not in props or "top" not in props:
+            properties["position"][1].error("absolute layout requires explicit left and top; automatic static-position offsets are unavailable")
+        offsets = [float(checked(k, lambda v: length(v, True))) for k in ("left", "top")]
+        if parent:
+            offsets = [x - p for x, p in zip(offsets, parent.padding)]
+        st.fields["offset"] = array([fmt(x) for x in offsets])
+    elif "left" in props or "top" in props:
         key = "left" if "left" in props else "top"
-        if st.fields.get("float") != "true":
-            properties[key][1].error("left/top offsets require position: absolute")
-        st.fields["offset"] = array([checked(k, lambda v: length(v, True)) if k in props else "0" for k in ("left", "top")])
+        properties[key][1].error("native in-flow layout cannot apply CSS positioning offsets")
     if "background-color" in props:
         if tag in CONTROLS:
             properties["background-color"][1].error(f"<{tag}> draws its interactive background from the widget theme")
         st.fields["fill"] = checked("background-color", tint)
     if "opacity" in props:
         st.fields["opacity"] = checked("opacity", lambda v: fmt(alpha_value(v)))
+        has_contents = any(c.get("kind") == "element" or c.get("text", "").strip() for c in node.get("children", []))
+        if 0 < float(st.fields["opacity"]) < 1 and (any(c.get("kind") == "element" for c in node.get("children", []))
+                                                      or has_contents and ("fill" in st.fields or border)):
+            properties["opacity"][1].error("overlapping content needs group opacity compositing")
     if any(k in props for k in CORNERS):
         radii = [checked(k, length) if k in props else "0" for k in CORNERS]
         if len(set(radii)) == 1:
             st.fields["radius"] = radii[0]
         else:
             st.fields["radii"] = array(radii)
-    if "border-style" in props:
-        checked("border-style", lambda v: one_of(v, ["none", "hidden", "solid"]))
-    if "border-width" in props:
-        st.fields["border"] = checked("border-width", length)
-    if props.get("border-style", "").lower() in ("none", "hidden"):
-        st.fields["border"] = "0"
-    elif props.get("border-style", "").lower() == "solid":
-        st.fields.setdefault("border", "3")
-    if "border-style" in props and "border-color" not in props and st.fields.get("border") != "0":
-        if "color" not in st.text:
-            properties["border-style"][1].error("a visible border needs border-color or a resolved text color")
-        st.fields["border_color"] = st.text["color"]
-    if "border-color" in props:
-        if not (props["border-color"].lower() == "currentcolor" and st.fields.get("border") == "0"):
-            st.fields["border_color"] = checked("border-color", tint)
     if "transform" in props:
         st.fields["transform"] = checked("transform", lambda v: affine(v, st.font_px, rem))
+        if props["transform"].lower() != "none":
+            st.containing_block = True
     if "transform-origin" in props:
         checked("transform-origin", lambda v: one_of(v, ["center", "center center", "50% 50%"]))
     return st
@@ -670,8 +803,13 @@ def compute_styles(root, stylesheets, parse_css, *, html_path="<html>", html_sou
             loc = at(decl.get("offset"))
             if not CUSTOM.fullmatch(name) and name not in PROPERTY_TARGETS:
                 loc.error(f"unsupported CSS property {name!r} in native LCGF layout")
+            value = CSS_COMMENTS.sub(lambda m: " " if m[0].startswith("/*") else m[0], decl["value"]).strip()
+            try:
+                preflight(name, value)
+            except ValueError as err:
+                loc.error(f"{name}: {err}")
             sequence += 1
-            result.append((name, decl["value"], bool(decl.get("important")), sequence, loc))
+            result.append((name, value, bool(decl.get("important")), sequence, loc))
         return result
 
     for sheet in stylesheets:
@@ -755,6 +893,8 @@ def compute_styles(root, stylesheets, parse_css, *, html_path="<html>", html_sou
         for key, (name, raw, loc) in winners.items():
             try:
                 value = expand_vars(raw, variables.get)
+                if raw != value:
+                    preflight(name, value)
                 if value.lower() in ("inherit", "unset") and key in INHERITED:
                     continue
                 val = longhands(name, value)[key]
@@ -763,7 +903,14 @@ def compute_styles(root, stylesheets, parse_css, *, html_path="<html>", html_sou
                 props[key] = val, loc
             except ValueError as err:
                 loc.error(f"{name}: {err}")
-        computed = lower(node, parent, root_font, props)
+        initial_font = root_font
+        if parent is None and "--text-px" in local:
+            location = next(loc for _, name, _, loc in reversed(candidates) if name == "--text-px")
+            try:
+                initial_font = px(variables.get("--text-px") or "", root_font, root_font)
+            except ValueError as err:
+                location.error(f"--text-px: {err}")
+        computed = lower(node, parent, root_font, props, initial_font)
         computed.variables = variables
 
         # The reserved root tokens are explicit native theme overrides. An
@@ -784,7 +931,10 @@ def compute_styles(root, stylesheets, parse_css, *, html_path="<html>", html_sou
                     val = variables[name]
                     if val is None:
                         raise ValueError("unresolved theme token")
-                    computed.theme[field_name] = convert(val) if convert else fmt(px(val, computed.font_px, root_font))
+                    if field_name == "text_px":
+                        computed.theme[field_name] = fmt(initial_font)
+                    else:
+                        computed.theme[field_name] = convert(val) if convert else fmt(px(val, computed.font_px, root_font))
                 except ValueError as err:
                     loc.error(f"{name}: {err}")
             if "text" in computed.theme:
