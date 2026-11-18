@@ -42,16 +42,22 @@ pub const default_keys: Keymap = .{};
 /// Why `State` cannot back a comptime list bound to `selected` with option fields `items`, or
 /// null when it can. `validate` turns the answer into a compile error; tests read it directly.
 pub fn check(comptime State: type, comptime selected: []const u8, comptime items: []const []const u8) ?[]const u8 {
-    comptime {
-        if (!@hasField(State, selected)) return "list: state has no field '" ++ selected ++ "' for the selection";
-        if (@FieldType(State, selected) != u32) return "list: selection field '" ++ selected ++ "' must be a u32 (a row, or none)";
-        if (items.len == 0) return "list: a list needs at least one option";
-        for (items) |f| {
-            if (!@hasField(State, f)) return "list: state has no field '" ++ f ++ "' for an option";
-            if (@FieldType(State, f) != []const u8) return "list: option field '" ++ f ++ "' must be a []const u8";
-        }
-        return null;
-    }
+    if (selectionError(State, selected, items.len)) |msg| return msg;
+    for (items) |f| if (optionError(State, f)) |msg| return msg;
+    return null;
+}
+
+fn selectionError(comptime State: type, comptime selected: []const u8, count: usize) ?[]const u8 {
+    if (!@hasField(State, selected)) return "list: state has no field '" ++ selected ++ "' for the selection";
+    if (@FieldType(State, selected) != u32) return "list: selection field '" ++ selected ++ "' must be a u32 (a row, or none)";
+    if (count == 0) return "list: a list needs at least one option";
+    return null;
+}
+
+fn optionError(comptime State: type, comptime f: []const u8) ?[]const u8 {
+    if (!@hasField(State, f)) return "list: state has no field '" ++ f ++ "' for an option";
+    if (@FieldType(State, f) != []const u8) return "list: option field '" ++ f ++ "' must be a []const u8";
+    return null;
 }
 
 /// `check` as a compile error.
@@ -225,8 +231,8 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// A list named `id` selecting into the u32 field `selected`, one option per string field
-    /// in `items` (a tuple of enum literals): `ct.list(th, .fruit, .selected, .{ .apple, .pear })`.
+    /// A list named `id` selecting into the u32 field `selected`, one option per literal or
+    /// bound caption in `items`: `ct.list(th, .fruit, .selected, .{ "Apple", .pear })`.
     /// It builds itself in `base.ComptimeUi` (`Spec.widget`).
     pub fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime selected: @EnumLiteral(), comptime items: anytype) Spec {
         var opts: [items.len]Spec = undefined;
@@ -234,19 +240,12 @@ pub const ct = struct {
         var s = spec_zig.col(listStyle(&th), opts);
         s.id = @tagName(id);
         s.bind = @tagName(selected);
-        s.widget = ListWidget(@tagName(selected), &fieldNames(items));
+        s.widget = ListWidget(@tagName(selected), s.children);
         return s;
     }
 };
 
-/// The names of a tuple of enum literals.
-fn fieldNames(comptime items: anytype) [items.len][]const u8 {
-    var out: [items.len][]const u8 = undefined;
-    for (&out, items) |*o, item| o.* = @tagName(item);
-    return out;
-}
-
-/// The option fields of the list node `n` (built by `ct.list`): each option row's label binding.
+/// The option fields of a fully bound list node. For a mixed list inspect each label’s `bind` or `text`.
 pub fn itemFields(comptime n: Spec) [n.children.len][]const u8 {
     var out: [n.children.len][]const u8 = undefined;
     for (&out, n.children) |*o, c| o.* = c.children[0].bind.?;
@@ -255,15 +254,20 @@ pub fn itemFields(comptime n: Spec) [n.children.len][]const u8 {
 
 /// A list in `base.ComptimeUi`, for a list bound to `selected` with option fields `fields`:
 /// `step` applies the click and keys to the selection, `push` builds the rows `list` builds.
-fn ListWidget(comptime selected: []const u8, comptime fields: []const []const u8) type {
+fn ListWidget(comptime selected: []const u8, comptime options: []const Spec) type {
     return struct {
         pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
             const Ui = @TypeOf(ui.*);
-            comptime validate(@TypeOf(ui.signals.state), selected, fields);
-            var items: [fields.len][]const u8 = undefined;
-            inline for (&items, fields) |*s, f| s.* = @field(ui.signals.state, f);
+            const State = @TypeOf(ui.signals.state);
+            if (comptime selectionError(State, selected, options.len)) |msg| @compileError(msg);
+            var items: [options.len][]const u8 = undefined;
+            inline for (&items, options) |*str, option| {
+                const caption = comptime option.children[0];
+                if (comptime caption.bind) |f| if (comptime optionError(State, f)) |msg| @compileError(msg);
+                str.* = spec_zig.labelBytes(caption, &ui.signals.state);
+            }
             var sel: u32 = @field(ui.signals.state, selected);
-            sel = click(sel, ctClicked(ui, row, event), rowAt(&Ui.theme, ctRect(ui, row).y0, in.pointer[1], fields.len));
+            sel = click(sel, ctClicked(ui, row, event), rowAt(&Ui.theme, ctRect(ui, row).y0, in.pointer[1], options.len));
             if (ctResponse(ui, row, in).focused) sel = keys(sel, &items, in, &default_keys);
             ui.signals.set(comptime Ui.field(selected), sel);
         }
@@ -273,7 +277,7 @@ fn ListWidget(comptime selected: []const u8, comptime fields: []const []const u8
             const row = comptime widgetRow(@TypeOf(ui.*), n.id.?);
             const tb = &ui.tables;
             const state = &ui.signals.state;
-            next.* += comptime flatten.count(n);
+            next.* += 1;
             const r = ctResponse(ui, row, in);
             const count: u32 = n.children.len;
             const sel: u32 = @field(state, selected);
@@ -285,7 +289,8 @@ fn ListWidget(comptime selected: []const u8, comptime fields: []const []const u8
                 var s = o.style;
                 s.fill = optionFill(th, r.hovered and under == j, sel == j);
                 const i = tb.t.push(box, .none, &s);
-                pushLabel(tb, i, &o.children[0].style, @field(state, o.children[0].bind.?), th);
+                next.* += 1;
+                ui.push(o.children[0], i, next, in);
                 tb.t.seal(i);
             }
             tb.t.seal(box);
@@ -587,4 +592,19 @@ test "list: another theme restyles both front ends alike" {
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
+}
+
+test "a widget list selects across literal and bound option captions" {
+    const chip = @import("chip.zig");
+    const State = struct { second: []const u8 = "Banana", selected: u32 = none };
+    const page = comptime spec_zig.col(.{}, .{
+        ct.list(theme, .fruit, .selected, .{ "Apple", .second }),
+        chip.ct.chip(theme, .fruit_chip, "Fruit", "×"),
+    });
+    var ui: base.ComptimeUi(State, page, theme) = .{};
+    const rest = ui.frame(&.{ .viewport = .{ 200, 100 } });
+    try testing.expectEqualStrings("AppleBananaFruit×", rest.draw.strings);
+    ui.focus = .fruit;
+    _ = ui.frame(&.{ .viewport = .{ 200, 100 }, .text = "b", .events = &.{.{ .kind = .text, .len = 1 }} });
+    try testing.expectEqual(@as(u32, 1), ui.signals.state.selected);
 }

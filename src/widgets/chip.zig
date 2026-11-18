@@ -89,15 +89,20 @@ pub const ct = struct {
     /// .remove_text)` or `ct.chip(th, .draft, .draft_text, null)`. The chip itself is no
     /// widget; its remove button is the widget `<id>.remove`, a button (void event, focus
     /// stop) whose click asks the application to remove the chip.
-    pub fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime remove: ?@EnumLiteral()) Spec {
+    pub fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime remove: anytype) Spec {
         const caption = label_zig.ct.label(th, text);
-        const kids: []const Spec = if (remove) |r| &.{ caption, .{
+        const remove_caption: ?Spec = switch (@typeInfo(@TypeOf(remove))) {
+            .null => null,
+            .optional => if (remove) |r| label_zig.ct.label(th, r) else null,
+            else => label_zig.ct.label(th, remove),
+        };
+        const kids: []const Spec = if (remove_caption) |r| &.{ caption, .{
             .kind = .row,
             .id = @tagName(id) ++ ".remove",
-            .children = &.{label_zig.ct.label(th, r)},
+            .children = &.{r},
             .widget = base.FocusStop,
         } } else &.{caption};
-        return .{ .kind = .row, .style = chipStyle(&th), .children = kids, .widget = Comptime(@tagName(id), remove != null) };
+        return .{ .kind = .row, .style = chipStyle(&th), .children = kids, .widget = Comptime(@tagName(id), remove_caption != null) };
     }
 };
 
