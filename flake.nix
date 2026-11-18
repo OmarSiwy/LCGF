@@ -110,10 +110,25 @@
             pkgs.pkg-config
             pkgs.libx11
             pkgs.cairo
+            pkgs.gtk4
             pkgs.xvfb
+            pkgs.xvfb-run
             pkgs.qt6.qtbase
             pkgs.qt6.qtdeclarative
           ];
+          # Source-only comparators, available exclusively in the benchmark shell.
+          NUKLEAR_SRC = pkgs.fetchFromGitHub {
+            owner = "Immediate-Mode-UI";
+            repo = "Nuklear";
+            rev = "f101764f7a2ec99e0db7895d148069eda96cce2b"; # v4.13.4
+            hash = "sha256-4JFgxAay5jlfE/sKsWzbA8ORJqEavJf8jyOv8M9sD5A=";
+          };
+          MICROUI_SRC = pkgs.fetchFromGitHub {
+            owner = "rxi";
+            repo = "microui";
+            rev = "0850aba860959c3e75fb3e97120ca92957f9d057";
+            hash = "sha256-oilNz95OZJ5mv6NA17fnwnFmXq6L7j1w5Nkg/34gf64=";
+          };
           QT_PLUGIN_PATH = "${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}";
           QML_IMPORT_PATH = "${pkgs.qt6.qtdeclarative}/${pkgs.qt6.qtbase.qtQmlPrefix}";
         };

@@ -80,9 +80,11 @@ static bool ready_corner(Window win, Size s) {
 
 static bool complete(XImage *im, Size s, bool diagnostic) {
     if (im->bits_per_pixel != 32 || im->byte_order != LSBFirst) {
-        fprintf(stderr, "Observer requires little-endian XRGB on a 24-bit X server\n");
+        fprintf(stderr, "Observer requires a little-endian 32-bit pixel layout\n");
         exit(1);
     }
+    const uint32_t alpha = im->depth == 32 ? 0xff000000u : 0;
+    const uint32_t mask = 0xffffffu | alpha;
     uint32_t bg = background(s);
     int left = (s.w - 64) / 2, top = (s.h - 64) / 2;
     for (int y = 0; y < s.h; ++y) {
@@ -91,9 +93,10 @@ static bool complete(XImage *im, Size s, bool diagnostic) {
             uint32_t pixel;
             memcpy(&pixel, row + (size_t)x * 4, sizeof pixel);
             uint32_t expected = y >= top && y < top+64 && x >= left && x < left+64 ? 0xe67e28 : bg;
-            if ((pixel & 0xffffff) != expected) {
+            expected |= alpha;
+            if ((pixel & mask) != expected) {
                 if (diagnostic)
-                    fprintf(stderr, "Pixel (%d,%d) is #%06x, expected #%06x\n", x, y, pixel & 0xffffff, expected);
+                    fprintf(stderr, "Pixel (%d,%d) is #%08x, expected #%08x\n", x, y, pixel & mask, expected);
                 return false;
             }
         }
@@ -152,13 +155,14 @@ int main(int argc, char **argv) {
     if (!display) return 2;
     Window win = find_client(argv[2]);
     XWindowAttributes attr;
-    if (!XGetWindowAttributes(display, win, &attr) || attr.depth != 24 ||
+    if (!XGetWindowAttributes(display, win, &attr) || (attr.depth != 24 && attr.depth != 32) ||
+        attr.visual->class != TrueColor ||
         attr.visual->red_mask != 0xff0000 || attr.visual->green_mask != 0xff00 ||
         attr.visual->blue_mask != 0xff) {
-        fprintf(stderr, "Window must use the Xvfb screen's 24-bit TrueColor visual\n");
+        fprintf(stderr, "Window must use an RGB24 or ARGB32 TrueColor visual\n");
         return 1;
     }
-    snapshot = XCreatePixmap(display, win, large.w, large.h, DefaultDepth(display, DefaultScreen(display)));
+    snapshot = XCreatePixmap(display, win, large.w, large.h, (unsigned)attr.depth);
     XGCValues values = {.graphics_exposures = False};
     capture = XCreateGC(display, snapshot, GCGraphicsExposures, &values);
     double readback;

@@ -1,4 +1,4 @@
-"""Drive the eight mapped resize fixtures on a private Xvfb display."""
+"""Drive the mapped resize fixtures on a private Xvfb display."""
 import argparse
 from contextlib import contextmanager
 import csv
@@ -12,7 +12,7 @@ import select
 import statistics
 import subprocess
 
-FRAMEWORKS = ("lcgf", "clay", "imgui", "egui", "iced", "lvgl", "slint", "qtquick")
+FRAMEWORKS = tuple(json.loads((Path(__file__).resolve().parents[1] / "frameworks.json").read_text()))
 KINDS = ("grow", "shrink", "drag-settle")
 
 

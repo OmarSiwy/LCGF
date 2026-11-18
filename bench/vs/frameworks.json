@@ -1,0 +1,14 @@
+{
+  "lcgf": "LCGF",
+  "clay": "Clay",
+  "imgui": "Dear ImGui",
+  "egui": "egui",
+  "iced": "Iced",
+  "lvgl": "LVGL",
+  "slint": "Slint",
+  "qtquick": "Qt Quick",
+  "nuklear": "Nuklear",
+  "microui": "microui",
+  "gtk4": "GTK 4",
+  "qtwidgets": "Qt Widgets"
+}

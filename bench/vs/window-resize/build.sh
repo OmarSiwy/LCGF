@@ -16,6 +16,10 @@ for toolkit in clay imgui lvgl; do
 done
 # shellcheck disable=SC2046
 c++ -O2 -std=c++17 -fPIC "$src/qtquick.cpp" $(pkg-config --cflags --libs Qt6Quick Qt6Qml Qt6Gui Qt6Core) -o "$out/resize-qtquick"
+cc -O2 -std=gnu99 -I"$NUKLEAR_SRC" "$src/nuklear.c" "$obj/window.o" $libs -lm -o "$out/resize-nuklear"
+cc -O2 -std=gnu99 -I"$MICROUI_SRC/src" "$src/microui.c" "$MICROUI_SRC/src/microui.c" "$obj/window.o" $libs -lm -o "$out/resize-microui"
+cc -O2 -std=gnu11 "$src/gtk4.c" $(pkg-config --cflags --libs gtk4-x11 x11) -lm -o "$out/resize-gtk4"
+c++ -O2 -std=c++17 -fPIC "$src/qtwidgets.cpp" $(pkg-config --cflags --libs Qt6Widgets) -o "$out/resize-qtwidgets"
 # Link only these three binaries to the X11 presenter. The original comparison
 # binaries retain their existing dependency and size measurements.
 # Cargo does not fingerprint objects passed via linker arguments. A content-addressed
