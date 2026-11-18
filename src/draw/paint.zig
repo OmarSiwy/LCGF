@@ -34,6 +34,51 @@ pub fn emitLayered(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []co
 
 inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, comptime ordered: bool, order: []const u32, d: *DrawList) void {
     const c = &t.c;
+    const x = &t.x;
+    const V4 = @Vector(4, f32);
+    const sign: V4 = .{ 1, 1, -1, -1 };
+    if (tx.len | cu.len != 0 or !nodeOps(t, ordered, order, d, false)) {
+        _ = nodeOps(t, ordered, order, d, true);
+    }
+
+    // 2. Side lists -> geometry. One row per text run or custom draw that
+    //    exists; nodes without either cost nothing here.
+    for (0..tx.len) |k| {
+        const n = tx.c.node[k];
+        d.runs[k] = .{
+            .rect = .{
+                c.rect[0][n] + c.pad_lo[0][n], c.rect[1][n] + c.pad_lo[1][n],
+                c.rect[2][n] - c.pad_hi[0][n], c.rect[3][n] - c.pad_hi[1][n],
+            },
+            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
+            .start = tx.c.start[k],
+            .bytes = tx.c.bytes[k],
+            .px = tx.c.px[k],
+            .color = fade(tx.c.color[k], x.row[c.scope[n]].alpha),
+            .font = tx.c.font[k],
+        };
+    }
+    d.run_len = tx.len;
+    for (0..cu.len) |k| {
+        const n = cu.c.node[k];
+        d.customs[k] = .{
+            .rect = .{ c.rect[0][n], c.rect[1][n], c.rect[2][n], c.rect[3][n] },
+            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
+            .data = cu.c.data[k],
+            .id = cu.c.id[k],
+            .node = n,
+        };
+    }
+    d.custom_len = cu.len;
+    d.strings = strings;
+    encode(d);
+}
+
+/// Appends quads and the ordered ops. Without side lists the quad and op
+/// indices advance together, and each node writes one candidate operation.
+/// Returns false when directly populated text or custom links need the full path.
+inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d: *DrawList, comptime mixed: bool) bool {
+    const c = &t.c;
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
 
@@ -48,6 +93,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     const child_clip = c.child_clip;
     const looks = c.look;
     const x = &t.x;
+    var links: u32 = none;
     var q: u32 = 0;
     var o: u32 = 0;
     for (0..t.len) |k| {
@@ -80,6 +126,10 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
         q += has_quad;
         o += has_quad;
 
+        if (!mixed) {
+            links &= c.text[i] & c.custom[i];
+            continue;
+        }
         op_kind[o] = @backingInt(DrawList.Kind.text);
         op_key[o] = 0;
         op_ref[o] = c.text[i];
@@ -91,39 +141,8 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
         o += vis & @intFromBool(c.custom[i] != none);
     }
     d.quad_len = q;
-
-    // 2. Side lists -> geometry. One row per text run or custom draw that
-    //    exists; nodes without either cost nothing here.
-    for (0..tx.len) |k| {
-        const n = tx.c.node[k];
-        d.runs[k] = .{
-            .rect = .{
-                c.rect[0][n] + c.pad_lo[0][n], c.rect[1][n] + c.pad_lo[1][n],
-                c.rect[2][n] - c.pad_hi[0][n], c.rect[3][n] - c.pad_hi[1][n],
-            },
-            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
-            .start = tx.c.start[k],
-            .bytes = tx.c.bytes[k],
-            .px = tx.c.px[k],
-            .color = fade(tx.c.color[k], x.row[c.scope[n]].alpha),
-            .font = tx.c.font[k],
-        };
-    }
-    d.run_len = tx.len;
-    for (0..cu.len) |k| {
-        const n = cu.c.node[k];
-        d.customs[k] = .{
-            .rect = .{ c.rect[0][n], c.rect[1][n], c.rect[2][n], c.rect[3][n] },
-            .clip = @as(V4, c.child_clip[c.parent[n]]) * sign,
-            .data = cu.c.data[k],
-            .id = cu.c.id[k],
-            .node = n,
-        };
-    }
-    d.custom_len = cu.len;
-    d.strings = strings;
     d.op_len = o;
-    encode(d);
+    return links == none;
 }
 
 /// Sweep 3 alone: `d.op[0..op_len]` -> commands by run-length encoding. Consecutive quads with
@@ -384,4 +403,48 @@ test "a textured node with no fill paints its texture untinted" {
     try testing.expectEqual(2, sc.d.quad_len);
     for (sc.d.quads[0..2]) |q| try testing.expectEqual(Color.white.bitsOf(), q.fill);
     try testing.expectEqual(Cmd{ .quads = .{ .first = 0, .count = 2, .texture = @fromBackingInt(3), .material = .solid } }, sc.d.command(0));
+}
+
+test "quad-only frames preserve the general op stream on reused, reordered and directly linked rows" {
+    var live_buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var expected_buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var sc = Scene.build(&live_buf);
+    var expected = Scene.build(&expected_buf);
+    const t = &sc.t;
+    sc.tx.reset();
+    sc.cu.reset();
+    @memset(t.c.text[0..t.len], none);
+    @memset(t.c.custom[0..t.len], none);
+    // Stale links just beyond the last node cannot affect the specialization.
+    t.c.text[t.len] = 12;
+    t.c.custom[t.len] = 13;
+    const reverse = [_]u32{ 6, 5, 4, 3, 2, 1, 0 };
+    for (0..3) |kind| {
+        if (kind == 1) t.c.text[Scene.box] = 12;
+        if (kind == 2) {
+            t.c.text[Scene.box] = none;
+            t.c.custom[Scene.box] = 13;
+        }
+        inline for (.{ false, true }) |ordered| {
+            _ = nodeOps(t, ordered, &reverse, &expected.d, true);
+            encode(&expected.d);
+            paintIn(t, &sc.tx, &sc.cu, "storage", ordered, &reverse, &sc.d);
+            const want = &expected.d;
+            const got = &sc.d;
+            try testing.expectEqualSlices(@import("draw_list.zig").Quad, want.quads[0..want.quad_len], got.quads[0..got.quad_len]);
+            try testing.expectEqualSlices(u8, want.op.kind[0..want.op_len], got.op.kind[0..got.op_len]);
+            try testing.expectEqualSlices(u32, want.op.key[0..want.op_len], got.op.key[0..got.op_len]);
+            try testing.expectEqualSlices(u32, want.op.ref[0..want.op_len], got.op.ref[0..got.op_len]);
+            try testing.expectEqual(want.cmd_len, got.cmd_len);
+            for (0..got.cmd_len) |i| try testing.expectEqual(want.command(@intCast(i)), got.command(@intCast(i)));
+            try testing.expectEqual(0, got.run_len);
+            try testing.expectEqual(0, got.custom_len);
+            try testing.expectEqualStrings("storage", got.strings);
+        }
+    }
+    t.reset();
+    emit(t, &sc.tx, &sc.cu, "", &sc.d);
+    try testing.expectEqual(0, sc.d.quad_len);
+    try testing.expectEqual(0, sc.d.cmd_len);
+    try testing.expectEqual(0, sc.d.op_len);
 }

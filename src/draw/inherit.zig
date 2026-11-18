@@ -16,29 +16,42 @@ inline fn up(t: *const Tree, n: u32) u32 {
     return simd.selU(n == 0, 0, t.c.scope[t.c.parent[n]]);
 }
 
+/// Resolves the requested fields on each extra after the row it inherits from.
+inline fn sweep(t: *Tree, comptime alpha: bool, comptime world: bool, comptime radii: bool) void {
+    const c = &t.c;
+    const x = &t.x;
+    const V4 = @Vector(4, f32);
+    for (1..t.xlen) |r| {
+        const i = x.node[r];
+        const row = &x.row[r];
+        const inherited = &x.row[up(t, i)];
+        if (alpha) row.alpha = row.opacity * inherited.alpha;
+        if (world) {
+            const m = row.transform;
+            const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
+            const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
+            const local: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
+            row.world = compose(inherited.world, local);
+        }
+        if (radii) {
+            const own = @max(@as(V4, row.radii) - @as(V4, @splat(row.border)), @as(V4, @splat(0)));
+            row.clip_radii = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, inherited.clip_radii);
+        }
+    }
+}
+
 /// `alpha` of every extras row = its `opacity` times the inherited row's `alpha`: the opacity
 /// paint applies to the row's node and the nodes that take its scope. Idempotent: it reads
 /// `opacity`, never its own output.
 pub fn opacity(t: *Tree) void {
-    const x = &t.x;
-    for (1..t.xlen) |r| x.row[r].alpha = x.row[r].opacity * x.row[up(t, x.node[r])].alpha;
+    sweep(t, true, false, false);
 }
 
 /// `world` of every extras row = the inherited `world` after the row's `transform` about its
 /// node's centre: what maps the node's layout rect to the screen. Run after layout (the centre
 /// comes from `rect`). Idempotent like `opacity`.
 pub fn transform(t: *Tree) void {
-    const c = &t.c;
-    const x = &t.x;
-    for (1..t.xlen) |r| {
-        const i = x.node[r];
-        const m = x.row[r].transform;
-        const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
-        const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
-        // Translate the centre to the origin, apply m, translate back.
-        const l: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
-        x.row[r].world = compose(x.row[up(t, i)].world, l);
-    }
+    sweep(t, false, true, false);
 }
 
 /// `clip_radii` of every extras row: the corner radii of the clip its node hands its children.
@@ -47,23 +60,12 @@ pub fn transform(t: *Tree) void {
 /// quad its parent's. Rounded corners are applied to the clip rect the quad gets, which is the
 /// clipping node's inner rect unless an outer clip cut into it.
 pub fn clip(t: *Tree) void {
-    const c = &t.c;
-    const x = &t.x;
-    const V4 = @Vector(4, f32);
-    const zero: V4 = @splat(0);
-    for (1..t.xlen) |r| {
-        const i = x.node[r];
-        const own = @max(@as(V4, x.row[r].radii) - @as(V4, @splat(x.row[r].border)), zero);
-        const inherited: V4 = x.row[up(t, i)].clip_radii;
-        x.row[r].clip_radii = @select(f32, @as(@Vector(4, bool), @splat(c.clips[i] != 0)), own, inherited);
-    }
+    sweep(t, false, false, true);
 }
 
-/// The three sweeps, as `paint.emit` runs them.
+/// Resolves opacity, transform and clip together in parent order.
 pub fn all(t: *Tree) void {
-    opacity(t);
-    transform(t);
-    clip(t);
+    sweep(t, true, true, true);
 }
 
 /// Opacity paint applies to node `i`, after `opacity`.
@@ -224,4 +226,33 @@ test "clip: a clipping node's radii less its border reach every descendant until
     try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, clipRadiiOf(&t, card));
     try testing.expectEqual([4]f32{ 10, 10, 0, 0 }, clipRadiiOf(&t, row)); // not clipping: passes it on
     try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, clipRadiiOf(&t, inner)); // square clip of its own
+}
+
+test "one pass over nested extras preserves separately computed alpha, transforms and clips" {
+    var buf: [32 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var t = Tree.init(&carver, 8);
+    var parent = t.push(0, .none, &.{ .opacity = 0.875, .clip = true, .radius = 12, .border = 0.5 });
+    for (0..5) |i| {
+        parent = t.push(parent, .none, &.{
+            .opacity = 0.625,
+            .clip = i % 2 != 0,
+            .radii = .{ 1.5, 2, 3.5, 4 },
+            .transform = .{ 0, 1, -1, 0, 1.25, -2.125 },
+        });
+        t.c.rect[0][parent] = @floatFromInt(i);
+        t.c.rect[2][parent] = t.c.rect[0][parent] + 3.5;
+    }
+    opacity(&t);
+    transform(&t);
+    clip(&t);
+    var want: [9]@import("../core/tree.zig").Extra = undefined;
+    @memcpy(want[0..t.xlen], t.x.row[0..t.xlen]);
+    for (t.x.row[1..t.xlen]) |*extra| {
+        extra.alpha = -1;
+        extra.world = @splat(98);
+        extra.clip_radii = @splat(42);
+    }
+    all(&t);
+    try testing.expectEqualSlices(@import("../core/tree.zig").Extra, want[0..t.xlen], t.x.row[0..t.xlen]);
 }
