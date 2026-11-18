@@ -45,7 +45,7 @@ the two frameworks in the same run. [Full comparison log](https://github.com/Oma
 
 The November 16 owner-machine run below remains the recorded regression baseline.
 The release plan requires pushed, verified tags for the two early milestones and
-three months of passing gate evidence for 1.0. [Milestone criteria](../../plan/plan.json)
+three months of passing gate evidence for 1.0. [Milestone criteria](https://github.com/OmarSiwy/LCGF/blob/b6c1319/plan/plan.json)
 
 ## Visible window resize, November 17
 

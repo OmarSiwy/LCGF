@@ -697,7 +697,7 @@ Cost to build: about four commits (section 9, lane `markup-dev`), after the tool
 
 ## 9. Milestones
 
-These are plan entries in `plan/gen/generate.py`'s format, ready to paste. They are not
+These proposed entries use the historical planning format. They are not
 added: the plan is not edited here. Four lanes. Two are small prerequisites in existing
 families (`ct-*`, `w-*`). `markup` is the tool, `markup-dev` is section 8. Commit titles
 follow the repository's `area: verb …` style. Every commit builds and passes
@@ -775,7 +775,7 @@ lane("P16", "markup-dev", ["markup"], R("MARKUP", "section 8"), "", "an edited p
 ])
 ```
 
-`R("MARKUP", …)` needs a `MARKUP` entry in `plan/gen/refs.py` pointing at this file. Waves and
+The proposed entries use `MARKUP` to refer to this design. Waves and
 prerequisites come from `generate.py` as usual.
 
 Not planned, and why:
