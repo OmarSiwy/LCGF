@@ -97,7 +97,6 @@ Small value types of the core: identities, indices, colours, rects, sizing and s
 - `none: u32 = 0xffff_ffff`: "No index" for every u32 link in the core.
 - `Axis = enum(u1) { x = 0, y = 1 }`
 - `inf = std.math.inf(f32)`
-- `Role = enum(u8) { none, group, label, button, checkbox, slider, image, text_input }`: What a node is to assistive technology.
 - `Texture = enum(u16) { white = 0, _ }`: Handles the renderer gives out.
 - `Material = enum(u16) { solid = 0, _ }`
 - `Font = enum(u16) { default = 0, _ }`
@@ -167,6 +166,10 @@ Fields: `hover`, `click`, `drag`, `focus`
 Result of `Frame.interact`.
 
 Fields: `hovered`, `held`, `pressed`, `released`, `clicked`, `focused`
+
+
+### `Role` (enum)
+What a node is to assistive technology.
 
 
 ### `Style` (struct)
@@ -904,9 +907,15 @@ Spec: a UI declared as a compile-time value.
 ### Top level
 
 - `Kind = enum(u8) { col, row, label, checkbox, slider }`: What a spec node is.
+- `Landmark = enum { group, article, region, banner, navigation, main, complementary, content_info, form, search }`: Document containers whose role is independent of their layout direction.
 - `fn col(comptime style: Style, comptime children: anytype) Spec`: A vertical container.
 - `fn row(comptime style: Style, comptime children: anytype) Spec`: A horizontal container; as `col`, with `dir` always `.x`.
-- `fn label(comptime bind: @EnumLiteral()) Spec`: Text showing the state field `bind`: `label(.title)`.
+- `fn label(comptime caption: anytype) Spec`: A literal caption (`label("Save")`) or a bound string field (`label(.title)`).
+- `fn landmark(comptime role: Landmark, comptime style: Style, comptime children: anytype) Spec`: Preserve the layout and children while exposing this row's document role.
+- `fn heading(comptime level: u8, comptime caption: anytype) Spec`: A document heading whose accessibility name is its displayed literal or bound text.
+- `fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32`: Frame string bytes for all declared literals, plus the caller's budget when a bound label or a widget hook can append runtime text.
+- `fn labelError(comptime s: Spec) ?[]const u8`: Check the two sources before emitting a label.
+- `fn labelBytes(comptime s: Spec, state: anytype) []const u8`: Resolve a label's source at compile time.
 - `fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A checkbox named `id`, showing and toggling the bool field `bind`: `checkbox(.mute, .muted)`.
 - `fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A slider named `id`, showing and setting the f32 field `bind`: `slider(.volume, .volume)`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
@@ -918,7 +927,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `style`, `children`, `widget`, `name`, `region`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `children`, `widget`, `custom`, `name`, `region`
 
 
 ### `Region` (struct)
@@ -996,6 +1005,7 @@ Validate: mistakes in a comptime spec become compile errors, before anything is 
 ### Top level
 
 - `fn check(comptime State: type, comptime spec: Spec, comptime options: Options) void`: Fails compilation with a message naming the first broken rule of `spec` over the state struct `State`.
+- `fn regionError(comptime State: type, comptime r: spec_zig.Region) ?[]const u8`: Validate the runtime inputs of a declared region before building either frontend.
 
 ### `Options` (struct)
 Which optional rules `check` applies.
@@ -2406,15 +2416,15 @@ The `Spec.widget` of a node inside a custom widget that is a focus stop of its o
 ### `ct` (struct)
 The reference widgets as spec nodes.
 
-- `fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec`: Text showing the string field `text`.
-- `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A button named `id` showing the string field `text`; its click is its event.
-- `fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
+- `fn label(comptime th: Theme, comptime text: anytype) Spec`: A literal string or the value of a string field.
+- `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec`: A button named `id` showing the string field `text`; its click is its event.
+- `fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec`: A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
 - `fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A slider named `id` setting the f32 field `bind`, 0 to 1.
 
 ### `ComptimeUi(..)` (generic struct)
 The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
 
-Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kept`, `built`, `font`
+Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
 
 - `Events = E`
 - `Signals = S`
@@ -2427,6 +2437,8 @@ Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kep
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
+- `fn treeRow(ui: *const Self, row: u32) u32`: Current tree row of a spec descriptor, or types.none when its subtree is inactive.
+- `fn lastRect(ui: *const Self, row: u32) types.Rect`: During a widget step, geometry of a descriptor in the last completed frame.
 - `fn response(ui: *const Self, row: u32, in: *const Input) Response`
 - `fn field(comptime name: []const u8) S.Field`
 
@@ -2482,7 +2494,7 @@ Label: static text in the theme's size and colour.
 
 ### `ct` (struct)
 
-- `fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec`: Text showing the string field `text`: `ct.label(th, .title)`.
+- `fn label(comptime th: Theme, comptime text: anytype) Spec`: A literal string or a bound string field: `ct.label(th, "Title")` or `ct.label(th, .title)`.
 
 ### `Page` (struct)
 The label's example page: three labels in a column on a panel, in both front ends.
@@ -2516,7 +2528,7 @@ Button: a caption on a face that reports a click.
 
 ### `ct` (struct)
 
-- `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A button named `id` showing the string field `text`; its click is its event: `ct.button(th, .reset, .reset_text)`.
+- `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec`: A button named `id` showing the string field `text`; its click is its event: `ct.button(th, .reset, .reset_text)`.
 
 ### `Comptime(..)` (generic struct)
 The comptime button named `name` (`Spec.widget`): it builds the same rows as `button`, with the comptime front end's hover and held, and turns Enter and Space on it while focused into its event, as `button` sets `clicked`.
@@ -2565,7 +2577,7 @@ A tri-state checkbox's value.
 
 ### `ct` (struct)
 
-- `fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A checkbox named `id` over the `bool` or `Check` field `bind`, captioned by the string field `text`: `ct.checkbox(th, .wire, .wireframe, .wire_text)`.
+- `fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec`: A checkbox named `id` over the `bool` or `Check` field `bind`, captioned by the string field `text`: `ct.checkbox(th, .wire, .wireframe, .wire_text)`.
 
 ### `Comptime(..)` (generic struct)
 The comptime checkbox named `name` over field `bind` (`Spec.widget`): the same rows as `checkbox`, and the same input (`toggled`, `flip`) applied to the comptime front end's state; Space on it while focused is also its event, as `checkbox` sets `clicked`.
@@ -2703,7 +2715,7 @@ Toggle button: a button that stays pressed until it is pressed again (bold, mute
 
 ### `ct` (struct)
 
-- `fn toggle(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A toggle button named `id` over the `bool` field `bind`, captioned by the string field `text`: `ct.toggle(th, .bold, .bold, .bold_text)`.
+- `fn toggle(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype) Spec`: A toggle button named `id` over the `bool` field `bind`, captioned by the string field `text`: `ct.toggle(th, .bold, .bold, .bold_text)`.
 
 ### `Comptime(..)` (generic struct)
 The comptime toggle button named `name` over field `bind` (`Spec.widget`): the same rows as `toggle`, and the same input (`button.activated`, `base.toggle`) applied to the comptime front end's state; Enter and Space on it while focused are also its event.
@@ -2842,7 +2854,7 @@ Chip: a short caption on a pill (a tag, a filter, a recipient), optionally with 
 
 ### `ct` (struct)
 
-- `fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral(), comptime remove: ?@EnumLiteral()) Spec`: A chip named `id` showing the string field `text`, with a remove button captioned by the string field `remove` when it is not null: `ct.chip(th, .rust, .rust_text, .remove_text)` or `ct.chip(th, .draft, .draft_text, null)`.
+- `fn chip(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime remove: anytype) Spec`: A chip named `id` showing the string field `text`, with a remove button captioned by the string field `remove` when it is not null: `ct.chip(th, .rust, .rust_text, .remove_text)` or `ct.chip(th, .draft, .draft_text, null)`.
 
 ### `Comptime(..)` (generic struct)
 The comptime chip named `name`, with a remove button when `removable` (`Spec.widget`): the same rows as `chip`, the remove button with the comptime front end's hover and held, and Enter and Space on it while focused turned into its event, as `chip` sets `clicked`.
@@ -2894,7 +2906,7 @@ List box (tier 2): a column of options, one of them selected, in both front ends
 - `fn setRoles(t: *Tree, box: u32, first_option: u32, count: u32) void`: Roles of the list's rows, written to the tree's `role` column (they are past `types.Role`): the list a list box, each option row an option.
 - `fn setStates(s: *a11y.Semantics, first_option: u32, count: u32, sel: u32) void`: The `selected` state of the selected option, for the accessibility bridge.
 - `fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, selected: *u32) Response`: A list of `items` with `selected.*` the selected row.
-- `fn itemFields(comptime n: Spec) [n.children.len][]const u8`: The option fields of the list node `n` (built by `ct.list`): each option row's label binding.
+- `fn itemFields(comptime n: Spec) [n.children.len][]const u8`: The option fields of a fully bound list node.
 - `fn ctResponse(ui: anytype, comptime row: u32, in: *const Input) Response`: Hover, held and focus of the widget at spec row `row` of a `base.ComptimeUi` page, as `Frame.interact` returns them (`ComptimeUi.response` plus its `focus`).
 - `fn ctClicked(ui: anytype, comptime row: u32, event: anytype) bool`: Whether this frame's event is a click on the widget at spec row `row`.
 - `fn ctRect(ui: anytype, comptime row: u32) types.Rect`: Last frame's rect of the widget at spec row `row`.
@@ -2906,7 +2918,7 @@ List box (tier 2): a column of options, one of them selected, in both front ends
 
 ### `ct` (struct)
 
-- `fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime selected: @EnumLiteral(), comptime items: anytype) Spec`: A list named `id` selecting into the u32 field `selected`, one option per string field in `items` (a tuple of enum literals): `ct.list(th, .fruit, .selected, .{ .apple, .pear })`.
+- `fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime selected: @EnumLiteral(), comptime items: anytype) Spec`: A list named `id` selecting into the u32 field `selected`, one option per literal or bound caption in `items`: `ct.list(th, .fruit, .selected, .{ "Apple", .pear })`.
 
 ### `Example(..)` (generic struct)
 The example page: a caption and a list of five fruits on a panel, in both front ends, in theme `th`.
@@ -3320,7 +3332,7 @@ Card and group box (tier 2): a container that frames the widgets inside it under
 ### `ct` (struct)
 The containers as spec nodes.
 
-- `fn card(comptime th: Theme, comptime variant: Variant, comptime title: @EnumLiteral(), comptime children: anytype) Spec`: A card or group box titled by the string field `title`, holding `children` (a tuple of specs).
+- `fn card(comptime th: Theme, comptime variant: Variant, comptime title: anytype, comptime children: anytype) Spec`: A card or group box titled by the string field `title`, holding `children` (a tuple of specs).
 
 ### `Page(..)` (generic struct)
 The example page: a card titled "Render" holding a button and a group box "Options" with a checkbox, in both front ends, in theme `th`.
@@ -3520,7 +3532,7 @@ Accordion (tier 2): sections stacked in a column, each a header that shows or hi
 ### `ct` (struct)
 The accordion's sections as spec nodes.
 
-- `fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: @EnumLiteral(), comptime children: anytype) Spec`: A section whose header is the widget `id`, titled by the string field `title`, showing `children` (a tuple of specs) while the bool field `expanded` is set.
+- `fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime children: anytype) Spec`: A section whose header is the widget `id`, titled by the string field `title`, showing `children` (a tuple of specs) while the bool field `expanded` is set.
 
 ### `Page(..)` (generic struct)
 The example page: two sections, "General" (open) holding a checkbox and "Advanced" (closed) holding a slider, in both front ends, in theme `th`.
@@ -3916,7 +3928,7 @@ The popover named `name` bound to the bool field `open`, in theme `th`: its spec
 - `trigger_name = id`
 - `scrim_name = scrim`
 - `panel_name = panel`
-- `fn button(comptime text: @EnumLiteral()) Spec`: The button that opens and closes the popover, showing the string field `text`.
+- `fn button(comptime text: anytype) Spec`: The button that opens and closes the popover, showing the string field `text`.
 - `fn layer(comptime children: anytype) Spec`: The scrim and the panel holding `children`, shown while the popover is open.
 - `fn check(comptime State: type) ?[]const u8`
 - `fn step(sig: anytype, v: anytype) void`: The trigger's click toggles; a press on the scrim or Escape closes.
@@ -3985,7 +3997,7 @@ Fields: `open`
 
 ### `Example(..).State` (struct)
 
-Fields: `open`, `details_text`, `layer`, `exposure`, `gamma`
+Fields: `open`, `layer`, `exposure`
 
 
 ### `golden` (struct)
@@ -4021,7 +4033,7 @@ Fields: `rested`, `dismissed`, `shown`
 ### `Tooltip(..)` (generic struct)
 The tooltip of the widget named `target`, bound to the `Tip` field `tip`, in theme `th`: its spec builder and the hooks `popover.ComptimePage` calls.
 
-- `fn bubble(comptime text: @EnumLiteral()) Spec`: The bubble showing the string field `text`.
+- `fn bubble(comptime text: anytype) Spec`: The bubble showing the string field `text`.
 - `fn check(comptime State: type) ?[]const u8`
 - `fn step(sig: anytype, v: anytype) void`: Rests or resets the timer from the target's hover; Escape hides.
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
@@ -4092,7 +4104,7 @@ Fields: `open`, `active`, `sub`, `sub_active`, `hover`, `chosen`
 ### `Menu(..)` (generic struct)
 Menu `name`, with items `def`, bound to the `MenuState` field `menu`, in theme `th`: its spec builders and the hooks `popover.ComptimePage` calls.
 
-- `fn button(comptime text: @EnumLiteral()) Spec`: The button that opens and closes the menu, showing the string field `text`.
+- `fn button(comptime text: anytype) Spec`: The button that opens and closes the menu, showing the string field `text`.
 - `fn layer() Spec`: The scrim, the list and the submenu, shown while the menu is open.
 - `fn check(comptime State: type) ?[]const u8`
 - `fn step(sig: anytype, v: anytype) void`: The trigger, the scrim and the items' responses, then the keys, through `advance`.
@@ -4308,8 +4320,8 @@ Fields: `open`, `focus`, `result`
 ### `Dialog(..)` (generic struct)
 Dialog `name` with buttons `def`, bound to the `DialogState` field `field`, in theme `th`: its spec builders and the hooks `popover.ComptimePage` calls.
 
-- `fn button(comptime text: @EnumLiteral()) Spec`: The button that opens the dialog, showing the string field `text`.
-- `fn layer(comptime title: @EnumLiteral(), comptime message: @EnumLiteral()) Spec`: The backdrop and the dialog showing the string fields `title` and `message`, then its buttons.
+- `fn button(comptime text: anytype) Spec`: The button that opens the dialog, showing the string field `text`.
+- `fn layer(comptime title: anytype, comptime message: anytype) Spec`: The backdrop and the dialog showing the string fields `title` and `message`, then its buttons.
 - `fn check(comptime State: type) ?[]const u8`
 - `fn step(sig: anytype, v: anytype) void`: The opener's and the buttons' responses, then the keys, through `advance`.
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
@@ -4375,7 +4387,7 @@ Fields: `shown`, `left`
 ### `Toast(..)` (generic struct)
 Toast `name`, bound to the `ToastState` field `field` and shown when the widget `trigger` is clicked, in theme `th`: its spec builder and the hooks `popover.ComptimePage` calls.
 
-- `fn layer(comptime text: @EnumLiteral()) Spec`: The layer and the toast showing the string field `text`.
+- `fn layer(comptime text: anytype) Spec`: The layer and the toast showing the string field `text`.
 - `fn check(comptime State: type) ?[]const u8`
 - `fn step(sig: anytype, v: anytype) void`: The trigger's click and the toast's hover, through `advance`.
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
@@ -5058,6 +5070,7 @@ The semantic tree as flat arrays, the form a bridge hands to the platform: one r
 
 Fields: `len`, `cap`, `c`
 
+- `fn headingLevel(e: *const Export, row: usize) ?usize`: Semantic rank of an HTML-style heading.
 - `fn init(carver: *mem.Carver, cap: u32) Export`: Carves every column from `carver`, `simd.rows(cap)` rows each, for a tree of `cap` nodes.
 
 ### `Export.Columns` (struct)
@@ -5920,6 +5933,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `send_event_size = 44`
 - `set_input_focus_size = 12`
 - `get_input_focus_size = 4`
+- `create_pixmap_size = 16`
+- `copy_area_size = 28`
 - `create_gc_size = 20`
 - `put_image_head = 24`
 - `get_image_size = 20`
@@ -5966,6 +5981,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn sendEvent(b: *Buf, window: u32, mask: u32, event: *const [32]u8) void`: Sends the 32-byte `event` to `window` (to its owner when `mask` is 0).
 - `fn setInputFocus(b: *Buf, window: u32) void`: Gives `window` the keyboard focus (revert to the root; CurrentTime).
 - `fn getInputFocus(b: *Buf) void`: Has a reply and no effect: a round trip, after which the server has handled every earlier request.
+- `fn createPixmap(b: *Buf, id: u32, drawable: u32, width: u16, height: u16, depth: u8) void`
+- `fn copyArea(b: *Buf, src: u32, dst: u32, gc: u32, width: u16, height: u16) void`: Copies the complete frame from the pixmap to the window, origin to origin.
 - `fn createGc(b: *Buf, id: u32, drawable: u32) void`: A graphics context for PutImage, without GraphicsExpose events.
 - `fn putImage(b: *Buf, drawable: u32, gc: u32, w: u16, h: u16, x: i16, y: i16, depth: u8) void`: The header of a ZPixmap PutImage of `w` x `h` pixels of 32 bits at (x, y); the caller sends the `w * h * 4` pixel bytes right after it.
 - `fn getImage(b: *Buf, drawable: u32, x: i16, y: i16, w: u16, h: u16) void`: Reads `w` x `h` ZPixmap pixels back; the reply's data starts at byte 32.
@@ -6047,7 +6064,11 @@ Modifier and button bits of an event's `state`.
 - `get_input_focus = 43`
 - `translate_coordinates = 40`
 - `open_font = 45`
+- `create_pixmap = 53`
+- `free_pixmap = 54`
 - `create_gc = 55`
+- `free_gc = 60`
+- `copy_area = 62`
 - `put_image = 72`
 - `get_image = 73`
 - `create_glyph_cursor = 94`
@@ -6480,6 +6501,7 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 ### Top level
 
 - `fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region: an empty column named `id` whose content another front end builds.
+- `fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
 - `fn rectOf(ram: anytype, row: usize) [4]f32`: Row `row`'s rect (x0, y0, x1, y1) in a comptime layout's RAM (`Columns.Dynamic`), as f32 whatever the coordinate type.
 - `fn widgetRects(comptime E: type, ram: anytype) E.Rects`: The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's visible rect (`vis`), in the layout's own coordinates, as `Rects.fromTree` takes it from a runtime tree.
 - `fn regionInput(outer: *const Input, rect: [4]f32) Input`: The input of a front end hosted in `rect` (x0, y0, x1, y1, in `outer`'s coordinates): the rect's size as its viewport, and the pointer moved by the rect's origin.
