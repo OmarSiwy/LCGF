@@ -138,10 +138,41 @@ pub fn lab(lightness: f32, a: f32, b: f32, alpha: f32) Rgba {
     const x = labInverse(fy + a / 500) * 0.96422;
     const y = labInverse(fy);
     const z = labInverse(fy - b / 200) * 0.82521;
-    const xd = 0.9554734 * x - 0.0230985 * y + 0.0632593 * z;
-    const yd = -0.0283697 * x + 1.0099955 * y + 0.0210414 * z;
-    const zd = 0.0123140 * x - 0.0205077 * y + 1.3303659 * z;
-    return encoded(.{ 3.24096994 * xd - 1.53738318 * yd - 0.49861076 * zd, -0.96924364 * xd + 1.87596750 * yd + 0.04155506 * zd, 0.05563008 * xd - 0.20397696 * yd + 1.05697151 * zd, alpha });
+    return xyzD50(.{ x, y, z, alpha });
+}
+
+pub fn xyzD65(c: Rgba) Rgba {
+    return encoded(.{ 3.24096994 * c[0] - 1.53738318 * c[1] - 0.49861076 * c[2], -0.96924364 * c[0] + 1.87596750 * c[1] + 0.04155506 * c[2], 0.05563008 * c[0] - 0.20397696 * c[1] + 1.05697151 * c[2], c[3] });
+}
+
+pub fn xyzD50(c: Rgba) Rgba {
+    return xyzD65(.{ 0.9554734 * c[0] - 0.0230985 * c[1] + 0.0632593 * c[2], -0.0283697 * c[0] + 1.0099955 * c[1] + 0.0210414 * c[2], 0.0123140 * c[0] - 0.0205077 * c[1] + 1.3303659 * c[2], c[3] });
+}
+
+/// CSS Color 4 predefined RGB spaces, converted to extended straight sRGB. These are
+/// authoring conversions; choosing an actual display/output profile remains an explicit step.
+pub fn a98Rgb(c: Rgba) Rgba {
+    var v = c;
+    inline for (0..3) |k| v[k] = std.math.copysign(std.math.pow(f32, @abs(c[k]), 563.0 / 256.0), c[k]);
+    return xyzD65(.{ 0.5766690429 * v[0] + 0.1855582379 * v[1] + 0.1882286462 * v[2], 0.2973449753 * v[0] + 0.6273635663 * v[1] + 0.0752914585 * v[2], 0.0270313614 * v[0] + 0.0706888525 * v[1] + 0.9913375368 * v[2], c[3] });
+}
+
+pub fn prophotoRgb(c: Rgba) Rgba {
+    var v = c;
+    inline for (0..3) |k| {
+        const magnitude = @abs(c[k]);
+        v[k] = std.math.copysign(if (magnitude <= 16.0 / 512.0) magnitude / 16 else std.math.pow(f32, magnitude, 1.8), c[k]);
+    }
+    return xyzD50(.{ 0.7977666449 * v[0] + 0.1351812974 * v[1] + 0.0313477341 * v[2], 0.2880748288 * v[0] + 0.7118352342 * v[1] + 0.0000899369 * v[2], 0.8251046025 * v[2], c[3] });
+}
+
+pub fn rec2020(c: Rgba) Rgba {
+    var v = c;
+    inline for (0..3) |k| {
+        const magnitude = @abs(c[k]);
+        v[k] = std.math.copysign(if (magnitude < 0.018053968510807 * 4.5) magnitude / 4.5 else std.math.pow(f32, (magnitude + 0.09929682680944) / 1.09929682680944, 1.0 / 0.45), c[k]);
+    }
+    return xyzD65(.{ 0.6369580483 * v[0] + 0.1446169036 * v[1] + 0.1688809752 * v[2], 0.2627002120 * v[0] + 0.6779980715 * v[1] + 0.0593017165 * v[2], 0.0280726930 * v[1] + 1.0609850577 * v[2], c[3] });
 }
 
 fn labInverse(v: f32) f32 {
@@ -246,4 +277,14 @@ test "OKLab round trip and explicit alpha representation" {
     const straight = unpremultiply(pre);
     inline for (0..4) |i| try testing.expectApproxEqAbs(c[i], straight[i], 0.00001);
     try testing.expectEqual(@as(Rgba, @splat(0)), unpremultiply(@splat(0)));
+}
+
+test "XYZ and predefined wide gamut authoring spaces preserve white and extended gamut" {
+    const white: Rgba = .{ 1, 1, 1, 0.7 };
+    for ([_]Rgba{ a98Rgb(white), prophotoRgb(white), rec2020(white), xyzD65(.{ 0.9504559271, 1, 1.0890577508, 0.7 }) }) |converted| {
+        inline for (0..3) |k| try testing.expectApproxEqAbs(@as(f32, 1), converted[k], 0.001);
+        try testing.expectEqual(@as(f32, 0.7), converted[3]);
+    }
+    const red = rec2020(.{ 1, 0, 0, 1 });
+    try testing.expect(red[0] > 1 and red[1] < 0);
 }

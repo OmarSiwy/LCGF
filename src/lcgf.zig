@@ -203,3 +203,9 @@ pub const embedded_spi = @import("embedded/spi.zig");
 pub const vertical_text = @import("text/layout/vertical.zig");
 
 pub const inline_objects = @import("text/layout/inline_objects.zig");
+
+pub const vector = @import("draw/vector.zig");
+
+pub const effects = @import("render/effects.zig");
+
+pub const text_display = @import("text/layout/display.zig");

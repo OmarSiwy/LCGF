@@ -30,6 +30,21 @@ pub const Style = struct {
 };
 pub const Result = struct { size: [2]f32, columns: u32, clamped: bool };
 
+/// Resolves mixed orientation using the pinned Unicode 16 UAX #50 property. Pass true
+/// only when vertical shaping supplied the Tr alternates; otherwise those rotate. A
+/// caller may override individual Item orientations afterwards for explicit sideways text.
+pub fn orient(items: []Item, text: []const u8, vertical_alternates: bool, sideways: Orientation) void {
+    const display = @import("display.zig");
+    for (items) |*item| {
+        const property = display.vertical(utf8.decode(text, item.cluster).cp);
+        item.orientation = switch (property) {
+            .upright, .transformed_upright => .upright,
+            .rotated => sideways,
+            .transformed_rotated => if (vertical_alternates) .upright else sideways,
+        };
+    }
+}
+
 /// Converts the existing horizontal glyph columns plus explicit vertical advances from a
 /// shaping adapter into logical-pixel rows. Y offsets flip from font y-up to screen y-down.
 pub fn fromRun(run: *const shape.Run, vertical_advance: []const i32, scale: f32, orientation: Orientation, out: []Item) error{NoSpace}![]const Item {

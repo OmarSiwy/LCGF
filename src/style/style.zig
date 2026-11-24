@@ -29,3 +29,5 @@ pub const inspect = resolution.inspect;
 test {
     @import("std").testing.refAllDecls(@This());
 }
+
+pub const compiler = @import("compiler.zig");

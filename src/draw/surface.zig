@@ -66,10 +66,14 @@ pub fn init(pixels: []u32, width: u32, height: u32) Error!Surface {
 }
 
 pub inline fn overlaps(a: []const u32, b: []const u32) bool {
+    return overlapsBytes(std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
+}
+
+pub inline fn overlapsBytes(a: []const u8, b: []const u8) bool {
     if (a.len == 0 or b.len == 0) return false;
     const aa = @intFromPtr(a.ptr);
     const bb = @intFromPtr(b.ptr);
-    return aa < bb + b.len * @sizeOf(u32) and bb < aa + a.len * @sizeOf(u32);
+    return aa < bb + b.len and bb < aa + a.len;
 }
 
 pub inline fn unpack(v: simd.U) Batch {

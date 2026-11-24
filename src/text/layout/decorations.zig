@@ -106,7 +106,7 @@ pub fn quads(run: draw.TextRun, l: *const lines.Lines, g: *const lines.Glyphs, t
 
 fn patterned(run: draw.TextRun, left: f32, right: f32, y: f32, thickness: f32, style: Style, out: []draw.Quad, n: *u32) error{NoSpace}!void {
     if (right <= left) return;
-    const color = style.color orelse run.color;
+    const color = if (style.color) |authored| withOpacity(authored, run.opacity) else run.color;
     switch (style.pattern) {
         .solid => try segment(run, .{ left, y }, .{ right, y }, thickness, 0, color, out, n),
         .double => {
@@ -193,10 +193,16 @@ fn box(run: draw.TextRun, rect: [4]f32, color: u32) draw.Quad {
         .fill = color,
         .border_color = 0,
         .border = 0,
-        .opacity = 1,
+        .opacity = run.opacity,
         .xform = run.xform,
         .clip_radii = run.clip_radii,
     };
+}
+
+fn withOpacity(bits: u32, opacity: f32) u32 {
+    var color: @import("../../core/types.zig").Color = @bitCast(bits);
+    color.a = @intFromFloat(@round(@as(f32, @floatFromInt(color.a)) * std.math.clamp(opacity, 0, 1)));
+    return color.bitsOf();
 }
 
 test "decorations consume font metrics patterns ink and transformed selection geometry" {
@@ -234,4 +240,10 @@ test "decorations consume font metrics patterns ink and transformed selection ge
     try std.testing.expectEqual(run.xform, out[0].xform);
     const mark = caret(run, &p.l, &p.g, "ab cd", 1, .underline, 1, 10, 0xff0000ff);
     try std.testing.expectEqual([4]f32{ 20, 29, 30, 30 }, mark.rect);
+    var faded = run;
+    faded.opacity = 0.5;
+    _ = try quads(faded, &p.l, &p.g, "ab cd", .{ 0, 5 }, .{ .underline = true, .color = 0xffffffff }, metrics, &.{}, &rects, &out);
+    const color: @import("../../core/types.zig").Color = @bitCast(out[0].fill);
+    try std.testing.expectEqual(128, color.a);
+    try std.testing.expectEqual(@as(f32, 0.5), caret(faded, &p.l, &p.g, "ab cd", 0, .bar, 1, 10, 0xffffffff).opacity);
 }
