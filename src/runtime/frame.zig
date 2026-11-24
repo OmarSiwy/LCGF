@@ -138,6 +138,11 @@ pub const Frame = struct {
     /// been created with an id; anonymous nodes report nothing.
     pub fn interact(f: *Frame, node: Node, sense: Sense) Response {
         const c = &f.tree().c;
+        if (!f.tree().participation(node.ix()).hit) {
+            c.sense[node.ix()] = 0;
+            f.ctx.inter.cancel(@fromBackingInt(c.id[node.ix()]));
+            return .{};
+        }
         c.sense[node.ix()] = @bitCast(sense);
         return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
     }
@@ -829,4 +834,37 @@ test "limits: a frame past every limit at once reports it and never crashes" {
         for (1..out.tree.len) |i| try testing.expect(out.tree.c.parent[i] < i);
         _ = frame;
     }
+}
+
+test "participation reserves hidden space, collapses layout and cancels descendant input" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 2, .strings = 128, .depth = 8 });
+    var ctx = try Fx.context();
+    var f = ctx.begin(&.{ .viewport = .{ 200, 200 } });
+    const stack = f.open(.from("stack"), .{ .gap = 4 });
+    const hidden = f.open(.from("hidden"), .{ .size = .{ .px(40), .px(20) }, .fill = .white, .participation = .hidden });
+    const control = f.leaf(.from("hidden-button"), .{ .size = .{ .px(40), .px(20) }, .role = .button, .fill = .white });
+    ctx.inter.active = @backingInt(Id.from("hidden-button"));
+    ctx.inter.focus = ctx.inter.active;
+    ctx.inter.clicked = ctx.inter.active;
+    try testing.expectEqual(Response{}, f.interact(control, .button));
+    try testing.expectEqual(@as(u32, 0), ctx.inter.active);
+    try testing.expectEqual(@as(u32, 0), ctx.inter.focus);
+    _ = f.text("hidden", .{});
+    _ = f.custom(.none, .{ .float = true, .size = .{ .px(20), .px(20) } }, 1);
+    f.close();
+    const collapsed = f.open(.from("collapsed"), .{ .size = .{ .px(50), .px(50) }, .pad = @splat(8), .participation = .collapsed });
+    _ = f.text("must not restore the collapsed size", .{});
+    f.close();
+    const shown = f.leaf(.from("shown"), .{ .size = .{ .px(40), .px(10) }, .fill = .white, .role = .button });
+    _ = f.interact(shown, .button);
+    f.close();
+    const result = f.end(.{});
+    try testing.expectEqual(@as(f32, 20), result.tree.rect(hidden.ix()).h());
+    try testing.expectEqual(@as(f32, 0), result.tree.rect(collapsed.ix()).h());
+    try testing.expectEqual(@as(f32, 24), result.tree.rect(shown.ix()).y0 - result.tree.rect(stack.ix()).y0);
+    try testing.expectEqual(@as(u32, 1), result.draw.quad_len);
+    try testing.expectEqual(@as(u32, 1), result.draw.cmd_len);
+    try testing.expectEqual(@as(u8, 0), result.tree.c.role[control.ix()]);
+    try testing.expectEqual(types.none, @import("../interact/hit.zig").at(result.tree, 10, 10, .any));
+    try testing.expectEqual(shown.ix(), @import("../interact/hit.zig").at(result.tree, 10, 28, .any));
 }

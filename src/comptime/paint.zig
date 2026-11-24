@@ -9,8 +9,8 @@
 //! rectangles from the layout outputs in `Dynamic`. Rows that paint nothing cost nothing.
 //!
 //! `emitText` interleaves measured labels with the quads in draw order. Custom draws use the runtime
-//! front end (a custom widget makes every column dynamic). A transform needs the laid-out rect for its centre: a spec with one is a
-//! compile error.
+//! front end (a custom widget makes every column dynamic). Transforms use the current laid-out
+//! rectangles and immutable extras; untransformed specs retain their constant templates.
 
 const std = @import("std");
 const tree = @import("../core/tree.zig");
@@ -39,6 +39,10 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     for ([_][]const u8{ "look", "extra", "scope", "clips" }) |name|
         if (C.classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic (a custom widget builds its rows at run time): paint it with the runtime tree");
 
+    const transformed = blk: {
+        for (p.x.row[1..p.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &identity)) break :blk true;
+        break :blk false;
+    };
     // `draw.inherit`'s opacity and clip sweeps over the extras rows, while compiling.
     const Inherited = struct { alpha: [n + 1]f32, clip_radii: [n + 1][4]f32 };
     const inh: Inherited = blk: {
@@ -49,8 +53,6 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         for (1..p.xlen) |r| {
             const i = p.x.node[r];
             const x = p.x.row[r];
-            if (!std.mem.eql(f32, &x.transform, &identity))
-                @compileError("a comptime UI with a transform needs its laid-out rect to paint: paint it with the runtime tree");
             const up = if (i == 0) 0 else p.c.scope[p.c.parent[i]];
             out.alpha[r] = x.opacity * out.alpha[up];
             const own: [4]f32 = @max(@as(V4, x.radii) - @as(V4, @splat(x.border)), @as(V4, @splat(0)));
@@ -65,7 +67,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         var rows: []const u32 = &.{};
         for (0..n) |i| {
             const look = p.c.look[i];
-            if (((look.fill | look.border_color) >> 24) != 0 and inh.alpha[p.c.scope[i]] > 0) rows = rows ++ [_]u32{i};
+            if (((look.fill | look.border_color) >> 24) != 0 and inh.alpha[p.c.scope[i]] > 0 and p.x.row[p.c.scope[i]].active_participation.paint) rows = rows ++ [_]u32{i};
         }
         break :blk rows;
     };
@@ -131,7 +133,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// Row k: the node whose `child_clip` clips template k, its parent.
         pub const clip_node: [m]u32 = blk: {
             var out: [m]u32 = undefined;
-            for (&out, node) |*o, i| o.* = p.c.parent[i];
+            for (&out, node) |*o, i| o.* = p.c.parent[sourceOf(i)];
             break :blk out;
         };
         /// Row k: the quad template k paints, `rect` and `clip` zero. Read-only data.
@@ -150,9 +152,9 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     .border_color = look.border_color,
                     .radii = tree.radiiOf(own.radii, look.radius),
                     .border = own.border,
-                    .opacity = inh.alpha[p.c.scope[i]],
+                    .opacity = alphaOf(i),
                     .xform = identity,
-                    .clip_radii = inh.clip_radii[p.c.scope[p.c.parent[i]]],
+                    .clip_radii = inh.clip_radii[p.c.scope[p.c.parent[sourceOf(i)]]],
                 };
             }
             break :blk out;
@@ -301,16 +303,65 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             return .{ f32Of(ram.rect[0][slot]), f32Of(ram.rect[1][slot]), f32Of(ram.rect[2][slot]), f32Of(ram.rect[3][slot]) };
         }
 
+        fn sourceOf(i: u32) u32 {
+            const source = p.x.row[p.c.extra[i]].paint_reference;
+            std.debug.assert(source == none or source < i);
+            return if (source == none) i else source;
+        }
+
+        fn alphaOf(i: u32) f32 {
+            const source = sourceOf(i);
+            return inh.alpha[p.c.scope[source]] * (if (source == i) @as(f32, 1) else p.x.row[p.c.extra[i]].opacity);
+        }
+
+        pub fn worldOf(ram: *const C.Dynamic, node_id: u32) [6]f32 {
+            if (comptime !transformed) return identity;
+            var result = identity;
+            var i = node_id;
+            while (true) {
+                const x = p.x.row[p.c.extra[i]];
+                result = geometry.compose(geometry.about(x.transform, rectOf(ram, i), x.transform_origin), result);
+                if (i == 0) break;
+                i = p.c.parent[i];
+            }
+            return result;
+        }
+
+        /// Exact pointer query over the same world matrices and all rounded ancestor clips.
+        /// This is also usable by Events.atPaint without creating a runtime tree.
+        pub fn hit(ram: *const C.Dynamic, i: u32, screen: [2]f32) bool {
+            if (i >= n or !p.x.row[p.c.scope[i]].active_participation.hit or ram.visible[i] == 0) return false;
+            const own_inverse = geometry.inverse(worldOf(ram, i)) orelse return false;
+            if (!geometry.contains(rectOf(ram, i), geometry.point(own_inverse, screen))) return false;
+            var a = i;
+            while (a != 0) {
+                a = p.c.parent[a];
+                if (p.c.clips[a] == 0) continue;
+                const x = p.x.row[p.c.extra[a]];
+                const inverse = geometry.inverse(worldOf(ram, a)) orelse return false;
+                const rect = geometry.expand(rectOf(ram, a), @splat(-x.border));
+                const radii: [4]f32 = @max(@as(V4, x.radii) - @as(V4, @splat(x.border)), @as(V4, @splat(0)));
+                if (!geometry.roundedContains(rect, radii, geometry.point(inverse, screen))) return false;
+            }
+            return true;
+        }
+
         inline fn quadVisible(ram: *const C.Dynamic, i: u32) u32 {
-            const bounds = geometry.paintBounds(rectOf(ram, i), p.c.look[i].params, identity, clipOf(ram, p.c.parent[i]));
-            return ram.visible[i] & @intFromBool(geometry.hasArea(bounds));
+            const source = sourceOf(i);
+            const raw = rectOf(ram, source);
+            const rect = geometry.expand(raw, p.x.row[p.c.extra[i]].paint_outset);
+            const bounds = geometry.paintBounds(rect, p.c.look[i].params, worldOf(ram, source), clipOf(ram, p.c.parent[source]));
+            // Dynamic absent rows have zero size; expanded shadows must not revive them.
+            const present = if (comptime D.count != 0) ram.visible[i] else @as(u32, 1);
+            return present & @intFromBool(p.x.row[p.c.scope[i]].active_participation.paint) & @intFromBool(geometry.hasArea(bounds));
         }
 
         inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
             for (first..end) |k| {
                 const i = node[k];
                 var quad = templates[k];
-                quad.rect = rectOf(ram, i);
+                quad.rect = geometry.expand(rectOf(ram, sourceOf(i)), p.x.row[p.c.extra[i]].paint_outset);
+                quad.xform = worldOf(ram, sourceOf(i));
                 quad.clip = clipOf(ram, clip_node[k]);
                 d.quads[cursor.quad] = quad;
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
@@ -354,11 +405,13 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     .color = label.color,
                     .font = @backingInt(style.font),
                     .opacity = inh.alpha[p.c.scope[label.node]],
+                    .xform = worldOf(ram, label.node),
+                    .clip_radii = inh.clip_radii[p.c.scope[label.parent]],
                 };
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
                 d.op.key[cursor.op] = 0;
                 d.op.ref[cursor.op] = r;
-                cursor.op += ram.visible[label.node];
+                cursor.op += ram.visible[label.node] & @intFromBool(p.x.row[p.c.scope[label.node]].active_participation.paint);
                 r += @intFromBool(mask[label.node] != 0);
             }
             emitQuads(ram, d, first, m, &cursor);
@@ -397,6 +450,8 @@ fn sortByKey(comptime C: type, comptime spec: Spec, comptime options: Options, c
     } else true) return rows;
     const n = C.node_count;
     const p = C.pushed;
+    // Layout-space disjointness cannot authorize reordering transformed or expanded paint.
+    for (p.x.row[1..p.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &identity) or x.paint_reference != none or !std.mem.eql(f32, &x.paint_outset, &@as([4]f32, @splat(0)))) return rows;
     const plan = @import("layout.zig").FoldPlan(C);
     @setEvalBranchQuota(100_000 + 1_000 * n + 50 * m * m * m);
     // The fold root each row lies under (itself for a root), or `none`.
@@ -869,4 +924,31 @@ test "measured paint interleaves text and quads across clipping, shared choices 
     LP.runText(&plain_scratch, &plain_ram, vp, Scene.spans[0..1], Mono{});
     PP.emitText(&plain_ram, Scene.spans[0..1], Scene.strings, &d);
     try expectRuntimeText(plain, Scene.spans[0..1], Scene.strings, vp, &d);
+}
+
+test "pure comptime affine painting and exact hit agree with the runtime tree" {
+    const s = sp.col(.{ .size = .{ .px(100), .px(80) }, .clip = true }, .{
+        sp.col(.{ .size = .{ .px(40), .px(40) }, .clip = true, .radius = 20, .transform = .{ 1, 0.25, 0.5, 1, 30, 5 }, .fill = .rgb(20, 30, 40) }, .{
+            sp.col(.{ .size = .{ .px(60), .px(30) }, .fill = .white, .transform = .{ 1, 0, 0, 1, -10, 0 } }, .{}),
+        }),
+        sp.col(.{ .size = .{ .px(10), .px(10) }, .fill = .white, .offset = .{ 200, 0 }, .transform = .{ 1, 0, 0, 1, -190, 0 } }, .{}),
+        sp.col(.{ .size = .{ .px(10), .px(10) }, .fill = .white, .transform = .{ 0, 0, 0, 0, 0, 0 } }, .{}),
+    });
+    try expectSamePaint(.{ .name = "affine", .State = struct {}, .spec = s }, .{ 100, 80 });
+    const L = ct_layout.Layout(s, .{});
+    const P = Paint(s, .{});
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    L.run(&scratch, &ram, .{ 100, 80 });
+    var raw: [32 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = tree.Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    pushAll(&t, s, 0);
+    layout.run(&t, &tx, .{ 100, 80 });
+    for (0..80) |y| for (0..100) |x| {
+        const point: [2]f32 = .{ @floatFromInt(x), @floatFromInt(y) };
+        try testing.expectEqual(geometry.hitNode(&t, 2, point) and t.c.visible[2] != 0, P.hit(&ram, 2, point));
+    };
+    try testing.expect(!P.hit(&ram, 4, .{ 0, 0 }));
 }

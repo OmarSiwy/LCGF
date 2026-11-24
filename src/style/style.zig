@@ -7,6 +7,10 @@ pub const environment = @import("environment.zig");
 pub const resolution = @import("resolve.zig");
 pub const storage = @import("storage.zig");
 pub const paragraph = @import("paragraph.zig");
+pub const compiler = @import("compiler.zig");
+pub const inspector = @import("inspector.zig");
+pub const accessibility = @import("accessibility.zig");
+pub const import_tests = @import("import_tests.zig");
 pub const Property = properties.Property;
 pub const Value = properties.Value;
 pub const Computed = properties.Computed;
@@ -29,5 +33,3 @@ pub const inspect = resolution.inspect;
 test {
     @import("std").testing.refAllDecls(@This());
 }
-
-pub const compiler = @import("compiler.zig");

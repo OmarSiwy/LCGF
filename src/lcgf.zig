@@ -208,4 +208,15 @@ pub const vector = @import("draw/vector.zig");
 
 pub const effects = @import("render/effects.zig");
 
+pub const text_break_policy = @import("text/layout/break_policy.zig");
 pub const text_display = @import("text/layout/display.zig");
+
+pub const capabilities = @import("render/capabilities.zig");
+
+pub const scroll_policy = @import("layout/scroll_policy.zig");
+
+pub const scroll_area = @import("widgets/scroll_area.zig");
+
+pub const special_layout = @import("layout/special.zig");
+
+pub const document_layout = @import("layout/document.zig");

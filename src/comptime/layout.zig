@@ -183,9 +183,25 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 
         /// What the layout passes take as their tree.
         pub const View = if (unroll)
-            struct { comptime len: u32 = n, c: ViewColumns, x: ViewExtras }
+            struct {
+                pub const has_transforms = blk: {
+                    for (C.pushed.x.row[1..C.pushed.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &@import("../draw/geometry.zig").identity)) break :blk true;
+                    break :blk false;
+                };
+                comptime len: u32 = n,
+                c: ViewColumns,
+                x: ViewExtras,
+            }
         else
-            struct { len: u32, c: ViewColumns, x: ViewExtras };
+            struct {
+                pub const has_transforms = blk: {
+                    for (C.pushed.x.row[1..C.pushed.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &@import("../draw/geometry.zig").identity)) break :blk true;
+                    break :blk false;
+                };
+                len: u32,
+                c: ViewColumns,
+                x: ViewExtras,
+            };
 
         /// The view over `scratch` for this UI: every column the passes read, constant ones from
         /// read-only tables.

@@ -11,6 +11,9 @@ const utf8 = @import("../unicode/utf8.zig");
 pub const Image = struct {
     bounds: [4]f32 = .{ 0, 0, 0, 0 },
     uv: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Explicit substituted glyph (e.g. an ellipsis mapped to an omitted newline). Ordinary
+    /// controls, including discretionary soft hyphens, stay hidden unless replaced.
+    draw_control: bool = false,
 };
 
 pub const Images = struct {
@@ -34,8 +37,8 @@ pub fn quads(run: draw.TextRun, g: *const lines.Glyphs, l: *const lines.Lines, t
     var n: u32 = 0;
     for (0..l.len) |k| {
         for (l.first[k]..l.ink[k]) |i| {
-            if (hiddenControl(utf8.decode(text, g.cluster[i]).cp)) continue;
             const image = images.glyphs[i];
+            if (!image.draw_control and hiddenControl(utf8.decode(text, g.cluster[i]).cp)) continue;
             if (images.colors.len > 0 and g.span[i] >= images.colors.len) return error.NoSpace;
             const color = if (images.colors.len == 0) run.color else withOpacity(images.colors[g.span[i]], run.opacity);
             try append(run, image, .{
@@ -86,7 +89,7 @@ fn append(run: draw.TextRun, image: Image, pen: [2]f32, color: u32, out: []draw.
 }
 
 fn hiddenControl(cp: u21) bool {
-    return cp < 0x20 or (cp >= 0x7f and cp <= 0x9f) or
+    return cp < 0x20 or cp == 0xad or (cp >= 0x7f and cp <= 0x9f) or
         (cp >= 0x200b and cp <= 0x200f) or (cp >= 0x2028 and cp <= 0x202e) or
         (cp >= 0x2060 and cp <= 0x206f) or cp == 0xfeff;
 }

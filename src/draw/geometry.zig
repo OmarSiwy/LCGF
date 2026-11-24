@@ -95,8 +95,29 @@ pub fn nodeRect(t: anytype, i: usize) [4]f32 {
     return expand(.{ c.rect[0][source], c.rect[1][source], c.rect[2][source], c.rect[3][source] }, t.x.row[c.extra[i]].paint_outset);
 }
 
+/// Reconstruct world geometry from immutable extras and current rectangle columns. This
+/// is the compile-time frontend's no-storage route; ordinary runtime trees use their sweep.
+pub fn worldFromColumns(t: anytype, node: usize) [6]f32 {
+    var result = identity;
+    var i = node;
+    while (true) {
+        const x = t.x.row[t.c.extra[i]];
+        const rect: [4]f32 = .{ t.c.rect[0][i], t.c.rect[1][i], t.c.rect[2][i], t.c.rect[3][i] };
+        result = compose(about(x.transform, rect, x.transform_origin), result);
+        if (i == 0) break;
+        i = t.c.parent[i];
+    }
+    return result;
+}
+
+pub fn worldAt(t: anytype, i: usize) [6]f32 {
+    const Tree = @import("../core/tree.zig").Tree;
+    if (comptime @TypeOf(t) == *const Tree or @TypeOf(t) == *Tree) return t.x.row[t.c.scope[i]].world;
+    return worldFromColumns(t, i);
+}
+
 pub fn nodeWorld(t: anytype, i: usize) [6]f32 {
-    return t.x.row[t.c.scope[paintSource(t, i)]].world;
+    return worldAt(t, paintSource(t, i));
 }
 
 pub fn nodeClip(t: anytype, i: usize) [4]f32 {
@@ -153,14 +174,14 @@ pub fn roundedContains(rect: [4]f32, radii: [4]f32, p: [2]f32) bool {
 /// do this for candidate hits, after the SIMD screen-box broad phase.
 pub fn hitNode(t: anytype, node: u32, screen: [2]f32) bool {
     const c = &t.c;
-    const own_inv = inverse(t.x.row[c.scope[node]].world) orelse return false;
+    const own_inv = inverse(worldAt(t, node)) orelse return false;
     const local = point(own_inv, screen);
     if (!contains(.{ c.rect[0][node], c.rect[1][node], c.rect[2][node], c.rect[3][node] }, local)) return false;
     var i = node;
     while (i != 0) {
         i = c.parent[i];
         if (c.clips[i] == 0) continue;
-        const inv = inverse(t.x.row[c.scope[i]].world) orelse return false;
+        const inv = inverse(worldAt(t, i)) orelse return false;
         const extra = t.x.row[c.extra[i]];
         const box = expand(.{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] }, @splat(-extra.border));
         const radii: [4]f32 = @max(@as(V4, extra.radii) - @as(V4, @splat(extra.border)), @as(V4, @splat(0)));

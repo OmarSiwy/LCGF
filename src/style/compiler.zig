@@ -285,6 +285,7 @@ fn parseSource(target: properties.Property, value: []const u8) Error!resolution.
         .vector2 => .{ .vector2 = try vector(2, value, target == .transform_origin) },
         .vector4 => .{ .vector4 = try vector(4, value, false) },
         .matrix => .{ .matrix = try vector(6, function(value, "matrix") orelse value, false) },
+        .participation => .{ .participation = if (std.mem.eql(u8, value, "all")) .all else if (std.mem.eql(u8, value, "hidden")) .hidden else if (std.mem.eql(u8, value, "collapsed")) .collapsed else return error.UnsupportedValue },
     };
     properties.validate(target, parsed) catch return error.InvalidValue;
     return .{ .literal = parsed };

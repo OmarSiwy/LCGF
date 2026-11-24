@@ -272,7 +272,7 @@ pub fn names(t: *const Tree, s: *Semantics) void {
     const c = &t.c;
     const n = t.len;
     const first = s.c.first_text;
-    @memcpy(first[0..n], c.text[0..n]);
+    for (0..n) |k| first[k] = simd.selU(t.participation(@intCast(k)).semantics, c.text[k], none);
     // ponytail: the first run only; ARIA joins every text run of the content. Join spans in the
     // bridge if a name made of several runs is ever needed.
     var i = n;
@@ -389,7 +389,7 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
     ix[0] = none; // the root's parent is itself: it reads `none` before writing its own row
     var w: u32 = 0;
     for (0..t.len) |k| {
-        const keep = c.role[k] != 0;
+        const keep = (c.role[k] != 0) and t.participation(@intCast(k)).semantics;
         const par = ix[c.parent[k]];
         ix[k] = simd.selU(keep, w, par);
         const pi = @min(par, spare);
@@ -427,7 +427,8 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         o.text[w] = s.c.text[k];
         o.hint[w] = s.c.hint[k];
         o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]) ^ s.c.text_hash[k];
-        inline for (0..4) |e| o.rect[e][w] = c.rect[e][k];
+        const screen = @import("../draw/geometry.zig").transformRect(t.rect(@intCast(k)).array(), t.x.row[c.scope[k]].world);
+        inline for (0..4) |e| o.rect[e][w] = screen[e];
         o.kids[w] = 0;
         o.kids_hash[w] = 0;
         w += @intFromBool(keep);

@@ -41,11 +41,12 @@ pub const Property = enum(u8) {
     text_size,
     text_font,
     text_wrap,
+    participation,
 };
 
 pub const count = @typeInfo(Property).@"enum".field_names.len;
 
-pub const Kind = enum { color, number, vector4, matrix, texture, material, axis, size, alignment, boolean, vector2, font };
+pub const Kind = enum { color, number, vector4, matrix, texture, material, axis, size, alignment, boolean, vector2, font, participation };
 
 pub const Value = union(Kind) {
     color: types.Color,
@@ -60,6 +61,7 @@ pub const Value = union(Kind) {
     boolean: bool,
     vector2: [2]f32,
     font: types.Font,
+    participation: types.Participation,
 };
 
 /// A transient pair of existing authoring values, not a per-node retained record. Callers can
@@ -109,6 +111,7 @@ pub fn kind(property: Property) Kind {
         .shrink, .floating, .clip, .text_wrap => .boolean,
         .offset, .scroll, .transform_origin => .vector2,
         .text_font => .font,
+        .participation => .participation,
     };
 }
 
@@ -126,6 +129,7 @@ pub fn Type(comptime property: Property) type {
         .boolean => bool,
         .vector2 => [2]f32,
         .font => types.Font,
+        .participation => types.Participation,
     };
 }
 
@@ -133,11 +137,11 @@ pub fn metadata(property: Property) Metadata {
     const value_kind = kind(property);
     var domains: Invalidation = switch (property) {
         .fill, .border_color, .opacity, .texture, .material, .params, .uv, .text_color => paint,
-        .border_width, .radius, .radii, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll => geometry,
+        .border_width, .radius, .radii, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .participation => geometry,
         .text_size, .text_font, .text_wrap => text_domains,
     };
     domains.descendants = switch (property) {
-        .border_width, .radius, .radii, .opacity, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .text_color, .text_size, .text_font => true,
+        .border_width, .radius, .radii, .opacity, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .text_color, .text_size, .text_font, .participation => true,
         else => false,
     };
     return .{
@@ -194,6 +198,7 @@ pub fn read(comptime property: Property, computed: *const Computed) Type(propert
         .text_size => computed.text.px,
         .text_font => computed.text.font,
         .text_wrap => computed.text.wrap,
+        .participation => computed.box.participation,
     };
 }
 
@@ -234,6 +239,7 @@ pub fn write(comptime property: Property, computed: *Computed, value: Type(prope
         .text_size => computed.text.px = value,
         .text_font => computed.text.font = value,
         .text_wrap => computed.text.wrap = value,
+        .participation => computed.box.participation = value,
     }
 }
 

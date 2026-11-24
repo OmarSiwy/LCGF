@@ -375,6 +375,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// Eligibility of the geometry in `rects`, like the runtime tree's previous `sense`.
         /// Current state may disable it immediately; re-enabling takes effect after rebuilding.
         previous_input_mask: if (has_input_availability) E.InputMask else void = if (has_input_availability) .{} else {},
+        /// Exact previous-geometry hit captured before this single-buffer UI rebuilds its
+        /// tree. Rects may borrow that tree, so build-time response cannot query it again.
+        build_hit: ?E.Widget = null,
+        building: bool = false,
         /// Four floats per custom widget (`Spec.widget`, in row order) that it keeps from frame
         /// to frame, such as what its `step` measured in last frame's tree for its `push`.
         /// Zero until it writes them.
@@ -481,6 +485,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             }
 
             ui.springs.frame(&ui.signals.state, in.dt, !ui.built, settings.reduced_motion);
+            ui.build_hit = ui.hitAt(in);
+            ui.building = true;
+            defer ui.building = false;
             var carver: mem.Carver = .{ .buf = &ui.buf };
             ui.tables = Tables.carve(&carver);
             const tb = &ui.tables;
@@ -511,10 +518,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             layout.finalize(t);
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
 
-            ui.rects = .{};
-            for (0..4) |side| {
-                for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
-            }
+            ui.rects = E.Rects.fromTreeOffset(t, 1);
             if (comptime has_input_availability) ui.previous_input_mask = next_input_mask;
             ui.built = true;
             return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf), .failure = ui.failure };
@@ -614,11 +618,15 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             if (comptime has_input_availability) if (!ui.input_mask.allows(w)) return .{};
             const held = ui.pointer.pressed == w;
             const owned = ui.pointer.pressed == null or held;
-            const under = if (comptime has_input_availability)
-                E.atEnabled(&ui.rects, &ui.input_mask, in.pointer[0], in.pointer[1]) == w
-            else
-                E.at(&ui.rects, in.pointer[0], in.pointer[1]) == w;
+            const under = (if (ui.building) ui.build_hit else ui.hitAt(in)) == w;
             return .{ .hovered = under and owned, .held = held };
+        }
+
+        fn hitAt(ui: *const Self, in: *const Input) ?E.Widget {
+            return if (comptime has_input_availability)
+                E.atEnabled(&ui.rects, &ui.input_mask, in.pointer[0], in.pointer[1])
+            else
+                E.at(&ui.rects, in.pointer[0], in.pointer[1]);
         }
 
         pub fn field(comptime name: []const u8) S.Field {

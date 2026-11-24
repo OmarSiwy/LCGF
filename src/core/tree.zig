@@ -33,6 +33,8 @@ pub const Extra = struct {
     /// Prepared RGBA owns border/radius painting; layout still reads the original border.
     prepared_texture: u32 = 0,
     paint_revision: u32 = 0,
+    participation: types.Participation = .all,
+    active_participation: types.Participation = .all,
     /// Opacity paint applies: the product of `opacity` over the row's node and its
     /// ancestors. Written by `draw.inherit.opacity`.
     alpha: f32,
@@ -113,6 +115,7 @@ pub const Template = struct {
     /// Prepared RGBA owns border/radius painting; layout still reads the original border.
     prepared_texture: u32 = 0,
     paint_revision: u32 = 0,
+    participation: types.Participation = .all,
 
     /// Names of the node-column fields, in column order.
     const node_fields = blk: {
@@ -167,7 +170,7 @@ pub const Template = struct {
         const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= @as(V4, @splat(0))) |
             (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
             (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
-        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.paint_reference != none);
+        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.paint_reference != none) | @intFromBool(@as(u8, @bitCast(s.participation)) != @as(u8, @bitCast(types.Participation.all)));
         r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
@@ -178,6 +181,7 @@ pub const Template = struct {
         r.paint_outset = s.paint_outset;
         r.prepared_texture = 0;
         r.paint_revision = 0;
+        r.participation = s.participation;
         return r;
     }
 };
@@ -410,10 +414,27 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                     inline for (0..2) |a| @field(c, name)[a][i] = v[a];
                 } else @field(c, name)[i] = v;
             }
+            const up = if (i == 0) types.Participation.all else t.x.row[c.scope[parent]].active_participation;
+            var active: types.Participation = @bitCast(@as(u8, @bitCast(row.participation)) & @as(u8, @bitCast(up)));
+            if (!active.layout) {
+                active = .collapsed;
+                inline for (0..2) |axis| {
+                    c.min[axis][i] = 0;
+                    c.max[axis][i] = 0;
+                    c.grow[axis][i] = 0;
+                    c.pct[axis][i] = -1;
+                    c.pad_lo[axis][i] = 0;
+                    c.pad_hi[axis][i] = 0;
+                }
+                c.flow[i] = 0;
+                c.gap[i] = 0;
+            }
+            c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
+            c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             // Count this node in its parent, then clear its own count. The root is its own
             // parent, so the clear also removes its self-count: no `i != 0` test, which
             // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
-            c.nkids[parent] += row.flow;
+            c.nkids[parent] += c.flow[i];
             c.nkids[i] = 0;
 
             // The extras row, appended when the style has one. `xlen <= cap + 1` holds while
@@ -442,7 +463,14 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.paint_outset = row.paint_outset;
             x.prepared_texture = row.prepared_texture;
             x.paint_revision = row.paint_revision;
+            x.participation = row.participation;
+            x.active_participation = active;
             return i;
+        }
+
+        /// Effective subtree participation, available immediately while building.
+        pub fn participation(t: *const Self, i: u32) types.Participation {
+            return t.x.row[t.c.scope[i]].active_participation;
         }
 
         /// Border width of node `i` (`Style.border`).
@@ -568,8 +596,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // u32 links (with extra and scope), layout inputs, scratch, outputs, child clip, three u8
     // flags, look, role, value. The paint extras are a side table (`Extras`).
     try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
-    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 16 + 8 + 4 + 24 + 16, rowBytes(Tree.Extras));
-    try testing.expectEqual(144, @sizeOf(Extra));
+    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 16 + 8 + 4 + 24 + 16 + 4, rowBytes(Tree.Extras));
+    try testing.expectEqual(148, @sizeOf(Extra));
 }
 
 test "Look: one 32-byte row, params first" {

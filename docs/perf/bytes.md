@@ -2,9 +2,9 @@
 
 ## Current styling branch
 
-The current `Context.requiredBytes` capacity test measures **996 bytes per node**.
+The current `Context.requiredBytes` capacity test measures **1004 bytes per node**.
 The upstream baseline at `ed94db3` measured 924 bytes; transform origins, paint-reference/outset geometry, and prepared-texture revision
-metadata add 36 bytes to each of the two generations of sparse paint-extra capacity.
+metadata and subtree participation add 40 bytes to each of the two generations of sparse paint-extra capacity.
 `Look` remains 32 bytes and the GPU `Quad` remains 136 bytes. Text and custom rows
 now carry their inherited transform and rounded clip; those costs follow the
 separate `texts` and `customs` limits. The historical measurements below are retained

@@ -112,6 +112,9 @@ pub const Grids = struct {
         /// Opt-in bounded fractional solver, preserving the original single-pass default.
         bounded: []u8,
         distribution: [2][]u8,
+        /// Optional parent grid whose resolved tracks this axis shares.
+        parent: [2][]u32,
+        parent_first: [2][]u32,
     };
 
     pub const TrackColumns = struct {
@@ -147,6 +150,8 @@ pub const Grids = struct {
         /// From `Justify`: 1.0 to fill the cell, and the share of the leftover placed before.
         stretch: [2][]f32,
         factor: [2][]f32,
+        /// Child grid supplying individual intrinsic contributions on this item's axis.
+        subgrid: [2][]u32,
     };
 
     pub fn init(carver: *mem.Carver, cap: Capacity) Grids {
@@ -184,6 +189,8 @@ pub const Grids = struct {
         gs.g.bounded[k] = 0;
         inline for (.{ columns, rows }, 0..) |list, a| {
             gs.g.distribution[a][k] = 0;
+            gs.g.parent[a][k] = none;
+            gs.g.parent_first[a][k] = 0;
             const n: u32 = if (fits) @intCast(list.len) else 0;
             // A grid with no tracks on an axis points at the spare row past `cap.tracks`, which
             // its items may write and no other grid owns.
@@ -221,6 +228,7 @@ pub const Grids = struct {
             it.span[a][r] = 1;
             it.stretch[a][r] = 1;
             it.factor[a][r] = 0;
+            it.subgrid[a][r] = none;
         }
         // Append to the grid's chain. On overflow the reused row may already be the tail.
         if (gs.g.last_item[k] == none) {
@@ -274,7 +282,50 @@ pub const Grids = struct {
             gs.it.span[a][r] = @min(@max(n[a], 1), left);
         }
     }
+
+    /// Shares an existing parent item's tracks with its child grid. Call after span and
+    /// before run. Parent grids precede children, and the child axis has exactly the span's
+    /// track count, preventing cycles and unbounded implicit expansion. The shared content
+    /// edges coincide: use zero padding on this child axis, or inset its children instead.
+    /// Both intrinsic child contributions and resolved parent lines are shared.
+    pub fn shareAxis(gs: *Grids, child: u32, parent_item: u32, axis: Axis) error{InvalidSubgrid}!void {
+        if (child >= gs.len or parent_item >= gs.items_len) return error.InvalidSubgrid;
+        const a = @backingInt(axis);
+        const parent = gs.it.grid[parent_item];
+        if (parent >= child or gs.it.auto[parent_item] != 0 or gs.it.node[parent_item] != gs.g.node[child] or gs.g.count[a][child] != gs.it.span[a][parent_item]) return error.InvalidSubgrid;
+        gs.g.parent[a][child] = parent;
+        gs.g.parent_first[a][child] = gs.it.cell[a][parent_item];
+        gs.g.gap[a][child] = gs.g.gap[a][parent];
+        gs.it.subgrid[a][parent_item] = child;
+    }
 };
+
+pub const Repeat = enum { auto_fill, auto_fit };
+
+/// Resolves an automatic repeat against a definite content extent, before constructing the
+/// grid. Auto-fit removes empty trailing tracks; auto-fill retains them. The caller supplies
+/// occupied track count (including spans), so explicit holes are not silently collapsed.
+pub fn repeatAuto(extent: f32, gap: f32, minimum: f32, occupied_tracks: u32, mode: Repeat, track: Track, out: []Track) error{ NoSpace, InvalidGeometry }![]const Track {
+    if (!std.math.isFinite(extent) or !std.math.isFinite(gap) or !std.math.isFinite(minimum) or extent < 0 or gap < 0 or minimum <= 0) return error.InvalidGeometry;
+    const fitting = @max(@floor((extent + gap) / (minimum + gap)), 1);
+    const count_float = if (mode == .auto_fit) @min(fitting, @as(f32, @floatFromInt(occupied_tracks))) else fitting;
+    if (count_float >= 4294967296 or count_float > @as(f32, @floatFromInt(out.len))) return error.NoSpace;
+    const count: u32 = @intFromFloat(count_float);
+    if (out.len < count) return error.NoSpace;
+    @memset(out[0..count], track);
+    return out[0..count];
+}
+
+/// Materializes bounded implicit tracks by repeating the caller's pattern after explicit
+/// tracks. No registry, retained style or allocator is needed; pass the result to grid().
+pub fn expandTracks(explicit: []const Track, required: u32, pattern: []const Track, out: []Track) error{ NoSpace, MissingPattern }![]const Track {
+    const count = @max(explicit.len, required);
+    if (out.len < count) return error.NoSpace;
+    if (count > explicit.len and pattern.len == 0) return error.MissingPattern;
+    @memcpy(out[0..explicit.len], explicit);
+    for (explicit.len..count) |i| out[i] = pattern[(i - explicit.len) % pattern.len];
+    return out[0..count];
+}
 
 /// Sizes the tracks of grid `k` on axis `a` inside `inner`, the grid's content size, writes
 /// each track's `size` and `start` (a running sum), and returns the total.
@@ -442,6 +493,12 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
             // sorted by span; this is one pass.
             const j = first + gs.it.cell[a][it];
             const n = gs.it.span[a][it];
+            const child = gs.it.subgrid[a][it];
+            if (child != none) {
+                const source = gs.g.first[a][child];
+                for (0..n) |offset| gs.tr.content[j + offset] = @max(gs.tr.content[j + offset], gs.tr.content[source + offset]);
+                continue;
+            }
             const gap = gs.g.gap[a][k];
             const share = @max(nat[gs.it.node[it]] - gap * @as(f32, @floatFromInt(n - 1)), 0) / @as(f32, @floatFromInt(n));
             for (gs.tr.content[j..][0..n]) |*v| v.* = @max(v.*, share);
@@ -484,7 +541,17 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             resolveRows(t, axis, from, grid_row + 1);
             from = grid_row + 1;
             const node = gs.g.node[k];
-            _ = sizeTracks(gs, k, a, c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node]);
+            const parent = gs.g.parent[a][k];
+            if (parent == none) {
+                _ = sizeTracks(gs, k, a, c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node]);
+            } else {
+                const source = gs.g.first[a][parent] + gs.g.parent_first[a][k];
+                const destination = gs.g.first[a][k];
+                for (0..gs.g.count[a][k]) |offset| {
+                    gs.tr.size[destination + offset] = gs.tr.size[source + offset];
+                    gs.tr.start[destination + offset] = gs.tr.start[source + offset] - gs.tr.start[source];
+                }
+            }
             const first = gs.g.first[a][k];
             var it = gs.g.first_item[k];
             while (it != none) : (it = gs.it.next[it]) {
@@ -647,6 +714,52 @@ const Scene = struct {
 
 fn rect(x0: f32, y0: f32, x1: f32, y1: f32) types.Rect {
     return .{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 };
+}
+
+test "shared subgrid contributes individual intrinsic tracks and reuses resolved lines" {
+    var s: Scene = .{};
+    s.init();
+    const parent = s.t.push(0, .none, &.{});
+    const pg = s.gs.grid(parent, &.{ .fit, .fit, .fit }, &.{.fit});
+    s.gs.gaps(pg, .{ 5, 0 });
+    const child = s.t.push(parent, .none, &.{ .float = true });
+    const item = s.gs.item(pg, child, .{ 0, 0 });
+    s.gs.span(item, .{ 2, 1 });
+    const cg = s.gs.grid(child, &.{ .fit, .fit }, &.{.fit});
+    try s.gs.shareAxis(cg, item, .x);
+    const a = s.cell(child, cg, .{ 0, 0 }, .{ 60, 10 });
+    const b = s.cell(child, cg, .{ 1, 0 }, .{ 10, 10 });
+    s.t.seal(child);
+    const c = s.cell(parent, pg, .{ 2, 0 }, .{ 30, 10 });
+    s.t.seal(parent);
+    run(&s.t, &s.tx, &s.gs, .{ 200, 100 });
+    try testing.expectEqual(60, s.t.c.size[0][a]);
+    try testing.expectEqual(65, s.t.c.pos[0][b]);
+    try testing.expectEqual(80, s.t.c.pos[0][c]);
+    try testing.expectEqual(75, s.t.c.size[0][child]);
+    try testing.expectError(error.InvalidSubgrid, s.gs.shareAxis(pg, item, .x));
+}
+
+test "automatic repeats and bounded implicit patterns feed actual grid track sizing" {
+    var repeated: [8]Track = undefined;
+    const filled = try repeatAuto(320, 10, 100, 2, .auto_fill, .minmaxFr(100, 1, 1000), &repeated);
+    try testing.expectEqual(3, filled.len);
+    const fitted = try repeatAuto(320, 10, 100, 2, .auto_fit, .minmaxFr(100, 1, 1000), &repeated);
+    try testing.expectEqual(2, fitted.len);
+    var expanded: [8]Track = undefined;
+    const rows = try expandTracks(&.{.px(5)}, 4, &.{ .px(10), .px(20) }, &expanded);
+    var s: Scene = .{};
+    s.init();
+    const g = s.gs.grid(0, fitted, rows);
+    s.gs.gaps(g, .{ 10, 2 });
+    s.gs.boundedFractions(g, true);
+    _ = sizeTracks(&s.gs, g, 0, 320);
+    _ = sizeTracks(&s.gs, g, 1, 100);
+    try testing.expectApproxEqAbs(155, s.gs.tr.size[0], 0.001);
+    try testing.expectApproxEqAbs(165, s.gs.tr.start[1], 0.001);
+    const first = s.gs.g.first[1][g];
+    try testing.expectEqualSlices(f32, &.{ 5, 10, 20, 10 }, s.gs.tr.size[first..][0..4]);
+    try testing.expectError(error.NoSpace, repeatAuto(1000, 0, 1, 1000, .auto_fill, .fit, &repeated));
 }
 
 test "grid: items in explicit cells; fit tracks take the largest item, items fill their cell" {

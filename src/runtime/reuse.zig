@@ -101,7 +101,20 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
         (c1 -% c0) <= ctx.customs[ctx.cur].cap - ctx.customs[ctx.cur].len,
     ));
     const busy = moving(ctx, a, count);
-    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), !busy));
+    // Collapsing masks layout inputs while building. A parent participation change must
+    // rebuild original inputs instead of reviving rows whose stored dimensions were zeroed.
+    const new_parent = ctx.stack[ctx.depth - 1];
+    const same_participation = @as(u8, @bitCast(t.participation(new_parent))) == @as(u8, @bitCast(prev.participation(prev.c.parent[a])));
+    var references_valid = true;
+    if (from_last_frame and fits) {
+        for (x0..x1) |r| {
+            const source = prev.x.row[r].paint_reference;
+            if (source == none or (source >= a and source < b) or source == prev.c.parent[a]) continue;
+            references_valid = references_valid and source < prev.len and prev.c.id[@min(source, prev.cap - 1)] != 0;
+            if (references_valid) references_valid = t.find(@fromBackingInt(prev.c.id[source])) != none;
+        }
+    }
+    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), andB(!busy, andB(same_participation, references_valid))));
 
     // The subtree starts at the next row whether it is copied or rebuilt.
     m.c.id[slot] = k;
@@ -189,7 +202,11 @@ fn copySubtree(f: *Frame, a: u32, b: u32, ks: [2]u32, cs: [2]u32, xs: [2]u32) vo
 
     const xn = x1 - x0;
     mem.copyRows(Tree.Extras, &t.x, t.xlen, &prev.x, x0, xn);
-    for (t.xlen..t.xlen + xn) |r| t.x.node[r] +%= delta;
+    for (t.xlen..t.xlen + xn) |r| {
+        t.x.node[r] +%= delta;
+        const source = t.x.row[r].paint_reference;
+        if (source != none) t.x.row[r].paint_reference = if (source >= a and source < b) source +% delta else if (source == prev.c.parent[a]) parent else t.find(@fromBackingInt(prev.c.id[source]));
+    }
     t.xlen += xn;
 
     keepAlive(ctx, a, count, delta);

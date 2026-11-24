@@ -360,6 +360,7 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
         simd.storeF(c.rect[3], j, @round(y + simd.loadF(c.size[1], j)));
     }
     if (comptime @TypeOf(t) == *Tree) inherit.all(t);
+    const transformed = comptime @TypeOf(t) == *Tree or (@hasDecl(@TypeOf(t.*), "has_transforms") and @TypeOf(t.*).has_transforms);
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
     const everything: V4 = @splat(-inf);
@@ -375,9 +376,10 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
     if (first == 0) child_clip[0] = everything;
     for (first..last) |i| {
+        c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
         const local: [4]f32 = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] };
-        const world = if (comptime @TypeOf(t) == *Tree) t.x.row[c.scope[i]].world else geometry.identity;
-        const screen: [4]f32 = if (comptime @TypeOf(t) == *Tree) geometry.transformRect(local, world) else local;
+        const world = if (comptime transformed) geometry.worldAt(t, i) else geometry.identity;
+        const screen: [4]f32 = if (comptime transformed) geometry.transformRect(local, world) else local;
         const r = @as(V4, screen) * sign;
         // child_clip[i] feeds the next row whose parent is i, so the path from this load to
         // that store is the pass's latency chain: keep it to one max. The clip-or-not select
@@ -388,7 +390,7 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
         const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
-        const inner_rect: [4]f32 = if (comptime @TypeOf(t) == *Tree) geometry.transformRect(inset, world) else inset;
+        const inner_rect: [4]f32 = if (comptime transformed) geometry.transformRect(inset, world) else inset;
         const inner = @select(f32, clips, @as(V4, inner_rect) * sign, everything);
         child_clip[i] = @max(inherited, inner);
         const out = v * sign;

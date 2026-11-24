@@ -315,7 +315,23 @@ pub const Material = enum(u16) { solid = 0, _ };
 pub const Font = enum(u16) { default = 0, _ };
 
 /// Everything a node can be told at creation. Plain data with defaults.
+/// Independent subtree participation. `hidden` keeps its layout space; `collapsed`
+/// removes it from layout as well. Descendants cannot re-enable an excluded domain.
+/// For self-only pointer pass-through, leave participation enabled and omit Sense.
+pub const Participation = bitpack struct(u8) {
+    layout: bool = true,
+    paint: bool = true,
+    hit: bool = true,
+    semantics: bool = true,
+    _: u4 = 0,
+
+    pub const all: Participation = .{};
+    pub const hidden: Participation = .{ .paint = false, .hit = false, .semantics = false };
+    pub const collapsed: Participation = .{ .layout = false, .paint = false, .hit = false, .semantics = false };
+};
+
 pub const Style = struct {
+    participation: Participation = .all,
     // ---- layout
     /// Axis children are stacked along.
     dir: Axis = .y,

@@ -125,6 +125,17 @@ pub const Interaction = struct {
         s.buttons = in.buttons;
     }
 
+    /// Cancel capture, focus and pending activation when a built control stops participating.
+    pub fn cancel(s: *Interaction, id: types.Id) void {
+        const k = @backingInt(id);
+        if (k == 0) return;
+        if (s.hot == k) s.hot_node = none;
+        if (s.active == k) s.active_node = none;
+        inline for (.{ "hot", "under", "active", "focus", "pressed", "released", "clicked", "double_clicked", "long_pressed", "dragging", "hover_intent", "last_click" }) |name| {
+            if (@field(s, name) == k) @field(s, name) = 0;
+        }
+    }
+
     /// Pointer movement this frame while `id` is dragged; zero otherwise.
     pub fn drag(s: *const Interaction, id: types.Id) [2]f32 {
         const k = @backingInt(id);

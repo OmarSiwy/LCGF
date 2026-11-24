@@ -139,7 +139,7 @@ pub fn mapNodes(t: *const tree.Tree, text: *const Texts, list: *const draw.DrawL
         const i = if (order.len == 0) k else order[k];
         if (i >= t.len) return error.InvalidRange;
         const look = t.c.look[i];
-        if (((look.fill | look.border_color) >> 24) == 0 or geometry.nodeAlpha(t, i) <= 0 or !geometry.hasArea(geometry.nodeBounds(t, i))) continue;
+        if (!t.participation(@intCast(i)).paint or ((look.fill | look.border_color) >> 24) == 0 or geometry.nodeAlpha(t, i) <= 0 or !geometry.hasArea(geometry.nodeBounds(t, i))) continue;
         if (n >= list.quad_len) return error.InvalidNodeMap;
         quads[n] = @intCast(i);
         n += 1;

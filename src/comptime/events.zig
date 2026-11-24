@@ -114,13 +114,27 @@ pub fn Events(comptime spec: Spec) type {
         pub const Rects = struct {
             /// x0, y0, x1, y1 columns, in logical pixels, clipped as `Tree.Columns.vis`.
             c: [4][rect_rows]f32 = @splat(@splat(0)),
+            /// Optional borrowed runtime geometry, used only when transforms/rounded clips
+            /// require an exact second phase. The table's owner keeps the tree alive.
+            exact_tree: ?*const @import("../core/tree.zig").Tree = null,
+            node_offset: u32 = 0,
 
             /// The widgets' rows of a laid-out tree's `vis` columns (a tree built from this
             /// spec, so row numbers agree).
             pub fn fromTree(t: anytype) Rects {
-                var r: Rects = .{};
-                for (0..4) |side| {
-                    for (widget_nodes, 0..) |node, k| r.c[side][k] = t.c.vis[side][node];
+                return fromTreeOffset(t, 0);
+            }
+
+            /// Widgets.Ui has one host root before the spec's rows; raw specs use zero.
+            pub fn fromTreeOffset(t: anytype, offset: u32) Rects {
+                var r: Rects = .{ .node_offset = offset };
+                for (widget_nodes, 0..) |node, k| {
+                    const i = @as(u32, node) + offset;
+                    const enabled = t.x.row[t.c.scope[i]].active_participation.hit;
+                    inline for (0..4) |side| r.c[side][k] = if (enabled) t.c.vis[side][i] else 0;
+                }
+                if (comptime @TypeOf(t) == *Tree or @TypeOf(t) == *const Tree) {
+                    if (@import("../draw/geometry.zig").needsExactHit(t)) r.exact_tree = t;
                 }
                 return r;
             }
@@ -155,11 +169,32 @@ pub fn Events(comptime spec: Spec) type {
             return atMasked(false, r, undefined, x, y);
         }
 
+        /// Pure compile-time geometry route, with no runtime Tree or stored geometry table.
+        /// PaintType is ct_paint.Paint(spec, options); use the same ram as its emit call.
+        pub fn atPaint(comptime PaintType: type, ram: *const PaintType.Cols.Dynamic, x: f32, y: f32) ?Widget {
+            var result: ?Widget = null;
+            for (widget_nodes, 0..) |node, k| if (PaintType.hit(ram, node, .{ x, y })) {
+                result = widget(k);
+            };
+            return result;
+        }
+
         pub fn atEnabled(r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget {
             return atMasked(true, r, mask, x, y);
         }
 
         fn atMasked(comptime filtered: bool, r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget {
+            if (r.exact_tree) |t| {
+                var result: ?Widget = null;
+                for (widget_nodes, 0..) |node, k| {
+                    if (comptime filtered) {
+                        if (mask.enabled[k] == 0) continue;
+                    }
+                    if (x < r.c[0][k] or y < r.c[1][k] or x >= r.c[2][k] or y >= r.c[3][k]) continue;
+                    if (@import("../draw/geometry.zig").hitNode(t, @as(u32, node) + r.node_offset, .{ x, y })) result = widget(k);
+                }
+                return result;
+            }
             const px = simd.f(x);
             const py = simd.f(y);
             var found: u32 = none;
