@@ -330,6 +330,7 @@ pub const op = struct {
     pub const copy_area = 62;
     pub const put_image = 72;
     pub const get_image = 73;
+    pub const create_cursor = 93;
     pub const create_glyph_cursor = 94;
     pub const query_extension = 98;
     pub const get_keyboard_mapping = 101;
@@ -547,6 +548,28 @@ pub fn openFont(b: *Buf, id: u32, name: []const u8) void {
     b.int(u16, @intCast(name.len));
     b.zeros(2);
     b.str(name);
+}
+
+pub const create_cursor_size = 32;
+
+/// Core CreateCursor: a depth-one bitmap and mask, black on white, hotspot at (0,0).
+/// A cleared mask hides every pixel and works without the XFIXES extension.
+pub fn createCursor(b: *Buf, id: u32, source: u32, mask: u32) void {
+    b.head(op.create_cursor, 0, create_cursor_size / 4);
+    b.int(u32, id);
+    b.int(u32, source);
+    b.int(u32, mask);
+    b.zeros(6);
+    for (0..3) |_| b.int(u16, 0xffff);
+    b.zeros(4);
+}
+
+pub const clear_bitmap_size = 28;
+
+/// One zero bit, padded to the server's 32-bit scanline unit. The source and mask share it.
+pub fn clearBitmap(b: *Buf, bitmap: u32, gc: u32) void {
+    putImage(b, bitmap, gc, 1, 1, 0, 0, 1);
+    b.zeros(4);
 }
 
 pub const create_glyph_cursor_size = 32;
@@ -966,6 +989,8 @@ test "requests: lengths match the bytes written" {
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },
         .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },
         .{ openFontSize("cursor"), openFont, .{ 1, "cursor" } },
+        .{ create_cursor_size, createCursor, .{ 1, 2, 2 } },
+        .{ clear_bitmap_size, clearBitmap, .{ 1, 2 } },
         .{ create_glyph_cursor_size, createGlyphCursor, .{ 1, 2, 68 } },
         .{ xfixes_query_version_size, xfixesQueryVersion, .{140} },
         .{ xfixes_get_cursor_image_size, xfixesGetCursorImage, .{140} },

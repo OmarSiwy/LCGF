@@ -144,7 +144,9 @@ pub const Frame = struct {
             return .{};
         }
         c.sense[node.ix()] = @bitCast(sense);
-        return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
+        const response = f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
+        if (f.tree().cursor(node.ix())) |cursor| f.setCursor(cursor, response.hovered);
+        return response;
     }
 
     /// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
@@ -867,4 +869,21 @@ test "participation reserves hidden space, collapses layout and cancels descenda
     try testing.expectEqual(@as(u8, 0), result.tree.c.role[control.ix()]);
     try testing.expectEqual(types.none, @import("../interact/hit.zig").at(result.tree, 10, 10, .any));
     try testing.expectEqual(shown.ix(), @import("../interact/hit.zig").at(result.tree, 10, 28, .any));
+}
+
+test "style cursor inherits through paint extras and explicit arrow overrides it" {
+    const Fx = Fixture(.{ .nodes = 12, .texts = 1, .customs = 1, .strings = 16, .depth = 5 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 60 }, .pointer = .{ 10, 10 } };
+    for (0..3) |step| {
+        var f = ctx.begin(&in);
+        _ = f.open(.from("cursor-parent"), .{ .cursor = .crosshair, .size = .{ .fill, .fill } });
+        const n = f.leaf(.from("cursor-child"), .{ .cursor = if (step == 2) .arrow else null, .radius = 3, .opacity = 0.8, .size = .{ .px(30), .px(25) }, .fill = .white });
+        _ = f.interact(n, .button);
+        f.close();
+        const out = f.end(.{});
+        try testing.expectEqual(@as(?Cursor, if (step == 2) .arrow else .crosshair), out.tree.cursor(n.ix()));
+        if (step == 1) try testing.expectEqual(Cursor.crosshair, out.platform.cursor);
+        if (step == 2) try testing.expectEqual(Cursor.arrow, out.platform.cursor);
+    }
 }

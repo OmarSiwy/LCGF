@@ -112,9 +112,44 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .zxdg_decoration_manager_v1 = .decoration_manager,
 });
 
-/// `wp_cursor_shape_device_v1` shapes (cursor-shape-v1.xml) by `Cursor`: default, pointer,
-/// text, grab, ew-resize, ns-resize.
-const cursor_shapes = std.enums.EnumArray(context.Cursor, u32).init(.{ .arrow = 1, .pointer = 4, .text = 9, .grab = 16, .resize_h = 26, .resize_v = 27 });
+/// Cursor-shape-v1 enum values; `hidden` uses wl_pointer.set_cursor(null), not shape 0.
+const cursor_shapes = std.enums.EnumArray(context.Cursor, u32).init(.{
+    .arrow = 1,
+    .pointer = 4,
+    .text = 9,
+    .grab = 16,
+    .resize_h = 26,
+    .resize_v = 27,
+    .crosshair = 8,
+    .move = 13,
+    .grabbing = 17,
+    .resize_nwse = 29,
+    .resize_nesw = 28,
+    .resize_n = 19,
+    .resize_e = 18,
+    .resize_s = 22,
+    .resize_w = 25,
+    .resize_ne = 20,
+    .resize_nw = 21,
+    .resize_se = 23,
+    .resize_sw = 24,
+    .not_allowed = 15,
+    .no_drop = 14,
+    .progress = 5,
+    .wait = 6,
+    .help = 3,
+    .copy = 12,
+    .alias = 11,
+    .context_menu = 2,
+    .cell = 7,
+    .vertical_text = 10,
+    .zoom_in = 33,
+    .zoom_out = 34,
+    .all_scroll = 32,
+    .col_resize = 30,
+    .row_resize = 31,
+    .hidden = 0,
+});
 
 /// Opcodes used, from wayland.xml and xdg-shell.xml.
 const op = struct {
@@ -260,6 +295,8 @@ pub const Wayland = struct {
     cursor: context.Cursor = .arrow,
     cursor_serial: u32 = 0,
     cursor_device: u32 = 0,
+    /// A reusable visible arrow for restoring from hidden on compositors without cursor-shape.
+    cursor_fallback: Window = .{},
     /// Clock of `Input.time`: `init` is time 0.
     t0: linux.timespec,
     /// Wakes `wait` from another thread (`wake`).
@@ -326,6 +363,7 @@ pub const Wayland = struct {
 
     pub fn deinit(w: *Wayland) void {
         for (&w.windows) |*win| win.shm.unmap();
+        w.cursor_fallback.shm.unmap();
         w.data.deinit();
         w.conn.close();
         _ = linux.close(w.wake_fd);
@@ -408,7 +446,13 @@ pub const Wayland = struct {
             w.request(w.globals.get(.wp_cursor_shape_manager_v1), op.cursor_manager_get_pointer, .{ w.cursor_device, s.pointer });
         }
         if (s.pointer_focus != 0 and s.pointer_focus == surface and (p.cursor != w.cursor or s.enter_serial != w.cursor_serial)) {
-            w.request(w.cursor_device, op.cursor_device_set_shape, .{ s.enter_serial, cursor_shapes.get(p.cursor) });
+            if (p.cursor == .hidden and s.pointer != 0) {
+                w.request(s.pointer, 0, .{ s.enter_serial, @as(u32, 0), @as(i32, 0), @as(i32, 0) });
+            } else if (w.cursor_device != 0) {
+                w.request(w.cursor_device, op.cursor_device_set_shape, .{ s.enter_serial, cursor_shapes.get(p.cursor) });
+            } else {
+                w.restoreCursor(s.enter_serial) catch |err| return w.fail(err);
+            }
             w.cursor = p.cursor;
             w.cursor_serial = s.enter_serial;
         }
@@ -789,6 +833,35 @@ pub const Wayland = struct {
             w.request(win.decoration, op.decoration_set_mode, .{@as(u32, 2)}); // server_side
         }
         w.request(win.surface, op.surface_commit, .{});
+    }
+
+    /// Native named shapes need cursor-shape-v1. Hiding and the visible-arrow fallback
+    /// work with the core wl_pointer protocol even when that optional global is absent.
+    pub fn supportsCursor(w: *const Wayland, cursor: context.Cursor) bool {
+        return cursor == .hidden or cursor == .arrow or w.globals.get(.wp_cursor_shape_manager_v1) != 0;
+    }
+
+    fn restoreCursor(w: *Wayland, serial: u32) Error!void {
+        const fallback = &w.cursor_fallback;
+        if (fallback.surface == 0) {
+            fallback.surface = w.new(.surface);
+            w.request(w.globals.get(.wl_compositor), op.compositor_create_surface, .{fallback.surface});
+            try w.resizeBuffers(fallback, .{ 24, 24 });
+            const fb = fallback.shm.framebuffer(0);
+            @memset(fb.pixels, 0);
+            // A legible black outline/white interior, independent of a theme file service.
+            for (0..19) |y| {
+                const edge = y / 2;
+                for (0..edge + 1) |x| fb.pixels[y * fb.stride + x] = if (x == 0 or x == edge or y == 18) 0xff000000 else 0xffffffff;
+            }
+            for (12..23) |y| for (5..9) |x| {
+                fb.pixels[y * fb.stride + x] = if (x == 5 or x == 8 or y == 22) 0xff000000 else 0xffffffff;
+            };
+            w.request(fallback.surface, op.surface_attach, .{ fallback.shm.buffers[0], @as(i32, 0), @as(i32, 0) });
+            w.request(fallback.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, 24), @as(i32, 24) });
+            w.request(fallback.surface, op.surface_commit, .{});
+        }
+        w.request(w.seat.pointer, 0, .{ serial, fallback.surface, @as(i32, 0), @as(i32, 0) });
     }
 
     /// Two buffers of `px` pixels in one new pool, replacing the window's old ones. A buffer

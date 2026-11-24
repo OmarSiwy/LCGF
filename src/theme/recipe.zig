@@ -233,6 +233,80 @@ pub const input: Recipe = .{
     .rules = &input_rules,
 };
 
+pub const navigation_rules = button_rules ++ [_]Rule{
+    .{ .part = Parts.root, .declarations = &.{ style.set(.padding_top, 6), style.set(.padding_bottom, 6), style.token(.gap, Names.space[2]) } },
+    .{ .part = Parts.root, .require = .{ .current = true }, .declarations = &.{ style.token(.fill, Names.surface), style.token(.text_color, Names.accent) } },
+    .{ .part = Parts.indicator, .declarations = &.{style.set(.fill, .transparent)} },
+    .{ .part = Parts.indicator, .require = .{ .selected = true }, .declarations = &.{style.token(.fill, Names.accent)} },
+    .{ .part = Parts.indicator, .require = .{ .expanded = true }, .declarations = &.{style.token(.fill, Names.text)} },
+};
+/// The item, label, optional icon, state indicator and outside focus are separate parts.
+pub const navigation: Recipe = .{
+    .parts = &.{
+        .{ .id = Parts.root, .base = .{ .box = .{ .dir = .x, .cross = .center, .size = .{ .fit, .fit } } } },
+        .{ .id = Parts.indicator, .base = .{ .box = .{ .size = .{ .px(6), .px(6) }, .radius = 3 } } },
+        label_part,
+        icon_part,
+        focus_part,
+    },
+    .rules = &navigation_rules,
+};
+
+pub const data_rules = text_rules ++ [_]Rule{
+    .{ .part = Parts.root, .declarations = &.{style.token(.fill, Names.surface)} },
+    .{ .part = Parts.header, .declarations = &.{style.token(.fill, Names.control)} },
+    .{ .part = Parts.row, .require = .{ .selected = true }, .declarations = &.{style.token(.fill, Names.held)} },
+    .{ .part = Parts.cell, .require = .{ .selected = true }, .declarations = &.{ style.token(.fill, Names.accent), style.token(.text_color, Names.text) } },
+    .{ .part = Parts.cell, .require = .{ .invalid = true }, .declarations = &.{ style.set(.border_width, 1), style.token(.border_color, Names.danger) } },
+    .{ .part = Parts.disclosure, .declarations = &.{style.token(.fill, Names.muted)} },
+    .{ .part = Parts.disclosure, .require = .{ .expanded = true }, .declarations = &.{style.token(.fill, Names.accent)} },
+    .{ .part = Parts.separator, .declarations = &.{style.token(.fill, Names.control)} },
+};
+/// Passive table/tree/list parts. Existing data widgets' sorting, navigation and selection
+/// functions remain independently callable; callers assign their resulting states here.
+pub const data: Recipe = .{
+    .parts = &.{
+        .{ .id = Parts.root, .base = .{ .box = .{ .dir = .y, .size = .{ .fill, .fit }, .role = .group } } },
+        .{ .id = Parts.header, .base = .{ .box = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(6) } } },
+        .{ .id = Parts.row, .base = .{ .box = .{ .dir = .x, .size = .{ .fill, .fit } } } },
+        .{ .id = Parts.cell, .base = .{ .box = .{ .dir = .y, .size = .{ .fill, .fit }, .pad = @splat(6), .clip = true } } },
+        .{ .id = Parts.disclosure, .base = .{ .box = .{ .size = .{ .px(8), .px(8) }, .radius = 2 } } },
+        .{ .id = Parts.separator, .base = .{ .box = .{ .size = .{ .fill, .px(1) } } } },
+        label_part,
+        icon_part,
+        focus_part,
+    },
+    .rules = &data_rules,
+};
+
+pub const gutter = Id.from("gutter");
+pub const line_number = Id.from("line-number");
+pub const editor_rules = input_rules ++ [_]Rule{
+    .{ .part = gutter, .declarations = &.{style.token(.fill, Names.surface)} },
+    .{ .part = line_number, .declarations = &.{style.token(.text_color, Names.muted)} },
+};
+/// Multiline editing shares the text input's error/placeholder/selection/caret/support rules.
+pub const editor: Recipe = .{
+    .parts = &.{
+        .{ .id = Parts.root, .base = .{ .box = blk: {
+            var box = textfield_zig.fieldStyle(&.default, false, 0);
+            box.dir = .y;
+            break :blk box;
+        } } },
+        .{ .id = Parts.content },
+        .{ .id = Parts.placeholder },
+        .{ .id = Parts.selection, .base = .{ .box = textfield_zig.selectionStyle(&.default, .{ 0, 0 }, 0) } },
+        .{ .id = Parts.caret, .base = .{ .box = textfield_zig.caretStyle(&.default, 0, 0, false) } },
+        .{ .id = Parts.support, .base = .{ .box = .{ .role = .label } } },
+        .{ .id = gutter, .base = .{ .box = .{ .dir = .y, .size = .{ .fit, .fill }, .pad = .{ 6, 0, 6, 0 } } } },
+        .{ .id = line_number, .base = .{ .box = .{ .role = .label, .size = .{ .fit, .fit } } } },
+        label_part,
+        icon_part,
+        focus_part,
+    },
+    .rules = &editor_rules,
+};
+
 /// Adapt a computed root to widgets whose existing behavior uses Theme for metrics. Visual
 /// part values still come from the recipe; this does not reduce recipes to Theme's palette.
 pub fn metrics(computed: style.Computed) base.Theme {

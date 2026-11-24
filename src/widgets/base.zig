@@ -379,6 +379,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// tree. Rects may borrow that tree, so build-time response cannot query it again.
         build_hit: ?E.Widget = null,
         building: bool = false,
+        platform_cursor: types.Cursor = .arrow,
+        cursor_set: bool = false,
         /// Four floats per custom widget (`Spec.widget`, in row order) that it keeps from frame
         /// to frame, such as what its `step` measured in last frame's tree for its `push`.
         /// Zero until it writes them.
@@ -413,7 +415,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             break :blk counter.off;
         };
 
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null };
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null, cursor: types.Cursor = .arrow };
 
         /// True while a declared spring moves or its target has changed since the last frame.
         pub fn needsAnimationFrame(ui: *const Self) bool {
@@ -437,6 +439,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             const press = in.buttons.left and !ui.pointer.down;
             ui.frame_settings = settings.*;
             ui.failure = null;
+            ui.platform_cursor = .arrow;
+            ui.cursor_set = false;
             var key = false;
             for (in.events) |e| key = key or e.kind == .press;
             ui.focus_visible = ((ui.focus_visible or key) and !press) or settings.always_show_focus;
@@ -519,9 +523,16 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
 
             ui.rects = E.Rects.fromTreeOffset(t, 1);
+            if (!ui.cursor_set) {
+                if (ui.build_hit) |target| {
+                    const owned = ui.pointer.pressed == null or ui.pointer.pressed == target;
+                    const row: u32 = @as(u32, @backingInt(target)) + 1;
+                    if (owned and t.participation(row).hit) ui.platform_cursor = t.cursor(row) orelse .arrow;
+                }
+            }
             if (comptime has_input_availability) ui.previous_input_mask = next_input_mask;
             ui.built = true;
-            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf), .failure = ui.failure };
+            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf), .failure = ui.failure, .cursor = ui.platform_cursor };
         }
 
         /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom
@@ -583,6 +594,15 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// as output data. The caller decides whether to display, retry or reject that frame.
         pub fn fail(ui: *Self, err: anyerror) void {
             ui.failure = ui.failure orelse err;
+        }
+
+        /// Explicit override as on Frame. A caller can pass its actual hover response; the
+        /// default at frame end otherwise comes from the hovered node's inherited style.
+        pub fn setCursor(ui: *Self, cursor: types.Cursor, when: bool) void {
+            if (when) {
+                ui.platform_cursor = cursor;
+                ui.cursor_set = true;
+            }
         }
 
         /// Optional custom-widget contract, statically dispatched like push/step:

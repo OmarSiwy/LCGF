@@ -48,7 +48,7 @@ export function shell(page) {
 const inputModes = ["text", "text", "text", "decimal", "tel", "email", "url"];
 
 /// CSS cursors of context.Cursor, in its order: arrow, pointer, text, grab, resize_h, resize_v.
-export const cursors = ["default", "pointer", "text", "grab", "ew-resize", "ns-resize"];
+export const cursors = ["default", "pointer", "text", "grab", "ew-resize", "ns-resize", "crosshair", "move", "grabbing", "nwse-resize", "nesw-resize", "n-resize", "e-resize", "s-resize", "w-resize", "ne-resize", "nw-resize", "se-resize", "sw-resize", "not-allowed", "no-drop", "progress", "wait", "help", "copy", "alias", "context-menu", "cell", "vertical-text", "zoom-in", "zoom-out", "all-scroll", "col-resize", "row-resize", "none"];
 
 /// Starts forwarding `canvas`'s events to `ui` and running its frames. Returns `page`, with
 /// `frames` (animation frames run) and `stop()`.

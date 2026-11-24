@@ -35,6 +35,8 @@ pub const Extra = struct {
     paint_revision: u32 = 0,
     participation: types.Participation = .all,
     active_participation: types.Participation = .all,
+    cursor: u8 = 255,
+    active_cursor: u8 = 255,
     /// Opacity paint applies: the product of `opacity` over the row's node and its
     /// ancestors. Written by `draw.inherit.opacity`.
     alpha: f32,
@@ -116,6 +118,7 @@ pub const Template = struct {
     prepared_texture: u32 = 0,
     paint_revision: u32 = 0,
     participation: types.Participation = .all,
+    cursor: u8 = 255,
 
     /// Names of the node-column fields, in column order.
     const node_fields = blk: {
@@ -170,7 +173,7 @@ pub const Template = struct {
         const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= @as(V4, @splat(0))) |
             (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
             (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
-        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.paint_reference != none) | @intFromBool(@as(u8, @bitCast(s.participation)) != @as(u8, @bitCast(types.Participation.all)));
+        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.cursor != null) | @intFromBool(s.paint_reference != none) | @intFromBool(@as(u8, @bitCast(s.participation)) != @as(u8, @bitCast(types.Participation.all)));
         r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
@@ -182,6 +185,7 @@ pub const Template = struct {
         r.prepared_texture = 0;
         r.paint_revision = 0;
         r.participation = s.participation;
+        r.cursor = if (s.cursor) |cursor| @backingInt(cursor) else 255;
         return r;
     }
 };
@@ -465,7 +469,15 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.paint_revision = row.paint_revision;
             x.participation = row.participation;
             x.active_participation = active;
+            x.cursor = row.cursor;
+            x.active_cursor = if (row.cursor != 255) row.cursor else if (i == 0) 255 else t.x.row[c.scope[parent]].active_cursor;
             return i;
+        }
+
+        /// Effective pointer shape, available while building without an extra ancestor walk.
+        pub fn cursor(t: *const Self, i: u32) ?types.Cursor {
+            const value = t.x.row[t.c.scope[i]].active_cursor;
+            return if (value == 255) null else @fromBackingInt(value);
         }
 
         /// Effective subtree participation, available immediately while building.

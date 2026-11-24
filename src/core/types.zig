@@ -310,6 +310,47 @@ test "Role: one byte, none is the zero default" {
 }
 
 /// Handles the renderer gives out. The core only stores and groups by them.
+/// Standard pointer shapes. The original six ordinals remain stable for shell clients.
+/// A host can substitute the documented nearest native shape; `cursor.emit` draws a
+/// caller-provided image when exact artwork or a custom hotspot is required.
+pub const Cursor = enum(u8) {
+    arrow,
+    pointer,
+    text,
+    grab,
+    resize_h,
+    resize_v,
+    crosshair,
+    move,
+    grabbing,
+    resize_nwse,
+    resize_nesw,
+    resize_n,
+    resize_e,
+    resize_s,
+    resize_w,
+    resize_ne,
+    resize_nw,
+    resize_se,
+    resize_sw,
+    not_allowed,
+    no_drop,
+    progress,
+    wait,
+    help,
+    copy,
+    alias,
+    context_menu,
+    cell,
+    vertical_text,
+    zoom_in,
+    zoom_out,
+    all_scroll,
+    col_resize,
+    row_resize,
+    hidden,
+};
+
 pub const Texture = enum(u16) { white = 0, _ };
 pub const Material = enum(u16) { solid = 0, _ };
 pub const Font = enum(u16) { default = 0, _ };
@@ -332,6 +373,8 @@ pub const Participation = bitpack struct(u8) {
 
 pub const Style = struct {
     participation: Participation = .all,
+    /// null inherits the closest ancestor cursor; an explicit arrow resets inheritance.
+    cursor: ?Cursor = null,
     // ---- layout
     /// Axis children are stacked along.
     dir: Axis = .y,

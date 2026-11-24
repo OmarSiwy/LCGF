@@ -63,6 +63,11 @@ font.save(Path(__file__).with_name("color-png.ttf"))
 
 font = base()
 svg = newTable("SVG ")
-svg.docList = [SVGDocument('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -800 500 1000"><path id="glyph2" d="M50 0H450V-700H50Z" fill="#ff8000"/></svg>', 2, 2)]
+document = '<svg xmlns="http://www.w3.org/2000/svg"><g transform="translate(100 100)" opacity="0.25"><path id="glyph2" d="M50 0H450V-700H50Z" fill="var(--color0, #ff8000)"/></g></svg>'
+svg.docList = [SVGDocument(document, 2, 2)]
 font["SVG "] = svg
 font.save(Path(__file__).with_name("color-svg.ttf"))
+svg.docList = [SVGDocument(document, 2, 2, compressed=True)]
+font.save(Path(__file__).with_name("color-svg-gzip.ttf"))
+font["CPAL"] = buildCPAL([[(0, 1, 0, .5)]])
+font.save(Path(__file__).with_name("color-svg-palette.ttf"))

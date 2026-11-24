@@ -42,11 +42,12 @@ pub const Property = enum(u8) {
     text_font,
     text_wrap,
     participation,
+    cursor,
 };
 
 pub const count = @typeInfo(Property).@"enum".field_names.len;
 
-pub const Kind = enum { color, number, vector4, matrix, texture, material, axis, size, alignment, boolean, vector2, font, participation };
+pub const Kind = enum { color, number, vector4, matrix, texture, material, axis, size, alignment, boolean, vector2, font, participation, cursor };
 
 pub const Value = union(Kind) {
     color: types.Color,
@@ -62,6 +63,7 @@ pub const Value = union(Kind) {
     vector2: [2]f32,
     font: types.Font,
     participation: types.Participation,
+    cursor: ?types.Cursor,
 };
 
 /// A transient pair of existing authoring values, not a per-node retained record. Callers can
@@ -78,7 +80,8 @@ pub const Invalidation = bitpack struct(u8) {
     hit: bool = false,
     semantics: bool = false,
     descendants: bool = false,
-    _: u2 = 0,
+    platform: bool = false,
+    _: u1 = 0,
 
     pub fn merge(a: Invalidation, b: Invalidation) Invalidation {
         return @bitCast(@as(u8, @bitCast(a)) | @as(u8, @bitCast(b)));
@@ -112,6 +115,7 @@ pub fn kind(property: Property) Kind {
         .offset, .scroll, .transform_origin => .vector2,
         .text_font => .font,
         .participation => .participation,
+        .cursor => .cursor,
     };
 }
 
@@ -130,6 +134,7 @@ pub fn Type(comptime property: Property) type {
         .vector2 => [2]f32,
         .font => types.Font,
         .participation => types.Participation,
+        .cursor => ?types.Cursor,
     };
 }
 
@@ -139,15 +144,16 @@ pub fn metadata(property: Property) Metadata {
         .fill, .border_color, .opacity, .texture, .material, .params, .uv, .text_color => paint,
         .border_width, .radius, .radii, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .participation => geometry,
         .text_size, .text_font, .text_wrap => text_domains,
+        .cursor => .{ .platform = true },
     };
     domains.descendants = switch (property) {
-        .border_width, .radius, .radii, .opacity, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .text_color, .text_size, .text_font, .participation => true,
+        .border_width, .radius, .radii, .opacity, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .text_color, .text_size, .text_font, .participation, .cursor => true,
         else => false,
     };
     return .{
         .kind = value_kind,
         .inherits = switch (property) {
-            .text_color, .text_size, .text_font => true,
+            .text_color, .text_size, .text_font, .cursor => true,
             else => false,
         },
         .interpolation = switch (value_kind) {
@@ -199,6 +205,7 @@ pub fn read(comptime property: Property, computed: *const Computed) Type(propert
         .text_font => computed.text.font,
         .text_wrap => computed.text.wrap,
         .participation => computed.box.participation,
+        .cursor => computed.box.cursor,
     };
 }
 
@@ -240,6 +247,7 @@ pub fn write(comptime property: Property, computed: *Computed, value: Type(prope
         .text_font => computed.text.font = value,
         .text_wrap => computed.text.wrap = value,
         .participation => computed.box.participation = value,
+        .cursor => computed.box.cursor = value,
     }
 }
 

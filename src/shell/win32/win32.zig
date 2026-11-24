@@ -218,6 +218,35 @@ pub const Win32 = struct {
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
 
+    /// Applies DWM's actual system backdrop. The compositor owns its appearance and may
+    /// reduce transparency itself. A successful call does not make opaque client pixels
+    /// transparent: this shell's GDI framebuffer still covers the client area; a host that
+    /// wants material there must present alpha through its own compatible window renderer.
+    /// Windows 11 build 22621+; older systems return UnsupportedMaterial, preserving the
+    /// caller's chosen solid fallback instead of silently claiming a material was installed.
+    pub fn setBackdrop(w: *Win32, backdrop: lcgf.shell_materials.WindowsBackdrop) error{UnsupportedMaterial}!void {
+        const value: u32 = @backingInt(backdrop);
+        if (DwmSetWindowAttribute(w.hwnd, 38, &value, @sizeOf(u32)) < 0) return error.UnsupportedMaterial;
+    }
+
+    pub fn setCorners(w: *Win32, corners: lcgf.shell_materials.WindowsCorners) error{UnsupportedMaterial}!void {
+        const value: u32 = @backingInt(corners);
+        if (DwmSetWindowAttribute(w.hwnd, 33, &value, @sizeOf(u32)) < 0) return error.UnsupportedMaterial;
+    }
+
+    /// One native attribute per call; no transactional promise is made across several calls.
+    /// Only the border accepts `suppress`. Alpha is discarded by DWM's COLORREF API.
+    pub fn setChromeColor(w: *Win32, part: enum { border, caption, text }, color: lcgf.shell_materials.WindowsColor) error{ UnsupportedMaterial, InvalidColor }!void {
+        if (part != .border and color == .suppress) return error.InvalidColor;
+        const value = color.colorref();
+        const attribute: u32 = switch (part) {
+            .border => 34,
+            .caption => 35,
+            .text => 36,
+        };
+        if (DwmSetWindowAttribute(w.hwnd, attribute, &value, @sizeOf(u32)) < 0) return error.UnsupportedMaterial;
+    }
+
     pub const Options = struct {
         /// UTF-16, as the window title is shown.
         title: [*:0]const u16 = std.unicode.utf8ToUtf16LeStringLiteral("LCGF"),
@@ -263,7 +292,7 @@ pub const Win32 = struct {
             .pixels = buf.pixels,
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
         };
-        for (&w.cursors, translate.cursor_ids) |*c, id| c.* = LoadCursorW(null, id);
+        for (&w.cursors, translate.cursor_ids) |*c, id| c.* = if (id == 0) null else LoadCursorW(null, id);
         w.cursor = w.cursors[@backingInt(context.Cursor.arrow)];
         w.hwnd = CreateWindowExW(0, class_name, opt.title, ws_overlappedwindow, cw_usedefault, cw_usedefault, cw_usedefault, cw_usedefault, null, null, instance, w) orelse return error.CreateWindow;
         // Now that the window has a monitor, size it: the logical size at that monitor's
@@ -711,4 +740,19 @@ test "win32: copy then paste round-trips through the system clipboard" {
     w.apply(&.{ .clipboard = "two\nlines \u{e9}", .paste = true });
     try testing.expect(w.poll(&ev));
     try testing.expectEqualStrings("two\nlines \u{e9}", ev.in.text);
+}
+
+test "win32: native backdrop and window decoration submission is explicit" {
+    var w: Win32 = undefined;
+    try Fixture.open(&w);
+    defer w.deinit();
+    w.setBackdrop(.window) catch |err| {
+        try testing.expectEqual(error.UnsupportedMaterial, err);
+        return error.SkipZigTest;
+    };
+    try w.setCorners(.round);
+    try w.setChromeColor(.border, .{ .color = .rgb(40, 80, 120) });
+    try w.setChromeColor(.caption, .system);
+    try testing.expectError(error.InvalidColor, w.setChromeColor(.caption, .suppress));
+    try w.setBackdrop(.none);
 }

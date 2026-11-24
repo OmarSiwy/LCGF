@@ -515,7 +515,14 @@ fn coverageAt(coverage: Coverage, x: F, y: F) F {
 /// Paints path fill/stroke coverage using any rich gradient/image/solid brush. This consumes
 /// the existing rasterizer's actual mask; no replacement fill-rule or stroke engine is used.
 pub fn paintCoverage(dst: surface.Surface, coverage: Coverage, brush: brushes.Brush, view: decoration.View, opacity: f32) Error!void {
+    return paintCoverageTransformed(dst, coverage, brush, .{ 1, 0, 0, 1, 0, 0 }, view, opacity);
+}
+
+/// The inverse maps logical painting coordinates into the brush coordinate system. Keeping
+/// it separate preserves the gradient normals under skew and nonuniform scale.
+pub fn paintCoverageTransformed(dst: surface.Surface, coverage: Coverage, brush: brushes.Brush, inverse: [6]f32, view: decoration.View, opacity: f32) Error!void {
     try dst.validate();
+    try validateMatrix(inverse);
     try brushes.validateSource(brush, dst.pixels);
     try decoration.validateClipSources(dst.pixels, view.clips);
     if (coverage.box.w == 0 or coverage.box.h == 0) return;
@@ -540,7 +547,8 @@ pub fn paintCoverage(dst: surface.Surface, coverage: Coverage, brush: brushes.Br
                 mask += coverageAt(coverage, px, py) * decoration.clipCoverage(view.clips, px, py);
             };
             mask *= simd.f(opacity / @as(f32, @floatFromInt(grid * grid)));
-            surface.store(dst, x, y, compositor.combine(surface.load(dst, x, y), brushes.sample(brush, xx, yy), mask, .source_over, .normal));
+            const sample_point = decoration.transformed(inverse, xx, yy);
+            surface.store(dst, x, y, compositor.combine(surface.load(dst, x, y), brushes.sample(brush, sample_point[0], sample_point[1]), mask, .source_over, .normal));
         }
     }
 }

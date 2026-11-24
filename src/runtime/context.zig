@@ -61,7 +61,7 @@ pub const Status = bitpack struct(u8) {
     }
 };
 
-pub const Cursor = enum(u8) { arrow, pointer, text, grab, resize_h, resize_v };
+pub const Cursor = types.Cursor;
 
 /// Effects the host should apply, returned as data instead of called back.
 pub const Platform = struct {

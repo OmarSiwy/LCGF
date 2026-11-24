@@ -70,6 +70,22 @@ pub fn environmentFor(f: *const Frame, options: Options) model.Environment {
     return options.environment orelse model.Environment.fromInput(f.in).withSettings(&f.ctx.settings);
 }
 
+pub fn visibleFocus(f: *const Frame, options: Options) bool {
+    return f.ctx.focus.visible or (environmentFor(f, options).always_show_focus orelse false);
+}
+
+/// Resolve the pre-action participation before a control changes application state. The
+/// parent already exists in this frame, so a newly hidden ancestor cancels input too.
+pub fn policyResponse(f: *Frame, id: types.Id, recipe: model.Recipe, options: Options, authoritative: style.States) style.Error!types.Response {
+    const response = responseFor(f, id, authoritative.disabled);
+    if (authoritative.disabled) return response;
+    const states = statesFor(authoritative, response, visibleFocus(f, options));
+    const root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
+    const parent = f.tree().participation(f.ctx.stack[f.ctx.depth - 1]);
+    if (!root.box.participation.layout or !root.box.participation.hit or !parent.layout or !parent.hit) return responseFor(f, id, true);
+    return response;
+}
+
 pub fn statesFor(authoritative: style.States, response: types.Response, visible_focus: bool) style.States {
     var states = authoritative;
     states.hovered = response.hovered;
@@ -128,15 +144,15 @@ fn resolvedControl(f: *const Frame, recipe: model.Recipe, options: Options, stat
 /// opening, so a bad token or property cannot leave an unmatched Frame.open behind.
 pub fn beginButton(f: *Frame, id: types.Id, options: Options) style.Error!OpenControl {
     try checkSemantics(f, options);
-    var response = responseFor(f, id, options.states.disabled);
+    var response = try policyResponse(f, id, options.recipe orelse model.button, options, options.states);
     response.clicked = !options.states.disabled and button_zig.activated(response.clicked, response.focused, f.in);
-    const visible = f.ctx.focus.visible or (environmentFor(f, options).always_show_focus orelse false);
+    const visible = visibleFocus(f, options);
     var control = try resolvedControl(f, options.recipe orelse model.button, options, statesFor(options.states, response, visible));
     control.root.box.role = .button;
     control.node = f.open(id, control.root.box);
     _ = f.interact(control.node, if (options.states.disabled) .{} else .button);
     control.response = response;
-    f.setCursor(.pointer, response.hovered);
+    f.setCursor(f.tree().cursor(control.node.ix()) orelse .pointer, response.hovered);
     expose(options.semantics, control.node, control.states);
     return control;
 }
@@ -176,11 +192,15 @@ pub fn button(f: *Frame, id: types.Id, text: []const u8, options: Options) style
 /// disabled/read-only control. Value changes commit only after all parts resolve.
 pub fn checkbox(f: *Frame, id: types.Id, value: anytype, text: []const u8, options: Options) style.Error!types.Response {
     try checkSemantics(f, options);
-    var response = responseFor(f, id, options.states.disabled);
+    var before = options.states;
+    const previous = checkbox_zig.Check.of(value.*);
+    before.checked = previous == .on;
+    before.indeterminate = previous == .mixed;
+    var response = try policyResponse(f, id, options.recipe orelse model.checkbox, options, before);
     response.clicked = !options.states.disabled and !options.states.read_only and checkbox_zig.toggled(response.clicked, response.focused, f.in);
     const next = checkbox_zig.flip(value.*, response.clicked);
     const check = checkbox_zig.Check.of(next);
-    var states = statesFor(options.states, response, f.ctx.focus.visible);
+    var states = statesFor(options.states, response, visibleFocus(f, options));
     states.checked = check == .on;
     states.indeterminate = check == .mixed;
     var control = try resolvedControl(f, options.recipe orelse model.checkbox, options, states);
@@ -202,10 +222,12 @@ pub fn checkbox(f: *Frame, id: types.Id, value: anytype, text: []const u8, optio
 
 pub fn switchControl(f: *Frame, id: types.Id, value: *bool, text: []const u8, options: Options) style.Error!types.Response {
     try checkSemantics(f, options);
-    var response = responseFor(f, id, options.states.disabled);
+    var before = options.states;
+    before.checked = value.*;
+    var response = try policyResponse(f, id, options.recipe orelse model.switch_control, options, before);
     response.clicked = !options.states.disabled and !options.states.read_only and checkbox_zig.toggled(response.clicked, response.focused, f.in);
     const next = base.toggle(value.*, response.clicked);
-    var states = statesFor(options.states, response, f.ctx.focus.visible);
+    var states = statesFor(options.states, response, visibleFocus(f, options));
     states.checked = next;
     var control = try resolvedControl(f, options.recipe orelse model.switch_control, options, states);
     const track = try control.part(Parts.track, null);
@@ -226,8 +248,8 @@ pub fn switchControl(f: *Frame, id: types.Id, value: *bool, text: []const u8, op
 pub fn slider(f: *Frame, id: types.Id, value: *f32, lo: f32, hi: f32, options: Options) style.Error!types.Response {
     if (!std.math.isFinite(lo) or !std.math.isFinite(hi) or !(lo < hi)) return error.InvalidValue;
     try checkSemantics(f, options);
-    const response = responseFor(f, id, options.states.disabled);
-    const state = statesFor(options.states, response, f.ctx.focus.visible);
+    const response = try policyResponse(f, id, options.recipe orelse model.slider, options, options.states);
+    const state = statesFor(options.states, response, visibleFocus(f, options));
     var next = value.*;
     if (!state.disabled and !state.read_only) {
         const rect = f.heldRect();
@@ -275,8 +297,8 @@ pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node 
 /// caller's existing read-only policy is retained; options may restrict it further.
 pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
     try checkSemantics(f, options);
-    const response = responseFor(f, id, options.states.disabled);
-    const states = statesFor(options.states, response, f.ctx.focus.visible);
+    const response = try policyResponse(f, id, options.recipe orelse model.input, options, options.states);
+    const states = statesFor(options.states, response, visibleFocus(f, options));
     var control = try resolvedControl(f, options.recipe orelse model.input, options, states);
     const content = try control.part(Parts.content, null);
     const hint = try control.part(Parts.placeholder, null);
@@ -298,7 +320,7 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
     control.root.box.scroll = .{ field.scroll, 0 };
     control.node = f.open(id, control.root.box);
     _ = f.interact(control.node, if (states.disabled) .{} else types.Sense.any);
-    f.setCursor(.text, response.hovered);
+    f.setCursor(f.tree().cursor(control.node.ix()) orelse .text, response.hovered);
     const shown = textfield_zig.shown(field, &th, placeholder);
     for (shown.band) |band| {
         var box = selection.box;

@@ -140,9 +140,16 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
         }
 
         pub fn inputAvailability(ui: anytype, in: *const Input) events.Availability {
-            _ = in;
             const states = state(ui);
-            return .{ .enabled = !states.disabled, .activates = !states.read_only or kind == .button or kind == .input };
+            const Ui = @TypeOf(ui.*);
+            const target = @field(Ui.Events.Widget, name);
+            var response = ui.response(@backingInt(target), in);
+            response.focused = ui.focus == target;
+            const root = recipe(ui).resolve(Parts.root, useFor(ui, in, response), null) catch |err| {
+                ui.fail(err);
+                return .{ .enabled = false, .activates = false };
+            };
+            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .input };
         }
 
         fn resolvePart(ui: anytype, part: types.Id, use: model.Use) style.Computed {
@@ -185,6 +192,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             }
             root.box.value = value;
             const row = tb.t.push(parent, .hash(name), &root.box);
+            if (kind == .button or kind == .input) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
             switch (kind) {
                 .button => {
                     pushText(ui, row, @field(ui.signals.state, text), label_part);

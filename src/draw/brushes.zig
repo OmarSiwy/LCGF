@@ -16,6 +16,8 @@ pub const Sampling = enum { nearest, linear };
 pub const Address = enum { clamp, repeat, mirror, transparent };
 pub const Fit = enum { fill, contain, cover, none, scale_down };
 pub const Repeat = enum { none, repeat, mirror, round, space };
+/// EXIF orientations 1..8, applied to the selected source crop before fitting/tiling.
+pub const Orientation = enum { normal, mirror_x, rotate_180, mirror_y, transpose, rotate_90, transverse, rotate_270 };
 
 /// Positions may extend outside 0..1 and may coincide for a hard stop. `midpoint` is the
 /// interpolation midpoint between this stop and the next, in the open interval (0,1).
@@ -90,8 +92,16 @@ pub const Linear = struct { ramp: Ramp, from: [2]f32, to: [2]f32 };
 /// The center and radii define the final ellipse; the optional focus shifts the zero-radius
 /// point. Focus must lie strictly inside the ellipse. This also supports focal SVG gradients.
 pub const Radial = struct { ramp: Ramp, center: [2]f32, radius: [2]f32, focus: ?[2]f32 = null };
+/// General radial cone, including two nonzero radii and an external focal circle. The
+/// greatest valid circle parameter paints each point; points outside the cone are clear.
+/// Equal circles paint nothing. An affine inverse on the painting layer supplies ellipses.
+pub const TwoCircle = struct { ramp: Ramp, start: [2]f32, start_radius: f32, end: [2]f32, end_radius: f32 };
 /// Angle zero points up; positive angles turn clockwise. `angle` is in radians.
 pub const Conic = struct { ramp: Ramp, center: [2]f32, angle: f32 = 0 };
+/// OpenType/COLRv1 sweep: atan2(y-cy,x-cx) normalized to [0,2pi), with an arbitrary,
+/// possibly reversed interval. Use font coordinates (x right/y up) or a layer inverse.
+/// For equal endpoints pad switches first/last at that angle; repeated sweeps paint clear.
+pub const Sweep = struct { ramp: Ramp, center: [2]f32, start_angle: f32, end_angle: f32 };
 
 pub const ImageBrush = struct {
     image: surface.Image,
@@ -105,13 +115,21 @@ pub const ImageBrush = struct {
     repeat: [2]Repeat = .{ .none, .none },
     sampling: Sampling = .linear,
     tint: color.Rgba = .{ 1, 1, 1, 1 },
+    orientation: Orientation = .normal,
+    /// Optional half-size levels after `image` (level zero), prepared by the caller.
+    mipmaps: []const surface.Image = &.{},
+    /// Explicit fractional level of detail. Zero keeps the original sampling behavior.
+    lod: f32 = 0,
+    mip_filter: Sampling = .linear,
 };
 
 pub const Brush = union(enum) {
     solid: color.Rgba,
     linear: Linear,
     radial: Radial,
+    two_circle: TwoCircle,
     conic: Conic,
+    sweep: Sweep,
     image: ImageBrush,
 };
 
@@ -148,15 +166,33 @@ pub fn validate(b: Brush) Error!void {
                 if (x * x + y * y >= 1) return error.InvalidGeometry;
             }
         },
+        .two_circle => |g| {
+            try validateRamp(g.ramp);
+            if (!finite2(g.start) or !finite2(g.end) or !std.math.isFinite(g.start_radius) or !std.math.isFinite(g.end_radius) or g.start_radius < 0 or g.end_radius < 0) return error.InvalidGeometry;
+        },
         .conic => |g| {
             try validateRamp(g.ramp);
             if (!finite2(g.center) or !std.math.isFinite(g.angle)) return error.InvalidGeometry;
+        },
+        .sweep => |g| {
+            try validateRamp(g.ramp);
+            if (!finite2(g.center) or !std.math.isFinite(g.start_angle) or !std.math.isFinite(g.end_angle)) return error.InvalidGeometry;
         },
         .image => |g| {
             try g.image.validate();
             if (!validRect(g.source) or !validRect(g.destination) or !validRect(g.area)) return error.InvalidGeometry;
             if (g.source.x0 < 0 or g.source.y0 < 0 or g.source.x1 > @as(f32, @floatFromInt(g.image.width)) or g.source.y1 > @as(f32, @floatFromInt(g.image.height))) return error.InvalidGeometry;
             if (!color.finite(g.tint) or g.tint[3] < 0 or g.tint[3] > 1) return error.InvalidColor;
+            if (!std.math.isFinite(g.lod) or g.lod < 0 or (g.mipmaps.len == 0 and g.lod != 0)) return error.InvalidGeometry;
+            var width = g.image.width;
+            var height = g.image.height;
+            for (g.mipmaps) |level| {
+                try level.validate();
+                if (width == 1 and height == 1) return error.InvalidGeometry;
+                width = @max(width / 2, 1);
+                height = @max(height / 2, 1);
+                if (level.width != width or level.height != height) return error.InvalidGeometry;
+            }
         },
     }
 }
@@ -166,6 +202,50 @@ pub fn validate(b: Brush) Error!void {
 pub fn validateSource(b: Brush, destination: []const u32) Error!void {
     try validate(b);
     if (b == .image and surface.overlaps(destination, b.image.image.pixels)) return error.AliasedStorage;
+    if (b == .image) for (b.image.mipmaps) |level| if (surface.overlaps(destination, level.pixels)) return error.AliasedStorage;
+}
+
+pub fn orientedSize(size: [2]f32, orientation: Orientation) [2]f32 {
+    return switch (orientation) {
+        .normal, .mirror_x, .rotate_180, .mirror_y => size,
+        else => .{ size[1], size[0] },
+    };
+}
+
+/// Inverse orientation: display-normalized coordinates to encoded source-normalized ones.
+pub inline fn orientedUv(u: F, v: F, orientation: Orientation) [2]F {
+    const one = simd.f(1);
+    return switch (orientation) {
+        .normal => .{ u, v },
+        .mirror_x => .{ one - u, v },
+        .rotate_180 => .{ one - u, one - v },
+        .mirror_y => .{ u, one - v },
+        .transpose => .{ v, u },
+        .rotate_90 => .{ v, one - u },
+        .transverse => .{ one - v, one - u },
+        .rotate_270 => .{ one - v, u },
+    };
+}
+
+/// Explicit footprint-to-LOD helper. Derivatives are source pixels per output pixel.
+pub fn imageLod(dx: [2]f32, dy: [2]f32) Error!f32 {
+    if (!finite2(dx) or !finite2(dy)) return error.InvalidGeometry;
+    return @max(0, @log2(@max(@max(std.math.hypot(dx[0], dx[1]), std.math.hypot(dy[0], dy[1])), 1)));
+}
+
+fn imageLevel(g: ImageBrush, level: usize, u: F, v: F) Batch {
+    const image = if (level == 0) g.image else g.mipmaps[level - 1];
+    const scale_x = @as(f32, @floatFromInt(image.width)) / @as(f32, @floatFromInt(g.image.width));
+    const scale_y = @as(f32, @floatFromInt(image.height)) / @as(f32, @floatFromInt(g.image.height));
+    const x0 = g.source.x0 * scale_x;
+    const x1 = g.source.x1 * scale_x;
+    const y0 = g.source.y0 * scale_y;
+    const y1 = g.source.y1 * scale_y;
+    const inset_x = @min(0.5, (x1 - x0) * 0.5);
+    const inset_y = @min(0.5, (y1 - y0) * 0.5);
+    const x = @min(@max(simd.f(x0) + u * simd.f(x1 - x0), simd.f(x0 + inset_x)), simd.f(x1 - inset_x));
+    const y = @min(@max(simd.f(y0) + v * simd.f(y1 - y0), simd.f(y0 + inset_y)), simd.f(y1 - inset_y));
+    return sampleImage(image, x, y, g.sampling, .{ .clamp, .clamp });
 }
 
 inline fn pow(v: F, e: F) F {
@@ -328,14 +408,57 @@ pub fn sample(b: Brush, x: F, y: F) Batch {
             const p = (bcoef + @sqrt(bcoef * bcoef + a * simd.f(ccoef))) / simd.f(ccoef);
             break :blk sampleRamp(g.ramp, p);
         },
+        .two_circle => |g| blk: {
+            const dx = g.end[0] - g.start[0];
+            const dy = g.end[1] - g.start[1];
+            const dr = g.end_radius - g.start_radius;
+            const qx = x - simd.f(g.start[0]);
+            const qy = y - simd.f(g.start[1]);
+            const a = dx * dx + dy * dy - dr * dr;
+            const polynomial_b = -simd.f(2) * (qx * simd.f(dx) + qy * simd.f(dy) + simd.f(g.start_radius * dr));
+            const c = qx * qx + qy * qy - simd.f(g.start_radius * g.start_radius);
+            var t: F = undefined;
+            var valid: simd.B = undefined;
+            if (a == 0) {
+                valid = polynomial_b != simd.f(0);
+                t = -c / @select(f32, valid, polynomial_b, simd.f(1));
+                valid &= simd.f(g.start_radius) + t * simd.f(dr) >= simd.f(0);
+            } else {
+                const discriminant = polynomial_b * polynomial_b - simd.f(4 * a) * c;
+                const root = @sqrt(@max(discriminant, simd.f(0)));
+                const q = -simd.f(0.5) * (polynomial_b + @select(f32, polynomial_b < simd.f(0), -root, root));
+                const t0 = q / simd.f(a);
+                const t1 = c / @select(f32, q != simd.f(0), q, simd.f(1));
+                const valid0 = simd.f(g.start_radius) + t0 * simd.f(dr) >= simd.f(0);
+                const valid1 = (q != simd.f(0)) & (simd.f(g.start_radius) + t1 * simd.f(dr) >= simd.f(0));
+                t = @max(@select(f32, valid0, t0, simd.f(-std.math.inf(f32))), @select(f32, valid1, t1, simd.f(-std.math.inf(f32))));
+                valid = (discriminant >= simd.f(0)) & (valid0 | valid1);
+            }
+            const value = sampleRamp(g.ramp, @select(f32, valid, t, simd.f(0)));
+            var result: Batch = undefined;
+            inline for (0..4) |channel| result[channel] = @select(f32, valid, value[channel], simd.f(0));
+            break :blk result;
+        },
         .conic => |g| sampleRamp(g.ramp, @mod(angle(x - simd.f(g.center[0]), -(y - simd.f(g.center[1]))) - simd.f(g.angle), simd.f(2 * std.math.pi)) / simd.f(2 * std.math.pi)),
+        .sweep => |g| blk: {
+            const theta = @mod(angle(y - simd.f(g.center[1]), x - simd.f(g.center[0])), simd.f(2 * std.math.pi));
+            if (g.start_angle == g.end_angle) {
+                if (g.ramp.spread != .pad) break :blk surface.splat(.{ 0, 0, 0, 0 });
+                break :blk sampleRamp(g.ramp, @select(f32, theta < simd.f(g.start_angle), simd.f(g.ramp.segments[0].position), simd.f(g.ramp.segments[g.ramp.segments.len - 1].position)));
+            }
+            break :blk sampleRamp(g.ramp, (theta - simd.f(g.start_angle)) / simd.f(g.end_angle - g.start_angle));
+        },
         .image => |g| blk: {
             const tx = tileAxis(x, g.destination.x0, g.destination.w(), g.area.x0, g.area.w(), g.repeat[0]);
             const ty = tileAxis(y, g.destination.y0, g.destination.h(), g.area.y0, g.area.h(), g.repeat[1]);
-            // Clamp to the selected source's pixel centers, rather than adjacent atlas texels.
-            const sx = @min(@max(simd.f(g.source.x0) + tx.fraction * simd.f(g.source.w()), simd.f(g.source.x0 + 0.5)), simd.f(@max(g.source.x0 + 0.5, g.source.x1 - 0.5)));
-            const sy = @min(@max(simd.f(g.source.y0) + ty.fraction * simd.f(g.source.h()), simd.f(g.source.y0 + 0.5)), simd.f(@max(g.source.y0 + 0.5, g.source.y1 - 0.5)));
-            var pixels = sampleImage(g.image, sx, sy, g.sampling, .{ .clamp, .clamp });
+            const uv = orientedUv(tx.fraction, ty.fraction, g.orientation);
+            const lod = @min(g.lod, @as(f32, @floatFromInt(g.mipmaps.len)));
+            const first: usize = @intFromFloat(if (g.mip_filter == .nearest) @round(lod) else @floor(lod));
+            var pixels = imageLevel(g, first, uv[0], uv[1]);
+            if (g.mip_filter == .linear and first < g.mipmaps.len and lod > @floor(lod)) {
+                const second = imageLevel(g, first + 1, uv[0], uv[1]);
+                inline for (0..4) |channel| pixels[channel] += (second[channel] - pixels[channel]) * simd.f(lod - @floor(lod));
+            }
             const visible: F = @floatFromInt(@intFromBool(tx.visible & ty.visible));
             inline for (0..3) |c| pixels[c] *= visible * simd.f(std.math.clamp(g.tint[c], 0, 1) * g.tint[3]);
             pixels[3] *= visible * simd.f(g.tint[3]);
@@ -443,4 +566,30 @@ test "nine slice consumes fractional and large destination cuts" {
     try testing.expectEqual(@as(usize, 8), slices.len);
     try testing.expectEqual(@as(f32, 300.5), slices[0].destination.x1);
     try testing.expectEqual(Repeat.round, slices[1].repeat[0]);
+}
+
+test "general two circle gradients preserve inner radii and transparent cone exterior" {
+    var segments: [2]Segment = undefined;
+    const ramp = try prepareStops(&.{ .{ .position = 0, .color = .{ 0, 0, 0, 1 } }, .{ .position = 1, .color = .{ 1, 1, 1, 1 } } }, &segments, .{}, .pad);
+    const concentric: Brush = .{ .two_circle = .{ .ramp = ramp, .start = .{ 0, 0 }, .start_radius = 2, .end = .{ 0, 0 }, .end_radius = 6 } };
+    try validate(concentric);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), sample(concentric, simd.f(4), simd.f(0))[0][0], 0.0001);
+    const cone: Brush = .{ .two_circle = .{ .ramp = ramp, .start = .{ 10, 0 }, .start_radius = 0, .end = .{ 0, 0 }, .end_radius = 3 } };
+    try testing.expectEqual(@as(f32, 0), sample(cone, simd.f(10), simd.f(10))[3][0]);
+    const equal: Brush = .{ .two_circle = .{ .ramp = ramp, .start = .{ 0, 0 }, .start_radius = 2, .end = .{ 0, 0 }, .end_radius = 2 } };
+    try testing.expectEqual(@as(f32, 0), sample(equal, simd.f(2), simd.f(0))[3][0]);
+}
+
+test "OpenType sweep uses Cartesian angles and consumes reversed and degenerate intervals" {
+    var segments: [2]Segment = undefined;
+    var ramp = try prepareStops(&.{ .{ .position = 0, .color = .{ 0, 0, 0, 1 } }, .{ .position = 1, .color = .{ 1, 1, 1, 1 } } }, &segments, .{}, .pad);
+    const sweep: Brush = .{ .sweep = .{ .ramp = ramp, .center = .{ 0, 0 }, .start_angle = std.math.pi, .end_angle = 0 } };
+    try validate(sweep);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), sample(sweep, simd.f(0), simd.f(1))[0][0], 0.0001);
+    var degenerate: Brush = .{ .sweep = .{ .ramp = ramp, .center = .{ 0, 0 }, .start_angle = std.math.pi, .end_angle = std.math.pi } };
+    try testing.expectEqual(@as(f32, 0), sample(degenerate, simd.f(1), simd.f(0))[0][0]);
+    try testing.expectEqual(@as(f32, 1), sample(degenerate, simd.f(0), simd.f(-1))[0][0]);
+    ramp.spread = .repeat;
+    degenerate.sweep.ramp = ramp;
+    try testing.expectEqual(@as(f32, 0), sample(degenerate, simd.f(0), simd.f(-1))[3][0]);
 }

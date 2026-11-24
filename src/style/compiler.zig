@@ -286,6 +286,7 @@ fn parseSource(target: properties.Property, value: []const u8) Error!resolution.
         .vector4 => .{ .vector4 = try vector(4, value, false) },
         .matrix => .{ .matrix = try vector(6, function(value, "matrix") orelse value, false) },
         .participation => .{ .participation = if (std.mem.eql(u8, value, "all")) .all else if (std.mem.eql(u8, value, "hidden")) .hidden else if (std.mem.eql(u8, value, "collapsed")) .collapsed else return error.UnsupportedValue },
+        .cursor => .{ .cursor = try cursor(value) },
     };
     properties.validate(target, parsed) catch return error.InvalidValue;
     return .{ .literal = parsed };
@@ -295,6 +296,16 @@ fn tokenName(name: []const u8) bool {
     if (name.len == 0) return false;
     for (name) |c| if (!ident(c) and c != '.') return false;
     return true;
+}
+
+fn cursor(value: []const u8) Error!?types.Cursor {
+    if (std.mem.eql(u8, value, "auto")) return null;
+    if (std.mem.eql(u8, value, "default")) return .arrow;
+    if (std.mem.eql(u8, value, "none")) return .hidden;
+    inline for (@typeInfo(types.Cursor).@"enum".field_names) |field| {
+        if (equalsName(value, field)) return @field(types.Cursor, field);
+    }
+    return error.UnsupportedValue;
 }
 fn function(value: []const u8, name: []const u8) ?[]const u8 {
     if (value.len < name.len + 2 or !std.mem.startsWith(u8, value, name) or value[name.len] != '(' or value[value.len - 1] != ')') return null;

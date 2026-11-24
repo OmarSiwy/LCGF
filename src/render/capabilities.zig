@@ -123,8 +123,8 @@ pub fn plan(requirements: Set, profile: Profile, policy: Policy) Plan {
 fn brushRequirements(set: *Set, brush: brushes.Brush) void {
     switch (brush) {
         .solid => set.insert(.solid),
-        .linear, .radial => set.insert(.multistop_gradient),
-        .conic => set.insert(.conic_gradient),
+        .linear, .radial, .two_circle => set.insert(.multistop_gradient),
+        .conic, .sweep => set.insert(.conic_gradient),
         .image => |image| {
             set.insert(.image);
             if (image.repeat[0] != .none or image.repeat[1] != .none) set.insert(.repeated_image);

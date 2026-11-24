@@ -16,6 +16,11 @@ const checkbox_zig = @import("../widgets/checkbox.zig");
 const keys = @import("../widgets/keys.zig");
 
 const panel: types.Style = .{ .dir = .y, .gap = 8, .size = .{ .fill, .fit }, .pad = @splat(12) };
+const button_rules = model.button_rules ++ [_]style.Rule{
+    .{ .part = style.Parts.root, .require = .{ .busy = true }, .declarations = &.{style.set(.participation, .hidden)} },
+    .{ .part = style.Parts.root, .require = .{ .selected = true }, .declarations = &.{style.set(.cursor, .crosshair)} },
+};
+const button_recipe: model.Recipe = .{ .parts = model.button.parts, .rules = &button_rules };
 const State = struct {
     save: []const u8 = "Save",
     check_text: []const u8 = "Enabled",
@@ -32,7 +37,7 @@ const State = struct {
 
     pub fn build(app: *@This(), f: *Frame) void {
         _ = f.open(.none, panel);
-        app.activated = (controls.button(f, .from("save"), app.save, .{ .states = app.button_state, .environment = app.environment }) catch unreachable).clicked;
+        app.activated = (controls.button(f, .from("save"), app.save, .{ .recipe = button_recipe, .states = app.button_state, .environment = app.environment }) catch unreachable).clicked;
         const options: controls.Options = .{ .states = app.control_state, .environment = app.environment };
         _ = controls.checkbox(f, .from("check"), &app.checked, app.check_text, options) catch unreachable;
         _ = controls.switchControl(f, .from("switch"), &app.switched, app.switch_text, options) catch unreachable;
@@ -42,7 +47,7 @@ const State = struct {
     }
 };
 
-const button_config: ct.Config = .{ .states_field = "button_state", .environment_field = "environment" };
+const button_config: ct.Config = .{ .recipe = button_recipe, .states_field = "button_state", .environment_field = "environment" };
 const control_config: ct.Config = .{ .states_field = "control_state", .environment_field = "environment" };
 const page = spec.col(panel, .{
     ct.button(.save, .save, button_config),
@@ -151,6 +156,32 @@ test "recipe read-only checkbox remains focusable and its pointer event is expli
     output = try run.frame(&input);
     try std.testing.expectEqual(@as(?Ui.Events.Event, null), output.comptime_.event);
     try std.testing.expectEqual(checkbox_zig.Check.mixed, run.app.checked);
+}
+
+test "recipe participation cancels release actions and explicit cursor wins in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Saved = struct {
+        var run: Run = .{};
+    };
+    const run = &Saved.run;
+    run.init();
+    run.app.button_state.selected = true;
+    run.ui.signals.set(.button_state, run.app.button_state);
+    var input: Input = .{ .viewport = .{ 320, 400 } };
+    var output = try run.frame(&input);
+    input.pointer = aim(output, .from("save"));
+    output = try run.frame(&input);
+    try std.testing.expectEqual(types.Cursor.crosshair, output.runtime.platform.cursor);
+    try std.testing.expectEqual(types.Cursor.crosshair, output.comptime_.cursor);
+    input.buttons.left = true;
+    _ = try run.frame(&input);
+    run.app.button_state.busy = true;
+    run.ui.signals.set(.button_state, run.app.button_state);
+    input.buttons.left = false;
+    output = try run.frame(&input);
+    try std.testing.expect(!run.app.activated);
+    try std.testing.expectEqual(@as(?Ui.Events.Event, null), output.comptime_.event);
+    try std.testing.expectEqual(types.Cursor.arrow, output.comptime_.cursor);
 }
 
 test "a runtime token error in a comptime recipe is returned as frame data" {

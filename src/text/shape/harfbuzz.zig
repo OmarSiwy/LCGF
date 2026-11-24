@@ -13,6 +13,10 @@
 const std = @import("std");
 const lcgf = @import("lcgf");
 const Run = lcgf.shape.Run;
+const color_paint = @import("harfbuzz_paint.zig");
+pub const PaintOptions = color_paint.Options;
+pub const PaintScratch = color_paint.Scratch;
+pub const PaintColorStop = color_paint.ColorStop;
 
 const hb_blob_t = opaque {};
 const hb_face_t = opaque {};
@@ -37,6 +41,7 @@ extern fn hb_blob_get_length(blob: *hb_blob_t) c_uint;
 extern fn hb_blob_get_data(blob: *hb_blob_t, length: ?*c_uint) ?[*]const u8;
 extern fn hb_face_create(blob: *hb_blob_t, index: c_uint) *hb_face_t;
 extern fn hb_face_destroy(face: *hb_face_t) void;
+extern fn hb_face_get_upem(face: *hb_face_t) c_uint;
 extern fn hb_face_reference_table(face: *hb_face_t, tag: u32) *hb_blob_t;
 extern fn hb_font_create(face: *hb_face_t) *hb_font_t;
 extern fn hb_font_destroy(font: *hb_font_t) void;
@@ -86,6 +91,14 @@ pub const Feature = extern struct {
     end: u32 = std.math.maxInt(u32),
 };
 pub const Variation = extern struct { tag: u32, value: f32 };
+pub const SvgOptions = struct {
+    px: f32,
+    /// Baseline origin in output pixels. SVG font coordinates have positive y downwards.
+    origin: [2]f32 = .{ 0, 0 },
+    foreground: lcgf.types.Color = .black,
+    /// Null ignores font palette entries, retaining var() fallbacks/currentColor.
+    palette: ?u32 = 0,
+};
 pub const Options = struct {
     /// Horizontal directions supported by Run's advance column. Vertical advances need a
     /// vertical text pipeline and are not silently discarded through this API.
@@ -126,6 +139,8 @@ pub const HarfBuzz = struct {
     buf: *hb_buffer_t,
     /// Lazily allocated by outline; shaping-only callers do not create drawing callbacks.
     draw: ?*hb_draw_funcs_t = null,
+    /// Optional COLRv1 callbacks, created only by rasterPaint.
+    painter: ?*color_paint.Functions = null,
 
     pub fn init(data: []const u8, index: u32) HarfBuzz {
         const blob = hb_blob_create(data.ptr, @intCast(data.len), hb_memory_mode_readonly, null, null);
@@ -135,6 +150,7 @@ pub const HarfBuzz = struct {
 
     pub fn deinit(hb: *HarfBuzz) void {
         if (hb.draw) |draw| hb_draw_funcs_destroy(draw);
+        if (hb.painter) |painter| color_paint.destroy(painter);
         hb_buffer_destroy(hb.buf);
         hb_font_destroy(hb.font);
         hb_face_destroy(hb.face);
@@ -287,6 +303,80 @@ pub const HarfBuzz = struct {
         const blob = hb_ot_color_glyph_reference_svg(hb.face, glyph);
         defer hb_blob_destroy(blob);
         return copyBlob(blob, out);
+    }
+
+    /// Decodes plain or gzip-compressed OpenType SVG into caller storage. The bounded SVG
+    /// renderer reports unsupported visual features explicitly; the host can choose another
+    /// renderer for those documents without silently losing their appearance.
+    pub fn svgDocument(hb: *const HarfBuzz, glyph: u16, out: []u8) error{ NoSpace, NoImage, InvalidSvgCompression }![]const u8 {
+        const blob = hb_ot_color_glyph_reference_svg(hb.face, glyph);
+        defer hb_blob_destroy(blob);
+        var count: c_uint = 0;
+        const data = hb_blob_get_data(blob, &count) orelse return error.NoImage;
+        if (count == 0) return error.NoImage;
+        if (count >= 3 and std.mem.eql(u8, data[0..3], &.{ 0x1f, 0x8b, 0x08 })) {
+            var input: std.Io.Reader = .fixed(data[0..count]);
+            var gzip: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+            var output: std.Io.Writer = .fixed(out);
+            const n = gzip.reader.streamRemaining(&output) catch |err| return if (err == error.WriteFailed) error.NoSpace else error.InvalidSvgCompression;
+            return out[0..n];
+        }
+        return copyBlob(blob, out);
+    }
+
+    /// Copies a selected CPAL palette into the renderer's explicit RGBA color space.
+    pub fn paletteColors(hb: *const HarfBuzz, palette: u32, out: []lcgf.color_math.Rgba) error{ InvalidPalette, NoSpace }![]const lcgf.color_math.Rgba {
+        if (palette >= hb_ot_color_palette_get_count(hb.face)) return error.InvalidPalette;
+        const count = hb_ot_color_palette_get_colors(hb.face, palette, 0, null, null);
+        if (out.len < count) return error.NoSpace;
+        for (out[0..count], 0..) |*color, i| {
+            var n: c_uint = 1;
+            var value: [1]u32 = undefined;
+            _ = hb_ot_color_palette_get_colors(hb.face, palette, @intCast(i), &n, &value);
+            if (n != 1) return error.InvalidPalette;
+            color.* = lcgf.color_math.fromColor(.rgba(@truncate(value[0] >> 8), @truncate(value[0] >> 16), @truncate(value[0] >> 24), @truncate(value[0])));
+        }
+        return out[0..count];
+    }
+
+    /// Connected static OpenType SVG subset: plain/gzip document -> detached glyphN ->
+    /// paths/gradients -> premultiplied surface. The unclipped em viewport and baseline agree
+    /// with OpenType's SVG coordinate rules. Unsupported SVG features return the parser's
+    /// explicit profile error; this is not a claim of complete SVG/CSS/filter conformance.
+    pub fn rasterSvg(hb: *const HarfBuzz, glyph: u16, options: SvgOptions, destination: lcgf.surface.Surface, document_storage: []u8, palette_storage: []lcgf.color_math.Rgba, buffers: lcgf.svg.Buffers) !void {
+        try destination.validate();
+        if (!std.math.isFinite(options.px) or options.px <= 0 or !std.math.isFinite(options.origin[0]) or !std.math.isFinite(options.origin[1])) return error.InvalidGeometry;
+        const upem = hb_face_get_upem(hb.face);
+        if (upem == 0) return error.InvalidGeometry;
+        const document = try hb.svgDocument(glyph, document_storage);
+        const colors: []const lcgf.color_math.Rgba = if (options.palette != null and hb_ot_color_palette_get_count(hb.face) > 0) try hb.paletteColors(options.palette.?, palette_storage) else &.{};
+        var id_storage: [16]u8 = undefined;
+        const id = try std.fmt.bufPrint(&id_storage, "glyph{d}", .{glyph});
+        const em: f32 = @floatFromInt(upem);
+        const scale = options.px / em;
+        try lcgf.surface.clear(destination, @splat(0));
+        errdefer lcgf.surface.clear(destination, @splat(0)) catch {};
+        try lcgf.svg.paint(document, destination, .{
+            .viewport = .{ .x0 = 0, .y0 = 0, .x1 = em, .y1 = em },
+            .initial_transform = .{ scale, 0, 0, scale, options.origin[0], options.origin[1] },
+            .clip_viewport = false,
+            .fragment_ancestors = false,
+            .use_intrinsic_size = true,
+            .fragment = id,
+            .palette = colors,
+            .current_color = lcgf.color_math.fromColor(options.foreground),
+        }, buffers);
+    }
+
+    /// Renders COLRv1 solid/linear/two-circle/sweep paints, nested affine transforms, glyph
+    /// and rectangle clips, all OpenType composite/blend modes and palette overrides through
+    /// LCGF's shared CPU brushes/compositor. The selected variable instance applies to both
+    /// the paint graph and its outlines. Short stacks/storage return an error and clear output.
+    pub fn rasterPaint(hb: *HarfBuzz, glyph: u16, variations: []const Variation, options: PaintOptions, destination: lcgf.surface.Surface, scratch: PaintScratch) !void {
+        if (hb_ot_color_glyph_has_paint(hb.face, glyph) == 0) return error.NoPaint;
+        if (options.palette >= hb_ot_color_palette_get_count(hb.face)) return error.InvalidPalette;
+        hb_font_set_variations(hb.font, if (variations.len == 0) null else variations.ptr, @intCast(variations.len));
+        try color_paint.raster(hb, glyph, variations, options, destination, scratch);
     }
 
     /// Renders real COLRv0 layers through outline -> paths.flatten/fill -> premultiplied
@@ -615,6 +705,122 @@ test "bitmap color fonts decode with the existing PNG path and SVG extraction is
     try std.testing.expect(std.mem.startsWith(u8, svg, "<svg "));
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"glyph2\"") != null);
     try std.testing.expectError(error.NoImage, svg_hb.copyPng(run.glyph[0], .{ 16, 16 }, &encoded));
+}
+
+test "COLRv1 callbacks render real gradients groups transforms palette overrides and bounded failures" {
+    var hb: HarfBuzz = .init(@embedFile("testdata/color-paint.ttf"), 0);
+    defer hb.deinit();
+    try std.testing.expect(hb.formats().colr_paint);
+    var glyph_cols: lcgf.shape.TestRun = .{};
+    var run = glyph_cols.run();
+    try hb.shape("ABCDEFGH", &run);
+    try std.testing.expectEqual(8, run.len);
+    var path_buffers: lcgf.paths.TestBuffers(64, 512) = .{};
+    var path = path_buffers.path();
+    var poly = path_buffers.polyline();
+    var accumulator: [60 * 90 + 32]f32 = undefined;
+    var coverage: [60 * 90 + 32]u8 = undefined;
+    var pixels: [80 * 90]u32 = undefined;
+    const destination = try lcgf.surface.init(&pixels, 60, 90);
+    var group_pixels: [3][80 * 90]u32 = undefined;
+    var groups: [3]lcgf.surface.Surface = undefined;
+    for (&groups, &group_pixels) |*group, *storage| group.* = try lcgf.surface.init(storage, 60, 90);
+    var clips: [8 * 80 * 90]u8 = undefined;
+    var transforms: [16][6]f32 = undefined;
+    var group_clips: [3]usize = undefined;
+    var stops: [8]PaintColorStop = undefined;
+    var brush_stops: [8]lcgf.brushes.Stop = undefined;
+    var segments: [8]lcgf.brushes.Segment = undefined;
+    const scratch: PaintScratch = .{ .path = &path, .poly = &poly, .scan = path_buffers.scratch(), .acc = &accumulator, .coverage = &coverage, .clips = &clips, .transforms = &transforms, .groups = &groups, .group_clips = &group_clips, .stops = &stops, .brush_stops = &brush_stops, .segments = &segments };
+    const options: PaintOptions = .{ .transform = .{ 0.1, 0, 0, -0.1, 0, 80 } };
+    try hb.rasterPaint(run.glyph[0], &.{}, options, destination, scratch);
+    const gradient: lcgf.types.Color = @bitCast(destination.pixels[20 * destination.stride + 10]);
+    try std.testing.expect(gradient.r >= 180 and gradient.r <= 190 and gradient.b >= 65 and gradient.b <= 75 and gradient.a == 255);
+    try std.testing.expectEqual(lcgf.types.Color.rgba(0, 0, 255, 255).bitsOf(), destination.pixels[20 * destination.stride + 35]);
+    const reference = destination.pixels[20 * destination.stride + 10];
+    try hb.rasterPaint(run.glyph[5], &.{}, options, destination, scratch);
+    try std.testing.expectEqual(reference, destination.pixels[20 * destination.stride + 10]); // PaintColrGlyph traversal
+    try hb.rasterPaint(run.glyph[1], &.{}, options, destination, scratch);
+    // Pinned HarfBuzz COLR get_color feeds 255 * .5 through HB_COLOR/HB_TAG u8,
+    // truncating to 127 before our premultiplied compositor sees the source.
+    const composite: lcgf.types.Color = @bitCast(destination.pixels[20 * destination.stride + 10]);
+    try std.testing.expectEqual(@as(u8, 127), composite.r);
+    try std.testing.expectEqual(@as(u8, 127), composite.a);
+    try std.testing.expectEqual(@as(u32, 0), destination.pixels[20 * destination.stride + 35]);
+    try hb.rasterPaint(run.glyph[2], &.{}, options, destination, scratch);
+    const radial_center: lcgf.types.Color = @bitCast(destination.pixels[44 * destination.stride + 25]);
+    try std.testing.expect(radial_center.r > 240 and radial_center.b < 15);
+    try hb.rasterPaint(run.glyph[3], &.{}, options, destination, scratch);
+    const sweep_right: lcgf.types.Color = @bitCast(destination.pixels[44 * destination.stride + 35]);
+    const sweep_left: lcgf.types.Color = @bitCast(destination.pixels[44 * destination.stride + 15]);
+    try std.testing.expect(sweep_right.r > 245 and sweep_right.b < 10);
+    try std.testing.expect(sweep_left.r > 120 and sweep_left.r < 140 and sweep_left.b > 120 and sweep_left.b < 140);
+    var changed = options;
+    changed.palette = 1;
+    try hb.rasterPaint(run.glyph[4], &.{}, changed, destination, scratch);
+    try std.testing.expectEqual(@as(u32, 0), destination.pixels[20 * destination.stride + 10]);
+    try std.testing.expectEqual(lcgf.types.Color.rgba(0, 255, 0, 255).bitsOf(), destination.pixels[20 * destination.stride + 20]);
+    changed = options;
+    changed.palette_overrides = &.{.{ .index = 0, .color = .rgba(255, 128, 0, 255) }};
+    try hb.rasterPaint(run.glyph[4], &.{}, changed, destination, scratch);
+    try std.testing.expectEqual(lcgf.types.Color.rgba(255, 128, 0, 255).bitsOf(), destination.pixels[20 * destination.stride + 20]);
+    changed = options;
+    changed.foreground = .rgba(0, 255, 0, 255);
+    try hb.rasterPaint(run.glyph[6], &.{}, changed, destination, scratch);
+    try std.testing.expectEqual(lcgf.types.Color.rgba(0, 127, 0, 127).bitsOf(), destination.pixels[20 * destination.stride + 20]);
+    try hb.rasterPaint(run.glyph[7], &.{}, options, destination, scratch);
+    for (destination.pixels) |pixel| try std.testing.expectEqual(@as(u32, 0), pixel);
+    var short = scratch;
+    short.transforms = transforms[0..1];
+    try std.testing.expectError(error.NoSpace, hb.rasterPaint(run.glyph[4], &.{}, options, destination, short));
+    for (destination.pixels) |pixel| try std.testing.expectEqual(@as(u32, 0), pixel);
+    changed = options;
+    changed.max_operations = 1;
+    try std.testing.expectError(error.LimitExceeded, hb.rasterPaint(run.glyph[0], &.{}, changed, destination, scratch));
+}
+
+test "plain and gzip SVG font glyphs render detached at the true baseline with palette fallback" {
+    var bytes: [1024]u8 = undefined;
+    var palette: [4]lcgf.color_math.Rgba = undefined;
+    var path_storage: lcgf.paths.TestBuffers(64, 256) = .{};
+    var work_storage: lcgf.paths.TestBuffers(64, 256) = .{};
+    var outline_storage: lcgf.paths.TestBuffers(64, 256) = .{};
+    var path = path_storage.path();
+    var center = path_storage.polyline();
+    var work = work_storage.polyline();
+    var outline = outline_storage.polyline();
+    var acc: [16384]f32 = undefined;
+    var coverage: [16384]u8 = undefined;
+    var gradients: [4]lcgf.svg.Gradient = undefined;
+    var stops: [8]lcgf.brushes.Stop = undefined;
+    var segments: [8]lcgf.brushes.Segment = undefined;
+    var stack: [16]lcgf.svg.Frame = undefined;
+    var dashes: [8]f32 = undefined;
+    var clips: [1]lcgf.decoration.Clip = undefined;
+    var pixels: [80 * 90]u32 = undefined;
+    const destination = try lcgf.surface.init(&pixels, 60, 90);
+    var layer_pixels: [80 * 90]u32 = undefined;
+    var layers = [_]lcgf.surface.Surface{try lcgf.surface.init(&layer_pixels, 60, 90)};
+    const buffers: lcgf.svg.Buffers = .{ .path = &path, .centerline = &center, .work = &work, .outline = &outline, .fill = path_storage.scratch(), .accumulator = &acc, .coverage = &coverage, .gradients = &gradients, .stops = &stops, .segments = &segments, .stack = &stack, .layers = &layers, .dashes = &dashes, .clips = &clips };
+    inline for (.{ @embedFile("testdata/color-svg.ttf"), @embedFile("testdata/color-svg-gzip.ttf"), @embedFile("testdata/color-svg-palette.ttf") }, 0..) |data, i| {
+        var hb: HarfBuzz = .init(data, 0);
+        defer hb.deinit();
+        var glyph_columns: lcgf.shape.TestRun = .{};
+        var run = glyph_columns.run();
+        try hb.shape("A", &run);
+        const document = try hb.svgDocument(run.glyph[0], &bytes);
+        try std.testing.expect(std.mem.startsWith(u8, document, "<svg"));
+        try std.testing.expectError(error.NoSpace, hb.svgDocument(run.glyph[0], bytes[0..4]));
+        try hb.rasterSvg(run.glyph[0], .{ .px = 100, .origin = .{ 0, 80 } }, destination, &bytes, &palette, buffers);
+        const expected = if (i == 2) lcgf.types.Color.rgba(0, 128, 0, 128) else lcgf.types.Color.rgba(255, 128, 0, 255);
+        try std.testing.expectEqual(expected.bitsOf(), destination.pixels[20 * destination.stride + 10]);
+        try std.testing.expectEqual(@as(u32, 0), destination.pixels[5 * destination.stride + 10]);
+        try std.testing.expectEqual(@as(u32, 0), destination.pixels[20 * destination.stride + 50]);
+        if (i == 2) {
+            try hb.rasterSvg(run.glyph[0], .{ .px = 100, .origin = .{ 0, 80 }, .palette = null }, destination, &bytes, &palette, buffers);
+            try std.testing.expectEqual(lcgf.types.Color.rgba(255, 128, 0, 255).bitsOf(), destination.pixels[20 * destination.stride + 10]);
+        }
+    }
 }
 
 test "a complex-script sample renders through the adapter" {
