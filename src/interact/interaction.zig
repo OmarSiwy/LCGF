@@ -116,10 +116,11 @@ pub const Interaction = struct {
         const keep = -%@as(u64, @intFromBool(moving));
         s.drag_delta = @bitCast(@as(u64, @bitCast(moved)) & keep);
         s.drag_from = @bitCast(pick(u64, moving, here, @bitCast(from)));
-        // Anonymous rows have id 0, so nothing held must not search for 0: OR in all ones
-        // (`none`) when `active` is 0 instead of the prototype's select.
-        const idle = -%@as(u32, @intFromBool(s.active == 0));
-        s.active_node = simd.find(prev.c.id, prev.len, s.active) | idle;
+        // No active id means no rows to search. A zero-length find returns none,
+        // avoiding the whole id-column scan and preventing anonymous id-0 matches.
+        // A held id still resolves against the supplied tree, since its row can move.
+        const active_rows = prev.len * @as(u32, @intFromBool(s.active != 0));
+        s.active_node = simd.find(prev.c.id, active_rows, s.active);
         s.delta = .{ in.pointer[0] - s.pointer[0], in.pointer[1] - s.pointer[1] };
         s.pointer = in.pointer;
         s.buttons = in.buttons;
@@ -330,6 +331,42 @@ test "step: hover, press, release, click over the button that was pressed" {
     try testing.expectEqual(none, f[4].hot_node);
     try testing.expectEqual(@as(u32, 0), f[4].clicked);
     try testing.expectEqual([2]f32{ 130, 60 }, f[4].delta);
+}
+
+test "step: inactive ids have no row; held ids follow current rows and ignore padding" {
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var t = twoButtons(&raw);
+    var s: Interaction = .{ .active_node = 1 };
+
+    // Hover does not create an active id, and a stale row must not survive.
+    s.step(&t, &.{ .pointer = .{ 20, 20 } });
+    try testing.expectEqual(@backingInt(id_a), s.hot);
+    try testing.expectEqual(@as(u32, 0), s.active);
+    try testing.expectEqual(none, s.active_node);
+
+    s.step(&t, &.{ .pointer = .{ 20, 20 }, .buttons = .{ .left = true } });
+    try testing.expectEqual(@backingInt(id_a), s.active);
+    try testing.expectEqual(@as(u32, 1), s.active_node);
+
+    // A rebuild may move the held widget. Keep resolving its stable id rather
+    // than caching the old row or substituting the pointer's current hit.
+    std.mem.swap(u32, &t.c.id[1], &t.c.id[2]);
+    s.step(&t, &.{ .buttons = .{ .left = true } });
+    try testing.expectEqual(@backingInt(id_a), s.active);
+    try testing.expectEqual(@as(u32, 2), s.active_node);
+
+    // Removing the held widget leaves capture by id intact until release, but
+    // no live row matches. A stale occurrence in SIMD padding is not a match.
+    t.c.id[2] = 0;
+    t.c.id[t.len] = @backingInt(id_a);
+    s.step(&t, &.{ .buttons = .{ .left = true } });
+    try testing.expectEqual(@backingInt(id_a), s.active);
+    try testing.expectEqual(none, s.active_node);
+
+    s.step(&t, &.{});
+    try testing.expectEqual(@backingInt(id_a), s.released);
+    try testing.expectEqual(@as(u32, 0), s.active);
+    try testing.expectEqual(none, s.active_node);
 }
 
 test "step: release elsewhere is not a click; pressing nothing clears active, keeps focus" {

@@ -157,8 +157,8 @@ pub const Focus = struct {
         const lo_t = pick(u32, trapped, sc.modal +% 1, 0);
         const hi_t = pick(u32, trapped, prev.c.end[@min(sc.modal, last)], prev.len);
         {
-            const cur = simd.find(prev.c.id, prev.len, it.focus);
-            const was = simd.find(prev.c.id, prev.len, s.last);
+            const cur = focusedRow(prev, it.focus);
+            const was = focusedRow(prev, s.last);
             const first = seek(prev, c.stop, 1, lo_t, hi_t, lo_t -% 1, false);
             const to = pick(u32, (was -% lo_t) < (hi_t -% lo_t), was, first);
             const id = pick(u32, to != none, prev.c.id[@min(to, last)], 0);
@@ -170,7 +170,7 @@ pub const Focus = struct {
         for (in.events, 0..) |e, ei| {
             const down = simd.orB(e.kind == .press, e.kind == .repeat);
             key = simd.orB(key, e.kind == .press);
-            const cur = simd.find(prev.c.id, prev.len, it.focus);
+            const cur = focusedRow(prev, it.focus);
             const row = @min(cur, last);
             const g = pick(u32, cur != none, c.group[row], none);
             const gr = @min(g, last);
@@ -231,13 +231,21 @@ pub const Focus = struct {
     /// `ring_width`. A zero rect when the ring is hidden, nothing is focused, or the focused
     /// node is not in `t`, so the caller can draw it unconditionally.
     pub fn ring(s: *const Focus, it: *const Interaction, t: *const Tree) Rect {
-        const row = simd.find(t.c.id, t.len, it.focus);
+        const row = focusedRow(t, it.focus);
         const r = t.rect(@min(row, t.cap - 1));
         const m = simd.b2f(simd.andB(simd.andB(s.visible, it.focus != 0), row != none));
         const g = s.ring_width;
         return .{ .x0 = (r.x0 - g) * m, .y0 = (r.y0 - g) * m, .x1 = (r.x1 + g) * m, .y1 = (r.y1 + g) * m };
     }
 };
+
+/// Zero means no focused identity, not the first anonymous label in the tree. Search zero
+/// rows in that case: no idle ID-column sweep and no anonymous row to displace initial Tab.
+/// A live nonzero ID still resolves against this tree, since its row can move or disappear.
+inline fn focusedRow(t: *const Tree, id: u32) u32 {
+    const rows = t.len * @as(u32, @intFromBool(id != 0));
+    return simd.find(t.c.id, rows, id);
+}
 
 /// The row after `cur` (before it with `back`) among rows `[lo, hi)` of `t` whose `col` has a
 /// bit of `mask` set and whose id is not 0, wrapping around the range; `none` when there is no
@@ -424,6 +432,92 @@ test "walkthrough: Tab and Shift+Tab move through the form in tree order and wra
         const row = f.t.find(@fromBackingInt(k));
         try testing.expectEqual(f.t.rect(row).y0 - 2, r.y0);
     }
+}
+
+/// Named root, named buttons, and anonymous label children: the runtime widget shape whose
+/// first id-0 row follows the first focus stop. An anonymous root would hide the regression.
+const NamedButtons = struct {
+    raw: [64 * 1024]u8 align(mem.column_align) = undefined,
+    t: Tree = undefined,
+    sc: Scopes = undefined,
+
+    const first_id = Id.from("focus.first");
+    const second_id = Id.from("focus.second");
+
+    fn build(f: *NamedButtons, prefix_spacer: bool, include_first: bool) void {
+        const layout = @import("../layout/layout.zig");
+        const Texts = @import("../core/texts.zig").Texts;
+        var carver: mem.Carver = .{ .buf = &f.raw };
+        f.t = Tree.init(&carver, 16);
+        var tx = Texts.init(&carver, 1);
+        f.sc = Scopes.init(&carver, 16);
+        const t = &f.t;
+        const root = t.push(0, Id.from("focus.named-root"), &.{ .size = .{ .px(300), .px(200) }, .gap = 8 });
+        if (prefix_spacer) {
+            const spacer = t.push(root, .none, &.{ .size = .{ .px(100), .px(10) } });
+            t.seal(spacer);
+        }
+        if (include_first) f.button(root, first_id);
+        f.button(root, second_id);
+        t.seal(root);
+        layout.run(t, &tx, .{ 300, 200 });
+    }
+
+    fn button(f: *NamedButtons, parent: u32, id: Id) void {
+        const t = &f.t;
+        const row = t.push(parent, id, &.{ .size = .{ .px(100), .px(20) }, .role = .button });
+        t.c.sense[row] = @bitCast(Sense.button);
+        const label = t.push(row, .none, &.{ .size = .{ .px(40), .px(14) }, .role = .label });
+        t.seal(label);
+        t.seal(row);
+    }
+};
+
+test "zero focus skips anonymous labels; live focus follows moved and removed rows" {
+    var buttons: NamedButtons = .{};
+    buttons.build(false, true);
+    const first = bi(NamedButtons.first_id);
+    const second = bi(NamedButtons.second_id);
+    const original_row = buttons.t.find(NamedButtons.first_id);
+    // Ensure the fixture would previously resolve zero to the first button's child.
+    try testing.expectEqual(original_row + 1, simd.find(buttons.t.c.id, buttons.t.len, 0));
+    try testing.expectEqual(none, focusedRow(&buttons.t, 0));
+
+    var walk: Walk = .{};
+    try walk.run(&buttons.t, &buttons.sc,
+        \\frame
+        \\press 43
+        \\frame
+        \\press 43
+        \\frame
+        \\press 43 shift
+    );
+    try testing.expectEqualSlices(u32, &.{ first, second, first }, walk.focus[0..walk.n]);
+    const original_ring = walk.fo.ring(&walk.it, &buttons.t);
+
+    // Rebuilding inserts a row before the focused identity. Focus resolves its new row and
+    // geometry without storing a stale index; subsequent Tab still follows document order.
+    buttons.build(true, true);
+    const moved_row = buttons.t.find(NamedButtons.first_id);
+    try testing.expect(moved_row > original_row);
+    try testing.expectEqual(moved_row, focusedRow(&buttons.t, first));
+    try walk.run(&buttons.t, &buttons.sc, "frame\n");
+    try testing.expectEqual(first, walk.it.focus);
+    const moved_ring = walk.fo.ring(&walk.it, &buttons.t);
+    try testing.expect(moved_ring.y0 > original_ring.y0);
+    try testing.expectEqual(buttons.t.rect(moved_row).y0 - walk.fo.ring_width, moved_ring.y0);
+    try walk.run(&buttons.t, &buttons.sc, "frame\npress 43\n");
+    try testing.expectEqual(second, walk.it.focus);
+
+    // An application-held identity can disappear between frames. It has no ring, and Tab
+    // restarts from the remaining first stop instead of treating an anonymous row as focus.
+    walk.it.focus = first;
+    walk.fo.last = first;
+    buttons.build(true, false);
+    try testing.expectEqual(none, focusedRow(&buttons.t, first));
+    try testing.expectEqual(Rect{}, walk.fo.ring(&walk.it, &buttons.t));
+    try walk.run(&buttons.t, &buttons.sc, "frame\npress 43\n");
+    try testing.expectEqual(second, walk.it.focus);
 }
 
 test "seek: wraps both ways, skips inert and anonymous rows, none when nothing qualifies" {

@@ -124,13 +124,17 @@ pub const Context = struct {
     /// Keyboard focus: Tab and Shift+Tab, arrows in focus groups, modal traps, the ring.
     /// `begin` steps it after `inter`, so `inter.focus` is where the keys left it.
     focus: focus.Focus = .{},
-    /// Focus groups and traps (`kind`, set while building with `Frame.focusScope`; cleared by
-    /// the next `begin`) of the tree `focus` steps through: that `begin` scans the tree that
-    /// set them, then steps.
+    /// Focus groups and traps of the tree `focus` steps through. The derived scope columns
+    /// are scratch; the declared kind bytes follow the two tree generations for reuse.
     scopes: focus.Scopes,
+    previous_scope_kind: []u8,
+    previous_scoped: bool = false,
     /// `Frame.focusScope` was called this frame.
     scoped: bool = false,
     platform: Platform = .{},
+    /// Previous-tree owner of active text input. Its subtree must republish borrowed IME
+    /// and caret data each frame; it cannot preserve that per-frame output by copying rows.
+    text_input_node: u32 = types.none,
     status: Status = .{},
     frame: u32 = 0,
     /// Frames still owed after the last input change.
@@ -177,6 +181,7 @@ pub const Context = struct {
             .memos = Memos.init(carver, limits.memos),
             .levels = Levels.init(carver, limits.nodes),
             .scopes = focus.Scopes.init(carver, limits.nodes),
+            .previous_scope_kind = carver.slice(u8, simd.rows(limits.nodes)),
         };
     }
 
@@ -235,6 +240,7 @@ pub const Context = struct {
         ctx.texts[ctx.cur].reset();
         ctx.customs[ctx.cur].reset();
         ctx.strings[ctx.cur].reset();
+        const text_input = ctx.platform.wants_text;
         ctx.platform = .{};
         ctx.status = .{};
         ctx.frame +%= 1;
@@ -261,7 +267,15 @@ pub const Context = struct {
             fo.taken = 0;
         }
         fo.visible = simd.orB(fo.visible, ctx.settings.always_show_focus);
-        if (scoped) sc.reset();
+        // Resolve once per IME-active frame, never once per memo. Ordinary focused buttons
+        // remain reusable; text-input widgets rerun their per-frame host requests.
+        ctx.text_input_node = if (simd.andB(text_input, ctx.inter.focus != 0)) prev.find(@fromBackingInt(ctx.inter.focus)) else types.none;
+        // Only declarations survive reuse; scan's group/lead/stop columns are recomputed.
+        // Swap one byte column with the tree generation, clearing only a generation that
+        // actually declared scopes. The copy path can now restore a moved subtree's kinds.
+        std.mem.swap([]u8, &sc.c.kind, &ctx.previous_scope_kind);
+        if (ctx.previous_scoped) sc.reset();
+        ctx.previous_scoped = scoped;
         scheduler.settle(ctx, in);
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
         ctx.flips.len = 0;
@@ -302,16 +316,16 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
-test "requiredBytes: 924 bytes per node of capacity (docs/perf/bytes.md)" {
+test "requiredBytes: 925 bytes per node of capacity (docs/perf/bytes.md)" {
     // Two tree generations of 276 bytes a row and a 112-byte extras row each, less the 48
     // bytes of layout scratch they share, plus 170 bytes of draw list, 16 of level-order
-    // index (docs/perf/port-perf.md) and 10 of focus scopes. A change here is a change to the
-    // recorded footprint.
+    // index (docs/perf/port-perf.md) and 11 of focus scopes, including the previous kind byte.
+    // A change here is a change to the recorded footprint.
     var a = example_limits;
     a.nodes = 4096;
     var b = a;
     b.nodes = 8192;
-    try testing.expectEqual(924 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+    try testing.expectEqual(925 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {

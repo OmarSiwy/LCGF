@@ -8,7 +8,7 @@
     python3 bench/gates/gates.py idle FILE      zero frames and zero wake-ups while idle
     python3 bench/gates/gates.py latency FILE   input-to-photon latency against its budget
     python3 bench/gates/gates.py compile-time       comptime front end compile time against its budget
-    python3 bench/gates/gates.py census         every census probe is in the census object
+    python3 bench/gates/gates.py census         every census probe is in a checked census object
     python3 bench/gates/gates.py size FILE      binary size of each example against its budget
     python3 bench/gates/gates.py table [--write]  the published table in bench/gates/README.md
     python3 bench/gates/gates.py --self-test
@@ -282,16 +282,65 @@ def check_compile_time(seconds, budgets, load):
     return rows, failed
 
 
-def check_census(src):
+def check_census(src, separate=()):
     """Branches in hot loops (docs/CHECKS.md section 2): the census jobs fail when a function of
-    the census object gains a conditional jump over tools/census/baseline*.json, but only for
+    a census object gains a conditional jump over tools/census/baseline*.json, but only for
     functions in the object. A probe file (src/**/census_probe*.zig) that src/census_probes.zig
-    does not import is never disassembled, so its passes could gain any jump unseen. Returns the
-    probe files missing from the object's root, relative to src."""
+    does not import needs its own checked object. separate contains roots whose build, CI and
+    baseline wiring has been verified by check_census_coverage. Returns uncovered probe files,
+    relative to src."""
     with open(os.path.join(src, "census_probes.zig")) as f:
         imported = set(re.findall(r'@import\("([^"]+)"\)', f.read()))
     probes = sorted(os.path.relpath(p, src) for p in glob.glob(os.path.join(src, "**", "census_probe*.zig"), recursive=True))
-    return [p for p in probes if p not in imported and p != "census_probes.zig"]
+    return [p for p in probes if p not in imported and p not in separate and p != "census_probes.zig"]
+
+
+# Independent objects prevent LLVM from merging equivalent format loops into uncensused
+# helpers. Register each root explicitly; an arbitrary unimported probe must still fail.
+SEPARATE_CENSUS = (("render/sw/census_probe_alpha8.zig", "census_alpha8", "tools/census/baseline-alpha8.json"),)
+
+
+def check_census_coverage(repo):
+    """Check separate objects through the existing build/CI wiring, then census file coverage.
+    This is a source-wiring check; census.py still disassembles and enforces all jump ceilings."""
+    with open(os.path.join(repo, "build.zig")) as f:
+        build = re.sub(r"//[^\n]*", "", f.read())
+    with open(os.path.join(repo, "ci/jobs/census-src.sh")) as f:
+        commands = [line.split("#", 1)[0].strip() for line in f]
+    compact = re.sub(r"\s+", "", build)
+    objects = re.findall(r"const\s+(\w+)\s*=\s*b\.addObject\(([^;]+)\);", build)
+    step = re.search(r'const\s+(\w+)\s*=\s*b\.step\("census-src-obj"\s*,', build)
+    src = os.path.join(repo, "src")
+    bad, separate = [], []
+    for probe, name, baseline in SEPARATE_CENSUS:
+        errors = []
+        obj = next((var for var, body in objects
+                    if re.search(r'\.name\s*=\s*"' + re.escape(name) + r'"', body)
+                    and f'.root_source_file=b.path("src/{probe}")' in re.sub(r"\s+", "", body)), None)
+        if obj is None:
+            errors.append(f"build.zig does not build src/{probe} as {name}")
+        elif step is None or f'{step[1]}.dependOn(&b.addInstallFile({obj}.getEmittedBin(),"{name}.o").step);' not in compact:
+            errors.append(f"census-src-obj does not install {name}.o from src/{probe}")
+        if not any(re.fullmatch(r"zig\s+build\s+census-src-obj(?:\s+.*)?", command) for command in commands):
+            errors.append("ci/jobs/census-src.sh does not build census-src-obj")
+        expected = ["python3", "tools/census/census.py", f"zig-out/{name}.o", "--baseline", baseline]
+        if not any(command.split() == expected for command in commands):
+            errors.append(f"ci/jobs/census-src.sh does not check {name}.o against {baseline}")
+        try:
+            with open(os.path.join(src, probe)) as f:
+                symbols = set(re.findall(r"^\s*export\s+fn\s+(p_\w+)\s*\(", f.read(), re.M))
+            with open(os.path.join(repo, baseline)) as f:
+                recorded = json.load(f)
+            if not symbols or not isinstance(recorded, dict) or symbols != set(recorded):
+                errors.append(f"{baseline} does not cover exactly the exported probes in src/{probe}")
+        except (OSError, ValueError) as e:
+            errors.append(f"cannot check src/{probe} against {baseline}: {e}")
+        bad.extend(errors)
+        if not errors:
+            separate.append(probe)
+    bad += [f"src/{p} is neither imported by src/census_probes.zig nor built and checked separately"
+            for p in check_census(src, separate)]
+    return bad
 
 
 README = os.path.join(HERE, "README.md")
@@ -440,6 +489,57 @@ def self_test():
         with open(os.path.join(d, "census_probes.zig"), "w") as f:
             f.write('comptime {\n    _ = @import("a/census_probe.zig");\n}\n')
         assert check_census(d) == ["a/census_probe_b.zig"]
+    with tempfile.TemporaryDirectory() as d:
+        # The separate format object is covered only when every link reaches the baseline.
+        files = {
+            "src/census_probes.zig": 'comptime { _ = @import("a/census_probe.zig"); }\n',
+            "src/a/census_probe.zig": "export fn p_core() void {}\n",
+            "src/render/sw/census_probe_alpha8.zig": "export fn p_alpha8() void {}\n",
+            "build.zig": '''const alpha = b.addObject(.{ .name = "census_alpha8", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/render/sw/census_probe_alpha8.zig"),
+            }) });
+            const census = b.step("census-src-obj", "Emit census objects");
+            census.dependOn(&b.addInstallFile(alpha.getEmittedBin(), "census_alpha8.o").step);
+            ''',
+            "ci/jobs/census-src.sh": "zig build census-src-obj -Dcpu=x86_64_v3\n"
+                "python3 tools/census/census.py zig-out/census_alpha8.o --baseline tools/census/baseline-alpha8.json\n",
+            "tools/census/baseline-alpha8.json": '{"p_alpha8": {"jcc": 4, "back": 2, "short_fwd": 0}}\n',
+        }
+
+        def write(rel, contents):
+            path = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(contents)
+
+        for rel, contents in files.items():
+            write(rel, contents)
+        assert check_census_coverage(d) == []
+        broken = (
+            ("build.zig", 'b.path("src/render/sw/census_probe_alpha8.zig")', 'b.path("src/a/census_probe.zig")'),
+            ("build.zig", "alpha.getEmittedBin()", "other.getEmittedBin()"),
+            ("build.zig", "census.dependOn", "other_step.dependOn"),
+            ("ci/jobs/census-src.sh", "zig build census-src-obj", "# zig build census-src-obj"),
+            ("ci/jobs/census-src.sh", "python3 tools/census/census.py", "# python3 tools/census/census.py"),
+            ("ci/jobs/census-src.sh", "zig-out/census_alpha8.o", "zig-out/census_src.o"),
+            ("ci/jobs/census-src.sh", "baseline-alpha8.json", "baseline-src.json"),
+            ("tools/census/baseline-alpha8.json", "p_alpha8", "p_other"),
+        )
+        for rel, before, after in broken:
+            write(rel, files[rel].replace(before, after))
+            assert check_census_coverage(d), (rel, before, after)
+            write(rel, files[rel])
+        probe = "src/render/sw/census_probe_alpha8.zig"
+        write(probe, files[probe] + "export fn p_new() void {}\n")
+        assert check_census_coverage(d)  # Adding a probe without its baseline must fail.
+        write(probe, files[probe])
+        baseline = "tools/census/baseline-alpha8.json"
+        os.remove(os.path.join(d, baseline))
+        assert check_census_coverage(d)
+        write(baseline, files[baseline])
+        write("src/a/census_probe_new.zig", "export fn p_new() void {}\n")
+        bad = check_census_coverage(d)
+        assert len(bad) == 1 and "src/a/census_probe_new.zig" in bad[0], bad
     rec = {"frameworks": ["a"], "frame": {}, "size": {"x": {"loaded": 1, "bss": 2}}, "latency_us": 3,
            "compile_time_s": {"100": 0.1}}
     for kind, values in (("frame", {"lcgf": 1.0, "a": 2.0}), ("rss", {"lcgf": 3, "a": 2}), ("first-frame", {"lcgf": 1, "a": 1})):
@@ -504,12 +604,12 @@ def main():
         print("gate table: bench/gates/README.md " + ("shows the recorded measurements" if current else "is not the recorded table: run gates.py table --write"))
         return 0 if current else 1
     if a.gate == "census":
-        missing = check_census(os.path.join(os.path.dirname(os.path.dirname(HERE)), "src"))
-        for p in missing:
-            print(f"gate census: src/{p} is not imported by src/census_probes.zig: its passes are not censused")
-        if not missing:
-            print("gate census: every census probe file is in the census object")
-        return 1 if missing else 0
+        bad = check_census_coverage(os.path.dirname(os.path.dirname(HERE)))
+        for error in bad:
+            print(f"gate census: {error}")
+        if not bad:
+            print("gate census: every census probe file is in a checked census object")
+        return 1 if bad else 0
     if a.gate == "compile-time":
         rec = {}
         if os.path.exists(RECORDED):

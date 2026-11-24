@@ -59,6 +59,15 @@ pub const Mono = struct {
     pub fn wrap(font: Mono, tx: *Texts) void {
         const c = &tx.c;
         const n = simd.padded(tx.len);
+        // Labels and controls commonly have no wrapping runs. One narrow-column
+        // scan avoids divisions, rounding and writes across all the metric columns.
+        // Read the padded rows as the pass below does: a stale wrapping flag there
+        // can only disable this shortcut, never skip a live wrapping run.
+        var any_wrap: simd.B = @splat(false);
+        var at: usize = 0;
+        while (at < n) : (at += W) any_wrap |= simd.loadF(c.wrap, at) > simd.f(0);
+        if (!@reduce(.Or, any_wrap)) return;
+
         const one = simd.f(1);
         var i: usize = 0;
         while (i < n) : (i += W) {
@@ -92,33 +101,58 @@ pub const Mono = struct {
     pub fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32 {
         std.debug.assert(out.len >= 1);
         var n: u32 = 0;
-        const last: u32 = @intCast(out.len - 1);
-        for (d.runs[0..d.run_len], 0..) |r, k| {
-            const adv = @max(r.px * font.advance, 1e-6);
-            const line = r.px * font.line;
-            const per_line: u32 = @intFromFloat(@min(@max(@floor((r.rect[2] - r.rect[0]) / adv + 0.5), 1), 1e6));
-            glyphs.first[k] = n;
-            for (d.strings[r.start..][0..r.bytes], 0..) |byte, j| {
-                const col: f32 = @floatFromInt(j % per_line);
-                const row: f32 = @floatFromInt(j / per_line);
-                const x = r.rect[0] + col * adv;
-                const y = r.rect[1] + row * line;
-                out[n] = .{
-                    .rect = .{ x, y, x + adv, y + line },
-                    .clip = r.clip,
-                    .params = .{ 0, 0, 0, 0 },
-                    .uv = try Grid.uv(byte),
-                    .fill = r.color,
-                    .border_color = 0,
-                    .radii = @splat(0),
-                    .border = 0,
-                    .opacity = 1, // the run's colour already carries its opacity
-                };
-                // Write always, advance until the last row.
-                n = @min(n + 1, last);
-            }
-            glyphs.count[k] = n - glyphs.first[k];
+        for (0..d.run_len) |k| n = try font.appendRun(Grid, d, @intCast(k), out, glyphs, n);
+        return n;
+    }
+
+    /// Expands only runs referenced by text commands. Run indices stay unchanged; a
+    /// non-submitted run gets an empty span. Repeated commands share one expansion.
+    /// The host still draws every submitted command in its original paint order.
+    /// This avoids constructing geometry for offscreen runs retained in the side list.
+    pub fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32 {
+        std.debug.assert(out.len >= 1);
+        std.debug.assert(glyphs.first.len >= d.run_len and glyphs.count.len >= d.run_len);
+        @memset(glyphs.first[0..d.run_len], 0);
+        @memset(glyphs.count[0..d.run_len], 0);
+        var n: u32 = 0;
+        for (0..d.cmd_len) |i| {
+            if (d.cmd.kind[i] != @backingInt(DrawList.Kind.text)) continue;
+            const k = d.cmd.first[i];
+            // Empty/truncated repeated runs can be revisited, but emit no live quads.
+            if (glyphs.count[k] != 0) continue;
+            n = try font.appendRun(Grid, d, k, out, glyphs, n);
         }
+        return n;
+    }
+
+    fn appendRun(font: Mono, comptime Grid: type, d: *const DrawList, k: u32, out: []Quad, glyphs: Glyphs, start: u32) error{GlyphOutsideSubset}!u32 {
+        const r = d.runs[k];
+        const adv = @max(r.px * font.advance, 1e-6);
+        const line = r.px * font.line;
+        const per_line: u32 = @intFromFloat(@min(@max(@floor((r.rect[2] - r.rect[0]) / adv + 0.5), 1), 1e6));
+        const last: u32 = @intCast(out.len - 1);
+        var n = start;
+        glyphs.first[k] = n;
+        for (d.strings[r.start..][0..r.bytes], 0..) |byte, j| {
+            const col: f32 = @floatFromInt(j % per_line);
+            const row: f32 = @floatFromInt(j / per_line);
+            const x = r.rect[0] + col * adv;
+            const y = r.rect[1] + row * line;
+            out[n] = .{
+                .rect = .{ x, y, x + adv, y + line },
+                .clip = r.clip,
+                .params = .{ 0, 0, 0, 0 },
+                .uv = try Grid.uv(byte),
+                .fill = r.color,
+                .border_color = 0,
+                .radii = @splat(0),
+                .border = 0,
+                .opacity = 1, // the run's colour already carries its opacity
+            };
+            // Write always, advance until the last row.
+            n = @min(n + 1, last);
+        }
+        glyphs.count[k] = n - start;
         return n;
     }
 };
@@ -356,6 +390,65 @@ test "Mono.wrap: a run that does not wrap keeps the extent another font measured
     try testing.expectEqual(24, tx.c.h[1]);
 }
 
+test "Mono.wrap: no wrapping flags preserve foreign metrics and a later final run still wraps" {
+    const runs = 2 * W + 1;
+    var fx: Fixture(runs) = .{};
+    var tx = fx.texts();
+    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
+    for (0..runs) |k| {
+        _ = tx.push(0, .{ .bytes = 24 }, &.{ .px = 10 });
+        tx.c.w[k] = @floatFromInt(k + 80);
+        tx.c.h[k] = @floatFromInt(k + 20);
+        tx.c.avail[k] = 100;
+    }
+    // Non-positive and unordered flags all mean "keep the extent" under the
+    // protocol's > 0 predicate. Do not reinterpret them as a truthy bit pattern.
+    tx.c.wrap[0] = -1;
+    tx.c.wrap[1] = std.math.nan(f32);
+    tx.c.w[0] = -0.0;
+    tx.c.h[0] = std.math.inf(f32);
+    font.wrap(&tx);
+    try testing.expectEqual(@as(u32, 0x8000_0000), @as(u32, @bitCast(tx.c.w[0])));
+    try testing.expectEqual(std.math.inf(f32), tx.c.h[0]);
+    for (1..runs) |k| {
+        try testing.expectEqual(@as(f32, @floatFromInt(k + 80)), tx.c.w[k]);
+        try testing.expectEqual(@as(f32, @floatFromInt(k + 20)), tx.c.h[k]);
+    }
+
+    // No cached summary: a direct column write between calls must be observed,
+    // including the single valid lane of a trailing partial vector.
+    tx.c.wrap[runs - 1] = 1;
+    tx.c.w[runs - 1] = 120;
+    tx.c.h[runs - 1] = 12;
+    font.wrap(&tx);
+    try testing.expectEqual(@as(f32, 100), tx.c.w[runs - 1]);
+    try testing.expectEqual(@as(f32, 24), tx.c.h[runs - 1]);
+    for (1..runs - 1) |k| {
+        try testing.expectEqual(@as(f32, @floatFromInt(k + 80)), tx.c.w[k]);
+        try testing.expectEqual(@as(f32, @floatFromInt(k + 20)), tx.c.h[k]);
+    }
+}
+
+test "Mono.wrap: stale padding after a shorter frame cannot change live nonwrapping extents" {
+    var fx: Fixture(2 * W) = .{};
+    var tx = fx.texts();
+    const font: Mono = .{};
+    for (0..2 * W) |_| _ = tx.push(0, .{ .bytes = 24 }, &.{ .wrap = true });
+    font.measure(&tx);
+    tx.reset();
+    _ = tx.push(0, .{ .bytes = 4 }, &.{});
+    tx.c.w[0] = 81;
+    tx.c.h[0] = 21;
+    tx.c.avail[0] = 30;
+    font.wrap(&tx);
+    try testing.expectEqual(@as(f32, 81), tx.c.w[0]);
+    try testing.expectEqual(@as(f32, 21), tx.c.h[0]);
+    tx.reset();
+    font.wrap(&tx); // An empty list has no columns to read, including stale padding.
+    try testing.expectEqual(@as(f32, 81), tx.c.w[0]);
+    try testing.expectEqual(@as(f32, 21), tx.c.h[0]);
+}
+
 test "Cache: misses are measured once, hits come back without measuring" {
     var fx: Fixture(4) = .{};
     var tx = fx.texts();
@@ -532,4 +625,42 @@ test "StaticAtlas: subset pixels and glyph UVs select the same cells as the full
     d.strings = "XXXX";
     try testing.expectError(error.GlyphOutsideSubset, (Mono{}).quadsFor(Subset, &d, &out, .{ .first = &first, .count = &count }));
     try testing.expectError(error.GlyphOutsideSubset, StaticAtlas(&.{}).uv('a'));
+}
+
+test "Mono command expansion skips unsubmitted runs and shares repeated text commands" {
+    const Subset = StaticAtlas(&.{"ABC"});
+    const r: draw_list.TextRun = .{ .rect = .{ 1.25, 2, 80, 24 }, .clip = .{ 0, 0, 80, 32 }, .start = 0, .bytes = 2, .px = 11, .color = 0x9f234567, .font = 0 };
+    var runs = [_]draw_list.TextRun{ r, r, r };
+    runs[1].start = 2;
+    runs[1].bytes = 3;
+    runs[2].start = 5;
+    runs[2].bytes = 1;
+    var d = testList(&runs, "ABXXXC");
+    var kinds = [_]u8{ @backingInt(DrawList.Kind.text), @backingInt(DrawList.Kind.quads), @backingInt(DrawList.Kind.text), @backingInt(DrawList.Kind.text) };
+    var refs = [_]u32{ 2, 0, 0, 2 };
+    var counts = [_]u32{ 1, 0, 1, 1 };
+    var keys = [_]u32{ 0, 0, 0, 0 };
+    d.cmd = .{ .kind = &kinds, .first = &refs, .count = &counts, .key = &keys };
+    d.cmd_len = kinds.len;
+    var visible: [7]Quad = undefined;
+    var all: [7]Quad = undefined;
+    var first: [3]u32 = undefined;
+    var count: [3]u32 = undefined;
+    var all_first: [3]u32 = undefined;
+    var all_count: [3]u32 = undefined;
+    const mono: Mono = .{};
+    try testing.expectEqual(3, try mono.quadsForCommands(Subset, &d, &visible, .{ .first = &first, .count = &count }));
+    try testing.expectEqualSlices(u32, &.{ 2, 0, 1 }, &count);
+    try testing.expectEqual(0, first[1]);
+    try testing.expectError(error.GlyphOutsideSubset, mono.quadsFor(Subset, &d, &all, .{ .first = &all_first, .count = &all_count }));
+    d.strings = "ABABCC";
+    _ = try mono.quadsFor(Subset, &d, &all, .{ .first = &all_first, .count = &all_count });
+    for ([_]u32{ 0, 2 }) |k| {
+        const actual = visible[first[k]..][0..count[k]];
+        const expected = all[all_first[k]..][0..all_count[k]];
+        try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(expected), std.mem.sliceAsBytes(actual));
+    }
+    d.cmd_len = 0;
+    try testing.expectEqual(0, try mono.quadsForCommands(Subset, &d, &visible, .{ .first = &first, .count = &count }));
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0 }, &count);
 }

@@ -4,13 +4,9 @@ const lcgf = @import("lcgf");
 const width = 16 * 9;
 const height = 6 * 18;
 const alpha: *const [width * height]u8 = @embedFile("font/mono.a8");
-const pixels: [alpha.len]u32 = blk: {
-    @setEvalBranchQuota(4 * alpha.len);
-    var out: [alpha.len]u32 = undefined;
-    for (alpha, &out) |a, *pixel| pixel.* = lcgf.types.Color.rgba(255, 255, 255, a).bitsOf();
-    break :blk out;
-};
-pub const image: lcgf.render_sw.Image = .{ .pixels = &pixels, .width = width, .height = height };
+// The renderer samples coverage directly; white RGB is part of the Alpha8 contract.
+// Keep the embedded atlas at one byte per texel instead of expanding it fourfold.
+pub const image: lcgf.render_sw.Image = .{ .alpha8 = alpha, .width = width, .height = height };
 
 /// The atlas has six rows of sixteen cells, starting at space. Other bytes
 /// select the question-mark cell.

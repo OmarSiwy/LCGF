@@ -48,3 +48,12 @@ read that table: a storage buffer, which GLSL ES 3.0 (`translate.sh` targets `es
 stage access to, or a texture fetched by index, which is a new per-frame resource in every back
 end (sw, wgpu, vk, the golden tools' wgpu-py pipelines and the GL ES one to come). That is a change
 to the renderer contract across several lanes' homes, not a footprint commit; reported to the plan.
+
+## Scope metadata retained with copied subtrees
+
+The current runtime keeps one additional `u8` scope-kind column with the previous tree
+generation, so `Frame.reuse` can restore focus groups and modal traps after an idle copy.
+Its per-node capacity slope is now **925 bytes**, pinned by the corresponding
+`Context.requiredBytes` regression. The preceding table is the historical C0804 result.
+Timer ownership adds four bytes per timer row; memo focus state and kept-source mapping add
+twelve bytes per memo row. These capacities are independent of the node count.

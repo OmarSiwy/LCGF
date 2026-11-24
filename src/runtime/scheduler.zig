@@ -97,6 +97,8 @@ pub const Timers = struct {
         at: []f64,
         /// Frame that last asked for the timer; `sweep` drops the others.
         seen: []u32,
+        /// Open node that owns the request, for subtree reuse and deadline invalidation.
+        node: []u32,
     };
 
     pub fn init(carver: *mem.Carver, cap: u32) Timers {
@@ -147,6 +149,7 @@ pub fn timer(f: *Frame, id: Id, seconds: f32, mode: TimerMode) bool {
     // A finished one-shot leaves no deadline and is not seen this frame, so `sweep` drops it.
     t.c.at[i] = selD(fired, selD(repeat, now + seconds, inf), at);
     t.c.seen[i] = ctx.frame -% @intFromBool(done);
+    t.c.node[i] = ctx.stack[ctx.depth - 1];
     return fired;
 }
 

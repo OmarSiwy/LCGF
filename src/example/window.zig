@@ -24,6 +24,7 @@ var glyphs: [8192]Quad = undefined;
 var first: [limits.texts]u32 = undefined;
 var count: [limits.texts]u32 = undefined;
 var app: example.App = .{};
+var retained_storage: [host.Incremental.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -46,6 +47,8 @@ pub fn main(init: std.process.Init) !void {
     try w.open(&conn, 800, 600, name, .{ .pixels = pixels.items, .glyphs = &glyphs, .first = &first, .count = &count });
     defer w.close();
     var ctx = try context.Context.init(&ctx_buffer, limits);
+    var carver: lcgf.mem.Carver = .{ .buf = &retained_storage };
+    var renderer = host.Incremental.init(&carver, limits);
     if (@hasDecl(example.App, "init")) app.init();
 
     const t0 = std.Io.Timestamp.now(io, .awake);
@@ -59,8 +62,8 @@ pub fn main(init: std.process.Init) !void {
             const out = f.end(.{});
             builds += 1;
             w.apply(&out.platform);
-            host.draw(&app, &w.gfx.gfx, &w.fb, .{ .quads = w.glyphs.quads, .first = w.glyphs.first, .count = w.glyphs.count }, &out, w.scale, w.background);
-            try w.presentPixels();
+            const update = renderer.draw(&app, &w.gfx.gfx, &w.fb, .{ .quads = w.glyphs.quads, .first = w.glyphs.first, .count = w.glyphs.count }, &out, w.scale, w.background);
+            try w.presentPixelsRegions(update.boxes[0..update.len]);
         }
         const elapsed: f32 = @floatCast(@as(f64, @floatFromInt(t0.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds())) / std.time.ns_per_s);
         if (elapsed >= seconds) break;

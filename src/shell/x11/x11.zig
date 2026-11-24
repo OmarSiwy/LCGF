@@ -1130,6 +1130,90 @@ pub const Window = struct {
         w.last_present = now();
     }
 
+    /// Upload and show only these physical boxes (x0,y0,x1,y1), clipped to the framebuffer.
+    /// The caller retains initialized pixels outside the boxes. A new/resized server pixmap
+    /// needs the entire framebuffer once, even when the requested region is empty.
+    /// Expose already restores the persistent pixmap in poll, without another pixel upload.
+    pub fn presentPixelsRegions(w: *Window, boxes: []const [4]u32) Error!void {
+        const fb = &w.fb;
+        if (fb.width == 0 or fb.height == 0) return;
+        if (w.pixmap == 0 or w.pixmap_width != fb.width or w.pixmap_height != fb.height)
+            return w.presentPixels();
+        // Core requests use signed 16-bit origins. A full origin-zero upload may
+        // still represent a wider/taller target; choose that path before sending
+        // any partial requests if a tile origin could exceed the signed range.
+        for (boxes) |raw| {
+            const box = clipPixels(raw, fb.width, fb.height);
+            if (box[0] < box[2] and box[1] < box[3] and (box[2] > 32768 or box[3] > 32768))
+                return w.presentPixels();
+        }
+        var changed = false;
+        for (boxes) |raw| {
+            const box = clipPixels(raw, fb.width, fb.height);
+            if (box[0] == box[2] or box[1] == box[3]) continue;
+            try w.uploadRegion(box);
+            changed = true;
+        }
+        if (!changed) return;
+        // Finish every pixmap update before queuing copies to the visible window.
+        for (boxes) |raw| {
+            const box = clipPixels(raw, fb.width, fb.height);
+            if (box[0] == box[2] or box[1] == box[3]) continue;
+            const x = std.math.cast(i16, box[0]) orelse return error.MessageTooLarge;
+            const y = std.math.cast(i16, box[1]) orelse return error.MessageTooLarge;
+            _ = w.conn.send(wire.copy_area_size, wire.copyAreaRect, .{
+                w.pixmap,                            w.id,                                w.gc, x, y,
+                @as(u16, @intCast(box[2] - box[0])), @as(u16, @intCast(box[3] - box[1])),
+            });
+        }
+        try w.conn.flush();
+        w.presents += 1;
+        w.presented_size = .{ w.width, w.height };
+        w.last_present = now();
+    }
+
+    fn clipPixels(box: [4]u32, width: u32, height: u32) [4]u32 {
+        const x0 = @min(box[0], width);
+        const y0 = @min(box[1], height);
+        return .{ x0, y0, @max(x0, @min(box[2], width)), @max(y0, @min(box[3], height)) };
+    }
+
+    /// Pack complete narrow rows into the connection's existing output buffer, rather than
+    /// issuing a write syscall for every strided framebuffer row. One coarse loop per tile;
+    /// memcpy handles the contiguous pixel span. Request size respects both server and buffer.
+    fn uploadRegion(w: *Window, box: [4]u32) Error!void {
+        const c = w.conn;
+        if (c.setup.max_request <= wire.put_image_head / 4) return error.MessageTooLarge;
+        const max_pixels: u32 = @intCast(@min(
+            @as(usize, c.setup.max_request) - wire.put_image_head / 4,
+            (c.out.len - wire.put_image_head) / 4,
+        ));
+        var x = box[0];
+        while (x < box[2]) {
+            const width = @min(box[2] - x, max_pixels);
+            const rows = max_pixels / width;
+            var y = box[1];
+            while (y < box[3]) {
+                const height = @min(box[3] - y, rows);
+                const dst_x = std.math.cast(i16, x) orelse return error.MessageTooLarge;
+                const dst_y = std.math.cast(i16, y) orelse return error.MessageTooLarge;
+                const size = wire.put_image_head + @as(usize, width) * height * 4;
+                if (c.out.len - c.out_len < size) try c.flush();
+                _ = c.send(wire.put_image_head, wire.putImage, .{
+                    w.pixmap, w.gc,  @as(u16, @intCast(width)), @as(u16, @intCast(height)),
+                    dst_x,    dst_y, c.setup.root_depth,
+                });
+                for (y..y + height) |row| {
+                    const bytes = std.mem.sliceAsBytes(w.fb.pixels[row * w.fb.stride + x ..][0..width]);
+                    @memcpy(c.out[c.out_len..][0..bytes.len], bytes);
+                    c.out_len += bytes.len;
+                }
+                y += height;
+            }
+            x += width;
+        }
+    }
+
     fn uploadPixels(w: *Window, x: u32, y: u32, width: u32, height: u32, pixels: []const u32) Error!void {
         const c = w.conn;
         const dst_x = std.math.cast(i16, x) orelse return error.MessageTooLarge;
@@ -1326,6 +1410,91 @@ test "x11: grow and shrink a padded custom framebuffer, then present the entire 
         const reply = try c.reply(c.send(wire.get_image_size, wire.getImage, .{ w.pixmap, @as(i16, @intCast(x)), @as(i16, @intCast(y)), 1, 1 }));
         try testing.expectEqualDeep([3]u8{ marker.b, marker.g, marker.r }, reply[32..35].*);
     }
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
+test "x11: partial upload packs strided pixels within the negotiated request size" {
+    var c: Connection = .{};
+    c.setup.root_depth = 24;
+    var pixels: [sw.Framebuffer.len(13, 9)]u32 = undefined;
+    for (&pixels, 0..) |*p, i| p.* = @intCast(i + 100);
+    var w: Window = undefined;
+    w.conn = &c;
+    w.pixmap = 10;
+    w.gc = 11;
+    w.fb = .init(&pixels, 13, 9, .bgra8);
+    const box = [4]u32{ 3, 2, 12, 8 };
+    // One small tile, horizontal splitting, and multirow packing. None fills out,
+    // so this observes the exact wire requests without opening an X server.
+    for ([_]u16{ 8, 16, 64 }) |max_request| {
+        c.setup.max_request = max_request;
+        c.out_len = 0;
+        var touched: [13 * 9]u8 = @splat(0);
+        try w.uploadRegion(box);
+        var at: usize = 0;
+        while (at < c.out_len) {
+            const packet = c.out[at..c.out_len];
+            const size = @as(usize, wire.get(u16, packet, 2)) * 4;
+            try testing.expect(size <= @as(usize, max_request) * 4);
+            try testing.expectEqual(wire.op.put_image, packet[0]);
+            const width = wire.get(u16, packet, 12);
+            const height = wire.get(u16, packet, 14);
+            const x = wire.get(u16, packet, 16);
+            const y = wire.get(u16, packet, 18);
+            try testing.expectEqual(wire.put_image_head + @as(usize, width) * height * 4, size);
+            for (0..height) |row| for (0..width) |col| {
+                const px = x + col;
+                const py = y + row;
+                try testing.expect(px >= box[0] and px < box[2] and py >= box[1] and py < box[3]);
+                const value = wire.get(u32, packet, wire.put_image_head + (row * width + col) * 4);
+                try testing.expectEqual(pixels[py * w.fb.stride + px], value);
+                touched[py * 13 + px] += 1;
+            };
+            at += size;
+        }
+        for (0..9) |y| for (0..13) |x| {
+            const wanted: u8 = @intFromBool(x >= box[0] and x < box[2] and y >= box[1] and y < box[3]);
+            try testing.expectEqual(wanted, touched[y * 13 + x]);
+        };
+    }
+    try testing.expectEqual([4]u32{ 12, 8, 13, 9 }, Window.clipPixels(.{ 12, 8, 20, 30 }, 13, 9));
+    try testing.expectEqual([4]u32{ 9, 8, 9, 8 }, Window.clipPixels(.{ 9, 8, 2, 3 }, 13, 9));
+    c.setup.max_request = wire.put_image_head / 4;
+    try testing.expectError(error.MessageTooLarge, w.uploadRegion(box));
+}
+
+test "x11: partial presentation updates only damaged pixels and initializes new pixmaps" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    var storage: std.ArrayList(u32) = .empty;
+    defer storage.deinit(testing.allocator);
+    var w: Window = undefined;
+    try w.open(c, 83, 61, "partial pixels", Fixture.buffers);
+    defer w.close();
+    try w.fitPixels(&storage, testing.allocator);
+    const original = Color.rgb(12, 34, 56);
+    const marker = Color.rgb(210, 80, 19);
+    w.fb.clear(original);
+    // First use cannot leave the backing pixmap uninitialized.
+    try w.presentPixelsRegions(&.{});
+    try testing.expectEqual(original, try pixel(&w, 4, 4));
+    const old_presents = w.presents;
+    try w.presentPixelsRegions(&.{});
+    try testing.expectEqual(old_presents, w.presents);
+    w.fb.fill(.{ 3, 5, 21, 18 }, marker);
+    // Deliberately alter a pixel outside the dirty region. A full upload would
+    // expose it and fail this assertion; partial transport must retain server pixels.
+    w.fb.fill(.{ 40, 30, 41, 31 }, marker);
+    const old_limit = c.setup.max_request;
+    c.setup.max_request = 16; // force both row and horizontal splits
+    try w.presentPixelsRegions(&.{.{ 3, 5, 21, 18 }});
+    c.setup.max_request = old_limit;
+    try testing.expectEqual(marker, try pixel(&w, 3, 5));
+    try testing.expectEqual(marker, try pixel(&w, 20, 17));
+    try testing.expectEqual(original, try pixel(&w, 21, 18));
+    try testing.expectEqual(original, try pixel(&w, 40, 30));
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
 

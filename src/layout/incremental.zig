@@ -294,6 +294,38 @@ pub fn placeKept(t: *Tree, kept: []const u32) void {
     if (first + 1 < t.len) layout.placeSpan(t, first, t.len);
 }
 
+/// Finalize a tree with copied, fixed-size subtrees. `sources` maps each kept root to its
+/// source in `prev`; it must describe the same unchanged content as the layout keep list.
+/// Every root is finalized after its ancestors. Its interior can retain the copied rects,
+/// visibility and child clips only when unsnapped position/size and the root's resulting
+/// child clip are unchanged. Fractional motion must compare before snapping: a root can
+/// keep its rounded rect while a descendant crosses a pixel boundary.
+///
+/// This function handles ordinary layout; a caller that modifies descendant positions after
+/// placeKept (for example FLIP animation) must use layout.finalize instead. Paint inheritance
+/// is intentionally separate and still propagates current transforms, opacity and radii.
+pub fn finalizeKept(t: *Tree, prev: *const Tree, kept: []const u32, sources: []const u32) void {
+    std.debug.assert(kept.len == sources.len);
+    if (kept.len == 0) return layout.finalize(t);
+    const c = &t.c;
+    const old = &prev.c;
+    var first: u32 = 0;
+    for (kept, sources) |r, source| {
+        std.debug.assert(first <= r and source < prev.len);
+        layout.finalizeSpan(t, first, r + 1);
+        const here: @Vector(4, f32) = .{ c.pos[0][r], c.pos[1][r], c.size[0][r], c.size[1][r] };
+        const there: @Vector(4, f32) = .{ old.pos[0][source], old.pos[1][source], old.size[0][source], old.size[1][source] };
+        const clip: @Vector(4, f32) = c.child_clip[r];
+        const old_clip: @Vector(4, f32) = old.child_clip[source];
+        const unchanged = @reduce(.And, (here == there) & (clip == old_clip));
+        const end = c.end[r];
+        if (!unchanged) layout.finalizeSpan(t, r + 1, end);
+        first = end;
+    }
+    if (first < t.len) layout.finalizeSpan(t, first, t.len);
+    @memset(c.sense[t.len..simd.padded(t.len)], 0);
+}
+
 /// `layout.run` with kept subtrees: every pass in order, each skipping the kept interiors.
 /// `finalize` runs over everything, since clips come down from ancestors.
 pub fn runKept(t: *Tree, tx: *Texts, viewport: [2]f32, kept: []const u32) void {

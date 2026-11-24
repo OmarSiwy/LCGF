@@ -170,7 +170,17 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
         .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
     }) });
-    b.step("census-src-obj", "Emit zig-out/census_src.o, the ported passes for the branch census").dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+    // Separate format objects preserve the actual shader loops under each probe
+    // symbol: LLVM can otherwise merge cross-format bodies into uncounted helpers.
+    const census_alpha8_probe = b.addObject(.{ .name = "census_alpha8", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/render/sw/census_probe_alpha8.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+    }) });
+    const census_step = b.step("census-src-obj", "Emit census_src.o and census_alpha8.o for independent branch censuses");
+    census_step.dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
+    census_step.dependOn(&b.addInstallFile(census_alpha8_probe.getEmittedBin(), "census_alpha8.o").step);
 
     // tools/drawgolden: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
     const draw_dump_mod = b.createModule(.{

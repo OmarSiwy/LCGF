@@ -1,0 +1,37 @@
+{
+  "p_sw_alpha8_dashed": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_dotted": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_linear": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_nine_slice": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_radial": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_shadow": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  },
+  "p_sw_alpha8_solid": {
+    "back": 2,
+    "jcc": 4,
+    "short_fwd": 0
+  }
+}

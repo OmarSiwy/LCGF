@@ -655,6 +655,7 @@ incremental: lay out again only what a change can reach.
 - `fn fitKept(t: *Tree, axis: Axis, kept: []const u32) void`: `layout.fit` that does not visit kept interiors: bottom-up, gap by gap.
 - `fn resolveKept(t: *Tree, axis: Axis, viewport: f32, kept: []const u32) void`: `layout.resolve` that does not visit kept interiors: top-down, gap by gap.
 - `fn placeKept(t: *Tree, kept: []const u32) void`: `layout.place` that does not visit the interior of a kept root that did not move.
+- `fn finalizeKept(t: *Tree, prev: *const Tree, kept: []const u32, sources: []const u32) void`: Finalize a tree with copied, fixed-size subtrees.
 - `fn runKept(t: *Tree, tx: *Texts, viewport: [2]f32, kept: []const u32) void`: `layout.run` with kept subtrees: every pass in order, each skipping the kept interiors.
 
 ### `Dirty` (struct)
@@ -954,6 +955,7 @@ Fields: `advance`, `line`
 - `fn wrap(font: Mono, tx: *Texts) void`: SIMD.
 - `fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32`: Expands the draw list's text runs into glyph quads for a 16x16 byte-indexed atlas: byte b samples cell (b & 15, b >> 4).
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
+- `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -2135,7 +2137,7 @@ Fields: `draw`, `tree`, `texts`, `platform`, `status`, `wake`, `pace`
 ### `Context` (struct)
 Everything that outlives a frame.
 
-Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `scoped`, `platform`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`
+Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`
 
 - `needsFrame = scheduler.needsFrame`
 - `fn requiredBytes(limits: Limits) usize`: Bytes `init` needs.
@@ -2326,7 +2328,7 @@ Fields: `len`, `cap`, `c`
 
 ### `Timers.Columns` (struct)
 
-Fields: `id`, `at`, `seen`
+Fields: `id`, `at`, `seen`, `node`
 
 
 ### `Wake` (struct)
@@ -2356,13 +2358,13 @@ Reuse: signals-driven skipping of unchanged subtrees in the runtime front end (t
 ### `Memos` (struct)
 One row per memoized subtree.
 
-Fields: `len`, `cap`, `c`, `kept`, `kept_len`
+Fields: `len`, `cap`, `c`, `kept`, `kept_source`, `kept_len`
 
 - `fn init(carver: *mem.Carver, cap: u32) Memos`: Carves every column from `carver`, `simd.rows(cap)` rows each, so `simd.find` can scan the id column in whole vectors.
 
 ### `Memos.Columns` (struct)
 
-Fields: `id`, `node`, `frame`, `stamp`
+Fields: `id`, `node`, `frame`, `stamp`, `focus`
 
 
 ## `lcgf.widgets_base` (src/widgets/base.zig)
@@ -5169,9 +5171,9 @@ Fields: `pixels`, `width`, `height`, `stride`, `format`
 - `fn clear(fb: *Framebuffer, c: Color) void`
 
 ### `Image` (struct)
-A texture: `width` x `height` RGBA8 texels (`Color` bits), sampled nearest with clamped coordinates, as the GPU back ends' samplers do.
+Caller-owned nearest-sampled texture.
 
-Fields: `pixels`, `width`, `height`
+Fields: `pixels`, `width`, `height`, `alpha8`
 
 - `white: Image = .{ .pixels = &.{0xffff_ffff}, .width = 1, .height = 1 }`: Texture 0 (`types.Texture.white`): put it at row 0 of `Software.images`.
 
@@ -5983,6 +5985,7 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn getInputFocus(b: *Buf) void`: Has a reply and no effect: a round trip, after which the server has handled every earlier request.
 - `fn createPixmap(b: *Buf, id: u32, drawable: u32, width: u16, height: u16, depth: u8) void`
 - `fn copyArea(b: *Buf, src: u32, dst: u32, gc: u32, width: u16, height: u16) void`: Copies the complete frame from the pixmap to the window, origin to origin.
+- `fn copyAreaRect(b: *Buf, src: u32, dst: u32, gc: u32, x: i16, y: i16, width: u16, height: u16) void`: Copies the same physical rectangle from the backing pixmap to the window.
 - `fn createGc(b: *Buf, id: u32, drawable: u32) void`: A graphics context for PutImage, without GraphicsExpose events.
 - `fn putImage(b: *Buf, drawable: u32, gc: u32, w: u16, h: u16, x: i16, y: i16, depth: u8) void`: The header of a ZPixmap PutImage of `w` x `h` pixels of 32 bits at (x, y); the caller sends the `w * h * 4` pixel bytes right after it.
 - `fn getImage(b: *Buf, drawable: u32, x: i16, y: i16, w: u16, h: u16) void`: Reads `w` x `h` ZPixmap pixels back; the reply's data starts at byte 32.

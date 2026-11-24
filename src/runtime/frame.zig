@@ -276,7 +276,14 @@ pub const Frame = struct {
         incremental.placeKept(t, kept);
         // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
-        layout.finalize(t);
+        // The copied interiors already contain finalized columns. Ancestor clip changes or
+        // fractional movement invalidate that shortcut; FLIP can edit descendant positions
+        // after placement, so its frames retain the complete reference pass.
+        if (f.ctx.flips.len == 0) {
+            incremental.finalizeKept(t, f.prevTree(), kept, m.kept_source[0..kept.len]);
+        } else {
+            layout.finalize(t);
+        }
         return f.finish();
     }
 

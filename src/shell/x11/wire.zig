@@ -691,13 +691,38 @@ pub const copy_area_size = 28;
 
 /// Copies the complete frame from the pixmap to the window, origin to origin.
 pub fn copyArea(b: *Buf, src: u32, dst: u32, gc: u32, width: u16, height: u16) void {
+    copyAreaRect(b, src, dst, gc, 0, 0, width, height);
+}
+
+/// Copies the same physical rectangle from the backing pixmap to the window.
+/// Matching source/destination coordinates preserve pixels outside a partial update.
+pub fn copyAreaRect(b: *Buf, src: u32, dst: u32, gc: u32, x: i16, y: i16, width: u16, height: u16) void {
     b.head(op.copy_area, 0, copy_area_size / 4);
     b.int(u32, src);
     b.int(u32, dst);
     b.int(u32, gc);
-    b.zeros(8);
+    b.int(i16, x);
+    b.int(i16, y);
+    b.int(i16, x);
+    b.int(i16, y);
     b.int(u16, width);
     b.int(u16, height);
+}
+
+test "copyAreaRect: preserve the damage origin in source and destination" {
+    var bytes: [copy_area_size]u8 = undefined;
+    var b: Buf = .{ .bytes = &bytes };
+    copyAreaRect(&b, 11, 22, 33, 17, 29, 123, 45);
+    try std.testing.expectEqual(copy_area_size, b.len);
+    try std.testing.expectEqual(op.copy_area, bytes[0]);
+    try std.testing.expectEqual(@as(u16, copy_area_size / 4), get(u16, &bytes, 2));
+    try std.testing.expectEqual(@as(u32, 11), get(u32, &bytes, 4));
+    try std.testing.expectEqual(@as(u32, 22), get(u32, &bytes, 8));
+    try std.testing.expectEqual(@as(u32, 33), get(u32, &bytes, 12));
+    inline for (.{ 16, 20 }) |offset| try std.testing.expectEqual(@as(i16, 17), get(i16, &bytes, offset));
+    inline for (.{ 18, 22 }) |offset| try std.testing.expectEqual(@as(i16, 29), get(i16, &bytes, offset));
+    try std.testing.expectEqual(@as(u16, 123), get(u16, &bytes, 24));
+    try std.testing.expectEqual(@as(u16, 45), get(u16, &bytes, 26));
 }
 
 pub const create_gc_size = 20;

@@ -12,7 +12,7 @@ test "memory: bytes per node of capacity" {
     // -- bytes
     const small = Context.requiredBytes(.{ .nodes = 4096 });
     const large = Context.requiredBytes(.{ .nodes = 8192 });
-    try testing.expectEqual(924 * 4096, large - small); // 924 bytes per node
+    try testing.expectEqual(925 * 4096, large - small); // 925 bytes per node
     // -- end
 }
 
