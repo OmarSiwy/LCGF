@@ -1,5 +1,26 @@
 # Changelog
 
+
+## Unreleased — comprehensive styling branch
+
+- Add typed style resolution, semantic tokens, scoped recipes and parts, combined states,
+  system/contrast/locale policies, authoring/import tools and computed-style diagnostics.
+- Extend common geometry across transforms, clip chains, input, text, custom drawing,
+  accessibility and damage; add explicit participation, device-grid rounding and caller-owned hit targets.
+- Add portable composed decorations, brushes/image sampling, vector imports, masks,
+  isolated groups, filters/backdrop operations, projective planes and managed color conversion.
+- Extend measured text/layout with intrinsic sizes, rich shaping/fallback, font generations,
+  advanced grids, typography/publication helpers and optional HarfBuzz variable/color-font consumers.
+- Extend cursor/native-material presentation and make animation-capacity failure observable
+  without replacing unrelated controls.
+- Preserve the 136-byte GPU Quad and 32-byte Look. CPU TextRun/CustomDraw are now 96 bytes;
+  recompile consumers and update raw CPU-row serialization. Runtime Context capacity is 1004 bytes/node.
+- Add the executable styling gallery, five-workload CPU benchmark and inventory evidence check.
+
+See [the implementation guide](docs/styling/README.md), [capability profiles](docs/styling/coverage.md)
+and [validation report](docs/styling/validation.md). Native platform and standards-conformance
+boundaries are explicit; this is a development branch, not a versioned upstream release.
+
 ## Unreleased
 
 - The framework is now named LCGF. Downstream packages use `.lcgf` in their manifest, `@import("lcgf")` in Zig and `lcgf_render` for the selected renderer. The browser integration is `lcgf.js`.

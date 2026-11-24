@@ -1,6 +1,8 @@
 # Styling implementation plan
 
-Baseline: `ed94db3da27882ef1c87d0dd15a382b4df39e2c2`. All work below is proposed. This documentation branch changes no runtime behavior. Phase labels express dependency order and scope, not delivery dates or measured effort. A capability group can involve several patches; an existing group may need only integration or clearer documentation.
+> **Historical research snapshot.** This record predates implementation. See the [implemented styling guide](../../styling/README.md), [coverage profiles](../../styling/coverage.md), and [validation report](../../styling/validation.md) for the completed branch.
+
+Baseline: `ed94db3da27882ef1c87d0dd15a382b4df39e2c2`. The work below was proposed when this research snapshot was written. The original documentation commit changed no runtime behavior. Phase labels express dependency order and scope, not delivery dates or measured effort. A capability group can involve several patches; an existing group may need only integration or clearer documentation.
 
 ## Working sequence
 
@@ -88,4 +90,4 @@ Use meaningful cases that probe combined semantics, not tests that merely restat
 
 Compare visual results only for declared compatible paths, with documented tolerances. Performance scenes should include a dense static control grid, theme switching, sparse active animations, a scrolling/zooming technical canvas and an effects-heavy panel. Record toolchain, hardware, backend, resolution, scale and warm/cold state; measure frame percentiles, CPU phases, allocations, bytes per node, draw calls, damaged pixels and peak offscreen storage. Avoid global translucent reordering and unmeasured SIMD rewrites.
 
-No runtime tests or benchmarks were executed for this documentation-only branch. Source-audit risks remain hypotheses until the corresponding reproductions are run.
+No runtime tests or benchmarks were executed for the original documentation-only commit. The later [validation report](../../styling/validation.md) records implementation results; this plan retains its original proposed completion criteria.

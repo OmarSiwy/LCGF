@@ -1,5 +1,7 @@
 # LCGF styling source audit
 
+> **Historical research snapshot.** This record predates implementation. See the [implemented styling guide](../../styling/README.md), [coverage profiles](../../styling/coverage.md), and [validation report](../../styling/validation.md) for the completed branch.
+
 Research date: **2026-11-23**. Audited source: `OmarSiwy/LCGF`, commit **`ed94db3da27882ef1c87d0dd15a382b4df39e2c2`**, verified as remote `main` for this research.
 
 This report is based on **code inspection, not executed tests**. No production source was edited and no build or runtime test was run for this audit. Implementation statements describe the inspected contracts. Correctness-risk findings require focused reproductions before claiming a demonstrated failure, a fix, or a measured regression. An absence statement means the capability was not found in the inspected built-in path; custom host code may provide additional behavior.

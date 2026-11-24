@@ -72,7 +72,7 @@ function of `Limits`:
 ```zig
 const small = Context.requiredBytes(.{ .nodes = 4096 });
 const large = Context.requiredBytes(.{ .nodes = 8192 });
-try testing.expectEqual(924 * 4096, large - small); // 924 bytes per node
+try testing.expectEqual(1004 * 4096, large - small); // 1004 bytes per node
 ```
 
 Two tree generations (this frame's, and last frame's for hit testing and reuse) take most of it;

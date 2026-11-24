@@ -1,0 +1,24 @@
+{
+  "os": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "architecture": "x86_64",
+  "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "logical_cpus_visible": 9,
+  "process_affinity_cpu_count": 9,
+  "cpu_pinned": false,
+  "driver_note": "Headless EGL/GL ES verified separately; benchmark is the stock CPU software renderer.",
+  "methodology": [
+    "128 measured warm frames plus one first measured frame per workload.",
+    "Full framebuffer redraw, even where computed damage is empty.",
+    "First-frame timing is not cold process launch or cold OS cache.",
+    "No explicit allocation inside measured loops; setup and JSON output are outside the timed regions.",
+    "Damage is the clamped union bounding-box area, not exact changed-pixel count.",
+    "No upstream baseline was run; these measurements do not establish a regression or speedup."
+  ],
+  "source_commit": "b0ab2bd0e6b6a10c799a36d4117f49bf391ee2ef",
+  "recorded_at_utc": "2026-11-24T06:19:00.391804+00:00",
+  "isolated_machine": false,
+  "sample_count_per_scene": 129,
+  "first_frame_definition": "First measured frame of this scene, not process startup or a cold OS/CPU cache.",
+  "allocation_evidence": "Source inspection and Tier-0 ownership contract; no allocator instrumentation.",
+  "workload_scope": "Dense/theme/sparse scenes contain box controls without text labels; complex shaping is functionally tested separately, not timed here."
+}

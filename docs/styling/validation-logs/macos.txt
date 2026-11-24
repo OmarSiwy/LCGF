@@ -1,0 +1,7 @@
+Build Summary: 6/6 steps succeeded
+macos-build success
++- install macos-test success
+   +- compile test macos-test debug aarch64-macos success 10s MaxRSS:436M
+      +- options cached
+      +- run exe ucd-gen (unicode_tables.zig) cached
+         +- compile exe ucd-gen debug native cached 5ms MaxRSS:39M

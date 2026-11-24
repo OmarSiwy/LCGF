@@ -15,7 +15,8 @@ A Zig GUI framework with runtime and comptime front ends over shared layout, int
 | Compare frameworks | [Latest twelve-framework CI results](https://github.com/OmarSiwy/LCGF/blob/benchmark-results/README.md), [workloads and methodology](docs/perf/vs.md), [historical results](docs/perf/RESULTS.md), [capability matrix](docs/TARGETS.md) |
 | Reproduce performance and footprint measurements | [Performance guide](docs/guide/perf.md), [CI checks](docs/CHECKS.md) |
 | Find release information | [Changelog](CHANGELOG.md), [compatibility policy](docs/release/compatibility.md), [dependency licences](docs/release/licenses.md) |
-| Review proposed styling coverage and API constraints | [Comprehensive styling research](docs/research/styling/README.md), [capability inventory](docs/research/styling/inventory.md) |
+| Use the comprehensive styling branch | [Implementation guide and rendered gallery](docs/styling/README.md), [coverage and profiles](docs/styling/coverage.md), [validation](docs/styling/validation.md) |
+| Review the research baseline and API constraints | [Comprehensive styling research](docs/research/styling/README.md), [capability inventory](docs/research/styling/inventory.md) |
 
 Use `nix develop -c zig build test` to run the framework tests and `nix develop -c zig build docs` to regenerate the declaration index and verify the guides. Run `nix develop -c zig build embedded-sim` to replay the counter on the simulated SPI board.
 

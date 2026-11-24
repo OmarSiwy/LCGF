@@ -1,6 +1,8 @@
 # API design: applying Casey Muratori's work
 
-This is a design constraint for future styling implementation, not a new public API. No production signature changes are included in this research branch. The capability inventory describes outcomes; it must not be translated mechanically into a manager, object hierarchy, or one enormous style struct.
+> **Historical research snapshot.** This record predates implementation. See the [implemented styling guide](../../styling/README.md), [coverage profiles](../../styling/coverage.md), and [validation report](../../styling/validation.md) for the completed branch.
+
+This historical review established design constraints before styling implementation. The original research commit included no production signature changes. The capability inventory describes outcomes; it must not be translated mechanically into a manager, object hierarchy, or one enormous style struct.
 
 ## What was studied
 

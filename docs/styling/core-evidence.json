@@ -1,0 +1,294 @@
+[
+  {
+    "id": "ui.hit_target_geometry",
+    "implementation": [
+      "src/interact/targets.zig",
+      "src/runtime/context.zig",
+      "src/interact/interaction.zig",
+      "src/comptime/events.zig",
+      "src/comptime/paint.zig"
+    ],
+    "verification": [
+      "expanded transformed targets preserve clipping, ordering, real activation and unchanged paint",
+      "path targets share evenodd/nonzero holes and validate ambiguous expansion",
+      "expanded targets agree across pure comptime and layered runtime input",
+      "pure comptime affine painting and exact hit agree with the runtime tree",
+      "Touches: enlarged caller targets preserve capture across reordered contacts and reject count changes atomically",
+      "Touches: removed hidden or nonsensing owners cancel before missing-contact release and cannot reactivate mid-press",
+      "shared choice slots paint and hit only the active hosted region",
+      "unshared inactive choice targets stay absent while ordinary offscreen targets can expand"
+    ],
+    "profile": "Caller-owned sorted hit-policy entries add local padding/minimum dimensions and rectangle/rounded/ellipse/path shapes. The chosen hit drives the ordinary capture/release path; runtime and pure compile-time use common inverse-transform and ancestor-clip geometry. Simultaneous contacts use caller-computed rows through Touches.stepWithHits while retaining capture by platform contact ID.",
+    "limitations": [
+      "Path expansion is deliberately rejected; callers must provide a dilated path when needed. Empty/collapsed rows are never revived.",
+      "Pure compile-time target enumeration uses descriptor order; runtime accepts explicit layer rows."
+    ]
+  },
+  {
+    "id": "ui.cursor_styles",
+    "implementation": [
+      "src/core/types.zig",
+      "src/runtime/frame.zig",
+      "src/draw/cursor.zig",
+      "src/shell/win32/win32.zig",
+      "src/shell/macos/macos.zig",
+      "src/shell/wayland/wayland.zig",
+      "src/shell/x11/x11.zig",
+      "src/shell/web/shell.js"
+    ],
+    "verification": [
+      "setCursor: the last request that holds wins; the next frame starts at arrow",
+      "style cursor inherits through paint extras and explicit arrow overrides it",
+      "custom cursor uploads through ordinary image draw, respects hotspot and damages movement",
+      "x11: the cursor the frame asks for is the one the server shows"
+    ],
+    "profile": "35 cursor values with inheritance/default reset, platform mappings and declared fallback fidelity. Custom images use an ordinary texture quad with explicit hotspot, hardware hiding and old/new damage.",
+    "limitations": [
+      "Windows/macOS methods were cross-compiled; actual native sessions were unavailable. Wayland protocol/fallback fixtures and Web syntax were checked.",
+      "The caller owns custom-image upload and final quad emission; platform-specific unavailable cursor shapes use documented fallbacks."
+    ]
+  },
+  {
+    "id": "ui.visibility_participation",
+    "implementation": [
+      "src/core/types.zig",
+      "src/core/tree.zig",
+      "src/layout/layout.zig",
+      "src/runtime/frame.zig",
+      "src/runtime/reuse.zig",
+      "src/a11y/tree.zig",
+      "src/theme/recipe_tests.zig"
+    ],
+    "verification": [
+      "participation reserves hidden space, collapses layout and cancels descendant input",
+      "reuse rebuilds collapsed and cursor-dependent children when their parent changes",
+      "recipe participation cancels release actions and explicit cursor wins in both front ends"
+    ],
+    "profile": "Independent layout/paint/hit/semantic participation combines down the subtree, collapses layout contributions and cancels captured input when a control becomes ineligible.",
+    "limitations": [
+      "Inherited exclusions cannot be re-enabled by a child; choose a separate sibling/subtree for a portal or independently participating overlay."
+    ]
+  },
+  {
+    "id": "ui.layer_order",
+    "implementation": [
+      "src/layout/overlay.zig",
+      "src/draw/order.zig",
+      "src/interact/hit.zig",
+      "src/interact/targets.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "order: raised nodes and their subtrees paint after layer 0, rows in order within a layer",
+      "overlay: a window with a menu, a tooltip from last frame's rect and paint layers",
+      "stacking layers: a raised menu paints after every row; batch counts recorded",
+      "stacking layers: with no node raised, layer order paints exactly like row order",
+      "merge across text: overlapping items keep their order, in row and in layer order",
+      "atLayered matches the scalar reference, and is `at` when every layer is 0",
+      "atLayered: an open menu covers the later body row under it",
+      "expanded targets agree across pure comptime and layered runtime input",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Global inherited layer order and row order agree between paint and hit queries. Explicit offscreen ranges provide isolated local composition without global translucent reordering.",
+    "limitations": [
+      "Local groups are caller-sequenced surfaces, not a retained CSS stacking-context resolver."
+    ]
+  },
+  {
+    "id": "ui.fixed_sticky",
+    "implementation": [
+      "src/layout/scroll_policy.zig"
+    ],
+    "verification": [
+      "both-axis gutters converge, mirror and position thumbs with real offsets",
+      "chaining, snap stops, reveal padding and content anchoring combine predictably"
+    ],
+    "profile": "Measured fixed/sticky placement accepts explicit containing and scroll boxes, independent start/end constraints and caller chosen stacking. Unconstrained axes retain their measured positions.",
+    "limitations": [
+      "Call between arrangement and finalization; the helper does not observe window/scroll state or create a layer automatically."
+    ]
+  },
+  {
+    "id": "ui.scrollbar_parts",
+    "implementation": [
+      "src/widgets/scroll_area.zig",
+      "src/layout/scroll_policy.zig"
+    ],
+    "verification": [
+      "two-axis styled viewport consumes input and emits semantic bars through ordinary Frame",
+      "both-axis gutters converge, mirror and position thumbs with real offsets",
+      "chaining, snap stops, reveal padding and content anchoring combine predictably"
+    ],
+    "profile": "Actual two-axis viewport emits styled track/thumb/corner/optional arrow parts and semantics, with hover/drag/input behavior and minimum thumb geometry.",
+    "limitations": [
+      "The caller provides content extent and per-axis scroll state; visibility follows measured need and chosen gutter policy."
+    ]
+  },
+  {
+    "id": "ui.scrollbar_layout",
+    "implementation": [
+      "src/widgets/scroll_area.zig",
+      "src/layout/scroll_policy.zig"
+    ],
+    "verification": [
+      "two-axis styled viewport consumes input and emits semantic bars through ordinary Frame",
+      "both-axis gutters converge, mirror and position thumbs with real offsets",
+      "chaining, snap stops, reveal padding and content anchoring combine predictably"
+    ],
+    "profile": "Overlay/classic/stable/both-edge gutters converge on a two-axis viewport, with configurable sides, RTL placement, thickness and corners.",
+    "limitations": [
+      "When both axes alter available space, the bounded resolution pass decides whether each scrollbar is required."
+    ]
+  },
+  {
+    "id": "ui.scroll_behavior_policy",
+    "implementation": [
+      "src/layout/scroll_policy.zig",
+      "src/layout/scroll.zig",
+      "src/widgets/scroll_area.zig"
+    ],
+    "verification": [
+      "chaining, snap stops, reveal padding and content anchoring combine predictably",
+      "clamp: scroll stays between the content start and its end",
+      "scroll: a long list scrolled by a wheel, then to a focused row, with a sticky header"
+    ],
+    "profile": "Scroll consumption reports remainder for chaining, enforces axis/overscroll policy, chooses snap positions/stops, and composes with the existing caller-stepped scroll motion helpers.",
+    "limitations": [
+      "Momentum/smooth timing is an explicit application policy; the geometry helper does not install an event loop or scheduler."
+    ]
+  },
+  {
+    "id": "ui.scroll_focus_reveal",
+    "implementation": [
+      "src/layout/scroll_policy.zig",
+      "src/layout/scroll.zig"
+    ],
+    "verification": [
+      "chaining, snap stops, reveal padding and content anchoring combine predictably"
+    ],
+    "profile": "Nested reveal consumes target geometry, scroll padding/margin and current viewports; anchoring adjusts position when measured content changes.",
+    "limitations": [
+      "The host invokes reveal/anchor when focus or content changes and chooses instant versus animated movement."
+    ]
+  },
+  {
+    "id": "ui.overflow_modes",
+    "implementation": [
+      "src/core/types.zig",
+      "src/layout/scroll.zig",
+      "src/widgets/scroll_area.zig",
+      "src/layout/scroll_policy.zig"
+    ],
+    "verification": [
+      "clamp: scroll stays between the content start and its end",
+      "scroll: a long list scrolled by a wheel, then to a focused row, with a sticky header",
+      "two-axis styled viewport consumes input and emits semantic bars through ordinary Frame",
+      "both-axis gutters converge, mirror and position thumbs with real offsets"
+    ],
+    "profile": "Native visible/clip geometry remains separate from a measured scroll viewport; both-axis auto/always presentation uses real extents, clipping and input.",
+    "limitations": [
+      "This is explicit native container behavior, not CSS overflow propagation or anonymous scroll-box construction."
+    ]
+  },
+  {
+    "id": "ui.out_of_flow",
+    "implementation": [
+      "src/core/types.zig",
+      "src/layout/overlay.zig",
+      "src/layout/units.zig"
+    ],
+    "verification": [
+      "anchor: corners and edges of the parent's content box, with the subtree carried along",
+      "anchor: no anchors leaves the layout untouched; overflow is reported",
+      "anchor: a popover is placed against another node's rect from the previous frame",
+      "anchor: flip to the other side only when the first side leaves the viewport",
+      "relative units and expressions feed real layout without a manager or hidden passes"
+    ],
+    "profile": "Floating rows retain an explicit containing parent/origin; ordinary offsets, logical inset resolution and anchor/pivot passes lower to normal geometry.",
+    "limitations": [
+      "The caller identifies the containing block; there is no implicit CSS containing-block search."
+    ]
+  },
+  {
+    "id": "ui.anchored_overlays",
+    "implementation": [
+      "src/layout/overlay.zig"
+    ],
+    "verification": [
+      "anchor: corners and edges of the parent's content box, with the subtree carried along",
+      "anchor: no anchors leaves the layout untouched; overflow is reported",
+      "anchor: a popover is placed against another node's rect from the previous frame",
+      "anchor: flip to the other side only when the first side leaves the viewport",
+      "overlay: a window with a menu, a tooltip from last frame's rect and paint layers"
+    ],
+    "profile": "Anchors consume explicit/current-or-previous geometry, edge/pivot/offset and viewport fallback data, carrying the subtree with the repositioned root.",
+    "limitations": [
+      "Applications decide when previous-frame geometry is acceptable; layer selection and focus trapping remain explicit."
+    ]
+  },
+  {
+    "id": "ui.containment_virtualization",
+    "implementation": [
+      "src/runtime/reuse.zig",
+      "src/comptime/dynamic.zig",
+      "src/widgets/vlist.zig",
+      "src/layout/incremental.zig"
+    ],
+    "verification": [
+      "reuse: unchanged signals copy the subtree; a changed one rebuilds it once",
+      "reuse: a copy moved to other rows has its links rebased",
+      "reuse: the pointer over the subtree forces a rebuild",
+      "reuse: after the pointer leaves, one more rebuild clears the hover, then reuse resumes",
+      "reuse: springs moving outside the subtree do not stop the copy",
+      "reuse: a spring moving inside the subtree rebuilds it until it lands, then survives copies",
+      "reuse: a copy behind a relayout boundary skips layout and lands where a rebuild would",
+      "reuse: no room for the copy means a rebuild, never an overflow",
+      "reuse: a copied subtree keeps its extras rows and inherits from its new place",
+      "reuse rebuilds collapsed and cursor-dependent children when their parent changes",
+      "reuse rebases paint references when an unchanged decorated subtree moves in row storage",
+      "virtual list maps a bounded window onto a large data set and clips fractional rows",
+      "a conditional root releases its viewport when hidden, then reuses it",
+      "check: what a comptime virtual list's state must have",
+      "window: the rows on screen by index arithmetic",
+      "boundaries: changes inside a boundary leave its natural size, and all outside it, alone"
+    ],
+    "profile": "Existing bounded virtualization and relayout boundaries compose with measured placeholders and explicit scroll extent. Reused subtrees rebase sparse paint references and rebuild when inherited participation/cursor inputs change.",
+    "limitations": [
+      "Visible-range realization and content extents are application inputs. No CSS content-visibility heuristic or asynchronous intrinsic measurement is implied."
+    ]
+  },
+  {
+    "id": "ui.safe_area_occlusion",
+    "implementation": [
+      "src/core/input.zig",
+      "src/style/environment.zig",
+      "src/layout/overlay.zig"
+    ],
+    "verification": [
+      "unknown preferences do not match false; viewport and container conditions stay separate",
+      "known accessibility inputs consume existing settings and explicit effect choices",
+      "anchor: flip to the other side only when the first side leaves the viewport"
+    ],
+    "profile": "Host safe-area/keyboard/occlusion inputs produce an explicit usable rectangle for responsive layout and overlay constraints. Unknown preferences remain distinguishable from false.",
+    "limitations": [
+      "The framework consumes host measurements; it does not guess display cutouts or keyboard geometry."
+    ]
+  },
+  {
+    "id": "ui.pixel_rounding",
+    "implementation": [
+      "src/layout/rounding.zig",
+      "src/layout/layout.zig",
+      "src/runtime/frame.zig",
+      "src/comptime/layout.zig"
+    ],
+    "verification": [
+      "cumulative rounding preserves shared edges and glyph caret geometry at fractional scale",
+      "rounded runtime, plain and folded layouts retain shared fractional geometry"
+    ],
+    "profile": "Runtime, plain and folded compile-time layout support fractional or device-grid coordinates and a caller grid origin. Cumulative track/glyph/caret endpoints use the same optional rounding pass.",
+    "limitations": [
+      "Fixed-viewport integer compile-time retention rejects fractional policies unless fractional_coordinates is selected. Change the grid from original measurements, not already-snapped text advances."
+    ]
+  }
+]

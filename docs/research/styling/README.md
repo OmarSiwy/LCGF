@@ -1,6 +1,8 @@
 # Comprehensive styling for LCGF
 
-Research date: **2026-11-23**. Audited baseline: **`ed94db3da27882ef1c87d0dd15a382b4df39e2c2`** in `OmarSiwy/LCGF`. This branch contains research and a proposed implementation program. It does not add the capabilities below to the runtime, change the public API, or establish new performance results.
+> **Historical research snapshot.** This record predates implementation. See the [implemented styling guide](../../styling/README.md), [coverage profiles](../../styling/coverage.md), and [validation report](../../styling/validation.md) for the completed branch.
+
+Research date: **2026-11-23**. Audited baseline: **`ed94db3da27882ef1c87d0dd15a382b4df39e2c2`** in `OmarSiwy/LCGF`. This historical snapshot records the research and proposed implementation program before runtime changes or new performance measurements. The implementation links above describe the subsequently completed work.
 
 ## Recommendation
 

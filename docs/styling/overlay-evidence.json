@@ -1,0 +1,30 @@
+[
+  {
+    "id": "ui.navigation_overlay_parts",
+    "implementation": [
+      "src/theme/recipe_overlays.zig",
+      "src/widgets/popover.zig"
+    ],
+    "verification": [
+      "recipe menu: disabled items are skipped and read-only items cannot activate",
+      "recipe menu: runtime and CT consume dynamic typography tokens and the same submenu keys",
+      "overlay recipes: runtime popup content tooltip focus toast deadline and breadcrumb roles are consumed",
+      "recipe popover: CT typography is opt-in per label and Escape closes the native overlay",
+      "recipe overlays: CT tooltip focus and reduced-motion toast use the styled label consumer",
+      "recipe breadcrumb: CT links follow Enter keep focus outlines and reject disabled activation",
+      "recipe overlays: resolution failure is explicit preserves menu state and resets next frame only",
+      "recipe menu accessories: runtime and CT style accelerators indicators separators and skip separator actions",
+      "recipe tooltip arrow: optional part styles real geometry in runtime and CT without input or extra layout",
+      "recipe overlay participation: hidden popup removes its scrim and read-only focused controls retain help"
+    ],
+    "profile": "Dedicated runtime menu, popover, tooltip, breadcrumb and toast compositions resolve plain recipe values into actual Frame rows and Texts while reusing native pure behavior. Compile-time Menu/Popover/Tooltip/Toast hooks reuse ComptimePage, and breadcrumb reuses ComptimeUi focus handling. Dynamic token/recipe/environment and optional menu content spans are caller-owned. Accelerator and indicator strings use named styled parts, separators emit actual noninteractive geometry and are skipped by menu navigation. Tooltip arrows are optional transformed-shape rows with independently resolved paint/geometry. Popover Part.text/Part.content optionally override label typography/bytes, preserving bound labels when null. Label bytes are borrowed until the existing bounded Strings copy; CT recipe content preflights remaining string capacity and reports NoSpace without overwriting. Recipe failures occur before runtime menu action commit; CT hook failure_field retains the first error until the next step. Hidden/collapsed popup panels remove their scrims, while read-only focused controls retain tooltips.",
+    "limitations": [
+      "ComptimePage does not own a keyboard focus manager. Its host supplies trigger focused/focus_visible state; open-menu keyboard sequences and Escape use the native menu behavior. ComptimeUi breadcrumb owns its normal focus chain.",
+      "Call floating overlays after ordinary content under the root. Native placement uses previous trigger geometry below the trigger (or beside a submenu trigger); this adapter does not choose viewport-flipping placement automatically.",
+      "Callers explicitly sequence frames while CT tooltip/toast timers are live. Runtime adapters request motion deadlines through the existing context.",
+      "Arbitrary caller popup children preserve their original styles; H.label explicitly opts CT content labels into the popup recipe.",
+      "Accelerators are display text; registering actual shortcuts remains the native caller-owned input/shortcut operation. MenuContent indicator text can represent submenu arrows; complex arrow textures/materials remain caller-owned.",
+      "Tooltip arrow defaults to a transformed square and is opt-in. Its named part may supply caller-owned texture/material resources. It does not change the native fixed-below placement policy."
+    ]
+  }
+]
