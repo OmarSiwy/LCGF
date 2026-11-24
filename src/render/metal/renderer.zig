@@ -201,8 +201,14 @@ pub fn RendererOver(comptime Encoder: type) type {
 
         /// One instanced draw for a text run's glyphs.
         pub fn drawText(r: *const Self, pass: Pass, run: u32) void {
-            r.bind(pass, .solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * quad_shader.stride);
-            pass.drawQuads(r.glyphs.span(run)[1]);
+            r.drawGlyphSpan(pass, r.glyphs.span(run));
+        }
+
+        /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+        /// draw (`iface.drawUntilCustom`).
+        pub fn drawGlyphSpan(r: *const Self, pass: Pass, span: [2]u32) void {
+            r.bind(pass, .solid, r.glyphs.texture, r.glyphsAt() + @as(usize, span[0]) * quad_shader.stride);
+            pass.drawQuads(span[1]);
         }
 
         /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
@@ -441,7 +447,7 @@ test "renderer: each prepare writes the next frame slot, and draws read the slot
             try testing.expectEqual(conformance.scenes[2].draws[n].first, call.draw.first_instance);
             n += 1;
         };
-        try testing.expectEqual(4, n);
+        try testing.expectEqual(3, n);
     }
 }
 

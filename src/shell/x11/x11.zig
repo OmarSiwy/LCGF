@@ -637,6 +637,9 @@ pub const Window = struct {
     pixmap: u32 = 0,
     pixmap_width: u16 = 0,
     pixmap_height: u16 = 0,
+    /// Rows of the frame buffer `presentPixels` sends: the next frame's damage, when its draw
+    /// list tracks it (`Context.trackDamage`), else all. The pixmap keeps the rest from earlier frames.
+    upload_rows: [2]u32 = .{ 0, std.math.maxInt(u32) },
     /// Size in physical pixels, from the last ConfigureNotify.
     width: u16,
     height: u16,
@@ -1082,6 +1085,8 @@ pub const Window = struct {
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
         w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.scale);
+        const r = lcgf.damage.Region.scissor(out.draw.damage.bounds(), .{ width, rows }, w.scale);
+        w.upload_rows = .{ r[1], r[1] + r[3] };
         w.presentPixels() catch {};
     }
 
@@ -1093,7 +1098,13 @@ pub const Window = struct {
         if (fb.width == 0 or fb.height == 0) return;
         const width: u16 = @intCast(fb.width);
         const height: u16 = @intCast(fb.height);
+        var from: u32 = @min(w.upload_rows[0], height);
+        var to: u32 = @min(w.upload_rows[1], height);
+        w.upload_rows = .{ 0, std.math.maxInt(u32) };
         if (w.pixmap_width != width or w.pixmap_height != height) {
+            // A new pixmap holds nothing yet: all of it.
+            from = 0;
+            to = height;
             if (w.pixmap == 0) {
                 w.pixmap = c.id();
             } else {
@@ -1107,14 +1118,14 @@ pub const Window = struct {
         const max_pixels = @as(usize, c.setup.max_request) - wire.put_image_head / 4;
         if (fb.stride <= max_pixels and fb.stride <= std.math.maxInt(u16)) {
             const rows: u32 = @intCast(@min(max_pixels / fb.stride, height));
-            var y: u32 = 0;
-            while (y < height) : (y += rows) {
-                const h = @min(rows, height - y);
+            var y: u32 = from;
+            while (y < to) : (y += rows) {
+                const h = @min(rows, to - y);
                 try w.uploadPixels(0, y, fb.stride, h, fb.pixels[y * fb.stride ..][0 .. h * fb.stride]);
             }
         } else {
             // Even one padded row can exceed a small server's request limit.
-            for (0..height) |y| {
+            for (from..to) |y| {
                 const row = fb.pixels[y * fb.stride ..][0..width];
                 var x: usize = 0;
                 while (x < width) {

@@ -107,7 +107,7 @@ float texel_centre(float pos, float size, float uv0_, float uv1_, float n) {
 }
 
 vec4 gradient(Frag in_3) {
-    bool local = false;
+    bool local_1 = false;
     uint _e2 = in_3.params.y;
     vec4 to = (vec4(_e2 & 0xFFu, _e2 >> 8 & 0xFFu, _e2 >> 16 & 0xFFu, _e2 >> 24) / 255.0);
     float a_1 = uintBitsToFloat(in_3.params.z);
@@ -118,11 +118,11 @@ vec4 gradient(Frag in_3) {
     float t_rad = (length((in_3.local - centre)) / max(uintBitsToFloat(in_3.params.w), 1e-6));
     float t = clamp(((in_3.params.x == k_radial) ? t_rad : t_lin), 0.0, 1.0);
     if (!((in_3.params.x == k_linear))) {
-        local = (in_3.params.x == k_radial);
+        local_1 = (in_3.params.x == k_radial);
     } else {
-        local = true;
+        local_1 = true;
     }
-    bool graded = local;
+    bool graded = local_1;
     return (graded ? mix(in_3.fill, to, t) : in_3.fill);
 }
 

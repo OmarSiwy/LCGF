@@ -115,7 +115,7 @@ metal::float2 nearest_uv(
 metal::float4 gradient(
     Frag in_3
 ) {
-    bool local = {};
+    bool local_1 = {};
     metal::float4 to = metal::unpack_unorm4x8_to_float(in_3.params.y);
     float a_1 = as_type<float>(in_3.params.z);
     metal::float2 dir = metal::float2(metal::cos(a_1), metal::sin(a_1));
@@ -125,11 +125,11 @@ metal::float4 gradient(
     float t_rad = metal::length(in_3.local - centre) / metal::max(as_type<float>(in_3.params.w), 0.000001);
     float t = metal::clamp((in_3.params.x == k_radial) ? t_rad : t_lin, 0.0, 1.0);
     if (!((in_3.params.x == k_linear))) {
-        local = in_3.params.x == k_radial;
+        local_1 = in_3.params.x == k_radial;
     } else {
-        local = true;
+        local_1 = true;
     }
-    bool graded = local;
+    bool graded = local_1;
     return graded ? metal::mix(in_3.fill, to, t) : in_3.fill;
 }
 
@@ -196,19 +196,38 @@ metal::float4 material(
     metal::texture2d<float, metal::access::sample> tex,
     metal::sampler samp
 ) {
-    metal::float2 _e1 = nearest_uv(in_6, tex);
-    metal::float2 _e2 = nine_uv(in_6);
-    metal::float2 uv = (in_6.params.x == k_nine) ? _e2 : _e1;
-    metal::float4 _e8 = gradient(in_6);
-    metal::float4 _e11 = tex.sample(samp, uv);
-    return _e8 * _e11;
+    metal::float2 uv = {};
+    metal::float4 color = {};
+    bool local_2 = {};
+    if (in_6.params.x == k_nine) {
+        metal::float2 _e6 = nine_uv(in_6);
+        uv = _e6;
+    } else {
+        metal::float2 _e7 = nearest_uv(in_6, tex);
+        uv = _e7;
+    }
+    color = in_6.fill;
+    if (!((in_6.params.x == k_linear))) {
+        local_2 = in_6.params.x == k_radial;
+    } else {
+        local_2 = true;
+    }
+    bool _e22 = local_2;
+    if (_e22) {
+        metal::float4 _e23 = gradient(in_6);
+        color = _e23;
+    }
+    metal::float4 _e24 = color;
+    metal::float2 _e27 = uv;
+    metal::float4 _e28 = tex.sample(samp, _e27);
+    return _e24 * _e28;
 }
 
 struct vsInput {
     metal::float4 rect [[attribute(0)]];
     metal::float4 clip [[attribute(1)]];
     metal::uint4 params [[attribute(2)]];
-    metal::float4 uv [[attribute(3)]];
+    metal::float4 uv_1 [[attribute(3)]];
     metal::float4 fill [[attribute(4)]];
     metal::float4 border_color [[attribute(5)]];
     metal::float4 radii_1 [[attribute(6)]];
@@ -241,7 +260,7 @@ vertex vsOutput vs(
 , uint vi [[vertex_id]]
 , constant Globals& globals [[user(fake0)]]
 ) {
-    const Instance inst = { varyings.rect, varyings.clip, varyings.params, varyings.uv, varyings.fill, varyings.border_color, varyings.radii_1, varyings.border, varyings.opacity, {}, varyings.xform_abcd, varyings.xform_t, {}, varyings.clip_radii };
+    const Instance inst = { varyings.rect, varyings.clip, varyings.params, varyings.uv_1, varyings.fill, varyings.border_color, varyings.radii_1, varyings.border, varyings.opacity, {}, varyings.xform_abcd, varyings.xform_t, {}, varyings.clip_radii };
     Frag out = {};
     metal::float2 corner = metal::float2(static_cast<float>(vi & 1u), static_cast<float>(vi >> 1u));
     float grow = (inst.params.x == k_shadow) ? (3.0 * as_type<float>(inst.params.y)) : 0.0;
@@ -278,8 +297,8 @@ vertex vsOutput vs(
 
 
 struct fsInput {
-    metal::float2 local_1 [[user(loc0), center_perspective]];
-    metal::float2 uv [[user(loc1), center_perspective]];
+    metal::float2 local_3 [[user(loc0), center_perspective]];
+    metal::float2 uv_1 [[user(loc1), center_perspective]];
     metal::float2 pixel [[user(loc2), center_perspective]];
     metal::float2 half_2 [[user(loc3), flat]];
     metal::float4 radii_1 [[user(loc4), flat]];
@@ -304,7 +323,11 @@ fragment fsOutput fs(
 , metal::texture2d<float, metal::access::sample> tex [[user(fake0)]]
 , metal::sampler samp [[user(fake0)]]
 ) {
-    const Frag in = { position, varyings_1.local_1, varyings_1.uv, varyings_1.pixel, varyings_1.half_2, varyings_1.radii_1, varyings_1.fill, varyings_1.border_color, varyings_1.clip, varyings_1.params, varyings_1.uv_rect, varyings_1.border, varyings_1.opacity, {}, varyings_1.clip_radii, varyings_1.to_rect, varyings_1.to_rect_off };
+    const Frag in = { position, varyings_1.local_3, varyings_1.uv_1, varyings_1.pixel, varyings_1.half_2, varyings_1.radii_1, varyings_1.fill, varyings_1.border_color, varyings_1.clip, varyings_1.params, varyings_1.uv_rect, varyings_1.border, varyings_1.opacity, {}, varyings_1.clip_radii, varyings_1.to_rect, varyings_1.to_rect_off };
+    float pattern = 1.0;
+    bool local = {};
+    float cover = {};
+    float rounded = 1.0;
     float _e4 = corner_radius(in.local, in.half_, in.radii);
     float _e7 = rounded_box(in.local, in.half_, _e4);
     float _e10 = globals.scale;
@@ -314,22 +337,39 @@ fragment fsOutput fs(
     float inner = metal::clamp(0.5 - (d_1 + (in.border * _e20)), 0.0, 1.0);
     float has_border = metal::step(0.001, in.border);
     bool is_shadow = in.params.x == k_shadow;
-    float _e39 = border_pattern(in, globals);
-    float on_border = (1.0 - metal::mix(1.0, inner, has_border)) * _e39;
-    metal::float4 _e41 = material(in, tex, samp);
-    metal::float4 color = is_shadow ? in.fill : metal::mix(_e41, in.border_color, on_border);
-    float _e48 = globals.scale;
-    float _e53 = shadow_coverage(d_1 / _e48, as_type<float>(in.params.y));
-    float cover = is_shadow ? _e53 : shape;
+    if (!((in.params.x == k_dashed))) {
+        local = in.params.x == k_dotted;
+    } else {
+        local = true;
+    }
+    bool _e49 = local;
+    if (_e49) {
+        float _e50 = border_pattern(in, globals);
+        pattern = _e50;
+    }
+    float _e55 = pattern;
+    float on_border = (1.0 - metal::mix(1.0, inner, has_border)) * _e55;
+    metal::float4 _e57 = material(in, tex, samp);
+    metal::float4 color_1 = is_shadow ? in.fill : metal::mix(_e57, in.border_color, on_border);
+    cover = shape;
+    if (is_shadow) {
+        float _e65 = globals.scale;
+        float _e70 = shadow_coverage(d_1 / _e65, as_type<float>(in.params.y));
+        cover = _e70;
+    }
     metal::float2 inside = metal::step(in.clip.xy, in.pixel) * metal::step(in.pixel, in.clip.zw);
-    metal::float2 clip_centre = (in.clip.xy + in.clip.zw) * 0.5;
-    metal::float2 clip_half = (in.clip.zw - in.clip.xy) * 0.5;
-    metal::float2 to_clip = in.pixel - clip_centre;
-    float _e81 = corner_radius(to_clip, clip_half, in.clip_radii);
-    float _e82 = rounded_box(to_clip, clip_half, _e81);
-    float _e85 = globals.scale;
-    float clip_d = _e82 * _e85;
-    float rounded = metal::any(in.clip_radii > metal::float4(0.0)) ? metal::clamp(0.5 - clip_d, 0.0, 1.0) : 1.0;
-    float alpha = (((cover * inside.x) * inside.y) * rounded) * in.opacity;
-    return fsOutput { metal::float4(color.xyz * color.w, color.w) * alpha };
+    if (metal::any(in.clip_radii > metal::float4(0.0))) {
+        metal::float2 clip_centre = (in.clip.xy + in.clip.zw) * 0.5;
+        metal::float2 clip_half = (in.clip.zw - in.clip.xy) * 0.5;
+        metal::float2 to_clip = in.pixel - clip_centre;
+        float _e104 = corner_radius(to_clip, clip_half, in.clip_radii);
+        float _e105 = rounded_box(to_clip, clip_half, _e104);
+        float _e108 = globals.scale;
+        float clip_d = _e105 * _e108;
+        rounded = metal::clamp(0.5 - clip_d, 0.0, 1.0);
+    }
+    float _e115 = cover;
+    float _e120 = rounded;
+    float alpha = (((_e115 * inside.x) * inside.y) * _e120) * in.opacity;
+    return fsOutput { metal::float4(color_1.xyz * color_1.w, color_1.w) * alpha };
 }

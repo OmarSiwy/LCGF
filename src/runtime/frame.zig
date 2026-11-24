@@ -289,6 +289,7 @@ pub const Frame = struct {
         t.seal(0);
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        if (ctx.damage_hook) |record| record(ctx, t, tx, cu, strings.buf[0..strings.len]);
         ctx.anims.sweep(ctx.frame);
         ctx.tweens.sweep(ctx.frame);
         ctx.signals.dirty = false;

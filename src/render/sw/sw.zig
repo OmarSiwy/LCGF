@@ -11,12 +11,30 @@
 //!
 //! Framebuffer rows are padded to whole vectors, so shading uses whole vectors with a mask for
 //! the pixels outside the quad or the scissor.
+//!
+//! The quads of a UI are nearly all untransformed solid rects, glyphs and images, and those take
+//! loops specialised to them (`fast_paths`), which split the shader's terms into one part per
+//! column and one per row, computed once each:
+//!
+//!   rectQuad     fills the interior whole vectors at a time; the frame around it (`rectFrame`)
+//!                takes a square root only in the corners
+//!   texturedQuad an image or a lone glyph: coverage and texel column per column, texel row per row
+//!   textStrip    a line of glyphs a row at a time; from an alpha atlas (`Image.coverage`) the
+//!                texels of a vector come from one or two 16-byte loads and a byte shuffle, and
+//!                vectors whose texels are all 0 are skipped
+//!
+//! Their branches are per vector at most (all-zero texels, a corner), never per lane. Blending is
+//! in 8-bit integers, two channels per 16-bit field of a u32 (`overSa`), as pixman does; it may
+//! differ from float arithmetic by a level. `frame` starts at the last quad that covers the
+//! target opaquely, so what lies under a full-window panel, the clear included, is not drawn.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const simd = @import("../../core/simd.zig");
 const types = @import("../../core/types.zig");
 const draw_list = @import("../../draw/draw_list.zig");
 const damage = @import("../../draw/damage.zig");
+pub const bands = @import("bands.zig");
 const features = @import("../../draw/features.zig");
 const iface = @import("../iface.zig");
 const Color = types.Color;
@@ -111,14 +129,14 @@ pub const Framebuffer = struct {
         const mask = simd.u(0x00ff00ff);
         const rb = simd.u((source & 0x00ff00ff) * a);
         const ga = simd.u(((source >> 8) & 0x00ff00ff) * a);
-        const inv = simd.u(255 - a);
+        const inv = simd.u((255 - a) * 0x00010001);
         for (b[1]..b[3]) |y| {
             const row = fb.pixels[y * fb.stride ..][0..fb.stride];
             var x = std.mem.alignBackward(u32, b[0], W);
             while (x < b[2]) : (x += W) {
                 const old: U = row[x..][0..W].*;
-                const lo = rb + (old & mask) * inv;
-                const hi = ga + ((old >> @splat(8)) & mask) * inv;
+                const lo = rb + mul16(old & mask, inv);
+                const hi = ga + mul16((old >> @splat(8)) & mask, inv);
                 const result = div255(lo) | (div255(hi) << @splat(8));
                 row[x..][0..W].* = @select(u32, spanMask(x, b[0], b[2]), result, old);
             }
@@ -143,6 +161,10 @@ pub const Image = struct {
     pixels: []const u32,
     width: u32,
     height: u32,
+    /// The same texture as 8-bit alpha, when every texel is white at that alpha (a glyph
+    /// atlas): `width * height` bytes, row by row, or empty. Text reads these, a quarter of the
+    /// bytes of `pixels`, and skips the runs of texels that are 0.
+    coverage: []const u8 = &.{},
 
     /// Texture 0 (`types.Texture.white`): put it at row 0 of `Software.images`.
     pub const white: Image = .{ .pixels = &.{0xffff_ffff}, .width = 1, .height = 1 };
@@ -213,10 +235,28 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
         }
 
         pub fn drawText(s: *const Self, t: Target, run: u32) void {
+            s.drawGlyphSpan(t, s.glyphs.span(run));
+        }
+
+        /// The `span[1]` glyph quads from `span[0]`: consecutive text runs at once
+        /// (`iface.drawUntilCustom`), so a line's strip may run on across them.
+        pub fn drawGlyphSpan(s: *const Self, t: Target, span: [2]u32) void {
             if (!use.text) return;
             const g = s.glyphs;
-            const r = g.span(run);
-            s.drawQuads(t, g.quads[r[0]..][0..r[1]], s.images[@backingInt(g.texture)]);
+            s.drawGlyphs(t, g.quads[span[0]..][0..span[1]], s.images[@backingInt(g.texture)]);
+        }
+
+        /// Glyph quads. Consecutive glyphs on one line (`stripLen`) are drawn as one strip, a
+        /// row of the whole line at a time; any other quad as `drawQuads` draws it.
+        fn drawGlyphs(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
+            var i: usize = 0;
+            while (i < quads.len) {
+                const n = if (fixed_point or !fast_paths or !(use.image or use.text)) 1 else stripLen(quads[i..], img);
+                if (n < 2 or !textStrip(t, quads[i..][0..n], img, s.scale)) {
+                    s.drawQuads(t, quads[i..][0..n], img);
+                }
+                i += n;
+            }
         }
 
         fn drawQuads(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
@@ -229,34 +269,24 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
                     local.clip = fixed.decode(fixed.encode(local.clip));
                     break :q &local;
                 } else source;
-                if (solidRect(q, img, s.scale)) {
-                    const box = clampBox(coveredPixels(q, s.scale), t.scissor);
-                    const color: Color = @bitCast(q.fill);
-                    const radius = @reduce(.Max, @as(@Vector(4, f32), q.radii));
-                    if (use.radius and radius > 0) {
-                        // Only the four corner squares need the distance shader.
-                        const center = clampBox(toPixels(.{
-                            @ceil((q.rect[0] + radius) * s.scale),
-                            @ceil((q.rect[1] + radius) * s.scale),
-                            (q.rect[2] - radius) * s.scale,
-                            (q.rect[3] - radius) * s.scale,
-                        }), box);
-                        for ([_][2]u32{ .{ box[1], center[1] }, .{ center[3], box[3] } }) |band| {
-                            if (band[0] == band[1]) continue;
-                            for ([_][2]u32{ .{ box[0], center[0] }, .{ center[2], box[2] } }) |corner| {
-                                if (corner[0] == corner[1]) continue;
-                                shadeFor(use, .solid, .{ .fb = t.fb, .scissor = .{ corner[0], band[0], corner[1], band[1] } }, q, img, s.scale);
-                            }
-                            t.fb.solid(.{ center[0], band[0], center[2], band[1] }, color);
-                        }
-                        t.fb.solid(.{ box[0], center[1], box[2], center[3] }, color);
-                    } else {
-                        t.fb.solid(box, color);
+                // Whatever the quad's transform, it draws only inside its clip: one wholly above
+                // or below the target (another band of a threaded frame) costs two compares.
+                if (q.clip[3] * s.scale <= @as(f32, @floatFromInt(t.scissor[1])) or
+                    q.clip[1] * s.scale >= @as(f32, @floatFromInt(t.scissor[3]))) continue;
+                const code: u32 = @bitCast(q.params[0]);
+                // Untransformed quads of the solid kind with a square clip, which is nearly every
+                // quad of a UI, take loops specialised to them (one branch per quad).
+                if (fast_paths and code == 0 and plain(q)) {
+                    if (img.pixels.ptr == Image.white.pixels.ptr) {
+                        rectQuad(use, t, q, s.scale);
+                        continue;
                     }
-                    continue;
+                    if ((use.image or use.text) and q.border < 0.001 and @reduce(.Max, @as(@Vector(4, f32), q.radii)) <= 0) {
+                        texturedQuad(t, q, img, s.scale);
+                        continue;
+                    }
                 }
                 // One loop per feature; unknown codes draw as solid, as the shader's selects do.
-                const code: u32 = @bitCast(q.params[0]);
                 switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
                     inline else => |kind| if (comptime use.kinds.contains(kind))
                         shadeFor(use, kind, t, q, img, s.scale)
@@ -275,9 +305,53 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
                 const r = damage.Region.scissor(draw.damage.rect(@intCast(k)), .{ fb.width, fb.height }, s.scale);
                 const box = clampBox(.{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, scissor);
                 if (box[0] >= box[2] or box[1] >= box[3]) continue;
-                fb.fill(box, background);
-                iface.render(s, .{ .fb = fb, .scissor = box }, draw);
+                s.frame(.{ .fb = fb, .scissor = box }, draw, background);
             }
+        }
+
+        /// `t.scissor` cleared to `background` with the commands of `list` drawn over it, custom
+        /// ones skipped. `list` is a `DrawList` or anything with its `cmd_len` and `command`.
+        /// Whatever the last quad that covers the whole scissor opaquely (`covers`) is drawn
+        /// over, the clear included, is never seen, so it is not drawn: the frame starts at that
+        /// quad. A full-window background panel saves a clear of the window.
+        pub fn frame(s: *const Self, t: Target, list: anytype, background: Color) void {
+            var i: u32 = 0;
+            if (s.cover(t.scissor, list)) |at| {
+                var batch = list.command(at[0]).quads;
+                batch.first += at[1];
+                batch.count -= at[1];
+                s.drawBatch(t, batch);
+                i = at[0] + 1;
+            } else t.fb.fill(t.scissor, background);
+            while (i < list.cmd_len) : (i += 1) switch (list.command(i)) {
+                .quads => |batch| s.drawBatch(t, batch),
+                .text => |run| {
+                    const span = iface.glyphSpan(s.glyphs, list, &i, run);
+                    s.drawGlyphSpan(t, span);
+                },
+                .custom => {},
+            };
+        }
+
+        /// The command and the quad in its batch of the last quad of `list` that `covers` `box`.
+        fn cover(s: *const Self, box: [4]u32, list: anytype) ?[2]u32 {
+            // Fixed-point quads are drawn at their quantized rect, not the one tested here.
+            if (fixed_point or box[0] >= box[2] or box[1] >= box[3]) return null;
+            var i = list.cmd_len;
+            while (i > 0) {
+                i -= 1;
+                const batch = switch (list.command(i)) {
+                    .quads => |batch| batch,
+                    else => continue,
+                };
+                if (use.image and batch.texture != .white) continue;
+                var k = batch.count;
+                while (k > 0) {
+                    k -= 1;
+                    if (covers(use, &s.quads[batch.first + k], s.scale, box)) return .{ i, k };
+                }
+            }
+            return null;
         }
     };
 }
@@ -291,13 +365,47 @@ comptime {
 /// the shell owns the pixels and shows them (PutImage, SetDIBitsToDevice, a wl_shm buffer).
 pub const Setup = struct {
     gfx: Software = .{},
+    /// Threads to draw with, a band of rows each (`bands`), set by a host that has them; null
+    /// draws on the caller's thread alone.
+    pool: ?*bands.Pool = null,
 
+    /// Draws `list` over `fb`, which holds the last frame: only the rects of `list.damage` (all
+    /// of `fb` unless the context tracks damage, `Context.trackDamage`), each cleared and drawn.
     pub fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void {
         s.gfx.prepare({}, list, glyphs, .{ 0, 0 }, scale);
-        fb.clear(background);
-        iface.render(&s.gfx, .{ .fb = fb, .scissor = fb.all() }, list);
+        for (0..damage.max_rects) |k| {
+            const r = damage.Region.scissor(list.damage.rect(@intCast(k)), .{ fb.width, fb.height }, scale);
+            if (r[2] == 0 or r[3] == 0) continue;
+            const job: Band = .{ .gfx = &s.gfx, .fb = fb, .box = .{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, .list = list, .background = background };
+            // One band a thread: every band walks the whole list, so more bands cost more than
+            // the balance they buy.
+            if (s.pool) |pool| pool.run(pool.count, &job, Band.draw) else job.draw(0, 1);
+        }
     }
+
+    const Band = struct {
+        gfx: *const Software,
+        fb: *Framebuffer,
+        box: [4]u32,
+        list: *const DrawList,
+        background: Color,
+
+        /// Rows `k` of `n` of the box.
+        fn draw(b: *const Band, k: u32, n: u32) void {
+            const h = b.box[3] - b.box[1];
+            const box: [4]u32 = .{ b.box[0], b.box[1] + h * k / n, b.box[2], b.box[1] + h * (k + 1) / n };
+            if (box[1] < box[3]) b.gfx.frame(.{ .fb = b.fb, .scissor = box }, b.list, b.background);
+        }
+    };
 };
+
+/// Whether quads take the loops specialised to their case (`rectQuad`, `texturedQuad`,
+/// `textStrip`) or all go through the shader loop. A build optimised for size keeps the one loop:
+/// the specialised ones cost a microcontroller image about 7 to 12 KiB of flash.
+const fast_paths = !for ([_][]const u8{ "small", "ReleaseSmall" }) |name| {
+    // The mode's name differs between Zig versions.
+    if (std.mem.eql(u8, @tagName(builtin.mode), name)) break true;
+} else false;
 
 /// Tile `k` of `n`: a band of whole rows. Bands share no pixel, so `n` threads may each draw one
 /// (`Software.redraw` with the band as scissor) into the same framebuffer at once.
@@ -320,17 +428,535 @@ inline fn spanMask(x: u32, x0: u32, x1: u32) B {
     return (xs >= simd.u(x0)) & (xs < simd.u(x1));
 }
 
-/// True when `q` covers whole pixels with one colour: no feature, texture, transform,
-/// rounded clip or border, and edges on pixel boundaries. Its own rounded corners need shading.
-fn solidRect(q: *const Quad, img: Image, scale: f32) bool {
-    const r: @Vector(4, f32) = q.rect;
-    const s: @Vector(4, f32) = r * @as(@Vector(4, f32), @splat(scale));
-    const zero: @Vector(4, f32) = @splat(0);
+/// True when `q` has no transform and a square clip: its shading then needs neither the
+/// inverse transform nor the clip's distance field.
+fn plain(q: *const Quad) bool {
     const xform: [6]f32 = q.xform;
-    return @as(u32, @bitCast(q.params[0])) == 0 and img.pixels.ptr == Image.white.pixels.ptr and
-        std.mem.eql(f32, &xform, &.{ 1, 0, 0, 1, 0, 0 }) and
-        @reduce(.And, @as(@Vector(4, f32), q.clip_radii) <= zero) and
-        q.border < 0.001 and q.opacity == 1 and @reduce(.And, @floor(s) == s);
+    return std.mem.eql(f32, &xform, &.{ 1, 0, 0, 1, 0, 0 }) and
+        @reduce(.And, @as(@Vector(4, f32), q.clip_radii) <= @as(@Vector(4, f32), @splat(0)));
+}
+
+/// The pixels of an untransformed quad the shader loop can change, cut by the scissor: those
+/// whose centre passes its `geo` and `inside` tests, rect[0] <= c < rect[2] and clip[0] <= c <=
+/// clip[2] on each axis, in the same arithmetic. (The loop's own box reaches a pixel past both
+/// far edges; those pixels get alpha 0.)
+fn plainBox(q: *const Quad, scale: f32, scissor: [4]u32) [4]u32 {
+    const r = q.rect;
+    const c = q.clip;
+    const inv = 1 / scale;
+    const x = axisPixels(@max(r[0], c[0]), r[2], c[2], scale, inv);
+    const y = axisPixels(@max(r[1], c[1]), r[3], c[3], scale, inv);
+    return clampBox(.{ x[0], y[0], x[1], y[1] }, scissor);
+}
+
+/// First and end pixel whose centre (p + 0.5) / scale is >= lo, < hi_open and <= hi_closed: an
+/// estimate, settled by the loop's own test on the pixels next to it.
+fn axisPixels(lo: f32, hi_open: f32, hi_closed: f32, scale: f32, inv: f32) [2]u32 {
+    const limit: f32 = 1 << 24;
+    var first: u32 = @intFromFloat(std.math.clamp(@ceil(lo * scale - 0.5), 0, limit));
+    if (first > 0 and pixelCentre(first - 1, inv) >= lo) first -= 1;
+    if (first < 1 << 24 and !(pixelCentre(first, inv) >= lo)) first += 1;
+    const est = @min(@ceil(hi_open * scale - 0.5), @floor(hi_closed * scale - 0.5) + 1);
+    var end: u32 = @intFromFloat(std.math.clamp(est, 0, limit));
+    if (end > 0 and !below(pixelCentre(end - 1, inv), hi_open, hi_closed)) end -= 1;
+    if (end < 1 << 24 and below(pixelCentre(end, inv), hi_open, hi_closed)) end += 1;
+    return .{ first, @max(end, first) };
+}
+
+inline fn pixelCentre(p: u32, inv: f32) f32 {
+    return (@as(f32, @floatFromInt(p)) + 0.5) * inv;
+}
+
+inline fn below(c: f32, hi_open: f32, hi_closed: f32) bool {
+    return c < hi_open and c <= hi_closed;
+}
+
+/// An untransformed, untextured quad of the solid kind with a square clip. Pixels whose centres
+/// lie at least max(radius, border + half a pixel) inside its rect, and inside the clip, have
+/// full coverage and no border: they take the fill (or its blend) whole vectors at a time. The
+/// frame of pixels around them is the shader's rounded box with its terms split by column and
+/// row (`rectFrame`).
+fn rectQuad(comptime use: features.Usage, t: Target, q: *const Quad, scale: f32) void {
+    const box = plainBox(q, scale, t.scissor);
+    if (box[0] >= box[2] or box[1] >= box[3]) return;
+    const inner = interior(use, q, scale, box);
+    const parts: [4][4]u32 = if (inner[0] < inner[2] and inner[1] < inner[3]) .{
+        .{ box[0], box[1], box[2], inner[1] },
+        .{ box[0], inner[3], box[2], box[3] },
+        .{ box[0], inner[1], inner[0], inner[3] },
+        .{ inner[2], inner[1], box[2], inner[3] },
+    } else .{ box, @splat(0), @splat(0), @splat(0) };
+    if (inner[0] < inner[2] and inner[1] < inner[3]) {
+        const color = interiorColor(q);
+        if (color.a > 0) t.fb.solid(inner, color);
+    }
+    const bordered = use.border and q.border >= 0.001;
+    if (bordered) rectFrame(use, true, t, q, scale, &parts) else rectFrame(use, false, t, q, scale, &parts);
+}
+
+/// The pixels of `box` (a `plainBox`) a `rectQuad` fills whole: those whose centres lie at
+/// least max(radius, border + half a pixel) inside its rect, and inside the clip, where coverage
+/// is full and there is no border. Centre x + 0.5 is inside when |(x + 0.5) / scale - cx| <=
+/// hx - inset.
+fn interior(comptime use: features.Usage, q: *const Quad, scale: f32, box: [4]u32) [4]u32 {
+    const x0, const y0, const x1, const y1 = q.rect;
+    const hx = (x1 - x0) * 0.5;
+    const hy = (y1 - y0) * 0.5;
+    const cx = (x0 + x1) * 0.5;
+    const cy = (y0 + y1) * 0.5;
+    const radius: f32 = if (use.radius) @min(@reduce(.Max, @as(@Vector(4, f32), q.radii)), @min(hx, hy)) else 0;
+    const bordered = use.border and q.border >= 0.001;
+    const inset = @max(radius, (if (bordered) q.border else 0) + 0.5 / scale);
+    const c = q.clip;
+    const lo: @Vector(2, f32) = .{ @max(cx - (hx - inset), c[0]), @max(cy - (hy - inset), c[1]) };
+    const hi: @Vector(2, f32) = .{ @min(cx + (hx - inset), c[2]), @min(cy + (hy - inset), c[3]) };
+    const half: @Vector(2, f32) = @splat(0.5);
+    const s: @Vector(2, f32) = @splat(scale);
+    const first = @ceil(lo * s - half);
+    const end = @floor(hi * s - half) + @as(@Vector(2, f32), @splat(1));
+    return clampBox(toPixels(.{ first[0], first[1], @max(end[0], first[0]), @max(end[1], first[1]) }), box);
+}
+
+/// Whether `q`, untextured, fills every pixel of `box` with an opaque colour: a `rectQuad` whose
+/// interior holds the box.
+fn covers(comptime use: features.Usage, q: *const Quad, scale: f32, box: [4]u32) bool {
+    if (@as(u32, @bitCast(q.params[0])) != 0 or !plain(q) or interiorColor(q).a != 255) return false;
+    const inner = interior(use, q, scale, plainBox(q, scale, box));
+    return inner[0] <= box[0] and inner[1] <= box[1] and inner[2] >= box[2] and inner[3] >= box[3];
+}
+
+/// The fill of a `rectQuad`'s interior: its colour at the quad's opacity.
+fn interiorColor(q: *const Quad) Color {
+    var color: Color = @bitCast(q.fill);
+    color.a = @intFromFloat(@round(std.math.clamp(@as(f32, @floatFromInt(color.a)) * q.opacity, 0, 255)));
+    return color;
+}
+
+/// The frame of a `rectQuad`: the shader's rounded box with no transform, no texture and a square
+/// clip, over pixels that all pass its `geo` and `inside` tests. Its distance there is
+/// len(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - r with qx = |lx| - hx + r, qy = |ly| - hy + r
+/// and r the radius of the pixel's quadrant: |lx| - hx and the quadrant's column side are terms of
+/// the column, computed once per column, |ly| - hy and its row side terms of the row. The square
+/// root is needed only where both qx and qy are positive, in the corners; elsewhere the length is
+/// the positive one of the two, which the root gives to the last bit too. The blend is 8-bit.
+fn rectFrame(comptime use: features.Usage, comptime bordered: bool, t: Target, q: *const Quad, scale: f32, parts: []const [4]u32) void {
+    const x0, const y0, const x1, const y1 = q.rect;
+    const hx = (x1 - x0) * 0.5;
+    const hy = (y1 - y0) * 0.5;
+    const cx = (x0 + x1) * 0.5;
+    const cy = (y0 + y1) * 0.5;
+    const inv_scale = 1 / scale;
+    const cap = @min(hx, hy);
+    const radii: [4]f32 = if (use.radius) @min(@as(@Vector(4, f32), q.radii), @as(@Vector(4, f32), @splat(cap))) else @splat(0);
+    const fill = rgba(q.fill);
+    const edge = rgba(q.border_color);
+    const fill8: [4]u8 = @bitCast(q.fill);
+    const width = q.border * scale;
+    const opacity = simd.f(q.opacity);
+    const fb = t.fb;
+    const red = fb.red();
+    const chunk = 64;
+    var ax: [chunk]F = undefined;
+    var r_top: [chunk]F = undefined;
+    var r_bottom: [chunk]F = undefined;
+    for (parts) |part| {
+        if (part[0] >= part[2] or part[1] >= part[3]) continue;
+        var x_start = std.mem.alignBackward(u32, part[0], W);
+        while (x_start < part[2]) : (x_start += chunk * W) {
+            const n: u32 = @min(chunk, (part[2] - x_start + W - 1) / W);
+            for (0..n) |j| {
+                const fx = @as(F, @floatFromInt(simd.iota + simd.u(x_start + @as(u32, @intCast(j)) * W))) + simd.f(0.5);
+                const lx = fx * simd.f(inv_scale) - simd.f(cx);
+                ax[j] = @abs(lx) - simd.f(hx);
+                const right = lx > simd.f(0);
+                r_top[j] = @select(f32, right, simd.f(radii[1]), simd.f(radii[0]));
+                r_bottom[j] = @select(f32, right, simd.f(radii[2]), simd.f(radii[3]));
+            }
+            for (part[1]..part[3]) |y| {
+                const ly = (@as(f32, @floatFromInt(y)) + 0.5) * inv_scale - cy;
+                const ay = simd.f(@abs(ly) - hy);
+                const rs = if (ly > 0) &r_bottom else &r_top;
+                const row = fb.pixels[y * fb.stride ..][0..fb.stride];
+                for (0..n) |j| {
+                    const x = x_start + @as(u32, @intCast(j)) * W;
+                    const r = rs[j];
+                    const qx = ax[j] + r;
+                    const qy = ay + r;
+                    const mx = @max(qx, simd.f(0));
+                    const my = @max(qy, simd.f(0));
+                    const len = if (@reduce(.Or, (qx > simd.f(0)) & (qy > simd.f(0)))) len2(mx, my) else mx + my;
+                    const dist = (len + @min(@max(qx, qy), simd.f(0)) - r) * simd.f(scale);
+                    const shape = sat(simd.f(0.5) - dist);
+                    const alpha = sat(shape * opacity);
+                    const old: U = row[x..][0..W].*;
+                    const out = if (bordered) out: {
+                        const on_border = simd.f(1) - sat(simd.f(0.5) - (dist + simd.f(width)));
+                        var c: [4]F = undefined;
+                        inline for (0..4) |i| {
+                            const m = simd.f(fill[i]);
+                            c[i] = m + (simd.f(edge[i]) - m) * on_border;
+                        }
+                        var c8: [3]U = undefined;
+                        inline for (0..3) |i| c8[i] = @intFromFloat(@round(c[i] * simd.f(255)));
+                        break :out overSa(c8, @intFromFloat(@round(c[3] * alpha * simd.f(255))), old, red);
+                    } else overSa(.{ simd.u(fill8[0]), simd.u(fill8[1]), simd.u(fill8[2]) }, @intFromFloat(@round(alpha * simd.f(fill[3] * 255))), old, red);
+                    row[x..][0..W].* = @select(u32, spanMask(x, part[0], part[2]), out, old);
+                }
+            }
+        }
+    }
+}
+
+/// An untransformed quad of the solid kind with a texture, no radius, no border and a square
+/// clip: glyphs, icons and images. Its coverage is the smaller of a term of the pixel's column and
+/// a term of its row, its texel column depends on x only and its texel row on y only, so all of
+/// them are computed once per column and once per row instead of once per pixel. Per pixel
+/// what is left is the texel fetch and the blend, with the shader loop's arithmetic.
+fn texturedQuad(t: Target, q: *const Quad, img: Image, scale: f32) void {
+    const box = plainBox(q, scale, t.scissor);
+    if (box[0] >= box[2] or box[1] >= box[3]) return;
+    const x0, const y0, const x1, const y1 = q.rect;
+    const hx = (x1 - x0) * 0.5;
+    const hy = (y1 - y0) * 0.5;
+    const cx = (x0 + x1) * 0.5;
+    const cy = (y0 + y1) * 0.5;
+    const c = q.clip;
+    const uv = q.uv;
+    const tex_w: f32 = @floatFromInt(img.width);
+    const tex_h: f32 = @floatFromInt(img.height);
+    const tinted = tint(q.fill);
+    const opacity = simd.f(q.opacity);
+    const inv_scale = 1 / scale;
+    const red = t.fb.red();
+    // Up to `chunk` vectors of columns at a time; a wider quad takes several passes.
+    const chunk = 16;
+    var cover: [chunk]F = undefined;
+    var texel_x: [chunk]U = undefined;
+    var in_x: [chunk]B = undefined;
+    var start = std.mem.alignBackward(u32, box[0], W);
+    while (start < box[2]) : (start += chunk * W) {
+        const n: u32 = @min(chunk, (box[2] - start + W - 1) / W);
+        for (0..n) |j| {
+            const x = start + @as(u32, @intCast(j)) * W;
+            const fx = @as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5);
+            const sx = fx * simd.f(inv_scale);
+            // The shader's rect_pos, local position and texel column for this column.
+            const px = sx - simd.f(x0);
+            const lx = sx - simd.f(cx);
+            cover[j] = sat(simd.f(0.5) - (@abs(lx) - simd.f(hx)) * simd.f(scale));
+            const u = texelCentre(px, 2 * hx, uv[0], uv[2], tex_w);
+            texel_x[j] = @intFromFloat(@min(@max(@floor(u * simd.f(tex_w)), simd.f(0)), simd.f(tex_w - 1)));
+            in_x[j] = (sx >= simd.f(x0)) & (sx < simd.f(x1)) & (sx >= simd.f(c[0])) & (sx <= simd.f(c[2])) & spanMask(x, box[0], box[2]);
+        }
+        for (box[1]..box[3]) |y| {
+            const fy = @as(f32, @floatFromInt(y)) + 0.5;
+            const sy = fy * inv_scale;
+            // A row outside the rect or the clip gets alpha 0: its pixels stay as they are.
+            if (!(sy >= y0 and sy < y1 and sy >= c[1] and sy <= c[3])) continue;
+            const ly = sy - cy;
+            const row_cover = simd.f(std.math.clamp(0.5 - (@abs(ly) - hy) * scale, 0, 1));
+            const v = texelCentre(simd.f(sy - y0), 2 * hy, uv[1], uv[3], tex_h);
+            const texel_y: u32 = @intFromFloat(@min(@max(@floor(v[0] * tex_h), 0), tex_h - 1));
+            const texels = img.pixels[texel_y * img.width ..];
+            const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
+            for (0..n) |j| {
+                const x = start + @as(u32, @intCast(j)) * W;
+                var texel: U = undefined;
+                inline for (0..W) |l| texel[l] = texels[texel_x[j][l]];
+                const alpha: U = @intFromFloat(@round(sat(@min(cover[j], row_cover) * opacity) * simd.f(255)));
+                const old: U = row[x..][0..W].*;
+                row[x..][0..W].* = @select(u32, in_x[j], overTexel(texel, tinted, alpha, old, red), old);
+            }
+        }
+    }
+}
+
+/// How many quads from the first form a strip `textStrip` can draw: glyphs of the solid kind
+/// with no transform, radius or border, a square clip and a texture, sharing their rows, colour,
+/// opacity and clip, left to right, whose texel rows step alike (same fraction of a texel at
+/// the top, same cell height). At least 1.
+fn stripLen(quads: []const Quad, img: Image) usize {
+    if (img.pixels.ptr == Image.white.pixels.ptr) return 1;
+    const q0 = &quads[0];
+    if (!glyphLike(q0)) return 1;
+    const tex_h: f32 = @floatFromInt(img.height);
+    const rows = texelRows(q0, tex_h);
+    var n: usize = 1;
+    while (n < quads.len) : (n += 1) {
+        const q = &quads[n];
+        const same = glyphLike(q) and q.rect[1] == q0.rect[1] and q.rect[3] == q0.rect[3] and
+            q.fill == q0.fill and q.opacity == q0.opacity and
+            @reduce(.And, @as(@Vector(4, f32), q.clip) == @as(@Vector(4, f32), q0.clip)) and
+            q.rect[0] >= quads[n - 1].rect[0] and
+            std.meta.eql(texelRows(q, tex_h), rows);
+        if (!same) break;
+    }
+    return n;
+}
+
+fn glyphLike(q: *const Quad) bool {
+    return @as(u32, @bitCast(q.params[0])) == 0 and plain(q) and q.border < 0.001 and
+        @reduce(.Max, @as(@Vector(4, f32), q.radii)) <= 0 and q.uv[1] >= 0;
+}
+
+/// The parts of the shader's `texel_centre` along y that a strip's glyphs must share: the
+/// fraction of a texel at the cell's top times the size, and the cell height in texels.
+fn texelRows(q: *const Quad, tex_h: f32) [2]f32 {
+    const size = @max(q.rect[3] - q.rect[1], 1e-6);
+    const a = q.uv[1] * tex_h;
+    return .{ (a - @floor(a)) * size, (q.uv[3] - q.uv[1]) * tex_h };
+}
+
+/// The shader's `floor_div` on one value.
+fn floorDiv1(num: f32, den: f32) f32 {
+    const q = @floor(num / den);
+    const up: f32 = @floatFromInt(@intFromBool((q + 1) * den <= num));
+    const down: f32 = @floatFromInt(@intFromBool(q * den > num));
+    return q + up - down;
+}
+
+/// Glyphs on one line drawn together, a row of the whole line at a time (`stripLen` says which
+/// may be), framebuffer vector by vector. Each pixel column belongs to the glyph whose [x0, x1)
+/// holds its centre; per column its coverage term and texel column are computed once, per row
+/// the row's coverage term and its texel row, which all glyphs share up to their cell's first
+/// row. Per vector and row: the texels (from an alpha atlas, one or two 16-byte loads and a
+/// byte shuffle, skipped where all are 0), then the blend. Returns false, having drawn nothing,
+/// when a pixel centre falls in two glyphs or a texel row would be clamped; the caller then draws
+/// the quads one by one.
+fn textStrip(t: Target, glyphs: []const Quad, img: Image, scale: f32) bool {
+    const q0 = &glyphs[0];
+    const last = &glyphs[glyphs.len - 1];
+    const c = q0.clip;
+    const inv_scale = 1 / scale;
+    const xs = axisPixels(@max(q0.rect[0], c[0]), last.rect[2], c[2], scale, inv_scale);
+    const ys = axisPixels(@max(q0.rect[1], c[1]), q0.rect[3], c[3], scale, inv_scale);
+    const box = clampBox(.{ xs[0], ys[0], xs[1], ys[1] }, t.scissor);
+    if (box[0] >= box[2] or box[1] >= box[3]) return true;
+    const tex_w: f32 = @floatFromInt(img.width);
+    const tex_h: f32 = @floatFromInt(img.height);
+    const y0 = q0.rect[1];
+    const hy = (q0.rect[3] - y0) * 0.5;
+    const cy = (y0 + q0.rect[3]) * 0.5;
+    const size_y = @max(2 * hy, 1e-6);
+    const step = texelRows(q0, tex_h);
+    // The texel row is the glyph's first cell row plus a part shared by the strip; it stays in
+    // the texture over the strip's rows when it does at the first and the last.
+    var top: f32 = std.math.inf(f32);
+    var bottom: f32 = -std.math.inf(f32);
+    for (glyphs) |*g| {
+        const whole = @floor(g.uv[1] * tex_h);
+        top = @min(top, whole);
+        bottom = @max(bottom, whole);
+    }
+    for ([2]u32{ box[1], box[3] - 1 }) |y| {
+        const pos = pixelCentre(y, inv_scale) - y0;
+        const shared = floorDiv1(step[0] + step[1] * pos, size_y);
+        if (top + shared < 0 or bottom + shared > tex_h - 1) return false;
+    }
+    // Each pixel column belongs to one glyph, by the loop's own test; a centre in two glyphs
+    // needs them drawn one over the other, one by one.
+    var prev_end: u32 = 0;
+    for (glyphs) |*q| {
+        const cols = axisPixels(@max(q.rect[0], c[0]), q.rect[2], c[2], scale, inv_scale);
+        if (cols[0] < cols[1] and cols[0] < prev_end) return false;
+        prev_end = @max(prev_end, cols[1]);
+    }
+
+    const tinted = tint(q0.fill);
+    const opaque_tint = q0.fill >> 24 == 255;
+    const opacity = q0.opacity;
+    const red = t.fb.red();
+    const width = img.width;
+    const a8 = img.coverage.len > 0;
+    // Alpha texels by a byte shuffle of 16-byte windows of a row; otherwise one load per lane.
+    const windows = byte_shuffle and a8;
+    const chunk = 64;
+    // Per framebuffer vector of the strip, as u32 lanes (vectors of bools load bit by bit):
+    // whether a glyph holds the column, its coverage times opacity in 8 bits and its texel index
+    // in the cell's first row. When the vector's texels lie in at most two windows of 16 bytes
+    // (a window per glyph piece in it), each window's first index and, per lane, the shuffle
+    // control that picks the lane's byte (0x80, zero, in the lanes of the other).
+    var in_x: [chunk]U = undefined;
+    var cover: [chunk]U = undefined;
+    var base: [chunk]U = undefined;
+    var win_at: [chunk][2]u32 = undefined;
+    // The last window's first index: the vector's windows are in the texture when it is.
+    var win_last: [chunk]u32 = undefined;
+    var win_ctl: [chunk][2]U = undefined;
+    // 0: no glyph; 1 or 2: windows; `lanewise`: a load per lane.
+    var pieces: [chunk]u8 = undefined;
+    const lanewise = 3;
+    const none = simd.u(0);
+    const all = simd.u(~@as(u32, 0));
+    var g: usize = 0;
+    var start = std.mem.alignBackward(u32, box[0], W);
+    while (start < box[2]) : (start += chunk * W) {
+        const n: u32 = @min(chunk, (box[2] - start + W - 1) / W);
+        const stop = @min(start + n * W, box[2]);
+        @memset(in_x[0..n], none);
+        @memset(cover[0..n], none);
+        @memset(pieces[0..n], 0);
+        while (g < glyphs.len) : (g += 1) {
+            const q = &glyphs[g];
+            const x0, _, const x1, _ = q.rect;
+            const cols = axisPixels(@max(x0, c[0]), x1, c[2], scale, inv_scale);
+            const from = @max(cols[0], @max(start, box[0]));
+            const to = @min(cols[1], stop);
+            const hx = (x1 - x0) * 0.5;
+            const cx = (x0 + x1) * 0.5;
+            const row0 = @as(u32, @intFromFloat(@floor(q.uv[1] * tex_h))) * width;
+            var v = (from - start) / W;
+            while (from < to and start + v * W < to) : (v += 1) {
+                const xs_v = simd.iota + simd.u(start + v * W);
+                const live = (xs_v >= simd.u(from)) & (xs_v < simd.u(to));
+                const sx = (@as(F, @floatFromInt(xs_v)) + simd.f(0.5)) * simd.f(inv_scale);
+                const cv = sat(simd.f(0.5) - (@abs(sx - simd.f(cx)) - simd.f(hx)) * simd.f(scale));
+                const cover8: U = @intFromFloat(@round(sat(cv * simd.f(opacity)) * simd.f(255)));
+                const u = texelCentre(sx - simd.f(x0), 2 * hx, q.uv[0], q.uv[2], tex_w);
+                const tx: U = @intFromFloat(@min(@max(@floor(u * simd.f(tex_w)), simd.f(0)), simd.f(tex_w - 1)));
+                const index = simd.u(row0) + tx;
+                in_x[v] |= @select(u32, live, all, none);
+                cover[v] = @select(u32, live, cover8, cover[v]);
+                base[v] = @select(u32, live, index, base[v]);
+                // The piece's window starts at its first texel: texel columns rise with x.
+                const first = @reduce(.Min, @select(u32, live, index, all));
+                const rel = index -% simd.u(first);
+                const k = pieces[v];
+                if (k < 2 and @reduce(.And, (rel < simd.u(16)) | ~live)) {
+                    win_at[v][k] = first;
+                    win_last[v] = @max(first, if (k == 1) win_at[v][0] else 0);
+                    win_ctl[v][k] = @select(u32, live, rel | simd.u(0x80808000), simd.u(0x80808080));
+                    pieces[v] = k + 1;
+                } else pieces[v] = lanewise;
+            }
+            // A glyph running past this chunk carries on in the next.
+            if (cols[1] > stop) break;
+        }
+        for (box[1]..box[3]) |y| {
+            const sy = pixelCentre(@intCast(y), inv_scale);
+            const ly = sy - cy;
+            const row_cover = std.math.clamp(0.5 - (@abs(ly) - hy) * scale, 0, 1);
+            const row_alpha = simd.u(@intFromFloat(@round(std.math.clamp(row_cover * opacity, 0, 1) * 255)));
+            // May be negative for a cell below the texture's top row: indices wrap back.
+            const shared: i32 = @intFromFloat(floorDiv1(step[0] + step[1] * (sy - y0), size_y));
+            const offset: u32 = @bitCast(shared *% @as(i32, @intCast(width)));
+            const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
+            for (0..n) |j| {
+                const k = pieces[j];
+                if (k == 0) continue;
+                const x = start + @as(u32, @intCast(j)) * W;
+                const mask = in_x[j] != none;
+                const alpha = @min(cover[j], row_alpha);
+                const old: U = row[x..][0..W].*;
+                const out = if (a8) out: {
+                    const at = win_at[j];
+                    const fits = @as(u64, win_last[j] +% offset) + 16 <= img.coverage.len;
+                    const cov: U = if (windows and k < lanewise and fits) window: {
+                        const one: @Vector(16, u8) = img.coverage[at[0] +% offset ..][0..16].*;
+                        const two: @Vector(16, u8) = if (k == 2) img.coverage[at[1] +% offset ..][0..16].* else @splat(0);
+                        if (!@reduce(.Or, (one | two) != @as(@Vector(16, u8), @splat(0)))) continue;
+                        const first = shuffleBytes(one, win_ctl[j][0]);
+                        break :window if (k == 2) first | shuffleBytes(two, win_ctl[j][1]) else first;
+                    } else gather: {
+                        const idx = base[j] +% simd.u(offset);
+                        var v: U = undefined;
+                        inline for (0..W) |l| v[l] = img.coverage[if (mask[l]) idx[l] else 0];
+                        break :gather v;
+                    };
+                    // round255(255 * cov) is cov.
+                    const ca = if (opaque_tint) cov else round255(mul16(tinted.a, cov));
+                    break :out overSa(.{ tinted.r, tinted.g, tinted.b }, round255(mul16(ca, alpha)), old, red);
+                } else out: {
+                    const idx = base[j] +% simd.u(offset);
+                    var texel: U = undefined;
+                    inline for (0..W) |l| texel[l] = img.pixels[if (mask[l]) idx[l] else 0];
+                    break :out overTexel(texel, tinted, alpha, old, red);
+                };
+                row[x..][0..W].* = @select(u32, mask, out, old);
+            }
+        }
+    }
+    return true;
+}
+
+/// Whether `shuffleBytes` is one instruction here (AVX2's vpshufb over 8 lanes).
+const byte_shuffle = builtin.cpu.arch == .x86_64 and W == 8 and std.Target.x86.featureSetHas(builtin.cpu.features, .avx2);
+
+/// Per u32 lane, byte `ctl & 15` of `bytes` (the lane's other control bytes are 0x80, which
+/// zero theirs): a texel fetch from a 16-byte window of an alpha atlas.
+inline fn shuffleBytes(bytes: @Vector(16, u8), ctl: U) U {
+    const both = @shuffle(u8, bytes, undefined, [32]i32{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 });
+    return @bitCast(asm ("vpshufb %[ctl], %[src], %[dst]"
+        : [dst] "=x" (-> @Vector(32, u8)),
+        : [src] "x" (both),
+          [ctl] "x" (@as(@Vector(32, u8), @bitCast(ctl))),
+    ));
+}
+
+/// A colour as 8-bit channel factors for `overTexel`: red and blue, green and alpha.
+const Tint = struct { r: U, g: U, b: U, a: U };
+
+fn tint(c: u32) Tint {
+    const v: [4]u8 = @bitCast(c);
+    return .{ .r = simd.u(v[0]), .g = simd.u(v[1]), .b = simd.u(v[2]), .a = simd.u(v[3]) };
+}
+
+/// `overTexel` in 8-bit integers: the texel (Color bits, red in the low byte) times `t`, at
+/// coverage `alpha8` (0..255), premultiplied over `old`. Two channels share a u32 in 16-bit fields,
+/// as `Framebuffer.blend` does. Each step rounds to the nearest level, so a channel may differ
+/// from the float loop by a level or two.
+inline fn overTexel(texel: U, t: Tint, alpha8: U, old: U, red: u5) U {
+    const m8 = simd.u(255);
+    return overRgba(.{
+        round255(mul16(t.r, texel & m8)),
+        round255(mul16(t.g, (texel >> @splat(8)) & m8)),
+        round255(mul16(t.b, (texel >> @splat(16)) & m8)),
+        round255(mul16(t.a, texel >> @splat(24))),
+    }, alpha8, old, red);
+}
+
+/// Straight 8-bit r, g, b, a at coverage `alpha8` (0..255), premultiplied over `old`.
+inline fn overRgba(c: [4]U, alpha8: U, old: U, red: u5) U {
+    return overSa(c[0..3].*, round255(mul16(c[3], alpha8)), old, red);
+}
+
+/// Straight 8-bit r, g, b with source alpha `sa` (0..255), premultiplied over `old`.
+inline fn overSa(c: [3]U, sa: U, old: U, red: u5) U {
+    const fields = simd.u(0x00ff00ff);
+    const cr, const cg, const cb = c;
+    // Source alpha and its complement in both 16-bit fields.
+    const sa2 = sa | (sa << @splat(16));
+    const inv = fields - sa2;
+    // The framebuffer's red sits at bit `red`, its blue at 16 - red.
+    const src_lo = (cr << @splat(red)) | (cb << @splat(16 - red));
+    const src_hi = cg | simd.u(0x00ff0000);
+    const lo = mul16(src_lo, sa2) + mul16(old & fields, inv);
+    const hi = mul16(src_hi, sa2) + mul16((old >> @splat(8)) & fields, inv);
+    return Framebuffer.div255(lo) | (Framebuffer.div255(hi) << @splat(8));
+}
+
+/// Products of the 16-bit fields of `a` and `b`, each pair on its own: a u32 lane holding two
+/// channels times one holding a factor in both, or a plain product below 2^16 (8 bits times 8
+/// bits). One 16-bit multiply where a 32-bit one costs two micro-ops and twice the latency.
+inline fn mul16(a: U, b: U) U {
+    const U16 = @Vector(2 * W, u16);
+    return @bitCast(@as(U16, @bitCast(a)) *% @as(U16, @bitCast(b)));
+}
+
+/// round(x / 255) for 0 <= x <= 255², one value per lane.
+inline fn round255(x: U) U {
+    const bias = x + simd.u(128);
+    return (bias + (bias >> @splat(8))) >> @splat(8);
+}
+
+/// Source `color` (straight, 0..1) at coverage `alpha` premultiplied over the pixels `old`: the
+/// colour and its alpha times the coverage rounded to 8 bits, then `overSa`. Each rounds to the
+/// nearest level, so a channel may differ from float arithmetic by a level.
+inline fn overColor(color: [4]F, alpha: F, old: U, red: u5) U {
+    var c8: [3]U = undefined;
+    inline for (0..3) |i| c8[i] = @intFromFloat(@round(sat(color[i]) * simd.f(255)));
+    const sa: U = @intFromFloat(@round(sat(color[3] * alpha) * simd.f(255)));
+    return overSa(c8, sa, old, red);
 }
 
 /// Pixels whose centres lie in `q.rect` and inside `q.clip` (the shader's `step` tests).
@@ -428,17 +1054,12 @@ inline fn unpack(p: U, red: u5) [4]F {
     };
 }
 
-inline fn pack(c: [4]F, red: u5) U {
-    var out: [4]U = undefined;
-    inline for (0..4) |i| out[i] = @intFromFloat(@round(sat(c[i]) * simd.f(255)));
-    return (out[0] << @splat(red)) | (out[1] << @splat(8)) | (out[2] << @splat(16 - red)) | (out[3] << @splat(24));
-}
-
 /// Shades `q` into `t` with the stock material's `kind` loop: quad.wgsl `vs` and `fs` per pixel.
 pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
     shadeFor(.all, kind, t, q, img, scale);
 }
 
+/// The shader loop over the pixels of `q`'s box.
 fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
@@ -509,15 +1130,118 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Targe
 
     const red = t.fb.red();
     const inv_scale = 1 / scale;
+    shadeRows(use, kind, t.fb, red, box, .{
+        .q = q,
+        .img = img,
+        .scale = scale,
+        .inv_scale = inv_scale,
+        .mr = mr,
+        .off = .{ off_x, off_y },
+        .m = .{ a, b, c, d, tx, ty, inv },
+        .g0 = g0,
+        .g1 = g1,
+        .half = .{ hx, hy },
+        .centre = .{ cx, cy },
+        .fill = fill,
+        .edge = edge,
+        .to = to,
+        .border = border,
+        .has_border = has_border,
+        .uv = uv,
+        .tex = .{ tex_w, tex_h },
+        .dir = .{ dir_x, dir_y },
+        .reach = reach,
+        .rc = .{ rc_x, rc_y },
+        .radius = radius,
+        .dst = dst,
+        .src = src,
+        .dash = dash,
+        .period = period,
+        .sigma = sigma,
+        .clip = clip,
+        .clip_centre = .{ ccx, ccy },
+        .clip_half = .{ chx, chy },
+        .rounded_clip = rounded_clip,
+    });
+}
+
+/// Per-quad constants of the shader loop, computed once by `shadeFor`.
+const Consts = struct {
+    q: *const Quad,
+    img: Image,
+    scale: f32,
+    inv_scale: f32,
+    mr: [4]f32,
+    off: [2]f32,
+    m: [7]f32,
+    g0: [2]f32,
+    g1: [2]f32,
+    half: [2]f32,
+    centre: [2]f32,
+    fill: [4]f32,
+    edge: [4]f32,
+    to: [4]f32,
+    border: f32,
+    has_border: f32,
+    uv: [4]f32,
+    tex: [2]f32,
+    dir: [2]f32,
+    reach: f32,
+    rc: [2]f32,
+    radius: f32,
+    dst: [4]f32,
+    src: [4]f32,
+    dash: f32,
+    period: f32,
+    sigma: f32,
+    clip: [4]f32,
+    clip_centre: [2]f32,
+    clip_half: [2]f32,
+    rounded_clip: B,
+};
+
+inline fn shadeRows(comptime use: features.Usage, comptime kind: features.Kind, fb: *Framebuffer, red: u5, box: [4]u32, kc: Consts) void {
+    const q = kc.q;
+    const img = kc.img;
+    const scale = kc.scale;
+    const inv_scale = kc.inv_scale;
+    const mr = kc.mr;
+    const off_x, const off_y = kc.off;
+    const a, const b, const c, const d, const tx, const ty, const inv = kc.m;
+    const g0 = kc.g0;
+    const g1 = kc.g1;
+    const hx, const hy = kc.half;
+    const cx, const cy = kc.centre;
+    const fill = kc.fill;
+    const edge = kc.edge;
+    const to = kc.to;
+    const border = kc.border;
+    const has_border = kc.has_border;
+    const uv = kc.uv;
+    const tex_w, const tex_h = kc.tex;
+    const dir_x, const dir_y = kc.dir;
+    const reach = kc.reach;
+    const rc_x, const rc_y = kc.rc;
+    const radius = kc.radius;
+    const dst = kc.dst;
+    const src = kc.src;
+    const dash = kc.dash;
+    const period = kc.period;
+    const sigma = kc.sigma;
+    const clip = kc.clip;
+    const ccx, const ccy = kc.clip_centre;
+    const chx, const chy = kc.clip_half;
+    const rounded_clip = kc.rounded_clip;
     for (box[1]..box[3]) |y| {
-        const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
+        const row = fb.pixels[y * fb.stride ..][0..fb.stride];
         const fy = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
         const sy = fy * simd.f(inv_scale);
         var x = std.mem.alignBackward(u32, box[0], W);
         while (x < box[2]) : (x += W) {
             const fx = @as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5);
             const sx = fx * simd.f(inv_scale);
-            // The shader's `rect_pos`, from exact inputs only.
+            // The shader's `rect_pos`, from exact inputs only. For the identity it is the
+            // physical position over the scale less the rect's corner, to the last bit.
             const px = simd.f(mr[0]) * fx + simd.f(mr[2]) * fy + simd.f(off_x);
             const py = simd.f(mr[1]) * fx + simd.f(mr[3]) * fy + simd.f(off_y);
             // The point in the quad's own space; pixels whose centre is outside the drawn
@@ -551,14 +1275,6 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Targe
             const on_border = (simd.f(1) - inner) * simd.f(has_border) * pattern;
 
             // Material: the fill or its gradient, times the texture.
-            var tu = texelCentre(px, 2 * hx, uv[0], uv[2], tex_w);
-            var tv = texelCentre(py, 2 * hy, uv[1], uv[3], tex_h);
-            if (kind == .nine_slice) {
-                const fu = nineAxis(lx + simd.f(hx), 2 * hx, dst[0], dst[2], src[0], src[2]);
-                const fv = nineAxis(ly + simd.f(hy), 2 * hy, dst[1], dst[3], src[1], src[3]);
-                tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * fu;
-                tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * fv;
-            }
             var base: [4]F = .{ simd.f(fill[0]), simd.f(fill[1]), simd.f(fill[2]), simd.f(fill[3]) };
             if (kind == .linear or kind == .radial) {
                 const g = sat(if (kind == .linear)
@@ -578,7 +1294,17 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Targe
                 cover = simd.f(0.5) - simd.f(0.5) * erf;
                 color = base;
             } else {
-                const tex: [4]F = if (use.image or use.text) sample(img, tu, tv) else @splat(simd.f(1));
+                const tex: [4]F = if (use.image or use.text) tex: {
+                    var tu = texelCentre(px, 2 * hx, uv[0], uv[2], tex_w);
+                    var tv = texelCentre(py, 2 * hy, uv[1], uv[3], tex_h);
+                    if (kind == .nine_slice) {
+                        const fu = nineAxis(lx + simd.f(hx), 2 * hx, dst[0], dst[2], src[0], src[2]);
+                        const fv = nineAxis(ly + simd.f(hy), 2 * hy, dst[1], dst[3], src[1], src[3]);
+                        tu = simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * fu;
+                        tv = simd.f(uv[1]) + simd.f(uv[3] - uv[1]) * fv;
+                    }
+                    break :tex sample(img, tu, tv);
+                } else @splat(simd.f(1));
                 inline for (0..4) |i| {
                     const m = base[i] * tex[i];
                     color[i] = if (use.border) m + (simd.f(edge[i]) - m) * on_border else m;
@@ -587,20 +1313,17 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Targe
 
             // Clip as coverage: the rect as a step, its rounded corners as a distance field.
             const inside = (sx >= simd.f(clip[0])) & (sx <= simd.f(clip[2])) & (sy >= simd.f(clip[1])) & (sy <= simd.f(clip[3]));
-            const tcx = sx - simd.f(ccx);
-            const tcy = sy - simd.f(ccy);
-            const clip_d = roundedBox(tcx, tcy, chx, chy, cornerRadius(tcx, tcy, chx, chy, q.clip_radii)) * simd.f(scale);
-            const rounded = if (use.radius) @select(f32, rounded_clip, sat(simd.f(0.5) - clip_d), simd.f(1)) else simd.f(1);
+            const rounded = if (use.radius) rounded: {
+                const tcx = sx - simd.f(ccx);
+                const tcy = sy - simd.f(ccy);
+                const clip_d = roundedBox(tcx, tcy, chx, chy, cornerRadius(tcx, tcy, chx, chy, q.clip_radii)) * simd.f(scale);
+                break :rounded @select(f32, rounded_clip, sat(simd.f(0.5) - clip_d), simd.f(1));
+            } else simd.f(1);
             const alpha = @select(f32, inside & geo, cover * rounded * simd.f(q.opacity), simd.f(0));
 
             // Premultiplied source over the framebuffer.
             const old: U = row[x..][0..W].*;
-            const dst_px = unpack(old, red);
-            const sa = color[3] * alpha;
-            var out: [4]F = undefined;
-            inline for (0..3) |i| out[i] = color[i] * sa + dst_px[i] * (simd.f(1) - sa);
-            out[3] = sa + dst_px[3] * (simd.f(1) - sa);
-            row[x..][0..W].* = @select(u32, spanMask(x, box[0], box[2]), pack(out, red), old);
+            row[x..][0..W].* = @select(u32, spanMask(x, box[0], box[2]), overColor(color, alpha, old, red), old);
         }
     }
 }
@@ -623,6 +1346,10 @@ fn Frame(comptime w: u32, comptime h: u32) type {
 
 fn testQuad(rect: [4]f32, fill: Color) Quad {
     return .{ .rect = rect, .clip = .{ -1e6, -1e6, 1e6, 1e6 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = fill.bitsOf(), .border_color = 0, .border = 0, .opacity = 1 };
+}
+
+test {
+    _ = bands;
 }
 
 test "framebuffer: RGBA8 and BGRA8 byte order, rows padded to whole vectors" {
@@ -674,7 +1401,7 @@ test "opaque rects: filled exactly, cut by the clip's pixel centres and the scis
     fb.clear(.black);
     var q = testQuad(.{ 2, 1, 14, 7 }, .rgb(200, 100, 50));
     q.clip = .{ 3.4, 0, 12.5, 6 };
-    try testing.expect(solidRect(&q, Image.white, 1));
+    try testing.expect(plain(&q));
     const s: Software = .{ .quads = &.{q} };
     s.drawBatch(.{ .fb = &fb, .scissor = .{ 0, 0, 16, 5 } }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
     // Centres 3.5 .. 12.5 are inside the clip (its edges are inclusive), rows 1 .. 4 inside the scissor.
@@ -716,7 +1443,22 @@ test "solid fills and corner bands agree with the shader through a partial sciss
             @memcpy(reference.pixels, fb.pixels);
             gfx.drawQuads(.{ .fb = &fb, .scissor = scissor }, &.{q}, Image.white);
             shade(.solid, .{ .fb = &reference, .scissor = scissor }, &q, Image.white, 2);
-            try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
+            // The frame blends in 8 bits, the shader loop in floats.
+            try expectNear(reference.pixels, fb.pixels, 1);
+        }
+    }
+}
+
+/// Every channel of every pixel of `actual` within `tolerance` levels of `expected`.
+fn expectNear(expected: []const u32, actual: []const u32, tolerance: u8) !void {
+    try testing.expectEqual(expected.len, actual.len);
+    for (expected, actual, 0..) |e, a, i| {
+        const ev: @Vector(4, u8) = @bitCast(e);
+        const av: @Vector(4, u8) = @bitCast(a);
+        const d = @max(ev, av) - @min(ev, av);
+        if (@reduce(.Max, d) > tolerance) {
+            std.debug.print("pixel {d}: expected {x:0>8}, found {x:0>8}\n", .{ i, e, a });
+            return error.TestExpectedEqual;
         }
     }
 }

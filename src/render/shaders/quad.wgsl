@@ -212,23 +212,37 @@ fn border_pattern(in: Frag) -> f32 {
 fn fs(in: Frag) -> @location(0) vec4f {
     let r = corner_radius(in.local, in.half, in.radii);
     let d = rounded_box(in.local, in.half, r) * globals.scale;
-    // Coverage instead of discard: one physical pixel of antialiasing, no branch.
+    // Coverage instead of discard: one physical pixel of antialiasing.
     let shape = clamp(0.5 - d, 0.0, 1.0);
     let inner = clamp(0.5 - (d + in.border * globals.scale), 0.0, 1.0);
     let has_border = step(0.001, in.border);
     let is_shadow = in.params.x == k_shadow;
-    let on_border = (1.0 - mix(1.0, inner, has_border)) * border_pattern(in);
+    // The `if`s below test per-instance values, the same at every pixel of a quad, so a GPU runs
+    // only the side the quad takes: a plain quad skips the dash, blur and rounded-clip math. The
+    // texture is sampled outside them (`material`), where control flow is uniform, as the
+    // implicit derivatives of `textureSample` require.
+    var pattern = 1.0;
+    if (in.params.x == k_dashed || in.params.x == k_dotted) {
+        pattern = border_pattern(in);
+    }
+    let on_border = (1.0 - mix(1.0, inner, has_border)) * pattern;
     let color = select(mix(material(in), in.border_color, on_border), in.fill, is_shadow);
-    let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), is_shadow);
+    var cover = shape;
+    if (is_shadow) {
+        cover = shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y));
+    }
     // Per-instance clip, also as coverage: the rect as a step, its rounded corners (when it has
     // any) as a distance field with one pixel of antialiasing. A square clip skips the field,
     // which also keeps an unbounded clip (infinite edges) away from it.
     let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);
-    let clip_centre = (in.clip.xy + in.clip.zw) * 0.5;
-    let clip_half = (in.clip.zw - in.clip.xy) * 0.5;
-    let to_clip = in.pixel - clip_centre;
-    let clip_d = rounded_box(to_clip, clip_half, corner_radius(to_clip, clip_half, in.clip_radii)) * globals.scale;
-    let rounded = select(1.0, clamp(0.5 - clip_d, 0.0, 1.0), any(in.clip_radii > vec4f(0.0)));
+    var rounded = 1.0;
+    if (any(in.clip_radii > vec4f(0.0))) {
+        let clip_centre = (in.clip.xy + in.clip.zw) * 0.5;
+        let clip_half = (in.clip.zw - in.clip.xy) * 0.5;
+        let to_clip = in.pixel - clip_centre;
+        let clip_d = rounded_box(to_clip, clip_half, corner_radius(to_clip, clip_half, in.clip_radii)) * globals.scale;
+        rounded = clamp(0.5 - clip_d, 0.0, 1.0);
+    }
     let alpha = cover * inside.x * inside.y * rounded * in.opacity;
     return vec4f(color.rgb * color.a, color.a) * alpha;
 }

@@ -182,6 +182,9 @@ pub const Damage = struct {
     /// One frame: its row count, per-row hash and visible rect (`Tree.Columns.vis`).
     pub const Gen = struct { len: u32 = 0, hash: []u32, vis: [4][]f32 };
 
+    /// No rows: for a context that does not track damage.
+    pub const none: Damage = .{ .cap = 0, .gen = @splat(.{ .hash = &.{}, .vis = @splat(&.{}) }), .dirty = &.{}, .list = &.{} };
+
     /// Carves `simd.rows(cap)` rows per column. The first frame after `init` is all dirty.
     pub fn init(carver: *mem.Carver, cap: u32) Damage {
         const rows = simd.rows(cap);

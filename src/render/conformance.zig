@@ -145,10 +145,10 @@ pub const scenes = [_]Scene{
         },
         .strings = "UI!Hello",
         .cmds = &.{ batch(0, 1), .{ .text = 0 }, .{ .text = 1 }, batch(1, 1) },
+        // The two runs' glyphs are adjacent: one draw (`iface.glyphSpan`).
         .draws = &.{
             .{ .source = .quads, .first = 0, .count = 1 },
-            .{ .source = .glyphs, .first = 0, .count = 3 },
-            .{ .source = .glyphs, .first = 3, .count = 5 },
+            .{ .source = .glyphs, .first = 0, .count = 8 },
             .{ .source = .quads, .first = 1, .count = 1 },
         },
     },

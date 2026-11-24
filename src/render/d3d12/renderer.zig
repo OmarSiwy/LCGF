@@ -214,8 +214,14 @@ pub const Renderer = struct {
 
     /// One instanced draw for a text run's glyphs.
     pub fn drawText(r: *const Renderer, l: Pass, run: u32) void {
+        r.drawGlyphSpan(l, r.glyphs.span(run));
+    }
+
+    /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+    /// draw (`iface.drawUntilCustom`).
+    pub fn drawGlyphSpan(r: *const Renderer, l: Pass, span: [2]u32) void {
         r.bind(l, .solid, r.glyphs.texture, r.glyphsAt(), r.desc.max_glyphs);
-        l.drawInstanced(4, r.glyphs.span(run)[1], 0, r.glyphs.span(run)[0]);
+        l.drawInstanced(4, span[1], 0, span[0]);
     }
 
     /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the

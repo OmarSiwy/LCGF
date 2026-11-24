@@ -47,6 +47,7 @@ pub const ARRAY_BUFFER: Enum = 0x8892;
 pub const ELEMENT_ARRAY_BUFFER: Enum = 0x8893;
 pub const UNIFORM_BUFFER: Enum = 0x8A11;
 pub const DYNAMIC_DRAW: Enum = 0x88E8;
+pub const STREAM_DRAW: Enum = 0x88E0;
 pub const STATIC_DRAW: Enum = 0x88E4;
 pub const FLOAT: Enum = 0x1406;
 pub const UNSIGNED_INT: Enum = 0x1405;

@@ -15,6 +15,9 @@
 //!        One instanced draw of `batch.count` quads from `batch.first`.
 //!   fn drawText(*const B, B.Pass, run: u32) void
 //!        One instanced draw of run `run`'s glyph quads (`Glyphs.first[run]`, `count[run]`).
+//!   fn drawGlyphSpan(*const B, B.Pass, span: [2]u32) void      (optional)
+//!        One instanced draw of `span[1]` glyph quads from `span[0]`: the command loop gives it
+//!        consecutive runs whose glyphs are adjacent, so they cost one draw, not one each.
 //!
 //! Full state rebinding (required). `drawBatch` and `drawText` set every piece of pass state
 //! they depend on, on every call: pipeline, every bind group, the vertex buffer, and scissor or
@@ -94,15 +97,40 @@ pub fn check(comptime B: type) void {
 ///     var i = iface.drawUntilCustom(&gfx, pass, draw, 0);
 ///     while (i < draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, pass, draw, i + 1))
 ///         scene.draw(pass, draw.customs[draw.command(i).custom]);
+///
+/// Consecutive text commands whose glyphs follow each other in the glyph buffer (the shaper
+/// writes runs in order) go to a back end that declares `drawGlyphSpan(pass, span: [2]u32)` as
+/// one draw: with `order.mergeAcrossText` most of a frame's text is then a draw or two.
 pub fn drawUntilCustom(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawList, from: u32) u32 {
-    comptime check(@TypeOf(b.*));
+    const B = @TypeOf(b.*);
+    comptime check(B);
     var i = from;
     while (i < draw.cmd_len) : (i += 1) switch (draw.command(i)) {
         .quads => |batch| b.drawBatch(pass, batch),
-        .text => |run| b.drawText(pass, run),
+        .text => |run| if (comptime @hasDecl(B, "drawGlyphSpan"))
+            b.drawGlyphSpan(pass, glyphSpan(b.glyphs, draw, &i, run))
+        else
+            b.drawText(pass, run),
         .custom => return i,
     };
     return i;
+}
+
+/// Text command `i.*`'s glyphs (run `run`) and those of the text commands after it, while each
+/// run's glyphs start where the last one's end; `i.*` is left at the last command taken. `list`
+/// is a `DrawList` or anything with its `cmd_len` and `command`.
+pub fn glyphSpan(g: Glyphs, list: anytype, i: *u32, run: u32) [2]u32 {
+    var span = g.span(run);
+    while (i.* + 1 < list.cmd_len) {
+        const next = switch (list.command(i.* + 1)) {
+            .text => |r| g.span(r),
+            else => break,
+        };
+        if (next[0] != span[0] + span[1]) break;
+        span[1] += next[1];
+        i.* += 1;
+    }
+    return span;
 }
 
 /// Diagonal: the whole list, skipping custom draws.
@@ -185,4 +213,28 @@ test "contract: quads and text go to the back end, customs stop the loop for the
 
 test "contract: check accepts a back end" {
     comptime check(Tally);
+}
+
+test "glyphSpan: adjacent text runs join, a gap or another command ends the span" {
+    const Cmd = draw_list.Cmd;
+    const List = struct {
+        cmds: []const Cmd,
+        cmd_len: u32,
+        pub fn command(l: *const @This(), i: u32) Cmd {
+            return l.cmds[i];
+        }
+    };
+    // Runs 0 and 1 adjacent, 2 after a gap, then a batch, then run 3 adjacent to 2.
+    const g: Glyphs = .{ .first = &.{ 0, 4, 10, 12 }, .count = &.{ 4, 3, 2, 5 } };
+    const cmds = [_]Cmd{ .{ .text = 0 }, .{ .text = 1 }, .{ .text = 2 }, .{ .quads = .{ .first = 0, .count = 1, .texture = .white, .material = @fromBackingInt(0) } }, .{ .text = 3 } };
+    const list: List = .{ .cmds = &cmds, .cmd_len = cmds.len };
+    var i: u32 = 0;
+    try testing.expectEqual([2]u32{ 0, 7 }, glyphSpan(g, &list, &i, 0));
+    try testing.expectEqual(1, i);
+    i = 2;
+    try testing.expectEqual([2]u32{ 10, 2 }, glyphSpan(g, &list, &i, 2));
+    try testing.expectEqual(2, i);
+    i = 4;
+    try testing.expectEqual([2]u32{ 12, 5 }, glyphSpan(g, &list, &i, 3));
+    try testing.expectEqual(4, i);
 }

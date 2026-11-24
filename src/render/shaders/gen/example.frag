@@ -96,7 +96,7 @@ float texel_centre(float pos, float size, float uv0_, float uv1_, float n) {
 }
 
 vec4 gradient(Frag in_3) {
-    bool local = false;
+    bool local_1 = false;
     uint _e2 = in_3.params.y;
     vec4 to = (vec4(_e2 & 0xFFu, _e2 >> 8 & 0xFFu, _e2 >> 16 & 0xFFu, _e2 >> 24) / 255.0);
     float a_1 = uintBitsToFloat(in_3.params.z);
@@ -107,11 +107,11 @@ vec4 gradient(Frag in_3) {
     float t_rad = (length((in_3.local - centre)) / max(uintBitsToFloat(in_3.params.w), 1e-6));
     float t = clamp(((in_3.params.x == k_radial) ? t_rad : t_lin), 0.0, 1.0);
     if (!((in_3.params.x == k_linear))) {
-        local = (in_3.params.x == k_radial);
+        local_1 = (in_3.params.x == k_radial);
     } else {
-        local = true;
+        local_1 = true;
     }
-    bool graded = local;
+    bool graded = local_1;
     return (graded ? mix(in_3.fill, to, t) : in_3.fill);
 }
 
@@ -168,6 +168,10 @@ vec4 material(Frag in_6) {
 
 void main() {
     Frag in_ = Frag(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2, _vs2fs_location3, _vs2fs_location4, _vs2fs_location5, _vs2fs_location6, _vs2fs_location7, _vs2fs_location8, _vs2fs_location9, _vs2fs_location10, _vs2fs_location11, _vs2fs_location12, _vs2fs_location13, _vs2fs_location14);
+    float pattern = 1.0;
+    bool local = false;
+    float cover = 0.0;
+    float rounded = 1.0;
     float _e4 = corner_radius(in_.local, in_.half_, in_.radii);
     float _e7 = rounded_box(in_.local, in_.half_, _e4);
     float _e10 = _group_0_binding_0_fs.scale;
@@ -177,23 +181,40 @@ void main() {
     float inner = clamp((0.5 - (d_1 + (in_.border * _e20))), 0.0, 1.0);
     float has_border = step(0.001, in_.border);
     bool is_shadow = (in_.params.x == k_shadow);
-    float _e39 = border_pattern(in_);
-    float on_border = ((1.0 - mix(1.0, inner, has_border)) * _e39);
-    vec4 _e41 = material(in_);
-    vec4 color = (is_shadow ? in_.fill : mix(_e41, in_.border_color, on_border));
-    float _e48 = _group_0_binding_0_fs.scale;
-    float _e53 = shadow_coverage((d_1 / _e48), uintBitsToFloat(in_.params.y));
-    float cover = (is_shadow ? _e53 : shape);
+    if (!((in_.params.x == k_dashed))) {
+        local = (in_.params.x == k_dotted);
+    } else {
+        local = true;
+    }
+    bool _e49 = local;
+    if (_e49) {
+        float _e50 = border_pattern(in_);
+        pattern = _e50;
+    }
+    float _e55 = pattern;
+    float on_border = ((1.0 - mix(1.0, inner, has_border)) * _e55);
+    vec4 _e57 = material(in_);
+    vec4 color = (is_shadow ? in_.fill : mix(_e57, in_.border_color, on_border));
+    cover = shape;
+    if (is_shadow) {
+        float _e65 = _group_0_binding_0_fs.scale;
+        float _e70 = shadow_coverage((d_1 / _e65), uintBitsToFloat(in_.params.y));
+        cover = _e70;
+    }
     vec2 inside = (step(in_.clip.xy, in_.pixel) * step(in_.pixel, in_.clip.zw));
-    vec2 clip_centre = ((in_.clip.xy + in_.clip.zw) * 0.5);
-    vec2 clip_half = ((in_.clip.zw - in_.clip.xy) * 0.5);
-    vec2 to_clip = (in_.pixel - clip_centre);
-    float _e81 = corner_radius(to_clip, clip_half, in_.clip_radii);
-    float _e82 = rounded_box(to_clip, clip_half, _e81);
-    float _e85 = _group_0_binding_0_fs.scale;
-    float clip_d = (_e82 * _e85);
-    float rounded = (any(greaterThan(in_.clip_radii, vec4(0.0))) ? clamp((0.5 - clip_d), 0.0, 1.0) : 1.0);
-    float alpha = ((((cover * inside.x) * inside.y) * rounded) * in_.opacity);
+    if (any(greaterThan(in_.clip_radii, vec4(0.0)))) {
+        vec2 clip_centre = ((in_.clip.xy + in_.clip.zw) * 0.5);
+        vec2 clip_half = ((in_.clip.zw - in_.clip.xy) * 0.5);
+        vec2 to_clip = (in_.pixel - clip_centre);
+        float _e104 = corner_radius(to_clip, clip_half, in_.clip_radii);
+        float _e105 = rounded_box(to_clip, clip_half, _e104);
+        float _e108 = _group_0_binding_0_fs.scale;
+        float clip_d = (_e105 * _e108);
+        rounded = clamp((0.5 - clip_d), 0.0, 1.0);
+    }
+    float _e115 = cover;
+    float _e120 = rounded;
+    float alpha = ((((_e115 * inside.x) * inside.y) * _e120) * in_.opacity);
     _fs2p_location0 = (vec4((color.xyz * color.w), color.w) * alpha);
     return;
 }
