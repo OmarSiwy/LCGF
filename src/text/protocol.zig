@@ -113,6 +113,8 @@ pub const Mono = struct {
                     .radii = @splat(0),
                     .border = 0,
                     .opacity = 1, // the run's colour already carries its opacity
+                    .xform = r.xform,
+                    .clip_radii = r.clip_radii,
                 };
                 // Write always, advance until the last row.
                 n = @min(n + 1, last);
@@ -482,6 +484,33 @@ test "Mono.quads: one quad per byte, wrapped at the run width, uv from the byte'
         try testing.expectEqual(0, q.border_color);
     }
     try testing.expectEqual([4]f32{ 1, 2, 3, 4 }, out[4].clip);
+}
+
+test "Mono.quads: transformed labels carry the transform and rounded clip to every glyph" {
+    var runs = [_]draw_list.TextRun{.{
+        .rect = .{ 10, 20, 90, 40 },
+        .clip = .{ 0, 0, 100, 100 },
+        .start = 0,
+        .bytes = 2,
+        .px = 10,
+        .color = 0xffffffff,
+        .font = 0,
+        .xform = .{ 0, 2, -2, 0, 70, 12 },
+        .clip_radii = .{ 3, 4, 5, 6 },
+    }};
+    const d = testList(&runs, "Hi");
+    var out: [4]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    const n = (Mono{}).quads(&d, &out, .{ .first = &first, .count = &count });
+    try testing.expectEqual(2, n);
+    for (out[0..n]) |q| {
+        try testing.expectEqual(runs[0].xform, q.xform);
+        try testing.expectEqual(runs[0].clip_radii, q.clip_radii);
+        try testing.expectEqual(runs[0].clip, q.clip);
+    }
+    // Quads stay in layout space: the common vertex transform moves text and its box once.
+    try testing.expectEqual(@as(f32, 10), out[0].rect[0]);
 }
 
 test "Mono.quads: a full output stops at its last row, a zero-width run gets one glyph per line" {

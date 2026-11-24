@@ -355,9 +355,11 @@ pub const Style = struct {
     /// (`draw.inherit.opacity`).
     opacity: f32 = 1,
     /// 2D affine transform a, b, c, d, tx, ty (x' = a x + c y + tx, y' = b x + d y + ty) about
-    /// the node's centre, applied to the node and its subtree when painted. Layout, clipping
-    /// and hit testing do not see it.
+    /// transform origin, applied to paint, clipping bounds and pointer coordinates. It does
+    /// not change the space reserved by layout.
     transform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    /// Fraction of the border box; the default is its centre.
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
     // ---- semantics

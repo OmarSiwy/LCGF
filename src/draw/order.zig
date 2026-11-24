@@ -10,6 +10,7 @@
 //! number a GPU back end pays per frame (docs/TARGETS.md D2).
 
 const std = @import("std");
+const geometry = @import("geometry.zig");
 const paint = @import("paint.zig");
 const overlay = @import("../layout/overlay.zig");
 const DrawList = @import("draw_list.zig").DrawList;
@@ -60,9 +61,10 @@ pub fn mergeAcrossText(d: *DrawList) void {
         const q = d.quads[@min(ref, d.quads.len - 1)];
         const r = d.runs[@min(ref, d.runs.len - 1)];
         const cd = d.customs[@min(ref, d.customs.len - 1)];
-        const rect: V4 = @select(f32, @as(@Vector(4, bool), @splat(is_quad)), @as(V4, q.rect), @select(f32, @as(@Vector(4, bool), @splat(kind == text_kind)), @as(V4, r.rect), @as(V4, cd.rect)));
-        const clip: V4 = @select(f32, @as(@Vector(4, bool), @splat(is_quad)), @as(V4, q.clip), @select(f32, @as(@Vector(4, bool), @splat(kind == text_kind)), @as(V4, r.clip), @as(V4, cd.clip)));
-        const box = @max(rect * sign, clip * sign); // (x0, y0, -x1, -y1)
+        const qb: V4 = geometry.quadBounds(q);
+        const rb: V4 = geometry.intersect(geometry.transformRect(r.rect, r.xform), r.clip);
+        const cb: V4 = geometry.intersect(geometry.transformRect(cd.rect, cd.xform), cd.clip);
+        const box = @select(f32, @as(@Vector(4, bool), @splat(is_quad)), qb, @select(f32, @as(@Vector(4, bool), @splat(kind == text_kind)), rb, cb)) * sign;
         // Overlap with the held bound: x0 < bx1 and bx0 < x1, same on y.
         const flipped = @shuffle(f32, bound, undefined, @Vector(4, i32){ 2, 3, 0, 1 });
         const overlaps = @reduce(.And, box < -flipped);

@@ -1,5 +1,17 @@
 # Bytes per node (C0804)
 
+## Current styling branch
+
+The current `Context.requiredBytes` capacity test measures **940 bytes per node**.
+The upstream baseline at `ed94db3` measured 924 bytes; an explicit two-float transform
+origin adds 8 bytes to each of the two generations of sparse paint-extra capacity.
+`Look` remains 32 bytes and the GPU `Quad` remains 136 bytes. Text and custom rows
+now carry their inherited transform and rounded clip; those costs follow the
+separate `texts` and `customs` limits. The historical measurements below are retained
+for their original optimization comparison.
+
+## Historical C0804 measurements
+
 Measured with `docs/perf/build/bytes.zig` (`Context.requiredBytes` at 8,192 nodes minus 4,096,
 divided by 4,096; the same at every lane count) and pinned by the test "requiredBytes: 874 bytes
 per node of capacity" in src/runtime/context.zig.

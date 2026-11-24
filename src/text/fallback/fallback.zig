@@ -24,6 +24,7 @@ const opentype = @import("../font/opentype.zig");
 const property = @import("../unicode/property.zig");
 const script_runs = @import("../unicode/script.zig");
 const utf8 = @import("../unicode/utf8.zig");
+const Graphemes = @import("../unicode/grapheme.zig").Graphemes;
 
 const Face = opentype.Face;
 const Script = property.Script;
@@ -44,6 +45,19 @@ pub const Chain = struct {
         }
         for (c.default) |f| {
             if (c.faces[f].cmap.glyph(cp) != 0) return f;
+        }
+        return null;
+    }
+
+    /// The first candidate whose cmap covers every visible scalar in one grapheme. Joiners,
+    /// variation selectors and layout controls do not require a nominal glyph. Cmap coverage
+    /// is only a candidate test: it does not promise an emoji sequence or contextual shaping.
+    pub fn pickCluster(c: *const Chain, s: Script, text: []const u8) ?u16 {
+        for (c.script, c.face) |rs, f| {
+            if (rs == s and covers(&c.faces[f], text)) return f;
+        }
+        for (c.default) |f| {
+            if (covers(&c.faces[f], text)) return f;
         }
         return null;
     }
@@ -87,6 +101,76 @@ pub fn resolve(chain: *const Chain, text: []const u8, runs: *Runs) error{NoSpace
             started = true;
         }
     }
+}
+
+/// Cluster-preserving fallback. A grapheme is assigned wholly to the first face which covers
+/// it. Common/Inherited clusters keep the preceding face when it covers the complete cluster.
+/// If no candidate covers it, keep it intact in the first face with its initial scalar (or
+/// the current face); unsupported scalars then render as .notdef, without splitting a base
+/// from its marks or a joined emoji sequence between fonts. Buffers and ordering are caller-owned.
+pub fn resolveClusters(chain: *const Chain, text: []const u8, runs: *Runs) error{NoSpace}!void {
+    std.debug.assert(chain.default.len > 0);
+    runs.len = 0;
+    var cur = chain.default[0];
+    var scripts: script_runs.Scripts = .{ .text = text };
+    var script = scripts.next();
+    var graphemes: Graphemes = .{ .text = text };
+    var start: usize = 0;
+    while (graphemes.next()) |end| {
+        while (script != null and script.?.end <= start) script = scripts.next();
+        const s = if (script) |sr| sr.script else .Common;
+        const part = text[start..end];
+        const cp = utf8.decode(part, 0).cp;
+        const own = property.script(cp);
+        const common = own == .Common or own == .Inherited;
+        const keep = runs.len > 0 and common and covers(&chain.faces[cur], part);
+        const f = if (keep) cur else chain.pickCluster(s, part) orelse chain.pick(s, cp) orelse cur;
+        const same = runs.len > 0 and runs.face[runs.len - 1] == f and runs.script[runs.len - 1] == s;
+        if (!same) {
+            if (runs.len == runs.end.len) return error.NoSpace;
+            runs.face[runs.len] = f;
+            runs.script[runs.len] = s;
+            runs.len += 1;
+        }
+        runs.end[runs.len - 1] = @intCast(end);
+        cur = f;
+        start = end;
+    }
+}
+
+fn covers(face: *const Face, text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) {
+        const d = utf8.decode(text, i);
+        i += d.len;
+        const cp = d.cp;
+        const control = switch (property.bidiClass(cp)) {
+            .B, .S, .BN, .LRE, .RLE, .LRO, .RLO, .PDF, .LRI, .RLI, .FSI, .PDI => true,
+            else => false,
+        };
+        const selector = (cp >= 0xfe00 and cp <= 0xfe0f) or (cp >= 0xe0100 and cp <= 0xe01ef);
+        if (!control and !selector and face.cmap.glyph(cp) == 0) return false;
+    }
+    return true;
+}
+
+test "cluster fallback moves a base with its mark and never splits an unsupported sequence" {
+    const faces = [_]Face{ try .parse(test_latin, 0), try .parse(@embedFile("../layout/testdata/layout.ttf"), 0) };
+    const chain: Chain = .{ .faces = &faces, .default = &.{ 0, 1 } };
+    var columns: TestRuns = .{};
+    var runs = columns.runs();
+    const text = "Hi\u{301}!";
+    try std.testing.expectEqual(1, chain.pickCluster(.Latin, "i\u{301}"));
+    try resolveClusters(&chain, text, &runs);
+    try std.testing.expectEqualSlices(u32, &.{ 1, text.len }, runs.end[0..runs.len]);
+    try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, runs.face[0..runs.len]);
+    // Neither face has this mark, but the grapheme stays in the face chosen for its base.
+    try resolveClusters(&chain, "i\u{35c}", &runs);
+    try std.testing.expectEqual(1, runs.len);
+    try std.testing.expectEqual(0, runs.face[0]);
+    try std.testing.expectEqual(3, runs.end[0]);
+    // A selector and joiner need no standalone nominal glyph; they remain in the cluster.
+    try std.testing.expectEqual(0, chain.pickCluster(.Latin, "i\u{fe0f}\u{200d}"));
 }
 
 /// The face of a font file whose PostScript name (name table, ID 6) is `ps`, or null. For

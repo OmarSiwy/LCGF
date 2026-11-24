@@ -44,6 +44,9 @@ pub const TextRun = extern struct {
     px: f32,
     color: u32,
     font: u32,
+    /// Layout-to-screen geometry, shared with the surrounding box.
+    xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
 };
 
 /// A rectangle handed back to the host, which draws it with its own pipeline.
@@ -54,6 +57,10 @@ pub const CustomDraw = extern struct {
     data: u64,
     id: u32,
     node: u32,
+    /// The host applies these just as the built-in quad and text pipelines do.
+    xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
+    opacity: f32 = 1,
 };
 
 /// A run of quads sharing one texture and material: one instanced draw.
@@ -154,13 +161,13 @@ test "layout: Quad is the 136-byte instance row the quad pipeline declares" {
 }
 
 test "layout: TextRun and CustomDraw rows" {
-    try testing.expectEqual(52, @sizeOf(TextRun));
+    try testing.expectEqual(92, @sizeOf(TextRun));
     try testing.expectEqual(4, @alignOf(TextRun));
-    inline for (.{ "rect", "clip", "start", "bytes", "px", "color", "font" }, .{ 0, 16, 32, 36, 40, 44, 48 }) |name, off|
+    inline for (.{ "rect", "clip", "start", "bytes", "px", "color", "font", "xform", "clip_radii" }, .{ 0, 16, 32, 36, 40, 44, 48, 52, 76 }) |name, off|
         try testing.expectEqual(off, @offsetOf(TextRun, name));
-    try testing.expectEqual(48, @sizeOf(CustomDraw));
+    try testing.expectEqual(96, @sizeOf(CustomDraw));
     try testing.expectEqual(8, @alignOf(CustomDraw));
-    inline for (.{ "rect", "clip", "data", "id", "node" }, .{ 0, 16, 32, 40, 44 }) |name, off|
+    inline for (.{ "rect", "clip", "data", "id", "node", "xform", "clip_radii", "opacity" }, .{ 0, 16, 32, 40, 44, 48, 72, 88 }) |name, off|
         try testing.expectEqual(off, @offsetOf(CustomDraw, name));
 }
 

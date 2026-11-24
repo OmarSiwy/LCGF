@@ -26,6 +26,73 @@ const shape = @import("../shape/shape.zig");
 const lines = @import("lines.zig");
 const Texts = @import("../../core/texts.zig").Texts;
 const Strings = @import("../../core/strings.zig").Strings;
+const whitespace = @import("whitespace.zig");
+const fallback_ = @import("../fallback/fallback.zig");
+const Direction = @import("../unicode/bidi.zig").Direction;
+pub const emit = @import("emit.zig");
+
+/// Paragraph inputs, passed directly or in caller-owned rows. This is a capability input,
+/// not a retained style object: changing one row affects the next measure/layout call.
+pub const Paragraph = struct {
+    pub const Alignment = enum { start, center, end, left, right, justify };
+    pub const LineHeight = union(enum) { font, px: f32, multiple: f32 };
+    alignment: Alignment = .start,
+    last_align: Alignment = .start,
+    direction: ?Direction = null,
+    /// Null inherits the Texts.wrap flag at the wrap/draw steps. Explicit modes override it.
+    wrap: ?lines.Flow.Wrap = null,
+    whitespace: whitespace.Mode = .preserve,
+    /// Stops are this many space advances apart, unless `tab_width` supplies logical pixels.
+    tab_size: f32 = 8,
+    tab_width: ?f32 = null,
+    letter_spacing: f32 = 0,
+    word_spacing: f32 = 0,
+    line_height: LineHeight = .font,
+    /// Fraction of explicit line-height leading placed above the baseline, 0..1.
+    leading: f32 = 0.5,
+    max_lines: u32 = std.math.maxInt(u32),
+    /// The last visible line ends in U+2026 when it is cut. False clamps without a marker.
+    ellipsis: bool = false,
+    features: shape.Features = .{},
+
+    fn placement(p: Paragraph, width: f32, direction: Direction) lines.Align {
+        const a = if (p.alignment == .justify) p.last_align else p.alignment;
+        return .{
+            .width = width,
+            .factor = switch (a) {
+                .center => 0.5,
+                .end, .right => 1,
+                else => 0,
+            },
+            .justify = p.alignment == .justify,
+            .physical = a == .left or a == .right,
+            .direction = p.direction orelse direction,
+        };
+    }
+
+    fn metrics(p: Paragraph, m: lines.Metrics, px: f32) lines.Metrics {
+        const target = switch (p.line_height) {
+            .font => return m,
+            .px => |v| v,
+            .multiple => |v| v * px,
+        };
+        const leading = @max(target, 0) - m.ascent - m.descent;
+        const above = std.math.clamp(p.leading, 0, 1);
+        return .{ .ascent = m.ascent + leading * above, .descent = m.descent + leading * (1 - above) };
+    }
+
+    fn needsWidth(p: Paragraph) bool {
+        return p.alignment != .start or p.wrap != null or p.ellipsis;
+    }
+};
+
+/// Optional plain-paragraph fallback. Face indices in the chain index Stack.shapers. Metrics
+/// scratch has one row per shaper; run columns fit the paragraph's font/script transitions.
+pub const Fallback = struct {
+    chain: *const fallback_.Chain,
+    runs: fallback_.Runs,
+    metrics: []lines.Metrics,
+};
 
 /// Shapers by font index, and scratch for one paragraph. The caller owns all of it.
 pub const Stack = struct {
@@ -37,6 +104,19 @@ pub const Stack = struct {
     bidi: ?lines.BidiScratch = null,
     /// The base direction of every paragraph (`lines.Align.direction`).
     direction: @import("../unicode/bidi.zig").Direction = .auto,
+    /// A row overrides `default_paragraph`; absent rows use it. No registry or cache required.
+    paragraphs: []const Paragraph = &.{},
+    default_paragraph: Paragraph = .{},
+    /// Required only for collapsing whitespace. The prepared text and source map are valid
+    /// until this Stack lays out the next paragraph.
+    normalization: ?whitespace.Buffer = null,
+    fallback: ?Fallback = null,
+    /// Text whose byte offsets the current Glyphs/Lines index, after optional normalization.
+    text: []const u8 = "",
+    normalized: bool = false,
+    /// Marker to obtain from the atlas when `l.ellipsis` is nonzero.
+    ellipsis_glyph: u16 = 0,
+    ellipsis_font: u16 = 0,
     /// A run did not fit the scratch: it was measured as empty. Reset by the caller.
     overflow: bool = false,
 
@@ -49,22 +129,81 @@ pub const Stack = struct {
     /// `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and,
     /// with `bidi`, `lines.reorder`.
     pub fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void {
+        return st.layoutRow(tx, strings, k, width, true);
+    }
+
+    fn options(st: *const Stack, k: usize) Paragraph {
+        return if (k < st.paragraphs.len) st.paragraphs[k] else st.default_paragraph;
+    }
+
+    fn layoutRow(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32, wraps: bool) error{NoSpace}!void {
         const c = &tx.c;
+        const p = st.options(k);
         const sh = &st.shapers[c.font[k]];
-        const text = strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] });
-        try sh.shape(text, &st.run, .{});
+        st.text = strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] });
+        st.normalized = p.whitespace != .preserve;
+        if (st.normalized) {
+            const b = if (st.normalization) |*b| b else return error.NoSpace;
+            st.text = try b.prepare(st.text, p.whitespace);
+        }
+        const text = st.text;
+        var features = p.features;
+        // Optional ligatures suppress character spacing; disabling them exposes each
+        // typographic character while mandatory script shaping remains the shaper's job.
+        if (p.letter_spacing != 0) features.liga = false;
         st.g.len = 0;
-        try st.g.append(&st.run, c.px[k] / @as(f32, @floatFromInt(sh.face.units_per_em)), 0, 0);
-        try lines.breakLines(&st.g, text, width, &st.l);
-        const a: lines.Align = .{ .width = width, .direction = st.direction };
-        lines.place(&st.l, &st.g, text, &.{lines.Metrics.of(&sh.face, c.px[k])}, a);
+        const px = c.px[k];
+        const scale = px / @as(f32, @floatFromInt(sh.face.units_per_em));
+        const primary = [_]lines.Metrics{p.metrics(.of(&sh.face, px), px)};
+        var metrics: []const lines.Metrics = &primary;
+        if (st.fallback) |*fb| {
+            if (fb.metrics.len < st.shapers.len) return error.NoSpace;
+            try fallback_.resolveClusters(fb.chain, text, &fb.runs);
+            var start: u32 = 0;
+            for (fb.runs.end[0..fb.runs.len], fb.runs.face[0..fb.runs.len]) |end, font| {
+                const f = &st.shapers[font];
+                try f.shape(text[start..end], &st.run, features);
+                try st.g.append(&st.run, px / @as(f32, @floatFromInt(f.face.units_per_em)), start, font);
+                start = end;
+            }
+            for (st.shapers, 0..) |f, j| fb.metrics[j] = p.metrics(.of(&f.face, px), px);
+            metrics = fb.metrics[0..st.shapers.len];
+        } else {
+            try sh.shape(text, &st.run, features);
+            try st.g.append(&st.run, scale, 0, 0);
+        }
+        lines.graphemeClusters(&st.g, text);
+        if (p.letter_spacing != 0 or p.word_spacing != 0) lines.spacing(&st.g, text, p.letter_spacing, p.word_spacing);
+        const space = @as(f32, @floatFromInt(sh.face.hMetrics(sh.face.cmap.glyph(' ')).advance)) * scale;
+        try lines.breakFlow(&st.g, text, width, &st.l, .{
+            .wrap = p.wrap orelse (if (wraps) .word else .none),
+            .tab_width = @max(p.tab_width orelse (space * p.tab_size), 0),
+        });
+        st.ellipsis_font = c.font[k];
+        st.ellipsis_glyph = sh.face.cmap.glyph(0x2026);
+        if (p.ellipsis) {
+            const advance = @as(f32, @floatFromInt(sh.face.hMetrics(st.ellipsis_glyph).advance)) * scale;
+            lines.ellipsize(&st.l, &st.g, text, width, p.max_lines, advance);
+        } else st.l.len = @min(st.l.len, @max(p.max_lines, 1));
+        const a = p.placement(width, st.direction);
+        lines.place(&st.l, &st.g, text, metrics, a);
         if (st.bidi) |s| try lines.reorder(&st.l, &st.g, text, a, s);
     }
 
     /// Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.
     /// For drawing run k of the draw list at its rect.
     pub fn paragraph(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize) error{NoSpace}!void {
-        return st.layoutAt(tx, strings, k, breakWidth(tx, k));
+        return st.layoutRow(tx, strings, k, tx.c.avail[k], tx.c.wrap[k] > 0);
+    }
+
+    /// Maps a current layout/query byte offset back to the original text after collapse.
+    pub fn sourceOffset(st: *const Stack, display: u32) u32 {
+        return if (st.normalized) st.normalization.?.sourceOffset(display) else @min(display, @as(u32, @intCast(st.text.len)));
+    }
+
+    /// Run-aware rendering convenience over the same public emission pass and caller images.
+    pub fn quads(st: *const Stack, run: @import("../../draw/draw_list.zig").TextRun, images: emit.Images, out: []@import("../../draw/draw_list.zig").Quad) emit.Error!u32 {
+        return emit.quads(run, &st.g, &st.l, st.text, images, out);
     }
 
     /// Step 1 of the protocol: every run's extent unbroken (newlines still break): `w` the
@@ -82,13 +221,13 @@ pub const Stack = struct {
     pub fn wrap(st: *Stack, tx: *Texts, strings: *const Strings, ascent: []f32) void {
         std.debug.assert(ascent.len >= tx.len);
         for (0..tx.len) |k| {
-            if (!st.serves(tx, k) or tx.c.wrap[k] == 0) continue;
+            if (!st.serves(tx, k) or (tx.c.wrap[k] == 0 and !st.options(k).needsWidth())) continue;
             st.fill(tx, strings, k, tx.c.avail[k], ascent);
         }
     }
 
     fn fill(st: *Stack, tx: *Texts, strings: *const Strings, k: usize, at: f32, ascent: []f32) void {
-        st.layoutAt(tx, strings, k, at) catch {
+        st.layoutRow(tx, strings, k, at, tx.c.wrap[k] > 0) catch {
             st.overflow = true;
             tx.c.w[k] = 0;
             tx.c.h[k] = 0;
@@ -156,4 +295,102 @@ test "measure and wrap fill w, h and ascent of the runs in this stack's fonts" {
 
 test "golden: a frame measured, wrapped and painted through the stack matches the reference" {
     try golden.expectFrame();
+}
+
+test "paragraph rows drive normal measure wrap query and transformed glyph emission" {
+    const mem = @import("../../core/mem.zig");
+    const shapers = [_]shape.Shaper{.init(try @import("../font/opentype.zig").Face.parse(golden.font, 0))};
+    var buf: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 1);
+    var bytes: [128]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("  office  AV\tone two three  "), &.{ .px = 20, .wrap = true });
+    var p: golden.Para = .{};
+    p.bind();
+    var cols: golden.RunCols = .{};
+    var normalized: [128]u8 = undefined;
+    var source: [129]u32 = undefined;
+    const options = [_]Paragraph{.{
+        .alignment = .center,
+        .whitespace = .collapse,
+        .letter_spacing = 1,
+        .word_spacing = 2,
+        .line_height = .{ .px = 30 },
+        .max_lines = 2,
+        .ellipsis = true,
+    }};
+    var st: Stack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = p.g,
+        .l = p.l,
+        .paragraphs = &options,
+        .normalization = .{ .bytes = &normalized, .source = &source },
+    };
+    var ascent: [1]f32 = undefined;
+    st.measure(&tx, &strings, &ascent);
+    try testing.expectEqualStrings("office AV one two three", st.text);
+    try testing.expectEqual(3, st.sourceOffset(1));
+    try testing.expectEqual(st.text.len, st.g.len); // optional ligatures disabled for spacing
+    try testing.expectEqual(30, tx.c.h[0]);
+    tx.c.avail[0] = 61;
+    st.wrap(&tx, &strings, &ascent);
+    try testing.expectEqual(60, tx.c.h[0]);
+    try testing.expect(tx.c.w[0] <= 61 + lines.slack);
+    const height = tx.c.h[0];
+    try st.paragraph(&tx, &strings, 0);
+    try testing.expectEqual(height, lines.stackHeight(&st.l));
+    try testing.expect(st.l.ellipsis > 0);
+    try testing.expect(st.l.x[0] >= 0 and st.l.x[0] < 61);
+    const image: emit.Image = .{ .bounds = .{ 0, -10, 8, 0 }, .uv = .{ 0, 0, 1, 1 } };
+    const images: [256]emit.Image = @splat(image);
+    var out: [256]@import("../../draw/draw_list.zig").Quad = undefined;
+    const n = try st.quads(.{
+        .rect = .{ 0, 0, 61, height },
+        .clip = .{ 0, 0, 100, 100 },
+        .start = 0,
+        .bytes = tx.c.bytes[0],
+        .px = 20,
+        .color = 0xffffffff,
+        .font = 0,
+        .xform = .{ 2, 0, 0, 2, 10, 20 },
+        .clip_radii = .{ 4, 4, 4, 4 },
+    }, .{ .glyphs = &images, .ellipsis = image }, &out);
+    try testing.expect(n > 0);
+    try testing.expectEqual([6]f32{ 2, 0, 0, 2, 10, 20 }, out[0].xform);
+    try testing.expect(!st.overflow);
+}
+
+test "Stack fallback keeps a combining sequence in one face through shaping and line layout" {
+    const mem = @import("../../core/mem.zig");
+    const opentype = @import("../font/opentype.zig");
+    const faces = [_]opentype.Face{ try .parse(fallback_.test_latin, 0), try .parse(golden.font, 0) };
+    const shapers = [_]shape.Shaper{ .init(faces[0]), .init(faces[1]) };
+    const chain: fallback_.Chain = .{ .faces = &faces, .default = &.{ 0, 1 } };
+    var runs: fallback_.TestRuns = .{};
+    var metrics: [2]lines.Metrics = undefined;
+    var buf: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 1);
+    var bytes: [32]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("Hi\u{301}!"), &.{ .px = 20 });
+    var p: golden.Para = .{};
+    p.bind();
+    var cols: golden.RunCols = .{};
+    var st: Stack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = p.g,
+        .l = p.l,
+        .fallback = .{ .chain = &chain, .runs = runs.runs(), .metrics = &metrics },
+    };
+    var ascent: [1]f32 = undefined;
+    st.measure(&tx, &strings, &ascent);
+    try testing.expect(!st.overflow);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 1 }, st.g.span[0..st.g.len]);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 4 }, st.g.cluster[0..st.g.len]);
+    for (st.g.glyph[0..st.g.len]) |g| try testing.expect(g != 0);
+    try testing.expect(tx.c.w[0] > 0 and tx.c.h[0] > 0);
 }

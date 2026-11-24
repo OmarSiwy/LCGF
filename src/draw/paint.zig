@@ -13,6 +13,7 @@ const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const DrawList = @import("draw_list.zig").DrawList;
 const Layers = @import("../layout/overlay.zig").Layers;
+const geometry = @import("geometry.zig");
 const inherit = @import("inherit.zig");
 const radiiOf = @import("../core/tree.zig").radiiOf;
 const none = types.none;
@@ -56,6 +57,8 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .px = tx.c.px[k],
             .color = fade(tx.c.color[k], x.row[c.scope[n]].alpha),
             .font = tx.c.font[k],
+            .xform = x.row[c.scope[n]].world,
+            .clip_radii = x.row[c.scope[c.parent[n]]].clip_radii,
         };
     }
     d.run_len = tx.len;
@@ -67,6 +70,9 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .data = cu.c.data[k],
             .id = cu.c.id[k],
             .node = n,
+            .xform = x.row[c.scope[n]].world,
+            .clip_radii = x.row[c.scope[c.parent[n]]].clip_radii,
+            .opacity = x.row[c.scope[n]].alpha,
         };
     }
     d.custom_len = cu.len;
@@ -98,7 +104,7 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
     var o: u32 = 0;
     for (0..t.len) |k| {
         const i = if (ordered) order[k] else k;
-        const vis: u32 = c.visible[i];
+        const vis: u32 = @intFromBool(geometry.hasArea(geometry.nodeBounds(t, i)));
         const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
         const look = &looks[i];
         // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).

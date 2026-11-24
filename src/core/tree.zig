@@ -27,6 +27,7 @@ pub const Extra = struct {
     opacity: f32,
     /// `Style.transform` of this node alone, about its centre.
     transform: [6]f32,
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
     /// Opacity paint applies: the product of `opacity` over the row's node and its
     /// ancestors. Written by `draw.inherit.opacity`.
     alpha: f32,
@@ -101,6 +102,7 @@ pub const Template = struct {
     radii: [4]f32,
     opacity: f32,
     transform: [6]f32,
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
 
     /// Names of the node-column fields, in column order.
     const node_fields = blk: {
@@ -161,6 +163,7 @@ pub const Template = struct {
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
         r.opacity = s.opacity;
         r.transform = s.transform;
+        r.transform_origin = s.transform_origin;
         return r;
     }
 };
@@ -420,6 +423,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.radii = row.radii;
             x.opacity = row.opacity;
             x.transform = row.transform;
+            x.transform_origin = row.transform_origin;
             return i;
         }
 
@@ -546,8 +550,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // u32 links (with extra and scope), layout inputs, scratch, outputs, child clip, three u8
     // flags, look, role, value. The paint extras are a side table (`Extras`).
     try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
-    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 4 + 24 + 16, rowBytes(Tree.Extras));
-    try testing.expectEqual(108, @sizeOf(Extra));
+    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 24 + 16, rowBytes(Tree.Extras));
+    try testing.expectEqual(116, @sizeOf(Extra));
 }
 
 test "Look: one 32-byte row, params first" {

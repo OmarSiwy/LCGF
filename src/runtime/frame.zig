@@ -21,6 +21,7 @@ const none = types.none;
 const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
+const TextStack = @import("../text/layout/stack.zig").Stack;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const Transition = @import("../anim/tweens.zig").Transition;
@@ -280,6 +281,34 @@ pub const Frame = struct {
         return f.finish();
     }
 
+    /// Font-backed counterpart of `end`. The caller owns the shapers, paragraph options,
+    /// glyph/line scratch and one ascent row per text. `stack.paragraph` and `stack.quads`
+    /// use these same options when the host draws the resulting runs. Copy these public
+    /// passes to insert a custom layout, grid or baseline pass at either measurement point.
+    /// A scratch overflow is reported in Output.status.texts as well as stack.overflow.
+    pub fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output {
+        const t = f.tree();
+        const tx = f.texts();
+        const strings = &f.ctx.strings[f.ctx.cur];
+        t.seal(0);
+        stack.overflow = false;
+        stack.measure(tx, strings, ascent);
+        layout.prepare(t);
+        layout.applyText(t, tx, .x);
+        layout.fit(t, .x);
+        layout.resolve(t, .x, f.in.viewport[0]);
+        layout.textAvail(t, tx);
+        stack.wrap(tx, strings, ascent);
+        layout.applyText(t, tx, .y);
+        layout.fit(t, .y);
+        layout.resolve(t, .y, f.in.viewport[1]);
+        layout.place(t);
+        if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
+        layout.finalize(t);
+        tx.overflow = tx.overflow or stack.overflow;
+        return f.finish();
+    }
+
     /// Paint and bookkeeping only, for callers who ran layout themselves.
     pub fn finish(f: *Frame) Output {
         const ctx = f.ctx;
@@ -344,6 +373,36 @@ fn Fixture(comptime limits: @import("context.zig").Limits) type {
             return Context.init(&buffer, limits);
         }
     };
+}
+
+test "endText consumes real paragraph metrics in an ordinary frame" {
+    const golden = @import("../text/layout/golden.zig");
+    const shape = @import("../text/shape/shape.zig");
+    const face = try @import("../text/font/opentype.zig").Face.parse(golden.font, 0);
+    const shapers = [_]shape.Shaper{.init(face)};
+    var para: golden.Para = .{};
+    para.bind();
+    var cols: golden.RunCols = .{};
+    var stack: TextStack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = para.g,
+        .l = para.l,
+        .default_paragraph = .{ .line_height = .{ .px = 30 }, .max_lines = 2, .ellipsis = true },
+    };
+    var ascent: [4]f32 = undefined;
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 128, .depth = 4 });
+    var ctx = try Fx.context();
+    const input: Input = .{ .viewport = .{ 100, 200 } };
+    var frame = ctx.begin(&input);
+    _ = frame.open(.none, .{ .size = .{ .px(80), .fit }, .transform = .{ 1, 0, 0, 1, 5, 7 } });
+    const label = frame.text("one two three four five six", .{ .px = 20, .wrap = true });
+    frame.close();
+    const output = frame.endText(&stack, &ascent);
+    try testing.expect(!output.status.texts);
+    try testing.expectEqual(@as(f32, 60), output.tree.rect(label.ix()).h());
+    try testing.expectEqual([6]f32{ 1, 0, 0, 1, 5, 7 }, output.draw.runs[0].xform);
+    try testing.expect(ascent[0] > 0);
 }
 
 test "open, close, leaf: children nest under the open node, in depth-first rows" {

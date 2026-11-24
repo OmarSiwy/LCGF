@@ -15,6 +15,7 @@
 const std = @import("std");
 const tree = @import("../core/tree.zig");
 const columns = @import("columns.zig");
+const geometry = @import("../draw/geometry.zig");
 const draw_list = @import("../draw/draw_list.zig");
 const encode = @import("../draw/paint.zig").encode;
 const Spec = @import("spec.zig").Spec;
@@ -228,9 +229,9 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     inline for (comptime list(field)) |entry| {
                         const k = entry.template;
                         const row: ?usize = if (d.quad_len == m) k else blk: {
-                            for (node[cursor..k]) |i| visible += ram.visible[i];
+                            for (node[cursor..k]) |i| visible += quadVisible(ram, i);
                             cursor = k;
-                            break :blk if (ram.visible[node[k]] != 0) visible else null;
+                            break :blk if (quadVisible(ram, node[k]) != 0) visible else null;
                         };
                         if (row) |i| {
                             const q = &d.quads[i];
@@ -300,6 +301,11 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             return .{ f32Of(ram.rect[0][slot]), f32Of(ram.rect[1][slot]), f32Of(ram.rect[2][slot]), f32Of(ram.rect[3][slot]) };
         }
 
+        inline fn quadVisible(ram: *const C.Dynamic, i: u32) u32 {
+            const bounds = geometry.paintBounds(rectOf(ram, i), p.c.look[i].params, identity, clipOf(ram, p.c.parent[i]));
+            return ram.visible[i] & @intFromBool(geometry.hasArea(bounds));
+        }
+
         inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
             for (first..end) |k| {
                 const i = node[k];
@@ -310,8 +316,9 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
                 d.op.key[cursor.op] = keys[k];
                 d.op.ref[cursor.op] = cursor.quad;
-                cursor.quad += ram.visible[i];
-                cursor.op += ram.visible[i];
+                const visible = quadVisible(ram, i);
+                cursor.quad += visible;
+                cursor.op += visible;
             }
         }
 

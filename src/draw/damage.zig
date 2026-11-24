@@ -9,6 +9,7 @@
 //!   5. hand the region to the renderer in `DrawList.damage`, with the scissor rects to clip to
 
 const std = @import("std");
+const geometry = @import("geometry.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Look = @import("../core/tree.zig").Look;
@@ -223,7 +224,10 @@ pub const Damage = struct {
 
         // The dirty rows as a list, then their rects into the region. A row that exists in one
         // frame only adds that frame's rect; the other is masked to an empty box.
-        inline for (0..4) |k| @memcpy(now.vis[k][0..t.len], t.c.vis[k][0..t.len]);
+        for (0..t.len) |r| {
+            const bounds = geometry.nodeBounds(t, r);
+            inline for (0..4) |k| now.vis[k][r] = bounds[k];
+        }
         var w: u32 = 0;
         for (0..@max(now.len, last.len)) |r| w = simd.emit(u32, dm.list, w, @intCast(r), dm.dirty[r] != 0);
         dm.dirty_len = w;
@@ -261,10 +265,7 @@ pub fn cull(d: *DrawList, g: *const Region) void {
         for (0..d.cmd.count[i] * @intFromBool(is_quads)) |j| {
             const quad = d.quads[first + j];
             d.quads[q] = quad;
-            const box: [4]f32 = .{
-                @max(quad.rect[0], quad.clip[0]), @max(quad.rect[1], quad.clip[1]),
-                @min(quad.rect[2], quad.clip[2]), @min(quad.rect[3], quad.clip[3]),
-            };
+            const box = geometry.quadBounds(quad);
             q += @intFromBool(g.touches(box));
         }
         d.cmd.kind[n] = d.cmd.kind[i];
