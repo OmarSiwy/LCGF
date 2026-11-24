@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Input = @import("../core/input.zig").Input;
+const Color = @import("../core/types.zig").Color;
 const Settings = @import("../a11y/settings_data.zig").Settings;
 
 pub const Environment = struct {
@@ -11,6 +12,7 @@ pub const Environment = struct {
     scale: f32 = 1,
     text_scale: f32 = 1,
     dark: ?bool = null,
+    accent: ?Color = null,
     high_contrast: ?bool = null,
     forced_colors: ?bool = null,
     reduced_motion: ?bool = null,
@@ -21,7 +23,7 @@ pub const Environment = struct {
     rtl: ?bool = null,
 
     pub fn fromInput(input: *const Input) Environment {
-        return .{ .viewport = input.viewport, .scale = input.scale, .dark = input.appearance.dark };
+        return .{ .viewport = input.viewport, .scale = input.scale, .dark = input.appearance.dark, .accent = if (input.appearance.accent.a != 0) input.appearance.accent else null };
     }
 
     /// Read existing accessibility settings without overwriting unrelated preference inputs.
@@ -51,7 +53,8 @@ pub const Environment = struct {
     }
 
     /// A caller-controlled motion policy; essential motion is an explicit decision. The
-    /// returned duration works with the existing tween/keyframe functions.
+    /// returned duration is for caller-sequenced tween/keyframe operations. Frame.tween
+    /// independently honors Context.settings and still lands under global reduced motion.
     pub fn duration(environment: Environment, seconds: f32, essential: bool) f32 {
         if (!std.math.isFinite(seconds) or seconds < 0) return 0;
         if ((environment.reduced_motion orelse false) and !essential) return 0;

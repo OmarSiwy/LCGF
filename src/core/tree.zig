@@ -28,6 +28,11 @@ pub const Extra = struct {
     /// `Style.transform` of this node alone, about its centre.
     transform: [6]f32,
     transform_origin: [2]f32 = .{ 0.5, 0.5 },
+    paint_reference: u32 = none,
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Prepared RGBA owns border/radius painting; layout still reads the original border.
+    prepared_texture: u32 = 0,
+    paint_revision: u32 = 0,
     /// Opacity paint applies: the product of `opacity` over the row's node and its
     /// ancestors. Written by `draw.inherit.opacity`.
     alpha: f32,
@@ -103,6 +108,11 @@ pub const Template = struct {
     opacity: f32,
     transform: [6]f32,
     transform_origin: [2]f32 = .{ 0.5, 0.5 },
+    paint_reference: u32 = none,
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Prepared RGBA owns border/radius painting; layout still reads the original border.
+    prepared_texture: u32 = 0,
+    paint_revision: u32 = 0,
 
     /// Names of the node-column fields, in column order.
     const node_fields = blk: {
@@ -157,13 +167,17 @@ pub const Template = struct {
         const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= @as(V4, @splat(0))) |
             (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
             (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
-        r.own = @intFromBool(@reduce(.Or, lanes)) | @intFromBool(s.clip);
+        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.paint_reference != none);
         r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
         r.opacity = s.opacity;
         r.transform = s.transform;
         r.transform_origin = s.transform_origin;
+        r.paint_reference = s.paint_reference;
+        r.paint_outset = s.paint_outset;
+        r.prepared_texture = 0;
+        r.paint_revision = 0;
         return r;
     }
 };
@@ -424,6 +438,10 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.opacity = row.opacity;
             x.transform = row.transform;
             x.transform_origin = row.transform_origin;
+            x.paint_reference = row.paint_reference;
+            x.paint_outset = row.paint_outset;
+            x.prepared_texture = row.prepared_texture;
+            x.paint_revision = row.paint_revision;
             return i;
         }
 
@@ -550,8 +568,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // u32 links (with extra and scope), layout inputs, scratch, outputs, child clip, three u8
     // flags, look, role, value. The paint extras are a side table (`Extras`).
     try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
-    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 24 + 16, rowBytes(Tree.Extras));
-    try testing.expectEqual(116, @sizeOf(Extra));
+    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 16 + 8 + 4 + 24 + 16, rowBytes(Tree.Extras));
+    try testing.expectEqual(144, @sizeOf(Extra));
 }
 
 test "Look: one 32-byte row, params first" {

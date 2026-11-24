@@ -331,6 +331,14 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
+    const has_input_availability = blk: {
+        var found = false;
+        for (customRows(spec)) |row| {
+            const n = nodeAt(spec, row);
+            if (n.id != null and @hasDecl(n.widget.?, "inputAvailability")) found = true;
+        }
+        break :blk found;
+    };
     // One root row (the runtime front end's) above the spec's rows.
     const rows: u32 = flatten.count(spec) + 1;
     const runs: u32 = @max(labelCount(spec), 1);
@@ -356,6 +364,17 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// widgets read it for their keys, and a `step` may move it (arrow keys inside a
         /// composite widget). `focusable` decides the Tab order (`Events.focus_order`).
         focus: ?E.Widget = null,
+        /// Mirrors Focus.visible: key presses reveal focus, pointer presses hide it.
+        focus_visible: bool = false,
+        /// The current frame's explicitly supplied preferences, available to custom widgets.
+        frame_settings: @import("../a11y/settings_data.zig").Settings = .{},
+        /// First error reported by a custom widget during this frame; no exception or callback.
+        failure: ?anyerror = null,
+        /// Omitted entirely when no custom widget declares inputAvailability(ui, in).
+        input_mask: if (has_input_availability) E.InputMask else void = if (has_input_availability) .{} else {},
+        /// Eligibility of the geometry in `rects`, like the runtime tree's previous `sense`.
+        /// Current state may disable it immediately; re-enabling takes effect after rebuilding.
+        previous_input_mask: if (has_input_availability) E.InputMask else void = if (has_input_availability) .{} else {},
         /// Four floats per custom widget (`Spec.widget`, in row order) that it keeps from frame
         /// to frame, such as what its `step` measured in last frame's tree for its `push`.
         /// Zero until it writes them.
@@ -390,7 +409,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             break :blk counter.off;
         };
 
-        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf };
+        pub const Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null };
 
         /// True while a declared spring moves or its target has changed since the last frame.
         pub fn needsAnimationFrame(ui: *const Self) bool {
@@ -412,10 +431,22 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// Uses the same accessibility settings as the runtime context.
         pub fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output {
             const press = in.buttons.left and !ui.pointer.down;
-            var event = E.pointer(&ui.pointer, &ui.rects, in);
+            ui.frame_settings = settings.*;
+            ui.failure = null;
+            var key = false;
+            for (in.events) |e| key = key or e.kind == .press;
+            ui.focus_visible = ((ui.focus_visible or key) and !press) or settings.always_show_focus;
+            _ = ui.refreshInputAvailability(in);
+            var event = if (comptime has_input_availability)
+                E.pointerEnabled(&ui.pointer, &ui.rects, &ui.input_mask, in)
+            else
+                E.pointer(&ui.pointer, &ui.rects, in);
             if (press) ui.focus = ui.pointer.pressed;
-            // Tab and Shift+Tab, as `Context.begin` moves `Interaction.focus`.
-            E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
+            // Tab and Shift+Tab, as Context.begin; disabled nodes never become focus stops.
+            if (comptime has_input_availability)
+                E.focusKeysEnabled(&ui.focus, in, (focus.Keymap{}).tab, &ui.input_mask)
+            else
+                E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
             if (event) |e| switch (e) {
                 inline else => |payload, tag| {
                     const k = comptime E.slot(tag);
@@ -434,8 +465,19 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 // which the frame reports when the pointer made none.
                 if (comptime @hasDecl(W_, "step")) {
                     const got = W_.step(ui, row, event, in);
-                    if (@TypeOf(got) == ?E.Event) event = event orelse got;
+                    if (@TypeOf(got) == ?E.Event) {
+                        const accepted = if (comptime has_input_availability) ui.allowedEvent(got) else got;
+                        event = event orelse accepted;
+                    }
                 }
+            }
+            // A step may have disabled another control. Update hover/focus for the build
+            // without retroactively canceling an activation that legitimately caused it.
+            const next_input_mask = ui.refreshInputAvailability(in);
+            if (comptime has_input_availability) {
+                if (ui.focus) |target| if (!ui.input_mask.allows(target)) {
+                    ui.focus = null;
+                };
             }
 
             ui.springs.frame(&ui.signals.state, in.dt, !ui.built, settings.reduced_motion);
@@ -473,8 +515,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             for (0..4) |side| {
                 for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
             }
+            if (comptime has_input_availability) ui.previous_input_mask = next_input_mask;
             ui.built = true;
-            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf) };
+            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf), .failure = ui.failure };
         }
 
         /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom
@@ -532,11 +575,49 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             return &ui.kept[k];
         }
 
+        /// Custom widgets keep the existing non-error-returning frame API and report failure
+        /// as output data. The caller decides whether to display, retry or reject that frame.
+        pub fn fail(ui: *Self, err: anyerror) void {
+            ui.failure = ui.failure orelse err;
+        }
+
+        /// Optional custom-widget contract, statically dispatched like push/step:
+        /// inputAvailability(ui, in) returns events.Availability from authoritative state.
+        fn refreshInputAvailability(ui: *Self, in: *const Input) if (has_input_availability) E.InputMask else void {
+            if (comptime has_input_availability) {
+                var current: E.InputMask = .{};
+                inline for (comptime customRows(spec)) |row| {
+                    const n = comptime nodeAt(spec, row);
+                    if (comptime n.id != null and @hasDecl(n.widget.?, "inputAvailability")) {
+                        const target = @field(E.Widget, n.id.?);
+                        current.set(target, n.widget.?.inputAvailability(ui, in));
+                    }
+                }
+                ui.input_mask = current;
+                if (ui.built) {
+                    for (&ui.input_mask.enabled, ui.previous_input_mask.enabled) |*enabled, previous| enabled.* &= previous;
+                }
+                return current;
+            }
+        }
+
+        fn allowedEvent(ui: *const Self, event: ?E.Event) ?E.Event {
+            if (comptime !has_input_availability or E.widget_count == 0) return event;
+            if (event) |e| switch (e) {
+                inline else => |_, target| if (ui.input_mask.activates[E.slot(target)] == 0) return null,
+            };
+            return event;
+        }
+
         pub fn response(ui: *const Self, row: u32, in: *const Input) Response {
             const w: E.Widget = @fromBackingInt(@as(E.Index, @intCast(row)));
+            if (comptime has_input_availability) if (!ui.input_mask.allows(w)) return .{};
             const held = ui.pointer.pressed == w;
             const owned = ui.pointer.pressed == null or held;
-            const under = E.at(&ui.rects, in.pointer[0], in.pointer[1]) == w;
+            const under = if (comptime has_input_availability)
+                E.atEnabled(&ui.rects, &ui.input_mask, in.pointer[0], in.pointer[1]) == w
+            else
+                E.at(&ui.rects, in.pointer[0], in.pointer[1]) == w;
             return .{ .hovered = under and owned, .held = held };
         }
 

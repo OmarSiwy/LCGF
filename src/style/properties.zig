@@ -286,7 +286,8 @@ pub fn initial(property: Property) Value {
     return get(property, &.{});
 }
 
-/// The caller decides which work to run. This only reports which consumers changed.
+/// The caller decides which work to run. This compares catalog properties; behavior-owned
+/// role/value and internal decoration references are intentionally not style declarations.
 pub fn changed(before: *const Computed, after: *const Computed) Invalidation {
     var domains: Invalidation = .{};
     inline for (@typeInfo(Property).@"enum".field_names) |name| {
@@ -297,7 +298,8 @@ pub fn changed(before: *const Computed, after: *const Computed) Invalidation {
 }
 
 /// Interpolation of existing value types. Different sizing modes and resource handles switch
-/// at the midpoint. Matrix interpolation is component-wise, not rotation decomposition.
+/// at the midpoint. Colors use premultiplied sRGB, avoiding transparent-color fringes.
+/// Matrix interpolation is component-wise, not rotation decomposition.
 pub fn interpolate(property: Property, a: Value, b: Value, fraction: f32) Error!Value {
     try validate(property, a);
     try validate(property, b);
@@ -308,11 +310,9 @@ pub fn interpolate(property: Property, a: Value, b: Value, fraction: f32) Error!
     return switch (a) {
         .number => |v| .{ .number = if (std.math.isFinite(v) and std.math.isFinite(b.number)) v + (b.number - v) * t else if (t < 0.5) v else b.number },
         .color => |v| blk: {
-            const a4 = [4]u8{ v.r, v.g, v.b, v.a };
-            const b4 = [4]u8{ b.color.r, b.color.g, b.color.b, b.color.a };
-            var channels: [4]u8 = undefined;
-            for (&channels, a4, b4) |*channel, x, y| channel.* = @intFromFloat(@round(@as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(y)) - @as(f32, @floatFromInt(x))) * t));
-            break :blk .{ .color = .rgba(channels[0], channels[1], channels[2], channels[3]) };
+            const color_math = @import("../draw/color_math.zig");
+            const mixed = color_math.mix(color_math.fromColor(v), color_math.fromColor(b.color), t, .{});
+            break :blk .{ .color = @bitCast(color_math.pack(mixed)) };
         },
         .vector2 => |v| .{ .vector2 = mixArray(2, v, b.vector2, t) },
         .vector4 => |v| .{ .vector4 = mixArray(4, v, b.vector4, t) },

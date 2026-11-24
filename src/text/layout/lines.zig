@@ -32,6 +32,11 @@ pub const slack: f32 = 1.0 / 64.0;
 
 /// A paragraph's glyphs in pixels, in text order. Capacity is the slices' length, all equal.
 pub const Glyphs = struct {
+    /// Actual shaper/atlas face identity, separate from the span used for metrics and paint.
+    /// A plain paragraph needs one integer; rich text borrows the span font table; fallback
+    /// uses its already-resolved face indices. No mandatory per-glyph font column is added.
+    pub const Fonts = union(enum) { one: u16, spans: []const u16, indices };
+    fonts: Fonts = .{ .one = 0 },
     glyph: []u16,
     /// Byte offset in the paragraph's text of the first character of the glyph's cluster.
     cluster: []u32,
@@ -48,6 +53,14 @@ pub const Glyphs = struct {
     /// to left.
     level: []u8,
     len: u32 = 0,
+
+    pub fn fontAt(g: *const Glyphs, glyph: usize) u16 {
+        return switch (g.fonts) {
+            .one => |font| font,
+            .spans => |fonts| fonts[g.span[glyph]],
+            .indices => @intCast(g.span[glyph]),
+        };
+    }
 
     /// Appends a shaped run at `scale` px per font unit (px / units_per_em), shaped in span
     /// `span`. `base` is the byte offset of the run's text in the paragraph's text.

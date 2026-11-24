@@ -6,6 +6,7 @@ pub const tokens = @import("tokens.zig");
 pub const environment = @import("environment.zig");
 pub const resolution = @import("resolve.zig");
 pub const storage = @import("storage.zig");
+pub const paragraph = @import("paragraph.zig");
 pub const Property = properties.Property;
 pub const Value = properties.Value;
 pub const Computed = properties.Computed;

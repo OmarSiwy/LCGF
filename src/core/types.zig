@@ -362,6 +362,12 @@ pub const Style = struct {
     transform_origin: [2]f32 = .{ 0.5, 0.5 },
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
+    /// Optional paint-only rectangle source: an earlier node's border box. Layout and hit
+    /// geometry remain this node's. Its source parent's clip and transform are used as well.
+    /// Used by outside focus rings and prepared decorations; `none` uses this node.
+    paint_reference: u32 = none,
+    /// Paint-only expansion, left/top/right/bottom. Never contributes to layout measurement.
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
     // ---- semantics
     role: Role = .none,
     value: f32 = 0,

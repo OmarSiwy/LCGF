@@ -121,7 +121,7 @@ pub const Region = struct {
 };
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
-const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border: f32, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32 };
+const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border: f32, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32, prepared_texture: u32, paint_revision: u32 };
 
 /// Writes, for every node of `t`, a hash of what painting it reads: its rect, its visible
 /// (clipped) rect, its look, and the text run or custom draw it owns. Two frames that paint a
@@ -132,17 +132,18 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
     for (0..t.len) |i| {
         const x = &t.x;
         const own = c.extra[i];
-        const scope = c.scope[i];
         const row: QuadInputs = .{
-            .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
+            .rect = geometry.nodeRect(t, i),
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
             .border = x.row[own].border,
             .uv = x.row[own].uv,
             .radii = @import("../core/tree.zig").radiiOf(x.row[own].radii, c.look[i].radius),
-            .alpha = x.row[scope].alpha,
-            .world = x.row[scope].world,
-            .clip_radii = x.row[c.scope[c.parent[i]]].clip_radii,
+            .alpha = geometry.nodeAlpha(t, i),
+            .world = geometry.nodeWorld(t, i),
+            .clip_radii = geometry.nodeClipRadii(t, i),
+            .prepared_texture = x.row[own].prepared_texture,
+            .paint_revision = x.row[own].paint_revision,
         };
         out[i] = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&row)));
     }

@@ -28,6 +28,7 @@ const Texts = @import("../../core/texts.zig").Texts;
 const Strings = @import("../../core/strings.zig").Strings;
 const whitespace = @import("whitespace.zig");
 const fallback_ = @import("../fallback/fallback.zig");
+const spans_ = @import("spans.zig");
 const Direction = @import("../unicode/bidi.zig").Direction;
 pub const emit = @import("emit.zig");
 
@@ -94,6 +95,15 @@ pub const Fallback = struct {
     metrics: []lines.Metrics,
 };
 
+/// Optional rich paragraph row. Font choices are explicit in Spans; the plain-paragraph
+/// fallback chain does not override them. Scratch metrics fit every span. When whitespace is
+/// collapsed, normalized_spans is required to remap source boundaries without mutating input.
+pub const Rich = struct {
+    spans: *const spans_.Spans,
+    metrics: []lines.Metrics,
+    normalized_spans: ?*spans_.Spans = null,
+};
+
 /// Shapers by font index, and scratch for one paragraph. The caller owns all of it.
 pub const Stack = struct {
     shapers: []const shape.Shaper,
@@ -111,17 +121,29 @@ pub const Stack = struct {
     /// until this Stack lays out the next paragraph.
     normalization: ?whitespace.Buffer = null,
     fallback: ?Fallback = null,
+    rich: []const ?Rich = &.{},
+    /// Current paint/size tables, borrowed from the rich row when present. Plain paragraphs
+    /// use TextRun.color and px. The metadata remains valid until the next paragraph call.
+    paint_colors: []const u32 = &.{},
+    span_px: []const f32 = &.{},
+    px: f32 = 0,
     /// Text whose byte offsets the current Glyphs/Lines index, after optional normalization.
     text: []const u8 = "",
     normalized: bool = false,
     /// Marker to obtain from the atlas when `l.ellipsis` is nonzero.
     ellipsis_glyph: u16 = 0,
     ellipsis_font: u16 = 0,
+    ellipsis_px: f32 = 0,
     /// A run did not fit the scratch: it was measured as empty. Reset by the caller.
     overflow: bool = false,
 
     /// Whether this stack measures row `k`.
     pub fn serves(st: *const Stack, tx: *const Texts, k: usize) bool {
+        if (k < st.rich.len) if (st.rich[k]) |r| {
+            if (r.spans.len == 0) return false;
+            for (r.spans.font[0..r.spans.len]) |font| if (font >= st.shapers.len) return false;
+            return true;
+        };
         return tx.c.font[k] < st.shapers.len;
     }
 
@@ -139,7 +161,10 @@ pub const Stack = struct {
     fn layoutRow(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32, wraps: bool) error{NoSpace}!void {
         const c = &tx.c;
         const p = st.options(k);
-        const sh = &st.shapers[c.font[k]];
+        const rich = if (k < st.rich.len) st.rich[k] else null;
+        const primary_font = if (rich) |r| r.spans.font[0] else c.font[k];
+        const px = if (rich) |r| r.spans.px[0] else c.px[k];
+        const sh = &st.shapers[primary_font];
         st.text = strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] });
         st.normalized = p.whitespace != .preserve;
         if (st.normalized) {
@@ -147,16 +172,35 @@ pub const Stack = struct {
             st.text = try b.prepare(st.text, p.whitespace);
         }
         const text = st.text;
+        st.paint_colors = &.{};
+        st.span_px = &.{};
+        st.px = px;
         var features = p.features;
         // Optional ligatures suppress character spacing; disabling them exposes each
         // typographic character while mandatory script shaping remains the shaper's job.
         if (p.letter_spacing != 0) features.liga = false;
         st.g.len = 0;
-        const px = c.px[k];
+        st.g.fonts = .{ .one = primary_font };
         const scale = px / @as(f32, @floatFromInt(sh.face.units_per_em));
         const primary = [_]lines.Metrics{p.metrics(.of(&sh.face, px), px)};
         var metrics: []const lines.Metrics = &primary;
-        if (st.fallback) |*fb| {
+        if (rich) |r| {
+            var spans = r.spans;
+            if (st.normalized) {
+                const mapped = r.normalized_spans orelse return error.NoSpace;
+                mapped.len = 0;
+                for (0..spans.len) |i| _ = try mapped.push(st.normalization.?.displayOffset(spans.start[i]), spans.font[i], spans.px[i], spans.color[i]);
+                spans = mapped;
+            }
+            if (r.metrics.len < spans.len) return error.NoSpace;
+            try spans_.shapeFeatures(st.shapers, text, spans, &st.run, &st.g, features);
+            spans_.metrics(st.shapers, spans, r.metrics);
+            for (r.metrics[0..spans.len], spans.px[0..spans.len]) |*m, size| m.* = p.metrics(m.*, size);
+            metrics = r.metrics[0..spans.len];
+            st.paint_colors = spans.color[0..spans.len];
+            st.span_px = spans.px[0..spans.len];
+        } else if (st.fallback) |*fb| {
+            st.g.fonts = .indices;
             if (fb.metrics.len < st.shapers.len) return error.NoSpace;
             try fallback_.resolveClusters(fb.chain, text, &fb.runs);
             var start: u32 = 0;
@@ -179,10 +223,14 @@ pub const Stack = struct {
             .wrap = p.wrap orelse (if (wraps) .word else .none),
             .tab_width = @max(p.tab_width orelse (space * p.tab_size), 0),
         });
-        st.ellipsis_font = c.font[k];
-        st.ellipsis_glyph = sh.face.cmap.glyph(0x2026);
+        const marker_line = @min(st.l.len, @max(p.max_lines, 1)) - 1;
+        const marker_index = if (st.l.ink[marker_line] > st.l.first[marker_line]) st.l.ink[marker_line] - 1 else st.l.first[marker_line];
+        st.ellipsis_font = if (marker_index < st.g.len) st.g.fontAt(marker_index) else primary_font;
+        st.ellipsis_px = if (marker_index < st.g.len) st.pxAt(marker_index) else px;
+        const marker_face = &st.shapers[st.ellipsis_font].face;
+        st.ellipsis_glyph = marker_face.cmap.glyph(0x2026);
         if (p.ellipsis) {
-            const advance = @as(f32, @floatFromInt(sh.face.hMetrics(st.ellipsis_glyph).advance)) * scale;
+            const advance = @as(f32, @floatFromInt(marker_face.hMetrics(st.ellipsis_glyph).advance)) * st.ellipsis_px / @as(f32, @floatFromInt(marker_face.units_per_em));
             lines.ellipsize(&st.l, &st.g, text, width, p.max_lines, advance);
         } else st.l.len = @min(st.l.len, @max(p.max_lines, 1));
         const a = p.placement(width, st.direction);
@@ -201,9 +249,16 @@ pub const Stack = struct {
         return if (st.normalized) st.normalization.?.sourceOffset(display) else @min(display, @as(u32, @intCast(st.text.len)));
     }
 
+    /// Actual pixel size for a glyph's font/atlas lookup, independent of metric-span identity.
+    pub fn pxAt(st: *const Stack, glyph: usize) f32 {
+        return if (st.span_px.len == 0) st.px else st.span_px[st.g.span[glyph]];
+    }
+
     /// Run-aware rendering convenience over the same public emission pass and caller images.
     pub fn quads(st: *const Stack, run: @import("../../draw/draw_list.zig").TextRun, images: emit.Images, out: []@import("../../draw/draw_list.zig").Quad) emit.Error!u32 {
-        return emit.quads(run, &st.g, &st.l, st.text, images, out);
+        var effective = images;
+        if (effective.colors.len == 0) effective.colors = st.paint_colors;
+        return emit.quads(run, &st.g, &st.l, st.text, effective, out);
     }
 
     /// Step 1 of the protocol: every run's extent unbroken (newlines still break): `w` the
@@ -392,5 +447,80 @@ test "Stack fallback keeps a combining sequence in one face through shaping and 
     try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 1 }, st.g.span[0..st.g.len]);
     try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 4 }, st.g.cluster[0..st.g.len]);
     for (st.g.glyph[0..st.g.len]) |g| try testing.expect(g != 0);
+    for (0..st.g.len) |i| try testing.expectEqual(st.g.span[i], st.g.fontAt(i));
     try testing.expect(tx.c.w[0] > 0 and tx.c.h[0] > 0);
+}
+
+test "a nonzero font row retains its actual face identity independently of metric span zero" {
+    const mem = @import("../../core/mem.zig");
+    const opentype = @import("../font/opentype.zig");
+    const faces = [_]opentype.Face{ try .parse(fallback_.test_latin, 0), try .parse(golden.font, 0) };
+    const shapers = [_]shape.Shaper{ .init(faces[0]), .init(faces[1]) };
+    var buf: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 1);
+    var bytes: [16]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("AV"), &.{ .px = 20, .font = @fromBackingInt(1) });
+    var p: golden.Para = .{};
+    p.bind();
+    var cols: golden.RunCols = .{};
+    var st: Stack = .{ .shapers = &shapers, .run = cols.run(), .g = p.g, .l = p.l };
+    var ascent: [1]f32 = undefined;
+    st.measure(&tx, &strings, &ascent);
+    const wanted: lines.Metrics = .of(&faces[1], 20);
+    try testing.expectEqual(wanted.ascent, ascent[0]);
+    try testing.expectEqual(wanted.height(), tx.c.h[0]);
+    try testing.expectEqual(0, faces[0].cmap.glyph('A'));
+    try testing.expect(st.g.glyph[0] != 0);
+    for (0..st.g.len) |i| {
+        try testing.expectEqual(0, st.g.span[i]);
+        try testing.expectEqual(1, st.g.fontAt(i));
+    }
+}
+
+test "rich rows preserve shaping and expose per-glyph font size and inherited-opacity paint" {
+    const mem = @import("../../core/mem.zig");
+    const opentype = @import("../font/opentype.zig");
+    const shapers = [_]shape.Shaper{ .init(try opentype.Face.parse(fallback_.test_latin, 0)), .init(try opentype.Face.parse(golden.font, 0)) };
+    var buf: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 1);
+    var bytes: [32]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("office BIG"), &.{ .px = 10, .wrap = true });
+    var p: golden.Para = .{};
+    p.bind();
+    const Color = @import("../../core/types.zig").Color;
+    _ = try p.s.push(0, 1, 16, Color.rgba(255, 0, 0, 255).bitsOf());
+    _ = try p.s.push(2, 1, 16, Color.rgba(0, 0, 255, 255).bitsOf());
+    _ = try p.s.push(7, 1, 24, Color.rgba(0, 255, 0, 255).bitsOf());
+    var metrics: [3]lines.Metrics = undefined;
+    const rich = [_]?Rich{.{ .spans = &p.s, .metrics = &metrics }};
+    var cols: golden.RunCols = .{};
+    var st: Stack = .{ .shapers = &shapers, .run = cols.run(), .g = p.g, .l = p.l, .rich = &rich };
+    var ascent: [1]f32 = undefined;
+    st.measure(&tx, &strings, &ascent);
+    try testing.expect(!st.overflow and st.g.len < st.text.len);
+    tx.c.avail[0] = 200;
+    st.wrap(&tx, &strings, &ascent);
+    try st.paragraph(&tx, &strings, 0);
+    for (0..st.g.len) |i| try testing.expectEqual(1, st.g.fontAt(i));
+    try testing.expectEqual(16, st.pxAt(0));
+    try testing.expectEqual(24, st.pxAt(st.g.len - 1));
+    const image: emit.Image = .{ .bounds = .{ 0, -10, 8, 0 } };
+    const images: [256]emit.Image = @splat(image);
+    var out: [256]@import("../../draw/draw_list.zig").Quad = undefined;
+    const n = try st.quads(.{
+        .rect = .{ 0, 0, 200, 100 },
+        .clip = .{ 0, 0, 200, 100 },
+        .start = 0,
+        .bytes = 10,
+        .px = 10,
+        .font = 0,
+        .color = Color.rgba(255, 255, 255, 128).bitsOf(),
+        .opacity = 0.5,
+    }, .{ .glyphs = &images }, &out);
+    try testing.expectEqual(Color.rgba(255, 0, 0, 128).bitsOf(), out[0].fill);
+    try testing.expectEqual(Color.rgba(0, 255, 0, 128).bitsOf(), out[n - 1].fill);
 }

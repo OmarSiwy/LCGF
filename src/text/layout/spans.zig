@@ -64,6 +64,7 @@ pub fn shape(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spa
 /// restart the shaper. `run` must fit the largest adjacent group with the same font and size.
 pub fn shapeFeatures(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features) error{NoSpace}!void {
     g.len = 0;
+    g.fonts = .{ .spans = spans.font[0..spans.len] };
     var k: u32 = 0;
     while (k < spans.len) {
         var end = k + 1;

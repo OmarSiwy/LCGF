@@ -81,13 +81,43 @@ pub fn quadBounds(q: anytype) [4]f32 {
     return paintBounds(q.rect, q.params, q.xform, q.clip);
 }
 
-/// World-space node bounds after layout and inherit.transform. Text/custom content uses the
-/// same node box; hosts drawing beyond it must supply expanded bounds when composing it.
-pub fn nodeBounds(t: anytype, i: usize) [4]f32 {
+/// An explicit paint reference reads an earlier border box, never another reference. This
+/// makes paint dependencies acyclic and keeps the layout tree independent of decorations.
+pub fn paintSource(t: anytype, i: usize) usize {
+    const reference = t.x.row[t.c.extra[i]].paint_reference;
+    std.debug.assert(reference == types.none or reference < i);
+    return if (reference == types.none) i else reference;
+}
+
+pub fn nodeRect(t: anytype, i: usize) [4]f32 {
+    const source = paintSource(t, i);
     const c = &t.c;
+    return expand(.{ c.rect[0][source], c.rect[1][source], c.rect[2][source], c.rect[3][source] }, t.x.row[c.extra[i]].paint_outset);
+}
+
+pub fn nodeWorld(t: anytype, i: usize) [6]f32 {
+    return t.x.row[t.c.scope[paintSource(t, i)]].world;
+}
+
+pub fn nodeClip(t: anytype, i: usize) [4]f32 {
     const sign: V4 = .{ 1, 1, -1, -1 };
-    const clip: [4]f32 = @as(V4, c.child_clip[c.parent[i]]) * sign;
-    return paintBounds(.{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] }, c.look[i].params, t.x.row[c.scope[i]].world, clip);
+    return @as(V4, t.c.child_clip[t.c.parent[paintSource(t, i)]]) * sign;
+}
+
+pub fn nodeClipRadii(t: anytype, i: usize) [4]f32 {
+    return t.x.row[t.c.scope[t.c.parent[paintSource(t, i)]]].clip_radii;
+}
+
+pub fn nodeAlpha(t: anytype, i: usize) f32 {
+    const source = paintSource(t, i);
+    const inherited = t.x.row[t.c.scope[source]].alpha;
+    return if (source == i) inherited else inherited * t.x.row[t.c.extra[i]].opacity;
+}
+
+/// World-space node bounds after layout and inherit.transform. Includes an optional paint
+/// reference/outset, then stock shader expansion, transform and ancestor screen clip.
+pub fn nodeBounds(t: anytype, i: usize) [4]f32 {
+    return paintBounds(nodeRect(t, i), t.c.look[i].params, nodeWorld(t, i), nodeClip(t, i));
 }
 
 pub fn contains(rect: [4]f32, p: [2]f32) bool {

@@ -44,6 +44,8 @@ pub const TextRun = extern struct {
     px: f32,
     color: u32,
     font: u32,
+    /// Inherited alpha, retained separately for rich spans that replace the effective color.
+    opacity: f32 = 1,
     /// Layout-to-screen geometry, shared with the surrounding box.
     xform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
     clip_radii: [4]f32 = .{ 0, 0, 0, 0 },
@@ -161,9 +163,9 @@ test "layout: Quad is the 136-byte instance row the quad pipeline declares" {
 }
 
 test "layout: TextRun and CustomDraw rows" {
-    try testing.expectEqual(92, @sizeOf(TextRun));
+    try testing.expectEqual(96, @sizeOf(TextRun));
     try testing.expectEqual(4, @alignOf(TextRun));
-    inline for (.{ "rect", "clip", "start", "bytes", "px", "color", "font", "xform", "clip_radii" }, .{ 0, 16, 32, 36, 40, 44, 48, 52, 76 }) |name, off|
+    inline for (.{ "rect", "clip", "start", "bytes", "px", "color", "font", "opacity", "xform", "clip_radii" }, .{ 0, 16, 32, 36, 40, 44, 48, 52, 56, 80 }) |name, off|
         try testing.expectEqual(off, @offsetOf(TextRun, name));
     try testing.expectEqual(96, @sizeOf(CustomDraw));
     try testing.expectEqual(8, @alignOf(CustomDraw));

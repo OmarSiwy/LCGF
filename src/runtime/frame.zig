@@ -31,6 +31,7 @@ const layout = @import("../layout/layout.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
+const outlines = @import("../draw/outline.zig");
 const scheduler = @import("scheduler.zig");
 
 // Ordinary text leaves differ only in whether they may shrink to wrap.
@@ -54,12 +55,24 @@ pub const Frame = struct {
         return &f.ctx.trees[f.ctx.cur ^ 1];
     }
 
+    /// Paint an outside ring at this point in the command order. It follows `node` after
+    /// layout without reserving space or replacing the control's border/selected appearance.
+    pub fn outline(f: *Frame, node: Node, options: outlines.Outline) Node {
+        return outlines.append(f.tree(), f.ctx.stack[f.ctx.depth - 1], node, options);
+    }
+
     // ---- building -----------------------------------------------------------
 
     /// Starts a node. Everything created until the matching `close` is its child.
     pub fn open(f: *Frame, id: Id, style: Style) Node {
         const ctx = f.ctx;
         return f.enter(f.tree().push(ctx.stack[ctx.depth - 1], id, &style));
+    }
+
+    /// A precomputed row, including explicit sparse paint storage from prepared.row().
+    /// Expands directly into Tree.pushRow plus the existing nesting operation.
+    pub fn openRow(f: *Frame, id: Id, row: *const Template) Node {
+        return f.enter(f.tree().pushRow(f.ctx.stack[f.ctx.depth - 1], id, row));
     }
 
     fn enter(f: *Frame, i: u32) Node {
@@ -253,6 +266,13 @@ pub const Frame = struct {
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
     /// copy this body to put your own shaper, or your own pass, between any two of them.
     pub fn end(f: *Frame, font: Mono) Output {
+        f.layoutWith(font);
+        return f.finish();
+    }
+
+    /// Measure and arrange without painting: insert prepared textures or explicit passes,
+    /// then call finish. This is exactly the layout half of end.
+    pub fn layoutWith(f: *Frame, font: Mono) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -278,7 +298,6 @@ pub const Frame = struct {
         // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);
-        return f.finish();
     }
 
     /// Font-backed counterpart of `end`. The caller owns the shapers, paragraph options,
@@ -287,6 +306,12 @@ pub const Frame = struct {
     /// passes to insert a custom layout, grid or baseline pass at either measurement point.
     /// A scratch overflow is reported in Output.status.texts as well as stack.overflow.
     pub fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output {
+        f.layoutText(stack, ascent);
+        return f.finish();
+    }
+
+    /// Font-backed measurement and arrangement only, the public half of endText.
+    pub fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void {
         const t = f.tree();
         const tx = f.texts();
         const strings = &f.ctx.strings[f.ctx.cur];
@@ -306,7 +331,6 @@ pub const Frame = struct {
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         layout.finalize(t);
         tx.overflow = tx.overflow or stack.overflow;
-        return f.finish();
     }
 
     /// Paint and bookkeeping only, for callers who ran layout themselves.

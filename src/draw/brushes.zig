@@ -161,6 +161,13 @@ pub fn validate(b: Brush) Error!void {
     }
 }
 
+/// Validate borrowed image storage before a pass writes its destination. Feedback requires a
+/// separate caller snapshot; reading an image while overwriting it is not an implicit mode.
+pub fn validateSource(b: Brush, destination: []const u32) Error!void {
+    try validate(b);
+    if (b == .image and surface.overlaps(destination, b.image.image.pixels)) return error.AliasedStorage;
+}
+
 inline fn pow(v: F, e: F) F {
     return @select(f32, v > simd.f(0), @exp(@log(@max(v, simd.f(1e-30))) * e), simd.f(0));
 }

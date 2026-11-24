@@ -1,0 +1,29 @@
+//! Optional component recipes with caller-owned data and independent resolution. Existing
+//! theme/widget APIs remain the direct lightweight path; recipes lower to the same consumers.
+
+pub const model = @import("recipe.zig");
+pub const controls = @import("recipe_controls.zig");
+pub const ct = @import("recipe_comptime.zig");
+pub const tests = @import("recipe_tests.zig");
+pub const defaults = model;
+pub const Recipe = model.Recipe;
+pub const Part = model.Part;
+pub const Use = model.Use;
+pub const Names = model.Names;
+pub const tokenRows = model.tokenRows;
+pub const Options = controls.Options;
+pub const OpenControl = controls.OpenControl;
+pub const beginButton = controls.beginButton;
+pub const label = controls.label;
+pub const icon = controls.icon;
+pub const end = controls.end;
+pub const button = controls.button;
+pub const checkbox = controls.checkbox;
+pub const switchControl = controls.switchControl;
+pub const slider = controls.slider;
+pub const progress = controls.progress;
+pub const textfield = controls.textfield;
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

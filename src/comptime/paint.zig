@@ -353,6 +353,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     .px = style.px,
                     .color = label.color,
                     .font = @backingInt(style.font),
+                    .opacity = inh.alpha[p.c.scope[label.node]],
                 };
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
                 d.op.key[cursor.op] = 0;

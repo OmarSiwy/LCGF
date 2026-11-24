@@ -57,6 +57,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
             .px = tx.c.px[k],
             .color = fade(tx.c.color[k], x.row[c.scope[n]].alpha),
             .font = tx.c.font[k],
+            .opacity = x.row[c.scope[n]].alpha,
             .xform = x.row[c.scope[n]].world,
             .clip_radii = x.row[c.scope[c.parent[n]]].clip_radii,
         };
@@ -85,18 +86,12 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
 /// Returns false when directly populated text or custom links need the full path.
 inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d: *DrawList, comptime mixed: bool) bool {
     const c = &t.c;
-    const V4 = @Vector(4, f32);
-    const sign: V4 = .{ 1, 1, -1, -1 };
-
     // 1. Nodes -> quads and an ordered op stream. Every row writes its
     //    candidate output; the write index advances by 0 or 1.
     const quads = d.quads;
     const op_kind = d.op.kind;
     const op_key = d.op.key;
     const op_ref = d.op.ref;
-    const rect = c.rect;
-    const parent = c.parent;
-    const child_clip = c.child_clip;
     const looks = c.look;
     const x = &t.x;
     var links: u32 = none;
@@ -105,24 +100,23 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
     for (0..t.len) |k| {
         const i = if (ordered) order[k] else k;
         const vis: u32 = @intFromBool(geometry.hasArea(geometry.nodeBounds(t, i)));
-        const clip: [4]f32 = @as(V4, child_clip[parent[i]]) * sign;
+        const clip = geometry.nodeClip(t, i);
         const look = &looks[i];
         // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).
         const own = c.extra[i];
-        const scope = c.scope[i];
-        const alpha = x.row[scope].alpha;
+        const alpha = geometry.nodeAlpha(t, i);
         quads[q] = .{
-            .rect = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] },
+            .rect = geometry.nodeRect(t, i),
             .clip = clip,
             .params = look.params,
             .uv = x.row[own].uv,
             .fill = look.fill,
             .border_color = look.border_color,
-            .radii = radiiOf(x.row[own].radii, look.radius),
-            .border = x.row[own].border,
+            .radii = @select(f32, @as(@Vector(4, bool), @splat(x.row[own].prepared_texture != 0)), @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), radiiOf(x.row[own].radii, look.radius))),
+            .border = simd.selF(x.row[own].prepared_texture != 0, 0, x.row[own].border),
             .opacity = alpha,
-            .xform = x.row[scope].world,
-            .clip_radii = x.row[c.scope[parent[i]]].clip_radii,
+            .xform = geometry.nodeWorld(t, i),
+            .clip_radii = geometry.nodeClipRadii(t, i),
         };
         // Painted when either colour has alpha and the node is not fully transparent.
         const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(alpha > 0);

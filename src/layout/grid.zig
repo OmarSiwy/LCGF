@@ -32,6 +32,11 @@ pub const Track = struct {
     k_px: f32 = 0,
     k_fit: f32 = 0,
     k_fr: f32 = 0,
+    min: f32 = 0,
+    max: f32 = std.math.floatMax(f32),
+    /// Fraction tracks normally keep their content as a minimum. Explicit minmaxFr can opt
+    /// out, allowing minmax(0, 1fr)-like tracks to contain overflowing/wrapping content.
+    content_floor: f32 = 1,
 
     /// Exactly `v` pixels.
     pub fn px(v: f32) Track {
@@ -43,7 +48,23 @@ pub const Track = struct {
     pub fn fr(w: f32) Track {
         return .{ .k_fr = w };
     }
+    /// Content-sized track bounded by explicit logical-pixel minimum and maximum.
+    pub fn minmax(minimum: f32, maximum: f32) Track {
+        return .{ .k_fit = 1, .min = @max(minimum, 0), .max = @max(@max(maximum, minimum), 0) };
+    }
+    /// Fractional growth above an explicit minimum, independently of intrinsic content.
+    pub fn minmaxFr(minimum: f32, weight: f32, maximum: f32) Track {
+        return .{ .k_fr = @max(weight, 0), .min = @max(minimum, 0), .max = @max(@max(maximum, minimum), 0), .content_floor = 0 };
+    }
+    /// Fit content up to a pixel limit. This is a bounded max-content track; callers needing
+    /// a distinct min-content floor can supply it with minmax instead.
+    pub fn fitContent(maximum: f32) Track {
+        return minmax(0, maximum);
+    }
 };
+
+pub const AutoFlow = enum(u8) { row = 0, column = 1, row_dense = 2, column_dense = 3 };
+pub const Distribution = enum(u8) { start, center, end, space_between, space_around, space_evenly };
 
 /// Where an item sits inside its cell on one axis (CSS `justify-self` / `align-self`). Stored
 /// as two coefficients, so the resolve step blends instead of switching.
@@ -87,12 +108,19 @@ pub const Grids = struct {
         last_item: []u32,
         /// Space between columns (x) and between rows (y).
         gap: [2][]f32,
+        flow: []u8,
+        /// Opt-in bounded fractional solver, preserving the original single-pass default.
+        bounded: []u8,
+        distribution: [2][]u8,
     };
 
     pub const TrackColumns = struct {
         k_px: []f32,
         k_fit: []f32,
         k_fr: []f32,
+        min: []f32,
+        max: []f32,
+        content_floor: []f32,
         /// Largest item extent in the track, written by the fit step.
         content: []f32,
         /// Written by `sizeTracks`: final size, and start inside the container's content box.
@@ -152,7 +180,10 @@ pub const Grids = struct {
         gs.g.gap[0][k] = 0;
         gs.g.gap[1][k] = 0;
         gs.g.last_item[k] = none;
+        gs.g.flow[k] = 0;
+        gs.g.bounded[k] = 0;
         inline for (.{ columns, rows }, 0..) |list, a| {
+            gs.g.distribution[a][k] = 0;
             const n: u32 = if (fits) @intCast(list.len) else 0;
             // A grid with no tracks on an axis points at the spare row past `cap.tracks`, which
             // its items may write and no other grid owns.
@@ -162,6 +193,9 @@ pub const Grids = struct {
                 gs.tr.k_px[j] = tk.k_px;
                 gs.tr.k_fit[j] = tk.k_fit;
                 gs.tr.k_fr[j] = tk.k_fr;
+                gs.tr.min[j] = tk.min;
+                gs.tr.max[j] = tk.max;
+                gs.tr.content_floor[j] = tk.content_floor;
                 gs.tr.content[j] = 0;
             }
             gs.tracks_len += n;
@@ -211,6 +245,20 @@ pub const Grids = struct {
         gs.g.gap[0][k] = g[0];
         gs.g.gap[1][k] = g[1];
     }
+    /// Auto-placement traverses rows or columns, with optional hole filling from the start
+    /// for every item. Tracks remain explicit and capacity-bounded.
+    pub fn autoFlow(gs: *Grids, k: u32, flow: AutoFlow) void {
+        gs.g.flow[k] = @backingInt(flow);
+    }
+    /// Distribute fractional tracks subject to their minima/maxima. The solver performs 32
+    /// bounded bisection sweeps, with no allocation or convergence-dependent loop count.
+    pub fn boundedFractions(gs: *Grids, k: u32, enabled: bool) void {
+        gs.g.bounded[k] = @intFromBool(enabled);
+    }
+    /// Align the group of tracks inside free content-box space on each axis.
+    pub fn distribute(gs: *Grids, k: u32, modes: [2]Distribution) void {
+        inline for (0..2) |a| gs.g.distribution[a][k] = @backingInt(modes[a]);
+    }
     /// Sets where item `r` sits in its cell across (`j[0]`) and down (`j[1]`). An item that
     /// does not stretch takes its natural size, which may overflow the cell.
     pub fn justify(gs: *Grids, r: u32, j: [2]Justify) void {
@@ -247,20 +295,62 @@ pub fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32 {
     var weight: f32 = 0;
     for (first..first + n) |j| {
         const is_fr = b01(tr.k_fr[j] > 0);
-        taken += (tr.k_px[j] + tr.content[j] * tr.k_fit[j]) * (1 - is_fr);
+        taken += std.math.clamp(tr.k_px[j] + tr.content[j] * tr.k_fit[j], tr.min[j], tr.max[j]) * (1 - is_fr);
         weight += tr.k_fr[j];
     }
-    const per_weight = @max(inner - taken, 0) / @max(weight, 1e-6);
+    const per_weight = if (gs.g.bounded[k] > 0)
+        boundedShare(gs, first, n, @max(inner - taken, 0))
+    else
+        @max(inner - taken, 0) / @max(weight, 1e-6);
     var at: f32 = 0;
     for (first..first + n) |j| {
         const fixed = tr.k_px[j] + tr.content[j] * tr.k_fit[j];
-        const flexed = @max(tr.content[j], tr.k_fr[j] * per_weight);
-        const s = fixed + b01(tr.k_fr[j] > 0) * (flexed - fixed);
+        const flexed = @max(tr.content[j] * tr.content_floor[j], tr.k_fr[j] * per_weight);
+        const s = std.math.clamp(fixed + b01(tr.k_fr[j] > 0) * (flexed - fixed), tr.min[j], tr.max[j]);
         tr.size[j] = s;
         tr.start[j] = at;
         at += s + gap;
     }
-    return at - gap * b01(n > 0);
+    const total = at - gap * b01(n > 0);
+    const free_space = @max(inner - total, 0);
+    const mode: Distribution = @fromBackingInt(gs.g.distribution[a][k]);
+    const count: f32 = @floatFromInt(n);
+    const between = switch (mode) {
+        .space_between => free_space / @max(count - 1, 1) * b01(n > 1),
+        .space_around => free_space / @max(count, 1),
+        .space_evenly => free_space / (count + 1),
+        else => 0,
+    };
+    const edge = switch (mode) {
+        .center => free_space * 0.5,
+        .end => free_space,
+        .space_around => between * 0.5,
+        .space_evenly => between,
+        else => 0,
+    };
+    for (first..first + n, 0..) |j, index| tr.start[j] += edge + between * @as(f32, @floatFromInt(index));
+    return total;
+}
+
+fn boundedShare(gs: *const Grids, first: u32, n: u32, available: f32) f32 {
+    const tr = gs.tr;
+    var min_weight = std.math.floatMax(f32);
+    for (first..first + n) |j| min_weight = @min(min_weight, if (tr.k_fr[j] > 0) tr.k_fr[j] else std.math.floatMax(f32));
+    var lo: f32 = 0;
+    var hi = available / @max(min_weight, 1e-6);
+    for (0..32) |_| {
+        const mid = lo + (hi - lo) * 0.5;
+        var total: f32 = 0;
+        for (first..first + n) |j| {
+            const lower = std.math.clamp(tr.content[j] * tr.content_floor[j], tr.min[j], tr.max[j]);
+            const sized = std.math.clamp(mid * tr.k_fr[j], lower, tr.max[j]);
+            total += sized * b01(tr.k_fr[j] > 0);
+        }
+        const over = total > available;
+        hi = if (over) mid else hi;
+        lo = if (over) lo else mid;
+    }
+    return lo + (hi - lo) * 0.5;
 }
 
 /// Chooses cells for the items pushed with `autoItem`, grid by grid, as CSS auto-placement in
@@ -277,6 +367,10 @@ pub fn autoPlace(gs: *Grids) void {
         const cols = gs.g.count[0][k];
         const rows = gs.g.count[1][k];
         const cells = cols * rows;
+        if (cells == 0) continue;
+        const column = gs.g.flow[k] & 1 != 0;
+        const dense = gs.g.flow[k] & 2 != 0;
+        const minor = if (column) rows else cols;
         if (cells > gs.occupied.len) {
             gs.overflow = true;
             continue;
@@ -293,19 +387,19 @@ pub fn autoPlace(gs: *Grids) void {
             if (gs.it.auto[it] == 0) continue;
             const sc = gs.it.span[0][it];
             const sr = gs.it.span[1][it];
-            var at = cursor;
+            var at: u32 = if (dense) 0 else cursor;
             while (at < cells) : (at += 1) {
-                const col = at % cols;
-                const row = at / cols;
+                const col = if (column) at / minor else at % minor;
+                const row = if (column) at % minor else at / minor;
                 if (col + sc > cols or row + sr > rows) continue;
                 if (free(occ, cols, col, row, sc, sr)) break;
             }
             const found = at < cells;
             gs.overflow = simd.orB(gs.overflow, !found);
-            gs.it.cell[0][it] = if (found) at % cols else cols -| sc;
-            gs.it.cell[1][it] = if (found) at / cols else rows -| sr;
+            gs.it.cell[0][it] = if (found) (if (column) at / minor else at % minor) else cols -| sc;
+            gs.it.cell[1][it] = if (found) (if (column) at % minor else at / minor) else rows -| sr;
             mark(gs, occ, cols, it);
-            cursor = if (found) at + sc else cells;
+            cursor = if (found) at + (if (column) sr else sc) else cells;
         }
     }
 }
@@ -428,6 +522,63 @@ pub fn run(t: *Tree, tx: *Texts, gs: *Grids, viewport: [2]f32) void {
 }
 
 const b01 = simd.b2f;
+
+test "bounded grid fractions honor minima caps and redistribution in actual cell geometry" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    const g = t.push(0, .none, &.{});
+    const k = s.gs.grid(g, &.{
+        .minmaxFr(80, 1, 1000), .minmaxFr(0, 1, 30), .minmaxFr(0, 2, 1000),
+    }, &.{.minmax(10, 20)});
+    s.gs.boundedFractions(k, true);
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 200, 100 });
+    const b = s.cell(g, k, .{ 1, 0 }, .{ 200, 10 });
+    const c = s.cell(g, k, .{ 2, 0 }, .{ 200, 10 });
+    t.seal(g);
+    run(t, &s.tx, &s.gs, .{ 200, 50 });
+    try testing.expectApproxEqAbs(80, t.c.size[0][a], 1e-4);
+    try testing.expectApproxEqAbs(30, t.c.size[0][b], 1e-4);
+    try testing.expectApproxEqAbs(90, t.c.size[0][c], 1e-4);
+    try testing.expectEqual(20, t.c.size[1][a]);
+    try testing.expectApproxEqAbs(200, s.gs.tr.start[2] + s.gs.tr.size[2], 1e-4);
+}
+
+test "grid content distribution and bounded fit tracks set cell starts" {
+    var s: Scene = .{};
+    s.init();
+    const g = s.t.push(0, .none, &.{});
+    const k = s.gs.grid(g, &.{ .px(10), .fitContent(20) }, &.{.px(10)});
+    s.gs.gaps(k, .{ 10, 0 });
+    s.gs.distribute(k, .{ .space_evenly, .center });
+    const a = s.cell(g, k, .{ 0, 0 }, .{ 5, 5 });
+    const b = s.cell(g, k, .{ 1, 0 }, .{ 100, 5 });
+    s.t.seal(g);
+    run(&s.t, &s.tx, &s.gs, .{ 100, 30 });
+    try testing.expectEqual(rect(20, 10, 30, 20), s.t.rect(a));
+    try testing.expectEqual(rect(60, 10, 80, 20), s.t.rect(b));
+}
+
+test "dense and column auto flow use bounded existing cells" {
+    var s: Scene = .{};
+    s.init();
+    const g = s.t.push(0, .none, &.{});
+    const k = s.gs.grid(g, &.{ .px(10), .px(10), .px(10) }, &.{ .px(10), .px(10) });
+    _ = s.gs.item(k, 1, .{ 1, 0 });
+    const wide = s.gs.autoItem(k, 2);
+    s.gs.span(wide, .{ 2, 1 });
+    const small = s.gs.autoItem(k, 3);
+    autoPlace(&s.gs);
+    try testing.expectEqual([2]u32{ 2, 1 }, [2]u32{ s.gs.it.cell[0][small], s.gs.it.cell[1][small] });
+    s.gs.autoFlow(k, .row_dense);
+    autoPlace(&s.gs);
+    try testing.expectEqual([2]u32{ 0, 0 }, [2]u32{ s.gs.it.cell[0][small], s.gs.it.cell[1][small] });
+    s.gs.autoFlow(k, .column_dense);
+    autoPlace(&s.gs);
+    try testing.expectEqual([2]u32{ 0, 1 }, [2]u32{ s.gs.it.cell[0][wide], s.gs.it.cell[1][wide] });
+    try testing.expectEqual([2]u32{ 0, 0 }, [2]u32{ s.gs.it.cell[0][small], s.gs.it.cell[1][small] });
+    try testing.expect(!s.gs.overflow);
+}
 const testing = std.testing;
 
 test "sizeTracks: fixed tracks take their pixels, fit and fraction tracks their content" {

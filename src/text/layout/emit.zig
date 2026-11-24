@@ -18,8 +18,8 @@ pub const Images = struct {
     glyphs: []const Image,
     /// Image for the actual ellipsis face/glyph reported by Stack, when the text was cut.
     ellipsis: ?Image = null,
-    /// Optional effective colours by Glyphs.span. Empty uses TextRun.color for every glyph.
-    /// Like TextRun.color, supplied colours already include the inherited opacity.
+    /// Optional authored colours by Glyphs.span. Empty uses effective TextRun.color.
+    /// Supplied colours are multiplied by TextRun.opacity, preserving inherited node alpha.
     colors: []const u32 = &.{},
 };
 
@@ -36,7 +36,8 @@ pub fn quads(run: draw.TextRun, g: *const lines.Glyphs, l: *const lines.Lines, t
         for (l.first[k]..l.ink[k]) |i| {
             if (hiddenControl(utf8.decode(text, g.cluster[i]).cp)) continue;
             const image = images.glyphs[i];
-            const color = if (images.colors.len == 0) run.color else images.colors[g.span[i]];
+            if (images.colors.len > 0 and g.span[i] >= images.colors.len) return error.NoSpace;
+            const color = if (images.colors.len == 0) run.color else withOpacity(images.colors[g.span[i]], run.opacity);
             try append(run, image, .{
                 run.rect[0] + l.x[k] + g.x[i] + g.x_offset[i],
                 run.rect[1] + l.baseline[k] - g.y_offset[i],
@@ -45,12 +46,23 @@ pub fn quads(run: draw.TextRun, g: *const lines.Glyphs, l: *const lines.Lines, t
     }
     if (l.len > 0 and l.ellipsis > 0) {
         const k = l.len - 1;
+        const at = if (l.ink[k] > l.first[k]) l.ink[k] - 1 else l.first[k];
+        const span = if (at < g.len) g.span[at] else 0;
+        if (images.colors.len > 0 and span >= images.colors.len) return error.NoSpace;
+        const color = if (images.colors.len == 0) run.color else withOpacity(images.colors[span], run.opacity);
         try append(run, images.ellipsis.?, .{
             run.rect[0] + l.x[k] + l.ellipsis_x,
             run.rect[1] + l.baseline[k],
-        }, run.color, out, &n);
+        }, color, out, &n);
     }
     return n;
+}
+
+fn withOpacity(color: u32, opacity: f32) u32 {
+    const c: @import("../../core/types.zig").Color = @bitCast(color);
+    var out = c;
+    out.a = @intFromFloat(@round(@as(f32, @floatFromInt(c.a)) * std.math.clamp(opacity, 0, 1)));
+    return @bitCast(out);
 }
 
 fn append(run: draw.TextRun, image: Image, pen: [2]f32, color: u32, out: []draw.Quad, n: *u32) error{NoSpace}!void {
@@ -105,10 +117,12 @@ test "paragraph quads carry placement, span colour, marker, transform and rounde
     try std.testing.expectEqual([4]f32{ 101, 51, 109, 59 }, out[0].rect);
     try std.testing.expectEqual(@as(f32, 121), out[2].rect[0]);
     try std.testing.expectEqual(0xff0000ff, out[0].fill);
-    try std.testing.expectEqual(run.color, out[2].fill);
+    try std.testing.expectEqual(0xff0000ff, out[2].fill);
     for (out[0..n]) |q| {
         try std.testing.expectEqual(run.xform, q.xform);
         try std.testing.expectEqual(run.clip_radii, q.clip_radii);
     }
     try std.testing.expectError(error.NoSpace, quads(run, &p.g, &p.l, "abc", .{ .glyphs = &images, .ellipsis = image }, out[0..1]));
+    p.g.span[0] = 2;
+    try std.testing.expectError(error.NoSpace, quads(run, &p.g, &p.l, "abc", .{ .glyphs = &images, .ellipsis = image, .colors = &.{0xffffffff} }, &out));
 }
