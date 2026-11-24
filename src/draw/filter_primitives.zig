@@ -49,6 +49,7 @@ pub const Light = union(enum) {
 };
 pub const Lighting = struct {
     light: Light,
+    /// RGB light color; alpha must be one. Apply group opacity after lighting if needed.
     color: color.Rgba = .{ 1, 1, 1, 1 },
     surface_scale: f32 = 1,
     constant: f32 = 1,
@@ -257,7 +258,7 @@ fn valid3(v: [3]f32) bool {
 
 pub fn lighting(dst: surface.Surface, height_map: surface.Image, options: Lighting) Error!void {
     try filterInput(dst, height_map);
-    if (!std.math.isFinite(options.surface_scale) or !std.math.isFinite(options.constant) or options.constant < 0 or !color.finite(options.color)) return error.InvalidFilter;
+    if (!std.math.isFinite(options.surface_scale) or !std.math.isFinite(options.constant) or options.constant < 0 or !color.finite(options.color) or options.color[3] != 1) return error.InvalidFilter;
     if (options.specular_exponent) |exponent| if (!std.math.isFinite(exponent) or exponent < 1 or exponent > 128) return error.InvalidFilter;
     switch (options.light) {
         .distant, .point => |p| if (!valid3(p)) return error.InvalidFilter,

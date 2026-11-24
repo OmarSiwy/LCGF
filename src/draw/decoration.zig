@@ -392,15 +392,41 @@ fn distance(shape: RoundedRect, x: F, y: F) F {
         const ny = @max(py, simd.f(0)) / simd.f(@max(ry, 1e-20));
         const ell = @sqrt(nx * nx + ny * ny);
         const grad = @sqrt(nx * nx / simd.f(@max(rx * rx, 1e-20)) + ny * ny / simd.f(@max(ry * ry, 1e-20)));
-        const d = (ell - simd.f(1)) * ell / @max(grad, simd.f(1e-20));
-        const valid_corner = (px > simd.f(0)) & (py > simd.f(0)) & @as(simd.B, @splat(rx > 0 and ry > 0 and shape.corners[k] == .round));
+        const d = switch (shape.corners[k]) {
+            .round => (ell - simd.f(1)) * ell / @max(grad, simd.f(1e-20)),
+            .square => result,
+            .bevel => blk: {
+                const t = @min(@max(((simd.f(rx) - px) * simd.f(rx) + py * simd.f(ry)) / simd.f(@max(rx * rx + ry * ry, 1e-20)), simd.f(0)), simd.f(1));
+                const ax = px - simd.f(rx) * (simd.f(1) - t);
+                const ay = py - simd.f(ry) * t;
+                const magnitude = @sqrt(ax * ax + ay * ay);
+                break :blk @select(f32, nx + ny <= simd.f(1), -magnitude, magnitude);
+            },
+            .notch => blk: {
+                const ax = px - @min(@max(px, simd.f(0)), simd.f(rx));
+                const ay = py - @min(@max(py, simd.f(0)), simd.f(ry));
+                break :blk @min(@sqrt(ax * ax + py * py), @sqrt(px * px + ay * ay));
+            },
+            .scoop => blk: {
+                const qx = simd.f(1) - @min(nx, simd.f(1));
+                const qy = simd.f(1) - @min(ny, simd.f(1));
+                const length = @sqrt(qx * qx + qy * qy);
+                const gradient = @sqrt(qx * qx / simd.f(@max(rx * rx, 1e-20)) + qy * qy / simd.f(@max(ry * ry, 1e-20)));
+                const radius = @select(f32, length > simd.f(1e-10), length / @max(gradient, simd.f(1e-20)), simd.f(@min(rx, ry)));
+                const ox = @max(px - simd.f(rx), simd.f(0));
+                const oy = @max(py - simd.f(ry), simd.f(0));
+                break :blk (simd.f(1) - length) * radius + @sqrt(ox * ox + oy * oy);
+            },
+            .squircle, .superellipse => blk: {
+                const exponent: f32 = if (shape.corners[k] == .squircle) 4 else shape.powers[k];
+                const implicit = power(nx, exponent) + power(ny, exponent) - simd.f(1);
+                const gx = simd.f(exponent / @max(rx, 1e-20)) * power(@max(nx, simd.f(1e-10)), exponent - 1);
+                const gy = simd.f(exponent / @max(ry, 1e-20)) * power(@max(ny, simd.f(1e-10)), exponent - 1);
+                break :blk implicit / @max(@sqrt(gx * gx + gy * gy), simd.f(1e-20));
+            },
+        };
+        const valid_corner = (px > simd.f(0)) & (py > simd.f(0)) & @as(simd.B, @splat(rx > 0 and ry > 0));
         result = @select(f32, valid_corner, d, result);
-        // Non-round corner shadows use the actual contour's inside/outside sign. Their blur
-        // is deliberately the same distance approximation as the fast rounded-box effect.
-        if (shape.corners[k] != .round and shape.corners[k] != .square) {
-            const inside = contains(shape, x, y);
-            result = @select(f32, inside, -@abs(result), @abs(result));
-        }
     }
     return result;
 }
@@ -697,4 +723,14 @@ test "corner shapes and inset shadows consume their supplied options" {
     try testing.expectEqual(@as(u32, 0), target.pixels[0]);
     try testing.expectEqual(@as(u32, 0xff000000), target.pixels[6]);
     try testing.expectEqual(@as(u32, 0xffffffff), target.pixels[6 * target.stride + 6]);
+}
+
+test "non round shadow distances follow bevel scoop and notch contours" {
+    var shape: RoundedRect = .{ .rect = .{ .x1 = 20, .y1 = 20 }, .radii = @splat(.{ 6, 6 }), .corners = @splat(.bevel) };
+    try testing.expectApproxEqAbs(@as(f32, 0), distance(shape, simd.f(3), simd.f(3))[0], 0.0001);
+    try testing.expect(distance(shape, simd.f(1), simd.f(1))[0] > 2);
+    shape.corners = @splat(.scoop);
+    try testing.expectApproxEqAbs(@as(f32, 6), distance(shape, simd.f(0), simd.f(0))[0], 0.0001);
+    shape.corners = @splat(.notch);
+    try testing.expectApproxEqAbs(@as(f32, 3), distance(shape, simd.f(3), simd.f(3))[0], 0.0001);
 }

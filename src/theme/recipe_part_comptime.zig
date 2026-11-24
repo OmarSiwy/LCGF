@@ -56,6 +56,7 @@ fn Part(comptime part: types.Id, comptime default_recipe: model.Recipe, comptime
                 .tokens = if (config.tokens_field) |field| @field(ui.signals.state, field) else config.tokens,
                 .scope = config.scope,
                 .variants = config.variants,
+                .color_policy = config.color_policy,
             };
             var parent: style.Computed = undefined;
             if (options.parent_part) |parent_part| {

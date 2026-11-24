@@ -28,6 +28,7 @@ const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
+const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
@@ -193,10 +194,11 @@ pub const Frame = struct {
     /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
     /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,
     /// `needsFrame` true) until it lands; a spring not asked for in a frame is dropped.
+    /// Exhaustion returns target immediately and reports Output.status.anims.
     pub fn animate(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
         const ctx = f.ctx;
         const a = &ctx.anims;
-        const i = a.slot(id, target);
+        const i = a.reserve(id, target) catch return target;
         a.c.target[i] = target;
         a.c.stiffness[i] = spring.stiffness;
         a.c.damping[i] = spring.damping;
@@ -213,19 +215,21 @@ pub const Frame = struct {
     /// Position only: a size change still takes effect at once. `end` runs the slide
     /// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
     /// themselves call it there too.
+    /// Exhaustion keeps settled layout and reports Output.status.flips or .anims.
     pub fn animateLayout(f: *Frame, node: Node, spring: Spring) void {
-        f.ctx.flips.add(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring);
+        f.ctx.flips.reserve(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring) catch {};
     }
 
     /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
     /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
     /// key; stop asking for one frame and the next ask plays it again from the start.
+    /// Exhaustion returns the final key's value and reports Output.status.tweens.
     pub fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
         const total = keyframes.duration(keys);
         // A new row rests at 0, so the first retarget starts the clock's only leg.
-        const i = t.slot(id, 0);
+        const i = t.reserve(id, 0) catch return keyframes.sample(keys, total);
         t.retarget(i, total, total, .linear);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
@@ -236,7 +240,16 @@ pub const Frame = struct {
 
     /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
     /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    /// All four keys are preflighted together. Exhaustion settles the whole color and reports
+    /// status.tweens, without reserving a partial transition or touching unrelated controls.
     pub fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color {
+        const table = &f.ctx.tweens;
+        var needed: u32 = 0;
+        inline for (0..4) |k| needed += @intFromBool(simd.find(table.c.id, table.len, @backingInt(id.with(k))) == none);
+        if (needed > table.cap - table.len) {
+            table.overflow = true;
+            return target;
+        }
         const want = [4]u8{ target.r, target.g, target.b, target.a };
         var got: [4]u8 = undefined;
         for (want, &got, 0..) |w, *g, k| {
@@ -256,10 +269,11 @@ pub const Frame = struct {
     /// target changes, a new leg starts from the current value. Returns this frame's value
     /// (`target` on first use). Keeps the host awake until it lands; a tween not asked for in
     /// a frame is dropped.
+    /// Exhaustion returns target immediately and reports Output.status.tweens.
     pub fn tween(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
-        const i = t.slot(id, target);
+        const i = t.reserve(id, target) catch return target;
         t.retarget(i, target, seconds, ease);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
@@ -280,6 +294,25 @@ pub const Frame = struct {
     /// Measure and arrange without painting: insert prepared textures or explicit passes,
     /// then call finish. This is exactly the layout half of end.
     pub fn layoutWith(f: *Frame, font: Mono) void {
+        f.arrangeWith(font);
+        f.finalizeLayout(.{}) catch unreachable;
+    }
+
+    /// A frame on a caller-selected device grid; no second arrangement or finalization pass.
+    pub fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output {
+        try f.layoutRounded(font, options);
+        return f.finish();
+    }
+
+    pub fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        f.arrangeWith(font);
+        try f.finalizeLayout(options);
+    }
+
+    /// Measure and place, leaving original fractional positions available for explicit RTL,
+    /// grid, sticky or custom placement passes. Call finalizeLayout before finish.
+    pub fn arrangeWith(f: *Frame, font: Mono) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -302,9 +335,15 @@ pub const Frame = struct {
         incremental.fitKept(t, .y, kept);
         resolve(t, lv, .y, f.in.viewport[1], kept);
         incremental.placeKept(t, kept);
-        // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
+    }
+
+    /// Apply layout transitions after all placement passes, then snap, transform and clip.
+    /// Calling this once preserves FLIP's comparison with the previous final arrangement.
+    pub fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        const t = f.tree();
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
-        layout.finalize(t);
+        try layout.finalizeWith(t, options);
     }
 
     /// Font-backed counterpart of `end`. The caller owns the shapers, paragraph options,
@@ -319,6 +358,23 @@ pub const Frame = struct {
 
     /// Font-backed measurement and arrangement only, the public half of endText.
     pub fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void {
+        f.arrangeText(stack, ascent);
+        f.finalizeLayout(.{}) catch unreachable;
+    }
+
+    pub fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output {
+        try f.layoutTextRounded(stack, ascent, options);
+        return f.finish();
+    }
+
+    pub fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        f.arrangeText(stack, ascent);
+        try f.finalizeLayout(options);
+    }
+
+    /// Font-backed measurement and placement before caller passes and finalizeLayout.
+    pub fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void {
         const t = f.tree();
         const tx = f.texts();
         const strings = &f.ctx.strings[f.ctx.cur];
@@ -335,8 +391,6 @@ pub const Frame = struct {
         layout.fit(t, .y);
         layout.resolve(t, .y, f.in.viewport[1]);
         layout.place(t);
-        if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
-        layout.finalize(t);
         tx.overflow = tx.overflow or stack.overflow;
     }
 
@@ -359,6 +413,9 @@ pub const Frame = struct {
             .customs = cu.overflow,
             .strings = strings.overflow,
             .depth = ctx.status.depth,
+            .anims = ctx.anims.overflow,
+            .tweens = ctx.tweens.overflow,
+            .flips = ctx.flips.overflow,
         };
         ctx.timers.sweep(ctx.frame);
         return .{
@@ -829,13 +886,89 @@ test "limits: a frame past every limit at once reports it and never crashes" {
         }
         for (0..10) |_| f.close();
         const out = f.end(.{});
-        try testing.expect(ctx.status.nodes and ctx.status.texts and ctx.status.customs and ctx.status.strings and ctx.status.depth);
+        try testing.expect(ctx.status.nodes and ctx.status.texts and ctx.status.customs and ctx.status.strings and ctx.status.depth and ctx.status.anims and ctx.status.tweens and ctx.status.flips);
         try testing.expect(out.tree.len <= 8);
         // Every row's parent comes before it (the rewritten last row included), which
         // levels.build, the parent-following passes and paint rely on.
         for (1..out.tree.len) |i| try testing.expect(out.tree.c.parent[i] < i);
         _ = frame;
     }
+}
+
+test "animation exhaustion returns settled values without retargeting another control" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 8, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .timers = 1, .memos = 1 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 60.0 };
+    const spring_id: Id = .from("reserved-spring");
+    const tween_id: Id = .from("reserved-tween");
+    const keys = [_]keyframes.Key{ .{ .at = 0, .value = 3 }, .{ .at = 2, .value = 7 } };
+    var f = ctx.begin(&in);
+    _ = f.animate(spring_id, 0, .{});
+    _ = f.tween(tween_id, 0, 1, .linear);
+    try testing.expect(f.end(.{}).status.ok());
+    f = ctx.begin(&in);
+    try testing.expectEqual(@as(f32, 0), f.animate(spring_id, 10, .{}));
+    try testing.expectEqual(@as(f32, 999), f.animate(.from("extra-spring"), 999, .{}));
+    try testing.expectEqual(@as(f32, 0), f.tween(tween_id, 10, 1, .linear));
+    try testing.expectEqual(@as(f32, 999), f.tween(.from("extra-tween"), 999, 5, .linear));
+    try testing.expectEqual(@as(f32, 7), f.sequence(.from("extra-sequence"), &keys));
+    const out = f.end(.{});
+    try testing.expect(out.status.anims and out.status.tweens and !out.status.flips);
+    try testing.expectEqual(@backingInt(spring_id), ctx.anims.c.id[0]);
+    try testing.expectEqual(@backingInt(tween_id), ctx.tweens.c.id[0]);
+    try testing.expectEqual(@as(f32, 10), ctx.anims.c.target[0]);
+    try testing.expectEqual(@as(f32, 10), ctx.tweens.c.to[0]);
+    f = ctx.begin(&in);
+    _ = f.animate(spring_id, 10, .{});
+    _ = f.tween(tween_id, 10, 1, .linear);
+    try testing.expect(f.end(.{}).status.ok());
+}
+
+test "color transition exhaustion settles all channels without partial reservations" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .depth = 4, .anims = 1, .tweens = 4, .flips = 1, .signals = 1, .timers = 1, .memos = 1 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var f = ctx.begin(&in);
+    _ = f.tween(.from("unrelated"), 5, 1, .linear);
+    const target: Color = .rgba(80, 120, 160, 200);
+    try testing.expectEqual(target, f.transition(.from("overflow-color"), target, .{}));
+    try testing.expectEqual(@as(u32, 1), ctx.tweens.len);
+    try testing.expectEqual(@backingInt(Id.from("unrelated")), ctx.tweens.c.id[0]);
+    try testing.expectEqual(@as(f32, 5), ctx.tweens.c.to[0]);
+    try testing.expect(f.end(.{}).status.tweens);
+}
+
+test "FLIP exhaustion preserves prior registrations and reserves its two spring axes atomically" {
+    const Ui = struct {
+        fn frame(c: *Context, input: *const Input, top: f32, second: bool) Output {
+            var f = c.begin(input);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(top) } });
+            const a = f.leaf(.from("first-layout"), .{ .size = .{ .fill, .px(10) } });
+            f.animateLayout(a, .{});
+            const b = f.leaf(.from("second-layout"), .{ .size = .{ .fill, .px(10) } });
+            if (second) f.animateLayout(b, .{});
+            return f.end(.{});
+        }
+    };
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    const limits: @import("context.zig").Limits = .{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 8, .anims = 2, .tweens = 1, .flips = 1, .signals = 1, .timers = 1, .memos = 1 };
+    var ctx = try Fixture(limits).context();
+    _ = Ui.frame(&ctx, &in, 10, true);
+    const out = Ui.frame(&ctx, &in, 30, true);
+    try testing.expect(out.status.flips and !out.status.anims);
+    try testing.expectEqual(@as(f32, 10), out.tree.rect(out.tree.find(.from("first-layout"))).y0);
+    try testing.expectEqual(@as(f32, 40), out.tree.rect(out.tree.find(.from("second-layout"))).y0);
+    const short_limits = comptime blk: {
+        var value = limits;
+        value.anims = 1;
+        break :blk value;
+    };
+    var short = try Fixture(short_limits).context();
+    _ = Ui.frame(&short, &in, 10, false);
+    const settled = Ui.frame(&short, &in, 30, false);
+    try testing.expect(settled.status.anims and !settled.status.flips);
+    try testing.expectEqual(@as(u32, 0), short.anims.len);
+    try testing.expectEqual(@as(f32, 30), settled.tree.rect(settled.tree.find(.from("first-layout"))).y0);
 }
 
 test "participation reserves hidden space, collapses layout and cancels descendant input" {

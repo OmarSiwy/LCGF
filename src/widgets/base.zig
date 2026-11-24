@@ -436,6 +436,14 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         /// Uses the same accessibility settings as the runtime context.
         pub fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output {
+            return ui.frameWithPresentation(in, settings, .{}) catch unreachable;
+        }
+
+        /// Optional caller-owned direction rows and device grid, sequenced at the same
+        /// points as style.locale.end. Tree/keyboard/semantic order is never reversed.
+        pub fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation) @import("../style/locale.zig").LayoutError!Output {
+            try presentation.rounding.validate();
+            if (presentation.directions) |directions| try @import("../style/locale.zig").validateDirections(directions, rows);
             const press = in.buttons.left and !ui.pointer.down;
             ui.frame_settings = settings.*;
             ui.failure = null;
@@ -508,6 +516,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             // `Frame.end`'s pass sequence.
             const t = &tb.t;
             const tx = &tb.tx;
+            if (presentation.directions) |directions| {
+                @import("../layout/rtl.zig").direction(t, directions);
+                @import("../layout/rtl.zig").startEnd(t, directions);
+            }
             ui.font.measure(tx);
             layout.prepare(t);
             layout.applyText(t, tx, .x);
@@ -519,7 +531,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             layout.fit(t, .y);
             layout.resolve(t, .y, in.viewport[1]);
             layout.place(t);
-            layout.finalize(t);
+            if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
+            try layout.finalizeWith(t, presentation.rounding);
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
 
             ui.rects = E.Rects.fromTreeOffset(t, 1);
@@ -532,7 +545,18 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             }
             if (comptime has_input_availability) ui.previous_input_mask = next_input_mask;
             ui.built = true;
-            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf), .failure = ui.failure, .cursor = ui.platform_cursor };
+            var wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf);
+            // An optional custom widget can request its next visual update as returned
+            // deadline data. Hidden/collapsed subtrees do not request visual updates;
+            // static controls add no hook or timer storage.
+            inline for (comptime customRows(spec)) |row| {
+                const Widget = comptime nodeAt(spec, row).widget.?;
+                if (comptime @hasDecl(Widget, "wakeAfter")) {
+                    const node = row + 1;
+                    if (node < t.len and t.participation(node).paint) wake = @min(wake, Widget.wakeAfter(ui, in));
+                }
+            }
+            return .{ .draw = &tb.d, .tree = t, .event = event, .wake = wake, .failure = ui.failure, .cursor = ui.platform_cursor };
         }
 
         /// Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`. A custom

@@ -8,7 +8,8 @@ const utf8 = @import("../unicode/utf8.zig");
 const LineBreaks = @import("../unicode/line.zig").LineBreaks;
 const draw = @import("../../draw/draw_list.zig");
 const Image = @import("emit.zig").Image;
-pub const Error = error{ NoSpace, InvalidInput, LimitExceeded };
+pub const tailoring = @import("tailoring.zig");
+pub const Error = error{ NoSpace, InvalidInput, LimitExceeded, UnsupportedPolicy };
 
 pub const Hyphen = struct { byte: u32, advance: f32, penalty: f32 = 50 };
 pub const Policy = struct {
@@ -16,11 +17,20 @@ pub const Policy = struct {
     word: enum { normal, keep_all, grapheme } = .normal,
     emergency: bool = true,
     soft_hyphen_advance: f32 = 0,
+    tailoring: tailoring.Options = .{},
 };
 pub const Opportunity = struct { end: u32, ink: u32, byte: u32, mandatory: bool = false, emergency: bool = false, penalty: f32 = 0, marker: f32 = 0 };
 pub const Marker = struct { advance: f32 = 0, byte: u32 = 0, x: f32 = 0 };
 pub const Scratch = struct { prefix: []f32, cost: []f64, previous: []u32, choices: []u32 };
-pub const Options = struct { width: f32, algorithm: enum { greedy, balanced } = .greedy, max_candidates: u32 = 4096, balance_last: bool = true };
+pub const Options = struct {
+    width: f32,
+    /// Leading-line exclusion widths. Greedy consumes these; balanced needs a different
+    /// two-dimensional cost table and reports UnsupportedPolicy rather than ignoring them.
+    line_widths: []const f32 = &.{},
+    algorithm: enum { greedy, balanced } = .greedy,
+    max_candidates: u32 = 4096,
+    balance_last: bool = true,
+};
 
 fn cjk(cp: u21) bool {
     return (cp >= 0x2e80 and cp <= 0x9fff) or (cp >= 0xac00 and cp <= 0xd7ff) or (cp >= 0xf900 and cp <= 0xfaff) or (cp >= 0x20000 and cp <= 0x3ffff);
@@ -55,10 +65,11 @@ pub fn opportunities(g: *lines.Glyphs, text: []const u8, policy: Policy, hyphens
         const standard = next != null and next.?.pos == at;
         const mandatory = end == g.len or (standard and next.?.mandatory) or hard(cp);
         const following = if (end < g.len) utf8.decode(text, g.cluster[end]).cp else 0;
-        const allowed = mandatory or policy.word == .grapheme or (standard and !(policy.word == .keep_all and cjk(cp) and cjk(following)));
+        const tailored = tailoring.allowed(cp, following, standard, policy.tailoring);
+        const allowed = mandatory or policy.word == .grapheme or policy.tailoring.mode == .anywhere or (tailored and !(policy.word == .keep_all and cjk(cp) and cjk(following)));
         while (hy < hyphens.len and hyphens[hy].byte < at) hy += 1;
-        const explicit = hy < hyphens.len and hyphens[hy].byte == at;
-        const soft = cp == 0xad;
+        const explicit = policy.tailoring.mode != .anywhere and hy < hyphens.len and hyphens[hy].byte == at;
+        const soft = policy.tailoring.mode != .anywhere and cp == 0xad;
         if (allowed or explicit or soft or policy.emergency) {
             if (n == out.len) return error.NoSpace;
             out[n] = .{
@@ -88,6 +99,8 @@ fn width(points: []const Opportunity, prefix: []const f32, first: usize, last: u
 pub fn breakLines(g: *const lines.Glyphs, text: []const u8, points: []const Opportunity, options: Options, scratch: Scratch, out: *lines.Lines, markers: []Marker) Error!void {
     if (points.len == 0 or points[0].end != 0 or !std.math.isFinite(options.width) or options.width < 0) return error.InvalidInput;
     if (points.len > options.max_candidates) return error.LimitExceeded;
+    for (options.line_widths) |available| if (!std.math.isFinite(available) or available < 0) return error.InvalidInput;
+    if (options.algorithm == .balanced and options.line_widths.len > 0) return error.UnsupportedPolicy;
     if (scratch.prefix.len <= g.len or scratch.cost.len < points.len or scratch.previous.len < points.len or scratch.choices.len < points.len) return error.NoSpace;
     scratch.prefix[0] = 0;
     for (g.advance[0..g.len], 0..) |a, i| scratch.prefix[i + 1] = scratch.prefix[i] + a;
@@ -99,11 +112,12 @@ pub fn breakLines(g: *const lines.Glyphs, text: []const u8, points: []const Oppo
     if (options.algorithm == .greedy) {
         var start: usize = 0;
         while (start + 1 < points.len) {
+            const available = if (count < options.line_widths.len) options.line_widths[count] else options.width;
             var ordinary: ?usize = null;
             var emergency: ?usize = null;
             var stop = start + 1;
             while (stop < points.len) : (stop += 1) {
-                if (width(points, scratch.prefix, start, stop) <= options.width + lines.slack) {
+                if (width(points, scratch.prefix, start, stop) <= available + lines.slack) {
                     if (points[stop].emergency) emergency = stop else ordinary = stop;
                 }
                 if (points[stop].mandatory) break;
@@ -301,6 +315,40 @@ fn copy(g: *const lines.Glyphs, i: u32, out: *lines.Glyphs, sources: []u32) void
     out.len += 1;
 }
 
+test "strict and loose CJK tailoring change real wrapped lines while keeping glue and clusters" {
+    const golden = @import("golden.zig");
+    var p: golden.Para = .{};
+    var points: [16]Opportunity = undefined;
+    var prefix: [16]f32 = undefined;
+    var cost: [16]f64 = undefined;
+    var previous: [16]u32 = undefined;
+    var choices: [16]u32 = undefined;
+    var markers: [16]Marker = undefined;
+    const scratch: Scratch = .{ .prefix = &prefix, .cost = &cost, .previous = &previous, .choices = &choices };
+    const samples = [_][]const u8{ "漢〜字", "漢ぁ字", "漢‐字", "漢・字", "……字" };
+    for (samples) |sample| {
+        for ([_]tailoring.Mode{ .strict, .loose }, [_]u32{ 2, 1 }) |mode, first_end| {
+            p.fixed(sample, 10);
+            const opportunities_ = try opportunities(&p.g, sample, .{ .emergency = false, .tailoring = .{ .mode = mode, .writing_system = .japanese } }, &.{}, &points);
+            try breakLines(&p.g, sample, opportunities_, .{ .width = 10 }, scratch, &p.l, &markers);
+            lines.place(&p.l, &p.g, sample, &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = 10 });
+            try std.testing.expectEqual(first_end, p.l.end[0]);
+            try std.testing.expectEqual(@as(f32, 8), p.l.baseline[0]);
+        }
+    }
+    const glued = "漢\u{a0}ぁ";
+    p.fixed(glued, 10);
+    const glued_points = try opportunities(&p.g, glued, .{ .emergency = false, .tailoring = .{ .mode = .loose, .writing_system = .japanese } }, &.{}, &points);
+    try breakLines(&p.g, glued, glued_points, .{ .width = 10 }, scratch, &p.l, &markers);
+    try std.testing.expectEqual(@as(u32, 1), p.l.len);
+    const combined = "漢\u{3099}字";
+    p.fixed(combined, 10);
+    lines.graphemeClusters(&p.g, combined);
+    const anywhere = try opportunities(&p.g, combined, .{ .tailoring = .{ .mode = .anywhere } }, &.{}, &points);
+    try breakLines(&p.g, combined, anywhere, .{ .width = 10 }, scratch, &p.l, &markers);
+    try std.testing.expectEqual(@as(u32, 2), p.l.end[0]);
+}
+
 test "patterns create measured hyphen breaks consumed by standard line placement" {
     var scalars: [32]u21 = undefined;
     var offsets: [32]u32 = undefined;
@@ -329,6 +377,12 @@ test "patterns create measured hyphen breaks consumed by standard line placement
     try std.testing.expectEqual(@as(f32, 40), markers[0].x);
     try breakLines(&p.g, "abcdefgh", ops, .{ .width = 45, .algorithm = .balanced }, scratch, &p.l, &markers);
     try std.testing.expectEqual(4, p.l.end[0]);
+    const shaped_boundaries = try opportunities(&p.g, "abcdefgh", .{ .word = .grapheme }, &.{}, &points);
+    try breakLines(&p.g, "abcdefgh", shaped_boundaries, .{ .width = 60, .line_widths = &.{ 20, 30 } }, scratch, &p.l, &markers);
+    lines.place(&p.l, &p.g, "abcdefgh", &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = 60, .line_widths = &.{ 20, 30 }, .factor = 1 });
+    try std.testing.expectEqualSlices(u32, &.{ 0, 2, 5 }, p.l.first[0..p.l.len]);
+    try std.testing.expectEqual(@as(f32, 30), p.l.x[2]);
+    try std.testing.expectError(error.UnsupportedPolicy, breakLines(&p.g, "abcdefgh", shaped_boundaries, .{ .width = 60, .line_widths = &.{20}, .algorithm = .balanced }, scratch, &p.l, &markers));
 }
 
 test "start middle and end truncation preserve complete clusters in real glyph output" {

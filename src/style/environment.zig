@@ -5,6 +5,7 @@ const std = @import("std");
 const Input = @import("../core/input.zig").Input;
 const Color = @import("../core/types.zig").Color;
 const Settings = @import("../a11y/settings_data.zig").Settings;
+const SystemColors = @import("system_colors.zig").Colors;
 
 pub const Environment = struct {
     viewport: [2]f32 = .{ 0, 0 },
@@ -13,6 +14,8 @@ pub const Environment = struct {
     text_scale: f32 = 1,
     dark: ?bool = null,
     accent: ?Color = null,
+    /// Host-supplied semantic colours, used when high contrast or forced colours is active.
+    system_colors: ?SystemColors = null,
     high_contrast: ?bool = null,
     forced_colors: ?bool = null,
     reduced_motion: ?bool = null,

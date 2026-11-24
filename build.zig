@@ -133,6 +133,28 @@ pub fn build(b: *std.Build) void {
     // benchmarks, SDK probes, docs and examples belong to this repository.
     if (!b.isRoot()) return;
 
+    const gallery_font = b.createModule(.{
+        .root_source_file = b.path("src/example/font.zig"),
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+    });
+    const styling_gallery = b.addExecutable(.{ .name = "styling-gallery", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/styling/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "gallery_font", .module = gallery_font } },
+    }) });
+    const render_gallery = b.addRunArtifact(styling_gallery);
+    render_gallery.addArg(b.option([]const u8, "gallery-output", "Styling gallery PNG path") orelse "styling-gallery.png");
+    b.step("styling-gallery", "Render the portable styling gallery as a PNG (-Dgallery-output=path)").dependOn(&render_gallery.step);
+
+    const styling_check = b.step("styling-check", "Verify styling inventory evidence and token authoring regressions");
+    const coverage_check = b.addSystemCommand(&.{ "python3", "tools/styling/coverage.py", "--check" });
+    coverage_check.has_side_effects = true;
+    styling_check.dependOn(&coverage_check.step);
+    const token_check = b.addSystemCommand(&.{ "python3", "-m", "unittest", "discover", "-s", "tools/stylegen", "-p", "test_*.py" });
+    token_check.has_side_effects = true;
+    styling_check.dependOn(&token_check.step);
+
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
@@ -207,6 +229,15 @@ pub fn build(b: *std.Build) void {
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
     b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
+    const styling_bench = b.addRunArtifact(b.addExecutable(.{ .name = "styling-bench", .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/styling/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+    }) }));
+    styling_bench.addPassthruArgs();
+    b.step("styling-bench", "Measure five styling workloads in software (Linux; -- output.json)").dependOn(&styling_bench.step);
+
     // Input-to-photon latency of the example in the headless shell (bench/gates/latency.zig).
     const gates_latency = b.addRunArtifact(b.addExecutable(.{ .name = "gates-latency", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/gates/latency.zig"),

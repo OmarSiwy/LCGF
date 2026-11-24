@@ -63,6 +63,12 @@ pub fn shape(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spa
 /// The same segmentation with explicit shaping features. Paint-only boundaries do not
 /// restart the shaper. `run` must fit the largest adjacent group with the same font and size.
 pub fn shapeFeatures(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features) error{NoSpace}!void {
+    return shapeCached(shapers, text, spans, run, g, features, null, &.{}, &.{});
+}
+
+/// Optional caller-owned shaping cache. Font identities and reload generations are separate
+/// from local span indices; omitted entries use the span font index and generation zero.
+pub fn shapeCached(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features, cache: ?*@import("../shape/cache.zig").Cache, font_ids: []const u64, generations: []const u64) error{NoSpace}!void {
     g.len = 0;
     g.fonts = .{ .spans = spans.font[0..spans.len] };
     var k: u32 = 0;
@@ -72,10 +78,17 @@ pub fn shapeFeatures(shapers: []const shape_.Shaper, text: []const u8, spans: *c
         const sh = &shapers[spans.font[k]];
         const start = spans.start[k];
         const byte_end = if (end < spans.len) spans.start[end] else text.len;
-        try sh.shape(text[start..byte_end], run, features);
+        const font = spans.font[k];
+        const shaped = if (cache) |c| try c.shapeVersioned(sh, .{
+            .font = if (font < font_ids.len) font_ids[font] else font,
+            .generation = if (font < generations.len) generations[font] else 0,
+        }, text[start..byte_end], features, run) else blk: {
+            try sh.shape(text[start..byte_end], run, features);
+            break :blk run.*;
+        };
         const scale = spans.px[k] / @as(f32, @floatFromInt(sh.face.units_per_em));
         const first = g.len;
-        try g.append(run, scale, start, k);
+        try g.append(&shaped, scale, start, k);
         // Clusters are monotonic in this shaper. Walk the paint spans once, including empty
         // spans, instead of rescanning the whole table for every glyph.
         var paint = k;

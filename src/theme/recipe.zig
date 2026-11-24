@@ -19,6 +19,7 @@ pub const States = style.States;
 pub const Environment = style.environment.Environment;
 pub const Rule = style.Rule;
 pub const Declaration = style.Declaration;
+pub const ColorPolicy = style.system_colors.Policy;
 
 pub const Names = struct {
     pub const text = Id.from("color.text");
@@ -40,7 +41,10 @@ pub const token_count = 24;
 /// The caller owns the returned array. Custom applications may supply any token table instead.
 pub fn tokenRows(source_tokens: theme.Tokens, environment: Environment) [token_count]style.tokens.Entry {
     var tok = source_tokens;
-    if ((environment.high_contrast orelse false) or (environment.forced_colors orelse false)) tok.palette = accessibility.high_contrast_palette;
+    if ((environment.high_contrast orelse false) or (environment.forced_colors orelse false)) {
+        const colors = environment.system_colors orelse style.system_colors.highContrast(environment.dark orelse true);
+        tok.palette = .{ colors.get(.canvas_text), colors.get(.canvas), colors.get(.button_face), colors.get(.button_border), colors.get(.field), colors.get(.accent) };
+    }
     const roles = [6]Id{ Names.text, Names.surface, Names.control, Names.hot, Names.held, Names.accent };
     var rows: [token_count]style.tokens.Entry = undefined;
     for (roles, tok.palette, 0..) |id, value, i| {
@@ -70,6 +74,7 @@ pub const Use = struct {
     environment: Environment = .{},
     parent: ?*const style.Computed = null,
     local: []const Declaration = &.{},
+    color_policy: ColorPolicy = .automatic,
 };
 
 pub const Recipe = struct {
@@ -85,12 +90,20 @@ pub const Recipe = struct {
     }
 
     pub fn resolve(recipe: Recipe, part: Id, use: Use, trace: ?[]style.Origin) style.Error!style.Computed {
+        if (use.color_policy == .automatic and ((use.environment.high_contrast orelse false) or (use.environment.forced_colors orelse false))) {
+            if (use.environment.system_colors) |colors| if (!colors.isOpaque()) return error.InvalidValue;
+        }
         var default_tokens = if (use.environment.dark orelse true) theme.dark else theme.light;
         if (use.environment.accent) |accent| default_tokens.palette[@backingInt(theme.Role.accent)] = accent;
-        const default_rows = tokenRows(default_tokens, use.environment);
+        var token_environment = use.environment;
+        if (use.color_policy == .preserve) {
+            token_environment.high_contrast = false;
+            token_environment.forced_colors = false;
+        }
+        const default_rows = tokenRows(default_tokens, token_environment);
         const default_scopes = [_]style.tokens.Scope{.{ .entries = &default_rows }};
         const table = if (use.tokens.scopes.len == 0) style.tokens.Table{ .scopes = &default_scopes } else use.tokens;
-        return style.resolve(.{
+        var computed = try style.resolve(.{
             .base = recipe.baseFor(part),
             .parent = use.parent,
             .tokens = table,
@@ -102,8 +115,68 @@ pub const Recipe = struct {
             .rules = recipe.rules,
             .local = use.local,
         }, trace);
+        if (use.color_policy == .automatic and ((use.environment.high_contrast orelse false) or (use.environment.forced_colors orelse false))) {
+            const colors = use.environment.system_colors orelse style.system_colors.highContrast(use.environment.dark orelse true);
+            applySystem(&computed, part, use, colors, trace);
+        }
+        return computed;
     }
 };
+
+fn systemWrite(computed: *style.Computed, comptime property: style.Property, value: style.properties.Type(property), trace: ?[]style.Origin) void {
+    style.properties.write(property, computed, value);
+    if (trace) |rows| rows[@backingInt(property)] = .{ .mode = .literal, .source = .from("system.colors") };
+}
+
+/// A final semantic paint policy, after authored declarations. The explicit preserve
+/// exception is per component; layout, spacing, typography and input state are untouched.
+fn applySystem(computed: *style.Computed, part: Id, use: Use, colors: style.system_colors.Colors, trace: ?[]style.Origin) void {
+    const states = use.states;
+    const inherited = if (use.parent) |parent| parent.text.color else colors.get(.canvas_text);
+    if (part == Parts.root) {
+        const role = computed.box.role;
+        const input_control = role == .text_input;
+        const button_control = role == .button;
+        const face = colors.get(if (input_control) .field else if (button_control) .button_face else .canvas);
+        if (computed.box.fill.a > 0 or input_control or button_control) systemWrite(computed, .fill, face, trace);
+        systemWrite(computed, .text_color, colors.get(if (states.disabled) .gray_text else if (input_control) .field_text else if (button_control) .button_text else .canvas_text), trace);
+        if (input_control or button_control or computed.box.border > 0) {
+            systemWrite(computed, .border_width, @max(computed.box.border, 1), trace);
+            systemWrite(computed, .border_color, colors.get(if (states.focused or states.hovered or states.selected) .highlight else .button_border), trace);
+        }
+        if (button_control and states.held and !states.disabled) {
+            systemWrite(computed, .fill, colors.get(.highlight), trace);
+            systemWrite(computed, .text_color, colors.get(.highlight_text), trace);
+        }
+    } else if (part == Parts.focus) {
+        systemWrite(computed, .border_color, colors.get(.highlight), trace);
+    } else if (part == Parts.selection) {
+        systemWrite(computed, .fill, colors.get(.highlight), trace);
+        systemWrite(computed, .text_color, colors.get(.highlight_text), trace);
+    } else if (part == Parts.background or part == Parts.track) {
+        systemWrite(computed, .fill, colors.get(if (states.checked or states.indeterminate) .accent else .button_face), trace);
+        systemWrite(computed, .border_width, @max(computed.box.border, 1), trace);
+        systemWrite(computed, .border_color, colors.get(.button_border), trace);
+    } else if (part == Parts.indicator or part == Parts.thumb) {
+        if (computed.box.fill.a > 0) systemWrite(computed, .fill, colors.get(if (states.checked or states.indeterminate) .accent_text else .button_text), trace);
+    } else if (part == Parts.fill) {
+        systemWrite(computed, .fill, colors.get(.accent), trace);
+    } else if (part == Parts.caret or part == Parts.tick or part == Parts.separator or part == Parts.disclosure) {
+        if (computed.box.fill.a > 0) systemWrite(computed, .fill, inherited, trace);
+    } else if (part == Parts.row or part == Parts.cell) {
+        if (states.selected) {
+            systemWrite(computed, .fill, colors.get(.selected_item), trace);
+            systemWrite(computed, .text_color, colors.get(.selected_item_text), trace);
+        } else {
+            if (computed.box.fill.a > 0) systemWrite(computed, .fill, colors.get(.canvas), trace);
+            systemWrite(computed, .text_color, inherited, trace);
+        }
+        if (computed.box.border > 0) systemWrite(computed, .border_color, colors.get(.button_border), trace);
+    } else {
+        systemWrite(computed, .text_color, if (states.disabled) colors.get(.gray_text) else inherited, trace);
+        if (computed.box.fill.a > 0) systemWrite(computed, .fill, colors.get(if (part == Parts.icon) .button_text else .canvas), trace);
+    }
+}
 
 const text_rules = [_]Rule{
     .{ .part = Parts.root, .declarations = &.{ style.token(.text_color, Names.text), style.token(.text_size, Names.text_size[2]) }, .source = .from("control.typography") },
@@ -147,6 +220,7 @@ pub const checkbox_rules = text_rules ++ [_]Rule{
     .{ .part = Parts.background, .require = .{ .checked = true }, .declarations = &.{style.token(.fill, Names.accent)} },
     .{ .part = Parts.background, .require = .{ .indeterminate = true }, .declarations = &.{style.token(.fill, Names.accent)} },
     .{ .part = Parts.indicator, .declarations = &.{style.set(.fill, .transparent)} },
+    .{ .part = Parts.indicator, .require = .{ .checked = true }, .declarations = &.{ style.token(.fill, Names.text), style.set(.height, .px(8)) }, .source = .from("checked.shape") },
     .{ .part = Parts.indicator, .require = .{ .indeterminate = true }, .declarations = &.{style.token(.fill, Names.text)} },
 };
 pub const checkbox: Recipe = .{
@@ -338,6 +412,35 @@ test "default recipe respects environment text scale and keeps focus separate fr
     try std.testing.expectEqual(@as(f32, 1), root.box.border);
     try std.testing.expectEqual(@as(f32, 2), focus.box.border);
     try std.testing.expect(focus.box.float);
+}
+
+test "system colors override authored paint with provenance and explicit component exceptions" {
+    var system = style.system_colors.highContrast(false);
+    system.set(.button_face, .rgb(240, 250, 255));
+    system.set(.button_text, .rgb(10, 20, 30));
+    system.set(.button_border, .rgb(20, 40, 60));
+    const use: Use = .{ .environment = .{ .dark = false, .forced_colors = true, .system_colors = system }, .local = &.{style.set(.fill, .rgb(220, 40, 30))} };
+    var trace: [style.properties.count]style.Origin = undefined;
+    const system_button = try button.resolve(Parts.root, use, &trace);
+    try std.testing.expectEqual(system.get(.button_face), system_button.box.fill);
+    try std.testing.expectEqual(system.get(.button_text), system_button.text.color);
+    try std.testing.expect(system_button.box.border >= 1);
+    try std.testing.expectEqual(Id.from("system.colors"), trace[@backingInt(style.Property.fill)].source);
+    var exception = use;
+    exception.color_policy = .preserve;
+    try std.testing.expectEqual(types.Color.rgb(220, 40, 30), (try button.resolve(Parts.root, exception, null)).box.fill);
+    for ([_]bool{ false, true }) |dark| {
+        const profile: Use = .{ .environment = .{ .dark = dark, .high_contrast = true } };
+        const root = try button.resolve(Parts.root, profile, null);
+        try std.testing.expect(accessibility.contrast(root.text.color, root.box.fill) >= 7);
+        try std.testing.expect(accessibility.contrast(root.box.border_color, root.box.fill) >= 3);
+        var checked = profile;
+        checked.states.checked = true;
+        const mark = try checkbox.resolve(Parts.indicator, checked, null);
+        const surface = try checkbox.resolve(Parts.background, checked, null);
+        try std.testing.expect(mark.box.fill.a > 0 and mark.box.size[1].v == 8);
+        try std.testing.expect(accessibility.contrast(mark.box.fill, surface.box.fill) >= 3);
+    }
 }
 
 test {

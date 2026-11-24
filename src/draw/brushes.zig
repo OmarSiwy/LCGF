@@ -316,6 +316,22 @@ pub fn sampleRamp(r: Ramp, position: F) Batch {
     return fromCoordinates(result, r.interpolation);
 }
 
+/// Mean of one complete gradient period in its interpolation coordinates. Stop spacing and
+/// exponential transition hints are integrated analytically; alpha follows the chosen mode.
+pub fn averageRamp(r: Ramp) Batch {
+    const first = r.segments[0];
+    const last = r.segments[r.segments.len - 1];
+    const span = last.position - first.position;
+    if (span <= 0) return fromCoordinates(surface.splat(last.from), r.interpolation);
+    var mean: color.Rgba = @splat(0);
+    for (r.segments) |s| {
+        if (s.reciprocal_span == 0) continue;
+        const weight = 1 / (s.reciprocal_span * span);
+        mean += (s.from + (s.to - s.from) * @as(color.Rgba, @splat(1 / (s.exponent + 1)))) * @as(color.Rgba, @splat(weight));
+    }
+    return fromCoordinates(surface.splat(mean), r.interpolation);
+}
+
 /// SIMD atan2 for finite coordinates, including a stable zero-angle at the center. The std
 /// vector atan implementation handles its approximation; quadrant selection stays branchless.
 pub inline fn angle(y: F, x: F) F {

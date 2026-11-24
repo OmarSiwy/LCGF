@@ -35,8 +35,16 @@ pub const LinearSurface = struct {
         if (s.stride < try surface.rowPixels(s.width) or s.stride % simd.lanes != 0) return error.InvalidStride;
         const count = std.math.mul(usize, s.stride, s.height) catch return error.InvalidSize;
         for (s.channels) |channel| if (channel.len < count) return error.InsufficientStorage;
+        inline for (0..4) |c| inline for (0..c) |previous| {
+            if (surface.overlapsBytes(std.mem.sliceAsBytes(s.channels[c][0..count]), std.mem.sliceAsBytes(s.channels[previous][0..count]))) return error.AliasedStorage;
+        };
     }
 };
+
+fn disjointBytes(s: LinearSurface, bytes: []const u8) Error!void {
+    const count = s.stride * s.height;
+    for (s.channels) |channel| if (surface.overlapsBytes(std.mem.sliceAsBytes(channel[0..count]), bytes)) return error.AliasedStorage;
+}
 
 pub fn requiredFloats(width: u32, height: u32) Error!usize {
     return std.math.mul(usize, try surface.requiredPixels(width, height), 4) catch return error.InvalidSize;
@@ -167,6 +175,7 @@ pub fn fromRGBA8(dst: LinearSurface, src: surface.Image, white_nits: f32) Error!
     try src.validate();
     try validEncoding(.{ .transfer = .{ .srgb = white_nits } });
     if (dst.width != src.width or dst.height != src.height) return error.SizeMismatch;
+    try disjointBytes(dst, std.mem.sliceAsBytes(src.pixels));
     const matrix = primaryMatrix(.srgb, dst.primaries);
     for (0..dst.height) |y| {
         var x: usize = 0;
@@ -181,11 +190,15 @@ pub fn fromRGBA8(dst: LinearSurface, src: surface.Image, white_nits: f32) Error!
 
 /// Real linear-light source-over, preserving highlights above reference white. Source and
 /// destination may use different primaries; the primary conversion is computed once.
+/// Exact in-place source/destination is supported; shifted or cross-plane aliases are rejected.
 pub fn over(dst: LinearSurface, src: LinearSurface, opacity: f32) Error!void {
     try dst.validate();
     try src.validate();
     if (dst.width != src.width or dst.height != src.height) return error.SizeMismatch;
     if (!std.math.isFinite(opacity) or opacity < 0 or opacity > 1) return error.InvalidOpacity;
+    var same = dst.stride == src.stride;
+    inline for (0..4) |c| same = same and dst.channels[c].ptr == src.channels[c].ptr;
+    if (!same) for (src.channels) |channel| try disjointBytes(dst, std.mem.sliceAsBytes(channel[0 .. src.stride * src.height]));
     const matrix = primaryMatrix(src.primaries, dst.primaries);
     for (0..dst.height) |y| {
         var x: usize = 0;
@@ -215,6 +228,7 @@ pub fn exportRGBA(comptime T: type, src: LinearSurface, dst: []T, stride: usize,
     if (stride < src.width) return error.InvalidStride;
     const count = std.math.mul(usize, std.math.mul(usize, stride, src.height) catch return error.InvalidSize, 4) catch return error.InvalidSize;
     if (dst.len < count) return error.InsufficientStorage;
+    try disjointBytes(src, std.mem.sliceAsBytes(dst[0..count]));
     const matrix = primaryMatrix(src.primaries, encoding.primaries);
     for (0..src.height) |y| {
         var x: usize = 0;
@@ -240,6 +254,7 @@ pub fn importRGBA(comptime T: type, dst: LinearSurface, src: []const T, stride: 
     if (stride < dst.width) return error.InvalidStride;
     const count = std.math.mul(usize, std.math.mul(usize, stride, dst.height) catch return error.InvalidSize, 4) catch return error.InvalidSize;
     if (src.len < count) return error.InsufficientStorage;
+    try disjointBytes(dst, std.mem.sliceAsBytes(src[0..count]));
     // Validate before writing so a bad decoded file cannot leave a partly converted surface.
     for (0..dst.height) |y| for (0..dst.width) |x| {
         inline for (0..4) |c| if (!std.math.isFinite(src[(y * stride + x) * 4 + c])) return error.InvalidColor;
@@ -270,6 +285,7 @@ pub fn exportRGB10A2(src: LinearSurface, dst: []u32, stride: usize, encoding: En
     if (stride < src.width) return error.InvalidStride;
     const count = std.math.mul(usize, stride, src.height) catch return error.InvalidSize;
     if (dst.len < count) return error.InsufficientStorage;
+    try disjointBytes(src, std.mem.sliceAsBytes(dst[0..count]));
     const matrix = primaryMatrix(src.primaries, encoding.primaries);
     for (0..src.height) |y| {
         var x: usize = 0;
@@ -290,6 +306,7 @@ pub fn toRGBA8(dst: surface.Surface, src: LinearSurface, options: SdrOptions) Er
     try dst.validate();
     try src.validate();
     if (dst.width != src.width or dst.height != src.height) return error.SizeMismatch;
+    try disjointBytes(src, std.mem.sliceAsBytes(dst.pixels));
     if (!std.math.isFinite(options.white_nits) or options.white_nits <= 0 or !std.math.isFinite(options.exposure) or options.exposure < 0) return error.InvalidEncoding;
     const matrix = primaryMatrix(src.primaries, .srgb);
     const bayer = [16]f32{ 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
@@ -356,4 +373,22 @@ test "SDR import conversion and tone-map fallback preserve alpha and transparent
     try clear(linear, .{ 1000, 1000, 1000, 1 });
     try toRGBA8(rgba, linear, .{ .tone_map = .reinhard, .dither = true });
     try testing.expect((rgba.pixels[0] & 255) > 200 and (rgba.pixels[0] & 255) < 255);
+}
+
+test "planar HDR import export and composition reject destructive overlap before writes" {
+    var storage: [simd.rows(2) * 4 + simd.lanes]f32 = undefined;
+    const linear = try init(storage[0 .. simd.rows(2) * 4], 2, 1, .srgb);
+    try clear(linear, .{ 203, 0, 0, 0.5 });
+    const before = storage[0];
+    try testing.expectError(error.AliasedStorage, exportRGBA(f32, linear, storage[0..8], 2, .{}, .straight));
+    try testing.expectError(error.AliasedStorage, importRGBA(f32, linear, storage[0..8], 2, .{}, .straight));
+    var shifted = linear;
+    shifted.channels[0] = storage[1 .. 1 + linear.stride];
+    try testing.expectError(error.AliasedStorage, over(linear, shifted, 0.5));
+    try testing.expectEqual(before, storage[0]);
+    var overlapping = linear;
+    overlapping.channels[1] = overlapping.channels[0];
+    try testing.expectError(error.AliasedStorage, overlapping.validate());
+    try over(linear, linear, 1);
+    try testing.expectApproxEqAbs(@as(f32, 0.75), linear.channels[3][0], 0.0001);
 }

@@ -177,6 +177,12 @@ pub fn hitNode(t: anytype, node: u32, screen: [2]f32) bool {
     const own_inv = inverse(worldAt(t, node)) orelse return false;
     const local = point(own_inv, screen);
     if (!contains(.{ c.rect[0][node], c.rect[1][node], c.rect[2][node], c.rect[3][node] }, local)) return false;
+    return clipsContain(t, node, screen);
+}
+
+/// Exact ancestor clip test independent of the node's own visual or input target.
+pub fn clipsContain(t: anytype, node: u32, screen: [2]f32) bool {
+    const c = &t.c;
     var i = node;
     while (i != 0) {
         i = c.parent[i];

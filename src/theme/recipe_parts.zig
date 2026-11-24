@@ -159,7 +159,7 @@ pub fn tabPanel(f: *Frame, id: types.Id, selected: u32, index: u32, options: Par
 /// Supplied shaped views retain the existing textarea's bidi selection and caret behavior.
 pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []const u8, options: controls.Options) style.Error!types.Response {
     if (rows == 0) return error.InvalidValue;
-    const lines = std.math.mul(u32, rows, textfield.bands + 1) catch return error.NoSpace;
+    const lines = std.math.mul(u32, rows, textfield.bands + 1 + controls.selection_sections * 2) catch return error.NoSpace;
     const needed = std.math.add(u32, lines, 3) catch return error.NoSpace;
     if (needed > f.tree().cap -| f.tree().len or rows > f.texts().cap -| f.texts().len) return error.NoSpace;
     if (options.semantics) |s| if (f.tree().len >= s.cap) return error.NoSpace;
@@ -213,10 +213,10 @@ pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []cons
     for (0..rows) |i| {
         const line = textarea_zig.shownLine(value, scroll, @intCast(i), selected, advance);
         const show_hint = value.len == 0 and i == 0;
-        const part = if (show_hint) placeholder else content;
-        var box = part.box;
-        box.size[1] = .px(height);
-        _ = f.textStyled(if (show_hint) hint else line.str, part.text, box);
+        var part = if (show_hint) placeholder else content;
+        part.box.size[1] = .px(height);
+        const bands = textarea_zig.lineBands(fresh, scroll + @as(u32, @intCast(i)), selected, line.sel);
+        controls.selectedText(f, if (show_hint) hint else line.str, part, selection, bands, @as(f32, @floatFromInt(i)) * height, height);
     }
     const at = textarea_zig.caretAt(value, editor.shownCaret(), scroll, rows, &metrics, fresh);
     var caret_box = caret.box;
@@ -278,7 +278,7 @@ test "data and navigation parts feed actual semantic rows and tab selection beha
 
 test "multiline recipe routes typing, read-only policy and support part to real editor output" {
     const context = @import("../runtime/context.zig");
-    const caps: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 12, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .timers = 1 };
+    const caps: context.Limits = .{ .nodes = 96, .texts = 32, .customs = 1, .strings = 2048, .depth = 12, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .timers = 1 };
     const bytes = comptime blk: {
         @setEvalBranchQuota(40_000);
         break :blk context.Context.requiredBytes(caps);

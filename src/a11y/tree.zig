@@ -172,7 +172,13 @@ pub const State = bitpack struct(u16) {
     focused: bool = false,
     /// Shown but not editable (`aria-readonly`). The application's to set.
     read_only: bool = false,
-    _: u5 = 0,
+    /// The value fails the application's validation (`aria-invalid`).
+    invalid: bool = false,
+    /// A value is required before the related action can complete (`aria-required`).
+    required: bool = false,
+    /// Content is being updated; independent from whether input is disabled (`aria-busy`).
+    busy: bool = false,
+    _: u2 = 0,
 
     pub inline fn bitsOf(st: State) u16 {
         return @bitCast(st);
@@ -1199,6 +1205,23 @@ test "tree export: the focused node is marked focused; multiline and read-only a
     try testing.expectEqual(State{ .multiline = true, .focused = true }, @as(State, @bitCast(e.c.state[1])));
     try testing.expectEqual(State{ .multiline = true, .read_only = true }, @as(State, @bitCast(e.c.state[2])));
     try testing.expectEqual(State{}, @as(State, @bitCast(e.c.state[0])));
+}
+
+test "tree export: validation requirement and busy state retain the existing compact state ABI" {
+    try testing.expectEqual(@as(usize, 2), @sizeOf(State));
+    try testing.expectEqual(@as(u16, 1 << 10), State.bitsOf(.{ .read_only = true }));
+    try testing.expectEqual(@as(u16, (1 << 11) | (1 << 12) | (1 << 13)), State.bitsOf(.{ .invalid = true, .required = true, .busy = true }));
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const root = f.t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const field = f.t.push(root, types.Id.from("email"), &.{ .role = .text_input });
+    f.t.seal(field);
+    f.t.seal(root);
+    f.s.c.state[field] = State.bitsOf(.{ .invalid = true, .required = true, .busy = true });
+    const output = f.run(0);
+    const semantic_state: State = @bitCast(output.c.state[1]);
+    try testing.expect(semantic_state.invalid and semantic_state.required and semantic_state.busy);
+    try testing.expect(!semantic_state.disabled and !semantic_state.read_only);
 }
 
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {

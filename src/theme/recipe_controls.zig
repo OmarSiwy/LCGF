@@ -30,6 +30,7 @@ pub const Options = struct {
     semantics: ?*a11y.Semantics = null,
     /// Gap between the control's border box and its independently painted focus outline.
     focus_offset: f32 = 0,
+    color_policy: model.ColorPolicy = .automatic,
 };
 
 pub const OpenControl = struct {
@@ -96,7 +97,7 @@ pub fn statesFor(authoritative: style.States, response: types.Response, visible_
 }
 
 pub fn useFor(f: *const Frame, options: Options, states: style.States) model.Use {
-    return .{ .tokens = options.tokens, .scope = options.scope, .variants = options.variants, .states = states, .environment = environmentFor(f, options), .local = options.local };
+    return .{ .tokens = options.tokens, .scope = options.scope, .variants = options.variants, .states = states, .environment = environmentFor(f, options), .local = options.local, .color_policy = options.color_policy };
 }
 
 fn checkSemantics(f: *const Frame, options: Options) style.Error!void {
@@ -117,6 +118,9 @@ pub fn expose(semantics: ?*a11y.Semantics, node: types.Node, states: style.State
         value.current = states.current;
         value.pressed = states.toggled;
         value.focused = states.focused;
+        value.invalid = states.invalid;
+        value.required = states.required;
+        value.busy = states.busy;
         s.c.state[node.ix()] = value.bitsOf();
     }
 }
@@ -168,6 +172,13 @@ pub fn icon(f: *Frame, control: *const OpenControl, texture: types.Texture, uv: 
     computed.box.texture = texture;
     computed.box.uv = uv;
     return f.leaf(.none, computed.box);
+}
+
+/// Explicit directional metadata: photos, logos and other non-directional icons keep their
+/// authored UV orientation. Only marked directional icons mirror when the locale is RTL.
+pub fn directionalIcon(f: *Frame, control: *const OpenControl, texture: types.Texture, uv: [4]f32, mirror_in_rtl: bool) style.Error!types.Node {
+    const coordinates = if (mirror_in_rtl and (control.use.environment.rtl orelse false)) [4]f32{ uv[2], uv[1], uv[0], uv[3] } else uv;
+    return icon(f, control, texture, coordinates);
 }
 
 pub fn end(f: *Frame, control: *const OpenControl) void {
@@ -330,7 +341,7 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
         _ = f.leaf(.none, box);
     }
     const text_part = if (shown.hint) hint else content;
-    _ = f.textStyled(shown.str, text_part.text, text_part.box);
+    selectedText(f, shown.str, text_part, selection, shown.band, 0, textfield_zig.lineHeight(&th));
     var caret_box = caret.box;
     caret_box.float = true;
     caret_box.offset = .{ shown.caret, 0 };
@@ -339,6 +350,62 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
     end(f, &control);
     expose(options.semantics, control.node, states);
     return response;
+}
+
+pub const selection_sections = textfield_zig.bands * 2 + 1;
+pub const Section = struct { from: f32, to: ?f32, selected: bool };
+pub const Selected = struct { active: bool, sections: [selection_sections]Section };
+
+/// Disjoint visual intervals prevent double-painted glyph antialiasing and keep ligatures
+/// shaped across a selection boundary. Full-text copies are clipped, never substring-shaped.
+pub fn selectionSections(content: style.Computed, selection: style.Computed, bands: [textfield_zig.bands][2]f32) Selected {
+    var sorted = bands;
+    var n: usize = 0;
+    for (bands) |band| if (band[1] > band[0]) {
+        sorted[n] = band;
+        n += 1;
+    };
+    for (1..@max(n, 1)) |i| {
+        const value = sorted[i];
+        var at = i;
+        while (at > 0 and sorted[at - 1][0] > value[0]) : (at -= 1) sorted[at] = sorted[at - 1];
+        sorted[at] = value;
+    }
+    var result: Selected = .{ .active = n > 0 and !std.meta.eql(content.text.color, selection.text.color), .sections = @splat(.{ .from = 0, .to = 0, .selected = false }) };
+    var limit: f32 = 0;
+    for (sorted[0..n], 0..) |band, i| {
+        const from = @max(limit, band[0]);
+        result.sections[i * 2] = .{ .from = limit, .to = from, .selected = false };
+        result.sections[i * 2 + 1] = .{ .from = from, .to = @max(from, band[1]), .selected = true };
+        limit = @max(limit, band[1]);
+    }
+    result.sections[selection_sections - 1] = .{ .from = limit, .to = null, .selected = false };
+    return result;
+}
+
+pub fn selectedText(f: *Frame, text: []const u8, content: style.Computed, selection: style.Computed, bands: [textfield_zig.bands][2]f32, top: f32, height: f32) void {
+    const selected = selectionSections(content, selection, bands);
+    var original = content.box;
+    original.participation.paint = original.participation.paint and !selected.active;
+    _ = f.textStyled(text, content.text, original);
+    for (selected.sections) |section| {
+        const boxes = selectionTextBoxes(content, section, top, height, selected.active);
+        _ = f.open(.none, boxes.clip);
+        if (boxes.clip.participation.paint) _ = f.textStyled(text, if (section.selected) selection.text else content.text, boxes.text) else _ = f.leaf(.none, boxes.text);
+        f.close();
+    }
+}
+
+pub fn selectionTextBoxes(content: style.Computed, section: Section, top: f32, height: f32, active: bool) struct { clip: types.Style, text: types.Style } {
+    var text = content.box;
+    text.float = true;
+    text.offset = .{ content.box.offset[0] - section.from, content.box.offset[1] };
+    text.size = .{ .fit, .fit };
+    text.fill = .transparent;
+    text.border = 0;
+    text.participation.hit = false;
+    text.participation.semantics = false;
+    return .{ .clip = .{ .float = true, .offset = .{ section.from, top }, .size = .{ if (section.to) |limit| .px(@max(limit - section.from, 0)) else .fill, .px(height) }, .clip = true, .participation = .{ .paint = active and (section.to == null or section.to.? > section.from), .hit = false, .semantics = false } }, .text = text };
 }
 
 const context = @import("../runtime/context.zig");

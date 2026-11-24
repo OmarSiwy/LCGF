@@ -12,6 +12,14 @@ const std = @import("std");
 const mem = @import("../../core/mem.zig");
 const shaping = @import("shape.zig");
 
+/// Caller identity is independent of table position. Generation changes when bytes, face
+/// selection or shaping defaults change; no font discovery or lifetime manager is required.
+pub const Identity = struct { font: u64, generation: u64 = 0 };
+/// An optional external adapter hashes every shaping-affecting setting into configuration.
+/// Pixel size is excluded only when the adapter's output is in invariant font units (optical
+/// sizing, hinting/ppem and synthesis must be included when they change those results).
+pub const Context = struct { identity: Identity, engine: u64 = 0, configuration: u64 = 0 };
+
 pub const Cache = struct {
     /// Slots - 1. Index from bit 1 because generated keys reserve bit 0 for the empty marker.
     mask: u32,
@@ -56,6 +64,19 @@ pub const Cache = struct {
         return std.hash.Wyhash.hash((@as(u64, font) << 8) | flags, text) | 1;
     }
 
+    pub fn keyContext(text: []const u8, context: Context) u64 {
+        const words = [4]u64{ context.identity.font, context.identity.generation, context.engine, context.configuration };
+        var hash: std.hash.Wyhash = .init(0x4c43474674657874);
+        hash.update(std.mem.asBytes(&words));
+        hash.update(text);
+        return hash.final() | 1;
+    }
+
+    pub fn keyVersioned(text: []const u8, identity: Identity, features: shaping.Features) u64 {
+        const flags = @as(u64, @intFromBool(features.liga)) | (@as(u64, @intFromBool(features.kern)) << 1) | (@as(u64, @intFromBool(features.mark)) << 2);
+        return keyContext(text, .{ .identity = identity, .configuration = flags });
+    }
+
     /// The cached run of key `k`, as a view of its slot (valid until the slot is replaced), or
     /// null.
     pub fn get(c: *const Cache, k: u64) ?shaping.Run {
@@ -85,6 +106,15 @@ pub const Cache = struct {
     /// of `scratch`.
     pub fn shape(c: *Cache, shaper: *const shaping.Shaper, font: u16, text: []const u8, features: shaping.Features, scratch: *shaping.Run) error{NoSpace}!shaping.Run {
         const k = key(text, font, features);
+        if (c.get(k)) |hit| return hit;
+        try shaper.shape(text, scratch, features);
+        _ = c.put(k, scratch);
+        return scratch.*;
+    }
+
+    /// Generation-aware diagonal convenience; get/put and the uncached shaper remain public.
+    pub fn shapeVersioned(c: *Cache, shaper: *const shaping.Shaper, identity: Identity, text: []const u8, features: shaping.Features, scratch: *shaping.Run) error{NoSpace}!shaping.Run {
+        const k = keyVersioned(text, identity, features);
         if (c.get(k)) |hit| return hit;
         try shaper.shape(text, scratch, features);
         _ = c.put(k, scratch);
@@ -133,6 +163,28 @@ fn expectSameRun(want: *const shaping.Run, got: *const shaping.Run) !void {
     try std.testing.expectEqualSlices(i32, want.advance[0..want.len], got.advance[0..got.len]);
     try std.testing.expectEqualSlices(i32, want.x_offset[0..want.len], got.x_offset[0..got.len]);
     try std.testing.expectEqualSlices(i32, want.y_offset[0..want.len], got.y_offset[0..got.len]);
+}
+
+test "caller generations prevent reloaded font data from reusing stale cached advances" {
+    const data = @embedFile("../font/testdata/test.ttc");
+    const regular: shaping.Shaper = .init(try Face.parse(data, try @import("../font/opentype.zig").faceOffset(data, 0)));
+    const bold: shaping.Shaper = .init(try Face.parse(data, try @import("../font/opentype.zig").faceOffset(data, 1)));
+    var fixture: Fixture(2, 32) = .{};
+    var cache = fixture.cache();
+    var columns: shaping.TestRun = .{};
+    var scratch = columns.run();
+    _ = try cache.shapeVersioned(&regular, .{ .font = 123, .generation = 7 }, "Hello", .{}, &scratch);
+    const old = Cache.keyVersioned("Hello", .{ .font = 123, .generation = 7 }, .{});
+    const fresh = Cache.keyVersioned("Hello", .{ .font = 123, .generation = 8 }, .{});
+    try std.testing.expect(old != fresh);
+    try std.testing.expect(cache.get(old) != null);
+    const loaded = try cache.shapeVersioned(&bold, .{ .font = 123, .generation = 8 }, "Hello", .{}, &scratch);
+    var expected_columns: shaping.TestRun = .{};
+    var expected = expected_columns.run();
+    try bold.shape("Hello", &expected, .{});
+    try expectSameRun(&expected, &loaded);
+    const hit = cache.get(fresh).?;
+    try expectSameRun(&expected, &hit);
 }
 
 test "cached runs equal freshly shaped ones" {

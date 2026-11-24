@@ -30,6 +30,7 @@ const whitespace = @import("whitespace.zig");
 const fallback_ = @import("../fallback/fallback.zig");
 const spans_ = @import("spans.zig");
 const Direction = @import("../unicode/bidi.zig").Direction;
+const metrics_ = @import("metrics.zig");
 pub const emit = @import("emit.zig");
 
 /// Paragraph inputs, passed directly or in caller-owned rows. This is a capability input,
@@ -55,6 +56,8 @@ pub const Paragraph = struct {
     /// The last visible line ends in U+2026 when it is cut. False clamps without a marker.
     ellipsis: bool = false,
     features: shape.Features = .{},
+    /// Which measured line is reported to the native baseline-layout pass.
+    baseline_source: metrics_.Source = .first,
 
     fn placement(p: Paragraph, width: f32, direction: Direction) lines.Align {
         const a = if (p.alignment == .justify) p.last_align else p.alignment;
@@ -107,6 +110,10 @@ pub const Rich = struct {
 /// Shapers by font index, and scratch for one paragraph. The caller owns all of it.
 pub const Stack = struct {
     shapers: []const shape.Shaper,
+    /// Optional persistent caller cache; direct uncached layout remains the default.
+    cache: ?*@import("../shape/cache.zig").Cache = null,
+    font_ids: []const u64 = &.{},
+    font_generations: []const u64 = &.{},
     run: shape.Run,
     g: lines.Glyphs,
     l: lines.Lines,
@@ -158,6 +165,16 @@ pub const Stack = struct {
         return if (k < st.paragraphs.len) st.paragraphs[k] else st.default_paragraph;
     }
 
+    fn shapeRun(st: *Stack, font: u16, text: []const u8, features: shape.Features) error{NoSpace}!shape.Run {
+        const shaper = &st.shapers[font];
+        if (st.cache) |cache| return cache.shapeVersioned(shaper, .{
+            .font = if (font < st.font_ids.len) st.font_ids[font] else font,
+            .generation = if (font < st.font_generations.len) st.font_generations[font] else 0,
+        }, text, features, &st.run);
+        try shaper.shape(text, &st.run, features);
+        return st.run;
+    }
+
     fn layoutRow(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32, wraps: bool) error{NoSpace}!void {
         const c = &tx.c;
         const p = st.options(k);
@@ -193,7 +210,7 @@ pub const Stack = struct {
                 spans = mapped;
             }
             if (r.metrics.len < spans.len) return error.NoSpace;
-            try spans_.shapeFeatures(st.shapers, text, spans, &st.run, &st.g, features);
+            try spans_.shapeCached(st.shapers, text, spans, &st.run, &st.g, features, st.cache, st.font_ids, st.font_generations);
             spans_.metrics(st.shapers, spans, r.metrics);
             for (r.metrics[0..spans.len], spans.px[0..spans.len]) |*m, size| m.* = p.metrics(m.*, size);
             metrics = r.metrics[0..spans.len];
@@ -206,15 +223,15 @@ pub const Stack = struct {
             var start: u32 = 0;
             for (fb.runs.end[0..fb.runs.len], fb.runs.face[0..fb.runs.len]) |end, font| {
                 const f = &st.shapers[font];
-                try f.shape(text[start..end], &st.run, features);
-                try st.g.append(&st.run, px / @as(f32, @floatFromInt(f.face.units_per_em)), start, font);
+                const shaped = try st.shapeRun(font, text[start..end], features);
+                try st.g.append(&shaped, px / @as(f32, @floatFromInt(f.face.units_per_em)), start, font);
                 start = end;
             }
             for (st.shapers, 0..) |f, j| fb.metrics[j] = p.metrics(.of(&f.face, px), px);
             metrics = fb.metrics[0..st.shapers.len];
         } else {
-            try sh.shape(text, &st.run, features);
-            try st.g.append(&st.run, scale, 0, 0);
+            const shaped = try st.shapeRun(primary_font, text, features);
+            try st.g.append(&shaped, scale, 0, 0);
         }
         lines.graphemeClusters(&st.g, text);
         if (p.letter_spacing != 0 or p.word_spacing != 0) lines.spacing(&st.g, text, p.letter_spacing, p.word_spacing);
@@ -291,7 +308,7 @@ pub const Stack = struct {
         };
         tx.c.w[k] = lines.widest(&st.l);
         tx.c.h[k] = lines.stackHeight(&st.l);
-        ascent[k] = st.l.baseline[0];
+        ascent[k] = metrics_.baseline(&st.l, st.options(k).baseline_source);
     }
 };
 
@@ -320,7 +337,10 @@ test "measure and wrap fill w, h and ascent of the runs in this stack's fonts" {
     var p: golden.Para = .{};
     p.bind();
     var cols: golden.RunCols = .{};
-    var st: Stack = .{ .shapers = &shapers, .run = cols.run(), .g = p.g, .l = p.l };
+    const cache_module = @import("../shape/cache.zig");
+    var cache = cache_module.Cache.init(&carver, 4, 32);
+    var generations = [_]u64{5};
+    var st: Stack = .{ .shapers = &shapers, .cache = &cache, .font_ids = &.{100}, .font_generations = &generations, .run = cols.run(), .g = p.g, .l = p.l };
     var ascent: [4]f32 = @splat(-1);
     st.measure(&tx, &strings, &ascent);
     const m: lines.Metrics = .of(&shapers[0].face, 20);
@@ -331,6 +351,15 @@ test "measure and wrap fill w, h and ascent of the runs in this stack's fonts" {
     try testing.expectEqual(0, tx.c.w[c]); // not this stack's font: untouched
     try testing.expectEqual(-1, ascent[c]);
     try testing.expectEqual(2 * m.height(), tx.c.h[d]);
+    const cached_key = cache_module.Cache.keyVersioned("two\nlines", .{ .font = 100, .generation = 5 }, .{});
+    try testing.expect(cache.get(cached_key) != null);
+    @memset(st.run.glyph[0..st.run.len], 0);
+    try st.paragraph(&tx, &strings, d);
+    try testing.expect(st.g.glyph[0] != 0);
+    try testing.expectEqual(@as(u16, 0), st.run.glyph[0]); // the cache hit did not reshape
+    generations[0] += 1;
+    try st.paragraph(&tx, &strings, d);
+    try testing.expect(st.run.glyph[0] != 0); // changing the caller generation shapes again
     // The measured width fits exactly: wrapping at it changes nothing.
     const w = tx.c.w[a];
     tx.c.avail[a] = w;
@@ -346,6 +375,9 @@ test "measure and wrap fill w, h and ascent of the runs in this stack's fonts" {
     try testing.expectEqual(w, tx.c.w[b]);
     try testing.expectEqual(m.height(), tx.c.h[b]);
     try testing.expect(!st.overflow);
+    st.default_paragraph.baseline_source = .last;
+    st.measure(&tx, &strings, &ascent);
+    try testing.expectEqual(m.height() + m.ascent, ascent[d]);
 }
 
 test "golden: a frame measured, wrapped and painted through the stack matches the reference" {

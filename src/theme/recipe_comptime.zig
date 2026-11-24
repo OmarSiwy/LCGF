@@ -20,6 +20,9 @@ const textfield_zig = @import("../widgets/textfield.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
 const Spec = spec_zig.Spec;
+pub const radio = @import("recipe_extra_controls.zig").ct.radio;
+pub const range = @import("recipe_extra_controls.zig").ct.range;
+pub const spinner = @import("recipe_extra_controls.zig").ct.spinner;
 
 pub const Config = struct {
     recipe: ?model.Recipe = null,
@@ -30,6 +33,7 @@ pub const Config = struct {
     environment: ?model.Environment = null,
     local: []const style.Declaration = &.{},
     focus_offset: f32 = 0,
+    color_policy: model.ColorPolicy = .automatic,
     /// Optional fields of the application's State. Their types are checked by the builder.
     states_field: ?[]const u8 = null,
     environment_field: ?[]const u8 = null,
@@ -48,9 +52,9 @@ pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comp
 pub fn switchControl(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral(), comptime config: Config) Spec {
     return build(.switch_control, @tagName(id), @tagName(bind), @tagName(text), .{}, config);
 }
-pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime range: slider_zig.Range, comptime config: Config) Spec {
-    if (!(range.lo < range.hi)) @compileError("recipe slider requires lo below hi");
-    return build(.slider, @tagName(id), @tagName(bind), "", range, config);
+pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime limits: slider_zig.Range, comptime config: Config) Spec {
+    if (!(limits.lo < limits.hi)) @compileError("recipe slider requires lo below hi");
+    return build(.slider, @tagName(id), @tagName(bind), "", limits, config);
 }
 pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral(), comptime config: Config) Spec {
     return build(.input, @tagName(id), @tagName(bind), @tagName(hint), .{}, config);
@@ -66,7 +70,7 @@ fn stock(comptime kind: Kind) model.Recipe {
     };
 }
 
-fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime range: slider_zig.Range, comptime config: Config) Spec {
+fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config) Spec {
     const label_node: Spec = .{ .kind = .label, .bind = if (kind == .button or kind == .checkbox or kind == .switch_control) text else null };
     const mark: Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
     const children: []const Spec = switch (kind) {
@@ -75,7 +79,8 @@ fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []cons
         .slider => &.{ .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col } },
         .input => blk: {
             const bands: [textfield_zig.bands]Spec = @splat(.{ .kind = .col });
-            const nodes = bands ++ [3]Spec{ label_node, .{ .kind = .col }, .{ .kind = .col } };
+            const overlays: [controls.selection_sections]Spec = @splat(.{ .kind = .col, .children = &.{label_node} });
+            const nodes = bands ++ [1]Spec{label_node} ++ overlays ++ [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
             break :blk &nodes;
         },
     };
@@ -84,11 +89,11 @@ fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []cons
         .id = name,
         .bind = bind,
         .children = children,
-        .widget = Widget(kind, name, bind, text, range, config),
+        .widget = Widget(kind, name, bind, text, limits, config),
     };
 }
 
-fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime range: slider_zig.Range, comptime config: Config) type {
+fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config) type {
     return struct {
         pub const focusable = true;
         pub const Payload = switch (kind) {
@@ -136,6 +141,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 .environment = environment,
                 .variants = config.variants,
                 .local = config.local,
+                .color_policy = config.color_policy,
             };
         }
 
@@ -209,7 +215,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     next.* += 5;
                 },
                 .slider => {
-                    const fraction = base.fraction(value, range.lo, range.hi);
+                    const fraction = base.fraction(value, limits.lo, limits.hi);
                     var fill = resolvePart(ui, Parts.fill, child);
                     fill.box.size[0] = .pct(fraction);
                     fill.box.float = true;
@@ -238,13 +244,25 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                         box.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
                         _ = tb.t.push(row, .none, &box);
                     }
-                    pushText(ui, row, shown.str, if (shown.hint) hint else content);
+                    const text_part = if (shown.hint) hint else content;
+                    const selected = controls.selectionSections(text_part, selection, shown.band);
+                    var original = text_part;
+                    original.box.participation.paint = original.box.participation.paint and !selected.active;
+                    pushText(ui, row, shown.str, original);
+                    for (selected.sections) |section| {
+                        const boxes = controls.selectionTextBoxes(text_part, section, 0, textfield_zig.lineHeight(&th), selected.active);
+                        const clip = tb.t.push(row, .none, &boxes.clip);
+                        var selected_text = if (section.selected) selection else text_part;
+                        selected_text.box = boxes.text;
+                        if (boxes.clip.participation.paint) pushText(ui, clip, shown.str, selected_text) else _ = tb.t.push(clip, .none, &boxes.text);
+                        tb.t.seal(clip);
+                    }
                     var box = caret.box;
                     box.float = true;
                     box.offset = .{ shown.caret, 0 };
                     box.size[1] = .px(textfield_zig.lineHeight(&th));
                     _ = tb.t.push(row, .none, &box);
-                    next.* += textfield_zig.bands + 4;
+                    next.* += textfield_zig.bands + controls.selection_sections * 2 + 4;
                 },
             }
             _ = outline.append(&tb.t, row, @fromBackingInt(row), controls.outlineOptions(focus_part, config.focus_offset));
@@ -271,9 +289,9 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     var value = before;
                     if (response.held and ui.built) {
                         const rect = ui.tables.t.rect(row + 1);
-                        value = base.slide(value, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), range.lo, range.hi);
+                        value = base.slide(value, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), limits.lo, limits.hi);
                     }
-                    if (response.focused) value = slider_zig.keyed(value, range.lo, range.hi, in) orelse value;
+                    if (response.focused) value = slider_zig.keyed(value, limits.lo, limits.hi, in) orelse value;
                     ui.signals.set(Ui.field(bind), value);
                     if (value != before) return @unionInit(Ui.Events.Event, name, value);
                 },

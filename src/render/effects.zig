@@ -22,6 +22,7 @@ pub const Operation = union(enum) {
     matrix: compositor.ColorMatrix,
     components: struct { channels: [4]primitives.Component, space: compositor.FilterSpace = .linear_srgb },
     blur: struct { sigma: f32, edge: [2]brushes.Address = .{ .transparent, .transparent } },
+    blur_xy: struct { sigma: [2]f32, edge: [2]brushes.Address = .{ .transparent, .transparent } },
     morphology: struct { radius: [2]u32, mode: compositor.Morphology, edge: [2]brushes.Address = .{ .transparent, .transparent } },
     shadow: struct { sigma: f32, offset: [2]i32 = .{ 0, 0 }, tint: color.Rgba },
     displacement: compositor.Displacement,
@@ -90,6 +91,11 @@ pub fn validate(nodes: []const Node, external: []const surface.Image, storage: S
         if (arity(node.operation) > 1) _ = try reference(node.b, i, external, storage.outputs);
         switch (node.operation) {
             .blur => |v| try validateSigma(v.sigma, storage.kernel.len, limits),
+            .blur_xy => |v| {
+                for (v.sigma) |sigma| try validateSigma(sigma, storage.kernel.len, limits);
+                const count = (try compositor.gaussianKernelLength(v.sigma[0])) + (try compositor.gaussianKernelLength(v.sigma[1]));
+                if (count > storage.kernel.len) return error.NoSpace;
+            },
             .shadow => |v| try validateSigma(v.sigma, storage.kernel.len, limits),
             .morphology => |v| if (@max(v.radius[0], v.radius[1]) > limits.morphology_radius) return error.BudgetExceeded,
             .convolution => |v| if (v.values.len > limits.convolution_taps) return error.BudgetExceeded,
@@ -152,6 +158,13 @@ pub fn run(nodes: []const Node, external: []const surface.Image, storage: Storag
                 const kernel = try compositor.gaussianKernel(v.sigma, storage.kernel);
                 try copy(storage.work[0], a);
                 try compositor.blur(storage.work[0], out, storage.work[1], kernel, v.edge);
+                passes += 3;
+            },
+            .blur_xy => |v| {
+                const kernel_x = try compositor.gaussianKernel(v.sigma[0], storage.kernel);
+                const kernel_y = try compositor.gaussianKernel(v.sigma[1], storage.kernel[kernel_x.len..]);
+                try copy(storage.work[0], a);
+                try compositor.blurXY(storage.work[0], out, storage.work[1], kernel_x, kernel_y, v.edge);
                 passes += 3;
             },
             .morphology => |v| {
@@ -311,4 +324,21 @@ test "backdrop refresh follows changed background inside the blur halo" {
     try std.testing.expectEqual([2]i32{ 7, 7 }, origin);
     // The white source lies outside the panel itself, but contributes through the halo.
     try std.testing.expect(buffers[0].pixels[3 * buffers[0].stride + 3] >> 24 > 0);
+}
+
+test "anisotropic graph blur preserves the identity axis and checks joint kernel capacity" {
+    var input_pixels: [256]u32 = undefined;
+    const input = try surface.init(&input_pixels, 9, 5);
+    input.pixels[2 * input.stride + 4] = 0xffffffff;
+    var raw: [3][256]u32 = undefined;
+    var buffers: [3]surface.Surface = undefined;
+    for (&buffers, &raw) |*dst, *pixels| dst.* = try surface.init(pixels, 9, 5);
+    var kernels: [8]f32 = undefined;
+    const nodes = [_]Node{.{ .operation = .{ .blur_xy = .{ .sigma = .{ 1, 0 } } } }};
+    const result = try run(&nodes, &.{input.view()}, .{ .outputs = buffers[0..1], .work = buffers[1..3].*, .kernel = &kernels }, .{});
+    try std.testing.expect(result.image.pixels[2 * result.image.stride + 3] >> 24 > 0);
+    try std.testing.expectEqual(@as(u32, 0), result.image.pixels[result.image.stride + 4]);
+    const before = result.image.pixels[2 * result.image.stride + 4];
+    try std.testing.expectError(error.NoSpace, run(&nodes, &.{input.view()}, .{ .outputs = buffers[0..1], .work = buffers[1..3].*, .kernel = kernels[0..7] }, .{}));
+    try std.testing.expectEqual(before, result.image.pixels[2 * result.image.stride + 4]);
 }

@@ -46,6 +46,9 @@ extern fn hb_face_reference_table(face: *hb_face_t, tag: u32) *hb_blob_t;
 extern fn hb_font_create(face: *hb_face_t) *hb_font_t;
 extern fn hb_font_destroy(font: *hb_font_t) void;
 extern fn hb_font_set_ppem(font: *hb_font_t, x: c_uint, y: c_uint) void;
+extern fn hb_font_get_ppem(font: *hb_font_t, x: *c_uint, y: *c_uint) void;
+extern fn hb_font_set_synthetic_bold(font: *hb_font_t, x: f32, y: f32, in_place: c_int) void;
+extern fn hb_font_set_synthetic_slant(font: *hb_font_t, slant: f32) void;
 extern fn hb_buffer_create() *hb_buffer_t;
 extern fn hb_buffer_destroy(buf: *hb_buffer_t) void;
 extern fn hb_buffer_clear_contents(buf: *hb_buffer_t) void;
@@ -91,6 +94,19 @@ pub const Feature = extern struct {
     end: u32 = std.math.maxInt(u32),
 };
 pub const Variation = extern struct { tag: u32, value: f32 };
+/// Explicit fallback styling for an outline face. Bold strengths are fractions of em;
+/// slant is horizontal displacement per vertical em (0.2 means a 20% skew). A real selected
+/// bold/italic face remains the caller's first choice. SVG/bitmap artwork is not synthesized.
+pub const Synthesis = struct {
+    bold: [2]f32 = .{ 0, 0 },
+    slant: f32 = 0,
+    /// Retains advances while thickening outlines, useful for an explicit grade policy.
+    in_place: bool = false,
+
+    pub fn validate(value: Synthesis) error{NonFinite}!void {
+        if (!std.math.isFinite(value.bold[0]) or !std.math.isFinite(value.bold[1]) or !std.math.isFinite(value.slant)) return error.NonFinite;
+    }
+};
 pub const SvgOptions = struct {
     px: f32,
     /// Baseline origin in output pixels. SVG font coordinates have positive y downwards.
@@ -111,6 +127,8 @@ pub const Options = struct {
     /// Complete axis settings for this call. An empty slice resets all axes to defaults;
     /// callers rasterizing these glyphs must use the same variable-font instance.
     variations: []const Variation = &.{},
+    /// Complete synthesis state for this call. Defaults reset earlier bold/slant settings.
+    synthesis: Synthesis = .{},
     cluster_level: enum(c_int) { graphemes = 0, characters = 1 } = .characters,
 };
 
@@ -161,20 +179,51 @@ pub const HarfBuzz = struct {
     /// `hb_buffer_guess_segment_properties` does) into `run`, glyphs in visual order with
     /// clusters as byte offsets into `text`. `error.NoSpace` when the run's columns are short.
     pub fn shape(hb: *HarfBuzz, text: []const u8, run: *Run) error{NoSpace}!void {
-        return hb.shapeOptions(text, run, .{});
+        hb.shapeBuffer(text, .{}, 0);
+        try hb.copyRun(run);
     }
 
     /// Explicit script/language/direction, feature ranges and variable axes. This remains an
     /// optional allocating host adapter: its output is the same caller-owned glyph rows.
-    pub fn shapeOptions(hb: *HarfBuzz, text: []const u8, run: *Run, options: Options) error{NoSpace}!void {
+    pub fn shapeOptions(hb: *HarfBuzz, text: []const u8, run: *Run, options: Options) error{ NoSpace, NonFinite }!void {
+        try options.synthesis.validate();
         hb.shapeBuffer(text, options, @backingInt(options.direction));
         try hb.copyRun(run);
+    }
+
+    /// Includes every current shaping option plus caller font identity/generation. Feature
+    /// and variation ordering remains significant (equivalent descriptions may miss, never
+    /// falsely hit). Run output is in font units; rendering at another px does not reshape.
+    pub fn cacheKey(text: []const u8, identity: lcgf.shape_cache.Identity, options: Options) u64 {
+        var hash: std.hash.Wyhash = .init(0x4842466561747572);
+        const values = [10]u64{ @intCast(@backingInt(options.direction)), options.script orelse 0, @intCast(@backingInt(options.cluster_level)), options.language.len, options.features.len, options.variations.len, @as(u32, @bitCast(options.synthesis.bold[0])), @as(u32, @bitCast(options.synthesis.bold[1])), @as(u32, @bitCast(options.synthesis.slant)), @intFromBool(options.synthesis.in_place) };
+        hash.update(std.mem.asBytes(&values));
+        hash.update(options.language);
+        hash.update(std.mem.sliceAsBytes(options.features));
+        hash.update(std.mem.sliceAsBytes(options.variations));
+        return lcgf.shape_cache.Cache.keyContext(text, .{ .identity = identity, .engine = 130201, .configuration = hash.final() });
+    }
+
+    /// Optional cache convenience over shapeOptions + public Cache.get/put. Cache storage
+    /// stays caller-owned, and long runs still shape directly into the supplied scratch.
+    pub fn shapeCached(hb: *HarfBuzz, cache: *lcgf.shape_cache.Cache, identity: lcgf.shape_cache.Identity, text: []const u8, options: Options, scratch: *Run) error{ NoSpace, NonFinite }!Run {
+        try options.synthesis.validate();
+        const key = cacheKey(text, identity, options);
+        if (cache.get(key)) |hit| {
+            hb_font_set_variations(hb.font, if (options.variations.len == 0) null else options.variations.ptr, @intCast(options.variations.len));
+            hb.applySynthesis(options.synthesis);
+            return hit;
+        }
+        try hb.shapeOptions(text, scratch, options);
+        _ = cache.put(key, scratch);
+        return scratch.*;
     }
 
     /// Real vertical shaping, including the font's vertical substitutions, origins and
     /// advances. Horizontal advances stay in Run.advance, vertical ones in caller y_advance;
     /// vertical_text.fromRun consumes both, so no advance component is silently discarded.
-    pub fn shapeVertical(hb: *HarfBuzz, text: []const u8, run: *Run, y_advance: []i32, options: Options, direction: enum { top_to_bottom, bottom_to_top }) error{NoSpace}!void {
+    pub fn shapeVertical(hb: *HarfBuzz, text: []const u8, run: *Run, y_advance: []i32, options: Options, direction: enum { top_to_bottom, bottom_to_top }) error{ NoSpace, NonFinite }!void {
+        try options.synthesis.validate();
         hb.shapeBuffer(text, options, if (direction == .top_to_bottom) 6 else 7);
         const n = hb_buffer_get_length(hb.buf);
         if (y_advance.len < n) return error.NoSpace;
@@ -194,7 +243,27 @@ pub const HarfBuzz = struct {
         // same granularity as the built-in shaper (one cluster per character before ligation).
         hb_buffer_set_cluster_level(hb.buf, @backingInt(options.cluster_level));
         hb_font_set_variations(hb.font, if (options.variations.len == 0) null else options.variations.ptr, @intCast(options.variations.len));
+        hb.applySynthesis(options.synthesis);
         hb_shape(hb.font, hb.buf, if (options.features.len == 0) null else options.features.ptr, @intCast(options.features.len));
+    }
+
+    /// Fine-grained configuration for callers sequencing shaping and outline extraction.
+    /// Each shape/shapeOptions call supplies a complete state again; no implicit synthesis
+    /// policy is inferred from missing family faces or from their catalog metadata.
+    pub fn setSynthesis(hb: *HarfBuzz, synthesis: Synthesis) error{NonFinite}!void {
+        try synthesis.validate();
+        hb.applySynthesis(synthesis);
+    }
+
+    fn applySynthesis(hb: *HarfBuzz, synthesis: Synthesis) void {
+        hb_font_set_synthetic_bold(hb.font, synthesis.bold[0], synthesis.bold[1], @intFromBool(synthesis.in_place));
+        hb_font_set_synthetic_slant(hb.font, synthesis.slant);
+    }
+
+    /// Explicit outline convenience for atlas generation without a preceding shape call.
+    pub fn outlineStyled(hb: *HarfBuzz, glyph: u16, variations: []const Variation, synthesis: Synthesis, transform: [6]f32, path: *lcgf.paths.Path) error{ NoSpace, NoOutline, Unavailable, NonFinite }!void {
+        try hb.setSynthesis(synthesis);
+        try hb.outline(glyph, variations, transform, path);
     }
 
     fn copyRun(hb: *HarfBuzz, run: *Run) error{NoSpace}!void {
@@ -215,6 +284,8 @@ pub const HarfBuzz = struct {
     /// TrueType, CFF/CFF2 and variable outlines through HarfBuzz into the existing bounded
     /// path rasterizer. `transform` maps font units (y up) to caller path coordinates; e.g.
     /// {px/em,0,0,-px/em,x,baseline}. Axes are explicit for this call and reset when empty.
+    /// Synthetic outline settings are the current state set by shaping/setSynthesis;
+    /// outlineStyled supplies them explicitly when building an atlas independently.
     /// Callback allocation occurs lazily in this optional host adapter, never in the core.
     /// A short path or unsupported outline returns an error and clears the partial result.
     pub fn outline(hb: *HarfBuzz, glyph: u16, variations: []const Variation, transform: [6]f32, path: *lcgf.paths.Path) error{ NoSpace, NoOutline, Unavailable, NonFinite }!void {
@@ -290,7 +361,10 @@ pub const HarfBuzz = struct {
     /// Copies the glyph's compressed PNG from sbix/CBDT into caller bytes. The returned
     /// payload is accepted by lcgf.png.decode and can then enter the existing image atlas.
     pub fn copyPng(hb: *HarfBuzz, glyph: u16, ppem: [2]u32, out: []u8) error{ NoSpace, NoImage }![]const u8 {
+        var previous: [2]c_uint = undefined;
+        hb_font_get_ppem(hb.font, &previous[0], &previous[1]);
         hb_font_set_ppem(hb.font, ppem[0], ppem[1]);
+        defer hb_font_set_ppem(hb.font, previous[0], previous[1]);
         const blob = hb_ot_color_glyph_reference_png(hb.font, glyph);
         defer hb_blob_destroy(blob);
         return copyBlob(blob, out);
@@ -572,6 +646,70 @@ test "variable coordinates change real glyph advances and an empty axis list res
     try std.testing.expectEqual(500, run.advance[0]);
 }
 
+test "optional HarfBuzz cache separates variable instances features language and font generations" {
+    var hb: HarfBuzz = .init(@embedFile("testdata/variable.ttf"), 0);
+    defer hb.deinit();
+    var bytes: [8192]u8 align(lcgf.mem.column_align) = undefined;
+    var carver: lcgf.mem.Carver = .{ .buf = &bytes };
+    var cache = lcgf.shape_cache.Cache.init(&carver, 4, 16);
+    var columns: lcgf.shape.TestRun = .{};
+    var scratch = columns.run();
+    const identity: lcgf.shape_cache.Identity = .{ .font = 77, .generation = 2 };
+    const heavy: Options = .{ .variations = &.{.{ .tag = lcgf.opentype.tag("wght"), .value = 900 }} };
+    const normal = try hb.shapeCached(&cache, identity, "A", .{}, &scratch);
+    try std.testing.expectEqual(@as(i32, 500), normal.advance[0]);
+    const bold = try hb.shapeCached(&cache, identity, "A", heavy, &scratch);
+    try std.testing.expectEqual(@as(i32, 900), bold.advance[0]);
+    const again = try hb.shapeCached(&cache, identity, "A", .{}, &scratch);
+    try std.testing.expectEqual(@as(i32, 500), again.advance[0]);
+    const base = HarfBuzz.cacheKey("A", identity, .{});
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", identity, heavy));
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", identity, .{ .language = "tr" }));
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", identity, .{ .features = &.{.{ .tag = lcgf.opentype.tag("kern"), .value = 0 }} }));
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", identity, .{ .synthesis = .{ .bold = .{ 0.05, 0 } } }));
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", identity, .{ .synthesis = .{ .slant = 0.2 } }));
+    try std.testing.expect(HarfBuzz.cacheKey("A", identity, .{ .synthesis = .{ .bold = .{ 0.05, 0 } } }) != HarfBuzz.cacheKey("A", identity, .{ .synthesis = .{ .bold = .{ 0.05, 0 }, .in_place = true } }));
+    try std.testing.expect(base != HarfBuzz.cacheKey("A", .{ .font = 77, .generation = 3 }, .{}));
+}
+
+test "explicit synthesis changes real outline coverage and matching advances with default reset" {
+    var hb: HarfBuzz = .init(@embedFile("testdata/variable.ttf"), 0);
+    defer hb.deinit();
+    var columns: lcgf.shape.TestRun = .{};
+    var run = columns.run();
+    var buffers: lcgf.paths.TestBuffers(32, 256) = .{};
+    var path = buffers.path();
+    var poly = buffers.polyline();
+    var acc: [8192]f32 = undefined;
+    var coverage: [8192]u8 = undefined;
+    var previous_ink: usize = 0;
+    const bold: Synthesis = .{ .bold = .{ 0.05, 0 } };
+    for ([_]Synthesis{ .{}, bold }, [_]i32{ 500, 550 }) |synthesis, advance| {
+        try hb.shapeOptions("A", &run, .{ .synthesis = synthesis });
+        try std.testing.expectEqual(advance, run.advance[0]);
+        try hb.outline(run.glyph[0], &.{}, .{ 0.1, 0, 0, -0.1, 0, 80 }, &path);
+        lcgf.paths.flatten(&path, 0.1, &poly);
+        const box = lcgf.paths.bounds(&poly);
+        lcgf.paths.fill(&poly, box, .nonzero, buffers.scratch(), &acc);
+        lcgf.raster.coverage(&acc, &coverage, @as(usize, box.w) * box.h);
+        var ink: usize = 0;
+        for (coverage[0 .. @as(usize, box.w) * box.h]) |value| ink += value;
+        try std.testing.expect(ink > previous_ink);
+        previous_ink = ink;
+    }
+    try hb.shapeOptions("A", &run, .{ .synthesis = .{ .bold = bold.bold, .in_place = true } });
+    try std.testing.expectEqual(@as(i32, 500), run.advance[0]);
+    try hb.outlineStyled(run.glyph[0], &.{}, .{ .slant = 0.2 }, .{ 0.1, 0, 0, -0.1, 0, 80 }, &path);
+    lcgf.paths.flatten(&path, 0.1, &poly);
+    try std.testing.expect(lcgf.paths.bounds(&poly).w > 40);
+    try hb.shape("A", &run);
+    try std.testing.expectEqual(@as(i32, 500), run.advance[0]);
+    try hb.outline(run.glyph[0], &.{}, .{ 0.1, 0, 0, -0.1, 0, 80 }, &path);
+    lcgf.paths.flatten(&path, 0.1, &poly);
+    try std.testing.expectEqual(@as(u32, 40), lcgf.paths.bounds(&poly).w);
+    try std.testing.expectError(error.NonFinite, hb.setSynthesis(.{ .slant = std.math.nan(f32) }));
+}
+
 test "vertical HarfBuzz advances feed the bounded vertical layout consumer" {
     var hb: HarfBuzz = .init(@embedFile("testdata/variable.ttf"), 0);
     defer hb.deinit();
@@ -690,6 +828,9 @@ test "bitmap color fonts decode with the existing PNG path and SVG extraction is
     try std.testing.expect(hb.formats().png);
     var encoded: [1024]u8 = undefined;
     const png = try hb.copyPng(run.glyph[0], .{ 16, 16 }, &encoded);
+    var retained_ppem: [2]c_uint = undefined;
+    hb_font_get_ppem(hb.font, &retained_ppem[0], &retained_ppem[1]);
+    try std.testing.expectEqual([2]c_uint{ 0, 0 }, retained_ppem);
     var pixels: [4]u8 = undefined;
     var scratch: [1024]u8 = undefined;
     const info = try lcgf.png.decode(png, &pixels, &scratch);

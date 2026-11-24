@@ -366,7 +366,10 @@ fn convolutionAxis(src: surface.Image, dst: surface.Surface, kernel: []const f32
 /// Separable convolution of premultiplied RGBA. `src` and `dst` may be exactly the same
 /// surface. Scratch must be disjoint. Edge mode is part of the result, never a backend default.
 pub fn blur(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, kernel: []const f32, edge: [2]brushes.Address) Error!void {
-    try filterSurfaces(src, dst, scratch);
+    return blurXY(src, dst, scratch, kernel, kernel, edge);
+}
+
+fn validateBlurKernel(kernel: []const f32) Error!void {
     if (kernel.len == 0 or kernel.len % 2 != 1) return error.InvalidFilter;
     var sum: f32 = 0;
     for (kernel) |v| {
@@ -374,8 +377,19 @@ pub fn blur(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface
         sum += v;
     }
     if (@abs(sum - 1) > 0.0001) return error.InvalidFilter;
-    convolutionAxis(src.view(), scratch, kernel, 0, edge);
-    convolutionAxis(scratch.view(), dst, kernel, 1, edge);
+}
+
+/// Independent horizontal and vertical kernels support anisotropic Gaussian sigma. Both
+/// kernels and all storage are checked before either pass; a one-tap axis is exact identity.
+pub fn blurXY(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, kernel_x: []const f32, kernel_y: []const f32, edge: [2]brushes.Address) Error!void {
+    try filterSurfaces(src, dst, scratch);
+    try validateBlurKernel(kernel_x);
+    try validateBlurKernel(kernel_y);
+    for ([_][]const f32{ kernel_x, kernel_y }) |kernel| {
+        if (surface.overlapsBytes(std.mem.sliceAsBytes(kernel), std.mem.sliceAsBytes(dst.pixels)) or surface.overlapsBytes(std.mem.sliceAsBytes(kernel), std.mem.sliceAsBytes(scratch.pixels))) return error.AliasedStorage;
+    }
+    convolutionAxis(src.view(), scratch, kernel_x, 0, edge);
+    convolutionAxis(scratch.view(), dst, kernel_y, 1, edge);
 }
 
 fn morphologyAxis(src: surface.Image, dst: surface.Surface, radius: u32, axis: usize, mode: Morphology, edge: [2]brushes.Address) void {
@@ -521,4 +535,19 @@ test "displacement and alpha drop shadow are rendered with explicit storage" {
     const map = [_]u32{0xff0080ff};
     try displace(dst, src.view(), .{ .pixels = &map, .width = 1, .height = 1, .stride = 1 }, .{ .scale = .{ 2, 0 }, .sampling = .nearest });
     try testing.expectEqual(@as(u32, 0xffffffff), dst.pixels[0]);
+}
+
+test "anisotropic blur consumes independent axes and preserves unblurred rows" {
+    var source_pixels: [simd.rows(5) * 3]u32 = undefined;
+    var target_pixels: [simd.rows(5) * 3]u32 = undefined;
+    var scratch_pixels: [simd.rows(5) * 3]u32 = undefined;
+    const src = try surface.init(&source_pixels, 5, 3);
+    const dst = try surface.init(&target_pixels, 5, 3);
+    const scratch = try surface.init(&scratch_pixels, 5, 3);
+    src.pixels[src.stride + 2] = 0xffffffff;
+    try blurXY(src, dst, scratch, &.{ 0.25, 0.5, 0.25 }, &.{1}, .{ .transparent, .transparent });
+    try testing.expectEqual(@as(u32, 0), dst.pixels[2]);
+    try testing.expectEqual(@as(u32, 0x40404040), dst.pixels[dst.stride + 1]);
+    try testing.expectEqual(@as(u32, 0x80808080), dst.pixels[dst.stride + 2]);
+    try testing.expectEqual(@as(u32, 0), dst.pixels[2 * dst.stride + 2]);
 }

@@ -36,6 +36,18 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     const D = @import("dynamic.zig").Regions(spec);
     const labels = @import("layout.zig").labelRows(spec);
     const p = C.pushed;
+    // Presence is descriptor-indexed even when alternatives share retained geometry.
+    // Only rows a region can hide need this guard; ordinary offscreen controls may
+    // deliberately extend an input target back inside their ancestor's clip.
+    const can_be_absent: [n]bool = blk: {
+        @setEvalBranchQuota(10_000 + 100 * n);
+        var rows: [n]bool = @splat(false);
+        for (D.regions) |region| {
+            const first = if (region.kind == .when) region.row else region.row + 1;
+            for (first..region.end) |i| rows[i] = true;
+        }
+        break :blk rows;
+    };
     for ([_][]const u8{ "look", "extra", "scope", "clips" }) |name|
         if (C.classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic (a custom widget builds its rows at run time): paint it with the runtime tree");
 
@@ -330,9 +342,20 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// Exact pointer query over the same world matrices and all rounded ancestor clips.
         /// This is also usable by Events.atPaint without creating a runtime tree.
         pub fn hit(ram: *const C.Dynamic, i: u32, screen: [2]f32) bool {
-            if (i >= n or !p.x.row[p.c.scope[i]].active_participation.hit or ram.visible[i] == 0) return false;
+            if (i >= n or ram.visible[i] == 0) return false;
+            return hitTarget(ram, i, screen, .{});
+        }
+
+        /// Caller-owned policy, with the same local shape and ancestor clips as runtime hits.
+        pub fn hitTarget(ram: *const C.Dynamic, i: u32, screen: [2]f32, policy: @import("../interact/targets.zig").Policy) bool {
+            if (i >= n or !p.x.row[p.c.scope[i]].active_participation.hit) return false;
+            // Check region descriptors before worldOf/rectOf can read stale geometry
+            // or another choice alternative's live slot, whether slots overlap or not.
+            if (can_be_absent[i] and ram.visible[i] == 0) return false;
             const own_inverse = geometry.inverse(worldOf(ram, i)) orelse return false;
-            if (!geometry.contains(rectOf(ram, i), geometry.point(own_inverse, screen))) return false;
+            const own = p.x.row[p.c.extra[i]];
+            const own_radii = tree.radiiOf(own.radii, p.c.look[i].radius);
+            if (!@import("../interact/targets.zig").contains(rectOf(ram, i), own_radii, geometry.point(own_inverse, screen), policy)) return false;
             var a = i;
             while (a != 0) {
                 a = p.c.parent[a];
@@ -818,11 +841,22 @@ test "shared choice slots paint and hit only the active hosted region" {
     var scratch: L.Scratch = undefined;
     var ram: P.Cols.Dynamic = undefined;
     const empty: [4]f32 = @splat(0);
+    const targets = @import("../interact/targets.zig");
+    const entries = [_]targets.Entry{
+        .{ .node = 2, .policy = .{ .minimum = .{ 24, 24 } } },
+        .{ .node = 3, .policy = .{ .minimum = .{ 24, 24 } } },
+    };
+    try testing.expect(P.Cols.slot_count < P.Cols.node_count);
+    try testing.expectEqual(P.Cols.slot(2), P.Cols.slot(3));
     for ([_]u32{ 0, 1, 9, 0 }) |mode| {
         L.runLive(&scratch, &ram, .{ 60, 40 }, .{.{ .n = mode }});
         P.emit(&ram, &d);
         const rects = interop.widgetRects(E, &ram);
         const hit = E.at(&rects, 2, 2);
+        // Policy routing must retain the descriptor visibility check even when an
+        // inactive alternative shares the selected one's nonempty geometry slot.
+        try testing.expectEqual(hit, try E.atPaintTargets(P, &ram, &.{}, 2, 2));
+        try testing.expectEqual(hit, try E.atPaintTargets(P, &ram, &entries, 2, 2));
         switch (mode) {
             0 => {
                 try testing.expectEqual(E.Widget.first, hit);
@@ -843,6 +877,34 @@ test "shared choice slots paint and hit only the active hosted region" {
                 try testing.expectEqual(null, hit);
                 try testing.expectEqual(0, d.quad_len);
             },
+        }
+    }
+}
+
+test "unshared inactive choice targets stay absent while ordinary offscreen targets can expand" {
+    const ui = sp.col(.{ .clip = true }, .{
+        sp.choice(.mode, .{}, .{Spec{ .kind = .checkbox, .id = "only", .name = "Only", .style = .{ .size = .{ .px(16), .px(12) } } }}),
+        Spec{ .kind = .checkbox, .id = "outside", .name = "Outside", .style = .{ .float = true, .offset = .{ -8, 20 }, .size = .{ .px(4), .px(4) } } },
+    });
+    const P = Paint(ui, .{});
+    const E = @import("events.zig").Events(ui);
+    const targets = @import("../interact/targets.zig");
+    const entries = [_]targets.Entry{
+        .{ .node = 2, .policy = .{ .minimum = .{ 24, 24 } } },
+        .{ .node = 3, .policy = .{ .minimum = .{ 16, 16 } } },
+    };
+    try testing.expectEqual(P.Cols.node_count, P.Cols.slot_count);
+    inline for (.{ ct_layout.Plain(ui, .{}), ct_layout.Layout(ui, .{}) }) |L| {
+        var scratch: L.Scratch = undefined;
+        var ram: P.Cols.Dynamic = undefined;
+        for ([_]u32{ 0, 1, 0 }) |mode| {
+            L.runLive(&scratch, &ram, .{ 60, 40 }, .{.{ .n = mode }});
+            const expected: ?E.Widget = if (mode == 0) .only else null;
+            try testing.expectEqual(expected, try E.atPaintTargets(P, &ram, &.{}, 2, 2));
+            try testing.expectEqual(expected, try E.atPaintTargets(P, &ram, &entries, 2, 2));
+            try testing.expectEqual(0, ram.visible[3]);
+            try testing.expectEqual(@as(?E.Widget, null), E.atPaint(P, &ram, 1, 22));
+            try testing.expectEqual(E.Widget.outside, try E.atPaintTargets(P, &ram, &entries, 1, 22));
         }
     }
 }

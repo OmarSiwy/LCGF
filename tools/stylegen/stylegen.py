@@ -4,7 +4,7 @@
 Host tool, Python standard library only. It never evaluates expressions, imports input
 modules, fetches references or executes generated code. Source/metadata round-trip in the
 optional JSON report; the target profile records rem, blur and color lowering decisions.
-See docs/guide/styling.md for the supported format and consumer examples.
+See docs/styling/recipes.md for the supported format and consumer examples.
 """
 
 from __future__ import annotations

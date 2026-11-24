@@ -30,6 +30,14 @@ const std = @import("std");
 const simd = @import("../core/simd.zig");
 const tree = @import("../core/tree.zig");
 const layout = @import("../layout/layout.zig");
+const rounding = @import("../layout/rounding.zig");
+pub const RoundingError = error{ InvalidScale, FractionalCoordinatesRequired };
+
+fn validateRounding(comptime Coordinate: type, options: rounding.Options) RoundingError!void {
+    try options.validate();
+    if (@typeInfo(Coordinate) == .int and
+        (options.mode == .none or options.scale != 1 or @floor(options.origin[0]) != options.origin[0] or @floor(options.origin[1]) != options.origin[1])) return error.FractionalCoordinatesRequired;
+}
 const columns = @import("columns.zig");
 const dynamic = @import("dynamic.zig");
 const Spec = @import("spec.zig").Spec;
@@ -324,9 +332,29 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
 
         /// Measures every declared label and lays out the selected rows.
         pub fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
+            runLiveTextRounded(scratch, ram, viewport, sel, spans, font, .{}) catch unreachable;
+        }
+
+        pub fn runRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, grid_options: rounding.Options) RoundingError!void {
+            if (D.count != 0) @compileError("select dynamic regions with runLiveRounded");
+            try runLiveRounded(scratch, ram, viewport, .{}, grid_options);
+        }
+
+        pub fn runTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) RoundingError!void {
+            if (D.count != 0) @compileError("select dynamic regions with runLiveTextRounded");
+            try runLiveTextRounded(scratch, ram, viewport, .{}, spans, font, grid_options);
+        }
+
+        pub fn runLiveRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, grid_options: rounding.Options) RoundingError!void {
+            try runLiveTextRounded(scratch, ram, viewport, sel, &@as([label_count]Span, @splat(.{})), {}, grid_options);
+        }
+
+        /// Invalid options or integer-only retained columns leave scratch and RAM unchanged.
+        pub fn runLiveTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) RoundingError!void {
+            try validateRounding(C.Coordinate, grid_options);
             passesLiveText(scratch, viewport, sel, spans, font);
             var v = view(scratch);
-            layout.finalize(&v);
+            try layout.finalizeWith(&v, grid_options);
             keep(scratch, ram);
         }
 
@@ -606,6 +634,10 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
         pub const runLive = P.runLive;
         pub const runLiveText = P.runLiveText;
         pub const runText = P.runText;
+        pub const runRounded = P.runRounded;
+        pub const runTextRounded = P.runTextRounded;
+        pub const runLiveRounded = P.runLiveRounded;
+        pub const runLiveTextRounded = P.runLiveTextRounded;
         pub const relayout = P.relayout;
         pub const dirtySpan = P.dirtySpan;
     };
@@ -699,6 +731,26 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
 
         /// Measures every declared label and lays out the selected rows.
         pub fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
+            runLiveTextRounded(scratch, ram, viewport, sel, spans, font, .{}) catch unreachable;
+        }
+
+        pub fn runRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, grid_options: rounding.Options) RoundingError!void {
+            if (D.count != 0) @compileError("select dynamic regions with runLiveRounded");
+            try runLiveRounded(scratch, ram, viewport, .{}, grid_options);
+        }
+
+        pub fn runTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) RoundingError!void {
+            if (D.count != 0) @compileError("select dynamic regions with runLiveTextRounded");
+            try runLiveTextRounded(scratch, ram, viewport, .{}, spans, font, grid_options);
+        }
+
+        pub fn runLiveRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, grid_options: rounding.Options) RoundingError!void {
+            try runLiveTextRounded(scratch, ram, viewport, sel, &@as([label_count]Span, @splat(.{})), {}, grid_options);
+        }
+
+        /// Invalid options or integer-only retained columns leave scratch and RAM unchanged.
+        pub fn runLiveTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) RoundingError!void {
+            try validateRounding(C.Coordinate, grid_options);
             comptime std.debug.assert(S.label_count == label_count);
             scratch.selection = sel;
             S.passesLiveText(&scratch.skel, viewport, sel, spans, font);
@@ -718,7 +770,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
                 for (&full.sense, m) |*x, k| x.* &= @truncate(k);
             }
             var v = P.view(full);
-            layout.finalize(&v);
+            try layout.finalizeWith(&v, grid_options);
             P.keep(full, ram);
         }
     };
@@ -967,4 +1019,52 @@ test "Layout: equals the runtime front end (Context frame) for every example and
             if (vp[0] <= max[0] and vp[1] <= max[1]) try expectSameAsContext(e, vp);
         }
     };
+}
+
+test "rounded runtime, plain and folded layouts retain shared fractional geometry" {
+    const sp = @import("spec.zig");
+    const spec = sp.row(.{ .size = .{ .fill, .fill }, .gap = 0.2, .pad = @splat(0.3) }, .{
+        sp.col(.{ .size = .{ .px(10.6), .px(7.6) }, .fill = .white }, .{sp.col(.{ .size = .{ .px(2.6), .px(3.6) } }, .{})}),
+        sp.col(.{ .size = .{ .px(10.6), .px(7.6) }, .fill = .white }, .{}),
+    });
+    const options: Options = .{ .viewport = .{ 100, 100 }, .fractional_coordinates = true };
+    const P = Plain(spec, options);
+    const L = Layout(spec, options);
+    try testing.expect(L.folded_rows > 0);
+    const Build = struct {
+        fn add(f: *@import("../runtime/frame.zig").Frame, comptime node: Spec) void {
+            _ = f.open(.none, node.style);
+            inline for (node.children) |child| add(f, child);
+            f.close();
+        }
+    };
+    var ps: P.Scratch = undefined;
+    var ls: L.Scratch = undefined;
+    var pr: P.Cols.Dynamic = undefined;
+    var lr: L.Cols.Dynamic = undefined;
+    const limits: @import("../runtime/context.zig").Limits = .{ .nodes = 8, .texts = 1, .customs = 1, .strings = 8, .depth = 8 };
+    var buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&buf, limits);
+    for ([_]rounding.Options{ .{ .mode = .none }, .{ .scale = 1.25 }, .{ .mode = .floor, .scale = 2 }, .{ .mode = .ceil, .origin = .{ 0.1, 0.2 } } }) |grid| {
+        try P.runRounded(&ps, &pr, .{ 100, 100 }, grid);
+        try L.runRounded(&ls, &lr, .{ 100, 100 }, grid);
+        var f = ctx.begin(&.{ .viewport = .{ 100, 100 } });
+        Build.add(&f, spec);
+        const out = try f.endRounded(.{}, grid);
+        try testing.expect(out.status.ok());
+        for (0..P.Cols.node_count) |i| inline for (0..4) |a| {
+            try testing.expectApproxEqAbs(pr.rect[a][i], lr.rect[a][i], 0.0001);
+            try testing.expectApproxEqAbs(pr.rect[a][i], out.tree.c.rect[a][i + 1], 0.0001);
+        };
+    }
+    const before = lr;
+    try testing.expectError(error.InvalidScale, L.runRounded(&ls, &lr, .{ 100, 100 }, .{ .scale = 0 }));
+    try testing.expectEqual(before, lr);
+    const Compact = Layout(spec, .{ .viewport = .{ 100, 100 } });
+    var cs: Compact.Scratch = undefined;
+    var cr: Compact.Cols.Dynamic = undefined;
+    Compact.run(&cs, &cr, .{ 100, 100 });
+    const compact_before = cr;
+    try testing.expectError(error.FractionalCoordinatesRequired, Compact.runRounded(&cs, &cr, .{ 100, 100 }, .{ .scale = 1.25 }));
+    try testing.expectEqual(compact_before, cr);
 }

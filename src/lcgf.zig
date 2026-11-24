@@ -18,6 +18,7 @@ pub const overlay = @import("layout/overlay.zig");
 pub const scroll = @import("layout/scroll.zig");
 pub const grid = @import("layout/grid.zig");
 pub const rtl = @import("layout/rtl.zig");
+pub const hit_targets = @import("interact/targets.zig");
 pub const hit = @import("interact/hit.zig");
 pub const flex = @import("layout/flex.zig");
 pub const wrap = @import("layout/wrap.zig");
@@ -224,3 +225,19 @@ pub const scroll_area = @import("widgets/scroll_area.zig");
 pub const special_layout = @import("layout/special.zig");
 
 pub const document_layout = @import("layout/document.zig");
+
+pub const rounding = @import("layout/rounding.zig");
+pub const text_intrinsic = @import("text/layout/intrinsic.zig");
+pub const math_text = @import("text/layout/math.zig");
+pub const ornamental_text = @import("text/layout/ornament.zig");
+pub const text_counters = @import("text/layout/counters.zig");
+
+pub const backgrounds = @import("draw/backgrounds.zig");
+pub const image_variants = @import("draw/image_variants.zig");
+
+pub const masks = @import("draw/masks.zig");
+
+pub const grid_names = @import("layout/grid_names.zig");
+pub const text_metrics = @import("text/layout/metrics.zig");
+
+pub const text_emphasis = @import("text/layout/emphasis.zig");

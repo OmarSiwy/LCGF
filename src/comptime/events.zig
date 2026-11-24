@@ -170,6 +170,17 @@ pub fn Events(comptime spec: Spec) type {
         }
 
         /// Pure compile-time geometry route, with no runtime Tree or stored geometry table.
+        /// Optional target policies over pure comptime paint geometry, without runtime trees.
+        pub fn atPaintTargets(comptime PaintType: type, ram: anytype, entries: []const @import("../interact/targets.zig").Entry, x: f32, y: f32) @import("../interact/targets.zig").Error!?Widget {
+            const targets = @import("../interact/targets.zig");
+            try targets.validate(entries, F.node_count);
+            var found: ?Widget = null;
+            for (widget_nodes, 0..) |node, k| {
+                if (PaintType.hitTarget(ram, node, .{ x, y }, targets.policyAt(entries, node))) found = widget(k);
+            }
+            return found;
+        }
+
         /// PaintType is ct_paint.Paint(spec, options); use the same ram as its emit call.
         pub fn atPaint(comptime PaintType: type, ram: *const PaintType.Cols.Dynamic, x: f32, y: f32) ?Widget {
             var result: ?Widget = null;

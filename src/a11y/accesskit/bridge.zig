@@ -334,6 +334,9 @@ pub const Bridge = struct {
         if (st.selected) c.accesskit_node_set_selected(n, true);
         if (st.disabled) c.accesskit_node_set_disabled(n);
         if (st.read_only) c.accesskit_node_set_read_only(n);
+        if (st.required) c.accesskit_node_set_required(n);
+        if (st.busy) c.accesskit_node_set_busy(n);
+        if (st.invalid) c.accesskit_node_set_invalid(n, .true);
         // `focused` needs nothing here: AccessKit takes focus from the update (`focusId`).
         if (of.value) c.accesskit_node_set_numeric_value(n, e.value[r]);
         const lo = e.range[0][r];
@@ -723,7 +726,7 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     a11y.setText(&f.s, name, &f.str, "", "Your name");
     a11y.setText(&f.s, city, &f.str, "Oslo", "");
     // Name is a read-only text area (several lines).
-    f.s.c.state[name] = a11y.State.bitsOf(.{ .multiline = true, .read_only = true });
+    f.s.c.state[name] = a11y.State.bitsOf(.{ .multiline = true, .read_only = true, .invalid = true, .required = true, .busy = true });
     f.end(0);
     _ = Bridge.activate(&f.b);
     const u = Bridge.factory(&f.b).?;
@@ -737,6 +740,9 @@ test "accesskit: a text input's text goes out as its value, its placeholder as p
     try expectHas(d, "role: SearchInput");
     try expectHas(d, "role: MultilineTextInput");
     try expectHas(d, "is_read_only");
+    try expectHas(d, "is_required");
+    try expectHas(d, "is_busy");
+    try expectHas(d, "invalid: True");
     try expectHas(d, "TextRun");
     try expectHas(d, "character_lengths: [1, 1, 1, 1]");
     try testing.expectEqual(1, std.mem.count(u8, d, "TextRun"));

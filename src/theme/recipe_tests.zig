@@ -100,6 +100,41 @@ test "recipe controls: runtime/comptime draw and behavior parity through click, 
     try std.testing.expectEqual(@as(?anyerror, null), output.comptime_.failure);
 }
 
+test "forced color selection uses HighlightText in both front ends without duplicate semantics" {
+    @setEvalBranchQuota(200_000);
+    const Saved = struct {
+        var run: Run = .{};
+    };
+    const run = &Saved.run;
+    run.init();
+    run.app.field = textfield_zig.Text(64).init("office");
+    run.app.field.editor().anchor = 1;
+    run.app.field.editor().caret = 4;
+    run.app.environment = .{ .dark = false, .forced_colors = true };
+    run.ui.signals.set(.field, run.app.field);
+    run.ui.signals.set(.environment, run.app.environment);
+    const input: Input = .{ .viewport = .{ 320, 400 } };
+    const output = try run.frame(&input);
+    const colors = style.system_colors.highContrast(false);
+    var found = false;
+    for (output.runtime.draw.runs[0..output.runtime.draw.run_len]) |text_run| {
+        if (text_run.color == colors.get(.highlight_text).bitsOf()) found = true;
+    }
+    try std.testing.expect(found);
+    const field_row = output.runtime.tree.find(.from("field"));
+    var text_nodes: usize = 0;
+    var semantic_nodes: usize = 0;
+    for (field_row + 1..output.runtime.tree.c.end[field_row]) |row| {
+        if (output.runtime.tree.c.text[row] != types.none) {
+            text_nodes += 1;
+            semantic_nodes += @intFromBool(output.runtime.tree.participation(@intCast(row)).semantics);
+        }
+    }
+    try std.testing.expect(text_nodes >= 3);
+    try std.testing.expectEqual(@as(usize, 1), semantic_nodes);
+    try std.testing.expect(output.runtime.status.ok());
+}
+
 test "recipe disabled state cancels capture, skips Tab and cannot be defeated by a visual override" {
     @setEvalBranchQuota(200_000);
     const Saved = struct {

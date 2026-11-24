@@ -119,6 +119,9 @@ pub const Lines = struct {
 /// read by `reorder`.
 pub const Align = struct {
     width: f32 = 0,
+    /// Optional leading-line widths, e.g. beside a drop cap or caller-computed exclusion.
+    /// Later lines use width. Both placement and bidi reordering consume the same values.
+    line_widths: []const f32 = &.{},
     factor: f32 = 0,
     justify: bool = false,
     direction: bidi.Direction = .auto,
@@ -460,7 +463,8 @@ pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metri
         for (first..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
         // An unbounded measure has no spare alignment space. In particular, centring must
         // not send a glyph to half of floatMax, and justification must never multiply infinity.
-        const free = if (std.math.isFinite(a.width)) a.width - lines.width[k] else 0;
+        const available = if (k < a.line_widths.len) a.line_widths[k] else a.width;
+        const free = if (std.math.isFinite(available)) available - lines.width[k] else 0;
         const j = justify * (1 - lines.hard[k]) * @min(spaces, 1);
         lines.extra[k] = j * free / @max(spaces, 1);
         lines.x[k] = (1 - j) * free * a.factor;
@@ -565,7 +569,7 @@ pub fn reorder(lines: *Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScr
                 while (cp + 1 < c1 and s.at[cp + 1] <= g.cluster[i]) cp += 1;
                 g.level[i] = s.levels[cp];
             }
-            try visualLine(lines, g, text, k, para, a.width, a.physical, s.order);
+            try visualLine(lines, g, text, k, para, if (k < a.line_widths.len) a.line_widths[k] else a.width, a.physical, s.order);
             c = c1;
         }
     }

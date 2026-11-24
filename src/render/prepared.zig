@@ -79,6 +79,10 @@ pub fn bake(shape: decoration.RoundedRect, description: decoration.Description, 
     if (storage.len < count or rgba.len < output_count) return error.NoSpace;
     if (surface.overlaps(storage[0..count], rgba[0..output_count])) return error.AliasedStorage;
     try decoration.validateClips(clips);
+    // Surface initialization clears its storage; reject borrowed image/coverage aliases
+    // before that first write, including the later straight-alpha export destination.
+    try decoration.validateSources(storage[0..count], description, clips);
+    try decoration.validateSources(rgba[0..output_count], description, clips);
     const target = try surface.init(storage, dims.width, dims.height);
     try decoration.rasterize(target, shape, description, .{ .origin = dims.origin, .scale = scale, .quality = quality, .clips = clips });
     try surface.exportRGBA(target, rgba, dims.width, .straight);
@@ -226,7 +230,10 @@ pub fn drawRange(dst: surface.Surface, scratch: surface.Surface, list: *const dr
     if (first > list.cmd_len or count > list.cmd_len - first) return error.InvalidRange;
     if (!std.math.isFinite(view.scale) or view.scale <= 0 or !std.math.isFinite(view.origin[0]) or !std.math.isFinite(view.origin[1])) return error.InvalidScale;
     if (view.clips.len > limits.clips) return error.BudgetExceeded;
-    try decoration.validateClips(view.clips);
+    // Clips are borrowed throughout the pass. Reject aliases before clearing scratch
+    // or compositing into dst, either of which would change a later coverage sample.
+    try decoration.validateClipSources(dst.pixels, view.clips);
+    try decoration.validateClipSources(scratch.pixels, view.clips);
     if (view.nodes != null and view.tree == null) return error.MissingNodeMap;
     if (view.tree) |input| {
         if (input.nodes.len < list.quad_len or input.nodes.runs.len < list.run_len) return error.InvalidNodeMap;
@@ -307,8 +314,8 @@ fn paintQuad(dst: surface.Surface, scratch: surface.Surface, source: draw.Quad, 
 pub fn applyClips(dst: surface.Surface, clips: []const decoration.Clip, view: View) Error!void {
     if (!std.math.isFinite(view.scale) or view.scale <= 0 or !std.math.isFinite(view.origin[0]) or !std.math.isFinite(view.origin[1])) return error.InvalidScale;
     try dst.validate();
-    try decoration.validateClips(clips);
-    try decoration.validateClips(view.clips);
+    try decoration.validateClipSources(dst.pixels, clips);
+    try decoration.validateClipSources(dst.pixels, view.clips);
     const samples: u32 = switch (view.quality) {
         .one => 1,
         .four => 2,
@@ -402,4 +409,60 @@ test "ordinary quad text and custom commands participate in an exact clipped iso
     try std.testing.expectEqual(@as(u32, 0x80800000), output.pixels[8 * output.stride + 14]);
     try std.testing.expectEqual(label, nodes.runs[0]);
     try std.testing.expectEqual(box, nodes.quads[0]);
+}
+
+test "bake rejects borrowed source aliases before clearing scratch or export pixels" {
+    var scratch: [128]u32 = @splat(0xff339977);
+    var output: [128]u32 = @splat(0xffeeccaa);
+    const rect: types.Rect = .{ .x1 = 2, .y1 = 2 };
+    for ([_][]u32{ &scratch, &output }) |source| {
+        const image: surface.Image = .{ .pixels = source, .width = 2, .height = 2, .stride = 2 };
+        const value: decoration.Description = .{ .backgrounds = &.{.{ .brush = .{ .image = .{ .image = image, .source = rect, .destination = rect, .area = rect } } }} };
+        try std.testing.expectError(error.AliasedStorage, bake(.{ .rect = rect }, value, 1, &.{}, .one, .{}, &scratch, &output));
+        try std.testing.expectEqual(@as(u32, 0xff339977), scratch[0]);
+        try std.testing.expectEqual(@as(u32, 0xffeeccaa), output[0]);
+    }
+}
+
+test "drawRange rejects borrowed coverage aliases before modifying destination or scratch" {
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var list = draw.DrawList.init(&carver, 1, 0, 0);
+    list.quads[0] = .{ .rect = .{ 0, 0, 2, 2 }, .clip = .{ 0, 0, 2, 2 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = 0xffffffff, .border_color = 0, .border = 0, .opacity = 1 };
+    list.quad_len = 1;
+    list.cmd_len = 1;
+    list.cmd.kind[0] = @backingInt(draw.DrawList.Kind.quads);
+    list.cmd.first[0] = 0;
+    list.cmd.count[0] = 1;
+    list.cmd.key[0] = 0;
+    var dst_pixels: [128]u32 = undefined;
+    var scratch_pixels: [128]u32 = undefined;
+    const dst = try surface.init(&dst_pixels, 2, 2);
+    const scratch = try surface.init(&scratch_pixels, 2, 2);
+    @memset(&dst_pixels, 0xff224466);
+    @memset(&scratch_pixels, 0xff7799bb);
+    const before_dst = dst_pixels;
+    const before_scratch = scratch_pixels;
+    for ([_]surface.Image{ dst.view(), scratch.view() }) |image| {
+        const clips = [_]decoration.Clip{.{ .coverage = .{ .image = image } }};
+        try std.testing.expectError(error.AliasedStorage, drawRange(dst, scratch, &list, 0, 1, .{}, .{ .clips = &clips }, .{}));
+        try std.testing.expectEqualSlices(u32, &before_dst, &dst_pixels);
+        try std.testing.expectEqualSlices(u32, &before_scratch, &scratch_pixels);
+    }
+}
+
+test "applyClips rejects aliased coverage in either clip list before modifying pixels" {
+    var dst_pixels: [128]u32 = undefined;
+    var mask_pixels: [128]u32 = undefined;
+    const dst = try surface.init(&dst_pixels, 2, 2);
+    const mask = try surface.init(&mask_pixels, 2, 2);
+    @memset(&dst_pixels, 0xff224466);
+    @memset(&mask_pixels, 0x80808080);
+    const before = dst_pixels;
+    const borrowed = [_]decoration.Clip{.{ .coverage = .{ .image = dst.view() } }};
+    const separate = [_]decoration.Clip{.{ .coverage = .{ .image = mask.view() } }};
+    try std.testing.expectError(error.AliasedStorage, applyClips(dst, &borrowed, .{ .clips = &separate }));
+    try std.testing.expectEqualSlices(u32, &before, &dst_pixels);
+    try std.testing.expectError(error.AliasedStorage, applyClips(dst, &separate, .{ .clips = &borrowed }));
+    try std.testing.expectEqualSlices(u32, &before, &dst_pixels);
 }

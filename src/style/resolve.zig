@@ -55,7 +55,8 @@ pub const States = bitpack struct(u64) {
     scrolling: bool = false,
     current: bool = false,
     toggled: bool = false,
-    custom: u46 = 0,
+    required: bool = false,
+    custom: u45 = 0,
 
     pub fn bits(states: States) u64 {
         return @bitCast(states);
@@ -77,6 +78,9 @@ pub const States = bitpack struct(u64) {
             .read_only = semantic.read_only,
             .current = semantic.current,
             .toggled = semantic.pressed,
+            .invalid = semantic.invalid,
+            .required = semantic.required,
+            .busy = semantic.busy,
         };
     }
 

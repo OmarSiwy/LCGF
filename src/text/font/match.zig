@@ -76,6 +76,51 @@ pub fn apply(tx: *Texts, row: u32, catalog: []const Entry, families: []const []c
     return true;
 }
 
+pub const Metric = enum { x_height, cap_height, zero_advance, ideograph_advance };
+pub const AdjustError = error{ InvalidSize, MissingMetric };
+
+/// Selected font metric as a fraction of its em. OS/2 x/cap metadata wins when present;
+/// native TrueType outline bounds supply a measured fallback. Missing glyph/metric is an
+/// explicit error, rather than a silent guessed x-height or incorrect fallback advance.
+pub fn metricRatio(face: *const opentype.Face, metric: Metric) error{MissingMetric}!f32 {
+    const os2 = (face.dir.find(opentype.tag("OS/2")) catch null) orelse &.{};
+    if ((metric == .x_height or metric == .cap_height) and read(os2, 0, 0) >= 2 and os2.len >= 90) {
+        const at: usize = if (metric == .x_height) 86 else 88;
+        const value = std.mem.readInt(i16, os2[at..][0..2], .big);
+        if (value > 0) return @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(face.units_per_em));
+    }
+    const cp: u21 = switch (metric) {
+        .x_height => 'x',
+        .cap_height => 'H',
+        .zero_advance => '0',
+        .ideograph_advance => 0x6c34,
+    };
+    const glyph = face.cmap.glyph(cp);
+    if (glyph == 0) return error.MissingMetric;
+    var value: f32 = 0;
+    if (metric == .zero_advance or metric == .ideograph_advance) {
+        value = @floatFromInt(face.hMetrics(glyph).advance);
+    } else {
+        const record = face.glyphRecord(glyph) catch return error.MissingMetric;
+        if (record.len < 10) return error.MissingMetric;
+        value = @floatFromInt(std.mem.readInt(i16, record[8..10], .big));
+    }
+    if (value <= 0) return error.MissingMetric;
+    return value / @as(f32, @floatFromInt(face.units_per_em));
+}
+
+pub fn adjustedSize(face: *const opentype.Face, px: f32, target_ratio: f32, metric: Metric) AdjustError!f32 {
+    if (!std.math.isFinite(px) or !std.math.isFinite(target_ratio) or px < 0 or target_ratio < 0) return error.InvalidSize;
+    const result = px * target_ratio / try metricRatio(face, metric);
+    if (!std.math.isFinite(result)) return error.InvalidSize;
+    return result;
+}
+
+/// Direct font-size-adjust consumer: normal Stack measurement/shaping uses the new px.
+pub fn applySizeAdjust(tx: *Texts, row: u32, face: *const opentype.Face, target_ratio: f32, metric: Metric) AdjustError!void {
+    tx.c.px[row] = try adjustedSize(face, tx.c.px[row], target_ratio, metric);
+}
+
 fn less(a: [3]f32, b: [3]f32) bool {
     inline for (0..3) |i| {
         if (a[i] != b[i]) return a[i] < b[i];
@@ -136,6 +181,16 @@ test "font requests select actual family faces before the ordinary text measure 
     var ascent: [1]f32 = undefined;
     st.measure(&tx, &strings, &ascent);
     try std.testing.expect(tx.c.w[0] > 0 and tx.c.h[0] > 0 and !st.overflow);
+    const old_width = tx.c.w[0];
+    const old_height = tx.c.h[0];
+    const ratio = try metricRatio(&bold, .x_height);
+    try applySizeAdjust(&tx, 0, &bold, ratio * 0.5, .x_height);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), tx.c.px[0], 0.001);
+    st.measure(&tx, &strings, &ascent);
+    try std.testing.expectApproxEqAbs(old_width * 0.5, tx.c.w[0], 0.001);
+    try std.testing.expectApproxEqAbs(old_height * 0.5, tx.c.h[0], 0.001);
+    try std.testing.expectError(error.MissingMetric, metricRatio(&bold, .ideograph_advance));
+    try std.testing.expectError(error.InvalidSize, adjustedSize(&bold, 20, -1, .x_height));
 }
 
 test "static-face matching respects width priority and the 400 to 500 weight interval" {

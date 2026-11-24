@@ -16,6 +16,7 @@ const iface = @import("iface.zig");
 pub const Feature = enum {
     solid,
     image,
+    image_sampling,
     glyphs,
     border,
     circular_corners,
@@ -127,6 +128,9 @@ fn brushRequirements(set: *Set, brush: brushes.Brush) void {
         .conic, .sweep => set.insert(.conic_gradient),
         .image => |image| {
             set.insert(.image);
+            // The portable brush owns its sampler and LOD contract; stock quad sampling is
+            // backend-defined and cannot promise the same linear/mipmap result.
+            set.insert(.image_sampling);
             if (image.repeat[0] != .none or image.repeat[1] != .none) set.insert(.repeated_image);
         },
     }
@@ -263,4 +267,14 @@ test "checked rendering rejects stripped shaders before an ordinary backend draw
     try render(&backend, target, &list, .{}, null, .stock, .{});
     try std.testing.expect(pixels[0] != 0);
     try std.testing.expect(pixels[0] != pixels[7]);
+}
+
+test "image brush sampling requests preparation rather than a backend-default sampler" {
+    const pixels = [_]u32{0xffffffff};
+    const requirements = decorationRequirements(.{ .rect = .{ .x0 = 0, .y0 = 0, .x1 = 1, .y1 = 1 } }, .{ .backgrounds = &.{.{ .brush = .{ .image = .{ .image = .{ .pixels = &pixels, .width = 1, .height = 1, .stride = 1 }, .source = .{ .x0 = 0, .y0 = 0, .x1 = 1, .y1 = 1 }, .destination = .{ .x0 = 0, .y0 = 0, .x1 = 1, .y1 = 1 }, .area = .{ .x0 = 0, .y0 = 0, .x1 = 1, .y1 = 1 } } } }} }, &.{});
+    try std.testing.expect(requirements.contains(.image_sampling));
+    try std.testing.expectError(error.UnsupportedFeature, plan(requirements, .stock, .{}).require());
+    const portable = plan(requirements, .portable_sdr, .{});
+    try portable.require();
+    try std.testing.expect(portable.prepared.contains(.image_sampling));
 }
