@@ -1,0 +1,179 @@
+--- a/src/render/sw/sw.zig
++++ b/src/render/sw/sw.zig
+@@ -9,7 +9,7 @@
+ //! batches specialize white bindings and each quad picks the loop for its material and geometry.
+ //! Ordinary textured rectangles (including glyph cells) omit inactive transform, border and
+ //! rounded-clip work, while preserving the same coverage, sampling and blend arithmetic.
+-//! Opaque bordered panels fill a proven full-coverage interior and shade the unchanged perimeter.
++//! Opaque panels fill a proven full-coverage interior and shade the unchanged perimeter.
+ //!
+ //! Framebuffer rows are padded to whole vectors, so shading uses whole vectors with a mask for
+ //! the pixels outside the quad or the scissor.
+@@ -285,7 +285,7 @@
+                     continue;
+                 }
+                 if (comptime !(shading.image or shading.text)) {
+-                    if (borderedInterior(q, img, s.scale)) |interior| {
++                    if (opaqueInterior(q, img, s.scale)) |interior| {
+                         // Preserve the full shader's loop box, including its final
+                         // candidate pixel for fractional edges. Only coverage decides
+                         // whether that pixel contributes.
+@@ -401,7 +401,8 @@
+ /// An opaque interior whose coverage is proven in the shader's own f32 arithmetic.
+ /// Fractional scales and edges are allowed: only pixels far from the contour use
+ /// a fill, and an exact extrema check rejects a candidate that cannot be proved.
+-fn borderedInterior(q: *const Quad, img: Image, scale: f32) ?[4]u32 {
++/// Zero and subthreshold border widths use the same conservative coverage proof.
++fn opaqueInterior(q: *const Quad, img: Image, scale: f32) ?[4]u32 {
+     const V = @Vector(4, f32);
+     const zero: V = @splat(0);
+     const color: Color = @bitCast(q.fill);
+@@ -423,7 +424,7 @@
+     if (!@reduce(.And, @abs(rect) <= limit) or
+         rect[0] >= rect[2] or rect[1] >= rect[3] or
+         !@reduce(.And, (radii >= zero) & (radii <= limit)) or
+-        !(q.border >= 0.001 and border <= (1 << 16)) or
++        !(q.border >= 0 and border <= (1 << 16)) or
+         !@reduce(.And, @abs(clip) <= @as(V, @splat(1 << 22)))) return null;
+ 
+     // This geometric inset only proposes a useful interior; it is not a floating
+@@ -1013,7 +1014,7 @@
+                 q.clip = @as(@Vector(4, f32), scene.clip) / s;
+                 q.border = scene.border / scale;
+                 try testing.expect(!solidRect(&q, Image.white, scale));
+-                try testing.expect(borderedInterior(&q, Image.white, scale) != null);
++                try testing.expect(opaqueInterior(&q, Image.white, scale) != null);
+                 for ([_]u8{ 0, 97, 255 }) |alpha| {
+                     q.border_color = Color.rgba(211, 33, 80, alpha).bitsOf();
+                     try expectBorderedMatches(q, scale, format, scene.scissor);
+@@ -1039,10 +1040,71 @@
+                 q.radii = scene.radii;
+                 q.border = scene.border;
+                 q.clip = scene.clip;
+-                try testing.expect(borderedInterior(&q, Image.white, scale) != null);
++                try testing.expect(opaqueInterior(&q, Image.white, scale) != null);
+                 for ([_]u8{ 0, 97, 255 }) |alpha| {
+                     q.border_color = Color.rgba(211, 33, 80, alpha).bitsOf();
+                     try expectBorderedMatches(q, scale, format, .{ 3, 2, 91, 79 });
++                }
++            }
++        }
++    }
++}
++
++test "opaque interiors preserve zero and subthreshold borders at fractional edges" {
++    const Scene = struct {
++        rect: [4]f32,
++        radii: [4]f32,
++        clip: [4]f32,
++        scissor: [4]u32 = .{ 0, 0, 99, 83 },
++    };
++    const scenes = [_]Scene{
++        .{ .rect = .{ 1.1, 0.7, 63.3, 47.9 }, .radii = @splat(0), .clip = .{ 0.2, 0.9, 66.1, 49.7 } },
++        .{ .rect = .{ -11.25, -6.75, 51.1, 38.7 }, .radii = .{ 0, 0.5, 1.25, 2.75 }, .clip = .{ 2.35, 1.25, 61.75, 43.125 }, .scissor = .{ 3, 2, 91, 79 } },
++        .{ .rect = .{ 0.1, 0.2, 31.3, 29.4 }, .radii = .{ 1.1, 2.3, 0.7, 3.1 }, .clip = .{ 6.4999995, 6.5000005, 25.500002, 24.499998 } },
++        .{ .rect = .{ -32767.9, -16383.7, 65.1, 48.3 }, .radii = @splat(0), .clip = .{ 0.35, 1.15, 65.8, 50.6 } },
++    };
++    for ([_]Format{ .rgba8, .bgra8 }) |format| {
++        for ([_]f32{ 0.75, 1.25, 1.5, 1.3333334, 2 }) |scale| {
++            for (scenes) |scene| {
++                var q = testQuad(scene.rect, .rgb(17, 149, 231));
++                q.radii = scene.radii;
++                q.clip = scene.clip;
++                for ([_]f32{ 0, 0.000001, 0.0005, 0.0009999999 }) |border| {
++                    q.border = border;
++                    // Exercise the new eligibility directly, not the integer-edge fill.
++                    try testing.expect(!solidRect(&q, Image.white, scale));
++                    try testing.expect(opaqueInterior(&q, Image.white, scale) != null);
++                    for ([_]u8{ 0, 97, 255 }) |alpha| {
++                        q.border_color = Color.rgba(211, 33, 80, alpha).bitsOf();
++                        // The helper compares every pixel, destination alpha and padding.
++                        try expectBorderedMatches(q, scale, format, scene.scissor);
++                    }
++                }
++            }
++        }
++    }
++}
++
++test "borderless interior fallback preserves tiny panels and inclusive narrow clips" {
++    for ([_]Format{ .rgba8, .bgra8 }) |format| {
++        for ([_]f32{ 1.25, 1.5 }) |scale| {
++            for ([_]f32{ 0, 0.0005 }) |border| {
++                var q = testQuad(.{ 3.1, 4.1, 3.9, 4.9 }, .rgb(19, 85, 211));
++                q.border = border;
++                q.border_color = Color.rgba(250, 61, 101, 97).bitsOf();
++                try testing.expect(opaqueInterior(&q, Image.white, scale) == null);
++                try expectBorderedMatches(q, scale, format, .{ 0, 0, 99, 83 });
++                q.rect = .{ 1.1, 1.3, 31.1, 23.3 };
++                q.radii = .{ 0, 2.5, 0.75, 3.25 };
++                const center = @as(f32, 10.5) * (1 / scale);
++                for ([_][4]f32{
++                    .{ center, 0, center, 99 },
++                    .{ 0, center, 99, center },
++                    .{ center - 0.1, center - 0.1, center + 0.1, center + 0.1 },
++                }) |clip| {
++                    q.clip = clip;
++                    try testing.expect(opaqueInterior(&q, Image.white, scale) == null);
++                    try expectBorderedMatches(q, scale, format, .{ 0, 0, 99, 83 });
+                 }
+             }
+         }
+@@ -1061,7 +1123,7 @@
+         q.radii = @splat(3);
+         q.border = 1;
+         q.border_color = Color.rgba(250, 61, 101, 97).bitsOf();
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
+         for ([_]Format{ .rgba8, .bgra8 }) |format|
+             try expectBorderedMatches(q, 1, format, .{ 0, 0, 99, 83 });
+     }
+@@ -1072,7 +1134,7 @@
+     // The hard clip includes a pixel center but has no conservative fill interval.
+     for ([_][4]f32{ .{ 8.4, 9.4, 8.6, 9.6 }, .{ 8, 9, 8, 9 } }) |clip| {
+         q.clip = clip;
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
+         for ([_]Format{ .rgba8, .bgra8 }) |format|
+             try expectBorderedMatches(q, 1, format, .{ 0, 0, 99, 83 });
+     }
+@@ -1103,7 +1165,7 @@
+         const scale: f32 = if (mode == 9) 1.25 else 1;
+         const kind: features.Kind = if (mode == 7) .linear else .solid;
+         const eligible = mode == 0 or mode == 1 or mode == 2 or mode == 9;
+-        try testing.expectEqual(eligible, borderedInterior(&q, img, scale) != null);
++        try testing.expectEqual(eligible, opaqueInterior(&q, img, scale) != null);
+         for ([_]Format{ .rgba8, .bgra8 }) |format|
+             try expectTexturedMatches(kind, q, img, scale, format, false);
+     }
+@@ -1114,23 +1176,23 @@
+     panel.clip = .{ 169, 57, 800, 600 };
+     panel.radii = @splat(5);
+     panel.border = 1;
+-    try testing.expectEqual([4]u32{ 191, 144, 778, 472 }, borderedInterior(&panel, Image.white, 1).?);
+-    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32), 65537 }) |bad| {
++    try testing.expectEqual([4]u32{ 191, 144, 778, 472 }, opaqueInterior(&panel, Image.white, 1).?);
++    for ([_]f32{ -1, -0.000001, std.math.inf(f32), std.math.nan(f32), 65537 }) |bad| {
+         var q = panel;
+         q.radii[0] = bad;
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
+         q = panel;
+         q.border = bad;
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
+     }
+     for ([_]f32{ std.math.inf(f32), std.math.nan(f32) }) |bad| {
+         var q = panel;
+         q.rect[0] = bad;
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
+         q = panel;
+         q.clip[0] = bad;
+-        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
+-        try testing.expect(borderedInterior(&panel, Image.white, bad) == null);
++        try testing.expect(opaqueInterior(&q, Image.white, 1) == null);
++        try testing.expect(opaqueInterior(&panel, Image.white, bad) == null);
+     }
+ }
+ 

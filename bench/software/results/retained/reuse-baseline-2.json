@@ -1,0 +1,442 @@
+{
+  "benchmark": "public_frame_reuse",
+  "scope": "CPU Context.begin + public Frame.reuse scene + Frame.end; no rasterization or presentation",
+  "simd_lanes": 4,
+  "viewport": [
+    1280,
+    32768
+  ],
+  "warmups": 100,
+  "samples": 1001,
+  "percentiles": "nearest rank; individual frame wall-clock samples in nanoseconds",
+  "context_bytes": 4376960,
+  "mixed_updates": "signal changes, keyboard activation, repeating timer, ancestor clip/position/opacity, scale and moved row indices",
+  "run_order": "Cases alternate full/retained order; pass --retained-first on alternating process runs to reverse every case",
+  "comparison_rule": "Compare timings only when every frame's output hash, dimensions and cumulative update counters match. Per-frame checks and step-tagged sequence digests are outside timing; hashes are regression evidence, not mathematical equivalence proof.",
+  "cases": [
+    {
+      "scenario": "unchanged",
+      "rows": 330,
+      "full_rebuild": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 660,
+        "text_runs": 330,
+        "draw_commands": 660,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 76979,
+          "p95_ns": 134100,
+          "p99_ns": 208828,
+          "min_ns": 75791,
+          "max_ns": 727435
+        },
+        "output_hash": "d0eb7710181d1870",
+        "sequence_hash": "6fd4abf1c1f869fc",
+        "observed_frames": 1101,
+        "changed_output_frames": 0
+      },
+      "retained": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 660,
+        "text_runs": 330,
+        "draw_commands": 660,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 37100,
+          "p95_ns": 51774,
+          "p99_ns": 74671,
+          "min_ns": 36397,
+          "max_ns": 399801
+        },
+        "output_hash": "d0eb7710181d1870",
+        "sequence_hash": "6fd4abf1c1f869fc",
+        "observed_frames": 1101,
+        "changed_output_frames": 0
+      },
+      "run_order": "full, retained",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "ancestor_clip",
+      "rows": 330,
+      "full_rebuild": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 330,
+        "text_runs": 330,
+        "draw_commands": 330,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 76642,
+          "p95_ns": 120214,
+          "p99_ns": 181304,
+          "min_ns": 74261,
+          "max_ns": 1565207
+        },
+        "output_hash": "7dd45298026e7c28",
+        "sequence_hash": "10890b459601e0ed",
+        "observed_frames": 1101,
+        "changed_output_frames": 251
+      },
+      "retained": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 330,
+        "text_runs": 330,
+        "draw_commands": 330,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 36689,
+          "p95_ns": 56744,
+          "p99_ns": 111140,
+          "min_ns": 34016,
+          "max_ns": 238714
+        },
+        "output_hash": "7dd45298026e7c28",
+        "sequence_hash": "10890b459601e0ed",
+        "observed_frames": 1101,
+        "changed_output_frames": 251
+      },
+      "run_order": "retained, full",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "ancestor_layout",
+      "rows": 330,
+      "full_rebuild": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 660,
+        "text_runs": 330,
+        "draw_commands": 660,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 76828,
+          "p95_ns": 139925,
+          "p99_ns": 295130,
+          "min_ns": 74257,
+          "max_ns": 924301
+        },
+        "output_hash": "d0eb7710181d1870",
+        "sequence_hash": "9f011dacfe884ad0",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "retained": {
+        "nodes": 993,
+        "texts": 330,
+        "quads": 660,
+        "text_runs": 330,
+        "draw_commands": 660,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 43363,
+          "p95_ns": 59206,
+          "p99_ns": 101890,
+          "min_ns": 42151,
+          "max_ns": 193996
+        },
+        "output_hash": "d0eb7710181d1870",
+        "sequence_hash": "9f011dacfe884ad0",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "run_order": "full, retained",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "mixed_updates",
+      "rows": 330,
+      "full_rebuild": {
+        "nodes": 995,
+        "texts": 330,
+        "quads": 330,
+        "text_runs": 330,
+        "draw_commands": 330,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 137,
+        "keyboard_activations": 17,
+        "frame": {
+          "median_ns": 78855,
+          "p95_ns": 121733,
+          "p99_ns": 198391,
+          "min_ns": 76079,
+          "max_ns": 620015
+        },
+        "output_hash": "3266058c5eb8412a",
+        "sequence_hash": "255dfe79594dcdbb",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "retained": {
+        "nodes": 995,
+        "texts": 330,
+        "quads": 330,
+        "text_runs": 330,
+        "draw_commands": 330,
+        "subtree_builds": 14,
+        "subtree_copies": 1087,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 44073,
+          "p95_ns": 78718,
+          "p99_ns": 145862,
+          "min_ns": 41988,
+          "max_ns": 614034
+        },
+        "output_hash": "3266058c5eb8412a",
+        "sequence_hash": "b10d1e5f7154cabf",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "run_order": "retained, full",
+      "compared_frames": 1101,
+      "mismatched_frames": 1093,
+      "first_mismatch_step": 8,
+      "same_output_and_updates": false
+    },
+    {
+      "scenario": "unchanged",
+      "rows": 1320,
+      "full_rebuild": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 2640,
+        "text_runs": 1320,
+        "draw_commands": 2640,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 341875,
+          "p95_ns": 505976,
+          "p99_ns": 734741,
+          "min_ns": 312768,
+          "max_ns": 1572586
+        },
+        "output_hash": "8bec94dfcebc9f06",
+        "sequence_hash": "5ec1c00fd9ff20cd",
+        "observed_frames": 1101,
+        "changed_output_frames": 0
+      },
+      "retained": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 2640,
+        "text_runs": 1320,
+        "draw_commands": 2640,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 179918,
+          "p95_ns": 304261,
+          "p99_ns": 475519,
+          "min_ns": 173166,
+          "max_ns": 804124
+        },
+        "output_hash": "8bec94dfcebc9f06",
+        "sequence_hash": "5ec1c00fd9ff20cd",
+        "observed_frames": 1101,
+        "changed_output_frames": 0
+      },
+      "run_order": "retained, full",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "ancestor_clip",
+      "rows": 1320,
+      "full_rebuild": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 1320,
+        "text_runs": 1320,
+        "draw_commands": 1320,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 338452,
+          "p95_ns": 507831,
+          "p99_ns": 636703,
+          "min_ns": 304340,
+          "max_ns": 1075132
+        },
+        "output_hash": "08c28a06035ede89",
+        "sequence_hash": "379bbb5f5237fb26",
+        "observed_frames": 1101,
+        "changed_output_frames": 251
+      },
+      "retained": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 1320,
+        "text_runs": 1320,
+        "draw_commands": 1320,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 176667,
+          "p95_ns": 276778,
+          "p99_ns": 436768,
+          "min_ns": 159684,
+          "max_ns": 796034
+        },
+        "output_hash": "08c28a06035ede89",
+        "sequence_hash": "379bbb5f5237fb26",
+        "observed_frames": 1101,
+        "changed_output_frames": 251
+      },
+      "run_order": "full, retained",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "ancestor_layout",
+      "rows": 1320,
+      "full_rebuild": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 2640,
+        "text_runs": 1320,
+        "draw_commands": 2640,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 341035,
+          "p95_ns": 488627,
+          "p99_ns": 630567,
+          "min_ns": 304946,
+          "max_ns": 903409
+        },
+        "output_hash": "8bec94dfcebc9f06",
+        "sequence_hash": "a98c941fd0a1749d",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "retained": {
+        "nodes": 3963,
+        "texts": 1320,
+        "quads": 2640,
+        "text_runs": 1320,
+        "draw_commands": 2640,
+        "subtree_builds": 1,
+        "subtree_copies": 1100,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 205889,
+          "p95_ns": 319163,
+          "p99_ns": 473238,
+          "min_ns": 197687,
+          "max_ns": 874477
+        },
+        "output_hash": "8bec94dfcebc9f06",
+        "sequence_hash": "a98c941fd0a1749d",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "run_order": "retained, full",
+      "compared_frames": 1101,
+      "mismatched_frames": 0,
+      "first_mismatch_step": null,
+      "same_output_and_updates": true
+    },
+    {
+      "scenario": "mixed_updates",
+      "rows": 1320,
+      "full_rebuild": {
+        "nodes": 3965,
+        "texts": 1320,
+        "quads": 1320,
+        "text_runs": 1320,
+        "draw_commands": 1320,
+        "subtree_builds": 1101,
+        "subtree_copies": 0,
+        "timer_fires": 137,
+        "keyboard_activations": 17,
+        "frame": {
+          "median_ns": 346421,
+          "p95_ns": 483706,
+          "p99_ns": 669323,
+          "min_ns": 309570,
+          "max_ns": 962168
+        },
+        "output_hash": "34cb28b257df5239",
+        "sequence_hash": "83414e79f04ebb11",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "retained": {
+        "nodes": 3965,
+        "texts": 1320,
+        "quads": 1320,
+        "text_runs": 1320,
+        "draw_commands": 1320,
+        "subtree_builds": 14,
+        "subtree_copies": 1087,
+        "timer_fires": 0,
+        "keyboard_activations": 0,
+        "frame": {
+          "median_ns": 207495,
+          "p95_ns": 354185,
+          "p99_ns": 512329,
+          "min_ns": 186689,
+          "max_ns": 1373836
+        },
+        "output_hash": "34cb28b257df5239",
+        "sequence_hash": "08cd577fe9000495",
+        "observed_frames": 1101,
+        "changed_output_frames": 1001
+      },
+      "run_order": "full, retained",
+      "compared_frames": 1101,
+      "mismatched_frames": 1093,
+      "first_mismatch_step": 8,
+      "same_output_and_updates": false
+    }
+  ]
+}

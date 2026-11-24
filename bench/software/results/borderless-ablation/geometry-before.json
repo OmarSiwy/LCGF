@@ -1,0 +1,913 @@
+{
+  "diagnostic": "application_geometry",
+  "framework": "optimized",
+  "architecture": "viper",
+  "zig": "0.18.0-dev.1151+8dfb7a7cc",
+  "physical_viewport": [
+    1000,
+    750
+  ],
+  "logical_viewport": [
+    800,
+    600
+  ],
+  "scale": 1.25,
+  "frames_built": 2,
+  "scope": "Geometry only; normal Frame.end and the exact host Mono/atlas glyph expansion; no timings or framebuffer",
+  "area_definition": "Per-quad clipped transformed AABB area in physical pixels squared; shadows expand by 3 sigma. Overlaps and transparent glyph cells count; rounded corners, alpha, and occlusion do not reduce the estimate.",
+  "shader_box_definition": "General shader floor(lower)/floor(upper + 1) loop-box estimate after rectangular clipping; not actual pixel work for solidRect, and excludes masked SIMD lanes.",
+  "classification_definition": "Eligibility only, independent of renderer revision. classes partition each total, checking solidRect first. Other property groups overlap. legacy_general_fallback means not eligible for the original solidRect shortcut.",
+  "plain_rect_definition": "Solid feature, identity transform, positive size, exactly zero border, radii and clip radii; texture and opacity unrestricted. plain_white_fractional additionally has a white binding and fractional physical rect edges.",
+  "counts": {
+    "nodes": 59,
+    "text_runs": 29,
+    "regular_quads": 12,
+    "generated_glyph_quads": 614,
+    "draw_commands": 38,
+    "custom_commands_unmeasured": 0
+  },
+  "font_atlas": {
+    "width": 144,
+    "height": 108
+  },
+  "regular": {
+    "total": {
+      "count": 12,
+      "clipped_aabb_px2": 1372973.4375,
+      "shader_box_px": 1378619
+    },
+    "classes": {
+      "solid_rect": {
+        "count": 4,
+        "clipped_aabb_px2": 829600,
+        "shader_box_px": 830922
+      },
+      "plain_white_rect": {
+        "count": 1,
+        "clipped_aabb_px2": 142537.5,
+        "shader_box_px": 143269
+      },
+      "plain_textured_rect": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      },
+      "general_white": {
+        "count": 7,
+        "clipped_aabb_px2": 400835.9375,
+        "shader_box_px": 404428
+      },
+      "general_textured": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      }
+    },
+    "white_binding": {
+      "count": 12,
+      "clipped_aabb_px2": 1372973.4375,
+      "shader_box_px": 1378619
+    },
+    "solid_material": {
+      "count": 12,
+      "clipped_aabb_px2": 1372973.4375,
+      "shader_box_px": 1378619
+    },
+    "solid_feature": {
+      "count": 12,
+      "clipped_aabb_px2": 1372973.4375,
+      "shader_box_px": 1378619
+    },
+    "identity_transform": {
+      "count": 12,
+      "clipped_aabb_px2": 1372973.4375,
+      "shader_box_px": 1378619
+    },
+    "border_nonzero": {
+      "count": 1,
+      "clipped_aabb_px2": 318218.75,
+      "shader_box_px": 319500
+    },
+    "border_at_shader_threshold": {
+      "count": 1,
+      "clipped_aabb_px2": 318218.75,
+      "shader_box_px": 319500
+    },
+    "rounded_corners": {
+      "count": 9,
+      "clipped_aabb_px2": 410435.9375,
+      "shader_box_px": 414350
+    },
+    "rounded_clip": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "fractional_rect_physical": {
+      "count": 8,
+      "clipped_aabb_px2": 543373.4375,
+      "shader_box_px": 547697
+    },
+    "fractional_clip_physical": {
+      "count": 6,
+      "clipped_aabb_px2": 401585.9375,
+      "shader_box_px": 405125
+    },
+    "opacity_not_one": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "plain_rect_eligible": {
+      "count": 3,
+      "clipped_aabb_px2": 962537.5,
+      "shader_box_px": 964269
+    },
+    "plain_white_fractional": {
+      "count": 1,
+      "clipped_aabb_px2": 142537.5,
+      "shader_box_px": 143269
+    },
+    "legacy_general_fallback": {
+      "count": 8,
+      "clipped_aabb_px2": 543373.4375,
+      "shader_box_px": 547697
+    },
+    "solid_rect_with_corners": {
+      "count": 2,
+      "clipped_aabb_px2": 9600,
+      "shader_box_px": 9922
+    },
+    "empty_clipped_aabb": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    }
+  },
+  "glyph": {
+    "total": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "classes": {
+      "solid_rect": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      },
+      "plain_white_rect": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      },
+      "plain_textured_rect": {
+        "count": 588,
+        "clipped_aabb_px2": 139064.0679359436,
+        "shader_box_px": 158644
+      },
+      "general_white": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      },
+      "general_textured": {
+        "count": 0,
+        "clipped_aabb_px2": 0,
+        "shader_box_px": 0
+      }
+    },
+    "white_binding": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "solid_material": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "solid_feature": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "identity_transform": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "border_nonzero": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "border_at_shader_threshold": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "rounded_corners": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "rounded_clip": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "fractional_rect_physical": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "fractional_clip_physical": {
+      "count": 546,
+      "clipped_aabb_px2": 128784.36462879181,
+      "shader_box_px": 146885
+    },
+    "opacity_not_one": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "plain_rect_eligible": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "plain_white_fractional": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "legacy_general_fallback": {
+      "count": 588,
+      "clipped_aabb_px2": 139064.0679359436,
+      "shader_box_px": 158644
+    },
+    "solid_rect_with_corners": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    },
+    "empty_clipped_aabb": {
+      "count": 0,
+      "clipped_aabb_px2": 0,
+      "shader_box_px": 0
+    }
+  },
+  "largest_regular_quads": [
+    {
+      "quad_index": 0,
+      "command_index": 0,
+      "texture": 0,
+      "material": 0,
+      "class": "solid_rect",
+      "white_binding": true,
+      "plain_rect_eligible": true,
+      "legacy_general_fallback": false,
+      "rect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "clip": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4280358930,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          0,
+          0,
+          1000,
+          750
+        ],
+        "clipped_physical_aabb": [
+          0,
+          0,
+          1000,
+          750
+        ],
+        "clipped_aabb_px2": 750000,
+        "shader_box_px": 750000,
+        "fractional_rect": false,
+        "fractional_clip": false
+      }
+    },
+    {
+      "quad_index": 10,
+      "command_index": 21,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        185,
+        138,
+        784,
+        478
+      ],
+      "clip": [
+        169,
+        57,
+        800,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 1,
+      "opacity": 1,
+      "fill_rgba8": 4280358930,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          231.25,
+          172.5,
+          980,
+          597.5
+        ],
+        "clipped_physical_aabb": [
+          231.25,
+          172.5,
+          980,
+          597.5
+        ],
+        "clipped_aabb_px2": 318218.75,
+        "shader_box_px": 319500,
+        "fractional_rect": true,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 5,
+      "command_index": 8,
+      "texture": 0,
+      "material": 0,
+      "class": "plain_white_rect",
+      "white_binding": true,
+      "plain_rect_eligible": true,
+      "legacy_general_fallback": true,
+      "rect": [
+        0,
+        57,
+        168,
+        600
+      ],
+      "clip": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4280819480,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          0,
+          71.25,
+          210,
+          750
+        ],
+        "clipped_physical_aabb": [
+          0,
+          71.25,
+          210,
+          750
+        ],
+        "clipped_aabb_px2": 142537.5,
+        "shader_box_px": 143269,
+        "fractional_rect": true,
+        "fractional_clip": false
+      }
+    },
+    {
+      "quad_index": 1,
+      "command_index": 0,
+      "texture": 0,
+      "material": 0,
+      "class": "solid_rect",
+      "white_binding": true,
+      "plain_rect_eligible": true,
+      "legacy_general_fallback": false,
+      "rect": [
+        0,
+        0,
+        800,
+        56
+      ],
+      "clip": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4280819480,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          0,
+          0,
+          1000,
+          70
+        ],
+        "clipped_physical_aabb": [
+          0,
+          0,
+          1000,
+          70
+        ],
+        "clipped_aabb_px2": 70000,
+        "shader_box_px": 71000,
+        "fractional_rect": false,
+        "fractional_clip": false
+      }
+    },
+    {
+      "quad_index": 11,
+      "command_index": 35,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        185,
+        515,
+        784,
+        576
+      ],
+      "clip": [
+        169,
+        57,
+        800,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4280819480,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          231.25,
+          643.75,
+          980,
+          720
+        ],
+        "clipped_physical_aabb": [
+          231.25,
+          643.75,
+          980,
+          720
+        ],
+        "clipped_aabb_px2": 57092.1875,
+        "shader_box_px": 58500,
+        "fractional_rect": true,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 6,
+      "command_index": 10,
+      "texture": 0,
+      "material": 0,
+      "class": "solid_rect",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": false,
+      "rect": [
+        12,
+        96,
+        156,
+        128
+      ],
+      "clip": [
+        0,
+        57,
+        168,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4287000359,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          15,
+          120,
+          195,
+          160
+        ],
+        "clipped_physical_aabb": [
+          15,
+          120,
+          195,
+          160
+        ],
+        "clipped_aabb_px2": 7200,
+        "shader_box_px": 7421,
+        "fractional_rect": false,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 8,
+      "command_index": 14,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        12,
+        179,
+        156,
+        211
+      ],
+      "clip": [
+        0,
+        57,
+        168,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4282331431,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          15,
+          223.75,
+          195,
+          263.75
+        ],
+        "clipped_physical_aabb": [
+          15,
+          223.75,
+          195,
+          263.75
+        ],
+        "clipped_aabb_px2": 7200,
+        "shader_box_px": 7421,
+        "fractional_rect": true,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 7,
+      "command_index": 12,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        12,
+        138,
+        156,
+        169
+      ],
+      "clip": [
+        0,
+        57,
+        168,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4282331431,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          15,
+          172.5,
+          195,
+          211.25
+        ],
+        "clipped_physical_aabb": [
+          15,
+          172.5,
+          195,
+          211.25
+        ],
+        "clipped_aabb_px2": 6975,
+        "shader_box_px": 7240,
+        "fractional_rect": true,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 9,
+      "command_index": 16,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        12,
+        529,
+        110,
+        561
+      ],
+      "clip": [
+        0,
+        57,
+        168,
+        600
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4282331431,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          15,
+          661.25,
+          137.5,
+          701.25
+        ],
+        "clipped_physical_aabb": [
+          15,
+          661.25,
+          137.5,
+          701.25
+        ],
+        "clipped_aabb_px2": 4900,
+        "shader_box_px": 5043,
+        "fractional_rect": true,
+        "fractional_clip": true
+      }
+    },
+    {
+      "quad_index": 4,
+      "command_index": 6,
+      "texture": 0,
+      "material": 0,
+      "class": "general_white",
+      "white_binding": true,
+      "plain_rect_eligible": false,
+      "legacy_general_fallback": true,
+      "rect": [
+        715,
+        12,
+        788,
+        44
+      ],
+      "clip": [
+        0,
+        0,
+        800,
+        56
+      ],
+      "radii": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "clip_radii": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": 0,
+      "opacity": 1,
+      "fill_rgba8": 4282331431,
+      "xform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "params_kind": "solid",
+      "params_code": 0,
+      "geometry": {
+        "physical_aabb": [
+          893.75,
+          15,
+          985,
+          55
+        ],
+        "clipped_physical_aabb": [
+          893.75,
+          15,
+          985,
+          55
+        ],
+        "clipped_aabb_px2": 3650,
+        "shader_box_px": 3813,
+        "fractional_rect": true,
+        "fractional_clip": false
+      }
+    }
+  ]
+}

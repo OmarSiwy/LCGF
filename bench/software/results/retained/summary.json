@@ -1,0 +1,4336 @@
+{
+  "environment": {
+    "started_utc": "2026-11-24T03:38:07.152397+00:00",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "python": "3.12.14",
+    "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "affinity_cpu": 2,
+    "repeats": 5,
+    "incremental_samples": 101,
+    "binaries": {
+      "incremental": {
+        "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+        "sha256": "f54e86c8c20ae982eeba348a91f36997496f98ef42a35bba2a1deb66a3ec94ab"
+      },
+      "reuse-baseline": {
+        "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench",
+        "sha256": "67a301cf550fc517e75aa393752883da757819dbcb17ec6e3f8950d8f0427df2"
+      },
+      "reuse-candidate": {
+        "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench",
+        "sha256": "2a8ce5c70a67db930e9f62ae6617ea5af1e835dc7a496077daca84c88bff9cff"
+      }
+    },
+    "aggregation": "Median of run medians and their range; p95/p99 are medians of per-run percentiles, not pooled tails.",
+    "order": "Rotate incremental size order; alternate reuse baseline/candidate process order and --retained-first every round.",
+    "reuse_baseline_first_runs": 3,
+    "reuse_candidate_first_runs": 2,
+    "retained_first_flag_runs": 2,
+    "order_balance": "Odd repeat counts leave one extra initial-order run; even counts balance the two orders exactly.",
+    "scope": "CPU wall time. No X11 transfer, GPU, vsync, input-to-display latency or power measurement. Payload bytes are calculated.",
+    "validity": "All candidate reuse frames must match their full control. Both versions must share full-control sequence digests. Invalid baseline retained timings are kept only in raw reports.",
+    "completed_utc": "2026-11-24T03:41:31.115880+00:00"
+  },
+  "incremental_cases": {
+    "800x600": {
+      "width": 800,
+      "height": 600,
+      "scale": 1,
+      "metadata": {
+        "zig": "0.18.0-dev.1151+8dfb7a7cc",
+        "optimize": "fast",
+        "cpu_target": "x86_64",
+        "architecture": "viper",
+        "framework": "optimized",
+        "samples": 101,
+        "warmup_frames": 32,
+        "retained_bytes": 80600,
+        "scope": "One shared UI build per input frame, excluding the scenario's preceding input/state mutation. Full/incremental draw order changes every two frames to decouple it from alternating scene states. Bytewise framebuffer equality and sequence hashing run after every frame outside timing. Pixel payload is a calculated byte count, not timed X11 transport."
+      },
+      "retained_bytes": 80600,
+      "full_pixel_payload_bytes": 1920000,
+      "cases": {
+        "unchanged": {
+          "scenario": "unchanged",
+          "mean_damage_pixels": 0,
+          "mean_pixel_payload_bytes": 0,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 101,
+          "verified_frames": 133,
+          "pixel_hash": 9815157311930241834,
+          "pixel_sequence_hash": 16966159597197688579,
+          "incremental_draw": {
+            "median_ns": 1560,
+            "run_medians_ns": [
+              1824,
+              1560,
+              1531,
+              1726,
+              1515
+            ],
+            "min_run_median_ns": 1515,
+            "max_run_median_ns": 1824,
+            "median_p95_ns": 2385,
+            "median_p99_ns": 2536
+          },
+          "ui": {
+            "median_ns": 9648,
+            "run_medians_ns": [
+              9801,
+              9648,
+              9486,
+              9928,
+              9558
+            ],
+            "min_run_median_ns": 9486,
+            "max_run_median_ns": 9928,
+            "median_p95_ns": 11146,
+            "median_p99_ns": 33401
+          },
+          "full_draw": {
+            "median_ns": 3609758,
+            "run_medians_ns": [
+              3757998,
+              3595882,
+              3609758,
+              3633504,
+              3594796
+            ],
+            "min_run_median_ns": 3594796,
+            "max_run_median_ns": 3757998,
+            "median_p95_ns": 4402223,
+            "median_p99_ns": 5351841
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3609758,
+              "run_medians_ns": [
+                3757998,
+                3595882,
+                3609758,
+                3633504,
+                3594796
+              ],
+              "min_run_median_ns": 3594796,
+              "max_run_median_ns": 3757998,
+              "median_p95_ns": 4402223,
+              "median_p99_ns": 5351841
+            },
+            "after": {
+              "median_ns": 1560,
+              "run_medians_ns": [
+                1824,
+                1560,
+                1531,
+                1726,
+                1515
+              ],
+              "min_run_median_ns": 1515,
+              "max_run_median_ns": 1824,
+              "median_p95_ns": 2385,
+              "median_p99_ns": 2536
+            },
+            "reduction_percent": 99.95678380655988,
+            "speedup": 2313.9474358974358
+          },
+          "pixel_payload_reduction_percent": 100.0
+        },
+        "hover": {
+          "scenario": "hover",
+          "mean_damage_pixels": 1700,
+          "mean_pixel_payload_bytes": 6800,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 7981021297057113164,
+          "pixel_sequence_hash": 8263932842723055436,
+          "incremental_draw": {
+            "median_ns": 109669,
+            "run_medians_ns": [
+              109597,
+              109756,
+              109517,
+              109945,
+              109669
+            ],
+            "min_run_median_ns": 109517,
+            "max_run_median_ns": 109945,
+            "median_p95_ns": 181970,
+            "median_p99_ns": 255837
+          },
+          "ui": {
+            "median_ns": 9756,
+            "run_medians_ns": [
+              9465,
+              9756,
+              9702,
+              9988,
+              9817
+            ],
+            "min_run_median_ns": 9465,
+            "max_run_median_ns": 9988,
+            "median_p95_ns": 11730,
+            "median_p99_ns": 41865
+          },
+          "full_draw": {
+            "median_ns": 3658676,
+            "run_medians_ns": [
+              3694276,
+              3532815,
+              3620838,
+              3701943,
+              3658676
+            ],
+            "min_run_median_ns": 3532815,
+            "max_run_median_ns": 3701943,
+            "median_p95_ns": 4565724,
+            "median_p99_ns": 5488991
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3658676,
+              "run_medians_ns": [
+                3694276,
+                3532815,
+                3620838,
+                3701943,
+                3658676
+              ],
+              "min_run_median_ns": 3532815,
+              "max_run_median_ns": 3701943,
+              "median_p95_ns": 4565724,
+              "median_p99_ns": 5488991
+            },
+            "after": {
+              "median_ns": 109669,
+              "run_medians_ns": [
+                109597,
+                109756,
+                109517,
+                109945,
+                109669
+              ],
+              "min_run_median_ns": 109517,
+              "max_run_median_ns": 109945,
+              "median_p95_ns": 181970,
+              "median_p99_ns": 255837
+            },
+            "reduction_percent": 97.00249489159467,
+            "speedup": 33.361077423884595
+          },
+          "pixel_payload_reduction_percent": 99.64583333333333
+        },
+        "selection": {
+          "scenario": "selection",
+          "mean_damage_pixels": 263238,
+          "mean_pixel_payload_bytes": 1052952,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 7556354546714157944,
+          "pixel_sequence_hash": 9633164939259237279,
+          "incremental_draw": {
+            "median_ns": 2952293,
+            "run_medians_ns": [
+              2952293,
+              2923502,
+              2962954,
+              2905189,
+              2970729
+            ],
+            "min_run_median_ns": 2905189,
+            "max_run_median_ns": 2970729,
+            "median_p95_ns": 3683371,
+            "median_p99_ns": 4472013
+          },
+          "ui": {
+            "median_ns": 10278,
+            "run_medians_ns": [
+              10208,
+              10339,
+              10278,
+              10024,
+              10376
+            ],
+            "min_run_median_ns": 10024,
+            "max_run_median_ns": 10376,
+            "median_p95_ns": 11591,
+            "median_p99_ns": 20833
+          },
+          "full_draw": {
+            "median_ns": 3887017,
+            "run_medians_ns": [
+              3994710,
+              3850588,
+              3864149,
+              3887017,
+              3942408
+            ],
+            "min_run_median_ns": 3850588,
+            "max_run_median_ns": 3994710,
+            "median_p95_ns": 4737808,
+            "median_p99_ns": 5692686
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3887017,
+              "run_medians_ns": [
+                3994710,
+                3850588,
+                3864149,
+                3887017,
+                3942408
+              ],
+              "min_run_median_ns": 3850588,
+              "max_run_median_ns": 3994710,
+              "median_p95_ns": 4737808,
+              "median_p99_ns": 5692686
+            },
+            "after": {
+              "median_ns": 2952293,
+              "run_medians_ns": [
+                2952293,
+                2923502,
+                2962954,
+                2905189,
+                2970729
+              ],
+              "min_run_median_ns": 2905189,
+              "max_run_median_ns": 2970729,
+              "median_p95_ns": 3683371,
+              "median_p99_ns": 4472013
+            },
+            "reduction_percent": 24.047335012941808,
+            "speedup": 1.3166094964151593
+          },
+          "pixel_payload_reduction_percent": 45.158750000000005
+        },
+        "scroll": {
+          "scenario": "scroll",
+          "mean_damage_pixels": 77631,
+          "mean_pixel_payload_bytes": 310524,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 5478630388355259021,
+          "pixel_sequence_hash": 4550705578884898938,
+          "incremental_draw": {
+            "median_ns": 1749016,
+            "run_medians_ns": [
+              1770982,
+              1747514,
+              1753590,
+              1734932,
+              1749016
+            ],
+            "min_run_median_ns": 1734932,
+            "max_run_median_ns": 1770982,
+            "median_p95_ns": 2090529,
+            "median_p99_ns": 2321230
+          },
+          "ui": {
+            "median_ns": 9935,
+            "run_medians_ns": [
+              9935,
+              10247,
+              9905,
+              9962,
+              9875
+            ],
+            "min_run_median_ns": 9875,
+            "max_run_median_ns": 10247,
+            "median_p95_ns": 11991,
+            "median_p99_ns": 68581
+          },
+          "full_draw": {
+            "median_ns": 3630448,
+            "run_medians_ns": [
+              3738281,
+              3620611,
+              3658312,
+              3630448,
+              3623107
+            ],
+            "min_run_median_ns": 3620611,
+            "max_run_median_ns": 3738281,
+            "median_p95_ns": 4539116,
+            "median_p99_ns": 5184316
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3630448,
+              "run_medians_ns": [
+                3738281,
+                3620611,
+                3658312,
+                3630448,
+                3623107
+              ],
+              "min_run_median_ns": 3620611,
+              "max_run_median_ns": 3738281,
+              "median_p95_ns": 4539116,
+              "median_p99_ns": 5184316
+            },
+            "after": {
+              "median_ns": 1749016,
+              "run_medians_ns": [
+                1770982,
+                1747514,
+                1753590,
+                1734932,
+                1749016
+              ],
+              "min_run_median_ns": 1734932,
+              "max_run_median_ns": 1770982,
+              "median_p95_ns": 2090529,
+              "median_p99_ns": 2321230
+            },
+            "reduction_percent": 51.82368677364336,
+            "speedup": 2.0757088557223033
+          },
+          "pixel_payload_reduction_percent": 83.826875
+        },
+        "theme": {
+          "scenario": "theme",
+          "mean_damage_pixels": 480000,
+          "mean_pixel_payload_bytes": 1920000,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 14472759089467255877,
+          "pixel_sequence_hash": 5651881583269537673,
+          "incremental_draw": {
+            "median_ns": 3647053,
+            "run_medians_ns": [
+              3635321,
+              3583122,
+              3710024,
+              3706815,
+              3647053
+            ],
+            "min_run_median_ns": 3583122,
+            "max_run_median_ns": 3710024,
+            "median_p95_ns": 4324473,
+            "median_p99_ns": 4650400
+          },
+          "ui": {
+            "median_ns": 10272,
+            "run_medians_ns": [
+              10015,
+              10423,
+              10512,
+              10272,
+              10040
+            ],
+            "min_run_median_ns": 10015,
+            "max_run_median_ns": 10512,
+            "median_p95_ns": 12290,
+            "median_p99_ns": 38153
+          },
+          "full_draw": {
+            "median_ns": 3633085,
+            "run_medians_ns": [
+              3633085,
+              3587264,
+              3691127,
+              3641475,
+              3621259
+            ],
+            "min_run_median_ns": 3587264,
+            "max_run_median_ns": 3691127,
+            "median_p95_ns": 4634463,
+            "median_p99_ns": 5298367
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3633085,
+              "run_medians_ns": [
+                3633085,
+                3587264,
+                3691127,
+                3641475,
+                3621259
+              ],
+              "min_run_median_ns": 3587264,
+              "max_run_median_ns": 3691127,
+              "median_p95_ns": 4634463,
+              "median_p99_ns": 5298367
+            },
+            "after": {
+              "median_ns": 3647053,
+              "run_medians_ns": [
+                3635321,
+                3583122,
+                3710024,
+                3706815,
+                3647053
+              ],
+              "min_run_median_ns": 3583122,
+              "max_run_median_ns": 3710024,
+              "median_p95_ns": 4324473,
+              "median_p99_ns": 4650400
+            },
+            "reduction_percent": -0.38446664473856806,
+            "speedup": 0.9961700584005772
+          },
+          "pixel_payload_reduction_percent": 0.0
+        },
+        "navigation": {
+          "scenario": "navigation",
+          "mean_damage_pixels": 464721,
+          "mean_pixel_payload_bytes": 1858884,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 14936695187160630790,
+          "pixel_sequence_hash": 8045089537955696759,
+          "incremental_draw": {
+            "median_ns": 3653438,
+            "run_medians_ns": [
+              3700162,
+              3612073,
+              3718348,
+              3653438,
+              3642684
+            ],
+            "min_run_median_ns": 3612073,
+            "max_run_median_ns": 3718348,
+            "median_p95_ns": 4187574,
+            "median_p99_ns": 4842098
+          },
+          "ui": {
+            "median_ns": 236551,
+            "run_medians_ns": [
+              248085,
+              236353,
+              236551,
+              236792,
+              236545
+            ],
+            "min_run_median_ns": 236353,
+            "max_run_median_ns": 248085,
+            "median_p95_ns": 378173,
+            "median_p99_ns": 433058
+          },
+          "full_draw": {
+            "median_ns": 3637723,
+            "run_medians_ns": [
+              3699641,
+              3600752,
+              3651464,
+              3636374,
+              3637723
+            ],
+            "min_run_median_ns": 3600752,
+            "max_run_median_ns": 3699641,
+            "median_p95_ns": 4582655,
+            "median_p99_ns": 5381736
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3637723,
+              "run_medians_ns": [
+                3699641,
+                3600752,
+                3651464,
+                3636374,
+                3637723
+              ],
+              "min_run_median_ns": 3600752,
+              "max_run_median_ns": 3699641,
+              "median_p95_ns": 4582655,
+              "median_p99_ns": 5381736
+            },
+            "after": {
+              "median_ns": 3653438,
+              "run_medians_ns": [
+                3700162,
+                3612073,
+                3718348,
+                3653438,
+                3642684
+              ],
+              "min_run_median_ns": 3612073,
+              "max_run_median_ns": 3718348,
+              "median_p95_ns": 4187574,
+              "median_p99_ns": 4842098
+            },
+            "reduction_percent": -0.43200100722347035,
+            "speedup": 0.9956985721394478
+          },
+          "pixel_payload_reduction_percent": 3.1831249999999978
+        },
+        "sidebar": {
+          "scenario": "sidebar",
+          "mean_damage_pixels": 427040,
+          "mean_pixel_payload_bytes": 1708160,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 7491366715160934269,
+          "pixel_sequence_hash": 8017155549963713397,
+          "incremental_draw": {
+            "median_ns": 3282997,
+            "run_medians_ns": [
+              3282997,
+              3311719,
+              3268154,
+              3295616,
+              3246502
+            ],
+            "min_run_median_ns": 3246502,
+            "max_run_median_ns": 3311719,
+            "median_p95_ns": 3856529,
+            "median_p99_ns": 4715046
+          },
+          "ui": {
+            "median_ns": 9924,
+            "run_medians_ns": [
+              9924,
+              10258,
+              9920,
+              10056,
+              9890
+            ],
+            "min_run_median_ns": 9890,
+            "max_run_median_ns": 10258,
+            "median_p95_ns": 11100,
+            "median_p99_ns": 42514
+          },
+          "full_draw": {
+            "median_ns": 3542637,
+            "run_medians_ns": [
+              3560641,
+              3505019,
+              3584563,
+              3511626,
+              3542637
+            ],
+            "min_run_median_ns": 3505019,
+            "max_run_median_ns": 3584563,
+            "median_p95_ns": 4134185,
+            "median_p99_ns": 4608664
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3542637,
+              "run_medians_ns": [
+                3560641,
+                3505019,
+                3584563,
+                3511626,
+                3542637
+              ],
+              "min_run_median_ns": 3505019,
+              "max_run_median_ns": 3584563,
+              "median_p95_ns": 4134185,
+              "median_p99_ns": 4608664
+            },
+            "after": {
+              "median_ns": 3282997,
+              "run_medians_ns": [
+                3282997,
+                3311719,
+                3268154,
+                3295616,
+                3246502
+              ],
+              "min_run_median_ns": 3246502,
+              "max_run_median_ns": 3311719,
+              "median_p95_ns": 3856529,
+              "median_p99_ns": 4715046
+            },
+            "reduction_percent": 7.329003790114541,
+            "speedup": 1.0790862739137441
+          },
+          "pixel_payload_reduction_percent": 11.033333333333328
+        },
+        "invalidation": {
+          "scenario": "invalidation",
+          "mean_damage_pixels": 480000,
+          "mean_pixel_payload_bytes": 1920000,
+          "full_frames": 101,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 9815157311930241834,
+          "pixel_sequence_hash": 16966159597197688579,
+          "incremental_draw": {
+            "median_ns": 3644835,
+            "run_medians_ns": [
+              3658424,
+              3567706,
+              3644835,
+              3617919,
+              3677126
+            ],
+            "min_run_median_ns": 3567706,
+            "max_run_median_ns": 3677126,
+            "median_p95_ns": 4198365,
+            "median_p99_ns": 4843189
+          },
+          "ui": {
+            "median_ns": 10141,
+            "run_medians_ns": [
+              9819,
+              10491,
+              9923,
+              10141,
+              10356
+            ],
+            "min_run_median_ns": 9819,
+            "max_run_median_ns": 10491,
+            "median_p95_ns": 11415,
+            "median_p99_ns": 44237
+          },
+          "full_draw": {
+            "median_ns": 3637688,
+            "run_medians_ns": [
+              3635432,
+              3681350,
+              3637688,
+              3594512,
+              3655463
+            ],
+            "min_run_median_ns": 3594512,
+            "max_run_median_ns": 3681350,
+            "median_p95_ns": 4636617,
+            "median_p99_ns": 5440104
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 3637688,
+              "run_medians_ns": [
+                3635432,
+                3681350,
+                3637688,
+                3594512,
+                3655463
+              ],
+              "min_run_median_ns": 3594512,
+              "max_run_median_ns": 3681350,
+              "median_p95_ns": 4636617,
+              "median_p99_ns": 5440104
+            },
+            "after": {
+              "median_ns": 3644835,
+              "run_medians_ns": [
+                3658424,
+                3567706,
+                3644835,
+                3617919,
+                3677126
+              ],
+              "min_run_median_ns": 3567706,
+              "max_run_median_ns": 3677126,
+              "median_p95_ns": 4198365,
+              "median_p99_ns": 4843189
+            },
+            "reduction_percent": -0.1964709452817237,
+            "speedup": 0.9980391430613457
+          },
+          "pixel_payload_reduction_percent": 0.0
+        }
+      }
+    },
+    "1000x750_scale1_25": {
+      "width": 1000,
+      "height": 750,
+      "scale": 1.25,
+      "metadata": {
+        "zig": "0.18.0-dev.1151+8dfb7a7cc",
+        "optimize": "fast",
+        "cpu_target": "x86_64",
+        "architecture": "viper",
+        "framework": "optimized",
+        "samples": 101,
+        "warmup_frames": 32,
+        "retained_bytes": 80600,
+        "scope": "One shared UI build per input frame, excluding the scenario's preceding input/state mutation. Full/incremental draw order changes every two frames to decouple it from alternating scene states. Bytewise framebuffer equality and sequence hashing run after every frame outside timing. Pixel payload is a calculated byte count, not timed X11 transport."
+      },
+      "retained_bytes": 80600,
+      "full_pixel_payload_bytes": 3000000,
+      "cases": {
+        "unchanged": {
+          "scenario": "unchanged",
+          "mean_damage_pixels": 0,
+          "mean_pixel_payload_bytes": 0,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 101,
+          "verified_frames": 133,
+          "pixel_hash": 12830242774534902837,
+          "pixel_sequence_hash": 7318269450666742939,
+          "incremental_draw": {
+            "median_ns": 1840,
+            "run_medians_ns": [
+              1840,
+              1841,
+              1870,
+              1826,
+              1799
+            ],
+            "min_run_median_ns": 1799,
+            "max_run_median_ns": 1870,
+            "median_p95_ns": 2586,
+            "median_p99_ns": 2876
+          },
+          "ui": {
+            "median_ns": 10150,
+            "run_medians_ns": [
+              10101,
+              10150,
+              10590,
+              10447,
+              10065
+            ],
+            "min_run_median_ns": 10065,
+            "max_run_median_ns": 10590,
+            "median_p95_ns": 11533,
+            "median_p99_ns": 63455
+          },
+          "full_draw": {
+            "median_ns": 6105419,
+            "run_medians_ns": [
+              6183041,
+              6083630,
+              6093750,
+              6169450,
+              6105419
+            ],
+            "min_run_median_ns": 6083630,
+            "max_run_median_ns": 6183041,
+            "median_p95_ns": 7042045,
+            "median_p99_ns": 7689698
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6105419,
+              "run_medians_ns": [
+                6183041,
+                6083630,
+                6093750,
+                6169450,
+                6105419
+              ],
+              "min_run_median_ns": 6083630,
+              "max_run_median_ns": 6183041,
+              "median_p95_ns": 7042045,
+              "median_p99_ns": 7689698
+            },
+            "after": {
+              "median_ns": 1840,
+              "run_medians_ns": [
+                1840,
+                1841,
+                1870,
+                1826,
+                1799
+              ],
+              "min_run_median_ns": 1799,
+              "max_run_median_ns": 1870,
+              "median_p95_ns": 2586,
+              "median_p99_ns": 2876
+            },
+            "reduction_percent": 99.96986283824255,
+            "speedup": 3318.1625
+          },
+          "pixel_payload_reduction_percent": 100.0
+        },
+        "hover": {
+          "scenario": "hover",
+          "mean_damage_pixels": 2604,
+          "mean_pixel_payload_bytes": 10416,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 10637836192994803787,
+          "pixel_sequence_hash": 8470737528310102815,
+          "incremental_draw": {
+            "median_ns": 53099,
+            "run_medians_ns": [
+              53353,
+              53099,
+              53012,
+              53764,
+              52985
+            ],
+            "min_run_median_ns": 52985,
+            "max_run_median_ns": 53764,
+            "median_p95_ns": 98601,
+            "median_p99_ns": 152413
+          },
+          "ui": {
+            "median_ns": 10217,
+            "run_medians_ns": [
+              9946,
+              10004,
+              10415,
+              10487,
+              10217
+            ],
+            "min_run_median_ns": 9946,
+            "max_run_median_ns": 10487,
+            "median_p95_ns": 11376,
+            "median_p99_ns": 42357
+          },
+          "full_draw": {
+            "median_ns": 6125836,
+            "run_medians_ns": [
+              6206021,
+              6064228,
+              6125836,
+              6169999,
+              6113531
+            ],
+            "min_run_median_ns": 6064228,
+            "max_run_median_ns": 6206021,
+            "median_p95_ns": 6968750,
+            "median_p99_ns": 7855737
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6125836,
+              "run_medians_ns": [
+                6206021,
+                6064228,
+                6125836,
+                6169999,
+                6113531
+              ],
+              "min_run_median_ns": 6064228,
+              "max_run_median_ns": 6206021,
+              "median_p95_ns": 6968750,
+              "median_p99_ns": 7855737
+            },
+            "after": {
+              "median_ns": 53099,
+              "run_medians_ns": [
+                53353,
+                53099,
+                53012,
+                53764,
+                52985
+              ],
+              "min_run_median_ns": 52985,
+              "max_run_median_ns": 53764,
+              "median_p95_ns": 98601,
+              "median_p99_ns": 152413
+            },
+            "reduction_percent": 99.13319586094045,
+            "speedup": 115.3663157498258
+          },
+          "pixel_payload_reduction_percent": 99.6528
+        },
+        "selection": {
+          "scenario": "selection",
+          "mean_damage_pixels": 410797,
+          "mean_pixel_payload_bytes": 1643188,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 3199327508376561778,
+          "pixel_sequence_hash": 17893339097926680069,
+          "incremental_draw": {
+            "median_ns": 4831310,
+            "run_medians_ns": [
+              4895735,
+              4831310,
+              4814428,
+              4768858,
+              4891540
+            ],
+            "min_run_median_ns": 4768858,
+            "max_run_median_ns": 4895735,
+            "median_p95_ns": 5613103,
+            "median_p99_ns": 6123714
+          },
+          "ui": {
+            "median_ns": 11061,
+            "run_medians_ns": [
+              10755,
+              10693,
+              11289,
+              11061,
+              11193
+            ],
+            "min_run_median_ns": 10693,
+            "max_run_median_ns": 11289,
+            "median_p95_ns": 12040,
+            "median_p99_ns": 32546
+          },
+          "full_draw": {
+            "median_ns": 6563138,
+            "run_medians_ns": [
+              6704422,
+              6563138,
+              6498696,
+              6491200,
+              6621725
+            ],
+            "min_run_median_ns": 6491200,
+            "max_run_median_ns": 6704422,
+            "median_p95_ns": 7828639,
+            "median_p99_ns": 8775464
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6563138,
+              "run_medians_ns": [
+                6704422,
+                6563138,
+                6498696,
+                6491200,
+                6621725
+              ],
+              "min_run_median_ns": 6491200,
+              "max_run_median_ns": 6704422,
+              "median_p95_ns": 7828639,
+              "median_p99_ns": 8775464
+            },
+            "after": {
+              "median_ns": 4831310,
+              "run_medians_ns": [
+                4895735,
+                4831310,
+                4814428,
+                4768858,
+                4891540
+              ],
+              "min_run_median_ns": 4768858,
+              "max_run_median_ns": 4895735,
+              "median_p95_ns": 5613103,
+              "median_p99_ns": 6123714
+            },
+            "reduction_percent": 26.387194662065617,
+            "speedup": 1.3584592998586305
+          },
+          "pixel_payload_reduction_percent": 45.22706666666667
+        },
+        "scroll": {
+          "scenario": "scroll",
+          "mean_damage_pixels": 121264,
+          "mean_pixel_payload_bytes": 485056,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 7909420090639569132,
+          "pixel_sequence_hash": 4309226383812461312,
+          "incremental_draw": {
+            "median_ns": 2554426,
+            "run_medians_ns": [
+              2553464,
+              2554426,
+              2584218,
+              2575594,
+              2518183
+            ],
+            "min_run_median_ns": 2518183,
+            "max_run_median_ns": 2584218,
+            "median_p95_ns": 3072248,
+            "median_p99_ns": 3355938
+          },
+          "ui": {
+            "median_ns": 10534,
+            "run_medians_ns": [
+              10270,
+              10585,
+              11245,
+              10534,
+              10453
+            ],
+            "min_run_median_ns": 10270,
+            "max_run_median_ns": 11245,
+            "median_p95_ns": 11785,
+            "median_p99_ns": 42631
+          },
+          "full_draw": {
+            "median_ns": 6081621,
+            "run_medians_ns": [
+              6101992,
+              6081621,
+              6086420,
+              6060875,
+              6003329
+            ],
+            "min_run_median_ns": 6003329,
+            "max_run_median_ns": 6101992,
+            "median_p95_ns": 7368995,
+            "median_p99_ns": 8117643
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6081621,
+              "run_medians_ns": [
+                6101992,
+                6081621,
+                6086420,
+                6060875,
+                6003329
+              ],
+              "min_run_median_ns": 6003329,
+              "max_run_median_ns": 6101992,
+              "median_p95_ns": 7368995,
+              "median_p99_ns": 8117643
+            },
+            "after": {
+              "median_ns": 2554426,
+              "run_medians_ns": [
+                2553464,
+                2554426,
+                2584218,
+                2575594,
+                2518183
+              ],
+              "min_run_median_ns": 2518183,
+              "max_run_median_ns": 2584218,
+              "median_p95_ns": 3072248,
+              "median_p99_ns": 3355938
+            },
+            "reduction_percent": 57.997612807506414,
+            "speedup": 2.3808170602710748
+          },
+          "pixel_payload_reduction_percent": 83.83146666666667
+        },
+        "theme": {
+          "scenario": "theme",
+          "mean_damage_pixels": 750000,
+          "mean_pixel_payload_bytes": 3000000,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 16448687458710801261,
+          "pixel_sequence_hash": 2221669684377735508,
+          "incremental_draw": {
+            "median_ns": 6124738,
+            "run_medians_ns": [
+              6174110,
+              6137067,
+              6124738,
+              6101432,
+              6122057
+            ],
+            "min_run_median_ns": 6101432,
+            "max_run_median_ns": 6174110,
+            "median_p95_ns": 6745333,
+            "median_p99_ns": 7464974
+          },
+          "ui": {
+            "median_ns": 10831,
+            "run_medians_ns": [
+              10495,
+              10831,
+              11251,
+              10942,
+              10796
+            ],
+            "min_run_median_ns": 10495,
+            "max_run_median_ns": 11251,
+            "median_p95_ns": 11985,
+            "median_p99_ns": 38026
+          },
+          "full_draw": {
+            "median_ns": 6102235,
+            "run_medians_ns": [
+              6125521,
+              6113693,
+              6086215,
+              6102235,
+              6087155
+            ],
+            "min_run_median_ns": 6086215,
+            "max_run_median_ns": 6125521,
+            "median_p95_ns": 6880440,
+            "median_p99_ns": 7668928
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6102235,
+              "run_medians_ns": [
+                6125521,
+                6113693,
+                6086215,
+                6102235,
+                6087155
+              ],
+              "min_run_median_ns": 6086215,
+              "max_run_median_ns": 6125521,
+              "median_p95_ns": 6880440,
+              "median_p99_ns": 7668928
+            },
+            "after": {
+              "median_ns": 6124738,
+              "run_medians_ns": [
+                6174110,
+                6137067,
+                6124738,
+                6101432,
+                6122057
+              ],
+              "min_run_median_ns": 6101432,
+              "max_run_median_ns": 6174110,
+              "median_p95_ns": 6745333,
+              "median_p99_ns": 7464974
+            },
+            "reduction_percent": -0.3687665257073869,
+            "speedup": 0.9963258836541253
+          },
+          "pixel_payload_reduction_percent": 0.0
+        },
+        "navigation": {
+          "scenario": "navigation",
+          "mean_damage_pixels": 725696,
+          "mean_pixel_payload_bytes": 2902784,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 16873225279093661171,
+          "pixel_sequence_hash": 695546682995370766,
+          "incremental_draw": {
+            "median_ns": 6162544,
+            "run_medians_ns": [
+              6162544,
+              6288439,
+              6213146,
+              6138322,
+              6126126
+            ],
+            "min_run_median_ns": 6126126,
+            "max_run_median_ns": 6288439,
+            "median_p95_ns": 6924522,
+            "median_p99_ns": 8164482
+          },
+          "ui": {
+            "median_ns": 237380,
+            "run_medians_ns": [
+              236599,
+              259822,
+              238297,
+              237183,
+              237380
+            ],
+            "min_run_median_ns": 236599,
+            "max_run_median_ns": 259822,
+            "median_p95_ns": 357519,
+            "median_p99_ns": 464902
+          },
+          "full_draw": {
+            "median_ns": 6216199,
+            "run_medians_ns": [
+              6221192,
+              6227887,
+              6216199,
+              6187838,
+              6146120
+            ],
+            "min_run_median_ns": 6146120,
+            "max_run_median_ns": 6227887,
+            "median_p95_ns": 6885325,
+            "median_p99_ns": 7978710
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6216199,
+              "run_medians_ns": [
+                6221192,
+                6227887,
+                6216199,
+                6187838,
+                6146120
+              ],
+              "min_run_median_ns": 6146120,
+              "max_run_median_ns": 6227887,
+              "median_p95_ns": 6885325,
+              "median_p99_ns": 7978710
+            },
+            "after": {
+              "median_ns": 6162544,
+              "run_medians_ns": [
+                6162544,
+                6288439,
+                6213146,
+                6138322,
+                6126126
+              ],
+              "min_run_median_ns": 6126126,
+              "max_run_median_ns": 6288439,
+              "median_p95_ns": 6924522,
+              "median_p99_ns": 8164482
+            },
+            "reduction_percent": 0.8631480427187088,
+            "speedup": 1.0087066315469715
+          },
+          "pixel_payload_reduction_percent": 3.2405333333333286
+        },
+        "sidebar": {
+          "scenario": "sidebar",
+          "mean_damage_pixels": 667080,
+          "mean_pixel_payload_bytes": 2668320,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 10572885554862664313,
+          "pixel_sequence_hash": 17819427546556865720,
+          "incremental_draw": {
+            "median_ns": 5458433,
+            "run_medians_ns": [
+              5548031,
+              5458433,
+              5449691,
+              5480561,
+              5455221
+            ],
+            "min_run_median_ns": 5449691,
+            "max_run_median_ns": 5548031,
+            "median_p95_ns": 6235758,
+            "median_p99_ns": 6639245
+          },
+          "ui": {
+            "median_ns": 10690,
+            "run_medians_ns": [
+              10644,
+              10690,
+              11453,
+              11032,
+              10689
+            ],
+            "min_run_median_ns": 10644,
+            "max_run_median_ns": 11453,
+            "median_p95_ns": 12013,
+            "median_p99_ns": 77126
+          },
+          "full_draw": {
+            "median_ns": 5917818,
+            "run_medians_ns": [
+              5941299,
+              5892770,
+              5917818,
+              5962536,
+              5888065
+            ],
+            "min_run_median_ns": 5888065,
+            "max_run_median_ns": 5962536,
+            "median_p95_ns": 6982021,
+            "median_p99_ns": 7610230
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 5917818,
+              "run_medians_ns": [
+                5941299,
+                5892770,
+                5917818,
+                5962536,
+                5888065
+              ],
+              "min_run_median_ns": 5888065,
+              "max_run_median_ns": 5962536,
+              "median_p95_ns": 6982021,
+              "median_p99_ns": 7610230
+            },
+            "after": {
+              "median_ns": 5458433,
+              "run_medians_ns": [
+                5548031,
+                5458433,
+                5449691,
+                5480561,
+                5455221
+              ],
+              "min_run_median_ns": 5449691,
+              "max_run_median_ns": 5548031,
+              "median_p95_ns": 6235758,
+              "median_p99_ns": 6639245
+            },
+            "reduction_percent": 7.762742956947988,
+            "speedup": 1.0841606006705586
+          },
+          "pixel_payload_reduction_percent": 11.056
+        },
+        "invalidation": {
+          "scenario": "invalidation",
+          "mean_damage_pixels": 750000,
+          "mean_pixel_payload_bytes": 3000000,
+          "full_frames": 101,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 12830242774534902837,
+          "pixel_sequence_hash": 7318269450666742939,
+          "incremental_draw": {
+            "median_ns": 6175165,
+            "run_medians_ns": [
+              6242834,
+              6175165,
+              6157995,
+              6201730,
+              6123418
+            ],
+            "min_run_median_ns": 6123418,
+            "max_run_median_ns": 6242834,
+            "median_p95_ns": 7310535,
+            "median_p99_ns": 9803794
+          },
+          "ui": {
+            "median_ns": 10794,
+            "run_medians_ns": [
+              10583,
+              10692,
+              11326,
+              11192,
+              10794
+            ],
+            "min_run_median_ns": 10583,
+            "max_run_median_ns": 11326,
+            "median_p95_ns": 11949,
+            "median_p99_ns": 34239
+          },
+          "full_draw": {
+            "median_ns": 6134059,
+            "run_medians_ns": [
+              6074685,
+              6116444,
+              6164999,
+              6165262,
+              6134059
+            ],
+            "min_run_median_ns": 6074685,
+            "max_run_median_ns": 6165262,
+            "median_p95_ns": 7607921,
+            "median_p99_ns": 8486554
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 6134059,
+              "run_medians_ns": [
+                6074685,
+                6116444,
+                6164999,
+                6165262,
+                6134059
+              ],
+              "min_run_median_ns": 6074685,
+              "max_run_median_ns": 6165262,
+              "median_p95_ns": 7607921,
+              "median_p99_ns": 8486554
+            },
+            "after": {
+              "median_ns": 6175165,
+              "run_medians_ns": [
+                6242834,
+                6175165,
+                6157995,
+                6201730,
+                6123418
+              ],
+              "min_run_median_ns": 6123418,
+              "max_run_median_ns": 6242834,
+              "median_p95_ns": 7310535,
+              "median_p99_ns": 9803794
+            },
+            "reduction_percent": -0.6701272354895815,
+            "speedup": 0.9933433357651172
+          },
+          "pixel_payload_reduction_percent": 0.0
+        }
+      }
+    },
+    "1920x1080": {
+      "width": 1920,
+      "height": 1080,
+      "scale": 1,
+      "metadata": {
+        "zig": "0.18.0-dev.1151+8dfb7a7cc",
+        "optimize": "fast",
+        "cpu_target": "x86_64",
+        "architecture": "viper",
+        "framework": "optimized",
+        "samples": 101,
+        "warmup_frames": 32,
+        "retained_bytes": 80600,
+        "scope": "One shared UI build per input frame, excluding the scenario's preceding input/state mutation. Full/incremental draw order changes every two frames to decouple it from alternating scene states. Bytewise framebuffer equality and sequence hashing run after every frame outside timing. Pixel payload is a calculated byte count, not timed X11 transport."
+      },
+      "retained_bytes": 80600,
+      "full_pixel_payload_bytes": 8294400,
+      "cases": {
+        "unchanged": {
+          "scenario": "unchanged",
+          "mean_damage_pixels": 0,
+          "mean_pixel_payload_bytes": 0,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 101,
+          "verified_frames": 133,
+          "pixel_hash": 3326415041433039508,
+          "pixel_sequence_hash": 4630649498909343722,
+          "incremental_draw": {
+            "median_ns": 2219,
+            "run_medians_ns": [
+              2257,
+              2204,
+              2219,
+              2201,
+              2287
+            ],
+            "min_run_median_ns": 2201,
+            "max_run_median_ns": 2287,
+            "median_p95_ns": 2908,
+            "median_p99_ns": 3213
+          },
+          "ui": {
+            "median_ns": 14281,
+            "run_medians_ns": [
+              14300,
+              14281,
+              14004,
+              14089,
+              14333
+            ],
+            "min_run_median_ns": 14004,
+            "max_run_median_ns": 14333,
+            "median_p95_ns": 15751,
+            "median_p99_ns": 40793
+          },
+          "full_draw": {
+            "median_ns": 7345048,
+            "run_medians_ns": [
+              7345048,
+              7387486,
+              7232523,
+              7309781,
+              7447678
+            ],
+            "min_run_median_ns": 7232523,
+            "max_run_median_ns": 7447678,
+            "median_p95_ns": 8278965,
+            "median_p99_ns": 9741999
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7345048,
+              "run_medians_ns": [
+                7345048,
+                7387486,
+                7232523,
+                7309781,
+                7447678
+              ],
+              "min_run_median_ns": 7232523,
+              "max_run_median_ns": 7447678,
+              "median_p95_ns": 8278965,
+              "median_p99_ns": 9741999
+            },
+            "after": {
+              "median_ns": 2219,
+              "run_medians_ns": [
+                2257,
+                2204,
+                2219,
+                2201,
+                2287
+              ],
+              "min_run_median_ns": 2201,
+              "max_run_median_ns": 2287,
+              "median_p95_ns": 2908,
+              "median_p99_ns": 3213
+            },
+            "reduction_percent": 99.96978916951939,
+            "speedup": 3310.071203244705
+          },
+          "pixel_payload_reduction_percent": 100.0
+        },
+        "hover": {
+          "scenario": "hover",
+          "mean_damage_pixels": 1700,
+          "mean_pixel_payload_bytes": 6800,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 0,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 7972689307004853923,
+          "pixel_sequence_hash": 14639879581483565173,
+          "incremental_draw": {
+            "median_ns": 119640,
+            "run_medians_ns": [
+              119705,
+              119640,
+              119488,
+              119409,
+              120338
+            ],
+            "min_run_median_ns": 119409,
+            "max_run_median_ns": 120338,
+            "median_p95_ns": 190747,
+            "median_p99_ns": 298690
+          },
+          "ui": {
+            "median_ns": 14272,
+            "run_medians_ns": [
+              14272,
+              14506,
+              14105,
+              14244,
+              14449
+            ],
+            "min_run_median_ns": 14105,
+            "max_run_median_ns": 14506,
+            "median_p95_ns": 16080,
+            "median_p99_ns": 37962
+          },
+          "full_draw": {
+            "median_ns": 7352163,
+            "run_medians_ns": [
+              7352163,
+              7357129,
+              7332243,
+              7347322,
+              7398265
+            ],
+            "min_run_median_ns": 7332243,
+            "max_run_median_ns": 7398265,
+            "median_p95_ns": 8643297,
+            "median_p99_ns": 9035933
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7352163,
+              "run_medians_ns": [
+                7352163,
+                7357129,
+                7332243,
+                7347322,
+                7398265
+              ],
+              "min_run_median_ns": 7332243,
+              "max_run_median_ns": 7398265,
+              "median_p95_ns": 8643297,
+              "median_p99_ns": 9035933
+            },
+            "after": {
+              "median_ns": 119640,
+              "run_medians_ns": [
+                119705,
+                119640,
+                119488,
+                119409,
+                120338
+              ],
+              "min_run_median_ns": 119409,
+              "max_run_median_ns": 120338,
+              "median_p95_ns": 190747,
+              "median_p99_ns": 298690
+            },
+            "reduction_percent": 98.37272378210331,
+            "speedup": 61.45238214643932
+          },
+          "pixel_payload_reduction_percent": 99.91801697530865
+        },
+        "selection": {
+          "scenario": "selection",
+          "mean_damage_pixels": 1572994,
+          "mean_pixel_payload_bytes": 6291976,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 665886009954020868,
+          "pixel_sequence_hash": 5644784760376338058,
+          "incremental_draw": {
+            "median_ns": 7180007,
+            "run_medians_ns": [
+              7127229,
+              7133222,
+              7216853,
+              7180007,
+              7199799
+            ],
+            "min_run_median_ns": 7127229,
+            "max_run_median_ns": 7216853,
+            "median_p95_ns": 8416031,
+            "median_p99_ns": 9607753
+          },
+          "ui": {
+            "median_ns": 14919,
+            "run_medians_ns": [
+              15140,
+              15251,
+              14802,
+              14843,
+              14919
+            ],
+            "min_run_median_ns": 14802,
+            "max_run_median_ns": 15251,
+            "median_p95_ns": 16467,
+            "median_p99_ns": 69903
+          },
+          "full_draw": {
+            "median_ns": 8272535,
+            "run_medians_ns": [
+              8298211,
+              8272535,
+              8146118,
+              8219809,
+              8272983
+            ],
+            "min_run_median_ns": 8146118,
+            "max_run_median_ns": 8298211,
+            "median_p95_ns": 9682735,
+            "median_p99_ns": 11285813
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 8272535,
+              "run_medians_ns": [
+                8298211,
+                8272535,
+                8146118,
+                8219809,
+                8272983
+              ],
+              "min_run_median_ns": 8146118,
+              "max_run_median_ns": 8298211,
+              "median_p95_ns": 9682735,
+              "median_p99_ns": 11285813
+            },
+            "after": {
+              "median_ns": 7180007,
+              "run_medians_ns": [
+                7127229,
+                7133222,
+                7216853,
+                7180007,
+                7199799
+              ],
+              "min_run_median_ns": 7127229,
+              "max_run_median_ns": 7216853,
+              "median_p95_ns": 8416031,
+              "median_p99_ns": 9607753
+            },
+            "reduction_percent": 13.206689364263791,
+            "speedup": 1.1521625257468413
+          },
+          "pixel_payload_reduction_percent": 24.14187885802469
+        },
+        "scroll": {
+          "scenario": "scroll",
+          "mean_damage_pixels": 186635,
+          "mean_pixel_payload_bytes": 746540,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 11883044703905319355,
+          "pixel_sequence_hash": 5241298480665815039,
+          "incremental_draw": {
+            "median_ns": 4120019,
+            "run_medians_ns": [
+              4221875,
+              4177225,
+              4116339,
+              4120019,
+              4112249
+            ],
+            "min_run_median_ns": 4112249,
+            "max_run_median_ns": 4221875,
+            "median_p95_ns": 4900759,
+            "median_p99_ns": 5492050
+          },
+          "ui": {
+            "median_ns": 14396,
+            "run_medians_ns": [
+              14768,
+              14853,
+              14317,
+              14396,
+              14226
+            ],
+            "min_run_median_ns": 14226,
+            "max_run_median_ns": 14853,
+            "median_p95_ns": 15552,
+            "median_p99_ns": 72734
+          },
+          "full_draw": {
+            "median_ns": 7369924,
+            "run_medians_ns": [
+              7369924,
+              7409622,
+              7368575,
+              7416735,
+              7258421
+            ],
+            "min_run_median_ns": 7258421,
+            "max_run_median_ns": 7416735,
+            "median_p95_ns": 8578917,
+            "median_p99_ns": 9263333
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7369924,
+              "run_medians_ns": [
+                7369924,
+                7409622,
+                7368575,
+                7416735,
+                7258421
+              ],
+              "min_run_median_ns": 7258421,
+              "max_run_median_ns": 7416735,
+              "median_p95_ns": 8578917,
+              "median_p99_ns": 9263333
+            },
+            "after": {
+              "median_ns": 4120019,
+              "run_medians_ns": [
+                4221875,
+                4177225,
+                4116339,
+                4120019,
+                4112249
+              ],
+              "min_run_median_ns": 4112249,
+              "max_run_median_ns": 4221875,
+              "median_p95_ns": 4900759,
+              "median_p99_ns": 5492050
+            },
+            "reduction_percent": 44.09685907208812,
+            "speedup": 1.788808255495909
+          },
+          "pixel_payload_reduction_percent": 90.99946952160494
+        },
+        "theme": {
+          "scenario": "theme",
+          "mean_damage_pixels": 2073600,
+          "mean_pixel_payload_bytes": 8294400,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 10627244865777450622,
+          "pixel_sequence_hash": 18340758857508893129,
+          "incremental_draw": {
+            "median_ns": 7296179,
+            "run_medians_ns": [
+              7270653,
+              7381563,
+              7295817,
+              7296179,
+              7352292
+            ],
+            "min_run_median_ns": 7270653,
+            "max_run_median_ns": 7381563,
+            "median_p95_ns": 8357590,
+            "median_p99_ns": 9039582
+          },
+          "ui": {
+            "median_ns": 14756,
+            "run_medians_ns": [
+              15096,
+              15143,
+              14704,
+              14553,
+              14756
+            ],
+            "min_run_median_ns": 14553,
+            "max_run_median_ns": 15143,
+            "median_p95_ns": 34352,
+            "median_p99_ns": 87262
+          },
+          "full_draw": {
+            "median_ns": 7349973,
+            "run_medians_ns": [
+              7331680,
+              7350464,
+              7349973,
+              7311899,
+              7372926
+            ],
+            "min_run_median_ns": 7311899,
+            "max_run_median_ns": 7372926,
+            "median_p95_ns": 8517820,
+            "median_p99_ns": 9743128
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7349973,
+              "run_medians_ns": [
+                7331680,
+                7350464,
+                7349973,
+                7311899,
+                7372926
+              ],
+              "min_run_median_ns": 7311899,
+              "max_run_median_ns": 7372926,
+              "median_p95_ns": 8517820,
+              "median_p99_ns": 9743128
+            },
+            "after": {
+              "median_ns": 7296179,
+              "run_medians_ns": [
+                7270653,
+                7381563,
+                7295817,
+                7296179,
+                7352292
+              ],
+              "min_run_median_ns": 7270653,
+              "max_run_median_ns": 7381563,
+              "median_p95_ns": 8357590,
+              "median_p99_ns": 9039582
+            },
+            "reduction_percent": 0.7318938450522228,
+            "speedup": 1.0073729002536806
+          },
+          "pixel_payload_reduction_percent": 0.0
+        },
+        "navigation": {
+          "scenario": "navigation",
+          "mean_damage_pixels": 2040721,
+          "mean_pixel_payload_bytes": 8162884,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 1481364677435988257,
+          "pixel_sequence_hash": 6429404990315841628,
+          "incremental_draw": {
+            "median_ns": 7430846,
+            "run_medians_ns": [
+              7369755,
+              7434233,
+              7430846,
+              7416268,
+              7511685
+            ],
+            "min_run_median_ns": 7369755,
+            "max_run_median_ns": 7511685,
+            "median_p95_ns": 9600717,
+            "median_p99_ns": 12122156
+          },
+          "ui": {
+            "median_ns": 249586,
+            "run_medians_ns": [
+              242459,
+              260769,
+              255944,
+              249586,
+              240673
+            ],
+            "min_run_median_ns": 240673,
+            "max_run_median_ns": 260769,
+            "median_p95_ns": 378899,
+            "median_p99_ns": 495483
+          },
+          "full_draw": {
+            "median_ns": 7463258,
+            "run_medians_ns": [
+              7427127,
+              7470209,
+              7463258,
+              7414685,
+              7479749
+            ],
+            "min_run_median_ns": 7414685,
+            "max_run_median_ns": 7479749,
+            "median_p95_ns": 9062698,
+            "median_p99_ns": 11239776
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7463258,
+              "run_medians_ns": [
+                7427127,
+                7470209,
+                7463258,
+                7414685,
+                7479749
+              ],
+              "min_run_median_ns": 7414685,
+              "max_run_median_ns": 7479749,
+              "median_p95_ns": 9062698,
+              "median_p99_ns": 11239776
+            },
+            "after": {
+              "median_ns": 7430846,
+              "run_medians_ns": [
+                7369755,
+                7434233,
+                7430846,
+                7416268,
+                7511685
+              ],
+              "min_run_median_ns": 7369755,
+              "max_run_median_ns": 7511685,
+              "median_p95_ns": 9600717,
+              "median_p99_ns": 12122156
+            },
+            "reduction_percent": 0.4342875457340467,
+            "speedup": 1.0043618182909455
+          },
+          "pixel_payload_reduction_percent": 1.585599922839509
+        },
+        "sidebar": {
+          "scenario": "sidebar",
+          "mean_damage_pixels": 1950720,
+          "mean_pixel_payload_bytes": 7802880,
+          "full_frames": 0,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 101,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 12398843983190924181,
+          "pixel_sequence_hash": 3577680718505211408,
+          "incremental_draw": {
+            "median_ns": 6980674,
+            "run_medians_ns": [
+              6994452,
+              6790480,
+              6980674,
+              7020813,
+              6932465
+            ],
+            "min_run_median_ns": 6790480,
+            "max_run_median_ns": 7020813,
+            "median_p95_ns": 8134876,
+            "median_p99_ns": 9121683
+          },
+          "ui": {
+            "median_ns": 14992,
+            "run_medians_ns": [
+              15255,
+              15331,
+              14992,
+              14830,
+              14666
+            ],
+            "min_run_median_ns": 14666,
+            "max_run_median_ns": 15331,
+            "median_p95_ns": 27911,
+            "median_p99_ns": 65343
+          },
+          "full_draw": {
+            "median_ns": 7226385,
+            "run_medians_ns": [
+              7429554,
+              7139300,
+              7315549,
+              7226385,
+              7116426
+            ],
+            "min_run_median_ns": 7116426,
+            "max_run_median_ns": 7429554,
+            "median_p95_ns": 8330007,
+            "median_p99_ns": 9333689
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7226385,
+              "run_medians_ns": [
+                7429554,
+                7139300,
+                7315549,
+                7226385,
+                7116426
+              ],
+              "min_run_median_ns": 7116426,
+              "max_run_median_ns": 7429554,
+              "median_p95_ns": 8330007,
+              "median_p99_ns": 9333689
+            },
+            "after": {
+              "median_ns": 6980674,
+              "run_medians_ns": [
+                6994452,
+                6790480,
+                6980674,
+                7020813,
+                6932465
+              ],
+              "min_run_median_ns": 6790480,
+              "max_run_median_ns": 7020813,
+              "median_p95_ns": 8134876,
+              "median_p99_ns": 9121683
+            },
+            "reduction_percent": 3.4001924890522672,
+            "speedup": 1.035198750149341
+          },
+          "pixel_payload_reduction_percent": 5.925925925925924
+        },
+        "invalidation": {
+          "scenario": "invalidation",
+          "mean_damage_pixels": 2073600,
+          "mean_pixel_payload_bytes": 8294400,
+          "full_frames": 101,
+          "glyph_rebuild_frames": 101,
+          "changed_pixel_frames": 0,
+          "zero_damage_frames": 0,
+          "verified_frames": 133,
+          "pixel_hash": 3326415041433039508,
+          "pixel_sequence_hash": 4630649498909343722,
+          "incremental_draw": {
+            "median_ns": 7315665,
+            "run_medians_ns": [
+              7335284,
+              7200827,
+              7236669,
+              7315665,
+              7332743
+            ],
+            "min_run_median_ns": 7200827,
+            "max_run_median_ns": 7335284,
+            "median_p95_ns": 8199969,
+            "median_p99_ns": 8973159
+          },
+          "ui": {
+            "median_ns": 14849,
+            "run_medians_ns": [
+              15086,
+              14939,
+              14537,
+              14849,
+              14620
+            ],
+            "min_run_median_ns": 14537,
+            "max_run_median_ns": 15086,
+            "median_p95_ns": 16013,
+            "median_p99_ns": 49304
+          },
+          "full_draw": {
+            "median_ns": 7300219,
+            "run_medians_ns": [
+              7399744,
+              7240518,
+              7300219,
+              7273922,
+              7313744
+            ],
+            "min_run_median_ns": 7240518,
+            "max_run_median_ns": 7399744,
+            "median_p95_ns": 8410875,
+            "median_p99_ns": 10132211
+          },
+          "draw_comparison": {
+            "before_label": "forced full draw",
+            "after_label": "incremental draw",
+            "before": {
+              "median_ns": 7300219,
+              "run_medians_ns": [
+                7399744,
+                7240518,
+                7300219,
+                7273922,
+                7313744
+              ],
+              "min_run_median_ns": 7240518,
+              "max_run_median_ns": 7399744,
+              "median_p95_ns": 8410875,
+              "median_p99_ns": 10132211
+            },
+            "after": {
+              "median_ns": 7315665,
+              "run_medians_ns": [
+                7335284,
+                7200827,
+                7236669,
+                7315665,
+                7332743
+              ],
+              "min_run_median_ns": 7200827,
+              "max_run_median_ns": 7335284,
+              "median_p95_ns": 8199969,
+              "median_p99_ns": 8973159
+            },
+            "reduction_percent": -0.21158269361507553,
+            "speedup": 0.9978886403354993
+          },
+          "pixel_payload_reduction_percent": 0.0
+        }
+      }
+    }
+  },
+  "reuse": {
+    "metadata": {
+      "baseline": {
+        "benchmark": "public_frame_reuse",
+        "scope": "CPU Context.begin + public Frame.reuse scene + Frame.end; no rasterization or presentation",
+        "simd_lanes": 4,
+        "viewport": [
+          1280,
+          32768
+        ],
+        "warmups": 100,
+        "samples": 1001,
+        "percentiles": "nearest rank; individual frame wall-clock samples in nanoseconds",
+        "context_bytes": 4376960,
+        "mixed_updates": "signal changes, keyboard activation, repeating timer, ancestor clip/position/opacity, scale and moved row indices",
+        "run_order": "Cases alternate full/retained order; pass --retained-first on alternating process runs to reverse every case",
+        "comparison_rule": "Compare timings only when every frame's output hash, dimensions and cumulative update counters match. Per-frame checks and step-tagged sequence digests are outside timing; hashes are regression evidence, not mathematical equivalence proof."
+      },
+      "candidate": {
+        "benchmark": "public_frame_reuse",
+        "scope": "CPU Context.begin + public Frame.reuse scene + Frame.end; no rasterization or presentation",
+        "simd_lanes": 4,
+        "viewport": [
+          1280,
+          32768
+        ],
+        "warmups": 100,
+        "samples": 1001,
+        "percentiles": "nearest rank; individual frame wall-clock samples in nanoseconds",
+        "context_bytes": 4381312,
+        "mixed_updates": "signal changes, keyboard activation, repeating timer, ancestor clip/position/opacity, scale and moved row indices",
+        "run_order": "Cases alternate full/retained order; pass --retained-first on alternating process runs to reverse every case",
+        "comparison_rule": "Compare timings only when every frame's output hash, dimensions and cumulative update counters match. Per-frame checks and step-tagged sequence digests are outside timing; hashes are regression evidence, not mathematical equivalence proof."
+      }
+    },
+    "cases": {
+      "330_unchanged": {
+        "rows": 330,
+        "scenario": "unchanged",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "6fd4abf1c1f869fc",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 77061,
+              "run_medians_ns": [
+                79369,
+                77061,
+                76979,
+                77051,
+                77485
+              ],
+              "min_run_median_ns": 76979,
+              "max_run_median_ns": 79369,
+              "median_p95_ns": 130014,
+              "median_p99_ns": 220386,
+              "min_sample_ns": 74010,
+              "max_sample_ns": 1713899
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "6fd4abf1c1f869fc",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 37100,
+              "run_medians_ns": [
+                39084,
+                36768,
+                37100,
+                36998,
+                37302
+              ],
+              "min_run_median_ns": 36768,
+              "max_run_median_ns": 39084,
+              "median_p95_ns": 67915,
+              "median_p99_ns": 150700,
+              "min_sample_ns": 35180,
+              "max_sample_ns": 2266546
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "6fd4abf1c1f869fc",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 77415,
+              "run_medians_ns": [
+                77357,
+                78611,
+                77044,
+                77530,
+                77415
+              ],
+              "min_run_median_ns": 77044,
+              "max_run_median_ns": 78611,
+              "median_p95_ns": 120662,
+              "median_p99_ns": 208182,
+              "min_sample_ns": 73823,
+              "max_sample_ns": 855898
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "6fd4abf1c1f869fc",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 20225,
+              "run_medians_ns": [
+                20225,
+                21474,
+                20132,
+                20162,
+                20229
+              ],
+              "min_run_median_ns": 20132,
+              "max_run_median_ns": 21474,
+              "median_p95_ns": 25825,
+              "median_p99_ns": 86844,
+              "min_sample_ns": 19419,
+              "max_sample_ns": 1350775
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 77061,
+            "run_medians_ns": [
+              79369,
+              77061,
+              76979,
+              77051,
+              77485
+            ],
+            "min_run_median_ns": 76979,
+            "max_run_median_ns": 79369,
+            "median_p95_ns": 130014,
+            "median_p99_ns": 220386,
+            "min_sample_ns": 74010,
+            "max_sample_ns": 1713899
+          },
+          "after": {
+            "median_ns": 77415,
+            "run_medians_ns": [
+              77357,
+              78611,
+              77044,
+              77530,
+              77415
+            ],
+            "min_run_median_ns": 77044,
+            "max_run_median_ns": 78611,
+            "median_p95_ns": 120662,
+            "median_p99_ns": 208182,
+            "min_sample_ns": 73823,
+            "max_sample_ns": 855898
+          },
+          "reduction_percent": -0.45937633822557,
+          "speedup": 0.9954272427824065
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 77415,
+            "run_medians_ns": [
+              77357,
+              78611,
+              77044,
+              77530,
+              77415
+            ],
+            "min_run_median_ns": 77044,
+            "max_run_median_ns": 78611,
+            "median_p95_ns": 120662,
+            "median_p99_ns": 208182,
+            "min_sample_ns": 73823,
+            "max_sample_ns": 855898
+          },
+          "after": {
+            "median_ns": 20225,
+            "run_medians_ns": [
+              20225,
+              21474,
+              20132,
+              20162,
+              20229
+            ],
+            "min_run_median_ns": 20132,
+            "max_run_median_ns": 21474,
+            "median_p95_ns": 25825,
+            "median_p99_ns": 86844,
+            "min_sample_ns": 19419,
+            "max_sample_ns": 1350775
+          },
+          "reduction_percent": 73.87457211134793,
+          "speedup": 3.827688504326329
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 37100,
+            "run_medians_ns": [
+              39084,
+              36768,
+              37100,
+              36998,
+              37302
+            ],
+            "min_run_median_ns": 36768,
+            "max_run_median_ns": 39084,
+            "median_p95_ns": 67915,
+            "median_p99_ns": 150700,
+            "min_sample_ns": 35180,
+            "max_sample_ns": 2266546
+          },
+          "after": {
+            "median_ns": 20225,
+            "run_medians_ns": [
+              20225,
+              21474,
+              20132,
+              20162,
+              20229
+            ],
+            "min_run_median_ns": 20132,
+            "max_run_median_ns": 21474,
+            "median_p95_ns": 25825,
+            "median_p99_ns": 86844,
+            "min_sample_ns": 19419,
+            "max_sample_ns": 1350775
+          },
+          "reduction_percent": 45.485175202156334,
+          "speedup": 1.834363411619283
+        }
+      },
+      "330_ancestor_clip": {
+        "rows": 330,
+        "scenario": "ancestor_clip",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "7dd45298026e7c28",
+            "sequence_hash": "10890b459601e0ed",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 76642,
+              "run_medians_ns": [
+                78623,
+                76485,
+                76642,
+                76400,
+                76885
+              ],
+              "min_run_median_ns": 76400,
+              "max_run_median_ns": 78623,
+              "median_p95_ns": 125492,
+              "median_p99_ns": 217620,
+              "min_sample_ns": 72512,
+              "max_sample_ns": 2052265
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "7dd45298026e7c28",
+            "sequence_hash": "10890b459601e0ed",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 36689,
+              "run_medians_ns": [
+                38137,
+                36419,
+                36689,
+                36391,
+                36863
+              ],
+              "min_run_median_ns": 36391,
+              "max_run_median_ns": 38137,
+              "median_p95_ns": 56744,
+              "median_p99_ns": 121360,
+              "min_sample_ns": 33450,
+              "max_sample_ns": 1652266
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "7dd45298026e7c28",
+            "sequence_hash": "10890b459601e0ed",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 76869,
+              "run_medians_ns": [
+                76869,
+                78135,
+                76701,
+                77099,
+                76745
+              ],
+              "min_run_median_ns": 76701,
+              "max_run_median_ns": 78135,
+              "median_p95_ns": 125607,
+              "median_p99_ns": 238889,
+              "min_sample_ns": 72605,
+              "max_sample_ns": 1028204
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "7dd45298026e7c28",
+            "sequence_hash": "10890b459601e0ed",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 20125,
+              "run_medians_ns": [
+                20206,
+                21418,
+                20123,
+                20085,
+                20125
+              ],
+              "min_run_median_ns": 20085,
+              "max_run_median_ns": 21418,
+              "median_p95_ns": 36108,
+              "median_p99_ns": 91403,
+              "min_sample_ns": 17982,
+              "max_sample_ns": 330695
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 76642,
+            "run_medians_ns": [
+              78623,
+              76485,
+              76642,
+              76400,
+              76885
+            ],
+            "min_run_median_ns": 76400,
+            "max_run_median_ns": 78623,
+            "median_p95_ns": 125492,
+            "median_p99_ns": 217620,
+            "min_sample_ns": 72512,
+            "max_sample_ns": 2052265
+          },
+          "after": {
+            "median_ns": 76869,
+            "run_medians_ns": [
+              76869,
+              78135,
+              76701,
+              77099,
+              76745
+            ],
+            "min_run_median_ns": 76701,
+            "max_run_median_ns": 78135,
+            "median_p95_ns": 125607,
+            "median_p99_ns": 238889,
+            "min_sample_ns": 72605,
+            "max_sample_ns": 1028204
+          },
+          "reduction_percent": -0.2961822499412792,
+          "speedup": 0.9970469239875632
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 76869,
+            "run_medians_ns": [
+              76869,
+              78135,
+              76701,
+              77099,
+              76745
+            ],
+            "min_run_median_ns": 76701,
+            "max_run_median_ns": 78135,
+            "median_p95_ns": 125607,
+            "median_p99_ns": 238889,
+            "min_sample_ns": 72605,
+            "max_sample_ns": 1028204
+          },
+          "after": {
+            "median_ns": 20125,
+            "run_medians_ns": [
+              20206,
+              21418,
+              20123,
+              20085,
+              20125
+            ],
+            "min_run_median_ns": 20085,
+            "max_run_median_ns": 21418,
+            "median_p95_ns": 36108,
+            "median_p99_ns": 91403,
+            "min_sample_ns": 17982,
+            "max_sample_ns": 330695
+          },
+          "reduction_percent": 73.81909482366103,
+          "speedup": 3.819577639751553
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 36689,
+            "run_medians_ns": [
+              38137,
+              36419,
+              36689,
+              36391,
+              36863
+            ],
+            "min_run_median_ns": 36391,
+            "max_run_median_ns": 38137,
+            "median_p95_ns": 56744,
+            "median_p99_ns": 121360,
+            "min_sample_ns": 33450,
+            "max_sample_ns": 1652266
+          },
+          "after": {
+            "median_ns": 20125,
+            "run_medians_ns": [
+              20206,
+              21418,
+              20123,
+              20085,
+              20125
+            ],
+            "min_run_median_ns": 20085,
+            "max_run_median_ns": 21418,
+            "median_p95_ns": 36108,
+            "median_p99_ns": 91403,
+            "min_sample_ns": 17982,
+            "max_sample_ns": 330695
+          },
+          "reduction_percent": 45.14704679876802,
+          "speedup": 1.823055900621118
+        }
+      },
+      "330_ancestor_layout": {
+        "rows": 330,
+        "scenario": "ancestor_layout",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "9f011dacfe884ad0",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 77163,
+              "run_medians_ns": [
+                79291,
+                77118,
+                76828,
+                77163,
+                77273
+              ],
+              "min_run_median_ns": 76828,
+              "max_run_median_ns": 79291,
+              "median_p95_ns": 131567,
+              "median_p99_ns": 295130,
+              "min_sample_ns": 73778,
+              "max_sample_ns": 3908190
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "9f011dacfe884ad0",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 43363,
+              "run_medians_ns": [
+                45391,
+                42926,
+                43363,
+                43044,
+                43384
+              ],
+              "min_run_median_ns": 42926,
+              "max_run_median_ns": 45391,
+              "median_p95_ns": 79465,
+              "median_p99_ns": 185295,
+              "min_sample_ns": 41145,
+              "max_sample_ns": 2150400
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "9f011dacfe884ad0",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 77373,
+              "run_medians_ns": [
+                77180,
+                78448,
+                108347,
+                77373,
+                77209
+              ],
+              "min_run_median_ns": 77180,
+              "max_run_median_ns": 108347,
+              "median_p95_ns": 135502,
+              "median_p99_ns": 216222,
+              "min_sample_ns": 74005,
+              "max_sample_ns": 891751
+            }
+          },
+          "retained": {
+            "nodes": 993,
+            "texts": 330,
+            "quads": 660,
+            "text_runs": 330,
+            "draw_commands": 660,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "d0eb7710181d1870",
+            "sequence_hash": "9f011dacfe884ad0",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 41627,
+              "run_medians_ns": [
+                41511,
+                43007,
+                41465,
+                41627,
+                41745
+              ],
+              "min_run_median_ns": 41465,
+              "max_run_median_ns": 43007,
+              "median_p95_ns": 60730,
+              "median_p99_ns": 135108,
+              "min_sample_ns": 39706,
+              "max_sample_ns": 343096
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 77163,
+            "run_medians_ns": [
+              79291,
+              77118,
+              76828,
+              77163,
+              77273
+            ],
+            "min_run_median_ns": 76828,
+            "max_run_median_ns": 79291,
+            "median_p95_ns": 131567,
+            "median_p99_ns": 295130,
+            "min_sample_ns": 73778,
+            "max_sample_ns": 3908190
+          },
+          "after": {
+            "median_ns": 77373,
+            "run_medians_ns": [
+              77180,
+              78448,
+              108347,
+              77373,
+              77209
+            ],
+            "min_run_median_ns": 77180,
+            "max_run_median_ns": 108347,
+            "median_p95_ns": 135502,
+            "median_p99_ns": 216222,
+            "min_sample_ns": 74005,
+            "max_sample_ns": 891751
+          },
+          "reduction_percent": -0.2721511605302984,
+          "speedup": 0.9972858749176069
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 77373,
+            "run_medians_ns": [
+              77180,
+              78448,
+              108347,
+              77373,
+              77209
+            ],
+            "min_run_median_ns": 77180,
+            "max_run_median_ns": 108347,
+            "median_p95_ns": 135502,
+            "median_p99_ns": 216222,
+            "min_sample_ns": 74005,
+            "max_sample_ns": 891751
+          },
+          "after": {
+            "median_ns": 41627,
+            "run_medians_ns": [
+              41511,
+              43007,
+              41465,
+              41627,
+              41745
+            ],
+            "min_run_median_ns": 41465,
+            "max_run_median_ns": 43007,
+            "median_p95_ns": 60730,
+            "median_p99_ns": 135108,
+            "min_sample_ns": 39706,
+            "max_sample_ns": 343096
+          },
+          "reduction_percent": 46.19957866439197,
+          "speedup": 1.858721502870733
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 43363,
+            "run_medians_ns": [
+              45391,
+              42926,
+              43363,
+              43044,
+              43384
+            ],
+            "min_run_median_ns": 42926,
+            "max_run_median_ns": 45391,
+            "median_p95_ns": 79465,
+            "median_p99_ns": 185295,
+            "min_sample_ns": 41145,
+            "max_sample_ns": 2150400
+          },
+          "after": {
+            "median_ns": 41627,
+            "run_medians_ns": [
+              41511,
+              43007,
+              41465,
+              41627,
+              41745
+            ],
+            "min_run_median_ns": 41465,
+            "max_run_median_ns": 43007,
+            "median_p95_ns": 60730,
+            "median_p99_ns": 135108,
+            "min_sample_ns": 39706,
+            "max_sample_ns": 343096
+          },
+          "reduction_percent": 4.0034130479902235,
+          "speedup": 1.041703701924232
+        }
+      },
+      "330_mixed_updates": {
+        "rows": 330,
+        "scenario": "mixed_updates",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": false,
+          "mismatched_frames": 1093,
+          "first_mismatch_step": 8,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 995,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "3266058c5eb8412a",
+            "sequence_hash": "255dfe79594dcdbb",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 79290,
+              "run_medians_ns": [
+                80572,
+                79009,
+                78855,
+                80659,
+                79290
+              ],
+              "min_run_median_ns": 78855,
+              "max_run_median_ns": 80659,
+              "median_p95_ns": 142721,
+              "median_p99_ns": 337072,
+              "min_sample_ns": 74901,
+              "max_sample_ns": 2986211
+            }
+          },
+          "retained": {
+            "nodes": 995,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 14,
+            "subtree_copies": 1087,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "3266058c5eb8412a",
+            "sequence_hash": "b10d1e5f7154cabf",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": false,
+            "frame": null,
+            "invalid_reason": "Retained work differs from its full control. Timings remain in the raw JSON and are excluded from summary timing comparisons."
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 995,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "3266058c5eb8412a",
+            "sequence_hash": "255dfe79594dcdbb",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 79341,
+              "run_medians_ns": [
+                91179,
+                79341,
+                79664,
+                79038,
+                79249
+              ],
+              "min_run_median_ns": 79038,
+              "max_run_median_ns": 91179,
+              "median_p95_ns": 115623,
+              "median_p99_ns": 196296,
+              "min_sample_ns": 74702,
+              "max_sample_ns": 2870367
+            }
+          },
+          "retained": {
+            "nodes": 995,
+            "texts": 330,
+            "quads": 330,
+            "text_runs": 330,
+            "draw_commands": 330,
+            "subtree_builds": 285,
+            "subtree_copies": 816,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "3266058c5eb8412a",
+            "sequence_hash": "255dfe79594dcdbb",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 42944,
+              "run_medians_ns": [
+                42967,
+                43155,
+                42909,
+                42944,
+                42928
+              ],
+              "min_run_median_ns": 42909,
+              "max_run_median_ns": 43155,
+              "median_p95_ns": 96185,
+              "median_p99_ns": 163398,
+              "min_sample_ns": 39802,
+              "max_sample_ns": 849040
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 79290,
+            "run_medians_ns": [
+              80572,
+              79009,
+              78855,
+              80659,
+              79290
+            ],
+            "min_run_median_ns": 78855,
+            "max_run_median_ns": 80659,
+            "median_p95_ns": 142721,
+            "median_p99_ns": 337072,
+            "min_sample_ns": 74901,
+            "max_sample_ns": 2986211
+          },
+          "after": {
+            "median_ns": 79341,
+            "run_medians_ns": [
+              91179,
+              79341,
+              79664,
+              79038,
+              79249
+            ],
+            "min_run_median_ns": 79038,
+            "max_run_median_ns": 91179,
+            "median_p95_ns": 115623,
+            "median_p99_ns": 196296,
+            "min_sample_ns": 74702,
+            "max_sample_ns": 2870367
+          },
+          "reduction_percent": -0.06432084752174827,
+          "speedup": 0.9993572049759897
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 79341,
+            "run_medians_ns": [
+              91179,
+              79341,
+              79664,
+              79038,
+              79249
+            ],
+            "min_run_median_ns": 79038,
+            "max_run_median_ns": 91179,
+            "median_p95_ns": 115623,
+            "median_p99_ns": 196296,
+            "min_sample_ns": 74702,
+            "max_sample_ns": 2870367
+          },
+          "after": {
+            "median_ns": 42944,
+            "run_medians_ns": [
+              42967,
+              43155,
+              42909,
+              42944,
+              42928
+            ],
+            "min_run_median_ns": 42909,
+            "max_run_median_ns": 43155,
+            "median_p95_ns": 96185,
+            "median_p99_ns": 163398,
+            "min_sample_ns": 39802,
+            "max_sample_ns": 849040
+          },
+          "reduction_percent": 45.87413821353399,
+          "speedup": 1.8475456408345752
+        },
+        "retained_version_comparison": null
+      },
+      "1320_unchanged": {
+        "rows": 1320,
+        "scenario": "unchanged",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "5ec1c00fd9ff20cd",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 343541,
+              "run_medians_ns": [
+                349380,
+                340714,
+                341875,
+                343541,
+                347556
+              ],
+              "min_run_median_ns": 340714,
+              "max_run_median_ns": 349380,
+              "median_p95_ns": 517808,
+              "median_p99_ns": 752341,
+              "min_sample_ns": 307252,
+              "max_sample_ns": 7019966
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "5ec1c00fd9ff20cd",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 178594,
+              "run_medians_ns": [
+                177052,
+                178594,
+                179918,
+                178117,
+                183494
+              ],
+              "min_run_median_ns": 177052,
+              "max_run_median_ns": 183494,
+              "median_p95_ns": 306437,
+              "median_p99_ns": 498805,
+              "min_sample_ns": 165177,
+              "max_sample_ns": 4611507
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "5ec1c00fd9ff20cd",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 340760,
+              "run_medians_ns": [
+                344332,
+                345996,
+                339866,
+                340192,
+                340760
+              ],
+              "min_run_median_ns": 339866,
+              "max_run_median_ns": 345996,
+              "median_p95_ns": 481860,
+              "median_p99_ns": 658038,
+              "min_sample_ns": 307774,
+              "max_sample_ns": 1753710
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "5ec1c00fd9ff20cd",
+            "observed_frames": 1101,
+            "changed_output_frames": 0,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 111773,
+              "run_medians_ns": [
+                112136,
+                114221,
+                110594,
+                110497,
+                111773
+              ],
+              "min_run_median_ns": 110497,
+              "max_run_median_ns": 114221,
+              "median_p95_ns": 195472,
+              "median_p99_ns": 322819,
+              "min_sample_ns": 106243,
+              "max_sample_ns": 2428854
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 343541,
+            "run_medians_ns": [
+              349380,
+              340714,
+              341875,
+              343541,
+              347556
+            ],
+            "min_run_median_ns": 340714,
+            "max_run_median_ns": 349380,
+            "median_p95_ns": 517808,
+            "median_p99_ns": 752341,
+            "min_sample_ns": 307252,
+            "max_sample_ns": 7019966
+          },
+          "after": {
+            "median_ns": 340760,
+            "run_medians_ns": [
+              344332,
+              345996,
+              339866,
+              340192,
+              340760
+            ],
+            "min_run_median_ns": 339866,
+            "max_run_median_ns": 345996,
+            "median_p95_ns": 481860,
+            "median_p99_ns": 658038,
+            "min_sample_ns": 307774,
+            "max_sample_ns": 1753710
+          },
+          "reduction_percent": 0.80951036411957,
+          "speedup": 1.0081611691513088
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 340760,
+            "run_medians_ns": [
+              344332,
+              345996,
+              339866,
+              340192,
+              340760
+            ],
+            "min_run_median_ns": 339866,
+            "max_run_median_ns": 345996,
+            "median_p95_ns": 481860,
+            "median_p99_ns": 658038,
+            "min_sample_ns": 307774,
+            "max_sample_ns": 1753710
+          },
+          "after": {
+            "median_ns": 111773,
+            "run_medians_ns": [
+              112136,
+              114221,
+              110594,
+              110497,
+              111773
+            ],
+            "min_run_median_ns": 110497,
+            "max_run_median_ns": 114221,
+            "median_p95_ns": 195472,
+            "median_p99_ns": 322819,
+            "min_sample_ns": 106243,
+            "max_sample_ns": 2428854
+          },
+          "reduction_percent": 67.19890832257308,
+          "speedup": 3.0486790190833206
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 178594,
+            "run_medians_ns": [
+              177052,
+              178594,
+              179918,
+              178117,
+              183494
+            ],
+            "min_run_median_ns": 177052,
+            "max_run_median_ns": 183494,
+            "median_p95_ns": 306437,
+            "median_p99_ns": 498805,
+            "min_sample_ns": 165177,
+            "max_sample_ns": 4611507
+          },
+          "after": {
+            "median_ns": 111773,
+            "run_medians_ns": [
+              112136,
+              114221,
+              110594,
+              110497,
+              111773
+            ],
+            "min_run_median_ns": 110497,
+            "max_run_median_ns": 114221,
+            "median_p95_ns": 195472,
+            "median_p99_ns": 322819,
+            "min_sample_ns": 106243,
+            "max_sample_ns": 2428854
+          },
+          "reduction_percent": 37.41503074011445,
+          "speedup": 1.597827740151915
+        }
+      },
+      "1320_ancestor_clip": {
+        "rows": 1320,
+        "scenario": "ancestor_clip",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "08c28a06035ede89",
+            "sequence_hash": "379bbb5f5237fb26",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 338452,
+              "run_medians_ns": [
+                343955,
+                336192,
+                338452,
+                338249,
+                342775
+              ],
+              "min_run_median_ns": 336192,
+              "max_run_median_ns": 343955,
+              "median_p95_ns": 519631,
+              "median_p99_ns": 684306,
+              "min_sample_ns": 299339,
+              "max_sample_ns": 3729904
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "08c28a06035ede89",
+            "sequence_hash": "379bbb5f5237fb26",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 176151,
+              "run_medians_ns": [
+                172680,
+                176151,
+                176667,
+                175714,
+                178974
+              ],
+              "min_run_median_ns": 172680,
+              "max_run_median_ns": 178974,
+              "median_p95_ns": 278579,
+              "median_p99_ns": 479423,
+              "min_sample_ns": 155596,
+              "max_sample_ns": 3358937
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "08c28a06035ede89",
+            "sequence_hash": "379bbb5f5237fb26",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 341536,
+              "run_medians_ns": [
+                343054,
+                342779,
+                341536,
+                337267,
+                331491
+              ],
+              "min_run_median_ns": 331491,
+              "max_run_median_ns": 343054,
+              "median_p95_ns": 510239,
+              "median_p99_ns": 723438,
+              "min_sample_ns": 298950,
+              "max_sample_ns": 3161765
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "08c28a06035ede89",
+            "sequence_hash": "379bbb5f5237fb26",
+            "observed_frames": 1101,
+            "changed_output_frames": 251,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 113102,
+              "run_medians_ns": [
+                113102,
+                115249,
+                113253,
+                111206,
+                111973
+              ],
+              "min_run_median_ns": 111206,
+              "max_run_median_ns": 115249,
+              "median_p95_ns": 227337,
+              "median_p99_ns": 326243,
+              "min_sample_ns": 94666,
+              "max_sample_ns": 1202701
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 338452,
+            "run_medians_ns": [
+              343955,
+              336192,
+              338452,
+              338249,
+              342775
+            ],
+            "min_run_median_ns": 336192,
+            "max_run_median_ns": 343955,
+            "median_p95_ns": 519631,
+            "median_p99_ns": 684306,
+            "min_sample_ns": 299339,
+            "max_sample_ns": 3729904
+          },
+          "after": {
+            "median_ns": 341536,
+            "run_medians_ns": [
+              343054,
+              342779,
+              341536,
+              337267,
+              331491
+            ],
+            "min_run_median_ns": 331491,
+            "max_run_median_ns": 343054,
+            "median_p95_ns": 510239,
+            "median_p99_ns": 723438,
+            "min_sample_ns": 298950,
+            "max_sample_ns": 3161765
+          },
+          "reduction_percent": -0.9112074976658446,
+          "speedup": 0.990970205190668
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 341536,
+            "run_medians_ns": [
+              343054,
+              342779,
+              341536,
+              337267,
+              331491
+            ],
+            "min_run_median_ns": 331491,
+            "max_run_median_ns": 343054,
+            "median_p95_ns": 510239,
+            "median_p99_ns": 723438,
+            "min_sample_ns": 298950,
+            "max_sample_ns": 3161765
+          },
+          "after": {
+            "median_ns": 113102,
+            "run_medians_ns": [
+              113102,
+              115249,
+              113253,
+              111206,
+              111973
+            ],
+            "min_run_median_ns": 111206,
+            "max_run_median_ns": 115249,
+            "median_p95_ns": 227337,
+            "median_p99_ns": 326243,
+            "min_sample_ns": 94666,
+            "max_sample_ns": 1202701
+          },
+          "reduction_percent": 66.88431087791625,
+          "speedup": 3.0197167158847766
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 176151,
+            "run_medians_ns": [
+              172680,
+              176151,
+              176667,
+              175714,
+              178974
+            ],
+            "min_run_median_ns": 172680,
+            "max_run_median_ns": 178974,
+            "median_p95_ns": 278579,
+            "median_p99_ns": 479423,
+            "min_sample_ns": 155596,
+            "max_sample_ns": 3358937
+          },
+          "after": {
+            "median_ns": 113102,
+            "run_medians_ns": [
+              113102,
+              115249,
+              113253,
+              111206,
+              111973
+            ],
+            "min_run_median_ns": 111206,
+            "max_run_median_ns": 115249,
+            "median_p95_ns": 227337,
+            "median_p99_ns": 326243,
+            "min_sample_ns": 94666,
+            "max_sample_ns": 1202701
+          },
+          "reduction_percent": 35.792587041799365,
+          "speedup": 1.5574525649413804
+        }
+      },
+      "1320_ancestor_layout": {
+        "rows": 1320,
+        "scenario": "ancestor_layout",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "a98c941fd0a1749d",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 342499,
+              "run_medians_ns": [
+                351881,
+                341750,
+                341035,
+                342499,
+                348883
+              ],
+              "min_run_median_ns": 341035,
+              "max_run_median_ns": 351881,
+              "median_p95_ns": 503363,
+              "median_p99_ns": 658605,
+              "min_sample_ns": 304946,
+              "max_sample_ns": 9756346
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "a98c941fd0a1749d",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 206528,
+              "run_medians_ns": [
+                209018,
+                206528,
+                205889,
+                205377,
+                216443
+              ],
+              "min_run_median_ns": 205377,
+              "max_run_median_ns": 216443,
+              "median_p95_ns": 334194,
+              "median_p99_ns": 520372,
+              "min_sample_ns": 192445,
+              "max_sample_ns": 4518379
+            }
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full"
+          ],
+          "full_rebuild": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "a98c941fd0a1749d",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 341848,
+              "run_medians_ns": [
+                343954,
+                349823,
+                340534,
+                339955,
+                341848
+              ],
+              "min_run_median_ns": 339955,
+              "max_run_median_ns": 349823,
+              "median_p95_ns": 499180,
+              "median_p99_ns": 690634,
+              "min_sample_ns": 305121,
+              "max_sample_ns": 2189597
+            }
+          },
+          "retained": {
+            "nodes": 3963,
+            "texts": 1320,
+            "quads": 2640,
+            "text_runs": 1320,
+            "draw_commands": 2640,
+            "subtree_builds": 1,
+            "subtree_copies": 1100,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "8bec94dfcebc9f06",
+            "sequence_hash": "a98c941fd0a1749d",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 200410,
+              "run_medians_ns": [
+                200427,
+                202062,
+                199882,
+                200031,
+                200410
+              ],
+              "min_run_median_ns": 199882,
+              "max_run_median_ns": 202062,
+              "median_p95_ns": 331186,
+              "median_p99_ns": 516234,
+              "min_sample_ns": 187506,
+              "max_sample_ns": 3058417
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 342499,
+            "run_medians_ns": [
+              351881,
+              341750,
+              341035,
+              342499,
+              348883
+            ],
+            "min_run_median_ns": 341035,
+            "max_run_median_ns": 351881,
+            "median_p95_ns": 503363,
+            "median_p99_ns": 658605,
+            "min_sample_ns": 304946,
+            "max_sample_ns": 9756346
+          },
+          "after": {
+            "median_ns": 341848,
+            "run_medians_ns": [
+              343954,
+              349823,
+              340534,
+              339955,
+              341848
+            ],
+            "min_run_median_ns": 339955,
+            "max_run_median_ns": 349823,
+            "median_p95_ns": 499180,
+            "median_p99_ns": 690634,
+            "min_sample_ns": 305121,
+            "max_sample_ns": 2189597
+          },
+          "reduction_percent": 0.19007354765999684,
+          "speedup": 1.0019043551519973
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 341848,
+            "run_medians_ns": [
+              343954,
+              349823,
+              340534,
+              339955,
+              341848
+            ],
+            "min_run_median_ns": 339955,
+            "max_run_median_ns": 349823,
+            "median_p95_ns": 499180,
+            "median_p99_ns": 690634,
+            "min_sample_ns": 305121,
+            "max_sample_ns": 2189597
+          },
+          "after": {
+            "median_ns": 200410,
+            "run_medians_ns": [
+              200427,
+              202062,
+              199882,
+              200031,
+              200410
+            ],
+            "min_run_median_ns": 199882,
+            "max_run_median_ns": 202062,
+            "median_p95_ns": 331186,
+            "median_p99_ns": 516234,
+            "min_sample_ns": 187506,
+            "max_sample_ns": 3058417
+          },
+          "reduction_percent": 41.37452903044628,
+          "speedup": 1.705743226385909
+        },
+        "retained_version_comparison": {
+          "before_label": "baseline retained",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 206528,
+            "run_medians_ns": [
+              209018,
+              206528,
+              205889,
+              205377,
+              216443
+            ],
+            "min_run_median_ns": 205377,
+            "max_run_median_ns": 216443,
+            "median_p95_ns": 334194,
+            "median_p99_ns": 520372,
+            "min_sample_ns": 192445,
+            "max_sample_ns": 4518379
+          },
+          "after": {
+            "median_ns": 200410,
+            "run_medians_ns": [
+              200427,
+              202062,
+              199882,
+              200031,
+              200410
+            ],
+            "min_run_median_ns": 199882,
+            "max_run_median_ns": 202062,
+            "median_p95_ns": 331186,
+            "median_p99_ns": 516234,
+            "min_sample_ns": 187506,
+            "max_sample_ns": 3058417
+          },
+          "reduction_percent": 2.9623101952277686,
+          "speedup": 1.0305274187914775
+        }
+      },
+      "1320_mixed_updates": {
+        "rows": 1320,
+        "scenario": "mixed_updates",
+        "compared_frames": 1101,
+        "baseline": {
+          "same_output_and_updates": false,
+          "mismatched_frames": 1093,
+          "first_mismatch_step": 8,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 3965,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "34cb28b257df5239",
+            "sequence_hash": "83414e79f04ebb11",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 352685,
+              "run_medians_ns": [
+                353266,
+                349392,
+                346421,
+                354791,
+                352685
+              ],
+              "min_run_median_ns": 346421,
+              "max_run_median_ns": 354791,
+              "median_p95_ns": 515264,
+              "median_p99_ns": 681883,
+              "min_sample_ns": 308001,
+              "max_sample_ns": 5806616
+            }
+          },
+          "retained": {
+            "nodes": 3965,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 14,
+            "subtree_copies": 1087,
+            "timer_fires": 0,
+            "keyboard_activations": 0,
+            "output_hash": "34cb28b257df5239",
+            "sequence_hash": "08cd577fe9000495",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": false,
+            "frame": null,
+            "invalid_reason": "Retained work differs from its full control. Timings remain in the raw JSON and are excluded from summary timing comparisons."
+          }
+        },
+        "candidate": {
+          "same_output_and_updates": true,
+          "mismatched_frames": 0,
+          "first_mismatch_step": null,
+          "run_orders": [
+            "full, retained",
+            "retained, full",
+            "full, retained",
+            "retained, full",
+            "full, retained"
+          ],
+          "full_rebuild": {
+            "nodes": 3965,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 1101,
+            "subtree_copies": 0,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "34cb28b257df5239",
+            "sequence_hash": "83414e79f04ebb11",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 350526,
+              "run_medians_ns": [
+                403436,
+                350526,
+                352011,
+                346330,
+                345547
+              ],
+              "min_run_median_ns": 345547,
+              "max_run_median_ns": 403436,
+              "median_p95_ns": 539211,
+              "median_p99_ns": 740916,
+              "min_sample_ns": 311326,
+              "max_sample_ns": 12356898
+            }
+          },
+          "retained": {
+            "nodes": 3965,
+            "texts": 1320,
+            "quads": 1320,
+            "text_runs": 1320,
+            "draw_commands": 1320,
+            "subtree_builds": 285,
+            "subtree_copies": 816,
+            "timer_fires": 137,
+            "keyboard_activations": 17,
+            "output_hash": "34cb28b257df5239",
+            "sequence_hash": "83414e79f04ebb11",
+            "observed_frames": 1101,
+            "changed_output_frames": 1001,
+            "timing_valid": true,
+            "frame": {
+              "median_ns": 217231,
+              "run_medians_ns": [
+                216601,
+                210175,
+                217231,
+                224029,
+                217584
+              ],
+              "min_run_median_ns": 210175,
+              "max_run_median_ns": 224029,
+              "median_p95_ns": 443906,
+              "median_p99_ns": 609740,
+              "min_sample_ns": 179872,
+              "max_sample_ns": 1920629
+            }
+          }
+        },
+        "full_rebuild_comparison": {
+          "before_label": "baseline full rebuild",
+          "after_label": "candidate full rebuild",
+          "before": {
+            "median_ns": 352685,
+            "run_medians_ns": [
+              353266,
+              349392,
+              346421,
+              354791,
+              352685
+            ],
+            "min_run_median_ns": 346421,
+            "max_run_median_ns": 354791,
+            "median_p95_ns": 515264,
+            "median_p99_ns": 681883,
+            "min_sample_ns": 308001,
+            "max_sample_ns": 5806616
+          },
+          "after": {
+            "median_ns": 350526,
+            "run_medians_ns": [
+              403436,
+              350526,
+              352011,
+              346330,
+              345547
+            ],
+            "min_run_median_ns": 345547,
+            "max_run_median_ns": 403436,
+            "median_p95_ns": 539211,
+            "median_p99_ns": 740916,
+            "min_sample_ns": 311326,
+            "max_sample_ns": 12356898
+          },
+          "reduction_percent": 0.612160993521127,
+          "speedup": 1.0061593148582415
+        },
+        "candidate_reuse_comparison": {
+          "before_label": "candidate full rebuild",
+          "after_label": "candidate retained",
+          "before": {
+            "median_ns": 350526,
+            "run_medians_ns": [
+              403436,
+              350526,
+              352011,
+              346330,
+              345547
+            ],
+            "min_run_median_ns": 345547,
+            "max_run_median_ns": 403436,
+            "median_p95_ns": 539211,
+            "median_p99_ns": 740916,
+            "min_sample_ns": 311326,
+            "max_sample_ns": 12356898
+          },
+          "after": {
+            "median_ns": 217231,
+            "run_medians_ns": [
+              216601,
+              210175,
+              217231,
+              224029,
+              217584
+            ],
+            "min_run_median_ns": 210175,
+            "max_run_median_ns": 224029,
+            "median_p95_ns": 443906,
+            "median_p99_ns": 609740,
+            "min_sample_ns": 179872,
+            "max_sample_ns": 1920629
+          },
+          "reduction_percent": 38.02713636078351,
+          "speedup": 1.6136094756273276
+        },
+        "retained_version_comparison": null
+      }
+    }
+  }
+}

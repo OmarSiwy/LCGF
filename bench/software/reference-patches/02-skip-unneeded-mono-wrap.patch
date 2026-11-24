@@ -1,0 +1,86 @@
+diff --git a/src/text/protocol.zig b/src/text/protocol.zig
+index fc8eee4..263bdec 100644
+--- a/src/text/protocol.zig
++++ b/src/text/protocol.zig
+@@ -59,6 +59,15 @@ pub const Mono = struct {
+     pub fn wrap(font: Mono, tx: *Texts) void {
+         const c = &tx.c;
+         const n = simd.padded(tx.len);
++        // Labels and controls commonly have no wrapping runs. One narrow-column
++        // scan avoids divisions, rounding and writes across all the metric columns.
++        // Read the padded rows as the pass below does: a stale wrapping flag there
++        // can only disable this shortcut, never skip a live wrapping run.
++        var any_wrap: simd.B = @splat(false);
++        var at: usize = 0;
++        while (at < n) : (at += W) any_wrap |= simd.loadF(c.wrap, at) > simd.f(0);
++        if (!@reduce(.Or, any_wrap)) return;
++
+         const one = simd.f(1);
+         var i: usize = 0;
+         while (i < n) : (i += W) {
+@@ -356,6 +365,65 @@ test "Mono.wrap: a run that does not wrap keeps the extent another font measured
+     try testing.expectEqual(24, tx.c.h[1]);
+ }
+ 
++test "Mono.wrap: no wrapping flags preserve foreign metrics and a later final run still wraps" {
++    const runs = 2 * W + 1;
++    var fx: Fixture(runs) = .{};
++    var tx = fx.texts();
++    const font: Mono = .{ .advance = 0.5, .line = 1.2 };
++    for (0..runs) |k| {
++        _ = tx.push(0, .{ .bytes = 24 }, &.{ .px = 10 });
++        tx.c.w[k] = @floatFromInt(k + 80);
++        tx.c.h[k] = @floatFromInt(k + 20);
++        tx.c.avail[k] = 100;
++    }
++    // Non-positive and unordered flags all mean "keep the extent" under the
++    // protocol's > 0 predicate. Do not reinterpret them as a truthy bit pattern.
++    tx.c.wrap[0] = -1;
++    tx.c.wrap[1] = std.math.nan(f32);
++    tx.c.w[0] = -0.0;
++    tx.c.h[0] = std.math.inf(f32);
++    font.wrap(&tx);
++    try testing.expectEqual(@as(u32, 0x8000_0000), @as(u32, @bitCast(tx.c.w[0])));
++    try testing.expectEqual(std.math.inf(f32), tx.c.h[0]);
++    for (1..runs) |k| {
++        try testing.expectEqual(@as(f32, @floatFromInt(k + 80)), tx.c.w[k]);
++        try testing.expectEqual(@as(f32, @floatFromInt(k + 20)), tx.c.h[k]);
++    }
++
++    // No cached summary: a direct column write between calls must be observed,
++    // including the single valid lane of a trailing partial vector.
++    tx.c.wrap[runs - 1] = 1;
++    tx.c.w[runs - 1] = 120;
++    tx.c.h[runs - 1] = 12;
++    font.wrap(&tx);
++    try testing.expectEqual(@as(f32, 100), tx.c.w[runs - 1]);
++    try testing.expectEqual(@as(f32, 24), tx.c.h[runs - 1]);
++    for (1..runs - 1) |k| {
++        try testing.expectEqual(@as(f32, @floatFromInt(k + 80)), tx.c.w[k]);
++        try testing.expectEqual(@as(f32, @floatFromInt(k + 20)), tx.c.h[k]);
++    }
++}
++
++test "Mono.wrap: stale padding after a shorter frame cannot change live nonwrapping extents" {
++    var fx: Fixture(2 * W) = .{};
++    var tx = fx.texts();
++    const font: Mono = .{};
++    for (0..2 * W) |_| _ = tx.push(0, .{ .bytes = 24 }, &.{ .wrap = true });
++    font.measure(&tx);
++    tx.reset();
++    _ = tx.push(0, .{ .bytes = 4 }, &.{});
++    tx.c.w[0] = 81;
++    tx.c.h[0] = 21;
++    tx.c.avail[0] = 30;
++    font.wrap(&tx);
++    try testing.expectEqual(@as(f32, 81), tx.c.w[0]);
++    try testing.expectEqual(@as(f32, 21), tx.c.h[0]);
++    tx.reset();
++    font.wrap(&tx); // An empty list has no columns to read, including stale padding.
++    try testing.expectEqual(@as(f32, 81), tx.c.w[0]);
++    try testing.expectEqual(@as(f32, 21), tx.c.h[0]);
++}
++
+ test "Cache: misses are measured once, hits come back without measuring" {
+     var fx: Fixture(4) = .{};
+     var tx = fx.texts();

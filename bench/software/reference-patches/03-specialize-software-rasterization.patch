@@ -1,0 +1,485 @@
+diff --git a/src/render/sw/sw.zig b/src/render/sw/sw.zig
+index 8db025d..0627e7c 100644
+--- a/src/render/sw/sw.zig
++++ b/src/render/sw/sw.zig
+@@ -6,8 +6,10 @@
+ //! time, with the shader's math as vector expressions: rounded-box distance, border, clip and
+ //! rounded clip as coverage, the per-quad feature of `params.x`, then premultiplied "over"
+ //! blending (Porter and Duff 1984: out = src + dst * (1 - src.a)). Per pixel there is no branch;
+-//! per quad there is one, picking the loop compiled for its feature (what a GPU back end does
+-//! with one pipeline and a uniform branch).
++//! batches specialize white bindings and each quad picks the loop for its material and geometry.
++//! Ordinary textured rectangles (including glyph cells) omit inactive transform, border and
++//! rounded-clip work, while preserving the same coverage, sampling and blend arithmetic.
++//! Opaque bordered panels fill a proven full-coverage interior and shade the unchanged perimeter.
+ //!
+ //! Framebuffer rows are padded to whole vectors, so shading uses whole vectors with a mask for
+ //! the pixels outside the quad or the scissor.
+@@ -220,6 +222,24 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
+         }
+ 
+         fn drawQuads(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
++            // Texture binding is constant across the batch. A white binding has no
++            // sampling work: retain the material and geometry, but compile out UV
++            // conversion, gathers and channel unpacking for every covered pixel.
++            // Keep `shade` as the complete shader reference for conformance tests.
++            if (img.pixels.ptr == Image.white.pixels.ptr and img.width == 1 and img.height == 1) {
++                const untextured = comptime blk: {
++                    var value = use;
++                    value.image = false;
++                    value.text = false;
++                    break :blk value;
++                };
++                s.drawQuadsUsing(untextured, t, quads, img);
++            } else {
++                s.drawQuadsUsing(use, t, quads, img);
++            }
++        }
++
++        fn drawQuadsUsing(s: *const Self, comptime shading: features.Usage, t: Target, quads: []const Quad, img: Image) void {
+             for (quads) |*source| {
+                 var local: Quad = undefined;
+                 const q = if (fixed_point) q: {
+@@ -245,7 +265,7 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
+                             if (band[0] == band[1]) continue;
+                             for ([_][2]u32{ .{ box[0], center[0] }, .{ center[2], box[2] } }) |corner| {
+                                 if (corner[0] == corner[1]) continue;
+-                                shadeFor(use, .solid, .{ .fb = t.fb, .scissor = .{ corner[0], band[0], corner[1], band[1] } }, q, img, s.scale);
++                                shadeFor(shading, .solid, .{ .fb = t.fb, .scissor = .{ corner[0], band[0], corner[1], band[1] } }, q, img, s.scale);
+                             }
+                             t.fb.solid(.{ center[0], band[0], center[2], band[1] }, color);
+                         }
+@@ -255,11 +275,40 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
+                     }
+                     continue;
+                 }
++                if (comptime !(shading.image or shading.text)) {
++                    if (borderedInterior(q, img, s.scale)) |interior| {
++                        const pixels = @as(@Vector(4, f32), q.rect) * @as(@Vector(4, f32), @splat(s.scale));
++                        const box = clampBox(toPixels(pixels), t.scissor);
++                        const center = clampBox(interior, box);
++                        if (center[0] < center[2] and center[1] < center[3]) {
++                            t.fb.fill(center, @bitCast(q.fill));
++                            // Four disjoint bands plus the center cover the original box.
++                            // Keep the original quad: only its scissor changes, so border
++                            // color, corner coverage and clipping use the same shader math.
++                            for ([_][4]u32{
++                                .{ box[0], box[1], box[2], center[1] },
++                                .{ box[0], center[3], box[2], box[3] },
++                                .{ box[0], center[1], center[0], center[3] },
++                                .{ center[2], center[1], box[2], center[3] },
++                            }) |band| {
++                                if (band[0] == band[2] or band[1] == band[3]) continue;
++                                shadeFor(shading, .solid, .{ .fb = t.fb, .scissor = band }, q, img, s.scale);
++                            }
++                            continue;
++                        }
++                    }
++                }
++                if (comptime shading.image or shading.text) {
++                    if (plainTexturedRect(shading, q)) {
++                        shadeTexturedRect(t, q, img, s.scale);
++                        continue;
++                    }
++                }
+                 // One loop per feature; unknown codes draw as solid, as the shader's selects do.
+                 const code: u32 = @bitCast(q.params[0]);
+                 switch (std.enums.fromInt(features.Kind, code) orelse .solid) {
+                     inline else => |kind| if (comptime use.kinds.contains(kind))
+-                        shadeFor(use, kind, t, q, img, s.scale)
++                        shadeFor(shading, kind, t, q, img, s.scale)
+                     else
+                         t.fb.fill(clampBox(coveredPixels(q, s.scale), t.scissor), missing_kind),
+                 }
+@@ -333,6 +382,67 @@ fn solidRect(q: *const Quad, img: Image, scale: f32) bool {
+         q.border < 0.001 and q.opacity == 1 and @reduce(.And, @floor(s) == s);
+ }
+ 
++/// An opaque interior of a white solid panel with a border. The deliberately narrow
++/// gate leaves fractional physical geometry and unusual scales on the full shader.
++fn borderedInterior(q: *const Quad, img: Image, scale: f32) ?[4]u32 {
++    const V = @Vector(4, f32);
++    const zero: V = @splat(0);
++    const color: Color = @bitCast(q.fill);
++    if (@as(u32, @bitCast(q.params[0])) != 0 or img.pixels.ptr != Image.white.pixels.ptr or
++        img.width != 1 or img.height != 1 or color.a != 255 or q.opacity != 1 or
++        !std.mem.eql(f32, &q.xform, &.{ 1, 0, 0, 1, 0, 0 }) or
++        !@reduce(.And, @as(V, q.clip_radii) == zero)) return null;
++    if (scale != 1 and scale != 2 and scale != 4) return null;
++
++    const s: V = @splat(scale);
++    const rect = @as(V, q.rect) * s;
++    const radii = @as(V, q.radii) * s;
++    const border = q.border * scale;
++    const clip = @as(V, q.clip) * s;
++    const limit: V = @splat(1 << 16);
++    // Bounded comparisons reject NaNs/infinities before any float-to-int conversion.
++    if (!@reduce(.And, (@abs(rect) <= limit) & (@floor(rect) == rect)) or
++        rect[0] >= rect[2] or rect[1] >= rect[3] or
++        !@reduce(.And, (radii >= zero) & (radii <= limit) & (@floor(radii) == radii)) or
++        !(q.border >= 0.001 and border <= (1 << 16) and @floor(border) == border) or
++        !@reduce(.And, @abs(clip) <= @as(V, @splat(1 << 22)))) return null;
++
++    // Proof in physical pixels: integral edges/radii/border, scales 1/2/4 and
++    // |rect| <= 2^16 keep centers, half sizes and the interior SDF arithmetic on
++    // an exactly representable half-pixel grid (magnitudes stay below 2^18).
++    // Radius capping preserves that grid. With I = max(radius, border) + 1,
++    // every center in this inset is >= I + 0.5 from each edge. In physical units,
++    // roundedBox's logical qx/qy multiplied by scale are <= -1.5, so its sqrt
++    // term is zero. The shader's scaled dist <= -I - 0.5 and dist + border * scale
++    // <= -1.5. Both shape and inner coverage saturate to exactly 1.
++    // ceil(clip.low)/floor(clip.high) conservatively put centers inside the hard
++    // clip. White texture, opaque fill, opacity 1 and no rounded clip then make
++    // source-over exactly the packed fill, regardless of the border/destination alpha.
++    const inset = @max(@reduce(.Max, radii), border) + 1;
++    const center: [4]f32 = .{
++        @max(rect[0] + inset, @ceil(clip[0])),
++        @max(rect[1] + inset, @ceil(clip[1])),
++        @min(rect[2] - inset, @floor(clip[2])),
++        @min(rect[3] - inset, @floor(clip[3])),
++    };
++    if (center[0] >= center[2] or center[1] >= center[3]) return null;
++    const pixels = toPixels(center);
++    if (pixels[0] == pixels[2] or pixels[1] == pixels[3]) return null;
++    return pixels;
++}
++
++/// The common glyph/image geometry: square, borderless, untransformed and without
++/// a rounded clip. Texture content and opacity are unrestricted. This is a quad
++/// predicate, never a pixel branch; every other case keeps the complete shader.
++fn plainTexturedRect(comptime use: features.Usage, q: *const Quad) bool {
++    const zero: @Vector(4, f32) = @splat(0);
++    const square = !use.radius or (@reduce(.And, @as(@Vector(4, f32), q.radii) == zero) and
++        @reduce(.And, @as(@Vector(4, f32), q.clip_radii) == zero));
++    return @as(u32, @bitCast(q.params[0])) == 0 and square and (!use.border or q.border == 0) and
++        q.rect[2] > q.rect[0] and q.rect[3] > q.rect[1] and
++        std.mem.eql(f32, &q.xform, &.{ 1, 0, 0, 1, 0, 0 });
++}
++
+ /// Pixels whose centres lie in `q.rect` and inside `q.clip` (the shader's `step` tests).
+ fn coveredPixels(q: *const Quad, scale: f32) [4]u32 {
+     const s: @Vector(4, f32) = @splat(scale);
+@@ -439,6 +549,63 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
+     shadeFor(.all, kind, t, q, img, scale);
+ }
+ 
++/// `shadeFor(.solid)` with the facts established by plainTexturedRect. Retain
++/// the distance calculation even for square edges: fractional positions still
++/// need its antialias coverage, and replacing it with integer bounds would alter
++/// pixels. RGBA sampling also stays intact, so colored glyphs/images work here.
++fn shadeTexturedRect(t: Target, q: *const Quad, img: Image, scale: f32) void {
++    const x0, const y0, const x1, const y1 = q.rect;
++    const hx = (x1 - x0) * 0.5;
++    const hy = (y1 - y0) * 0.5;
++    const cx = (x0 + x1) * 0.5;
++    const cy = (y0 + y1) * 0.5;
++    const clip = q.clip;
++    const box = clampBox(toPixels(.{
++        @max(x0, clip[0]) * scale,
++        @max(y0, clip[1]) * scale,
++        @min(x1, clip[2]) * scale + 1,
++        @min(y1, clip[3]) * scale + 1,
++    }), t.scissor);
++    const fill = rgba(q.fill);
++    const tex_w: f32 = @floatFromInt(img.width);
++    const tex_h: f32 = @floatFromInt(img.height);
++    const red = t.fb.red();
++    const inv_scale = 1 / scale;
++    for (box[1]..box[3]) |y| {
++        const row = t.fb.pixels[y * t.fb.stride ..][0..t.fb.stride];
++        const fy = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
++        const sy = fy * simd.f(inv_scale);
++        const py = sy - simd.f(y0);
++        const ly = sy - simd.f(cy);
++        // The identity transform makes the vertical sample constant for a row.
++        const tv = texelCentre(py, 2 * hy, q.uv[1], q.uv[3], tex_h);
++        var x = std.mem.alignBackward(u32, box[0], W);
++        while (x < box[2]) : (x += W) {
++            const fx = @as(F, @floatFromInt(simd.iota + simd.u(x))) + simd.f(0.5);
++            const sx = fx * simd.f(inv_scale);
++            const px = sx - simd.f(x0);
++            const lx = sx - simd.f(cx);
++            const geo = (sx >= simd.f(x0)) & (sx < simd.f(x1)) & (sy >= simd.f(y0)) & (sy < simd.f(y1));
++            const dist = roundedBox(lx, ly, hx, hy, simd.f(0)) * simd.f(scale);
++            const shape = sat(simd.f(0.5) - dist);
++            const tu = texelCentre(px, 2 * hx, q.uv[0], q.uv[2], tex_w);
++            const tex = sample(img, tu, tv);
++            var color: [4]F = undefined;
++            inline for (0..4) |i| color[i] = simd.f(fill[i]) * tex[i];
++            const inside = (sx >= simd.f(clip[0])) & (sx <= simd.f(clip[2])) & (sy >= simd.f(clip[1])) & (sy <= simd.f(clip[3]));
++            const alpha = @select(f32, inside & geo, shape * simd.f(q.opacity), simd.f(0));
++
++            const old: U = row[x..][0..W].*;
++            const dst_px = unpack(old, red);
++            const sa = color[3] * alpha;
++            var out: [4]F = undefined;
++            inline for (0..3) |i| out[i] = color[i] * sa + dst_px[i] * (simd.f(1) - sa);
++            out[3] = sa + dst_px[3] * (simd.f(1) - sa);
++            row[x..][0..W].* = @select(u32, spanMask(x, box[0], box[2]), pack(out, red), old);
++        }
++    }
++}
++
+ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void {
+     const p: [4]u32 = @bitCast(q.params);
+     const x0, const y0, const x1, const y1 = q.rect;
+@@ -721,6 +888,259 @@ test "solid fills and corner bands agree with the shader through a partial sciss
+     }
+ }
+ 
++fn expectBorderedMatches(q: Quad, scale: f32, format: Format, scissor: [4]u32) !void {
++    var fast: Frame(99, 83) = .{};
++    var slow: Frame(99, 83) = .{};
++    var fb = fast.fb(format);
++    var reference = slow.fb(format);
++    // Preserve arbitrary destination alpha and row padding in the comparison.
++    for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
++    @memcpy(reference.pixels, fb.pixels);
++    const gfx: Software = .{ .quads = &.{q}, .scale = scale };
++    gfx.drawBatch(.{ .fb = &fb, .scissor = scissor }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
++    shade(.solid, .{ .fb = &reference, .scissor = scissor }, &q, Image.white, scale);
++    try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
++}
++
++test "bordered interiors preserve corners clipping and transparent borders at integer scales" {
++    const Scene = struct {
++        rect: [4]f32,
++        radii: [4]f32,
++        border: f32,
++        clip: [4]f32 = .{ -1e6, -1e6, 1e6, 1e6 },
++        scissor: [4]u32 = .{ 0, 0, 99, 83 },
++    };
++    // Describe physical pixels, then divide by scale. Scales 2/4 also exercise
++    // fractional logical edges/radii/borders that become exact physical pixels.
++    const scenes = [_]Scene{
++        .{ .rect = .{ 1, 1, 94, 77 }, .radii = @splat(5), .border = 1 },
++        .{ .rect = .{ -7, -5, 89, 72 }, .radii = .{ 0, 2, 8, 4 }, .border = 4, .clip = .{ 3.5, 2.5, 92.5, 74.5 }, .scissor = .{ 3, 2, 91, 79 } },
++        .{ .rect = .{ 3, 2, 48, 35 }, .radii = @splat(0), .border = 8, .clip = .{ 7.25, 5.75, 43.75, 32.25 }, .scissor = .{ 5, 4, 47, 34 } },
++        // One fill pixel; the remaining panel still uses the original shader.
++        .{ .rect = .{ 3, 4, 12, 13 }, .radii = .{ 3, 1, 2, 0 }, .border = 1 },
++        .{ .rect = .{ -65536, -65536, 95, 79 }, .radii = .{ 5, 0, 2, 8 }, .border = 2, .clip = .{ 1.25, 0.5, 98.5, 82.5 } },
++        // This scissor excludes the whole interior, exercising dispatch fallback.
++        .{ .rect = .{ 1, 1, 94, 77 }, .radii = @splat(5), .border = 1, .scissor = .{ 0, 0, 99, 3 } },
++    };
++    for ([_]Format{ .rgba8, .bgra8 }) |format| {
++        for ([_]f32{ 1, 2, 4 }) |scale| {
++            const s: @Vector(4, f32) = @splat(scale);
++            for (scenes) |scene| {
++                var q = testQuad(@as(@Vector(4, f32), scene.rect) / s, .rgb(17, 149, 231));
++                q.radii = @as(@Vector(4, f32), scene.radii) / s;
++                q.clip = @as(@Vector(4, f32), scene.clip) / s;
++                q.border = scene.border / scale;
++                try testing.expect(!solidRect(&q, Image.white, scale));
++                try testing.expect(borderedInterior(&q, Image.white, scale) != null);
++                for ([_]u8{ 0, 97, 255 }) |alpha| {
++                    q.border_color = Color.rgba(211, 33, 80, alpha).bitsOf();
++                    try expectBorderedMatches(q, scale, format, scene.scissor);
++                }
++            }
++        }
++    }
++}
++
++test "bordered interior fallback preserves small empty and narrowly clipped panels" {
++    for ([_][4]f32{
++        .{ 3, 4, 3, 15 }, // empty width
++        .{ 8, 4, 3, 15 }, // inverted width
++        .{ 3, 4, 15, 4 }, // empty height
++        .{ 3, 4, 6, 7 }, // radius consumes the interior
++        .{ 3, 4, 11, 12 }, // inset edges meet exactly
++    }) |rect| {
++        var q = testQuad(rect, .rgb(19, 85, 211));
++        q.radii = @splat(3);
++        q.border = 1;
++        q.border_color = Color.rgba(250, 61, 101, 97).bitsOf();
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        for ([_]Format{ .rgba8, .bgra8 }) |format|
++            try expectBorderedMatches(q, 1, format, .{ 0, 0, 99, 83 });
++    }
++    var q = testQuad(.{ 1, 1, 31, 23 }, .rgb(19, 85, 211));
++    q.radii = @splat(3);
++    q.border = 1;
++    q.border_color = Color.rgba(250, 61, 101, 97).bitsOf();
++    // The hard clip includes a pixel center but has no conservative fill interval.
++    for ([_][4]f32{ .{ 8.4, 9.4, 8.6, 9.6 }, .{ 8, 9, 8, 9 } }) |clip| {
++        q.clip = clip;
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        for ([_]Format{ .rgba8, .bgra8 }) |format|
++            try expectBorderedMatches(q, 1, format, .{ 0, 0, 99, 83 });
++    }
++}
++
++test "bordered interior gate retains the shader for fractional transformed and nonopaque panels" {
++    const texels = testTexels();
++    const texture: Image = .{ .pixels = &texels, .width = 7, .height = 5 };
++    inline for (0..11) |mode| {
++        var q = testQuad(.{ 1, 1, 31, 23 }, .rgb(17, 149, 231));
++        q.radii = @splat(5);
++        q.border = 1;
++        q.border_color = Color.rgba(211, 33, 80, 97).bitsOf();
++        switch (mode) {
++            0 => q.rect[0] += 0.1,
++            1 => q.radii[2] = 1.1,
++            2 => q.border = 1.1,
++            3 => q.opacity = 0.65,
++            4 => q.fill = Color.rgba(17, 149, 231, 254).bitsOf(),
++            5 => q.xform = .{ 1, 0.08, -0.05, 1, 1.5, -0.25 },
++            6 => q.clip_radii = .{ 0, 2, 0, 0 },
++            7 => q.params = features.linear(.rgba(19, 85, 211, 165), 0.7),
++            8, 9 => {}, // nonwhite binding / non-power-of-two scale
++            10 => q.rect[0] = -65537,
++            else => unreachable,
++        }
++        const img = if (mode == 8) texture else Image.white;
++        const scale: f32 = if (mode == 9) 1.25 else 1;
++        const kind: features.Kind = if (mode == 7) .linear else .solid;
++        try testing.expect(borderedInterior(&q, img, scale) == null);
++        for ([_]Format{ .rgba8, .bgra8 }) |format|
++            try expectTexturedMatches(kind, q, img, scale, format, false);
++    }
++}
++
++test "bordered interior gate rejects nonfinite inputs and recognizes the application panel" {
++    var panel = testQuad(.{ 185, 138, 784, 478 }, .rgb(30, 31, 36));
++    panel.clip = .{ 169, 57, 800, 600 };
++    panel.radii = @splat(5);
++    panel.border = 1;
++    try testing.expectEqual([4]u32{ 191, 144, 778, 472 }, borderedInterior(&panel, Image.white, 1).?);
++    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32), 65537 }) |bad| {
++        var q = panel;
++        q.radii[0] = bad;
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        q = panel;
++        q.border = bad;
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++    }
++    for ([_]f32{ std.math.inf(f32), std.math.nan(f32) }) |bad| {
++        var q = panel;
++        q.rect[0] = bad;
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        q = panel;
++        q.clip[0] = bad;
++        try testing.expect(borderedInterior(&q, Image.white, 1) == null);
++        try testing.expect(borderedInterior(&panel, Image.white, bad) == null);
++    }
++}
++
++test "white binding specialization matches the complete shader for every material" {
++    var fast: Frame(67, 53) = .{};
++    var slow: Frame(67, 53) = .{};
++    inline for (all_kinds) |kind| {
++        for ([_]Format{ .rgba8, .bgra8 }) |format| {
++            var fb = fast.fb(format);
++            var reference = slow.fb(format);
++            for ([_]f32{ 0.75, 1, 1.25, 2 }) |scale| {
++                // Fractional, transformed geometry misses the opaque fill path.
++                // Rounded clips, opacity and borders must remain part of shading.
++                var q = testQuad(.{ 1.3, 2.7, 27.4, 22.2 }, .rgba(233, 81, 106, 129));
++                q.xform = .{ 1, 0.08, -0.05, 1, 1.5, -0.25 };
++                q.radii = .{ 0, 1, 3, 2 };
++                q.clip = .{ 0.75, 0.5, 26.25, 23 };
++                q.clip_radii = .{ 1, 2, 0, 3 };
++                q.uv = .{ -1.25, 0.875, 2.25, -0.5 };
++                q.border = 1.3;
++                q.border_color = Color.rgba(71, 205, 43, 202).bitsOf();
++                q.opacity = 0.65;
++                q.params = switch (kind) {
++                    .solid => @splat(0),
++                    .linear => features.linear(.rgba(50, 150, 250, 197), 0.7),
++                    .radial => features.radial(.rgba(10, 250, 80, 218), .{ 0.3, 0.8 }, 9.5),
++                    .shadow => features.shadow(2.5),
++                    .nine_slice => features.nineSlice(.{ 3, 2, 4, 5 }, .{ 0.2, 0.3, 0.8, 0.7 }),
++                    .dashed => features.dashed(3.25, 1.5),
++                    .dotted => features.dotted(1.75),
++                };
++                for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
++                @memcpy(reference.pixels, fb.pixels);
++                const scissor = [4]u32{ 3, 2, 61, 49 };
++                const gfx: Software = .{ .quads = &.{q}, .scale = scale };
++                gfx.drawBatch(.{ .fb = &fb, .scissor = scissor }, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
++                shade(kind, .{ .fb = &reference, .scissor = scissor }, &q, Image.white, scale);
++                try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
++            }
++        }
++    }
++}
++
++/// Exercise actual drawText/drawBatch dispatch against the unspecialized shader.
++/// Initialize padding and destination alpha too, so clipping and source-over are
++/// checked rather than only comparing RGB against an opaque cleared framebuffer.
++fn expectTexturedMatches(comptime kind: features.Kind, q: Quad, img: Image, scale: f32, format: Format, comptime text: bool) !void {
++    var fast: Frame(67, 53) = .{};
++    var slow: Frame(67, 53) = .{};
++    var fb = fast.fb(format);
++    var reference = slow.fb(format);
++    for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
++    @memcpy(reference.pixels, fb.pixels);
++    const scissor = [4]u32{ 3, 2, 61, 49 };
++    const gfx: Software = .{
++        .quads = &.{q},
++        .glyphs = .{ .quads = &.{q}, .first = &.{0}, .count = &.{1} },
++        .images = &.{img},
++        .scale = scale,
++    };
++    const target: Target = .{ .fb = &fb, .scissor = scissor };
++    if (text) gfx.drawText(target, 0) else gfx.drawBatch(target, .{ .first = 0, .count = 1, .texture = .white, .material = .solid });
++    shade(kind, .{ .fb = &reference, .scissor = scissor }, &q, img, scale);
++    try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
++}
++
++fn testTexels() [35]u32 {
++    var texels: [35]u32 = undefined;
++    for (&texels, 0..) |*px, i| px.* = Color.rgba(@truncate(i * 61), @truncate(i * 103), @truncate(i * 19), @truncate(i * 37)).bitsOf();
++    return texels;
++}
++
++test "ordinary glyph quads preserve RGBA samples, fractional coverage and HiDPI" {
++    const texels = testTexels();
++    const img: Image = .{ .pixels = &texels, .width = 7, .height = 5 };
++    for ([_]Format{ .rgba8, .bgra8 }) |format| {
++        for ([_]f32{ 0.75, 1, 1.25, 2.5 }) |scale| {
++            for ([_]f32{ 0, 0.1, 0.5, 0.9 }) |offset| {
++                for ([_]f32{ 0, 0.17, 0.65, 1 }) |opacity| {
++                    var q = testQuad(.{ 1 + offset, 0.3 + offset, 25.7 + offset, 19.4 + offset }, .rgba(17, 149, 231, 193));
++                    q.clip = .{ 1.5, 2.5, 26.25, 20.5 };
++                    q.uv = .{ -0.125, 1.25, 0.875, -0.25 };
++                    q.opacity = opacity;
++                    try testing.expect(plainTexturedRect(.all, &q));
++                    try expectTexturedMatches(.solid, q, img, scale, format, true);
++                }
++            }
++        }
++    }
++}
++
++test "textured rectangle dispatch retains the full shader for radius border transform and material" {
++    const texels = testTexels();
++    const img: Image = .{ .pixels = &texels, .width = 7, .height = 5 };
++    inline for (0..6) |mode| {
++        var q = testQuad(.{ 1.3, 2.7, 27.4, 22.2 }, .rgba(233, 81, 106, 129));
++        q.clip = .{ 1.5, 2.5, 26.25, 20.5 };
++        q.opacity = 0.65;
++        const kind: features.Kind = if (mode == 4) .linear else .solid;
++        switch (mode) {
++            0 => q.radii = .{ 0, 3, 1, 2 },
++            1 => q.clip_radii = .{ 0, 3, 1, 2 },
++            2 => {
++                q.border = 1.25;
++                q.border_color = Color.rgba(75, 205, 43, 197).bitsOf();
++            },
++            3 => q.xform = .{ 1, 0.08, -0.05, 1, 1.5, -0.25 },
++            4 => q.params = features.linear(.rgba(19, 85, 211, 165), 0.7),
++            // Ordinary image quads use the same specialization as text runs.
++            5 => {},
++            else => unreachable,
++        }
++        try testing.expectEqual(mode == 5, plainTexturedRect(.all, &q));
++        for ([_]Format{ .rgba8, .bgra8 }) |format|
++            for ([_]f32{ 0.75, 1, 1.25, 2.5 }) |scale|
++                try expectTexturedMatches(kind, q, img, scale, format, false);
++    }
++}
++
+ test "shade: a quad that starts right of the scissor, off a lane boundary, draws nothing" {
+     // A width of whole vectors leaves rows no padding, so a box starting past the scissor's
+     // right edge would read the vector after the row.

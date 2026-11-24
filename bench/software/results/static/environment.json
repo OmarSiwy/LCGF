@@ -1,0 +1,28 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "affinity_cpu": 2,
+  "repeats": 5,
+  "samples": 101,
+  "binaries": {
+    "baseline": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/bench",
+      "sha256": "1e21b5ef7160521d5533a43b472545f4fa2633a87f31822e4a2c02db0af5734b"
+    },
+    "candidate": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/bench",
+      "sha256": "1dda8f6afbf277741d39146cb0709405ce9733e76f81d723cf069d360ff827fa"
+    },
+    "core-baseline": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/core_bench",
+      "sha256": "5dec570b55fac2889b5ceaedf021e44101135280812968a3e6e89cbd7704ce71"
+    },
+    "core-candidate": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/core_bench",
+      "sha256": "a6390ad99f137468a6ac96a6624ee5befd54050ea46ca047c85f1ca7c2759999"
+    }
+  },
+  "aggregation": "Median of run medians. p95/p99 are medians of per-run percentiles, not pooled tails.",
+  "order": "Alternate baseline/candidate order each round; rotate architecture order each round.",
+  "scope": "CPU wall time on this host. No X11 transfer, GPU, display/vsync, input-to-display latency, or power measurements."
+}

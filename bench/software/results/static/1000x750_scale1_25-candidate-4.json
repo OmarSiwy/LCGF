@@ -1,0 +1,60 @@
+{
+  "metadata": {
+    "zig": "0.18.0-dev.1151+8dfb7a7cc",
+    "optimize": "fast",
+    "cpu_target": "x86_64",
+    "framework": "optimized",
+    "context_bytes": 419456,
+    "warmup_frames": 100,
+    "filter_warmup_transitions": 20,
+    "ui_distribution": "Percentiles of 8-frame batch averages, not individual-frame tail latency",
+    "idle_distribution": "Percentiles of 1000 scheduler-call batch averages"
+  },
+  "architecture": "viper",
+  "scope": "CPU UI and actual software pixels; excludes X11 transfer, GPU work, input-to-display latency and vsync",
+  "width": 1000,
+  "height": 750,
+  "scale": 1.25,
+  "records": 100000,
+  "ui_nodes": 59,
+  "app_bytes": 700072,
+  "ui": {
+    "median_ns": 5360,
+    "p95_ns": 12844,
+    "p99_ns": 21353,
+    "min_ns": 5296,
+    "max_ns": 173351,
+    "samples": 101,
+    "iterations_per_sample": 8
+  },
+  "software_draw": {
+    "median_ns": 6194118,
+    "p95_ns": 7214963,
+    "p99_ns": 7889555,
+    "min_ns": 5762818,
+    "max_ns": 9684229,
+    "samples": 101,
+    "iterations_per_sample": 1
+  },
+  "full_cpu_frame": {
+    "median_ns": 6305794,
+    "p95_ns": 7388338,
+    "p99_ns": 8347731,
+    "min_ns": 5739460,
+    "max_ns": 9989415,
+    "samples": 101,
+    "iterations_per_sample": 1
+  },
+  "idle_scheduler": {
+    "median_ns": 42,
+    "p95_ns": 57,
+    "p99_ns": 110,
+    "min_ns": 41,
+    "max_ns": 140,
+    "samples": 101,
+    "iterations_per_sample": 1000
+  },
+  "idle_requested_frames": 0,
+  "pixel_hash": 12830242774534902837,
+  "checksum": 88173
+}

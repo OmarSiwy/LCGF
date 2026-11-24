@@ -1,0 +1,141 @@
+{
+  "metadata": {
+    "zig": "0.18.0-dev.1151+8dfb7a7cc",
+    "optimize": "fast",
+    "cpu_target": "x86_64",
+    "framework": "optimized",
+    "context_bytes": 419456,
+    "warmup_frames": 100,
+    "filter_warmup_transitions": 20,
+    "ui_distribution": "Percentiles of 8-frame batch averages, not individual-frame tail latency",
+    "idle_distribution": "Percentiles of 1000 scheduler-call batch averages"
+  },
+  "scope": "800x600 CPU UI preparation; changed_filter_ui includes a 100000-row projection rebuild",
+  "architectures": [
+    {
+      "name": "mvvm_c",
+      "app_bytes": 700088,
+      "ui_nodes": 59,
+      "records": 100000,
+      "warm_ui": {
+        "median_ns": 5411,
+        "p95_ns": 9935,
+        "p99_ns": 21630,
+        "min_ns": 5216,
+        "max_ns": 57983,
+        "samples": 501,
+        "iterations_per_sample": 8
+      },
+      "changed_filter_ui": {
+        "median_ns": 224310,
+        "p95_ns": 308488,
+        "p99_ns": 385462,
+        "min_ns": 211508,
+        "max_ns": 716910,
+        "samples": 501,
+        "iterations_per_sample": 1
+      },
+      "checksum": 18775359
+    },
+    {
+      "name": "viper",
+      "app_bytes": 700072,
+      "ui_nodes": 59,
+      "records": 100000,
+      "warm_ui": {
+        "median_ns": 5382,
+        "p95_ns": 9906,
+        "p99_ns": 23699,
+        "min_ns": 5281,
+        "max_ns": 44795,
+        "samples": 501,
+        "iterations_per_sample": 8
+      },
+      "changed_filter_ui": {
+        "median_ns": 224535,
+        "p95_ns": 324778,
+        "p99_ns": 518822,
+        "min_ns": 214585,
+        "max_ns": 626800,
+        "samples": 501,
+        "iterations_per_sample": 1
+      },
+      "checksum": 18775359
+    },
+    {
+      "name": "mvp",
+      "app_bytes": 700080,
+      "ui_nodes": 59,
+      "records": 100000,
+      "warm_ui": {
+        "median_ns": 5526,
+        "p95_ns": 8382,
+        "p99_ns": 18583,
+        "min_ns": 5370,
+        "max_ns": 26127,
+        "samples": 501,
+        "iterations_per_sample": 8
+      },
+      "changed_filter_ui": {
+        "median_ns": 224774,
+        "p95_ns": 301103,
+        "p99_ns": 367964,
+        "min_ns": 216554,
+        "max_ns": 551710,
+        "samples": 501,
+        "iterations_per_sample": 1
+      },
+      "checksum": 18775359
+    },
+    {
+      "name": "mvvp",
+      "app_bytes": 700080,
+      "ui_nodes": 59,
+      "records": 100000,
+      "warm_ui": {
+        "median_ns": 5404,
+        "p95_ns": 7598,
+        "p99_ns": 16853,
+        "min_ns": 5164,
+        "max_ns": 63240,
+        "samples": 501,
+        "iterations_per_sample": 8
+      },
+      "changed_filter_ui": {
+        "median_ns": 232410,
+        "p95_ns": 414051,
+        "p99_ns": 562964,
+        "min_ns": 219043,
+        "max_ns": 1101771,
+        "samples": 501,
+        "iterations_per_sample": 1
+      },
+      "checksum": 18775359
+    },
+    {
+      "name": "mvvm",
+      "app_bytes": 700080,
+      "ui_nodes": 59,
+      "records": 100000,
+      "warm_ui": {
+        "median_ns": 5428,
+        "p95_ns": 9200,
+        "p99_ns": 18240,
+        "min_ns": 5339,
+        "max_ns": 49773,
+        "samples": 501,
+        "iterations_per_sample": 8
+      },
+      "changed_filter_ui": {
+        "median_ns": 224937,
+        "p95_ns": 343051,
+        "p99_ns": 725792,
+        "min_ns": 216469,
+        "max_ns": 2503805,
+        "samples": 501,
+        "iterations_per_sample": 1
+      },
+      "checksum": 18775359
+    }
+  ]
+}

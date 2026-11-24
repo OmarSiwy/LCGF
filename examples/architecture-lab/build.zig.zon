@@ -1,0 +1,8 @@
+.{
+    .name = .lcgf_architecture_lab,
+    .version = "0.0.1",
+    .fingerprint = 0x690f25220224da03,
+    .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
+    .dependencies = .{ .lcgf = .{ .path = "../.." } },
+    .paths = .{ "build.zig", "build.zig.zon", "app.zig", "src", "tools", "docs", "licenses", "README.md", "LICENSE", "THIRD_PARTY.md", ".zigversion" },
+}

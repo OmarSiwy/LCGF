@@ -1,0 +1,235 @@
+{
+  "metadata": {
+    "zig": "0.18.0-dev.1151+8dfb7a7cc",
+    "optimize": "fast",
+    "cpu_target": "x86_64",
+    "architecture": "viper",
+    "framework": "optimized",
+    "samples": 101,
+    "warmup_frames": 32,
+    "retained_bytes": 80600,
+    "scope": "One shared UI build per input frame, excluding the scenario's preceding input/state mutation. Full/incremental draw order changes every two frames to decouple it from alternating scene states. Bytewise framebuffer equality and sequence hashing run after every frame outside timing. Pixel payload is a calculated byte count, not timed X11 transport."
+  },
+  "width": 1000,
+  "height": 750,
+  "scale": 1.25,
+  "full_pixel_payload_bytes": 3000000,
+  "cases": [
+    {
+      "scenario": "unchanged",
+      "ui": {
+        "median_ns": 10590,
+        "p95_ns": 12434,
+        "p99_ns": 69836
+      },
+      "full_draw": {
+        "median_ns": 6093750,
+        "p95_ns": 7223977,
+        "p99_ns": 7689698
+      },
+      "incremental_draw": {
+        "median_ns": 1870,
+        "p95_ns": 2725,
+        "p99_ns": 8145
+      },
+      "mean_damage_pixels": 0,
+      "mean_pixel_payload_bytes": 0,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 0,
+      "changed_pixel_frames": 0,
+      "zero_damage_frames": 101,
+      "verified_frames": 133,
+      "pixel_hash": 12830242774534902837,
+      "pixel_sequence_hash": 7318269450666742939
+    },
+    {
+      "scenario": "hover",
+      "ui": {
+        "median_ns": 10415,
+        "p95_ns": 12043,
+        "p99_ns": 77041
+      },
+      "full_draw": {
+        "median_ns": 6125836,
+        "p95_ns": 6968750,
+        "p99_ns": 7621547
+      },
+      "incremental_draw": {
+        "median_ns": 53012,
+        "p95_ns": 114101,
+        "p99_ns": 152413
+      },
+      "mean_damage_pixels": 2604,
+      "mean_pixel_payload_bytes": 10416,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 0,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 10637836192994803787,
+      "pixel_sequence_hash": 8470737528310102815
+    },
+    {
+      "scenario": "selection",
+      "ui": {
+        "median_ns": 11289,
+        "p95_ns": 32461,
+        "p99_ns": 59533
+      },
+      "full_draw": {
+        "median_ns": 6498696,
+        "p95_ns": 7867420,
+        "p99_ns": 11377398
+      },
+      "incremental_draw": {
+        "median_ns": 4814428,
+        "p95_ns": 5613103,
+        "p99_ns": 6123714
+      },
+      "mean_damage_pixels": 410797,
+      "mean_pixel_payload_bytes": 1643188,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 3199327508376561778,
+      "pixel_sequence_hash": 17893339097926680069
+    },
+    {
+      "scenario": "scroll",
+      "ui": {
+        "median_ns": 11245,
+        "p95_ns": 15100,
+        "p99_ns": 111010
+      },
+      "full_draw": {
+        "median_ns": 6086420,
+        "p95_ns": 7377649,
+        "p99_ns": 8117643
+      },
+      "incremental_draw": {
+        "median_ns": 2584218,
+        "p95_ns": 3111897,
+        "p99_ns": 3585513
+      },
+      "mean_damage_pixels": 121264,
+      "mean_pixel_payload_bytes": 485056,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 7909420090639569132,
+      "pixel_sequence_hash": 4309226383812461312
+    },
+    {
+      "scenario": "theme",
+      "ui": {
+        "median_ns": 11251,
+        "p95_ns": 15670,
+        "p99_ns": 41259
+      },
+      "full_draw": {
+        "median_ns": 6086215,
+        "p95_ns": 7173272,
+        "p99_ns": 7668928
+      },
+      "incremental_draw": {
+        "median_ns": 6124738,
+        "p95_ns": 6633391,
+        "p99_ns": 7556572
+      },
+      "mean_damage_pixels": 750000,
+      "mean_pixel_payload_bytes": 3000000,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 16448687458710801261,
+      "pixel_sequence_hash": 2221669684377735508
+    },
+    {
+      "scenario": "navigation",
+      "ui": {
+        "median_ns": 238297,
+        "p95_ns": 377123,
+        "p99_ns": 464902
+      },
+      "full_draw": {
+        "median_ns": 6216199,
+        "p95_ns": 6850769,
+        "p99_ns": 7721851
+      },
+      "incremental_draw": {
+        "median_ns": 6213146,
+        "p95_ns": 6924522,
+        "p99_ns": 7735786
+      },
+      "mean_damage_pixels": 725696,
+      "mean_pixel_payload_bytes": 2902784,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 16873225279093661171,
+      "pixel_sequence_hash": 695546682995370766
+    },
+    {
+      "scenario": "sidebar",
+      "ui": {
+        "median_ns": 11453,
+        "p95_ns": 34490,
+        "p99_ns": 98936
+      },
+      "full_draw": {
+        "median_ns": 5917818,
+        "p95_ns": 7233261,
+        "p99_ns": 7610230
+      },
+      "incremental_draw": {
+        "median_ns": 5449691,
+        "p95_ns": 6616554,
+        "p99_ns": 8732371
+      },
+      "mean_damage_pixels": 667080,
+      "mean_pixel_payload_bytes": 2668320,
+      "full_frames": 0,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 101,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 10572885554862664313,
+      "pixel_sequence_hash": 17819427546556865720
+    },
+    {
+      "scenario": "invalidation",
+      "ui": {
+        "median_ns": 11326,
+        "p95_ns": 16676,
+        "p99_ns": 58991
+      },
+      "full_draw": {
+        "median_ns": 6164999,
+        "p95_ns": 8216607,
+        "p99_ns": 8486554
+      },
+      "incremental_draw": {
+        "median_ns": 6157995,
+        "p95_ns": 8208613,
+        "p99_ns": 10180217
+      },
+      "mean_damage_pixels": 750000,
+      "mean_pixel_payload_bytes": 3000000,
+      "full_frames": 101,
+      "glyph_rebuild_frames": 101,
+      "changed_pixel_frames": 0,
+      "zero_damage_frames": 0,
+      "verified_frames": 133,
+      "pixel_hash": 12830242774534902837,
+      "pixel_sequence_hash": 7318269450666742939
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "method": "Five alternating paired runs, 101 samples, CPU2, generic x86_64 ReleaseFast, same input and exact output hashes. Before changes only renderer opaque-interior eligibility/helper name/tests.",
+  "binaries": {
+    "before": {
+      "path": "/workspace/scratch/34848b39e660/perf-v2/bordered-only-bin/bench",
+      "sha256": "3211170b4ddf21d59aaf3694152e0b90b7a9be2c14e7581d3df31effe1e73783"
+    },
+    "after": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/borderless/bin/bench",
+      "sha256": "1dda8f6afbf277741d39146cb0709405ce9733e76f81d723cf069d360ff827fa"
+    }
+  },
+  "cases": {
+    "800x600": {
+      "before": {
+        "median_ns": 3730861,
+        "run_medians_ns": [
+          3795768,
+          3638436,
+          3730861,
+          3637342,
+          3761895
+        ],
+        "min_run_median_ns": 3637342,
+        "max_run_median_ns": 3795768
+      },
+      "after": {
+        "median_ns": 3675022,
+        "run_medians_ns": [
+          3672527,
+          3675022,
+          6476189,
+          3695832,
+          3621062
+        ],
+        "min_run_median_ns": 3621062,
+        "max_run_median_ns": 6476189
+      },
+      "reduction_percent": 1.4966786487087047,
+      "pixel_hash": 9815157311930241834
+    },
+    "1000x750_scale1_25": {
+      "before": {
+        "median_ns": 10072044,
+        "run_medians_ns": [
+          10072044,
+          10478931,
+          10195464,
+          10057747,
+          9986624
+        ],
+        "min_run_median_ns": 9986624,
+        "max_run_median_ns": 10478931
+      },
+      "after": {
+        "median_ns": 6192094,
+        "run_medians_ns": [
+          6183828,
+          6192094,
+          6513046,
+          6068811,
+          8718911
+        ],
+        "min_run_median_ns": 6068811,
+        "max_run_median_ns": 8718911
+      },
+      "reduction_percent": 38.52197230274213,
+      "pixel_hash": 12830242774534902837
+    }
+  }
+}

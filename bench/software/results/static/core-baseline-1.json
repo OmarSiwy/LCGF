@@ -1,0 +1,52 @@
+{
+  "benchmark": "public_frame_end",
+  "scope": "CPU Context.begin + scene build + Frame.end; no rasterization or presentation",
+  "zig": "0.18.0-dev.1151+8dfb7a7cc",
+  "optimize": "fast",
+  "arch": "x86_64",
+  "os": "linux",
+  "cpu_target": "x86_64",
+  "simd_lanes": 4,
+  "viewport": [
+    1280,
+    32768
+  ],
+  "warmups": 100,
+  "samples": 1001,
+  "percentiles": "nearest rank; individual frame wall-clock samples in nanoseconds",
+  "context_bytes": 4376960,
+  "cases": [
+    {
+      "scene": "no_wrapping",
+      "nodes": 3961,
+      "texts": 1320,
+      "wrapped_runs": 0,
+      "quads": 2310,
+      "draw_commands": 2641,
+      "frame": {
+        "median_ns": 326629,
+        "p95_ns": 461595,
+        "p99_ns": 638816,
+        "min_ns": 297089,
+        "max_ns": 1322515
+      },
+      "output_hash": "8858418c5185565d"
+    },
+    {
+      "scene": "all_wrapping",
+      "nodes": 3961,
+      "texts": 1320,
+      "wrapped_runs": 1320,
+      "quads": 2310,
+      "draw_commands": 2641,
+      "frame": {
+        "median_ns": 343020,
+        "p95_ns": 593342,
+        "p99_ns": 1324185,
+        "min_ns": 309541,
+        "max_ns": 3057355
+      },
+      "output_hash": "dc072a9135ffa3d3"
+    }
+  ]
+}

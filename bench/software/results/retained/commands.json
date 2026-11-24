@@ -1,0 +1,341 @@
+[
+  {
+    "round": 0,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "800",
+      "600",
+      "1.0"
+    ],
+    "report": "incremental-800x600-0.json"
+  },
+  {
+    "round": 0,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1000",
+      "750",
+      "1.25"
+    ],
+    "report": "incremental-1000x750_scale1_25-0.json"
+  },
+  {
+    "round": 0,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1920",
+      "1080",
+      "1.0"
+    ],
+    "report": "incremental-1920x1080-0.json"
+  },
+  {
+    "round": 0,
+    "binary": "reuse-baseline",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench"
+    ],
+    "report": "reuse-baseline-0.json"
+  },
+  {
+    "round": 0,
+    "binary": "reuse-candidate",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench"
+    ],
+    "report": "reuse-candidate-0.json"
+  },
+  {
+    "round": 1,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1000",
+      "750",
+      "1.25"
+    ],
+    "report": "incremental-1000x750_scale1_25-1.json"
+  },
+  {
+    "round": 1,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1920",
+      "1080",
+      "1.0"
+    ],
+    "report": "incremental-1920x1080-1.json"
+  },
+  {
+    "round": 1,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "800",
+      "600",
+      "1.0"
+    ],
+    "report": "incremental-800x600-1.json"
+  },
+  {
+    "round": 1,
+    "binary": "reuse-candidate",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench",
+      "--retained-first"
+    ],
+    "report": "reuse-candidate-1.json"
+  },
+  {
+    "round": 1,
+    "binary": "reuse-baseline",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench",
+      "--retained-first"
+    ],
+    "report": "reuse-baseline-1.json"
+  },
+  {
+    "round": 2,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1920",
+      "1080",
+      "1.0"
+    ],
+    "report": "incremental-1920x1080-2.json"
+  },
+  {
+    "round": 2,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "800",
+      "600",
+      "1.0"
+    ],
+    "report": "incremental-800x600-2.json"
+  },
+  {
+    "round": 2,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1000",
+      "750",
+      "1.25"
+    ],
+    "report": "incremental-1000x750_scale1_25-2.json"
+  },
+  {
+    "round": 2,
+    "binary": "reuse-baseline",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench"
+    ],
+    "report": "reuse-baseline-2.json"
+  },
+  {
+    "round": 2,
+    "binary": "reuse-candidate",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench"
+    ],
+    "report": "reuse-candidate-2.json"
+  },
+  {
+    "round": 3,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "800",
+      "600",
+      "1.0"
+    ],
+    "report": "incremental-800x600-3.json"
+  },
+  {
+    "round": 3,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1000",
+      "750",
+      "1.25"
+    ],
+    "report": "incremental-1000x750_scale1_25-3.json"
+  },
+  {
+    "round": 3,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1920",
+      "1080",
+      "1.0"
+    ],
+    "report": "incremental-1920x1080-3.json"
+  },
+  {
+    "round": 3,
+    "binary": "reuse-candidate",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench",
+      "--retained-first"
+    ],
+    "report": "reuse-candidate-3.json"
+  },
+  {
+    "round": 3,
+    "binary": "reuse-baseline",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench",
+      "--retained-first"
+    ],
+    "report": "reuse-baseline-3.json"
+  },
+  {
+    "round": 4,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1000",
+      "750",
+      "1.25"
+    ],
+    "report": "incremental-1000x750_scale1_25-4.json"
+  },
+  {
+    "round": 4,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "1920",
+      "1080",
+      "1.0"
+    ],
+    "report": "incremental-1920x1080-4.json"
+  },
+  {
+    "round": 4,
+    "binary": "incremental",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "101",
+      "800",
+      "600",
+      "1.0"
+    ],
+    "report": "incremental-800x600-4.json"
+  },
+  {
+    "round": 4,
+    "binary": "reuse-baseline",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench"
+    ],
+    "report": "reuse-baseline-4.json"
+  },
+  {
+    "round": 4,
+    "binary": "reuse-candidate",
+    "command": [
+      "taskset",
+      "-c",
+      "2",
+      "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench"
+    ],
+    "report": "reuse-candidate-4.json"
+  }
+]

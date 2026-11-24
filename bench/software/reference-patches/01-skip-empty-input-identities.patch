@@ -1,0 +1,204 @@
+diff --git a/src/interact/focus.zig b/src/interact/focus.zig
+index ccafd2f..d4db236 100644
+--- a/src/interact/focus.zig
++++ b/src/interact/focus.zig
+@@ -157,8 +157,8 @@ pub const Focus = struct {
+         const lo_t = pick(u32, trapped, sc.modal +% 1, 0);
+         const hi_t = pick(u32, trapped, prev.c.end[@min(sc.modal, last)], prev.len);
+         {
+-            const cur = simd.find(prev.c.id, prev.len, it.focus);
+-            const was = simd.find(prev.c.id, prev.len, s.last);
++            const cur = focusedRow(prev, it.focus);
++            const was = focusedRow(prev, s.last);
+             const first = seek(prev, c.stop, 1, lo_t, hi_t, lo_t -% 1, false);
+             const to = pick(u32, (was -% lo_t) < (hi_t -% lo_t), was, first);
+             const id = pick(u32, to != none, prev.c.id[@min(to, last)], 0);
+@@ -170,7 +170,7 @@ pub const Focus = struct {
+         for (in.events, 0..) |e, ei| {
+             const down = simd.orB(e.kind == .press, e.kind == .repeat);
+             key = simd.orB(key, e.kind == .press);
+-            const cur = simd.find(prev.c.id, prev.len, it.focus);
++            const cur = focusedRow(prev, it.focus);
+             const row = @min(cur, last);
+             const g = pick(u32, cur != none, c.group[row], none);
+             const gr = @min(g, last);
+@@ -231,7 +231,7 @@ pub const Focus = struct {
+     /// `ring_width`. A zero rect when the ring is hidden, nothing is focused, or the focused
+     /// node is not in `t`, so the caller can draw it unconditionally.
+     pub fn ring(s: *const Focus, it: *const Interaction, t: *const Tree) Rect {
+-        const row = simd.find(t.c.id, t.len, it.focus);
++        const row = focusedRow(t, it.focus);
+         const r = t.rect(@min(row, t.cap - 1));
+         const m = simd.b2f(simd.andB(simd.andB(s.visible, it.focus != 0), row != none));
+         const g = s.ring_width;
+@@ -239,6 +239,14 @@ pub const Focus = struct {
+     }
+ };
+ 
++/// Zero means no focused identity, not the first anonymous label in the tree. Search zero
++/// rows in that case: no idle ID-column sweep and no anonymous row to displace initial Tab.
++/// A live nonzero ID still resolves against this tree, since its row can move or disappear.
++inline fn focusedRow(t: *const Tree, id: u32) u32 {
++    const rows = t.len * @as(u32, @intFromBool(id != 0));
++    return simd.find(t.c.id, rows, id);
++}
++
+ /// The row after `cur` (before it with `back`) among rows `[lo, hi)` of `t` whose `col` has a
+ /// bit of `mask` set and whose id is not 0, wrapping around the range; `none` when there is no
+ /// such row. `cur` may be outside the range or `none`: forward then gives the first row and
+@@ -426,6 +434,92 @@ test "walkthrough: Tab and Shift+Tab move through the form in tree order and wra
+     }
+ }
+ 
++/// Named root, named buttons, and anonymous label children: the runtime widget shape whose
++/// first id-0 row follows the first focus stop. An anonymous root would hide the regression.
++const NamedButtons = struct {
++    raw: [64 * 1024]u8 align(mem.column_align) = undefined,
++    t: Tree = undefined,
++    sc: Scopes = undefined,
++
++    const first_id = Id.from("focus.first");
++    const second_id = Id.from("focus.second");
++
++    fn build(f: *NamedButtons, prefix_spacer: bool, include_first: bool) void {
++        const layout = @import("../layout/layout.zig");
++        const Texts = @import("../core/texts.zig").Texts;
++        var carver: mem.Carver = .{ .buf = &f.raw };
++        f.t = Tree.init(&carver, 16);
++        var tx = Texts.init(&carver, 1);
++        f.sc = Scopes.init(&carver, 16);
++        const t = &f.t;
++        const root = t.push(0, Id.from("focus.named-root"), &.{ .size = .{ .px(300), .px(200) }, .gap = 8 });
++        if (prefix_spacer) {
++            const spacer = t.push(root, .none, &.{ .size = .{ .px(100), .px(10) } });
++            t.seal(spacer);
++        }
++        if (include_first) f.button(root, first_id);
++        f.button(root, second_id);
++        t.seal(root);
++        layout.run(t, &tx, .{ 300, 200 });
++    }
++
++    fn button(f: *NamedButtons, parent: u32, id: Id) void {
++        const t = &f.t;
++        const row = t.push(parent, id, &.{ .size = .{ .px(100), .px(20) }, .role = .button });
++        t.c.sense[row] = @bitCast(Sense.button);
++        const label = t.push(row, .none, &.{ .size = .{ .px(40), .px(14) }, .role = .label });
++        t.seal(label);
++        t.seal(row);
++    }
++};
++
++test "zero focus skips anonymous labels; live focus follows moved and removed rows" {
++    var buttons: NamedButtons = .{};
++    buttons.build(false, true);
++    const first = bi(NamedButtons.first_id);
++    const second = bi(NamedButtons.second_id);
++    const original_row = buttons.t.find(NamedButtons.first_id);
++    // Ensure the fixture would previously resolve zero to the first button's child.
++    try testing.expectEqual(original_row + 1, simd.find(buttons.t.c.id, buttons.t.len, 0));
++    try testing.expectEqual(none, focusedRow(&buttons.t, 0));
++
++    var walk: Walk = .{};
++    try walk.run(&buttons.t, &buttons.sc,
++        \\frame
++        \\press 43
++        \\frame
++        \\press 43
++        \\frame
++        \\press 43 shift
++    );
++    try testing.expectEqualSlices(u32, &.{ first, second, first }, walk.focus[0..walk.n]);
++    const original_ring = walk.fo.ring(&walk.it, &buttons.t);
++
++    // Rebuilding inserts a row before the focused identity. Focus resolves its new row and
++    // geometry without storing a stale index; subsequent Tab still follows document order.
++    buttons.build(true, true);
++    const moved_row = buttons.t.find(NamedButtons.first_id);
++    try testing.expect(moved_row > original_row);
++    try testing.expectEqual(moved_row, focusedRow(&buttons.t, first));
++    try walk.run(&buttons.t, &buttons.sc, "frame\n");
++    try testing.expectEqual(first, walk.it.focus);
++    const moved_ring = walk.fo.ring(&walk.it, &buttons.t);
++    try testing.expect(moved_ring.y0 > original_ring.y0);
++    try testing.expectEqual(buttons.t.rect(moved_row).y0 - walk.fo.ring_width, moved_ring.y0);
++    try walk.run(&buttons.t, &buttons.sc, "frame\npress 43\n");
++    try testing.expectEqual(second, walk.it.focus);
++
++    // An application-held identity can disappear between frames. It has no ring, and Tab
++    // restarts from the remaining first stop instead of treating an anonymous row as focus.
++    walk.it.focus = first;
++    walk.fo.last = first;
++    buttons.build(true, false);
++    try testing.expectEqual(none, focusedRow(&buttons.t, first));
++    try testing.expectEqual(Rect{}, walk.fo.ring(&walk.it, &buttons.t));
++    try walk.run(&buttons.t, &buttons.sc, "frame\npress 43\n");
++    try testing.expectEqual(second, walk.it.focus);
++}
++
+ test "seek: wraps both ways, skips inert and anonymous rows, none when nothing qualifies" {
+     var f: Form = .{};
+     f.build();
+diff --git a/src/interact/interaction.zig b/src/interact/interaction.zig
+index feb339a..c94b847 100644
+--- a/src/interact/interaction.zig
++++ b/src/interact/interaction.zig
+@@ -116,10 +116,11 @@ pub const Interaction = struct {
+         const keep = -%@as(u64, @intFromBool(moving));
+         s.drag_delta = @bitCast(@as(u64, @bitCast(moved)) & keep);
+         s.drag_from = @bitCast(pick(u64, moving, here, @bitCast(from)));
+-        // Anonymous rows have id 0, so nothing held must not search for 0: OR in all ones
+-        // (`none`) when `active` is 0 instead of the prototype's select.
+-        const idle = -%@as(u32, @intFromBool(s.active == 0));
+-        s.active_node = simd.find(prev.c.id, prev.len, s.active) | idle;
++        // No active id means no rows to search. A zero-length find returns none,
++        // avoiding the whole id-column scan and preventing anonymous id-0 matches.
++        // A held id still resolves against the supplied tree, since its row can move.
++        const active_rows = prev.len * @as(u32, @intFromBool(s.active != 0));
++        s.active_node = simd.find(prev.c.id, active_rows, s.active);
+         s.delta = .{ in.pointer[0] - s.pointer[0], in.pointer[1] - s.pointer[1] };
+         s.pointer = in.pointer;
+         s.buttons = in.buttons;
+@@ -332,6 +333,42 @@ test "step: hover, press, release, click over the button that was pressed" {
+     try testing.expectEqual([2]f32{ 130, 60 }, f[4].delta);
+ }
+ 
++test "step: inactive ids have no row; held ids follow current rows and ignore padding" {
++    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
++    var t = twoButtons(&raw);
++    var s: Interaction = .{ .active_node = 1 };
++
++    // Hover does not create an active id, and a stale row must not survive.
++    s.step(&t, &.{ .pointer = .{ 20, 20 } });
++    try testing.expectEqual(@backingInt(id_a), s.hot);
++    try testing.expectEqual(@as(u32, 0), s.active);
++    try testing.expectEqual(none, s.active_node);
++
++    s.step(&t, &.{ .pointer = .{ 20, 20 }, .buttons = .{ .left = true } });
++    try testing.expectEqual(@backingInt(id_a), s.active);
++    try testing.expectEqual(@as(u32, 1), s.active_node);
++
++    // A rebuild may move the held widget. Keep resolving its stable id rather
++    // than caching the old row or substituting the pointer's current hit.
++    std.mem.swap(u32, &t.c.id[1], &t.c.id[2]);
++    s.step(&t, &.{ .buttons = .{ .left = true } });
++    try testing.expectEqual(@backingInt(id_a), s.active);
++    try testing.expectEqual(@as(u32, 2), s.active_node);
++
++    // Removing the held widget leaves capture by id intact until release, but
++    // no live row matches. A stale occurrence in SIMD padding is not a match.
++    t.c.id[2] = 0;
++    t.c.id[t.len] = @backingInt(id_a);
++    s.step(&t, &.{ .buttons = .{ .left = true } });
++    try testing.expectEqual(@backingInt(id_a), s.active);
++    try testing.expectEqual(none, s.active_node);
++
++    s.step(&t, &.{});
++    try testing.expectEqual(@backingInt(id_a), s.released);
++    try testing.expectEqual(@as(u32, 0), s.active);
++    try testing.expectEqual(none, s.active_node);
++}
++
+ test "step: release elsewhere is not a click; pressing nothing clears active, keeps focus" {
+     var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+     const t = twoButtons(&raw);

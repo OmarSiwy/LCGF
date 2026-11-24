@@ -1,0 +1,32 @@
+{
+  "started_utc": "2026-11-24T03:38:07.152397+00:00",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "python": "3.12.14",
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "affinity_cpu": 2,
+  "repeats": 5,
+  "incremental_samples": 101,
+  "binaries": {
+    "incremental": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/incremental_bench",
+      "sha256": "f54e86c8c20ae982eeba348a91f36997496f98ef42a35bba2a1deb66a3ec94ab"
+    },
+    "reuse-baseline": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/previous/bin/reuse_bench",
+      "sha256": "67a301cf550fc517e75aa393752883da757819dbcb17ec6e3f8950d8f0427df2"
+    },
+    "reuse-candidate": {
+      "path": "/workspace/scratch/34848b39e660/lcgf-architecture-lab-v2/out/optimized/bin/reuse_bench",
+      "sha256": "2a8ce5c70a67db930e9f62ae6617ea5af1e835dc7a496077daca84c88bff9cff"
+    }
+  },
+  "aggregation": "Median of run medians and their range; p95/p99 are medians of per-run percentiles, not pooled tails.",
+  "order": "Rotate incremental size order; alternate reuse baseline/candidate process order and --retained-first every round.",
+  "reuse_baseline_first_runs": 3,
+  "reuse_candidate_first_runs": 2,
+  "retained_first_flag_runs": 2,
+  "order_balance": "Odd repeat counts leave one extra initial-order run; even counts balance the two orders exactly.",
+  "scope": "CPU wall time. No X11 transfer, GPU, vsync, input-to-display latency or power measurement. Payload bytes are calculated.",
+  "validity": "All candidate reuse frames must match their full control. Both versions must share full-control sequence digests. Invalid baseline retained timings are kept only in raw reports.",
+  "completed_utc": "2026-11-24T03:41:31.115880+00:00"
+}
