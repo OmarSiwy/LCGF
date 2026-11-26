@@ -97,9 +97,12 @@ pub const Conditions = struct {
     coarse_pointer: ?bool = null,
     hover: ?bool = null,
     rtl: ?bool = null,
+    /// CSS `orientation`: portrait when the viewport is at least as tall as it is wide.
+    portrait: ?bool = null,
 
     pub fn matches(conditions: Conditions, environment: Environment) bool {
         if (!conditions.width.contains(environment.viewport[0]) or !conditions.height.contains(environment.viewport[1]) or !conditions.scale.contains(environment.scale)) return false;
+        if (conditions.portrait) |portrait| if ((environment.viewport[1] >= environment.viewport[0]) != portrait) return false;
         if (conditions.container_width) |range| {
             const size = environment.container orelse return false;
             if (!range.contains(size[0])) return false;
@@ -125,6 +128,16 @@ test "unknown preferences do not match false; viewport and container conditions 
     const compact: Conditions = .{ .width = .{ .min = 800 }, .container_width = .{ .max = 300 } };
     try std.testing.expect(!compact.matches(.{ .viewport = .{ 1024, 768 } }));
     try std.testing.expect(compact.matches(.{ .viewport = .{ 1024, 768 }, .container = .{ 240, 500 } }));
+}
+
+test "orientation: portrait when the viewport is at least as tall as it is wide" {
+    const portrait: Conditions = .{ .portrait = true };
+    const landscape: Conditions = .{ .portrait = false };
+    try std.testing.expect(portrait.matches(.{ .viewport = .{ 400, 800 } }));
+    try std.testing.expect(portrait.matches(.{ .viewport = .{ 500, 500 } }));
+    try std.testing.expect(!portrait.matches(.{ .viewport = .{ 800, 400 } }));
+    try std.testing.expect(landscape.matches(.{ .viewport = .{ 800, 400 } }));
+    try std.testing.expect((Conditions{}).matches(.{ .viewport = .{ 800, 400 } }));
 }
 
 test "known accessibility inputs consume existing settings and explicit effect choices" {
