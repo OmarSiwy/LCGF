@@ -315,3 +315,42 @@ test "a recipe box follows hover and the viewport in both front ends, its childr
     output = try run.frame(&input);
     try std.testing.expectEqual(Boxes.narrow.bitsOf(), output.runtime.tree.c.look[bar].fill);
 }
+
+test "a recipe box is focus-within while a widget inside it has focus, in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Within = struct {
+        const lit: types.Color = .rgb(9, 99, 9);
+        const rules = [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .focus_within = true }, .declarations = &.{style.set(.fill, lit)} }};
+        const group: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(4) } } }}, .rules = &rules };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.beginBox(f, .from("group"), false, .{ .recipe = group }) catch unreachable;
+                _ = controls.button(f, .from("inner"), "In", .{}) catch unreachable;
+                controls.endBox(f);
+                _ = controls.button(f, .from("outer"), "Out", .{}) catch unreachable;
+                f.close();
+            }
+        };
+        const WUi = base.ComptimeUi(struct {}, spec.col(panel, .{ ct.box(.group, .{ .recipe = group }, .{ct.button(.inner, "In", .{})}), ct.button(.outer, "Out", .{}) }), .default);
+        const WRun = base.Harness(App, WUi, .{ .nodes = 32, .texts = 8, .customs = 4, .strings = 64, .depth = 8 });
+        var run: WRun = .{};
+    };
+    const run = &Within.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const group = output.runtime.tree.find(.from("group"));
+    try std.testing.expect(output.runtime.tree.c.look[group].fill != Within.lit.bitsOf());
+    const tab = (@import("../interact/focus.zig").Keymap{}).tab;
+    input.events = &.{.{ .kind = .press, .code = tab }};
+    output = try run.frame(&input);
+    input.events = &.{};
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Within.lit.bitsOf(), output.runtime.tree.c.look[group].fill);
+    input.events = &.{.{ .kind = .press, .code = tab }};
+    output = try run.frame(&input);
+    input.events = &.{};
+    output = try run.frame(&input);
+    try std.testing.expect(output.runtime.tree.c.look[group].fill != Within.lit.bitsOf());
+}

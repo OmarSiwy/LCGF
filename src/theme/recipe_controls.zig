@@ -298,10 +298,23 @@ pub fn slider(f: *Frame, id: types.Id, value: *f32, lo: f32, hi: f32, options: O
 pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!types.Node {
     const recipe = options.recipe orelse model.Recipe{};
     const response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
-    const root = try recipe.resolve(Parts.root, useFor(f, options, statesFor(options.states, response, false)), null);
+    var states = statesFor(options.states, response, false);
+    states.focus_within = focusWithin(f, id);
+    const root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
     const node = f.open(id, root.box);
     if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });
     return node;
+}
+
+/// Whether the focused widget is in `id`'s subtree, as the previous frame laid it out (CSS
+/// `:focus-within`); false for `.none`.
+pub fn focusWithin(f: *const Frame, id: types.Id) bool {
+    const focused = f.ctx.inter.focus;
+    if (focused == 0 or id == .none) return false;
+    const t = f.prevTree();
+    const at = t.find(id);
+    const r = t.find(@fromBackingInt(focused));
+    return at != types.none and r != types.none and r >= at and r < t.c.end[at];
 }
 
 pub fn endBox(f: *Frame) void {

@@ -62,7 +62,11 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
             next.* += 1;
             const response = if (name != null) ui.response(row, in) else types.Response{};
             const environment = config.environment orelse model.Environment.fromInput(in).withSettings(&ui.frame_settings);
-            const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = controls.statesFor(config.states, response, false), .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
+            var states = controls.statesFor(config.states, response, false);
+            // `:focus-within`: the focused widget is one of this box's spec rows.
+            const rows = comptime @import("../comptime/flatten.zig").count(n);
+            states.focus_within = if (ui.focus) |w| @backingInt(w) >= row and @backingInt(w) < row + rows else false;
+            const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = states, .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
             const recipe = config.recipe orelse model.Recipe{};
             const root = recipe.resolve(Parts.root, use, null) catch |err| blk: {
                 ui.fail(err);
