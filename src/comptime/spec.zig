@@ -13,6 +13,7 @@ const types = @import("../core/types.zig");
 const fmt = @import("../core/fmt.zig");
 const FlexStyle = @import("../layout/flex.zig").Flex.Style;
 const grid_zig = @import("../layout/grid.zig");
+const overlay = @import("../layout/overlay.zig");
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
@@ -47,6 +48,14 @@ pub const Spec = struct {
     grid: ?grid_zig.Decl = null,
     /// Where a child of a `grid` sits (`cell`); null is the next free cell.
     cell: ?grid_zig.Item = null,
+    /// Where a floating node sits against its parent's content box or the viewport
+    /// (`anchored`; overlay.Anchors). A page with none carves no anchor rows.
+    anchor: ?overlay.Place = null,
+    /// Distance from the top of the viewport the node sticks at (`sticky`; scroll.Sticky).
+    sticky: ?f32 = null,
+    /// Stacking layer (`layer`; overlay.Layers): painted above every row of a lower layer, its
+    /// subtree with it. A page with every node in layer 0 paints in row order as before.
+    layer: u8 = 0,
     children: []const Spec = &.{},
     /// A widget that builds this node itself, for widgets the kinds above do not cover: a
     /// namespace with `push` (and optionally `step`), which the widgets' comptime front end
@@ -366,6 +375,32 @@ pub fn cell(comptime s: Spec, comptime item: grid_zig.Item) Spec {
     return out;
 }
 
+/// `s`, a floating node, placed by `place` instead of at its parent's content origin plus its
+/// offset: `anchored(styled(label("New"), .{ .float = true }), .{ .at = .top_right, .pivot =
+/// .top_right })`. With `place.viewport` the box is the viewport (CSS `position: fixed`).
+pub fn anchored(comptime s: Spec, comptime place: overlay.Place) Spec {
+    var out = s;
+    out.anchor = place;
+    return out;
+}
+
+/// `s` held at least `top` pixels below the top of the viewport while its parent's content
+/// box has room, as CSS `position: sticky; top: …`. Scroll containers are not modelled yet,
+/// so the viewport is the scroller.
+pub fn sticky(comptime s: Spec, comptime top: f32) Spec {
+    var out = s;
+    out.sticky = top;
+    return out;
+}
+
+/// `s` and its subtree painted in stacking layer `z` (CSS `z-index` on a positioned box):
+/// above every row of a lower layer, in row order within one.
+pub fn layer(comptime s: Spec, comptime z: u8) Spec {
+    var out = s;
+    out.layer = z;
+    return out;
+}
+
 /// The cells `n`'s children ask for, for `grid.implicitTracks`.
 pub fn gridItems(comptime n: Spec) []const grid_zig.Item {
     comptime {
@@ -594,6 +629,16 @@ test "grid, cell: children float in a grid container; cell places one" {
         std.debug.assert(g.children[0].style.float and g.children[1].style.float);
         std.debug.assert(g.children[0].cell == null and g.children[1].cell.?.cell.?[0] == 1);
         std.debug.assert(gridItems(g).len == 2 and gridItems(g)[1].cell.?[0] == 1);
+    }
+}
+
+test "anchored, sticky, layer: set their field and nothing else" {
+    comptime {
+        const plain = label("A");
+        const a = layer(sticky(anchored(plain, .{ .at = .bottom, .pivot = .top }), 8), 3);
+        std.debug.assert(a.anchor.?.at == .bottom and a.sticky.? == 8 and a.layer == 3);
+        std.debug.assert(plain.anchor == null and plain.sticky == null and plain.layer == 0);
+        std.debug.assert(std.meta.eql(a.style, plain.style));
     }
 }
 

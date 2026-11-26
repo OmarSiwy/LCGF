@@ -8,6 +8,7 @@
 //!              and flips them to the other side when they would leave the viewport
 //!   order      paint order by layer: popovers and tooltips above the rows after them
 //!   lastRect   where a node was in the previous frame's tree, to anchor a popover to it
+//!   Place      one anchored placement as a value, for the front ends (`Anchors.place`)
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -44,6 +45,17 @@ pub const Anchor = enum(u8) {
 
     pub const fx = [9]f32{ 0, 0.5, 1, 0, 0.5, 1, 0, 0.5, 1 };
     pub const fy = [9]f32{ 0, 0, 0, 0.5, 0.5, 0.5, 1, 1, 1 };
+};
+
+/// One anchored placement as a value (CSS `right`/`bottom` insets, `position: fixed`), for
+/// `Anchors.place`: point `pivot` of the node on point `at` of the box, moved by `offset`.
+pub const Place = struct {
+    at: Anchor,
+    pivot: Anchor,
+    offset: [2]f32 = .{ 0, 0 },
+    /// The box is the viewport, not the parent's content box (CSS `position: fixed`).
+    viewport: bool = false,
+    flip: [2]bool = .{ false, false },
 };
 
 /// The anchor side list: one row per anchored node, so the pass loops over anchors that exist
@@ -100,6 +112,12 @@ pub const Anchors = struct {
         const k = an.row(node, at, pivot, offset);
         an.c.rel[k] = 0;
         inline for (0..4) |e| an.c.box[e][k] = box.array()[e];
+        return k;
+    }
+    /// `push`, or `pushRect` over `viewport` for a `Place.viewport` placement, with its flip.
+    pub fn place(an: *Anchors, node: u32, p: Place, viewport: Rect) u32 {
+        const k = if (p.viewport) an.pushRect(node, viewport, p.at, p.pivot, p.offset) else an.push(node, p.at, p.pivot, p.offset);
+        an.flip(k, p.flip);
         return k;
     }
     /// Lets anchor row `k` flip on the axes set in `axes`: when the node would cross an edge of
@@ -581,4 +599,34 @@ test "overlay: a window with a menu, a tooltip from last frame's rect and paint 
     try testing.expectEqualSlices(u32, &.{ r.menu, r.items[0], r.items[1], r.items[2] }, ly.c.order[n - 5 .. n - 1]);
     try testing.expectEqual(r.body, ly.c.order[n - 6]);
     try testing.expect(r.body > r.items[2]);
+}
+
+test "Anchors.place: a parent's corner, or the viewport's for a fixed placement" {
+    var s: Scene = .{};
+    s.init();
+    const t = &s.t;
+    var raw: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var an = Anchors.init(&carver, 2);
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) } });
+    const box = t.push(root, .none, &.{ .size = .{ .px(80), .px(40) }, .pad = @splat(4) });
+    const badge = t.push(box, .none, &.{ .size = .{ .px(10), .px(10) }, .float = true });
+    const fixed = t.push(box, .none, &.{ .size = .{ .px(20), .px(20) }, .float = true });
+    t.seal(box);
+    t.seal(root);
+    const vp = rect(0, 0, 200, 100);
+    _ = an.place(badge, .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -2, -3 } }, vp);
+    _ = an.place(fixed, .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -5, -5 }, .viewport = true }, vp);
+    layout.prepare(t);
+    layout.applyText(t, &s.tx, .x);
+    layout.fit(t, .x);
+    layout.resolve(t, .x, 200);
+    layout.applyText(t, &s.tx, .y);
+    layout.fit(t, .y);
+    layout.resolve(t, .y, 100);
+    layout.place(t);
+    anchor(t, &an, vp);
+    layout.finalize(t);
+    try testing.expectEqual(rect(64, 23, 74, 33), t.rect(badge));
+    try testing.expectEqual(rect(175, 75, 195, 95), t.rect(fixed));
 }

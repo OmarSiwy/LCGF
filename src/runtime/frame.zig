@@ -35,6 +35,8 @@ const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
 const FlexOptions = @import("../layout/flex.zig").FlexOptions;
 const grid = @import("../layout/grid.zig");
+const overlay = @import("../layout/overlay.zig");
+const scroll = @import("../layout/scroll.zig");
 const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
@@ -519,37 +521,74 @@ pub const Frame = struct {
         for (0..t.len) |i| fx.set(@intCast(i), &.{});
     }
 
-    /// `end` with the grids the caller declared into `gs` this frame: `gs.declare` after
-    /// opening a grid node, and `gs.place(k, @intCast(f.tree().len), item)` before pushing
-    /// each of its children, which float (`.float = true`). `gs` is caller-owned
-    /// (`Grids.init` once) and is reset afterwards, so each frame declares its own grids. A
-    /// frame without grids calls `end` and carves nothing.
-    pub fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output {
-        f.layoutGrid(font, gs);
+    /// Caller-owned side tables for `endSides`, each null when the frame uses none. Each is
+    /// filled while the frame builds and reset after it, so every frame states its own rows.
+    pub const Sides = struct {
+        /// Grids: `gs.declare` after opening a grid node, and `gs.place(k,
+        /// @intCast(f.tree().len), item)` before pushing each of its children, which float
+        /// (`.float = true`).
+        grids: ?*grid.Grids = null,
+        /// Anchored floating nodes (`an.place(node, p, viewport)`), moved after placement.
+        anchors: ?*overlay.Anchors = null,
+        /// Sticky nodes (`st.push`), held at their scroller's edge after placement.
+        sticky: ?*scroll.Sticky = null,
+        /// Stacking layers (`ly.c.own[node] = z`): the frame paints in layer order.
+        layers: ?*overlay.Layers = null,
+    };
+
+    /// `end` with the side tables in `sides`. A frame without any calls `end`.
+    pub fn endSides(f: *Frame, font: Mono, sides: Sides) Output {
+        f.layoutSides(font, sides);
+        if (sides.layers) |ly| return f.finishLayered(ly);
         return f.finish();
     }
 
-    /// The layout half of `endGrid`: `grid.run`'s passes over the whole tree, with the font's
-    /// measure and wrap.
-    pub fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void {
+    /// The layout half of `endSides`: `grid.run`'s passes when there are grids, else
+    /// `layout.run`'s, with the font's measure and wrap; then the anchors and the sticky
+    /// nodes.
+    pub fn layoutSides(f: *Frame, font: Mono, sides: Sides) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
         f.ctx.memos.kept_len = 0;
         font.measure(tx);
-        grid.autoPlace(gs);
         layout.prepare(t);
         layout.applyText(t, tx, .x);
-        grid.fit(t, gs, .x);
-        grid.resolve(t, gs, .x, f.in.viewport[0]);
+        if (sides.grids) |gs| {
+            grid.autoPlace(gs);
+            grid.fit(t, gs, .x);
+            grid.resolve(t, gs, .x, f.in.viewport[0]);
+        } else {
+            layout.fit(t, .x);
+            layout.resolve(t, .x, f.in.viewport[0]);
+        }
         layout.textAvail(t, tx);
         font.wrap(tx);
         layout.applyText(t, tx, .y);
-        grid.fit(t, gs, .y);
-        grid.resolve(t, gs, .y, f.in.viewport[1]);
+        if (sides.grids) |gs| {
+            grid.fit(t, gs, .y);
+            grid.resolve(t, gs, .y, f.in.viewport[1]);
+        } else {
+            layout.fit(t, .y);
+            layout.resolve(t, .y, f.in.viewport[1]);
+        }
         layout.place(t);
+        if (sides.anchors) |an| overlay.anchor(t, an, .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] });
+        if (sides.sticky) |st| scroll.stick(t, st);
         f.finalizeLayout(.{}) catch unreachable;
-        gs.reset();
+        if (sides.grids) |gs| gs.reset();
+        if (sides.anchors) |an| an.reset();
+        if (sides.sticky) |st| st.reset();
+    }
+
+    /// `endSides` with grids only.
+    pub fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output {
+        return f.endSides(font, .{ .grids = gs });
+    }
+
+    /// `layoutSides` with grids only.
+    pub fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void {
+        f.layoutSides(font, .{ .grids = gs });
     }
 
     /// A frame on a caller-selected device grid; no second arrangement or finalization pass.
@@ -683,6 +722,48 @@ pub const Frame = struct {
     }
 
     /// Paint and bookkeeping only, for callers who ran layout themselves.
+    /// `finish`, painting in the stacking-layer order of `layers`, whose rows go back to layer
+    /// 0 afterwards.
+    // ponytail: a copy of `finish`. Folding the two into one function, even an inline one,
+    // grew every runtime page's .text by 64 B (ci/run.sh markup-zero-cost).
+    fn finishLayered(f: *Frame, layers: *overlay.Layers) Output {
+        const ctx = f.ctx;
+        const t = f.tree();
+        const tx = f.texts();
+        const strings = &ctx.strings[ctx.cur];
+        t.seal(0);
+        const cu = &ctx.customs[ctx.cur];
+        overlay.order(t, layers);
+        paint.emitLayered(t, tx, cu, strings.buf[0..strings.len], layers, &ctx.draw);
+        layers.reset();
+        if (ctx.canvas_hook) |mark| mark(ctx);
+        if (ctx.damage_hook) |record| record(ctx, t, tx, cu, strings.buf[0..strings.len]);
+        ctx.anims.sweep(ctx.frame);
+        ctx.tweens.sweep(ctx.frame);
+        ctx.signals.dirty = false;
+        // The tables flag their own overflow; the frame reports them together.
+        ctx.status = .{
+            .nodes = t.overflow,
+            .texts = tx.overflow,
+            .customs = cu.overflow,
+            .strings = strings.overflow,
+            .depth = ctx.status.depth,
+            .anims = ctx.anims.overflow,
+            .tweens = ctx.tweens.overflow,
+            .flips = ctx.flips.overflow,
+        };
+        ctx.timers.sweep(ctx.frame);
+        return .{
+            .draw = &ctx.draw,
+            .tree = t,
+            .texts = tx,
+            .platform = ctx.platform,
+            .status = ctx.status,
+            .wake = scheduler.wake(ctx, f.in),
+            .pace = scheduler.pace(ctx),
+        };
+    }
+
     pub fn finish(f: *Frame) Output {
         const ctx = f.ctx;
         const t = f.tree();

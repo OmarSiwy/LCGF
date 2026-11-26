@@ -70,6 +70,8 @@ const paint = @import("../draw/paint.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
 const grid = @import("../layout/grid.zig");
+const overlay = @import("../layout/overlay.zig");
+const scroll_zig = @import("../layout/scroll.zig");
 const Mono = @import("../text/protocol.zig").Mono;
 const Paragraph = @import("../text/layout/stack.zig").Paragraph;
 const Frame = @import("../runtime/frame.zig").Frame;
@@ -387,6 +389,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const grid_cap = comptime gridCapacity(spec);
     const has_grid = grid_cap.grids > 0;
     if (has_flex and has_grid) @compileError("a page with both spec.flexed and spec.grid nodes is not supported yet");
+    // Anchor, sticky and layer columns and passes only for a page that uses them.
+    const anchor_rows = comptime countPositioned(spec, .anchor);
+    const sticky_rows = comptime countPositioned(spec, .sticky);
+    const has_layers = comptime countPositioned(spec, .layer) > 0;
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -469,6 +475,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             d: DrawList,
             fx: if (has_flex) Flex else void,
             gs: if (has_grid) grid.Grids else void,
+            an: if (anchor_rows > 0) overlay.Anchors else void,
+            st: if (sticky_rows > 0) scroll_zig.Sticky else void,
+            ly: if (has_layers) overlay.Layers else void,
 
             fn carve(carver: *mem.Carver) Tables {
                 return .{
@@ -479,6 +488,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     .d = DrawList.init(carver, rows, runs, customs),
                     .fx = if (has_flex) .{ .c = carver.columns(Flex.Columns, simd.rows(rows)) } else {},
                     .gs = if (has_grid) grid.Grids.init(carver, grid_cap) else {},
+                    .an = if (anchor_rows > 0) overlay.Anchors.init(carver, anchor_rows) else {},
+                    .st = if (sticky_rows > 0) scroll_zig.Sticky.init(carver, sticky_rows) else {},
+                    .ly = if (has_layers) overlay.Layers.init(carver, rows) else {},
                 };
             }
         };
@@ -637,6 +649,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 @memset(tb.fx.c.text_has, 0);
             }
             if (has_grid) tb.gs.reset();
+            if (anchor_rows > 0) tb.an.reset();
+            if (sticky_rows > 0) tb.st.reset();
+            if (has_layers) tb.ly.reset();
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
             if (dynamic) {
@@ -717,9 +732,14 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.resolve(t, .y, in.viewport[1]);
                 layout.place(t);
             }
+            if (anchor_rows > 0) overlay.anchor(t, &tb.an, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
+            if (sticky_rows > 0) scroll_zig.stick(t, &tb.st);
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
             try layout.finalizeWith(t, presentation.rounding);
-            paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
+            if (has_layers) {
+                overlay.order(t, &tb.ly);
+                paint.emitLayered(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.ly, &tb.d);
+            } else paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
             if (comptime paragraph_slots > 0) font.decorate(&tb.d, tx);
 
             if (dynamic) {
@@ -766,6 +786,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             // The node's row is the next one pushed, whoever pushes it.
             const at = ui.tables.t.len;
             defer if (comptime n.flex) |fs| ui.tables.fx.set(at, &fs);
+            // In row order, before the subtree: a nested anchor sees its parent's final place.
+            if (comptime n.anchor) |pl| _ = ui.tables.an.place(at, pl, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
+            if (comptime n.sticky) |top| _ = ui.tables.st.push(at, 0, .{ 0, top }, .{ false, true });
+            if (comptime n.layer != 0) ui.tables.ly.c.own[at] = n.layer;
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             if (comptime n.custom) |data| {
                 const id = Id.hash(n.id orelse @compileError("a custom draw needs an id"));
@@ -1050,6 +1074,19 @@ fn gridCapacity(comptime n: Spec) grid.Grids.Capacity {
             cap = .{ .grids = cap.grids + sub.grids, .tracks = cap.tracks + sub.tracks, .items = cap.items + sub.items, .cells = @max(cap.cells, sub.cells) };
         }
         return cap;
+    }
+}
+
+/// How many nodes of `n`'s subtree set `field` (`anchor`, `sticky`) or a nonzero `layer`.
+fn countPositioned(comptime n: Spec, comptime field: enum { anchor, sticky, layer }) u32 {
+    comptime {
+        var k: u32 = switch (field) {
+            .anchor => @intFromBool(n.anchor != null),
+            .sticky => @intFromBool(n.sticky != null),
+            .layer => @intFromBool(n.layer != 0),
+        };
+        for (n.children) |c| k += countPositioned(c, field);
+        return k;
     }
 }
 
@@ -1971,6 +2008,65 @@ test "grid: tracks, spans, placed cells and implicit rows lay out the same in bo
         try std.testing.expectEqual(types.Rect{ .x0 = 3, .y0 = 25, .x1 = 197, .y1 = 45 }, out.rect(5));
         try std.testing.expectEqual(@as(f32, 67), out.rect(6).x0);
         try std.testing.expect(out.rect(7).y0 >= out.rect(6).y1);
+    }
+}
+
+test "anchored, sticky, layer: placed and painted the same in both front ends" {
+    const th: Theme = .default;
+    const box: Style = comptime .{ .size = .{ .px(100), .px(60) }, .pad = @splat(4), .fill = .rgb(0, 0, 200) };
+    const dot: Style = comptime .{ .size = .{ .px(10), .px(10) }, .float = true, .fill = .rgb(200, 0, 0) };
+    const corner: overlay.Place = comptime .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -2, -3 } };
+    const fixed: overlay.Place = comptime .{ .at = .top_right, .pivot = .top_right, .offset = .{ -5, 5 }, .viewport = true };
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.layer(spec_zig.styled(spec_zig.row(.{}, .{
+            spec_zig.anchored(spec_zig.styled(spec_zig.row(.{}, .{}), dot), corner),
+            spec_zig.anchored(spec_zig.styled(spec_zig.row(.{}, .{}), dot), fixed),
+        }), box), 2),
+        spec_zig.sticky(spec_zig.label("stuck"), 70),
+        spec_zig.styled(spec_zig.row(.{}, .{}), .{ .size = .{ .px(40), .px(40) }, .fill = .rgb(0, 200, 0) }),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        buf: [16 * 1024]u8 align(mem.column_align) = undefined,
+        an: ?overlay.Anchors = null,
+        st: scroll_zig.Sticky = undefined,
+        ly: overlay.Layers = undefined,
+        pub fn build(app: *@This(), f: *Frame) void {
+            if (app.an == null) {
+                var c: mem.Carver = .{ .buf = &app.buf };
+                app.an = overlay.Anchors.init(&c, 2);
+                app.st = scroll_zig.Sticky.init(&c, 1);
+                app.ly = overlay.Layers.init(&c, 16);
+                app.ly.reset();
+            }
+            const vp: types.Rect = .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] };
+            var d = dot;
+            d.dir = .x;
+            var b = box;
+            b.dir = .x;
+            _ = f.open(.none, .{});
+            const raised = f.open(.none, b);
+            app.ly.c.own[@backingInt(raised)] = 2;
+            _ = app.an.?.place(@backingInt(f.leaf(.none, d)), corner, vp);
+            _ = app.an.?.place(@backingInt(f.leaf(.none, d)), fixed, vp);
+            f.close();
+            _ = app.st.push(@backingInt(f.textStyled("stuck", labelText(&th), .{})), 0, .{ 0, 70 }, .{ false, true });
+            _ = f.leaf(.none, .{ .dir = .x, .size = .{ .px(40), .px(40) }, .fill = .rgb(0, 200, 0) });
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endSides(font, .{ .anchors = &app.an.?, .sticky = &app.st, .layers = &app.ly });
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 64, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    for (0..2) |_| {
+        const out = (try h.frame(&in)).comptime_.tree;
+        // Root, col, box, the two dots, the sticky label, the green box.
+        try std.testing.expectEqual(types.Rect{ .x0 = 84, .y0 = 43, .x1 = 94, .y1 = 53 }, out.rect(3));
+        try std.testing.expectEqual(types.Rect{ .x0 = 305, .y0 = 5, .x1 = 315, .y1 = 15 }, out.rect(4));
+        try std.testing.expectEqual(@as(f32, 70), out.rect(5).y0);
     }
 }
 
