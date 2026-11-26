@@ -1,6 +1,7 @@
 //! faces, written by hand: CSS on widgets. The comptime page restyles each widget's root with
 //! `spec.styled`; the runtime page passes the same style to the widget's `…Face` function
-//! (engine spec R1), so the two draw the same frames (`App`, and parity.zig).
+//! (engine spec R1), so the two draw the same frames (`App`, and parity.zig), also under a
+//! box-shadow and an outline, which wrap the widget in a column with their floating nodes.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -25,6 +26,15 @@ const body: Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 const face: Style = .{ .dir = .x, .size = .{ .px(120), .fit }, .pad = @splat(theme.pad), .main = .center, .cross = .center, .border_color = red, .border = 2, .radius = theme.radius, .role = .button };
 const done_row: Style = .{ .dir = .x, .size = .{ .px(200), .fit }, .gap = 6, .cross = .center, .role = .checkbox };
 const wifi_row: Style = .{ .dir = .x, .size = .{ .px(200), .fit }, .gap = 6, .cross = .center };
+/// `#lit`: box-shadow and outline wrap the button in a column with a floating shadow and ring.
+const lit_box: Style = .{ .size = .{ .px(120), .fit } };
+const lit_shadow: Style = .{ .size = @splat(.pct(1)), .float = true, .fill = .rgb(0, 0, 0), .radius = theme.radius, .params = lcgf.features.shadow(2), .paint_outset = .{ -2, -3, 2, 3 } };
+const lit_ring: Style = .{ .size = @splat(.pct(1)), .float = true, .border_color = .rgb(240, 240, 240), .border = 2, .radius = theme.radius + 3, .paint_outset = @splat(3) };
+const lit_face: Style = blk: {
+    var st = face;
+    st.size = @splat(.fill);
+    break :blk st;
+};
 const track: Style = .{ .dir = .x, .size = .{ .px(160), .px(12) }, .min = .{ 40, 0 }, .fill = theme.control, .radius = theme.radius, .role = .slider };
 
 pub const spec = s.col(body, .{
@@ -33,6 +43,7 @@ pub const spec = s.col(body, .{
     s.styled(checkbox.ct.checkbox(theme, .done, .done, "Done"), done_row),
     s.styled(switch_.ct.@"switch"(theme, .wifi, .wifi, ""), wifi_row),
     s.styled(slider.ct.slider(theme, .level, .level, .{}), track),
+    s.col(lit_box, .{ s.col(lit_shadow, .{}), s.col(lit_ring, .{}), s.styled(button.ct.button(theme, .lit, "Lit"), lit_face) }),
 });
 
 pub fn Handlers(comptime Ui: type) type {
@@ -61,11 +72,16 @@ pub const App = struct {
         _ = checkbox.checkboxFace(f, &theme, .from("done"), &app.done, "Done", done_row);
         _ = switch_.switchFace(f, &theme, .from("wifi"), &app.wifi, "", wifi_row);
         _ = slider.sliderFace(f, &theme, .from("level"), &app.level, 0, 1, track);
+        _ = f.open(.none, lit_box);
+        _ = f.leaf(.none, lit_shadow);
+        _ = f.leaf(.none, lit_ring);
+        _ = button.buttonFace(f, &theme, .from("lit"), "Lit", label.labelText(&theme), lit_face);
+        f.close();
         f.close();
     }
 };
 
-/// Hover and click each widget, top to bottom, and drag the slider.
+/// Hover and click each widget, top to bottom, drag the slider, and click the lit button.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -98,6 +114,12 @@ pub const replay =
     \\buttons left
     \\frame
     \\pointer 120 109
+    \\frame
+    \\buttons
+    \\frame
+    \\pointer 60 130
+    \\frame
+    \\buttons left
     \\frame
     \\buttons
     \\frame

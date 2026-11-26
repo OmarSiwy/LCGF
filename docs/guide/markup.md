@@ -157,7 +157,8 @@ By default the page is a comptime page (`ComptimeUi`).
 - `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
 
 CSS on a button, toggle, checkbox, switch or range restyles it there through the widget's
-`…Face` function, as `spec.styled` restyles the comptime one. CSS that changes the look of
+`…Face` function, as `spec.styled` restyles the comptime one. A box-shadow or an outline on one of them
+works there too: its column of floating nodes is built around the restyled widget. CSS that changes the look of
 another control, and a margin on any widget, are refused on a runtime page for now.
 
 A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame, data)` and

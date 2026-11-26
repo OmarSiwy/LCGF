@@ -6,6 +6,7 @@
     button { width: 120px; border: 2px solid #c03030; }
     .wide { width: 200px; }
     #level { width: 160px; height: 12px; }
+    #lit { box-shadow: 2px 3px 4px #000; outline: 2px solid #f0f0f0; outline-offset: 1px; }
   </style>
 </head>
 <body>
@@ -14,5 +15,6 @@
   <label><input type="checkbox" id="done" class="wide" bind:checked="done"> Done</label>
   <input type="checkbox" switch id="wifi" class="wide" bind:checked="wifi">
   <input type="range" id="level" bind:value="level">
+  <button id="lit">Lit</button>
 </body>
 </html>
