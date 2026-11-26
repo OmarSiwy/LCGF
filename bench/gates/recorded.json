@@ -104,12 +104,12 @@
  },
  "size": {
   "golden-dump": {
-   "loaded": 65160,
-   "bss": 1498944
+   "loaded": 74683,
+   "bss": 1550856
   },
   "bench": {
-   "loaded": 283456,
-   "bss": 11849748
+   "loaded": 258972,
+   "bss": 7440964
   }
  },
  "first-frame": {

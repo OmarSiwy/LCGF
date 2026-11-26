@@ -24,8 +24,8 @@ met" is a finding: the gate's threshold is not moved to make it hold.
 
 | Gate | Budget or rule | Recorded |
 |---|---|---|
-| Binary size, golden-dump | loaded and bss each within 2% of the budget | 65,160 B loaded, 1,498,944 B bss |
-| Binary size, bench | loaded and bss each within 2% of the budget | 283,456 B loaded, 11,849,748 B bss |
+| Binary size, golden-dump | loaded and bss each within 2% of the budget | 74,683 B loaded, 1,550,856 B bss |
+| Binary size, bench | loaded and bss each within 2% of the budget | 258,972 B loaded, 7,440,964 B bss |
 | Input-to-photon latency | every move shown in the first frame; median within 50% of the budget | 345.5 us median |
 | Compile time, 100-node spec | within 50% of the budget | 0.094 s |
 | Compile time, 1,000-node spec | within 50% of the budget | 0.146 s |
