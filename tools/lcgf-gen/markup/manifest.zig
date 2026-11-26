@@ -39,9 +39,9 @@ pub const Fixture = struct {
     runtime_vars: []const u8 = "",
     /// Its page and twin import `app` from `<name>/app.zig` (app components).
     app: bool = false,
-    /// The compile-fail cases also get the page built over `<name>/app_wrong.zig`, as
-    /// `<name>_wrong`.
-    app_wrong: bool = false,
+    /// The compile-fail cases also get the page built over each `<name>/app_<x>.zig` listed,
+    /// as `<name>_<x>`.
+    wrong_apps: []const []const u8 = &.{},
 };
 
 pub const Manifest = struct { rows: []const Row, fixtures: []const Fixture };
