@@ -63,6 +63,8 @@ pub const geometry = @import("draw/geometry.zig");
 pub const outline = @import("draw/outline.zig");
 pub const theme_recipes = @import("theme/recipes.zig");
 pub const style = @import("style/style.zig");
+/// Many 2D primitives in caller-owned columns under a camera: `Frame.canvas`, `canvas.hit`.
+pub const canvas = @import("draw/canvas.zig");
 pub const draw_list = @import("draw/draw_list.zig");
 pub const opentype = @import("text/font/opentype.zig");
 pub const unicode_property = @import("text/unicode/property.zig");

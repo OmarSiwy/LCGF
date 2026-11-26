@@ -2136,6 +2136,72 @@ Typed styling as independently callable operations.
 - `resolve = resolution.resolve`
 - `inspect = resolution.inspect`
 
+## `lcgf.canvas` (src/draw/canvas.zig)
+
+canvas: many 2D primitives in caller-owned columns, drawn under a camera.
+
+### Top level
+
+- `Kind = enum(u4) { segment, rect, arc, polygon, glyph }`
+- `Cap = enum(u4) { butt, square, round }`: How a segment or an arc ends: at its end point, half its width past it, or in a half disc.
+- `Range = extern struct { first: u32, count: u32 }`: Instances `first` to `first + count`, drawn in that order.
+- `fn kindOf(look: [4]u32) Kind`
+- `fn segmentDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The segment `sh` (a to b, `half` either side, its caps).
+- `fn rectDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The rounded box `sh` (the shader's `rounded_box` with one radius), outline at distance 0.
+- `fn arcDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The arc `sh`: a ring sector around its centre, `half` either side of `radius`, with caps.
+- `fn polygonDist(comptime V: type, px: V, py: V, v: View, verts: []const [2]i32) V`: The polygon of `verts` under `v`, nonzero rule: distance to its nearest edge, negative inside.
+- `fn coverage(comptime V: type, d: V) V`: Antialiased coverage of a signed distance in pixels.
+- `fn hit(s: *const Instances, cam: Camera, ranges: []const Range, point: [2]f32, slop: f32) ?u32`: The last instance of `ranges` (drawn last, so on top) within `slop` logical pixels of `point`, in logical pixels from the node's top-left corner; null when none is.
+
+### `Camera` (struct)
+Where the world sits in the node.
+
+Fields: `origin`, `scale`, `offset`
+
+
+### `View` (struct)
+World to pixels for one node: `base + f32(w -% origin) * scale`, in logical pixels or, times the framebuffer scale, physical ones.
+
+Fields: `origin`, `scale`, `base`
+
+- `fn of(cam: Camera, corner: [2]f32, px: f32) View`: `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
+- `fn x(v: View, w: i32) f32`
+- `fn y(v: View, w: i32) f32`
+- `fn len(v: View, w: u32) f32`: A length (width, radius) in world units, in pixels.
+
+### `Instances` (struct)
+
+Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `c`, `verts`
+
+- `Line = struct { width: u32 = 0, cap: Cap = .butt, color: Color = .black }`
+- `Box = struct { fill: Color = .transparent, stroke: Color = .transparent, width: u32 = 0, radius: u32 = 0 }`
+- `Arc = struct { start: f32 = 0, sweep: f32 = std.math.tau, width: u32 = 0, cap: Cap = .butt, color: Color = .black }`
+- `Fill = struct { fill: Color = .black }`
+- `Text = struct { px: u32, color: Color = .black, font: Mono = .{} }`
+- `fn init(carver: *mem.Carver, cap: u32, verts: u32) Instances`: Carves `simd.rows(cap)` instance rows and `verts` polygon vertices from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
+- `fn requiredBytes(cap: u32, verts: u32) usize`
+- `fn reset(s: *Instances) void`
+- `fn since(s: *const Instances, first: u32) Range`: The instances added since `len` was `first`.
+- `fn segment(s: *Instances, a: [2]i32, b: [2]i32, o: Line) u32`: A line from `a` to `b`, `width` across.
+- `fn rect(s: *Instances, lo: [2]i32, hi: [2]i32, o: Box) u32`: The box from `lo` to `hi`, filled, its outline stroked `width` across; corners rounded by `radius` (capped at half the shorter side; up to 2^24 - 1).
+- `fn circle(s: *Instances, c: [2]i32, r: u32, o: Box) u32`: A disc of radius `r` around `c`: a rect rounded by its half side.
+- `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (radians, from +x toward +y; a negative sweep runs the other way), `width` across.
+- `fn polygon(s: *Instances, points: []const [2]i32, o: Fill) u32`: The polygon through `points`, closed, filled by the nonzero rule.
+- `fn glyph(s: *Instances, lo: [2]i32, hi: [2]i32, uv: [4]f32, color: Color) u32`: One textured box: atlas `uv` (u0, v0, u1, v1, 0..1) over `lo` to `hi`, tinted `color`; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`).
+- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (its top-left), `o.px` world units tall, with the metrics and 16 x 16 byte atlas of `protocol.Mono`.
+
+### `Instances.Columns` (struct)
+
+Fields: `pos`, `look`
+
+
+### `Shape` (struct)
+One instance in pixels: what the shaders read, decoded once per instance.
+
+Fields: `kind`, `p`, `half`, `radius`, `square`, `round`, `mid`, `aperture`, `seam`, `box`
+
+- `fn of(v: View, pos: [4]i32, look: [4]u32) Shape`
+
 ## `lcgf.draw_list` (src/draw/draw_list.zig)
 
 Draw list: what a renderer consumes.
