@@ -752,6 +752,14 @@ pub const Lowerer = struct {
                 };
             }
         }
+        // accent-color on :root is the theme's accent, after --lcgf-accent.
+        const ac = l.k.get(0, .@"accent-color");
+        if (ac.decl != none) {
+            const d = l.c.decls.get(ac.decl);
+            if (l.substitute(0, d.first, d.end, d.loc)) |r| {
+                if (values.isIdent(l.c, r[0], "auto")) {} else if (values.isIdent(l.c, r[0], "currentcolor")) th.accent = th.text else if (values.color(l.c, r[0], r[1])) |col| th.accent = col else l.badValue(r[0], .@"accent-color", r[1]);
+            }
+        }
         l.page.theme = th;
     }
 
@@ -1004,6 +1012,8 @@ pub const Lowerer = struct {
             return;
         }
         l.attributes(n);
+        if (l.k.get(n, .@"accent-color").decl != none)
+            l.ds.err(l.declared(n, .@"accent-color").?.loc, "accent-color is lowered on :root only, as the theme's accent", .{});
         if (std.mem.eql(u8, t, "template")) {
             l.template(n, parent);
             return;

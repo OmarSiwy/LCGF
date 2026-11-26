@@ -1,0 +1,12 @@
+content.html:3:8: error: accent-color is lowered on :root only, as the theme's accent
+  .x { accent-color: red; }
+       ^
+content.html:7:3: error: a link shows one literal or one field; its content cannot hold elements
+  <a href="#" on:click="go"><span>b</span></a>
+  ^
+content.html:8:3: error: <details> needs bind:open="field", the bool it shows its content by
+  <details><summary>c</summary><p>d</p></details>
+  ^
+content.html:9:3: error: <details> takes a <summary> first and then its content
+  <details bind:open="e"><p>f</p></details>
+  ^

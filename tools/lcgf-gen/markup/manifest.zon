@@ -209,7 +209,7 @@
         .{ .kind = "property", .name = "text-transform", .status = .planned, .diagnostic = "text-transform is not lowered yet" },
         .{ .kind = "property", .name = "text-decoration", .status = .planned, .diagnostic = "text-decoration is not lowered yet (text/layout/decorations.zig, P2)" },
         .{ .kind = "property", .name = "content", .status = .planned, .diagnostic = "::before and ::after content is not lowered yet" },
-        .{ .kind = "property", .name = "accent-color", .status = .planned, .diagnostic = "accent-color is not lowered yet; set --lcgf-accent on :root" },
+        .{ .kind = "property", .name = "accent-color", .status = .mapped, .target = "on :root: Theme.accent base.zig:103, over --lcgf-accent; on any other element an error", .fixture = "content" },
         .{ .kind = "property", .name = "direction", .status = .planned, .diagnostic = "direction is not lowered yet" },
         .{ .kind = "property", .name = "box-sizing", .status = .planned, .diagnostic = "box-sizing is not lowered yet; LCGF sizes are border-box" },
         .{ .kind = "property", .name = "transition", .status = .planned, .diagnostic = "transitions are not lowered yet (P2)" },

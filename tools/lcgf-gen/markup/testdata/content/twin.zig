@@ -1,5 +1,5 @@
 //! content, written by hand: the document elements over widgets and roles: a link, lists, a
-//! details section.
+//! details section, the accent colour.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -9,7 +9,8 @@ const link = lcgf.widgets_link;
 const label = lcgf.widgets_label;
 const accordion = lcgf.widgets_accordion;
 
-pub const theme: w.Theme = .{};
+/// accent-color on :root: the theme's accent.
+pub const theme: w.Theme = .{ .accent = .rgb(48, 128, 224) };
 
 pub const State = struct { more_open: bool = true };
 
