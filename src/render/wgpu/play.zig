@@ -2,7 +2,7 @@
 //! wgpu-native and writes each as a PNG, for comparison with the golden images
 //! (ci/jobs/wgpu.sh):
 //!
-//!     wgpu-play OUT [SAMPLES]      ->  OUT/<scene>.png
+//!     wgpu-play OUT [SAMPLES]      ->  OUT/<scene>.png, OUT/canvas.png
 //!
 //! SAMPLES (default 1) above 1 draws through a multisampled target resolved into the image.
 //!
@@ -22,6 +22,7 @@ const gpu = native.gpu;
 const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
+var canvas: conformance.CanvasStorage = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -99,6 +100,31 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, w, ht, px) });
     }
+
+    // The canvas scene (golden tools/golden/ref/draw/canvas.png), by a renderer with the canvas
+    // pipeline.
+    const sc = conformance.canvas_scene;
+    canvas.load();
+    var cgfx = native.Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm, .sample_count = samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
+    defer cgfx.deinit();
+    if (cgfx.canvas == null) return error.CanvasPipeline;
+    const catlas = cgfx.addTexture(&ctx, atlas_tex.view, sampler);
+    const w: u32 = @intFromFloat(sc.viewport[0]);
+    const ht: u32 = @intFromFloat(sc.viewport[1]);
+    var target = host.Target.init(&h, w, ht, c.WGPUTextureFormat_RGBA8Unorm);
+    defer target.deinit();
+    cgfx.prepare(h.queue, &canvas.draw, .{ .texture = catlas }, sc.viewport, 1);
+    const encoder = c.wgpuDeviceCreateCommandEncoder(h.device, null);
+    var msaa: ?native.Multisample = if (samples > 1) .init(h.device, w, ht, c.WGPUTextureFormat_RGBA8Unorm, samples) else null;
+    defer if (msaa) |*m| m.deinit();
+    const bg: [4]f64 = .{ 13.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1 };
+    const pass = if (msaa) |m| host.beginPass(encoder, m.view, target.view, bg) else host.beginPass(encoder, target.view, null, bg);
+    iface.render(&cgfx, pass, &canvas.draw);
+    host.endPass(pass);
+    h.submit(encoder);
+    const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
+    try h.readback(&target, px);
+    try out.writeFile(io, .{ .sub_path = "canvas.png", .data = try png(gpa, w, ht, px) });
 }
 
 /// RGBA rows as a PNG with stored (uncompressed) deflate blocks.

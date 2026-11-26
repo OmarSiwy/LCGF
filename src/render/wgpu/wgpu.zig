@@ -28,6 +28,8 @@ const std = @import("std");
 const types = @import("../../core/types.zig");
 const draw_list = @import("../../draw/draw_list.zig");
 const quad_shader = @import("../shaders/quad.zig");
+const canvas_shader = @import("../shaders/canvas.zig");
+const canvas_pipeline = @import("../gpu/canvas.zig");
 const iface = @import("../iface.zig");
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
@@ -78,6 +80,10 @@ pub const Glyphs = iface.Glyphs;
 ///   fn setBindGroup(RenderPass, index: u32, BindGroup) void
 ///   fn setVertexBuffer(RenderPass, slot: u32, Buffer, offset: u64, size: u64) void
 ///   fn draw(RenderPass, vertices: u32, instances: u32, first_vertex: u32, first_instance: u32) void
+///
+///   Optional, for canvases: `canvas`, a namespace with `projection` (this binding's
+///   lcgf_render.gpu, P) and `fn device(Device, ?Queue) P.Device`, `fn format(TextureFormat)
+///   P.TextureFormat`, `fn view(TextureView) P.TextureView`, `fn upload(P.Device) P.Upload`.
 pub const Binding = struct {
     pub const types = [_][]const u8{ "Device", "Queue", "RenderPass", "Buffer", "Pipeline", "BindGroup", "TextureView", "Sampler", "TextureFormat" };
     pub const functions = [_][]const u8{ "createBuffer", "destroyBuffer", "writeBuffer", "createPipeline", "globalsBindGroup", "textureBindGroup", "releaseBindGroup", "setPipeline", "setBindGroup", "setVertexBuffer", "draw" };
@@ -92,6 +98,11 @@ pub fn Renderer(comptime gpu: type) type {
 
     return struct {
         const Self = @This();
+        /// The canvas pipeline, through the binding's lcgf_render.gpu (src/render/gpu/canvas.zig).
+        const cb = if (@hasDecl(gpu, "canvas")) gpu.canvas else null;
+        pub const Canvas = if (@TypeOf(cb) == @TypeOf(null)) void else canvas_pipeline.Canvas(cb.projection, struct {
+            pub const wgsl = canvas_shader.wgsl;
+        });
 
         pub const Queue = gpu.Queue;
         pub const Pass = gpu.RenderPass;
@@ -105,6 +116,11 @@ pub fn Renderer(comptime gpu: type) type {
             sample_count: u32 = 1,
             max_quads: u32 = 16 * 1024,
             max_glyphs: u32 = 32 * 1024,
+            /// Canvas instance rows and polygon vertices kept on the GPU (32 and 8 bytes each);
+            /// 0 rows: no canvas pipeline, and canvases draw nothing. Needs a binding with
+            /// `canvas` (see `Binding`).
+            canvas_rows: u32 = 0,
+            canvas_verts: u32 = 0,
         };
 
         /// Plain description the binding turns into a wgpu pipeline.
@@ -126,8 +142,15 @@ pub fn Renderer(comptime gpu: type) type {
         pipelines: [max_materials]gpu.Pipeline = undefined,
         material_count: u16 = 0,
         textures: [max_textures]gpu.BindGroup = undefined,
+        /// The views behind `textures`, for the canvas pipeline's glyph atlas.
+        views: [max_textures]gpu.TextureView = undefined,
         texture_count: u16 = 0,
         glyphs: Glyphs = .{},
+        canvas: if (Canvas == void) void else ?Canvas = if (Canvas == void) {} else null,
+        device: gpu.Device,
+        list: ?*const DrawList = null,
+        /// Physical pixels: viewport * scale from the last `prepare`.
+        extent: [2]u32 = .{ 0, 0 },
 
         /// `white` is a 1x1 opaque white texture; it becomes `Texture.white`.
         pub fn init(device: gpu.Device, desc: Desc, white: gpu.TextureView, sampler: gpu.Sampler) Self {
@@ -142,13 +165,23 @@ pub fn Renderer(comptime gpu: type) type {
                 .glyph_quads = gpu.createBuffer(device, @as(u64, desc.max_glyphs) * quad_stride, .vertex),
                 .globals = globals,
                 .globals_group = gpu.globalsBindGroup(device, globals),
+                .device = device,
             };
             _ = self.addMaterial(device, quad_shader.stockFor(use)); // Material.solid
             _ = self.addTexture(device, white, sampler); // Texture.white
+            if (Canvas != void and desc.canvas_rows > 0) {
+                // ponytail: a canvas pipeline that fails to build leaves canvases undrawn, as
+                // init has no error to return.
+                var cv: Canvas = undefined;
+                if (cv.init(cb.device(device, null), .{ .format = cb.format(desc.format), .samples = desc.sample_count }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts })) |_| {
+                    self.canvas = cv;
+                } else |_| {}
+            }
             return self;
         }
 
         pub fn deinit(self: *Self) void {
+            if (Canvas != void) if (self.canvas) |*cv| cv.deinit(cb.device(self.device, null));
             gpu.destroyBuffer(self.quads);
             gpu.destroyBuffer(self.glyph_quads);
             gpu.destroyBuffer(self.globals);
@@ -165,6 +198,7 @@ pub fn Renderer(comptime gpu: type) type {
             const i: u16 = @min(self.texture_count, max_textures - 1);
             if (i < self.texture_count) gpu.releaseBindGroup(self.textures[i]);
             self.textures[i] = gpu.textureBindGroup(device, view, sampler);
+            self.views[i] = view;
             self.texture_count = i + 1;
             return @fromBackingInt(i);
         }
@@ -176,6 +210,7 @@ pub fn Renderer(comptime gpu: type) type {
             const i = @min(@backingInt(texture), self.texture_count - 1);
             gpu.releaseBindGroup(self.textures[i]);
             self.textures[i] = gpu.textureBindGroup(device, view, sampler);
+            self.views[i] = view;
         }
 
         /// A quad pipeline with your fragment logic. Build `wgsl` with `quad_shader.shader`.
@@ -196,6 +231,7 @@ pub fn Renderer(comptime gpu: type) type {
             const quad_bytes = draw.quadBytes();
             gpu.writeBuffer(queue, self.quads, 0, quad_bytes[0..@min(quad_bytes.len, @as(usize, self.desc.max_quads) * quad_stride)]);
             self.prepareFrame(queue, glyphs, viewport, scale);
+            self.prepareCanvas(queue, draw, scale);
         }
 
         /// Upload the rows touched since the last frame on this buffer. Pass the full dirty
@@ -213,6 +249,7 @@ pub fn Renderer(comptime gpu: type) type {
                 gpu.writeBuffer(queue, self.quads, first * quad_stride, std.mem.sliceAsBytes(draw.quads[first..end]));
             }
             self.prepareFrame(queue, glyphs, viewport, scale);
+            self.prepareCanvas(queue, draw, scale);
         }
 
         fn prepareFrame(self: *Self, queue: gpu.Queue, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
@@ -220,6 +257,27 @@ pub fn Renderer(comptime gpu: type) type {
             gpu.writeBuffer(queue, self.glyph_quads, 0, glyph_bytes[0..@min(glyph_bytes.len, @as(usize, self.desc.max_glyphs) * quad_stride)]);
             gpu.writeBuffer(queue, self.globals, 0, std.mem.asBytes(&Globals{ .viewport = viewport, .scale = scale }));
             self.glyphs = glyphs;
+            self.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
+        }
+
+        fn prepareCanvas(self: *Self, queue: gpu.Queue, draw: *const DrawList, scale: f32) void {
+            self.list = draw;
+            if (Canvas == void) return;
+            const cv = if (self.canvas) |*cv| cv else return;
+            const dev = cb.device(self.device, queue);
+            var up = cb.upload(dev);
+            const atlas = @min(@backingInt(self.glyphs.texture), self.texture_count - 1);
+            cv.prepare(dev, &up, draw, 0, scale, self.extent, cb.view(self.views[atlas]), atlas);
+        }
+
+        /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the
+        /// canvas pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+        /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+        pub fn drawCanvas(self: *const Self, pass: gpu.RenderPass, k: u32) void {
+            if (Canvas == void) return;
+            const cv = if (self.canvas) |*cv| cv else return;
+            var p = cb.projection.RenderPass.wrap(cb.device(self.device, null), pass, self.extent[0], self.extent[1]);
+            cv.draw(&p, self.list.?, k);
         }
 
         fn bind(self: *const Self, pass: gpu.RenderPass, material: types.Material, texture: types.Texture, instances: gpu.Buffer, size: u64) void {

@@ -32,6 +32,29 @@ pub const TextureView = c.WGPUTextureView;
 pub const Sampler = c.WGPUSampler;
 pub const TextureFormat = c.WGPUTextureFormat;
 
+/// lcgf_render.gpu over the same device, for the canvas pipeline (wgpu.zig `Binding`).
+pub const canvas = struct {
+    pub const projection = gpu;
+    pub fn device(d: Device, q: ?Queue) gpu.Device {
+        return .wrap(d.device, q orelse null);
+    }
+    pub fn format(f: TextureFormat) gpu.TextureFormat {
+        return switch (f) {
+            c.WGPUTextureFormat_BGRA8Unorm => .bgra8_unorm,
+            c.WGPUTextureFormat_BGRA8UnormSrgb => .bgra8_unorm_srgb,
+            c.WGPUTextureFormat_RGBA8UnormSrgb => .rgba8_unorm_srgb,
+            c.WGPUTextureFormat_RGBA16Float => .rgba16_float,
+            else => .rgba8_unorm,
+        };
+    }
+    pub fn view(v: TextureView) gpu.TextureView {
+        return .{ .view = v, .width = 0, .height = 0 };
+    }
+    pub fn upload(d: gpu.Device) gpu.Upload {
+        return .begin(d, null);
+    }
+};
+
 pub const Context = struct {
     device: c.WGPUDevice,
     globals_layout: c.WGPUBindGroupLayout,

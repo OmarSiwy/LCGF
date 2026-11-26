@@ -4,7 +4,7 @@
 # wgpu-native major (-Dwgpu-native, archives in build.zig.zon, headers translated by build.zig).
 # The tests draw and read pixels back; wgpu-play draws every render conformance scene (custom
 # commands by the host's own pipeline), without and with 4x multisampling, compared with its
-# golden image.
+# golden image; and the canvas scene, compared with sw's golden of it.
 for v in v27 v29; do
     golden_build wgpu wgpu-play -Dwgpu-native=$v --summary all
     for samples in 1 4; do
@@ -17,5 +17,6 @@ for v in v27 v29; do
             if [ "$samples" -gt 1 ] && [ "$(basename "$ref")" = custom.png ]; then ring="--scissor-ring 8,8,152,112"; fi
             python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref" $ring
         done
+        python3 tools/golden/golden.py "$out/canvas.png" tools/golden/ref/draw/canvas.png
     done
 done
