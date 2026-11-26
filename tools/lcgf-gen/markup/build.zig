@@ -128,7 +128,7 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
                         .target = target,
                         .optimize = .ReleaseFast,
                         .strip = true,
-                        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "ui", .module = side[1] } },
+                        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "ui", .module = side[1] }, .{ .name = "twin", .module = twin } },
                     }) });
                     cost.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("markup-cost/{s}-{s}.o", .{ f.name, side[0] })).step);
                 }
