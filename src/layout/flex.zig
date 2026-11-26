@@ -41,6 +41,8 @@ pub const Flex = struct {
         align_base: []f32,
         /// How the node shares its free main-axis space between its children (`Space`).
         space: []u32,
+        /// How a wrapping row shares the height its lines leave (`LineSpace`).
+        line_space: []u32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -135,6 +137,27 @@ pub const Flex = struct {
         /// before them (CSS `justify-content: space-*`), in place of `Style.main`. Ignored on
         /// a wrapping row.
         space: Space = .none,
+        /// For a wrapping row: the height its lines leave goes between them or into them (CSS
+        /// `align-content: space-*` and `stretch`), in place of `lines`.
+        line_space: LineSpace = .none,
+    };
+
+    /// `Style.line_space`: where a wrapping row's spare height goes, for `n` lines. The
+    /// tables are `Space`'s, plus `stretch`, which adds an equal share to every line's height.
+    pub const LineSpace = enum(u8) {
+        none,
+        between,
+        around,
+        evenly,
+        stretch,
+
+        pub const lines_k = [5]f32{ 1, 0, 0, 0, 0 };
+        pub const lead_k = [5]f32{ 0, 0, 0.5, 1, 0 };
+        pub const lead_n = [5]f32{ 1, 1, 0, 1, 1 };
+        pub const step_k = [5]f32{ 0, 1, 1, 1, 0 };
+        pub const step_n = [5]f32{ 1, -1, 0, 1, 1 };
+        pub const stretch_k = [5]f32{ 0, 0, 0, 0, 1 };
+        pub const stretch_n = [5]f32{ 1, 1, 1, 1, 0 };
     };
 
     /// `Style.space`: where free main-axis space goes, for `n` in-flow children.
@@ -177,6 +200,7 @@ pub const Flex = struct {
         fx.c.align_base[i] = b01(s.baseline);
         fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
         fx.c.space[i] = @backingInt(s.space);
+        fx.c.line_space[i] = @backingInt(s.line_space);
     }
 
     /// place: what node `p` puts before its first child of its free main-axis space `free`:

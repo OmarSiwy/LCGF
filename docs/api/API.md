@@ -638,14 +638,25 @@ Fields: `c`
 ### `Flex.Columns` (struct)
 One row per tree node, `simd.rows(cap)` rows each.
 
-Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `space`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
+Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `space`, `line_space`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
 
 
 ### `Flex.Style` (struct)
 What `set` writes for one node.
 
-Fields: `aspect`, `shrink`, `regrow`, `cross`, `margin`, `wrap`, `lines`, `baseline`, `space`
+Fields: `aspect`, `shrink`, `regrow`, `cross`, `margin`, `wrap`, `lines`, `baseline`, `space`, `line_space`
 
+
+### `Flex.LineSpace` (enum)
+`Style.line_space`: where a wrapping row's spare height goes, for `n` lines.
+
+- `lines_k = [5]f32{ 1, 0, 0, 0, 0 }`
+- `lead_k = [5]f32{ 0, 0, 0.5, 1, 0 }`
+- `lead_n = [5]f32{ 1, 1, 0, 1, 1 }`
+- `step_k = [5]f32{ 0, 1, 1, 1, 0 }`
+- `step_n = [5]f32{ 1, -1, 0, 1, 1 }`
+- `stretch_k = [5]f32{ 0, 0, 0, 0, 1 }`
+- `stretch_n = [5]f32{ 1, 1, 1, 1, 0 }`
 
 ### `Flex.Space` (enum)
 `Style.space`: where free main-axis space goes, for `n` in-flow children.
@@ -661,7 +672,7 @@ Wrapping rows.
 - `fn linesGap(t: *const Tree, fx: *const Flex, a: u1, i: usize) f32`: fitFlex: the gaps between a wrapping row's lines, on y.
 - `fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, contrib: f32, folded: f32) f32`: fitFlex: on y, child `i` of a wrapping row raises its line's cross size to its own extent, and the line joins the row's sum when its first child (the last one the reverse sweep sees) folds in.
 - `fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, inner: f32) f32`: resolveFlex: how much more than the parent's inner size a stretching child of a wrapping row gets on y: its line's cross size instead of the whole row.
-- `fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void`: placeFlex, before child `i` is placed: the first child of a line sets the line's offset down the row: the row's cursor (which for a wrapping row runs across it) plus the share of the row's spare height that `Style.lines` puts before its lines.
+- `fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void`: placeFlex, before child `i` is placed: the first child of a line sets the line's offset down the row: the row's cursor (which for a wrapping row runs across it) plus the share of the row's spare height that `Style.lines` (or `Style.line_space`) puts before its lines.
 - `fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, inner: f32, cross: f32, in_flow: f32) f32`: placeFlex: child `i`'s offset inside a wrapping row's content box.
 - `fn advance(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain: f32) f32`: placeFlex, after child `i` is placed: it moves its line's cursor along x, and a line's first child moves the row's cursor down past the line.
 

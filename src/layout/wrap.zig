@@ -110,20 +110,40 @@ pub inline fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usiz
 /// row gets on y: its line's cross size instead of the whole row. Zero otherwise.
 pub inline fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, inner: f32) f32 {
     const on_y: f32 = @floatFromInt(a);
-    return on_y * wraps(t, fx, p) * (fx.c.line_cross[fx.c.line[i]] - inner);
+    return on_y * wraps(t, fx, p) * (fx.c.line_cross[fx.c.line[i]] + lineExtra(t, fx, p) - inner);
+}
+
+/// The height wrapping row `p`'s lines leave inside it, once `p` is sized.
+inline fn spareOf(t: *const Tree, fx: *const Flex, p: usize) f32 {
+    const c = &t.c;
+    const inner = c.size[1][p] - c.pad_lo[1][p] - c.pad_hi[1][p];
+    return @max(inner - c.fit[1][p] - linesGap(t, fx, 1, p), 0);
+}
+
+/// What `Style.line_space` divides `spare` by: `nlines + n` of the kind, at least 1.
+inline fn lineShare(fx: *const Flex, p: usize, spare: f32, comptime k: []const f32, comptime n: []const f32) f32 {
+    const s = fx.c.line_space[p];
+    return spare * k[s] / @max(fx.c.nlines[p] + n[s], 1);
+}
+
+/// The height `align-content: stretch` adds to each line of row `p` (0 otherwise).
+inline fn lineExtra(t: *const Tree, fx: *const Flex, p: usize) f32 {
+    const S = Flex.LineSpace;
+    return lineShare(fx, p, spareOf(t, fx, p), &S.stretch_k, &S.stretch_n);
 }
 
 /// placeFlex, before child `i` is placed: the first child of a line sets the line's offset
 /// down the row: the row's cursor (which for a wrapping row runs across it) plus the share of
-/// the row's spare height that `Style.lines` puts before its lines.
+/// the row's spare height that `Style.lines` (or `Style.line_space`) puts before its lines.
 pub inline fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void {
     const c = &t.c;
     const f = &fx.c;
     const l = f.line[i];
     const h = f.head[i];
-    const inner = c.size[1][p] - c.pad_lo[1][p] - c.pad_hi[1][p];
-    const spare = @max(inner - c.fit[1][p] - linesGap(t, fx, 1, p), 0);
-    f.line_off[l] += h * (c.cursor[p] + spare * f.align_lines[p] - f.line_off[l]);
+    const S = Flex.LineSpace;
+    const spare = spareOf(t, fx, p);
+    const lead = spare * f.align_lines[p] * S.lines_k[f.line_space[p]] + lineShare(fx, p, spare, &S.lead_k, &S.lead_n);
+    f.line_off[l] += h * (c.cursor[p] + lead - f.line_off[l]);
 }
 
 /// placeFlex: child `i`'s offset inside a wrapping row's content box. Along x: its line's
@@ -137,7 +157,7 @@ pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, 
     const at = if (a == 0)
         @max(inner - f.line_main[l], 0) * c.align_main[p] + f.line_cursor[l]
     else
-        f.line_off[l] + @max(f.line_cross[l] - c.size[1][i] - fx.margin(1, i), 0) * cross;
+        f.line_off[l] + @max(f.line_cross[l] + lineExtra(t, fx, p) - c.size[1][i] - fx.margin(1, i), 0) * cross;
     return in_flow + wraps(t, fx, p) * (at + f.margin_lo[a][i] - in_flow);
 }
 
@@ -148,7 +168,9 @@ pub inline fn advance(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain
     const l = f.line[i];
     const w = wraps(t, fx, p);
     f.line_cursor[l] += w * t.c.flow[i] * (t.c.size[0][i] + fx.margin(0, i) + t.c.gap[p]);
-    const down = f.head[i] * (f.line_cross[l] + t.c.gap[p]);
+    const S = Flex.LineSpace;
+    const spare = spareOf(t, fx, p);
+    const down = f.head[i] * (f.line_cross[l] + t.c.gap[p] + lineShare(fx, p, spare, &S.stretch_k, &S.stretch_n) + lineShare(fx, p, spare, &S.step_k, &S.step_n));
     return plain + w * (down - plain);
 }
 
@@ -450,4 +472,28 @@ test "wrap: a tag cloud in a column, end to end through finalize" {
     try testing.expectEqual(R{ .x0 = 40, .y0 = 76, .x1 = 80, .y1 = 92 }, t.rect(tag[4]));
     // The footer follows the three 16 px lines and their two 4 px gaps.
     try testing.expectEqual(R{ .x0 = 10, .y0 = 98, .x1 = 110, .y1 = 108 }, t.rect(foot));
+}
+
+test "line_space: between, around and evenly share a wrapping row's spare height; stretch grows its lines" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .dir = .x, .size = .{ .px(400), .px(200) } });
+    const kinds = [_]Flex.LineSpace{ .between, .around, .evenly };
+    var rows: [3]u32 = undefined;
+    for (&rows, kinds) |*r, k| {
+        // One 60 px box per line in 100: three lines of 10 leave 70 of 100.
+        r.* = s.row(root, &.{ .dir = .x, .size = .{ .px(100), .px(100) } }, &.{ .{ 60, 10 }, .{ 60, 10 }, .{ 60, 10 } });
+        s.fx.set(r.*, &.{ .wrap = true, .line_space = k });
+    }
+    const st = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(100), .px(100) } });
+    const a = t.push(st, .none, &.{ .size = .{ .px(60), .fill }, .min = .{ 0, 10 } });
+    const b = t.push(st, .none, &.{ .size = .{ .px(60), .px(10) } });
+    t.seal(st);
+    s.fx.set(st, &.{ .wrap = true, .line_space = .stretch });
+    s.run(400, 200);
+    const want = [3][3]f32{ .{ 0, 45, 90 }, .{ 70.0 / 6.0, 10 + 70.0 / 2.0, 20 + 70.0 * 5.0 / 6.0 }, .{ 17.5, 45, 72.5 } };
+    for (rows, want) |r, ys| for (0..3) |k| try testing.expectApproxEqAbs(ys[k], t.c.pos[1][r + 1 + k], 1e-4);
+    // Stretch: two lines of 10 leave 80, 40 each; the filling box takes its line's 50.
+    try testing.expectEqual(50, t.c.size[1][a]);
+    try testing.expectEqual(50, t.c.pos[1][b]);
 }
