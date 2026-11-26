@@ -11,7 +11,9 @@
 //! Comptime: `const S = Select(th, .shape, .shape_state, .shape_text, def);` gives the spec
 //! builders `S.button` and `S.layer` and the hooks `popover.ComptimePage(State, spec, th, S)`
 //! runs. The button's label shows the string field `shape_text`, which the hooks keep equal to
-//! the chosen option's field.
+//! the chosen option's field. Or, in `base.ComptimeUi` beside any other widget:
+//! `ct.select(th, .shape, .shape, opts)` in the flow and `ct.list(th, .shape, .shape, opts)`
+//! last in the root, the options given by their captions (`Options`).
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -41,7 +43,35 @@ pub const SelectState = struct {
     selected: u8 = 0,
     /// The open list, as menu.zig keeps a menu.
     menu: menu.MenuState = .{},
+
+    /// Whether the list is shown: what `spec.when` over this field selects by (`ct.list`).
+    pub fn shown(s: SelectState) bool {
+        return s.menu.open;
+    }
 };
+
+/// The options of a select known by their captions only (`ct.select`, HTML `<option>`), and
+/// the headers of their groups (`<optgroup label>`).
+pub const Options = struct {
+    /// One caption per option, in order.
+    texts: []const []const u8,
+    /// Group headers, in order, each shown in the list before the option at `at`. A header
+    /// is not an option: the keys and the pointer pass over it.
+    groups: []const Group = &.{},
+};
+
+pub const Group = struct { at: u8, label: []const u8 };
+
+/// The `menu.Def` of `n` options named by position: "0", "1", ..., so option k's id is
+/// `name_k`. For the runtime twin of `ct.select`: `button(f, th, "name", positional(n), ...)`.
+pub fn positional(comptime n: usize) menu.Def {
+    comptime {
+        var items: [n][:0]const u8 = undefined;
+        for (&items, 0..) |*it, k| it.* = std.fmt.comptimePrint("{d}", .{k});
+        const out = items;
+        return .{ .items = &out };
+    }
+}
 
 /// `null` if `State` can hold select `def` bound to `field`, its button showing `text`, else
 /// the compile error: `field` must be a `SelectState`, `text` and every option's field strings,
@@ -138,6 +168,20 @@ pub fn optionStyle(th: *const Theme, active: bool, selected: bool) Style {
     return s;
 }
 
+/// A group's header row: an option's padding, no fill.
+pub fn headerStyle(th: *const Theme) Style {
+    var s = menu.itemStyle(th, false);
+    s.fill = .transparent;
+    return s;
+}
+
+/// A group's header text: the label's, in the hot control colour (dimmer than the options).
+pub fn headerText(th: *const Theme) types.TextStyle {
+    var ts = base.labelText(th);
+    ts.color = th.control_hot;
+    return ts;
+}
+
 /// An option's fill, indexed by `active << 1 | selected`: none, the control colour for the
 /// chosen one, the hot control colour for the highlighted one, chosen or not.
 pub fn optionFills(th: *const Theme) base.StateColors {
@@ -216,12 +260,22 @@ pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime d
 /// The list of select `name`, if it is open. Call it at the root's depth, after the rest of
 /// the page, so it is drawn on top.
 pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8) void {
+    listGrouped(f, th, name, def, st, texts, &.{});
+}
+
+/// `list`, with group headers (`Options.groups`) among the options.
+pub fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime groups: []const Group) void {
     if (!st.menu.open) return;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
     const l = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
     _ = f.interact(l, popover.overlay_sense);
     role(f, l, .listbox);
     inline for (def.items, 0..) |o, k| {
+        inline for (groups) |g| if (g.at == k) {
+            _ = f.open(.none, headerStyle(th));
+            _ = f.text(g.label, headerText(th));
+            f.close();
+        };
         const row = f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k));
         _ = f.interact(row, popover.overlay_sense);
         role(f, row, .option);
@@ -230,6 +284,113 @@ pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     }
     f.close();
     f.close();
+}
+
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+/// The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, and its list,
+/// last in the page's root (so it is drawn above the rest), live while the list is open
+/// (`spec.when` over the field, `SelectState.shown`). Their runtime twins are `button` and
+/// `listGrouped` with `positional(opts.texts.len)`.
+pub const ct = struct {
+    /// The button of select `id`, bound to the `SelectState` field `field`, showing the chosen
+    /// one of `opts.texts`.
+    pub fn select(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec {
+        const W = Comptime(th, @tagName(id), @tagName(field), opts);
+        return .{ .kind = .row, .id = @tagName(id), .bind = @tagName(field), .widget = W.Button, .children = &.{.{ .kind = .label }} };
+    }
+
+    /// The scrim and the list of select `id`, with the same arguments as its `select`.
+    pub fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec {
+        const W = Comptime(th, @tagName(id), @tagName(field), opts);
+        const name = @tagName(id);
+        comptime var rows: []const Spec = &.{};
+        inline for (opts.texts, 0..) |_, k| {
+            inline for (opts.groups) |g| if (g.at == k) {
+                rows = rows ++ .{Spec{ .kind = .col, .children = &.{.{ .kind = .label }} }};
+            };
+            rows = rows ++ .{Spec{ .kind = .row, .id = partName(name, W.def.items[k]), .children = &.{.{ .kind = .label }} }};
+        }
+        const panel: Spec = .{ .kind = .col, .id = partName(name, "panel"), .children = rows };
+        return spec_zig.when(field, .{ .kind = .col, .id = partName(name, "scrim"), .widget = W.List, .children = &.{panel} });
+    }
+};
+
+/// The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads
+/// every part's response and the keys through `advance`, as `button` does at run time, and
+/// keeps the button's rect for the list's `push`.
+pub fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options) type {
+    if (opts.texts.len == 0) @compileError("select '" ++ id ++ "': no options");
+    if (opts.texts.len >= menu.no_item) @compileError("select '" ++ id ++ "': too many options");
+    return struct {
+        pub const def = positional(opts.texts.len);
+
+        pub const Button = struct {
+            pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+                return base.fieldError(State, "select", bound, SelectState);
+            }
+
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                const U = @TypeOf(ui.*);
+                const at = ui.lastRect(row);
+                ui.keep(Button).* = .{ at.x0, at.y0, at.x1, at.y1 };
+                const scrim = comptime base_widgetRow(U, partName(id, "scrim"));
+                var hits: menu.Hits = .{
+                    .toggle = base.ctResponse(ui, row, event, in).clicked,
+                    .outside = ui.pointer.pressed == @as(U.Events.Widget, @fromBackingInt(scrim)),
+                };
+                inline for (def.items, 0..) |o, k| hits.add(k, base.ctResponse(ui, comptime base_widgetRow(U, partName(id, o)), event, in));
+                ui.signals.set(comptime U.field(field), advance(def, @field(ui.signals.state, field), hits, in.events));
+            }
+
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const tb = &ui.tables;
+                const st: SelectState = @field(ui.signals.state, field);
+                const b = tb.t.push(parent, .hash(id), &valued(buttonStyle(&th, ui.response(next.*, in)), st));
+                tb.t.c.role[b] = @backingInt(a11y.Role.combobox);
+                pushText(tb, b, opts.texts[st.selected], base.labelText(&th));
+                tb.t.seal(b);
+                next.* += comptime @import("../comptime/flatten.zig").count(n);
+            }
+        };
+
+        pub const List = struct {
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const tb = &ui.tables;
+                const t = &tb.t;
+                const st: SelectState = @field(ui.signals.state, field);
+                const k4 = ui.keep(Button).*;
+                const sc = t.push(parent, .hash(partName(id, "scrim")), &popover.scrimStyle(in.viewport));
+                const l = t.push(sc, .hash(partName(id, "panel")), &listStyle(&th, .{ .x0 = k4[0], .y0 = k4[1], .x1 = k4[2], .y1 = k4[3] }));
+                t.c.role[l] = @backingInt(a11y.Role.listbox);
+                inline for (def.items, 0..) |o, k| {
+                    inline for (opts.groups) |g| if (g.at == k) {
+                        const h = t.push(l, .none, &headerStyle(&th));
+                        pushText(tb, h, g.label, headerText(&th));
+                        t.seal(h);
+                    };
+                    const r = t.push(l, .hash(partName(id, o)), &optionStyle(&th, st.menu.active == k, st.selected == k));
+                    t.c.role[r] = @backingInt(a11y.Role.option);
+                    pushText(tb, r, opts.texts[k], base.labelText(&th));
+                    t.seal(r);
+                }
+                t.seal(l);
+                t.seal(sc);
+                next.* += comptime @import("../comptime/flatten.zig").count(n);
+            }
+        };
+    };
+}
+
+fn base_widgetRow(comptime Ui: type, comptime name: []const u8) u32 {
+    return @backingInt(@field(Ui.Events.Widget, name));
+}
+
+/// A text leaf as `Frame.text` makes it, under tree row `parent` of the tables `tb`.
+fn pushText(tb: anytype, parent: u32, str: []const u8, ts: types.TextStyle) void {
+    const i = tb.t.push(parent, .none, &.{ .role = .label });
+    tb.t.c.text[i] = tb.tx.push(i, tb.strings.add(str), &ts);
+    tb.t.seal(i);
 }
 
 // ---- example page, replay and golden frames ---------------------------------------------------
@@ -242,8 +403,8 @@ pub const shape_texts = [_][]const u8{ "Circle", "Square", "Triangle" };
 /// front ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
-        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
-        const page_style: Style = .{ .size = .{ .fill, .fill } };
+        pub const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
+        pub const page_style: Style = .{ .size = .{ .fill, .fill } };
 
         pub const App = struct {
             shape: SelectState = .{},
@@ -510,6 +671,79 @@ test "Select: a combobox named by its caption, valued by its choice, with a list
     try testing.expectEqual(H.hash("Square"), e.c.name_hash[row(e, t, "shape_square")]);
     try testing.expectEqual(a11y.State.bitsOf(.{ .selected = true }), e.c.state[row(e, t, "shape_square")]);
     try testing.expectEqual(@as(u8, 0), e.c.state[row(e, t, "shape_triangle")]);
+}
+
+/// The example page with the select as `ct.select` and `ct.list` in `base.ComptimeUi`, and,
+/// for the group test, `groups` headers among its options; the runtime side is `Example`'s
+/// app, or `listGrouped` with the same groups.
+fn CtPage(comptime groups: []const Group) type {
+    const th: Theme = .default;
+    const E = Example(th);
+    const opts: Options = .{ .texts = &shape_texts, .groups = groups };
+    return struct {
+        pub const App = struct {
+            shape: SelectState = .{},
+
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, E.page_style);
+                _ = f.open(.none, E.toolbar_style);
+                _ = base.label(f, &th, "Shape");
+                _ = button(f, &th, "shape", positional(3), &app.shape, &shape_texts);
+                f.close();
+                listGrouped(f, &th, "shape", positional(3), &app.shape, &shape_texts, groups);
+                f.close();
+            }
+        };
+        pub const State = struct { shape: SelectState = .{} };
+        pub const spec = spec_zig.col(E.page_style, .{
+            spec_zig.row(E.toolbar_style, .{ base.ct.label(th, "Shape"), ct.select(th, .shape, .shape, opts) }),
+            ct.list(th, .shape, .shape, opts),
+        });
+        pub const Ui = base.ComptimeUi(State, spec, th);
+        pub const Run = base.Harness(App, Ui, E.limits);
+    };
+}
+
+fn expectCtReplay(h: anytype, last: u8) !void {
+    const Replay = @import("../core/input.zig").Replay;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    var r: Replay = .{ .src = replay };
+    var open: u32 = 0;
+    while (try r.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| {
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.shape.selected, h.ui.signals.state.shape.selected);
+        try testing.expectEqual(h.app.shape.menu.open, h.ui.signals.state.shape.menu.open);
+        open += @intFromBool(h.app.shape.menu.open);
+    }
+    try testing.expect(open > 0);
+    try testing.expectEqual(last, h.app.shape.selected);
+}
+
+var ct_harness: CtPage(&.{}).Run = .{};
+var ct_grouped: CtPage(&.{ .{ .at = 0, .label = "Round" }, .{ .at = 1, .label = "Angular" } }).Run = .{};
+
+test "ct.select, ct.list: the example replay in base.ComptimeUi gives the runtime select's frames" {
+    // Triangle by keys, then Square by a click; Escape at the end keeps it.
+    try expectCtReplay(&ct_harness, 1);
+}
+
+test "ct.list: group headers sit before their options in both front ends, and the keys pass over them" {
+    // The first header moves the options down: the click at Square's place chooses Circle.
+    try expectCtReplay(&ct_grouped, 0);
+    const h = &ct_grouped;
+    const st: SelectState = .{ .selected = 1, .menu = .{ .open = true, .active = 1 } };
+    h.app.shape = st;
+    h.ui.signals.set(.shape, st);
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try h.frame(&in);
+    const t = (try h.frame(&in)).runtime.tree;
+    // Header "Round", option 0, header "Angular", option 1, option 2: 2 + 2 + 2 + 2 + 2 rows.
+    const panel = t.find(.from("shape_panel"));
+    try testing.expectEqual(panel + 1 + 10, t.c.end[panel]);
+    try testing.expect(t.find(.from("shape_0")) == panel + 3);
 }
 
 test "checkSelect: the state field, the button's text and the options" {
