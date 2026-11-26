@@ -94,6 +94,7 @@ pub const Prop = enum(u8) {
     @"grid-auto-rows",
     @"justify-items",
     @"justify-self",
+    @"caption-side",
     @"text-decoration",
     @"object-fit",
 

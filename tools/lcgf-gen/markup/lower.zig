@@ -1340,6 +1340,11 @@ pub const Lowerer = struct {
         // Tables are grids (engine spec F7): the row groups hand their rows to the table.
         if (std.mem.eql(u8, t, "thead") or std.mem.eql(u8, t, "tbody") or std.mem.eql(u8, t, "tfoot")) return;
         if (std.mem.eql(u8, t, "table")) return l.table(n, parent);
+        // Column sizes: read by `table`.
+        if (std.mem.eql(u8, t, "col") or std.mem.eql(u8, t, "colgroup")) {
+            l.skip[n] = true;
+            return;
+        }
         if (std.mem.eql(u8, t, "tr")) return l.tableRow(n, parent);
         if (isComponent(t)) return l.appComponent(n, parent);
         if (l.widget(n, t, parent)) return l.tooltip(n);
@@ -2011,6 +2016,8 @@ pub const Lowerer = struct {
         // The HTML table algorithm's slots: each cell at the first free column of its row,
         // covering colspan columns and rowspan rows.
         var taken: std.AutoHashMapUnmanaged([2]u32, void) = .empty;
+        var cap_el: u32 = none;
+        var widths: std.ArrayList(lcgf.grid.Track) = .empty;
         var trs: std.ArrayList(u32) = .empty;
         var cells: std.ArrayList(struct { node: u32, row: u32, at: [2]u32, span: [2]u32 }) = .empty;
         var rowspans = false;
@@ -2019,7 +2026,26 @@ pub const Lowerer = struct {
             if (l.doc.nodes.items(.kind)[i] != .element or l.tableOf(i) != n) continue;
             if (l.doc.isElement(i, "template")) l.ds.err(l.loc(i), "a table's rows are static; repeat rows with display: grid and lcgf-each instead", .{});
             if (l.doc.isElement(i, "tr")) ok(trs.append(l.arena, i));
+            if (l.doc.isElement(i, "caption") and cap_el == none) cap_el = i;
+            if (l.doc.isElement(i, "col") or (l.doc.isElement(i, "colgroup") and !l.hasChild(i, "col"))) {
+                if (l.declared(i, .@"background-color")) |v| l.ds.err(v.loc, "only width is lowered on <col> and <colgroup>; style the cells", .{});
+                const width: lcgf.grid.Track = if (l.length(i, .width)) |len| switch (len) {
+                    .px => |v| .px(v),
+                    .auto => .fit,
+                    .pct => blk: {
+                        l.ds.err(l.declared(i, .width).?.loc, "a column width in % is not supported; give px", .{});
+                        break :blk .fit;
+                    },
+                } else .fit;
+                // A <col> in a <colgroup> without a width takes the group's.
+                const p = l.doc.nodes.items(.parent)[i];
+                const group: ?lcgf.grid.Track = if (l.doc.isElement(i, "col") and l.doc.isElement(p, "colgroup") and l.length(i, .width) == null) (if (l.px(p, .width)) |v| lcgf.grid.Track.px(v) else null) else null;
+                for (0..l.cellSpan(i, "span")) |_| ok(widths.append(l.arena, group orelse width));
+            }
         }
+        // The cap_el is the first row, across the columns (cap_el-side: bottom, the last).
+        const bottom = if (cap_el != none) (if (l.keyword(cap_el, .@"caption-side")) |kw| css.eq(kw, "bottom") else false) else false;
+        const first_row: u32 = @intFromBool(cap_el != none and !bottom);
         const rows: u32 = @intCast(trs.items.len);
         var cols: u32 = 0;
         for (trs.items, 0..) |tr, r_| {
@@ -2048,7 +2074,7 @@ pub const Lowerer = struct {
             for (cells.items) |cl| if (cl.row == r) {
                 extent = @max(extent, cl.span[1]);
             };
-            ok(l.rows.put(l.arena, tr, .{ @intCast(r), extent }));
+            ok(l.rows.put(l.arena, tr, .{ @as(u32, @intCast(r)) + first_row, extent }));
         }
         if (rowspans) for (cells.items) |cl| ok(l.slots.put(l.arena, cl.node, .{ .cell = .{ cl.at[0], 0 }, .span = cl.span }));
         var params: []const u8 = "";
@@ -2056,12 +2082,17 @@ pub const Lowerer = struct {
         var st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
         st.role = .table;
         st.dir = .y;
-        var d: lcgf.grid.Decl = .{ .columns = l.padTracks(&.{}, @max(cols, 1)), .rows = l.padTracks(&.{}, rows) };
+        cols = @max(cols, @as(u32, @intCast(widths.items.len)));
+        const row_tracks = rows + @intFromBool(cap_el != none);
+        var d: lcgf.grid.Decl = .{ .columns = l.padTracks(widths.items, @max(cols, 1)), .rows = l.padTracks(&.{}, row_tracks) };
+        if (cap_el != none) ok(l.slots.put(l.arena, cap_el, .{ .cell = .{ 0, if (bottom) rows else 0 }, .span = .{ @max(cols, 1), 1 } }));
         inline for (.{ Prop.@"column-gap", Prop.@"row-gap" }, 0..) |p, a| if (l.px(n, p)) |g| {
             d.gap[a] = g;
         };
         var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = st, .params_expr = params, .margin = margin, .placed = .{ .grid = d } };
         node.name = l.accessibleName(n);
+        // The caption names its table, as HTML-AAM does.
+        if (node.name.len == 0 and cap_el != none) node.name = collapse(l.arena, l.ownText(cap_el));
         l.ir_of[n] = l.addNode(node);
     }
 
@@ -2092,6 +2123,12 @@ pub const Lowerer = struct {
             .placed = .{ .grid = .{ .columns = columns, .rows = l.padTracks(&.{}, tr[1]), .subgrid = .{ true, tr[1] > 1 } }, .cell = .{ .cell = .{ 0, tr[0] }, .span = .{ @intCast(columns.len), tr[1] } } },
             .name = l.accessibleName(n),
         });
+    }
+
+    /// Whether element `n` has a child element `tag`.
+    fn hasChild(l: *const Lowerer, n: u32, tag_: []const u8) bool {
+        for (n + 1..l.k.end[n]) |i| if (l.doc.nodes.items(.parent)[i] == n and l.doc.isElement(@intCast(i), tag_)) return true;
+        return false;
     }
 
     /// A cell's `colspan` or `rowspan`, at least 1.
@@ -2205,6 +2242,9 @@ pub const Lowerer = struct {
             const p = nodes.items(.parent)[i];
             if (p != none and nodes.items(.placed)[p].grid != null) {
                 if (l.gridItem(n, p)) |it| nodes.items(.placed)[i].cell = it;
+                if (l.doc.isElement(n, "caption")) if (l.slots.get(n)) |slot| {
+                    nodes.items(.placed)[i].cell = slot;
+                };
                 const td = l.doc.isElement(n, "td");
                 if (td or l.doc.isElement(n, "th")) {
                     // A table cell: its role, and colspan as its span across the row's columns.

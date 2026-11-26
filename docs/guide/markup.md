@@ -318,8 +318,9 @@ grid that shares the table's columns (`grid.Decl.subgrid`), so the cells line up
 keeps its node. The roles are `table`, `row`, `cell` and `column_header` (`row_header` for
 `<th scope="row">`); `colspan` spans columns, and `rowspan` rows (each row then covers the rows
 its cells reach, so a row's background can extend under the next). `<thead>`, `<tbody>` and `<tfoot>` hand their
-rows to the table. Rows are static: `<caption>`, `<col>` and a template among the rows are
-errors.
+rows to the table. A `<caption>` is the first row (`caption-side: bottom`, the last) and names
+the table; `<col>` and `<colgroup>` set column widths in px. Rows are static: a template among
+the rows is an error.
 
 Lengths are folded to px: `em` and `rem` from the resolved font size, `in`, `cm`, `mm`, `pt` and
 `pc` at 96 px per inch.

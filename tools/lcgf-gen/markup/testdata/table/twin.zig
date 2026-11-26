@@ -10,10 +10,11 @@ const grid = lcgf.grid;
 pub const theme: w.Theme = .{};
 
 /// Accessible names the a11y export must carry (parity.zig).
-pub const names = .{"Channels"};
+pub const names = .{ "Channels", "Routing" };
 
 const cols: []const grid.Track = &.{ .fit, .fit, .fit };
 const row: grid.Decl = .{ .columns = cols, .rows = &.{.fit}, .subgrid = .{ true, false } };
+const routing: []const grid.Track = &.{ .px(60), .fit };
 const pad: [4]f32 = .{ 4, 2, 4, 2 };
 const head: lcgf.types.TextStyle = .{ .color = .rgb(0xc0, 0xc8, 0xd0) };
 
@@ -39,17 +40,19 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         tr(3, .{ .fill = .rgb(0x30, 0x34, 0x40) }, .{ s.cell(td("Two channels"), .{ .span = .{ 2, 1 } }), td("Stereo") }),
     }), "Channels"),
     // A rowspan: the first row covers the two rows its first cell reaches, and every cell
-    // sits at its slot from the table algorithm.
-    s.grid(.{ .pad = @splat(4), .fill = .rgb(0x26, 0x28, 0x2e), .role = .table }, .{ .columns = &.{ .fit, .fit }, .rows = &.{ .fit, .fit, .fit }, .gap = .{ 12, 2 } }, .{
-        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{ .fit, .fit }, .subgrid = .{ true, true } }, .{
+    // sits at its slot from the table algorithm. The caption is the first row and names the
+    // table; <col style="width: 60px"> sizes the first column.
+    s.named(s.grid(.{ .pad = @splat(4), .fill = .rgb(0x26, 0x28, 0x2e), .role = .table }, .{ .columns = routing, .rows = &.{ .fit, .fit, .fit, .fit }, .gap = .{ 12, 2 } }, .{
+        s.cell(label.ct.label(theme, "Routing"), .{ .cell = .{ 0, 0 }, .span = .{ 2, 1 } }),
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = routing, .rows = &.{ .fit, .fit }, .subgrid = .{ true, true } }, .{
             s.cell(td("Bus"), .{ .cell = .{ 0, 0 }, .span = .{ 1, 2 } }),
             s.cell(td("Left"), .{ .cell = .{ 1, 0 } }),
-        }), .{ .cell = .{ 0, 0 }, .span = .{ 2, 2 } }),
-        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
+        }), .{ .cell = .{ 0, 1 }, .span = .{ 2, 2 } }),
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = routing, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
             s.cell(td("Right"), .{ .cell = .{ 1, 0 } }),
-        }), .{ .cell = .{ 0, 1 }, .span = .{ 2, 1 } }),
-        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
-            s.cell(td("Master"), .{ .cell = .{ 0, 0 }, .span = .{ 2, 1 } }),
         }), .{ .cell = .{ 0, 2 }, .span = .{ 2, 1 } }),
-    }),
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = routing, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
+            s.cell(td("Master"), .{ .cell = .{ 0, 0 }, .span = .{ 2, 1 } }),
+        }), .{ .cell = .{ 0, 3 }, .span = .{ 2, 1 } }),
+    }), "Routing"),
 });
