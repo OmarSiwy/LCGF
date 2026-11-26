@@ -107,6 +107,8 @@ const Lower = struct {
         }
         if (n.name.len > 0) return l.refuse(i, "an accessible name (aria-label, a <label> naming a control)", .{});
         if (n.margin != null) return l.refuse(i, "a margin", .{});
+        if (n.placed.grid != null or n.placed.cell != null) return l.refuse(i, "display: grid, a table or columns", .{});
+        if (n.placed.anchor != null or n.placed.sticky != null or n.placed.layer != 0 or n.placed.below != 0) return l.refuse(i, "position: absolute, fixed or sticky, or z-index", .{});
         if (n.uses.len > 0 or n.text_uses.px != ir.none or n.text_uses.color != ir.none) return l.refuse(i, "a run-time theme token", .{});
         if (n.params_expr.len > 0) return l.refuse(i, "a gradient or dashed border", .{});
         switch (n.kind) {
