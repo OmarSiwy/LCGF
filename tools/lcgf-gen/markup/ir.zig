@@ -73,7 +73,9 @@ pub const Kind = enum(u8) {
 };
 
 /// Where a caption's text comes from.
-pub const TextKind = enum(u8) { none, literal, field, format };
+/// `counter`: a list marker inside a run-time region, `text` the Zig expression that formats
+/// it from the copy index (into a `mark` buffer the statement declares).
+pub const TextKind = enum(u8) { none, literal, field, format, counter };
 
 pub const Node = struct {
     kind: Kind,

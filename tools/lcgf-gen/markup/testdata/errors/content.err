@@ -34,3 +34,6 @@ content.html:10:9: error: an outline inside the box (negative width or offset) i
 content.html:24:14: error: list-style-type: armenian is not lowered; use a bullet, a string, none, or decimal, decimal-leading-zero, lower- or upper-alpha, -latin, -roman, or lower-greek
   <ol style="list-style-type: armenian"><li>m</li></ol>
              ^
+content.html:25:44: error: a counter marker in a template other than lcgf-each="x in xs" has no item index (lcgf-max copies share one template); use a bullet or none there
+  <ol><template lcgf-each="n" lcgf-max="3"><li>q</li></template></ol>
+                                           ^

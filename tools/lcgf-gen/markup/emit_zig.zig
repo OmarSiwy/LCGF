@@ -207,6 +207,7 @@ pub const Emit = struct {
             .literal => e.string(text),
             .field => e.print(".{f}", .{std.zig.fmtId(text)}),
             .format => e.string(text),
+            .counter => unreachable, // only in run-time regions
         }
     }
 
@@ -660,6 +661,7 @@ pub const Emit = struct {
             .none => e.write("\"\""),
             .literal, .format => e.string(text),
             .field => e.write(e.stateRef(text)),
+            .counter => e.write(text),
         }
     }
 
@@ -714,6 +716,9 @@ pub const Emit = struct {
                 return "accordion.close(f);";
             },
             .label, .heading, .text => {
+                // A counted list marker formats into a buffer of its own statement.
+                if (n.text_kind == .counter) e.write("{ var mark: [64]u8 = undefined; ");
+                defer if (n.text_kind == .counter) e.write(" }");
                 const plain = n.kind == .label and !styled(n) and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
                 if (plain) {
                     e.print("_ = {s}.label(f, &theme, ", .{e.use("label")});

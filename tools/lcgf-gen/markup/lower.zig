@@ -1033,7 +1033,8 @@ pub const Lowerer = struct {
         const row_: u32 = @intCast(l.page.nodes.len - 1);
         const th = &l.page.theme;
         const ls = lcgf.widgets_label.labelStyle(th);
-        ok(l.page.nodes.append(l.arena, .{ .kind = .label, .parent = row_, .loc = node.loc, .style = ls, .base_style = ls, .text_style = l.text[l.current], .base_text = lcgf.widgets_label.labelText(th), .text_kind = .literal, .text = marker, .text_uses = l.text_tokens[l.current] }));
+        const counted = std.mem.startsWith(u8, marker, "lcgf.text_counters.");
+        ok(l.page.nodes.append(l.arena, .{ .kind = .label, .parent = row_, .loc = node.loc, .style = ls, .base_style = ls, .text_style = l.text[l.current], .base_text = lcgf.widgets_label.labelText(th), .text_kind = if (counted) .counter else .literal, .text = marker, .text_uses = l.text_tokens[l.current] }));
         // The content: the item's flow of its children, or its text, filling the row.
         const box = node.style;
         node.parent = row_;
@@ -1068,9 +1069,22 @@ pub const Lowerer = struct {
             return "";
         };
         const p = l.doc.nodes.items(.parent)[n];
-        if (l.doc.nodes.items(.in_template)[n] or (p != none and l.doc.isElement(p, "template"))) {
-            l.ds.err(l.loc(n), "a counter marker inside a template needs the item's index; use a bullet or none there", .{});
-            return "";
+        if (p != none and l.doc.isElement(p, "template")) {
+            // An item of `lcgf-each="x in xs"`: counted at run time from the copy index, in
+            // the list around the template.
+            const each = l.eachOf(n);
+            if (each == none or l.doc.nodes.items(.parent)[n] != p or l.ir_of[p] != each) {
+                l.ds.err(l.loc(n), "a counter marker in a template other than lcgf-each=\"x in xs\" has no item index (lcgf-max copies share one template); use a bullet or none there", .{});
+                return "";
+            }
+            const list = l.doc.nodes.items(.parent)[p];
+            const reversed = list != none and l.attr(list, "reversed") != null;
+            const start = if (list != none) l.attr(list, "start") else null;
+            const from = if (start) |st| ok(std.fmt.allocPrint(l.arena, "{d}", .{std.fmt.parseInt(i64, std.mem.trim(u8, st, " "), 10) catch 1})) else if (reversed) ok(std.fmt.allocPrint(l.arena, "@as(i64, @intCast(data.{f}.len))", .{std.zig.fmtId(l.page.nodes.items(.bind)[each])})) else "1";
+            const cs = for (counter_styles) |c| {
+                if (std.meta.eql(c[1], style)) break c;
+            } else unreachable;
+            return ok(std.fmt.allocPrint(l.arena, "lcgf.text_counters.format(@as(i64, {s}) {s} @as(i64, @intCast(copy0)), {s}, &mark) catch \"\"", .{ from, if (reversed) "-" else "+", cs[2] }));
         }
         // The item's place among the list's items; a reversed list counts down, by default
         // from its item count (HTML).
@@ -3144,12 +3158,16 @@ pub fn colorExpr(arena: std.mem.Allocator, c: types.Color) []const u8 {
 const counter_styles = blk: {
     const c = lcgf.text_counters;
     const greek = [_][]const u8{ "\u{3B1}", "\u{3B2}", "\u{3B3}", "\u{3B4}", "\u{3B5}", "\u{3B6}", "\u{3B7}", "\u{3B8}", "\u{3B9}", "\u{3BA}", "\u{3BB}", "\u{3BC}", "\u{3BD}", "\u{3BE}", "\u{3BF}", "\u{3C0}", "\u{3C1}", "\u{3C3}", "\u{3C4}", "\u{3C5}", "\u{3C6}", "\u{3C7}", "\u{3C8}", "\u{3C9}" };
-    break :blk [_]struct { []const u8, c.Style }{
-        .{ "decimal", c.decimal },                                    .{ "decimal-leading-zero", c.decimal_leading_zero },
-        .{ "lower-alpha", c.lower_alpha },                            .{ "lower-latin", c.lower_alpha },
-        .{ "upper-alpha", c.upper_alpha },                            .{ "upper-latin", c.upper_alpha },
-        .{ "lower-roman", c.lower_roman },                            .{ "upper-roman", c.upper_roman },
-        .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } } },
+    break :blk [_]struct { []const u8, c.Style, []const u8 }{
+        .{ "decimal", c.decimal, "lcgf.text_counters.decimal" },
+        .{ "decimal-leading-zero", c.decimal_leading_zero, "lcgf.text_counters.decimal_leading_zero" },
+        .{ "lower-alpha", c.lower_alpha, "lcgf.text_counters.lower_alpha" },
+        .{ "lower-latin", c.lower_alpha, "lcgf.text_counters.lower_alpha" },
+        .{ "upper-alpha", c.upper_alpha, "lcgf.text_counters.upper_alpha" },
+        .{ "upper-latin", c.upper_alpha, "lcgf.text_counters.upper_alpha" },
+        .{ "lower-roman", c.lower_roman, "lcgf.text_counters.lower_roman" },
+        .{ "upper-roman", c.upper_roman, "lcgf.text_counters.upper_roman" },
+        .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } }, "lcgf.text_counters.Style{ .system = .{ .alphabetic = &.{ \"\\u{3B1}\", \"\\u{3B2}\", \"\\u{3B3}\", \"\\u{3B4}\", \"\\u{3B5}\", \"\\u{3B6}\", \"\\u{3B7}\", \"\\u{3B8}\", \"\\u{3B9}\", \"\\u{3BA}\", \"\\u{3BB}\", \"\\u{3BC}\", \"\\u{3BD}\", \"\\u{3BE}\", \"\\u{3BF}\", \"\\u{3C0}\", \"\\u{3C1}\", \"\\u{3C3}\", \"\\u{3C4}\", \"\\u{3C5}\", \"\\u{3C6}\", \"\\u{3C7}\", \"\\u{3C8}\", \"\\u{3C9}\" } } }" },
     };
 };
 
