@@ -25,6 +25,8 @@ pub const Kind = enum(u8) {
     /// `spec.heading(level, text)`.
     heading,
     button,
+    /// `<a href>`: `widgets_link.ct.link(theme, id, text)`, activated by click and Enter.
+    link,
     checkbox,
     @"switch",
     toggle,

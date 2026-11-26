@@ -74,7 +74,7 @@
         .{ .kind = "attribute", .name = "bind:value", .applies_to = "select", .status = .mapped, .target = "a widgets_select.SelectState field; on:change gets .selected as a u32", .fixture = "overlays" },
         .{ .kind = "element", .name = "dialog", .status = .mapped, .target = "widgets_dialog.ct.dialog(theme, .id, .open, .{ content }) last in a root over the viewport (F10): modal, Escape closes, Tab stays inside; runtime: dialog.begin/end", .fixture = "overlays" },
         .{ .kind = "attribute", .name = "bind:open", .applies_to = "dialog", .status = .mapped, .target = "the dialog's bool field: shown while true; Escape sets it false; the open attribute makes it start true", .fixture = "overlays" },
-        .{ .kind = "element", .name = "a", .status = .planned, .diagnostic = "<a href> needs the link widget (engine spec F4), not lowered yet", .spec = "F4" },
+        .{ .kind = "element", .name = "a", .status = .mapped, .target = "with href: widgets_link.ct.link(theme, .id, text) w/link:67, activated by click and Enter; on:click gets it, the href is not followed. Without href: text", .fixture = "content", .spec = "F4" },
         .{ .kind = "element", .name = "ul", .status = .planned, .diagnostic = "lists need list roles (engine spec F1), not lowered yet; use <div>", .spec = "F1" },
         .{ .kind = "element", .name = "ol", .status = .planned, .diagnostic = "lists need list roles (engine spec F1), not lowered yet; use <div>", .spec = "F1" },
         .{ .kind = "element", .name = "table", .status = .planned, .diagnostic = "tables need grid layout (engine spec F7), not lowered yet", .spec = "F7" },
@@ -256,5 +256,6 @@
         .{ .name = "paragraphs" },
         .{ .name = "components", .spec_only = true, .app = true, .wrong_apps = .{ "wrong", "missing" } },
         .{ .name = "themed", .spec_only = true, .app = true, .runtime_vars = "t-" },
+        .{ .name = "content" },
     },
 }

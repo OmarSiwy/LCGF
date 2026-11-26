@@ -1919,6 +1919,10 @@ pub const Lowerer = struct {
             l.skip[n] = true;
             return true;
         }
+        if (std.mem.eql(u8, t, "a") and l.attr(n, "href") != null) {
+            l.link(n, parent);
+            return true;
+        }
         if (std.mem.eql(u8, t, "textarea")) return l.textInput(n, parent, .textarea);
         if (std.mem.eql(u8, t, "select")) return l.selectWidget(n, parent);
         if (std.mem.eql(u8, t, "dialog")) return l.dialog(n, parent);
@@ -2012,6 +2016,32 @@ pub const Lowerer = struct {
         node.base_text = lcgf.widgets_label.labelText(&th);
         l.handlers(n, node.id, "", null);
         l.skip[n] = true; // its text is the caption
+        l.ir_of[n] = l.addNode(node);
+    }
+
+    /// `<a href>`: a link (engine spec F4). The href is not followed; the page reports the
+    /// activation to its on:click handler, which acts on it.
+    fn link(l: *Lowerer, n: u32, parent: u32) void {
+        const th = l.page.theme;
+        var node: ir.Node = .{ .kind = .link, .parent = parent, .loc = l.loc(n) };
+        if (l.content(n).elements > 0) {
+            l.ds.err(l.loc(n), "a link shows one literal or one field; its content cannot hold elements", .{});
+            l.skip[n] = true;
+            return;
+        }
+        l.caption(&node, collapse(l.arena, l.ownText(n)), l.loc(n));
+        if (node.text_kind == .format) {
+            l.ds.err(l.loc(n), "a link shows one literal or one field; give the formatted text its own field", .{});
+            return;
+        }
+        node.kind = .link;
+        node.id = l.widgetId(n, "", "<a href>") orelse {
+            l.skip[n] = true;
+            return;
+        };
+        l.widgetStyle(n, parent, lcgf.widgets_link.linkStyle(&th), &node);
+        l.handlers(n, node.id, "", null);
+        l.skip[n] = true; // its text is the link's
         l.ir_of[n] = l.addNode(node);
     }
 

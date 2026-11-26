@@ -291,8 +291,8 @@ pub const Emit = struct {
                 e.caption(n.text_kind, n.text);
                 e.write(")");
             },
-            .button => {
-                e.print("{s}.ct.button(theme, .{f}, ", .{ e.use("button"), std.zig.fmtId(n.id) });
+            .button, .link => {
+                e.print("{s}.ct.{s}(theme, .{f}, ", .{ e.use(@tagName(n.kind)), @tagName(n.kind), std.zig.fmtId(n.id) });
                 e.caption(n.text_kind, n.text);
                 e.write(")");
             },
@@ -701,9 +701,9 @@ pub const Emit = struct {
                 if (n.paragraph) |pa| e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(pa)});
                 return "";
             },
-            .button => {
+            .button, .link => {
                 const h = e.clickHandler(n.id);
-                e.print("{s}{s}.button(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use("button"), e.rtId(n.id, list_depth) });
+                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), @tagName(n.kind), e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
