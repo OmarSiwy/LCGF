@@ -36,6 +36,10 @@ const Mono = @import("../text/protocol.zig").Mono;
 const Texts = @import("../core/texts.zig").Texts;
 const plan = @import("plan.zig");
 const geometry = @import("../draw/geometry.zig");
+const dynamic = @import("../comptime/dynamic.zig");
+const ct_layout = @import("../comptime/layout.zig");
+const ct_paint = @import("../comptime/paint.zig");
+const Span = @import("../core/strings.zig").Span;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Id = types.Id;
@@ -46,7 +50,7 @@ const Extra = tree.Extra;
 pub const none = types.none;
 
 pub const magic: u32 = 0x5443_434C; // "LCCT"
-pub const version: u32 = 1;
+pub const version: u32 = 2;
 /// Lanes every column is padded for: the widest build reads them too.
 pub const pad_lanes = 16;
 /// Bytes of label text one frame holds, by default.
@@ -197,7 +201,15 @@ pub const Header = extern struct {
     batch_count: u32 = 0,
     batch_key: u32 = 0,
     label_plans: u32 = 0,
+    /// `full.xlen` f32 and [4]f32: each extras row's inherited opacity and clip radii
+    /// (`tables.inherit`), for the labels' runs.
+    alpha: u32 = 0,
+    clip_radii: u32 = 0,
 };
+
+/// One segment of a label's format (src/core/fmt.zig's `Seg`), its argument the field's byte
+/// offset in the state.
+pub const Seg = extern struct { kind: fmt.Kind, prec: u8, _pad: u16 = 0, arg: u32, start: u32, len: u32 };
 
 /// FNV-1a of every type the words carry and of the column list: lcgf.h's `LCGF_CT_LAYOUT`.
 pub const layout_hash: u32 = blk: {
@@ -209,7 +221,7 @@ pub const layout_hash: u32 = blk: {
         h.update(std.mem.asBytes(&c.axis));
         h.update(std.mem.asBytes(&c.size));
     }
-    h.update(std.mem.asBytes(&plan.layoutHashOf(.{ Header, Block, Region, Extra, tree.Look, Quad, tables.Label, draw_list.TextRun })));
+    h.update(std.mem.asBytes(&plan.layoutHashOf(.{ Header, Block, Region, Seg, Extra, tree.Look, Quad, tables.Label, draw_list.TextRun })));
     break :blk h.final();
 };
 
@@ -486,7 +498,7 @@ pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u
     var labels: std.ArrayList(u32) = .empty;
     var offsets: std.ArrayList(u32) = .empty;
     var label_formats: std.ArrayList([4]u32) = .empty;
-    var segs: std.ArrayList([4]u32) = .empty;
+    var segs: std.ArrayList(Seg) = .empty;
     var format_text: std.ArrayList(u8) = .empty;
     const volatile_rows = try arena.alloc(bool, n);
     @memset(volatile_rows, false);
@@ -505,7 +517,7 @@ pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u
                     if (plan.argKind(field.type) != g.kind) return error.BadLabel;
                     off = field.offset;
                 }
-                try segs.append(arena, .{ @as(u32, @backingInt(g.kind)) | (@as(u32, g.prec) << 8), off, g.start, g.len });
+                try segs.append(arena, .{ .kind = g.kind, .prec = g.prec, .arg = off, .start = g.start, .len = g.len });
             }
             try format_text.appendSlice(arena, f.text);
         } else if (nd.label_field != none) {
@@ -641,6 +653,8 @@ pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u
     h.batch_count = try w.section(std.mem.sliceAsBytes(bcount[0..nb]));
     h.batch_key = try w.section(std.mem.sliceAsBytes(bkey[0..nb]));
     h.label_plans = try w.section(std.mem.sliceAsBytes(plans));
+    h.alpha = try w.section(std.mem.sliceAsBytes(alpha));
+    h.clip_radii = try w.section(std.mem.sliceAsBytes(clip_radii));
 
     // Each field's dirty span: the labels showing it, through their relayout boundaries.
     const bounds = try arena.alloc(u32, L.len);
@@ -687,11 +701,11 @@ fn reference(arena: std.mem.Allocator, words: []const u32, h: *const Header, tex
     var carver: mem.Carver = .{ .buf = buf };
     var run = Run.carve(&carver, words, h, &h.full);
     var tx = Run.carveTexts(&carver, h.labels);
-    const spans = try arena.alloc([2]u32, h.labels);
-    @memset(spans, .{ 0, 0 });
+    const spans = try arena.alloc(Span, h.labels);
+    @memset(spans, .{ .start = 0, .bytes = 0 });
     const sel = try arena.alloc(Select, h.regions);
     @memset(sel, .{});
-    run.passes(&tx, spans, sel, .{ 1000, 1000 }, text);
+    if (text) run.passes(&tx, spans, sel, .{ 1000, 1000 }, Mono{}) else run.passes(&tx, spans, sel, .{ 1000, 1000 }, {});
     var out: Reference = undefined;
     for (0..2) |a| {
         out.pos[a] = try arena.dupe(f32, run.v.c.pos[a][0..h.full.n]);
@@ -701,19 +715,13 @@ fn reference(arena: std.mem.Allocator, words: []const u32, h: *const Header, tex
 }
 
 // ---- the frame ---------------------------------------------------------------------------------
+//
+// The frame is the comptime pipeline's (src/comptime/layout.zig `passesOver`, `expandOver`,
+// `slotSourcesOver`; src/comptime/paint.zig `emitLiveTextOver`, `VisibleRows`), over tables
+// read from the words instead of folded constants: `Run` and `Ui` are its table sources.
 
 /// One region's selection this frame (ct_dynamic.Select).
-pub const Select = struct { n: u32 = 0, first: u32 = 0, offset: f32 = 0 };
-
-/// ct_dynamic's `selectWindow`: the live copies of a windowed list scrolled `scroll` px.
-fn selectWindow(count: u32, visible: u32, height: f32, scroll: f32) Select {
-    const h: f64 = height;
-    const max_scroll = @as(f64, @floatFromInt(count -| visible)) * h;
-    const px = @min(@max(@as(f64, scroll), 0), max_scroll);
-    const first: u32 = @intFromFloat(@floor(px / h));
-    const offset: f32 = @floatCast(px - @as(f64, @floatFromInt(first)) * h);
-    return .{ .first = first, .offset = offset, .n = @min(count - first, visible + @intFromBool(offset > 0)) };
-}
+pub const Select = dynamic.Select;
 
 /// What the tier-0 passes take as their tree: constant columns in the words, written ones in
 /// the caller's buffer (ct_layout.Plain's `View` with a run-time row count).
@@ -723,7 +731,7 @@ const View = struct {
     x: struct { row: []const Extra },
 };
 
-/// One block over its words and its share of the buffer.
+/// One block over its words and its share of the buffer: the table source of `passesOver`.
 const Run = struct {
     v: View,
     sense: []const u8,
@@ -735,9 +743,11 @@ const Run = struct {
     scroll_src: [2][]const f32,
     /// This frame's live mask, one word per row (ct_dynamic.Regions.mask).
     mask: []u32,
+    live: bool,
+    windows: bool,
     root_when: bool,
 
-    fn carve(carver: *mem.Carver, words: []const u32, h: *const Header, b: *const Block) Run {
+    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header, b: *const Block) Run {
         const n = b.n;
         const rows = rowsMax(n);
         const offs: *const [column_arrays.len]u32 = @ptrCast(words[b.cols..][0..column_arrays.len]);
@@ -753,6 +763,8 @@ const Run = struct {
             .flow_src = if (live) at(f32, words, b.flow_src, rows) else &.{},
             .scroll_src = if (windows) .{ at(f32, words, b.scroll_src[0], rows), at(f32, words, b.scroll_src[1], rows) } else .{ &.{}, &.{} },
             .mask = carver.slice(u32, if (live) rows else 0),
+            .live = live,
+            .windows = windows,
             .root_when = h.root_when != 0,
         };
         inline for (column_arrays, 0..) |c, k| {
@@ -775,95 +787,31 @@ const Run = struct {
         return .{ .len = @intCast(labels), .cap = cap, .c = carver.columns(Texts.Columns, rowsMax(cap)) };
     }
 
-    /// The live mask of `sel` (ct_dynamic.Regions.mask): rows outside every region live, a row
-    /// inside regions live when each of them keeps it.
-    fn liveMask(r: *Run, sel: []const Select) void {
-        const rows = simd.rows(r.v.len);
-        const m = r.mask[0..rows];
-        @memset(m, ~@as(u32, 0));
+    /// The live mask of `sel` (ct_dynamic.Regions.mask).
+    inline fn liveMask(r: *Run, sel: []const Select) void {
+        @memset(r.mask[0..simd.rows(r.v.len)], ~@as(u32, 0));
         for (r.regions, sel) |g, s| {
             const kind: RegionKind = @fromBackingInt(@intCast(g.kind));
-            const first = if (kind == .when) g.row else g.row + 1;
-            var lo: u32 = first;
-            var len: u32 = undefined;
-            switch (kind) {
-                .list => len = @min(s.n, g.max) * g.stride,
-                .when => len = @min(s.n, 1) * (g.end - g.row),
-                .choice => {
-                    const win = at([2]u32, r.words, g.alts, g.max + 1)[@min(s.n, g.max)];
-                    lo = win[0];
-                    len = win[1];
-                },
+            const k: spec_zig.RegionKind = switch (kind) {
+                .list => .list,
+                .when => .when,
+                .choice => .choice,
                 .none => unreachable,
-            }
-            for (first..g.end) |j| m[j] &= 0 -% @as(u32, @intFromBool(@as(u32, @intCast(j)) -% lo < len));
+            };
+            dynamic.maskRegion(r.mask, k, g.row, g.end, g.stride, g.max, at([2]u32, r.words, g.alts, g.max + 1), s);
         }
     }
 
+    pub fn setScroll(r: *const Run, c: anytype, sel: []const Select) void {
+        for (r.regions, sel) |g, s| if (g.scroll_offset != none) {
+            c.scroll[1][g.row] = s.offset;
+        };
+    }
+
     /// `Plain.passesLiveText`: every pass but finalize.
-    fn passes(r: *Run, tx: *Texts, spans: []const [2]u32, sel: []const Select, viewport: [2]f32, text: bool) void {
-        const c = &r.v.c;
-        const n = r.v.len;
-        // The rows this build's lanes reach, as Plain's scratch has them.
-        const rows = simd.rows(n);
-        @memcpy(c.sense[0..rows], r.sense[0..rows]);
-        const measure = text and r.label_rows.len > 0;
-        if (measure) {
-            const ts: TextStyle = .{};
-            for (r.label_rows, spans, 0..) |row, sp, k| {
-                tx.c.node[k] = row;
-                tx.c.start[k] = sp[0];
-                tx.c.bytes[k] = sp[1];
-                tx.c.px[k] = ts.px;
-                tx.c.color[k] = ts.color.bitsOf();
-                tx.c.font[k] = @backingInt(ts.font);
-                tx.c.wrap[k] = @floatFromInt(@intFromBool(ts.wrap));
-                tx.c.w[k] = 0;
-                tx.c.h[k] = 0;
-                tx.c.avail[k] = 0;
-            }
-            (Mono{}).measure(tx);
-        }
-        if (r.regions.len > 0) {
-            // `applyMask`: a dead row gets `max` 0 on both axes, `flow` 0 and `sense` 0, and
-            // `nkids` counts in-flow live children only.
-            r.liveMask(sel);
-            const m = r.mask;
-            for (0..rows) |i| {
-                inline for (0..2) |a| c.max[a][i] = @bitCast(@as(u32, @bitCast(r.max_src[a][i])) & m[i]);
-                c.flow[i] = @bitCast(@as(u32, @bitCast(r.flow_src[i])) & m[i]);
-                c.sense[i] &= @truncate(m[i]);
-            }
-            @memset(c.nkids[0..rows], 0);
-            for (1..n) |j| c.nkids[c.parent[j]] += c.flow[j];
-            if (r.scroll_src[0].len > 0) {
-                inline for (0..2) |a| @memcpy(c.scroll[a][0..rows], r.scroll_src[a][0..rows]);
-                for (r.regions, sel) |g, s| if (g.scroll_offset != none) {
-                    c.scroll[1][g.row] = s.offset;
-                };
-            }
-            layout.prepare(&r.v);
-        } else {
-            // `clear`: the accumulators fit, resolve and place add into.
-            inline for (0..2) |a| {
-                @memset(c.fit[a][0..rows], 0);
-                @memset(c.grow_sum[a][0..rows], 0);
-                @memset(c.used[a][0..rows], 0);
-            }
-            @memset(c.cursor[0..rows], 0);
-        }
-        // resolve assigns the viewport directly to the root, bypassing its masked maximum.
-        const shown = if (r.root_when) sel[0].n != 0 else true;
-        const wrap = comptime (TextStyle{}).wrap;
-        if (measure) layout.applyText(&r.v, tx, .x);
-        layout.fit(&r.v, .x);
-        layout.resolve(&r.v, .x, simd.selF(shown, viewport[0], 0));
-        if (measure and wrap) layout.textAvail(&r.v, tx);
-        if (measure and wrap) (Mono{}).wrap(tx);
-        if (measure) layout.applyText(&r.v, tx, .y);
-        layout.fit(&r.v, .y);
-        layout.resolve(&r.v, .y, simd.selF(shown, viewport[1], 0));
-        layout.place(&r.v);
+    inline fn passes(r: *Run, tx: *Texts, spans: []const Span, sel: []const Select, viewport: [2]f32, font: anytype) void {
+        if (r.live) r.liveMask(sel);
+        ct_layout.passesOver(r, &r.v, tx, spans, sel, r.mask, viewport, font);
     }
 };
 
@@ -872,19 +820,57 @@ fn at(comptime T: type, words: []const u32, off: u32, n: usize) []const T {
     return p[0..n];
 }
 
-/// A static UI, placed at the start of the caller's buffer by `init`.
+/// The arguments of a formatted label: fields of the state as C lays it out, by byte offset.
+const CArgs = struct {
+    state: [*]const u8,
+
+    pub fn str(a: CArgs, off: u32) []const u8 {
+        const s: *align(1) const [2]usize = @ptrCast(a.state + off);
+        return if (s[1] > 0) @as([*]const u8, @ptrFromInt(s[0]))[0..s[1]] else "";
+    }
+    pub fn boolean(a: CArgs, off: u32) bool {
+        return a.state[off] != 0;
+    }
+    pub fn uint(a: CArgs, off: u32) u64 {
+        return std.mem.readInt(u32, (a.state + off)[0..4], .little);
+    }
+    pub fn byte(a: CArgs, off: u32) u64 {
+        return a.state[off];
+    }
+    pub fn float(a: CArgs, off: u32) f32 {
+        return @bitCast(std.mem.readInt(u32, (a.state + off)[0..4], .little));
+    }
+};
+
+/// A static UI, placed at the start of the caller's buffer by `init`. It is also the table
+/// source of `emitLiveTextOver`: the paint tables and, for row `i`, what comptime paint reads
+/// from its constant columns (a static UI has no paint reference, outset, transform or partial
+/// participation: `make` refuses them).
 pub const Ui = struct {
     words: []const u32,
     h: *const Header,
     full: Run,
     skel: Run,
     tx: Texts,
-    spans: [][2]u32,
+    spans: []Span,
     strings: []u8,
     sel: []Select,
     /// Each slot's live row this frame (ct_layout's `slot_source`), when slots are shared.
     slot_source: []u32,
     d: DrawList,
+    quad_count: u32,
+    label_count: u32,
+    batch_count: u32,
+    node: []const u32,
+    clip_node: []const u32,
+    templates: []const Quad,
+    keys: []const u32,
+    label_plans: []const tables.Label,
+    batch_first: []const u32,
+    batch_counts: []const u32,
+    batch_key: []const u32,
+    alpha: []const f32,
+    clip_radii: []const [4]f32,
 
     pub const InitError = error{ NotTables, Version, LayoutHash, Truncated, BufferTooSmall, Unaligned };
 
@@ -900,20 +886,35 @@ pub const Ui = struct {
         return h;
     }
 
-    fn carve(carver: *mem.Carver, words: []const u32, h: *const Header) Ui {
+    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header) Ui {
         const full = Run.carve(carver, words, h, &h.full);
         const skel = if (h.folded > 0) Run.carve(carver, words, h, &h.skel) else full;
+        const m = h.quads;
+        const nb = h.batches;
         return .{
             .words = words,
             .h = h,
             .full = full,
             .skel = skel,
             .tx = Run.carveTexts(carver, h.labels),
-            .spans = carver.slice([2]u32, @max(h.labels, 1)),
+            .spans = carver.slice(Span, @max(h.labels, 1)),
             .strings = carver.slice(u8, h.string_cap),
             .sel = carver.slice(Select, h.regions),
             .slot_source = carver.slice(u32, if (h.slot_count != h.full.n) h.slot_count else 0),
             .d = DrawList.init(carver, h.quads, h.labels, 0),
+            .quad_count = m,
+            .label_count = h.labels,
+            .batch_count = nb,
+            .node = at(u32, words, h.paint_node, m),
+            .clip_node = at(u32, words, h.clip_node, m),
+            .templates = at(Quad, words, h.templates, m),
+            .keys = at(u32, words, h.keys, m),
+            .label_plans = at(tables.Label, words, h.label_plans, h.labels),
+            .batch_first = at(u32, words, h.batch_first, nb),
+            .batch_counts = at(u32, words, h.batch_count, nb),
+            .batch_key = at(u32, words, h.batch_key, nb),
+            .alpha = at(f32, words, h.alpha, h.full.xlen),
+            .clip_radii = at([4]f32, words, h.clip_radii, h.full.xlen),
         };
     }
 
@@ -944,13 +945,9 @@ pub const Ui = struct {
         return at(T, ui.words, off, n);
     }
 
-    fn getBytes(ui: *const Ui, off: u32, n: usize) []const u8 {
-        return std.mem.sliceAsBytes(ui.words[off..])[0..n];
-    }
-
     /// ct_dynamic.Regions.select: each region's selector field as a number (`state` laid out
     /// as `plan.layoutState` says), a windowed list's live copies from its scroll field.
-    fn select(ui: *Ui, state: [*]const u8) void {
+    inline fn select(ui: *Ui, state: [*]const u8) void {
         for (ui.full.regions, ui.sel) |g, *s| {
             const p = state + g.field_offset;
             const v: u32 = switch (@as(plan.FieldType, @fromBackingInt(@intCast(g.field_type)))) {
@@ -959,7 +956,7 @@ pub const Ui = struct {
                 else => 0,
             };
             s.* = if (g.scroll_offset != none)
-                selectWindow(v, g.max - 1, g.height, @bitCast(std.mem.readInt(u32, (state + g.scroll_offset)[0..4], .little)))
+                dynamic.selectWindow(v, g.max - 1, g.height, @bitCast(std.mem.readInt(u32, (state + g.scroll_offset)[0..4], .little)))
             else
                 .{ .n = v };
         }
@@ -968,91 +965,57 @@ pub const Ui = struct {
     /// One frame: the labels' text and the regions' selectors from `state`, laid out in a
     /// `viewport`-sized area and painted. The draw list is read in place until the next frame.
     pub fn frame(ui: *Ui, state: [*]const u8, viewport: [2]f32) *const DrawList {
+        frameOn(ui, state, viewport);
+        return &ui.d;
+    }
+
+    inline fn frameOn(ui: *Ui, state: [*]const u8, viewport: [2]f32) void {
         const h = ui.h;
         // The labels' text, gathered into the frame's strings in label order.
-        var at_: u32 = 0;
+        var used: u32 = 0;
+        const args: CArgs = .{ .state = state };
         for (ui.get(u32, h.label_offsets, h.labels), ui.get([4]u32, h.label_formats, h.labels), ui.spans[0..h.labels]) |off, lf, *sp| {
-            var sink: fmt.Sink = .{ .buf = ui.strings[at_..] };
+            var sink: fmt.Sink = .{ .buf = ui.strings[used..] };
             if (lf[0] == none) {
-                const s: *align(1) const [2]usize = @ptrCast(state + off);
-                if (s[1] > 0) sink.put(@as([*]const u8, @ptrFromInt(s[0]))[0..s[1]]);
+                sink.put(args.str(off));
             } else {
-                const text = ui.getBytes(h.format_text, h.format_bytes)[lf[2]..][0..lf[3]];
-                for (ui.get([4]u32, h.segs, h.seg_count)[lf[0]..][0..lf[1]]) |g| {
-                    const p = state + g[1];
-                    switch (@as(fmt.Kind, @fromBackingInt(@as(u8, @truncate(g[0]))))) {
-                        .literal => sink.put(text[g[2]..][0..g[3]]),
-                        .str => {
-                            const s: *align(1) const [2]usize = @ptrCast(p);
-                            if (s[1] > 0) sink.put(@as([*]const u8, @ptrFromInt(s[0]))[0..s[1]]);
-                        },
-                        .bool => sink.putBool(p[0] != 0),
-                        .u32 => sink.putUint(std.mem.readInt(u32, p[0..4], .little)),
-                        .u8 => sink.putUint(p[0]),
-                        .f32 => sink.putF32(@bitCast(std.mem.readInt(u32, p[0..4], .little)), @truncate(g[0] >> 8)),
-                    }
-                }
+                const text = std.mem.sliceAsBytes(ui.words[h.format_text..])[lf[2]..][0..lf[3]];
+                fmt.write(ui.get(Seg, h.segs, h.seg_count)[lf[0]..][0..lf[1]], text, args, &sink);
             }
-            sp.* = .{ at_, @intCast(sink.len) };
-            at_ += @intCast(sink.len);
+            sp.* = .{ .start = used, .bytes = @intCast(sink.len) };
+            used += @intCast(sink.len);
         }
         ui.select(state);
         const spans = ui.spans[0..h.labels];
         const n = h.full.n;
         const full = &ui.full;
         if (h.folded == 0) {
-            full.passes(&ui.tx, spans, ui.sel, viewport, true);
+            full.passes(&ui.tx, spans, ui.sel, viewport, Mono{});
         } else {
-            ui.skel.passes(&ui.tx, spans, ui.sel, viewport, true);
-            const sk = &ui.skel.v.c;
-            const base = ui.get(u32, h.expand[0], n);
+            ui.skel.passes(&ui.tx, spans, ui.sel, viewport, Mono{});
             const rel = [2][]const f32{ ui.get(f32, h.expand[1], n), ui.get(f32, h.expand[2], n) };
             const size = [2][]const f32{ ui.get(f32, h.expand[3], n), ui.get(f32, h.expand[4], n) };
-            const keep = ui.get(f32, h.expand[5], n);
+            ct_layout.expandOver(n, ui.get(u32, h.expand[0], n), rel, size, ui.get(f32, h.expand[5], n), &ui.skel.v.c, &full.v.c);
             const c = &full.v.c;
-            for (0..n) |j| {
-                const b = base[j];
-                inline for (0..2) |a| {
-                    c.pos[a][j] = sk.pos[a][b] + rel[a][j];
-                    c.size[a][j] = sk.size[a][b] * keep[j] + size[a][j];
-                }
-            }
             @memcpy(c.sense[0..simd.rows(n)], full.sense[0..simd.rows(n)]);
             if (h.regions > 0) {
                 full.liveMask(ui.sel);
                 for (c.sense[0..simd.rows(n)], full.mask[0..simd.rows(n)]) |*x, k| x.* &= @truncate(k);
             }
         }
-        // `setSlotSources`: each shared slot shows its live row, else its default.
-        if (ui.slot_source.len > 0) {
-            @memcpy(ui.slot_source, ui.get(u32, h.slot_defaults, h.slot_count));
-            for (ui.get(u32, h.slots, n), full.mask[0..n], 0..) |slot, live, i| {
-                ui.slot_source[slot] = simd.selU(live != 0, @intCast(i), ui.slot_source[slot]);
-            }
-        }
-        layout.finalize(&full.v);
-        ui.paint(ui.strings[0..at_]);
+        if (ui.slot_source.len > 0) ct_layout.slotSourcesOver(ui.slot_source, ui.get(u32, h.slot_defaults, h.slot_count), ui.get(u32, h.slots, n), full.mask);
+        @call(layout.pass_call, layout.finalize, .{&full.v});
+        ct_paint.emitLiveTextOver(ui, {}, full.mask, spans, ui.strings[0..used], &ui.d);
         ui.patchAll(state);
-        return &ui.d;
     }
 
     /// The bound colours' rgb into their quads (ct_paint.Patches.apply for every field), the
     /// alpha the quad's style gave kept. A template whose quad is not drawn this frame is skipped.
-    fn patchAll(ui: *Ui, state: [*]const u8) void {
+    inline fn patchAll(ui: *Ui, state: [*]const u8) void {
         const h = ui.h;
-        if (h.patch_count == 0) return;
-        const all = ui.d.quad_len == h.quads;
-        var cursor: u32 = 0;
-        var seen: u32 = 0;
+        var rows: ct_paint.VisibleRows = .{};
         for (ui.get([4]u32, h.patches, h.patch_count)) |p| {
-            const k = p[1];
-            var row = k;
-            if (!all) {
-                for (cursor..k) |j| seen += ui.shown(j);
-                cursor = k;
-                if (ui.shown(k) == 0) continue;
-                row = seen;
-            }
+            const row = rows.of(ui, {}, &ui.d, p[1]) orelse continue;
             const bits = std.mem.readInt(u32, state[p[3]..][0..4], .little) & 0xffffff;
             const q = &ui.d.quads[row];
             if (p[2] == 0) q.fill = (q.fill & 0xff000000) | bits else q.border_color = (q.border_color & 0xff000000) | bits;
@@ -1069,7 +1032,7 @@ pub const Ui = struct {
     }
 
     /// Rect of row i as the comptime UI keeps it: in its coordinate type.
-    inline fn rectOf(ui: *const Ui, i: u32) V4 {
+    pub inline fn rectOf(ui: *const Ui, _: void, i: u32) V4 {
         const c = &ui.full.v.c;
         const g = ui.geometryRow(i);
         var r: V4 = .{ c.rect[0][g], c.rect[1][g], c.rect[2][g], c.rect[3][g] };
@@ -1081,101 +1044,43 @@ pub const Ui = struct {
         return r;
     }
 
-    inline fn clipOf(ui: *const Ui, i: u32) [4]f32 {
+    pub inline fn clipOf(ui: *const Ui, _: void, i: u32) [4]f32 {
         if (ui.h.has_child_clip == 0) return @as(V4, @splat(-std.math.inf(f32))) * sign;
         return @as(V4, ui.full.v.c.child_clip[ui.geometryRow(i)]) * sign;
     }
 
-    /// Whether template k paints this frame: comptime paint's `quadVisible` for the rows a
-    /// static UI keeps (no transform, reference, outset or partial participation).
-    inline fn shown(ui: *const Ui, k: usize) u32 {
-        const h = ui.h;
-        const i = ui.get(u32, h.paint_node, h.quads)[k];
-        const q = ui.get(Quad, h.templates, h.quads)[k];
-        const clip = ui.clipOf(ui.get(u32, h.clip_node, h.quads)[k]);
-        const present = if (h.regions != 0) ui.full.v.c.visible[i] else 1;
-        return present & @intFromBool(geometry.hasArea(geometry.paintBounds(ui.rectOf(i), q.params, .{ 1, 0, 0, 1, 0, 0 }, clip)));
+    pub inline fn sourceOf(_: *const Ui, i: u32) u32 {
+        return i;
     }
-
-    const Cursor = struct { quad: u32 = 0, op: u32 = 0 };
-
-    fn emitQuads(ui: *Ui, first: usize, end: usize, cursor: *Cursor) void {
-        const h = ui.h;
-        const m = h.quads;
-        const node = ui.get(u32, h.paint_node, m);
-        const clip_node = ui.get(u32, h.clip_node, m);
-        const templates = ui.get(Quad, h.templates, m);
-        const keys = ui.get(u32, h.keys, m);
-        const d = &ui.d;
-        for (first..end) |k| {
-            const i = node[k];
-            var quad = templates[k];
-            quad.rect = ui.rectOf(i);
-            quad.clip = ui.clipOf(clip_node[k]);
-            d.quads[cursor.quad] = quad;
-            d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
-            d.op.key[cursor.op] = keys[k];
-            d.op.ref[cursor.op] = cursor.quad;
-            const shown_k = ui.shown(k);
-            cursor.quad += shown_k;
-            cursor.op += shown_k;
-        }
+    pub inline fn outsetOf(_: *const Ui, _: u32) [4]f32 {
+        return @splat(0);
     }
-
-    /// ct_paint's `emit` and `emitLiveText`.
-    fn paint(ui: *Ui, strings: []const u8) void {
-        const h = ui.h;
-        const m = h.quads;
-        const d = &ui.d;
-        var cursor: Cursor = .{};
-        if (h.labels == 0) {
-            ui.emitQuads(0, m, &cursor);
-            d.quad_len = cursor.quad;
-            d.op_len = cursor.op;
-            d.run_len = 0;
-            d.custom_len = 0;
-            if (cursor.quad == m) {
-                const nb = h.batches;
-                @memset(d.cmd.kind[0..nb], @backingInt(DrawList.Kind.quads));
-                @memcpy(d.cmd.first[0..nb], ui.get(u32, h.batch_first, nb));
-                @memcpy(d.cmd.count[0..nb], ui.get(u32, h.batch_count, nb));
-                @memcpy(d.cmd.key[0..nb], ui.get(u32, h.batch_key, nb));
-                d.cmd_len = nb;
-            } else encode(d);
-            d.strings = strings;
-            return;
-        }
-        const style: TextStyle = .{};
-        const visible = ui.full.v.c.visible;
-        // In the folded frame the whole tree's mask was made for sense; unfolded, by the passes.
-        const live = h.regions > 0;
-        var first: u32 = 0;
-        var r: u32 = 0;
-        for (ui.get(tables.Label, h.label_plans, h.labels), ui.spans[0..h.labels]) |label, span| {
-            ui.emitQuads(first, label.quad_end, &cursor);
-            first = label.quad_end;
-            d.runs[r] = .{
-                .rect = ui.rectOf(label.node) + @as(V4, label.padding),
-                .clip = ui.clipOf(label.parent),
-                .start = span[0],
-                .bytes = span[1],
-                .px = style.px,
-                .color = label.color,
-                .font = @backingInt(style.font),
-            };
-            d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
-            d.op.key[cursor.op] = 0;
-            d.op.ref[cursor.op] = r;
-            cursor.op += visible[label.node];
-            r += @intFromBool(!live or ui.full.mask[label.node] != 0);
-        }
-        ui.emitQuads(first, m, &cursor);
-        d.quad_len = cursor.quad;
-        d.op_len = cursor.op;
-        d.run_len = r;
-        d.custom_len = 0;
-        d.strings = strings;
-        encode(d);
+    pub inline fn worldOf(_: *const Ui, _: void, _: u32) [6]f32 {
+        return geometry.identity;
+    }
+    pub inline fn paramsOf(ui: *const Ui, i: u32) [4]f32 {
+        return ui.full.v.c.look[i].params;
+    }
+    pub inline fn parentOf(ui: *const Ui, i: u32) u32 {
+        return ui.full.v.c.parent[i];
+    }
+    pub inline fn presentOf(ui: *const Ui, _: void, i: u32) u32 {
+        return if (ui.h.regions != 0) ui.full.v.c.visible[i] else 1;
+    }
+    pub inline fn visibleOf(ui: *const Ui, _: void, i: u32) u32 {
+        return ui.full.v.c.visible[i];
+    }
+    pub inline fn paintsOf(_: *const Ui, _: u32) u32 {
+        return 1;
+    }
+    pub inline fn alphaOf(ui: *const Ui, i: u32) f32 {
+        return ui.alpha[ui.full.v.c.scope[i]];
+    }
+    pub inline fn clipRadiiOf(ui: *const Ui, i: u32) [4]f32 {
+        return ui.clip_radii[ui.full.v.c.scope[i]];
+    }
+    pub inline fn liveOf(ui: *const Ui, mask: []const u32, i: u32) u32 {
+        return if (ui.h.regions != 0) @intFromBool(mask[i] != 0) else 1;
     }
 };
 
@@ -1236,9 +1141,6 @@ fn cFrame(buf: [*]u8, state: [*]const u8, width: f32, height: f32, out: *seam.CD
 
 const testing = std.testing;
 const examples = @import("../comptime/examples.zig");
-const ct_layout = @import("../comptime/layout.zig");
-const ct_paint = @import("../comptime/paint.zig");
-const Span = @import("../core/strings.zig").Span;
 
 /// Sized controls, for the events gate: the examples' checkboxes and sliders have no size of
 /// their own, so nothing can hit them.

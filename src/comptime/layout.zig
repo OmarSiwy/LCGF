@@ -142,15 +142,15 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
     const info = @typeInfo(RuntimeColumns).@"struct";
     for (C.class) |c| if (c != .dynamic) break else @compileError("every column is dynamic (a custom widget builds its rows at run time): lay it out with the runtime tree");
     const D = dynamic.Regions(spec);
-    const live = D.count > 0;
+    const has_regions = D.count > 0;
     // Columns a frame writes: the dynamic ones but those precomputed below, and `sense`
     // (finalize clears its padding rows). With dynamic regions, also the columns the live mask
     // is ANDed into (`masked`), and `gap_total` again, which then follows the live child count.
     const writes = blk: {
         var w: [info.field_names.len]bool = undefined;
         for (info.field_names, C.class, &w) |name, c, *x|
-            x.* = (c == .dynamic and !(isPrecomputed(name) and !live)) or std.mem.eql(u8, name, "sense") or
-                (live and masked(name)) or (D.has_windows and std.mem.eql(u8, name, "scroll"));
+            x.* = (c == .dynamic and !(isPrecomputed(name) and !has_regions)) or std.mem.eql(u8, name, "sense") or
+                (has_regions and masked(name)) or (D.has_windows and std.mem.eql(u8, name, "scroll"));
         break :blk w;
     };
     const labels = labelRows(spec);
@@ -272,17 +272,6 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             break :blk out;
         };
 
-        /// `prepare` without what is precomputed: clears the accumulators `fit`, `resolve` and
-        /// `place` add into.
-        fn clear(scratch: *Scratch) void {
-            inline for (0..2) |a| {
-                scratch.fit[a] = @splat(0);
-                scratch.grow_sum[a] = @splat(0);
-                scratch.used[a] = @splat(0);
-            }
-            scratch.cursor = @splat(0);
-        }
-
         /// Which optional passes this UI runs, decided while compiling. `text`: measure and
         /// applyText, for a UI with labels. `wrap`: textAvail and the font's wrap, for a UI with
         /// a run that may wrap; labels use the default `TextStyle`, which does not, so no
@@ -300,20 +289,22 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         pub fn texts(scratch: *Scratch, spans: *const [label_count]Span) Texts {
             var tx: Texts = .{ .len = label_count, .cap = @max(label_count, 1), .c = undefined };
             inline for (tx_info.field_names) |name| @field(tx.c, name) = &@field(scratch, "tx_" ++ name);
-            const ts: TextStyle = .{};
-            for (0..label_count) |k| {
-                tx.c.node[k] = label_rows[k];
-                tx.c.start[k] = spans[k].start;
-                tx.c.bytes[k] = spans[k].bytes;
-                tx.c.px[k] = ts.px;
-                tx.c.color[k] = ts.color.bitsOf();
-                tx.c.font[k] = @backingInt(ts.font);
-                tx.c.wrap[k] = @floatFromInt(@intFromBool(ts.wrap));
-                tx.c.w[k] = 0;
-                tx.c.h[k] = 0;
-                tx.c.avail[k] = 0;
-            }
+            fillTexts(&tx, label_rows, spans);
             return tx;
+        }
+
+        // ---- the table source `passesOver` reads ----
+        const live = has_regions;
+        const sense = &C.pushed.c.sense;
+        const max_src = C.pushed.c.max;
+        const flow_src = &C.pushed.c.flow;
+        const scroll_src = C.pushed.c.scroll;
+        const windows = D.has_windows;
+        const root_when = if (spec.region) |r| r.kind == .when else false;
+        fn setScroll(c: anytype, sel: *const D.Selection) void {
+            inline for (D.regions, sel) |region, selected| {
+                if (region.window != null) c.scroll[1][region.row] = selected.offset;
+            }
         }
 
         /// Geometry-only layout. Label extents are zero unless supplied through runText.
@@ -441,59 +432,17 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         }
 
         pub fn passesLiveText(scratch: *Scratch, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void {
-            // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
-            scratch.sense = C.pushed.c.sense;
             var v = view(scratch);
-            const measure = needs.text and @TypeOf(font) != void;
-            var tx: Texts = if (measure) texts(scratch, spans) else undefined;
-            // Passes the UI cannot need are not compiled in (`needs`).
-            if (measure) font.measure(&tx);
-            if (live) {
-                applyMask(scratch, &D.mask(sel));
-                if (D.has_windows) {
-                    scratch.scroll = C.pushed.c.scroll;
-                    inline for (D.regions, sel) |region, selected| {
-                        if (region.window != null) scratch.scroll[1][region.row] = selected.offset;
-                    }
-                }
-                @call(layout.pass_call, layout.prepare, .{&v});
-            } else clear(scratch);
-            // resolve assigns the viewport directly to the root, bypassing its masked maximum.
-            const root_when = if (spec.region) |r| r.kind == .when else false;
-            const shown = if (root_when) sel[0].n != 0 else true;
-            if (measure) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .x });
-            @call(layout.pass_call, layout.fit, .{ &v, .x });
-            @call(layout.pass_call, layout.resolve, .{ &v, .x, simd.selF(shown, viewport[0], 0) });
-            if (measure and needs.wrap) layout.textAvail(&v, &tx);
-            if (measure and needs.wrap) font.wrap(&tx);
-            if (measure) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .y });
-            @call(layout.pass_call, layout.fit, .{ &v, .y });
-            @call(layout.pass_call, layout.resolve, .{ &v, .y, simd.selF(shown, viewport[1], 0) });
-            @call(layout.pass_call, layout.place, .{&v});
-        }
-
-        /// Writes the masked columns from their tables: a dead row (mask 0) gets `max` 0 on both
-        /// axes, `flow` 0 and `sense` 0, and `nkids` counts in-flow live children only. Bit ANDs
-        /// with the mask, no select; `nkids` is a scatter-add over the parent column.
-        fn applyMask(scratch: *Scratch, m: *const D.Mask) void {
-            setSlotSources(scratch, m);
-            const t = &C.pushed.c;
-            for (0..R) |i| {
-                inline for (0..2) |a| scratch.max[a][i] = @bitCast(@as(u32, @bitCast(t.max[a][i])) & m[i]);
-                scratch.flow[i] = @bitCast(@as(u32, @bitCast(t.flow[i])) & m[i]);
-                scratch.sense[i] &= @truncate(m[i]);
-            }
-            scratch.nkids = @splat(0);
-            for (1..n) |j| scratch.nkids[t.parent[j]] += scratch.flow[j];
+            var tx: Texts = .{ .len = label_count, .cap = @max(label_count, 1), .c = undefined };
+            inline for (tx_info.field_names) |name| @field(tx.c, name) = &@field(scratch, "tx_" ++ name);
+            const m = if (live) D.mask(sel) else {};
+            if (live) setSlotSources(scratch, &m);
+            passesOver(@This(), &v, &tx, spans, &sel, &m, viewport, if (needs.text) font else {});
         }
 
         fn setSlotSources(scratch: *Scratch, m: *const D.Mask) void {
             if (C.slot_count == n) return;
-            scratch.slot_source = C.slots.defaults;
-            for (C.slots.by_node, m[0..n], 0..) |slot, live_mask, i| {
-                const src = &scratch.slot_source[slot];
-                src.* = simd.selU(live_mask != 0, @intCast(i), src.*);
-            }
+            slotSourcesOver(&scratch.slot_source, &C.slots.defaults, &C.slots.by_node, m);
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
@@ -555,6 +504,101 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             } else dst.* = src.*;
         }
     };
+}
+
+// ---- the frame over a table source ---------------------------------------------------------------
+
+/// Label k's text run: row `label_rows[k]`, the bytes of `spans[k]` and the default
+/// `TextStyle`, as `Frame.text` would push it; `w`, `h` and `avail` cleared for the font.
+pub inline fn fillTexts(tx: *Texts, label_rows: anytype, spans: anytype) void {
+    const ts: TextStyle = .{};
+    for (0..label_rows.len) |k| {
+        tx.c.node[k] = label_rows[k];
+        tx.c.start[k] = spans[k].start;
+        tx.c.bytes[k] = spans[k].bytes;
+        tx.c.px[k] = ts.px;
+        tx.c.color[k] = ts.color.bitsOf();
+        tx.c.font[k] = @backingInt(ts.font);
+        tx.c.wrap[k] = @floatFromInt(@intFromBool(ts.wrap));
+        tx.c.w[k] = 0;
+        tx.c.h[k] = 0;
+        tx.c.avail[k] = 0;
+    }
+}
+
+/// Every pass but `finalize` over the view `v` of a static UI, `Frame.end`'s sequence: `font`
+/// measures the labels' text (`spans[k]` is label k's bytes; void: none measured), the live
+/// mask `m` of the selection `sel` is applied, then fit, resolve and place on both axes.
+/// `t` is where the constant tables come from: a comptime UI's `Plain` (they fold into its
+/// frame) or the static-UI engine's words (src/abi/ct.zig). It has `sense`, `label_rows`,
+/// `live` and, with it, `max_src` and `flow_src`; `windows` and `scroll_src`, `setScroll`;
+/// `root_when`.
+pub inline fn passesOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, sel: anytype, m: anytype, viewport: [2]f32, font: anytype) void {
+    const c = &v.c;
+    const rows = simd.rows(v.len);
+    // `sense` is constant; finalize clears its padding rows, so it is copied each frame.
+    @memcpy(c.sense[0..rows], t.sense[0..rows]);
+    const measure = @TypeOf(font) != void;
+    if (measure) {
+        fillTexts(tx, t.label_rows, spans);
+        font.measure(tx);
+    }
+    if (t.live) {
+        // `applyMask`: a dead row (mask 0) gets `max` 0 on both axes, `flow` 0 and `sense`
+        // 0, and `nkids` counts in-flow live children only. Bit ANDs with the mask, no
+        // select; `nkids` is a scatter-add over the parent column.
+        for (0..rows) |i| {
+            inline for (0..2) |a| c.max[a][i] = @bitCast(@as(u32, @bitCast(t.max_src[a][i])) & m[i]);
+            c.flow[i] = @bitCast(@as(u32, @bitCast(t.flow_src[i])) & m[i]);
+            c.sense[i] &= @truncate(m[i]);
+        }
+        @memset(c.nkids[0..rows], 0);
+        for (1..v.len) |j| c.nkids[c.parent[j]] += c.flow[j];
+        if (t.windows) {
+            inline for (0..2) |a| @memcpy(c.scroll[a][0..rows], t.scroll_src[a][0..rows]);
+            t.setScroll(c, sel);
+        }
+        @call(layout.pass_call, layout.prepare, .{v});
+    } else {
+        // `prepare` without what is precomputed: clears the accumulators `fit`, `resolve`
+        // and `place` add into.
+        inline for (0..2) |a| {
+            @memset(c.fit[a][0..rows], 0);
+            @memset(c.grow_sum[a][0..rows], 0);
+            @memset(c.used[a][0..rows], 0);
+        }
+        @memset(c.cursor[0..rows], 0);
+    }
+    // resolve assigns the viewport directly to the root, bypassing its masked maximum.
+    const shown = if (t.root_when) sel[0].n != 0 else true;
+    const wrap = measure and (TextStyle{}).wrap;
+    if (measure) @call(layout.pass_call, layout.applyText, .{ v, tx, .x });
+    @call(layout.pass_call, layout.fit, .{ v, .x });
+    @call(layout.pass_call, layout.resolve, .{ v, .x, simd.selF(shown, viewport[0], 0) });
+    if (wrap) layout.textAvail(v, tx);
+    if (wrap) font.wrap(tx);
+    if (measure) @call(layout.pass_call, layout.applyText, .{ v, tx, .y });
+    @call(layout.pass_call, layout.fit, .{ v, .y });
+    @call(layout.pass_call, layout.resolve, .{ v, .y, simd.selF(shown, viewport[1], 0) });
+    @call(layout.pass_call, layout.place, .{v});
+}
+
+/// A folded layout's whole tree from its skeleton's: each row's position is its base row's
+/// plus `rel`, its size the base's times `keep` plus `size` (one select per row, no branch).
+pub inline fn expandOver(n: usize, base: anytype, rel: anytype, size: anytype, keep: anytype, sk: anytype, full: anytype) void {
+    for (0..n) |j| {
+        const b = base[j];
+        inline for (0..2) |a| {
+            full.pos[a][j] = sk.pos[a][b] + rel[a][j];
+            full.size[a][j] = sk.size[a][b] * keep[j] + size[a][j];
+        }
+    }
+}
+
+/// `slot_source`: each shared geometry slot shows its live row this frame, else its default.
+pub inline fn slotSourcesOver(out: anytype, defaults: anytype, by_node: anytype, m: anytype) void {
+    @memcpy(out[0..defaults.len], defaults[0..defaults.len]);
+    for (by_node, 0..) |slot, i| out[slot] = simd.selU(m[i] != 0, @intCast(i), out[slot]);
 }
 
 /// Which rows of a UI fold: `root[j]` is true for a row whose subtree is laid out while
@@ -731,13 +775,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
             S.passesLiveText(&scratch.skel, viewport, sel, spans, font);
             const sk = &scratch.skel;
             const full = &scratch.full;
-            for (0..n) |j| {
-                const b = expand.base[j];
-                inline for (0..2) |a| {
-                    full.pos[a][j] = sk.pos[a][b] + expand.rel[a][j];
-                    full.size[a][j] = sk.size[a][b] * expand.keep_size[j] + expand.size[a][j];
-                }
-            }
+            expandOver(n, &expand.base, .{ &expand.rel[0], &expand.rel[1] }, .{ &expand.size[0], &expand.size[1] }, &expand.keep_size, sk, full);
             full.sense = C.pushed.c.sense;
             if (D.count > 0) {
                 const m = D.mask(sel);

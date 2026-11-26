@@ -136,6 +136,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             break :blk .{ .keys = k, .b = out };
         };
 
+        const Self = @This();
         pub const Dirty = std.bit_set.Static(m);
         /// Payload fields independent of visibility, batch keys, layout and inherited styles.
         /// RGB preserves template alpha. Material data preserves the static feature selector.
@@ -176,16 +177,9 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
 
                 pub fn apply(comptime field: Field, state: *const State, ram: *const C.Dynamic, d: *DrawList, dirty: *Dirty) void {
                     const value = @field(state, @tagName(field));
-                    var cursor: usize = 0;
-                    var visible: usize = 0;
+                    var rows: VisibleRows = .{};
                     inline for (comptime list(field)) |entry| {
-                        const k = entry.template;
-                        const row: ?usize = if (d.quad_len == m) k else blk: {
-                            for (node[cursor..k]) |i| visible += quadVisible(ram, i);
-                            cursor = k;
-                            break :blk if (quadVisible(ram, node[k]) != 0) visible else null;
-                        };
-                        if (row) |i| {
+                        if (rows.of(Self, ram, d, entry.template)) |i| {
                             const q = &d.quads[i];
                             switch (entry.target) {
                                 .fill_rgb => q.fill = (q.fill & 0xff000000) | (value.bitsOf() & 0xffffff),
@@ -229,24 +223,14 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// batches after it and may join its neighbours). `d` comes from
         /// `DrawList.init(carver, quad_count, 0, 0)` or larger.
         pub fn emit(ram: *const C.Dynamic, d: *DrawList) void {
-            var cursor: Cursor = .{};
-            emitQuads(ram, d, 0, m, &cursor);
-            d.quad_len = cursor.quad;
-            d.op_len = cursor.op;
-            d.run_len = 0;
-            d.custom_len = 0;
+            emitOver(@This(), ram, d);
             d.strings = "";
-            // Once per frame, not per row.
-            if (cursor.quad == m) {
-                @memset(d.cmd.kind[0..nb], @backingInt(DrawList.Kind.quads));
-                @memcpy(d.cmd.first[0..nb], &batches.first);
-                @memcpy(d.cmd.count[0..nb], &batches.count);
-                @memcpy(d.cmd.key[0..nb], &batches.key);
-                d.cmd_len = nb;
-            } else encode(d);
         }
 
-        const Cursor = struct { quad: u32 = 0, op: u32 = 0 };
+        // ---- the table source `emitOver` and `emitLiveTextOver` read ----
+        const batch_first = batches.first;
+        const batch_counts = batches.count;
+        const batch_key = batches.key;
 
         inline fn rectOf(ram: *const C.Dynamic, descriptor: u32) V4 {
             const slot = C.slot(descriptor);
@@ -259,9 +243,33 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             return if (source == none) i else source;
         }
 
-        fn alphaOf(i: u32) f32 {
-            const source = sourceOf(i);
-            return inh.alpha[p.c.scope[source]] * (if (source == i) @as(f32, 1) else p.x.row[p.c.extra[i]].opacity);
+        inline fn outsetOf(i: u32) [4]f32 {
+            return p.x.row[p.c.extra[i]].paint_outset;
+        }
+        inline fn paramsOf(i: u32) [4]f32 {
+            return p.c.look[i].params;
+        }
+        inline fn parentOf(i: u32) u32 {
+            return p.c.parent[i];
+        }
+        /// Dynamic absent rows have zero size; expanded shadows must not revive them.
+        inline fn presentOf(ram: *const C.Dynamic, i: u32) u32 {
+            return if (comptime D.count != 0) ram.visible[i] else 1;
+        }
+        inline fn visibleOf(ram: *const C.Dynamic, i: u32) u32 {
+            return ram.visible[i];
+        }
+        inline fn paintsOf(i: u32) u32 {
+            return @intFromBool(p.x.row[p.c.scope[i]].active_participation.paint);
+        }
+        inline fn alphaOf(i: u32) f32 {
+            return inh.alpha[p.c.scope[i]];
+        }
+        inline fn clipRadiiOf(i: u32) [4]f32 {
+            return inh.clip_radii[p.c.scope[i]];
+        }
+        inline fn liveOf(mask: *const D.Mask, i: u32) u32 {
+            return @intFromBool(mask[i] != 0);
         }
 
         pub fn worldOf(ram: *const C.Dynamic, node_id: u32) [6]f32 {
@@ -308,32 +316,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         }
 
         inline fn quadVisible(ram: *const C.Dynamic, i: u32) u32 {
-            const source = sourceOf(i);
-            const raw = rectOf(ram, source);
-            const rect = geometry.expand(raw, p.x.row[p.c.extra[i]].paint_outset);
-            const bounds = geometry.paintBounds(rect, p.c.look[i].params, worldOf(ram, source), clipOf(ram, p.c.parent[source]));
-            // Dynamic absent rows have zero size; expanded shadows must not revive them.
-            const present = if (comptime D.count != 0) ram.visible[i] else @as(u32, 1);
-            return present & @intFromBool(p.x.row[p.c.scope[i]].active_participation.paint) & @intFromBool(geometry.hasArea(bounds));
-        }
-
-        inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
-            // A UI that paints no quad (only text) has no templates to index.
-            if (comptime m == 0) return;
-            for (first..end) |k| {
-                const i = node[k];
-                var quad = templates[k];
-                quad.rect = geometry.expand(rectOf(ram, sourceOf(i)), p.x.row[p.c.extra[i]].paint_outset);
-                quad.xform = worldOf(ram, sourceOf(i));
-                quad.clip = clipOf(ram, clip_node[k]);
-                d.quads[cursor.quad] = quad;
-                d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
-                d.op.key[cursor.op] = keys[k];
-                d.op.ref[cursor.op] = cursor.quad;
-                const visible = quadVisible(ram, i);
-                cursor.quad += visible;
-                cursor.op += visible;
-            }
+            return quadVisibleOver(@This(), ram, i);
         }
 
         /// Paint a measured layout from its original spans, indexed in `strings`.
@@ -346,44 +329,8 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// As in runtime paint, clipped live labels retain runs and only visible labels
         /// emit commands. The selection is the one used by Layout.runLiveText.
         pub fn emitLiveText(ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void {
-            if (label_count == 0) {
-                emit(ram, d);
-                d.strings = strings;
-                return;
-            }
-            const mask = D.mask(sel);
-            const style: types.TextStyle = .{};
-            var cursor: Cursor = .{};
-            var first: u32 = 0;
-            var r: u32 = 0;
-            for (label_plans, spans) |label, span| {
-                emitQuads(ram, d, first, label.quad_end, &cursor);
-                first = label.quad_end;
-                d.runs[r] = .{
-                    .rect = rectOf(ram, label.node) + @as(V4, label.padding),
-                    .clip = clipOf(ram, label.parent),
-                    .start = span.start,
-                    .bytes = span.bytes,
-                    .px = style.px,
-                    .color = label.color,
-                    .font = @backingInt(style.font),
-                    .opacity = inh.alpha[p.c.scope[label.node]],
-                    .xform = worldOf(ram, label.node),
-                    .clip_radii = inh.clip_radii[p.c.scope[label.parent]],
-                };
-                d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
-                d.op.key[cursor.op] = 0;
-                d.op.ref[cursor.op] = r;
-                cursor.op += ram.visible[label.node] & @intFromBool(p.x.row[p.c.scope[label.node]].active_participation.paint);
-                r += @intFromBool(mask[label.node] != 0);
-            }
-            emitQuads(ram, d, first, m, &cursor);
-            d.quad_len = cursor.quad;
-            d.op_len = cursor.op;
-            d.run_len = r;
-            d.custom_len = 0;
-            d.strings = strings;
-            encode(d);
+            const mask = if (label_count == 0) {} else D.mask(sel);
+            emitLiveTextOver(@This(), ram, &mask, spans, strings, d);
         }
 
         /// The clip `paint.emit` gives node `i`'s children, as x0, y0, x1, y1. With no clipping
@@ -394,6 +341,125 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         }
     };
 }
+
+// ---- the frame over a table source ----------------------------------------------------------------
+//
+// Where a frame's draw list comes from: a comptime UI's `Paint` (every table a constant, so it
+// folds into the frame) or the static-UI engine's words (src/abi/ct.zig, the same frame over
+// tables read at run time). `t` has the paint tables (`node`, `templates`, `keys`,
+// `clip_node`, `label_plans`, the batches) and answers for row `i`: its paint source, outset,
+// look parameters, parent, presence, participation, opacity and clip radii; `g` is the frame's
+// geometry, which `t.rectOf`, `t.clipOf`, `t.worldOf` and `t.visibleOf` read.
+
+/// How far a frame's emit has got: the next quad and op.
+pub const Cursor = struct { quad: u32 = 0, op: u32 = 0 };
+
+/// Whether row `i` of `t` paints its quad this frame (`paint.emit`'s condition).
+pub inline fn quadVisibleOver(t: anytype, g: anytype, i: u32) u32 {
+    const source = t.sourceOf(i);
+    const rect = geometry.expand(t.rectOf(g, source), t.outsetOf(i));
+    const bounds = geometry.paintBounds(rect, t.paramsOf(i), t.worldOf(g, source), t.clipOf(g, t.parentOf(source)));
+    return t.presentOf(g, i) & t.paintsOf(i) & @intFromBool(geometry.hasArea(bounds));
+}
+
+/// Templates [first, end) with their rects and clips, a quad and op each when visible.
+pub inline fn emitQuadsOver(t: anytype, g: anytype, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
+    // A UI that paints no quad (only text) has no templates to index.
+    if (t.quad_count == 0) return;
+    for (first..end) |k| {
+        const i = t.node[k];
+        var quad = t.templates[k];
+        const source = t.sourceOf(i);
+        quad.rect = geometry.expand(t.rectOf(g, source), t.outsetOf(i));
+        quad.xform = t.worldOf(g, source);
+        quad.clip = t.clipOf(g, t.clip_node[k]);
+        d.quads[cursor.quad] = quad;
+        d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
+        d.op.key[cursor.op] = t.keys[k];
+        d.op.ref[cursor.op] = cursor.quad;
+        const visible = quadVisibleOver(t, g, i);
+        cursor.quad += visible;
+        cursor.op += visible;
+    }
+}
+
+/// The quads alone, then the commands: the batches when every template is visible, else
+/// `paint.encode` over the ops (a hidden quad shifts the batches after it and may join its
+/// neighbours).
+pub inline fn emitOver(t: anytype, g: anytype, d: *DrawList) void {
+    var cursor: Cursor = .{};
+    emitQuadsOver(t, g, d, 0, t.quad_count, &cursor);
+    d.quad_len = cursor.quad;
+    d.op_len = cursor.op;
+    d.run_len = 0;
+    d.custom_len = 0;
+    // Once per frame, not per row.
+    if (cursor.quad == t.quad_count) {
+        const nb = t.batch_count;
+        @memset(d.cmd.kind[0..nb], @backingInt(DrawList.Kind.quads));
+        @memcpy(d.cmd.first[0..nb], t.batch_first[0..nb]);
+        @memcpy(d.cmd.count[0..nb], t.batch_counts[0..nb]);
+        @memcpy(d.cmd.key[0..nb], t.batch_key[0..nb]);
+        d.cmd_len = nb;
+    } else encode(d);
+}
+
+/// The quads with the labels' runs between them, in draw order. `mask` is the frame's live
+/// mask (`t.liveOf`): a dead label keeps no run.
+pub inline fn emitLiveTextOver(t: anytype, g: anytype, mask: anytype, spans: anytype, strings: []const u8, d: *DrawList) void {
+    if (t.label_count == 0) {
+        emitOver(t, g, d);
+        d.strings = strings;
+        return;
+    }
+    const style: types.TextStyle = .{};
+    var cursor: Cursor = .{};
+    var first: u32 = 0;
+    var r: u32 = 0;
+    for (t.label_plans[0..t.label_count], spans[0..t.label_count]) |label, span| {
+        emitQuadsOver(t, g, d, first, label.quad_end, &cursor);
+        first = label.quad_end;
+        d.runs[r] = .{
+            .rect = t.rectOf(g, label.node) + @as(V4, label.padding),
+            .clip = t.clipOf(g, label.parent),
+            .start = span.start,
+            .bytes = span.bytes,
+            .px = style.px,
+            .color = label.color,
+            .font = @backingInt(style.font),
+            .opacity = t.alphaOf(label.node),
+            .xform = t.worldOf(g, label.node),
+            .clip_radii = t.clipRadiiOf(label.parent),
+        };
+        d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
+        d.op.key[cursor.op] = 0;
+        d.op.ref[cursor.op] = r;
+        cursor.op += t.visibleOf(g, label.node) & t.paintsOf(label.node);
+        r += t.liveOf(mask, label.node);
+    }
+    emitQuadsOver(t, g, d, first, t.quad_count, &cursor);
+    d.quad_len = cursor.quad;
+    d.op_len = cursor.op;
+    d.run_len = r;
+    d.custom_len = 0;
+    d.strings = strings;
+    encode(d);
+}
+
+/// Template `k`'s quad in a draw list that may skip hidden templates, for patches made in
+/// template order: `k` itself when every template is drawn, else the visible ones before it
+/// counted (from where the last call stopped). Null when `k` is not drawn.
+pub const VisibleRows = struct {
+    cursor: usize = 0,
+    visible: usize = 0,
+
+    pub inline fn of(r: *VisibleRows, t: anytype, g: anytype, d: *const DrawList, k: usize) ?usize {
+        if (d.quad_len == t.quad_count) return k;
+        for (t.node[r.cursor..k]) |i| r.visible += quadVisibleOver(t, g, i);
+        r.cursor = k;
+        return if (quadVisibleOver(t, g, t.node[k]) != 0) r.visible else null;
+    }
+};
 
 /// `rows` (the nodes that paint, in row order) reordered so that equal batch keys follow each
 /// other where that cannot change the picture. A comptime UI has one stacking layer (it has no

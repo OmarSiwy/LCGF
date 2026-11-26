@@ -159,13 +159,15 @@ fn decimal(buf: *[20]u8, v: u64, min_digits: usize) []const u8 {
 }
 
 /// Writes `segs` of `text` to `sink`, reading argument values from `args`, anything with
-/// `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` and `float(i) f32` for argument i.
-pub fn write(segs: []const Seg, text: []const u8, args: anytype, sink: *Sink) void {
+/// `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` (a u32), `byte(i) u64` (a u8) and
+/// `float(i) f32` for argument i. `segs` is a slice of anything with `Seg`'s fields.
+pub fn write(segs: anytype, text: []const u8, args: anytype, sink: *Sink) void {
     for (segs) |g| switch (g.kind) {
         .literal => sink.put(text[g.start..][0..g.len]),
         .str => sink.put(args.str(g.arg)),
         .bool => sink.putBool(args.boolean(g.arg)),
-        .u32, .u8 => sink.putUint(args.uint(g.arg)),
+        .u32 => sink.putUint(args.uint(g.arg)),
+        .u8 => sink.putUint(args.byte(g.arg)),
         .f32 => sink.putF32(args.float(g.arg), g.prec),
     };
 }
@@ -200,6 +202,9 @@ pub fn Fields(comptime State: type, comptime names: []const []const u8) type {
                 }
             }
             unreachable;
+        }
+        pub fn byte(a: Self, i: u32) u64 {
+            return a.uint(i);
         }
         pub fn float(a: Self, i: u32) f32 {
             inline for (names, 0..) |n, k| if (comptime @FieldType(State, n) == f32) {
@@ -254,6 +259,9 @@ const Floats = struct {
         return false;
     }
     pub fn uint(_: Floats, _: u32) u64 {
+        return 0;
+    }
+    pub fn byte(_: Floats, _: u32) u64 {
         return 0;
     }
     pub fn float(a: Floats, i: u32) f32 {

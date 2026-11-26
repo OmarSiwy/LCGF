@@ -285,8 +285,8 @@ void lcgf_rt_view(void *rt, lcgf_view *out);
  * words, padded for 16 lanes. A frame reads the labels' text from the state (an lcgf::Str per
  * label, at the offsets the words carry), runs the passes over the skeleton, expands, finalizes
  * and copies the templates. Status codes are lcgf_status's. */
-#define LCGF_CT_FORMAT_VERSION 1u
-#define LCGF_CT_LAYOUT 0x235b050bu
+#define LCGF_CT_FORMAT_VERSION 2u
+#define LCGF_CT_LAYOUT 0x338b01e5u
 int lcgf_ct_check(const uint32_t *tables, size_t len);
 /* Bytes one static UI of these tables needs, for any lane count, or 0 if they are refused. */
 size_t lcgf_ct_bytes(const uint32_t *tables, size_t len);

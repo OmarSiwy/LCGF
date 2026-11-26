@@ -59,7 +59,9 @@ pub const Select = struct {
     offset: f32 = 0,
 };
 
-fn selectWindow(count: u32, visible: u32, height: f32, scroll: f32) Select {
+/// The live copies of a windowed list of `count` items, `visible` on screen, `height` px each,
+/// scrolled `scroll` px.
+pub fn selectWindow(count: u32, visible: u32, height: f32, scroll: f32) Select {
     // f64 represents every u32 row index exactly, including the end of a very large list.
     const h: f64 = height;
     const max_scroll = @as(f64, @floatFromInt(count -| visible)) * h;
@@ -195,29 +197,33 @@ pub fn Regions(comptime spec: Spec) type {
         /// regions is live when each of them keeps it.
         pub fn mask(sel: Selection) Mask {
             var m: Mask = @splat(~@as(u32, 0));
-            inline for (regions, sel) |r, s| {
-                // The rows the region may hide, [first, end), and the live window among them,
-                // `len` rows from `lo`.
-                const first = switch (r.kind) {
-                    .list, .choice => r.row + 1,
-                    .when => r.row,
-                };
-                var lo: u32 = first;
-                var len: u32 = undefined;
-                switch (r.kind) {
-                    .list => len = @min(s.n, r.max) * r.stride,
-                    .when => len = @min(s.n, 1) * (r.end - r.row),
-                    .choice => {
-                        const w = alternatives(r)[@min(s.n, r.max)];
-                        lo = w[0];
-                        len = w[1];
-                    },
-                }
-                for (first..r.end) |j| m[j] &= 0 -% @as(u32, @intFromBool(@as(u32, @intCast(j)) -% lo < len));
-            }
+            inline for (regions, sel) |r, s| maskRegion(&m, r.kind, r.row, r.end, r.stride, r.max, alternatives(r), s);
             return m;
         }
     };
+}
+
+/// ANDs region `kind` (its node `row`, one past its last row `end`, a list's copy `stride`, its
+/// copies or alternatives `max` and a choice's windows `alts`) under selection `s` into the
+/// live mask `m`: the rows it may hide, [first, end), keep only the live window among them,
+/// `len` rows from `lo`.
+pub inline fn maskRegion(m: anytype, kind: RegionKind, row: u32, end: u32, stride: u32, max: u32, alts: anytype, s: Select) void {
+    const first = switch (kind) {
+        .list, .choice => row + 1,
+        .when => row,
+    };
+    var lo: u32 = first;
+    var len: u32 = undefined;
+    switch (kind) {
+        .list => len = @min(s.n, max) * stride,
+        .when => len = @min(s.n, 1) * (end - row),
+        .choice => {
+            const w = alts[@min(s.n, max)];
+            lo = w[0];
+            len = w[1];
+        },
+    }
+    for (first..end) |j| m[j] &= 0 -% @as(u32, @intFromBool(@as(u32, @intCast(j)) -% lo < len));
 }
 
 /// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1.

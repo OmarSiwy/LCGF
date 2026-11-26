@@ -318,7 +318,7 @@ fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`,
 - `fn maxSegs(text: []const u8) usize`: An upper bound on the segments of `text`: one per placeholder or brace, one per text run.
 - `fn parse(text: []const u8, args: []const Kind, out: []Seg) Error!usize`: The segments of `text` for arguments of kinds `args`, into `out` (at least `maxSegs` long); returns how many.
 - `fn kindOf(comptime T: type) ?Kind`: The kind a field of Zig type `T` formats as, or null when it cannot be an argument.
-- `fn write(segs: []const Seg, text: []const u8, args: anytype, sink: *Sink) void`: Writes `segs` of `text` to `sink`, reading argument values from `args`, anything with `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` and `float(i) f32` for argument i.
+- `fn write(segs: anytype, text: []const u8, args: anytype, sink: *Sink) void`: Writes `segs` of `text` to `sink`, reading argument values from `args`, anything with `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` (a u32), `byte(i) u64` (a u8) and `float(i) f32` for argument i.
 - `fn Fields(comptime State: type, comptime names: []const []const u8) type`: The arguments of a format as fields of a Zig value: argument i is field `names[i]` of `state`.
 - `fn kindsOf(comptime State: type, comptime names: []const []const u8) [names.len]Kind`: The arguments' kinds for fields `names` of `State`; a compile error naming a field that is missing or cannot be an argument.
 - `fn compile(comptime State: type, comptime text: []const u8, comptime names: []const []const u8) []const Seg`: The segments of `text` over fields `names` of `State`, checked while compiling.
@@ -341,6 +341,7 @@ Fields: `state`
 - `fn str(a: Self, i: u32) []const u8`
 - `fn boolean(a: Self, i: u32) bool`
 - `fn uint(a: Self, i: u32) u64`
+- `fn byte(a: Self, i: u32) u64`
 - `fn float(a: Self, i: u32) f32`
 
 ## `lcgf.texts` (src/core/texts.zig)
@@ -1194,6 +1195,10 @@ Layout for a comptime UI: the generic tier-0 layout passes (src/layout/layout.zi
 - `fn labelRows(comptime s: Spec) []const u32`: Rows of the labels of `s`, depth-first: label k of the UI is node `labelRows(s)[k]`.
 - `fn Plain(comptime spec: Spec, comptime options: Options) type`: Layout of `spec` over its own columns, every row through every pass (see the file comment).
 - `fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: bool) type`: `Plain`, with the row count a compile-time constant of the view when `unroll`: every pass loop then has a constant trip count the optimizer may unroll (C0165 measures it).
+- `fn fillTexts(tx: *Texts, label_rows: anytype, spans: anytype) void`: Label k's text run: row `label_rows[k]`, the bytes of `spans[k]` and the default `TextStyle`, as `Frame.text` would push it; `w`, `h` and `avail` cleared for the font.
+- `fn passesOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, sel: anytype, m: anytype, viewport: [2]f32, font: anytype) void`: Every pass but `finalize` over the view `v` of a static UI, `Frame.end`'s sequence: `font` measures the labels' text (`spans[k]` is label k's bytes; void: none measured), the live mask `m` of the selection `sel` is applied, then fit, resolve and place on both axes.
+- `fn expandOver(n: usize, base: anytype, rel: anytype, size: anytype, keep: anytype, sk: anytype, full: anytype) void`: A folded layout's whole tree from its skeleton's: each row's position is its base row's plus `rel`, its size the base's times `keep` plus `size` (one select per row, no branch).
+- `fn slotSourcesOver(out: anytype, defaults: anytype, by_node: anytype, m: anytype) void`: `slot_source`: each shared geometry slot shows its live row this frame, else its default.
 - `fn FoldPlan(comptime C: type) type`: Which rows of a UI fold: `root[j]` is true for a row whose subtree is laid out while compiling.
 - `fn Layout(comptime spec: Spec, comptime options: Options) type`: Layout of `spec`: as `Plain`, except that subtrees whose layout does not depend on the viewport (`FoldPlan`) are laid out while compiling.
 
@@ -1261,7 +1266,12 @@ Paint for a comptime UI: the draw list `paint.emit` (src/draw/paint.zig) gives f
 
 ### Top level
 
+- `Cursor = struct { quad: u32 = 0, op: u32 = 0 }`: How far a frame's emit has got: the next quad and op.
 - `fn Paint(comptime spec: Spec, comptime options: Options) type`: Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comment).
+- `fn quadVisibleOver(t: anytype, g: anytype, i: u32) u32`: Whether row `i` of `t` paints its quad this frame (`paint.emit`'s condition).
+- `fn emitQuadsOver(t: anytype, g: anytype, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void`: Templates [first, end) with their rects and clips, a quad and op each when visible.
+- `fn emitOver(t: anytype, g: anytype, d: *DrawList) void`: The quads alone, then the commands: the batches when every template is visible, else `paint.encode` over the ops (a hidden quad shifts the batches after it and may join its neighbours).
+- `fn emitLiveTextOver(t: anytype, g: anytype, mask: anytype, spans: anytype, strings: []const u8, d: *DrawList) void`: The quads with the labels' runs between them, in draw order.
 
 ### `Paint(..)` (generic struct)
 Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comment).
@@ -1294,6 +1304,13 @@ Resolve state fields to template indices while compiling.
 - `fn rebuildText(state: *const State, ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *Dirty) void`: Rebuild a measured frame and then apply its state-bound quad fields.
 - `fn rebuildLiveText(state: *const State, ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList, dirty: *…`
 
+### `VisibleRows` (struct)
+Template `k`'s quad in a draw list that may skip hidden templates, for patches made in template order: `k` itself when every template is drawn, else the visible ones before it counted (from where the last call stopped).
+
+Fields: `cursor`, `visible`
+
+- `fn of(r: *VisibleRows, t: anytype, g: anytype, d: *const DrawList, k: usize) ?usize`
+
 ## `lcgf.ct_examples` (src/comptime/examples.zig)
 
 Example UIs for the comptime front end's size reports (`zig build ct-sizes`) and tests.
@@ -1324,8 +1341,10 @@ Runtime selections for a compile-time UI.
 
 ### Top level
 
+- `fn selectWindow(count: u32, visible: u32, height: f32, scroll: f32) Select`: The live copies of a windowed list of `count` items, `visible` on screen, `height` px each, scrolled `scroll` px.
 - `fn Slots(comptime spec: Spec) type`
 - `fn Regions(comptime spec: Spec) type`: The regions of `spec`, in depth-first order of their nodes.
+- `fn maskRegion(m: anytype, kind: RegionKind, row: u32, end: u32, stride: u32, max: u32, alts: anytype, s: Select) void`: ANDs region `kind` (its node `row`, one past its last row `end`, a list's copy `stride`, its copies or alternatives `max` and a choice's windows `alts`) under selection `s` into the live mask `m`: the rows it may hide, [first, end), keep only the live window among them, `len` rows from `lo`.
 
 ### `Info` (struct)
 One region of a flattened spec.
@@ -8310,13 +8329,14 @@ Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for prog
 ### Top level
 
 - `none = types.none`
-- `version: u32 = 1`
+- `version: u32 = 2`
 - `pad_lanes = 16`: Lanes every column is padded for: the widest build reads them too.
 - `default_string_cap = 1024`: Bytes of label text one frame holds, by default.
 - `ColumnArray = struct { field: []const u8, axis: u32, size: u32 }`: One array of `Tree.Columns`: a `[]T` field, or one axis of a `[k][]T` field.
+- `Seg = extern struct { kind: fmt.Kind, prec: u8, _pad: u16 = 0, arg: u32, start: u32, len: u32 }`: One segment of a label's format (src/core/fmt.zig's `Seg`), its argument the field's byte offset in the state.
 - `RegionKind = enum(u32) { none, list, when, choice }`
 - `Error = error{ OutOfMemory, BadTree, BadLabel, BadRegion, BadBind, Transform }`
-- `Select = struct { n: u32 = 0, first: u32 = 0, offset: f32 = 0 }`: One region's selection this frame (ct_dynamic.Select).
+- `Select = dynamic.Select`: One region's selection this frame (ct_dynamic.Select).
 - `frame_symbol = std.fmt.comptimePrint("lcgf_ct_frame_u32_f32_l{d}", .{simd.lanes})`
 - `Controls = struct { title: []const u8 = "Volume", muted: bool = false, volume: f32 = 0.5, pan: f32 = 0 }`: Sized controls, for the events gate: the examples' checkboxes and sliders have no size of their own, so nothing can hit them.
 - `Palette = struct { title: []const u8 = "Palette", accent: types.Color = .rgb(200, 40, 40), edge: types.Color = .rgb(40, 40, 200) }`: Colours patched into quads, for the patch gate: a swatch filled with `accent` and a bar filled with `accent` and bordered with `edge` (ct_paint.Patches).
@@ -8351,7 +8371,7 @@ Fields: `kind`, `row`, `end`, `stride`, `max`, `alts`, `field_offset`, `field_ty
 ### `Header` (struct)
 The first words.
 
-Fields: `magic`, `version`, `layout_hash`, `words`, `coord`, `has_child_clip`, `state_size`, `state_align`, `string_cap`, `labels`, `quads`, `batches`, `folded`, `regions`, `has_windows`, `root_when`, `slot_count`, `slots`, `slot_defaults`, `full`, `skel`, `label_offsets`, `label_formats`, `seg_count`, `segs`, `format_bytes`, `format_text`, `expand`, `fields`, `spans`, `patch_count`, `patches`, `paint_node`, `clip_node`, `templates`, `keys`, `batch_first`, `batch_count`, `batch_key`, `label_plans`
+Fields: `magic`, `version`, `layout_hash`, `words`, `coord`, `has_child_clip`, `state_size`, `state_align`, `string_cap`, `labels`, `quads`, `batches`, `folded`, `regions`, `has_windows`, `root_when`, `slot_count`, `slots`, `slot_defaults`, `full`, `skel`, `label_offsets`, `label_formats`, `seg_count`, `segs`, `format_bytes`, `format_text`, `expand`, `fields`, `spans`, `patch_count`, `patches`, `paint_node`, `clip_node`, `templates`, `keys`, `batch_first`, `batch_count`, `batch_key`, `label_plans`, `alpha`, `clip_radii`
 
 
 ### `Node` (struct)
@@ -8371,13 +8391,26 @@ Fields: `fields`, `state_size`, `state_align`, `coord`, `string_cap`
 ### `Ui` (struct)
 A static UI, placed at the start of the caller's buffer by `init`.
 
-Fields: `words`, `h`, `full`, `skel`, `tx`, `spans`, `strings`, `sel`, `slot_source`, `d`
+Fields: `words`, `h`, `full`, `skel`, `tx`, `spans`, `strings`, `sel`, `slot_source`, `d`, `quad_count`, `label_count`, `batch_count`, `node`, `clip_node`, `templates`, `keys`, `label_plans`, `batch_first`, `batch_counts`, `batch_key`, `alpha`, `clip_radii`
 
 - `InitError = error{ NotTables, Version, LayoutHash, Truncated, BufferTooSmall, Unaligned }`
 - `fn check(words: []const u32) InitError!*const Header`: Checks the header of `words`.
 - `fn bytes(words: []const u32) InitError!usize`: Bytes one UI of `words` needs, for any lane count.
 - `fn init(words: []const u32, buf: []u8) InitError!*Ui`: Checks `words` and places a UI at the start of `buf` (aligned to `mem.column_align`).
 - `fn frame(ui: *Ui, state: [*]const u8, viewport: [2]f32) *const DrawList`: One frame: the labels' text and the regions' selectors from `state`, laid out in a `viewport`-sized area and painted.
+- `fn rectOf(ui: *const Ui, _: void, i: u32) V4`: Rect of row i as the comptime UI keeps it: in its coordinate type.
+- `fn clipOf(ui: *const Ui, _: void, i: u32) [4]f32`
+- `fn sourceOf(_: *const Ui, i: u32) u32`
+- `fn outsetOf(_: *const Ui, _: u32) [4]f32`
+- `fn worldOf(_: *const Ui, _: void, _: u32) [6]f32`
+- `fn paramsOf(ui: *const Ui, i: u32) [4]f32`
+- `fn parentOf(ui: *const Ui, i: u32) u32`
+- `fn presentOf(ui: *const Ui, _: void, i: u32) u32`
+- `fn visibleOf(ui: *const Ui, _: void, i: u32) u32`
+- `fn paintsOf(_: *const Ui, _: u32) u32`
+- `fn alphaOf(ui: *const Ui, i: u32) f32`
+- `fn clipRadiiOf(ui: *const Ui, i: u32) [4]f32`
+- `fn liveOf(ui: *const Ui, mask: []const u32, i: u32) u32`
 
 ### `Patched(..)` (generic struct)
 ct_paint.Patches over `e`'s bindings (`bindingsOf`): what the static UI's frame paints through.
