@@ -3,12 +3,13 @@
 <head>
   <title>Palette</title>
   <style>
+    body { align-items: center; }
     .hits { gap: 2px; }
   </style>
 </head>
 <body>
   <template lcgf-each="hit in hits" class="hits">
-    <span>{hit.title}</span>
+    <button on:click="pick">{hit.title}</button>
   </template>
   <span>Footer</span>
 </body>

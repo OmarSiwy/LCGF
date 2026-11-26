@@ -1909,6 +1909,12 @@ pub const Emit = struct {
                 \\        {s}: ?lcgf.context.Context = null,
                 \\
             , .{ n.id, n.text, n.bind, n.id, n.id, n.id });
+            if (n.level == 1) e.print(
+                \\        /// Where region `{s}`'s content is measured, with no input, before the page's layout.
+                \\        {s}_measure_buf: [lcgf.context.Context.requiredBytes({s}_limits)]u8 align(lcgf.mem.column_align) = undefined,
+                \\        {s}_measure: ?lcgf.context.Context = null,
+                \\
+            , .{ n.id, n.id, n.id, n.id });
             decls.print(e.arena, "        const {s}_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};\n", .{ n.id, n.max, @as(u32, @intFromFloat(n.range[0])) }) catch unreachable;
             rows.print(e.arena, " + {s}_limits.nodes", .{n.id}) catch unreachable;
             e.editorFields(@intCast(i), "        ");
@@ -1970,17 +1976,17 @@ pub const Emit = struct {
             const events = e.regionEvents(@intCast(i));
             if (events.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events });
         }
-        // A region sized by its content (a fit axis) is built first, and the page is laid out
-        // again around the sizes they measured before anything is composed, so the frame shows
-        // them (`ComptimeUi.rebuild`; the frame's event stays the first layout's).
+        // A region sized by its content (a fit axis) is measured first, in a Context of its
+        // own that takes no input, and the page is laid out again around the sizes measured
+        // (`ComptimeUi.rebuild`; the frame's event stays the first layout's). Every region is
+        // then built with the frame's input against its final rect.
         var fits = false;
         for (0..e.page.nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             if (e.page.nodes.items(.kind)[i] != .each or e.page.nodes.items(.level)[i] != 1) continue;
             if (!fits) e.write("            var refit = false;\n");
             fits = true;
-            e.print("            var region_{s}: lcgf.context.Output = undefined;\n", .{e.page.nodes.items(.id)[i]});
-            e.eachFrame(i, 0, .build);
+            e.eachFrame(i, 0, .measure);
         }
         if (fits) e.write(
             \\            if (refit) {
@@ -1994,33 +2000,51 @@ pub const Emit = struct {
         for (0..e.page.nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             if (e.page.nodes.items(.kind)[i] != .each) continue;
-            e.eachFrame(i, k, if (e.page.nodes.items(.level)[i] == 1) .compose else .whole);
+            e.eachFrame(i, k, .whole);
             k += 1;
         }
     }
 
-    /// Region `each`, the `slot`-th of the page: built and composed (`whole`), or, for a fit
-    /// region, built into `region_<id>` with its size recorded (`build`), then composed.
-    fn eachFrame(e: *Emit, each: u32, slot: u32, phase: enum { whole, build, compose }) void {
+    /// Region `each`, the `slot`-th of the page: built with the frame's input and composed
+    /// (`whole`), or, for a fit region, measured (`measure`): built with no input in its own
+    /// Context, with throwaway events and editors, its content's size recorded for the layout.
+    fn eachFrame(e: *Emit, each: u32, slot: u32, phase: enum { whole, measure }) void {
         const n = e.page.nodes.get(each);
         const fit = n.level == 1;
-        if (phase == .compose) {
-            e.print("            if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_{s}.draw, @backingInt(lcgf.types.Id.from(\"{s}\")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}\n", .{ slot % 2, n.id, n.id, slot % 2, slot % 2 });
-            return;
-        }
-        e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}\n", .{ n.text, n.bind, e.where(n.loc) });
-        e.eachChecks(each, "                ");
+        const measure = phase == .measure;
+        e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}{s}\n", .{ n.text, n.bind, e.where(n.loc), if (measure) ", measured" else "" });
+        if (!measure) e.eachChecks(each, "                ");
         // The copies' statements first: they name `ui` only when they read the view state.
+        const owner = e.owner;
+        if (measure) e.owner = "measure";
         const body = e.eachLoop(each);
+        e.owner = owner;
+        if (measure) {
+            // What the body writes, kept from the Page: the editors' state, copied. Its events
+            // are the frame's, which a measure with no input never sets.
+            var editors: std.ArrayList(u8) = .empty;
+            for (0..e.page.nodes.len) |k| {
+                const c = e.page.nodes.get(k);
+                const texty = c.kind == .textfield or c.kind == .search or c.kind == .textarea;
+                if (texty and e.eachOf(@intCast(k)) == each) editors.print(e.arena, " .edit_{s} = p.edit_{s}, .edit_{s}_row = p.edit_{s}_row,", .{ c.id, c.id, c.id, c.id }) catch unreachable;
+            }
+            if (editors.items.len > 0) e.print("                var measure = .{{{s} }};\n                _ = &measure;\n", .{editors.items});
+        }
         if (std.mem.indexOf(u8, body, "ui.") != null) e.write("                const ui = &p.ui;\n");
+        const ctx = if (measure) std.fmt.allocPrint(e.arena, "{s}_measure", .{n.id}) catch unreachable else n.id;
         e.print(
             \\                if (p.{s} == null) p.{s} = lcgf.context.Context.init(&p.{s}_buf, {s}_limits) catch unreachable;
             \\                const rect = out.tree.rect(out.tree.find(.from("{s}")));
-            \\                {s} region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});{s}
+            \\
+        , .{ ctx, ctx, ctx, n.id, n.id });
+        // The measure sees no pointer, buttons, keys or text: the content as it stands.
+        if (measure) e.write("                var region_in = lcgf.ct_interop.regionInput(&.{ .viewport = in.viewport, .time = in.time, .dt = in.dt, .pointer = @splat(-lcgf.types.inf) }, .{ rect.x0, rect.y0, rect.x1, rect.y1 });\n") else e.print("                {s} region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});\n", .{if (fit) "var" else "const"});
+        e.print(
+            \\{s}
             \\                var region_frame = p.{s}.?.begin(&region_in);
             \\                const f = &region_frame;
             \\
-        , .{ n.id, n.id, n.id, n.id, n.id, if (fit) "var" else "const", fitViewport(e, n), n.id });
+        , .{ fitViewport(e, n), ctx });
         const flex = e.regionFlex(each);
         if (flex) e.print(
             \\                if (p.{s}_flex == null) {{
@@ -2032,20 +2056,19 @@ pub const Emit = struct {
         , .{ n.id, n.id, n.id, n.id, n.id });
         e.write(body);
         const end = if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})";
-        if (phase == .build) e.print(
-            \\                region_{s} = {s};
+        if (measure) e.print(
             \\                // The content's size before snapping, for the page's layout, so the page
             \\                // around it lays out as it would around the content itself.
-            \\                const content = region_{s}.tree.c.size;
+            \\                const content = {s}.tree.c.size;
             \\                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) refit = true;
             \\            }}
             \\
-        , .{ n.id, end, n.id, std.zig.fmtId(n.id) }) else e.print(
-            \\                const region_out = {s};
+        , .{ end, std.zig.fmtId(n.id) }) else e.print(
+            \\                const region_out = {s};{s}
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ end, slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ end, if (fit) std.fmt.allocPrint(e.arena, "\n                // Input can change the content's size (a hover, a row's editor); the next frame\n                // lays the page out around it.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
     }
 
     /// The comptime checks of region `each`: the item fields the page reads and its
