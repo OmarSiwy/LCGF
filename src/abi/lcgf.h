@@ -278,6 +278,62 @@ void lcgf_row_from_style(const lcgf_style *style, lcgf_row *out);
 uint32_t lcgf_rt_layout(void);
 void lcgf_rt_view(void *rt, lcgf_view *out);
 
+/* ---- the canvas (src/abi/canvas.zig): many 2D primitives under a camera (src/draw/canvas.zig) */
+
+/* A batch of rows in the caller's buffer (LCGF_COLUMN_ALIGN-aligned, lcgf_canvas_bytes long):
+ * rows, polygon vertices and dirty ranges for a GPU back end's upload. Coordinates are int32
+ * world units; widths world units, 0 for the layer's width in logical pixels. */
+typedef struct lcgf_canvas lcgf_canvas;
+typedef struct { uint32_t first, count; } lcgf_canvas_range;
+/* Rows of `range` drawn in `color` (rgba8) instead of their layer's; the last match wins. */
+typedef struct { lcgf_canvas_range range; uint32_t color; } lcgf_canvas_override;
+/* One palette row: stroke and fill (rgba8), width at weight 1 (logical px), flags (bit 0
+ * fills drawn, bit 1 visible). */
+typedef struct { uint32_t stroke, fill; float width; uint32_t flags; } lcgf_canvas_layer;
+/* cap: 0 butt, 1 square, 2 round; dash n: 2n logical px on, 2n off, along the chain. */
+typedef struct { uint8_t layer, weight, cap, dash; uint32_t width; } lcgf_canvas_line_style;
+typedef struct { uint8_t layer, weight, fill, stroke; uint32_t radius, width; } lcgf_canvas_box_style;
+typedef struct { uint8_t layer, weight, cap, dash; float start, sweep; uint32_t width; } lcgf_canvas_arc_style;
+typedef struct { uint8_t layer, weight, fill, stroke; uint32_t width; } lcgf_canvas_area_style;
+typedef struct { uint32_t px; uint8_t layer, turns, pad[2]; } lcgf_canvas_text_style;
+/* World point `origin` drawn `offset` logical px from the node's corner, `scale` px a unit;
+ * `zoom` scales widths when the palette's zoom_scale is set. */
+typedef struct { int64_t origin[2]; float scale; float offset[2]; float zoom; } lcgf_camera;
+/* What a canvas node draws: all of it the caller's until the frame is drawn. */
+typedef struct {
+    lcgf_camera camera;
+    const lcgf_canvas_layer *layers;
+    size_t layers_len;
+    uint32_t zoom_scale;
+    const lcgf_canvas_range *ranges;
+    size_t ranges_len;
+    const lcgf_canvas_override *overrides;
+    size_t overrides_len;
+} lcgf_canvas_options;
+
+size_t lcgf_canvas_bytes(uint32_t rows, uint32_t verts, uint32_t dirty);
+lcgf_canvas *lcgf_canvas_init(void *buf, size_t len, uint32_t rows, uint32_t verts, uint32_t dirty);
+uint32_t lcgf_canvas_segment(lcgf_canvas *c, int32_t ax, int32_t ay, int32_t bx, int32_t by, const lcgf_canvas_line_style *o);
+lcgf_canvas_range lcgf_canvas_polyline(lcgf_canvas *c, const int32_t (*points)[2], size_t n, const lcgf_canvas_line_style *o);
+uint32_t lcgf_canvas_rect(lcgf_canvas *c, int32_t x0, int32_t y0, int32_t x1, int32_t y1, const lcgf_canvas_box_style *o);
+uint32_t lcgf_canvas_circle(lcgf_canvas *c, int32_t cx, int32_t cy, uint32_t r, const lcgf_canvas_box_style *o);
+uint32_t lcgf_canvas_arc(lcgf_canvas *c, int32_t cx, int32_t cy, uint32_t r, const lcgf_canvas_arc_style *o);
+uint32_t lcgf_canvas_polygon(lcgf_canvas *c, const int32_t (*points)[2], size_t n, const lcgf_canvas_area_style *o);
+uint32_t lcgf_canvas_glyph(lcgf_canvas *c, int32_t ax, int32_t ay, uint32_t w, uint32_t h, const float uv[4], uint8_t layer, uint8_t turns);
+lcgf_canvas_range lcgf_canvas_glyphs(lcgf_canvas *c, const char *str, size_t len, int32_t x, int32_t y, const lcgf_canvas_text_style *o);
+void lcgf_canvas_kill(lcgf_canvas *c, uint32_t row);
+void lcgf_canvas_reset(lcgf_canvas *c);
+/* After every renderer that draws the batch has prepared its frame. */
+void lcgf_canvas_clear_dirty(lcgf_canvas *c);
+uint32_t lcgf_canvas_len(const lcgf_canvas *c);
+/* The topmost row within `slop` logical px of (x, y), from the node's corner, or LCGF_NO_WIDGET. */
+uint32_t lcgf_canvas_hit(const lcgf_canvas *c, const lcgf_canvas_options *o, float x, float y, float slop);
+/* A context draws canvases once given lcgf_rt_canvas_bytes of memory (pointer-aligned), alive
+ * as long as it is; lcgf_rt_canvas then puts a canvas node in the frame. */
+size_t lcgf_rt_canvas_bytes(const lcgf_limits *limits);
+int lcgf_rt_enable_canvas(void *rt, void *buf, size_t len);
+uint32_t lcgf_rt_canvas(void *rt, uint32_t id, const lcgf_style *style, const lcgf_canvas *c, const lcgf_canvas_options *o);
+
 /* ---- static UIs (src/abi/ct.zig): the comptime pipeline, from lcgf-gen --static ------------- */
 
 /* A static UI's structure and style are fixed by its spec, so lcgf-gen lays out what does not

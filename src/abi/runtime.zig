@@ -24,6 +24,9 @@ const FlatRow = @import("../core/tree.zig").FlatRow;
 const Look = @import("../core/tree.zig").Look;
 const Extra = @import("../core/tree.zig").Extra;
 const TextStyle = types.TextStyle;
+const canvas = @import("../draw/canvas.zig");
+const draw_list = @import("../draw/draw_list.zig");
+const abi_canvas = @import("canvas.zig");
 
 /// `Limits`' sizes, as C passes them.
 pub const CLimits = extern struct {
@@ -105,6 +108,11 @@ const Runtime = struct {
     input: @import("../core/input.zig").Input = .{},
     theme: base.Theme = .default,
     font: Mono = .{},
+    /// `lcgf_rt_enable_canvas`: the palettes `lcgf_rt_canvas` makes from its options, in two
+    /// generations as the canvas rows are (a reused canvas keeps last frame's), and how many
+    /// this frame has made.
+    palettes: []canvas.Palette = &.{},
+    palette_len: u32 = 0,
 
     fn work(bytes: usize) usize {
         return std.mem.alignForward(usize, @sizeOf(Runtime), mem.column_align) + bytes;
@@ -147,6 +155,36 @@ fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void {
     const r = rt(p);
     r.input = in.input();
     r.frame = r.ctx.begin(&r.input);
+    r.palette_len = 0;
+}
+
+/// Bytes `lcgf_rt_enable_canvas` needs for `l`: the context's canvas rows and their palettes,
+/// two generations of `customs` each.
+fn cCanvasBytes(l: *const CLimits) callconv(.c) usize {
+    return 2 * @as(usize, l.customs) * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette));
+}
+
+fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int {
+    const r = rt(p);
+    const n = 2 * @as(usize, r.ctx.limits.customs);
+    if (@intFromPtr(buf) % @alignOf(draw_list.CanvasDraw) != 0) return @backingInt(seam.Status.unaligned);
+    if (len < n * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette))) return @backingInt(seam.Status.buffer_too_small);
+    const rows: [*]draw_list.CanvasDraw = @ptrCast(@alignCast(buf));
+    r.palettes = @as([*]canvas.Palette, @ptrCast(@alignCast(buf + n * @sizeOf(draw_list.CanvasDraw))))[0..n];
+    r.ctx.enableCanvas(rows[0..n]);
+    return 0;
+}
+
+/// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of
+/// them the caller's until the frame is drawn. LCGF_NO_WIDGET past `customs` canvases a frame.
+fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instances, o: *const abi_canvas.COptions) callconv(.c) u32 {
+    const r = rt(p);
+    const n = r.palettes.len / 2;
+    if (r.palette_len >= n) return std.math.maxInt(u32);
+    const pal = &r.palettes[@as(usize, r.ctx.cur) * n + r.palette_len];
+    r.palette_len += 1;
+    pal.* = o.palette();
+    return r.frame.canvas(@fromBackingInt(id), style(s), shapes, .{ .camera = o.cam(), .palette = pal, .ranges = o.spans(), .overrides = o.marks() }).ix();
 }
 
 fn cEnd(p: *anyopaque, out: *seam.CFrame) callconv(.c) void {
@@ -325,7 +363,10 @@ pub const exports = .{
     .{ "lcgf_row_from_style", &cRowFromStyle },
     .{ "lcgf_rt_layout", &cLayout },
     .{ "lcgf_rt_view", &cView },
-};
+    .{ "lcgf_rt_canvas_bytes", &cCanvasBytes },
+    .{ "lcgf_rt_enable_canvas", &cEnableCanvas },
+    .{ "lcgf_rt_canvas", &cCanvas },
+} ++ abi_canvas.exports;
 
 pub fn exportAll() void {
     inline for (0..exports.len) |k| @export(exports[k][1], .{ .name = exports[k][0] ++ plan.symbol_suffix });

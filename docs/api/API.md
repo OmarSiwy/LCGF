@@ -8341,6 +8341,29 @@ The frame's tree as `open` and `leaf` write it: where `Tree.pushRow` and `Frame.
 Fields: `len`, `xlen`, `overflow`, `depth`, `status`, `cap`, `depth_cap`, `stack`, `id`, `parent`, `end`, `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `nkids`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `extra`, `scope`, `x_node`, `x_row`
 
 
+## `lcgf.abi_canvas` (src/abi/canvas.zig)
+
+The canvas batch behind the C seam (lcgf.h `lcgf_canvas_*`): `canvas.Instances` in the caller's memory, its builders, `kill`, `clearDirty` and `hit`, for C, C++ (lcgf/runtime.hpp `lcgf::Canvas`) and Rust (`lcgf::runtime::Canvas`).
+
+### Top level
+
+- `CLine = extern struct { layer: u8 = 0, weight: u8 = 1, cap: u8 = 0, dash: u8 = 0, width: u32 = 0 }`: lcgf_canvas_line: segments and polylines.
+- `CBox = extern struct { layer: u8 = 0, weight: u8 = 1, fill: u8 = 1, stroke: u8 = 1, radius: u32 = 0, width: u32 = 0 }`: lcgf_canvas_box: rects and circles.
+- `CArc = extern struct { layer: u8 = 0, weight: u8 = 1, cap: u8 = 0, dash: u8 = 0, start: f32 = 0, sweep: f32 = std.math.tau, width: u32 = 0 }`: lcgf_canvas_arc.
+- `CArea = extern struct { layer: u8 = 0, weight: u8 = 1, fill: u8 = 1, stroke: u8 = 0, width: u32 = 0 }`: lcgf_canvas_area: polygons.
+- `CText = extern struct { px: u32, layer: u8 = 0, turns: u8 = 0, pad: [2]u8 = .{ 0, 0 } }`: lcgf_canvas_text: a line of `protocol.Mono` glyphs.
+- `CCamera = extern struct { origin: [2]i64 = .{ 0, 0 }, scale: f32 = 1, offset: [2]f32 = .{ 0, 0 }, zoom: f32 = 1 }`: lcgf_camera.
+
+### `COptions` (struct)
+lcgf_canvas_options: what `Frame.canvas` and `hit` read, all of it the caller's.
+
+Fields: `camera`, `layers`, `layers_len`, `zoom_scale`, `ranges`, `ranges_len`, `overrides`, `overrides_len`
+
+- `fn cam(o: *const COptions) canvas.Camera`
+- `fn palette(o: *const COptions) canvas.Palette`
+- `fn spans(o: *const COptions) []const canvas.Range`
+- `fn marks(o: *const COptions) []const canvas.Override`
+
 ## `lcgf.abi_ct` (src/abi/ct.zig)
 
 Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for programs written in C++ or Rust.
