@@ -5449,6 +5449,7 @@ Popover (tier 2): a button that opens a floating panel next to it, the WAI-ARIA 
 - `fn sameSemantics(a: *const a11y.Export, b: *const a11y.Export) bool`: Whether two exports say the same to assistive technology: rows, roles, states, values, ranges and names (by hash, as the front ends keep their bytes in different buffers).
 - `fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime H: type) type`: The comptime front end of a page with an overlay widget.
 - `fn rowOf(comptime n: Spec, comptime name: []const u8) u32`: Depth-first row of the spec node with id `name`; a compile error if there is none.
+- `fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8) type`: The custom widgets (`Spec.widget`) of `ct.button` and `ct.popover`: the button's `step` toggles on its click and closes on a press on the scrim or Escape, as `trigger` and `begin` do at run time, and keeps the button's rect for the panel's `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the trigger and a label, and the popover's panel with two labels, in both front ends, in theme `th`.
 - `fn exportRow(e: *const a11y.Export, node: u32) u32`: The export row of tree row `node`; `none` if it is not exported.
 
@@ -5517,9 +5518,30 @@ Fields: `in`, `last`, `event`, `pressed`, `response`, `page`
 
 - `fn responseOf(v: *const View, comptime name: []const u8) Response`: The response of the widget named `name` this frame, as `part` sees its own.
 
+### `ct` (struct)
+
+- `fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime text: anytype) Spec`: The button that opens and closes popover `name`, bound to the bool field `open`, showing `text` (a literal or a string field).
+- `fn popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec`: The scrim and the panel of popover `name` holding `children` (any spec nodes), live while `open` is true (`spec.when`); put it last in the page's root.
+
+### `Comptime(..)` (generic struct)
+The custom widgets (`Spec.widget`) of `ct.button` and `ct.popover`: the button's `step` toggles on its click and closes on a press on the scrim or Escape, as `trigger` and `begin` do at run time, and keeps the button's rect for the panel's `push`.
+
+
+### `Comptime(..).Trigger` (struct)
+
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
+### `Comptime(..).Layer` (struct)
+
+- `holds_content = true`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
 ### `Example(..)` (generic struct)
 The example page: a toolbar with the trigger and a label, and the popover's panel with two labels, in both front ends, in theme `th`.
 
+- `toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel }`
 - `P = Popover(th, .details, .open)`
 - `Ui = ComptimePage(State, spec, th, P)`
 - `limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 }`
@@ -5558,6 +5580,7 @@ Tooltip (tier 2): a short text that appears next to a widget once the pointer ha
 - `fn advance(tip: Tip, hovered: bool, dt: f32, escape: bool) Tip`: One frame of a tooltip: while the target is hovered the timer runs, and the tooltip shows once it reaches `delay`; leaving the target resets it.
 - `fn update(f: *const Frame, tip: *Tip, r: Response) void`: Steps `tip` by one frame from the target's response `r`.
 - `fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8) void`: Builds the bubble of the tooltip of `target` showing `text`, if it is shown.
+- `fn Bubble(comptime th: Theme, comptime target: []const u8, comptime tip: []const u8, comptime text: []const u8) type`: The custom widget (`Spec.widget`) of `ct.tooltip`: its `step` runs while the bubble is hidden too (`steps_hidden`), advancing the tip from the target's hover, and keeps the target's rect for `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with a button and a label, and the button's tooltip, in both front ends, in theme `th`.
 
 ### `Tip` (struct)
@@ -5565,6 +5588,7 @@ A tooltip's state, owned by the application.
 
 Fields: `rested`, `dismissed`, `shown`
 
+- `fn visible(t: Tip) bool`: Whether the bubble is shown: what `spec.when` over this field selects by (`ct.tooltip`).
 
 ### `Tooltip(..)` (generic struct)
 The tooltip of the widget named `target`, bound to the `Tip` field `tip`, in theme `th`: its spec builder and the hooks `popover.ComptimePage` calls.
@@ -5574,9 +5598,22 @@ The tooltip of the widget named `target`, bound to the `Tip` field `tip`, in the
 - `fn step(sig: anytype, v: anytype) void`: Rests or resets the timer from the target's hover; Escape hides.
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
 
+### `ct` (struct)
+
+- `fn tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip: @EnumLiteral(), comptime text: []const u8) Spec`: The tooltip of the widget named `target` (elsewhere on the page), bound to the `Tip` field `tip`, showing `text`.
+
+### `Bubble(..)` (generic struct)
+The custom widget (`Spec.widget`) of `ct.tooltip`: its `step` runs while the bubble is hidden too (`steps_hidden`), advancing the tip from the target's hover, and keeps the target's rect for `push`.
+
+- `steps_hidden = true`
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
 ### `Example(..)` (generic struct)
 The example page: a toolbar with a button and a label, and the button's tooltip, in both front ends, in theme `th`.
 
+- `toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel }`
 - `T = Tooltip(th, .save, .tip)`
 - `Ui = popover.ComptimePage(State, spec, th, T)`
 - `limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 }`
@@ -5621,6 +5658,7 @@ Menu (tier 2): a button that opens a list of actions, one of which may open a su
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: Def, st: MenuState) void`: The semantics of menu `name` the tree's columns cannot hold, written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`.
 - `fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []const u8) Response`: The trigger: a button named `name` showing `text`.
 - `fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8) u8`: Builds menu `name` (items `def`, labels `texts` in the one sequence) if it is open.
+- `fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime menu: []const u8, comptime def: Def) type`: The custom widgets (`Spec.widget`) of `ct.button` and `ct.list`: the button's `step` reads its own, the scrim's and the items' responses and the keys through `advance`, as `show` does at run time, and keeps its rect for the list's `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the File button and a label, and its menu, in both front ends, in theme `th`.
 
 ### `Def` (struct)
@@ -5636,6 +5674,7 @@ A menu's state, owned by the application.
 
 Fields: `open`, `active`, `sub`, `sub_active`, `hover`, `chosen`
 
+- `fn visible(s: MenuState) bool`: Whether the menu is shown: what `spec.when` over this field selects by (`ct.list`).
 
 ### `Menu(..)` (generic struct)
 Menu `name`, with items `def`, bound to the `MenuState` field `menu`, in theme `th`: its spec builders and the hooks `popover.ComptimePage` calls.
@@ -5653,9 +5692,29 @@ Fields: `toggle`, `outside`, `clicked`, `hovered`
 
 - `fn add(h: *Hits, k: u8, r: Response) void`: Notes item `k`'s response.
 
+### `ct` (struct)
+
+- `fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime text: anytype) Spec`: The button that opens menu `name`, bound to the `MenuState` field `menu`, showing `text` (a literal or a string field).
+- `fn list(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8) Spec`: The scrim and the list of menu `name` (items `def`, without a submenu, captioned by `texts`), live while it is open (`spec.when`, `MenuState.visible`); put it last in the page's root.
+
+### `Comptime(..)` (generic struct)
+The custom widgets (`Spec.widget`) of `ct.button` and `ct.list`: the button's `step` reads its own, the scrim's and the items' responses and the keys through `advance`, as `show` does at run time, and keeps its rect for the list's `push`.
+
+
+### `Comptime(..).Trigger` (struct)
+
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
+### `Comptime(..).List` (struct)
+
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
 ### `Example(..)` (generic struct)
 The example page: a toolbar with the File button and a label, and its menu, in both front ends, in theme `th`.
 
+- `toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel }`
 - `M = Menu(th, .file, .menu, file_menu)`
 - `Ui = popover.ComptimePage(State, spec, th, M)`
 - `limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 }`
@@ -6004,7 +6063,7 @@ A select's state, owned by the application.
 
 Fields: `selected`, `menu`
 
-- `fn shown(s: SelectState) bool`: Whether the list is shown: what `spec.when` over this field selects by (`ct.list`).
+- `fn visible(s: SelectState) bool`: Whether the list is shown: what `spec.when` over this field selects by (`ct.list`).
 
 ### `Options` (struct)
 The options of a select known by their captions only (`ct.select`, HTML `<option>`), and the headers of their groups (`<optgroup label>`).
@@ -6022,7 +6081,7 @@ Select `name` with options `def`, bound to the `SelectState` field `field`, its 
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
 
 ### `ct` (struct)
-The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, and its list, last in the page's root (so it is drawn above the rest), live while the list is open (`spec.when` over the field, `SelectState.shown`).
+The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, and its list, last in the page's root (so it is drawn above the rest), live while the list is open (`spec.when` over the field, `SelectState.visible`).
 
 - `fn select(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The button of select `id`, bound to the `SelectState` field `field`, showing the chosen one of `opts.texts`.
 - `fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The scrim and the list of select `id`, with the same arguments as its `select`.
