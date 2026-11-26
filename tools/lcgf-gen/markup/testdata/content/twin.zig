@@ -1,15 +1,22 @@
-//! content, written by hand: the document elements over widgets and roles: a link.
+//! content, written by hand: the document elements over widgets and roles: a link, lists.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
 const s = lcgf.spec;
 const w = lcgf.widgets_base;
 const link = lcgf.widgets_link;
+const label = lcgf.widgets_label;
 
 pub const theme: w.Theme = .{};
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
+    // <ul>, <ol>: role list; <li>: role list_item, on the label of text-only content.
+    s.col(.{ .role = .list }, .{
+        s.styled(label.ct.label(theme, "Plain"), .{ .role = .list_item }),
+        s.col(.{ .role = .list_item }, .{ label.ct.label(theme, "Inside"), label.ct.label(theme, "a box") }),
+    }),
+    s.col(.{ .role = .list }, .{s.styled(label.ct.label(theme, "First"), .{ .role = .list_item })}),
 });
 
 pub fn Handlers(comptime Ui: type) type {

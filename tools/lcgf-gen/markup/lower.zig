@@ -1413,6 +1413,7 @@ pub const Lowerer = struct {
             node.kind = .landmark;
             node.landmark = lm;
         }
+        if (listRole(t)) |r| node.style.role = r;
         node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
     }
@@ -1452,7 +1453,8 @@ pub const Lowerer = struct {
         const base_style: Style = if (heading != 0) .{ .role = .heading, .value = @floatFromInt(heading) } else lcgf.widgets_label.labelStyle(th);
         var params: []const u8 = "";
         var margin: ?[4]f32 = null;
-        const s = l.boxStyle(n, base_style, l.parentDir(parent), &params, &margin);
+        var s = l.boxStyle(n, base_style, l.parentDir(parent), &params, &margin);
+        if (listRole(l.tag(n))) |r| s.role = r;
         var node: ir.Node = .{
             .kind = if (heading != 0) .heading else .label,
             .parent = parent,
@@ -2507,6 +2509,14 @@ fn headingLevel(t: []const u8) u8 {
 /// A custom element (a name with a hyphen, not lcgf-*): an app component.
 fn isComponent(t: []const u8) bool {
     return std.mem.indexOfScalar(u8, t, '-') != null and !std.mem.startsWith(u8, t, "lcgf-");
+}
+
+/// The list role of element `t` (engine spec F1): `<ul>`, `<ol>` and `<menu>` are lists, `<li>`
+/// their items. No marker is drawn, as under `list-style: none`.
+fn listRole(t: []const u8) ?types.Role {
+    if (std.mem.eql(u8, t, "ul") or std.mem.eql(u8, t, "ol") or std.mem.eql(u8, t, "menu")) return .list;
+    if (std.mem.eql(u8, t, "li")) return .list_item;
+    return null;
 }
 
 fn isLandmark(t: []const u8) bool {
