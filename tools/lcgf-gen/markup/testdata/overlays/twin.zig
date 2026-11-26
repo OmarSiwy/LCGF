@@ -12,6 +12,7 @@ const dialog = lcgf.widgets_dialog;
 const label = lcgf.widgets_label;
 const select = lcgf.widgets_select;
 const tooltip = lcgf.widgets_tooltip;
+const popover = lcgf.widgets_popover;
 
 pub const theme: w.Theme = .{};
 
@@ -20,6 +21,7 @@ pub const State = struct {
     settings_tip: tooltip.Tip = .{},
     prefs_open: bool = true,
     snap: bool = false,
+    info_open: bool = false,
 };
 
 const shapes: select.Options = .{ .texts = &.{ "Circle", "Square", "Tri" }, .groups = &.{.{ .at = 1, .label = "Angular" }} };
@@ -29,6 +31,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
         s.row(.{ .pad = @splat(8), .gap = 8 }, .{
             s.named(select.ct.select(theme, .shape, .shape, shapes), "Shape"),
             button.ct.button(theme, .settings, "Settings"),
+            popover.ct.button(theme, .info, .info_open, "Info"),
         }),
     }),
     select.ct.list(theme, .shape, .shape, shapes),
@@ -38,13 +41,15 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
         checkbox.ct.checkbox(theme, .snap, .snap, "Snap"),
         button.ct.button(theme, .done, "Done"),
     }),
+    popover.ct.popover(theme, .info, .info_open, .{label.ct.label(theme, "Version 1")}),
 });
 
 pub const names = .{"Shape"};
 
 /// The dialog starts open: Tab inside it, a press on its backdrop (nothing), Escape; then the
 /// select: open it, Down to Tri, Enter, and a click on Circle; then the pointer rests on
-/// Settings until its tooltip shows, and Escape hides it.
+/// Settings until its tooltip shows, and Escape hides it; Info opens its popover, and a
+/// press outside closes it.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -84,6 +89,19 @@ pub const replay =
     \\frame
     \\frame
     \\press 41
+    \\frame
+    \\dt 0.016
+    \\pointer 252 25
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\pointer 252 70
+    \\frame
+    \\pointer 700 500
+    \\buttons left
+    \\frame
+    \\buttons
     \\frame
 ;
 
@@ -137,6 +155,16 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = p.frame(h, &in);
     _ = p.frame(h, &in);
     try std.testing.expect(p.ui.signals.state.settings_tip.shown);
+    // Info opens its popover; a press outside closes it.
+    in.dt = 0;
+    try click(p, h, &in, "info");
+    try std.testing.expect(p.ui.signals.state.info_open);
+    in.pointer = .{ 700, 500 };
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    try std.testing.expect(!p.ui.signals.state.info_open);
 }
 
 fn click(p: anytype, h: anytype, in: *lcgf.input.Input, comptime id: []const u8) !void {

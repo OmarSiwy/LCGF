@@ -73,6 +73,12 @@ pub const Kind = enum(u8) {
     /// `title="text"` on widget `id`: `widgets_tooltip.ct.tooltip(theme, .id, .bind, text)`,
     /// `bind` a `Tip`, moved last into the root.
     tooltip,
+    /// `<button popovertarget="id">`: `widgets_popover.ct.button(theme, .id, .bind, caption)`,
+    /// `bind` the popover's bool.
+    popover_button,
+    /// An element with `popover`: `widgets_popover.ct.popover(theme, .id, .bind, .{ children })`,
+    /// moved last into the root.
+    popover,
 };
 
 /// Where a caption's text comes from.

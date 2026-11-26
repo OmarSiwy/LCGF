@@ -1777,7 +1777,7 @@ pub const Lowerer = struct {
         const parent = if (l.ir_of[p] != none) l.ir_of[p] else l.irParent(p);
         if (parent == none) return;
         const kind = l.page.nodes.items(.kind)[parent];
-        if (kind != .container and kind != .landmark and kind != .component and kind != .dialog and kind != .section) return;
+        if (kind != .container and kind != .landmark and kind != .component and kind != .dialog and kind != .section and kind != .popover) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
         var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme), .paragraph = l.paragraphOf(p), .decoration = l.decorationOf(p) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
@@ -2320,7 +2320,7 @@ pub const Lowerer = struct {
         // A select's list and a tooltip name the widget they belong to.
         const owned = struct {
             fn is(k: ir.Kind) bool {
-                return k == .select_list or k == .tooltip;
+                return k == .select_list or k == .tooltip or k == .popover;
             }
         }.is;
         for (ids, 0..) |id, i| if (id.len > 0 and !owned(kinds[i])) for (ids[0..i], 0..) |o, j| if (!owned(kinds[j]) and std.mem.eql(u8, o, id)) {
@@ -2386,7 +2386,9 @@ pub const Lowerer = struct {
 
     /// The widget an element is, if any; true when `n` was lowered as one.
     fn widget(l: *Lowerer, n: u32, t: []const u8, parent: u32) bool {
+        if (l.attr(n, "popover") != null) return l.popover(n, parent);
         if (std.mem.eql(u8, t, "button")) {
+            if (l.attr(n, "popovertarget") != null) return l.popoverButton(n, parent);
             if (l.attr(n, "aria-pressed") != null) return l.boolWidget(n, parent, .toggle, "pressed");
             l.button(n, parent);
             return true;
@@ -2845,7 +2847,7 @@ pub const Lowerer = struct {
         const at = l.attrLoc(n, "title");
         const i = l.ir_of[n];
         const ok_target = i != none and l.page.nodes.items(.id)[i].len > 0 and !l.inRepeat(i) and switch (l.page.nodes.items(.kind)[i]) {
-            .dialog, .image, .component => false,
+            .dialog, .image, .component, .popover => false,
             else => true,
         };
         if (!ok_target) {
@@ -2856,6 +2858,93 @@ pub const Lowerer = struct {
         const field_name = ok(std.fmt.allocPrint(l.arena, "{s}_tip", .{id}));
         l.field(field_name, .tip, at, "title=");
         ok(l.overlays.append(l.arena, l.addNode(.{ .kind = .tooltip, .parent = l.page.nodes.items(.parent)[i], .loc = at, .id = id, .bind = field_name, .text = collapse(l.arena, text) })));
+    }
+
+    /// The bool field popover element `p` binds: its `bind:open`, else `<id>_open`.
+    fn popoverField(l: *Lowerer, p: u32) []const u8 {
+        if (l.attr(p, "bind:open")) |f| {
+            if (l.identifier(f, l.valueLoc(p, "bind:open"))) l.field(f, .bool, l.valueLoc(p, "bind:open"), "popover");
+            return f;
+        }
+        const f = ok(std.fmt.allocPrint(l.arena, "{s}_open", .{l.attr(p, "id").?}));
+        l.field(f, .bool, l.attrLoc(p, "popover"), "popover");
+        return f;
+    }
+
+    /// The element with id `id` and the `popover` attribute, or none.
+    fn popoverOf(l: *const Lowerer, id: []const u8) u32 {
+        for (0..l.doc.nodes.len) |i| {
+            if (l.doc.nodes.items(.kind)[i] != .element) continue;
+            if (l.attr(@intCast(i), "popover") == null) continue;
+            if (std.mem.eql(u8, l.attr(@intCast(i), "id") orelse "", id)) return @intCast(i);
+        }
+        return none;
+    }
+
+    /// `<button popovertarget="id">`: the button that opens and closes popover `id`
+    /// (`widgets_popover.ct.button`). It is named by the popover: the panel hangs below it.
+    fn popoverButton(l: *Lowerer, n: u32, parent: u32) bool {
+        l.skip[n] = true; // its text is the caption
+        const target = l.attr(n, "popovertarget").?;
+        const at = l.valueLoc(n, "popovertarget");
+        const p = l.popoverOf(target);
+        if (p == none or !l.identifier(target, at)) {
+            if (p == none) l.ds.err(at, "popovertarget names no element with that id and the popover attribute", .{});
+            return true;
+        }
+        if (l.attr(n, "id") != null or l.attr(n, "on:click") != null) {
+            l.ds.err(l.loc(n), "a popovertarget button takes its popover's name: no id or on:click of its own", .{});
+            return true;
+        }
+        for (l.page.nodes.items(.kind), l.page.nodes.items(.id)) |k, id| if (k == .popover_button and std.mem.eql(u8, id, target)) {
+            l.ds.err(at, "popover '{s}' has a button already; one opens it", .{target});
+            return true;
+        };
+        if (l.inRepeat(parent)) {
+            l.ds.err(l.loc(n), "a popovertarget button inside lcgf-each is not lowered", .{});
+            return true;
+        }
+        var node: ir.Node = .{ .kind = .popover_button, .parent = parent, .loc = l.loc(n), .id = target, .bind = l.popoverField(p) };
+        l.caption(&node, collapse(l.arena, l.ownText(n)), l.loc(n));
+        if (node.text_kind == .format or l.content(n).elements > 0) {
+            l.ds.err(l.loc(n), "a button shows one literal or one field", .{});
+            return true;
+        }
+        node.kind = .popover_button;
+        node.name = l.accessibleName(n);
+        l.ir_of[n] = l.addNode(node);
+        return true;
+    }
+
+    /// An element with `popover` (and an id): its content in a panel that a
+    /// `popovertarget` button opens below itself (`widgets_popover.ct.popover`), moved last
+    /// into the root. A press outside or Escape closes it.
+    fn popover(l: *Lowerer, n: u32, parent: u32) bool {
+        const id = l.attr(n, "id") orelse {
+            l.ds.err(l.loc(n), "a popover needs an id, which its popovertarget button names", .{});
+            l.skip[n] = true;
+            return true;
+        };
+        if (!l.identifier(id, l.valueLoc(n, "id"))) {
+            l.skip[n] = true;
+            return true;
+        }
+        if (l.inRepeat(parent)) {
+            l.ds.err(l.loc(n), "a popover inside lcgf-each is not lowered; put it at the page level", .{});
+            l.skip[n] = true;
+            return true;
+        }
+        const has_button = for (0..l.doc.nodes.len) |i| {
+            if (l.doc.nodes.items(.kind)[i] == .element and std.mem.eql(u8, l.attr(@intCast(i), "popovertarget") orelse "", id)) break true;
+        } else false;
+        if (!has_button) {
+            l.ds.err(l.loc(n), "popover '{s}' needs a <button popovertarget=\"{s}\"> to open it", .{ id, id });
+            l.skip[n] = true;
+            return true;
+        }
+        l.ir_of[n] = l.addNode(.{ .kind = .popover, .parent = parent, .loc = l.loc(n), .id = id, .bind = l.popoverField(n) });
+        ok(l.overlays.append(l.arena, l.ir_of[n]));
+        return true;
     }
 
     /// `<dialog bind:open>`: a modal dialog over the page while the bool field is true; its

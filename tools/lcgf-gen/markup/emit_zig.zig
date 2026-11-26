@@ -257,7 +257,7 @@ pub const Emit = struct {
         }
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
-            .container, .landmark, .when, .choice, .list, .dialog, .section => true,
+            .container, .landmark, .when, .choice, .list, .dialog, .section, .popover => true,
             .component => e.hasChild(i),
             else => false,
         };
@@ -390,6 +390,15 @@ pub const Emit = struct {
                 e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("select"), if (n.kind == .select) "select" else "list", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.selectOptions(n);
                 e.write(")");
+            },
+            .popover_button => {
+                e.print("{s}.ct.button(theme, .{f}, .{f}, ", .{ e.use("popover"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.caption(n.text_kind, n.text);
+                e.write(")");
+            },
+            .popover => {
+                e.print("{s}.ct.popover(theme, .{f}, .{f}, .{{", .{ e.use("popover"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
             .tooltip => {
                 e.print("{s}.ct.tooltip(theme, .{f}, .{f}, ", .{ e.use("tooltip"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
@@ -880,6 +889,16 @@ pub const Emit = struct {
                 }
                 if (!content) return "";
                 return std.fmt.allocPrint(e.arena, "app.components.{f}.close(f, &theme);", .{std.zig.fmtId(n.text)}) catch unreachable;
+            },
+            .popover_button => {
+                e.print("_ = {s}.trigger(f, &theme, \"{s}\", &{s}, ", .{ e.use("popover"), n.id, e.stateRef(n.bind) });
+                e.rtCaption(n.text_kind, n.text);
+                e.write(");");
+                return "";
+            },
+            .popover => {
+                e.print("if ({s}.begin(f, &theme, \"{s}\", &{s})) {{", .{ e.use("popover"), n.id, e.stateRef(n.bind) });
+                return e.arena.dupe(u8, "popover.end(f); }") catch unreachable;
             },
             .tooltip => {
                 e.print("{s}.update(f, &{s}, f.ctx.inter.response(.from(\"{s}\"))); {s}.show(f, &theme, \"{s}\", &{s}, ", .{ e.use("tooltip"), e.stateRef(n.bind), n.id, e.use("tooltip"), n.id, e.stateRef(n.bind) });
@@ -1417,7 +1436,7 @@ pub const Emit = struct {
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
             // A leaf inside a choice closes its prong at once.
             const leaf = switch (nodes.items(.kind)[i]) {
-                .container, .landmark, .when, .list, .choice, .dialog, .section => false,
+                .container, .landmark, .when, .list, .choice, .dialog, .section, .popover => false,
                 .component => !e.hasChild(i),
                 else => true,
             };

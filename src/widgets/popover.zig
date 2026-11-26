@@ -15,7 +15,9 @@
 //! `if (begin(...)) { content; end(f); }`.
 //!
 //! Comptime: `const P = Popover(th, .details, .open);` gives the spec builders `P.button` and
-//! `P.layer` and the hooks `ComptimePage(State, spec, th, P)` runs.
+//! `P.layer` and the hooks `ComptimePage(State, spec, th, P)` runs. Or, in `base.ComptimeUi`
+//! beside any widget: `ct.button(th, .details, .open, "Details")` in the flow and
+//! `ct.popover(th, .details, .open, children)` last in the root.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -530,6 +532,77 @@ fn rowWalk(comptime n: Spec, comptime name: []const u8, comptime next: *u32) ?u3
     return null;
 }
 
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+pub const ct = struct {
+    /// The button that opens and closes popover `name`, bound to the bool field `open`,
+    /// showing `text` (a literal or a string field). Its runtime twin is `trigger`.
+    pub fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime text: anytype) Spec {
+        var b = base.ct.button(th, name, text);
+        b.bind = @tagName(open);
+        b.widget = Comptime(th, @tagName(name), @tagName(open)).Trigger;
+        return b;
+    }
+
+    /// The scrim and the panel of popover `name` holding `children` (any spec nodes), live
+    /// while `open` is true (`spec.when`); put it last in the page's root. A press outside the
+    /// panel or Escape closes it. Its runtime twin is `begin` ... `end`.
+    pub fn popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec {
+        const id = @tagName(name);
+        var panel = spec_zig.col(.{}, children);
+        panel.id = partName(id, "panel");
+        return spec_zig.when(open, .{ .kind = .col, .id = partName(id, "scrim"), .widget = Comptime(th, id, @tagName(open)).Layer, .children = &.{panel} });
+    }
+};
+
+/// The custom widgets (`Spec.widget`) of `ct.button` and `ct.popover`: the button's `step`
+/// toggles on its click and closes on a press on the scrim or Escape, as `trigger` and `begin`
+/// do at run time, and keeps the button's rect for the panel's `push`.
+pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8) type {
+    return struct {
+        pub const Trigger = struct {
+            pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+                return base.fieldError(State, "popover '" ++ name ++ "'", bound, bool);
+            }
+
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                const U = @TypeOf(ui.*);
+                const at = ui.lastRect(row);
+                ui.keep(Trigger).* = .{ at.x0, at.y0, at.x1, at.y1 };
+                const scrim: U.Events.Widget = @field(U.Events.Widget, partName(name, "scrim"));
+                const toggled = toggle(@field(ui.signals.state, open), base.ctResponse(ui, row, event, in).clicked);
+                ui.signals.set(comptime U.field(open), dismiss(toggled, ui.pointer.pressed == scrim, keyPressed(in, keys.escape)));
+            }
+
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const t = &ui.tables.t;
+                var st = n.style;
+                st.fill = base.buttonFill(&th, ui.response(next.*, in));
+                const i = t.push(parent, .hash(name), &st);
+                next.* += 1;
+                ui.push(n.children[0], i, next, in);
+                t.seal(i);
+            }
+        };
+
+        pub const Layer = struct {
+            pub const holds_content = true;
+
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const t = &ui.tables.t;
+                const k = ui.keep(Trigger).*;
+                const sc = t.push(parent, .hash(partName(name, "scrim")), &scrimStyle(in.viewport));
+                const p = t.push(sc, .hash(partName(name, "panel")), &panelStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] }));
+                t.c.role[p] = @backingInt(role);
+                next.* += 2;
+                inline for (n.children[0].children) |c| ui.push(c, p, next, in);
+                t.seal(p);
+                t.seal(sc);
+            }
+        };
+    };
+}
+
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example page: a toolbar with the trigger and a label, and the popover's panel with two
@@ -537,7 +610,7 @@ fn rowWalk(comptime n: Spec, comptime name: []const u8, comptime next: *u32) ?u3
 /// (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
-        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
+        pub const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
         pub const App = struct {
             open: bool = false,
@@ -618,6 +691,38 @@ test "Popover: the page agrees in both front ends, closed and open" {
     const panel = t.rect(t.find(.from("details_panel")));
     try testing.expectEqual(at.x0, panel.x0);
     try testing.expectEqual(at.y1 + Theme.default.gap, panel.y0);
+}
+
+/// The example page with the popover as `ct.button` and `ct.popover` in `base.ComptimeUi`;
+/// the runtime side is `Example`'s app.
+const CtPage = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    pub const State = struct { open: bool = false };
+    pub const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{ ct.button(th, .details, .open, "Details"), base.ct.label(th, "Layer 0") }),
+        ct.popover(th, .details, .open, .{ base.ct.label(th, "Exposure 0.25"), base.ct.label(th, "Gamma 2.2") }),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(E.App, Ui, E.limits);
+};
+var ct_harness: CtPage.Run = .{};
+
+test "ct.button, ct.popover: the example replay in base.ComptimeUi gives the runtime popover's frames" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &ct_harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    var r: Replay = .{ .src = replay };
+    var opened: u32 = 0;
+    while (try r.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| {
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.open, h.ui.signals.state.open);
+        opened += @intFromBool(h.app.open);
+    }
+    try testing.expect(opened > 0);
 }
 
 test "panelStyle: the theme's tokens, below the trigger" {

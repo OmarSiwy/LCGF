@@ -1,0 +1,9 @@
+popover.html:4:26: error: popovertarget names no element with that id and the popover attribute
+  <button popovertarget="nothing">Open</button>
+                         ^
+popover.html:5:3: error: popover 'lonely' needs a <button popovertarget="lonely"> to open it
+  <div id="lonely" popover><span>No button</span></div>
+  ^
+popover.html:6:3: error: a popovertarget button takes its popover's name: no id or on:click of its own
+  <button id="named" popovertarget="tip">Tip</button>
+  ^

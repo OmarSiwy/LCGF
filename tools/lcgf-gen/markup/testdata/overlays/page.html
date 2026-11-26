@@ -16,11 +16,13 @@
       </optgroup>
     </select>
     <button id="settings" on:click="open_settings" title="Open the preferences">Settings</button>
+    <button popovertarget="info">Info</button>
   </div>
   <dialog id="prefs" bind:open="prefs_open" open>
     <span>Preferences</span>
     <label><input type="checkbox" id="snap" bind:checked="snap"> Snap</label>
     <button id="done" on:click="close_settings">Done</button>
   </dialog>
+  <div id="info" popover><span>Version 1</span></div>
 </body>
 </html>
