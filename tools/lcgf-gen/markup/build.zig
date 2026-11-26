@@ -98,6 +98,16 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = page }, .{ .name = "twin", .module = twin } },
         }) });
         (if (f.waits_for.len == 0) step else pending).dependOn(&b.addRunArtifact(t).step);
+        for (f.spec_apps) |x| {
+            const other = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/app_{s}.zig", .{ dir, f.name, x })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
+            const t_other = b.addTest(.{ .name = b.fmt("markup-{s}-{s}", .{ f.name, x }), .root_module = b.createModule(.{
+                .root_source_file = b.path(dir ++ "/fixture.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .app = other }) }, .{ .name = "twin", .module = twin } },
+            }) });
+            step.dependOn(&b.addRunArtifact(t_other).step);
+        }
         // The same page through the runtime frontend: identical frames (base.Harness).
         const parity = b.addTest(.{ .name = b.fmt("markup-{s}-runtime", .{f.name}), .root_module = b.createModule(.{
             .root_source_file = b.path(dir ++ "/parity.zig"),

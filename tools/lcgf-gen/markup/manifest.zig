@@ -42,6 +42,10 @@ pub const Fixture = struct {
     /// The compile-fail cases also get the page built over each `<name>/app_<x>.zig` listed,
     /// as `<name>_<x>`.
     wrong_apps: []const []const u8 = &.{},
+    /// More apps the comptime page is built over, each `<name>/app_<x>.zig`, that must give the
+    /// twin's spec and pass its fixture test: an app with only the spec forms, as before the
+    /// runtime frontend lowered components.
+    spec_apps: []const []const u8 = &.{},
 };
 
 pub const Manifest = struct { rows: []const Row, fixtures: []const Fixture };

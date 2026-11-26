@@ -260,7 +260,7 @@
         .{ .name = "flexitems" },
         .{ .name = "fonts" },
         .{ .name = "paragraphs" },
-        .{ .name = "components", .app = true, .wrong_apps = .{ "wrong", "missing", "chip" } },
+        .{ .name = "components", .app = true, .wrong_apps = .{ "wrong", "missing", "chip" }, .spec_apps = .{"spec"} },
         .{ .name = "themed", .app = true, .runtime_vars = "t-" },
         .{ .name = "content" },
         .{ .name = "faces" },
