@@ -1,0 +1,26 @@
+<!doctype html>
+<html lcgf-page="overlays">
+<head>
+  <title>Overlays</title>
+  <style>
+    .bar { display: flex; gap: 8px; padding: 8px; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <select id="shape" bind:value="shape" on:change="shape_changed" aria-label="Shape">
+      <option>Circle</option>
+      <optgroup label="Angular">
+        <option selected>Square</option>
+        <option label="Tri">Triangle</option>
+      </optgroup>
+    </select>
+    <button id="settings" on:click="open_settings">Settings</button>
+  </div>
+  <dialog id="prefs" bind:open="prefs_open" open>
+    <span>Preferences</span>
+    <label><input type="checkbox" id="snap" bind:checked="snap"> Snap</label>
+    <button id="done" on:click="close_settings">Done</button>
+  </dialog>
+</body>
+</html>

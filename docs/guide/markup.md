@@ -70,6 +70,8 @@ lcgf-gen --mappings                    # what every element, attribute and prope
 | `bind:checked="f"` | Two-way `bool` binding (checkbox, `switch`, `aria-pressed` button). |
 | `bind:value="f"` | Two-way binding: `f32` for range, `Number` for number, `Text(256)` for text controls. |
 | `bind:selected="f"` | A radio group's `u32` index. |
+| `<select bind:value="f">` with `<option>`s | A select (`widgets_select.ct.select`); `f` is a `SelectState`, its `.selected` the chosen option's index, which `on:change` gets as a `u32`. `<option selected>` is the default, an option's `label` its caption, and `<optgroup label>` a header in the list. |
+| `<dialog bind:open="f">` | A modal dialog of any content while the `bool` `f` is true (`widgets_dialog.ct.dialog`). Escape sets `f` false, Tab stays inside, and the page under it takes no input; `open` makes `f` start true. Close it from a handler with `ui.signals.set(.f, false)`. |
 | `on:click="name"` | Calls `pub fn name(h: *H, ui: *Ui) void`. |
 | `on:change="name"` | Calls `pub fn name(h: *H, ui: *Ui, value: T) void` with the new value. On a text field, search field or textarea, `value` is the text (`[]const u8`), reported as it is edited. |
 | `on:submit="name"` | On a text field, search field or textarea: calls `pub fn name(h: *H, ui: *Ui) void` on Enter (Ctrl+Enter or Cmd+Enter in a textarea, where Enter adds a line). |
@@ -86,6 +88,10 @@ compiles in every language.
 
 Field types are inferred from where a field is bound, and two bindings must agree. Defaults come
 from the HTML: `checked`, `value`, the checked radio. Anything else starts at zero.
+
+A select's list and a dialog are drawn above the page. The compiler moves them last into a new
+root, an unpadded column over the viewport that holds the `<body>` and then them, so they float
+from the viewport's origin.
 
 ## App components
 
@@ -204,7 +210,7 @@ per run. Nothing is silently dropped.
 - **mapped**: lowered today.
 - **pending**: lowered onto engine API that docs/plans/markup-engine-api.md specifies and the
   engine has not landed yet. Margins are one.
-- **planned**: not lowered yet, for example `:hover`, `@media`, grid and `<select>`.
+- **planned**: not lowered yet, for example `:hover`, `@media` and grid.
 - **rejected**: not modelled by design:
   - scripts and `on*` attributes, where you write `on:click="name"` instead;
   - remote stylesheets;

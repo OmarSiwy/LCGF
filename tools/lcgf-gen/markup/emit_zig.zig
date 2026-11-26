@@ -245,7 +245,7 @@ pub const Emit = struct {
         }
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
-            .container, .landmark, .when, .choice, .list => true,
+            .container, .landmark, .when, .choice, .list, .dialog => true,
             .component => e.hasChild(i),
             else => false,
         };
@@ -360,6 +360,15 @@ pub const Emit = struct {
                 e.componentCall(n, false, 0, has_children);
                 if (has_children) inner_close.appendSlice(e.arena, "} })") catch unreachable;
             },
+            .select, .select_list => {
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("select"), if (n.kind == .select) "select" else "list", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.selectOptions(n);
+                e.write(")");
+            },
+            .dialog => {
+                e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
+            },
             .spinner => unreachable,
         }
         if (restyle and !has_children) {
@@ -382,6 +391,26 @@ pub const Emit = struct {
             return "";
         }
         return all.items;
+    }
+
+    /// A select's `widgets_select.Options`: its captions and group headers.
+    fn selectOptions(e: *Emit, n: ir.Node) void {
+        e.write(".{ .texts = &.{");
+        for (n.captions, 0..) |c, k| {
+            e.write(if (k == 0) " " else ", ");
+            e.string(c);
+        }
+        e.write(" }");
+        if (n.groups.len > 0) {
+            e.write(", .groups = &.{");
+            for (n.groups, 0..) |g, k| {
+                e.print("{s}.{{ .at = {d}, .label = ", .{ if (k == 0) " " else ", ", g.at });
+                e.string(g.label);
+                e.write(" }");
+            }
+            e.write(" }");
+        }
+        e.write(" }");
     }
 
     fn indent(e: *Emit, depth: usize) void {
@@ -438,6 +467,7 @@ pub const Emit = struct {
             .u32 => "u32",
             .text => "lcgf.widgets_textfield.Text(256)",
             .number => "lcgf.widgets_number.Number",
+            .select => "lcgf.widgets_select.SelectState",
             .pair => "[2]f32",
             .@"enum" => "enum {}",
         };
@@ -449,7 +479,7 @@ pub const Emit = struct {
             .str => "\"\"",
             .bool => "false",
             .f32, .u32 => "0",
-            .text, .number, .pair, .@"enum" => ".{}",
+            .text, .number, .pair, .@"enum", .select => ".{}",
         };
     }
 
@@ -729,7 +759,36 @@ pub const Emit = struct {
                 }
                 return "";
             },
+            .select => {
+                e.print("_ = {s}.button(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
+                e.rtTexts(n.captions);
+                e.write(" });");
+                return "";
+            },
+            .select_list => {
+                e.print("{s}.listGrouped(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
+                e.rtTexts(n.captions);
+                e.write(" }, &.{");
+                for (n.groups, 0..) |g, k| {
+                    e.print("{s}.{{ .at = {d}, .label = ", .{ if (k == 0) " " else ", ", g.at });
+                    e.string(g.label);
+                    e.write(" }");
+                }
+                e.write(if (n.groups.len > 0) " });" else "});");
+                return "";
+            },
+            .dialog => {
+                e.print("if ({s}.begin(f, &theme, \"{s}\", &{s})) {{", .{ e.use("dialog"), n.id, e.stateRef(n.bind) });
+                return e.arena.dupe(u8, "dialog.end(f); }") catch unreachable;
+            },
             .spacer, .spinner, .each => unreachable,
+        }
+    }
+
+    fn rtTexts(e: *Emit, texts: []const []const u8) void {
+        for (texts, 0..) |c, k| {
+            e.write(if (k == 0) " " else ", ");
+            e.string(c);
         }
     }
 
@@ -1044,7 +1103,7 @@ pub const Emit = struct {
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
             // A leaf inside a choice closes its prong at once.
             const leaf = switch (nodes.items(.kind)[i]) {
-                .container, .landmark, .when, .list, .choice => false,
+                .container, .landmark, .when, .list, .choice, .dialog => false,
                 else => true,
             };
             if (leaf and in_choice) {
@@ -1067,7 +1126,7 @@ pub const Emit = struct {
             .change => if (textChange(h))
                 e.print("        if (ui.events.{s}_change) h.{f}(ui, {s}.text()); // {s}\n", .{ h.widget, std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) })
             else
-                e.print("        if ({s} != ui.before.{f}) h.{f}(ui, {s}); // {s}\n", .{ e.stateRef(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) }),
+                e.print("        if ({s}{s} != ui.before.{f}{s}) h.{f}(ui, {s}{s}); // {s}\n", .{ e.stateRef(h.field), e.member(h), std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.name), e.stateRef(h.field), e.member(h), e.where(h.loc) }),
         };
         e.write("    }\n};\n\n");
     }
@@ -1221,8 +1280,14 @@ pub const Emit = struct {
         for (hs) |h| if (h.event == .change and h.each.len > 0)
             e.print("            if (events_{s}.{f}) |change| h.{f}(&p.ui, change[0], change[1]); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change and h.each.len == 0 and !textChange(h))
-            e.print("            if (p.ui.signals.state.{f} != before.{f}) h.{f}(&p.ui, p.ui.signals.state.{f}); // {s}\n", .{ std.zig.fmtId(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.where(h.loc) });
+            e.print("            if (p.ui.signals.state.{f}{s} != before.{f}{s}) h.{f}(&p.ui, p.ui.signals.state.{f}{s}); // {s}\n", .{ std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.member(h), e.where(h.loc) });
         e.write("            return out;\n        }\n    };\n}\n\n");
+    }
+
+    /// `.member` of a handler's field, or "": the select's value is its state's `selected`.
+    fn member(e: *Emit, h: ir.Handler) []const u8 {
+        if (h.member.len == 0) return "";
+        return std.fmt.allocPrint(e.arena, ".{s}", .{h.member}) catch unreachable;
     }
 
     /// on:change on a text control outside a region: reported from its event, with its text.

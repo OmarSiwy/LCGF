@@ -54,6 +54,15 @@ pub const Kind = enum(u8) {
     /// the tag, `props` its attributes, `id` the widget a click handler names; its children are
     /// the `children` prop. Inside an lcgf-each it is the runtime form, `(f, .{ … })`.
     component,
+    /// `<select>`: `widgets_select.ct.select(theme, .id, .bind, .{ .texts = captions, .groups
+    /// = groups })`, the button in the flow; `bind` is a `SelectState`.
+    select,
+    /// Its list: `widgets_select.ct.list` with the same arguments, moved last into the root
+    /// (`Lowerer.overlays`).
+    select_list,
+    /// `<dialog bind:open>`: `widgets_dialog.ct.dialog(theme, .id, .bind, .{ children })`,
+    /// moved last into the root.
+    dialog,
 };
 
 /// Where a caption's text comes from.
@@ -87,8 +96,10 @@ pub const Node = struct {
     level: u8 = 0,
     /// Slider and number ranges: lo, hi, step.
     range: [3]f32 = .{ 0, 1, 0 },
-    /// Radio captions.
+    /// Radio and select captions.
     captions: []const []const u8 = &.{},
+    /// A select's group headers (`<optgroup label>`), each before the option at `at`.
+    groups: []const lcgf.widgets_select.Group = &.{},
     /// A list's maximum copy count.
     max: u32 = 0,
     /// Engine API from docs/plans/markup-engine-api.md: flex item margins (F2), or null.
@@ -149,6 +160,8 @@ pub const FieldType = enum(u8) {
     pair,
     /// An enum of `Field.cases` (`lcgf-switch`).
     @"enum",
+    /// `widgets_select.SelectState`; its value is `.selected`.
+    select,
 };
 
 pub const Field = struct {
@@ -173,6 +186,8 @@ pub const Handler = struct {
     /// The widget the event is on (its id) and, for `change`, the field it watches.
     widget: []const u8,
     field: []const u8 = "",
+    /// The member of `field` that holds the value (`selected` of a select's state), or "".
+    member: []const u8 = "",
     payload: ?FieldType = null,
     /// The run-time region the widget is repeated in (its handler also gets the item's index).
     each: []const u8 = "",

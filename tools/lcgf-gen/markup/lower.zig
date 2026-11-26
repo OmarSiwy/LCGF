@@ -48,6 +48,9 @@ pub const Lowerer = struct {
     current: u32 = none,
     /// Flex rules of the box being lowered other than its margins, attached by `addNode`.
     flex: lcgf.flex.Flex.Style = .{},
+    /// IR nodes drawn above the page (a select's list, a dialog), moved last into a root of
+    /// their own by `hoistOverlays`, so they float from the viewport's origin.
+    overlays: std.ArrayList(u32) = .empty,
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -454,6 +457,47 @@ pub const Lowerer = struct {
         l.checkRegions();
         l.checkProps();
         l.swapElse();
+        l.hoistOverlays();
+    }
+
+    /// Moves each overlay's subtree, in order, to the end of a new root: an unpadded column
+    /// over the viewport holding the old root and then the overlays. A float sits at its
+    /// parent's content origin, and later rows are drawn above earlier ones.
+    fn hoistOverlays(l: *Lowerer) void {
+        if (l.ds.errors > 0 or l.overlays.items.len == 0) return;
+        const old = l.page.nodes;
+        const n: u32 = @intCast(old.len);
+        // Old index -> new; the wrapper is new node 0.
+        const map = ok(l.arena.alloc(u32, n));
+        // The innermost overlay each node is in: overlays are listed outer first (a select
+        // in a dialog comes after the dialog), so a nested one moves on its own, after.
+        const owner = ok(l.arena.alloc(u32, n));
+        @memset(owner, none);
+        for (l.overlays.items) |o| @memset(owner[o..l.subtreeEnd(o)], o);
+        var order: std.ArrayList(u32) = .empty;
+        for (0..n) |i| if (owner[i] == none) ok(order.append(l.arena, @intCast(i)));
+        for (l.overlays.items) |o| for (o..l.subtreeEnd(o)) |i| if (owner[i] == o) ok(order.append(l.arena, @intCast(i)));
+        for (order.items, 1..) |i, k| map[i] = @intCast(k);
+        var nodes: std.MultiArrayList(ir.Node) = .empty;
+        ok(nodes.append(l.arena, .{ .kind = .container, .parent = none, .loc = old.items(.loc)[0], .style = .{ .size = .{ .fill, .fill } } }));
+        for (order.items) |i| {
+            var node = old.get(i);
+            const overlay = std.mem.indexOfScalar(u32, l.overlays.items, i) != null;
+            node.parent = if (overlay or node.parent == none) 0 else map[node.parent];
+            ok(nodes.append(l.arena, node));
+        }
+        l.page.nodes = nodes;
+    }
+
+    /// Whether IR node `i` is inside a region its overlay cannot leave: a list or a run-time
+    /// region repeats it.
+    fn inRepeat(l: *const Lowerer, i: u32) bool {
+        var k = i;
+        while (k != none) : (k = l.page.nodes.items(.parent)[k]) switch (l.page.nodes.items(.kind)[k]) {
+            .list, .each => return true,
+            else => {},
+        };
+        return false;
     }
 
     /// The `<template lcgf-else>` that is the next element after template `n`, or none.
@@ -1200,7 +1244,7 @@ pub const Lowerer = struct {
         const parent = if (l.ir_of[p] != none) l.ir_of[p] else l.irParent(p);
         if (parent == none) return;
         const kind = l.page.nodes.items(.kind)[parent];
-        if (kind != .container and kind != .landmark and kind != .component) return;
+        if (kind != .container and kind != .landmark and kind != .component and kind != .dialog) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
         var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
@@ -1585,7 +1629,9 @@ pub const Lowerer = struct {
     fn checkFields(l: *Lowerer) void {
         // Widget ids: unique, and not also a field of another type's meaning.
         const ids = l.page.nodes.items(.id);
-        for (ids, 0..) |id, i| if (id.len > 0) for (ids[0..i], 0..) |o, j| if (std.mem.eql(u8, o, id)) {
+        const kinds = l.page.nodes.items(.kind);
+        // A select's list names the select it belongs to.
+        for (ids, 0..) |id, i| if (id.len > 0 and kinds[i] != .select_list) for (ids[0..i], 0..) |o, j| if (kinds[j] != .select_list and std.mem.eql(u8, o, id)) {
             const a = l.ds.where(l.page.nodes.items(.loc)[j]);
             l.ds.err(l.page.nodes.items(.loc)[i], "id '{s}' is used twice; the first is at {d}:{d}", .{ id, a.line, a.col });
         };
@@ -1677,6 +1723,8 @@ pub const Lowerer = struct {
             return true;
         }
         if (std.mem.eql(u8, t, "textarea")) return l.textInput(n, parent, .textarea);
+        if (std.mem.eql(u8, t, "select")) return l.selectWidget(n, parent);
+        if (std.mem.eql(u8, t, "dialog")) return l.dialog(n, parent);
         if (std.mem.eql(u8, t, "progress")) {
             l.progress(n, parent);
             return true;
@@ -1963,6 +2011,87 @@ pub const Lowerer = struct {
         l.widgetStyle(n, parent, lcgf.widgets_radio.groupStyle(&th), &node);
         l.handlers(n, node.id, bind, .u32);
         l.ir_of[n] = l.addNode(node);
+        return true;
+    }
+
+    /// `<select bind:value>`: one option per `<option>` (its `label` or its text), an
+    /// `<optgroup label>` a header before its first option, `<option selected>` the default.
+    /// The value is the `SelectState` field's `selected`, which on:change reports.
+    fn selectWidget(l: *Lowerer, n: u32, parent: u32) bool {
+        const doc = l.doc;
+        // The options are consumed here, whatever happens next.
+        for (n + 1..l.k.end[n]) |i| l.skip[i] = true;
+        const bind = l.binding(n, "value", .select, "<select>");
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "<select> needs bind:value=\"field\"", .{});
+            return true;
+        }
+        if (l.attr(n, "multiple") != null or l.attr(n, "size") != null) {
+            l.ds.err(l.loc(n), "<select multiple> and <select size> are list boxes, not lowered yet; use <select>", .{});
+            return true;
+        }
+        var captions: std.ArrayList([]const u8) = .empty;
+        var groups: std.ArrayList(lcgf.widgets_select.Group) = .empty;
+        var selected: ?usize = null;
+        for (n + 1..l.k.end[n]) |i_| {
+            const i: u32 = @intCast(i_);
+            if (doc.nodes.items(.kind)[i] != .element) continue;
+            if (doc.isElement(i, "option")) {
+                if (l.attr(i, "selected") != null) selected = captions.items.len;
+                ok(captions.append(l.arena, collapse(l.arena, l.attr(i, "label") orelse l.allText(i))));
+            } else if (doc.isElement(i, "optgroup")) {
+                if (captions.items.len >= lcgf.widgets_menu.no_item) break;
+                ok(groups.append(l.arena, .{ .at = @intCast(captions.items.len), .label = collapse(l.arena, l.attr(i, "label") orelse "") }));
+            } else if (!doc.isElement(i, "hr")) l.ds.err(l.loc(i), "<select> holds <option> and <optgroup> only", .{});
+        }
+        if (captions.items.len == 0 or captions.items.len >= lcgf.widgets_menu.no_item) {
+            l.ds.err(l.loc(n), "<select> needs 1 to {d} <option>s", .{lcgf.widgets_menu.no_item - 1});
+            return true;
+        }
+        for (groups.items) |g| if (g.at == captions.items.len) l.ds.err(l.loc(n), "<optgroup label=\"{s}\"> holds no <option>", .{g.label});
+        if (selected) |k| l.setDefault(bind, ok(std.fmt.allocPrint(l.arena, ".{{ .selected = {d} }}", .{k})));
+        if (l.inRepeat(parent)) {
+            l.ds.err(l.loc(n), "<select> inside lcgf-each is not lowered yet; bind one per page", .{});
+            return true;
+        }
+        var node: ir.Node = .{ .kind = .select, .parent = parent, .loc = l.loc(n), .bind = bind, .captions = captions.items, .groups = groups.items };
+        node.id = l.widgetId(n, bind, "<select>") orelse return true;
+        node.name = l.accessibleName(n);
+        if (node.name.len == 0) node.name = l.controlCaption(n);
+        const first = l.page.handlers.items.len;
+        l.handlers(n, node.id, bind, .u32);
+        for (l.page.handlers.items[first..]) |*h| h.member = "selected";
+        l.ir_of[n] = l.addNode(node);
+        var list = node;
+        list.kind = .select_list;
+        list.name = "";
+        ok(l.overlays.append(l.arena, l.addNode(list)));
+        return true;
+    }
+
+    /// `<dialog bind:open>`: a modal dialog over the page while the bool field is true; its
+    /// content is lowered as a column's. `open` makes the field start true. Escape closes it;
+    /// a handler that sets the field closes it too.
+    fn dialog(l: *Lowerer, n: u32, parent: u32) bool {
+        const bind = l.binding(n, "open", .bool, "<dialog>");
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "<dialog> needs bind:open=\"field\", a bool", .{});
+            l.skip[n] = true;
+            return true;
+        }
+        if (l.attr(n, "open") != null) l.setDefault(bind, "true");
+        if (l.inRepeat(parent)) {
+            l.ds.err(l.loc(n), "<dialog> inside lcgf-each is not lowered; put it at the page level", .{});
+            l.skip[n] = true;
+            return true;
+        }
+        var node: ir.Node = .{ .kind = .dialog, .parent = parent, .loc = l.loc(n), .bind = bind };
+        node.id = l.widgetId(n, bind, "<dialog>") orelse {
+            l.skip[n] = true;
+            return true;
+        };
+        l.ir_of[n] = l.addNode(node);
+        ok(l.overlays.append(l.arena, l.ir_of[n]));
         return true;
     }
 
