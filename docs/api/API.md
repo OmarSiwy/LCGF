@@ -623,6 +623,8 @@ Fields: `c`
 - `fn sink(fx: *const Flex) u32`: The row that collects the line writes of nodes outside any wrapping row: one past the last line a tree of `cap` nodes can have, inside the padding `simd.rows` adds.
 - `fn init(carver: *mem.Carver, cap: u32) Flex`: Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
 - `fn set(fx: *Flex, i: u32, s: *const Style) void`: Writes node `i`'s row.
+- `fn spaceLead(fx: *const Flex, t: *const Tree, p: usize, free: f32, plain: f32) f32`: place: what node `p` puts before its first child of its free main-axis space `free`: `plain` (the `Style.main` share) without `Style.space`, else the space's share.
+- `fn spaceStep(fx: *const Flex, t: *const Tree, p: usize, free: f32) f32`: place: the share of `free` that node `p` puts after each child, before the next.
 - `fn secondRound(fx: *const Flex, t: *const Tree, a: u1, p: usize) void`: resolve, once node `p` has its size: the first round's leftover per unit of weight that is still free to grow, for `secondShare`.
 - `fn secondShare(fx: *const Flex, t: *const Tree, a: u1, i: usize, p: usize, first: f32) f32`: resolve: node `i`'s second-round share, given its first-round size `first`.
 - `fn margin(fx: *const Flex, a: u1, i: usize) f32`: Both margins of node `i` on axis `a`: what it takes beyond its own size.
@@ -635,13 +637,17 @@ Fields: `c`
 ### `Flex.Columns` (struct)
 One row per tree node, `simd.rows(cap)` rows each.
 
-Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
+Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `space`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
 
 
 ### `Flex.Style` (struct)
 What `set` writes for one node.
 
-Fields: `aspect`, `shrink`, `regrow`, `cross`, `margin`, `wrap`, `lines`, `baseline`
+Fields: `aspect`, `shrink`, `regrow`, `cross`, `margin`, `wrap`, `lines`, `baseline`, `space`
+
+
+### `Flex.Space` (enum)
+`Style.space`: where free main-axis space goes, for `n` in-flow children.
 
 
 ## `lcgf.wrap` (src/layout/wrap.zig)
