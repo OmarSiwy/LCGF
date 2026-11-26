@@ -46,7 +46,17 @@ const r = f.interact(node, .{ .hover = true, .drag = true });   // pan, select: 
 - **Instance kinds:** `segment` (capsule SDF, butt/square/round caps), `rect` (fill, stroke, radius), `circle`, `arc` (ring sector with caps), `polygon` (an edge range in a side column; winding evaluated per pixel inside its box), `glyph` (an atlas sample, through the existing glyph atlas).
 - **Coordinates:** `i32` milli-units. The camera takes an `i64` origin, so subtracting it on the host keeps f32 precision at any pan distance; the shader receives origin-relative i32 values plus scale and offset.
 - **Draw list:** one new command kind, `canvas`, carrying the node rect and clip, the instance buffer reference, the camera and the ranges. It sorts and damages like a custom node; a camera change damages the node.
-- **Hit testing:** `lcgf.canvas.hit(&shapes, camera, point) ?u32` uses the same SDFs on the CPU, so selection matches what is drawn.
+- **Hit testing:** `lcgf.canvas.hit(&shapes, camera, point) ?u32` uses the same SDFs on the CPU, so selection matches what is drawn. Optional: Schemify keeps its own object index.
+
+### Schemify's answers (2026-11-26), which the layout follows
+- **Width in screen logical px:** weight (1..4) × palette width of the layer, optionally × clamp(zoom, 0.5, 4); a world-unit width as an option.
+- **Colour by palette:** an instance stores a layer index (u8, 40 layers) and style bits; a palette uniform holds colour, width and fill on/off per layer, so theme, hidden layers and highlight cost one uniform write.
+- **Recolour and overlay by row:** a per-draw colour override table keyed by row range, and a second batch with its own ranges on top.
+- **Incremental updates:** rows are killed in place and appended; the caller marks dirty row ranges, and only those upload.
+- **Fill and stroke** of one closed shape on one layer, fills under strokes.
+- **Polygons:** CSR chains of ≥2 points, simple, often non-convex, unbounded edge count, nonzero rule. Open polylines are chains of capped segments, no joins.
+- **Dashes:** dash n in 0..15 is dashes and gaps of 2n logical px in screen space, restarting at each chain's first edge.
+- **Glyphs:** from LCGF's shaper; size in world milli-units, rotation in quarter turns, anchored at a world point.
 
 ### Work packages, in order (each passes the gates; goldens at 0 bad pixels)
 
