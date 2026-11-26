@@ -274,6 +274,9 @@ The whole cascade runs at build time:
 - type, class, id and attribute selectors;
 - the four combinators;
 - `:root`, `:first-child`, `:nth-child()`, `:not()`, `:is()`, `:where()` and `:has()`.
+- `@supports`, decided at build time: `(property: value)` holds when the compiler lowers the
+  property and every keyword of the value, with `not`, `and`, `or` and parentheses. A rule
+  under a false condition is dropped; `selector()` is an error.
 
 Every value is resolved to the framework's own `Style` and `TextStyle`. The user-agent sheet is
 the LCGF theme, not a browser's look: unstyled HTML looks like an LCGF page.

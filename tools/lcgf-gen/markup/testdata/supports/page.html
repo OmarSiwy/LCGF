@@ -1,0 +1,16 @@
+<!doctype html>
+<html lcgf-page="supports">
+<head>
+  <title>Supports</title>
+  <style>
+    @supports (gap: 4px) { .bar { display: flex; gap: 6px; } }
+    @supports (display: grid) { .bar { display: grid; } }
+    @supports not (frobnicate: 1) { .bar { padding: 4px; } }
+    @supports (color: red) and ((opacity: 1) or (display: grid)) { span { color: #80c0ff; } }
+    @supports (display: flex) and (display: grid) { span { color: red; } }
+  </style>
+</head>
+<body>
+  <div class="bar"><span>One</span><span>Two</span></div>
+</body>
+</html>

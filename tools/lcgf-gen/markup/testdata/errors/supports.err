@@ -1,0 +1,6 @@
+supports.html:3:13: error: @supports takes (property: value), not, and, or; selector() and functions are not lowered
+  @supports selector(a > b) { p { color: red; } }
+            ^
+supports.html:4:13: error: @supports takes (property: value), not, and, or; selector() and functions are not lowered
+  @supports gap: 1px { p { color: red; } }
+            ^

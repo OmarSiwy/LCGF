@@ -512,7 +512,9 @@ pub const Lowerer = struct {
             l.noted[x.decl] = true;
             l.ds.err(l.c.decls.items(.loc)[x.decl], "custom property '{s}' on ::backdrop is not lowered; declare it on the <dialog>", .{l.c.decls.items(.name)[x.decl]});
         };
-        for (l.c.conds.items) |cnd| _ = l.refused("at-rule", if (cnd.kind == .media) "@media" else "@supports", "", cnd.loc);
+        for (l.c.conds.items) |cnd| if (cnd.kind == .media) {
+            _ = l.refused("at-rule", "@media", "", cnd.loc);
+        };
         for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
 
@@ -4239,6 +4241,89 @@ fn fixStops(stops: []lcgf.features.Stop, given: []const bool) void {
         k = e - 1;
     }
 }
+
+/// `@supports` at build time (plan §2.3): a condition holds exactly when the compiler maps the
+/// property it names. A rule under a false one is dropped; under a true one it keeps only its
+/// `@media`, or none. Runs before the cascade.
+pub fn resolveSupports(c: *css.Css) void {
+    const truth = Lowerer.ok(c.arena.alloc(bool, c.conds.items.len));
+    for (c.conds.items, truth) |cnd, *t| {
+        var r: Supports = .{ .c = c, .end = cnd.end, .i = cnd.first };
+        t.* = cnd.kind == .media or (r.condition(0) orelse true);
+    }
+    const rules = c.rules.slice();
+    for (rules.items(.cond), rules.items(.sel_first)) |*cond, *sel_first| {
+        var media: u32 = none;
+        var x = cond.*;
+        while (x != none) : (x = c.conds.items[x].parent) {
+            if (!truth[x]) sel_first.* = none; // no selector: the cascade skips the rule
+            if (c.conds.items[x].kind == .media and media == none) media = x;
+        }
+        cond.* = media;
+    }
+}
+
+/// An `@supports` prelude, read left to right: `(prop: value)`, `not`, `and`, `or`, parens.
+const Supports = struct {
+    c: *css.Css,
+    i: u32,
+    end: u32,
+
+    fn skip(r: *Supports) void {
+        while (r.i < r.end and r.c.toks.items(.type)[r.i] == .whitespace) r.i += 1;
+    }
+
+    fn word(r: *Supports, w: []const u8) bool {
+        r.skip();
+        if (r.i < r.end and r.c.toks.items(.type)[r.i] == .ident and css.eq(r.c.toks.items(.str)[r.i], w)) {
+            r.i += 1;
+            return true;
+        }
+        return false;
+    }
+
+    /// `not <in-parens>`, or `<in-parens>` joined by `and` or `or`; null after an error.
+    fn condition(r: *Supports, depth: u32) ?bool {
+        if (r.word("not")) return !(r.inParens(depth) orelse return null);
+        var v = r.inParens(depth) orelse return null;
+        while (true) {
+            if (r.word("and")) {
+                v = (r.inParens(depth) orelse return null) and v;
+            } else if (r.word("or")) {
+                v = (r.inParens(depth) orelse return null) or v;
+            } else break;
+        }
+        return v;
+    }
+
+    /// `( <condition> )` or `( property: value )`. A declaration holds when its property is
+    /// known and not refused, and no keyword of its value is refused for it.
+    fn inParens(r: *Supports, depth: u32) ?bool {
+        r.skip();
+        const ty = r.c.toks.items(.type);
+        if (r.i >= r.end or ty[r.i] != .l_parenthesis or depth == 16) {
+            r.c.ds.err(r.c.tokLoc(@min(r.i, r.end - 1)), "@supports takes (property: value), not, and, or; selector() and functions are not lowered", .{});
+            return null;
+        }
+        const close = values.closeOf(r.c, r.i, r.end);
+        var inner: Supports = .{ .c = r.c, .i = r.i + 1, .end = close - 1 };
+        r.i = close;
+        inner.skip();
+        if (inner.i < inner.end and ty[inner.i] == .ident and !css.eq(inner.c.toks.items(.str)[inner.i], "not")) {
+            const name = inner.c.toks.items(.str)[inner.i];
+            var after = inner.i + 1;
+            while (after < inner.end and ty[after] == .whitespace) after += 1;
+            if (after < inner.end and ty[after] == .colon) {
+                if (std.mem.startsWith(u8, name, "--")) return true;
+                const known = std.meta.stringToEnum(Prop, name) != null or values.shorthand(name) != null;
+                if (!known or manifest.refusal("property", name, "") != null) return false;
+                for (after + 1..inner.end) |t| if (ty[t] == .ident and manifest.refusal("value", inner.c.toks.items(.str)[t], name) != null) return false;
+                return true;
+            }
+        }
+        return inner.condition(depth + 1);
+    }
+};
 
 pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: *css.Css, k: *cascade.Cascade, name: []const u8, source: []const u8) Lowerer {
     const n = doc.nodes.len;

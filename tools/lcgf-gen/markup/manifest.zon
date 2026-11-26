@@ -254,7 +254,7 @@
         .{ .kind = "selector", .name = ":focus-visible", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.focus_visible", .fixture = "states" },
         .{ .kind = "selector", .name = ":checked", .status = .mapped, .target = "on a checkbox or switch: a recipe rule requiring States.checked", .fixture = "states" },
         .{ .kind = "selector", .name = ":state", .status = .planned, .diagnostic = "state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)", .spec = "F3b" },
-        .{ .kind = "at-rule", .name = "@supports", .status = .planned, .diagnostic = "@supports is not lowered yet" },
+        .{ .kind = "at-rule", .name = "@supports", .status = .mapped, .target = "build time: (property: value) holds when the compiler maps the property; not, and, or", .fixture = "supports" },
         .{ .kind = "selector", .name = ":visited", .status = .rejected, .diagnostic = "navigation state is not modelled" },
         .{ .kind = "selector", .name = ":link", .status = .rejected, .diagnostic = "navigation state is not modelled" },
         .{ .kind = "selector", .name = ":any-link", .status = .rejected, .diagnostic = "navigation state is not modelled" },
@@ -304,5 +304,6 @@
         .{ .name = "decorations" },
         .{ .name = "inline" },
         .{ .name = "states" },
+        .{ .name = "supports" },
     },
 }
