@@ -381,6 +381,19 @@ of size, colour or font. It wraps as one paragraph, each byte in its run's size 
 changes inside it is an error, and so is bound text, whose length is only known at run time
 while the runs' byte offsets are fixed at build time. Other elements inside it are errors too.
 
+### State CSS
+
+`:hover`, `:active`, `:focus`, `:focus-visible` and `:checked` on a `<button>`, a checkbox or a
+switch make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
+`recipes.button` on a runtime one, with a generated `recipe_<id>`. The recipe is the stock
+one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
+rule requiring its states. A static declaration that outranks a state one drops it, as in a
+browser. A state rule sets `background-color`, `color`, `border-color`, `border-width`,
+`border-style: solid` and `opacity`; on a checkbox or switch, the colours and border are the
+box's. A recipe widget draws with the stock tokens, so it does not take the page's
+`--lcgf-*` theme yet. State CSS on any other box, on an ancestor (`div:hover button`), inside
+`:not()` or `:is()`, or inside lcgf-each is an error.
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20
@@ -394,7 +407,7 @@ its own): the error names the element. The flex container properties (`flex-dire
 - **mapped**: lowered today.
 - **pending**: lowered onto engine API that docs/plans/markup-engine-api.md specifies and the
   engine has not landed yet. Margins are one.
-- **planned**: not lowered yet, for example `:hover`, `@media` and `<select>`.
+- **planned**: not lowered yet, for example `writing-mode` and `filter`.
 - **rejected**: not modelled by design:
   - scripts and `on*` attributes, where you write `on:click="name"` instead;
   - remote stylesheets;

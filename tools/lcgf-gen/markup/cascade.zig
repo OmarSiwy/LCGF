@@ -18,8 +18,8 @@ const Prop = values.Prop;
 pub const Entry = struct { decl: u32 = none, shorthand: u32 = none, key: u64 = 0 };
 
 /// A declaration that applies at run time: under a state pseudo-class, a media condition or
-/// both. `states` names the pseudo-classes of the selector's last compound.
-pub const Dynamic = struct { node: u32, decl: u32, sel: u32, cond: u32, element: []const u8 };
+/// both. `key` is its cascade order, as a static declaration's.
+pub const Dynamic = struct { node: u32, decl: u32, sel: u32, cond: u32, element: []const u8, key: u64 = 0 };
 
 pub const Cascade = struct {
     /// `elements * prop_count` entries, row-major by element; non-elements have rows too.
@@ -142,8 +142,8 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
                 const element = c.sels.items(.element)[s];
                 const cond = rules.items(.cond)[r];
                 for (rules.items(.decl_first)[r]..rules.items(.decl_first)[r] + rules.items(.decl_count)[r]) |d| {
-                    const dyn: Dynamic = .{ .node = node, .decl = @intCast(d), .sel = s, .cond = cond, .element = element };
                     const kk = key(c, @intCast(d), c.sels.items(.specificity)[s], layers);
+                    const dyn: Dynamic = .{ .node = node, .decl = @intCast(d), .sel = s, .cond = cond, .element = element, .key = kk };
                     const custom = std.mem.startsWith(u8, c.decls.items(.name)[d], "--");
                     if (std.mem.eql(u8, element, "backdrop") and !res.dynamic and cond == none and !custom) {
                         apply(&k, k.backdrop, c, node, @intCast(d), kk);
@@ -166,7 +166,8 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
     return k;
 }
 
-fn apply(k: *Cascade, table: []Entry, c: *const css.Css, node: u32, d: u32, kk: u64) void {
+/// Declaration `d` on `node` with cascade order `kk`, into each longhand it sets in `table`.
+pub fn apply(k: *Cascade, table: []Entry, c: *const css.Css, node: u32, d: u32, kk: u64) void {
     const name = c.decls.items(.name)[d];
     if (std.mem.startsWith(u8, name, "--")) {
         for (k.customs, 0..) |x, i| if (std.mem.eql(u8, x, name)) {

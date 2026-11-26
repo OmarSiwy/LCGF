@@ -1,15 +1,30 @@
 states.html:5:15: error: ::before and ::after content is not lowered yet
   p::before { content: "x"; }
               ^
-states.html:3:9: error: state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)
-  button:hover { color: red; }
-        ^
-states.html:4:9: error: unknown pseudo-class :hovr
-  button:hovr { color: red; }
-        ^
+states.html:3:8: error: state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)
+  input:invalid { color: red; }
+       ^
+states.html:4:7: error: unknown pseudo-class :hovr
+  span:hovr { color: red; }
+      ^
+states.html:9:14: error: :focus inside :not(), :is(), :where() or :has() is not lowered yet
+  button:not(:focus) { color: red; }
+             ^
 states.html:5:3: error: ::before is not lowered yet
   p::before { content: "x"; }
   ^
 states.html:6:3: error: @media rules are not lowered yet
   @media (min-width: 600px) { p { gap: 2px; } }
   ^
+states.html:7:3: error: state CSS on <p> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)
+  p:hover { color: red; }
+  ^
+states.html:8:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles
+  div:hover button { color: red; }
+     ^
+states.html:10:15: error: width under a state pseudo-class is not lowered; a state rule sets background-color, color, border-color, border-width, border-style or opacity
+  #go:hover { width: 10px; }
+              ^
+states.html:14:47: error: a <button> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet
+<body><p>x</p><div><button id="go">Go</button><button id="wide">Wide</button></div></body>
+                                              ^

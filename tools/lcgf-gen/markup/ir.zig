@@ -157,6 +157,9 @@ pub const Node = struct {
     props: []const Prop = &.{},
     /// A part of the widget that CSS restyles apart from its root; none for the theme's.
     part: Part = .none,
+    /// A widget with state CSS (`button:hover`) is a recipe widget: these rules follow the
+    /// stock recipe's, in cascade order. Empty for the theme widget.
+    recipe: []const RecipeRule = &.{},
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed
@@ -185,6 +188,17 @@ pub const Placed = struct {
     sticky: ?f32 = null,
     layer: u8 = 0,
     below: i16 = 0,
+};
+
+/// One rule of a widget's recipe: the states it requires (none for the widget's static CSS)
+/// and the values it sets; null sets nothing.
+pub const RecipeRule = struct {
+    require: lcgf.style.States = .{},
+    fill: ?lcgf.types.Color = null,
+    text_color: ?lcgf.types.Color = null,
+    border_color: ?lcgf.types.Color = null,
+    border: ?f32 = null,
+    opacity: ?f32 = null,
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

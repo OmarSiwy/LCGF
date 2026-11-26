@@ -25,7 +25,8 @@ pub const Lowerer = struct {
     ds: *diag.Diags,
     doc: *const html.Doc,
     c: *css.Css,
-    k: *const cascade.Cascade,
+    /// Mutable only for `stateRules`, which reads one rule's declarations through the row.
+    k: *cascade.Cascade,
     page: ir.Page,
     /// Per document node: its IR node, or none.
     ir_of: []u32,
@@ -488,8 +489,22 @@ pub const Lowerer = struct {
                 l.ds.err(s.loc, "unknown pseudo-class {s}", .{name});
                 continue;
             }
-            _ = l.refused("selector", ":state", "", s.loc);
+            // A state with its own row is lowered (stateRules); the rest wait.
+            if (manifest.find("selector", name, "") == null) _ = l.refused("selector", ":state", "", s.loc);
         }
+        // A state inside :not() and its kin: the cascade matches those at build time.
+        const nested = ok(l.arena.alloc(bool, l.c.sels.len));
+        @memset(nested, false);
+        for (l.c.simples.items(.kind), l.c.simples.items(.arg), l.c.simples.items(.arg_count)) |kind, a, count|
+            if (kind == .logical) @memset(nested[a..][0..count], true);
+        for (0..l.c.sels.len) |sel| if (nested[sel]) {
+            const first = l.c.sels.items(.first)[sel];
+            for (first..first + l.c.sels.items(.count)[sel]) |comp| {
+                const f = l.c.comps.items(.first)[comp];
+                for (f..f + l.c.comps.items(.count)[comp]) |i| if (l.c.simples.items(.kind)[i] == .state and manifest.find("selector", ok(std.fmt.allocPrint(l.arena, ":{s}", .{l.c.simples.items(.name)[i]})), "") != null)
+                    l.ds.err(l.c.simples.items(.loc)[i], ":{s} inside :not(), :is(), :where() or :has() is not lowered yet", .{l.c.simples.items(.name)[i]});
+            }
+        };
         for (l.c.sels.items(.element), l.c.sels.items(.loc)) |e, at| if (e.len > 0 and !std.mem.eql(u8, e, "backdrop"))
             l.ds.err(at, "::{s} is not lowered yet", .{e});
         // A state or a condition is refused above; a custom property would set the element's.
@@ -499,6 +514,136 @@ pub const Lowerer = struct {
         };
         for (l.c.conds.items) |cnd| _ = l.refused("at-rule", if (cnd.kind == .media) "@media" else "@supports", "", cnd.loc);
         for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
+    }
+
+    // ---- state CSS ------------------------------------------------------------------------
+
+    /// Widgets with state CSS (`button:hover`) become recipe widgets (plan §2.3): every
+    /// state rule that matches one is a recipe rule over the states of its subject.
+    fn stateRules(l: *Lowerer) void {
+        var reported: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        const dyn = l.k.dynamic.items;
+        for (dyn, 0..) |d, i| {
+            if (d.cond != none) continue; // @media, refused in checkDeclarations
+            const first = for (dyn[0..i]) |e| {
+                if (e.node == d.node and e.cond == none) break false;
+            } else true;
+            if (first) l.recipeOf(d.node, &reported);
+        }
+    }
+
+    /// The states selector `sel` requires of its subject, or null after an error.
+    fn subjectStates(l: *Lowerer, sel: u32) ?lcgf.style.States {
+        const first = l.c.sels.items(.first)[sel];
+        const last = first + l.c.sels.items(.count)[sel] - 1;
+        var st: lcgf.style.States = .{};
+        var any = false;
+        for (first..last + 1) |comp| {
+            const f = l.c.comps.items(.first)[comp];
+            for (f..f + l.c.comps.items(.count)[comp]) |i| {
+                const simple = l.c.simples.get(i);
+                if (simple.kind != .state) continue;
+                if (comp != last) {
+                    l.ds.err(simple.loc, ":{s} here styles another element than its own; a state pseudo-class is lowered on the element the rule styles", .{simple.name});
+                    return null;
+                }
+                const mapped = inline for (state_bits) |b| {
+                    if (std.mem.eql(u8, simple.name, b[0])) {
+                        @field(st, b[1]) = true;
+                        break true;
+                    }
+                } else false;
+                if (!mapped) return null; // refused in checkDeclarations
+                any = true;
+            }
+        }
+        // None: the state is inside :is() and its kin, refused in checkDeclarations.
+        return if (any) st else null;
+    }
+
+    /// The recipe rules of document node `n`: its static CSS, then each state declaration
+    /// that matches it, in cascade order. A static declaration that wins over a state one
+    /// (higher specificity) drops it, as in CSS.
+    fn recipeOf(l: *Lowerer, n: u32, reported: *std.AutoHashMapUnmanaged(u32, void)) void {
+        const x = l.ir_of[n];
+        const nodes = l.page.nodes.slice();
+        const fits = x != none and switch (nodes.items(.kind)[x]) {
+            .button, .checkbox, .@"switch" => l.eachOf(n) == none,
+            else => false,
+        };
+        var entries: std.ArrayList(cascade.Dynamic) = .empty;
+        for (l.k.dynamic.items) |d| if (d.node == n and d.cond == none) ok(entries.append(l.arena, d));
+        if (!fits) {
+            for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing)
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "state CSS on <{s}> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)", .{l.tag(n)});
+            return;
+        }
+        if (!std.meta.eql(l.page.theme, ir.Theme{})) {
+            l.ds.err(l.loc(n), "a widget with state CSS is a recipe widget, drawn with the stock tokens; it cannot take the page's --lcgf-* theme yet", .{});
+            return;
+        }
+        std.mem.sort(cascade.Dynamic, entries.items, {}, struct {
+            fn less(_: void, a: cascade.Dynamic, b: cascade.Dynamic) bool {
+                return a.key < b.key;
+            }
+        }.less);
+        var rules: std.ArrayList(ir.RecipeRule) = .empty;
+        ok(rules.append(l.arena, l.staticRule(n, x) orelse return));
+        const row_ = l.k.table[n * values.prop_count ..][0..values.prop_count];
+        const saved = ok(l.arena.dupe(cascade.Entry, row_));
+        defer @memcpy(row_, saved);
+        var last_sel: u32 = none;
+        for (entries.items) |d| {
+            const st = l.subjectStates(d.sel) orelse continue;
+            // The declaration alone in the row, so the value readers see only it.
+            @memset(row_, .{});
+            cascade.apply(l.k, l.k.table, l.c, n, d.decl, d.key);
+            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st };
+            last_sel = d.sel;
+            for (row_, saved, 0..) |e, was, p_| {
+                if (e.decl == none or (was.decl != none and was.key > e.key)) continue;
+                const p: Prop = @fromBackingInt(@intCast(p_));
+                switch (p) {
+                    .@"background-color" => r.fill = l.colorOf(n, p),
+                    .color => r.text_color = l.colorOf(n, p),
+                    .@"border-color" => r.border_color = l.colorOf(n, p),
+                    .@"border-top-width" => r.border = l.px(n, p),
+                    .opacity => r.opacity = if (l.number(n, p)) |o| std.math.clamp(o, 0, 1) else null,
+                    .@"border-style" => if (l.keyword(n, p)) |kw| {
+                        if (css.eq(kw, "none") or css.eq(kw, "hidden")) r.border = 0 else if (!css.eq(kw, "solid")) l.ds.err(l.c.decls.items(.loc)[d.decl], "border-style: {s} under a state pseudo-class is not lowered; use solid", .{kw});
+                    },
+                    .@"background-image" => if (l.keyword(n, p)) |kw| {
+                        if (!css.eq(kw, "none")) l.ds.err(l.c.decls.items(.loc)[d.decl], "under a state pseudo-class, background takes a colour", .{});
+                    },
+                    else => l.ds.err(l.c.decls.items(.loc)[d.decl], "{s} under a state pseudo-class is not lowered; a state rule sets background-color, color, border-color, border-width, border-style or opacity", .{@tagName(p)}),
+                }
+            }
+            ok(rules.append(l.arena, r));
+        }
+        nodes.items(.recipe)[x] = rules.items;
+    }
+
+    /// The recipe rule of IR node `x`'s static CSS: what its style sets over the widget's own.
+    fn staticRule(l: *Lowerer, n: u32, x: u32) ?ir.RecipeRule {
+        const node = l.page.nodes.get(x);
+        var st = node.style;
+        var r: ir.RecipeRule = .{};
+        if (st.fill.bitsOf() != node.base_style.fill.bitsOf()) r.fill = st.fill;
+        if (st.border_color.bitsOf() != node.base_style.border_color.bitsOf()) r.border_color = st.border_color;
+        if (st.border != node.base_style.border) r.border = st.border;
+        if (st.opacity != node.base_style.opacity) r.opacity = st.opacity;
+        if (node.kind == .button and node.text_style.color.bitsOf() != node.base_text.color.bitsOf()) r.text_color = node.text_style.color;
+        st.fill = node.base_style.fill;
+        st.border_color = node.base_style.border_color;
+        st.border = node.base_style.border;
+        st.opacity = node.base_style.opacity;
+        var ts = node.text_style;
+        ts.color = node.base_text.color;
+        if (!std.meta.eql(st, node.base_style) or node.params_expr.len > 0 or node.uses.len > 0 or (node.kind == .button and !std.meta.eql(ts, node.base_text))) {
+            l.ds.err(l.loc(n), "a <{s}> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet", .{l.tag(n)});
+            return null;
+        }
+        return r;
     }
 
     // ---- the walk -------------------------------------------------------------------------
@@ -565,6 +710,7 @@ pub const Lowerer = struct {
         }
         l.finishInlines();
         l.gridItems();
+        l.stateRules();
         l.checkFields();
         l.checkRegions();
         l.checkProps();
@@ -2830,8 +2976,9 @@ pub const Lowerer = struct {
                 else => {},
             }
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
-            // rules (margins) go on the row a widget pushes first, its root.
-            const faced = switch (kind) {
+            // rules (margins) go on the row a widget pushes first, its root. A recipe
+            // widget's CSS is in its recipe, which the runtime call takes.
+            const faced = nodes.items(.recipe)[i].len > 0 or switch (kind) {
                 .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select, .dialog, .section => true,
                 else => false,
             };
@@ -4093,7 +4240,7 @@ fn fixStops(stops: []lcgf.features.Stop, given: []const bool) void {
     }
 }
 
-pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: *css.Css, k: *const cascade.Cascade, name: []const u8, source: []const u8) Lowerer {
+pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: *css.Css, k: *cascade.Cascade, name: []const u8, source: []const u8) Lowerer {
     const n = doc.nodes.len;
     const l: Lowerer = .{
         .arena = arena,
@@ -4325,6 +4472,8 @@ const counter_styles = blk: {
         .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } }, "lcgf.text_counters.Style{ .system = .{ .alphabetic = &.{ \"\\u{3B1}\", \"\\u{3B2}\", \"\\u{3B3}\", \"\\u{3B4}\", \"\\u{3B5}\", \"\\u{3B6}\", \"\\u{3B7}\", \"\\u{3B8}\", \"\\u{3B9}\", \"\\u{3BA}\", \"\\u{3BB}\", \"\\u{3BC}\", \"\\u{3BD}\", \"\\u{3BE}\", \"\\u{3BF}\", \"\\u{3C0}\", \"\\u{3C1}\", \"\\u{3C3}\", \"\\u{3C4}\", \"\\u{3C5}\", \"\\u{3C6}\", \"\\u{3C7}\", \"\\u{3C8}\", \"\\u{3C9}\" } } }" },
     };
 };
+/// The state pseudo-classes lowered onto recipe rules, and their `style.States` fields.
+const state_bits = .{ .{ "hover", "hovered" }, .{ "active", "held" }, .{ "focus", "focused" }, .{ "focus-visible", "focus_visible" }, .{ "checked", "checked" } };
 
 /// The state pseudo-classes of plan §2.3, resolved at run time (style.States).
 const states = [_][]const u8{ "hover", "active", "focus", "focus-visible", "focus-within", "checked", "indeterminate", "disabled", "enabled", "read-only", "read-write", "required", "optional", "invalid", "valid", "open", "placeholder-shown" };

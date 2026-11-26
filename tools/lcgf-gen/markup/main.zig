@@ -264,7 +264,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
         const r = c.tokenize(file, doc.attrs.items(.value_src)[a], v);
         _ = c.inlineStyle(r[0], r[1], n);
     }
-    const k = cascade.run(arena, &doc, &c);
+    var k = cascade.run(arena, &doc, &c);
     var l = lower.init(arena, ds, &doc, &c, &k, std.fs.path.stem(path), path);
     l.runtime_prefix = runtime_vars;
     l.checkDeclarations();

@@ -248,6 +248,11 @@
         .{ .kind = "selector", .name = "combinators", .status = .mapped, .target = "build time: descendant, >, +, ~", .fixture = "landmarks" },
         .{ .kind = "selector", .name = ":structural", .status = .mapped, .target = "build time: :root, :first-child, :nth-child(), :not(), :is(), :where(), :has()", .fixture = "landmarks" },
         .{ .kind = "selector", .name = "::backdrop", .status = .mapped, .target = "build time: a <dialog>'s backdrop fill from its static rules' background-color (ct.dialogFace / dialog.beginFace); other properties are an error", .fixture = "overlays" },
+        .{ .kind = "selector", .name = ":hover", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.hovered: recipes.ct.button / recipes.button with .recipe", .fixture = "states" },
+        .{ .kind = "selector", .name = ":active", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.held", .fixture = "states" },
+        .{ .kind = "selector", .name = ":focus", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.focused", .fixture = "states" },
+        .{ .kind = "selector", .name = ":focus-visible", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.focus_visible", .fixture = "states" },
+        .{ .kind = "selector", .name = ":checked", .status = .mapped, .target = "on a checkbox or switch: a recipe rule requiring States.checked", .fixture = "states" },
         .{ .kind = "selector", .name = ":state", .status = .planned, .diagnostic = "state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)", .spec = "F3b" },
         .{ .kind = "at-rule", .name = "@supports", .status = .planned, .diagnostic = "@supports is not lowered yet" },
         .{ .kind = "selector", .name = ":visited", .status = .rejected, .diagnostic = "navigation state is not modelled" },
@@ -298,5 +303,6 @@
         .{ .name = "fields" },
         .{ .name = "decorations" },
         .{ .name = "inline" },
+        .{ .name = "states" },
     },
 }

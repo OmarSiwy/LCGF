@@ -1,0 +1,19 @@
+<!doctype html>
+<html lcgf-page="states">
+<head>
+  <title>States</title>
+  <style>
+    button { background-color: #3a3c46; }
+    button:hover { background-color: #5078c8; color: #ffffff; }
+    button:active { background: #28304a; }
+    button:focus-visible { border: 2px solid #ffd040; }
+    #keep { background-color: #602020; }
+    input:checked { background-color: #40a060; }
+  </style>
+</head>
+<body>
+  <button id="go" on:click="go">Go</button>
+  <button id="keep">Keep</button>
+  <label><input type="checkbox" bind:checked="on"> On</label>
+</body>
+</html>
