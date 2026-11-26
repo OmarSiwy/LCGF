@@ -111,6 +111,7 @@ pub const widgets_base = @import("widgets/base.zig");
 pub const widgets = @import("widgets/kit.zig");
 pub const widgets_label = @import("widgets/label.zig");
 pub const widgets_button = @import("widgets/button.zig");
+pub const widgets_link = @import("widgets/link.zig");
 pub const widgets_checkbox = @import("widgets/checkbox.zig");
 pub const widgets_radio = @import("widgets/radio.zig");
 pub const widgets_switch = @import("widgets/switch.zig");

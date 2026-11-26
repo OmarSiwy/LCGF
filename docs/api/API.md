@@ -3738,6 +3738,46 @@ Fields: `resets`, `applies`
 
 - `fn build(app: *App, f: *Frame) void`
 
+## `lcgf.widgets_link` (src/widgets/link.zig)
+
+Link: inline text in the accent colour that reports activation, as a page link does.
+
+### Top level
+
+- `linkFill = breadcrumb.linkFill`: The target's fill by state: none at rest, control-hot under the pointer, held pressed.
+- `linkText = breadcrumb.linkText`: The text: the theme's size in the accent colour.
+- `fn linkStyle(th: *const Theme) Style`: The target: a breadcrumb link's padded, rounded row, role link.
+- `fn activated(clicked: bool, focused: bool, in: *const Input) bool`: Whether the link fires this frame: clicked, or focused and Enter went down (the WAI-ARIA APG link pattern: links take Enter, not Space).
+- `fn link(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response`: A link named `id` showing `str`; `clicked` is set the frame it fires (`activated`).
+- `fn Comptime(comptime name: [:0]const u8) type`: The comptime link named `name` (`Spec.widget`): the same rows as `link`, and Enter on it while focused turned into its event, as `link` sets `clicked`.
+
+### `ct` (struct)
+
+- `fn link(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec`: A link named `id` showing `text`, a literal or a string field (as `ct.label`); its activation is its event: `ct.link(th, .docs, "Read the docs")`.
+
+### `Comptime(..)` (generic struct)
+The comptime link named `name` (`Spec.widget`): the same rows as `link`, and Enter on it while focused turned into its event, as `link` sets `clicked`.
+
+- `focusable = true`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event)`
+
+### `Page` (struct)
+The link's example page: two links on a panel, in both front ends, counting activations.
+
+- `State = struct { home_text: []const u8 = "Home" }`
+- `spec = spec_zig.row(panel, .{ ct.link(th, .docs, "Docs"), ct.link(th, .home, .home_text) })`
+- `Ui = base.ComptimeUi(State, spec, th)`
+- `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
+- `replay = @embedFile("testdata/link.replay")`
+- `golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/link-<name>.png.
+
+### `Page.App` (struct)
+
+Fields: `docs`, `home`
+
+- `fn build(app: *App, f: *Frame) void`
+
 ## `lcgf.widgets_checkbox` (src/widgets/checkbox.zig)
 
 Checkbox: a box and a caption; a click toggles it.

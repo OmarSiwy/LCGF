@@ -1,0 +1,44 @@
+# Recorded input for the link page (widgets/link.zig, `Page`), at 320 x 80 in the default
+# theme: Docs at x 12..58 and Home at 66..111, both on y 12..34. One line per frame below
+# (format: input.Replay). Scancodes: Enter 40, Space 44.
+# 0: rest
+frame
+viewport 320 80
+dt 0.016
+pointer 300 70
+# 1: hover Docs
+frame
+pointer 30 22
+# 2: hold it (it takes focus)
+frame
+buttons left
+# 3: release over it: activated
+frame
+buttons
+# 4: Enter: Docs fires again
+frame
+pointer 300 70
+press 40
+# 5: Space down: links take no Space
+frame
+press 44
+# 6: Space up: still nothing
+frame
+release 44
+# 7: press Home, drag off it, release: not activated, and Home keeps focus
+frame
+pointer 88 22
+buttons left
+# 8: dragged off, still held
+frame
+pointer 200 70
+# 9: released off it: nothing
+frame
+buttons
+# 10: Enter: Home fires
+frame
+press 40
+# 11: a press on the panel takes focus away; Enter does nothing
+frame
+buttons left
+press 40

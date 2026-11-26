@@ -27,6 +27,7 @@ const pages = .{
     .{ "card-", lcgf.widgets_card.Page(.default), lcgf.widgets_card.replay, lcgf.widgets_card.golden_frames },
     .{ "label-", lcgf.widgets_label.Page, lcgf.widgets_label.Page.replay, lcgf.widgets_label.Page.golden_frames },
     .{ "button-", lcgf.widgets_button.Page, lcgf.widgets_button.Page.replay, lcgf.widgets_button.Page.golden_frames },
+    .{ "link-", lcgf.widgets_link.Page, lcgf.widgets_link.Page.replay, lcgf.widgets_link.Page.golden_frames },
     .{ "checkbox-", lcgf.widgets_checkbox.Page, lcgf.widgets_checkbox.Page.replay, lcgf.widgets_checkbox.Page.golden_frames },
     .{ "radio-", lcgf.widgets_radio.Page, lcgf.widgets_radio.Page.replay, lcgf.widgets_radio.Page.golden_frames },
     .{ "switch-", lcgf.widgets_switch.Page, lcgf.widgets_switch.Page.replay, lcgf.widgets_switch.Page.golden_frames },
