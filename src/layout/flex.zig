@@ -39,6 +39,8 @@ pub const Flex = struct {
         align_lines: []f32,
         /// 1.0 for a row that lines its children up by their first baselines.
         align_base: []f32,
+        /// How the node shares its free main-axis space between its children (`Space`).
+        space: []u32,
 
         // ---- scratch, rewritten by the passes every frame
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
@@ -129,6 +131,29 @@ pub const Flex = struct {
         /// own `cross` is placed by that instead (it still counts toward the row's baseline and
         /// height, unlike CSS). Ignored on a column and on a wrapping row.
         baseline: bool = false,
+        /// Free space along the main axis between this node's in-flow children instead of
+        /// before them (CSS `justify-content: space-*`), in place of `Style.main`. Ignored on
+        /// a wrapping row.
+        space: Space = .none,
+    };
+
+    /// `Style.space`: where free main-axis space goes, for `n` in-flow children.
+    pub const Space = enum(u8) {
+        none,
+        /// Between the children only (`space-between`); one child sits at the start.
+        between,
+        /// Half a share before the first and after the last, one between (`space-around`).
+        around,
+        /// `n + 1` equal shares, at the ends and between (`space-evenly`).
+        evenly,
+
+        /// Free space before the first child: `free * lead_k / max(n + lead_n, 1)`; and
+        /// between two children: the same with `step_k`, `step_n`. Indexed by the tag.
+        const main_k = [4]f32{ 1, 0, 0, 0 };
+        const lead_k = [4]f32{ 0, 0, 0.5, 1 };
+        const lead_n = [4]f32{ 1, 1, 0, 1 };
+        const step_k = [4]f32{ 0, 1, 1, 1 };
+        const step_n = [4]f32{ 1, -1, 0, 1 };
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -151,6 +176,21 @@ pub const Flex = struct {
         fx.c.align_lines[i] = types.Align.factor[@backingInt(s.lines)];
         fx.c.align_base[i] = b01(s.baseline);
         fx.c.self_cross[i] = if (s.cross) |c| types.Align.factor[@backingInt(c)] else -1;
+        fx.c.space[i] = @backingInt(s.space);
+    }
+
+    /// place: what node `p` puts before its first child of its free main-axis space `free`:
+    /// `plain` (the `Style.main` share) without `Style.space`, else the space's share. A table
+    /// lookup, not a branch.
+    pub inline fn spaceLead(fx: *const Flex, t: *const Tree, p: usize, free: f32, plain: f32) f32 {
+        const k = fx.c.space[p];
+        return plain * Space.main_k[k] + free * Space.lead_k[k] / @max(t.c.nkids[p] + Space.lead_n[k], 1);
+    }
+
+    /// place: the share of `free` that node `p` puts after each child, before the next.
+    pub inline fn spaceStep(fx: *const Flex, t: *const Tree, p: usize, free: f32) f32 {
+        const k = fx.c.space[p];
+        return free * Space.step_k[k] / @max(t.c.nkids[p] + Space.step_n[k], 1);
     }
 
     /// resolve, once node `p` has its size: the first round's leftover per unit of weight that
@@ -679,4 +719,47 @@ test "margin: a floating node ignores it" {
     s.runFlex(100, 50);
     try testing.expectEqual([2]f32{ 0, 0 }, [2]f32{ t.c.pos[0][f], t.c.pos[1][f] });
     try testing.expectEqual(0, t.c.fit[0][root]);
+}
+
+test "space: between, around and evenly share a row's free space; one child of between sits at the start" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(300), .px(300) } });
+    var rows: [3]u32 = undefined;
+    var kids: [3][3]u32 = undefined;
+    for (&rows, &kids) |*r, *k| {
+        r.* = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(100), .px(10) }, .gap = 5, .main = .end });
+        for (k) |*c| c.* = t.push(r.*, .none, &.{ .size = .{ .px(10), .px(10) } });
+        t.seal(r.*);
+    }
+    const lone = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(100), .px(10) } });
+    const one = t.push(lone, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(lone);
+    for (rows, [_]Flex.Space{ .between, .around, .evenly }) |r, sp| s.fx.set(r, &.{ .space = sp });
+    s.fx.set(lone, &.{ .space = .between });
+    s.runFlex(300, 300);
+    // 100 - 3 * 10 - 2 * 5 = 60 free.
+    const want = [3][3]f32{ .{ 0, 45, 90 }, .{ 10, 45, 80 }, .{ 15, 45, 75 } };
+    for (kids, want) |k, xs| for (k, xs) |c, x| try testing.expectEqual(x, t.c.pos[0][c]);
+    try testing.expectEqual(0, t.c.pos[0][one]);
+}
+
+test "space: a column shares along y; a grower leaves no free space" {
+    var s: Scene = .{};
+    const t = s.init();
+    const col = t.push(0, .none, &.{ .size = .{ .px(50), .px(100) } });
+    const a = t.push(col, .none, &.{ .size = .{ .px(10), .px(10) } });
+    const b = t.push(col, .none, &.{ .size = .{ .px(10), .px(10) } });
+    const row = t.push(col, .none, &.{ .dir = .x, .size = .{ .px(50), .px(10) } });
+    const c = t.push(row, .none, &.{ .size = .{ .fill, .px(10) } });
+    const d = t.push(row, .none, &.{ .size = .{ .px(10), .px(10) } });
+    t.seal(row);
+    s.fx.set(col, &.{ .space = .between });
+    s.fx.set(row, &.{ .space = .between });
+    s.runFlex(50, 100);
+    try testing.expectEqual(0, t.c.pos[1][a]);
+    try testing.expectEqual(45, t.c.pos[1][b]);
+    try testing.expectEqual(90, t.c.pos[1][row]);
+    try testing.expectEqual(40, s.size(c)[0]);
+    try testing.expectEqual(40, t.c.pos[0][d]);
 }

@@ -322,9 +322,15 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
         const p = parent[i];
         const fl = flow[i];
         if (flexed) wrap.openLine(t, fx, i, p);
+        var free_main: f32 = 0;
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
-            const lead = simd.maxF(inner - used[a][p] - gap_total[p], 0) * align_main[p];
+            const free = simd.maxF(inner - used[a][p] - gap_total[p], 0);
+            var lead = free * align_main[p];
+            if (flexed) {
+                lead = fx.spaceLead(t, p, free, lead);
+                free_main += free * main[a][p];
+            }
             var cross = align_cross[p];
             if (flexed) cross = fx.selfCross(i, cross);
             const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
@@ -340,7 +346,7 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
         var step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
         if (flexed) step += fx.margin(0, i) * main[0][p] + fx.margin(1, i) * main[1][p];
         var advance = step + gap[p];
-        if (flexed) advance = wrap.advance(t, fx, i, p, advance);
+        if (flexed) advance = wrap.advance(t, fx, i, p, advance + fx.spaceStep(t, p, free_main));
         cursor[p] += advance * fl;
     }
 }
