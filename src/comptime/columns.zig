@@ -160,14 +160,16 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
         /// the UI does not use the feature it serves. A constant column whose rows are all equal
         /// is one value (`uniform`): the defaults for a feature no node sets (`scroll`, `offset`,
         /// `grow`...), and any style every node shares. `child_clip`, the clip a node hands its
-        /// children, is not kept when no node clips.
+        /// children, is not kept when no node clips. The layout scratch (`Tree.scratch`) lives
+        /// only in the per-frame layout `Scratch`: nothing reads it after the frame.
         pub const dropped: [names.len]bool = blk: {
             @setEvalBranchQuota(10_000 + 200 * n * names.len);
             var out: [names.len]bool = undefined;
             for (names, class, &out) |name, c, *d| d.* = switch (c) {
                 .constant => allEqual(name),
-                .dynamic => std.mem.eql(u8, name, "child_clip") and classOf("clips") == .constant and
-                    allEqual("clips") and pushed.c.clips[0] == 0,
+                .dynamic => (!custom and contains(&tree.Tree.scratch, name)) or
+                    (std.mem.eql(u8, name, "child_clip") and classOf("clips") == .constant and
+                        allEqual("clips") and pushed.c.clips[0] == 0),
             };
             break :blk out;
         };
@@ -480,6 +482,11 @@ test "Columns.dropped: a column every node shares is one value, and equals the r
     // No node clips: no child clip in RAM. The badge clips, and keeps it.
     try testing.expect(!@hasField(C.Dynamic, "child_clip"));
     try testing.expect(@hasField(Columns(examples.badge, .{}).Dynamic, "child_clip"));
+    // The layout scratch is the frame's, not RAM; a custom widget's runtime tree keeps it.
+    inline for (tree.Tree.scratch) |name| {
+        try testing.expect(!@hasField(C.Dynamic, name));
+        try testing.expect(@hasField(Columns(examples.custom, .{}).Dynamic, name));
+    }
 }
 
 test "Columns.runtime_bytes: the bytes Tree.init carves for the same node count" {

@@ -254,7 +254,7 @@ complete example.
 Use a comptime spec when you know the screen's structure while writing the program.
 For a settings page, declare the rows and bindings once, then change the bound
 values as input arrives. A fixed display size can also reduce the width of stored
-coordinates. The 32-node settings example uses 2,720 bytes for retained columns,
+coordinates. The 32-node settings example uses 1,184 bytes for retained columns,
 5,472 bytes for layout scratch and 3,275 bytes for constant tables. An exact-capacity
 runtime tree for those nodes takes 18,304 bytes. Budget the caller's text storage,
 state and draw list in addition to these figures.
