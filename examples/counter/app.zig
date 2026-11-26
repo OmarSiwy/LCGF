@@ -71,8 +71,9 @@ test "counter: clicks move the count; the memo and the summary follow only its c
     try testing.expectEqual(@as(i32, 4), app.doubled.get());
     // The first frame's compute and one per change: none on the other frames.
     try testing.expectEqual(@as(u32, 1 + 4), app.computes);
-    // The summary was rebuilt for its first frame and each change of "doubled", not per frame.
-    try testing.expectEqual(@as(u32, 1 + 4), app.summary_builds);
+    // The summary was rebuilt for its first frame, each change of "doubled", and each move of
+    // keyboard focus (to "+", then to "-"), which `reuse` treats as an input to every memo.
+    try testing.expectEqual(@as(u32, 1 + 4 + 2), app.summary_builds);
     try testing.expectEqual(@as(u32, 14), s.builds);
     // Its panel was drawn, reused or not.
     const r = s.rect(id_summary);
