@@ -29,6 +29,13 @@ const red: lcgf.types.Color = .rgb(192, 48, 48);
 const body: Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 /// `button { width: 120px; border: 2px solid #c03030 }` over the button's own style.
 const face: Style = .{ .dir = .x, .size = .{ .px(120), .fit }, .pad = @splat(theme.pad), .main = .center, .cross = .center, .border_color = red, .border = 2, .radius = theme.radius, .role = .button };
+/// `#bold { background: linear-gradient(to right, #102030, #405060) }`: a gradient on a widget.
+const bold_face: Style = blk: {
+    var st = face;
+    st.fill = .rgb(16, 32, 48);
+    st.params = lcgf.features.linear(.rgb(64, 80, 96), 0);
+    break :blk st;
+};
 /// `#go { color: #ffcc00; font-size: 16px }`: the caption's text style.
 const go_text: lcgf.types.TextStyle = .{ .px = 16, .color = .rgb(255, 204, 0) };
 const done_row: Style = .{ .dir = .x, .size = .{ .px(200), .fit }, .gap = 6, .cross = .center, .role = .checkbox };
@@ -60,7 +67,7 @@ const track: Style = .{ .dir = .x, .size = .{ .px(160), .px(12) }, .min = .{ 40,
 
 pub const spec = s.col(body, .{
     s.styled(button.ct.buttonStyled(theme, .go, "Go", go_text), face),
-    s.flexed(s.styled(toggle.ct.toggle(theme, .bold, .bold, "Bold"), face), .{ .margin = .{ 8, 4, 8, 4 } }),
+    s.flexed(s.styled(toggle.ct.toggle(theme, .bold, .bold, "Bold"), bold_face), .{ .margin = .{ 8, 4, 8, 4 } }),
     s.styled(checkbox.ct.checkbox(theme, .done, .done, "Done"), done_row),
     s.styled(switch_.ct.@"switch"(theme, .wifi, .wifi, ""), wifi_row),
     s.styled(slider.ct.slider(theme, .level, .level, .{}), track),
@@ -116,7 +123,7 @@ pub const App = struct {
         _ = f.open(.none, body);
         _ = button.buttonFace(f, &theme, .from("go"), "Go", go_text, face);
         app.flex.?.set(f.tree().len, &.{ .margin = .{ 8, 4, 8, 4 } });
-        _ = toggle.toggleFace(f, &theme, .from("bold"), &app.bold, "Bold", face);
+        _ = toggle.toggleFace(f, &theme, .from("bold"), &app.bold, "Bold", bold_face);
         _ = checkbox.checkboxFace(f, &theme, .from("done"), &app.done, "Done", done_row);
         _ = switch_.switchFace(f, &theme, .from("wifi"), &app.wifi, "", wifi_row);
         _ = slider.sliderFace(f, &theme, .from("level"), &app.level, 0, 1, track);
