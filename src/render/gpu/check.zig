@@ -39,18 +39,28 @@ pub fn RenderToTexture(comptime gpu: type, comptime shaders: type) type {
         /// Fills `r` in place: the arenas must not move once resources live in them.
         pub fn init(r: *R, dev: gpu.Device) !void {
             r.arena = try .init(dev, .{ .bytes = 1 << 20 });
+            errdefer r.arena.deinit();
             r.host_arena = try .init(dev, .{ .bytes = 1 << 16, .memory = .host });
+            errdefer r.host_arena.deinit();
             r.staging = try .init(dev, &r.host_arena, 1 << 12);
+            errdefer r.staging.deinit(dev);
             r.pattern = try dev.createTexture(&r.arena, .{ .size = .{ .width = 2, .height = 2 }, .format = .rgba8_unorm, .usage = .{ .texture_binding = true, .copy_dst = true } });
+            errdefer dev.destroyTexture(r.pattern);
             r.middle = try dev.createTexture(&r.arena, .{ .size = .{ .width = 4, .height = 4 }, .format = .rgba8_unorm, .usage = .{ .texture_binding = true, .render_attachment = true } });
+            errdefer dev.destroyTexture(r.middle);
             r.final = try dev.createTexture(&r.arena, .{ .size = .{ .width = width, .height = height }, .format = .rgba8_unorm, .usage = .{ .texture_binding = true, .render_attachment = true, .copy_src = true } });
+            errdefer dev.destroyTexture(r.final);
             r.smp = try dev.createSampler(.{});
+            errdefer dev.destroySampler(r.smp);
             r.quad = try dev.createBuffer(&r.arena, .{ .size = 6 * 8, .usage = .{ .vertex = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(r.quad);
             r.tint = try dev.createBuffer(&r.arena, .{ .size = 16, .usage = .{ .uniform = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(r.tint);
             r.pipeline = try dev.createRenderPipeline(S, .{
                 .vertex = .{ .buffers = &.{.{ .array_stride = 8, .attributes = &.{.{ .format = .float32x2, .offset = 0, .shader_location = 0 }} }} },
                 .fragment = .{ .targets = &.{.{ .format = .rgba8_unorm }} },
             });
+            errdefer dev.destroyRenderPipeline(r.pipeline);
             // The bind group's fields are textured.wgsl's group 0: params, tex, smp.
             r.first = try dev.createBindGroup(&r.arena, r.pipeline, 0, .{ .params = r.tint, .tex = r.pattern.createView(), .smp = r.smp });
             r.second = try dev.createBindGroup(&r.arena, r.pipeline, 0, .{ .params = r.tint, .tex = r.middle.createView(), .smp = r.smp });
@@ -119,10 +129,15 @@ pub fn Compute(comptime gpu: type, comptime shaders: type) type {
 
         pub fn init(k: *K, dev: gpu.Device) !void {
             k.shared = try .init(dev, .{ .bytes = 1 << 16, .memory = .host });
+            errdefer k.shared.deinit();
             k.staging = try .init(dev, &k.shared, 256);
+            errdefer k.staging.deinit(dev);
             k.out = try dev.createBuffer(&k.shared, .{ .size = count * 4, .usage = .{ .storage = true, .copy_src = true } });
+            errdefer dev.destroyBuffer(k.out);
             k.base = try dev.createBuffer(&k.shared, .{ .size = 16, .usage = .{ .uniform = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(k.base);
             k.pipeline = try dev.createComputePipeline(S, .{ .entry_point = "main" });
+            errdefer dev.destroyComputePipeline(k.pipeline);
             k.group = try dev.createBindGroup(&k.shared, k.pipeline, 0, .{ .out = k.out, .base = k.base });
         }
 
@@ -177,12 +192,19 @@ pub fn Instancing(comptime gpu: type, comptime shaders: type) type {
 
         pub fn init(r: *I, dev: gpu.Device) !void {
             r.arena = try .init(dev, .{ .bytes = 1 << 16 });
+            errdefer r.arena.deinit();
             r.host_arena = try .init(dev, .{ .bytes = 1 << 16, .memory = .host });
+            errdefer r.host_arena.deinit();
             r.staging = try .init(dev, &r.host_arena, 1 << 12);
+            errdefer r.staging.deinit(dev);
             r.target = try dev.createTexture(&r.arena, .{ .size = .{ .width = width, .height = 1 }, .format = .rgba8_unorm, .usage = .{ .render_attachment = true, .copy_src = true } });
+            errdefer dev.destroyTexture(r.target);
             r.corners = try dev.createBuffer(&r.arena, .{ .size = 6 * 8, .usage = .{ .vertex = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(r.corners);
             r.rows = try dev.createBuffer(&r.arena, .{ .size = width * @sizeOf(Row), .usage = .{ .vertex = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(r.rows);
             r.checks = try dev.createBuffer(&r.arena, .{ .size = (width + 1) * 16, .usage = .{ .vertex = true, .copy_dst = true } });
+            errdefer dev.destroyBuffer(r.checks);
             r.pipeline = try dev.createRenderPipeline(S, .{
                 .vertex = .{ .buffers = &.{
                     .{ .array_stride = 8, .attributes = &.{.{ .format = .float32x2, .offset = 0, .shader_location = 0 }} },
@@ -288,4 +310,123 @@ pub fn compute(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: a
     var values: [K.count]u32 = undefined;
     try h.readBuffer(k.out, std.mem.sliceAsBytes(&values));
     try std.testing.expect(K.verify(&values));
+}
+
+/// A `gpu` that fails its `budget`-th creation and counts what is still alive, so each check's
+/// `init` can be failed at every step and shown to release what it had made.
+const Leaky = struct {
+    var live: i32 = 0;
+    var budget: u32 = 0;
+    fn take(counted: bool) error{OutOfArena}!void {
+        if (budget == 0) return error.OutOfArena;
+        budget -= 1;
+        if (counted) live += 1;
+    }
+    fn drop() void {
+        live -= 1;
+    }
+    const Pipeline = struct {};
+    const Group = struct {};
+    pub fn Shader(comptime _: anytype) type {
+        return struct {};
+    }
+    pub fn RenderPipeline(comptime _: type) type {
+        return Pipeline;
+    }
+    pub fn ComputePipeline(comptime _: type) type {
+        return Pipeline;
+    }
+    pub fn BindGroup(comptime _: type, comptime _: u32) type {
+        return Group;
+    }
+    pub const Arena = struct {
+        pub fn init(_: Device, _: anytype) !Arena {
+            try take(true);
+            return .{};
+        }
+        pub fn deinit(_: *Arena) void {
+            drop();
+        }
+    };
+    pub const Staging = struct {
+        pub fn init(_: Device, _: *Arena, _: u64) !Staging {
+            try take(true);
+            return .{};
+        }
+        pub fn deinit(_: Staging, _: Device) void {
+            drop();
+        }
+    };
+    pub const Texture = struct {
+        pub fn createView(_: Texture) void {}
+    };
+    pub const Sampler = struct {};
+    pub const Buffer = struct {};
+    pub const Device = struct {
+        pub fn createTexture(_: Device, _: *Arena, _: anytype) !Texture {
+            try take(true);
+            return .{};
+        }
+        pub fn destroyTexture(_: Device, _: Texture) void {
+            drop();
+        }
+        pub fn createSampler(_: Device, _: anytype) !Sampler {
+            try take(true);
+            return .{};
+        }
+        pub fn destroySampler(_: Device, _: Sampler) void {
+            drop();
+        }
+        pub fn createBuffer(_: Device, _: *Arena, _: anytype) !Buffer {
+            try take(true);
+            return .{};
+        }
+        pub fn destroyBuffer(_: Device, _: Buffer) void {
+            drop();
+        }
+        pub fn createRenderPipeline(_: Device, comptime _: type, _: anytype) !Pipeline {
+            try take(true);
+            return .{};
+        }
+        pub fn destroyRenderPipeline(_: Device, _: Pipeline) void {
+            drop();
+        }
+        pub fn createComputePipeline(_: Device, comptime _: type, _: anytype) !Pipeline {
+            try take(true);
+            return .{};
+        }
+        pub fn destroyComputePipeline(_: Device, _: Pipeline) void {
+            drop();
+        }
+        // A bind group lives in its arena: nothing to destroy, but it can still fail.
+        pub fn createBindGroup(_: Device, _: *Arena, _: anytype, comptime _: u32, _: anytype) !Group {
+            try take(false);
+            return .{};
+        }
+    };
+    const shaders = struct {
+        pub const textured = {};
+        pub const fill = {};
+        pub const instanced = {};
+    };
+};
+
+test "every check's init releases what it made when a later step fails" {
+    inline for (.{ RenderToTexture(Leaky, Leaky.shaders), Compute(Leaky, Leaky.shaders), Instancing(Leaky, Leaky.shaders) }) |C| {
+        var steps: u32 = 0;
+        while (true) : (steps += 1) {
+            Leaky.budget = steps;
+            Leaky.live = 0;
+            var c: C = undefined;
+            if (c.init(.{})) |_| {
+                c.deinit(.{});
+                try std.testing.expectEqual(@as(i32, 0), Leaky.live);
+                break;
+            } else |err| {
+                try std.testing.expectEqual(error.OutOfArena, err);
+                try std.testing.expectEqual(@as(i32, 0), Leaky.live);
+            }
+        }
+        try std.testing.expect(steps > 3);
+    }
 }
