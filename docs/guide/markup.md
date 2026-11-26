@@ -338,7 +338,10 @@ other elements inside it are errors.
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20
-per run. Nothing is silently dropped.
+per run. Nothing is silently dropped. That includes a declaration that wins the cascade on an element whose
+lowering never reads it (`select { width: 200px }`, a property of an element that has no box of
+its own): the error names the element. The flex container properties (`flex-direction`,
+`justify-content`, …) on a box that is not `display: flex` do nothing, as in CSS.
 
 `lcgf-gen --mappings` lists every decision with its status:
 

@@ -269,6 +269,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     l.runtime_prefix = runtime_vars;
     l.checkDeclarations();
     l.run();
+    l.checkUnread();
     // Font files are vendored: each must exist, and editing one reruns the tool.
     for (l.page.fonts.items, l.page.font_locs.items) |f, at| {
         const p = std.fs.path.join(arena, &.{ loader.dir, f.path }) catch @panic("out of memory");

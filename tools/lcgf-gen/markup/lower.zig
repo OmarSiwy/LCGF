@@ -36,6 +36,11 @@ pub const Lowerer = struct {
     root_px: f32 = 14,
     /// `--runtime-vars=t-`: custom properties `--t-*` are run-time theme tokens; "" for none.
     runtime_prefix: []const u8 = "",
+    /// (element << 32 | declaration) pairs the lowering read (`declared`): an author
+    /// declaration that wins on an element and is never read there is reported (`checkUnread`).
+    reads: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// Per declaration: already reported by `checkDeclarations` (unknown or refused).
+    noted: []bool = &.{},
     /// Token table index of a value token that a `var(--t-*)` produced.
     origin: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// The token behind the value the last `component` read, or none.
@@ -216,6 +221,7 @@ pub const Lowerer = struct {
     fn declared(l: *Lowerer, n: u32, p: Prop) ?Value {
         const e = l.k.get(n, p);
         if (e.decl == none) return null;
+        ok(l.reads.put(l.arena, (@as(u64, n) << 32) | e.decl, {}));
         const d = l.c.decls.get(e.decl);
         const r = l.substitute(n, d.first, d.end, d.loc) orelse return null;
         const v: Value = .{ .first = r[0], .end = r[1], .loc = d.loc, .shorthand = e.shorthand, .prop = p };
@@ -392,10 +398,40 @@ pub const Lowerer = struct {
         return true;
     }
 
+    /// An author declaration that wins on an element the lowering never read there: CSS the
+    /// page would otherwise drop without a word. Reported once per declaration, at it, naming
+    /// the first such element. Run after `run`.
+    pub fn checkUnread(l: *Lowerer) void {
+        const reported = ok(l.arena.alloc(bool, l.c.decls.len));
+        @memcpy(reported, l.noted);
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            if (l.doc.nodes.items(.kind)[n] != .element) continue;
+            // A flex container's own properties do nothing on another box, as in CSS.
+            const flex = l.display(n) == .flex;
+            for (0..values.prop_count) |pi| {
+                const e = l.k.table[n * values.prop_count + pi];
+                if (e.decl == none or reported[e.decl]) continue;
+                const p: Prop = @fromBackingInt(@as(@typeInfo(Prop).@"enum".tag_type, @intCast(pi)));
+                const container_only = switch (p) {
+                    .@"flex-direction", .@"flex-wrap", .@"justify-content", .@"align-items", .@"align-content" => true,
+                    else => false,
+                };
+                if (container_only and !flex) continue;
+                const origin = l.c.rules.items(.origin)[l.c.decls.items(.rule)[e.decl]];
+                if (origin == .ua or l.reads.contains((@as(u64, n) << 32) | e.decl)) continue;
+                reported[e.decl] = true;
+                l.ds.err(l.c.decls.items(.loc)[e.decl], "'{s}' on <{s}> is not lowered: nothing on this element reads it", .{ l.c.decls.items(.name)[e.decl], l.tag(n) });
+            }
+        }
+    }
+
     /// Checks every declaration once: unknown properties and refused ones are errors at the
     /// declaration, not once per element it matches.
     pub fn checkDeclarations(l: *Lowerer) void {
         const d = l.c.decls.slice();
+        l.noted = ok(l.arena.alloc(bool, d.len));
+        @memset(l.noted, false);
         for (0..d.len) |i| {
             const name = d.items(.name)[i];
             if (std.mem.startsWith(u8, name, "--")) continue;
@@ -404,9 +440,15 @@ pub const Lowerer = struct {
                 if (i >= f.decl_first and i < f.decl_first + f.decl_count) break true;
             } else false;
             if (descriptor) continue;
-            if (l.refused("property", name, "", d.items(.loc)[i])) continue;
+            if (l.refused("property", name, "", d.items(.loc)[i])) {
+                l.noted[i] = true;
+                continue;
+            }
             const known = std.meta.stringToEnum(Prop, name) != null or values.shorthand(name) != null;
-            if (!known) l.ds.err(d.items(.loc)[i], "unknown CSS property '{s}'", .{name});
+            if (!known) {
+                l.ds.err(d.items(.loc)[i], "unknown CSS property '{s}'", .{name});
+                l.noted[i] = true;
+            }
         }
         for (0..l.c.simples.len) |i| {
             const s = l.c.simples.get(i);
@@ -777,6 +819,7 @@ pub const Lowerer = struct {
         // accent-color on :root is the theme's accent, after --lcgf-accent.
         const ac = l.k.get(0, .@"accent-color");
         if (ac.decl != none) {
+            ok(l.reads.put(l.arena, ac.decl, {})); // node 0's
             const d = l.c.decls.get(ac.decl);
             if (l.substitute(0, d.first, d.end, d.loc)) |r| {
                 if (values.isIdent(l.c, r[0], "auto")) {} else if (values.isIdent(l.c, r[0], "currentcolor")) th.accent = th.text else if (values.color(l.c, r[0], r[1])) |col| th.accent = col else l.badValue(r[0], .@"accent-color", r[1]);

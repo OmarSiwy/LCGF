@@ -1,0 +1,3 @@
+unread.html:5:14: error: 'color' on <option> is not lowered: nothing on this element reads it
+    option { color: blue; }
+             ^
