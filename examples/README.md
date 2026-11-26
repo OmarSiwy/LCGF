@@ -13,14 +13,17 @@ sources and headless tests. Use the repository's pinned Zig
 | [dashboard](dashboard/) | Host-drawn bar and line charts |
 | [viewport](viewport/) | A ray-cast sphere behind UI controls |
 | [texture](texture/) | A second UI rendered into a texture |
-| [architecture-lab](architecture-lab/) | VIPER, MVP, MVVP, MVVM and MVVM-C over separate sidebar/top-bar/workspace modules, with headless correctness and performance comparisons |
+| [viper](viper/) | VIPER: entity, interactor, presenter, view and router files |
+| [mvp](mvp/) | MVP: one model, a passive view and a stateless presenter |
+| [mvvp](mvvp/) | MVVP, a project-defined Model-View-ViewModel-Presenter hybrid |
+| [mvvm](mvvm/) | MVVM: a view bound to ViewModel commands |
+| [mvvm-c](mvvm-c/) | MVVM-C: a coordinator owns navigation |
 | [mcu](mcu/) | A thermostat replay and Cortex-M7 image |
 | [embedded](embedded/) | A simulated SPI counter board and two firmware targets |
 
 From a project directory, `zig build` installs the application, `zig build run`
 runs it and `zig build test` runs its headless checks. The original seven desktop
-programs and the architecture lab use the software renderer and Linux/X11.
-The architecture lab also installs a headless snapshot executable on other hosts.
+programs and the five architecture examples use the software renderer and Linux/X11.
 For interactive timing at large window
 sizes, run `zig build run -Doptimize=ReleaseFast` in the example directory.
 The shared host embeds printable ASCII glyphs from DejaVu Sans Mono and installs
@@ -40,9 +43,8 @@ zig build test
 
 Pass a relative path to the framework when using a different layout. Zig
 updates the local dependency entry in the copied project's manifest. Use the
-framework revision that ships these projects. The original seven desktop build
-scripts use its `buildDesktopExample` helper. The architecture lab owns its
-build script to select architectures and expose its benchmarks. The runner and
+framework revision that ships these projects. The desktop build scripts use its
+`buildDesktopExample` helper. The runner and
 replay support are part of the framework package, so these commands also work
 with an unpacked SDK containing the package's declared paths. Each board
 project owns its simulator inputs and firmware sources.
@@ -55,5 +57,5 @@ offline build, use the package directory shipped with the checkout, for example
 The repository-wide `zig build examples` command builds the original seven
 desktop executables and thermostat image and runs their tests. The examples CI
 job also discovers each standalone build and runs `install test`, including the
-architecture lab's application and software-host suites. `zig build embedded
+five architecture examples. `zig build embedded
 embedded-sim` covers the counter board.

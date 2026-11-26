@@ -1,0 +1,8 @@
+.{
+    .name = .mvvp,
+    .version = "0.0.0",
+    .fingerprint = 0x91144b6c98c82b9d,
+    .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
+    .dependencies = .{ .lcgf = .{ .path = "../.." } },
+    .paths = .{ "build.zig", "build.zig.zon", "README.md", "LICENSE", "app.zig", "model.zig", "presenter.zig", "view.zig", "view_model.zig" },
+}
