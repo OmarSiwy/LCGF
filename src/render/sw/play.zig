@@ -90,7 +90,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t, s.images[1]);
+    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t.fb, clear, s.images[1]);
 
     // Tightly packed RGBA rows, then a PNG with stored (uncompressed) deflate blocks.
     var raw: std.ArrayList(u8) = .empty;
@@ -131,7 +131,11 @@ pub fn main(init: std.process.Init) !void {
     try cwd.writeFile(io, .{ .sub_path = out_path, .data = png.items });
 }
 
-fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, t: sw.Target, atlas: sw.Image) !void {
+/// The canvas scene through `sw.Setup.draw`, as a host draws it: three threads, a band each,
+/// and the canvas binned into them (`Setup.bins`), so sw-golden covers the binned path; the
+/// walk without a bin is covered by sw/canvas.zig's tests. The scene is the canvas alone, so
+/// Setup's clear to `clear` loses nothing.
+fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, fb: *sw.Framebuffer, clear: Color, atlas: sw.Image) !void {
     const canvas = lcgf.canvas;
     const DrawList = lcgf.draw_list.DrawList;
     var node: [9]f32 = undefined;
@@ -197,7 +201,22 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
     list.canvases = &canvases;
     list.customs[0] = .{ .rect = node[0..4].*, .clip = node[4..8].*, .data = 0, .id = 0, .node = 0, .opacity = node[8] };
     list.custom_len = 1;
-    sw.canvas.draw(t, &list, 0, 1, atlas);
+    list.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
+    list.cmd.first[0] = 0;
+    list.cmd.count[0] = 1;
+    list.cmd_len = 1;
+
+    var pool: sw.bands.Pool = undefined;
+    try pool.init(io, 3);
+    defer pool.deinit();
+    const cap = @max(n, 1);
+    var bin_carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, sw.canvas.Bin.requiredBytes(cap, 2 * cap)) };
+    var bins = [1]sw.canvas.Bin{.init(&bin_carver, cap, 2 * cap)};
+    var setup: sw.Setup = .{ .pool = &pool, .bins = &bins };
+    setup.gfx.images = &.{ sw.Image.white, atlas };
+    setup.draw(fb, &list, .{ .texture = @fromBackingInt(1) }, clear, 1);
+    // Every band drew from the bin.
+    if (bins[0].list != &list or bins[0].bands != pool.count) return error.CanvasNotBinned;
 }
 
 fn unorm(x: f32) u8 {
