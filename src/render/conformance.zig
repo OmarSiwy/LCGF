@@ -25,6 +25,7 @@ const TextRun = draw_list.TextRun;
 const CustomDraw = draw_list.CustomDraw;
 const Cmd = draw_list.Cmd;
 const Color = types.Color;
+const canvas = @import("../draw/canvas.zig");
 
 /// Which instance buffer a draw reads.
 pub const Source = enum(u32) { quads, glyphs };
@@ -168,6 +169,122 @@ pub const scenes = [_]Scene{
             .{ .source = .quads, .first = 1, .count = 1 },
         },
     },
+};
+
+/// The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes across a chain,
+/// a non-convex polygon, glyphs turned 0 and 1 quarter turns, an override, a dead row and a
+/// hidden layer, under a camera that pans (a far i64 origin), zooms (zoom-scaled widths) and
+/// offsets, in a node clipped by its parent. Not a tree scene: `canvasScene` dumps the
+/// instances, the palette and the command for sw-play and gpu.py; each GPU back end's player
+/// draws it from `CanvasStorage`. Its golden is tools/golden/ref/draw/canvas.png.
+pub const canvas_scene = struct {
+    /// Logical pixels: the node, and the clip its parent gives it.
+    pub const node = [4]f32{ 20, 20, 780, 580 };
+    pub const clip = [4]f32{ 40, 30, 760, 570 };
+    /// Twenty world units per pixel, centred on a point two billion units out.
+    pub const far: i64 = 2_000_000_000;
+    pub const camera: canvas.Camera = .{ .origin = .{ far, -far }, .scale = 0.05, .offset = .{ 10, 5 }, .zoom = 2 };
+    pub const layers = [_]canvas.Layer{
+        .of(.{ .stroke = .rgb(230, 230, 230), .width = 1 }), // 0 wires
+        .of(.{ .stroke = .rgb(90, 200, 255), .fill = .rgba(40, 90, 160, 180), .width = 1.5 }), // 1 symbols
+        .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 2 }), // 2 pins
+        .of(.{ .stroke = .rgb(250, 250, 120), .width = 1 }), // 3 labels
+        .of(.{ .stroke = .rgb(255, 0, 255), .fill = .rgb(255, 0, 255), .width = 8, .visible = false }), // 4 hidden
+        .of(.{ .stroke = .rgb(160, 255, 160), .fill = .rgb(60, 160, 60), .width = 1, .fill_on = false }), // 5 outlines only
+    };
+    pub const palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true };
+
+    /// World point at logical (x, y) from the camera's origin.
+    pub fn w(x: i32, y: i32) [2]i32 {
+        return .{ @intCast(far + @as(i64, x) * 20), @intCast(-far + @as(i64, y) * 20) };
+    }
+
+    pub fn build(s: *canvas.Instances) [2]canvas.Range {
+        // Caps: butt, square, round at weights 1..4 (2x zoom-scaled widths: 2 to 8 px).
+        const caps = [_]canvas.Cap{ .butt, .square, .round };
+        for (caps, 0..) |c, k| for (0..4) |wt| {
+            const y: i32 = @intCast(20 + 30 * k * 4 + 30 * wt);
+            _ = s.segment(w(20, y), w(160, y + 10), .{ .weight = @intCast(wt + 1), .cap = c });
+        };
+        // A dashed chain with joints, and a world-width wire (200 units: 10 px).
+        _ = s.polyline(&.{ w(200, 30), w(300, 30), w(340, 110), w(260, 160), w(200, 120) }, .{ .weight = 2, .dash = 2, .cap = .round });
+        _ = s.segment(w(200, 200), w(340, 260), .{ .width = 200, .cap = .round });
+        // Rects: filled and stroked, rounded, stroke only, fill only; circles.
+        _ = s.rect(w(380, 20), w(480, 90), .{ .layer = 1 });
+        _ = s.rect(w(500, 20), w(620, 90), .{ .layer = 1, .radius = 20 * 20, .weight = 3 });
+        _ = s.rect(w(380, 110), w(480, 170), .{ .layer = 5, .radius = 8 * 20 });
+        _ = s.rect(w(500, 110), w(620, 170), .{ .layer = 2, .stroke = false });
+        _ = s.circle(w(660, 60), 40 * 20, .{ .layer = 2 });
+        _ = s.circle(w(660, 150), 25 * 20, .{ .layer = 1, .fill = false, .weight = 2 });
+        // Arcs: each cap, a negative sweep, a full ring.
+        for (caps, 0..) |c, k| _ = s.arc(w(@intCast(420 + 90 * k), 250), 35 * 20, .{ .layer = 1, .weight = 3, .start = 0.4, .sweep = 4.2, .cap = c });
+        _ = s.arc(w(690, 250), 30 * 20, .{ .layer = 2, .weight = 2, .start = 0, .sweep = -2.5, .cap = .round });
+        _ = s.arc(w(690, 250), 12 * 20, .{ .layer = 0, .weight = 2 });
+        // Polygons: a pin triangle, a concave arrow stroked, a self-crossing star (nonzero).
+        _ = s.polygon(&.{ w(40, 420), w(110, 450), w(40, 480) }, .{ .layer = 2 });
+        _ = s.polygon(&.{ w(140, 400), w(260, 400), w(260, 430), w(200, 430), w(230, 500), w(170, 500), w(170, 430), w(140, 430) }, .{ .layer = 1, .stroke = true, .weight = 2 });
+        var star: [5][2]i32 = undefined;
+        for (&star, 0..) |*p, k| {
+            const a = -std.math.pi / 2.0 + @as(f32, @floatFromInt(k)) * 4 * std.math.pi / 5.0;
+            p.* = w(@intFromFloat(@round(340 + 60 * @cos(a))), @intFromFloat(@round(450 + 60 * @sin(a))));
+        }
+        _ = s.polygon(&star, .{ .layer = 1, .stroke = true });
+        // Glyphs: a label along x and one turned a quarter, 16 px tall.
+        _ = s.glyphs("LCGF canvas 0123", w(420, 330), .{ .px = 16 * 20, .layer = 3 });
+        _ = s.glyphs("turned", w(720, 300), .{ .px = 16 * 20, .layer = 3, .turns = 1 });
+        // A dead row and a hidden layer draw nothing; a wire past the clip is cut by it.
+        s.kill(s.segment(w(420, 400), w(700, 520), .{ .weight = 4 }));
+        _ = s.rect(w(420, 400), w(700, 520), .{ .layer = 4 });
+        _ = s.segment(w(400, 540), w(900, 580), .{ .weight = 4, .cap = .round });
+        // The selection: the second dashed edge's chain tinted, drawn as a second range.
+        const selection_first = s.len;
+        _ = s.polyline(&.{ w(420, 440), w(560, 520), w(700, 440) }, .{ .weight = 3, .cap = .square });
+        return .{ .{ .first = 0, .count = selection_first }, s.since(selection_first) };
+    }
+
+    pub const viewport = [2]f32{ 800, 600 };
+    /// What the golden is drawn over (sw-play's 0d0d0f).
+    pub const clear = Color.rgb(13, 13, 15);
+    /// The selection's override colour.
+    pub const tint = Color.rgb(80, 255, 120);
+    pub const rows = 256;
+    pub const verts = 64;
+};
+
+/// The canvas scene as a draw list of one canvas command, in caller-owned memory.
+pub const CanvasStorage = struct {
+    list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
+    shape_buf: [canvas.Instances.requiredBytes(canvas_scene.rows, canvas_scene.verts, 4)]u8 align(mem.column_align) = undefined,
+    draw: DrawList = undefined,
+    shapes: canvas.Instances = undefined,
+    ranges: [2]canvas.Range = undefined,
+    overrides: [1]canvas.Override = undefined,
+    rows: [1]draw_list.CanvasDraw = undefined,
+
+    const list_bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 1, 1, 1);
+        break :blk counter.off;
+    };
+
+    /// Builds the scene; `st` must not move afterwards.
+    pub fn load(st: *CanvasStorage) void {
+        const sc = canvas_scene;
+        var a: mem.Carver = .{ .buf = &st.list_buf };
+        st.draw = DrawList.init(&a, 1, 1, 1);
+        var b: mem.Carver = .{ .buf = &st.shape_buf };
+        st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4);
+        st.ranges = sc.build(&st.shapes);
+        st.overrides = .{.{ .range = st.ranges[1], .color = @bitCast(sc.tint) }};
+        st.rows = .{.{ .instances = &st.shapes, .camera = sc.camera, .ranges = &st.ranges, .palette = &sc.palette, .overrides = &st.overrides }};
+        st.draw.customs[0] = .{ .rect = sc.node, .clip = sc.clip, .data = 0, .id = 0, .node = 0 };
+        st.draw.custom_len = 1;
+        st.draw.canvases = &st.rows;
+        st.draw.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
+        st.draw.cmd.first[0] = 0;
+        st.draw.cmd.count[0] = 1;
+        st.draw.cmd_len = 1;
+    }
 };
 
 /// Bytes `Storage` needs, from a counting carver over the same `init`.
