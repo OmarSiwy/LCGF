@@ -680,18 +680,17 @@ pub const Lowerer = struct {
     fn recipeOf(l: *Lowerer, n: u32, reported: *std.AutoHashMapUnmanaged(u32, void)) void {
         const x = l.ir_of[n];
         const nodes = l.page.nodes.slice();
-        const fits = x != none and switch (nodes.items(.kind)[x]) {
-            .button, .checkbox, .@"switch" => l.eachOf(n) == none,
+        const kind = if (x != none) nodes.items(.kind)[x] else .container;
+        const is_box = kind == .container;
+        const fits = x != none and switch (kind) {
+            .button, .checkbox, .@"switch", .container => l.eachOf(n) == none,
             else => false,
         };
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
         for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                if (l.hasState(d.sel))
-                    l.ds.err(l.c.sels.items(.loc)[d.sel], "state CSS on <{s}> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)", .{l.tag(n)})
-                else
-                    l.ds.err(l.c.sels.items(.loc)[d.sel], "@media on <{s}> is not lowered: it restyles a <button>, a checkbox or a switch outside lcgf-each; other boxes need style variants (engine spec F3)", .{l.tag(n)});
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a checkbox or a switch outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -719,7 +718,11 @@ pub const Lowerer = struct {
                 const p: Prop = @fromBackingInt(@intCast(p_));
                 switch (p) {
                     .@"background-color" => r.fill = l.colorOf(n, p),
-                    .color => r.text_color = l.colorOf(n, p),
+                    .color => if (is_box)
+                        l.ds.err(l.c.decls.items(.loc)[d.decl], "color under a state pseudo-class or @media on a box would restyle the text inside it; set it on the text's own element", .{})
+                    else {
+                        r.text_color = l.colorOf(n, p);
+                    },
                     .@"border-color" => r.border_color = l.colorOf(n, p),
                     .@"border-top-width" => r.border = l.px(n, p),
                     .opacity => r.opacity = if (l.number(n, p)) |o| std.math.clamp(o, 0, 1) else null,
@@ -749,6 +752,20 @@ pub const Lowerer = struct {
     /// The recipe rule of IR node `x`'s static CSS: what its style sets over the widget's own.
     fn staticRule(l: *Lowerer, n: u32, x: u32) ?ir.RecipeRule {
         const node = l.page.nodes.get(x);
+        if (node.kind == .container) {
+            // A box's static style is its recipe's base; run-time tokens would be lost there.
+            if (node.uses.len > 0) {
+                l.ds.err(l.loc(n), "a box with state CSS or @media cannot also read run-time tokens yet", .{});
+                return null;
+            }
+            // A recipe box lays its children out as a row or column.
+            if (node.placed.grid != null) {
+                l.ds.err(l.loc(n), "a grid with state CSS or @media is not lowered yet; put the state CSS on a box inside it", .{});
+                return null;
+            }
+            l.page.nodes.items(.id)[x] = if (l.attr(n, "id")) |id| (if (l.identifier(id, l.valueLoc(n, "id"))) id else "box") else ok(std.fmt.allocPrint(l.arena, "box_{d}", .{x}));
+            return .{};
+        }
         var st = node.style;
         var r: ir.RecipeRule = .{};
         if (st.fill.bitsOf() != node.base_style.fill.bitsOf()) r.fill = st.fill;

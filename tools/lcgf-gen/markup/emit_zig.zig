@@ -379,7 +379,11 @@ pub const Emit = struct {
             e.write(", .{");
             inner_close.appendSlice(e.arena, "})") catch unreachable;
         } else switch (n.kind) {
-            .container => {
+            .container => if (n.recipe.len > 0) {
+                if (boxInteractive(n)) e.print("recipes.ct.box(.{f}, ", .{std.zig.fmtId(n.id)}) else e.write("recipes.ct.box(null, ");
+                e.print(".{{ .recipe = {s} }}, .{{", .{e.recipeName(n)});
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
+            } else {
                 e.write(if (n.dir == .x) "s.row(" else "s.col(");
                 e.fields(n.style, types.Style{}, &.{"dir"}, n.params_expr);
                 e.write(", .{");
@@ -666,6 +670,12 @@ pub const Emit = struct {
         return std.fmt.allocPrint(e.arena, "recipe_{s}", .{n.id}) catch unreachable;
     }
 
+    /// A box whose rules ask for a state takes hover and press: it is a widget.
+    fn boxInteractive(n: ir.Node) bool {
+        for (n.recipe) |r| if (r.require.bits() != 0) return true;
+        return false;
+    }
+
     fn hasRecipes(e: *const Emit) bool {
         for (e.page.nodes.items(.recipe)) |r| if (r.len > 0) return true;
         return false;
@@ -691,6 +701,16 @@ pub const Emit = struct {
         for (0..nodes.len) |i| {
             const n = nodes.get(i);
             if (n.recipe.len == 0) continue;
+            if (n.kind == .container) {
+                // A box: its static style is the base, its rules are its CSS's alone.
+                e.print("/// The recipe of box `{s}` ({s}): its static style, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc) });
+                e.print("const {s}: recipes.Recipe = .{{ .parts = &.{{.{{ .id = style.Parts.root, .base = .{{ .box = ", .{e.recipeName(n)});
+                e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                e.write(" } }}, .rules = &[_]style.Rule{\n");
+                for (n.recipe) |r| e.rule(r, "root", r);
+                e.write("} };\n\n");
+                continue;
+            }
             const stock = switch (n.kind) {
                 .button => "button",
                 .checkbox => "checkbox",
@@ -979,6 +999,11 @@ pub const Emit = struct {
         e.text_uses = n.text_uses;
         switch (n.kind) {
             .container, .landmark => {
+                if (n.recipe.len > 0) {
+                    const live = boxInteractive(n);
+                    e.print("_ = recipes.beginBox(f, {s}, {s}, .{{ .recipe = {s} }}) catch unreachable;", .{ if (live) e.rtId(n.id, list_depth) else ".none", if (live) "true" else "false", e.recipeName(n) });
+                    return "recipes.endBox(f);";
+                }
                 var st = n.style;
                 if (n.kind == .landmark) st.role = std.meta.stringToEnum(types.Role, n.landmark).?;
                 e.write("_ = f.open(.none, ");
