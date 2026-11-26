@@ -84,6 +84,8 @@ pub const Lowerer = struct {
     /// cell's slot in its row (`table`), by document node.
     rows: std.AutoHashMapUnmanaged(u32, [2]u32) = .empty,
     slots: std.AutoHashMapUnmanaged(u32, lcgf.grid.Item) = .empty,
+    /// `repeat(auto-fill | auto-fit, track)` read by the last `tracks` call.
+    repeat: ?lcgf.grid.Decl.AutoRepeat = null,
     /// `grid-template-areas` of each grid container, by IR node (engine spec F7).
     areas: std.AutoHashMapUnmanaged(u32, []const lcgf.grid_names.Area) = .empty,
     /// What `position` and `z-index` gave the box being lowered (engine spec F17), taken by
@@ -1929,7 +1931,9 @@ pub const Lowerer = struct {
     fn gridContainer(l: *Lowerer, n: u32, parent: u32, style: Style, params: []const u8, margin: ?[4]f32) void {
         const G = lcgf.grid;
         var d: G.Decl = .{};
+        l.repeat = null;
         var columns = l.tracks(n, .@"grid-template-columns");
+        const repeat = l.repeat;
         var rows = l.tracks(n, .@"grid-template-rows");
         var areas: []const lcgf.grid_names.Area = &.{};
         if (l.declared(n, .@"grid-template-areas")) |v| {
@@ -1962,6 +1966,11 @@ pub const Lowerer = struct {
         }
         d.columns = columns;
         d.rows = rows;
+        if (repeat) |rp| {
+            // At most `AutoRepeat.max` (64) columns.
+            d.repeat = rp;
+            if (areas.len > 0) l.ds.err(l.declared(n, .@"grid-template-areas").?.loc, "grid-template-areas with repeat(auto-fill/auto-fit) is not supported", .{});
+        }
         inline for (.{ Prop.@"grid-auto-columns", Prop.@"grid-auto-rows" }, 0..) |p, a| {
             const auto = l.tracks(n, p);
             if (auto.len == 1) d.auto[a] = auto[0] else if (auto.len > 1) l.ds.err(l.declared(n, p).?.loc, "{s} takes one track size", .{@tagName(p)});
@@ -1978,6 +1987,7 @@ pub const Lowerer = struct {
             }
             d.flow = @fromBackingInt(@intCast(@as(u8, @intFromBool(column)) | @as(u8, if (dense) 2 else 0)));
         }
+        if (d.repeat != null and d.growAxis() == 0) l.ds.err(l.declared(n, .@"grid-auto-flow").?.loc, "grid-auto-flow: column with repeat(auto-fill/auto-fit) columns is not supported", .{});
         inline for (.{ Prop.@"justify-content", Prop.@"align-content" }, 0..) |p, a| if (l.keyword(n, p)) |kw| {
             d.distribution[a] = distributionOf(kw) orelse blk: {
                 l.badValue(l.declared(n, p).?.first, p, l.declared(n, p).?.end);
@@ -2169,7 +2179,19 @@ pub const Lowerer = struct {
                 const comma = inner.untilComma();
                 const count_t = inner.next() orelse continue;
                 if (values.isIdent(l.c, count_t, "auto-fill") or values.isIdent(l.c, count_t, "auto-fit")) {
-                    l.ds.err(l.c.tokLoc(count_t), "repeat(auto-fill/auto-fit) needs the grid's width at run time; give a count", .{});
+                    // `gridContainer` takes it when it is the whole column list.
+                    var one: std.ArrayList(lcgf.grid.Track) = .empty;
+                    l.trackList(n, comma + 1, r.i - 1, p, &one);
+                    if (p != .@"grid-template-columns" or first != t or !r.done() or one.items.len != 1) {
+                        l.ds.err(l.c.tokLoc(count_t), "repeat(auto-fill/auto-fit) is lowered as the whole grid-template-columns, of one track", .{});
+                        continue;
+                    }
+                    const tk = one.items[0];
+                    if (@max(tk.k_px, tk.min) <= 0) {
+                        l.ds.err(l.c.tokLoc(count_t), "repeat(auto-fill/auto-fit) needs a track with a size or a minimum in px (minmax(100px, 1fr))", .{});
+                        continue;
+                    }
+                    l.repeat = .{ .mode = if (values.isIdent(l.c, count_t, "auto-fit")) .auto_fit else .auto_fill, .track = tk };
                     continue;
                 }
                 const count = l.c.toks.items(.num)[count_t];

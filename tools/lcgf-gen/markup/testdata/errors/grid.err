@@ -1,15 +1,15 @@
-grid.html:3:53: error: repeat(auto-fill/auto-fit) needs the grid's width at run time; give a count
-  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) [a] 10% 1fr; grid-template-areas: "a b" "c"; }
+grid.html:3:53: error: repeat(auto-fill/auto-fit) is lowered as the whole grid-template-columns, of one track
+  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
                                                     ^
-grid.html:3:70: error: named grid lines are not supported yet; use grid-template-areas
-  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) [a] 10% 1fr; grid-template-areas: "a b" "c"; }
-                                                                     ^
-grid.html:3:74: error: grid-template-columns: give a track in px, em, rem or fr
-  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) [a] 10% 1fr; grid-template-areas: "a b" "c"; }
-                                                                         ^
-grid.html:3:110: error: every row of grid-template-areas needs the same number of cells (2, not 1)
-  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) [a] 10% 1fr; grid-template-areas: "a b" "c"; }
-                                                                                                             ^
+grid.html:3:75: error: named grid lines are not supported yet; use grid-template-areas
+  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
+                                                                          ^
+grid.html:3:79: error: grid-template-columns: give a track in px, em, rem or fr
+  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
+                                                                              ^
+grid.html:3:115: error: every row of grid-template-areas needs the same number of cells (2, not 1)
+  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
+                                                                                                                  ^
 grid.html:9:22: error: a grid item with a line on one axis needs one on the other too (grid-column and grid-row); auto-placement on one axis is not supported
 <body><div class="g"><span class="one">1</span><span class="bad">2</span><span class="loose">3</span></div><p class="out">x</p></body>
                      ^

@@ -144,6 +144,10 @@ pub const Emit = struct {
                     e.write(", ");
                     e.track(v[1]);
                     e.write(" }");
+                } else if (comptime std.mem.eql(u8, name, "repeat")) {
+                    e.print(".{{ .mode = .{s}, .track = ", .{@tagName(v.?.mode)});
+                    e.track(v.?.track);
+                    e.print(", .max = {d} }}", .{v.?.max});
                 } else e.value(v);
                 any = true;
             }
@@ -2090,7 +2094,7 @@ pub const Emit = struct {
             const times = e.copies(@intCast(i));
             const items = e.gridItemsOf(@intCast(i));
             const extra = lcgf.grid.implicitTracks(d, items);
-            var count: [2]u32 = .{ @max(@as(u32, @intCast(d.columns.len)), 1), @max(@as(u32, @intCast(d.rows.len)), 1) };
+            var count: [2]u32 = .{ if (d.repeat) |r| r.max else @max(@as(u32, @intCast(d.columns.len)), 1), @max(@as(u32, @intCast(d.rows.len)), 1) };
             const given: u32 = @intCast(if (d.growAxis() == 0) d.columns.len else d.rows.len);
             count[d.growAxis()] = @max(count[d.growAxis()], given + extra);
             cap.grids += times;

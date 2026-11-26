@@ -1075,7 +1075,7 @@ fn gridCapacity(comptime n: Spec) grid.Grids.Capacity {
         var cap: grid.Grids.Capacity = .{ .grids = 0, .tracks = 0, .items = 0, .cells = 1 };
         if (n.grid) |decl| {
             const extra = grid.implicitTracks(decl, spec_zig.gridItems(n));
-            var count: [2]u32 = .{ @max(decl.columns.len, 1), @max(decl.rows.len, 1) };
+            var count: [2]u32 = .{ if (decl.repeat) |r| r.max else @max(decl.columns.len, 1), @max(decl.rows.len, 1) };
             count[decl.growAxis()] = @max(count[decl.growAxis()], @as(u32, if (decl.growAxis() == 0) decl.columns.len else decl.rows.len) + extra);
             cap = .{ .grids = 1, .tracks = count[0] + count[1], .items = n.children.len, .cells = count[0] * count[1] };
         }

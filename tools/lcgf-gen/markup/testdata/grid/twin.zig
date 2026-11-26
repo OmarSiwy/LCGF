@@ -28,6 +28,15 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         }), .{ .cell = .{ 1, 1 } }),
         s.cell(label.ct.label(theme, "Foot"), .{ .cell = .{ 0, 2 }, .span = .{ 2, 1 }, .justify = .{ .end, .stretch } }),
     }),
+    // repeat(auto-fill, minmax(60px, 1fr)) in 280 px: four columns, the width laid out decides.
+    s.grid(.{ .size = .{ .px(280), .fit } }, .{ .gap = .{ 4, 4 }, .repeat = .{ .mode = .auto_fill, .track = .minmaxFr(60, 1, lcgf.types.inf) } }, .{
+        label.ct.label(theme, "t1"),
+        label.ct.label(theme, "t2"),
+        label.ct.label(theme, "t3"),
+        label.ct.label(theme, "t4"),
+        label.ct.label(theme, "t5"),
+        label.ct.label(theme, "t6"),
+    }),
     s.grid(.{}, .{ .rows = &.{ .fit, .fit }, .flow = .column_dense, .distribution = .{ .space_between, .start } }, .{
         label.ct.label(theme, "1"),
         label.ct.label(theme, "2"),

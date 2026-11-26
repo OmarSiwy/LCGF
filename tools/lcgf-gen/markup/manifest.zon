@@ -183,7 +183,7 @@
         .{ .kind = "property", .name = "visibility", .status = .mapped, .target = "Participation.hidden", .fixture = "landmarks" },
         .{ .kind = "property", .name = "cursor", .status = .mapped, .target = "Style.cursor", .fixture = "counter" },
         .{ .kind = "property", .name = "pointer-events", .status = .mapped, .target = "Participation.hit = false", .fixture = "landmarks" },
-        .{ .kind = "property", .name = "grid-template-columns", .status = .mapped, .target = "Decl.columns: px/em -> Track.px, fr, auto/min-/max-content -> fit, minmax(), fit-content(), repeat(n, ...) expanded; repeat(auto-fill/fit), % and [names] are errors", .fixture = "grid" },
+        .{ .kind = "property", .name = "grid-template-columns", .status = .mapped, .target = "Decl.columns: px/em -> Track.px, fr, auto/min-/max-content -> fit, minmax(), fit-content(), repeat(n, ...) expanded; repeat(auto-fill/auto-fit, T) as the whole list -> Decl.repeat (columns counted from the laid-out width); % and [names] are errors", .fixture = "grid" },
         .{ .kind = "property", .name = "grid-auto-columns", .status = .mapped, .target = "Decl.auto[0], one track", .fixture = "grid" },
         .{ .kind = "property", .name = "grid-auto-rows", .status = .mapped, .target = "Decl.auto[1], one track: the rows auto-placement adds (grid.implicitTracks)", .fixture = "grid" },
         .{ .kind = "property", .name = "justify-items", .status = .mapped, .target = "grid: Decl.justify[0]", .fixture = "grid" },

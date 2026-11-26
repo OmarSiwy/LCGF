@@ -118,6 +118,11 @@ pub const Grids = struct {
         /// them (`declare`); `autoPlace` sets `count` between the two.
         explicit: [2][]u32,
         reserved: [2][]u32,
+        /// A `Decl.repeat` grid's current column count (0 for none), the track width a
+        /// column needs at least, and 1 for auto-fit: set again by `resolve` from its width.
+        repeat_count: []u32,
+        repeat_min: []f32,
+        repeat_fit: []u8,
         /// `Justify` of the grid's items that `place` gets none for (CSS `justify-items`,
         /// `align-items`).
         justify: [2][]u8,
@@ -201,6 +206,7 @@ pub const Grids = struct {
         gs.g.last_item[k] = none;
         gs.g.flow[k] = 0;
         gs.g.bounded[k] = 0;
+        gs.g.repeat_count[k] = 0;
         inline for (lists, 0..) |list, a| {
             gs.g.distribution[a][k] = 0;
             gs.g.justify[a][k] = @backingInt(Justify.stretch);
@@ -274,7 +280,19 @@ pub const Grids = struct {
         const g = decl.growAxis();
         var extra: [2]u32 = .{ @intFromBool(decl.columns.len == 0), @intFromBool(decl.rows.len == 0) };
         extra[g] = @max(extra[g], implicit);
-        const k = gs.pushGrid(node, .{ decl.columns, decl.rows }, extra, decl.auto);
+        var auto = decl.auto;
+        if (decl.repeat) |r| {
+            std.debug.assert(decl.columns.len == 0 and g == 1 and r.max > 0);
+            extra[0] = r.max;
+            auto[0] = r.track;
+        }
+        const k = gs.pushGrid(node, .{ decl.columns, decl.rows }, extra, auto);
+        if (decl.repeat) |r| {
+            // One column until `resolve` knows the width, as CSS's indefinite size.
+            gs.g.repeat_count[k] = @intFromBool(gs.g.count[0][k] > 0);
+            gs.g.repeat_min[k] = @max(r.track.k_px, r.track.min, 1);
+            gs.g.repeat_fit[k] = @intFromBool(r.mode == .auto_fit);
+        }
         gs.gaps(k, decl.gap);
         gs.autoFlow(k, decl.flow);
         gs.distribute(k, decl.distribution);
@@ -366,6 +384,11 @@ pub const Decl = struct {
     /// (CSS `subgrid`, `shareAxis`): it must be an item placed at an explicit cell, with as
     /// many tracks on that axis as its span, and no padding on it.
     subgrid: [2]bool = .{ false, false },
+    /// Columns as CSS `repeat(auto-fill | auto-fit, track)`, in place of `columns`: as many as
+    /// fit the grid's width, at most `max`.
+    repeat: ?AutoRepeat = null,
+
+    pub const AutoRepeat = struct { mode: Repeat, track: Track, max: u32 = 64 };
 
     /// The axis auto-placement adds tracks on: rows for row flow, columns for column flow.
     pub fn growAxis(d: Decl) u1 {
@@ -511,47 +534,83 @@ fn boundedShare(gs: *const Grids, first: u32, n: u32, available: f32) f32 {
 // ponytail: the free-span test scans the span's cells at each candidate, O(cells * span area)
 // per grid at worst; a per-row run-length of free cells would make it O(cells) if grids get big.
 pub fn autoPlace(gs: *Grids) void {
-    for (0..gs.len) |k| {
-        // Reserved implicit tracks are all open to placement, then trimmed to what it used.
-        inline for (0..2) |a| gs.g.count[a][k] = gs.g.reserved[a][k];
-        defer trim(gs, @intCast(k));
-        const cols = gs.g.count[0][k];
-        const rows = gs.g.count[1][k];
-        const cells = cols * rows;
-        if (cells == 0) continue;
-        const column = gs.g.flow[k] & 1 != 0;
-        const dense = gs.g.flow[k] & 2 != 0;
-        const minor = if (column) rows else cols;
-        if (cells > gs.occupied.len) {
-            gs.overflow = true;
-            continue;
-        }
-        const occ = gs.occupied[0..cells];
-        @memset(occ, 0);
-        var it = gs.g.first_item[k];
-        while (it != none) : (it = gs.it.next[it]) {
-            if (gs.it.auto[it] == 0) mark(gs, occ, cols, it);
-        }
-        var cursor: u32 = 0;
-        it = gs.g.first_item[k];
-        while (it != none) : (it = gs.it.next[it]) {
-            if (gs.it.auto[it] == 0) continue;
-            const sc = gs.it.span[0][it];
-            const sr = gs.it.span[1][it];
-            var at: u32 = if (dense) 0 else cursor;
-            while (at < cells) : (at += 1) {
-                const col = if (column) at / minor else at % minor;
-                const row = if (column) at % minor else at / minor;
-                if (col + sc > cols or row + sr > rows) continue;
-                if (free(occ, cols, col, row, sc, sr)) break;
-            }
-            const found = at < cells;
-            gs.overflow = simd.orB(gs.overflow, !found);
-            gs.it.cell[0][it] = if (found) (if (column) at / minor else at % minor) else cols -| sc;
-            gs.it.cell[1][it] = if (found) (if (column) at % minor else at / minor) else rows -| sr;
+    for (0..gs.len) |k| placeGrid(gs, @intCast(k));
+}
+
+/// `autoPlace` for grid `k` alone.
+fn placeGrid(gs: *Grids, k: u32) void {
+    // Reserved implicit tracks are all open to placement, then trimmed to what it used.
+    inline for (0..2) |a| gs.g.count[a][k] = gs.g.reserved[a][k];
+    if (gs.g.repeat_count[k] != 0) {
+        gs.g.count[0][k] = gs.g.repeat_count[k];
+        gs.g.explicit[0][k] = gs.g.repeat_count[k];
+    }
+    defer trim(gs, k);
+    const cols = gs.g.count[0][k];
+    const rows = gs.g.count[1][k];
+    const cells = cols * rows;
+    if (cells == 0) return;
+    const column = gs.g.flow[k] & 1 != 0;
+    const dense = gs.g.flow[k] & 2 != 0;
+    const minor = if (column) rows else cols;
+    if (cells > gs.occupied.len) {
+        gs.overflow = true;
+        return;
+    }
+    const occ = gs.occupied[0..cells];
+    @memset(occ, 0);
+    var it = gs.g.first_item[k];
+    while (it != none) : (it = gs.it.next[it]) {
+        if (gs.it.auto[it] == 0) {
+            // A cell past a repeat grid's current columns stays in its last one.
+            gs.it.cell[0][it] = @min(gs.it.cell[0][it], cols -| gs.it.span[0][it]);
             mark(gs, occ, cols, it);
-            cursor = if (found) at + (if (column) sr else sc) else cells;
         }
+    }
+    var cursor: u32 = 0;
+    it = gs.g.first_item[k];
+    while (it != none) : (it = gs.it.next[it]) {
+        if (gs.it.auto[it] == 0) continue;
+        const sc = @min(gs.it.span[0][it], cols);
+        const sr = gs.it.span[1][it];
+        var at: u32 = if (dense) 0 else cursor;
+        while (at < cells) : (at += 1) {
+            const col = if (column) at / minor else at % minor;
+            const row = if (column) at % minor else at / minor;
+            if (col + sc > cols or row + sr > rows) continue;
+            if (free(occ, cols, col, row, sc, sr)) break;
+        }
+        const found = at < cells;
+        gs.overflow = simd.orB(gs.overflow, !found);
+        gs.it.cell[0][it] = if (found) (if (column) at / minor else at % minor) else cols -| sc;
+        gs.it.cell[1][it] = if (found) (if (column) at % minor else at / minor) else rows -| sr;
+        mark(gs, occ, cols, it);
+        cursor = if (found) at + (if (column) sr else sc) else cells;
+    }
+}
+
+/// A `Decl.repeat` grid `k` whose content width is now `inner`: as many columns as fit (for
+/// auto-fit, no more than its items fill), its items placed again, and the columns' content
+/// taken again from the items' natural widths. Run by `resolve` on x, before sizing tracks.
+fn repeatColumns(t: *const Tree, gs: *Grids, k: u32, inner: f32) void {
+    const gap = gs.g.gap[0][k];
+    const fitting: u32 = @intFromFloat(std.math.clamp(@floor((inner + gap) / (gs.g.repeat_min[k] + gap)), 1, @as(f32, @floatFromInt(gs.g.reserved[0][k]))));
+    var demand: u32 = 0;
+    var it = gs.g.first_item[k];
+    while (it != none) : (it = gs.it.next[it]) demand += gs.it.span[0][it];
+    const n = if (gs.g.repeat_fit[k] != 0) @max(@min(fitting, demand), 1) else fitting;
+    if (n != gs.g.repeat_count[k]) {
+        gs.g.repeat_count[k] = n;
+        placeGrid(gs, k);
+    }
+    const first = gs.g.first[0][k];
+    @memset(gs.tr.content[first..][0..gs.g.count[0][k]], 0);
+    it = gs.g.first_item[k];
+    while (it != none) : (it = gs.it.next[it]) {
+        const j = first + gs.it.cell[0][it];
+        const span = gs.it.span[0][it];
+        const share = @max(t.c.nat[0][gs.it.node[it]] - gap * @as(f32, @floatFromInt(span - 1)), 0) / @as(f32, @floatFromInt(span));
+        for (gs.tr.content[j..][0..span]) |*v| v.* = @max(v.*, share);
     }
 }
 
@@ -667,7 +726,9 @@ pub fn resolveWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, viewport: f32)
             const node = gs.g.node[k];
             const parent = gs.g.parent[a][k];
             if (parent == none) {
-                _ = sizeTracks(gs, k, a, c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node]);
+                const inner = c.size[a][node] - c.pad_lo[a][node] - c.pad_hi[a][node];
+                if (a == 0 and gs.g.repeat_count[k] != 0) repeatColumns(t, gs, k, inner);
+                _ = sizeTracks(gs, k, a, inner);
             } else {
                 const source = gs.g.first[a][parent] + gs.g.parent_first[a][k];
                 const destination = gs.g.first[a][k];
@@ -1258,4 +1319,39 @@ test "declare: subgrid rows of a table share the table's columns" {
     try testing.expectEqual(@as(f32, 53), s.t.rect(cells[1]).x0);
     try testing.expectEqual(@as(f32, 53), s.t.rect(cells[3]).x0);
     try testing.expectEqual(@as(f32, 9), s.t.rect(cells[2]).y0);
+}
+
+test "Decl.repeat: auto-fill makes as many columns as fit the width, auto-fit no more than its items fill" {
+    var s: Scene = .{};
+    s.init();
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    s.gs = Grids.init(&carver, .{ .grids = 2, .tracks = 32, .items = 8, .cells = 64 });
+    const root = s.t.push(0, .none, &.{});
+    var nodes: [8]u32 = undefined;
+    const fill_decl: Decl = .{ .repeat = .{ .mode = .auto_fill, .track = .minmaxFr(50, 1, std.math.inf(f32)), .max = 8 }, .gap = .{ 10, 0 } };
+    const fit_decl: Decl = .{ .repeat = .{ .mode = .auto_fit, .track = .minmaxFr(50, 1, std.math.inf(f32)), .max = 8 }, .gap = .{ 10, 0 } };
+    var at: usize = 0;
+    inline for (.{ .{ fill_decl, 6 }, .{ fit_decl, 2 } }) |g| {
+        const box = s.t.push(root, .none, &.{ .size = .{ .px(230), .fit } });
+        const items: [g[1]]Item = @splat(.{});
+        const k = s.gs.declare(box, g[0], implicitTracks(g[0], &items));
+        for (0..g[1]) |_| {
+            _ = s.gs.place(k, s.t.len, .{});
+            nodes[at] = s.t.push(box, .none, &.{ .float = true, .size = .{ .fit, .px(10) } });
+            s.t.seal(nodes[at]);
+            at += 1;
+        }
+        s.t.seal(box);
+    }
+    s.t.seal(root);
+    run(&s.t, &s.tx, &s.gs, .{ 400, 300 });
+    // auto-fill: (230 + 10) / (50 + 10) = 4 columns of 50; the fifth item starts row 2.
+    try testing.expectEqual(4, s.gs.g.count[0][0]);
+    try testing.expectEqual(rect(0, 0, 50, 10), s.t.rect(nodes[0]));
+    try testing.expectEqual(@as(f32, 180), s.t.rect(nodes[3]).x0);
+    try testing.expectEqual(@as(f32, 10), s.t.rect(nodes[4]).y0);
+    // auto-fit: two items, two columns sharing the width.
+    try testing.expectEqual(2, s.gs.g.count[0][1]);
+    try testing.expectEqual(@as(f32, 110), s.t.rect(nodes[6]).x1 - s.t.rect(nodes[6]).x0);
 }
