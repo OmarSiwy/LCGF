@@ -550,6 +550,16 @@ fn interior(comptime use: features.Usage, q: *const Quad, scale: f32, box: [4]u3
 /// Whether `q`, untextured, fills every pixel of `box` with an opaque colour: a `rectQuad` whose
 /// interior holds the box.
 fn covers(comptime use: features.Usage, q: *const Quad, scale: f32, box: [4]u32) bool {
+    // What the interior needs first, cheaply, since `cover` asks of every quad: an opaque fill
+    // and the centres of the box's edge pixels inside the rect and the clip. (NaN fails too.)
+    const V = @Vector(4, f32);
+    const s: V = @splat(scale);
+    const near: V = @as(V, .{ q.rect[0], q.rect[1], q.clip[0], q.clip[1] }) * s;
+    const far: V = @as(V, .{ q.rect[2], q.rect[3], q.clip[2], q.clip[3] }) * s;
+    const b: V = @floatFromInt(@as(@Vector(4, u32), .{ box[0], box[1], box[0], box[1] }));
+    const e: V = @floatFromInt(@as(@Vector(4, u32), .{ box[2], box[3], box[2], box[3] }));
+    const half: V = @splat(0.5);
+    if (q.fill >> 24 != 255 or !@reduce(.And, near <= b + half) or !@reduce(.And, far >= e - half)) return false;
     if (@as(u32, @bitCast(q.params[0])) != 0 or !plain(q) or interiorColor(q).a != 255) return false;
     const inner = interior(use, q, scale, plainBox(q, scale, box));
     return inner[0] <= box[0] and inner[1] <= box[1] and inner[2] >= box[2] and inner[3] >= box[3];
@@ -1949,6 +1959,45 @@ test "redraw: only the damage rects change, cleared to the background first" {
     try testing.expectEqual(Color.rgb(1, 2, 3), fb.at(30, 15));
     try testing.expectEqual(Color.rgb(30, 31, 36), fb.at(10, 10)); // the panel, outside the card
     try testing.expectEqual(Color.rgb(90, 140, 255), fb.at(29, 29)); // the card, inside its border
+}
+
+test "frame: starting at the opaque cover gives the cleared, fully drawn frame" {
+    var a: Frame(40, 30) = .{};
+    var b: Frame(40, 30) = .{};
+    // A panel over the target, a translucent card on it, then one that covers only its own box.
+    var quads = [_]Quad{
+        testQuad(.{ 0, 0, 40, 30 }, .rgba(9, 9, 9, 128)),
+        testQuad(.{ -0.25, -0.5, 40.5, 30.25 }, .rgb(30, 31, 36)),
+        testQuad(.{ 3.3, 2.6, 21.2, 17.9 }, .rgba(200, 40, 90, 140)),
+        testQuad(.{ 25, 10, 38, 28 }, .rgb(90, 140, 255)),
+    };
+    quads[1].radii = @splat(0.4);
+    quads[3].radii = @splat(4);
+    const Commands = struct {
+        batch: draw_list.Batch,
+        cmd_len: u32 = 1,
+        pub fn command(c: *const @This(), _: u32) draw_list.Cmd {
+            return .{ .quads = c.batch };
+        }
+    };
+    const list: Commands = .{ .batch = .{ .first = 0, .count = quads.len, .texture = .white, .material = .solid } };
+    const s: Software = .{ .quads = &quads, .scale = 1.25 };
+    for ([_][4]u32{ .{ 0, 0, 40, 30 }, .{ 30, 15, 36, 25 }, .{ 2, 3, 17, 29 } }) |box| {
+        var fa = a.fb(.rgba8);
+        var fb = b.fb(.rgba8);
+        @memset(fa.pixels, 0x01020304);
+        @memset(fb.pixels, 0x01020304);
+        s.frame(.{ .fb = &fa, .scissor = box }, &list, .black);
+        fb.fill(box, .black);
+        s.drawBatch(.{ .fb = &fb, .scissor = box }, list.batch);
+        try testing.expectEqualSlices(u32, fb.pixels, fa.pixels);
+    }
+    // The second quad covers the whole target; the first, translucent, and the last do not.
+    try testing.expect(covers(.all, &quads[1], 1.25, .{ 0, 0, 40, 30 }));
+    try testing.expect(!covers(.all, &quads[0], 1.25, .{ 0, 0, 40, 30 }));
+    try testing.expect(!covers(.all, &quads[3], 1.25, .{ 0, 0, 40, 30 }));
+    try testing.expect(covers(.all, &quads[3], 1.25, .{ 37, 18, 42, 29 }));
+    try testing.expect(!covers(.all, &quads[3], 1.25, .{ 32, 13, 46, 34 })); // its corners are round
 }
 
 fn drawBand(s: *const Software, fb: *Framebuffer, draw: *const DrawList, k: u32, n: u32) void {
