@@ -1,0 +1,19 @@
+<!doctype html>
+<html lcgf-page="shadows">
+<head>
+  <title>Shadows</title>
+  <style>
+    body { padding: 20px; gap: 20px; }
+    .tile { padding: 8px; background-color: #303440; box-shadow: 0 2px 4px #000000; }
+    .tile:hover { box-shadow: 0 6px 12px 2px #102040; }
+    button:hover { box-shadow: 0 0 0 3px #80a0ff; }
+    .chip { margin-left: 4px; padding: 4px; background-color: #404850; }
+    .chip:hover { margin-left: 16px; }
+  </style>
+</head>
+<body>
+  <div class="tile" id="tile"><span>Tile</span></div>
+  <button id="go" on:click="go">Go</button>
+  <div class="chip" id="chip"><span>Chip</span></div>
+</body>
+</html>

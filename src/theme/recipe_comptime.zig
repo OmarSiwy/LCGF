@@ -52,6 +52,9 @@ pub const Config = struct {
     /// CSS `animation` of the root; `clock_field` names the State's `controls.Clock`.
     animation: controls.Animation = .{},
     clock_field: ?[]const u8 = null,
+    /// A box only: the widget whose hover, press and focus it takes instead of its own, as a
+    /// shadow drawn before the box it belongs to does (`controls.Options.follows`).
+    follows: ?[]const u8 = null,
     /// Optional fields of the application's State. Their types are checked by the builder.
     states_field: ?[]const u8 = null,
     environment_field: ?[]const u8 = null,
@@ -114,6 +117,7 @@ fn FadingBox(comptime config: Config, comptime W: type) type {
     if (config.fade_field == null and config.clock_field == null) return W;
     return struct {
         pub const holds_content = true;
+        pub const flexes = W.flexes;
         pub const push = W.push;
 
         pub fn wakeAfter(ui: anytype, in: *const Input) f32 {
@@ -123,30 +127,44 @@ fn FadingBox(comptime config: Config, comptime W: type) type {
     };
 }
 
+/// Whether `recipe` sets a margin: a box over it writes its flex entry itself.
+fn movesMargin(comptime recipe: model.Recipe) bool {
+    for (recipe.rules) |r| for (r.declarations) |d| switch (d.property) {
+        .margin_left, .margin_top, .margin_right, .margin_bottom => return true,
+        else => {},
+    };
+    return false;
+}
+
 fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
     return struct {
         pub const holds_content = true;
+        /// The box's margins are its recipe's: it writes its row's flex entry (`ComptimeUi.push`).
+        pub const flexes = movesMargin(config.recipe orelse .{});
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            const row = next.*;
+            const Ui = @TypeOf(ui.*);
             next.* += 1;
             // `:focus-within`, and :hover and :active on an ancestor: the widget is one of
-            // this box's spec rows.
-            const rows = comptime @import("../comptime/flatten.zig").count(n);
+            // this box's spec rows, or of the followed widget's.
+            const first: u32 = if (config.follows) |w| @backingInt(@field(Ui.Events.Widget, w)) else next.* - 1;
+            const rows: u32 = comptime if (config.follows) |w| Ui.rowsOf(@backingInt(@field(Ui.Events.Widget, w))) else @import("../comptime/flatten.zig").count(n);
             const inside = struct {
-                fn is(w: anytype, first: u32) bool {
+                fn is(w: anytype, at: u32, span: u32) bool {
                     const x = w orelse return false;
-                    return @backingInt(x) >= first and @backingInt(x) < first + rows;
+                    return @backingInt(x) >= at and @backingInt(x) < at + span;
                 }
             }.is;
-            var response = if (name != null) ui.response(row, in) else types.Response{};
-            if (name != null and !config.states.disabled) {
-                response.held = inside(ui.pointer.pressed, row);
-                response.hovered = inside(ui.build_hit, row) and (ui.pointer.pressed == null or response.held);
+            const reacts = name != null or config.follows != null;
+            var response = if (reacts) ui.response(first, in) else types.Response{};
+            if (reacts and !config.states.disabled) {
+                response.held = inside(ui.pointer.pressed, first, rows);
+                response.hovered = inside(ui.build_hit, first, rows) and (ui.pointer.pressed == null or response.held);
             }
+            if (config.follows) |w| response.focused = ui.focus == @field(Ui.Events.Widget, w);
             const environment = config.environment orelse model.Environment.fromInput(in).withSettings(&ui.frame_settings);
-            var states = controls.statesFor(config.states, response, false);
-            states.focus_within = inside(ui.focus, row);
+            var states = controls.statesFor(config.states, response, config.follows != null and (ui.focus_visible or (environment.always_show_focus orelse false)));
+            states.focus_within = inside(ui.focus, first, rows);
             const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = states, .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
             const recipe = config.recipe orelse model.Recipe{};
             var root = recipe.resolve(Parts.root, use, null) catch |err| blk: {
@@ -156,6 +174,11 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
             stepFade(config, ui, &root, in);
             const tb = &ui.tables;
             const i = tb.t.push(parent, if (name) |x| .hash(x) else .none, &root.box);
+            if (comptime flexes) if (comptime n.flex) |fs| {
+                var moved = fs;
+                moved.margin = root.margin;
+                tb.fx.set(i, &moved);
+            };
             const texts = tb.tx.len;
             inline for (n.children) |c| ui.push(c, i, next, in);
             controls.recolor(&tb.tx, texts, recipe.baseFor(Parts.root).text.color, root.text.color);

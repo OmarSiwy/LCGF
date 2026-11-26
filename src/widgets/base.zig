@@ -815,7 +815,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             }
             // The node's row is the next one pushed, whoever pushes it.
             const at = ui.tables.t.len;
-            defer if (comptime n.flex) |fs| ui.tables.fx.set(at, &fs);
+            // A widget that `flexes` writes its row's flex entry itself (a recipe box's margins).
+            defer if (comptime n.flex) |fs| if (comptime !(n.widget != null and @hasDecl(n.widget.?, "flexes") and n.widget.?.flexes)) ui.tables.fx.set(at, &fs);
             // In row order, before the subtree: a nested anchor sees its parent's final place.
             if (comptime n.anchor) |pl| _ = ui.tables.an.place(at, pl, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
             if (comptime n.sticky) |top| _ = ui.tables.st.push(at, @import("scroll.zig").scrollerOf(&ui.tables.t, parent), .{ 0, top }, .{ false, true });
@@ -980,6 +981,11 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 inline else => |_, target| if (ui.input_mask.activates[E.slot(target)] == 0) return null,
             };
             return event;
+        }
+
+        /// Rows of the spec node at row `row`, itself included.
+        pub fn rowsOf(comptime row: u32) u32 {
+            return flatten.count(nodeAt(spec, row));
         }
 
         pub fn response(ui: *const Self, row: u32, in: *const Input) Response {

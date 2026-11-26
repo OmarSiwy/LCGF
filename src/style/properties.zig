@@ -43,6 +43,13 @@ pub const Property = enum(u8) {
     text_wrap,
     participation,
     cursor,
+    /// How far the node paints past its rect, left, top, right, bottom (a shadow's offset and
+    /// spread).
+    paint_outset,
+    margin_left,
+    margin_top,
+    margin_right,
+    margin_bottom,
 };
 
 pub const count = @typeInfo(Property).@"enum".field_names.len;
@@ -71,6 +78,9 @@ pub const Value = union(Kind) {
 pub const Computed = struct {
     box: types.Style = .{},
     text: types.TextStyle = .{},
+    /// Left, top, right, bottom: space kept outside the node, which the flex table carries
+    /// (`flex.Flex.Style.margin`); a recipe box with margin rules writes it each frame.
+    margin: [4]f32 = @splat(0),
 };
 
 pub const Invalidation = bitpack struct(u8) {
@@ -103,8 +113,8 @@ pub const Metadata = struct {
 pub fn kind(property: Property) Kind {
     return switch (property) {
         .fill, .border_color, .text_color => .color,
-        .border_width, .radius, .opacity, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .text_size => .number,
-        .radii, .params, .uv => .vector4,
+        .border_width, .radius, .opacity, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .text_size, .margin_left, .margin_top, .margin_right, .margin_bottom => .number,
+        .radii, .params, .uv, .paint_outset => .vector4,
         .transform => .matrix,
         .texture => .texture,
         .material => .material,
@@ -141,9 +151,10 @@ pub fn Type(comptime property: Property) type {
 pub fn metadata(property: Property) Metadata {
     const value_kind = kind(property);
     var domains: Invalidation = switch (property) {
-        .fill, .border_color, .opacity, .texture, .material, .params, .uv, .text_color => paint,
+        .fill, .border_color, .opacity, .texture, .material, .params, .uv, .text_color, .paint_outset => paint,
         .border_width, .radius, .radii, .transform, .transform_origin, .direction, .width, .height, .min_width, .min_height, .max_width, .max_height, .padding_left, .padding_top, .padding_right, .padding_bottom, .gap, .main_align, .cross_align, .shrink, .floating, .offset, .clip, .scroll, .participation => geometry,
         .text_size, .text_font, .text_wrap => text_domains,
+        .margin_left, .margin_top, .margin_right, .margin_bottom => geometry,
         .cursor => .{ .platform = true },
     };
     domains.descendants = switch (property) {
@@ -206,6 +217,11 @@ pub fn read(comptime property: Property, computed: *const Computed) Type(propert
         .text_wrap => computed.text.wrap,
         .participation => computed.box.participation,
         .cursor => computed.box.cursor,
+        .paint_outset => computed.box.paint_outset,
+        .margin_left => computed.margin[0],
+        .margin_top => computed.margin[1],
+        .margin_right => computed.margin[2],
+        .margin_bottom => computed.margin[3],
     };
 }
 
@@ -248,6 +264,11 @@ pub fn write(comptime property: Property, computed: *Computed, value: Type(prope
         .text_wrap => computed.text.wrap = value,
         .participation => computed.box.participation = value,
         .cursor => computed.box.cursor = value,
+        .paint_outset => computed.box.paint_outset = value,
+        .margin_left => computed.margin[0] = value,
+        .margin_top => computed.margin[1] = value,
+        .margin_right => computed.margin[2] = value,
+        .margin_bottom => computed.margin[3] = value,
     }
 }
 

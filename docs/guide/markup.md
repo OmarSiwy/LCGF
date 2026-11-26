@@ -406,8 +406,13 @@ field and Clear button (`model.search`, the text field's rules), and a text area
 (`model.select`, the button's rules, `recipes.ct.select` with `recipes.ct.selectList`); its
 list stays the theme select's. A `<summary>`'s CSS styles its `<details>` section's header
 (`model.disclosure`: the button's rules and a mark in the accent while the section is open);
-the section and its panel stay the accordion's. None of these four eases or animates. Margins and `box-shadow` there are
-errors; `color` on a box restyles the text inside it that inherits its colour. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
+the section and its panel stay the accordion's. None of these four eases or animates. A `box-shadow` there is drawn by the
+shadow node a static one has (one that paints nothing when only a state rule gives it a
+shadow): a recipe box that follows the element's states (`Config.follows`,
+`Options.follows`), its colour, offset, spread and blur set per rule. Margins there move a
+`<div>`-like box (its recipe's `margin_*`, which the box writes into its flex entry each
+frame) and are an error on a widget; `color` on a box restyles the text inside it that
+inherits its colour. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), or inside
 `:not()` or `:is()` is an error.
 

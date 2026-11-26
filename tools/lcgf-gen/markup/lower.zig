@@ -1026,12 +1026,16 @@ pub const Lowerer = struct {
         var last_sel: u32 = none;
         // The rules of the CSS rule being read: one per alternative of its queries.
         var group: usize = rules.items.len;
+        // The box-shadow rules, for the shadow node, aligned with the box's.
+        var shadows: std.ArrayList(ir.RecipeRule) = .empty;
+        var shadowed = false;
         for (entries.items) |d| {
             const st = l.subjectStates(d.sel, d.cond != none) orelse continue;
             const alts = if (d.cond == none) ok(l.arena.dupe(Conditions, &.{.{}})) else l.mediaConditions(d.cond) orelse continue;
             if (d.sel != last_sel) {
                 group = rules.items.len;
                 for (alts) |when| ok(rules.append(l.arena, .{ .require = st.require, .forbid = st.forbid, .when = when }));
+                for (alts) |when| ok(shadows.append(l.arena, .{ .require = st.require, .forbid = st.forbid, .when = when }));
             }
             last_sel = d.sel;
             if (group == rules.items.len) continue; // a query that never holds
@@ -1074,16 +1078,42 @@ pub const Lowerer = struct {
                     },
                     .transform => put(&set, l.arena, .transform, .{ .matrix = box.transform }),
                     .color => if (l.colorOf(n, p)) |c| put(&set, l.arena, .text_color, .{ .color = c }),
-                    .@"margin-left", .@"margin-top", .@"margin-right", .@"margin-bottom" => {}, // reported below
-                    .@"box-shadow" => l.ds.err(at, "box-shadow is drawn by a node of its own; it is not lowered under a state pseudo-class or @media yet", .{}),
+                    // A box's margins are its flex entry's, which it writes each frame; a widget's are refused below.
+                    .@"margin-left" => if (kind == .container) put(&set, l.arena, .margin_left, .{ .number = margin.?[0] }),
+                    .@"margin-top" => if (kind == .container) put(&set, l.arena, .margin_top, .{ .number = margin.?[1] }),
+                    .@"margin-right" => if (kind == .container) put(&set, l.arena, .margin_right, .{ .number = margin.?[2] }),
+                    .@"margin-bottom" => if (kind == .container) put(&set, l.arena, .margin_bottom, .{ .number = margin.?[3] }),
+                    .@"box-shadow" => if (l.shadow) |sh| {
+                        // The shadow node's look, as `decorate` draws a static one.
+                        const b = nodes.items(.style)[x];
+                        const sp = sh.spread;
+                        const sets = [_]ir.Set{
+                            .{ .property = .fill, .value = .{ .color = sh.color } },
+                            .{ .property = .radius, .value = .{ .number = @max(b.radius + sp, 0) } },
+                            .{ .property = .radii, .value = .{ .vector4 = grown(b.radii, sp) } },
+                            .{ .property = .paint_outset, .value = .{ .vector4 = .{ sp - sh.x, sp - sh.y, sp + sh.x, sp + sh.y } } },
+                            .{ .property = .params, .value = .{ .vector4 = lcgf.features.shadow(sh.blur / 2) } },
+                        };
+                        const at_shadow = shadows.items.len - (rules.items.len - group);
+                        for (shadows.items[at_shadow..]) |*g| g.set = ok(std.mem.concat(l.arena, ir.Set, &.{ g.set, &sets }));
+                        shadowed = true;
+                    },
                     else => l.ds.err(at, "{s} under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform", .{@tagName(p)}),
                 }
             }
-            if (margin != null) l.ds.err(at, "a margin under a state pseudo-class or @media is not lowered", .{});
+            if (margin != null and kind != .container) l.ds.err(at, "a margin under a state pseudo-class or @media is lowered on a <div>-like box; wrap the widget in one", .{});
             r.set = set.items;
             for (rules.items[group..]) |*g| g.set = r.set;
         }
+        l.shadow = null;
         nodes.items(.recipe)[x] = rules.items;
+        const sh = nodes.items(.live)[x].shadow;
+        if (shadowed and sh != none) {
+            // The shadow node is a recipe box over its static look that takes the box's states.
+            nodes.items(.recipe)[sh] = ok(std.mem.concat(l.arena, ir.RecipeRule, &.{ &.{.{}}, shadows.items }));
+            nodes.items(.live)[sh].follows = nodes.items(.id)[x];
+            nodes.items(.id)[sh] = ok(std.fmt.allocPrint(l.arena, "{s}_shadow", .{nodes.items(.id)[x]}));
+        }
     }
 
     /// Whether document node `n` (IR node `x`) can be a recipe widget or box.
@@ -1972,6 +2002,7 @@ pub const Lowerer = struct {
         if (shade) |sh| {
             const s = sh.spread;
             const shadow: Style = .{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = sh.color, .radius = @max(b.radius + s, 0), .radii = grown(b.radii, s), .paint_outset = .{ s - sh.x, s - sh.y, s + sh.x, s + sh.y } };
+            node.live.shadow = @intCast(l.page.nodes.len);
             ok(l.page.nodes.append(l.arena, .{ .kind = .container, .parent = w, .loc = node.loc, .style = shadow, .params_expr = ok(std.fmt.allocPrint(l.arena, "lcgf.features.shadow({d})", .{sh.blur / 2})) }));
         }
         if (ring) |o| {
@@ -2151,6 +2182,12 @@ pub const Lowerer = struct {
         l.outline = null;
         l.marker = "";
         l.boxShadow(n);
+        // A box-shadow under a state pseudo-class or @media is drawn by the same node: one
+        // that paints nothing until a rule gives it a shadow.
+        if (l.shadow == null) for (l.k.dynamic.items) |d| if (d.node == n and std.mem.eql(u8, l.c.decls.items(.name)[d.decl], "box-shadow")) {
+            l.shadow = .{ .x = 0, .y = 0, .blur = 0, .spread = 0, .color = .transparent };
+            break;
+        };
         l.outlineOf(n);
         const main: u1 = @backingInt(axis);
         const cross: u1 = 1 - main;

@@ -214,6 +214,9 @@ pub const Options = struct {
     /// CSS `transition` of the root, and the state it keeps between frames; both or neither.
     transition: Transition = .{},
     fade: ?*Fade = null,
+    /// A box only: the widget whose hover, press and focus it takes instead of its own, as a
+    /// shadow drawn before the box it belongs to does.
+    follows: types.Id = .none,
     /// CSS `animation` of the root, and its clock; both or neither.
     animation: Animation = .{},
     clock: ?*Clock = null,
@@ -609,20 +612,25 @@ pub const OpenBox = struct {
     /// The text colour the box's content inherits statically, and the one it has now.
     from: types.Color,
     to: types.Color,
+    /// The margins the recipe gives the box this frame, for its flex entry.
+    margin: [4]f32 = @splat(0),
 };
 
 pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!OpenBox {
     const recipe = options.recipe orelse model.Recipe{};
-    var response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
-    if (interactive and !options.states.disabled) {
+    const follower = options.follows != .none;
+    const watched = if (follower) options.follows else id;
+    const reacts = interactive or follower;
+    var response = if (reacts) responseFor(f, watched, options.states.disabled) else types.Response{};
+    if (reacts and !options.states.disabled) {
         // CSS :hover and :active hold on every ancestor of what the pointer is over or holds.
         const inter = &f.ctx.inter;
-        const held = inSubtree(f, id, inter.active);
+        const held = inSubtree(f, watched, inter.active);
         response.held = held;
-        response.hovered = inSubtree(f, id, inter.hot) and (inter.active == 0 or held);
+        response.hovered = inSubtree(f, watched, inter.hot) and (inter.active == 0 or held);
     }
-    var states = statesFor(options.states, response, false);
-    states.focus_within = inSubtree(f, id, f.ctx.inter.focus);
+    var states = statesFor(options.states, response, follower and visibleFocus(f, options));
+    states.focus_within = inSubtree(f, watched, f.ctx.inter.focus);
     var root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
     if (options.fade) |fade| {
         const transition = options.transition.under(f.ctx.settings.reduced_motion);
@@ -635,7 +643,7 @@ pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) st
     }
     const node = f.open(id, root.box);
     if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });
-    return .{ .node = node, .texts = f.texts().len, .from = recipe.baseFor(Parts.root).text.color, .to = root.text.color };
+    return .{ .node = node, .texts = f.texts().len, .from = recipe.baseFor(Parts.root).text.color, .to = root.text.color, .margin = root.margin };
 }
 
 /// Whether interaction id `k` is `id`'s node or in its subtree, as the previous frame laid

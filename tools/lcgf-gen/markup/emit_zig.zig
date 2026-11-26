@@ -748,6 +748,11 @@ pub const Emit = struct {
             if (runtime) e.print(", .clock = {s}", .{e.copyRef(e.clockName(n))}) else e.print(", .clock_field = \"{s}\"", .{e.clockName(n)});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
+        if (n.live.follows.len > 0 and !runtime) {
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+            e.print(", .follows = \"{s}\"", .{n.live.follows});
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+        }
         return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.live.disabled) ", .states = .{ .disabled = true }" else "", validation.items }) catch unreachable;
     }
 
@@ -776,12 +781,14 @@ pub const Emit = struct {
 
     /// A box whose rules ask for a state takes hover and press: it is a widget.
     fn boxInteractive(n: ir.Node) bool {
+        if (n.live.follows.len > 0) return false; // a shadow takes its box's states
         for (n.recipe) |r| if (r.require.hovered or r.require.held) return true;
         return false;
     }
 
     /// The runtime box finds its subtree by id for `:focus-within`, so it needs one then too.
     fn boxNamed(n: ir.Node) bool {
+        if (n.live.follows.len > 0) return false;
         for (n.recipe) |r| if (r.require.hovered or r.require.held or r.require.focus_within) return true;
         return false;
     }
@@ -821,6 +828,11 @@ pub const Emit = struct {
                     e.write(", .text = .{ .color = ");
                     e.color(n.text_style.color);
                     e.write(" }");
+                }
+                // Its static margins, which its margin rules replace (the box writes its flex entry).
+                if (movesMargin(n)) {
+                    e.write(", .margin = ");
+                    e.value(n.margin orelse @as([4]f32, @splat(0)));
                 }
                 e.write(" } }}, .rules = &[_]style.Rule{\n");
                 for (n.recipe) |r| e.rule(r, "root", .all);
@@ -884,7 +896,8 @@ pub const Emit = struct {
             const boxed = d.property == .fill or d.property == .border_color or d.property == .border_width;
             if ((which == .boxed and !boxed) or (which == .unboxed and boxed)) continue;
             e.print("{s}style.set(.{s}, ", .{ if (any) ", " else " ", @tagName(d.property) });
-            switch (d.value) {
+            // ponytail: params only come from a box-shadow's blur (its sigma is the second word).
+            if (d.property == .params) e.print("lcgf.features.shadow({d})", .{d.value.vector4[1]}) else switch (d.value) {
                 inline else => |v| e.value(v),
             }
             e.write(")");
@@ -1150,7 +1163,10 @@ pub const Emit = struct {
         switch (n.kind) {
             .container, .landmark => {
                 if (n.recipe.len > 0) {
-                    e.print("const rbox_{s} = recipes.beginBox(f, {s}, {s}, {s}) catch unreachable;", .{ n.id, if (boxNamed(n)) e.rtId(n.id, list_depth) else ".none", if (boxInteractive(n)) "true" else "false", e.config(n, true) });
+                    var box_config = e.config(n, true);
+                    // A shadow takes its box's states, by the box's id (with the copy's, in a region).
+                    if (n.live.follows.len > 0) box_config = std.fmt.allocPrint(e.arena, "{s}, .follows = {s} }}", .{ box_config[0 .. box_config.len - 2], e.rtId(n.live.follows, list_depth) }) catch unreachable;
+                    e.print("const rbox_{s} = recipes.beginBox(f, {s}, {s}, {s}) catch unreachable;", .{ n.id, if (boxNamed(n)) e.rtId(n.id, list_depth) else ".none", if (boxInteractive(n)) "true" else "false", box_config });
                     return std.fmt.allocPrint(e.arena, "recipes.endBox(f, rbox_{s});", .{n.id}) catch unreachable;
                 }
                 var st = n.style;
@@ -2320,6 +2336,15 @@ pub const Emit = struct {
     /// `rtOpen`, with the node's flex rules written for the node its statement makes.
     fn rtOpenFlex(e: *Emit, i: u32, list_depth: u32) []const u8 {
         const fs = flexOf(e.page.nodes.get(i)) orelse return e.rtOpen(i, list_depth);
+        const n = e.page.nodes.get(i);
+        if (n.kind == .container and n.recipe.len > 0 and movesMargin(n)) {
+            // A recipe box's margins this frame are known once it opens, as `rbox_<id>`.
+            const close = e.rtOpen(i, list_depth);
+            e.write(" { var moved: lcgf.flex.Flex.Style = ");
+            e.structure(fs, FlexStyle{});
+            e.print("; moved.margin = rbox_{s}.margin; fx.set(@backingInt(rbox_{s}.node), &moved); }}", .{ n.id, n.id });
+            return close;
+        }
         // The rule's row is the next one pushed: the node's own, or the root a widget or a
         // component builds first, which `spec.flexed` gives the rule on a comptime page.
         e.write("fx.set(f.tree().len, &");
@@ -2923,5 +2948,15 @@ pub const Emit = struct {
 fn flexOf(n: ir.Node) ?FlexStyle {
     var fs = n.flex;
     if (n.margin) |m| fs.margin = m;
-    return if (std.meta.eql(fs, FlexStyle{})) null else fs;
+    // A box whose recipe moves its margins writes its flex entry, so it has one.
+    return if (std.meta.eql(fs, FlexStyle{}) and !movesMargin(n)) null else fs;
+}
+
+/// Whether recipe box `n`'s rules set a margin.
+fn movesMargin(n: ir.Node) bool {
+    for (n.recipe) |r| for (r.set) |d| switch (d.property) {
+        .margin_left, .margin_top, .margin_right, .margin_bottom => return true,
+        else => {},
+    };
+    return false;
 }

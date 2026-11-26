@@ -328,5 +328,6 @@
         .{ .name = "transitions" },
         .{ .name = "adapters" },
         .{ .name = "copies" },
+        .{ .name = "shadows" },
     },
 }

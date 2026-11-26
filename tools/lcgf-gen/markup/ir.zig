@@ -174,6 +174,10 @@ pub const Live = struct {
     transition: lcgf.theme_recipes.controls.Transition = .{},
     /// CSS `animation`; its clock is the `<id>_clock` field.
     animation: lcgf.theme_recipes.controls.Animation = .{},
+    /// The node drawing this node's `box-shadow` (`decorate`), or none.
+    shadow: u32 = std.math.maxInt(u32),
+    /// A shadow's: the widget whose states its recipe follows (`Config.follows`), or "".
+    follows: []const u8 = "",
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed
