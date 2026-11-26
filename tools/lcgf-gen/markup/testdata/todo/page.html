@@ -1,0 +1,22 @@
+<!doctype html>
+<html lcgf-page="todo">
+<head>
+  <title>Todo</title>
+  <style>
+    .items { gap: 2px; }
+  </style>
+</head>
+<body>
+  <label><input type="checkbox" id="show" bind:checked="show_done"> Show done</label>
+  <template lcgf-if="show_done">
+    <span>Done items are shown</span>
+  </template>
+  <template lcgf-each="count" lcgf-max="3" class="items">
+    <div><span>Item</span></div>
+  </template>
+  <template lcgf-switch="mode">
+    <template lcgf-case="compact"><span>Compact</span></template>
+    <template lcgf-case="detailed"><div><span>Detailed</span></div></template>
+  </template>
+</body>
+</html>

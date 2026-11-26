@@ -360,6 +360,7 @@ pub const Lowerer = struct {
             l.element(i, l.irParent(i));
         }
         l.checkFields();
+        l.checkRegions();
     }
 
     fn inside(l: *const Lowerer, n: u32, ancestor: u32) bool {
@@ -492,7 +493,7 @@ pub const Lowerer = struct {
         }
         l.attributes(n);
         if (std.mem.eql(u8, t, "template")) {
-            l.skip[n] = true; // a template without lcgf-* is inert
+            l.template(n, parent);
             return;
         }
         if (std.mem.eql(u8, t, "noscript") or std.mem.eql(u8, t, "style") or std.mem.eql(u8, t, "link") or std.mem.eql(u8, t, "meta") or std.mem.eql(u8, t, "title")) {
@@ -878,6 +879,91 @@ pub const Lowerer = struct {
         l.caption(&node, if (pre) raw.items else breaks(l.arena, collapse(l.arena, raw.items)), l.loc(n));
         if (heading != 0 and node.text_kind == .format) l.ds.err(node.loc, "a heading shows one literal or one field; put the formatted text in a <span>", .{});
         l.ir_of[n] = l.addNode(node);
+    }
+
+    /// `<template lcgf-if|lcgf-each|lcgf-switch|lcgf-case>`: a region over its content. A
+    /// template without lcgf-* is inert, as in a browser.
+    fn template(l: *Lowerer, n: u32, parent: u32) void {
+        const at = l.loc(n);
+        if (l.attr(n, "lcgf-else") != null) {
+            _ = l.refused("attribute", "lcgf-else", "", l.attrLoc(n, "lcgf-else"));
+            l.skip[n] = true;
+            return;
+        }
+        if (l.attr(n, "lcgf-case")) |case| {
+            // An alternative of the enclosing lcgf-switch: its content is the alternative.
+            const p = l.doc.nodes.items(.parent)[n];
+            if (p == none or !l.doc.isElement(p, "template") or l.attr(p, "lcgf-switch") == null) {
+                l.ds.err(at, "lcgf-case belongs directly inside <template lcgf-switch>", .{});
+                l.skip[n] = true;
+            }
+            _ = case;
+            return;
+        }
+        var node: ir.Node = .{ .kind = .when, .parent = parent, .loc = at };
+        if (l.attr(n, "lcgf-if")) |f| {
+            if (!l.identifier(f, l.valueLoc(n, "lcgf-if"))) return;
+            l.field(f, .bool, l.valueLoc(n, "lcgf-if"), "lcgf-if");
+            node.bind = f;
+        } else if (l.attr(n, "lcgf-each")) |f| {
+            if (std.mem.indexOf(u8, f, " in ") != null) {
+                _ = l.refused("attribute", "lcgf-each", "in", l.valueLoc(n, "lcgf-each"));
+                l.skip[n] = true;
+                return;
+            }
+            if (!l.identifier(f, l.valueLoc(n, "lcgf-each"))) return;
+            const max = l.attr(n, "lcgf-max") orelse {
+                l.ds.err(at, "lcgf-each=\"{s}\" needs lcgf-max=\"N\", the most copies it shows", .{f});
+                l.skip[n] = true;
+                return;
+            };
+            node.max = std.fmt.parseInt(u32, max, 10) catch 0;
+            if (node.max == 0 or node.max > 4096) {
+                l.ds.err(l.valueLoc(n, "lcgf-max"), "lcgf-max takes a count from 1 to 4096", .{});
+                return;
+            }
+            l.field(f, .u32, l.valueLoc(n, "lcgf-each"), "lcgf-each");
+            node.kind = .list;
+            node.bind = f;
+            var params: []const u8 = "";
+            var margin: ?[4]f32 = null;
+            node.style = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
+            // The copies stack in a column.
+            if (l.px(n, .@"row-gap")) |g| node.style.gap = g;
+        } else if (l.attr(n, "lcgf-switch")) |f| {
+            if (!l.identifier(f, l.valueLoc(n, "lcgf-switch"))) return;
+            var cases: std.ArrayList([]const u8) = .empty;
+            for (n + 1..l.k.end[n]) |i| if (l.doc.nodes.items(.parent)[i] == n and l.doc.isElement(@intCast(i), "template")) {
+                const c = l.attr(@intCast(i), "lcgf-case") orelse continue;
+                if (l.identifier(c, l.valueLoc(@intCast(i), "lcgf-case"))) ok(cases.append(l.arena, c));
+            };
+            if (cases.items.len == 0) {
+                l.ds.err(at, "lcgf-switch needs <template lcgf-case=\"name\"> alternatives", .{});
+                return;
+            }
+            l.field(f, .@"enum", l.valueLoc(n, "lcgf-switch"), "lcgf-switch");
+            for (l.page.fields.items) |*fd| if (std.mem.eql(u8, fd.name, f)) {
+                fd.cases = cases.items;
+            };
+            node.kind = .choice;
+            node.bind = f;
+        } else {
+            l.skip[n] = true;
+            return;
+        }
+        l.ir_of[n] = l.addNode(node);
+    }
+
+    /// Regions whose content is not exactly one element; checked after the walk.
+    fn checkRegions(l: *Lowerer) void {
+        const kinds = l.page.nodes.items(.kind);
+        const parents = l.page.nodes.items(.parent);
+        for (kinds, 0..) |k, i| {
+            if (k != .when and k != .list) continue;
+            var children: u32 = 0;
+            for (parents) |p| children += @intFromBool(p == i);
+            if (children != 1) l.ds.err(l.page.nodes.items(.loc)[i], "<template {s}> holds {d} elements; it takes exactly one (wrap them in a <div>)", .{ if (k == .when) "lcgf-if" else "lcgf-each", children });
+        }
     }
 
     fn separator(l: *Lowerer, n: u32, parent: u32) void {

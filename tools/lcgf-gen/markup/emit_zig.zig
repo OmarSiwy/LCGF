@@ -229,7 +229,21 @@ pub const Emit = struct {
             .progress => e.print("{s}.ct.progress(theme, .{f})", .{ e.use("progress"), std.zig.fmtId(n.bind) }),
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
-            .when, .choice, .list, .spinner, .radio, .textfield, .search, .textarea, .number => unreachable,
+            .when => {
+                e.print("s.when(.{f},", .{std.zig.fmtId(n.bind)});
+                inner_close.appendSlice(e.arena, ")") catch unreachable;
+            },
+            .list => {
+                e.print("s.list(.{f}, {d}, ", .{ std.zig.fmtId(n.bind), n.max });
+                e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                e.write(",");
+                inner_close.appendSlice(e.arena, ")") catch unreachable;
+            },
+            .choice => {
+                e.print("s.choice(.{f}, .{{}}, .{{", .{std.zig.fmtId(n.bind)});
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
+            },
+            .spinner, .radio, .textfield, .search, .textarea, .number => unreachable,
         }
         if (restyle and !has_children) {
             e.write(", ");
@@ -299,6 +313,7 @@ pub const Emit = struct {
             .text => "lcgf.widgets_textfield.Text(256)",
             .number => "lcgf.widgets_number.Number",
             .pair => "[2]f32",
+            .@"enum" => "enum {}",
         };
     }
 
@@ -308,7 +323,7 @@ pub const Emit = struct {
             .str => "\"\"",
             .bool => "false",
             .f32, .u32 => "0",
-            .text, .number, .pair => ".{}",
+            .text, .number, .pair, .@"enum" => ".{}",
         };
     }
 
@@ -349,7 +364,13 @@ pub const Emit = struct {
         e.write("pub const State = struct {");
         if (page.fields.items.len == 0) e.write("};\n\n") else {
             e.write("\n");
-            for (page.fields.items) |f| e.print("    {f}: {s} = {s}, // {s}\n", .{ std.zig.fmtId(f.name), fieldType(f.type), defaultOf(f), e.where(f.loc) });
+            for (page.fields.items) |f| {
+                if (f.type == .@"enum") {
+                    e.print("    {f}: enum {{", .{std.zig.fmtId(f.name)});
+                    for (f.cases, 0..) |c, k| e.print("{s} {f}", .{ if (k == 0) "" else ",", std.zig.fmtId(c) });
+                    e.print(" }} = .{f}, // {s}\n", .{ std.zig.fmtId(f.cases[0]), e.where(f.loc) });
+                } else e.print("    {f}: {s} = {s}, // {s}\n", .{ std.zig.fmtId(f.name), fieldType(f.type), defaultOf(f), e.where(f.loc) });
+            }
             e.write("};\n\n");
         }
         e.write("pub const theme: w.Theme = ");

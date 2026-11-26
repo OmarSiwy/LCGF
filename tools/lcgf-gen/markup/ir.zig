@@ -97,6 +97,8 @@ pub const FieldType = enum(u8) {
     number,
     /// `[2]f32`.
     pair,
+    /// An enum of `Field.cases` (`lcgf-switch`).
+    @"enum",
 };
 
 pub const Field = struct {
@@ -105,6 +107,8 @@ pub const Field = struct {
     /// Zig literal of the default; "" for the type's zero.
     default: []const u8 = "",
     cap: u32 = 0,
+    /// The tags of an `enum` field, in markup order.
+    cases: []const []const u8 = &.{},
     loc: diag.Loc,
     /// Where the type was fixed, and by what, for conflict messages.
     why: []const u8,

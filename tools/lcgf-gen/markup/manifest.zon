@@ -82,6 +82,14 @@
         .{ .kind = "event", .name = "wheel", .status = .rejected, .diagnostic = "use an app component for pointer-level input" },
         .{ .kind = "event", .name = "pointermove", .status = .rejected, .diagnostic = "use an app component for pointer-level input" },
 
+        // ---- regions (§3.5)
+        .{ .kind = "attribute", .name = "lcgf-if", .applies_to = "template", .status = .mapped, .target = "spec.when spec.zig:273, bool", .fixture = "todo" },
+        .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "template", .status = .mapped, .target = "spec.list(.n, lcgf-max, style, template) spec.zig:245, u32", .fixture = "todo" },
+        .{ .kind = "attribute", .name = "lcgf-switch", .applies_to = "template", .status = .mapped, .target = "spec.choice spec.zig:286 over a generated enum of the lcgf-case names", .fixture = "todo" },
+        .{ .kind = "attribute", .name = "lcgf-case", .applies_to = "template", .status = .mapped, .target = "one alternative of spec.choice", .fixture = "todo" },
+        .{ .kind = "attribute", .name = "lcgf-else", .status = .planned, .diagnostic = "lcgf-else is not lowered yet: spec.choice takes no bool selector (engine spec T4); use lcgf-switch", .spec = "T4" },
+        .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "in", .status = .planned, .diagnostic = "lcgf-each=\"item in items\" needs a run-time region (interop.region), not lowered yet; use lcgf-each=\"count\" lcgf-max=\"N\"" },
+
         // ---- text
         .{ .kind = "syntax", .name = "{field}", .status = .mapped, .target = "widgets_label.ct.label(theme, .field), str", .fixture = "counter" },
         .{ .kind = "syntax", .name = "{field:.N}", .status = .mapped, .target = "spec.text(\"{.N}\", .{.field}) spec.zig:164, f32", .fixture = "mixer" },
@@ -191,6 +199,7 @@
         .{ .name = "landmarks" },
         .{ .name = "mixer" },
         .{ .name = "settings" },
+        .{ .name = "todo" },
         .{ .name = "flexitems", .waits_for = .{"F2"} },
     },
 }

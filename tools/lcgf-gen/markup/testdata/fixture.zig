@@ -20,7 +20,13 @@ test "the generated theme and state defaults are the twin's" {
     if (@hasDecl(twin, "State")) {
         const a: twin.State = .{};
         const b: page.State = .{};
-        inline for (comptime @typeInfo(twin.State).@"struct".field_names) |f| try std.testing.expectEqualDeep(@field(a, f), @field(b, f));
+        inline for (comptime @typeInfo(twin.State).@"struct".field_names) |f| {
+            // An lcgf-switch field is an enum each side declares: compare by tag.
+            if (@TypeOf(@field(a, f)) != @TypeOf(@field(b, f)))
+                try std.testing.expectEqualStrings(@tagName(@field(a, f)), @tagName(@field(b, f)))
+            else
+                try std.testing.expectEqualDeep(@field(a, f), @field(b, f));
+        }
         try std.testing.expectEqual(@typeInfo(twin.State).@"struct".field_names.len, @typeInfo(page.State).@"struct".field_names.len);
     }
 }
