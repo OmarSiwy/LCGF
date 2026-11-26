@@ -389,6 +389,7 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn applyText(t: anytype, tx: *const Texts, axis: Axis) void`: Scatters measured text extents into their leaf nodes for one axis.
 - `fn fit(t: anytype, axis: Axis) void`: Bottom-up: natural size of every node on one axis.
 - `fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void`: `fit` with the extra sizing rules of `fx` (flex.zig).
+- `fn fitFlexOpts(t: *Tree, fx: *const Flex, axis: Axis, comptime opts: FlexOptions) void`: `fitFlex` with the features of `opts` compiled in.
 - `fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void`: `fit` over rows [first, last), any `first < last <= len`.
 - `fn resolve(t: anytype, axis: Axis, viewport: f32) void`: Top-down: final size of every node on one axis.
 - `fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void`: `resolve` with the extra sizing rules of `fx` (flex.zig).
@@ -396,6 +397,7 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn textAvail(t: anytype, tx: *Texts) void`: Gathers the width layout gave each text run.
 - `fn place(t: anytype) void`: Top-down: position of every node on both axes.
 - `fn placeFlex(t: *Tree, fx: *const Flex) void`: `place` with the extra placement rules of `fx` (flex.zig).
+- `fn placeFlexOpts(t: *Tree, fx: *const Flex, comptime opts: FlexOptions) void`: `placeFlex` with the features of `opts` compiled in.
 - `fn placeSpan(t: anytype, first: u32, last: u32) void`: `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row after `first` from its parent, with `first`'s own position taken as given.
 - `fn finalize(t: anytype) void`: Legacy whole-pixel finalization.
 - `fn finalizeWith(t: anytype, options: rounding.Options) error{InvalidScale}!void`: Snap cumulative endpoints on the selected device grid, then derive exact transforms, ancestor clips and hit visibility.
@@ -404,6 +406,7 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void`
 - `fn run(t: anytype, tx: *Texts, viewport: [2]f32) void`: Diagonal: every pass in order, for text that does not wrap (or whose `w`/`h` the caller has already settled).
 - `fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void`: `run` with the extra sizing rules of `fx` (flex.zig), and wrapping rows (wrap.zig).
+- `fn runFlexOpts(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32, comptime opts: FlexOptions) void`: `runFlex` with the features of `opts` compiled in.
 
 ## `lcgf.overlay` (src/layout/overlay.zig)
 
@@ -617,6 +620,12 @@ hit: which node is under a point.
 
 Flex: sizing rules beyond the prototype's fit / px / grow / pct, as extra per-node columns the caller carves next to the tree and passes to `layout.fitFlex`, `resolveFlex` and `runFlex`.
 
+### `FlexOptions` (struct)
+What the flex passes compile in beyond the defaults, as a comptime argument of their `...Opts` forms; the plain forms take `.{}`.
+
+Fields: `line_baseline`
+
+
 ### `Flex` (struct)
 
 Fields: `c`
@@ -667,11 +676,12 @@ Wrapping rows.
 ### Top level
 
 - `fn wrap(t: *const Tree, fx: *const Flex) void`: Forward sweep, after `resolveFlex(.x)`: puts every in-flow child of a wrapping row on a line, greedily, as CSS does: a child that would end past the row's inner width starts a new line, unless it is the first on its line.
+- `fn wrapOpts(t: *const Tree, fx: *const Flex, comptime opts: FlexOptions) void`: `wrap` with the features of `opts` compiled in.
 - `fn linesGap(t: *const Tree, fx: *const Flex, a: u1, i: usize) f32`: fitFlex: the gaps between a wrapping row's lines, on y.
-- `fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, contrib: f32, folded: f32) f32`: fitFlex: on y, child `i` of a wrapping row raises its line's cross size to its own extent, and the line joins the row's sum when its first child (the last one the reverse sweep sees) folds in.
+- `fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, contrib: f32, folded: f32, comptime opts: FlexOptions) f32`: fitFlex: on y, child `i` of a wrapping row raises its line's cross size to its own extent, and the line joins the row's sum when its first child (the last one the reverse sweep sees) folds in.
 - `fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, inner: f32) f32`: resolveFlex: how much more than the parent's inner size a stretching child of a wrapping row gets on y: its line's cross size instead of the whole row.
 - `fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void`: placeFlex, before child `i` is placed: the first child of a line sets the line's offset down the row: the row's cursor (which for a wrapping row runs across it) plus the share of the row's spare height that `Style.lines` (or `Style.line_space`) puts before its lines.
-- `fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, inner: f32, cross: f32, in_flow: f32) f32`: placeFlex: child `i`'s offset inside a wrapping row's content box.
+- `fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, p: usize, inner: f32, cross: f32, in_flow: f32, comptime opts: FlexOptions) f32`: placeFlex: child `i`'s offset inside a wrapping row's content box.
 - `fn advance(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain: f32) f32`: placeFlex, after child `i` is placed: it moves its line's cursor along x, and a line's first child moves the row's cursor down past the line.
 
 ## `lcgf.baseline` (src/layout/baseline.zig)
@@ -3559,6 +3569,8 @@ Fields: `ctx`, `in`
 - `fn layoutWith(f: *Frame, font: Mono) void`: Measure and arrange without painting: insert prepared textures or explicit passes, then call finish.
 - `fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output`: `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ...
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
+- `fn endFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) Output`: `endFlex` with the flex features of `opts` compiled in (`FlexOptions`), over `font` or a `paragraphs` font.
+- `fn layoutFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void`: The layout half of `endFlexOpts`.
 - `fn endParagraphs(f: *Frame, font: MonoParagraphs) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings` are set to this frame's).
 - `fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void`: The layout half of `endParagraphs`.
 - `fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.

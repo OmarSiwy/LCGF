@@ -373,6 +373,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const dynamic = Regions.count != 0;
     // Flex columns and passes only for a page with a `spec.flexed` node.
     const has_flex = comptime anyFlex(spec);
+    // The flex passes compile in per-line baselines only for a page that has such a row.
+    const flex_opts: @import("../layout/flex.zig").FlexOptions = .{ .line_baseline = comptime anyLineBaseline(spec) };
     // Paragraph styles and decorations (`spec.paragraph`, `spec.decorated`): their distinct
     // values, and one slot per label that has either.
     const paragraph_styles = comptime paragraphDistinct(spec);
@@ -659,15 +661,15 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             if (has_flex) {
                 // `layout.runFlex`'s sequence.
                 const fx = &tb.fx;
-                layout.fitFlex(t, fx, .x);
+                layout.fitFlexOpts(t, fx, .x, flex_opts);
                 layout.resolveFlex(t, fx, .x, in.viewport[0]);
-                @import("../layout/wrap.zig").wrap(t, fx);
+                @import("../layout/wrap.zig").wrapOpts(t, fx, flex_opts);
                 layout.textAvail(t, tx);
                 font.wrap(tx);
                 layout.applyText(t, tx, .y);
-                layout.fitFlex(t, fx, .y);
+                layout.fitFlexOpts(t, fx, .y, flex_opts);
                 layout.resolveFlex(t, fx, .y, in.viewport[1]);
-                layout.placeFlex(t, fx);
+                layout.placeFlexOpts(t, fx, flex_opts);
             } else {
                 layout.fit(t, .x);
                 layout.resolve(t, .x, in.viewport[0]);
@@ -965,6 +967,13 @@ fn paragraphIndexIn(comptime styles: ParagraphStyles, comptime n: Spec) ?u16 {
     const d = n.decoration orelse Decoration{};
     for (styles.paragraphs, styles.decorations, styles.spans, 0..) |q, e, sp, i| if (std.meta.eql(q, p) and std.meta.eql(e, d) and spansEql(sp, n.spans)) return i;
     return null;
+}
+
+/// Whether a node of `n` is a baseline-aligned wrapping row (`FlexOptions.line_baseline`).
+fn anyLineBaseline(comptime n: Spec) bool {
+    if (n.flex) |f| if (f.wrap and f.baseline) return true;
+    for (n.children) |c| if (anyLineBaseline(c)) return true;
+    return false;
 }
 
 fn anyFlex(comptime n: Spec) bool {

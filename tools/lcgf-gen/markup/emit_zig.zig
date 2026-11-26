@@ -1299,7 +1299,32 @@ pub const Emit = struct {
             \\
         , .{e.regionCount()});
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
-        if (regions) e.print(
+        // A page with a baseline-aligned wrapping row compiles the flex passes with per-line
+        // baselines (`FlexOptions.line_baseline`): the `...Opts` forms, over the paragraph
+        // font when there is one.
+        const opts_font = if (paragraphs) std.fmt.allocPrint(e.arena, "@as(lcgf.protocol.MonoParagraphs, {s})", .{e.fontExpr(true)}) catch unreachable else "font";
+        const opts_args = std.fmt.allocPrint(e.arena, "{s}, &ui.flex.?, .{{ .line_baseline = true }}", .{opts_font}) catch unreachable;
+        if (flex and e.lineBaseline()) {
+            if (regions) e.print(
+                \\    /// Lays the frame out (with this page's flex rules, per-line baselines compiled in),
+                \\    /// puts each region's content on the grid from the region's snapped corner, and paints.
+                \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
+                \\        f.layoutFlexOpts({s});
+                \\        for (ui.regions) |row| if (row != lcgf.types.none) lcgf.layout.snapSubtree(f.tree(), row);
+                \\        return f.{s};
+                \\    }}
+                \\
+                \\
+            , .{ opts_args, if (paragraphs) std.fmt.allocPrint(e.arena, "finishParagraphs({s})", .{e.fontExpr(true)}) catch unreachable else "finish()" }) else e.print(
+                \\    /// Ends the frame with this page's flex rules, per-line baselines compiled in
+                \\    /// (`Frame.endFlexOpts`).
+                \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
+                \\        return f.endFlexOpts({s});
+                \\    }}
+                \\
+                \\
+            , .{opts_args});
+        } else if (regions) e.print(
             \\    /// Lays the frame out (with this page's {s}), puts each region's content on the
             \\    /// grid from the region's snapped corner, and paints.
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
@@ -1680,6 +1705,12 @@ pub const Emit = struct {
             any = true;
         }
         e.write(if (any) " }" else "}");
+    }
+
+    /// Whether a node is a baseline-aligned wrapping row (`FlexOptions.line_baseline`).
+    fn lineBaseline(e: *Emit) bool {
+        for (e.page.nodes.items(.flex)) |fs| if (fs.wrap and fs.baseline) return true;
+        return false;
     }
 
     /// Whether a node has flex rules (CSS margins, align-self, wrap, …; engine spec F2).

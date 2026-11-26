@@ -26,6 +26,7 @@ const Texts = @import("../core/texts.zig").Texts;
 const Flex = @import("flex.zig").Flex;
 const wrap = @import("wrap.zig");
 const baseline = @import("baseline.zig");
+const FlexOptions = @import("flex.zig").FlexOptions;
 const rounding = @import("rounding.zig");
 const Axis = types.Axis;
 
@@ -72,13 +73,18 @@ pub fn applyText(t: anytype, tx: *const Texts, axis: Axis) void {
 /// Bottom-up: natural size of every node on one axis. One reverse sweep.
 pub fn fit(t: anytype, axis: Axis) void {
     if (t.len == 0) return;
-    fitOf(t, {}, axis, 0, t.len);
+    fitOf(t, {}, axis, 0, t.len, .{});
 }
 
 /// `fit` with the extra sizing rules of `fx` (flex.zig).
 pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
+    fitFlexOpts(t, fx, axis, .{});
+}
+
+/// `fitFlex` with the features of `opts` compiled in.
+pub fn fitFlexOpts(t: *Tree, fx: *const Flex, axis: Axis, comptime opts: FlexOptions) void {
     if (t.len == 0) return;
-    fitOf(t, fx, axis, 0, t.len);
+    fitOf(t, fx, axis, 0, t.len, opts);
 }
 
 /// `fit` over rows [first, last), any `first < last <= len`. Rows after `first` fold into their
@@ -95,12 +101,12 @@ pub fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void {
 /// call whose vectors cover it. The test "fitSpan, resolveSpan: pieces from any cut rows equal
 /// the whole pass" pins this.
 pub fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
-    fitOf(t, {}, axis, first, last);
+    fitOf(t, {}, axis, first, last, .{});
 }
 
 /// One body for every form: with `fx` void every flex term is compiled out, so `fit` keeps the
 /// prototype's code; `first`/`last` select a subtree for incremental layout.
-inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void {
+inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void {
     const flexed = @TypeOf(fx) != void;
     const a = @backingInt(axis);
     std.debug.assert(first < last and last <= t.len);
@@ -145,7 +151,7 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void
         const sum = fp + contrib;
         const mx = simd.selF(fp < contrib, contrib, fp);
         var folded = simd.selF(main[p] != 0, sum, mx);
-        if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded);
+        if (flexed) folded = wrap.foldLine(t, fx, a, i, p, contrib, folded, opts);
         fit_[p] = folded;
         grow_sum[p] += grow[i] * flow[i];
         if (flexed) fx.c.shrink_sum[a][p] += fx.scaledShrink(t, i, nat);
@@ -287,25 +293,30 @@ pub fn place(t: anytype) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
-    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, 0, t.len }) else placeOf(t, {}, 0, t.len);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, 0, t.len, FlexOptions{} }) else placeOf(t, {}, 0, t.len, .{});
 }
 
 /// `place` with the extra placement rules of `fx` (flex.zig).
 pub fn placeFlex(t: *Tree, fx: *const Flex) void {
+    placeFlexOpts(t, fx, .{});
+}
+
+/// `placeFlex` with the features of `opts` compiled in.
+pub fn placeFlexOpts(t: *Tree, fx: *const Flex, comptime opts: FlexOptions) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
-    if (inline_passes) @call(.always_inline, placeOf, .{ t, fx, 0, t.len }) else placeOf(t, fx, 0, t.len);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, fx, 0, t.len, opts }) else placeOf(t, fx, 0, t.len, opts);
 }
 
 /// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
 /// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
 /// rows must be cleared first, as `prepare` does for the whole tree.
 pub fn placeSpan(t: anytype, first: u32, last: u32) void {
-    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, first, last }) else placeOf(t, {}, first, last);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, first, last, FlexOptions{} }) else placeOf(t, {}, first, last, .{});
 }
 
-fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
+fn placeOf(t: anytype, fx: anytype, first: u32, last: u32, comptime opts: FlexOptions) void {
     const flexed = @TypeOf(fx) != void;
     std.debug.assert(first < last and last <= t.len);
     const parent = t.c.parent;
@@ -344,7 +355,7 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
             if (flexed and a == 1) across = baseline.across(t, fx, i, p, across);
             const along = lead + cursor[p] + m_lo;
             var in_flow = across + main[a][p] * (along - across);
-            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, inner, cross, in_flow);
+            if (flexed) in_flow = wrap.inLine(t, fx, a, i, p, inner, cross, in_flow, opts);
             pos[a][i] = pos[a][p] + lo[a][p] - scroll[a][p] + fl * in_flow + offset[a][i];
         }
         // Advance along whichever axis is the parent's main one.
@@ -476,16 +487,21 @@ pub fn run(t: anytype, tx: *Texts, viewport: [2]f32) void {
 /// baselines come from `baseline.apply`, which needs a per-run ascent column this call does not
 /// have: call the passes one by one, as baseline.zig's tests do, to line text up.
 pub fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void {
+    runFlexOpts(t, fx, tx, viewport, .{});
+}
+
+/// `runFlex` with the features of `opts` compiled in.
+pub fn runFlexOpts(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32, comptime opts: FlexOptions) void {
     prepare(t);
     applyText(t, tx, .x);
-    fitFlex(t, fx, .x);
+    fitFlexOpts(t, fx, .x, opts);
     resolveFlex(t, fx, .x, viewport[0]);
-    wrap.wrap(t, fx);
+    wrap.wrapOpts(t, fx, opts);
     textAvail(t, tx);
     applyText(t, tx, .y);
-    fitFlex(t, fx, .y);
+    fitFlexOpts(t, fx, .y, opts);
     resolveFlex(t, fx, .y, viewport[1]);
-    placeFlex(t, fx);
+    placeFlexOpts(t, fx, opts);
     finalize(t);
 }
 

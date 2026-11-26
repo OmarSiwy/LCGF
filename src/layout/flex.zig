@@ -15,6 +15,16 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const b01 = simd.b2f;
 
+/// What the flex passes compile in beyond the defaults, as a comptime argument of their
+/// `...Opts` forms; the plain forms take `.{}`. A front end sets them from what its page uses,
+/// so a page without the feature compiles to the passes without it.
+pub const FlexOptions = struct {
+    /// Baseline alignment in wrapping rows: each line's shared baseline and height
+    /// (`Style.baseline` on a row with `Style.wrap`). Without it such a row's lines align
+    /// by `Style.cross`.
+    line_baseline: bool = false,
+};
+
 pub const Flex = struct {
     c: Columns,
 
@@ -144,7 +154,7 @@ pub const Flex = struct {
         /// For a row: its in-flow children sit so that their first baselines (baseline.zig)
         /// are on one line, as CSS `align-items: baseline`, and the row is as tall as the
         /// highest part above that line plus the deepest below it; in a wrapping row, each line
-        /// has its own baseline and height. A child with its own `cross` is placed by that
+        /// has its own baseline and height, with `FlexOptions.line_baseline`. A child with its own `cross` is placed by that
         /// instead (in a row that does not wrap it still counts toward the row's baseline and
         /// height, unlike CSS). Ignored on a column.
         baseline: bool = false,

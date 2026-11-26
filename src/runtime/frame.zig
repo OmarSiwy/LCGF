@@ -32,6 +32,7 @@ const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
+const FlexOptions = @import("../layout/flex.zig").FlexOptions;
 const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
@@ -430,7 +431,19 @@ pub const Frame = struct {
     /// `reuse` copied are laid out again, and their flex rows are the defaults unless the
     /// caller writes them.
     pub fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void {
-        f.layoutFlexWith(font, fx);
+        f.layoutFlexWith(font, fx, .{});
+    }
+
+    /// `endFlex` with the flex features of `opts` compiled in (`FlexOptions`), over `font` or
+    /// a `paragraphs` font.
+    pub fn endFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) Output {
+        f.layoutFlexOpts(font, fx, opts);
+        return if (@TypeOf(font) == MonoParagraphs) f.finishParagraphs(font) else f.finish();
+    }
+
+    /// The layout half of `endFlexOpts`.
+    pub fn layoutFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void {
+        f.layoutFlexWith(if (@TypeOf(font) == MonoParagraphs) f.withStrings(font) else font, fx, opts);
     }
 
     /// `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text
@@ -455,7 +468,7 @@ pub const Frame = struct {
 
     /// The layout half of `endFlexParagraphs`.
     pub fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void {
-        f.layoutFlexWith(f.withStrings(font), fx);
+        f.layoutFlexWith(f.withStrings(font), fx, .{});
     }
 
     /// The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after
@@ -473,7 +486,7 @@ pub const Frame = struct {
         return p;
     }
 
-    fn layoutFlexWith(f: *Frame, font: anytype, fx: *Flex) void {
+    fn layoutFlexWith(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -485,15 +498,15 @@ pub const Frame = struct {
         @memset(fx.c.text_has, 0);
         layout.prepare(t);
         layout.applyText(t, tx, .x);
-        layout.fitFlex(t, fx, .x);
+        layout.fitFlexOpts(t, fx, .x, opts);
         layout.resolveFlex(t, fx, .x, f.in.viewport[0]);
-        @import("../layout/wrap.zig").wrap(t, fx);
+        @import("../layout/wrap.zig").wrapOpts(t, fx, opts);
         layout.textAvail(t, tx);
         font.wrap(tx);
         layout.applyText(t, tx, .y);
-        layout.fitFlex(t, fx, .y);
+        layout.fitFlexOpts(t, fx, .y, opts);
         layout.resolveFlex(t, fx, .y, f.in.viewport[1]);
-        layout.placeFlex(t, fx);
+        layout.placeFlexOpts(t, fx, opts);
         f.finalizeLayout(.{}) catch unreachable;
         for (0..t.len) |i| fx.set(@intCast(i), &.{});
     }
