@@ -8,6 +8,11 @@
 # front end's scenes. One GPU frame recorded through lcgf_render.gpu, lcgf/gpu.hpp and lcgf::gpu
 # must make the same Vulkan calls, and check.zig's GPU checks must pass in C++ and Rust on
 # Vulkan (lavapipe), GL ES (llvmpipe) and wgpu-native.
+# Formatting: the C++ against bindings/cpp/.clang-format, the Rust crates against rustfmt's
+# defaults.
+find bindings/cpp \( -name '*.cpp' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --dry-run -Werror
+(cd bindings/rust && cargo fmt --check)
+(cd bindings/rust/d3d12-bindgen && cargo fmt --check)
 # DirectX-Headers for the D3D12 recorder: only this job needs them, so they are no build.zig.zon
 # dependency (the pinned Zig would fetch them in every job). Pinned by the archive's SHA-256.
 dx=$(mktemp -d)

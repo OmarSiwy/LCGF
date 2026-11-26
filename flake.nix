@@ -110,6 +110,9 @@
           packages = [
             pkgs.cargo
             pkgs.rustc
+            # The bindings' format checks (ci/jobs/bindings.sh): cargo fmt and clang-format.
+            pkgs.rustfmt
+            pkgs.clang-tools
             # The C++ bindings' check (ci/jobs/bindings.sh) builds with CMake.
             pkgs.cmake
             # ...and translates its WGSL shaders with naga (lcgf_add_shader).
