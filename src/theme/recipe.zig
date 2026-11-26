@@ -13,6 +13,7 @@ const slider_zig = @import("../widgets/slider.zig");
 const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
+const link_zig = @import("../widgets/link.zig");
 pub const Parts = style.Parts;
 pub const Id = types.Id;
 pub const States = style.States;
@@ -212,6 +213,26 @@ const focus_part: Part = .{ .id = Parts.focus, .base = .{ .box = .{ .float = tru
 pub const button: Recipe = .{
     .parts = &.{ .{ .id = Parts.root, .base = .{ .box = button_zig.buttonStyle(&.default) } }, label_part, icon_part, focus_part },
     .rules = &button_rules,
+};
+
+/// A pressed toggle button (`States.toggled`) takes the accent, and the held colour while held,
+/// as `toggle.toggleFills`.
+pub const toggle_rules = button_rules ++ [_]Rule{
+    .{ .part = Parts.root, .require = .{ .toggled = true }, .forbid = .{ .disabled = true }, .declarations = &.{style.token(.fill, Names.accent)}, .source = .from("toggle.pressed") },
+    .{ .part = Parts.root, .require = .{ .toggled = true, .held = true }, .forbid = .{ .disabled = true }, .declarations = &.{style.token(.fill, Names.held)}, .source = .from("toggle.held") },
+};
+pub const toggle: Recipe = .{ .parts = button.parts, .rules = &toggle_rules };
+
+/// A link: no fill at rest, the control's hover and held colours, its text in the accent
+/// (`link.linkFill`, `link.linkText`).
+pub const link_rules = text_rules ++ [_]Rule{
+    .{ .part = Parts.root, .declarations = &.{ style.set(.fill, .transparent), style.token(.text_color, Names.accent) }, .source = .from("link.base") },
+    .{ .part = Parts.root, .require = .{ .hovered = true }, .forbid = .{ .disabled = true }, .declarations = &.{style.token(.fill, Names.hot)}, .source = .from("link.hovered") },
+    .{ .part = Parts.root, .require = .{ .held = true }, .forbid = .{ .disabled = true }, .declarations = &.{style.token(.fill, Names.held)}, .source = .from("link.held") },
+};
+pub const link: Recipe = .{
+    .parts = &.{ .{ .id = Parts.root, .base = .{ .box = link_zig.linkStyle(&.default) } }, label_part, icon_part, focus_part },
+    .rules = &link_rules,
 };
 
 pub const checkbox_rules = text_rules ++ [_]Rule{

@@ -29,7 +29,7 @@ const simd = @import("../core/simd.zig");
 const a11y = @import("../a11y/tree.zig");
 
 /// The toggle-button role byte both front ends write.
-const role: u8 = @backingInt(a11y.Role.toggle_button);
+pub const role: u8 = @backingInt(a11y.Role.toggle_button);
 
 // ---- spec -----------------------------------------------------------------------------------
 

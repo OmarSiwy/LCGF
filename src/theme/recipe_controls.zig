@@ -14,6 +14,9 @@ const slider_zig = @import("../widgets/slider.zig");
 const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
+const link_zig = @import("../widgets/link.zig");
+const toggle_zig = @import("../widgets/toggle.zig");
+const simd = @import("../core/simd.zig");
 const tweens = @import("../anim/tweens.zig");
 const keyframes = @import("../anim/keyframes.zig");
 const Parts = style.Parts;
@@ -331,12 +334,22 @@ fn resolvedControl(f: *const Frame, recipe: model.Recipe, options: Options, stat
 /// Leaves the control open for arbitrary children. All style resolution happens before
 /// opening, so a bad token or property cannot leave an unmatched Frame.open behind.
 pub fn beginButton(f: *Frame, id: types.Id, options: Options) style.Error!OpenControl {
+    return beginPressable(f, id, options, model.button, .button, button_zig.activated);
+}
+
+/// A link (role link, `link.activated`: Enter, not Space) open for its children, as
+/// `beginButton`.
+pub fn beginLink(f: *Frame, id: types.Id, options: Options) style.Error!OpenControl {
+    return beginPressable(f, id, options, model.link, .link, link_zig.activated);
+}
+
+fn beginPressable(f: *Frame, id: types.Id, options: Options, stock: model.Recipe, role: types.Role, comptime activated: fn (bool, bool, *const Input) bool) style.Error!OpenControl {
     try checkSemantics(f, options);
-    var response = try policyResponse(f, id, options.recipe orelse model.button, options, options.states);
-    response.clicked = !options.states.disabled and button_zig.activated(response.clicked, response.focused, f.in);
+    var response = try policyResponse(f, id, options.recipe orelse stock, options, options.states);
+    response.clicked = !options.states.disabled and activated(response.clicked, response.focused, f.in);
     const visible = visibleFocus(f, options);
-    var control = try resolvedControl(f, options.recipe orelse model.button, options, statesFor(options.states, response, visible));
-    control.root.box.role = .button;
+    var control = try resolvedControl(f, options.recipe orelse stock, options, statesFor(options.states, response, visible));
+    control.root.box.role = role;
     control.node = f.open(id, control.root.box);
     _ = f.interact(control.node, if (options.states.disabled) .{} else .button);
     control.response = response;
@@ -389,6 +402,39 @@ pub fn button(f: *Frame, id: types.Id, text: []const u8, options: Options) style
     _ = label(f, &control, text);
     end(f, &control);
     return control.response;
+}
+
+pub fn link(f: *Frame, id: types.Id, text: []const u8, options: Options) style.Error!types.Response {
+    const control = try beginLink(f, id, options);
+    _ = label(f, &control, text);
+    end(f, &control);
+    return control.response;
+}
+
+/// A toggle button over `value`, `States.toggled` while pressed; it flips as a button fires
+/// (`toggle.toggle`).
+pub fn toggle(f: *Frame, id: types.Id, value: *bool, text: []const u8, options: Options) style.Error!types.Response {
+    try checkSemantics(f, options);
+    const recipe = options.recipe orelse model.toggle;
+    var before = options.states;
+    before.toggled = value.*;
+    var response = try policyResponse(f, id, recipe, options, before);
+    response.clicked = !options.states.disabled and !options.states.read_only and button_zig.activated(response.clicked, response.focused, f.in);
+    const next = base.toggle(value.*, response.clicked);
+    var states = statesFor(options.states, response, visibleFocus(f, options));
+    states.toggled = next;
+    var control = try resolvedControl(f, recipe, options, states);
+    control.root.box.role = .button;
+    control.root.box.value = simd.b2f(next);
+    control.node = f.open(id, control.root.box);
+    _ = f.interact(control.node, if (states.disabled) .{} else .button);
+    f.setCursor(f.tree().cursor(control.node.ix()) orelse .pointer, response.hovered);
+    f.tree().c.role[control.node.ix()] = toggle_zig.role;
+    _ = label(f, &control, text);
+    end(f, &control);
+    value.* = next;
+    expose(options.semantics, control.node, states);
+    return response;
 }
 
 /// Boolean and tri-state controls use the stock toggle behavior; style cannot re-enable a

@@ -533,8 +533,8 @@ pub const Lowerer = struct {
             if (x == none or !l.disabledElement(n)) continue;
             nodes.items(.live)[x].disabled = true;
             switch (nodes.items(.kind)[x]) {
-                .button, .checkbox, .@"switch", .container, .slider, .textfield => {},
-                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a checkbox, a switch, a range or a text field", .{l.tag(n)}),
+                .button, .toggle, .checkbox, .@"switch", .container, .slider, .textfield => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a switch, a range or a text field", .{l.tag(n)}),
             }
             if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
         }
@@ -551,7 +551,7 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             if (x == none or nodes.items(.recipe)[x].len > 0) continue;
             const kind = nodes.items(.kind)[x];
-            const control = (kind == .button or kind == .checkbox or kind == .@"switch" or kind == .slider or (kind == .textfield and !nodes.items(.secure)[x])) and l.eachOf(n) == none;
+            const control = l.recipeWidget(n, x) and kind != .container;
             const eases = l.transitionOf(n) != null and control;
             const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.eachOf(n) == none));
             if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
@@ -613,7 +613,7 @@ pub const Lowerer = struct {
                 .container, .landmark, .label, .text, .heading, .when, .choice, .list, .each, .spacer, .separator => false,
                 else => true,
             };
-            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
+            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
         }
     }
 
@@ -630,7 +630,7 @@ pub const Lowerer = struct {
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
             if (node.recipe.len == 0) {
-                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
+                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
                 continue;
             }
             const a = l.animation(r, d.loc) orelse continue;
@@ -983,16 +983,12 @@ pub const Lowerer = struct {
         const nodes = l.page.nodes.slice();
         const kind = if (x != none) nodes.items(.kind)[x] else .container;
         const is_box = kind == .container;
-        const fits = x != none and switch (kind) {
-            .button, .checkbox, .@"switch", .container, .slider => l.eachOf(n) == none,
-            .textfield => l.eachOf(n) == none and !nodes.items(.secure)[x],
-            else => false,
-        };
+        const fits = x != none and l.recipeWidget(n, x);
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
         for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1073,6 +1069,15 @@ pub const Lowerer = struct {
         nodes.items(.recipe)[x] = rules.items;
     }
 
+    /// Whether document node `n` (IR node `x`) can be a recipe widget or box.
+    fn recipeWidget(l: *const Lowerer, n: u32, x: u32) bool {
+        return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
+            .button, .link, .toggle, .checkbox, .@"switch", .container, .slider => true,
+            .textfield => !l.page.nodes.items(.secure)[x],
+            else => false,
+        };
+    }
+
     fn hasState(l: *const Lowerer, sel: u32) bool {
         const first = l.c.sels.items(.first)[sel];
         for (first..first + l.c.sels.items(.count)[sel]) |comp| {
@@ -1113,7 +1118,8 @@ pub const Lowerer = struct {
         if (!std.meta.eql(st.size[1], b.size[1])) put(&set, l.arena, .height, .{ .size = st.size[1] });
         if (st.gap != b.gap) put(&set, l.arena, .gap, .{ .number = st.gap });
         if (!std.meta.eql(st.transform, b.transform)) put(&set, l.arena, .transform, .{ .matrix = st.transform });
-        if (node.kind == .button and node.text_style.color.bitsOf() != node.base_text.color.bitsOf()) put(&set, l.arena, .text_color, .{ .color = node.text_style.color });
+        const captioned = node.kind == .button or node.kind == .link or node.kind == .toggle;
+        if (captioned and node.text_style.color.bitsOf() != node.base_text.color.bitsOf()) put(&set, l.arena, .text_color, .{ .color = node.text_style.color });
         st.fill = b.fill;
         st.border_color = b.border_color;
         st.border = b.border;
@@ -1125,7 +1131,7 @@ pub const Lowerer = struct {
         st.transform = b.transform;
         var ts = node.text_style;
         ts.color = node.base_text.color;
-        if (!std.meta.eql(st, b) or node.params_expr.len > 0 or node.uses.len > 0 or (node.kind == .button and !std.meta.eql(ts, node.base_text))) {
+        if (!std.meta.eql(st, b) or node.params_expr.len > 0 or node.uses.len > 0 or (captioned and !std.meta.eql(ts, node.base_text))) {
             l.ds.err(l.loc(n), "a <{s}> with state CSS takes colours, border, radius, opacity, padding, gap, size and transform from its CSS; its other properties are not lowered with state rules yet", .{l.tag(n)});
             return null;
         }

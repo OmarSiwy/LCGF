@@ -17,6 +17,9 @@ const checkbox_zig = @import("../widgets/checkbox.zig");
 const slider_zig = @import("../widgets/slider.zig");
 const switch_zig = @import("../widgets/switch.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
+const link_zig = @import("../widgets/link.zig");
+const toggle_zig = @import("../widgets/toggle.zig");
+const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
 const Spec = spec_zig.Spec;
@@ -153,11 +156,19 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
     };
 }
 
-const Kind = enum { button, checkbox, switch_control, slider, input };
+const Kind = enum { button, link, toggle, checkbox, switch_control, slider, input };
 
 /// `text` is the caption: a `[]const u8` field of the State (`.save`) or a literal ("Save").
 pub fn button(comptime id: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
     return build(.button, @tagName(id), if (comptime isLiteral(text)) "" else @tagName(text), captionName(text), .{}, config, isLiteral(text));
+}
+/// A link: a button with role link that Enter activates, not Space (`link.activated`).
+pub fn link(comptime id: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
+    return build(.link, @tagName(id), if (comptime isLiteral(text)) "" else @tagName(text), captionName(text), .{}, config, isLiteral(text));
+}
+/// A toggle button over the `bool` field `bind`: `States.toggled` while it is pressed.
+pub fn toggle(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
+    return build(.toggle, @tagName(id), @tagName(bind), captionName(text), .{}, config, isLiteral(text));
 }
 pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
     return build(.checkbox, @tagName(id), @tagName(bind), captionName(text), .{}, config, isLiteral(text));
@@ -186,6 +197,8 @@ pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), com
 fn stock(comptime kind: Kind) model.Recipe {
     return switch (kind) {
         .button => model.button,
+        .link => model.link,
+        .toggle => model.toggle,
         .checkbox => model.checkbox,
         .switch_control => model.switch_control,
         .slider => model.slider,
@@ -194,11 +207,11 @@ fn stock(comptime kind: Kind) model.Recipe {
 }
 
 fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) Spec {
-    const captioned = kind == .button or kind == .checkbox or kind == .switch_control;
+    const captioned = kind != .slider and kind != .input;
     const label_node: Spec = if (literal) .{ .kind = .label, .text = text } else .{ .kind = .label, .bind = if (captioned) text else null };
     const mark: Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
     const children: []const Spec = switch (kind) {
-        .button => &.{ label_node, .{ .kind = .col } },
+        .button, .link, .toggle => &.{ label_node, .{ .kind = .col } },
         .checkbox, .switch_control => &.{ mark, label_node, .{ .kind = .col } },
         .slider => &.{ .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col } },
         .input => blk: {
@@ -236,7 +249,9 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.clock_field) |f| if (base.fieldError(State, "recipe clock", f, controls.Clock)) |err| return err;
             if (kind == .input) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
-            if (kind == .checkbox) {
+            if (kind == .toggle) {
+                if (toggle_zig.bindError(State, bind)) |err| return err;
+            } else if (kind == .checkbox) {
                 if (checkbox_zig.bindError(State, bind)) |err| return err;
             } else if (kind == .switch_control) {
                 if (base.fieldError(State, "recipe switch", bind, bool)) |err| return err;
@@ -266,6 +281,8 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 states.indeterminate = value == .mixed;
             } else if (kind == .switch_control) {
                 states.checked = @field(ui.signals.state, bind);
+            } else if (kind == .toggle) {
+                states.toggled = @field(ui.signals.state, bind);
             } else if (kind == .input) states = config.validation.states(states, @field(ui.signals.state, bind).text());
             return .{
                 .tokens = if (config.tokens_field) |field| @field(ui.signals.state, field) else config.tokens,
@@ -288,7 +305,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 ui.fail(err);
                 return .{ .enabled = false, .activates = false };
             };
-            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .input };
+            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .link or kind == .input };
         }
 
         fn resolvePart(ui: anytype, part: types.Id, use: model.Use) style.Computed {
@@ -315,6 +332,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             var value: f32 = 0;
             switch (kind) {
                 .button => root.box.role = .button,
+                .toggle => {
+                    root.box.role = .button;
+                    value = simd.b2f(@field(ui.signals.state, bind));
+                },
+                .link => root.box.role = .link,
                 .checkbox => {
                     root.box.role = .checkbox;
                     value = checkbox_zig.Check.of(@field(ui.signals.state, bind)).value();
@@ -332,9 +354,10 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             }
             root.box.value = value;
             const row = tb.t.push(parent, .hash(name), &root.box);
-            if (kind == .button or kind == .input) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
+            if (kind != .checkbox and kind != .switch_control and kind != .slider) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
             switch (kind) {
-                .button => {
+                .button, .link, .toggle => {
+                    if (kind == .toggle) tb.t.c.role[row] = toggle_zig.role;
                     pushText(ui, row, caption(ui), label_part);
                     next.* += 3;
                 },
@@ -410,6 +433,14 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             switch (kind) {
                 .button => {
                     if (!states.disabled and !response.clicked and button_zig.activated(false, response.focused, in)) return @unionInit(Ui.Events.Event, name, {});
+                },
+                .link => {
+                    if (!states.disabled and !response.clicked and link_zig.activated(false, response.focused, in)) return @unionInit(Ui.Events.Event, name, {});
+                },
+                .toggle => {
+                    if (states.disabled or states.read_only or !button_zig.activated(response.clicked, response.focused, in)) return null;
+                    ui.signals.set(Ui.field(bind), base.toggle(@field(ui.signals.state, bind), true));
+                    if (!response.clicked) return @unionInit(Ui.Events.Event, name, {});
                 },
                 .checkbox, .switch_control => {
                     const clicked = !states.disabled and !states.read_only and checkbox_zig.toggled(response.clicked, response.focused, in);

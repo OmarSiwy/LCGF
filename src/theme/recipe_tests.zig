@@ -511,3 +511,52 @@ test "a recipe box stays hovered and active while the pointer is over and holds 
     output = try run.frame(&input);
     try std.testing.expect(output.runtime.tree.c.look[card].fill != Nest.hot.bitsOf());
 }
+
+test "a recipe link and toggle button hover, press and flip the same in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Pair = struct {
+        const hot: types.Color = .rgb(200, 10, 10);
+        const rules = model.link_rules ++ [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, hot)} }};
+        const recipe: model.Recipe = .{ .parts = model.link.parts, .rules = &rules };
+        const App = struct {
+            on: bool = false,
+            pub fn build(app: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.link(f, .from("docs"), "Docs", .{ .recipe = recipe }) catch unreachable;
+                _ = controls.toggle(f, .from("bold"), &app.on, "B", .{}) catch unreachable;
+                f.close();
+            }
+        };
+        const State_ = struct { on: bool = false };
+        const PUi = base.ComptimeUi(State_, spec.col(panel, .{ ct.link(.docs, "Docs", .{ .recipe = recipe }), ct.toggle(.bold, .on, "B", .{}) }), .default);
+        const PRun = base.Harness(App, PUi, .{ .nodes = 32, .texts = 8, .customs = 2, .strings = 64, .depth = 8 });
+        var run: PRun = .{};
+    };
+    const run = &Pair.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const t = output.runtime.tree;
+    const docs = t.find(.from("docs"));
+    const bold = t.find(.from("bold"));
+    try std.testing.expectEqual(@backingInt(types.Role.link), t.c.role[docs]);
+    try std.testing.expectEqual(@import("../widgets/toggle.zig").role, t.c.role[bold]);
+    const released = t.c.look[bold].fill;
+    input.pointer = aimRect(t.rect(docs));
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Pair.hot.bitsOf(), output.runtime.tree.c.look[docs].fill);
+    input.pointer = aimRect(output.runtime.tree.rect(bold));
+    input.buttons.left = true;
+    _ = try run.frame(&input);
+    input.buttons.left = false;
+    output = try run.frame(&input);
+    try std.testing.expect(run.app.on and run.ui.signals.state.on);
+    input.pointer = .{ 319, 199 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(@as(f32, 1), output.runtime.tree.c.value[bold]);
+    try std.testing.expect(released != output.runtime.tree.c.look[bold].fill);
+}
+
+fn aimRect(r: types.Rect) [2]f32 {
+    return .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+}

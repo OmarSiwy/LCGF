@@ -415,7 +415,7 @@ pub const Emit = struct {
                 e.write(")");
             },
             .button, .link => if (n.recipe.len > 0) {
-                e.print("recipes.ct.button(.{f}, ", .{std.zig.fmtId(n.id)});
+                e.print("recipes.ct.{s}(.{f}, ", .{ @tagName(n.kind), std.zig.fmtId(n.id) });
                 e.caption(n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else {
@@ -434,7 +434,11 @@ pub const Emit = struct {
                 e.caption(n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else e.boolSpec(n),
-            .toggle => e.boolSpec(n),
+            .toggle => if (n.recipe.len > 0) {
+                e.print("recipes.ct.toggle(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.caption(n.text_kind, n.text);
+                e.print(", {s})", .{e.config(n, false)});
+            } else e.boolSpec(n),
             .slider => if (n.recipe.len > 0) {
                 e.print("recipes.ct.slider(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.structure(lcgf.widgets_slider.Range{ .lo = n.range[0], .hi = n.range[1] }, .{});
@@ -775,6 +779,8 @@ pub const Emit = struct {
             }
             const stock = switch (n.kind) {
                 .button => "button",
+                .link => "link",
+                .toggle => "toggle",
                 .checkbox => "checkbox",
                 .slider => "slider",
                 .textfield => "input",
@@ -1138,7 +1144,7 @@ pub const Emit = struct {
                 const ts = n.recipe.len == 0 and n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
                 const name = if (face.len > 0) e.faced(@tagName(n.kind), face) else if (ts) "buttonStyled" else @tagName(n.kind);
                 if (n.recipe.len > 0)
-                    e.print("{s}(recipes.button(f, {s}, ", .{ if (h != null) "if (" else "_ = ", e.rtId(n.id, list_depth) })
+                    e.print("{s}(recipes.{s}(f, {s}, ", .{ if (h != null) "if (" else "_ = ", @tagName(n.kind), e.rtId(n.id, list_depth) })
                 else
                     e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), name, e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
@@ -1169,7 +1175,11 @@ pub const Emit = struct {
                 } else if (n.kind == .@"switch") "@\"switch\"" else m;
                 const item = e.eachOf(i) != none;
                 if (n.recipe.len > 0) {
-                    e.print("_ = recipes.{s}(f, {s}, {s}, ", .{ if (n.kind == .checkbox) "checkbox" else "switchControl", e.rtId(n.id, list_depth), e.ref(n.bind) });
+                    e.print("_ = recipes.{s}(f, {s}, {s}, ", .{ switch (n.kind) {
+                        .checkbox => "checkbox",
+                        .toggle => "toggle",
+                        else => "switchControl",
+                    }, e.rtId(n.id, list_depth), e.ref(n.bind) });
                     e.rtCaption(n.text_kind, n.text);
                     e.print(", {s}) catch unreachable;", .{e.config(n, true)});
                     return "";
