@@ -31,6 +31,7 @@ The `gpu` in the examples is `@import("lcgf_render").gpu`. Every code block belo
 | Bind group layouts and entries as arrays | `createBindGroup(arena, pipeline, group, .{ ... })` takes a struct built from the WGSL at compile time. A binding that is misspelled, missing or of the wrong kind is a compile error. |
 | Validation on every call | Debug builds check what comptime cannot: scissor bounds, a draw with no pipeline, write alignment. These checks and their fields don't exist in release builds. |
 | `device.createShaderModule(wgsl)` | `gpu.Shader(source)`. The WGSL is reflected at compile time; naga translates it when you build. |
+| `firstInstance` | GL ES 3.0 has no base-instance draw. The GL ES projection rebinds every instance-step buffer `first_instance` elements on for that draw instead, and its `@builtin(instance_index)` would start at 0, not `first_instance`. Read per-instance data from instance-step vertex buffers, not from storage indexed by `instance_index`: on GL ES, a draw with `first_instance != 0` whose vertex shader reads `instance_index` panics in every build. |
 
 ## Shaders
 
@@ -139,6 +140,8 @@ while walking the commands with `drawUntilCustom`, exactly as `custom.md` shows.
   - a texture upload through staging;
   - render to texture, then sampling the result in a second pass;
   - vertex buffers;
+  - instanced draws from first instances past 0, from a per-vertex buffer and two per-instance
+    buffers (one bound at an offset), with `sint32x2`, `sint32x4` and `uint32` attributes;
   - a compute pass writing a storage buffer.
 
   It runs on Vulkan (lavapipe, with synchronization validation), GL ES 3.1, wgpu, and in

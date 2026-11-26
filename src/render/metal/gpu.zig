@@ -772,6 +772,17 @@ test "gpu: upload, render to a texture, sample it in a second pass, on a real de
     try lcgf.gpu_check.renderToTexture(@This(), shaders, k.dev, &k);
 }
 
+test "gpu: instanced draws from a first instance, integer attributes, an offset buffer, on a real device" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    try objc.load();
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var d = try device_mod.Device.init();
+    defer d.deinit();
+    var k: Check = .{ .dev = .wrap(d.device), .queue = d.queue };
+    try lcgf.gpu_check.instancing(@This(), shaders, k.dev, &k);
+}
+
 test "gpu: a compute pass writes a storage buffer the host reads" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     try objc.load();

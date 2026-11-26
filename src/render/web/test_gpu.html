@@ -2,10 +2,11 @@
 <meta charset="utf-8">
 <title>lcgf: lcgf_render.gpu checks</title>
 <!-- The projection's own checks (src/render/gpu/check.zig) in a browser: scenes.wasm records a
-     render-to-texture pass and a compute dispatch through lcgf_render.gpu (web/gpu.zig, calling
-     WebGPU through lcgf.js gpuProjection) into this page's encoder; the page submits, reads the
-     8 x 8 texture and the storage buffer back into the module's memory, and the module verifies
-     both. The same checks run natively on every back end (zig build test). -->
+     render-to-texture pass, a compute dispatch and instanced draws through lcgf_render.gpu
+     (web/gpu.zig, calling WebGPU through lcgf.js gpuProjection) into this page's encoder; the
+     page submits, reads the 8 x 8 and 8 x 1 textures and the storage buffer back into the
+     module's memory, and the module verifies them. The same checks run natively on every back
+     end (zig build test). -->
 <script type="module">
 import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
 import { readback, standInAtlas } from "./test_util.js";
@@ -35,6 +36,8 @@ window.lcgfTest = (async () => {
 
     // The render-to-texture result, 8 x 8 RGBA8.
     ui.u8(x.lcgf_check_pixels(), 8 * 8 * 4).set(await readback(device, get(tex), 8, 8));
+    // The instanced draws' result, 8 x 1 RGBA8.
+    ui.u8(x.lcgf_check_instancing_pixels(), 8 * 4).set(await readback(device, get(x.lcgf_check_instancing()), 8, 1));
 
     // The compute result: 200 u32 values.
     const size = 200 * 4;
@@ -49,6 +52,7 @@ window.lcgfTest = (async () => {
     const verified = x.lcgf_check_verify();
     if (!(verified & 1)) errors.push("render-to-texture: the pixels read back are not the expected ones");
     if (!(verified & 2)) errors.push("compute: the storage buffer read back is not the expected one");
+    if (!(verified & 4)) errors.push("instancing: the pixels read back are not the expected ones");
     return { ok: errors.length === 0, errors, adapter: adapter.info?.description || adapter.info?.vendor };
 })();
 </script>

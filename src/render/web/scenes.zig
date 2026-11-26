@@ -86,13 +86,16 @@ export fn lcgf_scene_draw(pass: u32) void {
 
 const RenderToTexture = lcgf.gpu_check.RenderToTexture(gpu, shaders);
 const Compute = lcgf.gpu_check.Compute(gpu, shaders);
+const Instancing = lcgf.gpu_check.Instancing(gpu, shaders);
+var check_instancing: Instancing = undefined;
+var check_instancing_pixels: [Instancing.width * 4]u8 = undefined;
 var check_texture: RenderToTexture = undefined;
 var check_compute: Compute = undefined;
 var check_pixels: [RenderToTexture.width * RenderToTexture.height * 4]u8 = undefined;
 var check_values: [Compute.count]u32 = undefined;
 
-/// Records both checks into `encoder`. Returns the texture to read back (8 x 8); the storage
-/// buffer is `lcgf_check_buffer`.
+/// Records the checks into `encoder`. Returns the texture to read back (8 x 8); the storage
+/// buffer is `lcgf_check_buffer`, the instanced draws' target `lcgf_check_instancing` (8 x 1).
 export fn lcgf_check_record(encoder: u32) u32 {
     check_texture.init(dev) catch @panic("check: render-to-texture setup failed");
     check_compute.init(dev) catch @panic("check: compute setup failed");
@@ -100,7 +103,18 @@ export fn lcgf_check_record(encoder: u32) u32 {
     check_texture.record(&up) catch @panic("check: render-to-texture recording failed");
     var up2: gpu.Upload = .begin(dev, encoder);
     check_compute.record(&up2);
+    check_instancing.init(dev) catch @panic("check: instancing setup failed");
+    var up3: gpu.Upload = .begin(dev, encoder);
+    check_instancing.record(&up3);
     return check_texture.final.texture;
+}
+
+export fn lcgf_check_instancing() u32 {
+    return check_instancing.target.texture;
+}
+
+export fn lcgf_check_instancing_pixels() [*]u8 {
+    return &check_instancing_pixels;
 }
 
 export fn lcgf_check_buffer() u32 {
@@ -115,9 +129,11 @@ export fn lcgf_check_values() [*]u32 {
     return &check_values;
 }
 
-/// Bit 0: the render-to-texture check passed; bit 1: the compute check passed.
+/// Bit 0: the render-to-texture check passed; bit 1: the compute check; bit 2: instancing.
 export fn lcgf_check_verify() u32 {
-    const ok = @as(u32, @intFromBool(RenderToTexture.verify(&check_pixels))) | (@as(u32, @intFromBool(Compute.verify(&check_values))) << 1);
+    const ok = @as(u32, @intFromBool(RenderToTexture.verify(&check_pixels))) | (@as(u32, @intFromBool(Compute.verify(&check_values))) << 1) |
+        (@as(u32, @intFromBool(Instancing.verify(&check_instancing_pixels))) << 2);
+    check_instancing.deinit(dev);
     check_compute.deinit(dev);
     check_texture.deinit(dev);
     return ok;
