@@ -1,0 +1,9 @@
+widgets.html:2:30: error: remote stylesheets and images are not fetched; vendor the file
+<link rel="stylesheet" href="https://example.com/a.css">
+                             ^
+widgets.html:4:3: error: <button> needs an id, a binding or an on:click handler to name it
+  <button>Unnamed</button>
+  ^
+widgets.html:6:3: error: id 'a' is used twice; the first is at 5:3
+  <button id="a">Two</button>
+  ^

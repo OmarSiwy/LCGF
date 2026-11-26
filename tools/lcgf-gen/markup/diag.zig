@@ -39,8 +39,11 @@ pub const Diags = struct {
 
     pub fn add(d: *Diags, loc: Loc, severity: Severity, comptime format: []const u8, args: anytype) void {
         if (severity == .warning and !d.warnings) return;
-        if (severity == .@"error") d.errors += 1;
         const msg = std.fmt.allocPrint(d.arena, format, args) catch @panic("out of memory");
+        // One value can fail once per longhand it sets (`padding: var(--cycle)`); say it once.
+        // ponytail: a linear scan, fine for the 20 errors that are printed.
+        for (d.items.items) |it| if (std.meta.eql(it.loc, loc) and std.mem.eql(u8, it.msg, msg)) return;
+        if (severity == .@"error") d.errors += 1;
         d.items.append(d.arena, .{ .loc = loc, .severity = severity, .msg = msg }) catch @panic("out of memory");
     }
 

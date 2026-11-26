@@ -43,20 +43,94 @@ fn lessPath(_: void, a: []const u8, b: []const u8) bool {
 /// `zig build markup`: the compiler's unit tests, its fixtures against their hand-written twins,
 /// and its diagnostics against their expected text. Returns the step for `test` to include.
 pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_host: *Build.Module, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step {
-    _ = target;
-    _ = optimize;
-    _ = lcgf;
     const step = b.step("markup", "Test the HTML/CSS compiler: units, fixtures against their twins, diagnostics");
+    const pending = b.step("markup-pending", "Build the markup fixtures that wait for engine API (docs/plans/markup-engine-api.md); expected to fail until main lands it");
     const root = b.path(".");
+    const lib = addLexbor(b, root, lexbor, b.graph.host);
     const unit = b.addTest(.{ .name = "markup-units", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/lcgf-gen/markup/tests.zig"),
         .target = b.graph.host,
         .imports = &.{.{ .name = "lcgf", .module = lcgf_host }},
     }) });
-    unit.root_module.linkLibrary(addLexbor(b, root, lexbor, b.graph.host));
+    unit.root_module.linkLibrary(lib);
     step.dependOn(&b.addRunArtifact(unit).step);
+
+    const gen = b.addExecutable(.{ .name = "lcgf-gen", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/lcgf-gen/main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_host }},
+    }) });
+    gen.root_module.linkLibrary(lib);
+    b.step("lcgf-gen", "Build lcgf-gen for this machine, with the HTML front end, into zig-out/bin").dependOn(&b.addInstallArtifact(gen, .{}).step);
+
+    // Fixtures: the page generated from page.html against the hand-written twin.zig.
+    const dir = "tools/lcgf-gen/markup/testdata";
+    var pages: std.ArrayList(Build.Module.Import) = .empty;
+    pages.append(b.allocator, .{ .name = "lcgf", .module = lcgf }) catch @panic("out of memory");
+    for (manifest.manifest.fixtures) |f| {
+        const page = addPage(b, gen, lcgf, .{ .html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name })) });
+        if (f.waits_for.len == 0) pages.append(b.allocator, .{ .name = f.name, .module = page }) catch @panic("out of memory");
+        const twin = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/twin.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
+        const t = b.addTest(.{ .name = b.fmt("markup-{s}", .{f.name}), .root_module = b.createModule(.{
+            .root_source_file = b.path(dir ++ "/fixture.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = page }, .{ .name = "twin", .module = twin } },
+        }) });
+        (if (f.waits_for.len == 0) step else pending).dependOn(&b.addRunArtifact(t).step);
+    }
+    // The check block: each testdata/compile_fail/<case>.zig drives a fixture's page with a
+    // wrong handler type and must fail with the message on its `//! expect: ` first line.
+    {
+        const io = b.graph.io;
+        const sub = dir ++ "/compile_fail";
+        var d = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer d.close(io);
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = d.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            b.dependOnFileContents(b.path(b.fmt("{s}/{s}", .{ sub, entry.name })));
+            const text = d.readFileAlloc(io, entry.name, b.allocator, .limited(1 << 16)) catch @panic("cannot read a compile-fail case");
+            const tag = "//! expect: ";
+            if (!std.mem.startsWith(u8, text, tag)) std.debug.panic("{s}/{s}: first line is not '{s}<message>'", .{ sub, entry.name, tag });
+            const case = b.addObject(.{ .name = b.dupe(entry.name[0 .. entry.name.len - 4]), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("{s}/{s}", .{ sub, entry.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = pages.items,
+            }) });
+            case.expect_errors = .{ .contains = text[tag.len..std.mem.indexOfScalar(u8, text, '\n').?] };
+            step.dependOn(&case.step);
+        }
+    }
+    // Diagnostics: each testdata/errors/<case>.html must fail with exactly <case>.err.
+    {
+        const io = b.graph.io;
+        const sub = dir ++ "/errors";
+        var d = b.root.root_dir.handle.openDir(io, b.pathJoin(&.{ b.root.sub_path, sub }), .{ .iterate = true }) catch @panic("cannot open " ++ sub);
+        defer d.close(io);
+        b.dependOnDirectoryContents(b.path(sub));
+        var it = d.iterate();
+        while (it.next(io) catch @panic("cannot list " ++ sub)) |entry| {
+            if (!std.mem.endsWith(u8, entry.name, ".html")) continue;
+            const stem = entry.name[0 .. entry.name.len - 5];
+            b.dependOnFileContents(b.path(b.fmt("{s}/{s}.err", .{ sub, stem })));
+            const expected = d.readFileAlloc(io, b.fmt("{s}.err", .{stem}), b.allocator, .limited(1 << 16)) catch std.debug.panic("{s}/{s}.err is missing", .{ sub, stem });
+            const run = b.addRunArtifact(gen);
+            run.setCwd(b.path(sub));
+            run.addArgs(&.{ entry.name, "--no-warnings", "--lang", "zig" });
+            run.expectExitCode(1);
+            run.expectStdErrEqual(expected);
+            run.addFileInput(b.path(b.fmt("{s}/{s}", .{ sub, entry.name })));
+            step.dependOn(&run.step);
+        }
+    }
     return step;
 }
+
+const manifest = @import("manifest.zig");
 
 pub const Options = struct {
     /// The page. `<link rel=stylesheet>` and `<style>` in it are read too.

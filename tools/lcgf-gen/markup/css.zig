@@ -255,9 +255,10 @@ pub const Css = struct {
         const Frame = struct { i: u32, end: u32, cond: u32, layer: u16, block_end: u32 };
         var stack: std.ArrayList(Frame) = .empty;
         ok(stack.append(c.arena, .{ .i = a, .end = b, .cond = none, .layer = 0, .block_end = b }));
-        const ty = c.toks.items(.type);
+        // An @import appends tokens, so the type column is fetched again for every rule.
         var rules_seen = false;
         while (stack.items.len > 0) {
+            const ty = c.toks.items(.type);
             const top = &stack.items[stack.items.len - 1];
             var i = top.i;
             while (i < top.end and (ty[i] == .whitespace or ty[i] == .cdo or ty[i] == .cdc or ty[i] == .semicolon)) i += 1;

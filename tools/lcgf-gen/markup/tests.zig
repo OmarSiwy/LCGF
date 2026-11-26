@@ -6,4 +6,6 @@ test {
     _ = @import("css.zig");
     _ = @import("values.zig");
     _ = @import("cascade.zig");
+    _ = @import("manifest.zig");
+    _ = @import("lower.zig");
 }

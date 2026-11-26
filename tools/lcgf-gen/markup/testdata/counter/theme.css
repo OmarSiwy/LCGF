@@ -1,0 +1,5 @@
+/* Theme tokens: the page's `theme` is the default with these set. */
+:root {
+  --lcgf-accent: #ff8800;
+  --lcgf-control: rgb(40 44 52);
+}

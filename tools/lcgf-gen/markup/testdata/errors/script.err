@@ -1,0 +1,12 @@
+script.html:3:3: error: no JavaScript: behaviour is code in your app; name a handler with on:click="save"
+  <script>alert(1)</script>
+  ^
+script.html:4:11: error: script attributes are not run; write on:click="save"
+  <button onclick="go()">Go</button>
+          ^
+script.html:4:3: error: <button> needs an id, a binding or an on:click handler to name it
+  <button onclick="go()">Go</button>
+  ^
+script.html:5:3: error: <video> needs a media host, which LCGF does not provide
+  <video src="a.mp4"></video>
+  ^

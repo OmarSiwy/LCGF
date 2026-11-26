@@ -1,0 +1,13 @@
+<!doctype html>
+<html lcgf-page="mixer">
+<head><title>Mixer</title></head>
+<body>
+  <main style="padding: 8px; gap: 4px">
+    <h1>{title}</h1>
+    <label><input type="checkbox" id="mute" bind:checked="muted" on:change="mute_changed"> Mute</label>
+    <input type="range" id="volume" bind:value="volume" min="0" max="1" value="0.5" aria-label="Volume" on:change="volume_changed">
+    <span>Gain {volume:.1}</span>
+    <progress value="{level}"></progress>
+  </main>
+</body>
+</html>
