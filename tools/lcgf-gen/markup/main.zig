@@ -3,6 +3,8 @@
 //!   lcgf-gen page.html [--css extra.css]... --lang zig -o OUT [--depfile OUT.d]
 //!            [--check VENDORED] [--explain] [--no-warnings]
 //!   lcgf-gen page.html --lang zon|cpp|rust|words ...   (the page in the seam's subset, to_zon.zig)
+//!   lcgf-gen page.html --static --lang zon|cpp|rust|c|zig|words ...   (a static UI: rows,
+//!            columns, labels, checkboxes and sliders whose structure never changes)
 //!   lcgf-gen --mappings        (the manifest as TSV)
 //!
 //! On any error nothing is written: the messages go to stderr in GNU format and the exit code
@@ -21,8 +23,9 @@ const emit_zig = @import("emit_zig.zig");
 const to_zon = @import("to_zon.zig");
 
 /// lcgf-gen's table emitters (tools/lcgf-gen/main.zig): `.zon` text in, the `lang` output out,
-/// or null after logging the error.
-pub const Tables = *const fn (arena: std.mem.Allocator, lang: []const u8, zon: [:0]const u8, path: []const u8) ?[]const u8;
+/// or null after logging the error. `static` makes a static UI's code (`--static`).
+pub const Emit = *const fn (arena: std.mem.Allocator, lang: []const u8, zon: [:0]const u8, path: []const u8) ?[]const u8;
+pub const Tables = struct { tables: Emit, static: Emit };
 
 const ua_css = @embedFile("ua.css");
 
@@ -36,6 +39,8 @@ pub const Options = struct {
     mappings: bool = false,
     explain: bool = false,
     warnings: bool = true,
+    /// `--static`: the page as a static UI (lcgf-gen's `--static` over its `.zon`).
+    static: bool = false,
     frontend: Frontend = .auto,
     /// `--runtime-vars=t-`: custom properties `--t-*` are run-time theme tokens.
     runtime_vars: []const u8 = "",
@@ -71,7 +76,7 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, tabl
         } else if (std.mem.eql(u8, a, "--frontend")) {
             const f = value(args, &i) orelse return usage();
             o.frontend = std.meta.stringToEnum(Frontend, f) orelse .zon;
-            if (o.frontend == .zon) {
+            if (o.frontend == .zon or o.frontend == .static_zon) {
                 std.log.err("--frontend {s}: the Zig emitter has the spec and runtime frontends (--lang cpp|rust take the seam's tables)", .{f});
                 return 2;
             }
@@ -79,6 +84,8 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, tabl
             o.runtime_vars = a["--runtime-vars=".len..];
         } else if (std.mem.eql(u8, a, "--mappings")) {
             o.mappings = true;
+        } else if (std.mem.eql(u8, a, "--static")) {
+            o.static = true;
         } else if (std.mem.eql(u8, a, "--explain")) {
             o.explain = true;
         } else if (std.mem.eql(u8, a, "--no-warnings")) {
@@ -94,19 +101,23 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, tabl
         try stdout.interface.flush();
         return 0;
     }
-    const zig = std.mem.eql(u8, o.lang, "zig");
-    if (!zig and std.meta.stringToEnum(enum { zon, cpp, rust, words }, o.lang) == null) return usage();
+    // `--static --lang zig|c` is the static UI's frame, not the page's Zig module.
+    const zig = std.mem.eql(u8, o.lang, "zig") and !o.static;
+    if (!zig and std.meta.stringToEnum(enum { zon, cpp, rust, words, c, zig }, o.lang) == null) return usage();
+    if (!o.static and std.mem.eql(u8, o.lang, "c")) return usage();
     const path = o.html orelse return usage();
     var ds: diag.Diags = .{ .arena = arena, .warnings = o.warnings };
     var deps: std.ArrayList([]const u8) = .empty;
-    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain, if (zig) o.frontend else .zon, o.runtime_vars);
+    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain, if (zig) o.frontend else if (o.static) .static_zon else .zon, o.runtime_vars);
     var stderr_buf: [4096]u8 = undefined;
     var stderr = std.Io.File.stderr().writer(io, &stderr_buf);
     try ds.render(&stderr.interface);
     try stderr.interface.flush();
     var text = result orelse return 1;
     // C++, Rust and the raw words: the ZON through the table emitters, as a `.zon` input is.
-    if (!zig and !std.mem.eql(u8, o.lang, "zon")) text = tables(arena, o.lang, try arena.dupeSentinel(u8, text, 0), path) orelse return 1;
+    if (o.static) {
+        text = tables.static(arena, o.lang, try arena.dupeSentinel(u8, text, 0), path) orelse return 1;
+    } else if (!zig and !std.mem.eql(u8, o.lang, "zon")) text = tables.tables(arena, o.lang, try arena.dupeSentinel(u8, text, 0), path) orelse return 1;
     if (o.check) |vendored| {
         const have = std.Io.Dir.cwd().readFileAlloc(io, vendored, arena, .limited(16 << 20)) catch "";
         if (!std.mem.eql(u8, have, text)) {
@@ -139,7 +150,7 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, tabl
 }
 
 fn usage() u8 {
-    std.log.err("usage: lcgf-gen page.html [--css extra.css]... --lang zig|zon|cpp|rust|words -o OUT [--depfile OUT.d] [--check VENDORED]  |  lcgf-gen --mappings", .{});
+    std.log.err("usage: lcgf-gen page.html [--css extra.css]... --lang zig|zon|cpp|rust|words [--static] -o OUT [--depfile OUT.d] [--check VENDORED]  |  lcgf-gen --mappings", .{});
     return 2;
 }
 
@@ -282,7 +293,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     }
     const runtime = switch (frontend) {
         .runtime => true,
-        .spec, .zon => false,
+        .spec, .zon, .static_zon => false,
         .auto => l.page.runtime,
     };
     if (runtime) l.checkRuntime();
@@ -290,7 +301,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     loadAssets(io, arena, ds, deps, &l.page);
     if (explain) ds.note(.{ .file = file, .off = 0 }, "{s}", .{if (runtime) "runtime frontend: the page is a build(ui, frame) of Frame and widget calls" else "spec frontend: every construct on this page lowers to a comptime Spec"});
     if (ds.errors > 0) return null;
-    if (frontend == .zon) return to_zon.text(arena, to_zon.lower(arena, ds, &l.page) orelse return null);
+    if (frontend == .zon or frontend == .static_zon) return to_zon.text(arena, to_zon.lower(arena, ds, &l.page, frontend == .static_zon) orelse return null);
     var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page, .runtime = runtime };
     // The output is formatted as `zig fmt` would, so it reads like code written by hand.
     const raw = arena.dupeSentinel(u8, e.file(path), 0) catch @panic("out of memory");
@@ -421,8 +432,9 @@ fn svgSize(bytes: []const u8) ?[2]f32 {
 }
 
 /// Which lowering `--frontend` asks for; `auto` takes the page's `lcgf-frontend`, else spec.
-/// `zon` is the seam's spec language (`--lang zon|cpp|rust|words`).
-pub const Frontend = enum { auto, spec, runtime, zon };
+/// `zon` is the seam's spec language (`--lang zon|cpp|rust|words`); `static_zon` is that for a
+/// static UI (`--static`), whose checkboxes carry no caption.
+pub const Frontend = enum { auto, spec, runtime, zon, static_zon };
 
 fn dash(comptime f: []const u8) []const u8 {
     comptime {

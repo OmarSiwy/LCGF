@@ -4,7 +4,7 @@
 //! bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's comptime
 //! pipeline's.
 //!
-//!   lcgf-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench> [partial]
+//!   lcgf-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter|volume> <frames> <out.bin|--bench> [partial]
 //!
 //! Field k of frame f's state is what src/abi/ct.zig's `stateFor` makes (see `text`, `flag`,
 //! `count`, `pick` and `value`).
@@ -21,6 +21,11 @@ lcgf::include_ui!("static/feed.zon", static);
 lcgf::include_ui!("static/controls.zon", static);
 lcgf::include_ui!("static/palette.zon", static);
 lcgf::include_ui!("static/meter.zon", static);
+// A page in the static subset, from its HTML (lcgf-gen page.html --static).
+lcgf::include_ui!(
+    "../../../tools/lcgf-gen/markup/testdata/seam/volume.html",
+    static
+);
 
 const TEXTS: [&str; 7] = [
     "",
@@ -348,6 +353,12 @@ fn main() {
         "controls" => static_ui!(controls, "controls", frames, out, |s, f| {
             s.title = text(f, 0);
             s.muted = flag(f, 1);
+            s.volume = value(f, 2);
+            s.pan = value(f, 3);
+        }),
+        "volume" => static_ui!(volume, "volume", frames, out, |s, f| {
+            s.muted = flag(f, 0);
+            s.title = text(f, 1);
             s.volume = value(f, 2);
             s.pan = value(f, 3);
         }),

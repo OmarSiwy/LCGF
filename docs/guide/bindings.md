@@ -217,7 +217,8 @@ argument moves the label, so `relayout<Field::level>()` covers it.
 
 A UI whose rows are all known from its spec (rows, columns, labels, checkboxes and sliders,
 and the regions `when`, `list`, `choice` and `virtual_list`, whose rows are reserved; no
-buttons or custom draws) can use Zig's comptime pipeline instead of the widgets' tables:
+buttons or custom draws; or an HTML page in that subset, docs/guide/markup.md) can use Zig's
+comptime pipeline instead of the widgets' tables:
 `ct_layout` folds every subtree whose layout does not depend on the viewport, `ct_paint`
 paints from one quad template per node, and `ct_events` hit-tests the widgets.
 

@@ -244,6 +244,26 @@ The errors cover headings, landmarks such as `<main>`, other form controls, `lcg
 `font-size` on text), CSS on a button, checkbox or text node, margins, theme overrides
 (`--lcgf-*`) and run-time tokens.
 
+A page in the static subset (rows, columns, labels and text, checkboxes without a caption and
+0-to-1 sliders sized by their CSS `width`, `height` and `background`, and `lcgf-if` and
+`lcgf-each` regions; no buttons) also
+builds as a static UI, the comptime pipeline's tables (docs/guide/bindings.md, "Static UIs"):
+
+```sh
+lcgf-gen ui/volume.html --static --lang zon        # the lowered static spec, for inspection
+```
+
+```cmake
+lcgf_add_ui(app ui/volume.html STATIC)
+```
+
+```rust
+lcgf::include_ui!("ui/volume.html", static);       // build.rs: lcgf_build::static_ui("ui/volume.html")
+```
+
+A checkbox caption there is an error: put a `<span>` beside the input. The gate runs
+tools/lcgf-gen/markup/testdata/seam/volume.html this way in C++ and Rust against its Zig twin.
+
 C++ and Rust have no handler type. The app polls the frame's events
 (`ui.events().clicked(counter::Widget::inc)`, `frame.events.clicked(counter::Widget::Inc)`) and
 writes state through the generated setters. `bindings/check/run.sh` replays the example page in

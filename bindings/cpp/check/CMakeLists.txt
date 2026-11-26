@@ -79,6 +79,8 @@ add_executable(lcgf-cpp-ct-check ct_check.cpp)
 foreach(_ui mixer card settings badge dash todo feed controls palette meter)
   lcgf_add_ui(lcgf-cpp-ct-check ${LCGF_SPECS}/static/${_ui}.zon STATIC)
 endforeach()
+# A page in the static subset, from its HTML (lcgf-gen page.html --static).
+lcgf_add_ui(lcgf-cpp-ct-check ${LCGF_SPECS}/../../../tools/lcgf-gen/markup/testdata/seam/volume.html STATIC)
 
 # The runtime front end from C++: bench/scenes' scenes, compared with Zig's frames.
 add_executable(lcgf-cpp-rt-check rt_check.cpp)

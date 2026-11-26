@@ -16,6 +16,8 @@ const Lower = struct {
     ds: *diag.Diags,
     page: *const ir.Page,
     fields: std.ArrayList(zon.ZField) = .empty,
+    /// A static UI (`--static`): a checkbox shows no caption of its own.
+    static: bool = false,
 
     const not_in_tables = "is not in the seam's widget tables (C++/Rust); use the Zig frontend";
 
@@ -55,6 +57,12 @@ const Lower = struct {
         if (std.meta.eql(z.style(&th, s.dir), s)) return z;
         _ = l.refuse(i, "a style property (transform, offset, scroll, per-corner radii, cursor, a texture)", .{});
         return null;
+    }
+
+    /// A static UI's checkbox or slider: one box, its size and fill (spec.zig's), the rest of
+    /// the input's look being the widgets' own.
+    fn inputStyle(l: *Lower, i: u32, s: types.Style) ?zon.ZStyle {
+        return l.style(i, .{ .size = s.size, .fill = s.fill });
     }
 
     /// Node `i`'s children, in order. ponytail: a scan of the rows after it per node, fine for
@@ -117,10 +125,12 @@ const Lower = struct {
             else => {},
         }
         switch (n.kind) {
-            .label, .text, .button, .checkbox, .slider => if (!std.meta.eql(n.style, n.base_style))
+            // A static UI's checkbox and slider are sized by their style.
+            .checkbox, .slider => if (!l.static and !std.meta.eql(n.style, n.base_style))
+                return l.refuse(i, "CSS on an <input>", .{}),
+            .label, .text, .button => if (!std.meta.eql(n.style, n.base_style))
                 return l.refuse(i, "CSS on a <{s}>", .{switch (n.kind) {
                     .button => "button",
-                    .checkbox, .slider => "input",
                     else => "span",
                 }}),
             else => {},
@@ -137,9 +147,14 @@ const Lower = struct {
             },
             .text => .{ .text = .{ .format = n.text, .args = n.args } },
             .button => .{ .button = .{ .id = n.id, .text = l.captionField(n) orelse return null } },
-            .checkbox => .{ .checkbox = .{ .id = n.id, .bind = n.bind, .text = l.captionField(n) orelse return null } },
+            .checkbox => {
+                if (!l.static) return .{ .checkbox = .{ .id = n.id, .bind = n.bind, .text = l.captionField(n) orelse return null } };
+                if (n.text_kind != .none and !(n.text_kind == .literal and n.text.len == 0)) return l.refuse(i, "a caption on a static UI's checkbox (put a <span> beside the input)", .{});
+                return .{ .checkbox = .{ .id = n.id, .bind = n.bind, .style = l.inputStyle(i, n.style) orelse return null } };
+            },
             .slider => {
                 if (n.range[0] != 0 or n.range[1] != 1) return l.refuse(i, "a range other than min=0 max=1", .{});
+                if (l.static) return .{ .slider = .{ .id = n.id, .bind = n.bind, .style = l.inputStyle(i, n.style) orelse return null } };
                 return .{ .slider = .{ .id = n.id, .bind = n.bind } };
             },
             .when => {
@@ -177,9 +192,9 @@ fn escape(arena: std.mem.Allocator, s: []const u8) []const u8 {
 }
 
 /// The page as a `ZSpec`, or null after reporting what the seam cannot carry.
-pub fn lower(arena: std.mem.Allocator, ds: *diag.Diags, page: *const ir.Page) ?zon.ZSpec {
+pub fn lower(arena: std.mem.Allocator, ds: *diag.Diags, page: *const ir.Page, static: bool) ?zon.ZSpec {
     const errors = ds.errors;
-    var l: Lower = .{ .arena = arena, .ds = ds, .page = page };
+    var l: Lower = .{ .arena = arena, .ds = ds, .page = page, .static = static };
     const html = page.nodes.items(.loc)[0];
     if (!std.meta.eql(page.theme, ir.Theme{})) ds.err(html, "a theme override (--lcgf-* on :root) " ++ Lower.not_in_tables, .{});
     for (page.fields.items) |f| {

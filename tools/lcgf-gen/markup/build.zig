@@ -182,6 +182,18 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
         run.expectStdOutEqual(b.root.root_dir.handle.readFileAlloc(io, b.pathJoin(&.{ b.root.sub_path, dir ++ "/seam/counter.zon" }), b.allocator, .limited(1 << 20)) catch @panic("cannot read " ++ dir ++ "/seam/counter.zon"));
         step.dependOn(&run.step);
     }
+    // A page in the static subset as a static UI: exactly testdata/seam/volume.zon, which the
+    // static reader accepted (`--static` checks it before echoing it).
+    {
+        const run = b.addRunArtifact(gen);
+        run.setCwd(b.path("."));
+        run.addArgs(&.{ dir ++ "/seam/volume.html", "--static", "--lang", "zon" });
+        run.addFileInput(b.path(dir ++ "/seam/volume.html"));
+        run.addFileInput(b.path(dir ++ "/seam/volume.zon"));
+        const io = b.graph.io;
+        run.expectStdOutEqual(b.root.root_dir.handle.readFileAlloc(io, b.pathJoin(&.{ b.root.sub_path, dir ++ "/seam/volume.zon" }), b.allocator, .limited(1 << 20)) catch @panic("cannot read " ++ dir ++ "/seam/volume.zon"));
+        step.dependOn(&run.step);
+    }
     // Diagnostics: each testdata/errors/<case>.html must fail with exactly <case>.err; a
     // `zon-*` case through the seam's lowering (`--lang zon`).
     {

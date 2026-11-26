@@ -49,10 +49,17 @@ pub fn static_ui(spec: &str) {
     match zig(&lanes) {
         Some(zig) => {
             let src = out.join(format!("{name}.lcgf.zig"));
-            run(Command::new(&lcgf_gen)
-                .arg(&spec_path)
+            let mut c = Command::new(&lcgf_gen);
+            c.arg(&spec_path)
                 .args(["--static", "--lang", "zig", "-o"])
-                .arg(&src));
+                .arg(&src);
+            // An HTML page: its stylesheets rebuild the frame too.
+            let dep = out.join(format!("{name}.lcgf.d"));
+            if spec.ends_with(".html") {
+                c.arg("--depfile").arg(&dep);
+            }
+            run(&mut c);
+            track(&dep);
             let share = Path::new(&prefix).join("share/lcgf/zig");
             let cpu = env::var("LCGF_ZIG_CPU").unwrap_or_else(|_| target_cpu());
             let mut c = Command::new(zig);
@@ -157,6 +164,19 @@ fn target_cpu() -> String {
         }
     }
     cpu
+}
+
+/// An HTML page's stylesheets, from lcgf-gen's depfile (`out: dep dep ...`, spaces escaped):
+/// editing one rebuilds the frame. None for a `.zon` spec.
+fn track(depfile: &Path) {
+    let deps = std::fs::read_to_string(depfile).unwrap_or_default();
+    let list = deps
+        .split_once(": ")
+        .map_or("", |d| d.1)
+        .replace("\\ ", "\0");
+    for d in list.split_whitespace() {
+        println!("cargo::rerun-if-changed={}", d.replace('\0', " "));
+    }
 }
 
 fn run(c: &mut Command) {

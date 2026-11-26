@@ -4,7 +4,7 @@
 //! Rust (`lcgf::StaticUi`) run the same frames over the tables lcgf-gen --static made from the
 //! examples' `.zon` (src/abi/testdata/static/); the dumps must be byte-identical.
 //!
-//!   lcgf-ct-dump <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench>
+//!   lcgf-ct-dump <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter|volume> <frames> <out.bin|--bench>
 //!   lcgf-ct-dump <mixer|dash|todo|palette|meter> <frames> <out.bin> partial
 //!
 //! `partial` replays ct_layout's `relayout` and ct_paint's `Patches`: frame f is a full frame
@@ -24,6 +24,20 @@
 const std = @import("std");
 const lcgf = @import("lcgf");
 const ct = lcgf.abi_ct;
+
+/// tools/lcgf-gen/markup/testdata/seam/volume.html, the static HTML page, as the Zig spec it
+/// lowers to: C++ and Rust build it from the HTML (lcgf_add_ui STATIC, include_ui! static).
+const volume: lcgf.ct_examples.Example = blk: {
+    const s = lcgf.spec;
+    const T = lcgf.types;
+    const Volume = struct { muted: bool = false, title: []const u8 = "", volume: f32 = 0.5, pan: f32 = 0 };
+    const control: T.Color = .rgb(90, 90, 90);
+    break :blk .{ .name = "volume", .State = Volume, .spec = s.col(.{ .size = .{ .fill, .fill }, .pad = @splat(4), .gap = 4, .fill = .rgb(30, 31, 36) }, .{
+        s.row(.{ .gap = 8 }, .{ s.Spec{ .kind = .checkbox, .id = "mute", .bind = "muted", .style = .{ .size = .{ .px(16), .px(16) }, .fill = .rgb(200, 200, 200) } }, s.label(.title) }),
+        s.Spec{ .kind = .slider, .id = "volume", .bind = "volume", .style = .{ .size = .{ .pct(1), .px(12) }, .fill = control } },
+        s.Spec{ .kind = .slider, .id = "pan", .bind = "pan", .style = .{ .size = .{ .px(100), .px(10) }, .fill = control } },
+    }) };
+};
 
 pub const texts = [_][]const u8{ "", "Mixer", "Battery 82%", "x", "a much longer label than its box", "Settings", "0123456789" };
 
@@ -75,7 +89,7 @@ pub fn main(init: std.process.Init) !void {
     const partial = if (a4) |a| std.mem.eql(u8, a, "partial") else false;
     if (a4) |a| g_mode = a;
     if (args.next()) |r| g_reps = try std.fmt.parseInt(u32, r, 10);
-    inline for (ct.static_examples) |e| if (std.mem.eql(u8, e.name, name)) {
+    inline for (ct.static_examples ++ [_]lcgf.ct_examples.Example{volume}) |e| if (std.mem.eql(u8, e.name, name)) {
         if (partial) return runPartial(e, init.io, arena, frames, out_path);
         return run(e, init.io, arena, frames, out_path);
     };

@@ -4,7 +4,7 @@
 // frame, specialized per UI by lcgf_add_ui), over the frames of bindings/check/ct_dump.zig,
 // dumped in its format. The dump must equal Zig's comptime pipeline's.
 //
-//   lcgf-cpp-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench> [partial]
+//   lcgf-cpp-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter|volume> <frames> <out.bin|--bench> [partial]
 //
 // Field k of frame f's state is what src/abi/ct.zig's `stateFor` makes: a string
 // `texts[(f + 3k) mod 7]`, a bool `(f + k) mod 3 != 0`, a count small or large on alternate
@@ -25,6 +25,7 @@
 #include "card.lcgf.hpp"
 #include "palette.lcgf.hpp"
 #include "controls.lcgf.hpp"
+#include "volume.lcgf.hpp"
 #include "dash.lcgf.hpp"
 #include "feed.lcgf.hpp"
 #include "meter.lcgf.hpp"
@@ -271,6 +272,13 @@ int main(int argc, char** argv) {
         return run_ui<controls::Ui>("controls", frames, out, [](controls::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.muted = flag(f, 1);
+            s.volume = value(f, 2);
+            s.pan = value(f, 3);
+        });
+    if (ui == "volume")
+        return run_ui<volume::Ui>("volume", frames, out, [](volume::State& s, std::uint32_t f) {
+            s.muted = flag(f, 0);
+            s.title = text(f, 1);
             s.volume = value(f, 2);
             s.pan = value(f, 3);
         });

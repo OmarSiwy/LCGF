@@ -44,7 +44,8 @@ pub fn ui(input: TokenStream) -> TokenStream {
 
 /// `include_ui!("toolbar.zon")`: a spec from a file, relative to `$LCGF_SPECS` when set, else
 /// to the crate's manifest directory. `include_ui!("ui/page.html")` takes an HTML page and its
-/// CSS instead (docs/guide/markup.md, "C++ and Rust"). `include_ui!("card.zon", static)` makes a static UI:
+/// CSS instead (docs/guide/markup.md, "C++ and Rust"). `include_ui!("card.zon", static)` (or a
+/// page in the static subset, `include_ui!("ui/card.html", static)`) makes a static UI:
 /// the comptime pipeline's tables (`lcgf::StaticUi`: folded layout, paint templates) for a
 /// spec whose structure never changes (`lcgf-gen --static`); its frame, `lcgf_ui_<name>_frame`,
 /// comes from `lcgf_build::static_ui` in the crate's build script.
@@ -72,12 +73,7 @@ pub fn include_ui(input: TokenStream) -> TokenStream {
         .unwrap_or_default();
     let full = PathBuf::from(base).join(path);
     if path.ends_with(".html") {
-        if static_ {
-            return compile_error(
-                "include_ui!: an HTML page makes the widgets' tables; `static` takes a .zon",
-            );
-        }
-        return include_html(&full);
+        return include_html(&full, static_);
     }
     let zon = match std::fs::read_to_string(&full) {
         Ok(z) => z,
@@ -267,8 +263,9 @@ pub fn include_shader(input: TokenStream) -> TokenStream {
 
 /// `include_ui!("page.html")`: the page and its CSS lowered by lcgf-gen to the `.zon` the seam
 /// reads, then generated as that `.zon` would be. lcgf-gen's errors (GNU format, at the HTML or
-/// CSS line) become the `compile_error!`; every file of its depfile is tracked.
-fn include_html(html: &std::path::Path) -> TokenStream {
+/// CSS line) become the `compile_error!`; every file of its depfile is tracked. `static_`: a
+/// page in the static subset, as a static UI (`lcgf-gen page.html --static`).
+fn include_html(html: &std::path::Path, static_: bool) -> TokenStream {
     let Ok(gen_path) = lcgf_gen() else {
         return compile_error(
             "set LCGF_GEN or LCGF_PREFIX (an installed `zig build abi`) to find lcgf-gen",
@@ -281,8 +278,12 @@ fn include_html(html: &std::path::Path) -> TokenStream {
         dir.join(format!("{stem}.zon")),
         dir.join(format!("{stem}.d")),
     );
-    let out = Command::new(&gen_path)
-        .arg(html)
+    let mut cmd = Command::new(&gen_path);
+    cmd.arg(html);
+    if static_ {
+        cmd.arg("--static");
+    }
+    let out = cmd
         .args(["--lang", "zon", "-o"])
         .arg(&zon_path)
         .arg("--depfile")
@@ -305,7 +306,7 @@ fn include_html(html: &std::path::Path) -> TokenStream {
         .and_then(|s| s.split('"').next())
         .unwrap_or("ui")
         .to_string();
-    let mut out = generate(&name, &zon);
+    let mut out = generate_as(&name, &zon, static_);
     // The depfile is `out: dep dep ...`, spaces in a path escaped.
     let list = deps
         .split_once(": ")

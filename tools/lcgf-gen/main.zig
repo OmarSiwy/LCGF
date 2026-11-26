@@ -29,6 +29,7 @@
 //!
 //!   lcgf-gen <page.html> [--css <extra.css>]... --lang zig -o <page_ui.zig> [--depfile <d>]
 //!   lcgf-gen <page.html> --lang zon|cpp|rust|words [-o <out>] [--depfile <d>]   (seam subset)
+//!   lcgf-gen <page.html> --static --lang zon|cpp|rust|c|zig|words [-o <out>] [--depfile <d>]   (static subset)
 //!   lcgf-gen --mappings    (the HTML/CSS mapping manifest as TSV)
 //!
 
@@ -53,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
         _ = all.next();
         var list: std.ArrayList([]const u8) = .empty;
         while (all.next()) |a| try list.append(arena, a);
-        if (markup.wants(list.items)) std.process.exit(try markup.main(io, arena, list.items, tablesOf));
+        if (markup.wants(list.items)) std.process.exit(try markup.main(io, arena, list.items, .{ .tables = tablesOf, .static = staticOf }));
     }
     var args = try init.minimal.args.iterateAllocator(arena);
     _ = args.next();
@@ -167,24 +168,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (static) {
         const path = input orelse return usage();
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
-        const src = try arena.dupeSentinel(u8, bytes, 0);
-        const x = zon.readStatic(init.gpa, arena, src, path) catch |e| switch (e) {
-            error.ParseZon, error.UnknownField, error.FieldWithoutType, error.NotStatic, error.BadField => std.process.exit(1),
-            else => return e,
-        };
-        const words = zon.staticTables(arena, &x) catch |e| {
-            std.log.err("{s}: {s}", .{ path, @errorName(e) });
-            std.process.exit(1);
-        };
-        const g: StaticGen = .{ .arena = arena, .out = &out, .x = &x, .words = words, .bytes = ct.Ui.bytes(words) catch unreachable, .source = path };
-        switch (lang) {
-            .cpp => try g.cpp(),
-            .rust => try g.rust(),
-            .c => try g.cSource(),
-            .zig => try g.zigSource(),
-            .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
-            .zon => try out.appendSlice(arena, bytes),
-        }
+        try out.appendSlice(arena, staticOf(arena, @tagName(lang), try arena.dupeSentinel(u8, bytes, 0), path) orelse std.process.exit(1));
     } else {
         const path = input orelse return usage();
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
@@ -199,6 +183,37 @@ pub fn main(init: std.process.Init) !void {
         try w.interface.writeAll(out.items);
         try w.interface.flush();
     }
+}
+
+/// A static `.zon` spec (`src`, read from `path`) as `lang`'s static-UI code (`StaticGen`), or
+/// null after logging what is wrong. The markup front end calls it for `page.html --static`.
+fn staticOf(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) ?[]const u8 {
+    return staticOrError(arena, lang_name, src, path) catch |e| {
+        std.log.err("{s}: {s}", .{ path, @errorName(e) });
+        return null;
+    };
+}
+
+fn staticOrError(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) !?[]const u8 {
+    const x = zon.readStatic(arena, arena, src, path) catch |e| switch (e) {
+        error.ParseZon, error.UnknownField, error.FieldWithoutType, error.NotStatic, error.BadField => return null,
+        else => return e,
+    };
+    const words = zon.staticTables(arena, &x) catch |e| {
+        std.log.err("{s}: {s}", .{ path, @errorName(e) });
+        return null;
+    };
+    var out: std.ArrayList(u8) = .empty;
+    const g: StaticGen = .{ .arena = arena, .out = &out, .x = &x, .words = words, .bytes = ct.Ui.bytes(words) catch unreachable, .source = path };
+    switch (std.meta.stringToEnum(Lang, lang_name).?) {
+        .cpp => try g.cpp(),
+        .rust => try g.rust(),
+        .c => try g.cSource(),
+        .zig => try g.zigSource(),
+        .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
+        .zon => try out.appendSlice(arena, src),
+    }
+    return out.items;
 }
 
 /// A `.zon` spec (`src`, read from `path`) as `lang`'s widget tables: `cpp`, `rust`, `words`, or

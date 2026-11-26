@@ -73,19 +73,17 @@ endif()
 # tables (lcgf::StaticUi: folded layout, paint templates) for a spec whose structure never
 # changes, and builds its frame (above); without it the widgets' tables (lcgf::Ui: events,
 # focus, springs).
-# lcgf_add_ui(target page.html): an HTML page and its CSS, lowered to the same tables
-# (docs/guide/markup.md, "C++ and Rust"). lcgf-gen writes a depfile, so editing the page or a
-# stylesheet it links regenerates the header; its errors name the HTML or CSS line.
+# lcgf_add_ui(target page.html [STATIC]): an HTML page and its CSS, lowered to the same tables
+# (docs/guide/markup.md, "C++ and Rust"); STATIC as for a .zon, for a page in the static subset.
+# lcgf-gen writes a depfile, so editing the page or a stylesheet it links regenerates the
+# header; its errors name the HTML or CSS line.
 function(lcgf_add_ui target spec)
   cmake_parse_arguments(_ui "STATIC" "" "" ${ARGN})
   get_filename_component(_spec "${spec}" ABSOLUTE)
   get_filename_component(_name "${spec}" NAME_WE)
   set(_dir "${CMAKE_CURRENT_BINARY_DIR}/lcgf_gen")
   set(_out "${_dir}/${_name}.lcgf.hpp")
-  if(_spec MATCHES "\\.html$")
-    if(_ui_STATIC)
-      message(FATAL_ERROR "lcgf_add_ui: an HTML page makes the widgets' tables; STATIC takes a .zon")
-    endif()
+  if(_spec MATCHES "\\.html$" AND NOT _ui_STATIC)
     file(MAKE_DIRECTORY "${_dir}")
     add_custom_command(OUTPUT "${_out}"
       COMMAND "${LCGF_GEN}" "${_spec}" --lang cpp -o "${_out}" --depfile "${_out}.d"
@@ -106,10 +104,18 @@ function(lcgf_add_ui target spec)
     set(_out "${_dir}/${_name}.lcgf.hpp")
   endif()
   file(MAKE_DIRECTORY "${_dir}")
+  # A static HTML page's stylesheets: lcgf-gen names them in a depfile.
+  set(_dep)
+  set(_depfile)
+  if(_spec MATCHES "\\.html$")
+    set(_dep --depfile "${_out}.d")
+    set(_depfile DEPFILE "${_out}.d")
+  endif()
   add_custom_command(OUTPUT "${_out}"
-    COMMAND "${LCGF_GEN}" "${_spec}" ${_static} --lang cpp -o "${_out}"
+    COMMAND "${LCGF_GEN}" "${_spec}" ${_static} --lang cpp -o "${_out}" ${_dep}
     DEPENDS "${_spec}" "${LCGF_GEN}"
-    COMMENT "lcgf-gen ${_name}.zon ${_static}"
+    ${_depfile}
+    COMMENT "lcgf-gen ${_name} ${_static}"
     VERBATIM)
   target_sources(${target} PRIVATE "${_out}")
   if(_ui_STATIC)
@@ -123,7 +129,8 @@ function(lcgf_add_ui target spec)
           --dep lcgf "-Mroot=${_zig}" --dep build_options --dep unicode_tables "-Mlcgf=${_share}/zig/src/lcgf.zig"
           "-Mbuild_options=${_share}/zig/options_l${LCGF_LANES}.zig" "-Municode_tables=${_share}/zig/unicode_tables.zig"
           --name "${_name}_frame" "-femit-bin=${_obj}"
-        DEPENDS "${_spec}" "${LCGF_GEN}"
+        # The header's depfile covers a page's stylesheets.
+        DEPENDS "${_spec}" "${_out}" "${LCGF_GEN}"
         COMMENT "zig build-obj ${_name}'s frame"
         VERBATIM)
       target_sources(${target} PRIVATE "${_obj}")
@@ -132,8 +139,8 @@ function(lcgf_add_ui target spec)
       set(_c "${_dir}/${_name}.lcgf.c")
       add_custom_command(OUTPUT "${_c}"
         COMMAND "${LCGF_GEN}" "${_spec}" --static --lang c -o "${_c}"
-        DEPENDS "${_spec}" "${LCGF_GEN}"
-        COMMENT "lcgf-gen ${_name}.zon --static --lang c"
+        DEPENDS "${_spec}" "${_out}" "${LCGF_GEN}"
+        COMMENT "lcgf-gen ${_name} --static --lang c"
         VERBATIM)
       target_sources(${target} PRIVATE "${_c}")
       set_source_files_properties("${_c}" PROPERTIES INCLUDE_DIRECTORIES "${_share}")

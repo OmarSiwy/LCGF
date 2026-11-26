@@ -211,7 +211,8 @@ for cc in clang gcc; do
             cargo build --release --quiet --manifest-path "$root/bindings/rust/Cargo.toml" --target-dir "$work/rust-$cc" -p lcgf-check --bin lcgf-ct-check
     fi
 done
-for ui in mixer card settings badge dash todo feed controls palette meter; do
+# volume is an HTML page in the static subset (lcgf-gen page.html --static), against a Zig twin.
+for ui in mixer card settings badge dash todo feed controls palette meter volume; do
     "$prefix/bin/lcgf-ct-dump" "$ui" 240 "$work/ct-$ui.zig.bin"
     for how in cpp cpp-clang cpp-gcc; do
         "$work/$how/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.$how.bin"
