@@ -29,6 +29,49 @@ pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
     return canvas(id, style, 0);
 }
 
+/// A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it
+/// takes the size its owner measured last (`setFit`), so the comptime layout, which runs before
+/// the content exists, gives it the room the content took one frame earlier. Zero until the
+/// first measure. The owner builds the content in a viewport of its own and reports its size.
+pub fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec {
+    var out = region(id, style);
+    out.widget = FitRegion(@tagName(id));
+    return out;
+}
+
+/// The `Spec.widget` of a `fitRegion` named `name`.
+pub fn FitRegion(comptime name: [:0]const u8) type {
+    return struct {
+        /// The region's own custom command; no others.
+        pub const custom_slots = 0;
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            next.* += 1;
+            const tb = &ui.tables;
+            const kept = ui.keep(@This());
+            var st = n.style;
+            inline for (0..2) |a| {
+                if (comptime n.style.size[a].kind == .fit) st.size[a] = .px(kept[a]);
+            }
+            const id = @import("../core/types.zig").Id.hash(name);
+            const i = tb.t.push(parent, id, &st);
+            tb.t.c.custom[i] = tb.cu.push(i, id, n.custom orelse 0);
+            tb.t.seal(i);
+        }
+    };
+}
+
+/// Records the content size `size` of the `fitRegion` named `id` in comptime UI `ui`, for its
+/// next frame. True when it changed, so the caller asks for another frame.
+pub fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool {
+    const kept = ui.keep(FitRegion(@tagName(id)));
+    const changed = kept[0] != size[0] or kept[1] != size[1];
+    kept[0] = size[0];
+    kept[1] = size[1];
+    return changed;
+}
+
 /// A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
 pub fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec {
     var out = spec_zig.col(style, .{});

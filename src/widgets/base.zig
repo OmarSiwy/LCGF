@@ -1509,6 +1509,29 @@ test "multiple host draw markers keep their ids, clip and paint order" {
     }
 }
 
+test "fitRegion: the comptime layout gives a region the size its owner last measured" {
+    const interop = @import("../comptime/interop.zig");
+    const page = comptime spec_zig.col(.{}, .{
+        interop.fitRegion(.menu, .{ .size = .{ .fit, .px(20) } }),
+        spec_zig.label("after"),
+    });
+    const S = struct {
+        var ui: ComptimeUi(struct {}, page, .default) = .{};
+    };
+    const in: Input = .{};
+    var t = S.ui.frame(&in).tree;
+    // root, col, region, label
+    try testing.expectEqual(0, t.rect(2).x1 - t.rect(2).x0);
+    try testing.expect(interop.setFit(&S.ui, .menu, .{ 50, 30 }));
+    try testing.expect(!interop.setFit(&S.ui, .menu, .{ 50, 30 }));
+    t = S.ui.frame(&in).tree;
+    // Width from the measure; height stays the style's px.
+    try testing.expectEqual(50, t.rect(2).x1 - t.rect(2).x0);
+    try testing.expectEqual(20, t.rect(2).y1 - t.rect(2).y0);
+    try testing.expectEqual(20, t.rect(3).y0 - t.rect(2).y0);
+    try testing.expectEqual(1, S.ui.frame(&in).draw.custom_len);
+}
+
 test "ComptimeUiTokens: rows read the token table when pushed; a change lays out again" {
     const Tokens = struct { space: f32 = 4, size: f32 = 14, ink: Color = .rgb(1, 2, 3) };
     const page = comptime spec_zig.col(.{}, .{

@@ -8022,11 +8022,20 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 ### Top level
 
 - `fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region: an empty column named `id` whose content another front end builds.
+- `fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it takes the size its owner measured last (`setFit`), so the comptime layout, which runs before the content exists, gives it the room the content took one frame earlier.
+- `fn FitRegion(comptime name: [:0]const u8) type`: The `Spec.widget` of a `fitRegion` named `name`.
+- `fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool`: Records the content size `size` of the `fitRegion` named `id` in comptime UI `ui`, for its next frame.
 - `fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
 - `fn rectOf(ram: anytype, row: usize) [4]f32`: Row `row`'s rect (x0, y0, x1, y1) in a comptime layout's RAM (`Columns.Dynamic`), as f32 whatever the coordinate type.
 - `fn widgetRects(comptime E: type, ram: anytype) E.Rects`: The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's visible rect (`vis`), in the layout's own coordinates, as `Rects.fromTree` takes it from a runtime tree.
 - `fn regionInput(outer: *const Input, rect: [4]f32) Input`: The input of a front end hosted in `rect` (x0, y0, x1, y1, in `outer`'s coordinates): the rect's size as its viewport, and the pointer moved by the rect's origin.
 - `fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, region_id: u32, strings: []u8) error{ NoRegion, NoRoom }!void`: `host` with `guest` drawn in the region `region_id`: the host's custom command whose `CustomDraw.id` is `region_id` is replaced, in paint order, by all of `guest`'s commands.
+
+### `FitRegion(..)` (generic struct)
+The `Spec.widget` of a `fitRegion` named `name`.
+
+- `custom_slots = 0`: The region's own custom command; no others.
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
 ## `lcgf.abi_plan` (src/abi/plan.zig)
 
