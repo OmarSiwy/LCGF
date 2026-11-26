@@ -94,12 +94,16 @@ pub inline fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
 }
 
 fn transformRectIn(rect: [4]f32, m: [6]f32) [4]f32 {
-    if (isIdentity(m)) {
+    if (comptime small) {
+        // Early exits and `mem.eql`: smaller in flash, and size builds run no census.
+        if (std.mem.eql(f32, &m, &identity)) return rect;
+        if (!hasArea(rect) or inverse(m) == null) return empty;
+    } else if (isIdentity(m)) {
         // Kept a jump: LLVM otherwise if-converts it and computes the transform for every row.
         @branchHint(.likely);
         return rect;
     }
-    const shown = hasArea(rect) & invertible(m);
+    const shown = small or (hasArea(rect) & invertible(m));
     const xx: V4 = .{ rect[0], rect[2], rect[2], rect[0] };
     const yy: V4 = .{ rect[1], rect[1], rect[3], rect[3] };
     const x = xx * @as(V4, @splat(m[0])) + yy * @as(V4, @splat(m[2])) + @as(V4, @splat(m[4]));
