@@ -2138,57 +2138,91 @@ Typed styling as independently callable operations.
 
 ## `lcgf.canvas` (src/draw/canvas.zig)
 
-canvas: many 2D primitives in caller-owned columns, drawn under a camera.
+canvas: many 2D primitives in caller-owned columns, drawn under a camera with a palette.
 
 ### Top level
 
 - `Kind = enum(u4) { segment, rect, arc, polygon, glyph }`
-- `Cap = enum(u4) { butt, square, round }`: How a segment or an arc ends: at its end point, half its width past it, or in a half disc.
+- `Cap = enum(u2) { butt, square, round }`: How a segment or an arc ends: at its end point, half its width past it, or in a half disc.
 - `Range = extern struct { first: u32, count: u32 }`: Instances `first` to `first + count`, drawn in that order.
+- `Override = extern struct { range: Range, color: u32 }`: Instances of `range` drawn in `color` instead of their layer's (a selection, a diff tint).
+- `fn turn(q: u2) [2]f32`: cos and sin of `q` quarter turns: the turn that takes a glyph's own x axis to the screen's.
 - `fn kindOf(look: [4]u32) Kind`
-- `fn segmentDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The segment `sh` (a to b, `half` either side, its caps).
+- `fn layerOf(look: [4]u32) u8`
+- `fn layerRow(pal: *const Palette, layer: u8) Layer`: Palette row `layer`, or an invisible one past the palette.
+- `fn shown(look: [4]u32, layer: Layer) bool`: Whether instance `look` on `layer` draws at all: alive and on a visible layer.
+- `fn overrideOf(overrides: []const Override, i: u32) ?u32`: The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
+- `fn segmentDist(comptime V: type, px: V, py: V, sh: *const Shape) [2]V`: The segment `sh` (a to b, `half` either side, its caps).
+- `fn dashCover(comptime V: type, at: V, sh: *const Shape) V`: How much of a dash is on at chain distance `at` (pixels): 1 for a solid line.
 - `fn rectDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The rounded box `sh` (the shader's `rounded_box` with one radius), outline at distance 0.
 - `fn arcDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The arc `sh`: a ring sector around its centre, `half` either side of `radius`, with caps.
 - `fn polygonDist(comptime V: type, px: V, py: V, v: View, verts: []const [2]i32) V`: The polygon of `verts` under `v`, nonzero rule: distance to its nearest edge, negative inside.
+- `fn glyphLocal(comptime V: type, px: V, py: V, sh: *const Shape) [2]V`: A point in a glyph's own frame: pixels from its anchor along its turned x and y axes.
 - `fn coverage(comptime V: type, d: V) V`: Antialiased coverage of a signed distance in pixels.
-- `fn hit(s: *const Instances, cam: Camera, ranges: []const Range, point: [2]f32, slop: f32) ?u32`: The last instance of `ranges` (drawn last, so on top) within `slop` logical pixels of `point`, in logical pixels from the node's top-left corner; null when none is.
+- `fn hit(s: *const Instances, pal: *const Palette, cam: Camera, ranges: []const Range, point: [2]f32, slop: f32) ?u32`: The last instance of `ranges` (drawn last, so on top) within `slop` logical pixels of `point`, in logical pixels from the node's top-left corner; null when none is.
+
+### `bit` (struct)
+The `look[0]` bits, as the module doc lays them out.
+
+- `filled: u32 = 1 << 6`
+- `stroked: u32 = 1 << 7`
+- `world_width: u32 = 1 << 8`
+- `dead: u32 = 1 << 9`
+
+### `Layer` (struct)
+One palette row; 16 bytes, so a palette is one GPU uniform array of `vec4u`.
+
+Fields: `stroke`, `fill`, `width`, `flags`
+
+- `fn of(o: struct { stroke: Color = .black, fill: Color = .transparent, width: f32 = 1, fill_on: bool = true, visible: bool = true }) Layer`
+
+### `Palette` (struct)
+Caller-owned colours and widths per layer (at most 256).
+
+Fields: `layers`, `zoom_scale`
+
 
 ### `Camera` (struct)
 Where the world sits in the node.
 
-Fields: `origin`, `scale`, `offset`
+Fields: `origin`, `scale`, `offset`, `zoom`
 
 
 ### `View` (struct)
-World to pixels for one node: `base + f32(w -% origin) * scale`, in logical pixels or, times the framebuffer scale, physical ones.
+World to pixels for one node, as a GPU uniform: `base + f32(w -% origin) * scale`, in physical pixels; `line` turns a palette width (logical pixels) into physical ones.
 
-Fields: `origin`, `scale`, `base`
+Fields: `origin`, `base`, `scale`, `line`, `px`, `zoom_scale`
 
-- `fn of(cam: Camera, corner: [2]f32, px: f32) View`: `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
+- `fn of(cam: Camera, pal: *const Palette, corner: [2]f32, px: f32) View`: `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
 - `fn x(v: View, w: i32) f32`
 - `fn y(v: View, w: i32) f32`
-- `fn len(v: View, w: u32) f32`: A length (width, radius) in world units, in pixels.
+- `fn len(v: View, w: u32) f32`: A length (radius, distance) in world units, in pixels.
 
 ### `Instances` (struct)
 
-Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `c`, `verts`
+Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`
 
-- `Line = struct { width: u32 = 0, cap: Cap = .butt, color: Color = .black }`
-- `Box = struct { fill: Color = .transparent, stroke: Color = .transparent, width: u32 = 0, radius: u32 = 0 }`
-- `Arc = struct { start: f32 = 0, sweep: f32 = std.math.tau, width: u32 = 0, cap: Cap = .butt, color: Color = .black }`
-- `Fill = struct { fill: Color = .black }`
-- `Text = struct { px: u32, color: Color = .black, font: Mono = .{} }`
-- `fn init(carver: *mem.Carver, cap: u32, verts: u32) Instances`: Carves `simd.rows(cap)` instance rows and `verts` polygon vertices from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
-- `fn requiredBytes(cap: u32, verts: u32) usize`
-- `fn reset(s: *Instances) void`
+- `Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`: What every stroked builder takes.
+- `Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
+- `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, width: ?u32 = null }`
+- `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
+- `Glyph = struct { layer: u8 = 0, turns: u2 = 0 }`
+- `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} }`
+- `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices and `dirty` dirty ranges from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
+- `fn requiredBytes(cap: u32, verts: u32, dirty: u32) usize`
+- `fn reset(s: *Instances) void`: Empties the batch; everything is dirty.
 - `fn since(s: *const Instances, first: u32) Range`: The instances added since `len` was `first`.
-- `fn segment(s: *Instances, a: [2]i32, b: [2]i32, o: Line) u32`: A line from `a` to `b`, `width` across.
-- `fn rect(s: *Instances, lo: [2]i32, hi: [2]i32, o: Box) u32`: The box from `lo` to `hi`, filled, its outline stroked `width` across; corners rounded by `radius` (capped at half the shorter side; up to 2^24 - 1).
+- `fn markDirty(s: *Instances, r: Range) void`: Records `r` as written: merged into the last dirty range when they touch (builders append in order, so a batch is one range), else appended; past capacity, everything.
+- `fn clearDirty(s: *Instances) void`: After the upload: nothing is dirty.
+- `fn kill(s: *Instances, i: u32) void`: Instance `i` draws and hits as nothing from now on.
+- `fn segment(s: *Instances, a: [2]i32, b: [2]i32, o: Line) u32`: A line from `a` to `b`.
+- `fn polyline(s: *Instances, points: []const [2]i32, o: Line) Range`: One segment per edge of the open chain through `points`, each with the chain's caps and its distance from the chain's start, so a dash runs on across the joints.
+- `fn rect(s: *Instances, lo: [2]i32, hi: [2]i32, o: Box) u32`: The box from `lo` to `hi`, filled and its outline stroked as `o` says; corners rounded by `radius` (capped at half the shorter side).
 - `fn circle(s: *Instances, c: [2]i32, r: u32, o: Box) u32`: A disc of radius `r` around `c`: a rect rounded by its half side.
-- `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (radians, from +x toward +y; a negative sweep runs the other way), `width` across.
-- `fn polygon(s: *Instances, points: []const [2]i32, o: Fill) u32`: The polygon through `points`, closed, filled by the nonzero rule.
-- `fn glyph(s: *Instances, lo: [2]i32, hi: [2]i32, uv: [4]f32, color: Color) u32`: One textured box: atlas `uv` (u0, v0, u1, v1, 0..1) over `lo` to `hi`, tinted `color`; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`).
-- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (its top-left), `o.px` world units tall, with the metrics and 16 x 16 byte atlas of `protocol.Mono`.
+- `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep runs the other way).
+- `fn polygon(s: *Instances, points: []const [2]i32, o: Area) u32`: The closed polygon through `points`, any shape, filled by the nonzero rule, its outline stroked over the fill when `o.stroke`.
+- `fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32`: Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
+- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall and turned with it, with the metrics and 16 x 16 byte atlas of `protocol.Mono`.
 
 ### `Instances.Columns` (struct)
 
@@ -2198,9 +2232,9 @@ Fields: `pos`, `look`
 ### `Shape` (struct)
 One instance in pixels: what the shaders read, decoded once per instance.
 
-Fields: `kind`, `p`, `half`, `radius`, `square`, `round`, `mid`, `aperture`, `seam`, `box`
+Fields: `kind`, `p`, `half`, `radius`, `square`, `round`, `filled`, `stroked`, `chain`, `dash`, `period`, `mid`, `aperture`, `seam`, `box`
 
-- `fn of(v: View, pos: [4]i32, look: [4]u32) Shape`
+- `fn of(v: View, pos: [4]i32, look: [4]u32, layer: Layer) Shape`: `layer` is the instance's palette row.
 
 ## `lcgf.draw_list` (src/draw/draw_list.zig)
 
@@ -2229,9 +2263,9 @@ Fields: `rect`, `clip`, `data`, `id`, `node`, `xform`, `clip_radii`, `opacity`
 
 
 ### `CanvasDraw` (struct)
-A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`.
+A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`, coloured by `palette` and `overrides`.
 
-Fields: `stamp`, `instances`, `camera`, `ranges`
+Fields: `stamp`, `instances`, `camera`, `ranges`, `palette`, `overrides`
 
 
 ### `Cmd` (union)
@@ -3326,8 +3360,13 @@ Frame: one frame under construction in the runtime front end (tier 1).
 
 ### Top level
 
-- `CanvasOptions = struct { camera: canvas_mod.Camera = .{}, ranges: []const canvas_mod.Range }`: `Frame.canvas`'s camera and the instance ranges it draws, in order (layers; a selection on top).
 - `fn resolve(t: *Tree, lv: *const levels.Levels, axis: types.Axis, viewport: f32, kept: []const u32) void`: `incremental.resolveKept`, or `levels.resolve` (`lv` built) when nothing is kept.
+
+### `CanvasOptions` (struct)
+`Frame.canvas`'s camera, palette, the instance ranges it draws in order (layers; a selection on top) and the colour overrides (the last whose range holds an instance wins).
+
+Fields: `camera`, `palette`, `ranges`, `overrides`
+
 
 ### `Frame` (struct)
 One frame under construction.
@@ -3353,7 +3392,7 @@ Fields: `ctx`, `in`
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
 - `fn custom(f: *Frame, id: Id, style: Style, data: u64) Node`: Reserves a rect that the caller draws itself.
 - `fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node`: `custom` from a row (`openRow`).
-- `fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node`: A node that draws `o.ranges` of `shapes` under `o.camera`: a `canvas` command in paint order, clipped to the node.
+- `fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node`: A node that draws `o.ranges` of `shapes` under `o.camera` with `o.palette`: a `canvas` command in paint order, clipped to the node.
 - `fn interact(f: *Frame, node: Node, sense: Sense) Response`: Makes `node` interactive and reports what happened to it this frame.
 - `fn drag(f: *const Frame, id: Id) [2]f32`: Pointer movement this frame while `id` is dragged; zero otherwise.
 - `fn lastRect(f: *const Frame, id: Id) Rect`: Where `id` was laid out last frame.
@@ -6483,14 +6522,17 @@ The software back end: draws a `DrawList` into a caller-owned framebuffer on the
 ### Top level
 
 - `bands = @import("bands.zig")`
+- `canvas = @import("canvas.zig")`
 - `Format = enum(u8) { rgba8, bgra8 }`: Byte order of a pixel in memory.
-- `Software = SoftwareOf(all_kinds)`: The back end with every feature of the stock material compiled in.
+- `Software = SoftwareOf(all_kinds)`: The back end with every feature of the stock material compiled in, and the canvas.
 - `all_kinds: []const features.Kind = std.enums.values(features.Kind)`: Every `features.Kind`, in declaration order.
 - `missing_kind: Color = .rgb(255, 0, 255)`: Colour of a quad whose feature this build left out: drawn over its covered pixels, opaque, so a missing feature shows instead of turning into another one.
 - `fn SoftwareOf(comptime kinds: []const features.Kind) type`: The back end compiled for the feature kinds in `kinds` only (`solid` must be one).
 - `fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_point: bool) type`: Quantize bare-metal rectangle and clip coordinates to Q12.4 when requested.
 - `fn SoftwareFor(comptime use: features.Usage) type`: Software renderer for the features collected from a comptime UI.
 - `fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32`: Tile `k` of `n`: a band of whole rows.
+- `fn spanMask(x: u32, x0: u32, x1: u32) B`: Lanes of the vector at `x` whose pixel lies in [x0, x1).
+- `fn overColor(color: [4]F, alpha: F, old: U, red: u5) U`: Source `color` (straight, 0..1) at coverage `alpha` premultiplied over the pixels `old`: the colour and its alpha times the coverage rounded to 8 bits, then `overSa`.
 - `fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image, scale: f32) void`: Shades `q` into `t` with the stock material's `kind` loop: quad.wgsl `vs` and `fs` per pixel.
 
 ### `Framebuffer` (struct)

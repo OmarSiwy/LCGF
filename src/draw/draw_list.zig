@@ -66,9 +66,9 @@ pub const CustomDraw = extern struct {
     opacity: f32 = 1,
 };
 
-/// A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`. Row k goes
-/// with custom draw k, which holds the node's rect, clip and opacity. The instances are the
-/// caller's and must outlive the frame's drawing.
+/// A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`, coloured by
+/// `palette` and `overrides`. Row k goes with custom draw k, which holds the node's rect, clip
+/// and opacity. All of it is the caller's and must outlive the frame's drawing.
 pub const CanvasDraw = struct {
     /// The front end's frame counter when the row was written: a custom row whose stamp is not
     /// this frame's is an ordinary custom draw.
@@ -76,6 +76,8 @@ pub const CanvasDraw = struct {
     instances: *const canvas.Instances,
     camera: canvas.Camera,
     ranges: []const canvas.Range,
+    palette: *const canvas.Palette,
+    overrides: []const canvas.Override = &.{},
 };
 
 /// A run of quads sharing one texture and material: one instanced draw.

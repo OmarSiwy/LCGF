@@ -39,9 +39,14 @@ const outlines = @import("../draw/outline.zig");
 const scheduler = @import("scheduler.zig");
 const canvas_mod = @import("../draw/canvas.zig");
 
-/// `Frame.canvas`'s camera and the instance ranges it draws, in order (layers; a selection
-/// on top).
-pub const CanvasOptions = struct { camera: canvas_mod.Camera = .{}, ranges: []const canvas_mod.Range };
+/// `Frame.canvas`'s camera, palette, the instance ranges it draws in order (layers; a
+/// selection on top) and the colour overrides (the last whose range holds an instance wins).
+pub const CanvasOptions = struct {
+    camera: canvas_mod.Camera = .{},
+    palette: *const canvas_mod.Palette,
+    ranges: []const canvas_mod.Range,
+    overrides: []const canvas_mod.Override = &.{},
+};
 
 // Ordinary text leaves differ only in whether they may shrink to wrap.
 const label_rows = [2]Template{
@@ -195,29 +200,38 @@ pub const Frame = struct {
         return n;
     }
 
-    /// A node that draws `o.ranges` of `shapes` under `o.camera`: a `canvas` command in paint
-    /// order, clipped to the node. Needs `Context.enableCanvas`. It is a custom row, so it
-    /// takes a `Limits.customs` row, orders, layers and damages like a custom node; its damage
-    /// covers the camera, the ranges and `shapes.revision`, so a pan or an edit redraws it.
-    /// `shapes` and `o.ranges` are the caller's and must outlive the frame's drawing. Not for
-    /// a subtree kept by `reuse`, whose copied custom rows are ordinary custom draws.
+    /// A node that draws `o.ranges` of `shapes` under `o.camera` with `o.palette`: a `canvas`
+    /// command in paint order, clipped to the node. Needs `Context.enableCanvas`. It is a
+    /// custom row, so it takes a `Limits.customs` row, orders, layers and damages like a
+    /// custom node; its damage covers the camera, the palette, the ranges, the overrides and
+    /// `shapes.revision`, so a pan, a recolour or an edit redraws it. An overlay is a second
+    /// canvas node over it (a float) or more ranges. Everything passed is the caller's and
+    /// must outlive the frame's drawing. Not for a subtree kept by `reuse`, whose copied
+    /// custom rows are ordinary custom draws.
     pub fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node {
         const ctx = f.ctx;
         std.debug.assert(ctx.canvas_hook != null);
-        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, revision: u32, len: u32, verts: u32, shapes: u64 }{
+        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, zoom: f32, revision: u32, len: u32, verts: u32, zoom_scale: u32, shapes: u64 }{
             .origin = o.camera.origin,
             .scale = o.camera.scale,
             .offset = o.camera.offset,
+            .zoom = o.camera.zoom,
+            .zoom_scale = @intFromBool(o.palette.zoom_scale),
             .revision = shapes.revision,
             .len = shapes.len,
             .verts = shapes.vert_len,
             .shapes = @intFromPtr(shapes),
         };
-        const key = std.hash.Wyhash.hash(std.hash.Wyhash.hash(3, std.mem.asBytes(&view)), std.mem.sliceAsBytes(o.ranges));
+        var h = std.hash.Wyhash.init(3);
+        h.update(std.mem.asBytes(&view));
+        h.update(std.mem.sliceAsBytes(o.ranges));
+        h.update(std.mem.sliceAsBytes(o.overrides));
+        h.update(std.mem.sliceAsBytes(o.palette.layers));
+        const key = h.final();
         const n = f.custom(id, style, key);
         const k = f.tree().c.custom[n.ix()];
         ctx.canvas_frame = ctx.frame;
-        ctx.draw.canvases[k] = .{ .stamp = ctx.frame, .instances = shapes, .camera = o.camera, .ranges = o.ranges };
+        ctx.draw.canvases[k] = .{ .stamp = ctx.frame, .instances = shapes, .camera = o.camera, .ranges = o.ranges, .palette = o.palette, .overrides = o.overrides };
         return n;
     }
 
@@ -792,33 +806,44 @@ test "custom: links the leaf to a row carrying its id and data" {
     try testing.expectEqual(n.ix(), f.tree().find(.from("view")));
 }
 
-test "canvas: a canvas command in paint order, clipped to its node; other customs stay custom" {
+test "canvas: canvas commands in paint order, an overlay over them; other customs stay custom" {
     const limits: @import("context.zig").Limits = .{ .nodes = 8, .texts = 1, .customs = 3, .strings = 16, .depth = 4, .damage = true };
     const Fx = Fixture(limits);
     var ctx = try Fx.context();
     var rows: [limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
     ctx.enableCanvas(&rows);
     ctx.trackDamage();
-    var buf: [canvas_mod.Instances.requiredBytes(4, 0)]u8 align(mem.column_align) = undefined;
+    var buf: [canvas_mod.Instances.requiredBytes(4, 0, 1)]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
-    var shapes: canvas_mod.Instances = .init(&carver, 4, 0);
-    _ = shapes.segment(.{ 0, 0 }, .{ 1_000, 0 }, .{ .width = 100 });
-    const wires = shapes.since(0);
+    var shapes: canvas_mod.Instances = .init(&carver, 4, 0, 1);
+    _ = shapes.segment(.{ 0, 0 }, .{ 1_000, 0 }, .{});
     const in: Input = .{ .viewport = .{ 200, 100 } };
+    var layers = [_]canvas_mod.Layer{.of(.{ .width = 2 })};
+    const pal: canvas_mod.Palette = .{ .layers = &layers };
 
-    const Build = struct {
-        fn frame(c: *Context, input: *const Input, sh: *const canvas_mod.Instances, ranges: []const canvas_mod.Range, cam: canvas_mod.Camera) Output {
+    const View = struct {
+        cam: canvas_mod.Camera,
+        ranges: []const canvas_mod.Range,
+        selected: []const canvas_mod.Override = &.{},
+        fn frame(v: @This(), c: *Context, input: *const Input, sh: *const canvas_mod.Instances, p: *const canvas_mod.Palette) Output {
             var f = c.begin(input);
             _ = f.open(.none, .{ .dir = .x, .size = .{ .fill, .fill } });
             _ = f.custom(.from("host"), .{ .size = .{ .px(50), .fill } }, 1);
-            _ = f.canvas(.from("schematic"), .{ .size = .{ .fill, .fill } }, sh, .{ .camera = cam, .ranges = ranges });
+            const area = f.open(.none, .{ .size = .{ .fill, .fill } });
+            _ = area;
+            _ = f.canvas(.from("schematic"), .{ .size = .{ .fill, .fill } }, sh, .{ .camera = v.cam, .palette = p, .ranges = v.ranges });
+            // The selection overlay: a second canvas floating over the first.
+            _ = f.canvas(.from("selection"), .{ .float = true, .size = .{ .px(150), .px(100) } }, sh, .{ .camera = v.cam, .palette = p, .ranges = v.ranges, .overrides = v.selected });
+            f.close();
             f.close();
             return f.end(.{});
         }
     };
     const cam: canvas_mod.Camera = .{ .origin = .{ 500, 0 }, .scale = 0.1, .offset = .{ 75, 50 } };
-    var out = Build.frame(&ctx, &in, &shapes, &.{wires}, cam);
-    var kinds: [2]DrawKind = undefined;
+    const wires = shapes.since(0);
+    var view: View = .{ .cam = cam, .ranges = &.{wires} };
+    var out = view.frame(&ctx, &in, &shapes, &pal);
+    var kinds: [3]DrawKind = undefined;
     var n: u32 = 0;
     for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
         .quads, .text => {},
@@ -827,26 +852,36 @@ test "canvas: a canvas command in paint order, clipped to its node; other custom
             n += 1;
         },
     };
-    try testing.expectEqual(2, n);
-    try testing.expectEqualSlices(DrawKind, &.{ .custom, .canvas }, &kinds);
-    const k = out.draw.command(out.draw.cmd_len - 1).canvas;
+    try testing.expectEqual(3, n);
+    try testing.expectEqualSlices(DrawKind, &.{ .custom, .canvas, .canvas }, &kinds);
+    const k = out.draw.command(out.draw.cmd_len - 2).canvas;
     try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.customs[k].rect);
     try testing.expectEqual(&shapes, out.draw.canvases[k].instances);
+    try testing.expectEqual(&pal, out.draw.canvases[k].palette);
     try testing.expectEqualSlices(canvas_mod.Range, &.{wires}, out.draw.canvases[k].ranges);
     try testing.expectEqual(cam, out.draw.canvases[k].camera);
 
-    // The same frame again changes nothing; a pan damages the canvas node, an edit too.
-    out = Build.frame(&ctx, &in, &shapes, &.{wires}, cam);
+    // The same frame again changes nothing; a pan, a selection, a recolour and an edit each
+    // damage the canvas nodes.
+    out = view.frame(&ctx, &in, &shapes, &pal);
     try testing.expectEqual(0, out.draw.damage.pixels());
-    var panned = cam;
-    panned.origin[0] += 10;
-    out = Build.frame(&ctx, &in, &shapes, &.{wires}, panned);
+    view.cam.origin[0] += 10;
+    out = view.frame(&ctx, &in, &shapes, &pal);
     try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
-    out = Build.frame(&ctx, &in, &shapes, &.{wires}, panned);
+    out = view.frame(&ctx, &in, &shapes, &pal);
     try testing.expectEqual(0, out.draw.damage.pixels());
-    _ = shapes.segment(.{ 0, 0 }, .{ 0, 1_000 }, .{ .width = 100 });
-    out = Build.frame(&ctx, &in, &shapes, &.{shapes.since(0)}, panned);
+    view.selected = &.{.{ .range = wires, .color = 0xff00ff00 }};
+    out = view.frame(&ctx, &in, &shapes, &pal);
     try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
+    layers[0].width = 3;
+    out = view.frame(&ctx, &in, &shapes, &pal);
+    try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
+    _ = shapes.segment(.{ 0, 0 }, .{ 0, 1_000 }, .{});
+    view.ranges = &.{shapes.since(0)};
+    out = view.frame(&ctx, &in, &shapes, &pal);
+    try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
+    out = view.frame(&ctx, &in, &shapes, &pal);
+    try testing.expectEqual(0, out.draw.damage.pixels());
 
     // A frame without the canvas: its custom row is an ordinary custom draw again.
     var f = ctx.begin(&in);
