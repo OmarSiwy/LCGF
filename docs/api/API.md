@@ -2149,6 +2149,7 @@ canvas: many 2D primitives in caller-owned columns, drawn under a camera with a 
 - `fn turn(q: u2) [2]f32`: cos and sin of `q` quarter turns: the turn that takes a glyph's own x axis to the screen's.
 - `fn kindOf(look: [4]u32) Kind`
 - `fn layerOf(look: [4]u32) u8`
+- `fn reach(pos: [4]i32, look: [4]u32, origin: [2]i32) [4]i32`: The box instance `pos`, `look` can touch, in world units from `origin` (wrapping), widened by its world width but not by a palette width: integers only, so a renderer can cull most rows of a big batch before decoding them (`Shape.of`).
 - `fn layerRow(pal: *const Palette, layer: u8) Layer`: Palette row `layer`, or an invisible one past the palette.
 - `fn shown(look: [4]u32, layer: Layer) bool`: Whether instance `look` on `layer` draws at all: alive and on a visible layer.
 - `fn overrideOf(overrides: []const Override, i: u32) ?u32`: The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
@@ -2978,6 +2979,29 @@ Conformance scenes: small frames every back end must draw the same way.
 Fields: `name`, `viewport`, `quads`, `runs`, `customs`, `strings`, `cmds`, `draws`
 
 
+### `canvas_scene` (struct)
+The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes across a chain, a non-convex polygon, glyphs turned 0 and 1 quarter turns, an override, a dead row and a hidden layer, under a camera that pans (a far i64 origin), zooms (zoom-scaled widths) and offsets, in a node clipped by its parent.
+
+- `node = [4]f32{ 20, 20, 780, 580 }`: Logical pixels: the node, and the clip its parent gives it.
+- `clip = [4]f32{ 40, 30, 760, 570 }`
+- `far: i64 = 2_000_000_000`: Twenty world units per pixel, centred on a point two billion units out.
+- `camera: canvas.Camera = .{ .origin = .{ far, -far }, .scale = 0.05, .offset = .{ 10, 5 }, .zoom = 2 }`
+- `palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true }`
+- `viewport = [2]f32{ 800, 600 }`
+- `clear = Color.rgb(13, 13, 15)`: What the golden is drawn over (sw-play's 0d0d0f).
+- `tint = Color.rgb(80, 255, 120)`: The selection's override colour.
+- `rows = 256`
+- `verts = 64`
+- `fn w(x: i32, y: i32) [2]i32`: World point at logical (x, y) from the camera's origin.
+- `fn build(s: *canvas.Instances) [2]canvas.Range`
+
+### `CanvasStorage` (struct)
+The canvas scene as a draw list of one canvas command, in caller-owned memory.
+
+Fields: `list_buf`, `shape_buf`, `draw`, `shapes`, `ranges`, `overrides`, `rows`
+
+- `fn load(st: *CanvasStorage) void`: Builds the scene; `st` must not move afterwards.
+
 ### `Storage` (struct)
 One scene, ready to draw: the draw list and its glyph quads, in caller-owned memory.
 
@@ -3009,6 +3033,24 @@ Fields: `wgsl`, `len`
 
 - `fn add(self: *Materials, material_wgsl: [:0]const u8) Material`: A material with your fragment logic; build `material_wgsl` with `shader`.
 - `fn source(self: *const Materials, m: Material) [:0]const u8`: The shader of `m`.
+
+## `lcgf.canvas_shader` (src/render/shaders/canvas.zig)
+
+The canvas shader (canvas.wgsl) and the uniforms it reads, for every GPU back end.
+
+### Top level
+
+- `verts_width = 2048`: Texels a row of `wgsl_es`'s vertex texture.
+- `max_overrides = 64`: Overrides one draw applies; past these, the first ones are dropped.
+- `max_layers = 256`
+- `fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, target: [2]f32, row_base: u32, vert_base: u32) void`: Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical pixels per logical one, on a `target` of physical pixels; the batch starts at `row_base` and `vert_base` in the GPU buffers.
+
+### `Uniforms` (struct)
+canvas.wgsl's `Draw`.
+
+Fields: `view`, `rect`, `clip`, `size`, `opacity`, `row_base`, `vert_base`, `vert_len`, `overrides`, `layers`, `palette`, `marks`
+
+- `fn headBytes(layers: u32) usize`: Bytes of the head and the first `layers` palette rows: what `marks` does not cover.
 
 ## `lcgf.render_null` (src/render/null.zig)
 
@@ -3224,6 +3266,32 @@ Fields: `pipeline`, `group`, `screen`
 - `fn deinit(g: *G, dev: gpu.Device) void`
 - `fn upload(g: *const G, up: *gpu.Upload, width: u32, height: u32) void`: The target size, written in the frame's upload phase.
 - `fn draw(g: *const G, pass: *gpu.RenderPass, rect: gpu.Rect, width: u32, height: u32) void`: Draws the gradient inside `rect` of a `width` × `height` target.
+
+## `lcgf.gpu_canvas` (src/render/gpu/canvas.zig)
+
+The canvas batch on a GPU, written once against `lcgf_render.gpu`: every GPU back end's `drawCanvas` (src/render/iface.zig) is this type, so vk, metal, d3d12, gles, wgpu and web draw canvases with the same pipeline, the same uploads and the same shader (src/render/shaders/canvas.wgsl; sw's twin is src/render/sw/canvas.zig).
+
+### Top level
+
+- `max_batches = 4`
+- `max_draws = 8`
+- `max_frames = 3`
+- `fn Canvas(comptime gpu: type, comptime source: type) type`
+
+### `Capacity` (struct)
+
+Fields: `rows`, `verts`, `frames`
+
+
+### `Canvas(..)` (generic struct)
+
+Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `row_written`, `atlas`, `atlas_len`, `batches`, `next_row`, `next_vert`, `frame`, `slot`, `draws`, `draw_len`, `atlas_group`, `size`, `scale`, `uploaded`
+
+- `Shader = gpu.Shader(source)`
+- `fn init(cv: *C, dev: gpu.Device, target: desc.Target, cap: Capacity) !void`: Fills `cv` in place (its arena must not move).
+- `fn deinit(cv: *C, dev: gpu.Device) void`
+- `fn prepare(cv: *C, dev: gpu.Device, up: ?*gpu.Upload, list: *const draw_list.DrawList, slot: u32, scale: f32, size: [2]u32, atlas: gpu.TextureView, atlas_key…`: Uploads the canvas commands of `list` for ring slot `slot` (0 when `frames` is 1), before the pass: `up` writes when the memory is not mapped.
+- `fn draw(cv: *const C, pass: *gpu.RenderPass, list: *const draw_list.DrawList, k: u32) void`: Draws canvas command `k` of the last `prepare` into `pass`: one instanced draw per range, scissored to the node.
 
 ## `lcgf.gpu_check` (src/render/gpu/check.zig)
 
