@@ -68,17 +68,17 @@ inline F method(void* obj, std::size_t slot) {
 }
 inline D3D12_CPU_DESCRIPTOR_HANDLE cpuStart(ID3D12DescriptorHeap* h) {
     D3D12_CPU_DESCRIPTOR_HANDLE out;
-    method<D3D12_CPU_DESCRIPTOR_HANDLE* (STDMETHODCALLTYPE*)(ID3D12DescriptorHeap*, D3D12_CPU_DESCRIPTOR_HANDLE*)>(h, 9)(h, &out);
+    method<D3D12_CPU_DESCRIPTOR_HANDLE*(STDMETHODCALLTYPE*)(ID3D12DescriptorHeap*, D3D12_CPU_DESCRIPTOR_HANDLE*)>(h, 9)(h, &out);
     return out;
 }
 inline D3D12_GPU_DESCRIPTOR_HANDLE gpuStart(ID3D12DescriptorHeap* h) {
     D3D12_GPU_DESCRIPTOR_HANDLE out;
-    method<D3D12_GPU_DESCRIPTOR_HANDLE* (STDMETHODCALLTYPE*)(ID3D12DescriptorHeap*, D3D12_GPU_DESCRIPTOR_HANDLE*)>(h, 10)(h, &out);
+    method<D3D12_GPU_DESCRIPTOR_HANDLE*(STDMETHODCALLTYPE*)(ID3D12DescriptorHeap*, D3D12_GPU_DESCRIPTOR_HANDLE*)>(h, 10)(h, &out);
     return out;
 }
 inline D3D12_RESOURCE_DESC resourceDesc(ID3D12Resource* r) {
     D3D12_RESOURCE_DESC out;
-    method<D3D12_RESOURCE_DESC* (STDMETHODCALLTYPE*)(ID3D12Resource*, D3D12_RESOURCE_DESC*)>(r, 10)(r, &out);
+    method<D3D12_RESOURCE_DESC*(STDMETHODCALLTYPE*)(ID3D12Resource*, D3D12_RESOURCE_DESC*)>(r, 10)(r, &out);
     return out;
 }
 template <class T>
@@ -100,21 +100,31 @@ inline D3D12_RESOURCE_BARRIER transition(ID3D12Resource* res, D3D12_RESOURCE_STA
 }
 inline DXGI_FORMAT dxgiFormat(TextureFormat f) {
     constexpr DXGI_FORMAT t[] = {
-        DXGI_FORMAT_R8_UNORM,      DXGI_FORMAT_R8G8_UNORM,         DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8A8_UNORM,
-        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R16_FLOAT,   DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,   DXGI_FORMAT_R32G32_FLOAT,
-        DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_UINT,     DXGI_FORMAT_D32_FLOAT,
+        DXGI_FORMAT_R8_UNORM,
+        DXGI_FORMAT_R8G8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+        DXGI_FORMAT_R16_FLOAT,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DXGI_FORMAT_R32_FLOAT,
+        DXGI_FORMAT_R32G32_FLOAT,
+        DXGI_FORMAT_R32G32B32A32_FLOAT,
+        DXGI_FORMAT_R32_UINT,
+        DXGI_FORMAT_D32_FLOAT,
     };
     return t[std::uint32_t(f)];
 }
 inline DXGI_FORMAT vertexFormat(VertexFormat f) {
-    constexpr DXGI_FORMAT t[] = {DXGI_FORMAT_R32_FLOAT,          DXGI_FORMAT_R32G32_FLOAT,   DXGI_FORMAT_R32G32B32_FLOAT,
-                                 DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_UINT,       DXGI_FORMAT_R32G32_UINT,
-                                 DXGI_FORMAT_R32G32B32A32_UINT,  DXGI_FORMAT_R32_SINT,       DXGI_FORMAT_R8G8B8A8_UNORM};
+    constexpr DXGI_FORMAT t[] = {DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT,
+                                 DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT,
+                                 DXGI_FORMAT_R32G32B32A32_UINT, DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R8G8B8A8_UNORM};
     return t[std::uint32_t(f)];
 }
 inline D3D12_BLEND blendFactor(BlendFactor f) {
-    constexpr D3D12_BLEND t[] = {D3D12_BLEND_ZERO,       D3D12_BLEND_ONE,            D3D12_BLEND_SRC_COLOR,  D3D12_BLEND_INV_SRC_COLOR,
-                                 D3D12_BLEND_SRC_ALPHA,  D3D12_BLEND_INV_SRC_ALPHA,  D3D12_BLEND_DEST_COLOR, D3D12_BLEND_INV_DEST_COLOR,
+    constexpr D3D12_BLEND t[] = {D3D12_BLEND_ZERO, D3D12_BLEND_ONE, D3D12_BLEND_SRC_COLOR, D3D12_BLEND_INV_SRC_COLOR,
+                                 D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_DEST_COLOR, D3D12_BLEND_INV_DEST_COLOR,
                                  D3D12_BLEND_DEST_ALPHA, D3D12_BLEND_INV_DEST_ALPHA, D3D12_BLEND_BLEND_FACTOR, D3D12_BLEND_INV_BLEND_FACTOR};
     return t[std::uint32_t(f)];
 }
@@ -246,7 +256,9 @@ struct Arena {
     MemoryKind kind = MemoryKind::Device;
     ID3D12DescriptorHeap* heaps[3] = {}; // resources, samplers, render target views
     std::uint32_t used[3] = {}, capacity[3] = {}, strides[3] = {};
-    enum Which { kResources, kSamplers, kRtv };
+    enum Which { kResources,
+                 kSamplers,
+                 kRtv };
 
     /// `n` descriptors of heap `w`, or a null handle when they do not fit.
     D3D12_CPU_DESCRIPTOR_HANDLE Take(Which w, std::uint32_t n) {
@@ -352,7 +364,7 @@ inline Result CreateTexture(const Device& d, Arena& arena, const TextureDescript
     rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     if (desc.usage & TextureUsage::RenderAttachment) rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     if (desc.usage & TextureUsage::StorageBinding) rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    const D3D12_RESOURCE_STATES resting = (desc.usage & TextureUsage::StorageBinding)   ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+    const D3D12_RESOURCE_STATES resting = (desc.usage & TextureUsage::StorageBinding)     ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
                                           : (desc.usage & TextureUsage::TextureBinding)   ? detail::kShaderResource
                                           : (desc.usage & TextureUsage::RenderAttachment) ? D3D12_RESOURCE_STATE_RENDER_TARGET
                                                                                           : D3D12_RESOURCE_STATE_COMMON;

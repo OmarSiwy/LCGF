@@ -57,7 +57,9 @@ using Quad = lcgf_quad;
 using TextRun = lcgf_text_run;
 using CustomDraw = lcgf_custom_draw;
 
-enum class CmdKind : std::uint8_t { quads = 0, text = 1, custom = 2 };
+enum class CmdKind : std::uint8_t { quads = 0,
+                                    text = 1,
+                                    custom = 2 };
 
 /// One draw command: a batch of quads sharing a texture and material (`key`), one text run, or
 /// one custom draw.

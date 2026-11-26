@@ -12,12 +12,12 @@
 #include "fill.lcgf.hpp"
 #include "textured.lcgf.hpp"
 
-#define TRY(x)                                                                    \
-    do {                                                                          \
-        if ((x) != gpu::kSuccess) {                                               \
+#define TRY(x) \
+    do { \
+        if ((x) != gpu::kSuccess) { \
             std::fprintf(stderr, "%s:%d: %s failed\n", __FILE__, __LINE__, #x); \
-            return 1;                                                             \
-        }                                                                         \
+            return 1; \
+        } \
     } while (0)
 
 int main(int argc, char** argv) {

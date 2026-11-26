@@ -9,18 +9,37 @@
 namespace lcgf::gpu {
 
 enum class TextureFormat : std::uint32_t {
-    R8Unorm, RG8Unorm, RGBA8Unorm, RGBA8UnormSrgb, BGRA8Unorm, BGRA8UnormSrgb, R16Float,
-    RGBA16Float, R32Float, RG32Float, RGBA32Float, R32Uint, Depth32Float,
+    R8Unorm,
+    RG8Unorm,
+    RGBA8Unorm,
+    RGBA8UnormSrgb,
+    BGRA8Unorm,
+    BGRA8UnormSrgb,
+    R16Float,
+    RGBA16Float,
+    R32Float,
+    RG32Float,
+    RGBA32Float,
+    R32Uint,
+    Depth32Float,
 };
-enum class LoadOp : std::uint32_t { Load, Clear };
-enum class StoreOp : std::uint32_t { Store, Discard };
-enum class IndexFormat : std::uint32_t { Uint16, Uint32 };
-enum class BindingKind : std::uint32_t { Uniform, StorageRead, StorageReadWrite, Texture, StorageTexture, Sampler, ComparisonSampler };
+enum class LoadOp : std::uint32_t { Load,
+                                    Clear };
+enum class StoreOp : std::uint32_t { Store,
+                                     Discard };
+enum class IndexFormat : std::uint32_t { Uint16,
+                                         Uint32 };
+enum class BindingKind : std::uint32_t { Uniform,
+                                         StorageRead,
+                                         StorageReadWrite,
+                                         Texture,
+                                         StorageTexture,
+                                         Sampler,
+                                         ComparisonSampler };
 
 struct Color {
     double r = 0, g = 0, b = 0, a = 0;
 };
-
 
 inline constexpr std::uint32_t kMaxGroups = 4, kMaxColorTargets = 4;
 
@@ -38,24 +57,73 @@ inline constexpr std::uint32_t bytesPerPixel(TextureFormat f) {
 } // namespace detail
 
 enum class BufferUsage : std::uint32_t {
-    None = 0, MapRead = 1, MapWrite = 2, CopySrc = 4, CopyDst = 8, Index = 16, Vertex = 32, Uniform = 64, Storage = 128, Indirect = 256,
+    None = 0,
+    MapRead = 1,
+    MapWrite = 2,
+    CopySrc = 4,
+    CopyDst = 8,
+    Index = 16,
+    Vertex = 32,
+    Uniform = 64,
+    Storage = 128,
+    Indirect = 256,
 };
-enum class TextureUsage : std::uint32_t { None = 0, CopySrc = 1, CopyDst = 2, TextureBinding = 4, StorageBinding = 8, RenderAttachment = 16 };
+enum class TextureUsage : std::uint32_t { None = 0,
+                                          CopySrc = 1,
+                                          CopyDst = 2,
+                                          TextureBinding = 4,
+                                          StorageBinding = 8,
+                                          RenderAttachment = 16 };
 constexpr BufferUsage operator|(BufferUsage a, BufferUsage b) { return BufferUsage(std::uint32_t(a) | std::uint32_t(b)); }
 constexpr TextureUsage operator|(TextureUsage a, TextureUsage b) { return TextureUsage(std::uint32_t(a) | std::uint32_t(b)); }
 constexpr bool operator&(BufferUsage a, BufferUsage b) { return (std::uint32_t(a) & std::uint32_t(b)) != 0; }
 constexpr bool operator&(TextureUsage a, TextureUsage b) { return (std::uint32_t(a) & std::uint32_t(b)) != 0; }
 
-enum class MemoryKind : std::uint32_t { Device, Host };
-enum class FilterMode : std::uint32_t { Nearest, Linear };
-enum class AddressMode : std::uint32_t { ClampToEdge, Repeat, MirrorRepeat };
-enum class VertexFormat : std::uint32_t { Float32, Float32x2, Float32x3, Float32x4, Uint32, Uint32x2, Uint32x4, Sint32, Unorm8x4 };
-enum class VertexStepMode : std::uint32_t { Vertex, Instance };
-enum class PrimitiveTopology : std::uint32_t { PointList, LineList, LineStrip, TriangleList, TriangleStrip };
-enum class FrontFace : std::uint32_t { CCW, CW };
-enum class CullMode : std::uint32_t { None, Front, Back };
-enum class BlendFactor : std::uint32_t { Zero, One, Src, OneMinusSrc, SrcAlpha, OneMinusSrcAlpha, Dst, OneMinusDst, DstAlpha, OneMinusDstAlpha, Constant, OneMinusConstant };
-enum class BlendOperation : std::uint32_t { Add, Subtract, ReverseSubtract, Min, Max };
+enum class MemoryKind : std::uint32_t { Device,
+                                        Host };
+enum class FilterMode : std::uint32_t { Nearest,
+                                        Linear };
+enum class AddressMode : std::uint32_t { ClampToEdge,
+                                         Repeat,
+                                         MirrorRepeat };
+enum class VertexFormat : std::uint32_t { Float32,
+                                          Float32x2,
+                                          Float32x3,
+                                          Float32x4,
+                                          Uint32,
+                                          Uint32x2,
+                                          Uint32x4,
+                                          Sint32,
+                                          Unorm8x4 };
+enum class VertexStepMode : std::uint32_t { Vertex,
+                                            Instance };
+enum class PrimitiveTopology : std::uint32_t { PointList,
+                                               LineList,
+                                               LineStrip,
+                                               TriangleList,
+                                               TriangleStrip };
+enum class FrontFace : std::uint32_t { CCW,
+                                       CW };
+enum class CullMode : std::uint32_t { None,
+                                      Front,
+                                      Back };
+enum class BlendFactor : std::uint32_t { Zero,
+                                         One,
+                                         Src,
+                                         OneMinusSrc,
+                                         SrcAlpha,
+                                         OneMinusSrcAlpha,
+                                         Dst,
+                                         OneMinusDst,
+                                         DstAlpha,
+                                         OneMinusDstAlpha,
+                                         Constant,
+                                         OneMinusConstant };
+enum class BlendOperation : std::uint32_t { Add,
+                                            Subtract,
+                                            ReverseSubtract,
+                                            Min,
+                                            Max };
 
 struct BufferDescriptor {
     std::uint64_t size;
@@ -124,7 +192,6 @@ struct RenderPipelineDescriptor {
 struct ComputePipelineDescriptor {
     const char* entryPoint = "main";
 };
-
 
 // ---- GL ES: what a shader brings for it -----------------------------------------------------
 

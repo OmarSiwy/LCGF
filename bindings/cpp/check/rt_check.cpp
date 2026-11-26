@@ -133,7 +133,10 @@ struct Plot {
     }
     lcgf::canvas::Options options(std::uint32_t k, std::span<const lcgf::canvas::Range> ranges, std::span<const lcgf::canvas::Override> o) const {
         return {.camera = {.origin = {std::int64_t(k * 7), -std::int64_t(k * 3)}, .scale = 0.5f + 0.25f * float(k % 4), .offset = {10, 10}, .zoom = float(1 + k % 3)},
-                .layers = layers, .zoom_scale = k % 2 == 1, .ranges = ranges, .overrides = o};
+                .layers = layers,
+                .zoom_scale = k % 2 == 1,
+                .ranges = ranges,
+                .overrides = o};
     }
     void build(lcgf::Frame& f, std::uint32_t k) {
         using namespace lcgf;
@@ -183,13 +186,17 @@ int main(int argc, char** argv) {
     std::vector<char> out;
     lcgf::Input in;
     for (std::uint32_t k = 0; k < frames; ++k) {
-        if (plot_scene) Plot::input(in, k); else if (kit_scene) Kit::input(in, k); else scenes::input(scene, in, k);
+        if (plot_scene) Plot::input(in, k);
+        else if (kit_scene) Kit::input(in, k);
+        else scenes::input(scene, in, k);
         // The bench scenes only hover; the gate also presses, so clicks and drags cross too.
         in.buttons = k % 6 < 2 ? lcgf::Input::left : 0;
         // Whether a frame is needed crosses the seam too (an `int` in lcgf.h).
         put(out, ctx.NeedsFrame(in) ? 1 : 0);
         lcgf::Frame f = ctx.Begin(in);
-        if (plot_scene) plot->build(f, k); else if (kit_scene) kit.build(f, k); else scenes::build(scene, f, ctx.theme());
+        if (plot_scene) plot->build(f, k);
+        else if (kit_scene) kit.build(f, k);
+        else scenes::build(scene, f, ctx.theme());
         const lcgf::DrawList& d = ctx.End();
         put(out, std::uint32_t(d.quads().size()));
         put_bytes(out, d.quads());

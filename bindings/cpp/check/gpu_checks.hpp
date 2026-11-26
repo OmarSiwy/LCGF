@@ -23,12 +23,12 @@
 namespace checks {
 namespace gpu = lcgf::gpu;
 
-#define CHECK_TRY(x)                                                                         \
-    do {                                                                                     \
-        if (auto r_ = (x); r_ != gpu::kSuccess) {                                            \
-            std::fprintf(stderr, "%s:%d: %s: %d\n", __FILE__, __LINE__, #x, int(r_));       \
-            return false;                                                                    \
-        }                                                                                    \
+#define CHECK_TRY(x) \
+    do { \
+        if (auto r_ = (x); r_ != gpu::kSuccess) { \
+            std::fprintf(stderr, "%s:%d: %s: %d\n", __FILE__, __LINE__, #x, int(r_)); \
+            return false; \
+        } \
     } while (0)
 
 template <class Host>

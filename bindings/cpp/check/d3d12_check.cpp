@@ -16,12 +16,12 @@ extern "C" void* lcgf_d3d12_record_device();
 extern "C" void* lcgf_d3d12_record_list();
 extern "C" const char* lcgf_d3d12_record_log(std::size_t* len);
 
-#define TRY(x)                                                                    \
-    do {                                                                          \
-        if ((x) != gpu::kSuccess) {                                               \
+#define TRY(x) \
+    do { \
+        if ((x) != gpu::kSuccess) { \
             std::fprintf(stderr, "%s:%d: %s failed\n", __FILE__, __LINE__, #x); \
-            return 1;                                                             \
-        }                                                                         \
+            return 1; \
+        } \
     } while (0)
 
 int main(int argc, char** argv) {

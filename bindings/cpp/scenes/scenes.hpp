@@ -9,7 +9,13 @@
 
 namespace scenes {
 
-enum Scene { form, list, text, springs, resize, idle, count };
+enum Scene { form,
+             list,
+             text,
+             springs,
+             resize,
+             idle,
+             count };
 inline constexpr const char* names[count] = {"form", "list", "text", "springs", "resize", "idle"};
 /// Nodes per scene (bench/vs/harness.h's vs_capacity).
 inline constexpr std::uint32_t capacity[count] = {256, 256, 256, 2048, 256, 256};
@@ -26,9 +32,27 @@ inline lcgf_limits limits(Scene s) {
 }
 
 inline constexpr std::string_view form_names[21] = {
-    "Name",     "Email", "Phone", "Street",  "City",    "Postcode", "Country",
-    "Company",  "Title", "Team",  "Manager", "Website", "Timezone", "Language",
-    "Currency", "Theme", "Font",  "Density", "Backup",  "Sync",     "Alerts",
+    "Name",
+    "Email",
+    "Phone",
+    "Street",
+    "City",
+    "Postcode",
+    "Country",
+    "Company",
+    "Title",
+    "Team",
+    "Manager",
+    "Website",
+    "Timezone",
+    "Language",
+    "Currency",
+    "Theme",
+    "Font",
+    "Density",
+    "Backup",
+    "Sync",
+    "Alerts",
 };
 inline bool checks[21] = {};
 inline float values[21] = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f,

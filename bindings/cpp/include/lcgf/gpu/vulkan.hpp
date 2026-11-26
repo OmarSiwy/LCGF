@@ -177,7 +177,6 @@ struct Sampler {
     VkSampler handle;
 };
 
-
 struct RenderPipeline {
     VkPipeline pipeline;
     VkPipelineLayout layout;
@@ -196,7 +195,6 @@ struct BindGroup {
     VkPipelineLayout layout;
     static constexpr std::uint32_t index = G;
 };
-
 
 struct RenderPassColorAttachment {
     TextureView view;
@@ -632,9 +630,7 @@ inline VkResult CreateArena(const Device& d, std::uint64_t bytes, MemoryKind kin
         a.mapped = static_cast<std::byte*>(p);
     }
     const std::uint32_t n = bindGroups;
-    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 * n}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * n},
-                                          {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4 * n}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, n},
-                                          {VK_DESCRIPTOR_TYPE_SAMPLER, 2 * n}};
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 * n}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * n}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4 * n}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, n}, {VK_DESCRIPTOR_TYPE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, n, 5, sizes};
     if (VkResult r = d.fns->CreateDescriptorPool(d.handle, &pi, nullptr, &a.pool); r != VK_SUCCESS) return r;
     *out = a;
@@ -797,7 +793,7 @@ VkResult CreateRenderPipeline(const Device& d, const RenderPipelineDescriptor& d
     VkPipelineRasterizationStateCreateInfo raster{};
     raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = desc.primitive.cullMode == CullMode::None ? VK_CULL_MODE_NONE
+    raster.cullMode = desc.primitive.cullMode == CullMode::None    ? VK_CULL_MODE_NONE
                       : desc.primitive.cullMode == CullMode::Front ? VK_CULL_MODE_FRONT_BIT
                                                                    : VK_CULL_MODE_BACK_BIT;
     // naga's SPIR-V flips y, so framebuffer winding is WebGPU's: ccw stays ccw.

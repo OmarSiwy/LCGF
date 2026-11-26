@@ -133,7 +133,10 @@ fn run<U>(
     let mut o = Vec::new();
     let mut ev = Vec::new();
     let mut best = u128::MAX;
-    let reps_: u32 = std::env::var("LCGF_REPS").ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+    let reps_: u32 = std::env::var("LCGF_REPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
     for _ in 0..(if bench { reps_ } else { 1 }) {
         let t0 = std::time::Instant::now();
         for f in 0..frames {

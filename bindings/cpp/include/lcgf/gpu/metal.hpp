@@ -129,7 +129,15 @@ using objc::id;
 using objc::NSUInteger;
 
 /// What creation reports. `kSuccess` is the one every back end has.
-enum class Result : std::uint32_t { Success, ShaderCompile, MissingEntryPoint, PipelineFailed, ResourceFailed, NoCode, NoStaging, OutOfArena, IncompatibleMemory };
+enum class Result : std::uint32_t { Success,
+                                    ShaderCompile,
+                                    MissingEntryPoint,
+                                    PipelineFailed,
+                                    ResourceFailed,
+                                    NoCode,
+                                    NoStaging,
+                                    OutOfArena,
+                                    IncompatibleMemory };
 inline constexpr Result kSuccess = Result::Success;
 
 namespace detail {
@@ -629,7 +637,7 @@ public:
         if (sizes_.count > 0)
             objc::Send<void, "setBytes:length:atIndex:">(encoder_, static_cast<const void*>(sizes_.lengths), NSUInteger(sizes_.count * 4), NSUInteger(sizes_.slot));
         objc::Send<void, "dispatchThreadgroups:threadsPerThreadgroup:">(encoder_, detail::MTLSize{x, y, z},
-                                                                         detail::MTLSize{threads_[0], threads_[1], threads_[2]});
+                                                                        detail::MTLSize{threads_[0], threads_[1], threads_[2]});
     }
     void End() { objc::Send<void, "endEncoding">(encoder_); }
     id Get() const { return encoder_; }
@@ -694,7 +702,7 @@ public:
         const std::uint64_t at = staging_->Push(data, size, 4);
         assert(at != ~std::uint64_t(0) && "the staging ring is full");
         objc::Send<void, "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:">(Encoder(), staging_->buffer.handle, NSUInteger(at), buffer.handle,
-                                                                                          NSUInteger(offset), NSUInteger(size));
+                                                                                         NSUInteger(offset), NSUInteger(size));
     }
     bool WriteTexture(const Texture& t, const void* data, std::size_t size, std::uint32_t bytesPerRow) {
         const std::uint64_t at = staging_->Push(data, size, 256);

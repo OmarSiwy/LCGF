@@ -55,7 +55,7 @@ struct MetalHost {
     bool ReadBuffer(const gpu::Buffer& b, void* out, std::size_t size) {
         return Readback(out, size, [&](objc::id blit, objc::id to) {
             objc::Send<void, "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:">(blit, b.handle, objc::NSUInteger(0), to, objc::NSUInteger(0),
-                                                                                              objc::NSUInteger(size));
+                                                                                             objc::NSUInteger(size));
         });
     }
 };

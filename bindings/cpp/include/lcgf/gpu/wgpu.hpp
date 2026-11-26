@@ -28,7 +28,10 @@
 namespace lcgf::gpu {
 
 /// What creation reports. `kSuccess` is the one every back end has.
-enum class Result : std::uint32_t { Success, PipelineFailed, MapFailed, NoCode };
+enum class Result : std::uint32_t { Success,
+                                    PipelineFailed,
+                                    MapFailed,
+                                    NoCode };
 inline constexpr Result kSuccess = Result::Success;
 
 /// The host's device and queue; the instance runs map callbacks for ReadBuffer.
@@ -124,9 +127,18 @@ namespace detail {
 inline WGPUStringView sv(const char* s) { return {s, WGPU_STRLEN}; }
 inline WGPUTextureFormat format(TextureFormat f) {
     constexpr WGPUTextureFormat t[] = {
-        WGPUTextureFormat_R8Unorm,     WGPUTextureFormat_RG8Unorm,       WGPUTextureFormat_RGBA8Unorm,  WGPUTextureFormat_RGBA8UnormSrgb,
-        WGPUTextureFormat_BGRA8Unorm,  WGPUTextureFormat_BGRA8UnormSrgb, WGPUTextureFormat_R16Float,    WGPUTextureFormat_RGBA16Float,
-        WGPUTextureFormat_R32Float,    WGPUTextureFormat_RG32Float,      WGPUTextureFormat_RGBA32Float, WGPUTextureFormat_R32Uint,
+        WGPUTextureFormat_R8Unorm,
+        WGPUTextureFormat_RG8Unorm,
+        WGPUTextureFormat_RGBA8Unorm,
+        WGPUTextureFormat_RGBA8UnormSrgb,
+        WGPUTextureFormat_BGRA8Unorm,
+        WGPUTextureFormat_BGRA8UnormSrgb,
+        WGPUTextureFormat_R16Float,
+        WGPUTextureFormat_RGBA16Float,
+        WGPUTextureFormat_R32Float,
+        WGPUTextureFormat_RG32Float,
+        WGPUTextureFormat_RGBA32Float,
+        WGPUTextureFormat_R32Uint,
         WGPUTextureFormat_Depth32Float,
     };
     return t[std::uint32_t(f)];

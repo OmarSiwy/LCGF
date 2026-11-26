@@ -147,11 +147,11 @@ int run_ui(const char* name, bool seam, std::uint32_t frames, const char* out, S
 }
 
 // The generated namespaces, as types for run_ui.
-#define LCGF_NS(n)                                       \
-    struct n##_ns {                                      \
-        using Ui = n::Ui;                                \
-        using SeamUi = n::SeamUi;                        \
-        static constexpr std::size_t bytes = n::bytes;   \
+#define LCGF_NS(n) \
+    struct n##_ns { \
+        using Ui = n::Ui; \
+        using SeamUi = n::SeamUi; \
+        static constexpr std::size_t bytes = n::bytes; \
     };
 LCGF_NS(mixer)
 LCGF_NS(card)
@@ -193,53 +193,43 @@ int partial(std::string_view ui, std::uint32_t frames, const char* out) {
     if (ui == "mixer") {
         static mixer::Ui u;
         return run_partial(u, frames, out, [](mixer::State& s, std::uint32_t f) {
-            s.title = text(f, 0); s.volume = value(f, 1); s.muted = flag(f, 2); s.pan = value(f, 3);
-        }, [](mixer::Ui& u, std::uint32_t f) {
+            s.title = text(f, 0); s.volume = value(f, 1); s.muted = flag(f, 2); s.pan = value(f, 3); }, [](mixer::Ui& u, std::uint32_t f) {
             u.state.title = text(f, 0);
-            u.relayout<mixer::Field::title>();
-        }, none);
+            u.relayout<mixer::Field::title>(); }, none);
     }
     if (ui == "dash") {
         static dash::Ui u;
         return run_partial(u, frames, out, [](dash::State& s, std::uint32_t f) {
-            s.title = text(f, 0); s.a = text(f, 1); s.b = text(f, 2); s.c = text(f, 3); s.level = value(f, 4);
-        }, [](dash::Ui& u, std::uint32_t f) {
+            s.title = text(f, 0); s.a = text(f, 1); s.b = text(f, 2); s.c = text(f, 3); s.level = value(f, 4); }, [](dash::Ui& u, std::uint32_t f) {
             switch ((f / 4 + f % 4) % 4) {
             case 0: u.state.title = text(f, 0); u.relayout<dash::Field::title>(); break;
             case 1: u.state.a = text(f, 1); u.relayout<dash::Field::a>(); break;
             case 2: u.state.b = text(f, 2); u.relayout<dash::Field::b>(); break;
             default: u.state.c = text(f, 3); u.relayout<dash::Field::c>(); break;
-            }
-        }, none);
+            } }, none);
     }
     if (ui == "todo") {
         static todo::Ui u;
         return run_partial(u, frames, out, [](todo::State& s, std::uint32_t f) {
-            s.title = text(f, 0); s.len = count(f, 1); s.footer = flag(f, 2); s.mode = pick(f, 3);
-        }, [](todo::Ui& u, std::uint32_t f) {
+            s.title = text(f, 0); s.len = count(f, 1); s.footer = flag(f, 2); s.mode = pick(f, 3); }, [](todo::Ui& u, std::uint32_t f) {
             u.state.title = text(f, 0);
-            u.relayout<todo::Field::title>();
-        }, none);
+            u.relayout<todo::Field::title>(); }, none);
     }
     if (ui == "palette") {
         static palette::Ui u;
         return run_partial(u, frames, out, [](palette::State& s, std::uint32_t f) {
-            s.title = text(f, 0); s.accent = color(f, 1); s.edge = color(f, 2);
-        }, [](palette::Ui& u, std::uint32_t f) {
+            s.title = text(f, 0); s.accent = color(f, 1); s.edge = color(f, 2); }, [](palette::Ui& u, std::uint32_t f) {
             u.state.title = text(f, 0);
-            u.relayout<palette::Field::title>();
-        }, [](palette::Ui& u, std::uint32_t f) {
+            u.relayout<palette::Field::title>(); }, [](palette::Ui& u, std::uint32_t f) {
             u.state.accent = color(f, 1);
             u.patch<palette::Field::accent>();
             u.state.edge = color(f, 2);
-            u.patch<palette::Field::edge>();
-        });
+            u.patch<palette::Field::edge>(); });
     }
     if (ui == "meter") {
         static meter::Ui u;
         return run_partial(u, frames, out, [](meter::State& s, std::uint32_t f) {
-            s.name = text(f, 0); s.level = value(f, 1); s.count = count(f, 2); s.on = flag(f, 3); s.peak = value(f, 4);
-        }, [](meter::Ui& u, std::uint32_t f) {
+            s.name = text(f, 0); s.level = value(f, 1); s.count = count(f, 2); s.on = flag(f, 3); s.peak = value(f, 4); }, [](meter::Ui& u, std::uint32_t f) {
             // Every field is shown by a formatted label: ct_dump's `labelFields` cycles them all.
             switch ((f / 4 + f % 4) % 5) {
             case 0: u.state.name = text(f, 0); u.relayout<meter::Field::name>(); break;
@@ -247,8 +237,7 @@ int partial(std::string_view ui, std::uint32_t frames, const char* out) {
             case 2: u.state.count = count(f, 2); u.relayout<meter::Field::count>(); break;
             case 3: u.state.on = flag(f, 3); u.relayout<meter::Field::on>(); break;
             default: u.state.peak = value(f, 4); u.relayout<meter::Field::peak>(); break;
-            }
-        }, none);
+            } }, none);
     }
     std::fprintf(stderr, "no partial replay for %s\n", std::string(ui).c_str());
     return 2;

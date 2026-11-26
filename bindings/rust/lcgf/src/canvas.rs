@@ -27,7 +27,13 @@ pub struct Line {
 }
 impl Default for Line {
     fn default() -> Self {
-        Self { layer: 0, weight: 1, cap: Cap::Butt, dash: 0, width: 0 }
+        Self {
+            layer: 0,
+            weight: 1,
+            cap: Cap::Butt,
+            dash: 0,
+            width: 0,
+        }
     }
 }
 
@@ -44,7 +50,14 @@ pub struct Rect {
 }
 impl Default for Rect {
     fn default() -> Self {
-        Self { layer: 0, weight: 1, fill: true, stroke: true, radius: 0, width: 0 }
+        Self {
+            layer: 0,
+            weight: 1,
+            fill: true,
+            stroke: true,
+            radius: 0,
+            width: 0,
+        }
     }
 }
 
@@ -62,7 +75,15 @@ pub struct Arc {
 }
 impl Default for Arc {
     fn default() -> Self {
-        Self { layer: 0, weight: 1, cap: Cap::Butt, dash: 0, start: 0.0, sweep: core::f32::consts::TAU, width: 0 }
+        Self {
+            layer: 0,
+            weight: 1,
+            cap: Cap::Butt,
+            dash: 0,
+            start: 0.0,
+            sweep: core::f32::consts::TAU,
+            width: 0,
+        }
     }
 }
 
@@ -78,7 +99,13 @@ pub struct Area {
 }
 impl Default for Area {
     fn default() -> Self {
-        Self { layer: 0, weight: 1, fill: true, stroke: false, width: 0 }
+        Self {
+            layer: 0,
+            weight: 1,
+            fill: true,
+            stroke: false,
+            width: 0,
+        }
     }
 }
 
@@ -129,7 +156,12 @@ pub struct Camera {
 }
 impl Default for Camera {
     fn default() -> Self {
-        Self { origin: [0, 0], scale: 1.0, offset: [0.0, 0.0], zoom: 1.0 }
+        Self {
+            origin: [0, 0],
+            scale: 1.0,
+            offset: [0.0, 0.0],
+            zoom: 1.0,
+        }
     }
 }
 
@@ -181,8 +213,24 @@ unsafe extern "C" {
     fn lcgf_canvas_circle(c: Raw, cx: i32, cy: i32, r: u32, o: *const Rect) -> u32;
     fn lcgf_canvas_arc(c: Raw, cx: i32, cy: i32, r: u32, o: *const Arc) -> u32;
     fn lcgf_canvas_polygon(c: Raw, pts: *const [i32; 2], n: usize, o: *const Area) -> u32;
-    fn lcgf_canvas_glyph(c: Raw, ax: i32, ay: i32, w: u32, h: u32, uv: *const [f32; 4], layer: u8, turns: u8) -> u32;
-    fn lcgf_canvas_glyphs(c: Raw, s: *const u8, len: usize, x: i32, y: i32, o: *const Text) -> Range;
+    fn lcgf_canvas_glyph(
+        c: Raw,
+        ax: i32,
+        ay: i32,
+        w: u32,
+        h: u32,
+        uv: *const [f32; 4],
+        layer: u8,
+        turns: u8,
+    ) -> u32;
+    fn lcgf_canvas_glyphs(
+        c: Raw,
+        s: *const u8,
+        len: usize,
+        x: i32,
+        y: i32,
+        o: *const Text,
+    ) -> Range;
     fn lcgf_canvas_kill(c: Raw, row: u32);
     fn lcgf_canvas_reset(c: Raw);
     fn lcgf_canvas_clear_dirty(c: Raw);
@@ -205,7 +253,10 @@ impl<'a> Canvas<'a> {
     /// None when `buf` is too small or not aligned to `COLUMN_ALIGN`.
     pub fn new(buf: &'a mut [u8], rows: u32, verts: u32, dirty: u32) -> Option<Self> {
         let c = unsafe { lcgf_canvas_init(buf.as_mut_ptr(), buf.len(), rows, verts, dirty) };
-        (!c.is_null()).then_some(Self { c, _buf: PhantomData })
+        (!c.is_null()).then_some(Self {
+            c,
+            _buf: PhantomData,
+        })
     }
     pub fn len(&self) -> u32 {
         unsafe { lcgf_canvas_len(self.c) }
@@ -231,8 +282,19 @@ impl<'a> Canvas<'a> {
     pub fn polygon(&mut self, points: &[[i32; 2]], o: &Area) -> u32 {
         unsafe { lcgf_canvas_polygon(self.c, points.as_ptr(), points.len(), o) }
     }
-    pub fn glyph(&mut self, anchor: [i32; 2], size: [u32; 2], uv: [f32; 4], layer: u8, turns: u8) -> u32 {
-        unsafe { lcgf_canvas_glyph(self.c, anchor[0], anchor[1], size[0], size[1], &uv, layer, turns) }
+    pub fn glyph(
+        &mut self,
+        anchor: [i32; 2],
+        size: [u32; 2],
+        uv: [f32; 4],
+        layer: u8,
+        turns: u8,
+    ) -> u32 {
+        unsafe {
+            lcgf_canvas_glyph(
+                self.c, anchor[0], anchor[1], size[0], size[1], &uv, layer, turns,
+            )
+        }
     }
     pub fn glyphs(&mut self, s: &str, at: [i32; 2], o: &Text) -> Range {
         unsafe { lcgf_canvas_glyphs(self.c, s.as_ptr(), s.len(), at[0], at[1], o) }

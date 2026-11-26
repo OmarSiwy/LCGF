@@ -67,83 +67,83 @@ inline constexpr Bitfield kAllBarrierBits = 0xFFFFFFFF;
 /// The GL ES entry points the projection calls, loaded once from the host's context. The 3.1
 /// ones (compute, images) stay null on a 3.0 context.
 struct GlFns {
-#define LCGF_GL_30(X)                                                                                                 \
-    X(void, GenBuffers, (gl::Sizei n, gl::Uint* b))                                                                   \
-    X(void, DeleteBuffers, (gl::Sizei n, const gl::Uint* b))                                                          \
-    X(void, BindBuffer, (gl::Enum t, gl::Uint b))                                                                     \
-    X(void, BufferData, (gl::Enum t, gl::Sizeiptr n, const void* d, gl::Enum u))                                      \
-    X(void, BufferSubData, (gl::Enum t, gl::Intptr o, gl::Sizeiptr n, const void* d))                                 \
-    X(void*, MapBufferRange, (gl::Enum t, gl::Intptr o, gl::Sizeiptr n, gl::Bitfield a))                              \
-    X(gl::Boolean, UnmapBuffer, (gl::Enum t))                                                                         \
-    X(void, BindBufferRange, (gl::Enum t, gl::Uint i, gl::Uint b, gl::Intptr o, gl::Sizeiptr n))                      \
-    X(void, GenTextures, (gl::Sizei n, gl::Uint* t))                                                                  \
-    X(void, DeleteTextures, (gl::Sizei n, const gl::Uint* t))                                                         \
-    X(void, BindTexture, (gl::Enum t, gl::Uint x))                                                                    \
-    X(void, ActiveTexture, (gl::Enum u))                                                                              \
-    X(void, TexStorage2D, (gl::Enum t, gl::Sizei l, gl::Enum f, gl::Sizei w, gl::Sizei h))                            \
+#define LCGF_GL_30(X) \
+    X(void, GenBuffers, (gl::Sizei n, gl::Uint * b)) \
+    X(void, DeleteBuffers, (gl::Sizei n, const gl::Uint* b)) \
+    X(void, BindBuffer, (gl::Enum t, gl::Uint b)) \
+    X(void, BufferData, (gl::Enum t, gl::Sizeiptr n, const void* d, gl::Enum u)) \
+    X(void, BufferSubData, (gl::Enum t, gl::Intptr o, gl::Sizeiptr n, const void* d)) \
+    X(void*, MapBufferRange, (gl::Enum t, gl::Intptr o, gl::Sizeiptr n, gl::Bitfield a)) \
+    X(gl::Boolean, UnmapBuffer, (gl::Enum t)) \
+    X(void, BindBufferRange, (gl::Enum t, gl::Uint i, gl::Uint b, gl::Intptr o, gl::Sizeiptr n)) \
+    X(void, GenTextures, (gl::Sizei n, gl::Uint * t)) \
+    X(void, DeleteTextures, (gl::Sizei n, const gl::Uint* t)) \
+    X(void, BindTexture, (gl::Enum t, gl::Uint x)) \
+    X(void, ActiveTexture, (gl::Enum u)) \
+    X(void, TexStorage2D, (gl::Enum t, gl::Sizei l, gl::Enum f, gl::Sizei w, gl::Sizei h)) \
     X(void, TexSubImage2D, (gl::Enum t, gl::Int l, gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h, gl::Enum f, gl::Enum ty, const void* p)) \
-    X(void, TexParameteri, (gl::Enum t, gl::Enum p, gl::Int v))                                                       \
-    X(void, PixelStorei, (gl::Enum p, gl::Int v))                                                                     \
-    X(void, ReadPixels, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h, gl::Enum f, gl::Enum t, void* p))            \
-    X(void, GenSamplers, (gl::Sizei n, gl::Uint* s))                                                                  \
-    X(void, DeleteSamplers, (gl::Sizei n, const gl::Uint* s))                                                         \
-    X(void, BindSampler, (gl::Uint u, gl::Uint s))                                                                    \
-    X(void, SamplerParameteri, (gl::Uint s, gl::Enum p, gl::Int v))                                                   \
-    X(void, SamplerParameterf, (gl::Uint s, gl::Enum p, gl::Float v))                                                 \
-    X(void, GenRenderbuffers, (gl::Sizei n, gl::Uint* r))                                                             \
-    X(void, DeleteRenderbuffers, (gl::Sizei n, const gl::Uint* r))                                                    \
-    X(void, BindRenderbuffer, (gl::Enum t, gl::Uint r))                                                               \
-    X(void, RenderbufferStorageMultisample, (gl::Enum t, gl::Sizei s, gl::Enum f, gl::Sizei w, gl::Sizei h))          \
-    X(void, GenFramebuffers, (gl::Sizei n, gl::Uint* f))                                                              \
-    X(void, DeleteFramebuffers, (gl::Sizei n, const gl::Uint* f))                                                     \
-    X(void, BindFramebuffer, (gl::Enum t, gl::Uint f))                                                                \
-    X(void, FramebufferTexture2D, (gl::Enum t, gl::Enum a, gl::Enum tt, gl::Uint x, gl::Int l))                       \
-    X(void, FramebufferRenderbuffer, (gl::Enum t, gl::Enum a, gl::Enum rt, gl::Uint r))                               \
-    X(gl::Enum, CheckFramebufferStatus, (gl::Enum t))                                                                 \
+    X(void, TexParameteri, (gl::Enum t, gl::Enum p, gl::Int v)) \
+    X(void, PixelStorei, (gl::Enum p, gl::Int v)) \
+    X(void, ReadPixels, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h, gl::Enum f, gl::Enum t, void* p)) \
+    X(void, GenSamplers, (gl::Sizei n, gl::Uint * s)) \
+    X(void, DeleteSamplers, (gl::Sizei n, const gl::Uint* s)) \
+    X(void, BindSampler, (gl::Uint u, gl::Uint s)) \
+    X(void, SamplerParameteri, (gl::Uint s, gl::Enum p, gl::Int v)) \
+    X(void, SamplerParameterf, (gl::Uint s, gl::Enum p, gl::Float v)) \
+    X(void, GenRenderbuffers, (gl::Sizei n, gl::Uint * r)) \
+    X(void, DeleteRenderbuffers, (gl::Sizei n, const gl::Uint* r)) \
+    X(void, BindRenderbuffer, (gl::Enum t, gl::Uint r)) \
+    X(void, RenderbufferStorageMultisample, (gl::Enum t, gl::Sizei s, gl::Enum f, gl::Sizei w, gl::Sizei h)) \
+    X(void, GenFramebuffers, (gl::Sizei n, gl::Uint * f)) \
+    X(void, DeleteFramebuffers, (gl::Sizei n, const gl::Uint* f)) \
+    X(void, BindFramebuffer, (gl::Enum t, gl::Uint f)) \
+    X(void, FramebufferTexture2D, (gl::Enum t, gl::Enum a, gl::Enum tt, gl::Uint x, gl::Int l)) \
+    X(void, FramebufferRenderbuffer, (gl::Enum t, gl::Enum a, gl::Enum rt, gl::Uint r)) \
+    X(gl::Enum, CheckFramebufferStatus, (gl::Enum t)) \
     X(void, BlitFramebuffer, (gl::Int a, gl::Int b, gl::Int c, gl::Int d, gl::Int e, gl::Int f, gl::Int g, gl::Int h, gl::Bitfield m, gl::Enum fl)) \
-    X(gl::Uint, CreateShader, (gl::Enum t))                                                                           \
-    X(void, ShaderSource, (gl::Uint s, gl::Sizei n, const gl::Char* const* src, const gl::Int* len))                  \
-    X(void, CompileShader, (gl::Uint s))                                                                              \
-    X(void, GetShaderiv, (gl::Uint s, gl::Enum p, gl::Int* v))                                                        \
-    X(void, GetShaderInfoLog, (gl::Uint s, gl::Sizei n, gl::Sizei* len, gl::Char* log))                               \
-    X(void, DeleteShader, (gl::Uint s))                                                                               \
-    X(gl::Uint, CreateProgram, ())                                                                                    \
-    X(void, AttachShader, (gl::Uint p, gl::Uint s))                                                                   \
-    X(void, LinkProgram, (gl::Uint p))                                                                                \
-    X(void, GetProgramiv, (gl::Uint p, gl::Enum n, gl::Int* v))                                                       \
-    X(void, GetProgramInfoLog, (gl::Uint p, gl::Sizei n, gl::Sizei* len, gl::Char* log))                              \
-    X(void, DeleteProgram, (gl::Uint p))                                                                              \
-    X(void, UseProgram, (gl::Uint p))                                                                                 \
-    X(gl::Uint, GetUniformBlockIndex, (gl::Uint p, const gl::Char* n))                                                \
-    X(void, UniformBlockBinding, (gl::Uint p, gl::Uint i, gl::Uint b))                                                \
-    X(gl::Int, GetUniformLocation, (gl::Uint p, const gl::Char* n))                                                   \
-    X(void, Uniform1i, (gl::Int l, gl::Int v))                                                                        \
-    X(void, GenVertexArrays, (gl::Sizei n, gl::Uint* a))                                                              \
-    X(void, DeleteVertexArrays, (gl::Sizei n, const gl::Uint* a))                                                     \
-    X(void, BindVertexArray, (gl::Uint a))                                                                            \
-    X(void, EnableVertexAttribArray, (gl::Uint i))                                                                    \
-    X(void, VertexAttribPointer, (gl::Uint i, gl::Int n, gl::Enum t, gl::Boolean norm, gl::Sizei s, const void* p))   \
-    X(void, VertexAttribIPointer, (gl::Uint i, gl::Int n, gl::Enum t, gl::Sizei s, const void* p))                    \
-    X(void, VertexAttribDivisor, (gl::Uint i, gl::Uint d))                                                            \
-    X(void, Enable, (gl::Enum c))                                                                                     \
-    X(void, Disable, (gl::Enum c))                                                                                    \
-    X(void, BlendFuncSeparate, (gl::Enum a, gl::Enum b, gl::Enum c, gl::Enum d))                                      \
-    X(void, BlendEquationSeparate, (gl::Enum a, gl::Enum b))                                                          \
-    X(void, BlendColor, (gl::Float r, gl::Float g, gl::Float b, gl::Float a))                                         \
-    X(void, ColorMask, (gl::Boolean r, gl::Boolean g, gl::Boolean b, gl::Boolean a))                                  \
-    X(void, CullFace, (gl::Enum m))                                                                                   \
-    X(void, FrontFace, (gl::Enum m))                                                                                  \
-    X(void, Viewport, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h))                                               \
-    X(void, Scissor, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h))                                                \
-    X(void, ClearColor, (gl::Float r, gl::Float g, gl::Float b, gl::Float a))                                         \
-    X(void, Clear, (gl::Bitfield m))                                                                                  \
-    X(void, DrawArraysInstanced, (gl::Enum m, gl::Int f, gl::Sizei n, gl::Sizei i))                                   \
-    X(void, DrawElementsInstanced, (gl::Enum m, gl::Sizei n, gl::Enum t, const void* o, gl::Sizei i))                 \
-    X(gl::Enum, GetError, ())                                                                                         \
+    X(gl::Uint, CreateShader, (gl::Enum t)) \
+    X(void, ShaderSource, (gl::Uint s, gl::Sizei n, const gl::Char* const* src, const gl::Int* len)) \
+    X(void, CompileShader, (gl::Uint s)) \
+    X(void, GetShaderiv, (gl::Uint s, gl::Enum p, gl::Int * v)) \
+    X(void, GetShaderInfoLog, (gl::Uint s, gl::Sizei n, gl::Sizei * len, gl::Char * log)) \
+    X(void, DeleteShader, (gl::Uint s)) \
+    X(gl::Uint, CreateProgram, ()) \
+    X(void, AttachShader, (gl::Uint p, gl::Uint s)) \
+    X(void, LinkProgram, (gl::Uint p)) \
+    X(void, GetProgramiv, (gl::Uint p, gl::Enum n, gl::Int * v)) \
+    X(void, GetProgramInfoLog, (gl::Uint p, gl::Sizei n, gl::Sizei * len, gl::Char * log)) \
+    X(void, DeleteProgram, (gl::Uint p)) \
+    X(void, UseProgram, (gl::Uint p)) \
+    X(gl::Uint, GetUniformBlockIndex, (gl::Uint p, const gl::Char* n)) \
+    X(void, UniformBlockBinding, (gl::Uint p, gl::Uint i, gl::Uint b)) \
+    X(gl::Int, GetUniformLocation, (gl::Uint p, const gl::Char* n)) \
+    X(void, Uniform1i, (gl::Int l, gl::Int v)) \
+    X(void, GenVertexArrays, (gl::Sizei n, gl::Uint * a)) \
+    X(void, DeleteVertexArrays, (gl::Sizei n, const gl::Uint* a)) \
+    X(void, BindVertexArray, (gl::Uint a)) \
+    X(void, EnableVertexAttribArray, (gl::Uint i)) \
+    X(void, VertexAttribPointer, (gl::Uint i, gl::Int n, gl::Enum t, gl::Boolean norm, gl::Sizei s, const void* p)) \
+    X(void, VertexAttribIPointer, (gl::Uint i, gl::Int n, gl::Enum t, gl::Sizei s, const void* p)) \
+    X(void, VertexAttribDivisor, (gl::Uint i, gl::Uint d)) \
+    X(void, Enable, (gl::Enum c)) \
+    X(void, Disable, (gl::Enum c)) \
+    X(void, BlendFuncSeparate, (gl::Enum a, gl::Enum b, gl::Enum c, gl::Enum d)) \
+    X(void, BlendEquationSeparate, (gl::Enum a, gl::Enum b)) \
+    X(void, BlendColor, (gl::Float r, gl::Float g, gl::Float b, gl::Float a)) \
+    X(void, ColorMask, (gl::Boolean r, gl::Boolean g, gl::Boolean b, gl::Boolean a)) \
+    X(void, CullFace, (gl::Enum m)) \
+    X(void, FrontFace, (gl::Enum m)) \
+    X(void, Viewport, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h)) \
+    X(void, Scissor, (gl::Int x, gl::Int y, gl::Sizei w, gl::Sizei h)) \
+    X(void, ClearColor, (gl::Float r, gl::Float g, gl::Float b, gl::Float a)) \
+    X(void, Clear, (gl::Bitfield m)) \
+    X(void, DrawArraysInstanced, (gl::Enum m, gl::Int f, gl::Sizei n, gl::Sizei i)) \
+    X(void, DrawElementsInstanced, (gl::Enum m, gl::Sizei n, gl::Enum t, const void* o, gl::Sizei i)) \
+    X(gl::Enum, GetError, ()) \
     X(void, Finish, ())
-#define LCGF_GL_31(X)                                                                                                 \
-    X(void, DispatchCompute, (gl::Uint x, gl::Uint y, gl::Uint z))                                                    \
-    X(void, MemoryBarrier, (gl::Bitfield b))                                                                          \
+#define LCGF_GL_31(X) \
+    X(void, DispatchCompute, (gl::Uint x, gl::Uint y, gl::Uint z)) \
+    X(void, MemoryBarrier, (gl::Bitfield b)) \
     X(void, BindImageTexture, (gl::Uint u, gl::Uint t, gl::Int l, gl::Boolean la, gl::Int ly, gl::Enum a, gl::Enum f))
 #define LCGF_GL_FIELD(R, N, A) R(*N) A = nullptr;
     LCGF_GL_30(LCGF_GL_FIELD)
@@ -167,7 +167,13 @@ struct GlFns {
 };
 
 /// What creation reports. `kSuccess` is the one every back end has.
-enum class Result : std::uint32_t { Success, CompileFailed, LinkFailed, UnsupportedFormat, IncompleteFramebuffer, NoCompute, NoCode };
+enum class Result : std::uint32_t { Success,
+                                    CompileFailed,
+                                    LinkFailed,
+                                    UnsupportedFormat,
+                                    IncompleteFramebuffer,
+                                    NoCompute,
+                                    NoCode };
 inline constexpr Result kSuccess = Result::Success;
 
 /// The host's current GL ES context: its function table.
@@ -449,8 +455,10 @@ public:
         }
         // naga's y flip mirrors the image in GL's clip space, which reverses the winding GL sees.
         f.FrontFace(p.frontCCW ? gl::kCW : gl::kCCW);
-        if (p.restart) f.Enable(gl::kPrimitiveRestartFixedIndex); else f.Disable(gl::kPrimitiveRestartFixedIndex);
-        if (p.alphaToCoverage) f.Enable(gl::kSampleAlphaToCoverage); else f.Disable(gl::kSampleAlphaToCoverage);
+        if (p.restart) f.Enable(gl::kPrimitiveRestartFixedIndex);
+        else f.Disable(gl::kPrimitiveRestartFixedIndex);
+        if (p.alphaToCoverage) f.Enable(gl::kSampleAlphaToCoverage);
+        else f.Disable(gl::kSampleAlphaToCoverage);
         f.Disable(gl::kDepthTest);
         f.Disable(gl::kStencilTest);
         f.Disable(gl::kDither);

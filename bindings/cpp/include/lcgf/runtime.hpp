@@ -63,9 +63,40 @@ constexpr std::uint32_t Rgba(std::uint8_t r, std::uint8_t g, std::uint8_t b, std
 inline constexpr std::uint32_t transparent = 0, white = 0xffffffffu;
 inline constexpr float inf = std::numeric_limits<float>::infinity();
 
-enum class Dir : std::uint32_t { x = 0, y = 1 };
-enum class Align : std::uint32_t { start = 0, center = 1, end = 2 };
-enum class Role : std::uint32_t { none, group, label, button, checkbox, slider, image, text_input, link, separator = 16, heading, article, list = 20, list_item, table = 38, row = 40, cell, column_header, row_header, dialog, region = 48, banner, navigation, main, complementary, content_info, form, search, status };
+enum class Dir : std::uint32_t { x = 0,
+                                 y = 1 };
+enum class Align : std::uint32_t { start = 0,
+                                   center = 1,
+                                   end = 2 };
+enum class Role : std::uint32_t { none,
+                                  group,
+                                  label,
+                                  button,
+                                  checkbox,
+                                  slider,
+                                  image,
+                                  text_input,
+                                  link,
+                                  separator = 16,
+                                  heading,
+                                  article,
+                                  list = 20,
+                                  list_item,
+                                  table = 38,
+                                  row = 40,
+                                  cell,
+                                  column_header,
+                                  row_header,
+                                  dialog,
+                                  region = 48,
+                                  banner,
+                                  navigation,
+                                  main,
+                                  complementary,
+                                  content_info,
+                                  form,
+                                  search,
+                                  status };
 
 /// A length: `Size::Fit()`, `Fill()`, `Px(8)`, `Pct(0.5f)`, `Grow(2)`.
 struct Size {
@@ -165,9 +196,9 @@ struct Row : lcgf_row {
         custom = none;
         const float* t = s.transform;
         const float* c = s.radii;
-        const bool off = (s.border != 0) | (s.opacity != 1) |                                       //
-                         (s.uv[0] != 0) | (s.uv[1] != 0) | (s.uv[2] != 1) | (s.uv[3] != 1) |        //
-                         (c[0] >= 0) | (c[1] >= 0) | (c[2] >= 0) | (c[3] >= 0) |                    //
+        const bool off = (s.border != 0) | (s.opacity != 1) |                                //
+                         (s.uv[0] != 0) | (s.uv[1] != 0) | (s.uv[2] != 1) | (s.uv[3] != 1) | //
+                         (c[0] >= 0) | (c[1] >= 0) | (c[2] >= 0) | (c[3] >= 0) |             //
                          (t[0] != 1) | (t[1] != 0) | (t[2] != 0) | (t[3] != 1) | (t[4] != 0) | (t[5] != 0);
         const float* o = s.paint_outset;
         const bool styled = (o[0] != 0) | (o[1] != 0) | (o[2] != 0) | (o[3] != 0) | (s.cursor != none) |
@@ -216,7 +247,12 @@ struct Spring {
 };
 
 /// A tween's curve (`tweens.Ease`).
-enum class Ease : std::uint32_t { linear, in_quad, out_quad, in_out, in_cubic, out_cubic };
+enum class Ease : std::uint32_t { linear,
+                                  in_quad,
+                                  out_quad,
+                                  in_out,
+                                  in_cubic,
+                                  out_cubic };
 
 /// A colour by channel, to animate one (`Animate`, `Tween`): `Color::From(lcgf::Rgb(...))`,
 /// back with `rgba()`. Channels move as numbers, as Zig's `Color` does.
@@ -299,7 +335,9 @@ struct Node {
 /// Points are int32 world units; a `width` of 0 is the layer's, in logical pixels.
 namespace canvas {
 using Point = std::array<std::int32_t, 2>;
-enum class Cap : std::uint8_t { butt, square, round };
+enum class Cap : std::uint8_t { butt,
+                                square,
+                                round };
 struct Line {
     std::uint8_t layer = 0, weight = 1;
     Cap cap = Cap::butt;
@@ -348,7 +386,13 @@ struct Options {
 
     lcgf_canvas_options raw() const {
         return {{{camera.origin[0], camera.origin[1]}, camera.scale, {camera.offset[0], camera.offset[1]}, camera.zoom},
-                layers.data(), layers.size(), zoom_scale ? 1u : 0u, ranges.data(), ranges.size(), overrides.data(), overrides.size()};
+                layers.data(),
+                layers.size(),
+                zoom_scale ? 1u : 0u,
+                ranges.data(),
+                ranges.size(),
+                overrides.data(),
+                overrides.size()};
     }
 };
 } // namespace canvas
@@ -363,7 +407,7 @@ public:
     std::uint32_t size() const { return lcgf_canvas_len(c_); }
     std::uint32_t Segment(canvas::Point a, canvas::Point b, const canvas::Line& o = {}) { return lcgf_canvas_segment(c_, a[0], a[1], b[0], b[1], line(o)); }
     canvas::Range Polyline(std::span<const canvas::Point> pts, const canvas::Line& o = {}) {
-        return lcgf_canvas_polyline(c_, reinterpret_cast<const std::int32_t(*)[2]>(pts.data()), pts.size(), line(o));
+        return lcgf_canvas_polyline(c_, reinterpret_cast<const std::int32_t (*)[2]>(pts.data()), pts.size(), line(o));
     }
     std::uint32_t Rect(canvas::Point lo, canvas::Point hi, const canvas::Box& o = {}) { return lcgf_canvas_rect(c_, lo[0], lo[1], hi[0], hi[1], box(o)); }
     std::uint32_t Circle(canvas::Point c, std::uint32_t r, const canvas::Box& o = {}) { return lcgf_canvas_circle(c_, c[0], c[1], r, box(o)); }
@@ -371,7 +415,7 @@ public:
         return lcgf_canvas_arc(c_, c[0], c[1], r, reinterpret_cast<const lcgf_canvas_arc_style*>(&o));
     }
     std::uint32_t Polygon(std::span<const canvas::Point> pts, const canvas::Area& o = {}) {
-        return lcgf_canvas_polygon(c_, reinterpret_cast<const std::int32_t(*)[2]>(pts.data()), pts.size(), reinterpret_cast<const lcgf_canvas_area_style*>(&o));
+        return lcgf_canvas_polygon(c_, reinterpret_cast<const std::int32_t (*)[2]>(pts.data()), pts.size(), reinterpret_cast<const lcgf_canvas_area_style*>(&o));
     }
     canvas::Range Glyphs(std::string_view str, canvas::Point at, const canvas::Text& o) {
         return lcgf_canvas_glyphs(c_, str.data(), str.size(), at[0], at[1], reinterpret_cast<const lcgf_canvas_text_style*>(&o));
@@ -466,7 +510,6 @@ private:
     }
 
 public:
-
 private:
     static constexpr Row kDefault{Style{}};
 
@@ -495,8 +538,7 @@ private:
         v.gap[i] = r.gap, v.flow[i] = r.flow, v.shrink[i] = r.shrink;
         v.align_main[i] = r.align_main, v.align_cross[i] = r.align_cross;
         v.clips[i] = std::uint8_t(r.clips), v.sense[i] = std::uint8_t(r.sense);
-        v.look[i] = {{r.params[0], r.params[1], r.params[2], r.params[3]}, r.fill, r.border_color, r.radius,
-                     std::uint16_t(r.texture), std::uint16_t(r.material)};
+        v.look[i] = {{r.params[0], r.params[1], r.params[2], r.params[3]}, r.fill, r.border_color, r.radius, std::uint16_t(r.texture), std::uint16_t(r.material)};
         v.role[i] = std::uint8_t(r.role), v.value[i] = r.value;
         v.text[i] = r.text, v.custom[i] = r.custom;
         // Participation narrows down the tree; without layout the node collapses.
@@ -535,7 +577,8 @@ private:
         e.prepared_texture = r.prepared_texture, e.paint_revision = r.paint_revision;
         e.participation = std::uint8_t(r.participation), e.active_participation = active;
         e.cursor = std::uint8_t(r.cursor);
-        e.active_cursor = r.cursor != 255 ? std::uint8_t(r.cursor) : i == 0 ? 255 : v.x_row[v.scope[parent]].active_cursor;
+        e.active_cursor = r.cursor != 255 ? std::uint8_t(r.cursor) : i == 0 ? 255
+                                                                            : v.x_row[v.scope[parent]].active_cursor;
         return i;
     }
 

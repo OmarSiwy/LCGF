@@ -462,7 +462,8 @@ public:
             if (from)
                 for (u32 k = 0; k < len; ++k)
                     if (T::widget_rows[T::focus_order[k]] == u32(*from)) at = k;
-            const u32 k = at == none ? (back ? len - 1 : 0) : back ? (at + len - 1) % len : (at + 1) % len;
+            const u32 k = at == none ? (back ? len - 1 : 0) : back ? (at + len - 1) % len
+                                                                   : (at + 1) % len;
             return Widget(T::widget_rows[T::focus_order[k]]);
         }
     }
@@ -734,7 +735,7 @@ private:
         } else {
             u32 first = 0, r = 0;
             for (u32 l = 0; l < runs; ++l) {
-                const auto& plan = T::label_plans[l];  // node, parent, quad_end, padding[4], color
+                const auto& plan = T::label_plans[l]; // node, parent, quad_end, padding[4], color
                 emit_quads(first, plan[2], quad, op);
                 first = plan[2];
                 V4 rect = rect_of(plan[0]);

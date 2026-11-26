@@ -26,11 +26,29 @@ struct Plot {
 }
 
 const PLOT_LAYERS: [canvas::Layer; 3] = [
-    canvas::Layer { stroke: 0xffe6e6e6, fill: 0, width: 1.0, flags: 3 },
-    canvas::Layer { stroke: 0xffffc85a, fill: 0xb4a05a28, width: 1.5, flags: 3 },
-    canvas::Layer { stroke: 0xff3c78ff, fill: 0xff3cc8ff, width: 2.0, flags: 2 },
+    canvas::Layer {
+        stroke: 0xffe6e6e6,
+        fill: 0,
+        width: 1.0,
+        flags: 3,
+    },
+    canvas::Layer {
+        stroke: 0xffffc85a,
+        fill: 0xb4a05a28,
+        width: 1.5,
+        flags: 3,
+    },
+    canvas::Layer {
+        stroke: 0xff3c78ff,
+        fill: 0xff3cc8ff,
+        width: 2.0,
+        flags: 2,
+    },
 ];
-const PLOT_MARKS: [canvas::Override; 1] = [canvas::Override { range: canvas::Range { first: 2, count: 3 }, color: 0xff00ff80 }];
+const PLOT_MARKS: [canvas::Override; 1] = [canvas::Override {
+    range: canvas::Range { first: 2, count: 3 },
+    color: 0xff00ff80,
+}];
 const PLOT_SUB: [canvas::Range; 1] = [canvas::Range { first: 1, count: 4 }];
 
 impl Plot {
@@ -40,15 +58,75 @@ impl Plot {
         for i in 0..8u32 {
             let x = (i * 100) as i32;
             let cap = [Cap::Butt, Cap::Square, Cap::Round][(i % 3) as usize];
-            s.segment([x, 0], [x + 80, (50 * (i % 3)) as i32], &Line { weight: (i % 4 + 1) as u8, cap, dash: ((i % 2) * 2) as u8, ..Default::default() });
+            s.segment(
+                [x, 0],
+                [x + 80, (50 * (i % 3)) as i32],
+                &Line {
+                    weight: (i % 4 + 1) as u8,
+                    cap,
+                    dash: ((i % 2) * 2) as u8,
+                    ..Default::default()
+                },
+            );
         }
-        s.polyline(&[[0, 200], [150, 260], [300, 200], [450, 300]], &Line { cap: Cap::Round, dash: 1, ..Default::default() });
-        s.rect([500, 0], [700, 150], &Rect { layer: 1, radius: 20, ..Default::default() });
-        s.circle([800, 100], 60, &Rect { layer: 2, ..Default::default() });
-        s.arc([100, 400], 80, &Arc { layer: 1, cap: Cap::Round, dash: 2, start: 0.5, sweep: 4.0, ..Default::default() });
-        s.polygon(&[[300, 350], [500, 380], [420, 500], [350, 450]], &Area { layer: 1, stroke: true, ..Default::default() });
-        s.glyphs("Hi", [600, 400], &Text { px: 40, turns: 1, ..Default::default() });
-        let all = [Range { first: 0, count: s.len() }];
+        s.polyline(
+            &[[0, 200], [150, 260], [300, 200], [450, 300]],
+            &Line {
+                cap: Cap::Round,
+                dash: 1,
+                ..Default::default()
+            },
+        );
+        s.rect(
+            [500, 0],
+            [700, 150],
+            &Rect {
+                layer: 1,
+                radius: 20,
+                ..Default::default()
+            },
+        );
+        s.circle(
+            [800, 100],
+            60,
+            &Rect {
+                layer: 2,
+                ..Default::default()
+            },
+        );
+        s.arc(
+            [100, 400],
+            80,
+            &Arc {
+                layer: 1,
+                cap: Cap::Round,
+                dash: 2,
+                start: 0.5,
+                sweep: 4.0,
+                ..Default::default()
+            },
+        );
+        s.polygon(
+            &[[300, 350], [500, 380], [420, 500], [350, 450]],
+            &Area {
+                layer: 1,
+                stroke: true,
+                ..Default::default()
+            },
+        );
+        s.glyphs(
+            "Hi",
+            [600, 400],
+            &Text {
+                px: 40,
+                turns: 1,
+                ..Default::default()
+            },
+        );
+        let all = [Range {
+            first: 0,
+            count: s.len(),
+        }];
         Self { s, all }
     }
 
@@ -58,9 +136,18 @@ impl Plot {
         input.dt = 1.0 / 60.0;
     }
 
-    fn options<'a>(k: u32, ranges: &'a [canvas::Range], overrides: &'a [canvas::Override]) -> canvas::Options<'a> {
+    fn options<'a>(
+        k: u32,
+        ranges: &'a [canvas::Range],
+        overrides: &'a [canvas::Override],
+    ) -> canvas::Options<'a> {
         canvas::Options {
-            camera: canvas::Camera { origin: [(k * 7) as i64, -((k * 3) as i64)], scale: 0.5 + 0.25 * (k % 4) as f32, offset: [10.0, 10.0], zoom: (1 + k % 3) as f32 },
+            camera: canvas::Camera {
+                origin: [(k * 7) as i64, -((k * 3) as i64)],
+                scale: 0.5 + 0.25 * (k % 4) as f32,
+                offset: [10.0, 10.0],
+                zoom: (1 + k % 3) as f32,
+            },
             layers: &PLOT_LAYERS,
             zoom_scale: k % 2 == 1,
             ranges,
@@ -75,9 +162,32 @@ impl Plot {
         }
         // The frame borrows the batch and its ranges until its draw list is dropped.
         let me: &'f Self = self;
-        f.open(Id::from("plot-root"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT });
-        f.canvas(Id::from("plot"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT }, &me.s, &Self::options(k, &me.all, &PLOT_MARKS));
-        f.canvas(Id::from("overlay"), &Style { size: [Size::px(120.0), Size::px(80.0)], floating: 1, ..Style::DEFAULT }, &me.s, &Self::options(k, &PLOT_SUB, &[]));
+        f.open(
+            Id::from("plot-root"),
+            &Style {
+                size: [Size::FILL, Size::FILL],
+                ..Style::DEFAULT
+            },
+        );
+        f.canvas(
+            Id::from("plot"),
+            &Style {
+                size: [Size::FILL, Size::FILL],
+                ..Style::DEFAULT
+            },
+            &me.s,
+            &Self::options(k, &me.all, &PLOT_MARKS),
+        );
+        f.canvas(
+            Id::from("overlay"),
+            &Style {
+                size: [Size::px(120.0), Size::px(80.0)],
+                floating: 1,
+                ..Style::DEFAULT
+            },
+            &me.s,
+            &Self::options(k, &PLOT_SUB, &[]),
+        );
         f.close();
     }
 }
@@ -311,7 +421,8 @@ fn main() {
         let mut ctx = Context::new(mem, &limits).expect("context");
         let mut plot = None;
         if plot_scene {
-            ctx.enable_canvas(leak(Context::canvas_bytes(&limits))).expect("canvas rows");
+            ctx.enable_canvas(leak(Context::canvas_bytes(&limits)))
+                .expect("canvas rows");
             plot = Some(Plot::new());
         }
         let th = *ctx.theme();
@@ -357,7 +468,12 @@ fn main() {
             out.extend_from_slice(&wake.to_bits().to_le_bytes());
             if let Some(p) = plot.as_mut() {
                 out.extend_from_slice(&p.s.len().to_le_bytes());
-                let hit = p.s.hit(&Plot::options(k, &p.all, &PLOT_MARKS), input.pointer[0], input.pointer[1], 2.0);
+                let hit = p.s.hit(
+                    &Plot::options(k, &p.all, &PLOT_MARKS),
+                    input.pointer[0],
+                    input.pointer[1],
+                    2.0,
+                );
                 out.extend_from_slice(&hit.unwrap_or(u32::MAX).to_le_bytes());
                 p.s.clear_dirty();
             }

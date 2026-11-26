@@ -743,11 +743,7 @@ impl<
                     seen += self.shown(j);
                 }
                 cursor = k;
-                row = if self.shown(k) != 0 {
-                    seen
-                } else {
-                    NONE
-                };
+                row = if self.shown(k) != 0 { seen } else { NONE };
             }
             if row == NONE {
                 continue;
@@ -1068,9 +1064,22 @@ impl<
         let q: Quad = unsafe { core::mem::transmute(T::TEMPLATES[k]) };
         let (r, c) = (self.rect_of(i), self.clip_of(T::CLIP_NODE[k] as usize));
         let sigma = q.params[1];
-        let g = if q.params[0].to_bits() == 3 && sigma.is_finite() { sigma.max(0.0) * 3.0 } else { 0.0 };
-        let b = [(r[0] - g).max(c[0]), (r[1] - g).max(c[1]), (r[2] + g).min(c[2]), (r[3] + g).min(c[3])];
-        let present = if T::REGIONS > 0 { self.visible[i] as u32 } else { 1 };
+        let g = if q.params[0].to_bits() == 3 && sigma.is_finite() {
+            sigma.max(0.0) * 3.0
+        } else {
+            0.0
+        };
+        let b = [
+            (r[0] - g).max(c[0]),
+            (r[1] - g).max(c[1]),
+            (r[2] + g).min(c[2]),
+            (r[3] + g).min(c[3]),
+        ];
+        let present = if T::REGIONS > 0 {
+            self.visible[i] as u32
+        } else {
+            1
+        };
         present & ((b[0] < b[2]) & (b[1] < b[3])) as u32
     }
 

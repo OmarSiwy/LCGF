@@ -390,7 +390,11 @@ impl Row {
             prepared_texture: 0,
             paint_revision: 0,
             participation: s.participation & 0xff,
-            cursor: if s.cursor == NONE { 255 } else { s.cursor & 0xff },
+            cursor: if s.cursor == NONE {
+                255
+            } else {
+                s.cursor & 0xff
+            },
         }
     }
 }
@@ -527,7 +531,11 @@ impl View {
             *self.text.add(iu) = r.text;
             *self.custom.add(iu) = r.custom;
             // Participation narrows down the tree; without layout the node collapses.
-            let up = if i == 0 { 15 } else { (*self.x_row.add(*self.scope.add(pu) as usize)).active_participation };
+            let up = if i == 0 {
+                15
+            } else {
+                (*self.x_row.add(*self.scope.add(pu) as usize)).active_participation
+            };
             let mut active = r.participation as u8 & up;
             if active & 1 == 0 {
                 active = 0;
@@ -631,7 +639,13 @@ unsafe extern "C" {
     pub fn lcgf_default_style(out: *mut Style);
     fn lcgf_rt_canvas_bytes(l: *const Limits) -> usize;
     fn lcgf_rt_enable_canvas(rt: Rt, buf: *mut u8, len: usize) -> i32;
-    fn lcgf_rt_canvas(rt: Rt, id: u32, s: *const Style, c: crate::canvas::Raw, o: *const crate::canvas::RawOptions) -> u32;
+    fn lcgf_rt_canvas(
+        rt: Rt,
+        id: u32,
+        s: *const Style,
+        c: crate::canvas::Raw,
+        o: *const crate::canvas::RawOptions,
+    ) -> u32;
 }
 
 /// The runtime front end in your buffer.
@@ -775,7 +789,13 @@ impl<'f> Frame<'f> {
     /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
     /// [`Context::enable_canvas`]. `u32::MAX` past the limits' customs. The draw list reads
     /// `c` and what `o` borrows, so both stay borrowed until it is dropped.
-    pub fn canvas(&mut self, id: Id, s: &Style, c: &'f crate::canvas::Canvas<'_>, o: &crate::canvas::Options<'f>) -> u32 {
+    pub fn canvas(
+        &mut self,
+        id: Id,
+        s: &Style,
+        c: &'f crate::canvas::Canvas<'_>,
+        o: &crate::canvas::Options<'f>,
+    ) -> u32 {
         let raw = o.raw();
         unsafe { lcgf_rt_canvas(self.rt, id.0, s, c.raw(), &raw) }
     }
