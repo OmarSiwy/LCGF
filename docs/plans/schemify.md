@@ -153,9 +153,12 @@ Today a comptime page folds the theme: `var()` is substituted by the compiler (`
 | N-FE runtime front end; N-SUBMIT on:submit | e863cf0e, 999c2329 |
 | C4/C5 GPU: canvas golden in draw-golden on the GPU, vk benchmark (RTX 5060: 0.55 ms/frame for 100k at 1080p; pan uploads 160 B), batch placement fix | 1e06d82c..00b85934 |
 | sw canvas: transform and rounded-clip parents, `Frame.reuse` (`enableCanvas` now takes 2 × customs rows), cheaper shading (71M instr/frame for 100k, 1 thread), golden through the bin, dashes on arcs | ea5ff09e, 58e13807, d42136f3, fdcd4a68, 2ae59430, b64b2381 |
+| GPU transformed nodes, rounded clips, dashed arcs; C6 canvas from C, C++ and Rust (safe Rust `Frame::canvas`); address-free damage; comptime `CanvasRenderer` (apps without a canvas pay 0 B); caller-set limits in `Desc` (`canvas_batches` ≤32, `canvas_draws` ≤64, `canvas_overrides` ≤512) | d48e38d1, 90db0223, 8af3f1ea, 7b81d32c..403133d8 |
+| Per-row mark colours for large selections: `Instances.init(…, .{ .marks = true })`, `mark(i, color)`; a mark beats a range override. **API change:** `Instances.init`/`requiredBytes` take an `Options` (`.{}` for none) | 2154cef9, b522005b |
+| Markup: `sfy-*` components (page theme and tokens passed in; one name for page and region forms), `lcgf-else`, page-level text on:change, accessible names, `aria-labelledby` | 33ba5e41, 55665436, bd55d7d3, b3aafd3a, 691a139c, 885ca6b2, 3e857e94, 84583f36 |
 | Text fields inside regions: `value="{row.f}"`, on:change(index, text), on:submit(index) | c4168b13 |
 | M8.2 `<each of>`; E2 several regions; per-row view state; E1 fit-sized regions; one-way per-item on:change over `[]const T` | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
 
-**Next:** GPU transform and rounded clip plus GPU arc dashes; caller-set canvas limits (batches, draws, overrides); a compile-time canvas switch so apps without one pay no bytes; C6 (C, C++ and Rust canvas exposure); markup components (M8.3), `lcgf-else`, accessible names.
+**Next:** C++ and Rust static UIs through a per-UI Zig object (Zig speed, hand ports deleted); census baselines; Windows CI. Deferred, runtime-front-end only: components and regions on runtime pages. E1 one-frame lag stays (a clean fix needs a second layout).
 
 LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.
