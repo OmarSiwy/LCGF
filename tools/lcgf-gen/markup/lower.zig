@@ -2687,7 +2687,7 @@ pub const Lowerer = struct {
         const header = l.boxStyle(summary, head_base, .y, &params, &margin);
         if (params.len > 0 or margin != null or l.shadow != null or l.outline != null or !std.meta.eql(l.flex, lcgf.flex.Flex.Style{}))
             l.ds.err(l.loc(summary), "CSS on a <summary> lays out the header: margins, gradients, box-shadow and outline are not lowered there", .{});
-        if (!std.meta.eql(header, head_base)) node.header = header;
+        if (!std.meta.eql(header, head_base)) node.part = .{ .header = header };
         l.flex = flex;
         l.shadow = shadow;
         l.outline = outline;
@@ -2936,6 +2936,7 @@ pub const Lowerer = struct {
         node.id = l.widgetId(n, bind, "<select>") orelse return true;
         // CSS on the <select> restyles its button; its list keeps the theme's look.
         l.widgetStyle(n, parent, lcgf.widgets_select.buttonStyle(&l.page.theme, .{}), &node);
+        l.optionFace(n, &node);
         node.name = l.accessibleName(n);
         if (node.name.len == 0) node.name = l.controlCaption(n);
         const first = l.page.handlers.items.len;
@@ -3146,6 +3147,68 @@ pub const Lowerer = struct {
         return true;
     }
 
+    /// CSS on the `<option>`s of select `n` lays out every option row (`Options.option`) and
+    /// draws its text (`Options.option_text`). The rows are one face, so every option must
+    /// compute the same style.
+    fn optionFace(l: *Lowerer, n: u32, node: *ir.Node) void {
+        const th = &l.page.theme;
+        const flex = l.flex;
+        const shadow = l.shadow;
+        const outline = l.outline;
+        defer {
+            l.flex = flex;
+            l.shadow = shadow;
+            l.outline = outline;
+        }
+        const face_base = lcgf.widgets_menu.itemStyle(th, false);
+        const text_base = lcgf.widgets_label.labelText(th);
+        var first = true;
+        var noted = false;
+        for (n + 1..l.k.end[n]) |i_| {
+            const i: u32 = @intCast(i_);
+            if (!l.doc.isElement(i, "option")) continue;
+            var params: []const u8 = "";
+            var margin: ?[4]f32 = null;
+            const face = l.boxStyle(i, face_base, .y, &params, &margin);
+            if (!noted and (params.len > 0 or margin != null or l.shadow != null or l.outline != null or !std.meta.eql(l.flex, lcgf.flex.Flex.Style{}))) {
+                noted = true;
+                l.ds.err(l.loc(i), "CSS on an <option> lays out its row: margins, var() bound at run time, gradients, box-shadow and outline are not lowered there", .{});
+            }
+            // Text CSS on the <option> draws its caption; it does not inherit the <select>'s.
+            l.text[i] = text_base;
+            l.text_tokens[i] = .{};
+            l.font[i] = .{};
+            l.para[i] = .{};
+            l.deco[i] = .{};
+            l.current = i;
+            l.computeText(i);
+            var text = text_base;
+            for (text_props) |p| if (l.k.get(i, p).decl != none) {
+                text = l.text[i];
+                break;
+            };
+            text.wrap = text_base.wrap;
+            if (!noted and !std.meta.eql(l.text_tokens[i], ir.TextTokens{})) {
+                noted = true;
+                l.ds.err(l.loc(i), "var() bound at run time in text CSS on an <option> is not lowered", .{});
+            }
+            for ([_]Prop{ .@"line-height", .@"letter-spacing", .@"word-spacing", .@"text-overflow" }) |p| {
+                const d = l.k.get(i, p).decl;
+                if (d == none or l.text_noted.contains(d)) continue;
+                ok(l.text_noted.put(l.arena, d, {}));
+                l.ds.err(l.declared(i, p).?.loc, "'{s}' on an <option> is not lowered: its caption is one line", .{@tagName(p)});
+            }
+            const o: ir.Part = if (std.meta.eql(face, face_base) and std.meta.eql(text, text_base)) .none else .{ .option = .{ .face = face, .text = text } };
+            if (first) {
+                node.part = o;
+                first = false;
+            } else if (!std.meta.eql(o, node.part)) {
+                l.ds.err(l.loc(i), "every <option> of a <select> draws in one style: give them all the same CSS", .{});
+                return;
+            }
+        }
+    }
+
     /// `<dialog bind:open>`: a modal dialog over the page while the bool field is true; its
     /// content is lowered as a column's. `open` makes the field start true. Escape closes it;
     /// a handler that sets the field closes it too.
@@ -3183,7 +3246,7 @@ pub const Lowerer = struct {
         l.outline = null;
         // `dialog::backdrop { background-color }` fills the backdrop, read from its own table.
         l.backdrop = true;
-        node.backdrop = l.colorOf(n, .@"background-color");
+        if (l.colorOf(n, .@"background-color")) |c| node.part = .{ .backdrop = c };
         if (l.declared(n, .@"background-image")) |v| if (l.component(v) != null)
             l.ds.err(v.loc, "a <dialog>'s ::backdrop takes a background-color, not an image or a gradient", .{});
         l.backdrop = false;

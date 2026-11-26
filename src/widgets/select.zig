@@ -58,6 +58,11 @@ pub const Options = struct {
     /// Group headers, in order, each shown in the list before the option at `at`. A header
     /// is not an option: the keys and the pointer pass over it.
     groups: []const Group = &.{},
+    /// Every option row's face (CSS on `<option>`), filled by `optionFaced`; null for
+    /// `menu.itemStyle`'s.
+    option: ?Style = null,
+    /// Every option's text (text CSS on `<option>`); null for the label's.
+    option_text: ?types.TextStyle = null,
 };
 
 pub const Group = struct { at: u8, label: []const u8 };
@@ -170,8 +175,16 @@ pub fn listStyle(th: *const Theme, at: Rect) Style {
 
 /// An option row: menu.zig's item, filled from `optionFills` by highlight and choice.
 pub fn optionStyle(th: *const Theme, active: bool, selected: bool) Style {
-    var s = menu.itemStyle(th, active);
-    s.fill = optionFills(th)[(@as(u2, @intFromBool(active)) << 1) | @intFromBool(selected)];
+    return optionFaced(th, menu.itemStyle(th, false), active, selected);
+}
+
+/// An option row laid out by `face` (CSS on `<option>`): its own fill while neither
+/// highlighted nor chosen, else `optionFills`'.
+pub fn optionFaced(th: *const Theme, face: Style, active: bool, selected: bool) Style {
+    var fills = optionFills(th);
+    fills[0] = face.fill;
+    var s = face;
+    s.fill = fills[(@as(u2, @intFromBool(active)) << 1) | @intFromBool(selected)];
     return s;
 }
 
@@ -278,6 +291,12 @@ pub fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
 
 /// `list`, with group headers (`Options.groups`) among the options.
 pub fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime groups: []const Group) void {
+    listFace(f, th, name, def, st, texts, groups, menu.itemStyle(th, false), base.labelText(th));
+}
+
+/// `listGrouped` with every option row laid out by `face` (`optionFaced`) and its text in
+/// `text`, as `Options.option` and `Options.option_text` restyle `ct.list` (CSS on `<option>`).
+pub fn listFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime groups: []const Group, face: Style, text: types.TextStyle) void {
     if (!st.menu.open) return;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
     const l = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
@@ -289,10 +308,10 @@ pub fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, compt
             _ = f.text(g.label, headerText(th));
             f.close();
         };
-        const row = f.open(.from(partName(name, o)), optionStyle(th, st.menu.active == k, st.selected == k));
+        const row = f.open(.from(partName(name, o)), optionFaced(th, face, st.menu.active == k, st.selected == k));
         _ = f.interact(row, popover.overlay_sense);
         role(f, row, .option);
-        _ = base.label(f, th, texts[k]);
+        _ = f.text(texts[k], text);
         f.close();
     }
     f.close();
@@ -382,9 +401,9 @@ pub fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: [
                         pushText(tb, h, g.label, headerText(&th));
                         t.seal(h);
                     };
-                    const r = t.push(l, .hash(partName(id, o)), &optionStyle(&th, st.menu.active == k, st.selected == k));
+                    const r = t.push(l, .hash(partName(id, o)), &optionFaced(&th, opts.option orelse menu.itemStyle(&th, false), st.menu.active == k, st.selected == k));
                     t.c.role[r] = @backingInt(a11y.Role.option);
-                    pushText(tb, r, opts.texts[k], base.labelText(&th));
+                    pushText(tb, r, opts.texts[k], opts.option_text orelse base.labelText(&th));
                     t.seal(r);
                 }
                 t.seal(l);

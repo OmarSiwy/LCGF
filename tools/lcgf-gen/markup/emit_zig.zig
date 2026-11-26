@@ -338,14 +338,14 @@ pub const Emit = struct {
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
             .section => {
-                const faced_ = restyle or n.header != null;
+                const faced_ = restyle or n.part == .header;
                 e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("accordion"), if (faced_) "sectionFace" else "section", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
                 if (faced_) {
                     e.write(", ");
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                     e.write(", ");
-                    e.fields(n.header orelse lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
+                    e.fields(if (n.part == .header) n.part.header else lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
                 }
                 e.write(", .{");
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
@@ -431,7 +431,7 @@ pub const Emit = struct {
                 e.write(")");
             },
             .dialog => {
-                if (restyle or n.backdrop != null) {
+                if (restyle or n.part == .backdrop) {
                     e.print("{s}.ct.dialogFace(theme, .{f}, .{f}, ", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                     e.print(", {s}, .{{", .{e.backdrop(n)});
@@ -524,6 +524,13 @@ pub const Emit = struct {
                 e.write(" }");
             }
             e.write(" }");
+        }
+        if (n.part == .option) {
+            const o = n.part.option;
+            e.write(", .option = ");
+            e.structure(o.face, types.Style{});
+            e.write(", .option_text = ");
+            e.structure(o.text, types.TextStyle{});
         }
         e.write(" }");
     }
@@ -767,14 +774,14 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .section => {
-                const faced_ = e.rtFace(n).len > 0 or n.header != null;
+                const faced_ = e.rtFace(n).len > 0 or n.part == .header;
                 e.print("_ = {s}.{s}(f, &theme, {s}, {s}, ", .{ e.use("accordion"), if (faced_) "openFace" else "open", e.rtId(n.id, list_depth), e.ref(n.bind) });
                 e.rtCaption(n.text_kind, n.text);
                 if (faced_) {
                     e.write(", ");
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                     e.write(", ");
-                    e.fields(n.header orelse lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
+                    e.fields(if (n.part == .header) n.part.header else lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
                 }
                 e.write(");");
                 return "accordion.close(f);";
@@ -990,7 +997,7 @@ pub const Emit = struct {
                 return "";
             },
             .select_list => {
-                e.print("{s}.listGrouped(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
+                e.print("{s}.{s}(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), if (n.part == .option) "listFace" else "listGrouped", n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
                 e.rtTexts(n.captions);
                 e.write(" }, &.{");
                 for (n.groups, 0..) |g, k| {
@@ -998,11 +1005,19 @@ pub const Emit = struct {
                     e.string(g.label);
                     e.write(" }");
                 }
-                e.write(if (n.groups.len > 0) " });" else "});");
+                e.write(if (n.groups.len > 0) " }" else "}");
+                if (n.part == .option) {
+                    const o = n.part.option;
+                    e.write(", ");
+                    e.structure(o.face, types.Style{});
+                    e.write(", ");
+                    e.structure(o.text, types.TextStyle{});
+                }
+                e.write(");");
                 return "";
             },
             .dialog => {
-                const style = if (e.rtFace(n).len == 0 and n.backdrop != null) std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable else e.rtFace(n);
+                const style = if (e.rtFace(n).len == 0 and n.part == .backdrop) std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable else e.rtFace(n);
                 const face = if (style.len > 0) std.fmt.allocPrint(e.arena, "{s}, {s}", .{ style, e.backdrop(n) }) catch unreachable else "";
                 e.print("if ({s}.{s}(f, &theme, \"{s}\", &{s}{s})) {{", .{ e.use("dialog"), e.faced("begin", face), n.id, e.stateRef(n.bind), face });
                 return e.arena.dupe(u8, "dialog.end(f); }") catch unreachable;
@@ -1027,8 +1042,8 @@ pub const Emit = struct {
 
     /// A dialog's backdrop fill: its `::backdrop` colour, or `dialog.dim`.
     fn backdrop(e: *Emit, n: ir.Node) []const u8 {
-        const c = n.backdrop orelse return std.fmt.allocPrint(e.arena, "{s}.dim", .{e.use("dialog")}) catch unreachable;
-        return @import("lower.zig").colorExpr(e.arena, c);
+        if (n.part != .backdrop) return std.fmt.allocPrint(e.arena, "{s}.dim", .{e.use("dialog")}) catch unreachable;
+        return @import("lower.zig").colorExpr(e.arena, n.part.backdrop);
     }
 
     /// The runtime function `name`, or `<name>Face` when the widget is restyled (`face`).

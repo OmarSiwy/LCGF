@@ -150,10 +150,21 @@ pub const Node = struct {
     secure: bool = false,
     /// A component's props, in attribute order.
     props: []const Prop = &.{},
-    /// A `<details>`'s header, as CSS on its `<summary>` restyles it; null for the theme's.
-    header: ?Style = null,
-    /// A `<dialog>`'s backdrop fill, as `::backdrop`'s background-color sets it; null for `dim`.
-    backdrop: ?lcgf.types.Color = null,
+    /// A part of the widget that CSS restyles apart from its root; none for the theme's.
+    part: Part = .none,
+};
+
+/// One node field for every widget's restyled part: one more field per part would exceed
+/// `std.MultiArrayList(Node)`'s comptime branch quota.
+pub const Part = union(enum) {
+    none,
+    /// A `<details>`'s header, as CSS on its `<summary>` restyles it.
+    header: Style,
+    /// A `<dialog>`'s backdrop fill, as `::backdrop`'s background-color sets it (else `dim`).
+    backdrop: lcgf.types.Color,
+    /// A `<select>`'s option rows and their text, as CSS on its `<option>`s restyles them
+    /// (`widgets_select.Options.option`, `.option_text`).
+    option: struct { face: Style, text: TextStyle },
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

@@ -6071,6 +6071,7 @@ Select (tier 2): a button showing the chosen option of a fixed list, which opens
 - `fn faced(th: *const Theme, face: Style, r: Response) Style`: The button's `face` (its style, or as CSS restyles it) filled by its response, as a button's is.
 - `fn listStyle(th: *const Theme, at: Rect) Style`: The list: menu.zig's list below the button's rect `at` (last frame's), at least as wide as the button.
 - `fn optionStyle(th: *const Theme, active: bool, selected: bool) Style`: An option row: menu.zig's item, filled from `optionFills` by highlight and choice.
+- `fn optionFaced(th: *const Theme, face: Style, active: bool, selected: bool) Style`: An option row laid out by `face` (CSS on `<option>`): its own fill while neither highlighted nor chosen, else `optionFills`'.
 - `fn headerStyle(th: *const Theme) Style`: A group's header row: an option's padding, no fill.
 - `fn headerText(th: *const Theme) types.TextStyle`: A group's header text: the label's, in the hot control colour (dimmer than the options).
 - `fn optionFills(th: *const Theme) base.StateColors`: An option's fill, indexed by `active << 1 | selected`: none, the control colour for the chosen one, the hot control colour for the highlighted one, chosen or not.
@@ -6081,6 +6082,7 @@ Select (tier 2): a button showing the chosen option of a fixed list, which opens
 - `fn buttonFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *SelectState, texts: []const []const u8, face: Style) Respo…`: `button` laid out by `face` instead of `buttonStyle`, as `spec.styled` restyles `ct.select` (CSS on a `<select>`); the fill still follows hover and held.
 - `fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8) void`: The list of select `name`, if it is open.
 - `fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime gr…`: `list`, with group headers (`Options.groups`) among the options.
+- `fn listFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime group…`: `listGrouped` with every option row laid out by `face` (`optionFaced`) and its text in `text`, as `Options.option` and `Options.option_text` restyle `ct.list` (CSS on `<option>`).
 - `fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options) type`: The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads every part's response and the keys through `advance`, as `button` does at run time, and keeps the button's rect for the list's `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with a caption and the select, and the select's list, in both front ends, in theme `th`.
 
@@ -6094,7 +6096,7 @@ Fields: `selected`, `menu`
 ### `Options` (struct)
 The options of a select known by their captions only (`ct.select`, HTML `<option>`), and the headers of their groups (`<optgroup label>`).
 
-Fields: `texts`, `groups`
+Fields: `texts`, `groups`, `option`, `option_text`
 
 
 ### `Select(..)` (generic struct)

@@ -1,8 +1,8 @@
 //! overlays, written by hand: a select with a group of options, a button's tooltip (title=),
 //! a dialog of any content, a popover and a menu (engine spec F10), each moved last into a
 //! root over the viewport so they float from its origin and draw above the page. CSS on the
-//! select restyles its button, and on the dialog its panel and
-//! backdrop, in both frontends.
+//! select restyles its button, on its options their rows and text, and on the dialog its
+//! panel and backdrop, in both frontends.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -30,7 +30,23 @@ pub const State = struct {
 
 const edit: menu.Def = .{ .items = &.{ "undo", "redo" } };
 
-const shapes: select.Options = .{ .texts = &.{ "Circle", "Square", "Tri" }, .groups = &.{.{ .at = 1, .label = "Angular" }} };
+/// `option { padding: 6px 12px; background-color: #202830; color: #f0d070 }` over every
+/// option row and its text.
+const shapes: select.Options = .{
+    .texts = &.{ "Circle", "Square", "Tri" },
+    .groups = &.{.{ .at = 1, .label = "Angular" }},
+    .option = blk: {
+        var st = lcgf.widgets_menu.itemStyle(&theme, false);
+        st.pad = .{ 12, 6, 12, 6 };
+        st.fill = .rgb(32, 40, 48);
+        break :blk st;
+    },
+    .option_text = blk: {
+        var ts = label.labelText(&theme);
+        ts.color = .rgb(240, 208, 112);
+        break :blk ts;
+    },
+};
 
 /// `select { width: 160px; border: 1px solid #c03030 }` over the select's button.
 const shape_face: lcgf.types.Style = blk: {
