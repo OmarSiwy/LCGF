@@ -629,6 +629,9 @@ unsafe extern "C" {
     fn lcgf_rt_slider(rt: Rt, id: u32, value: *mut f32, lo: f32, hi: f32) -> u8;
     fn lcgf_default_theme(out: *mut Theme);
     pub fn lcgf_default_style(out: *mut Style);
+    fn lcgf_rt_canvas_bytes(l: *const Limits) -> usize;
+    fn lcgf_rt_enable_canvas(rt: Rt, buf: *mut u8, len: usize) -> i32;
+    fn lcgf_rt_canvas(rt: Rt, id: u32, s: *const Style, c: crate::canvas::Raw, o: *const crate::canvas::RawOptions) -> u32;
 }
 
 /// The runtime front end in your buffer.
@@ -666,6 +669,20 @@ impl<'a> Context<'a> {
 
     pub fn theme(&self) -> &Theme {
         &self.theme
+    }
+
+    /// Bytes [`enable_canvas`](Self::enable_canvas) needs for `limits`, aligned to a pointer.
+    pub fn canvas_bytes(limits: &Limits) -> usize {
+        unsafe { lcgf_rt_canvas_bytes(limits) }
+    }
+
+    /// Lets frames hold canvas nodes ([`Frame::canvas`]), their rows kept in `buf`.
+    pub fn enable_canvas(&mut self, buf: &'a mut [u8]) -> Result<(), Status> {
+        let r = unsafe { lcgf_rt_enable_canvas(self.rt, buf.as_mut_ptr(), buf.len()) };
+        if r != 0 {
+            return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
+        }
+        Ok(())
     }
 
     /// Whether this input needs a frame (a host that sleeps between events asks first).
@@ -751,6 +768,17 @@ impl Frame<'_> {
     #[inline(always)]
     pub fn custom_row(&mut self, id: Id, r: &Row, data: u64) -> u32 {
         unsafe { lcgf_rt_custom_row(self.rt, id.0, r, data) }
+    }
+    /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
+    /// [`Context::enable_canvas`]. `u32::MAX` past the limits' customs.
+    ///
+    /// # Safety
+    /// The draw list keeps pointers to `c` and to what `o` borrows: they must stay alive and
+    /// unchanged until the frame's draw list has been drawn, and through the next frame when it
+    /// reuses this node.
+    pub unsafe fn canvas(&mut self, id: Id, s: &Style, c: &crate::canvas::Canvas<'_>, o: &crate::canvas::Options<'_>) -> u32 {
+        let raw = o.raw();
+        unsafe { lcgf_rt_canvas(self.rt, id.0, s, c.raw(), &raw) }
     }
     /// A value that eases toward `target` on a spring keyed by `id` (`Frame.animate`): an
     /// `f32`, or anything [`Animatable`] (a [`Color`], an array, a tuple, a type of yours),

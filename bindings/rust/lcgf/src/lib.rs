@@ -28,6 +28,7 @@
 
 pub use lcgf_macros::{include_shader, include_ui, ui};
 
+pub mod canvas;
 pub mod ct;
 pub mod gpu;
 pub mod runtime;

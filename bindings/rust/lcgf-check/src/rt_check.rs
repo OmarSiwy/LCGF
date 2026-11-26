@@ -9,8 +9,79 @@
 
 mod scenes;
 
-use lcgf::runtime::{Context, Row, Size, Style};
+use lcgf::canvas;
+use lcgf::runtime::{Context, Id, Row, Size, Style};
 use std::alloc::{Layout, alloc_zeroed, dealloc};
+
+/// An aligned, zeroed buffer that lives as long as the program.
+fn leak(n: usize) -> &'static mut [u8] {
+    let layout = Layout::from_size_align(n.max(1), lcgf::COLUMN_ALIGN).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(alloc_zeroed(layout), n) }
+}
+
+/// bindings/check/rt_dump.zig's `Plot`: a canvas batch through `lcgf::canvas`, two canvas nodes.
+struct Plot {
+    s: canvas::Canvas<'static>,
+    all: [canvas::Range; 1],
+}
+
+const PLOT_LAYERS: [canvas::Layer; 3] = [
+    canvas::Layer { stroke: 0xffe6e6e6, fill: 0, width: 1.0, flags: 3 },
+    canvas::Layer { stroke: 0xffffc85a, fill: 0xb4a05a28, width: 1.5, flags: 3 },
+    canvas::Layer { stroke: 0xff3c78ff, fill: 0xff3cc8ff, width: 2.0, flags: 2 },
+];
+const PLOT_MARKS: [canvas::Override; 1] = [canvas::Override { range: canvas::Range { first: 2, count: 3 }, color: 0xff00ff80 }];
+const PLOT_SUB: [canvas::Range; 1] = [canvas::Range { first: 1, count: 4 }];
+
+impl Plot {
+    fn new() -> Self {
+        use canvas::*;
+        let mut s = Canvas::new(leak(Canvas::bytes(32, 16, 8)), 32, 16, 8).expect("canvas");
+        for i in 0..8u32 {
+            let x = (i * 100) as i32;
+            let cap = [Cap::Butt, Cap::Square, Cap::Round][(i % 3) as usize];
+            s.segment([x, 0], [x + 80, (50 * (i % 3)) as i32], &Line { weight: (i % 4 + 1) as u8, cap, dash: ((i % 2) * 2) as u8, ..Default::default() });
+        }
+        s.polyline(&[[0, 200], [150, 260], [300, 200], [450, 300]], &Line { cap: Cap::Round, dash: 1, ..Default::default() });
+        s.rect([500, 0], [700, 150], &Rect { layer: 1, radius: 20, ..Default::default() });
+        s.circle([800, 100], 60, &Rect { layer: 2, ..Default::default() });
+        s.arc([100, 400], 80, &Arc { layer: 1, cap: Cap::Round, dash: 2, start: 0.5, sweep: 4.0, ..Default::default() });
+        s.polygon(&[[300, 350], [500, 380], [420, 500], [350, 450]], &Area { layer: 1, stroke: true, ..Default::default() });
+        s.glyphs("Hi", [600, 400], &Text { px: 40, turns: 1, ..Default::default() });
+        let all = [Range { first: 0, count: s.len() }];
+        Self { s, all }
+    }
+
+    fn input(input: &mut lcgf::Input, k: u32) {
+        input.viewport = [400.0, 300.0];
+        input.pointer = [((k * 17) % 400) as f32 + 0.5, ((k * 11) % 300) as f32 + 0.5];
+        input.dt = 1.0 / 60.0;
+    }
+
+    fn options<'a>(k: u32, ranges: &'a [canvas::Range], overrides: &'a [canvas::Override]) -> canvas::Options<'a> {
+        canvas::Options {
+            camera: canvas::Camera { origin: [(k * 7) as i64, -((k * 3) as i64)], scale: 0.5 + 0.25 * (k % 4) as f32, offset: [10.0, 10.0], zoom: (1 + k % 3) as f32 },
+            layers: &PLOT_LAYERS,
+            zoom_scale: k % 2 == 1,
+            ranges,
+            overrides,
+        }
+    }
+
+    fn build(&mut self, f: &mut lcgf::runtime::Frame<'_>, k: u32) {
+        if k % 10 == 9 {
+            let n = self.s.len();
+            self.s.kill((k / 10) % n);
+        }
+        f.open(Id::from("plot-root"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT });
+        // SAFETY: the batch and everything the options borrow live until the program ends.
+        unsafe {
+            f.canvas(Id::from("plot"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT }, &self.s, &Self::options(k, &self.all, &PLOT_MARKS));
+            f.canvas(Id::from("overlay"), &Style { size: [Size::px(120.0), Size::px(80.0)], floating: 1, ..Style::DEFAULT }, &self.s, &Self::options(k, &PLOT_SUB, &[]));
+        }
+        f.close();
+    }
+}
 
 /// bindings/check/rt_dump.zig's `Kit`, in this crate's words.
 struct Kit {
@@ -202,7 +273,8 @@ fn main() {
         args.len() == 4 || args.len() == 6,
         "usage: lcgf-rt-check <scene> <frames> <out.bin>"
     );
-    let kit_scene = args[1] == "kit";
+    let plot_scene = args[1] == "canvas";
+    let kit_scene = plot_scene || args[1] == "kit";
     let scene = scenes::NAMES
         .iter()
         .find(|(n, _)| kit_scene || *n == args[1])
@@ -238,10 +310,17 @@ fn main() {
     let mut out = Vec::new();
     {
         let mut ctx = Context::new(mem, &limits).expect("context");
+        let mut plot = None;
+        if plot_scene {
+            ctx.enable_canvas(leak(Context::canvas_bytes(&limits))).expect("canvas rows");
+            plot = Some(Plot::new());
+        }
         let th = *ctx.theme();
         let mut input = lcgf::Input::default();
         for k in 0..frames {
-            if kit_scene {
+            if plot_scene {
+                Plot::input(&mut input, k);
+            } else if kit_scene {
                 Kit::input(&mut input, k);
             } else {
                 state.input(&mut input, k);
@@ -251,7 +330,9 @@ fn main() {
             // Whether a frame is needed crosses the seam too (an `int` in lcgf.h).
             out.extend_from_slice(&(ctx.needs_frame(&input) as u32).to_le_bytes());
             let mut f = ctx.begin(&input);
-            if kit_scene {
+            if let Some(p) = plot.as_mut() {
+                p.build(&mut f, k);
+            } else if kit_scene {
                 kit.build(&mut f, k);
             } else {
                 state.build(&mut f, &th);
@@ -271,10 +352,24 @@ fn main() {
                 }
             }
             out.extend_from_slice(&(d.customs().len() as u32).to_le_bytes());
+            let at = out.len();
             out.extend_from_slice(bytes(d.customs()));
+            // A canvas's damage key hashes the batch's address, which differs between processes.
+            if plot_scene {
+                let size = core::mem::size_of::<lcgf::CustomDraw>();
+                for i in 0..d.customs().len() {
+                    out[at + i * size + 32..at + i * size + 40].fill(0);
+                }
+            }
             out.extend_from_slice(&u32::MAX.to_le_bytes());
             out.extend_from_slice(&u32::MAX.to_le_bytes());
             out.extend_from_slice(&wake.to_bits().to_le_bytes());
+            if let Some(p) = plot.as_mut() {
+                out.extend_from_slice(&p.s.len().to_le_bytes());
+                let hit = p.s.hit(&Plot::options(k, &p.all, &PLOT_MARKS), input.pointer[0], input.pointer[1], 2.0);
+                out.extend_from_slice(&hit.unwrap_or(u32::MAX).to_le_bytes());
+                p.s.clear_dirty();
+            }
         }
     }
     unsafe { dealloc(mem.as_mut_ptr(), layout) };

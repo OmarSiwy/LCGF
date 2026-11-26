@@ -4,7 +4,10 @@
 //!   lcgf-rt-dump <form|list|text|springs|resize|idle|kit> <frames> <out.bin> [nodes depth]
 //!
 //! `kit` is the gate's own scene (`Kit`): formatted text, the widgets by options, and springs
-//! and tweens on a colour and an array, as C++ and Rust write them.
+//! and tweens on a colour and an array, as C++ and Rust write them. `canvas` (`Plot`) is a
+//! canvas batch built through lcgf.h's builders, drawn in two canvas nodes under a moving
+//! camera, edited and hit-tested: after each frame's draw list, the batch's length and the row
+//! hit at the pointer.
 //!
 //! `nodes depth` shrink the limits, so the tree and the stack overflow and the rows the
 //! bindings push inline take the overflow paths too.
@@ -31,7 +34,8 @@ pub fn main(init: std.process.Init) !void {
         const words = try rowSweep(arena, frames);
         return std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = std.mem.sliceAsBytes(words) });
     }
-    const kit_scene = std.mem.eql(u8, name, "kit");
+    const plot_scene = std.mem.eql(u8, name, "canvas");
+    const kit_scene = plot_scene or std.mem.eql(u8, name, "kit");
     const k_scene = if (kit_scene) 0 else for (scenes.vs, 0..) |s, k| {
         if (std.mem.eql(u8, s.name, name)) break k;
     } else return error.UnknownScene;
@@ -45,17 +49,23 @@ pub fn main(init: std.process.Init) !void {
     }
     const buf = try arena.alignedAlloc(u8, .fromByteUnits(lcgf.mem.column_align), Context.requiredBytes(limits));
     var ctx = try Context.init(buf, limits);
+    const plot = try arena.create(Plot);
+    if (plot_scene) {
+        const rows = try arena.alloc(lcgf.draw_list.CanvasDraw, 2 * limits.customs);
+        ctx.enableCanvas(rows);
+        plot.init();
+    }
     const th: lcgf.widgets_base.Theme = .{};
     var in: lcgf.input.Input = .{};
     var out: std.ArrayList(u8) = .empty;
     for (0..frames) |k| {
-        if (kit_scene) Kit.input(&in, @intCast(k)) else s.input(&in, @intCast(k));
+        if (plot_scene) Plot.input(&in, @intCast(k)) else if (kit_scene) Kit.input(&in, @intCast(k)) else s.input(&in, @intCast(k));
         // The bench scenes only hover; the gate also presses, so clicks and drags cross too.
         in.buttons = .{ .left = k % 6 < 2 };
         // Whether a frame is needed crosses the seam too (an `int` in lcgf.h).
         try out.appendSlice(arena, std.mem.asBytes(&@as(u32, @intFromBool(ctx.needsFrame(&in)))));
         var f = ctx.begin(&in);
-        if (kit_scene) kit.build(&f, &th, @intCast(k)) else s.build(&f, &th);
+        if (plot_scene) plot.build(&f, @intCast(k)) else if (kit_scene) kit.build(&f, &th, @intCast(k)) else s.build(&f, &th);
         const o = f.end(.{});
         const d = o.draw;
         const put = struct {
@@ -77,10 +87,22 @@ pub fn main(init: std.process.Init) !void {
             try put(arena, &out, d.cmd.key[i]);
         }
         try put(arena, &out, d.custom_len);
+        const at = out.items.len;
         try out.appendSlice(arena, std.mem.sliceAsBytes(d.customs[0..d.custom_len]));
+        // A canvas's damage key hashes the batch's address, which differs between processes.
+        if (plot_scene) for (0..d.custom_len) |i| {
+            @memset(out.items[at + i * @sizeOf(lcgf.draw_list.CustomDraw) + @offsetOf(lcgf.draw_list.CustomDraw, "data") ..][0..8], 0);
+        };
         try put(arena, &out, 0xffff_ffff);
         try put(arena, &out, 0xffff_ffff);
         try put(arena, &out, @bitCast(o.wake));
+        if (plot_scene) {
+            try put(arena, &out, plot.s.len);
+            const pal = plot.palette(@intCast(k));
+            const hit = lcgf.canvas.hit(&plot.s, &pal, Plot.camera(@intCast(k)), &plot.all, in.pointer, 2);
+            try put(arena, &out, hit orelse 0xffff_ffff);
+            plot.s.clearDirty();
+        }
     }
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = out.items });
 }
@@ -130,6 +152,64 @@ const Kit = struct {
         f.close();
         f.close();
     }
+};
+
+/// The gate's canvas scene: rt_check.cpp's and rt_check.rs's `Plot` build the same batch
+/// through lcgf.h's builders. Values are ones every language computes alike (quarters).
+const Plot = struct {
+    const canvas = lcgf.canvas;
+    buf: [canvas.Instances.requiredBytes(32, 16, 8)]u8 align(lcgf.mem.column_align) = undefined,
+    s: canvas.Instances = undefined,
+    all: [1]canvas.Range = undefined,
+    const layers = [_]canvas.Layer{
+        .of(.{ .stroke = .rgb(230, 230, 230), .width = 1 }),
+        .of(.{ .stroke = .rgb(90, 200, 255), .fill = .rgba(40, 90, 160, 180), .width = 1.5 }),
+        .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 2, .fill_on = false }),
+    };
+    const marks = [_]canvas.Override{.{ .range = .{ .first = 2, .count = 3 }, .color = 0xff00ff80 }};
+    const sub = [_]canvas.Range{.{ .first = 1, .count = 4 }};
+
+    fn init(p: *Plot) void {
+        var carver: lcgf.mem.Carver = .{ .buf = &p.buf };
+        p.s = .init(&carver, 32, 16, 8);
+        const s = &p.s;
+        for (0..8) |i| {
+            const x: i32 = @intCast(i * 100);
+            _ = s.segment(.{ x, 0 }, .{ x + 80, @intCast(50 * (i % 3)) }, .{ .weight = @intCast(i % 4 + 1), .cap = @fromBackingInt(@intCast(i % 3)), .dash = @intCast((i % 2) * 2) });
+        }
+        _ = s.polyline(&.{ .{ 0, 200 }, .{ 150, 260 }, .{ 300, 200 }, .{ 450, 300 } }, .{ .dash = 1, .cap = .round });
+        _ = s.rect(.{ 500, 0 }, .{ 700, 150 }, .{ .layer = 1, .radius = 20 });
+        _ = s.circle(.{ 800, 100 }, 60, .{ .layer = 2 });
+        _ = s.arc(.{ 100, 400 }, 80, .{ .layer = 1, .start = 0.5, .sweep = 4, .cap = .round, .dash = 2 });
+        _ = s.polygon(&.{ .{ 300, 350 }, .{ 500, 380 }, .{ 420, 500 }, .{ 350, 450 } }, .{ .layer = 1, .stroke = true });
+        _ = s.glyphs("Hi", .{ 600, 400 }, .{ .px = 40, .turns = 1 });
+        p.all = .{s.since(0)};
+    }
+
+    fn input(in: *lcgf.input.Input, k: u32) void {
+        in.viewport = .{ 400, 300 };
+        in.pointer = .{ @as(f32, @floatFromInt((k * 17) % 400)) + 0.5, @as(f32, @floatFromInt((k * 11) % 300)) + 0.5 };
+        in.dt = 1.0 / 60.0;
+    }
+
+    fn camera(k: u32) canvas.Camera {
+        return .{ .origin = .{ @intCast(k * 7), -@as(i64, k * 3) }, .scale = 0.5 + 0.25 * @as(f32, @floatFromInt(k % 4)), .offset = .{ 10, 10 }, .zoom = @floatFromInt(1 + k % 3) };
+    }
+
+    fn palette(_: *const Plot, k: u32) canvas.Palette {
+        return .{ .layers = &layers, .zoom_scale = k % 2 == 1 };
+    }
+
+    fn build(p: *Plot, f: *lcgf.frame.Frame, k: u32) void {
+        if (k % 10 == 9) p.s.kill((k / 10) % p.s.len);
+        const pal = &palettes[k % 2];
+        _ = f.open(.from("plot-root"), .{ .size = .{ .fill, .fill } });
+        _ = f.canvas(.from("plot"), .{ .size = .{ .fill, .fill } }, &p.s, .{ .camera = camera(k), .palette = pal, .ranges = &p.all, .overrides = &marks });
+        _ = f.canvas(.from("overlay"), .{ .float = true, .size = .{ .px(120), .px(80) } }, &p.s, .{ .camera = camera(k), .palette = pal, .ranges = &sub });
+        f.close();
+    }
+
+    const palettes = [2]canvas.Palette{ .{ .layers = &layers }, .{ .layers = &layers, .zoom_scale = true } };
 };
 
 const plan = lcgf.abi_plan;

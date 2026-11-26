@@ -151,9 +151,9 @@ if [ $have_rust = yes ]; then
 fi
 echo "ok   rows: 4096 styles, the same 66-word row from Zig, the library, $langs"
 
-# The runtime front end: bench/scenes' scenes (and the gate's `kit`) built each frame from C++ (lcgf/runtime.hpp) and
+# The runtime front end: bench/scenes' scenes (and the gate's `kit` and `canvas`) built each frame from C++ (lcgf/runtime.hpp) and
 # Rust (lcgf::runtime), against the same scenes built in Zig.
-for scene in form list text springs resize idle kit; do
+for scene in form list text springs resize idle kit canvas; do
     "$prefix/bin/lcgf-rt-dump" "$scene" 120 "$work/rt-$scene.zig.bin"
     "$work/cpp/lcgf-cpp-rt-check" "$scene" 120 "$work/rt-$scene.cpp.bin"
     cmp "$work/rt-$scene.zig.bin" "$work/rt-$scene.cpp.bin"

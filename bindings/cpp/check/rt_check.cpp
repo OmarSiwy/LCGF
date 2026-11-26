@@ -6,6 +6,7 @@
 // `kit` is the gate's own scene (bindings/check/rt_dump.zig's `Kit`): formatted text, the
 // widgets by options, and springs and tweens on a colour and an array.
 //   lcgf-cpp-rt-check rows <in.bin>   (lcgf-rt-dump rows' styles: lcgf::Row must equal Zig's rows)
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -93,12 +94,63 @@ struct Kit {
         f.Close();
     }
 };
+// bindings/check/rt_dump.zig's `Plot`: a canvas batch through lcgf::Canvas, two canvas nodes.
+struct Plot {
+    static constexpr std::array<lcgf::canvas::Layer, 3> layers{{
+        {0xffe6e6e6u, 0, 1, 3},
+        {0xffffc85au, 0xb4a05a28u, 1.5f, 3},
+        {0xff3c78ffu, 0xff3cc8ffu, 2, 2},
+    }};
+    static constexpr std::array<lcgf::canvas::Override, 1> marks{{{{2, 3}, 0xff00ff80u}}};
+    static constexpr std::array<lcgf::canvas::Range, 1> sub{{{1, 4}}};
+    std::unique_ptr<std::byte[]> mem;
+    lcgf::Canvas s;
+    std::array<lcgf::canvas::Range, 1> all{};
+
+    static std::unique_ptr<std::byte[]> alloc() {
+        return std::unique_ptr<std::byte[]>(new (std::align_val_t(lcgf::column_align)) std::byte[lcgf::Canvas::Bytes(32, 16, 8)]);
+    }
+    Plot() : mem(alloc()), s({mem.get(), lcgf::Canvas::Bytes(32, 16, 8)}, 32, 16, 8) {
+        using namespace lcgf::canvas;
+        for (std::uint32_t i = 0; i < 8; ++i) {
+            const std::int32_t x = std::int32_t(i * 100);
+            s.Segment({x, 0}, {x + 80, std::int32_t(50 * (i % 3))}, {.weight = std::uint8_t(i % 4 + 1), .cap = Cap(i % 3), .dash = std::uint8_t((i % 2) * 2)});
+        }
+        const std::array<Point, 4> chain{{{0, 200}, {150, 260}, {300, 200}, {450, 300}}};
+        s.Polyline(chain, {.cap = Cap::round, .dash = 1});
+        s.Rect({500, 0}, {700, 150}, {.layer = 1, .radius = 20});
+        s.Circle({800, 100}, 60, {.layer = 2});
+        s.Arc({100, 400}, 80, {.layer = 1, .cap = Cap::round, .dash = 2, .start = 0.5f, .sweep = 4});
+        const std::array<Point, 4> quad{{{300, 350}, {500, 380}, {420, 500}, {350, 450}}};
+        s.Polygon(quad, {.layer = 1, .stroke = true});
+        s.Glyphs("Hi", {600, 400}, {.px = 40, .turns = 1});
+        all[0] = {0, s.size()};
+    }
+    static void input(lcgf::Input& in, std::uint32_t k) {
+        in.viewport[0] = 400, in.viewport[1] = 300;
+        in.pointer[0] = float((k * 17) % 400) + 0.5f, in.pointer[1] = float((k * 11) % 300) + 0.5f;
+        in.dt = 1.0f / 60.0f;
+    }
+    lcgf::canvas::Options options(std::uint32_t k, std::span<const lcgf::canvas::Range> ranges, std::span<const lcgf::canvas::Override> o) const {
+        return {.camera = {.origin = {std::int64_t(k * 7), -std::int64_t(k * 3)}, .scale = 0.5f + 0.25f * float(k % 4), .offset = {10, 10}, .zoom = float(1 + k % 3)},
+                .layers = layers, .zoom_scale = k % 2 == 1, .ranges = ranges, .overrides = o};
+    }
+    void build(lcgf::Frame& f, std::uint32_t k) {
+        using namespace lcgf;
+        if (k % 10 == 9) s.Kill((k / 10) % s.size());
+        f.Open(Id::From("plot-root"), {.size = {Size::Fill(), Size::Fill()}});
+        f.Canvas(Id::From("plot"), {.size = {Size::Fill(), Size::Fill()}}, s, options(k, all, marks));
+        f.Canvas(Id::From("overlay"), {.size = {Size::Px(120), Size::Px(80)}, .floating = 1}, s, options(k, sub, {}));
+        f.Close();
+    }
+};
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "rows") == 0) return rows(argv[2]);
     if (argc != 4 && argc != 6) return 2;
-    const bool kit_scene = std::strcmp(argv[1], "kit") == 0;
+    const bool plot_scene = std::strcmp(argv[1], "canvas") == 0;
+    const bool kit_scene = plot_scene || std::strcmp(argv[1], "kit") == 0;
     int s = 0;
     while (!kit_scene && s < scenes::count && std::strcmp(scenes::names[s], argv[1]) != 0) ++s;
     if (s == scenes::count) return 2;
@@ -120,16 +172,24 @@ int main(int argc, char** argv) {
     auto mem = std::unique_ptr<std::byte[]>(new (std::align_val_t(lcgf::column_align)) std::byte[bytes]);
     lcgf::Context ctx({mem.get(), bytes}, l);
     if (ctx.status() != lcgf::Status::ok) return 1;
+    std::unique_ptr<Plot> plot;
+    std::vector<std::byte> canvas_rows;
+    if (plot_scene) {
+        canvas_rows.resize(lcgf::Context::CanvasBytes(l));
+        if (ctx.EnableCanvas(canvas_rows) != lcgf::Status::ok) return 1;
+        plot = std::make_unique<Plot>();
+        if (!plot->s.valid()) return 1;
+    }
     std::vector<char> out;
     lcgf::Input in;
     for (std::uint32_t k = 0; k < frames; ++k) {
-        if (kit_scene) Kit::input(in, k); else scenes::input(scene, in, k);
+        if (plot_scene) Plot::input(in, k); else if (kit_scene) Kit::input(in, k); else scenes::input(scene, in, k);
         // The bench scenes only hover; the gate also presses, so clicks and drags cross too.
         in.buttons = k % 6 < 2 ? lcgf::Input::left : 0;
         // Whether a frame is needed crosses the seam too (an `int` in lcgf.h).
         put(out, ctx.NeedsFrame(in) ? 1 : 0);
         lcgf::Frame f = ctx.Begin(in);
-        if (kit_scene) kit.build(f, k); else scenes::build(scene, f, ctx.theme());
+        if (plot_scene) plot->build(f, k); else if (kit_scene) kit.build(f, k); else scenes::build(scene, f, ctx.theme());
         const lcgf::DrawList& d = ctx.End();
         put(out, std::uint32_t(d.quads().size()));
         put_bytes(out, d.quads());
@@ -146,13 +206,23 @@ int main(int argc, char** argv) {
             put(out, c.key);
         }
         put(out, std::uint32_t(d.customs().size()));
+        const std::size_t at = out.size();
         put_bytes(out, d.customs());
+        // A canvas's damage key hashes the batch's address, which differs between processes.
+        if (plot_scene)
+            for (std::size_t i = 0; i < d.customs().size(); ++i)
+                std::memset(out.data() + at + i * sizeof(d.customs()[0]) + offsetof(lcgf_custom_draw, data), 0, 8);
         put(out, LCGF_NO_WIDGET);
         put(out, LCGF_NO_WIDGET);
         const float wake = ctx.wake();
         std::uint32_t bits;
         std::memcpy(&bits, &wake, 4);
         put(out, bits);
+        if (plot_scene) {
+            put(out, plot->s.size());
+            put(out, plot->s.Hit(plot->options(k, plot->all, Plot::marks), in.pointer[0], in.pointer[1], 2));
+            plot->s.ClearDirty();
+        }
     }
     std::ofstream(argv[3], std::ios::binary).write(out.data(), std::streamsize(out.size()));
 #if LCGF_LANES == 0

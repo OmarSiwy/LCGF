@@ -294,6 +294,105 @@ struct Node {
     std::uint32_t row;
 };
 
+/// A batch of 2D primitives in your buffer (`lcgf.canvas.Instances`, lcgf.h `lcgf_canvas_*`):
+/// fill it once or when it changes, then draw ranges of it in a `Frame::Canvas` node each frame.
+/// Points are int32 world units; a `width` of 0 is the layer's, in logical pixels.
+namespace canvas {
+using Point = std::array<std::int32_t, 2>;
+enum class Cap : std::uint8_t { butt, square, round };
+struct Line {
+    std::uint8_t layer = 0, weight = 1;
+    Cap cap = Cap::butt;
+    std::uint8_t dash = 0;
+    std::uint32_t width = 0;
+};
+struct Box {
+    std::uint8_t layer = 0, weight = 1;
+    bool fill = true, stroke = true;
+    std::uint32_t radius = 0, width = 0;
+};
+struct Arc {
+    std::uint8_t layer = 0, weight = 1;
+    Cap cap = Cap::butt;
+    std::uint8_t dash = 0;
+    float start = 0, sweep = 6.28318530717958647692f;
+    std::uint32_t width = 0;
+};
+struct Area {
+    std::uint8_t layer = 0, weight = 1;
+    bool fill = true, stroke = false;
+    std::uint32_t width = 0;
+};
+struct Text {
+    std::uint32_t px;
+    std::uint8_t layer = 0, turns = 0, pad[2]{};
+};
+static_assert(sizeof(Line) == sizeof(lcgf_canvas_line_style) && sizeof(Box) == sizeof(lcgf_canvas_box_style) && sizeof(Arc) == sizeof(lcgf_canvas_arc_style));
+static_assert(sizeof(Area) == sizeof(lcgf_canvas_area_style) && sizeof(Text) == sizeof(lcgf_canvas_text_style));
+using Range = lcgf_canvas_range;
+using Override = lcgf_canvas_override;
+using Layer = lcgf_canvas_layer;
+struct Camera {
+    std::array<std::int64_t, 2> origin{};
+    float scale = 1;
+    std::array<float, 2> offset{};
+    float zoom = 1;
+};
+/// What a canvas node draws; everything it points at is yours until the frame is drawn.
+struct Options {
+    Camera camera{};
+    std::span<const Layer> layers;
+    bool zoom_scale = false;
+    std::span<const Range> ranges;
+    std::span<const Override> overrides{};
+
+    lcgf_canvas_options raw() const {
+        return {{{camera.origin[0], camera.origin[1]}, camera.scale, {camera.offset[0], camera.offset[1]}, camera.zoom},
+                layers.data(), layers.size(), zoom_scale ? 1u : 0u, ranges.data(), ranges.size(), overrides.data(), overrides.size()};
+    }
+};
+} // namespace canvas
+
+class Canvas {
+public:
+    static std::size_t Bytes(std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16) { return lcgf_canvas_bytes(rows, verts, dirty); }
+    /// In `buffer` (`Bytes` long, aligned to column_align); `valid()` is false otherwise.
+    Canvas(std::span<std::byte> buffer, std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16)
+        : c_(lcgf_canvas_init(buffer.data(), buffer.size(), rows, verts, dirty)) {}
+    bool valid() const { return c_ != nullptr; }
+    std::uint32_t size() const { return lcgf_canvas_len(c_); }
+    std::uint32_t Segment(canvas::Point a, canvas::Point b, const canvas::Line& o = {}) { return lcgf_canvas_segment(c_, a[0], a[1], b[0], b[1], line(o)); }
+    canvas::Range Polyline(std::span<const canvas::Point> pts, const canvas::Line& o = {}) {
+        return lcgf_canvas_polyline(c_, reinterpret_cast<const std::int32_t(*)[2]>(pts.data()), pts.size(), line(o));
+    }
+    std::uint32_t Rect(canvas::Point lo, canvas::Point hi, const canvas::Box& o = {}) { return lcgf_canvas_rect(c_, lo[0], lo[1], hi[0], hi[1], box(o)); }
+    std::uint32_t Circle(canvas::Point c, std::uint32_t r, const canvas::Box& o = {}) { return lcgf_canvas_circle(c_, c[0], c[1], r, box(o)); }
+    std::uint32_t Arc(canvas::Point c, std::uint32_t r, const canvas::Arc& o = {}) {
+        return lcgf_canvas_arc(c_, c[0], c[1], r, reinterpret_cast<const lcgf_canvas_arc_style*>(&o));
+    }
+    std::uint32_t Polygon(std::span<const canvas::Point> pts, const canvas::Area& o = {}) {
+        return lcgf_canvas_polygon(c_, reinterpret_cast<const std::int32_t(*)[2]>(pts.data()), pts.size(), reinterpret_cast<const lcgf_canvas_area_style*>(&o));
+    }
+    canvas::Range Glyphs(std::string_view str, canvas::Point at, const canvas::Text& o) {
+        return lcgf_canvas_glyphs(c_, str.data(), str.size(), at[0], at[1], reinterpret_cast<const lcgf_canvas_text_style*>(&o));
+    }
+    void Kill(std::uint32_t row) { lcgf_canvas_kill(c_, row); }
+    void Reset() { lcgf_canvas_reset(c_); }
+    /// Once every renderer that draws it has prepared the frame.
+    void ClearDirty() { lcgf_canvas_clear_dirty(c_); }
+    /// The topmost row within `slop` logical px of `p` (from the node's corner), or LCGF_NO_WIDGET.
+    std::uint32_t Hit(const canvas::Options& o, float x, float y, float slop = 0) const {
+        const lcgf_canvas_options r = o.raw();
+        return lcgf_canvas_hit(c_, &r, x, y, slop);
+    }
+    const lcgf_canvas* raw() const { return c_; }
+
+private:
+    static const lcgf_canvas_line_style* line(const canvas::Line& o) { return reinterpret_cast<const lcgf_canvas_line_style*>(&o); }
+    static const lcgf_canvas_box_style* box(const canvas::Box& o) { return reinterpret_cast<const lcgf_canvas_box_style*>(&o); }
+    lcgf_canvas* c_;
+};
+
 /// A frame being built. Valid between `Context::Begin` and `Context::End`.
 class Frame {
 public:
@@ -317,6 +416,12 @@ public:
     /// A node the host draws itself: its rect comes back in the draw list's customs.
     LCGF_INLINE Node Custom(Id id, const Style& s, std::uint64_t data) { return Custom(id, Row(s), data); }
     LCGF_INLINE Node Custom(Id id, const Row& r, std::uint64_t data) { return {lcgf_rt_custom_row(rt_, id.value, r.raw(), data)}; }
+    /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
+    /// `Context::EnableCanvas`. LCGF_NO_WIDGET past the limits' customs.
+    Node Canvas(Id id, const Style& s, const lcgf::Canvas& c, const canvas::Options& o) {
+        const lcgf_canvas_options r = o.raw();
+        return {lcgf_rt_canvas(rt_, id.value, s.raw(), c.raw(), &r)};
+    }
     /// A value that eases toward `target` on a spring keyed by `id` (`Frame.animate`): a float,
     /// or anything `Components` takes apart (a `Color`, a `std::array<float, 4>`, a type of
     /// yours), each number on its own spring keyed `id.With(k)`, as in Zig.
@@ -493,6 +598,9 @@ public:
 
     Status status() const { return status_; }
     const Theme& theme() const { return theme_; }
+    /// Memory for `EnableCanvas` (aligned to a pointer), alive as long as the context.
+    static std::size_t CanvasBytes(const lcgf_limits& l) { return lcgf_rt_canvas_bytes(&l); }
+    Status EnableCanvas(std::span<std::byte> buffer) { return static_cast<Status>(lcgf_rt_enable_canvas(rt_, buffer.data(), buffer.size())); }
     /// Whether this input needs a frame (a host that sleeps between events asks first).
     bool NeedsFrame(const Input& in) { return lcgf_rt_needs_frame(rt_, &in) != 0; }
     Frame Begin(const Input& in) {
