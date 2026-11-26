@@ -72,6 +72,7 @@ lcgf-gen --mappings                    # what every element, attribute and prope
 | `bind:selected="f"` | A radio group's `u32` index. |
 | `on:click="name"` | Calls `pub fn name(h: *H, ui: *Ui) void`. |
 | `on:change="name"` | Calls `pub fn name(h: *H, ui: *Ui, value: T) void` with the new value. |
+| `on:submit="name"` | On a text field, search field or textarea: calls `pub fn name(h: *H, ui: *Ui) void` on Enter (Ctrl+Enter or Cmd+Enter in a textarea, where Enter adds a line). |
 | `<template lcgf-if="f">` | `spec.when` over a `bool`. |
 | `<template lcgf-each="n" lcgf-max="N">` | `spec.list`: up to N copies, `n` (`u32`) of them live. |
 | `<template lcgf-each="file in files">` | A run-time region of the comptime page, sized by its CSS (width and height, or flex-grow). `Page.frame(h, in, .{ .files = slice })` builds one copy per item into the region and composes it into the page's draw list. `{file.name}` reads the item, checked against your item type at the HTML location; a click handler inside gets the item's `index: u32`. One region per page, comptime pages only, for now. `lcgf-nodes`/`lcgf-texts` size it (default 256/64). |

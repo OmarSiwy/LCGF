@@ -92,6 +92,7 @@
         .{ .kind = "attribute", .name = "contenteditable", .status = .rejected, .diagnostic = "rich editing is not supported; use <textarea>" },
         .{ .kind = "attribute", .name = "on:click", .status = .mapped, .target = "Page(H).frame: ComptimeUi Output.event base.zig:436 -> h.name(ui)", .fixture = "counter" },
         .{ .kind = "attribute", .name = "on:change", .status = .mapped, .target = "Page(H).frame: field compare after the frame -> h.name(ui, value)", .fixture = "mixer" },
+        .{ .kind = "attribute", .name = "on:submit", .applies_to = "text controls", .status = .mapped, .target = "Enter in a text or search field, Ctrl+Enter (Cmd+Enter) in a textarea: the control's Result.submitted -> h.name(ui)", .fixture = "form" },
         .{ .kind = "attribute", .name = "bind:checked", .status = .mapped, .target = "the builder's bind field, bool", .fixture = "mixer" },
         .{ .kind = "attribute", .name = "bind:value", .status = .mapped, .target = "the builder's bind field, f32 for range", .fixture = "mixer" },
         .{ .kind = "event", .name = "dblclick", .status = .rejected, .diagnostic = "use an app component for pointer-level input" },

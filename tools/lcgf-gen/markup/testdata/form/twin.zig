@@ -1,5 +1,7 @@
-//! form, written by hand: text controls with literal placeholders.
+//! form, written by hand: text controls with literal placeholders, and on:submit on the field
+//! and the text area.
 
+const std = @import("std");
 const lcgf = @import("lcgf");
 const s = lcgf.spec;
 const w = lcgf.widgets_base;
@@ -18,3 +20,55 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         textarea.ct.textarea(theme, .bio, .bio, 4, "About you"),
     }), "Sign up"),
 });
+
+pub fn Handlers(comptime Ui: type) type {
+    return struct {
+        names: u32 = 0,
+        bios: u32 = 0,
+
+        pub fn name_done(h: *@This(), _: *Ui) void {
+            h.names += 1;
+        }
+        pub fn bio_done(h: *@This(), _: *Ui) void {
+            h.bios += 1;
+        }
+    };
+}
+
+const Event = lcgf.input.Input.Event;
+
+/// N-SUBMIT: Enter submits the one-line field; in the text area Enter is a newline and
+/// Ctrl+Enter submits.
+pub fn events(comptime page: type, p: anytype, h: anytype) !void {
+    _ = page;
+    var in: lcgf.input.Input = .{};
+    const t = p.frame(h, &in).tree;
+    const field = t.rect(t.find(.from("name")));
+    const area = t.rect(t.find(.from("bio")));
+    // Focus the field with a click, then type and press Enter.
+    in.pointer = .{ (field.x0 + field.x1) / 2, (field.y0 + field.y1) / 2 };
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    const enter = [_]Event{.{ .kind = .press, .code = 0x28 }};
+    in.events = &enter;
+    _ = p.frame(h, &in);
+    in.events = &.{};
+    _ = p.frame(h, &in);
+    try std.testing.expectEqual(1, h.names);
+    // The text area: Enter adds a line, Ctrl+Enter submits.
+    in.pointer = .{ (area.x0 + area.x1) / 2, (area.y0 + area.y1) / 2 };
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    in.events = &enter;
+    _ = p.frame(h, &in);
+    try std.testing.expectEqual(0, h.bios);
+    const ctrl_enter = [_]Event{.{ .kind = .press, .code = 0x28, .mods = .{ .ctrl = true } }};
+    in.events = &ctrl_enter;
+    _ = p.frame(h, &in);
+    try std.testing.expectEqual(1, h.bios);
+    try std.testing.expectEqual(1, h.names);
+}

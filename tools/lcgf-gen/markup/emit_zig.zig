@@ -667,12 +667,14 @@ pub const Emit = struct {
                 e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(");");
+                e.submitFlag(n);
                 return "";
             },
             .textarea => {
                 e.print("_ = {s}.textarea(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(");");
+                e.submitFlag(n);
                 return "";
             },
             .when => {
@@ -692,6 +694,14 @@ pub const Emit = struct {
             },
             .spacer, .spinner, .each => unreachable,
         }
+    }
+
+    /// After a text control's call: its submit (`result.submitted`) recorded for dispatch.
+    fn submitFlag(e: *Emit, n: ir.Node) void {
+        for (e.page.handlers.items) |h| if (h.event == .submit and std.mem.eql(u8, h.widget, n.id)) {
+            e.print(" if ({s}.result.submitted) ui.events.{f} = true;", .{ e.stateRef(n.bind), std.zig.fmtId(n.id) });
+            return;
+        };
     }
 
     /// Whether a list's template holds a widget, whose id needs the copy index.
@@ -739,7 +749,7 @@ pub const Emit = struct {
             \\    events: struct {
         );
         var any = false;
-        for (e.page.handlers.items) |h| if (h.event == .click) {
+        for (e.page.handlers.items) |h| if (h.event == .click or h.event == .submit) {
             e.print(" {f}: bool = false,", .{std.zig.fmtId(h.widget)});
             any = true;
         };
@@ -854,7 +864,7 @@ pub const Emit = struct {
         e.write("    /// Calls the handlers of the frame `build` made.\n    pub fn dispatch(ui: *Ui, h: anytype) void {\n");
         if (e.page.handlers.items.len == 0) e.write("        _ = ui;\n        _ = h;\n");
         for (e.page.handlers.items) |h| switch (h.event) {
-            .click => e.print("        if (ui.events.{f}) h.{f}(ui); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) }),
+            .click, .submit => e.print("        if (ui.events.{f}) h.{f}(ui); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) }),
             .change => e.print("        if ({s} != ui.before.{f}) h.{f}(ui, {s}); // {s}\n", .{ e.stateRef(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) }),
         };
         e.write("    }\n};\n\n");
@@ -940,7 +950,7 @@ pub const Emit = struct {
         var clicks: u32 = 0;
         for (hs) |h| {
             changes = changes or h.event == .change;
-            clicks += @intFromBool(h.event == .click);
+            clicks += @intFromBool(h.event == .click or h.event == .submit);
         }
         var item_clicks: u32 = 0;
         for (hs) |h| item_clicks += @intFromBool(h.each.len > 0);
@@ -953,6 +963,8 @@ pub const Emit = struct {
         if (clicks > 0) {
             e.write("            if (out.event) |event| switch (event) {\n");
             for (hs) |h| if (h.event == .click and h.each.len == 0) e.print("                .{f} => h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+            // A text control's event is what its input did; submit is one part of it.
+            for (hs) |h| if (h.event == .submit) e.print("                .{f} => |result| if (result.submitted) h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
             var widgets: u32 = 0;
             for (e.page.nodes.items(.id), 0..) |id, k| widgets += @intFromBool(id.len > 0 and (e.eachOf(@intCast(k)) == none or e.page.nodes.items(.kind)[k] == .each));
             if (widgets > clicks) e.write("                else => {},\n");

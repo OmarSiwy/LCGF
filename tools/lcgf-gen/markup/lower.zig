@@ -1317,7 +1317,17 @@ pub const Lowerer = struct {
                 }
                 const each = l.eachOf(n);
                 ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .click, .widget = id, .loc = at, .each = if (each == none) "" else l.page.nodes.items(.id)[each] }));
+            } else if (std.mem.eql(u8, event, "submit")) {
+                if (payload != .text) {
+                    l.ds.err(doc.attrLoc(a), "on:submit is for text fields, search fields and text areas (Enter; Ctrl+Enter in a text area)", .{});
+                    continue;
+                }
+                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .submit, .widget = id, .field = bind, .loc = at }));
             } else if (std.mem.eql(u8, event, "change")) {
+                if (payload == .text) {
+                    l.ds.err(doc.attrLoc(a), "on:change on a text control is not lowered yet; use on:submit", .{});
+                    continue;
+                }
                 if (bind.len == 0) {
                     l.ds.err(doc.attrLoc(a), "on:change needs a bound value (bind:value or bind:checked)", .{});
                     continue;
@@ -1588,6 +1598,7 @@ pub const Lowerer = struct {
             else => row(lcgf.widgets_textfield.fieldStyle(&th, false, 0)),
         };
         l.widgetStyle(n, parent, base_style, &node);
+        l.handlers(n, node.id, bind, .text);
         l.skip[n] = true;
         l.ir_of[n] = l.addNode(node);
         return true;

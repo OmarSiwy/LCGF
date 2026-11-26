@@ -142,7 +142,8 @@ pub const Field = struct {
     why: []const u8,
 };
 
-pub const Event = enum(u8) { click, change };
+/// `submit`: Enter in a one-line text control, Ctrl+Enter (Cmd+Enter) in a text area.
+pub const Event = enum(u8) { click, change, submit };
 
 pub const Handler = struct {
     name: []const u8,
