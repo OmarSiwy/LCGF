@@ -763,6 +763,15 @@ fn pushWithText(t: anytype, tx: *Texts, comptime s: Spec, parent: u32, next_labe
 
 const test_font: Mono = .{ .advance = 0.5, .line = 1.2 };
 
+/// The whole tree's per-frame rows of a layout's `scratch`: a folded layout's are in `full`.
+fn rowsOf(scratch: anytype) *const Rows(@TypeOf(scratch.*)) {
+    return if (comptime @hasField(@TypeOf(scratch.*), "full")) &scratch.full else scratch;
+}
+
+fn Rows(comptime S: type) type {
+    return if (@hasField(S, "full")) @FieldType(S, "full") else S;
+}
+
 fn toF32(x: anytype) f32 {
     return if (@TypeOf(x) == f32) x else @floatFromInt(x);
 }
@@ -784,10 +793,11 @@ fn expectSameLayout(comptime e: examples.Example, viewport: [2]f32) !void {
     var ram: C.Dynamic = undefined;
     const spans = labelSpans(L.label_count);
     L.runText(&scratch, &ram, viewport, &spans, test_font);
+    const rows = rowsOf(&scratch);
     for (0..C.node_count) |i| {
         inline for (0..2) |a| {
-            try testing.expectEqual(t.c.size[a][i], ram.size[a][i]);
-            try testing.expectEqual(t.c.pos[a][i], ram.pos[a][i]);
+            try testing.expectEqual(t.c.size[a][i], rows.size[a][i]);
+            try testing.expectEqual(t.c.pos[a][i], rows.pos[a][i]);
         }
         inline for (0..4) |k| {
             try testing.expectEqual(t.c.rect[k][i], toF32(ram.rect[k][i]));
@@ -866,8 +876,12 @@ test "Plain.relayout: after a text change, the partial routine equals a full lay
         var scratch2: P.Scratch = undefined;
         var full: P.Cols.Dynamic = undefined;
         P.runText(&scratch2, &full, vp, &after, test_font);
-        inline for (.{ "size", "pos", "rect", "vis" }) |col|
+        inline for (.{ "rect", "vis" }) |col|
             try testing.expectEqualDeep(@field(full, col), @field(ram, col));
+        inline for (0..2) |a| {
+            try testing.expectEqualSlices(f32, scratch2.size[a][0..P.Cols.node_count], scratch.size[a][0..P.Cols.node_count]);
+            try testing.expectEqualSlices(f32, scratch2.pos[a][0..P.Cols.node_count], scratch.pos[a][0..P.Cols.node_count]);
+        }
         try testing.expectEqualSlices(u8, &full.visible, &ram.visible);
     }
     // The new text does change the tile's label, so the test is not trivially equal.
@@ -876,9 +890,9 @@ test "Plain.relayout: after a text change, the partial routine equals a full lay
     var after = before;
     after[1].bytes = 17;
     P.runText(&s1, &r1, vp, &before, test_font);
-    const w0 = r1.size[0][4];
+    const w0 = s1.size[0][4];
     P.relayout("a", &s1, &r1, &after, test_font);
-    try testing.expect(r1.size[0][4] != w0);
+    try testing.expect(s1.size[0][4] != w0);
 }
 
 test "Plain.gap_total: equals what prepare computes for the runtime tree" {
@@ -944,10 +958,11 @@ fn expectSameAsContext(comptime e: examples.Example, viewport: [2]f32) !void {
     var ram: L.Cols.Dynamic = undefined;
     const spans = labelSpans(L.label_count);
     L.runText(&scratch, &ram, viewport, &spans, test_font);
+    const rows = rowsOf(&scratch);
     for (0..t.len) |i| {
         inline for (0..2) |a| {
-            try testing.expectEqual(t.c.size[a][i], ram.size[a][i]);
-            try testing.expectEqual(t.c.pos[a][i], ram.pos[a][i]);
+            try testing.expectEqual(t.c.size[a][i], rows.size[a][i]);
+            try testing.expectEqual(t.c.pos[a][i], rows.pos[a][i]);
         }
         inline for (0..4) |k| {
             try testing.expectEqual(t.c.rect[k][i], toF32(ram.rect[k][i]));

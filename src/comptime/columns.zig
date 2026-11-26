@@ -24,6 +24,11 @@ pub const Class = enum { constant, dynamic };
 /// layout outputs, and the visibility and clip that finalize derives from them.
 const outputs = tree.Tree.scratch ++ [_][]const u8{ "size", "pos", "rect", "vis", "child_clip", "visible" };
 
+/// Outputs no reader needs after the frame: the layout scratch, and the sizes and positions
+/// finalize turns into rects and clips. Paint and events read the rects, and a partial relayout
+/// reads `Scratch`, so a static UI keeps these in its per-frame `Scratch`, not in `Dynamic`.
+const frame_only = tree.Tree.scratch ++ [_][]const u8{ "size", "pos" };
+
 /// Inputs a bound checkbox or slider writes from its state field each frame.
 const bound_inputs = [_][]const u8{"value"};
 
@@ -160,14 +165,14 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
         /// the UI does not use the feature it serves. A constant column whose rows are all equal
         /// is one value (`uniform`): the defaults for a feature no node sets (`scroll`, `offset`,
         /// `grow`...), and any style every node shares. `child_clip`, the clip a node hands its
-        /// children, is not kept when no node clips. The layout scratch (`Tree.scratch`) lives
-        /// only in the per-frame layout `Scratch`: nothing reads it after the frame.
+        /// children, is not kept when no node clips. `frame_only` columns live only in the
+        /// per-frame layout `Scratch`.
         pub const dropped: [names.len]bool = blk: {
             @setEvalBranchQuota(10_000 + 200 * n * names.len);
             var out: [names.len]bool = undefined;
             for (names, class, &out) |name, c, *d| d.* = switch (c) {
                 .constant => allEqual(name),
-                .dynamic => (!custom and contains(&tree.Tree.scratch, name)) or
+                .dynamic => (!custom and contains(&frame_only, name)) or
                     (std.mem.eql(u8, name, "child_clip") and classOf("clips") == .constant and
                         allEqual("clips") and pushed.c.clips[0] == 0),
             };
@@ -475,15 +480,16 @@ test "Columns.dropped: a column every node shares is one value, and equals the r
     const C = Columns(examples.mixer, .{});
     inline for (.{ "scroll", "offset", "grow", "pct", "flow", "shrink", "clips", "role", "look" }) |name|
         try testing.expect(comptime C.isDropped(name));
-    inline for (.{ "parent", "end", "nkids", "gap", "pad_lo", "main", "id", "rect", "size" }) |name|
+    inline for (.{ "parent", "end", "nkids", "gap", "pad_lo", "main", "id", "rect", "vis" }) |name|
         try testing.expect(comptime !C.isDropped(name));
     try testing.expectEqual([2]f32{ 0, 0 }, C.uniform("scroll"));
     try testing.expectEqual(@as(f32, 1), C.uniform("flow"));
     // No node clips: no child clip in RAM. The badge clips, and keeps it.
     try testing.expect(!@hasField(C.Dynamic, "child_clip"));
     try testing.expect(@hasField(Columns(examples.badge, .{}).Dynamic, "child_clip"));
-    // The layout scratch is the frame's, not RAM; a custom widget's runtime tree keeps it.
-    inline for (tree.Tree.scratch) |name| {
+    // The layout scratch, sizes and positions are the frame's, not RAM; a custom widget's
+    // runtime tree keeps them.
+    inline for (frame_only) |name| {
         try testing.expect(!@hasField(C.Dynamic, name));
         try testing.expect(@hasField(Columns(examples.custom, .{}).Dynamic, name));
     }
@@ -588,14 +594,13 @@ test "Coord: the smallest signed integer that holds the viewport, f32 without on
     const S = Columns(examples.settings, .{ .viewport = .{ 320, 240 } });
     try testing.expectEqual([4][S.node_count]i16, @FieldType(S.Dynamic, "rect"));
     try testing.expectEqual([4][S.node_count]i16, @FieldType(S.Dynamic, "vis"));
-    // Other layout outputs stay f32: they feed the next frame's arithmetic.
-    try testing.expectEqual([2][S.node_count]f32, @FieldType(S.Dynamic, "size"));
+    // Sizes and positions stay in the frame's f32 scratch: rects and clips are made from them.
+    try testing.expect(!@hasField(S.Dynamic, "size") and !@hasField(S.Dynamic, "pos"));
 }
 
 test "Columns.Dynamic: one exact array per dynamic column, nothing for constant ones" {
     const C = Columns(examples.mixer, .{});
     const D = C.Dynamic;
-    try testing.expectEqual([2][8]f32, @FieldType(D, "size"));
     try testing.expectEqual([4][8]f32, @FieldType(D, "rect"));
     try testing.expectEqual([8]f32, @FieldType(D, "value"));
     try testing.expect(!@hasField(D, "parent") and !@hasField(D, "look"));

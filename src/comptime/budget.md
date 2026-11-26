@@ -31,11 +31,11 @@ tables, so linker elimination can make the final image smaller.
 
 | Example | Nodes | Read-only bytes | Retained RAM | Layout scratch | Runtime tree RAM |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Mixer | 8 | 410 | 424 | 4,864 | 7,360 |
-| Card | 5 | 492 | 248 | 2,368 | 6,400 |
-| Settings | 32 | 3,275 | 1,184 | 5,472 | 18,304 |
-| Badge | 3 | 273 | 136 | 2,432 | 6,400 |
-| Dashboard | 13 | 1,063 | 900 | 3,344 | 11,328 |
+| Mixer | 8 | 410 | 296 | 4,864 | 7,360 |
+| Card | 5 | 492 | 168 | 2,368 | 6,400 |
+| Settings | 32 | 3,275 | 672 | 5,472 | 18,304 |
+| Badge | 3 | 273 | 88 | 2,432 | 6,400 |
+| Dashboard | 13 | 1,063 | 692 | 3,344 | 11,328 |
 
 Measured on the same x86-64 host with the default SIMD width. The custom widget
 example builds its rows at runtime and uses the runtime tree for layout.

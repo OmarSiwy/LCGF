@@ -272,6 +272,15 @@ fn pushLive(t: anytype, comptime s: Spec, parent: u32, sel: []const Select, next
     t.seal(i);
 }
 
+/// The whole tree's per-frame rows of a layout's `scratch`: a folded layout's are in `full`.
+fn rowsOf(scratch: anytype) *const Rows(@TypeOf(scratch.*)) {
+    return if (comptime @hasField(@TypeOf(scratch.*), "full")) &scratch.full else scratch;
+}
+
+fn Rows(comptime S: type) type {
+    return if (@hasField(S, "full")) @FieldType(S, "full") else S;
+}
+
 fn toF32(x: anytype) f32 {
     return if (@TypeOf(x) == f32) x else @floatFromInt(x);
 }
@@ -297,23 +306,18 @@ fn expectLiveFrame(comptime L: type, comptime s: Spec, sel: L.Regions.Selection,
 
     L.runLive(scratch, ram, viewport, sel);
     const m = L.Regions.mask(sel);
-    var live_slot: [C.slot_count]bool = @splat(false);
-    for (m[0..C.node_count], 0..) |mask, i| {
-        if (mask != 0) live_slot[C.slot(i)] = true;
-    }
-    for (live_slot, 0..) |live, slot| {
-        if (!live) inline for (0..2) |a| try testing.expectEqual(0, ram.size[a][slot]);
-    }
+    const rows = rowsOf(scratch);
     var r: u32 = 0;
     for (0..C.node_count) |i| {
         if (m[i] == 0) {
+            inline for (0..2) |a| try testing.expectEqual(0, rows.size[a][i]);
             try testing.expectEqual(0, ram.visible[i]);
             continue;
         }
         const slot = C.slot(i);
         inline for (0..2) |a| {
-            try testing.expectEqual(t.c.size[a][r], ram.size[a][slot]);
-            try testing.expectEqual(t.c.pos[a][r], ram.pos[a][slot]);
+            try testing.expectEqual(t.c.size[a][r], rows.size[a][i]);
+            try testing.expectEqual(t.c.pos[a][r], rows.pos[a][i]);
         }
         inline for (0..4) |k| {
             try testing.expectEqual(t.c.rect[k][r], toF32(ram.rect[k][slot]));
@@ -418,7 +422,7 @@ test "virtual list maps a bounded window onto a large data set and clips fractio
             var scratch: L.Scratch = undefined;
             var ram: L.Cols.Dynamic = undefined;
             L.runLive(&scratch, &ram, viewport, sel);
-            try testing.expectEqual(-c.offset, ram.pos[1][2]);
+            try testing.expectEqual(-c.offset, rowsOf(&scratch).pos[1][2]);
             try testing.expectEqual(0, ram.vis[1][2]);
             try testing.expectEqual(48, ram.vis[3][6]);
         }
@@ -449,8 +453,8 @@ test "a conditional root releases its viewport when hidden, then reuses it" {
     var ram: P.Cols.Dynamic = undefined;
     for ([_]bool{ true, false, true }) |show| {
         P.runLive(&scratch, &ram, .{ 80, 60 }, .{.{ .n = @intFromBool(show) }});
-        try testing.expectEqual(if (show) @as(f32, 80) else 0, ram.size[0][0]);
-        try testing.expectEqual(if (show) @as(f32, 60) else 0, ram.size[1][0]);
+        try testing.expectEqual(if (show) @as(f32, 80) else 0, scratch.size[0][0]);
+        try testing.expectEqual(if (show) @as(f32, 60) else 0, scratch.size[1][0]);
         for (ram.visible) |v| try testing.expectEqual(show, v != 0);
     }
 }
@@ -478,9 +482,10 @@ test "measured and updated text in a shared choice matches a static tree of its 
             oracle.runText(&ref_scratch, &ref_ram, viewport, &.{spans[1]}, Mono{});
             const slot = L.Cols.slot(5);
             for (0..2) |axis| {
-                try testing.expectEqual(ref_ram.size[axis][4], ram.size[axis][slot]);
-                try testing.expectEqual(ref_ram.pos[axis][4], ram.pos[axis][slot]);
+                try testing.expectEqual(ref_scratch.size[axis][4], rowsOf(&scratch).size[axis][5]);
+                try testing.expectEqual(ref_scratch.pos[axis][4], rowsOf(&scratch).pos[axis][5]);
             }
+            inline for (0..4) |k| try testing.expectEqual(ref_ram.rect[k][4], ram.rect[k][slot]);
             try testing.expectEqual(@as(u8, 0), ram.visible[4]);
             try testing.expectEqual(ref_ram.visible[4], ram.visible[5]);
         }
