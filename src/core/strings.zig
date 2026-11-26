@@ -26,6 +26,16 @@ pub const Strings = struct {
         s.len += n;
         return span;
     }
+    /// Formats `args` (`std.fmt`) straight into the end of the buffer, as `add` would copy the
+    /// result: no caller buffer. What does not fit is cut off and sets `overflow`.
+    pub fn print(s: *Strings, comptime fmt: []const u8, args: anytype) Span {
+        var w: std.Io.Writer = .fixed(s.buf[s.len..]);
+        const full = if (w.print(fmt, args)) true else |_| false;
+        s.overflow = simd.orB(s.overflow, !full);
+        const span: Span = .{ .start = s.len, .bytes = @intCast(w.end) };
+        s.len += span.bytes;
+        return span;
+    }
     pub fn get(s: *const Strings, span: Span) []const u8 {
         return s.buf[span.start..][0..span.bytes];
     }
@@ -71,4 +81,16 @@ test "running out of room is reported, not fatal" {
     s.reset();
     try testing.expect(!s.overflow);
     try testing.expectEqual(0, s.len);
+}
+
+test "print formats in place; what does not fit is cut and reported" {
+    var buf: [12]u8 = undefined;
+    var s: Strings = .{ .buf = &buf };
+    const a = s.print("n={d}", .{42});
+    try std.testing.expectEqualStrings("n=42", s.get(a));
+    try std.testing.expect(!s.overflow);
+    const b = s.print("{s}-{d:.1}", .{ "gains", 1.25 });
+    try std.testing.expectEqualStrings("gains-1.", s.get(b));
+    try std.testing.expectEqual(@as(u32, 12), s.len);
+    try std.testing.expect(s.overflow);
 }

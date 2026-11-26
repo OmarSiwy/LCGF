@@ -18,10 +18,9 @@ pub const id_summary = Id.from("summary");
 
 pub const App = struct {
     theme: w.Theme = .default,
-    /// Created on the first frame, from the context's signals.
-    count: signals.Cell(i32) = undefined,
-    doubled: signals.Derived(i32) = undefined,
-    ready: bool = false,
+    /// Their signals are created by their first change: nothing to set up.
+    count: signals.Cell(i32) = .of(0),
+    doubled: signals.Derived(i32) = .of(0),
     /// How often "doubled" was computed and the summary built: the work signals saved.
     computes: u32 = 0,
     summary_builds: u32 = 0,
@@ -29,11 +28,6 @@ pub const App = struct {
     pub fn build(app: *App, f: *Frame, _: *const Events) void {
         const th = &app.theme;
         const sig = &f.ctx.signals;
-        if (!app.ready) {
-            app.count = .init(sig, 0);
-            app.doubled = .init(sig, &.{app.count.signal}, 0);
-            app.ready = true;
-        }
 
         _ = f.open(.from("row"), .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(16), .gap = 8, .cross = .center, .fill = th.panel });
         if (w.button(f, th, id_dec, "-").clicked) app.count.set(sig, app.count.get() - 1);
@@ -42,12 +36,9 @@ pub const App = struct {
         _ = w.label(f, th, std.fmt.bufPrint(&buf, "Count: {d}", .{app.count.get()}) catch "?");
         f.close();
 
-        // A memo: runs once per change of its input, not once per frame.
-        const deps = [_]signals.Signal{app.count.signal};
-        if (app.doubled.stale(sig, &deps)) {
-            app.computes += 1;
-            app.doubled.set(sig, &deps, app.count.get() * 2);
-        }
+        // A memo: `double` runs on the first frame and once per change of its input, not
+        // once per frame.
+        _ = app.doubled.update(sig, &.{app.count.signal}, double, .{ app, app.count.get() });
         // Copied from last frame while "doubled" did not change.
         if (!f.reuse(id_summary, &.{app.doubled.signal()})) {
             app.summary_builds += 1;
@@ -56,6 +47,11 @@ pub const App = struct {
             _ = w.label(f, th, std.fmt.bufPrint(&buf2, "Doubled: {d}", .{app.doubled.get()}) catch "?");
             f.close();
         }
+    }
+
+    fn double(app: *App, n: i32) i32 {
+        app.computes += 1;
+        return n * 2;
     }
 };
 
@@ -73,8 +69,8 @@ test "counter: clicks move the count; the memo and the summary follow only its c
     s = try host.Smoke.run(&app, try host.clicks(&rec, &.{ inc, inc, inc, dec }));
     try testing.expectEqual(@as(i32, 2), app.count.get());
     try testing.expectEqual(@as(i32, 4), app.doubled.get());
-    // Four changes, four computes: none on the other frames.
-    try testing.expectEqual(@as(u32, 4), app.computes);
+    // The first frame's compute and one per change: none on the other frames.
+    try testing.expectEqual(@as(u32, 1 + 4), app.computes);
     // The summary was rebuilt for its first frame and each change of "doubled", not per frame.
     try testing.expectEqual(@as(u32, 1 + 4), app.summary_builds);
     try testing.expectEqual(@as(u32, 14), s.builds);

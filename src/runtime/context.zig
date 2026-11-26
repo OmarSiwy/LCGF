@@ -794,6 +794,41 @@ test "tween: wakes the host for its duration, lands, then the host sleeps" {
     try testing.expect(!ctx.needsFrame(&in));
 }
 
+test "animate, tween: a Rect and a Color move per component, and land on their targets" {
+    const n = comptime Context.requiredBytes(example_limits);
+    const S = struct {
+        var buffer: [n]u8 align(mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buffer, example_limits);
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 64.0 };
+    const from: types.Rect = .{ .x0 = 0, .y0 = 0, .x1 = 10, .y1 = 10 };
+    const to: types.Rect = .{ .x0 = 50, .y0 = 0, .x1 = 90, .y1 = 30 };
+    var rect = from;
+    var color: types.Color = .rgb(0, 0, 0);
+    var f = ctx.begin(&in);
+    // First use: the target itself.
+    try testing.expectEqual(from, f.animate(.from("box"), from, .{}));
+    try testing.expectEqual(color, f.tween(.from("ink"), color, 0.25, .linear));
+    _ = f.end(.{});
+    var frames: u32 = 0;
+    while (frames < 200) : (frames += 1) {
+        f = ctx.begin(&in);
+        rect = f.animate(.from("box"), to, .{});
+        color = f.tween(.from("ink"), types.Color.rgb(200, 100, 0), 0.25, .linear);
+        if (frames == 4) {
+            // Partway: each component between its ends, the one that does not move still.
+            try testing.expect(rect.x0 > 0 and rect.x0 < 50);
+            try testing.expect(rect.y1 > 10 and rect.y1 < 30);
+            try testing.expectEqual(@as(f32, 0), rect.y0);
+            try testing.expect(color.r > 0 and color.r < 200 and color.g < 100);
+        }
+        if (f.end(.{}).wake != 0) break;
+    }
+    try testing.expectEqual(to, rect);
+    try testing.expectEqual(types.Color.rgb(200, 100, 0), color);
+    try testing.expect(!ctx.needsFrame(&in));
+}
+
 test "transition: a fill change on hover fades over its duration, then the host sleeps" {
     const n = comptime Context.requiredBytes(example_limits);
     const S = struct {

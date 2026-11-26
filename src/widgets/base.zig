@@ -61,6 +61,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const Strings = @import("../core/strings.zig").Strings;
+const fmt = @import("../core/fmt.zig");
 const Input = @import("../core/input.zig").Input;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const paint = @import("../draw/paint.zig");
@@ -72,6 +73,7 @@ const spec_zig = @import("../comptime/spec.zig");
 const events = @import("../comptime/events.zig");
 const focus = @import("../interact/focus.zig");
 const signals = @import("../comptime/signals.zig");
+const plan = @import("../abi/plan.zig");
 const Spec = spec_zig.Spec;
 const Id = types.Id;
 const Node = types.Node;
@@ -313,6 +315,12 @@ pub const ct = struct {
         return s;
     }
 
+    /// A node named `id` that the host draws itself (`Frame.custom`'s route): its rect comes
+    /// back as a custom command carrying `data`. A click on it is its event.
+    pub fn custom(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec {
+        return .{ .kind = .col, .id = @tagName(id), .style = style, .widget = CustomDraw(data) };
+    }
+
     /// A slider named `id` setting the f32 field `bind`, 0 to 1.
     pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
         var s = spec_zig.row(sliderTrack(&th), .{Spec{ .kind = .col }});
@@ -334,6 +342,16 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     // One root row (the runtime front end's) above the spec's rows.
     const rows: u32 = flatten.count(spec) + 1;
     const runs: u32 = @max(labelCount(spec), 1);
+    // One custom command per custom draw node (`ct.custom`), and one for a widget of its own.
+    const custom_cap: u32 = 1 + customDrawCount(spec);
+    // The rows and styles this UI pushes: the plan the seam's tables are encoded from
+    // (src/abi/plan.zig), made while compiling. `push` walks the spec for its regions and
+    // custom widgets; every row it pushes goes through `plan.emit`, as the seam's frame does.
+    const P = comptime plan.planOf(State, spec, th);
+    const fields = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        break :blk plan.fieldsOfZig(State);
+    };
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -363,6 +381,11 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// A frame has been built: from then on, during `step`, `tables.t` is last frame's
         /// laid-out tree.
         built: bool = false,
+        /// The tree row of each spec row this frame, 0 for a row a dynamic region left out
+        /// (`when`, `list`, `choice`). Without regions it is the spec row plus one.
+        row_of: [rows - 1]u32 = @splat(0),
+        /// Spec rows left out so far this frame.
+        skipped: u32 = 0,
         font: Mono = .{},
 
         const Tables = struct {
@@ -376,9 +399,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 return .{
                     .t = Tree.init(carver, rows),
                     .tx = Texts.init(carver, runs),
-                    .cu = Customs.init(carver, 1),
+                    .cu = Customs.init(carver, custom_cap),
                     .strings = .{ .buf = carver.slice(u8, string_bytes) },
-                    .d = DrawList.init(carver, rows, runs, 1),
+                    .d = DrawList.init(carver, rows, runs, custom_cap),
                 };
             }
         };
@@ -449,6 +472,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
             var next: u32 = 0;
+            ui.row_of = @splat(0);
+            ui.skipped = 0;
             ui.push(spec, 0, &next, in);
             tb.t.seal(0);
 
@@ -471,7 +496,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
             ui.rects = .{};
             for (0..4) |side| {
-                for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = t.c.vis[side][@as(usize, node) + 1];
+                // A widget a region left out has no rect, so nothing hits it.
+                for (E.widget_nodes, 0..) |node, k| ui.rects.c[side][k] = if (ui.row_of[node] != 0) t.c.vis[side][ui.row_of[node]] else 0;
             }
             ui.built = true;
             return .{ .draw = &tb.d, .tree = t, .event = event, .wake = simd.selF(ui.needsAnimationFrame(), 0, types.inf) };
@@ -481,44 +507,118 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         /// widget pushes its own rows, one per node of its subtree in row order, and advances
         /// `next` past them.
         pub fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
-            const tb = &ui.tables;
             const state = &ui.signals.state;
+            // A `when` subtree is pushed only while its condition holds.
+            if (comptime n.region != null and n.region.?.kind == .when) {
+                if (!@field(state, n.region.?.bind)) return ui.skip(n, next);
+            }
+            const first = next.*;
+            if (comptime n.widget) |W_| {
+                // A custom draw node is a plan row like the others.
+                if (comptime @hasDecl(W_, "custom_draw_data")) {
+                    next.* += 1;
+                    ui.row_of[first] = ui.emit(first, parent, in);
+                    return;
+                }
+                W_.push(ui, n, parent, next, in);
+                // A custom widget pushes one tree row per spec row, in order.
+                for (first..next.*) |row| ui.row_of[row] = @intCast(row + 1 - ui.skipped);
+                return;
+            }
+            const tb = &ui.tables;
             next.* += 1;
             switch (n.kind) {
-                .label => {
-                    const i = tb.t.push(parent, .none, &n.style);
-                    const span = tb.strings.add(@field(state, n.bind.?));
-                    tb.t.c.text[i] = tb.tx.push(i, span, &labelText(&th));
-                },
+                .label => ui.row_of[first] = ui.emit(first, parent, in),
                 .checkbox => {
-                    const value: bool = @field(state, n.bind.?);
-                    var s = n.style;
-                    s.value = simd.b2f(value);
-                    const i = tb.t.push(parent, .hash(n.id.?), &s);
+                    const i = ui.emit(first, parent, in);
+                    ui.row_of[first] = i;
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &checkboxBox(&th, value));
+                    ui.row_of[first + 1] = ui.emit(first + 1, i, in);
                     ui.push(n.children[1], i, next, in);
                     tb.t.seal(i);
                 },
                 .slider => {
-                    const value = ui.animated(field(n.bind.?));
-                    var s = n.style;
-                    s.value = value;
-                    const i = tb.t.push(parent, .hash(n.id.?), &s);
+                    const i = ui.emit(first, parent, in);
+                    ui.row_of[first] = i;
                     next.* += 1;
-                    _ = tb.t.push(i, .none, &sliderThumb(&th, fraction(value, 0, 1)));
+                    ui.row_of[first + 1] = ui.emit(first + 1, i, in);
                     tb.t.seal(i);
                 },
                 .row, .col => {
-                    var s = n.style;
-                    // A container with an id is a button.
-                    if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
-                    const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
-                    inline for (n.children) |c| ui.push(c, i, next, in);
+                    const i = ui.emit(first, parent, in);
+                    ui.row_of[first] = i;
+                    // A list shows its first `count` copies, a choice its selected alternative.
+                    const live: u32 = comptime if (n.region) |r| (if (r.kind == .when) 0 else 1) else 0;
+                    inline for (n.children, 0..) |c, k| {
+                        if (live == 1 and !regionLive(n.region.?, state, k)) {
+                            ui.skip(c, next);
+                        } else ui.push(c, i, next, in);
+                    }
                     tb.t.seal(i);
                 },
             }
+        }
+
+        /// Pushes spec row `r` through `plan.emit`: its plan row and style.
+        fn emit(ui: *Self, r: u32, parent: u32, in: *const Input) u32 {
+            const row = P.rows[r];
+            return plan.emit(Host{ .ui = ui, .in = in }, &ui.tables, &P.looks, r, row, P.styles[row.style], parent);
+        }
+
+        /// What `plan.emit` reads: the typed state, the springs and the pointer.
+        const Host = struct {
+            ui: *Self,
+            in: *const Input,
+            pub inline fn response(h: Host, r: u32, _: u32) Response {
+                // A spec with no widgets has no button rows.
+                if (comptime E.widget_nodes.len == 0) return .{};
+                return h.ui.response(r, h.in);
+            }
+            pub inline fn flag(h: Host, k: u32) bool {
+                inline for (fields, 0..) |f, j| if (comptime f.type == .bool) {
+                    if (k == j) return @field(h.ui.signals.state, f.name);
+                };
+                unreachable;
+            }
+            pub inline fn animated(h: Host, k: u32) f32 {
+                inline for (fields, 0..) |f, j| if (comptime f.type == .f32 or f.type == .bool) {
+                    if (k == j) return h.ui.animated(comptime blk: {
+                        @setEvalBranchQuota(100_000);
+                        break :blk field(f.name);
+                    });
+                };
+                unreachable;
+            }
+            pub inline fn text(h: Host, k: u32) []const u8 {
+                inline for (fields, 0..) |f, j| if (comptime f.type == .str) {
+                    if (k == j) return @field(h.ui.signals.state, f.name);
+                };
+                unreachable;
+            }
+            pub inline fn formatted(h: Host, k: u32, sink: *fmt.Sink) void {
+                inline for (P.formats, 0..) |f, j| if (k == j) {
+                    const names = comptime blk: {
+                        var out: [f.args.len][]const u8 = undefined;
+                        for (f.args, &out) |a, *n| n.* = fields[a].name;
+                        const final = out;
+                        break :blk &final;
+                    };
+                    fmt.write(f.segs, f.text, fmt.Fields(State, names){ .state = &h.ui.signals.state }, sink);
+                };
+            }
+        };
+
+        /// Leaves out `n`'s subtree: its spec rows are passed over and get no tree row.
+        fn skip(ui: *Self, comptime n: Spec, next: *u32) void {
+            const count = comptime flatten.count(n);
+            next.* += count;
+            ui.skipped += count;
+        }
+
+        /// The tree row of spec row `row` in the frame being built (or last frame's, during
+        /// `step`), 0 when a region left it out.
+        pub fn treeRow(ui: *const Self, row: u32) u32 {
+            return ui.row_of[row];
         }
 
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
@@ -542,6 +642,43 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 
         pub fn field(comptime name: []const u8) S.Field {
             return comptime std.meta.stringToEnum(S.Field, name).?;
+        }
+    };
+}
+
+/// Whether child `k` of a `list` or `choice` region is live for `state`: a list's first
+/// `count` copies, a choice's selected alternative.
+fn regionLive(comptime r: spec_zig.Region, state: anytype, k: usize) bool {
+    if (r.window != null) @compileError("ComptimeUi: a windowed list (virtualList) needs the comptime layout passes (src/comptime/dynamic.zig)");
+    const v = @field(state, r.bind);
+    const n: u32 = switch (@typeInfo(@TypeOf(v))) {
+        .@"enum" => @intCast(@backingInt(v)),
+        .int => @intCast(v),
+        else => @compileError("region field '" ++ r.bind ++ "' must be an integer or an enum"),
+    };
+    return if (r.kind == .list) k < n else k == n;
+}
+
+/// Nodes in `n`'s subtree that are custom draw nodes (`ct.custom`).
+fn customDrawCount(comptime n: Spec) u32 {
+    var k: u32 = @intFromBool(n.widget != null and @hasDecl(n.widget.?, "custom_draw_data"));
+    for (n.children) |c| k += customDrawCount(c);
+    return k;
+}
+
+/// The widget of `ct.custom`: a node the host draws itself, as `Frame.custom` makes one. Its
+/// rect and clip come back in the draw list's `customs`, with `data`, in paint order.
+pub fn CustomDraw(comptime data: u64) type {
+    return struct {
+        pub const custom_draw_data = data;
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            next.* += 1;
+            const tb = &ui.tables;
+            const id: Id = .hash(n.id.?);
+            const i = tb.t.push(parent, id, &n.style);
+            tb.t.c.custom[i] = tb.cu.push(i, id, data);
         }
     };
 }

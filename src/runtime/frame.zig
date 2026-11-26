@@ -23,6 +23,8 @@ const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
+const values = @import("../anim/values.zig");
+const Span = @import("../core/strings.zig").Span;
 const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
@@ -84,6 +86,18 @@ pub const Frame = struct {
         return f.finishLeaf(f.open(id, style));
     }
 
+    /// `open` from a style already turned into its row (`Template.from`; a `*const Template`
+    /// or a C `*const FlatRow`): the row is pushed as it is. What C++ and Rust call, having made the row themselves (src/abi/runtime.zig).
+    pub fn openRow(f: *Frame, id: Id, row: anytype) Node {
+        const ctx = f.ctx;
+        return f.enter(f.tree().pushRow(ctx.stack[ctx.depth - 1], id, row));
+    }
+
+    /// `leaf` from a row (`openRow`).
+    pub fn leafRow(f: *Frame, id: Id, row: anytype) Node {
+        return f.finishLeaf(f.openRow(id, row));
+    }
+
     fn finishLeaf(f: *Frame, n: Node) Node {
         // push set the leaf's end when it created the row. Only pop the open slot.
         f.ctx.depth = @max(f.ctx.depth, 2) - 1;
@@ -95,6 +109,48 @@ pub const Frame = struct {
         const ctx = f.ctx;
         const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
         return f.attachText(f.finishLeaf(f.enter(i)), str, ts);
+    }
+
+    /// A text leaf of `args` formatted by `fmt` (`std.fmt`), written straight into the frame's
+    /// strings: `f.textf("Count: {d}", .{n}, ts)`, no buffer of the caller's.
+    pub fn textf(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle) Node {
+        const ctx = f.ctx;
+        const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
+        const n = f.finishLeaf(f.enter(i));
+        const span = ctx.strings[ctx.cur].print(fmt, args);
+        f.tree().c.text[n.ix()] = f.texts().push(n.ix(), span, &ts);
+        return n;
+    }
+
+    /// The free end of the frame's strings, to write text into before `textWritten`: how a
+    /// caller with its own formatter (C++'s `std::format_to_n`, Rust's `fmt::Write`) puts
+    /// formatted text in the frame without a buffer of its own.
+    pub fn room(f: *const Frame) []u8 {
+        const s = &f.ctx.strings[f.ctx.cur];
+        return s.buf[s.len..];
+    }
+
+    /// A text leaf over the `n` bytes just written at `room()`, as `text` would push them; `n`
+    /// past the room is cut to it, and reported (`Status.strings`).
+    pub fn textWritten(f: *Frame, n: usize, ts: TextStyle) Node {
+        const ctx = f.ctx;
+        const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
+        const node = f.finishLeaf(f.enter(i));
+        const s = &ctx.strings[ctx.cur];
+        const k: u32 = @intCast(@min(n, s.buf.len - s.len));
+        s.overflow = s.overflow or k < n;
+        const span: Span = .{ .start = s.len, .bytes = k };
+        s.len += k;
+        f.tree().c.text[node.ix()] = f.texts().push(node.ix(), span, &ts);
+        return node;
+    }
+
+    /// `textf` with full control over the leaf, as `textStyled`.
+    pub fn textfStyled(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle, style: Style) Node {
+        const n = f.leaf(.none, style);
+        const span = f.ctx.strings[f.ctx.cur].print(fmt, args);
+        f.tree().c.text[n.ix()] = f.texts().push(n.ix(), span, &ts);
+        return n;
     }
 
     /// `text` with full control over the leaf (padding, sizing, background).
@@ -112,8 +168,14 @@ pub const Frame = struct {
     /// Reserves a rect that the caller draws itself. It comes back in the draw list as
     /// `Cmd.custom`, in paint order, with `data` attached.
     pub fn custom(f: *Frame, id: Id, style: Style, data: u64) Node {
+        const row: Template = .from(&style);
+        return f.customRow(id, &row, data);
+    }
+
+    /// `custom` from a row (`openRow`).
+    pub fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node {
         const ctx = f.ctx;
-        const n = f.leaf(id, style);
+        const n = f.leafRow(id, row);
         f.tree().c.custom[n.ix()] = ctx.customs[ctx.cur].push(n.ix(), id, data);
         return n;
     }
@@ -172,7 +234,20 @@ pub const Frame = struct {
     /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
     /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,
     /// `needsFrame` true) until it lands; a spring not asked for in a frame is dropped.
-    pub fn animate(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
+    ///
+    /// `target` is an f32 (or a number literal), or anything made of numbers: a `Color`, a
+    /// `Rect`, `[2]f32`, a vector or a struct of them (src/anim/values.zig). Each component
+    /// moves on its own spring, keyed `id.with(k)` for the k-th; an f32 is keyed `id` itself.
+    pub fn animate(f: *Frame, id: Id, target: anytype, spring: Spring) values.Of(@TypeOf(target)) {
+        const T = values.Of(@TypeOf(target));
+        if (T == f32) return f.animateOne(id, target, spring);
+        const want = values.flatten(T, target);
+        var got: [want.len]f32 = undefined;
+        for (want, &got, 0..) |x, *g, k| g.* = f.animateOne(id.with(@intCast(k)), x, spring);
+        return values.build(T, &got);
+    }
+
+    fn animateOne(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
         const ctx = f.ctx;
         const a = &ctx.anims;
         const i = a.slot(id, target);
@@ -214,15 +289,9 @@ pub const Frame = struct {
     }
 
     /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
-    /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    /// jumping: `tween` over its channels, keyed by `id.with(0..3)`. Returns this frame's colour.
     pub fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color {
-        const want = [4]u8{ target.r, target.g, target.b, target.a };
-        var got: [4]u8 = undefined;
-        for (want, &got, 0..) |w, *g, k| {
-            const v = f.tween(id.with(@intCast(k)), @floatFromInt(w), tr.seconds, tr.ease);
-            g.* = @intFromFloat(@min(@max(@round(v), 0), 255));
-        }
-        return .rgba(got[0], got[1], got[2], got[3]);
+        return f.tween(id, target, tr.seconds, tr.ease);
     }
 
     /// `setFill` with a transition: a fill that changes between frames (hover, press, theme)
@@ -234,8 +303,17 @@ pub const Frame = struct {
     /// A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the
     /// target changes, a new leg starts from the current value. Returns this frame's value
     /// (`target` on first use). Keeps the host awake until it lands; a tween not asked for in
-    /// a frame is dropped.
-    pub fn tween(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
+    /// a frame is dropped. `target` is what `animate` takes, keyed the same way.
+    pub fn tween(f: *Frame, id: Id, target: anytype, seconds: f32, ease: Ease) values.Of(@TypeOf(target)) {
+        const T = values.Of(@TypeOf(target));
+        if (T == f32) return f.tweenOne(id, target, seconds, ease);
+        const want = values.flatten(T, target);
+        var got: [want.len]f32 = undefined;
+        for (want, &got, 0..) |x, *g, k| g.* = f.tweenOne(id.with(@intCast(k)), x, seconds, ease);
+        return values.build(T, &got);
+    }
+
+    fn tweenOne(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
         const i = t.slot(id, target);
@@ -728,8 +806,8 @@ test "limits: a frame past every limit at once reports it and never crashes" {
             const id: Id = .hash(std.mem.asBytes(&tag));
             _ = f.text("past the string limit", .{ .px = 10, .wrap = true });
             _ = f.custom(id, .{ .size = .{ .px(4), .px(4) } }, k);
-            _ = f.animate(id, @floatFromInt(k), .{});
-            _ = f.tween(id, @floatFromInt(k), 0.2, .linear);
+            _ = f.animate(id, @as(f32, @floatFromInt(k)), .{});
+            _ = f.tween(id, @as(f32, @floatFromInt(k)), 0.2, .linear);
             _ = scheduler.timer(&f, id, 0.1, .repeat);
             if (!@import("reuse.zig").reuse(&f, id, &.{})) {
                 _ = f.open(id, .{});
