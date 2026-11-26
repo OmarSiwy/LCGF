@@ -1,0 +1,51 @@
+<!doctype html>
+<html lcgf-page="landmarks">
+<head>
+  <title>Landmarks</title>
+  <style>
+    @layer base, page;
+    @layer page { nav { gap: 6px; } }
+    @layer base { nav { gap: 99px; padding: 2px; } }
+    :root { --space: 12px; }
+    body { display: flex; flex-direction: column; gap: var(--space); }
+    header { display: flex; justify-content: space-around; justify-content: center; height: 40px; background: linear-gradient(to right, #102030, #405060); }
+    nav > span:first-child { color: red; }
+    nav span + span { opacity: 0.5; }
+    nav :nth-child(3) { visibility: hidden; }
+    main { display: flex; flex-grow: 1; overflow: hidden; }
+    main > :not(aside) { flex-grow: 2; flex-shrink: 1; min-width: 100px; }
+    aside { max-width: 200px; text-align: center; pointer-events: none; }
+    article h2 { position: relative; top: 2px; left: 3px; }
+    .badge { position: absolute; left: 10px; top: 4px; transform: translate(5px, 1px) scale(2); transform-origin: left top; }
+    .card {
+      border: 2px dashed rgb(1 2 3);
+      border-radius: 1px 2px 3px 4px;
+      padding: var(--missing, 4px) 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Primary">
+      <span>One</span>
+      <span>Two</span>
+      <span>Three</span>
+    </nav>
+  </header>
+  <main>
+    <section aria-label="Settings">
+      <article>
+        <h2>Article</h2>
+        <span class="badge">new</span>
+      </article>
+      <div class="card" style="padding-top: 6px">Card</div>
+      <hr>
+    </section>
+    <aside><span>Side</span></aside>
+    <section><span>Plain</span></section>
+  </main>
+  <form><search><span>Find</span></search></form>
+  <p hidden>Gone</p>
+  <footer><span>Footer</span></footer>
+</body>
+</html>

@@ -1,0 +1,15 @@
+css.html:3:7: error: unknown CSS property 'colour'
+  p { colour: red; order: 2; display: flex; flex-direction: row-reverse; width: 10vw; }
+      ^
+css.html:3:20: error: order changes visual but not focus order; reorder the markup
+  p { colour: red; order: 2; display: flex; flex-direction: row-reverse; width: 10vw; }
+                   ^
+css.html:4:4: error: navigation state is not modelled
+  a:visited { color: blue }
+   ^
+css.html:3:81: error: viewport and container units need run-time evaluation; use % or flex-grow
+  p { colour: red; order: 2; display: flex; flex-direction: row-reverse; width: 10vw; }
+                                                                                ^
+css.html:5:9: error: custom properties refer to each other in a cycle
+  div { padding: var(--a); --a: var(--b); --b: var(--a); }
+        ^

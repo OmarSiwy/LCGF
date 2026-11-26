@@ -1,0 +1,5 @@
+:root { --lcgf-accent: #3cb371; }
+
+main { padding: 16px; gap: 12px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.count { min-width: 48px; font-size: 1.5em; color: var(--lcgf-accent); }

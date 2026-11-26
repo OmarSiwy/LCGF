@@ -229,6 +229,15 @@ pub fn styled(comptime s: Spec, comptime style: Style) Spec {
     return out;
 }
 
+/// Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1,
+/// "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`. Its layout style is unchanged.
+pub fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec {
+    if (s.kind != .label) @compileError("textStyled: only a label has a text style");
+    var out = s;
+    out.text_style = text_style;
+    return out;
+}
+
 /// `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
     var out = s;
@@ -417,6 +426,15 @@ test "named: sets the accessible name and nothing else" {
     try std.testing.expectEqualStrings(plain.id.?, s.id.?);
     try std.testing.expectEqualStrings(plain.bind.?, s.bind.?);
     try std.testing.expectEqual(plain.style, s.style);
+}
+
+test "textStyled: sets the label's text style and nothing else" {
+    comptime {
+        const plain = heading(1, "Mixer");
+        const big = textStyled(plain, .{ .px = 28 });
+        std.debug.assert(big.text_style.?.px == 28 and plain.text_style == null);
+        std.debug.assert(big.style.role == .heading and std.mem.eql(u8, big.text.?, "Mixer"));
+    }
 }
 
 test "options, styled: the same nodes as the positional builders with `named`; bind defaults to the id" {

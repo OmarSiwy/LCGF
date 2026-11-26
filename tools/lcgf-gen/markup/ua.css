@@ -1,0 +1,24 @@
+/* The user-agent stylesheet: the LCGF theme as CSS, not a browser's look (plan §2.3,
+   decision 7). lcgf-gen prepends `:root { --lcgf-*: … }` with the default theme's tokens;
+   an author `:root` rule overrides them, and the overrides become the page's `theme`. Text
+   does not wrap unless a rule says so, as LCGF labels do not. */
+
+:root {
+  color: var(--lcgf-text);
+  font-size: var(--lcgf-text-px);
+  white-space: nowrap;
+}
+
+body {
+  background-color: var(--lcgf-panel);
+}
+
+h1 { font-size: 2em; }
+h2 { font-size: 1.5em; }
+h3 { font-size: 1.17em; }
+h4 { font-size: 1em; }
+h5 { font-size: 0.83em; }
+h6 { font-size: 0.67em; }
+
+p { white-space: normal; }
+pre { white-space: pre; }

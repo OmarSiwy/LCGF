@@ -1,0 +1,6 @@
+conflict.html:4:35: error: 'level' is bound as f32 by <input type=range> here and as bool by <input type=checkbox> at 3:40
+  <input type="range" bind:value="level">
+                                  ^
+conflict.html:4:3: error: id 'level' is used twice; the first is at 3:3
+  <input type="range" bind:value="level">
+  ^

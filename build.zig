@@ -2,6 +2,10 @@
 //!
 //! `zig build --help` lists every step with its description; CI runs them through ci/jobs/.
 const std = @import("std");
+const markup = @import("tools/lcgf-gen/markup/build.zig");
+
+/// The Zig module generated from an HTML page (docs/guide/markup.md).
+pub const addMarkup = markup.addMarkup;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -31,6 +35,13 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{ "auxiliary/GraphemeBreakProperty", "emoji/emoji-data", "DerivedCoreProperties", "auxiliary/WordBreakProperty", "LineBreak", "EastAsianWidth", "extracted/DerivedGeneralCategory", "extracted/DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
         ucd_gen.addFileArg(ucd.path(b.fmt("{s}.txt", .{f})));
     lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+    // lcgf for the machine running the build: what lcgf-gen's markup compiler (addMarkup) links.
+    const host_options = b.addOptions();
+    host_options.addOption(?u32, "lanes", null);
+    host_options.addOption(bool, "fixed_point", false);
+    const lcgf_host = b.addModule("lcgf_host", .{ .root_source_file = b.path("src/lcgf.zig"), .target = b.graph.host });
+    lcgf_host.addOptions("build_options", host_options);
+    lcgf_host.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
 
     const lib = b.addLibrary(.{ .name = "lcgf", .root_module = lcgf });
     b.getInstallStep().dependOn(&lib.step);
@@ -109,6 +120,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgf", .module = lcgf16 }},
     }) });
+    // The markup compiler's tests and fixtures (tools/lcgf-gen/markup/), part of `test`.
+    var markup_step: ?*std.Build.Step = null;
+    if (b.lazyDependency("lexbor", .{})) |lexbor| {
+        lcgf_gen.root_module.linkLibrary(markup.addLexbor(b, b.path("."), lexbor, target));
+        markup_step = markup.steps(b, lexbor, lcgf, lcgf_host, target, optimize);
+    }
     abi_step.dependOn(&b.addInstallArtifact(lcgf_gen, .{}).step);
     // The Zig side of the bindings' gate (bindings/check/run.sh): the same UIs, frame by frame.
     const lcgf_dump = b.addExecutable(.{ .name = "lcgf-dump", .root_module = b.createModule(.{
@@ -253,6 +270,7 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+    if (markup_step) |s| test_step.dependOn(s);
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
     // The Unicode conformance files (src/text/unicode/conformance.zig): seconds, so not in `test`.

@@ -1,0 +1,3 @@
+doctype.html:1:1: error: use <!doctype html>; quirks mode is not supported
+<html><body><p>quirks</p></body></html>
+^

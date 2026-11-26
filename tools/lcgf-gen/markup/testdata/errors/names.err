@@ -1,0 +1,12 @@
+names.html:3:40: error: 'type' is a keyword in Zig; name the field something else
+  <input type="checkbox" bind:checked="type">
+                                       ^
+names.html:3:3: error: <input type=checkbox> needs bind:checked="field"
+  <input type="checkbox" bind:checked="type">
+  ^
+names.html:4:3: error: 'Level' is not a valid name: use lower case letters, digits and '_', starting with a letter
+  <span>{Level}</span>
+  ^
+names.html:5:3: error: '{gain:.9}': write {gain:.N} with N from 0 to 6 for a number
+  <span>{gain:.9}</span>
+  ^

@@ -1,0 +1,15 @@
+states.html:5:15: error: ::before and ::after content is not lowered yet
+  p::before { content: "x"; }
+              ^
+states.html:3:9: error: state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)
+  button:hover { color: red; }
+        ^
+states.html:4:9: error: unknown pseudo-class :hovr
+  button:hovr { color: red; }
+        ^
+states.html:5:3: error: ::before is not lowered yet
+  p::before { content: "x"; }
+  ^
+states.html:6:3: error: @media rules are not lowered yet
+  @media (min-width: 600px) { p { gap: 2px; } }
+  ^
