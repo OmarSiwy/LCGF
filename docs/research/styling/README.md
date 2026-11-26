@@ -17,7 +17,6 @@ The user specifically requested Casey Muratori's API-design approach. [api-desig
 | Need | Document |
 |---|---|
 | Every researched capability family, variants, current status, and proposed phase | [Capability inventory](inventory.md) |
-| The same inventory for filtering and implementation tracking | [Machine-readable inventory](inventory.json) |
 | What the source really does, with permanent links and exact evidence | [Source audit](source-audit.md) |
 | API constraints and usage-first review | [API design](api-design.md) |
 | Ordered work packages, dependencies, and meaningful completion criteria | [Implementation plan](implementation-plan.md) |

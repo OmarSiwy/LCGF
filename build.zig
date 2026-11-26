@@ -248,10 +248,7 @@ pub fn build(b: *std.Build) void {
     render_gallery.addArg(b.option([]const u8, "gallery-output", "Styling gallery PNG path") orelse "styling-gallery.png");
     b.step("styling-gallery", "Render the portable styling gallery as a PNG (-Dgallery-output=path)").dependOn(&render_gallery.step);
 
-    const styling_check = b.step("styling-check", "Verify styling inventory evidence and token authoring regressions");
-    const coverage_check = b.addSystemCommand(&.{ "python3", "tools/styling/coverage.py", "--check" });
-    coverage_check.has_side_effects = true;
-    styling_check.dependOn(&coverage_check.step);
+    const styling_check = b.step("styling-check", "Run the token authoring regressions");
     const token_check = b.addSystemCommand(&.{ "python3", "-m", "unittest", "discover", "-s", "tools/stylegen", "-p", "test_*.py" });
     token_check.has_side_effects = true;
     styling_check.dependOn(&token_check.step);

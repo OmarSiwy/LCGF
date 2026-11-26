@@ -1,7 +1,0 @@
-Build Summary: 6/6 steps succeeded
-styling-gallery success
-+- run exe styling-gallery success 10s
-   +- compile exe styling-gallery debug native success 1s MaxRSS:183M
-      +- options cached
-      +- run exe ucd-gen (unicode_tables.zig) cached
-         +- compile exe ucd-gen debug native cached 5ms MaxRSS:39M

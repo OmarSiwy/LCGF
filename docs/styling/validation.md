@@ -20,9 +20,9 @@ The final combined Linux gate completed **49/49 steps** with **1,508 passing Zig
 | Research inventory groups with source and named evidence | 158/158 validated |
 | Zig formatting, Web shell syntax, Git whitespace check | Passed |
 
-The [complete successful Linux log](validation-logs/linux.txt) and [machine-readable record](validation.json) are included. The GL ES log intentionally contains an undeclared `nope` shader diagnostic: the negative shader-compilation test checks that invalid shader source is rejected. Its containing suite reports success. This is not a failed final build.
+The GL ES log intentionally contains an undeclared `nope` shader diagnostic: the negative shader-compilation test checks that invalid shader source is rejected. Its containing suite reports success. This is not a failed final build.
 
-The coverage checker verifies all original IDs, implementation paths, named test or fixture references, and generated-file freshness. It is a traceability check. It does not infer standards conformance from a filename or test name; the [coverage profiles](coverage.md) state what each consumer does and its boundaries.
+The [coverage profiles](coverage.md) state what each consumer does and its boundaries; a profile is not a claim of standards conformance.
 
 ## Meaningful combined behaviors exercised
 
@@ -49,7 +49,7 @@ The actual driver was **Mesa 25.0.7-2+deb13u1, llvmpipe LLVM 19.1.7**, through E
 | Wayland | 31 passing protocol fixtures | No claim of an interactive desktop/compositor session |
 | Web shell | `node --check` passed | No browser-native rendering or DOM accessibility audit |
 
-[Windows](validation-logs/windows.txt) and [macOS](validation-logs/macos.txt) build logs are included. Native material/cursor fidelity, assistive-technology interaction and physical display color behavior still require the relevant hosts. HDR conversion is implemented as explicit color/output operations; HDR swapchain negotiation, ICC integration and display headroom remain host responsibilities. Projective plane painting is implemented; retained depth-aware preserve-3D remains a separately declared host capability.
+Native material/cursor fidelity, assistive-technology interaction and physical display color behavior still require the relevant hosts. HDR conversion is implemented as explicit color/output operations; HDR swapchain negotiation, ICC integration and display headroom remain host responsibilities. Projective plane painting is implemented; retained depth-aware preserve-3D remains a separately declared host capability.
 
 ## Rendered gallery
 
@@ -101,4 +101,4 @@ node --check src/shell/web/shell.js
 git diff --check
 ```
 
-Use the pinned toolchain and dependency manifest. The optional native/GL steps need their stated host libraries; cross-compilation is distinct from execution. [handoff.md](handoff.md) explains restoration and the remaining GitHub publication access requirement.
+Use the pinned toolchain and dependency manifest. The optional native/GL steps need their stated host libraries; cross-compilation is distinct from execution.

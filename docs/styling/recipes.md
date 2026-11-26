@@ -6,8 +6,7 @@ You can use either layer independently, keep using direct `Frame`/`Tree` calls, 
 layout and painting passes yourself. There is no required registry, allocator, retained style
 tree or renderer callback.
 
-The [evidence record](style-evidence.json) names the implementations and consumer
-tests for this layer. The [research inventory](../research/styling/inventory.md) describes the
+The [research inventory](../research/styling/inventory.md) describes the
 broader capability groups. A supported native profile is not a claim of full CSS, SVG, DTCG,
 MathML or platform accessibility conformance.
 

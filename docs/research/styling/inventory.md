@@ -2,7 +2,7 @@
 
 Research date: **2026-11-23**. Baseline: **`ed94db3da27882ef1c87d0dd15a382b4df39e2c2`**. **158 capability groups**; the options within groups are variants, not a count of independently shipped features. Cross-cutting groups intentionally share contracts. No capabilities are implemented by this document.
 
-[Main findings](README.md) · [Source audit](source-audit.md) · [API design](api-design.md) · [Implementation plan](implementation-plan.md) · [JSON](inventory.json) · [References](references.md)
+[Main findings](README.md) · [Source audit](source-audit.md) · [API design](api-design.md) · [Implementation plan](implementation-plan.md) · [References](references.md)
 
 ## How to read the inventory
 

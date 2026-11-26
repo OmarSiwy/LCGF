@@ -126,7 +126,6 @@ zig build test harfbuzz wayland gles accesskit docs styling-check -Drender=sw -j
 zig build styling-gallery -Drender=sw -Dgallery-output=docs/styling/gallery.png
 zig build styling-bench -Drender=sw -- docs/styling/benchmark.json
 python3 -m unittest discover -s tools/stylegen -p 'test_*.py'
-python3 tools/styling/coverage.py --check
 zig build fmt
 ```
 

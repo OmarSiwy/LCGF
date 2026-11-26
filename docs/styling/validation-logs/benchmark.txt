@@ -1,5 +1,0 @@
-Build Summary: 4/4 steps succeeded
-styling-bench success
-+- run exe styling-bench success 2s
-   +- compile exe styling-bench fast native success 32s MaxRSS:535M
-      +- options cached
