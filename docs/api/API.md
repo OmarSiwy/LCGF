@@ -383,7 +383,8 @@ layout: a fixed sequence of linear passes over the tree columns.
 
 ### Top level
 
-- `fn prepare(t: anytype) void`: SIMD.
+- `pass_call: std.builtin.CallModifier = if (inline_passes) .always_inline else .auto`: SIMD.
+- `fn prepare(t: anytype) void`
 - `fn applyText(t: anytype, tx: *const Texts, axis: Axis) void`: Scatters measured text extents into their leaf nodes for one axis.
 - `fn fit(t: anytype, axis: Axis) void`: Bottom-up: natural size of every node on one axis.
 - `fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void`: `fit` with the extra sizing rules of `fx` (flex.zig).
