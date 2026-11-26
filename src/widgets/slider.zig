@@ -167,17 +167,27 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             t.seal(i);
         }
 
-        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+        /// Its event is its value, each frame it is held or a key moves it, as the reference
+        /// slider's (and the seam's) is.
+        pub const Payload = f32;
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
             const Ui = @TypeOf(ui.*);
             const r = base.ctResponse(ui, row, event, in);
             var v: f32 = @field(ui.signals.state, bind);
+            var moved = false;
             if (r.held and ui.built) {
                 // Last frame's tree is still in the tables while input is applied.
                 const rect = ui.lastRect(row);
                 v = base.slide(v, true, (in.pointer[0] - rect.x0) / @max(rect.w(), 1), range.lo, range.hi);
+                moved = true;
             }
-            if (r.focused) v = keyed(v, range.lo, range.hi, in) orelse v;
+            if (r.focused) if (keyed(v, range.lo, range.hi, in)) |k| {
+                v = k;
+                moved = true;
+            };
             if (v != @field(ui.signals.state, bind)) ui.signals.set(Ui.field(bind), v);
+            return if (moved) @unionInit(Ui.Events.Event, name, v) else null;
         }
     };
 }
