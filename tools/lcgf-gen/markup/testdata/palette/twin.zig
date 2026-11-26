@@ -1,6 +1,6 @@
 //! palette, written by hand: a region sized by its content (E1), for menus and palette results.
-//! The comptime layout runs before the items exist, so the region takes the size its content
-//! measured on the previous frame; a change asks for another frame (`wake = 0`).
+//! The comptime layout runs before the items exist; the page builds the region, keeps the size
+//! its content measured, and lays itself out again around it in the same frame.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -36,13 +36,13 @@ fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
     return null;
 }
 
-/// The second frame lays the footer out below the region, which is as tall as its three hits.
+/// The first frame lays the footer out below the region, which is already as tall as its three
+/// hits (E1: the page is laid out again around the size the region measured), and asks for no
+/// second frame.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     const hits = [_]Hit{ .{ .title = "Open file" }, .{ .title = "Save all" }, .{ .title = "Quit" } };
     var in: lcgf.input.Input = .{};
-    const first = p.frame(h, &in, .{ .hits = &hits });
-    try std.testing.expectEqual(0, first.wake);
     const out = p.frame(h, &in, .{ .hits = &hits });
     try std.testing.expect(out.wake > 0);
     const region = out.tree.rect(out.tree.find(.from("each_hits")));
@@ -51,4 +51,6 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     try std.testing.expect(region.y1 - region.y0 > 3 * (quit[3] - quit[1]));
     try std.testing.expect(footer[1] >= region.y1);
     try std.testing.expect(quit[3] <= region.y1);
+    // A frame with the same items lays the page out once: the size is already kept.
+    try std.testing.expect(p.frame(h, &in, .{ .hits = &hits }).wake > 0);
 }

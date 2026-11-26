@@ -49,7 +49,7 @@ These need no engine change:
 - The item fields are checked with `@hasField`, and the error carries the HTML location.
 
 Requests, by usage:
-- **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`), one frame late. The page measures the content in its own viewport and sets `out.wake = 0` on a change. A layout that admits a region's measured content within the same frame would remove the lag.
+- **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`). The page builds its fit regions after the first layout, measures each content in its own viewport, and when a size changed lays the page out again in the same frame with `ComptimeUi.rebuild(in)` (build, layout and paint from the state, applying no input a second time; the frame's event stays the first layout's), so no frame shows the old size and none asks for another (`wake`). Pages without fit regions do not call it.
 - **E3 (landed):** `layout.snapSubtree(t, node)` after finalize moves a subtree onto the grid
   from its root's snapped corner and finalizes it again. The comptime page snaps a region's
   rect and lays its content out at (0, 0) in it; the runtime page lays the same content out in

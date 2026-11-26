@@ -30,9 +30,9 @@ pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
 }
 
 /// A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it
-/// takes the size its owner measured last (`setFit`), so the comptime layout, which runs before
-/// the content exists, gives it the room the content took one frame earlier. Zero until the
-/// first measure. The owner builds the content in a viewport of its own and reports its size.
+/// takes the size its owner measured last (`setFit`). The comptime layout runs before the content
+/// exists, so the owner builds the content in a viewport of its own after it, reports its size,
+/// and on a change lays the page out again in the same frame (`ComptimeUi.rebuild`).
 pub fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec {
     var out = region(id, style);
     out.widget = FitRegion(@tagName(id));

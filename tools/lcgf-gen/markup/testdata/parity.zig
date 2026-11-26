@@ -176,14 +176,8 @@ test "a page with regions draws the same frames in both frontends over the same 
         var hr: twin.Handlers(rt.Ui) = .{};
         var replay: Replay = .{ .src = src };
         while (try replay.next(buf)) |in| {
-            var a = S.cp.frame(&hc, in, items_c.data());
-            var b = S.rp.frame(&ctx, &hr, in, items_r.data());
-            // A fit region takes last frame's size (E1) and asks for this frame again, as a
-            // host then draws it: compare what the host shows.
-            if (a.wake == 0) {
-                a = S.cp.frame(&hc, in, items_c.data());
-                b = S.rp.frame(&ctx, &hr, in, items_r.data());
-            }
+            const a = S.cp.frame(&hc, in, items_c.data());
+            const b = S.rp.frame(&ctx, &hr, in, items_r.data());
             try expectSameCommands(a.draw, b.draw);
             // The state, the items and what the handlers saw move together.
             inline for (comptime @typeInfo(rt.State).@"struct".field_names) |f| {

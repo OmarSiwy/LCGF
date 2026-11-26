@@ -1970,19 +1970,44 @@ pub const Emit = struct {
             const events = e.regionEvents(@intCast(i));
             if (events.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events });
         }
+        // A region sized by its content (a fit axis) is built first, and the page is laid out
+        // again around the sizes they measured before anything is composed, so the frame shows
+        // them (`ComptimeUi.rebuild`; the frame's event stays the first layout's).
+        var fits = false;
+        for (0..e.page.nodes.len) |i_| {
+            const i: u32 = @intCast(i_);
+            if (e.page.nodes.items(.kind)[i] != .each or e.page.nodes.items(.level)[i] != 1) continue;
+            if (!fits) e.write("            var refit = false;\n");
+            fits = true;
+            e.print("            var region_{s}: lcgf.context.Output = undefined;\n", .{e.page.nodes.items(.id)[i]});
+            e.eachFrame(i, 0, .build);
+        }
+        if (fits) e.write(
+            \\            if (refit) {
+            \\                const event = out.event;
+            \\                out = p.ui.rebuild(in);
+            \\                out.event = event;
+            \\            }
+            \\
+        );
         var k: u32 = 0;
         for (0..e.page.nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             if (e.page.nodes.items(.kind)[i] != .each) continue;
-            e.eachFrame(i, k);
+            e.eachFrame(i, k, if (e.page.nodes.items(.level)[i] == 1) .compose else .whole);
             k += 1;
         }
     }
 
-    /// Region `each`, the `slot`-th of the page.
-    fn eachFrame(e: *Emit, each: u32, slot: u32) void {
+    /// Region `each`, the `slot`-th of the page: built and composed (`whole`), or, for a fit
+    /// region, built into `region_<id>` with its size recorded (`build`), then composed.
+    fn eachFrame(e: *Emit, each: u32, slot: u32, phase: enum { whole, build, compose }) void {
         const n = e.page.nodes.get(each);
         const fit = n.level == 1;
+        if (phase == .compose) {
+            e.print("            if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_{s}.draw, @backingInt(lcgf.types.Id.from(\"{s}\")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}\n", .{ slot % 2, n.id, n.id, slot % 2, slot % 2 });
+            return;
+        }
         e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}\n", .{ n.text, n.bind, e.where(n.loc) });
         e.eachChecks(each, "                ");
         // The copies' statements first: they name `ui` only when they read the view state.
@@ -2006,12 +2031,21 @@ pub const Emit = struct {
             \\
         , .{ n.id, n.id, n.id, n.id, n.id });
         e.write(body);
-        e.print(
-            \\                const region_out = {s};{s}
+        const end = if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})";
+        if (phase == .build) e.print(
+            \\                region_{s} = {s};
+            \\                // The content's size before snapping, for the page's layout, so the page
+            \\                // around it lays out as it would around the content itself.
+            \\                const content = region_{s}.tree.c.size;
+            \\                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) refit = true;
+            \\            }}
+            \\
+        , .{ n.id, end, n.id, std.zig.fmtId(n.id) }) else e.print(
+            \\                const region_out = {s};
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})", if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size before snapping, for the region's next layout, so the\n                // page around it lays out as it would around the content itself.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ end, slot % 2, n.id, slot % 2, slot % 2 });
     }
 
     /// The comptime checks of region `each`: the item fields the page reads and its
