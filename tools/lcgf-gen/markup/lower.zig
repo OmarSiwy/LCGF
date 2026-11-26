@@ -1130,13 +1130,13 @@ pub const Lowerer = struct {
         // The copies stack in a column, or a row under display: flex.
         if (l.display(n) == .flex) style.dir = if (l.keyword(n, .@"flex-direction")) |kw| (if (css.eq(kw, "column")) .y else .x) else .x;
         if (l.px(n, if (style.dir == .x) .@"column-gap" else .@"row-gap")) |g| style.gap = g;
-        if (style.size[0].kind == .fit or style.size[1].kind == .fit)
-            l.ds.err(l.loc(n), "a run-time region is laid out before its items exist: give it a width and a height, or flex-grow (and align-self: stretch)", .{});
+        // A fit axis takes the size the content measured last frame (ct_interop.fitRegion).
+        const fit: u8 = @intFromBool(style.size[0].kind == .fit or style.size[1].kind == .fit);
         const nodes = if (l.attr(n, "lcgf-nodes")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 256;
         const texts = if (l.attr(n, "lcgf-texts")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 64;
         if (nodes == 0 or texts == 0 or texts > 255 * 64) l.ds.err(at, "lcgf-nodes and lcgf-texts take positive counts", .{});
         const id = ok(std.fmt.allocPrint(l.arena, "each_{s}", .{list}));
-        l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), 0, 0 } });
+        l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), 0, 0 }, .level = fit });
     }
 
     /// A binding inside an lcgf-each region: per-item state lives in the app's item, so it names

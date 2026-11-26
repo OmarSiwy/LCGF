@@ -352,7 +352,7 @@ pub const Emit = struct {
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
             },
-            .each => e.print("lcgf.ct_interop.region(.{f}, {s})", .{ std.zig.fmtId(n.id), e.styleText(n.style, n.params_expr) }),
+            .each => e.print("lcgf.ct_interop.{s}(.{f}, {s})", .{ if (n.level == 1) "fitRegion" else "region", std.zig.fmtId(n.id), e.styleText(n.style, n.params_expr) }),
             .spinner => unreachable,
         }
         if (restyle and !has_children) {
@@ -1050,6 +1050,7 @@ pub const Emit = struct {
     /// Region `each`, the `slot`-th of the page.
     fn eachFrame(e: *Emit, each: u32, slot: u32) void {
         const n = e.page.nodes.get(each);
+        const fit = n.level == 1;
         e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}\n", .{ n.text, n.bind, e.where(n.loc) });
         // The item fields the page reads, checked with the HTML location.
         var seen: std.StringHashMapUnmanaged(void) = .empty;
@@ -1074,26 +1075,46 @@ pub const Emit = struct {
         e.rtWalk(each, 1);
         std.mem.swap(std.ArrayList(u8), &body, &e.out);
         if (std.mem.indexOf(u8, body.items, "ui.") != null) e.write("                const ui = &p.ui;\n");
+        // The copy index names widgets; a region of text alone has none.
+        if (std.mem.indexOf(u8, body.items, "copy0") == null) body.insertSlice(e.arena, 0, "                    _ = copy0;\n") catch unreachable;
         e.print(
             \\                if (p.{s} == null) p.{s} = lcgf.context.Context.init(&p.{s}_buf, {s}_limits) catch unreachable;
             \\                const rect = out.tree.rect(out.tree.find(.from("{s}")));
-            \\                const region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});
+            \\                {s} region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});{s}
             \\                var region_frame = p.{s}.?.begin(&region_in);
             \\                const f = &region_frame;
             \\                // The copies are laid out in the region as its CSS says.
             \\                _ = f.open(.none, {s});
             \\                for (data.{f}, 0..) |*{f}, copy0| {{
             \\
-        , .{ n.id, n.id, n.id, n.id, n.id, n.id, e.styleText(.{ .size = .{ .fill, .fill }, .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text) });
+        , .{ n.id, n.id, n.id, n.id, n.id, if (fit) "var" else "const", fitViewport(e, n), n.id, e.styleText(.{ .size = fitSize(n.style), .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text) });
         e.write(body.items);
         e.print(
             \\                }}
             \\                f.close();
-            \\                const region_out = f.end(.{{}});
+            \\                const region_out = f.end(.{{}});{s}
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size, for the region's next layout.\n                const content = region_out.tree.rect(1);\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content.x1 - content.x0, content.y1 - content.y0 }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+    }
+
+    /// A fit region's content is measured in the page's viewport on its fit axes.
+    fn fitViewport(e: *Emit, n: ir.Node) []const u8 {
+        if (n.level != 1) return "";
+        var out: std.ArrayList(u8) = .empty;
+        for (0..2) |a| if (n.style.size[a].kind == .fit) out.print(e.arena, "\n                region_in.viewport[{d}] = in.viewport[{d}];", .{ a, a }) catch unreachable;
+        return out.items;
+    }
+
+    /// The region content's wrapper size: the region's on a definite axis, the content's own
+    /// on a fit one.
+    fn fitSize(st: types.Style) [2]types.Size {
+        var out: [2]types.Size = .{ .fill, .fill };
+        for (0..2) |a| if (st.size[a].kind == .fit) {
+            out[a] = .fit;
+        };
+        return out;
     }
 
     /// The check block: each handler the markup names, with the signature it must have.

@@ -49,9 +49,7 @@ These need no engine change:
 - The item fields are checked with `@hasField`, and the error carries the HTML location.
 
 Requests, by usage:
-- **E1:** a Spec region whose content is laid out by its parent, so the region could be
-  `fit`-sized. Today it must have a definite size, because the comptime layout runs before
-  the region's content exists.
+- **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`), one frame late. The page measures the content in its own viewport and sets `out.wake = 0` on a change. A layout that admits a region's measured content within the same frame would remove the lag.
 - **E2:** `compose` into several regions in one pass. Today the page composes them one after another into two draw lists it alternates between, so each region copies the commands before it; one pass would copy them once (a performance request, not a usage one).
 
 ### What the runtime frontend emits

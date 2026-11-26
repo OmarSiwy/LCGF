@@ -232,6 +232,7 @@
         .{ .name = "tokens", .runtime_vars = "t-" },
         .{ .name = "files", .spec_only = true },
         .{ .name = "rows", .spec_only = true },
+        .{ .name = "palette", .spec_only = true },
         .{ .name = "form" },
         .{ .name = "flexitems" },
     },
