@@ -1677,9 +1677,15 @@ pub const Lowerer = struct {
                 l.ds.err(at, "flex-wrap: wrap-reverse changes visual but not focus order; not supported", .{});
             } else if (!css.eq(kw, "nowrap")) l.badValue(l.declared(n, .@"flex-wrap").?.first, .@"flex-wrap", l.declared(n, .@"flex-wrap").?.end);
         };
+        // CSS's initial align-content, normal, stretches a wrapping row's lines.
+        if (l.flex.wrap) l.flex.line_space = .stretch;
         if (disp == .flex) if (l.keyword(n, .@"align-content")) |kw| {
-            // Flex.Style.lines: where a wrapping row's lines sit when they leave height.
-            if (alignOf(kw)) |a| l.flex.lines = a else l.ds.err(l.declared(n, .@"align-content").?.loc, "align-content: {s} is not lowered; use start, center or end", .{kw});
+            // Flex.Style.lines and line_space: where a wrapping row's spare height goes.
+            const space = std.meta.stringToEnum(lcgf.flex.Flex.LineSpace, if (std.mem.startsWith(u8, kw, "space-")) kw[6..] else kw);
+            if (alignOf(kw)) |a| {
+                l.flex.lines = a;
+                l.flex.line_space = .none;
+            } else if (css.eq(kw, "normal")) {} else if (space != null and space.? != .none) l.flex.line_space = space.? else l.badValue(l.declared(n, .@"align-content").?.first, .@"align-content", l.declared(n, .@"align-content").?.end);
         };
         // gap along the main axis; CSS's column-gap is the gap between items of a row.
         const gp: Prop = if (dir == .x) .@"column-gap" else .@"row-gap";

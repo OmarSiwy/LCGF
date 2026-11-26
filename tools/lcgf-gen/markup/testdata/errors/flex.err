@@ -11,11 +11,11 @@ flex.html:7:26: error: aspect-ratio: '9' is not a supported value
   .rw { aspect-ratio: 16 9; }
                          ^
 flex.html:5:24: error: flex-wrap: wrap-reverse changes visual but not focus order; not supported
-  .rw { display: flex; flex-wrap: wrap-reverse; align-content: space-between; }
+  .rw { display: flex; flex-wrap: wrap-reverse; align-content: baseline; }
                        ^
-flex.html:5:49: error: align-content: space-between is not lowered; use start, center or end
-  .rw { display: flex; flex-wrap: wrap-reverse; align-content: space-between; }
-                                                ^
+flex.html:5:64: error: align-content: 'baseline' is not a supported value
+  .rw { display: flex; flex-wrap: wrap-reverse; align-content: baseline; }
+                                                               ^
 flex.html:8:43: error: a wrapping row has one gap: give row-gap and column-gap the same length
   .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
                                           ^

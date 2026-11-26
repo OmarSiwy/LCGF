@@ -29,6 +29,9 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "two"),
         label.ct.label(theme, "three"),
     }), .{ .wrap = true, .lines = .center }),
+    // align-content: space-between, and normal (unset): Flex.Style.line_space.
+    s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two"), label.ct.label(theme, "three") }), .{ .wrap = true, .line_space = .between }),
+    s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two") }), .{ .wrap = true, .line_space = .stretch }),
     // aspect-ratio: Flex.Style.aspect, width over height.
     s.flexed(s.col(.{ .size = .{ .px(40), .fit }, .fill = .rgb(192, 64, 64) }, .{}), .{ .aspect = 2 }),
     // justify-content: space-*: Flex.Style.space, on rows and columns.
