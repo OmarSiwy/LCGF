@@ -1186,6 +1186,8 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
 fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime encoding: ImageEncoding, t: Target, q: *const Quad, img: Image, scale: f32) void {
     // Not drawn: the box below is emptied, so the row loops run zero times (no gate jump).
     const drawn = std.math.isFinite(scale) & (scale > 0) & @import("../../draw/geometry.zig").invertible(q.xform);
+    // Size builds return instead (smaller; no census there).
+    if (comptime @import("builtin").mode == .small) if (!drawn) return;
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;
@@ -1221,7 +1223,7 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime
         @min(hi[0], clip[2]) * scale + 1,
         @min(hi[1], clip[3]) * scale + 1,
     }), t.scissor);
-    const box: [4]u32 = @select(u32, @as(@Vector(4, bool), @splat(drawn)), @as(@Vector(4, u32), shown), @as(@Vector(4, u32), @splat(0)));
+    const box: [4]u32 = if (comptime @import("builtin").mode == .small) shown else @select(u32, @as(@Vector(4, bool), @splat(drawn)), @as(@Vector(4, u32), shown), @as(@Vector(4, u32), @splat(0)));
 
     const fill = rgba(q.fill);
     const edge = rgba(q.border_color);

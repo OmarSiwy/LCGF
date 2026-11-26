@@ -8,6 +8,8 @@ const types = @import("../core/types.zig");
 const features = @import("features.zig");
 const simd = @import("../core/simd.zig");
 const V4 = @Vector(4, f32);
+/// Size builds (embedded flash) keep the smaller forms where a speed build removes a branch.
+const small = @import("builtin").mode == .small;
 
 pub const identity: [6]f32 = .{ 1, 0, 0, 1, 0, 0 };
 pub const empty: [4]f32 = .{ 0, 0, 0, 0 };
@@ -34,6 +36,15 @@ pub fn about(m: [6]f32, rect: [4]f32, origin: [2]f32) [6]f32 {
 }
 
 pub fn inverse(m: [6]f32) ?[6]f32 {
+    if (comptime small) {
+        // Early exits: smaller, and size builds run no census.
+        for (m) |v| if (!std.math.isFinite(v)) return null;
+        const det = m[0] * m[3] - m[1] * m[2];
+        if (det == 0 or !std.math.isFinite(det)) return null;
+        const inv = inverseRaw(m);
+        for (inv) |v| if (!std.math.isFinite(v)) return null;
+        return inv;
+    }
     const inv = inverseRaw(m);
     return if (invertibleRaw(m, inv)) inv else null;
 }
@@ -47,6 +58,7 @@ inline fn inverseRaw(m: [6]f32) [6]f32 {
 /// `inverse(m) != null` as one mask, with no early exit, so it stays a select in the
 /// per-row and per-quad passes.
 pub fn invertible(m: [6]f32) bool {
+    if (comptime small) return inverse(m) != null;
     return invertibleRaw(m, inverseRaw(m));
 }
 
@@ -77,7 +89,7 @@ pub fn expand(rect: [4]f32, amount: [4]f32) [4]f32 {
 /// (finalize 3.2G -> 7.4G on the rows bench).
 /// Inlined into the per-row passes, except in size builds (2.5 KB of flash on cortex-m7).
 pub inline fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
-    const how: std.builtin.CallModifier = if (@import("builtin").mode == .small) .never_inline else .always_inline;
+    const how: std.builtin.CallModifier = if (small) .never_inline else .always_inline;
     return @call(how, transformRectIn, .{ rect, m });
 }
 
@@ -92,11 +104,14 @@ fn transformRectIn(rect: [4]f32, m: [6]f32) [4]f32 {
     const yy: V4 = .{ rect[1], rect[1], rect[3], rect[3] };
     const x = xx * @as(V4, @splat(m[0])) + yy * @as(V4, @splat(m[2])) + @as(V4, @splat(m[4]));
     const y = xx * @as(V4, @splat(m[1])) + yy * @as(V4, @splat(m[3])) + @as(V4, @splat(m[5]));
-    // Min and max over the four corners as selects. `@reduce(.Min)` keeps the non-NaN
-    // operand through a `jp` fix-up per step; the same rule is the `b != b` term here.
-    const lo = lanesMin(x, y);
-    const hi = -lanesMin(-x, -y);
-    const moved: V4 = .{ lo[0], lo[1], hi[0], hi[1] };
+    // Min and max over the four corners. Speed builds use selects: `@reduce(.Min)` keeps the
+    // non-NaN operand through a `jp` fix-up per step, and the `b != b` term is the same rule.
+    // Size builds keep the smaller `@reduce`.
+    const moved: V4 = if (comptime small) .{ @reduce(.Min, x), @reduce(.Min, y), @reduce(.Max, x), @reduce(.Max, y) } else blk: {
+        const lo = lanesMin(x, y);
+        const hi = -lanesMin(-x, -y);
+        break :blk .{ lo[0], lo[1], hi[0], hi[1] };
+    };
     return @select(f32, @as(@Vector(4, bool), @splat(shown)), moved, @as(V4, empty));
 }
 
