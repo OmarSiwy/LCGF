@@ -23,10 +23,10 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.textStyled(label.ct.label(theme, "Big"), .{ .px = 24, .color = .rgb(230, 230, 235) }),
         label.ct.label(theme, "small"),
     }), .{ .baseline = true }),
-    // flex-wrap: wrap on a row: Flex.Style.wrap.
-    s.flexed(s.row(.{ .size = .{ .px(60), .fit }, .gap = 4 }, .{
+    // flex-wrap: wrap on a row: Flex.Style.wrap; align-content: Flex.Style.lines.
+    s.flexed(s.row(.{ .size = .{ .px(60), .px(80) }, .gap = 4 }, .{
         label.ct.label(theme, "one"),
         label.ct.label(theme, "two"),
         label.ct.label(theme, "three"),
-    }), .{ .wrap = true }),
+    }), .{ .wrap = true, .lines = .center }),
 });

@@ -1117,6 +1117,10 @@ pub const Lowerer = struct {
                 l.ds.err(at, "flex-wrap: wrap-reverse changes visual but not focus order; not supported", .{});
             } else if (!css.eq(kw, "nowrap")) l.badValue(l.declared(n, .@"flex-wrap").?.first, .@"flex-wrap", l.declared(n, .@"flex-wrap").?.end);
         };
+        if (disp == .flex) if (l.keyword(n, .@"align-content")) |kw| {
+            // Flex.Style.lines: where a wrapping row's lines sit when they leave height.
+            if (alignOf(kw)) |a| l.flex.lines = a else l.ds.err(l.declared(n, .@"align-content").?.loc, "align-content: {s} is not lowered; use start, center or end", .{kw});
+        };
         // gap along the main axis; CSS's column-gap is the gap between items of a row.
         const gp: Prop = if (dir == .x) .@"column-gap" else .@"row-gap";
         if (l.px(n, gp)) |g| {

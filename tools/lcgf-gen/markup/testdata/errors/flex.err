@@ -5,8 +5,11 @@ flex.html:4:48: error: flex-wrap: wrap is lowered on rows only (flex-direction: 
   .cw { display: flex; flex-direction: column; flex-wrap: wrap; }
                                                ^
 flex.html:5:24: error: flex-wrap: wrap-reverse changes visual but not focus order; not supported
-  .rw { display: flex; flex-wrap: wrap-reverse; }
+  .rw { display: flex; flex-wrap: wrap-reverse; align-content: space-between; }
                        ^
+flex.html:5:49: error: align-content: space-between is not lowered; use start, center or end
+  .rw { display: flex; flex-wrap: wrap-reverse; align-content: space-between; }
+                                                ^
 flex.html:6:43: error: a wrapping row has one gap: give row-gap and column-gap the same length
   .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; }
                                           ^
