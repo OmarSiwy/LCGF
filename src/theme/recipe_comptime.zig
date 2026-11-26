@@ -19,6 +19,7 @@ const switch_zig = @import("../widgets/switch.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
+const search_zig = @import("../widgets/search.zig");
 const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
@@ -156,7 +157,7 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
     };
 }
 
-const Kind = enum { button, link, toggle, checkbox, switch_control, slider, input };
+const Kind = enum { button, link, toggle, checkbox, switch_control, slider, input, search };
 
 /// `text` is the caption: a `[]const u8` field of the State (`.save`) or a literal ("Save").
 pub fn button(comptime id: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
@@ -193,6 +194,92 @@ pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), compti
 pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype, comptime config: Config) Spec {
     return build(.input, @tagName(id), @tagName(bind), captionName(hint), .{}, config, isLiteral(hint));
 }
+/// A search field, as `controls.search`: the box (the recipe's root) holds the field `id`
+/// and the Clear button, the widget `<id>.clear`. Its events carry the field's `edit.Result`.
+pub fn search(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype, comptime config: Config) Spec {
+    const name = @tagName(id);
+    const W = Widget(.search, name, @tagName(bind), captionName(hint), .{}, config, isLiteral(hint));
+    var field = build(.search, name, @tagName(bind), captionName(hint), .{}, config, isLiteral(hint));
+    field.bind = null;
+    field.widget = SearchField(W);
+    const clear: Spec = .{ .kind = .row, .id = name ++ ".clear", .children = &.{.{ .kind = .label }} };
+    return .{ .kind = .row, .bind = @tagName(bind), .children = &.{ field, clear }, .widget = SearchBox(name, @tagName(bind), W) };
+}
+
+/// The field inside a recipe search box: a focus stop the box pushes and steps.
+fn SearchField(comptime W: type) type {
+    return struct {
+        pub const focusable = true;
+        pub const Payload = edit.Result;
+        pub const inputAvailability = W.inputAvailability;
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = .{ ui, n, parent, next, in };
+            unreachable; // pushed by the search box
+        }
+    };
+}
+
+/// Rows of a recipe text field: the field, its bands, text, selection copies, caret and outline.
+const field_rows = textfield_zig.bands + controls.selection_sections * 2 + 4;
+
+fn SearchBox(comptime name: [:0]const u8, comptime bind: []const u8, comptime W: type) type {
+    return struct {
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            _ = field;
+            return W.bindError(State, bind);
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const row = next.*;
+            next.* += 1;
+            var response = ui.response(row + 1, in);
+            response.focused = ui.focus == @field(Ui.Events.Widget, name);
+            const use = W.useFor(ui, in, response);
+            const root = W.resolvePart(ui, Parts.root, use);
+            var child = use;
+            child.parent = &root;
+            child.local = &.{};
+            const th = controls.fieldMetrics(root, W.resolvePart(ui, Parts.content, child), true);
+            const t = &ui.tables.t;
+            const row_box = t.push(parent, .none, &root.box);
+            W.push(ui, n.children[0], row_box, next, in);
+            const some = @field(ui.signals.state, bind).text().len > 0;
+            const b = t.push(row_box, search_zig.clearId(.hash(name)), &search_zig.clearStyle(&th, ui.response(next.*, in), some));
+            const k = t.push(b, .none, &.{ .role = .label });
+            t.c.text[k] = ui.tables.tx.push(k, ui.tables.strings.add(search_zig.clear_text), &search_zig.clearText(&th, some));
+            t.seal(b);
+            next.* += 2;
+            t.seal(row_box);
+            search_zig.expose(t, row_box, b, some);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const states = W.state(ui);
+            const live = !states.disabled and !states.read_only;
+            const field = &@field(ui.signals.state, bind);
+            const clear = base.ctResponse(ui, row + 1 + field_rows, event, in);
+            if (live and clear.clicked and field.text().len > 0) ui.focus = @field(Ui.Events.Widget, name);
+            const response = base.ctResponse(ui, row + 1, event, in);
+            const use = W.useFor(ui, in, response);
+            const root = W.resolvePart(ui, Parts.root, use);
+            var child = use;
+            child.parent = &root;
+            child.local = &.{};
+            const th = controls.fieldMetrics(root, W.resolvePart(ui, Parts.content, child), true);
+            const editor = field.editor();
+            const previous = editor.mode.read_only;
+            editor.mode.read_only = previous or !live;
+            defer editor.mode.read_only = previous;
+            const last = ui.lastRect(row + 1);
+            if (live) search_zig.behave(field, &th, .hash(name), response, clear.clicked, last, in) else textfield_zig.behave(field, &th, .hash(name), response, last, in);
+            if (field.result.changed or field.result.submitted) return @unionInit(Ui.Events.Event, name, field.result);
+            return null;
+        }
+    };
+}
 
 fn stock(comptime kind: Kind) model.Recipe {
     return switch (kind) {
@@ -203,18 +290,19 @@ fn stock(comptime kind: Kind) model.Recipe {
         .switch_control => model.switch_control,
         .slider => model.slider,
         .input => model.input,
+        .search => model.search,
     };
 }
 
 fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) Spec {
-    const captioned = kind != .slider and kind != .input;
+    const captioned = kind != .slider and kind != .input and kind != .search;
     const label_node: Spec = if (literal) .{ .kind = .label, .text = text } else .{ .kind = .label, .bind = if (captioned) text else null };
     const mark: Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
     const children: []const Spec = switch (kind) {
         .button, .link, .toggle => &.{ label_node, .{ .kind = .col } },
         .checkbox, .switch_control => &.{ mark, label_node, .{ .kind = .col } },
         .slider => &.{ .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col } },
-        .input => blk: {
+        .input, .search => blk: {
             const bands: [textfield_zig.bands]Spec = @splat(.{ .kind = .col });
             const overlays: [controls.selection_sections]Spec = @splat(.{ .kind = .col, .children = &.{label_node} });
             const nodes = bands ++ [1]Spec{label_node} ++ overlays ++ [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
@@ -235,7 +323,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
         pub const focusable = true;
         pub const Payload = switch (kind) {
             .slider => f32,
-            .input => edit.Result,
+            .input, .search => edit.Result,
             else => void,
         };
 
@@ -247,7 +335,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.recipe_field) |f| if (base.fieldError(State, "recipe", f, model.Recipe)) |err| return err;
             if (config.fade_field) |f| if (base.fieldError(State, "recipe fade", f, controls.Fade)) |err| return err;
             if (config.clock_field) |f| if (base.fieldError(State, "recipe clock", f, controls.Clock)) |err| return err;
-            if (kind == .input) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
+            if (kind == .input or kind == .search) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
             if (kind == .toggle) {
                 if (toggle_zig.bindError(State, bind)) |err| return err;
@@ -283,7 +371,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 states.checked = @field(ui.signals.state, bind);
             } else if (kind == .toggle) {
                 states.toggled = @field(ui.signals.state, bind);
-            } else if (kind == .input) states = config.validation.states(states, @field(ui.signals.state, bind).text());
+            } else if (kind == .input or kind == .search) states = config.validation.states(states, @field(ui.signals.state, bind).text());
             return .{
                 .tokens = if (config.tokens_field) |field| @field(ui.signals.state, field) else config.tokens,
                 .scope = config.scope,
@@ -305,7 +393,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 ui.fail(err);
                 return .{ .enabled = false, .activates = false };
             };
-            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .link or kind == .input };
+            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .link or kind == .input or kind == .search };
         }
 
         fn resolvePart(ui: anytype, part: types.Id, use: model.Use) style.Computed {
@@ -351,9 +439,12 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     root.box.role = .text_input;
                     root.box.scroll = .{ @field(ui.signals.state, bind).scroll, 0 };
                 },
+                .search => {},
             }
             root.box.value = value;
-            const row = tb.t.push(parent, .hash(name), &root.box);
+            // A search field's root is the box around it (`SearchBox`); the field keeps the text field's layout.
+            const field_box = if (kind == .search) search_zig.inputStyle(&controls.fieldMetrics(root, resolvePart(ui, Parts.content, child), true), @field(ui.signals.state, bind).scroll) else root.box;
+            const row = tb.t.push(parent, .hash(name), &field_box);
             if (kind != .checkbox and kind != .switch_control and kind != .slider) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
             switch (kind) {
                 .button, .link, .toggle => {
@@ -384,15 +475,13 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     _ = tb.t.push(row, .none, &.{ .size = .{ .grow(1 - fraction), .px(0) } });
                     next.* += 6;
                 },
-                .input => {
+                .input, .search => {
                     const field = &@field(ui.signals.state, bind);
                     const content = resolvePart(ui, Parts.content, child);
                     const hint = resolvePart(ui, Parts.placeholder, child);
                     const selection = resolvePart(ui, Parts.selection, child);
                     const caret = resolvePart(ui, Parts.caret, child);
-                    var th = model.metrics(root);
-                    th.text_px = content.text.px;
-                    th.text = content.text.color;
+                    const th = controls.fieldMetrics(root, content, kind == .search);
                     const shown = textfield_zig.shown(field, &th, caption(ui));
                     for (shown.band) |band| {
                         var part = selection.box;
@@ -431,6 +520,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             const response = base.ctResponse(ui, row, event, in);
             const states = state(ui);
             switch (kind) {
+                .search => unreachable, // stepped by the search box
                 .button => {
                     if (!states.disabled and !response.clicked and button_zig.activated(false, response.focused, in)) return @unionInit(Ui.Events.Event, name, {});
                 },
@@ -467,9 +557,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     child.parent = &root;
                     child.local = &.{};
                     const content = resolvePart(ui, Parts.content, child);
-                    var th = model.metrics(root);
-                    th.text_px = content.text.px;
-                    th.text = content.text.color;
+                    const th = controls.fieldMetrics(root, content, false);
                     const field = &@field(ui.signals.state, bind);
                     const editor = field.editor();
                     const previous = editor.mode.read_only;

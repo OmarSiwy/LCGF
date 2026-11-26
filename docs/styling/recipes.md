@@ -116,6 +116,7 @@ can retain its `.parts` and concatenate its public rule array with application r
 | Adapter | Parts and behavior |
 |---|---|
 | Button | Root, label, icon and independent outside focus; caller can replace the content |
+| Link and toggle button | A button's parts; a link activates on Enter only, a toggle button is `States.toggled` while pressed |
 | Checkbox | Background, checked/mixed mark, label and focus; boolean and tri-state values |
 | Switch | Track, moving thumb, label and focus |
 | Slider | Track/root, value fill, visible thumb and focus; native drag/key behavior |
@@ -123,6 +124,7 @@ can retain its `.parts` and concatenate its public rule array with application r
 | Radio | Group/root, option row, circular background, mark, label and focus; native arrow/Space selection |
 | Progress and spinner | Track/fill or independently styled dots; spinner has a static reduced-motion state |
 | Text field and text area | Content, placeholder, selection foreground/background, caret, focus and support parts |
+| Search field | A text field's parts, its root the box around the field and the Clear button; Escape or the button clears it |
 | Navigation and data | Item, indicator, tab panel, header, row, cell, disclosure and separator composition |
 
 The additional defaults are `extra_controls.radio_recipe`, `range_recipe` and
@@ -132,8 +134,8 @@ hit regions continue to cover the track halves while the decorative knobs are ce
 the represented values. The geometry helper maps pointer positions through the track's
 transform and padding before calling the existing value behavior.
 
-The compile-time builders are `recipes.ct.button`, `checkbox`, `switchControl`, `slider`,
-`textfield`, `radio`, `range` and `spinner`. Their `Config` can bind `states_field`,
+The compile-time builders are `recipes.ct.button`, `link`, `toggle`, `checkbox`,
+`switchControl`, `slider`, `textfield`, `search`, `radio`, `range` and `spinner`. Their `Config` can bind `states_field`,
 `environment_field`, `tokens_field` and `recipe_field` to ordinary application state fields.
 Actual pointer/keyboard replay tests compare production draw output and semantic role/value
 columns with runtime builders. A runtime resolution failure in this frontend is returned in

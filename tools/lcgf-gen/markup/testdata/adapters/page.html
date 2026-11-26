@@ -6,6 +6,7 @@
     a:hover { background-color: #5078c8; }
     button[aria-pressed]:hover { background-color: #c85050; }
     input[type=radio]:hover { background-color: #50c878; }
+    input[type=search]:hover { background-color: #c8b450; }
   </style>
 </head>
 <body>
@@ -13,5 +14,6 @@
   <button aria-pressed="false" id="bold" bind:pressed="bold">Bold</button>
   <label><input type="radio" name="size" bind:selected="size"> Small</label>
   <label><input type="radio" name="size" checked> Large</label>
+  <input type="search" id="find" bind:value="find" placeholder="Find" on:change="found">
 </body>
 </html>

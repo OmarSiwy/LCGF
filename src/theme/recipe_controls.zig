@@ -15,6 +15,7 @@ const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
+const search_zig = @import("../widgets/search.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
 const simd = @import("../core/simd.zig");
 const tweens = @import("../anim/tweens.zig");
@@ -590,27 +591,54 @@ pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node 
 /// Uses the existing editor and shaping view. Only paint/layout parts are replaced. The
 /// caller's existing read-only policy is retained; options may restrict it further.
 pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
+    return textControl(f, id, field, placeholder, options, false);
+}
+
+/// A search field: a text field and a Clear button in one box, which takes the recipe's root
+/// (`model.search`). Escape or the button clears it and the button gives focus back
+/// (`search.behave`); the field is `id`, the button `search.clearId(id)`.
+pub fn search(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
+    return textControl(f, id, field, placeholder, options, true);
+}
+
+/// The text field's metrics from its resolved root and content; a search field's own field
+/// keeps the stock padding, its root being the box around it.
+pub fn fieldMetrics(root: style.Computed, content: style.Computed, comptime in_box: bool) base.Theme {
+    var th = model.metrics(root);
+    th.text_px = content.text.px;
+    th.text = content.text.color;
+    if (in_box) th.pad = base.Theme.default.pad;
+    return th;
+}
+
+fn textControl(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options, comptime in_box: bool) style.Error!types.Response {
     try checkSemantics(f, options);
-    const recipe = options.recipe orelse model.input;
-    const response = try policyResponse(f, id, recipe, options, options.states);
+    const recipe = options.recipe orelse if (in_box) model.search else model.input;
+    var response = try policyResponse(f, id, recipe, options, options.states);
+    const live = !options.states.disabled and !options.states.read_only;
+    const clear = if (in_box) f.ctx.inter.response(search_zig.clearId(id)) else types.Response{};
+    if (in_box and live and clear.clicked and field.text().len > 0) {
+        f.ctx.inter.focus = @backingInt(id);
+        response.focused = true;
+    }
     var states = options.validation.states(statesFor(options.states, response, visibleFocus(f, options)), field.text());
     var control = try resolvedControl(f, recipe, options, states);
     var content = try control.part(Parts.content, null);
     var hint = try control.part(Parts.placeholder, null);
     var selection = try control.part(Parts.selection, null);
     var caret = try control.part(Parts.caret, null);
-    var th = model.metrics(control.root);
-    th.text_px = content.text.px;
-    th.text = content.text.color;
+    var th = fieldMetrics(control.root, content, in_box);
     const editor = field.editor();
     const was_read_only = editor.mode.read_only;
     editor.mode.read_only = was_read_only or states.read_only or states.disabled;
     defer editor.mode.read_only = was_read_only;
     var last = f.lastRect(id);
-    last.x1 -= control.root.box.pad[2] - control.root.box.pad[0];
-    last.y0 += control.root.box.pad[1] - textfield_zig.padding(&th)[1];
+    if (!in_box) {
+        last.x1 -= control.root.box.pad[2] - control.root.box.pad[0];
+        last.y0 += control.root.box.pad[1] - textfield_zig.padding(&th)[1];
+    }
     const was_invalid = options.validation.invalid(field.text());
-    textfield_zig.behave(field, &th, id, response, last, f.in);
+    if (in_box and live) search_zig.behave(field, &th, id, response, clear.clicked, last, f.in) else textfield_zig.behave(field, &th, id, response, last, f.in);
     // The comptime front end resolves after this frame's edit: validity follows the new text.
     if (options.validation.invalid(field.text()) != was_invalid) {
         states.invalid = options.states.invalid or options.validation.invalid(field.text());
@@ -619,23 +647,26 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
         hint = try control.part(Parts.placeholder, null);
         selection = try control.part(Parts.selection, null);
         caret = try control.part(Parts.caret, null);
-        th = model.metrics(control.root);
-        th.text_px = content.text.px;
-        th.text = content.text.color;
+        th = fieldMetrics(control.root, content, in_box);
     }
     textfield_zig.platform(f, field);
-    control.root.box.role = .text_input;
-    control.root.box.scroll = .{ field.scroll, 0 };
-    control.node = f.open(id, control.root.box);
+    const box = if (in_box) f.open(.none, control.root.box) else types.Node.none;
+    if (in_box) {
+        control.node = f.open(id, search_zig.inputStyle(&th, field.scroll));
+    } else {
+        control.root.box.role = .text_input;
+        control.root.box.scroll = .{ field.scroll, 0 };
+        control.node = f.open(id, control.root.box);
+    }
     _ = f.interact(control.node, if (states.disabled) .{} else types.Sense.any);
     f.setCursor(f.tree().cursor(control.node.ix()) orelse .text, response.hovered);
     const shown = textfield_zig.shown(field, &th, placeholder);
     for (shown.band) |band| {
-        var box = selection.box;
-        box.float = true;
-        box.offset = .{ band[0], 0 };
-        box.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
-        _ = f.leaf(.none, box);
+        var b = selection.box;
+        b.float = true;
+        b.offset = .{ band[0], 0 };
+        b.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
+        _ = f.leaf(.none, b);
     }
     const text_part = if (shown.hint) hint else content;
     selectedText(f, shown.str, text_part, selection, shown.band, 0, textfield_zig.lineHeight(&th));
@@ -645,6 +676,17 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
     caret_box.size[1] = .px(textfield_zig.lineHeight(&th));
     _ = f.leaf(.none, caret_box);
     end(f, &control);
+    if (in_box) {
+        const some = field.text().len > 0;
+        const b = f.open(search_zig.clearId(id), search_zig.clearStyle(&th, clear, some));
+        // Hidden or disabled, it still senses (a click then clears nothing), as the comptime
+        // front end's rects do.
+        _ = f.interact(b, .{ .hover = true, .click = true });
+        _ = f.textStyled(search_zig.clear_text, search_zig.clearText(&th, some), .{ .role = .label });
+        f.close();
+        f.close();
+        search_zig.expose(f.tree(), box.ix(), b.ix(), some);
+    }
     expose(options.semantics, control.node, states);
     return response;
 }

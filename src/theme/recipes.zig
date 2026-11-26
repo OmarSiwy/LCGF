@@ -28,6 +28,7 @@ pub const endBox = controls.endBox;
 pub const button = controls.button;
 pub const beginLink = controls.beginLink;
 pub const link = controls.link;
+pub const search = controls.search;
 pub const toggle = controls.toggle;
 pub const checkbox = controls.checkbox;
 pub const switchControl = controls.switchControl;

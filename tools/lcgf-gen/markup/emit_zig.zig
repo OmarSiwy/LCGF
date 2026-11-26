@@ -497,7 +497,7 @@ pub const Emit = struct {
                 e.write(")");
             },
             .textfield, .search => if (n.recipe.len > 0) {
-                e.print("recipes.ct.textfield(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.print("recipes.ct.{s}(.{f}, .{f}, ", .{ @tagName(n.kind), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else {
@@ -790,10 +790,12 @@ pub const Emit = struct {
                 .radio => "radio",
                 .slider => "slider",
                 .textfield => "input",
+                .search => "search",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
                 .@"switch" => "switch",
+                .search => "input",
                 else => stock,
             };
             // A checkbox's or switch's colours and border are its box's; the others' their root's.
@@ -1259,7 +1261,7 @@ pub const Emit = struct {
                 e.submitFlag(n);
                 return "";
             } else if (n.recipe.len > 0) {
-                e.print("_ = recipes.textfield(f, {s}, &{s}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                e.print("_ = recipes.{s}(f, {s}, &{s}, ", .{ @tagName(n.kind), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.print(", {s}) catch unreachable;", .{e.config(n, true)});
                 e.submitFlag(n);

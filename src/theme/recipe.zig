@@ -15,6 +15,7 @@ const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const radio_zig = @import("../widgets/radio.zig");
+const search_zig = @import("../widgets/search.zig");
 pub const Parts = style.Parts;
 pub const Id = types.Id;
 pub const States = style.States;
@@ -347,6 +348,13 @@ pub const input: Recipe = .{
         icon_part,
         focus_part,
     },
+    .rules = &input_rules,
+};
+
+/// A search field: the text field's parts and rules, its root the box around the field and
+/// the Clear button (`search.boxStyle`).
+pub const search: Recipe = .{
+    .parts = &([_]Part{.{ .id = Parts.root, .base = .{ .box = search_zig.boxStyle(&.default, false) } }} ++ input.parts[1..input.parts.len].*),
     .rules = &input_rules,
 };
 
