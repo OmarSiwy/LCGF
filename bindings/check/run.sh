@@ -172,12 +172,16 @@ done
 # pointer and Tab input. The draw lists, events and focus must be byte-identical.
 # C++ three ways: each UI's frame built by `zig build-obj` (lcgf-gen --lang zig, the fast path),
 # and without Zig from C (lcgf-gen --lang c): by clang, specialized, and by gcc, a call into
-# liblcgf. Rust twice: its own passes compiled against the tables (lcgf::ct), and liblcgf's frame
-# through the seam (`seam`).
+# liblcgf. Rust four: its own passes compiled against the tables (lcgf::ct), and `SeamUi`, whose
+# frame lcgf_build::static_ui builds the same three ways (`seam`).
 for cc in clang gcc; do
     cmake -S "$root/bindings/cpp/check" -B "$work/cpp-$cc" -DCMAKE_PREFIX_PATH="$prefix" -DLCGF_ZIG=OFF \
         -DCMAKE_C_COMPILER=$cc -DLCGF_SPECS="$root/src/abi/testdata" -DLCGF_SHADERS="$root/src/render/gpu" -DCMAKE_BUILD_TYPE=Release >/dev/null
     cmake --build "$work/cpp-$cc" --target lcgf-cpp-ct-check >/dev/null
+    if [ $have_rust = yes ]; then
+        LCGF_ZIG=OFF CC=$cc LCGF_PREFIX="$prefix" LCGF_SPECS="$root/src/abi/testdata" LCGF_SHADERS="$root/src/render/gpu" \
+            cargo build --release --quiet --manifest-path "$root/bindings/rust/Cargo.toml" --target-dir "$work/rust-$cc" -p lcgf-check --bin lcgf-ct-check
+    fi
 done
 for ui in mixer card settings badge dash todo feed controls palette meter; do
     "$prefix/bin/lcgf-ct-dump" "$ui" 240 "$work/ct-$ui.zig.bin"
@@ -189,12 +193,14 @@ for ui in mixer card settings badge dash todo feed controls palette meter; do
     done
     langs="C++ (zig, clang, gcc)"
     if [ $have_rust = yes ]; then
-        for how in "" seam; do
-            "$work/rust/release/lcgf-ct-check" "$ui" 240 "$work/ct-$ui.rust$how.bin" $how
-            cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.rust$how.bin"
-        done
+        "$work/rust/release/lcgf-ct-check" "$ui" 240 "$work/ct-$ui.rust.bin"
+        cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.rust.bin"
         cmp "$work/ct-$ui.zig.bin.events" "$work/ct-$ui.rust.bin.events"
-        langs="$langs, Rust (compiled, seam)"
+        for how in rust rust-clang rust-gcc; do
+            "$work/$how/release/lcgf-ct-check" "$ui" 240 "$work/ct-$ui.$how-seam.bin" seam
+            cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.$how-seam.bin"
+        done
+        langs="$langs, Rust (compiled; seam: zig, clang, gcc)"
     fi
     events=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); r=[struct.unpack_from('<III',d,i) for i in range(0,len(d),12)]; print(sum(x[0]!=0xffffffff for x in r))" "$work/ct-$ui.zig.bin.events")
     echo "ok   static $ui: 240 frames, $(wc -c < "$work/ct-$ui.zig.bin") bytes of draw lists and $events pointer events, identical in Zig's comptime pipeline, $langs"

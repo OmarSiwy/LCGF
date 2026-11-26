@@ -160,15 +160,26 @@ fn decimal(buf: *[20]u8, v: u64, min_digits: usize) []const u8 {
 /// Writes `segs` of `text` to `sink`, reading argument values from `args`, anything with
 /// `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` (a u32), `byte(i) u64` (a u8) and
 /// `float(i) f32` for argument i. `segs` is a slice of anything with `Seg`'s fields.
-pub fn write(segs: anytype, text: []const u8, args: anytype, sink: *Sink) void {
-    for (segs) |g| switch (g.kind) {
+/// A pointer to an array of segments (a length known while compiling) is unrolled.
+pub inline fn write(segs: anytype, text: []const u8, args: anytype, sink: *Sink) void {
+    const unrolled = comptime switch (@typeInfo(@TypeOf(segs))) {
+        .pointer => |p| p.size == .one and @typeInfo(p.child) == .array,
+        else => false,
+    };
+    if (unrolled) {
+        inline for (segs) |g| writeSeg(g, text, args, sink);
+    } else for (segs) |g| writeSeg(g, text, args, sink);
+}
+
+inline fn writeSeg(g: anytype, text: []const u8, args: anytype, sink: *Sink) void {
+    switch (g.kind) {
         .literal => sink.put(text[g.start..][0..g.len]),
         .str => sink.put(args.str(g.arg)),
         .bool => sink.putBool(args.boolean(g.arg)),
         .u32 => sink.putUint(args.uint(g.arg)),
         .u8 => sink.putUint(args.byte(g.arg)),
         .f32 => sink.putF32(args.float(g.arg), g.prec),
-    };
+    }
 }
 
 /// The arguments of a format as fields of a Zig value: argument i is field `names[i]` of

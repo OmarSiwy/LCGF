@@ -32,4 +32,7 @@ fn main() {
     println!("cargo::rustc-link-search=native={prefix}/lib");
     println!("cargo::rustc-link-lib=static={lib}");
     println!("cargo::rustc-cfg=lcgf_lanes=\"{lanes}\"");
+    // For lcgf_build::static_ui in dependents' build scripts (DEP_LCGF_PREFIX, DEP_LCGF_LANES).
+    println!("cargo::metadata=prefix={prefix}");
+    println!("cargo::metadata=lanes={lanes}");
 }

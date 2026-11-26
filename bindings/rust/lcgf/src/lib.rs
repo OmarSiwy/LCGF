@@ -371,43 +371,57 @@ pub struct StaticTables<const N: usize>(pub [u32; N]);
 
 unsafe extern "C" {
     fn lcgf_ct_init(tables: *const u32, len: usize, buf: *mut u8, buf_len: usize) -> i32;
-    #[cfg_attr(lcgf_lanes = "4", link_name = "lcgf_ct_frame_u32_f32_l4")]
-    #[cfg_attr(lcgf_lanes = "8", link_name = "lcgf_ct_frame_u32_f32_l8")]
-    #[cfg_attr(lcgf_lanes = "16", link_name = "lcgf_ct_frame_u32_f32_l16")]
-    #[cfg_attr(lcgf_lanes = "auto", link_name = "lcgf_ct_frame_u32_f32_auto")]
-    fn lcgf_ct_frame(ui: *mut u8, state: *const u8, width: f32, height: f32, out: *mut RawDraw);
     pub fn lcgf_ct_layout() -> u32;
 }
 
-/// A static UI (lcgf-gen --static): the comptime pipeline over its tables, in the caller's
-/// buffer. The generated `Ui` wraps it and adds a setter per field. A frame reads only the
-/// labels' text from the state.
+/// A static UI's own frame, `lcgf_ui_<name>_frame`: liblcgf's static frame specialized to the
+/// UI's tables, built by `lcgf_build::static_ui` in the crate's build script (from
+/// lcgf-gen --static --lang zig, or --lang c without Zig).
+pub type StaticFrame = unsafe extern "C" fn(
+    buf: *mut u8,
+    bytes: usize,
+    state: *const u8,
+    width: f32,
+    height: f32,
+    out: *mut core::ffi::c_void,
+);
+
+/// A static UI (lcgf-gen --static): liblcgf's static frame over its tables, in the caller's
+/// buffer, through the UI's own `frame`. A frame reads the labels' text and the regions'
+/// selectors from the state.
 pub struct StaticUi<'a, S> {
     pub state: S,
     buf: &'a mut [u8],
+    frame: StaticFrame,
 }
 
 impl<'a, S> StaticUi<'a, S> {
     /// Checks the tables once and places the UI at the start of `buf`.
-    pub fn new(tables: &[u32], buf: &'a mut [u8], state: S) -> Result<Self, Status> {
+    pub fn new(
+        tables: &[u32],
+        buf: &'a mut [u8],
+        state: S,
+        frame: StaticFrame,
+    ) -> Result<Self, Status> {
         let r = unsafe { lcgf_ct_init(tables.as_ptr(), tables.len(), buf.as_mut_ptr(), buf.len()) };
         if r != 0 {
             // SAFETY: lcgf_ct_init returns 0 or one of Status's values.
             return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
         }
-        Ok(Self { state, buf })
+        Ok(Self { state, buf, frame })
     }
 
     /// One frame in a `width` x `height` viewport.
     pub fn frame(&mut self, width: f32, height: f32) -> DrawList<'_> {
         let mut out = core::mem::MaybeUninit::<RawDraw>::uninit();
         let raw = unsafe {
-            lcgf_ct_frame(
+            (self.frame)(
                 self.buf.as_mut_ptr(),
+                self.buf.len(),
                 (&self.state as *const S).cast(),
                 width,
                 height,
-                out.as_mut_ptr(),
+                out.as_mut_ptr().cast(),
             );
             out.assume_init()
         };

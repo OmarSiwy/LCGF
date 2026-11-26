@@ -27,11 +27,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcgf-build"
+version = "0.1.0"
+
+[[package]]
 name = "lcgf-check"
 version = "0.1.0"
 dependencies = [
  "ash",
  "lcgf",
+ "lcgf-build",
 ]
 
 [[package]]

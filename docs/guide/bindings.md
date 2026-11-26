@@ -225,7 +225,9 @@ instead. Clang specializes that file, the engine made C by Zig's C backend
 (`share/lcgf/lcgf_ct_l*.c`), to the UI's words, somewhat slower than Zig does; any other C
 compiler compiles a call into liblcgf's frame, which reads the tables as data. CMake says
 which at configure time. Rust compiles a port of the passes (`lcgf::ct`) against the tables,
-written as the associated consts of a `Tables` impl.
+written as the associated consts of a `Tables` impl; its `<name>::SeamUi` runs the specialized
+frame instead, which the crate's build script builds the same way with
+`lcgf_build::static_ui("controls.zon")` (the `lcgf-build` crate).
 
 ```cmake
 lcgf_add_ui(app controls.zon STATIC)   # controls.lcgf.hpp and its frame, in lcgf_gen_static/
@@ -321,17 +323,20 @@ for it (8 lanes, `-march=znver4`), Zig 0.18-dev (LLVM 23), clang and GCC from th
 (clang 21, GCC 16), rustc 1.99, medians of 5 interleaved rounds of 240 frames, the count at 100
 repetitions less the count at 0:
 
-| UI | Zig comptime | C++, `zig build-obj` | C++, clang (no Zig) | C++, GCC (no Zig) | Rust (`lcgf::ct`) |
-|---|---|---|---|---|---|
-| settings (32 nodes, fixed 320x240) | 8,489 / 4,439 | 8,942 / 4,437 | 9,052 / 4,078 | 13,578 / 5,545 | 8,707 / 3,969 |
-| todo (39 nodes: a list, a `when`, a `choice`) | 10,991 / 6,338 | 11,255 / 6,134 | 12,414 / 5,455 | 16,929 / 7,305 | 10,632 / 5,111 |
-| dash (13 nodes, three clipped tiles) | 3,487 / 2,087 | 3,708 / 2,048 | 3,898 / 1,876 | 5,544 / 2,381 | 3,479 / 1,693 |
-| mixer (8 nodes) | 985 / 661 | 1,122 / 718 | 1,476 / 831 | 3,214 / 1,198 | 1,123 / 542 |
+| UI | Zig comptime | C++, `zig build-obj` | C++, clang (no Zig) | C++, GCC (no Zig) | Rust (`lcgf::ct`) | Rust `SeamUi`, Zig-built |
+|---|---|---|---|---|---|---|
+| settings (32 nodes, fixed 320x240) | 8,489 / 4,760 | 8,711 / 4,784 | 9,052 / 4,078 | 13,578 / 5,545 | 8,707 / 3,977 | 8,727 / 4,754 |
+| todo (39 nodes: a list, a `when`, a `choice`) | 10,991 / 6,362 | 10,955 / 6,211 | 12,414 / 5,455 | 16,929 / 7,305 | 10,632 / 5,322 | 10,964 / 6,181 |
+| dash (13 nodes, three clipped tiles) | 3,487 / 2,056 | 3,596 / 1,975 | 3,898 / 1,876 | 5,544 / 2,381 | 3,479 / 1,730 | 3,591 / 1,995 |
+| mixer (8 nodes) | 985 / 661 | 1,038 / 672 | 1,476 / 831 | 3,214 / 1,198 | 1,123 / 562 | 1,048 / 677 |
 
-Built by Zig, a C++ UI's frame runs within 2 to 14% of Zig's instructions, and at Zig's cycles
-but on the mixer, whose frame is short enough that the call and the draw list's hand-over show.
-Without Zig, clang comes within 7 to 50%, and GCC, which runs liblcgf's frame over the tables as
-data, takes 1.5 to 3.3 times. `<name>::SeamUi` in Rust is liblcgf's frame too, at GCC's figures.
+(The clang and GCC columns come from an earlier run of the same harness and conditions.)
+
+Built by Zig, a C++ or Rust UI's frame runs within 0 to 6% of Zig's instructions and at Zig's
+cycles: it is Zig's code. Without Zig, clang comes within 7 to 50%, and GCC, which runs
+liblcgf's frame over the tables as data, takes 1.5 to 3.3 times. Rust's own port of the passes
+runs as many instructions in 11 to 20% fewer cycles than Zig's: a gap in Zig's code generation
+for the passes, not in the bindings.
 For comparison, the runtime tree's push and layout alone, without paint, take 390, 570 and 1,460
 ns for the mixer, dash and settings (`zig build ct-layout-bench`).
 

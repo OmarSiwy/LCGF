@@ -11,6 +11,9 @@ build = "build.rs"
 lcgf = { path = "../lcgf" }
 ash = { version = "0.38", features = ["loaded"] }
 
+[build-dependencies]
+lcgf-build = { path = "../lcgf-build" }
+
 [[bin]]
 name = "lcgf-check"
 path = "src/main.rs"

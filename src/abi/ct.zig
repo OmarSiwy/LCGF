@@ -218,6 +218,11 @@ pub const Header = extern struct {
     focus_pos: u32 = 0,
 };
 
+/// The header of `words`, read while compiling.
+pub fn headerOf(comptime words: []const u32) Header {
+    return comptime std.mem.bytesToValue(Header, std.mem.sliceAsBytes(words[0 .. @sizeOf(Header) / 4]));
+}
+
 /// One segment of a label's format (src/core/fmt.zig's `Seg`), its argument the field's byte
 /// offset in the state.
 pub const Seg = extern struct { kind: fmt.Kind, prec: u8, _pad: u16 = 0, arg: u32, start: u32, len: u32 };
@@ -1039,7 +1044,7 @@ pub const Ui = struct {
     /// One frame: the labels' text and the regions' selectors from `state`, laid out in a
     /// `viewport`-sized area and painted. The draw list is read in place until the next frame.
     pub fn frame(ui: *Ui, state: [*]const u8, viewport: [2]f32) *const DrawList {
-        frameOn(ui, state, viewport);
+        frameOn(ui, null, state, viewport);
         return &ui.d;
     }
 
@@ -1050,15 +1055,25 @@ pub const Ui = struct {
     /// (`column_arrays` order; unused for written ones) as its own array of the same rows: a
     /// compiler folds loads from a column of one value only when it is an object of its own.
     pub inline fn frameWith(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32) DrawList {
+        return frameOf(words, null, cols, buf, state, viewport);
+    }
+
+    /// `frameWith` over words known while compiling (lcgf-gen --static --lang zig): the labels'
+    /// text is written as straight-line code too.
+    pub inline fn frameKnown(comptime words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32) DrawList {
+        return frameOf(words, words, cols, buf, state, viewport);
+    }
+
+    inline fn frameOf(words: []const u32, comptime known: ?[]const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32) DrawList {
         // Carving again lays out the same slices `init` did; nothing is cleared.
         var carver: mem.Carver = .{ .buf = buf, .off = start(), .zeroed = true };
         var ui = carve(&carver, words, @ptrCast(words.ptr), cols);
-        ui.frameOn(state, viewport);
+        ui.frameOn(known, state, viewport);
         return ui.d;
     }
 
-    inline fn frameOn(ui: *Ui, state: [*]const u8, viewport: [2]f32) void {
-        const used = ui.gather(state);
+    inline fn frameOn(ui: *Ui, comptime known: ?[]const u32, state: [*]const u8, viewport: [2]f32) void {
+        const used = if (known) |w| ui.gatherKnown(w, state) else ui.gather(state);
         ui.select(state);
         ui.layOut(viewport);
         ui.paint(state, used);
@@ -1102,17 +1117,38 @@ pub const Ui = struct {
         var used: u32 = 0;
         const args: CArgs = .{ .state = state };
         for (ui.get(u32, h.label_offsets, h.labels), ui.get([4]u32, h.label_formats, h.labels), ui.spans[0..h.labels]) |off, lf, *sp| {
-            var sink: fmt.Sink = .{ .buf = ui.strings[used..] };
-            if (lf[0] == none) {
-                sink.put(args.str(off));
-            } else {
-                const text = std.mem.sliceAsBytes(ui.words[h.format_text..])[lf[2]..][0..lf[3]];
-                fmt.write(ui.get(Seg, h.segs, h.seg_count)[lf[0]..][0..lf[1]], text, args, &sink);
-            }
-            sp.* = .{ .start = used, .bytes = @intCast(sink.len) };
-            used += @intCast(sink.len);
+            const text = std.mem.sliceAsBytes(ui.words[h.format_text..])[lf[2]..][0..lf[3]];
+            const segs = if (lf[0] == none) &.{} else ui.get(Seg, h.segs, h.seg_count)[lf[0]..][0..lf[1]];
+            ui.gatherOne(&used, lf[0] == none, off, segs, text, args, sp);
         }
         return used;
+    }
+
+    /// `gather` over words known while compiling: one straight-line label after another, each
+    /// format's segments unrolled, as the comptime pipeline writes them.
+    inline fn gatherKnown(ui: *Ui, comptime words: []const u32, state: [*]const u8) u32 {
+        const h = comptime headerOf(words);
+        var used: u32 = 0;
+        const args: CArgs = .{ .state = state };
+        inline for (0..h.labels) |k| {
+            const off = comptime words[h.label_offsets + k];
+            const lf = comptime words[h.label_formats + 4 * k ..][0..4].*;
+            const known = comptime struct {
+                const text = std.mem.sliceAsBytes(words[h.format_text..])[lf[2]..][0..lf[3]].*;
+                const segs: [if (lf[0] == none) 0 else lf[1]]Seg = if (lf[0] == none) .{} else std.mem.bytesToValue([lf[1]]Seg, std.mem.sliceAsBytes(words[h.segs + 4 * lf[0] ..][0 .. 4 * lf[1]]));
+            };
+            ui.gatherOne(&used, lf[0] == none, off, &known.segs, &known.text, args, &ui.spans[k]);
+        }
+        return used;
+    }
+
+    /// Label text of a string field at `off`, or of format `segs` of `text`, into the frame's
+    /// strings after `used` bytes; its span to `sp`.
+    inline fn gatherOne(ui: *Ui, used: *u32, string: bool, off: u32, segs: anytype, text: []const u8, args: CArgs, sp: *Span) void {
+        var sink: fmt.Sink = .{ .buf = ui.strings[used.*..] };
+        if (string) sink.put(args.str(off)) else fmt.write(segs, text, args, &sink);
+        sp.* = .{ .start = used.*, .bytes = @intCast(sink.len) };
+        used.* += @intCast(sink.len);
     }
 
     /// Lays out again only what state field `field` moves (ct_layout's `relayout`), after a
@@ -1472,19 +1508,23 @@ fn cShortcut(list: [*]const CShortcut, len: usize, code: u8, mods: u8) callconv(
 /// `cFrame` with the words passed in and every table read from them: what a frame specialized
 /// to constant words calls (exported by src/abi/ct_c.zig only).
 pub fn cFrameWords(words: [*]const u32, len: usize, cols: ?[*]const [*]const u8, buf: [*]align(mem.column_align) u8, buf_len: usize, state: [*]const u8, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
-    frameInto(words[0..len], cols, buf[0..buf_len], state, .{ width, height }, out);
+    keepDraw(Ui.frameWith(words[0..len], cols, buf[0..buf_len], state, .{ width, height }), buf, out);
+}
+
+/// A frame's draw list into the UI in `buf` (only the counts and strings move: the columns are
+/// where `init` carved them) and into `out` (an `lcgf_draw`).
+inline fn keepDraw(d: DrawList, buf: [*]align(mem.column_align) u8, out: *anyopaque) void {
+    const ui: *Ui = @ptrCast(buf);
+    inline for (.{ "quad_len", "run_len", "custom_len", "cmd_len", "op_len", "strings" }) |f| @field(ui.d, f) = @field(d, f);
+    const o: *seam.CDraw = @ptrCast(@alignCast(out));
+    o.* = seam.cDraw(&d);
 }
 
 /// One frame of the UI `init` placed in `buf`, specialized to `words` and `cols` when they are
 /// constants (`Ui.frameWith`), its draw list kept for the other C functions and written to
 /// `out` (an `lcgf_draw`). What lcgf-gen --static --lang zig's frame calls.
-pub inline fn frameInto(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32, out: *anyopaque) void {
-    const d = Ui.frameWith(words, cols, buf, state, viewport);
-    // The draw list's columns are where `init` carved them; only the counts and strings move.
-    const ui: *Ui = @ptrCast(buf.ptr);
-    inline for (.{ "quad_len", "run_len", "custom_len", "cmd_len", "op_len", "strings" }) |f| @field(ui.d, f) = @field(d, f);
-    const o: *seam.CDraw = @ptrCast(@alignCast(out));
-    o.* = seam.cDraw(&d);
+pub inline fn frameInto(comptime words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32, out: *anyopaque) void {
+    keepDraw(Ui.frameKnown(words, cols, buf, state, viewport), buf.ptr, out);
 }
 
 // ---- tests -------------------------------------------------------------------------------------

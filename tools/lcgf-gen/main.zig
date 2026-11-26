@@ -928,23 +928,27 @@ const StaticGen = struct {
             \\
             \\]);
             \\/// Bytes `SeamUi` needs in your buffer, for any lane count.
-            \\pub const BYTES: usize = {d};
+            \\pub const BYTES: usize = {0d};
             \\
-            \\/// The UI through liblcgf.
+            \\unsafe extern "C" {{
+            \\    fn lcgf_ui_{1s}_frame(buf: *mut u8, bytes: usize, state: *const u8, width: f32, height: f32, out: *mut ::core::ffi::c_void);
+            \\}}
+            \\
+            \\/// The UI through liblcgf's frame, specialized to these tables by `lcgf_build::static_ui`.
             \\pub struct SeamUi<'a> {{
             \\    pub inner: ::lcgf::StaticUi<'a, State>,
             \\}}
             \\
             \\impl<'a> SeamUi<'a> {{
             \\    pub fn new(buffer: &'a mut ::lcgf::Buffer<BYTES>) -> Result<Self, ::lcgf::Status> {{
-            \\        Ok(Self {{ inner: ::lcgf::StaticUi::new(&WORDS.0, buffer.bytes(), State::default())? }})
+            \\        Ok(Self {{ inner: ::lcgf::StaticUi::new(&WORDS.0, buffer.bytes(), State::default(), lcgf_ui_{1s}_frame)? }})
             \\    }}
             \\    pub fn frame(&mut self, width: f32, height: f32) -> ::lcgf::DrawList<'_> {{
             \\        self.inner.frame(width, height)
             \\    }}
             \\}}
             \\
-        , .{g.bytes});
+        , .{ g.bytes, g.x.spec.name });
     }
 
     fn sliceRust(g: *const StaticGen, name: []const u8, ws: []const u32) !void {
