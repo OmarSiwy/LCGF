@@ -375,6 +375,14 @@ pub fn build(b: *std.Build) void {
     swbench_run.addPassthruArgs();
     b.step("swbench", "Run the software renderer benchmark (Linux)").dependOn(&swbench_run.step);
     b.step("swbench-build", "Build zig-out/bin/swbench").dependOn(&b.addInstallArtifact(swbench, .{}).step);
+    // The canvas batch in software: 100k primitives panned and zoomed (bench/micro/canvasbench.zig).
+    const canvasbench = b.addExecutable(.{ .name = "canvasbench", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/micro/canvasbench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+    }) });
+    b.step("canvasbench-build", "Build zig-out/bin/canvasbench (the canvas benchmark, Linux)").dependOn(&b.addInstallArtifact(canvasbench, .{}).step);
     const probe = b.addSystemCommand(&.{ "python3", "bench/micro/probe.py", "--" });
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
