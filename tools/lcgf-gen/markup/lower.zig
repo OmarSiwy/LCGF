@@ -580,9 +580,6 @@ pub const Lowerer = struct {
         const st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
         if (!std.meta.eql(st, Style{}) or params.len > 0)
             l.ds.err(l.loc(n), "CSS does not restyle an app component, only its margins; style it in the app or wrap it in a <div>", .{});
-        const c = l.content(n);
-        if (each != none and (c.elements > 0 or c.text))
-            l.ds.err(l.loc(n), "inside lcgf-each a component takes no children yet; give it props", .{});
         var props: std.ArrayList(ir.Prop) = .empty;
         const doc = l.doc;
         const first = doc.nodes.items(.attr_first)[n];

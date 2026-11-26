@@ -16,6 +16,9 @@
   <template lcgf-each="net in nets" class="list">
     <sfy-net id="pick" name="{net.name}" on:click="pick"></sfy-net>
     <sfy-tool id="row_zoom" icon="z" on:click="row_zoom"></sfy-tool>
+    <sfy-chip mark="#">
+      <span>{net.name}</span>
+    </sfy-chip>
   </template>
 </body>
 </html>

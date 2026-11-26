@@ -804,16 +804,20 @@ pub const Emit = struct {
                 return "} f.close();";
             },
             .component => {
+                // With content, the namespace's `open` builds what goes before it and `close`
+                // what goes after.
+                const content = e.hasChild(i);
                 if (e.clickHandler(n.id) != null) {
                     e.write("if (");
-                    e.componentCall(n, true, list_depth, false);
+                    e.componentCall(n, true, list_depth, content);
                     e.print(".clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) });
                 } else {
                     e.write("_ = ");
-                    e.componentCall(n, true, list_depth, false);
+                    e.componentCall(n, true, list_depth, content);
                     e.write(";");
                 }
-                return "";
+                if (!content) return "";
+                return std.fmt.allocPrint(e.arena, "app.components.{f}.close(f, &theme);", .{std.zig.fmtId(n.text)}) catch unreachable;
             },
             .image => {
                 e.print("_ = {s}.image(f, &theme, assets[{d}].picture(), ", .{ e.use("image"), n.asset });
@@ -856,9 +860,10 @@ pub const Emit = struct {
 
     /// `app.components.@"tag"(.{ .prop = value, … })`, or in a run-time region the runtime
     /// form `(f, .{ … })`: literals as strings, `{f}` as `.f` (the spec) or its value, `{x.f}`
-    /// as the item's field; `id` names the widget its on:click is on.
+    /// as the item's field; `id` names the widget its on:click is on. With `children`, the
+    /// spec form's `children` prop opens, and the runtime form is the namespace's `open`.
     fn componentCall(e: *Emit, n: ir.Node, region: bool, list_depth: u32, children: bool) void {
-        e.print("{s}({s}.{{", .{ e.componentForm(n.text, region), if (region) "f, &theme, " else "theme, " });
+        e.print("{s}({s}.{{", .{ e.componentForm(n.text, if (!region) "spec" else if (children) "open" else "frame"), if (region) "f, &theme, " else "theme, " });
         var k: usize = 0;
         if (n.id.len > 0) {
             if (region) e.print(" .id = {s}", .{e.rtId(n.id, list_depth)}) else e.print(" .id = .{f}", .{std.zig.fmtId(n.id)});
@@ -873,14 +878,16 @@ pub const Emit = struct {
             }
             k += 1;
         }
-        if (children) e.write(if (k > 0) ", .children = &.{" else " .children = &.{") else e.write(if (k > 0) " })" else "})");
+        if (children and !region) e.write(if (k > 0) ", .children = &.{" else " .children = &.{") else e.write(if (k > 0) " })" else "})");
     }
 
     /// The form of component `tag` a context calls: the function itself, or, when the app
-    /// declares both forms under one name, its namespace's `spec` (page) or `frame` (region).
-    fn componentForm(e: *Emit, tag: []const u8, region: bool) []const u8 {
+    /// declares both forms under one name, its namespace's `spec` (page) or `frame` (region);
+    /// `open` is always the namespace's.
+    fn componentForm(e: *Emit, tag: []const u8, form: []const u8) []const u8 {
         const c = std.fmt.allocPrint(e.arena, "app.components.{f}", .{std.zig.fmtId(tag)}) catch unreachable;
-        return std.fmt.allocPrint(e.arena, "(if (@TypeOf({s}) == type) {s}.{s} else {s})", .{ c, c, if (region) "frame" else "spec", c }) catch unreachable;
+        if (std.mem.eql(u8, form, "open")) return std.fmt.allocPrint(e.arena, "{s}.open", .{c}) catch unreachable;
+        return std.fmt.allocPrint(e.arena, "(if (@TypeOf({s}) == type) {s}.{s} else {s})", .{ c, c, form, c }) catch unreachable;
     }
 
     fn hasChild(e: *Emit, i: u32) bool {
@@ -899,20 +906,35 @@ pub const Emit = struct {
         const n = e.page.nodes.get(i);
         const at = e.whereFull(n.loc);
         const tag = n.text;
+        const content = e.hasChild(i);
+        const c = std.fmt.allocPrint(e.arena, "app.components.{f}", .{std.zig.fmtId(tag)}) catch unreachable;
+        const rt_sig = "f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …";
+        const spec_sig = "comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec";
+        const close_sig = "pub fn close(f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme) void";
         // Escaped for the generated string literal.
-        const want = std.fmt.allocPrint(e.arena, "pub fn @\\\"{s}\\\"({s}", .{ tag, if (region) "f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …" else "comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec" }) catch unreachable;
+        const want = if (region and content)
+            std.fmt.allocPrint(e.arena, "pub const @\\\"{s}\\\" = struct {{ pub fn open({s}; {s} }}", .{ tag, rt_sig, close_sig }) catch unreachable
+        else
+            std.fmt.allocPrint(e.arena, "pub fn @\\\"{s}\\\"({s}", .{ tag, if (region) rt_sig else spec_sig }) catch unreachable;
         e.print("{s}if (!@hasDecl(app, \"components\")) @compileError(\"{s}: <{s}> is an app component: give addMarkup an .app module with `pub const components`\")\n", .{ pad, at, tag });
         e.print("{s}else if (!@hasDecl(app.components, \"{s}\")) @compileError(\"{s}: component <{s}> is missing from app.components: add `{s}`\")\n", .{ pad, tag, at, tag, want });
-        // A namespace declares both forms under one name; this context needs one of them.
-        const form_name = if (region) "frame" else "spec";
-        const form_sig = if (region) "f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …" else "comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec";
-        e.print("{s}else if (@TypeOf(app.components.{f}) == type and !@hasDecl(app.components.{f}, \"{s}\")) @compileError(\"{s}: <{s}> is used {s}, so its namespace needs `pub fn {s}({s}`\")\n", .{ pad, std.zig.fmtId(tag), std.zig.fmtId(tag), form_name, at, tag, if (region) "inside lcgf-each" else "on the page", form_name, form_sig });
-        const form = e.componentForm(tag, region);
+        const form_name = if (!region) "spec" else if (content) "open" else "frame";
+        const form = e.componentForm(tag, form_name);
+        if (region and content) {
+            // Content goes between the two calls of a namespace.
+            e.print("{s}else if (@TypeOf({s}) != type or !@hasDecl({s}, \"open\") or !@hasDecl({s}, \"close\")) @compileError(\"{s}: <{s}> has content inside lcgf-each, so it is a namespace with `pub fn open({s}` and `{s}`, which build what goes before and after it\")\n", .{ pad, c, c, c, at, tag, rt_sig, close_sig });
+            e.print("{s}else if (@typeInfo(@TypeOf({s}.close)) != .@\"fn\" or @typeInfo(@TypeOf({s}.close)).@\"fn\".param_types.len != 2) @compileError(\"{s}: <{s}> must have `{s}`\")\n", .{ pad, c, c, at, tag, close_sig });
+        } else {
+            // A namespace declares both forms under one name; this context needs one of them.
+            const form_sig = if (region) rt_sig else spec_sig;
+            e.print("{s}else if (@TypeOf({s}) == type and !@hasDecl({s}, \"{s}\")) @compileError(\"{s}: <{s}> is used {s}, so its namespace needs `pub fn {s}({s}`\")\n", .{ pad, c, c, form_name, at, tag, if (region) "inside lcgf-each" else "on the page", form_name, form_sig });
+        }
         e.print("{s}else if (@typeInfo(@TypeOf({s})) != .@\"fn\" or @typeInfo(@TypeOf({s})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}, or a namespace with `pub fn {s}`\")\n", .{ pad, form, form, @as(u8, if (region) 3 else 2), at, tag, want, if (region) " inside lcgf-each" else "", form_name });
         e.print("{s}else if (@typeInfo(@TypeOf({s})).@\"fn\".param_types[{d}]) |P| {{\n", .{ pad, form, @as(u8, if (region) 2 else 1) });
         // Every prop the markup passes, typed as it passes it.
         if (n.id.len > 0) e.print("{s}    if (!@hasField(P, \"id\")) @compileError(\"{s}: <{s}> has no prop 'id', so id= and on:click cannot name its widget\");\n", .{ pad, at, tag });
-        if (e.hasChild(i)) e.print("{s}    if (!@hasField(P, \"children\")) @compileError(\"{s}: <{s}> takes no content: it has no prop 'children'\")\n{s}    else if (@FieldType(P, \"children\") != []const lcgf.spec.Spec) @compileError(\"{s}: the content of <{s}> is its prop 'children', which must be []const lcgf.spec.Spec\");\n", .{ pad, at, tag, pad, at, tag });
+        const children = content and !region;
+        if (children) e.print("{s}    if (!@hasField(P, \"children\")) @compileError(\"{s}: <{s}> takes no content: it has no prop 'children'\")\n{s}    else if (@FieldType(P, \"children\") != []const lcgf.spec.Spec) @compileError(\"{s}: the content of <{s}> is its prop 'children', which must be []const lcgf.spec.Spec\");\n", .{ pad, at, tag, pad, at, tag });
         for (n.props) |p| {
             const pat = e.whereFull(p.loc);
             e.print("{s}    if (!@hasField(P, \"{s}\")) @compileError(\"{s}: <{s}> has no prop '{s}'\")\n", .{ pad, p.name, pat, tag, p.name });
@@ -932,7 +954,7 @@ pub const Emit = struct {
             e.write(" \"id\"");
             k += 1;
         }
-        if (e.hasChild(i)) {
+        if (children) {
             e.print("{s} \"children\"", .{if (k > 0) "," else ""});
             k += 1;
         }
@@ -1239,6 +1261,7 @@ pub const Emit = struct {
             // A leaf inside a choice closes its prong at once.
             const leaf = switch (nodes.items(.kind)[i]) {
                 .container, .landmark, .when, .list, .choice, .dialog, .section => false,
+                .component => !e.hasChild(i),
                 else => true,
             };
             if (leaf and in_choice) {

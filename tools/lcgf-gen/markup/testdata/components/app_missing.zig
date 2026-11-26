@@ -18,4 +18,17 @@ pub const components = struct {
     pub fn @"sfy-net"(f: *lcgf.frame.Frame, theme: *const Theme, props: struct { id: lcgf.types.Id, name: []const u8 }) lcgf.types.Response {
         return lcgf.widgets_button.button(f, theme, props.id, props.name);
     }
+
+    /// A mark before a region row's content: `open` builds what goes before the content and
+    /// `close` what goes after it.
+    pub const @"sfy-chip" = struct {
+        pub fn open(f: *lcgf.frame.Frame, theme: *const Theme, props: struct { mark: []const u8 }) void {
+            _ = f.open(.none, .{ .dir = .x, .gap = 4 });
+            _ = lcgf.widgets_label.label(f, theme, props.mark);
+        }
+        pub fn close(f: *lcgf.frame.Frame, theme: *const Theme) void {
+            _ = theme;
+            f.close();
+        }
+    };
 };

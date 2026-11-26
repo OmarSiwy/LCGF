@@ -122,7 +122,13 @@ called with the page's `theme`, as in
 Inside `<template lcgf-each="net in nets">`, a component is the runtime form,
 `pub fn @"sfy-net"(f: *lcgf.frame.Frame, theme: *const lcgf.widgets_base.Theme, props: anytype) lcgf.types.Response`,
 called once per item with `.id` made unique by the item's index and `{net.name}` as the item's value. Its
-on:click reads `Response.clicked` and gets the index. It takes no content yet.
+on:click reads `Response.clicked` and gets the index.
+
+There a component with content is a namespace with `pub fn open(f, theme, props)`, which
+builds what goes before the content (and returns the `Response` when on:click reads it), and
+`pub fn close(f: *lcgf.frame.Frame, theme: *const lcgf.widgets_base.Theme) void`, which builds
+what goes after it. The content is built between the two, as anywhere in the region:
+`<sfy-chip mark="#"><span>{net.name}</span></sfy-chip>` in `testdata/components`.
 
 A component used in both places declares both forms under one name, as a namespace:
 `pub const @"sfy-tool" = struct { pub fn spec(…) Spec; pub fn frame(f, …) Response; }`.

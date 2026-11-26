@@ -84,4 +84,20 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     try std.testing.expectEqual(2, z);
     try std.testing.expectEqual(@as(?u32, 1), h.row_zoomed);
     try std.testing.expectEqual(1, h.zooms);
+    // sfy-chip's content, the item's name again, follows the mark its `open` drew.
+    // `close` ends the row, so the next item starts below it.
+    var marks: [2][4]f32 = undefined;
+    var n: u32 = 0;
+    var row1: [4]f32 = undefined;
+    for (out.draw.runs[0..out.draw.run_len]) |r| {
+        const t = out.draw.strings[r.start..][0..r.bytes];
+        if (std.mem.eql(u8, t, "#")) {
+            marks[n] = r.rect;
+            n += 1;
+        }
+        if (std.mem.eql(u8, t, "gnd")) row1 = r.rect;
+    }
+    try std.testing.expectEqual(2, n);
+    try std.testing.expect(row1[0] > marks[1][2] and row1[1] == marks[1][1]);
+    try std.testing.expect(marks[1][1] > marks[0][3]);
 }
