@@ -96,15 +96,18 @@ pub const Device = struct {
         const upload = arena.kind == .host;
         var rd = bufferDesc(size);
         if (d.usage.storage) rd.Flags = c.D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        // An upload heap cannot hold an unordered-access resource (E_INVALIDARG): a host storage
-        // buffer lives in a custom heap the CPU maps write-back, in system memory (L0).
+        // An upload heap's resources stay in GENERIC_READ and the GPU never writes them: an
+        // unordered-access buffer is refused (E_INVALIDARG), and a copy into one (writeBuffer)
+        // and its barrier fail the command list's Close. A host buffer the GPU writes lives in
+        // a custom heap the CPU maps write-back, in system memory (L0), resting in COMMON.
+        const gpu_written = d.usage.storage or d.usage.copy_dst;
         var heap = device_mod.heapProps(if (upload) c.D3D12_HEAP_TYPE_UPLOAD else c.D3D12_HEAP_TYPE_DEFAULT);
-        if (upload and d.usage.storage) {
+        if (upload and gpu_written) {
             heap.Type = c.D3D12_HEAP_TYPE_CUSTOM;
             heap.CPUPageProperty = c.D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
             heap.MemoryPoolPreference = c.D3D12_MEMORY_POOL_L0;
         }
-        const state: c.D3D12_RESOURCE_STATES = if (upload and !d.usage.storage) c.D3D12_RESOURCE_STATE_GENERIC_READ else c.D3D12_RESOURCE_STATE_COMMON;
+        const state: c.D3D12_RESOURCE_STATES = if (upload and !gpu_written) c.D3D12_RESOURCE_STATE_GENERIC_READ else c.D3D12_RESOURCE_STATE_COMMON;
         const resource = try device.handle().createCommittedResource(&heap, &rd, state, null);
         return .{ .resource = resource, .address = resource.getGPUVirtualAddress(), .size = d.size, .mapped = if (upload) try resource.map(false) else null };
     }
