@@ -4638,6 +4638,22 @@ Fields: `color`, `px`
 - `fn set(in: Inherited, node: types.Node, color: Color, px: f32) void`: Node `node`'s subtree takes colour `color` and size `px` (either 0 to keep inheriting).
 - `fn resolve(in: Inherited, t: *const Tree, tx: *Texts) void`: Resolves the columns down `t` (rows are in push order, so a parent is final before its children read it), then gives each text run of `tx` that inherits (colour 0 or size 0) its node's resolved value.
 
+## `lcgf.theme_table` (src/theme/table.zig)
+
+Run-time theme tokens (docs/plans/schemify.md §2): a caller-owned table of the values a compiled page reads while it builds (lengths, font sizes, radii, spacing, colours), with a generation that every change bumps, so a page that saw another generation lays out again.
+
+### Top level
+
+- `fn ThemeTable(comptime Tokens: type) type`
+
+### `ThemeTable(..)` (generic struct)
+
+Fields: `values`, `generation`
+
+- `Token = std.meta.FieldEnum(Tokens)`
+- `fn set(t: *Self, comptime token: Token, value: @FieldType(Tokens, @tagName(token))) void`: Sets one token and bumps the generation.
+- `fn changedSince(t: *const Self, seen: u32) bool`: Whether the table changed since a reader saw generation `seen`.
+
 ## `lcgf.theme_tests` (src/theme/tests.zig)
 
 Theme tests across the widget set: every stock theme and density applied to every widget page that takes a theme, through both front ends.

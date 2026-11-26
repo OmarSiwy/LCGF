@@ -128,6 +128,7 @@ pub const widgets_colorpicker = @import("widgets/colorpicker.zig");
 pub const widgets_card = @import("widgets/card.zig");
 pub const widgets_separator = @import("widgets/separator.zig");
 pub const theme = @import("theme/theme.zig");
+pub const theme_table = @import("theme/table.zig");
 pub const theme_tests = @import("theme/tests.zig");
 pub const widgets_check = @import("widgets/check.zig");
 pub const widgets_spacer = @import("widgets/spacer.zig");
