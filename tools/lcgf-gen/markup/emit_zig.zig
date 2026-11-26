@@ -696,6 +696,20 @@ pub const Emit = struct {
             \\    before: State = .{},
             \\
         );
+        const flex = e.hasFlex();
+        if (flex) e.write(
+            \\    /// Flex rules (layout/flex.zig) of the nodes with margins, written while the page
+            \\    /// builds and used by `end`. They point into `flex_buf`: a Ui does not move once built.
+            \\    flex_buf: [flex_bytes]u8 align(lcgf.mem.column_align) = undefined,
+            \\    flex: ?lcgf.flex.Flex = null,
+            \\
+            \\    /// Ends the frame with this page's flex rules (`Frame.endFlex`).
+            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
+            \\        return f.endFlex(font, &ui.flex.?);
+            \\    }
+            \\
+            \\
+        );
         if (tokens.len > 0) e.write(
             \\    /// The caller's theme tokens; point it at your table.
             \\    tokens: *const ThemeTable = &default_tokens,
@@ -716,6 +730,14 @@ pub const Emit = struct {
             \\
         );
         if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
+        if (flex) e.write(
+            \\        if (ui.flex == null) {
+            \\            var carver: lcgf.mem.Carver = .{ .buf = &ui.flex_buf };
+            \\            ui.flex = lcgf.flex.Flex.init(&carver, limits.nodes);
+            \\        }
+            \\        const fx = &ui.flex.?;
+            \\
+        );
         var stack: std.ArrayList(struct { node: u32, close: []const u8 }) = .empty;
         var lists: u32 = 0;
         for (0..nodes.len) |i_| {
@@ -738,7 +760,7 @@ pub const Emit = struct {
                 } else unreachable;
                 e.print(".{f} => {{ ", .{std.zig.fmtId(field.cases[k])});
             }
-            var close = e.rtOpen(i, lists);
+            var close = e.rtOpenFlex(i, lists);
             if (in_choice) close = std.fmt.allocPrint(e.arena, "{s}{s}}},", .{ close, if (close.len > 0) " " else "" }) catch unreachable;
             if (nodes.items(.kind)[i] == .list) lists += 1;
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
@@ -767,6 +789,27 @@ pub const Emit = struct {
         e.write("    }\n};\n\n");
     }
 
+    /// Whether a node has flex rules (CSS margins, engine spec F2).
+    fn hasFlex(e: *Emit) bool {
+        for (e.page.nodes.items(.margin)) |m| if (m != null) return true;
+        return false;
+    }
+
+    /// `rtOpen`, with the node's flex rules written for the node its statement makes.
+    fn rtOpenFlex(e: *Emit, i: u32, list_depth: u32) []const u8 {
+        const m = e.page.nodes.items(.margin)[i] orelse return e.rtOpen(i, list_depth);
+        var statement: std.ArrayList(u8) = .empty;
+        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
+        const close = e.rtOpen(i, list_depth);
+        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
+        // lower.checkRuntime admits margins only on nodes whose statement is `_ = call;`.
+        const call = statement.items[4 .. statement.items.len - 1];
+        e.print("fx.set(@backingInt({s}), &.{{ .margin = ", .{call});
+        e.value(m);
+        e.write(" });");
+        return close;
+    }
+
     fn runtimePage(e: *Emit) void {
         const n: u32 = @intCast(e.page.nodes.len);
         // Rows: widgets push up to a few rows each; texts and bytes as the literals need.
@@ -784,7 +827,7 @@ pub const Emit = struct {
             \\        pub fn frame(p: *@This(), ctx: *lcgf.context.Context, h: *H, in: *const lcgf.input.Input) lcgf.context.Output {{
             \\            var f = ctx.begin(in);
             \\            p.ui.build(&f);
-            \\            const out = f.end(.{{}});
+            \\            const out = {s};
             \\            p.ui.dispatch(h);
             \\            return out;
             \\        }}
@@ -792,7 +835,17 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ 8 * n + 16, 2 * n + 8 });
+        , .{ 8 * n + 16, 2 * n + 8, if (e.hasFlex()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        if (e.hasFlex()) e.write(
+            \\/// The bytes of the runtime page's flex columns.
+            \\const flex_bytes = blk: {
+            \\    var carver: lcgf.mem.Carver = .{ .buf = null };
+            \\    _ = carver.columns(lcgf.flex.Flex.Columns, lcgf.simd.rows(limits.nodes));
+            \\    break :blk carver.off;
+            \\};
+            \\
+            \\
+        );
     }
 
     fn page_fn(e: *Emit) void {

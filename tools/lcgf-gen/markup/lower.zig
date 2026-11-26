@@ -1087,10 +1087,11 @@ pub const Lowerer = struct {
         for (0..nodes.len) |i| {
             const kind = nodes.items(.kind)[i];
             switch (kind) {
-                .container, .landmark, .label, .text, .heading, .when, .list, .choice => continue,
+                .container, .landmark, .label, .text, .heading => continue,
+                .when, .list, .choice => continue,
                 else => {},
             }
-            if (!std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
+            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }
     }
