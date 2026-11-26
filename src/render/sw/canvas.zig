@@ -372,6 +372,10 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
         .{ stroke[0], stroke[1], stroke[2], simd.f(0) };
     const stroked = simd.f(simd.b2f(ink.stroked));
     const hw = simd.f(sh.half * simd.b2f(ink.stroked));
+    const solid = kind == .segment or kind == .arc;
+    var c8: [3]U = undefined;
+    inline for (0..3) |i| c8[i] = simd.u(@intFromFloat(@round(std.math.clamp(ink.stroke[i], 0, 1) * 255)));
+    const ca = ink.stroke[3];
     // Glyph: texel coordinates per pixel, nearest, clamped to the atlas.
     const tu0 = unorm16(x.uv[1]);
     const tv0 = unorm16(x.uv[1] >> 16);
@@ -440,9 +444,16 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
                     break :a @select(f32, inside, simd.f(1), simd.f(0));
                 },
             };
+            const a = alpha * keep * simd.f(ink.opacity);
+            // A vector the shape misses (a corner of its box, a dash's gap) is left as it is:
+            // at alpha 0 "over" gives back every pixel unchanged anyway.
+            if (!@reduce(.Or, a > simd.f(0))) continue;
             const old: U = row[at..][0..W].*;
             const mask = sw.spanMask(at, box[0], box[2]);
-            row[at..][0..W].* = @select(u32, mask, sw.overColor(color, alpha * keep * simd.f(ink.opacity), old, red), old);
+            // Segments, arcs and glyphs from an alpha atlas have one colour: its 8-bit channels
+            // are rounded once per instance, as `overColor` would round them per pixel.
+            const out = if (comptime solid) sw.overSa(c8, @intFromFloat(@round(@min(@max(simd.f(ca) * a, simd.f(0)), simd.f(1)) * simd.f(255))), old, red) else sw.overColor(color, a, old, red);
+            row[at..][0..W].* = @select(u32, mask, out, old);
         }
     }
 }

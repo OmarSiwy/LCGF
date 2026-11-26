@@ -428,7 +428,8 @@ pub const Shape = struct {
     /// Arc: added to how far past its ends a point is; -inf for a full turn, which has none
     /// (its two butt ends would otherwise meet in a half-covered seam).
     seam: f32 = 0,
-    /// Pixel box the shape can touch, x0, y0, x1, y1 (one pixel of antialiasing included).
+    /// Pixel box the shape can touch, x0, y0, x1, y1: coverage `0.5 - d` is 0 past half a
+    /// pixel from the outline, so that much antialiasing is included.
     box: [4]f32 = undefined,
 
     /// `layer` is the instance's palette row.
@@ -453,7 +454,8 @@ pub const Shape = struct {
         var grow: f32 = sh.half * @intFromBool(sh.stroked);
         switch (kind) {
             .segment => {
-                grow = sh.half * std.math.sqrt2;
+                // Only a square cap's corners reach past half the width on an axis.
+                grow = sh.half * (1 + (std.math.sqrt2 - 1) * sh.square);
                 sh.chain = v.len(look[1]);
                 sh.dash = 2 * dash * v.px;
                 sh.period = 2 * sh.dash;
@@ -471,8 +473,8 @@ pub const Shape = struct {
                 sh.aperture = .{ @max(@sin(sweep / 2), 0), @cos(sweep / 2) };
                 sh.seam = simd.selF(look[2] >> 16 == 0xffff, -std.math.inf(f32), 0);
                 sh.p = .{ corner[0], corner[1], 0, 0 };
-                const e = r + sh.half;
-                sh.box = .{ corner[0] - e - 1, corner[1] - e - 1, corner[0] + e + 1, corner[1] + e + 1 };
+                const e = r + sh.half + 0.5;
+                sh.box = .{ corner[0] - e, corner[1] - e, corner[0] + e, corner[1] + e };
                 return sh;
             },
             .glyph => {
@@ -486,8 +488,8 @@ pub const Shape = struct {
             },
         }
         sh.box = .{
-            @min(corner[0], corner[2]) - grow - 1, @min(corner[1], corner[3]) - grow - 1,
-            @max(corner[0], corner[2]) + grow + 1, @max(corner[1], corner[3]) + grow + 1,
+            @min(corner[0], corner[2]) - grow - 0.5, @min(corner[1], corner[3]) - grow - 0.5,
+            @max(corner[0], corner[2]) + grow + 0.5, @max(corner[1], corner[3]) + grow + 0.5,
         };
         return sh;
     }

@@ -1019,7 +1019,7 @@ inline fn overRgba(c: [4]U, alpha8: U, old: U, red: u5) U {
 }
 
 /// Straight 8-bit r, g, b with source alpha `sa` (0..255), premultiplied over `old`.
-inline fn overSa(c: [3]U, sa: U, old: U, red: u5) U {
+pub inline fn overSa(c: [3]U, sa: U, old: U, red: u5) U {
     const fields = simd.u(0x00ff00ff);
     const cr, const cg, const cb = c;
     // Source alpha and its complement in both 16-bit fields.

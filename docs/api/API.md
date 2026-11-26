@@ -6601,6 +6601,7 @@ The software back end: draws a `DrawList` into a caller-owned framebuffer on the
 - `fn SoftwareFor(comptime use: features.Usage) type`: Software renderer for the features collected from a comptime UI.
 - `fn tile(fb: *const Framebuffer, k: u32, n: u32) [4]u32`: Tile `k` of `n`: a band of whole rows.
 - `fn spanMask(x: u32, x0: u32, x1: u32) B`: Lanes of the vector at `x` whose pixel lies in [x0, x1).
+- `fn overSa(c: [3]U, sa: U, old: U, red: u5) U`: Straight 8-bit r, g, b with source alpha `sa` (0..255), premultiplied over `old`.
 - `fn overColor(color: [4]F, alpha: F, old: U, red: u5) U`: Source `color` (straight, 0..1) at coverage `alpha` premultiplied over the pixels `old`: the colour and its alpha times the coverage rounded to 8 bits, then `overSa`.
 - `fn cornerRadius(px: F, py: F, hx: f32, hy: f32, radii: [4]f32) F`: The shader's `corner_radius`: the radius of p's quadrant, capped by the half size.
 - `fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F`: The shader's `rounded_box`: signed distance to a box of half size (hx, hy) with radius r.
