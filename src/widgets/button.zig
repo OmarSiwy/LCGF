@@ -329,6 +329,85 @@ test "button input: click, then Enter and Space while focused, fire in both fron
     try testing.expect(out.comptime_.event != null);
 }
 
+/// A raised button earlier in the tree than the one it covers: the hit follows paint order.
+const Raised = struct {
+    const overlay = @import("../layout/overlay.zig");
+    const context = @import("../runtime/context.zig");
+    const mem = @import("../core/mem.zig");
+    const Mono = @import("../text/protocol.zig").Mono;
+    const th: Theme = .default;
+    const over: overlay.Place = .{ .at = .top_left, .pivot = .top_left, .offset = .{ 20, 4 } };
+    const floating: Style = blk: {
+        var st = buttonStyle(&th);
+        st.float = true;
+        break :blk st;
+    };
+    const spec = spec_zig.col(.{}, .{
+        spec_zig.layer(spec_zig.anchored(spec_zig.styled(ct.button(th, .top, "Top"), floating), over), 1),
+        ct.button(th, .under, "Under the top"),
+    });
+    const Ui = base.ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        buf: [8 * 1024]u8 align(mem.column_align) = undefined,
+        an: ?overlay.Anchors = null,
+        ly: overlay.Layers = undefined,
+        top: bool = false,
+        under: bool = false,
+        pub fn begin(app: *App, ctx: *context.Context, in: *const Input) Frame {
+            const hit = @import("../interact/hit.zig");
+            if (app.an == null) {
+                var c: mem.Carver = .{ .buf = &app.buf };
+                app.an = overlay.Anchors.init(&c, 1);
+                app.ly = overlay.Layers.init(&c, 16);
+                app.ly.reset();
+                @memset(app.ly.c.layer, 0);
+            }
+            return ctx.beginWithHit(in, hit.atLayered(&ctx.trees[ctx.cur], app.ly.c.layer, in.pointer[0], in.pointer[1], .any));
+        }
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{});
+            const row = f.tree().len;
+            app.ly.c.own[row] = 1;
+            _ = app.an.?.place(row, over, .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] });
+            app.top = raisedButton(f);
+            app.under = button(f, &th, .hash("under"), "Under the top").clicked;
+            f.close();
+        }
+        fn raisedButton(f: *Frame) bool {
+            const node = f.open(.hash("top"), floating);
+            var r = f.interact(node, .button);
+            r.clicked = activated(r.clicked, r.focused, f.in);
+            f.setFill(node, buttonFill(&th, r));
+            f.setCursor(.pointer, r.hovered);
+            _ = f.textStyled("Top", label_zig.labelText(&th), label_zig.labelStyle(&th));
+            f.close();
+            return r.clicked;
+        }
+        pub fn end(app: *App, f: *Frame, font: Mono) context.Output {
+            return f.endSides(font, .{ .anchors = &app.an.?, .layers = &app.ly });
+        }
+    };
+    var h: base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 64, .depth = 8 }) = undefined;
+};
+
+test "layered hit: a click on a raised button hits it, not the later one it covers, in both front ends" {
+    const h = &Raised.h;
+    h.init();
+    var in: Input = .{ .viewport = .{ 300, 100 } };
+    var out = try h.frame(&in);
+    const top = out.comptime_.tree.rect(2);
+    const under = out.comptime_.tree.rect(4);
+    // The raised button overlaps the one after it in the tree.
+    try testing.expect(top.x0 < under.x1 and top.y1 > under.y0);
+    in.pointer = .{ top.x0 + 2, @max(top.y0, under.y0) + 2 };
+    for ([_]bool{ false, true, false }) |left| {
+        in.buttons.left = left;
+        out = try h.frame(&in);
+    }
+    try testing.expect(h.app.top and !h.app.under);
+    try testing.expectEqual(Raised.Ui.Events.Event.top, out.comptime_.event.?);
+}
+
 var button_semantics: base.Semantic(16) = .{};
 
 test "button a11y: role button, named by its caption, value 0, no states, in both front ends" {

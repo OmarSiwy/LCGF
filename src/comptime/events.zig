@@ -18,12 +18,20 @@ const W = simd.lanes;
 pub const Availability = struct { enabled: bool = true, activates: bool = true };
 
 /// The interactive widgets of `spec` and how input reaches them.
+fn anyLayer(comptime n: Spec) bool {
+    if (n.layer != 0) return true;
+    for (n.children) |c| if (anyLayer(c)) return true;
+    return false;
+}
+
 pub fn Events(comptime spec: Spec) type {
     const F = flatten.Flat(spec);
     const count = blk: {
         @setEvalBranchQuota(1000 + 8 * F.node_count);
         break :blk widgetCount(spec);
     };
+    // Pages with a raised node (`spec.layer`) hit-test in paint order (`Rects.stack`).
+    const layered = comptime anyLayer(spec);
     return struct {
         pub const Index = F.Index;
         /// Widgets: spec nodes with an id.
@@ -118,6 +126,9 @@ pub fn Events(comptime spec: Spec) type {
             /// require an exact second phase. The table's owner keeps the tree alive.
             exact_tree: ?*const @import("../core/tree.zig").Tree = null,
             node_offset: u32 = 0,
+            /// On a page with stacking layers: the laid-out tree with its layer column, so a hit
+            /// goes to what is painted on top. Absent from pages without layers.
+            stack: if (layered) ?Stack else void = if (layered) null else {},
 
             /// The widgets' rows of a laid-out tree's `vis` columns (a tree built from this
             /// spec, so row numbers agree).
@@ -194,7 +205,39 @@ pub fn Events(comptime spec: Spec) type {
             return atMasked(true, r, mask, x, y);
         }
 
+        /// What a layered hit reads (`Rects.stack`), borrowed from its owner for one frame.
+        pub const Stack = struct {
+            tree: *const @import("../core/tree.zig").Tree,
+            /// `overlay.Layers.c.layer`, as `overlay.order` wrote it for `tree`.
+            layer: []const u8,
+            /// Tree row of each widget, in widget order, or `none` for one not built.
+            row: []const u32,
+        };
+
+        /// The widget painted on top at (x, y): the widget under it with the highest (layer,
+        /// row), as `hit.atLayered` picks in the runtime front end. With every node in layer 0
+        /// this is the widget-order topmost.
+        fn atStack(comptime filtered: bool, st: Stack, mask: *const InputMask, x: f32, y: f32) ?Widget {
+            const t = st.tree;
+            var best: u64 = 0;
+            var found: ?Widget = null;
+            for (widget_nodes, 0..) |node, k| {
+                if (comptime filtered) if (mask.enabled[k] == 0) continue;
+                const i = st.row[k];
+                if (i == none) continue;
+                if (x < t.c.vis[0][i] or y < t.c.vis[1][i] or x >= t.c.vis[2][i] or y >= t.c.vis[3][i]) continue;
+                if (!t.x.row[t.c.scope[i]].active_participation.hit) continue;
+                const key = ((@as(u64, st.layer[i]) << 32) | i) + 1;
+                if (key > best) {
+                    best = key;
+                    found = @fromBackingInt(node);
+                }
+            }
+            return found;
+        }
+
         fn atMasked(comptime filtered: bool, r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget {
+            if (comptime layered) if (r.stack) |st| return atStack(filtered, st, mask, x, y);
             if (r.exact_tree) |t| {
                 var result: ?Widget = null;
                 for (widget_nodes, 0..) |node, k| {

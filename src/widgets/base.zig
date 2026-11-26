@@ -466,6 +466,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// `MonoParagraphs`. Absent on a page without `spec.paragraph`.
         paragraphs: if (paragraph_slots > 0) struct { rows: [paragraph_slots]u32 = undefined, styles: [paragraph_slots]u16 = undefined, len: u32 = 0 } else void = if (paragraph_slots > 0) .{} else {},
 
+        /// The layer column and, for hits in paint order (`Events.Rects.stack`), each widget's
+        /// tree row in the frame built last.
+        const Stacking = struct { l: overlay.Layers, rows: []u32 };
+
         const Tables = struct {
             t: Tree,
             tx: Texts,
@@ -476,7 +480,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             gs: if (has_grid) grid.Grids else void,
             an: if (anchor_rows > 0) overlay.Anchors else void,
             st: if (sticky_rows > 0) scroll_zig.Sticky else void,
-            ly: if (has_layers) overlay.Layers else void,
+            ly: if (has_layers) Stacking else void,
 
             fn carve(carver: *mem.Carver) Tables {
                 return .{
@@ -489,7 +493,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     .gs = if (has_grid) grid.Grids.init(carver, grid_cap) else {},
                     .an = if (anchor_rows > 0) overlay.Anchors.init(carver, anchor_rows) else {},
                     .st = if (sticky_rows > 0) scroll_zig.Sticky.init(carver, sticky_rows) else {},
-                    .ly = if (has_layers) overlay.Layers.init(carver, rows) else {},
+                    .ly = if (has_layers) .{ .l = overlay.Layers.init(carver, rows), .rows = carver.slice(u32, E.widget_count) } else {},
                 };
             }
         };
@@ -650,7 +654,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             if (has_grid) tb.gs.reset();
             if (anchor_rows > 0) tb.an.reset();
             if (sticky_rows > 0) tb.st.reset();
-            if (has_layers) tb.ly.reset();
+            if (has_layers) tb.ly.l.reset();
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
             if (dynamic) {
@@ -739,8 +743,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
             try layout.finalizeWith(t, presentation.rounding);
             if (has_layers) {
-                overlay.order(t, &tb.ly);
-                paint.emitLayered(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.ly, &tb.d);
+                overlay.order(t, &tb.ly.l);
+                paint.emitLayered(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.ly.l, &tb.d);
             } else paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
             if (comptime paragraph_slots > 0) font.decorate(&tb.d, tx);
 
@@ -754,6 +758,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     inline for (0..4) |side| ui.rects.c[side][k] = t.c.vis[side][row];
                 }
             } else ui.rects = E.Rects.fromTreeOffset(t, 1);
+            if (has_layers) {
+                for (E.widget_nodes, tb.ly.rows) |node, *row| row.* = ui.treeRow(node);
+                ui.rects.stack = .{ .tree = t, .layer = tb.ly.l.c.layer, .row = tb.ly.rows };
+            }
             if (!ui.cursor_set) {
                 if (ui.build_hit) |target| {
                     const owned = ui.pointer.pressed == null or ui.pointer.pressed == target;
@@ -791,7 +799,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             // In row order, before the subtree: a nested anchor sees its parent's final place.
             if (comptime n.anchor) |pl| _ = ui.tables.an.place(at, pl, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
             if (comptime n.sticky) |top| _ = ui.tables.st.push(at, 0, .{ 0, top }, .{ false, true });
-            if (comptime n.layer != 0) ui.tables.ly.c.own[at] = n.layer;
+            if (comptime n.layer != 0) ui.tables.ly.l.c.own[at] = n.layer;
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             if (comptime n.custom) |data| {
                 const id = Id.hash(n.id orelse @compileError("a custom draw needs an id"));
@@ -1202,7 +1210,9 @@ pub fn sameDraw(a: *const DrawList, b: *const DrawList) bool {
 /// Runs one UI through both front ends, frame by frame, and checks they agree. `App` is the
 /// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`, and optionally
 /// `pub fn end(*App, *Frame, Mono) context.Output` to end the frame itself (`Frame.endFlex`
-/// over flex columns the App owns); otherwise the harness calls `Frame.end`. `Ui` is the
+/// over flex columns the App owns); otherwise the harness calls `Frame.end`. Likewise an
+/// optional `pub fn begin(*App, *context.Context, *const Input) Frame` starts it (a hit in
+/// layer order, `Context.beginWithHit`). `Ui` is the
 /// comptime side, a `ComptimeUi`. The harness owns both and the runtime context's buffer, so
 /// it must not move after `init`; declare it as a `var` at container level (it is too big for
 /// a test's stack) and drive it from replayed input:
@@ -1234,7 +1244,7 @@ pub fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Lim
         /// Builds frame `in` in both front ends. `error.FrontEndsDiffer` when their draw lists,
         /// row counts, or `role` and `value` columns (what accessibility reads) differ.
         pub fn frame(h: *Self, in: *const Input) error{FrontEndsDiffer}!Pair {
-            var f = h.ctx.begin(in);
+            var f = if (@hasDecl(App, "begin")) h.app.begin(&h.ctx, in) else h.ctx.begin(in);
             h.app.build(&f);
             const rt = if (@hasDecl(App, "end")) h.app.end(&f, h.ui.font) else f.end(h.ui.font);
             const cp = h.ui.frame(in);

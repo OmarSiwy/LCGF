@@ -1500,6 +1500,16 @@ pub const Emit = struct {
             \\
         );
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
+        if (e.hasLayers()) e.write(
+            \\    /// Starts the frame with the pointer's hit in last frame's paint order
+            \\    /// (`hit.atLayered`), so a raised box takes the clicks over what it covers.
+            \\    pub fn begin(ui: *Ui, ctx: *lcgf.context.Context, in: *const lcgf.input.Input) lcgf.frame.Frame {
+            \\        const sd = if (ui.sides) |*sd| sd else return ctx.begin(in);
+            \\        return ctx.beginWithHit(in, lcgf.hit.atLayered(&ctx.trees[ctx.cur], sd.ly.c.layer, in.pointer[0], in.pointer[1], .any));
+            \\    }
+            \\
+            \\
+        );
         if (sides) {
             // Lays out with the side tables (and flex rules), rounds each region's content from
             // its corner, and paints (in layer order, with the paragraph decorations).
@@ -2116,7 +2126,7 @@ pub const Emit = struct {
             \\        ui: Ui = .{{}},
             \\
             \\        pub fn frame(p: *@This(), ctx: *lcgf.context.Context, h: *H, in: *const lcgf.input.Input{s}) lcgf.context.Output {{
-            \\            var f = ctx.begin(in);
+            \\            var f = {s};
             \\            p.ui.build(&f{s});
             \\            const out = {s};
             \\            p.ui.dispatch(h);
@@ -2126,7 +2136,7 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions or e.hasSides()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (e.hasLayers()) "p.ui.begin(ctx, in)" else "ctx.begin(in)", if (regions) ", data" else "", if (e.hasFlex() or regions or e.hasSides()) "p.ui.end(&f, .{})" else "f.end(.{})" });
         if (e.hasSides()) {
             const pos = e.positionedRows();
             e.write("/// The runtime page's side tables, and their bytes.\nconst Sides = struct {");
