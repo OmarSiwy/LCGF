@@ -354,3 +354,31 @@ python3 scripts/summ.py m-final.txt
 ```
 
 Measured with `scripts/m2.sh 3 "zig-nokeep=src/zig-out/bin/lcgf-ct-dump @UI@ 240 --bench zig @R@"` (`data/m-nokeep.txt`). It makes paint read stale `Dynamic`, so the output is wrong; it shows only the copy's cost.
+
+## Appendix C. Follow-up: what landed and what is left (2026-11-26)
+
+**Landed.** WP3: one static frame (`passesOver`, `emitLiveTextOver` and the other `…Over`
+bodies in src/comptime/, read by the engine from its words). WP4: C++ and Rust static UIs go
+through liblcgf's frame and the `lcgf_ct_*` calls; `ct.hpp`, `ct.rs` and lcgf-gen's native
+emitters are deleted. WP5: each UI's frame is liblcgf's specialized to its words by Zig itself
+(`lcgf-gen --static --lang zig`, `zig build-obj` in CMake, `lcgf_build::static_ui` in Rust),
+with a C fallback (`--lang c`, the engine through Zig's C backend and tools/ct-csrc) for builds
+without Zig. Two things made specialization work: each constant column as an array of its own
+(a compiler folds loads from a column of one value only when it is its own object), and the
+labels' text written as straight-line code when the words are known while compiling.
+
+**Measured** (Ryzen 7 8700F pinned, 8 lanes, 5 rounds, settings/todo/dash/mixer, instructions /
+cycles per frame): Zig 8489/10991/3487/985 and 4760/6362/2056/661; C++ through the Zig-built
+frame 8711/10955/3596/1038 and 4784/6211/1975/672; Rust the same 8727/10964/3591/1048 and
+4754/6181/1995/677. The deleted Rust port ran 8707/10632/3479/1123 and 3977/5322/1730/562.
+
+**a3, open: Zig's passes run 18–20% more cycles than the Rust port did, at equal instructions.**
+- A cycle profile of settings puts the time in the tier-0 parent-to-child chains: `resolve`
+  (src/layout/layout.zig:241-265), `place` (:334-337) and finalize's clip chain (:414-428). The
+  Rust port ran the same expressions in the same order.
+- Ruled out: the scalar `maxF`/`minF` integer select (`selF`); plain float selects give the same
+  instructions and no cycle gain.
+- Next hypothesis, untested: alias analysis. Zig's written columns are fields of one `Scratch`
+  reached through `View` pointers, so a store to `used[p]` or `size[i]` may force reloads that
+  the port avoided with bounds-known `[f32; N]` fields. The experiment: read the inlined loop's
+  assembly for reloads after those stores, then try the written columns as separate arrays.
