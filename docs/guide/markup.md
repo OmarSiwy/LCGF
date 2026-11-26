@@ -140,7 +140,12 @@ that the markup does not pass. Each message starts at the HTML:
 
     page.html:18:5: <sfy-tool> is used inside lcgf-each, so its namespace needs `pub fn frame(f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …`
 
-Components are lowered on comptime pages only so far.
+On a runtime page (see Frontends) every component is the runtime form, as inside
+`lcgf-each`: `frame`, or `open` and `close` around content. `{f}` passes the field's value and
+`var(--t-space)` the token's value, so `level` is an `f32` there where the spec form takes
+`@EnumLiteral()`. A component used on both kinds of page declares the forms each needs under one
+name (`testdata/components/app.zig`). A margin on a component is not lowered there: wrap it in a
+`<div>` with the margin.
 
 ## Frontends
 
@@ -148,11 +153,16 @@ By default the page is a comptime page (`ComptimeUi`).
 
 `<html lcgf-frontend="runtime">`, or `--frontend runtime` (`.frontend = "runtime"` in
 `addMarkup`), emits it instead as a runtime page:
-- `Ui.build(ui, frame)`, made of `Frame` and widget calls, and `Ui.dispatch(ui, h)`;
+- `Ui.build(ui, frame)`, made of `Frame`, widget and component calls, and `Ui.dispatch(ui, h)`;
 - `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
 
-Both keep the same `State`, `spec` and handlers, because `ui.signals` is the same store in both.
-Every fixture draws identical frames in the two frontends.
+A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame, data)` and
+`Page(H).frame(p, ctx, h, input, data)`.
+
+Both keep the same `State` and handlers, because `ui.signals` is the same store in both.
+Every fixture draws identical frames in the two frontends. The one exception is inside a region
+whose origin falls between pixels: there its content's edges can round 1 px apart (engine
+request E3).
 
 ### Run-time theme tokens
 

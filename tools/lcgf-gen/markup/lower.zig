@@ -607,6 +607,7 @@ pub const Lowerer = struct {
                 // `var(--t-x)`: a run-time token, passed as its `Tokens` field's name, which
                 // the component gives `spec.tokened`.
                 prop.value = l.tokenProp(n, std.mem.trim(u8, tv[4 .. tv.len - 1], " "), at) orelse continue;
+                prop.token = true;
             } else if (isBound(v)) {
                 const inner = std.mem.trim(u8, std.mem.trim(u8, v, " ")[1 .. std.mem.trim(u8, v, " ").len - 1], " ");
                 if (std.mem.indexOfScalar(u8, inner, '.')) |dot| {
@@ -1693,7 +1694,9 @@ pub const Lowerer = struct {
                 .container, .landmark, .label, .text, .heading => continue,
                 .when, .list, .choice, .each => continue,
                 .component => {
-                    l.ds.err(nodes.items(.loc)[i], "app components are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
+                    // A flex rule names the node a statement makes; a component makes its own.
+                    if (nodes.items(.margin)[i] != null)
+                        l.ds.err(nodes.items(.loc)[i], "runtime frontend: a margin on an app component needs the node it builds; wrap it in a <div> with the margin", .{});
                     continue;
                 },
                 else => {},

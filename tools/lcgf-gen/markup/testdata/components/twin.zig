@@ -47,6 +47,15 @@ pub fn Handlers(comptime Ui: type) type {
 
 const Net = struct { name: []const u8 };
 
+/// The items parity.zig gives both frontends' regions; each side gets its own copy.
+pub const Sample = struct {
+    nets: [2]Net = .{ .{ .name = "vdd" }, .{ .name = "gnd" } },
+
+    pub fn data(x: *Sample) struct { nets: []const Net } {
+        return .{ .nets = &x.nets };
+    }
+};
+
 fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
     for (d.runs[0..d.run_len]) |r| if (std.mem.eql(u8, d.strings[r.start..][0..r.bytes], text)) return r.rect;
     return null;

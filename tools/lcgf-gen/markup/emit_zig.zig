@@ -139,6 +139,12 @@ pub const Emit = struct {
         e.write(if (any) " }" else "}");
     }
 
+    /// The index of the token whose `Tokens` field is `field`.
+    fn tokenIndex(e: *Emit, field: []const u8) u32 {
+        for (e.page.tokens.items, 0..) |t, k| if (std.mem.eql(u8, t.field, field)) return @intCast(k);
+        unreachable;
+    }
+
     /// `ui.tokens.values.<field>` of token `t`.
     fn tokenExpr(e: *Emit, t: u32) []const u8 {
         return std.fmt.allocPrint(e.arena, "ui.tokens.values.{f}", .{std.zig.fmtId(e.page.tokens.items[t].field)}) catch unreachable;
@@ -367,7 +373,12 @@ pub const Emit = struct {
                 e.write(")");
             },
             .each => e.print("lcgf.ct_interop.{s}(.{f}, {s})", .{ if (n.level == 1) "fitRegion" else "region", std.zig.fmtId(n.id), e.styleText(n.style, n.params_expr) }),
-            .component => {
+            .component => if (e.runtime) {
+                // The runtime page builds the component in `Ui.build`. Its spec, which only
+                // the state store reads, keeps the content's nodes.
+                e.write(if (has_children) "s.col(.{}, .{" else "s.col(.{}, .{})");
+                if (has_children) inner_close.appendSlice(e.arena, "})") catch unreachable;
+            } else {
                 // The content is the `children` prop, a tuple of Specs.
                 e.componentCall(n, false, 0, has_children);
                 if (has_children) inner_close.appendSlice(e.arena, "} })") catch unreachable;
@@ -463,7 +474,7 @@ pub const Emit = struct {
         }
         var stack: std.ArrayList(struct { node: u32, close: []const u8 }) = .empty;
         // App components are checked first, so a wrong one fails at the HTML.
-        const checked = e.specComponents();
+        const checked = !e.runtime and e.specComponents();
         e.write(if (checked) "pub const spec = blk: {\n    checkComponents();\n    break :blk " else "pub const spec = ");
         for (0..nodes.len) |i_| {
             const i: u32 = @intCast(i_);
@@ -810,7 +821,10 @@ pub const Emit = struct {
                 if (e.clickHandler(n.id) != null) {
                     e.write("if (");
                     e.componentCall(n, true, list_depth, content);
-                    e.print(".clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) });
+                    if (e.eachOf(i) != none)
+                        e.print(".clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
+                    else
+                        e.print(".clicked) ui.events.{f} = true;", .{std.zig.fmtId(n.id)});
                 } else {
                     e.write("_ = ");
                     e.componentCall(n, true, list_depth, content);
@@ -872,7 +886,8 @@ pub const Emit = struct {
         for (n.props) |p| {
             e.print("{s} .{f} = ", .{ if (k > 0) "," else "", std.zig.fmtId(p.name) });
             switch (p.kind) {
-                .literal => e.string(p.value),
+                // A token is its `Tokens` field's name for `spec.tokened`, or its value.
+                .literal => if (p.token and region) e.write(e.tokenExpr(e.tokenIndex(p.value))) else e.string(p.value),
                 .field => if (region) e.write(e.stateRef(p.value)) else e.print(".{f}", .{std.zig.fmtId(p.value)}),
                 .item => e.write(p.value),
             }
@@ -908,6 +923,8 @@ pub const Emit = struct {
         const tag = n.text;
         const content = e.hasChild(i);
         const c = std.fmt.allocPrint(e.arena, "app.components.{f}", .{std.zig.fmtId(tag)}) catch unreachable;
+        // Where the use is, for the messages: a runtime page builds every component at run time.
+        const place = if (!region) "on the page" else if (e.eachOf(i) != none) "inside lcgf-each" else "on a runtime page";
         const rt_sig = "f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …";
         const spec_sig = "comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec";
         const close_sig = "pub fn close(f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme) void";
@@ -922,14 +939,14 @@ pub const Emit = struct {
         const form = e.componentForm(tag, form_name);
         if (region and content) {
             // Content goes between the two calls of a namespace.
-            e.print("{s}else if (@TypeOf({s}) != type or !@hasDecl({s}, \"open\") or !@hasDecl({s}, \"close\")) @compileError(\"{s}: <{s}> has content inside lcgf-each, so it is a namespace with `pub fn open({s}` and `{s}`, which build what goes before and after it\")\n", .{ pad, c, c, c, at, tag, rt_sig, close_sig });
+            e.print("{s}else if (@TypeOf({s}) != type or !@hasDecl({s}, \"open\") or !@hasDecl({s}, \"close\")) @compileError(\"{s}: <{s}> has content {s}, so it is a namespace with `pub fn open({s}` and `{s}`, which build what goes before and after it\")\n", .{ pad, c, c, c, at, tag, place, rt_sig, close_sig });
             e.print("{s}else if (@typeInfo(@TypeOf({s}.close)) != .@\"fn\" or @typeInfo(@TypeOf({s}.close)).@\"fn\".param_types.len != 2) @compileError(\"{s}: <{s}> must have `{s}`\")\n", .{ pad, c, c, at, tag, close_sig });
         } else {
             // A namespace declares both forms under one name; this context needs one of them.
             const form_sig = if (region) rt_sig else spec_sig;
-            e.print("{s}else if (@TypeOf({s}) == type and !@hasDecl({s}, \"{s}\")) @compileError(\"{s}: <{s}> is used {s}, so its namespace needs `pub fn {s}({s}`\")\n", .{ pad, c, c, form_name, at, tag, if (region) "inside lcgf-each" else "on the page", form_name, form_sig });
+            e.print("{s}else if (@TypeOf({s}) == type and !@hasDecl({s}, \"{s}\")) @compileError(\"{s}: <{s}> is used {s}, so its namespace needs `pub fn {s}({s}`\")\n", .{ pad, c, c, form_name, at, tag, place, form_name, form_sig });
         }
-        e.print("{s}else if (@typeInfo(@TypeOf({s})) != .@\"fn\" or @typeInfo(@TypeOf({s})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}, or a namespace with `pub fn {s}`\")\n", .{ pad, form, form, @as(u8, if (region) 3 else 2), at, tag, want, if (region) " inside lcgf-each" else "", form_name });
+        e.print("{s}else if (@typeInfo(@TypeOf({s})) != .@\"fn\" or @typeInfo(@TypeOf({s})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}{s}, or a namespace with `pub fn {s}`\")\n", .{ pad, form, form, @as(u8, if (region) 3 else 2), at, tag, want, if (region) " " else "", if (region) place else "", form_name });
         e.print("{s}else if (@typeInfo(@TypeOf({s})).@\"fn\".param_types[{d}]) |P| {{\n", .{ pad, form, @as(u8, if (region) 2 else 1) });
         // Every prop the markup passes, typed as it passes it.
         if (n.id.len > 0) e.print("{s}    if (!@hasField(P, \"id\")) @compileError(\"{s}: <{s}> has no prop 'id', so id= and on:click cannot name its widget\");\n", .{ pad, at, tag });
@@ -940,7 +957,7 @@ pub const Emit = struct {
             e.print("{s}    if (!@hasField(P, \"{s}\")) @compileError(\"{s}: <{s}> has no prop '{s}'\")\n", .{ pad, p.name, pat, tag, p.name });
             const field = if (p.kind == .item) p.value[std.mem.indexOfScalar(u8, p.value, '.').? + 1 ..] else p.value;
             const want_ty, const why = switch (p.kind) {
-                .literal => .{ "[]const u8", "a literal" },
+                .literal => if (p.token and region) .{ std.fmt.allocPrint(e.arena, "@FieldType(Tokens, \"{s}\")", .{p.value}) catch unreachable, std.fmt.allocPrint(e.arena, "the token '{s}'", .{p.value}) catch unreachable } else .{ "[]const u8", "a literal" },
                 .field => if (region) .{ std.fmt.allocPrint(e.arena, "@FieldType(State, \"{s}\")", .{field}) catch unreachable, std.fmt.allocPrint(e.arena, "the view state's '{s}'", .{field}) catch unreachable } else .{ "@EnumLiteral()", std.fmt.allocPrint(e.arena, "the name of the field '{s}'", .{field}) catch unreachable },
                 .item => .{ std.fmt.allocPrint(e.arena, "@FieldType(Item, \"{s}\")", .{field}) catch unreachable, std.fmt.allocPrint(e.arena, "the item's '{s}'", .{field}) catch unreachable },
             };
@@ -1155,6 +1172,12 @@ pub const Emit = struct {
             e.print("        ui.events_{s} = .{{}};\n", .{e.page.nodes.items(.id)[i]});
         e.write("        ui.before = ui.signals.state;\n");
         if (paragraphs) e.write("        ui.paragraphs.len = 0;\n");
+        // The app's components, checked against the markup before they are called.
+        if (e.specComponents()) {
+            e.write("        comptime {\n");
+            for (e.page.nodes.items(.kind), 0..) |k, i| if (k == .component and e.eachOf(@intCast(i)) == none) e.componentChecks(@intCast(i), true, "            ");
+            e.write("        }\n");
+        }
         if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
         if (named > 0) e.write("        ui.named = @splat(lcgf.types.none);\n");
         if (flex) e.write(
@@ -1706,7 +1729,7 @@ pub const Emit = struct {
             e.print("    if (@TypeOf(H.{f}) != {s}) @compileError(\"{s}: handler '{s}' must be `{s}`\");\n", .{ std.zig.fmtId(h.name), e.fnType(h), at, h.name, e.signature(h, "H") });
         }
         for (e.page.nodes.items(.kind), e.page.nodes.items(.id), e.page.nodes.items(.text), 0..) |k, id, tag, i| {
-            if (k != .component or e.eachOf(@intCast(i)) != none or e.clickHandler(id) == null) continue;
+            if (e.runtime or k != .component or e.eachOf(@intCast(i)) != none or e.clickHandler(id) == null) continue;
             e.print("    if (!@hasField(Widget, \"{s}\")) @compileError(\"{s}: <{s}> makes no widget '{s}': give props.id to the widget its click is on\");\n", .{ id, e.whereFull(e.page.nodes.items(.loc)[i]), tag, id });
         }
         e.write("}\n");

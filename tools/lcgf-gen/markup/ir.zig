@@ -138,6 +138,9 @@ pub const Prop = struct {
     kind: enum(u8) { literal, field, item },
     /// The literal bytes, the field's name, or `x.f`.
     value: []const u8,
+    /// A literal that names a run-time token's `Tokens` field (`var(--t-x)`): the runtime
+    /// form gets the token's value.
+    token: bool = false,
     loc: diag.Loc,
 };
 

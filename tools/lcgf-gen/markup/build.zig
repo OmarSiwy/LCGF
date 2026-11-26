@@ -121,7 +121,7 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             }
             // A page with no `--t-*` token is the same runtime page with --runtime-vars.
             if (f.runtime_vars.len == 0 and !f.spec_only) {
-                const with_vars = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = "t-" });
+                const with_vars = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .app = app, .runtime_vars = "t-" });
                 for ([_]struct { []const u8, *Build.Module }{ .{ "rt", page_rt }, .{ "rtvars", with_vars } }) |side| {
                     const obj = b.addObject(.{ .name = b.fmt("{s}-{s}", .{ f.name, side[0] }), .root_module = b.createModule(.{
                         .root_source_file = b.path(dir ++ "/cost_probe_rt.zig"),

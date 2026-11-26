@@ -50,6 +50,10 @@ These need no engine change:
 
 Requests, by usage:
 - **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`), one frame late. The page measures the content in its own viewport and sets `out.wake = 0` on a change. A layout that admits a region's measured content within the same frame would remove the lag.
+- **E3:** lay a region's content out at the region's unsnapped origin. The comptime page snaps
+  the region's rect and then lays its content out at (0, 0) in it, where the runtime page lays
+  the same content out in place, so at a fractional origin their edges can round 1 px apart
+  (parity.zig allows that inside regions; `testdata/components`).
 - **E2:** `compose` into several regions in one pass. Today the page composes them one after another into two draw lists it alternates between, so each region copies the commands before it; one pass would copy them once (a performance request, not a usage one).
 
 ### App components (M8.3)
@@ -61,9 +65,8 @@ Requests, by usage:
   forms as a namespace with `spec` and `frame`; the call site picks by context. A runtime
   component with content (inside an lcgf-each) is a namespace with `open` and `close`; the
   generated code builds the content between the two calls, so no slot is a callback.
-- **Open:**
-  - The runtime frontend does not lower components: its `spec` (for `Signals`) would need the
-    comptime form as well.
+  The runtime frontend calls the runtime forms throughout; its `spec`, which only `Signals`
+  reads, holds a plain column with the component's content in its place.
 
 ### What the runtime frontend emits
 
