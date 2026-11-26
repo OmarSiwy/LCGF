@@ -46,7 +46,7 @@ inline fn inverseRaw(m: [6]f32) [6]f32 {
 
 /// `inverse(m) != null` as one mask, with no early exit, so it stays a select in the
 /// per-row and per-quad passes.
-pub inline fn invertible(m: [6]f32) bool {
+pub fn invertible(m: [6]f32) bool {
     return invertibleRaw(m, inverseRaw(m));
 }
 
@@ -75,7 +75,13 @@ pub fn expand(rect: [4]f32, amount: [4]f32) [4]f32 {
 /// the empty and the transformed rect are both computed, then selected. Computing the
 /// transform for the identity too costs the per-row passes about twice their instructions
 /// (finalize 3.2G -> 7.4G on the rows bench).
+/// Inlined into the per-row passes, except in size builds (2.5 KB of flash on cortex-m7).
 pub inline fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
+    const how: std.builtin.CallModifier = if (@import("builtin").mode == .small) .never_inline else .always_inline;
+    return @call(how, transformRectIn, .{ rect, m });
+}
+
+fn transformRectIn(rect: [4]f32, m: [6]f32) [4]f32 {
     if (isIdentity(m)) {
         // Kept a jump: LLVM otherwise if-converts it and computes the transform for every row.
         @branchHint(.likely);
