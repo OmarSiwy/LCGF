@@ -265,6 +265,7 @@ pub const Emit = struct {
             .label, .text, .heading => !std.meta.eql(n.text_style, n.base_text),
             else => false,
         };
+        if (n.decoration != null) e.write("s.decorated(");
         if (n.paragraph != null) e.write("s.paragraph(");
         if (text_styled) e.write("s.textStyled(");
         if (restyle and !has_children) e.write("s.styled(");
@@ -412,6 +413,11 @@ pub const Emit = struct {
         if (n.paragraph) |pa| {
             e.write(", ");
             e.paragraph(pa);
+            e.write(")");
+        }
+        if (n.decoration) |d| {
+            e.write(", ");
+            e.decoration(d);
             e.write(")");
         }
         var all: std.ArrayList(u8) = .empty;
@@ -702,7 +708,7 @@ pub const Emit = struct {
                 return "accordion.close(f);";
             },
             .label, .heading, .text => {
-                const plain = n.kind == .label and n.paragraph == null and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
+                const plain = n.kind == .label and n.paragraph == null and n.decoration == null and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
                 if (plain) {
                     e.print("_ = {s}.label(f, &theme, ", .{e.use("label")});
                     e.rtCaption(n.text_kind, n.text);
@@ -724,7 +730,7 @@ pub const Emit = struct {
                 e.write(", ");
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                 e.write(");");
-                if (n.paragraph) |pa| e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(pa)});
+                if (n.paragraph != null or n.decoration != null) e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(n)});
                 return "";
             },
             .button, .link => {
@@ -1116,7 +1122,16 @@ pub const Emit = struct {
             e.write("\n/// The page's paragraph styles, indexed by `Ui.paragraphs.styles`.\nconst paragraph_table = [_]lcgf.text_stack.Paragraph{");
             for (e.paragraphTable()) |pa| {
                 e.write(" ");
-                e.paragraph(pa);
+                e.paragraph(pa.paragraph orelse .{});
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
+        if (e.anyDecoration()) {
+            e.write("/// Their decorations, row for row.\nconst decoration_table = [_]lcgf.text_decorations.Style{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.decoration(pa.decoration orelse .{});
                 e.write(",");
             }
             e.write(" };\n");
@@ -1189,9 +1204,9 @@ pub const Emit = struct {
             \\    /// Lays the frame out (with this page's {s}), puts each region's content on the
             \\    /// grid from the region's snapped corner, and paints.
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
-            \\        f.{s}(font{s}{s});
+            \\        f.{s}({s}{s});
             \\        for (ui.regions) |row| if (row != lcgf.types.none) lcgf.layout.snapSubtree(f.tree(), row);
-            \\        return f.finish();
+            \\        return f.{s};
             \\    }}
             \\
             \\
@@ -1199,12 +1214,13 @@ pub const Emit = struct {
             e.regionCount(),
             if (flex and paragraphs) "flex rules and paragraph styles" else if (flex) "flex rules" else if (paragraphs) "paragraph styles" else "font",
             if (flex and paragraphs) "layoutFlexParagraphs" else if (flex) "layoutFlex" else if (paragraphs) "layoutParagraphs" else "layoutWith",
-            if (paragraphs) ", ui.paragraphs.rows[0..ui.paragraphs.len], ui.paragraphs.styles[0..ui.paragraphs.len], &paragraph_table" else "",
+            e.fontExpr(paragraphs),
             if (flex) ", &ui.flex.?" else "",
+            if (paragraphs) std.fmt.allocPrint(e.arena, "finishParagraphs({s})", .{e.fontExpr(true)}) catch unreachable else "finish()",
         }) else if (flex or paragraphs) e.print(
             \\    /// Ends the frame with this page's {s} (`Frame.{s}`).
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
-            \\        return f.{s}(font{s}{s});
+            \\        return f.{s}({s}{s});
             \\    }}
             \\
             \\
@@ -1212,7 +1228,7 @@ pub const Emit = struct {
             if (flex and paragraphs) "flex rules and paragraph styles" else if (flex) "flex rules" else "paragraph styles",
             if (flex and paragraphs) "endFlexParagraphs" else if (flex) "endFlex" else "endParagraphs",
             if (flex and paragraphs) "endFlexParagraphs" else if (flex) "endFlex" else "endParagraphs",
-            if (paragraphs) ", ui.paragraphs.rows[0..ui.paragraphs.len], ui.paragraphs.styles[0..ui.paragraphs.len], &paragraph_table" else "",
+            e.fontExpr(paragraphs),
             if (flex) ", &ui.flex.?" else "",
         });
         if (tokens.len > 0) e.write(
@@ -1454,20 +1470,57 @@ pub const Emit = struct {
         return out.items;
     }
 
-    /// The distinct paragraph styles of the page's labels, in first-use order.
-    fn paragraphTable(e: *Emit) []const lcgf.text_stack.Paragraph {
-        var out: std.ArrayList(lcgf.text_stack.Paragraph) = .empty;
-        for (e.page.nodes.items(.paragraph)) |p_| if (p_) |p| {
+    const Styled = struct { paragraph: ?lcgf.text_stack.Paragraph, decoration: ?lcgf.text_decorations.Style };
+
+    /// The distinct (paragraph, decoration) pairs of the page's labels, in first-use order:
+    /// `ComptimeUi`'s table, so both frontends index it alike.
+    fn paragraphTable(e: *Emit) []const Styled {
+        var out: std.ArrayList(Styled) = .empty;
+        for (e.page.nodes.items(.paragraph), e.page.nodes.items(.decoration)) |p, d| if (p != null or d != null) {
+            const st = norm(.{ .paragraph = p, .decoration = d });
             for (out.items) |q| {
-                if (std.meta.eql(p, q)) break;
-            } else out.append(e.arena, p) catch unreachable;
+                if (std.meta.eql(st, q)) break;
+            } else out.append(e.arena, st) catch unreachable;
         };
         return out.items;
     }
 
-    fn paragraphIndex(e: *Emit, p: lcgf.text_stack.Paragraph) usize {
-        for (e.paragraphTable(), 0..) |q, i| if (std.meta.eql(p, q)) return i;
+    fn norm(st: Styled) Styled {
+        return .{ .paragraph = st.paragraph orelse .{}, .decoration = st.decoration orelse .{} };
+    }
+
+    fn paragraphIndex(e: *Emit, n: ir.Node) usize {
+        const st = norm(.{ .paragraph = n.paragraph, .decoration = n.decoration });
+        for (e.paragraphTable(), 0..) |q, i| if (std.meta.eql(st, q)) return i;
         unreachable;
+    }
+
+    /// The font `Ui.end` measures with: `font`, or the page's `MonoParagraphs` over it.
+    fn fontExpr(e: *Emit, paragraphs: bool) []const u8 {
+        if (!paragraphs) return "font";
+        return std.fmt.allocPrint(e.arena, ".{{ .mono = font, .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s} }}", .{
+            if (e.anyDecoration()) ", .decorations = &decoration_table" else "",
+        }) catch unreachable;
+    }
+
+    fn anyDecoration(e: *Emit) bool {
+        for (e.page.nodes.items(.decoration)) |d| if (d != null) return true;
+        return false;
+    }
+
+    /// A decoration literal: the lines and colour the lowering sets.
+    fn decoration(e: *Emit, d: lcgf.text_decorations.Style) void {
+        e.write(".{");
+        var any = false;
+        inline for (.{ "underline", "overline", "strike" }) |f| if (@field(d, f)) {
+            e.print("{s} .{s} = true", .{ if (any) "," else "", f });
+            any = true;
+        };
+        if (d.color) |c| {
+            e.print("{s} .color = 0x{x:0>8}", .{ if (any) "," else "", c });
+            any = true;
+        }
+        e.write(if (any) " }" else "}");
     }
 
     /// A paragraph style literal: the fields the lowering sets.

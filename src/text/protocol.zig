@@ -30,6 +30,8 @@ const draw_list = @import("../draw/draw_list.zig");
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
 const Paragraph = @import("layout/stack.zig").Paragraph;
+const Decoration = @import("layout/decorations.zig").Style;
+const paint = @import("../draw/paint.zig");
 
 const W = simd.lanes;
 
@@ -167,14 +169,18 @@ pub const Mono = struct {
 /// Measure and wrap run Mono's passes over every run, then rewrite only the listed runs by
 /// walking their bytes, so a frame without styled runs costs what Mono costs. `quads` places
 /// glyphs by the same walk. Mono's own rules hold: every byte is one cell and lines break
-/// between any two bytes.
+/// between any two bytes. `decorate` adds underlines, overlines and line-throughs to the
+/// draw list as solid quads.
 pub const MonoParagraphs = struct {
     mono: Mono = .{},
     rows: []const u32,
     styles: []const u16,
     table: []const Paragraph,
-    /// The bytes the runs' `start` and `bytes` index: the frame's strings.
-    strings: []const u8,
+    /// Empty, or one row per `table` row: its runs' decoration lines (`text_decorations.Style`;
+    /// Mono draws `underline`, `overline` and `strike` solid, in `color` and `thickness`).
+    decorations: []const Decoration = &.{},
+    /// The bytes the runs' `start` and `bytes` index: the frame's strings (`Frame` sets it).
+    strings: []const u8 = "",
 
     /// Mono's measure, then the single-line extent of every styled run.
     pub fn measure(p: MonoParagraphs, tx: *Texts) void {
@@ -222,6 +228,8 @@ pub const MonoParagraphs = struct {
         const bytes = d.strings[r.start..][0..r.bytes];
         const avail = r.rect[2] - r.rect[0];
         // A run laid out on one line keeps to it; one taller than a line wrapped.
+        // ponytail: the draw list carries no wrap flag, so this reads it off the height; add
+        // one to TextRun if a run ever needs a different answer.
         const line = lineOf(p.mono, st, r.px);
         const wraps = r.rect[3] - r.rect[1] > line * 1.5;
         const f = fit(p.mono, st, bytes, r.px, avail, wraps);
@@ -242,6 +250,95 @@ pub const MonoParagraphs = struct {
         };
         glyphs.count[k] = n - start;
         return n;
+    }
+
+    /// After `paint.emit`: one solid quad per line and decoration of every decorated run,
+    /// painted right after the run's text and encoded into commands again. Lines are those
+    /// `quads` draws. Quads and ops past the draw list's rows are dropped.
+    pub fn decorate(p: MonoParagraphs, d: *DrawList) void {
+        if (p.decorations.len == 0) return;
+        std.debug.assert(p.decorations.len == p.table.len);
+        var j: u32 = 0;
+        while (j < d.op_len) : (j += 1) {
+            if (d.op.kind[j] != @backingInt(DrawList.Kind.text)) continue;
+            const k = d.op.ref[j];
+            const at = std.mem.indexOfScalar(u32, p.rows, k) orelse continue;
+            const deco = p.decorations[p.styles[at]];
+            const first = d.quad_len;
+            p.decorationQuads(d, k, p.table[p.styles[at]], deco);
+            // The new quads' ops go right after the text op, the later ops after them.
+            const added = @min(d.quad_len - first, @as(u32, @intCast(d.op.kind.len)) - d.op_len);
+            d.quad_len = first + added;
+            const tail = d.op_len - (j + 1);
+            inline for (.{ "kind", "key", "ref" }) |col| {
+                const c = @field(d.op, col);
+                std.mem.copyBackwards(@TypeOf(c[0]), c[j + 1 + added ..][0..tail], c[j + 1 ..][0..tail]);
+            }
+            for (0..added) |m| {
+                d.op.kind[j + 1 + m] = @backingInt(DrawList.Kind.quads);
+                d.op.key[j + 1 + m] = 0; // white texture, solid material
+                d.op.ref[j + 1 + m] = first + @as(u32, @intCast(m));
+            }
+            d.op_len += added;
+            j += added;
+        }
+        paint.encode(d);
+    }
+
+    fn decorationQuads(p: MonoParagraphs, d: *DrawList, k: u32, st: Paragraph, deco: Decoration) void {
+        const r = d.runs[k];
+        const bytes = d.strings[r.start..][0..r.bytes];
+        const avail = r.rect[2] - r.rect[0];
+        const line = lineOf(p.mono, st, r.px);
+        const wraps = r.rect[3] - r.rect[1] > line * 1.5;
+        const f = fit(p.mono, st, bytes, r.px, avail, wraps);
+        const adv = r.px * p.mono.advance;
+        const cell = r.px * p.mono.line;
+        const top = (line - cell) * std.math.clamp(st.leading, 0, 1);
+        const thickness = deco.thickness orelse @max(1, @round(r.px / 14));
+        const color = if (deco.color) |authored| paint.fade(authored, r.opacity) else r.color;
+        // Where each line ends: the walk `quads` makes, dots included.
+        var pen: Pen = .{};
+        var line_end: f32 = 0;
+        var line_no: u32 = 0;
+        const dots: u32 = if (f.cut < bytes.len and st.ellipsis) 3 else 0;
+        for (0..f.cut + dots) |i| {
+            const b = if (i < f.cut) bytes[i] else '.';
+            const before = pen.line;
+            pen.advance(adv, st, b, avail, wraps and i < f.cut);
+            if (pen.line != before) {
+                p.bars(d, r, line_no, line_end, line, top, cell, thickness, color, deco);
+                line_no = pen.line;
+            }
+            line_end = pen.x;
+        }
+        if (f.cut + dots > 0) p.bars(d, r, line_no, line_end, line, top, cell, thickness, color, deco);
+    }
+
+    /// The decoration bars of one line, `width` px long.
+    fn bars(p: MonoParagraphs, d: *DrawList, r: draw_list.TextRun, line_no: u32, width: f32, line: f32, top: f32, cell: f32, thickness: f32, color: u32, deco: Decoration) void {
+        _ = p;
+        const cell_top = r.rect[1] + @as(f32, @floatFromInt(line_no)) * line + top;
+        // Mono has no face metrics: the underline below the baseline, the strike through
+        // the x-height's middle, the overline at the cell's top.
+        const ys = [_]f32{ cell_top + cell * 0.82, cell_top + cell * 0.08, cell_top + cell * 0.5 };
+        for ([_]bool{ deco.underline, deco.overline, deco.strike }, ys) |on, y| {
+            if (!on or d.quad_len + 1 >= d.quads.len) continue;
+            d.quads[d.quad_len] = .{
+                .rect = .{ r.rect[0], y, r.rect[0] + width, y + thickness },
+                .clip = r.clip,
+                .params = @splat(0),
+                .uv = .{ 0, 0, 1, 1 },
+                .fill = color,
+                .border_color = 0,
+                .radii = @splat(0),
+                .border = 0,
+                .opacity = 1,
+                .xform = r.xform,
+                .clip_radii = r.clip_radii,
+            };
+            d.quad_len += 1;
+        }
     }
 
     fn glyph(out: []Quad, n: u32, last: u32, r: draw_list.TextRun, x_: f32, y: f32, adv: f32, cell: f32, b: u8) u32 {

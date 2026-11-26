@@ -258,6 +258,12 @@ The host loads `fonts[k].path` as the shaper or atlas of font `fonts[k].entry.fo
 measures with plain `Mono` and carries no paragraph rows (`testdata/paragraphs`). Not yet inside
 `lcgf-each`.
 
+`text-decoration` (`underline`, `overline`, `line-through`, a colour) applies to the text inside
+the element, adding up with its ancestors' (`none` removes none), as in CSS. It becomes
+`spec.decorated` (`text_decorations.Style`), and both frontends paint it after the run's text
+as solid quads, one per line (`MonoParagraphs.decorate`). The UA sheet underlines `<u>` and
+`<ins>` and strikes `<s>` and `<del>` (`testdata/decorations`).
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

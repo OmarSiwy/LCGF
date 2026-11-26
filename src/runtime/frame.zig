@@ -22,7 +22,6 @@ const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const MonoParagraphs = @import("../text/protocol.zig").MonoParagraphs;
-const Paragraph = @import("../text/layout/stack.zig").Paragraph;
 const TextStack = @import("../text/layout/stack.zig").Stack;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
@@ -434,35 +433,44 @@ pub const Frame = struct {
         f.layoutFlexWith(font, fx);
     }
 
-    /// `end` with paragraph styles (line height, spacing, line clamp, ellipsis) on some runs:
-    /// texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs`
-    /// over this frame's strings. The host draws its glyphs with the same `MonoParagraphs`.
-    pub fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output {
-        f.layoutParagraphs(font, rows, styles, table);
-        return f.finish();
+    /// `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text
+    /// decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings`
+    /// are set to this frame's). The host draws their glyphs with the same `MonoParagraphs`.
+    pub fn endParagraphs(f: *Frame, font: MonoParagraphs) Output {
+        f.layoutParagraphs(font);
+        return f.finishParagraphs(font);
     }
 
     /// The layout half of `endParagraphs`.
-    pub fn layoutParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) void {
-        f.arrange(f.paragraphs(font, rows, styles, table));
+    pub fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void {
+        f.arrange(f.withStrings(font));
         f.finalizeLayout(.{}) catch unreachable;
     }
 
     /// `endFlex` with paragraph styles, as `endParagraphs`.
-    pub fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output {
-        f.layoutFlexParagraphs(font, rows, styles, table, fx);
-        return f.finish();
+    pub fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output {
+        f.layoutFlexParagraphs(font, fx);
+        return f.finishParagraphs(font);
     }
 
     /// The layout half of `endFlexParagraphs`.
-    pub fn layoutFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) void {
-        f.layoutFlexWith(f.paragraphs(font, rows, styles, table), fx);
+    pub fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void {
+        f.layoutFlexWith(f.withStrings(font), fx);
     }
 
-    /// The font `endParagraphs` measures with.
-    pub fn paragraphs(f: *const Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) MonoParagraphs {
+    /// The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after
+    /// their runs, before the host reads the draw list.
+    pub fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output {
+        const out = f.finish();
+        f.withStrings(font).decorate(&f.ctx.draw);
+        return out;
+    }
+
+    fn withStrings(f: *const Frame, font: MonoParagraphs) MonoParagraphs {
         const s = &f.ctx.strings[f.ctx.cur];
-        return .{ .mono = font, .rows = rows, .styles = styles, .table = table, .strings = s.buf[0..s.len] };
+        var p = font;
+        p.strings = s.buf[0..s.len];
+        return p;
     }
 
     fn layoutFlexWith(f: *Frame, font: anytype, fx: *Flex) void {

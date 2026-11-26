@@ -62,6 +62,9 @@ pub const Lowerer = struct {
     /// Its `outline`, drawn by a ring node beside the shadow's.
     outline: ?Outline = null,
 
+    /// Per document node: the text decoration its text shows (its own and its ancestors').
+    deco: []Decoration = &.{},
+
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
     const Outline = struct { width: f32, offset: f32, color: types.Color };
 
@@ -444,6 +447,7 @@ pub const Lowerer = struct {
             l.font[i] = if (p == none) .{} else l.font[p];
             l.para[i] = if (p == none) .{} else l.para[p];
             l.para[i].ellipsis = false;
+            l.deco[i] = if (p == none) .{} else l.deco[p];
             l.current = i;
             if (kinds[i] == .text) {
                 l.textNode(i);
@@ -820,9 +824,26 @@ pub const Lowerer = struct {
                 };
             };
         }
+        // text-decoration propagates to the text inside: lines add up, `none` removes none.
+        if (l.declared(n, .@"text-decoration")) |v| {
+            const d = &l.deco[n];
+            var r: values.Reader = .init(l.c, v.first, v.end);
+            while (r.next()) |t| {
+                const ty = l.c.toks.items(.type)[t];
+                if (ty == .ident and css.eq(l.c.toks.items(.str)[t], "underline")) d.underline = true else if (ty == .ident and css.eq(l.c.toks.items(.str)[t], "overline")) d.overline = true else if (ty == .ident and css.eq(l.c.toks.items(.str)[t], "line-through")) d.strike = true else if (ty == .ident and (css.eq(l.c.toks.items(.str)[t], "none") or css.eq(l.c.toks.items(.str)[t], "solid"))) {} else if (values.color(l.c, t, r.i)) |col| d.color = col.bitsOf() else {
+                    l.badValue(t, .@"text-decoration", v.end);
+                    break;
+                }
+            }
+        }
         if (l.keyword(n, .@"text-overflow")) |kw| {
             if (css.eq(kw, "ellipsis")) pa.ellipsis = true else if (!css.eq(kw, "clip")) l.badValue(l.declared(n, .@"text-overflow").?.first, .@"text-overflow", l.declared(n, .@"text-overflow").?.end);
         }
+    }
+
+    /// The text decoration a label of `n` shows, or null for none.
+    fn decorationOf(l: *const Lowerer, n: u32) ?Decoration {
+        return if (std.meta.eql(l.deco[n], Decoration{})) null else l.deco[n];
     }
 
     /// The paragraph style a label of `n` carries, or null for the default.
@@ -1647,7 +1668,7 @@ pub const Lowerer = struct {
         const kind = l.page.nodes.items(.kind)[parent];
         if (kind != .container and kind != .landmark and kind != .component and kind != .dialog and kind != .section) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
-        var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme), .paragraph = l.paragraphOf(p) };
+        var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme), .paragraph = l.paragraphOf(p), .decoration = l.decorationOf(p) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
         _ = l.addNode(node);
     }
@@ -1677,6 +1698,7 @@ pub const Lowerer = struct {
             .text_style = l.text[n],
             .base_text = lcgf.widgets_label.labelText(th),
             .paragraph = l.paragraphOf(n),
+            .decoration = l.decorationOf(n),
             .level = heading,
             .name = l.accessibleName(n),
             .margin = margin,
@@ -1883,10 +1905,10 @@ pub const Lowerer = struct {
         const kinds = l.page.nodes.items(.kind);
         const parents = l.page.nodes.items(.parent);
         // A run-time region builds in a Context of its own, without the page's paragraph rows.
-        for (l.page.nodes.items(.paragraph), parents, 0..) |pa, _, i| if (pa != null) {
+        for (l.page.nodes.items(.paragraph), l.page.nodes.items(.decoration), 0..) |pa, de, i| if (pa != null or de != null) {
             var p = parents[i];
             while (p != none) : (p = parents[p]) if (kinds[p] == .each) {
-                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles (line-height, letter-spacing, word-spacing, text-overflow) inside lcgf-each are not supported yet", .{});
+                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles and text decorations inside lcgf-each are not supported yet", .{});
                 break;
             };
         };
@@ -2723,6 +2745,7 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
         .text_tokens = Lowerer.ok(arena.alloc(ir.TextTokens, n)),
         .font = Lowerer.ok(arena.alloc(FontState, n)),
         .para = Lowerer.ok(arena.alloc(Paragraph, n)),
+        .deco = Lowerer.ok(arena.alloc(Decoration, n)),
     };
     @memset(l.ir_of, none);
     @memset(l.skip, false);
@@ -2730,6 +2753,7 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
 }
 
 const Paragraph = lcgf.text_stack.Paragraph;
+const Decoration = lcgf.text_decorations.Style;
 
 /// The inherited font properties of an element.
 const FontState = struct {

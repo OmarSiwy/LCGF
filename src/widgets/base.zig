@@ -371,8 +371,11 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const dynamic = Regions.count != 0;
     // Flex columns and passes only for a page with a `spec.flexed` node.
     const has_flex = comptime anyFlex(spec);
-    // Paragraph styles (`spec.paragraph`): their distinct values, and one slot per label that has one.
-    const paragraph_table = comptime paragraphTable(spec);
+    // Paragraph styles and decorations (`spec.paragraph`, `spec.decorated`): their distinct
+    // values, and one slot per label that has either.
+    const paragraph_styles = comptime paragraphDistinct(spec);
+    const paragraph_table = comptime paragraph_styles.paragraphs[0..paragraph_styles.paragraphs.len].*;
+    const decoration_table = comptime paragraph_styles.decorations[0..paragraph_styles.decorations.len].*;
     const paragraph_slots = comptime paragraphCount(spec);
     return struct {
         const Self = @This();
@@ -640,6 +643,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 .rows = ui.paragraphs.rows[0..ui.paragraphs.len],
                 .styles = ui.paragraphs.styles[0..ui.paragraphs.len],
                 .table = &paragraph_table,
+                .decorations = if (comptime anyDecoration(spec)) &decoration_table else &.{},
                 .strings = tb.strings.buf[0..tb.strings.len],
             } else ui.font;
             font.measure(tx);
@@ -670,6 +674,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
             try layout.finalizeWith(t, presentation.rounding);
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
+            if (comptime paragraph_slots > 0) font.decorate(&tb.d);
 
             if (dynamic) {
                 // ponytail: no exact (transformed) hits on dynamic pages; Rects maps rows by a
@@ -743,10 +748,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                         break :blk sp;
                     } else tb.strings.add(spec_zig.labelBytes(n, state));
                     tb.t.c.text[i] = tb.tx.push(i, span, if (comptime tokened) &tok.text else &(n.text_style orelse labelText(&th)));
-                    if (comptime n.paragraph) |p| {
+                    if (comptime n.paragraph != null or n.decoration != null) {
                         const slot = &ui.paragraphs;
                         slot.rows[slot.len] = tb.t.c.text[i];
-                        slot.styles[slot.len] = comptime paragraphIndex(&paragraph_table, p);
+                        slot.styles[slot.len] = comptime paragraphIndex(paragraph_styles, n);
                         slot.len += 1;
                     }
                 },
@@ -890,39 +895,49 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     };
 }
 
-/// Labels in `n` with a paragraph style.
+/// Labels in `n` with a paragraph style or a decoration.
 fn paragraphCount(comptime n: Spec) u32 {
-    var k: u32 = @intFromBool(n.kind == .label and n.paragraph != null);
+    var k: u32 = @intFromBool(n.kind == .label and (n.paragraph != null or n.decoration != null));
     for (n.children) |c| k += paragraphCount(c);
     return k;
 }
 
-/// The distinct paragraph styles in `n`, in first-use order.
-fn paragraphTable(comptime n: Spec) [paragraphDistinct(n).len]Paragraph {
-    return paragraphDistinct(n)[0..paragraphDistinct(n).len].*;
+fn anyDecoration(comptime n: Spec) bool {
+    if (n.kind == .label and n.decoration != null) return true;
+    for (n.children) |c| if (anyDecoration(c)) return true;
+    return false;
 }
 
-fn paragraphDistinct(comptime n: Spec) []const Paragraph {
+const Decoration = @import("../text/layout/decorations.zig").Style;
+const ParagraphStyles = struct { paragraphs: []const Paragraph = &.{}, decorations: []const Decoration = &.{} };
+
+/// The distinct (paragraph, decoration) pairs of `n`'s labels, in first-use order.
+fn paragraphDistinct(comptime n: Spec) ParagraphStyles {
     comptime {
-        var out: []const Paragraph = &.{};
+        var out: ParagraphStyles = .{};
         paragraphWalk(n, &out);
         return out;
     }
 }
 
-fn paragraphWalk(comptime n: Spec, comptime out: *[]const Paragraph) void {
-    if (n.kind == .label) if (n.paragraph) |p| {
-        if (paragraphIndexIn(out.*, p) == null) out.* = out.* ++ .{p};
-    };
+fn paragraphWalk(comptime n: Spec, comptime out: *ParagraphStyles) void {
+    if (n.kind == .label and (n.paragraph != null or n.decoration != null)) {
+        if (paragraphIndexIn(out.*, n) == null) {
+            out.paragraphs = out.paragraphs ++ .{n.paragraph orelse Paragraph{}};
+            out.decorations = out.decorations ++ .{n.decoration orelse Decoration{}};
+        }
+    }
     for (n.children) |c| paragraphWalk(c, out);
 }
 
-fn paragraphIndex(comptime table: []const Paragraph, comptime p: Paragraph) u16 {
-    return paragraphIndexIn(table, p).?;
+fn paragraphIndex(comptime styles: ParagraphStyles, comptime n: Spec) u16 {
+    return paragraphIndexIn(styles, n).?;
 }
 
-fn paragraphIndexIn(comptime table: []const Paragraph, comptime p: Paragraph) ?u16 {
-    for (table, 0..) |q, i| if (std.meta.eql(q, p)) return i;
+fn paragraphIndexIn(comptime styles: ParagraphStyles, comptime n: Spec) ?u16 {
+    const p = n.paragraph orelse Paragraph{};
+    const d = n.decoration orelse Decoration{};
+    for (styles.paragraphs, styles.decorations, 0..) |q, e, i| if (std.meta.eql(q, p) and std.meta.eql(e, d)) return i;
     return null;
 }
 
@@ -1812,7 +1827,7 @@ test "paragraph: line height, spacing and an ellipsis lay out the same in both f
             f.close();
         }
         pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
-            return f.endParagraphs(font, &app.rows, &.{ 0, 1, 0 }, &table);
+            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{ 0, 1, 0 }, .table = &table });
         }
     };
     var h: Harness(App, Ui, .{ .nodes = 16, .texts = 8, .strings = 128, .depth = 8 }) = undefined;
@@ -1827,4 +1842,53 @@ test "paragraph: line height, spacing and an ellipsis lay out the same in both f
     try std.testing.expectApproxEqAbs(th.text_px * (Mono{}).line, out.rect(3).h(), 1);
     // The ellipsis run is cut to the column's 60 px.
     try std.testing.expectEqual(@as(f32, 60), out.rect(4).w());
+}
+
+test "decorated: one bar per line, painted right after its run, in both front ends" {
+    const th: Theme = .default;
+    const under: @import("../text/layout/decorations.zig").Style = .{ .underline = true, .color = 0xff0000ff };
+    const wrapping: TextStyle = .{ .px = th.text_px, .color = th.text, .wrap = true };
+    const spec = comptime spec_zig.col(.{ .size = .{ .px(60), .fit } }, .{
+        spec_zig.decorated(spec_zig.textStyled(spec_zig.styled(spec_zig.label("twelve bytes"), .{ .shrink = true }), wrapping), under),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        rows: [1]u32 = undefined,
+        pub fn build(app: *@This(), f: *Frame) void {
+            _ = f.open(.none, .{ .size = .{ .px(60), .fit } });
+            _ = f.textStyled("twelve bytes", wrapping, .{ .shrink = true });
+            app.rows[0] = f.texts().len - 1;
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .decorations = &.{under} });
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 8, .texts = 2, .strings = 64, .depth = 4 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    const d = (try h.frame(&in)).comptime_.draw;
+    // 60 px holds 7 bytes of 8.4: "twelve " and "bytes", two bars of 7 and 5 bytes.
+    const adv = th.text_px * (Mono{}).advance;
+    var bars: [2][4]f32 = undefined;
+    var n: usize = 0;
+    for (d.quads[0..d.quad_len]) |q| if (q.fill == 0xff0000ff) {
+        bars[n] = q.rect;
+        n += 1;
+    };
+    try std.testing.expectEqual(2, n);
+    try std.testing.expectApproxEqAbs(7 * adv, bars[0][2] - bars[0][0], 0.01);
+    try std.testing.expectApproxEqAbs(5 * adv, bars[1][2] - bars[1][0], 0.01);
+    try std.testing.expect(bars[1][1] > bars[0][1]);
+    // The text command, then the bars' quads command.
+    var text_at: ?usize = null;
+    for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
+        .text => text_at = i,
+        .quads => |b| if (text_at) |t| {
+            try std.testing.expectEqual(t + 1, i);
+            try std.testing.expectEqual(2, b.count);
+        },
+        else => {},
+    };
+    try std.testing.expect(text_at != null);
 }

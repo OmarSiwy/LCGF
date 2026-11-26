@@ -32,6 +32,8 @@ pub const Spec = struct {
     /// Paragraph style of this label (line height, spacing, line clamp, ellipsis; set with
     /// `paragraph`); null for none. A page with none measures with plain `Mono`.
     paragraph: ?@import("../text/layout/stack.zig").Paragraph = null,
+    /// Underline, overline or line-through of this label (`decorated`); null for none.
+    decoration: ?@import("../text/layout/decorations.zig").Style = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     /// Flex item and container rules beyond `style` (margins, wrap, align-self, aspect,
@@ -304,6 +306,15 @@ pub fn paragraph(comptime s: Spec, comptime p: @import("../text/layout/stack.zig
     if (s.kind != .label) @compileError("paragraph: only a label has a paragraph style");
     var out = s;
     out.paragraph = p;
+    return out;
+}
+
+/// Label `s` with text decoration `d`: `decorated(label(.a), .{ .underline = true })`. Drawn
+/// by `protocol.MonoParagraphs.decorate` as solid quads after the label's text.
+pub fn decorated(comptime s: Spec, comptime d: @import("../text/layout/decorations.zig").Style) Spec {
+    if (s.kind != .label) @compileError("decorated: only a label has a text decoration");
+    var out = s;
+    out.decoration = d;
     return out;
 }
 

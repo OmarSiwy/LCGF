@@ -125,6 +125,8 @@ pub const Node = struct {
     text_uses: TextTokens = .{},
     /// A label's paragraph style (`spec.paragraph`), or null for none.
     paragraph: ?lcgf.text_stack.Paragraph = null,
+    /// A label's text decoration (`spec.decorated`), or null for none.
+    decoration: ?lcgf.text_decorations.Style = null,
     /// A text field that is `<input type=password>`: `widgets_textfield.password`.
     secure: bool = false,
     /// A component's props, in attribute order.
