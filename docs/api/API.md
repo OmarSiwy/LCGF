@@ -3709,11 +3709,13 @@ Button: a caption on a face that reports a click.
 - `fn buttonFill(th: *const Theme, r: Response) Color`: The face's colour: the theme's control fills, picked by table index from hover and held.
 - `fn activated(clicked: bool, focused: bool, in: *const Input) bool`: Whether the button fires this frame: clicked, or focused and Enter went down or Space came up (the WAI-ARIA APG button pattern; Space on release, as native buttons do, so holding it does not repeat).
 - `fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response`: A button named `id` showing `str`; `clicked` is set the frame it fires (`activated`): the left button goes up over it after going down on it, or, while it has focus, Enter or Space.
+- `fn buttonStyled(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle) Response`: `button` with its caption drawn in `ts` instead of the theme's label text.
 - `fn Comptime(comptime name: [:0]const u8) type`: The comptime button named `name` (`Spec.widget`): it builds the same rows as `button`, with the comptime front end's hover and held, and turns Enter and Space on it while focused into its event, as `button` sets `clicked`.
 
 ### `ct` (struct)
 
 - `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec`: A button named `id` showing the string field `text`; its click is its event: `ct.button(th, .reset, .reset_text)`.
+- `fn buttonStyled(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime text_style: TextStyle) Spec`: `button` with its caption drawn in `text_style` instead of the page theme's (CSS `color` and `font-size` on a `<button>`): `ct.buttonStyled(th, .go, "Go", .{ .px = 18 })`.
 
 ### `Comptime(..)` (generic struct)
 The comptime button named `name` (`Spec.widget`): it builds the same rows as `button`, with the comptime front end's hover and held, and turns Enter and Space on it while focused into its event, as `button` sets `clicked`.

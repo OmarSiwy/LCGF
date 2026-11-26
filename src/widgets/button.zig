@@ -21,6 +21,7 @@ const Theme = base.Theme;
 const Id = types.Id;
 const Response = types.Response;
 const Style = types.Style;
+const TextStyle = types.TextStyle;
 const Color = types.Color;
 const Input = @import("../core/input.zig").Input;
 const simd = @import("../core/simd.zig");
@@ -52,12 +53,17 @@ pub fn activated(clicked: bool, focused: bool, in: *const Input) bool {
 /// A button named `id` showing `str`; `clicked` is set the frame it fires (`activated`): the
 /// left button goes up over it after going down on it, or, while it has focus, Enter or Space.
 pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
+    return buttonStyled(f, th, id, str, label_zig.labelText(th));
+}
+
+/// `button` with its caption drawn in `ts` instead of the theme's label text.
+pub fn buttonStyled(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle) Response {
     const node = f.open(id, buttonStyle(th));
     var r = f.interact(node, .button);
     r.clicked = activated(r.clicked, r.focused, f.in);
     f.setFill(node, buttonFill(th, r));
     f.setCursor(.pointer, r.hovered);
-    _ = label_zig.label(f, th, str);
+    _ = f.textStyled(str, ts, label_zig.labelStyle(th));
     f.close();
     return r;
 }
@@ -69,7 +75,17 @@ pub const ct = struct {
     /// `ct.button(th, .reset, .reset_text)`. A `Widget` with a `void` event, built and
     /// stepped by `Comptime` (`Spec.widget`).
     pub fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype) Spec {
-        var s = spec_zig.row(buttonStyle(&th), .{label_zig.ct.label(th, text)});
+        return face(th, id, label_zig.ct.label(th, text));
+    }
+
+    /// `button` with its caption drawn in `text_style` instead of the page theme's (CSS
+    /// `color` and `font-size` on a `<button>`): `ct.buttonStyled(th, .go, "Go", .{ .px = 18 })`.
+    pub fn buttonStyled(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: anytype, comptime text_style: TextStyle) Spec {
+        return face(th, id, spec_zig.textStyled(label_zig.ct.label(th, text), text_style));
+    }
+
+    fn face(comptime th: Theme, comptime id: @EnumLiteral(), comptime caption: Spec) Spec {
+        var s = spec_zig.row(buttonStyle(&th), .{caption});
         s.id = @tagName(id);
         s.widget = Comptime(@tagName(id));
         return s;
@@ -215,6 +231,27 @@ test "button look: other theme tokens restyle both front ends alike" {
     try testing.expectApproxEqAbs(@as(f32, 2 * 4 + 2 * 8.4), t.rect(2).w(), 0.5);
     try testing.expectEqual(@as(f32, 0), t.c.look[2].radius);
     try testing.expectEqual(Color.rgb(200, 0, 0).bitsOf(), t.c.look[2].fill);
+}
+
+test "ct.buttonStyled: the caption's text style in both front ends" {
+    const S = struct {
+        const th = Theme.default;
+        const ts: TextStyle = .{ .px = 20, .color = .rgb(250, 10, 10) };
+        const App = struct {
+            pub fn build(_: *App, f: *Frame) void {
+                _ = f.open(.none, .{ .dir = .x });
+                _ = buttonStyled(f, &th, .from("go"), "Go", ts);
+                f.close();
+            }
+        };
+        const Ui = base.ComptimeUi(struct {}, spec_zig.row(.{}, .{ct.buttonStyled(th, .go, "Go", ts)}), th);
+        var h: base.Harness(App, Ui, .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 64, .depth = 4 }) = .{};
+    };
+    S.h.init();
+    const out = try S.h.frame(&.{ .viewport = .{ 200, 60 } });
+    const tx = out.runtime.texts;
+    try testing.expectEqual(@as(f32, 20), tx.c.px[0]);
+    try testing.expectEqual(S.ts.color.bitsOf(), tx.c.color[0]);
 }
 
 test "activated: a click, or Enter down or Space up while focused; nothing with a modifier" {
