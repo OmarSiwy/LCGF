@@ -102,7 +102,8 @@ The test checks the result: the title is 80 x 20, and the body's 24 bytes of 5 p
 `protocol.MonoParagraphs` is `Mono` with paragraph styles on some runs: line height,
 letter and word spacing, a line clamp and an ellipsis from `text_stack.Paragraph`, for the texts
 rows it lists. `Frame.endParagraphs` and `spec.paragraph` use it; it rewrites only the listed
-rows after Mono's passes, and its `quads` places their glyphs by the same walk. Its `decorate`
+rows after Mono's passes, and its `quads(draw, texts, out, glyphs)` places their glyphs by the
+same walk, from each run's wrap flag and width in the frame's `Texts`. Its `decorate`
 puts their underlines, overlines and line-throughs (`spec.decorated`) into the draw list after
 `paint.emit`, as solid quads right after each run's text. Its `spans` give a run several styles
 (`protocol.Span`: from a byte on, another size, colour and font), as one paragraph.

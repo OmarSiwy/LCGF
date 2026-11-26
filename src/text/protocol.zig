@@ -261,16 +261,16 @@ pub const MonoParagraphs = struct {
         }
     }
 
-    /// `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its
-    /// span's size and colour.
-    pub fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32 {
+    /// `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's
+    /// `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
+    pub fn quads(p: MonoParagraphs, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32 {
         std.debug.assert(out.len >= 1);
         var n: u32 = 0;
         var next: usize = 0;
         for (0..d.run_len) |k_| {
             const k: u32 = @intCast(k_);
             const listed = next < p.rows.len and p.rows[next] == k;
-            n = if (listed) p.appendStyled(d, k, p.styles[next], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
+            n = if (listed) p.appendStyled(d, tx, k, p.styles[next], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
             next += @intFromBool(listed);
         }
         return n;
@@ -282,21 +282,20 @@ pub const MonoParagraphs = struct {
 
     /// The run's layout as `quads` and `decorate` draw it: the walker, whether it wrapped, and
     /// the walk's result.
-    fn placed(p: MonoParagraphs, d: *const DrawList, k: u32, style: u16) struct { w: Walk, wraps: bool, f: Fit, bytes: []const u8, avail: f32 } {
+    /// Draw list run k is texts row k: its wrap flag and the width layout gave it are the ones
+    /// `wrap` laid it out with, so this is the same layout exactly.
+    fn placed(p: MonoParagraphs, d: *const DrawList, tx: *const Texts, k: u32, style: u16) struct { w: Walk, wraps: bool, f: Fit, bytes: []const u8, avail: f32 } {
         const r = d.runs[k];
         const w = p.walker(style, r.px);
         const bytes = d.strings[r.start..][0..r.bytes];
-        const avail = r.rect[2] - r.rect[0];
-        // A run laid out on one line keeps to it; one taller than a line wrapped.
-        // ponytail: the draw list carries no wrap flag, so this reads it off the height; add
-        // one to TextRun if a run ever needs a different answer.
-        const wraps = r.rect[3] - r.rect[1] > w.line() * 1.5;
+        const avail = tx.c.avail[k];
+        const wraps = tx.c.wrap[k] > 0;
         return .{ .w = w, .wraps = wraps, .f = w.fit(bytes, avail, wraps), .bytes = bytes, .avail = avail };
     }
 
-    fn appendStyled(p: MonoParagraphs, d: *const DrawList, k: u32, style: u16, out: []Quad, glyphs: Mono.Glyphs, start: u32) u32 {
+    fn appendStyled(p: MonoParagraphs, d: *const DrawList, tx: *const Texts, k: u32, style: u16, out: []Quad, glyphs: Mono.Glyphs, start: u32) u32 {
         const r = d.runs[k];
-        const l = p.placed(d, k, style);
+        const l = p.placed(d, tx, k, style);
         const w = l.w;
         const last: u32 = @intCast(out.len - 1);
         var n = start;
@@ -321,7 +320,7 @@ pub const MonoParagraphs = struct {
     /// After `paint.emit`: one solid quad per line and decoration of every decorated run,
     /// painted right after the run's text and encoded into commands again. Lines are those
     /// `quads` draws. Quads and ops past the draw list's rows are dropped.
-    pub fn decorate(p: MonoParagraphs, d: *DrawList) void {
+    pub fn decorate(p: MonoParagraphs, d: *DrawList, tx: *const Texts) void {
         if (p.decorations.len == 0) return;
         std.debug.assert(p.decorations.len == p.table.len);
         var j: u32 = 0;
@@ -330,7 +329,7 @@ pub const MonoParagraphs = struct {
             const k = d.op.ref[j];
             const at = std.mem.indexOfScalar(u32, p.rows, k) orelse continue;
             const first = d.quad_len;
-            p.decorationQuads(d, k, p.styles[at]);
+            p.decorationQuads(d, tx, k, p.styles[at]);
             j += insertAfter(d, j, first);
         }
         paint.encode(d);
@@ -341,10 +340,10 @@ pub const MonoParagraphs = struct {
         return .{ .rows = p.rows, .styles = p.styles, .table = p.table, .decorations = p.decorations, .spans = p.spans };
     }
 
-    fn decorationQuads(p: MonoParagraphs, d: *DrawList, k: u32, style: u16) void {
+    fn decorationQuads(p: MonoParagraphs, d: *DrawList, tx: *const Texts, k: u32, style: u16) void {
         const deco = p.decorations[style];
         const r = d.runs[k];
-        const l = p.placed(d, k, style);
+        const l = p.placed(d, tx, k, style);
         const w = l.w;
         const cell = r.px * w.mono.line;
         const top = (w.line() - cell) * std.math.clamp(w.st.leading, 0, 1);
@@ -1091,7 +1090,7 @@ test "MonoParagraphs: letter and word spacing, line height, a clamp and an ellip
     var out: [32]Quad = undefined;
     var first: [3]u32 = undefined;
     var count: [3]u32 = undefined;
-    _ = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    _ = font.quads(&d, &tx, &out, .{ .first = &first, .count = &count });
     try testing.expectEqualSlices(u32, &.{ 5, 6, 5 }, &count);
     try testing.expectEqual([4]f32{ 22, 0, 27, 12 }, out[3].rect);
     // Line two of the clamped run starts at "d", 20 px lower, the 12 px cell centred in it.
@@ -1130,7 +1129,7 @@ test "MonoParagraphs: spans size and colour their bytes in one paragraph" {
     var out: [8]Quad = undefined;
     var first: [1]u32 = undefined;
     var count: [1]u32 = undefined;
-    _ = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    _ = font.quads(&d, &tx, &out, .{ .first = &first, .count = &count });
     try testing.expectEqual([4]f32{ 10, 0, 20, 24 }, out[2].rect);
     try testing.expectEqual(red.bitsOf(), out[2].fill);
     // The 10 px cells sit in the middle of the 24 px line.
@@ -1170,4 +1169,23 @@ test "insertAfter: quads after a run's text keep the later quads' commands whole
     try testing.expectEqual(draw_list.Cmd{ .quads = .{ .first = 1, .count = 2, .texture = .white, .material = .solid } }, d.command(2));
     try testing.expectEqual([4]f32{ 9, 0, 10, 1 }, d.quads[1].rect);
     try testing.expectEqual([4]f32{ 1, 0, 2, 1 }, d.quads[2].rect);
+}
+
+test "MonoParagraphs.quads: a run in a tall box keeps the one line it was measured on" {
+    var fx: Fixture(1) = .{};
+    var tx = fx.texts();
+    _ = tx.push(0, .{ .start = 0, .bytes = 4 }, &.{ .px = 10 });
+    const font: MonoParagraphs = .{ .mono = .{ .advance = 0.5, .line = 1.2 }, .rows = &.{0}, .styles = &.{0}, .table = &.{.{ .letter_spacing = 1 }}, .strings = "abcd" };
+    font.measure(&tx);
+    tx.c.avail[0] = 12;
+    font.wrap(&tx);
+    // Laid out 60 px tall and 12 px wide by its box, not by its text: still one line.
+    var runs = [_]draw_list.TextRun{.{ .rect = .{ 0, 0, 12, 60 }, .clip = .{ 0, 0, 100, 100 }, .start = 0, .bytes = 4, .px = 10, .color = 1, .font = 0 }};
+    var d = testList(&runs, "abcd");
+    var out: [8]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    _ = font.quads(&d, &tx, &out, .{ .first = &first, .count = &count });
+    for (out[0..4], 0..) |q, j| try testing.expectEqual(@as(f32, @floatFromInt(j)) * 6, q.rect[0]);
+    for (out[0..4]) |q| try testing.expectEqual(@as(f32, 0), q.rect[1]);
 }

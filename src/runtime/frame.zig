@@ -477,7 +477,7 @@ pub const Frame = struct {
     /// their runs, before the host reads the draw list.
     pub fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output {
         const out = f.finish();
-        f.withStrings(font).decorate(&f.ctx.draw);
+        f.withStrings(font).decorate(&f.ctx.draw, f.texts());
         return out;
     }
 

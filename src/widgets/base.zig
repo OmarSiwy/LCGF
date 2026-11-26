@@ -700,7 +700,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
             try layout.finalizeWith(t, presentation.rounding);
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
-            if (comptime paragraph_slots > 0) font.decorate(&tb.d);
+            if (comptime paragraph_slots > 0) font.decorate(&tb.d, tx);
 
             if (dynamic) {
                 // ponytail: no exact (transformed) hits on dynamic pages; Rects maps rows by a
