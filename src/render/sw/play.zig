@@ -7,6 +7,8 @@
 //! drawing mirrors src/render/conformance/render.py and tools/golden/gpu.py: the same stand-in
 //! glyph atlas as texture 1, the same host gradient for custom commands, the size from
 //! cmds.txt (800x600 without a `size` line) and the clear colour from the argument (black).
+//! A `canvas` line (tools/golden/draw.zig `canvasScene`) adds one canvas node from canvas.bin,
+//! verts.bin and its `camera`, `palette`, `layer`, `range` and `override` lines.
 const std = @import("std");
 const lcgf = @import("lcgf");
 const sw = lcgf.render_sw;
@@ -88,6 +90,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t, s.images[1]);
+
     // Tightly packed RGBA rows, then a PNG with stored (uncompressed) deflate blocks.
     var raw: std.ArrayList(u8) = .empty;
     for (0..h) |y| {
@@ -125,6 +129,75 @@ pub fn main(init: std.process.Init) !void {
         try png.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToBig(u32, crc.final())));
     }
     try cwd.writeFile(io, .{ .sub_path = out_path, .data = png.items });
+}
+
+fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, t: sw.Target, atlas: sw.Image) !void {
+    const canvas = lcgf.canvas;
+    const DrawList = lcgf.draw_list.DrawList;
+    var node: [9]f32 = undefined;
+    var cam: canvas.Camera = .{};
+    var pal: canvas.Palette = .{ .layers = &.{} };
+    var layers: std.ArrayList(canvas.Layer) = .empty;
+    var ranges: std.ArrayList(canvas.Range) = .empty;
+    var overrides: std.ArrayList(canvas.Override) = .empty;
+    var lines = std.mem.tokenizeScalar(u8, cmds, '\n');
+    while (lines.next()) |line| {
+        var f = std.mem.tokenizeScalar(u8, line, ' ');
+        const key = f.next().?;
+        if (std.mem.eql(u8, key, "canvas")) {
+            for (&node) |*x| x.* = try std.fmt.parseFloat(f32, f.next().?);
+        } else if (std.mem.eql(u8, key, "camera")) {
+            cam.origin = .{ try std.fmt.parseInt(i64, f.next().?, 10), try std.fmt.parseInt(i64, f.next().?, 10) };
+            cam.scale = try std.fmt.parseFloat(f32, f.next().?);
+            cam.offset = .{ try std.fmt.parseFloat(f32, f.next().?), try std.fmt.parseFloat(f32, f.next().?) };
+            cam.zoom = try std.fmt.parseFloat(f32, f.next().?);
+        } else if (std.mem.eql(u8, key, "palette")) {
+            pal.zoom_scale = std.mem.eql(u8, f.next().?, "1");
+        } else if (std.mem.eql(u8, key, "layer")) {
+            try layers.append(gpa, .{
+                .stroke = try std.fmt.parseInt(u32, f.next().?, 10),
+                .fill = try std.fmt.parseInt(u32, f.next().?, 10),
+                .width = try std.fmt.parseFloat(f32, f.next().?),
+                .flags = try std.fmt.parseInt(u32, f.next().?, 10),
+            });
+        } else if (std.mem.eql(u8, key, "range")) {
+            try ranges.append(gpa, .{ .first = try std.fmt.parseInt(u32, f.next().?, 10), .count = try std.fmt.parseInt(u32, f.next().?, 10) });
+        } else if (std.mem.eql(u8, key, "override")) {
+            const first = try std.fmt.parseInt(u32, f.next().?, 10);
+            const count = try std.fmt.parseInt(u32, f.next().?, 10);
+            try overrides.append(gpa, .{ .range = .{ .first = first, .count = count }, .color = try std.fmt.parseInt(u32, f.next().?, 10) });
+        }
+    }
+    pal.layers = layers.items;
+
+    const rows = try dir.readFileAlloc(io, "canvas.bin", gpa, .limited(1 << 26));
+    const verts = try dir.readFileAlloc(io, "verts.bin", gpa, .limited(1 << 26));
+    const n: u32 = @intCast(rows.len / 32);
+    const nv: u32 = @intCast(verts.len / 8);
+    const A = comptime std.mem.Alignment.fromByteUnits(lcgf.mem.column_align);
+    var carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, canvas.Instances.requiredBytes(@max(n, 1), nv, 1)) };
+    var s = canvas.Instances.init(&carver, @max(n, 1), nv, 1);
+    for (0..n) |i| {
+        const row = std.mem.bytesAsValue([8]u32, rows[i * 32 ..][0..32]).*;
+        s.c.pos[i] = @bitCast(row[0..4].*);
+        s.c.look[i] = row[4..8].*;
+    }
+    @memcpy(std.mem.sliceAsBytes(s.verts[0..nv]), verts[0 .. nv * 8]);
+    s.len = n;
+    s.vert_len = nv;
+
+    const bytes = comptime blk: {
+        var counter: lcgf.mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 1, 1, 1);
+        break :blk counter.off;
+    };
+    var list_carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, bytes) };
+    var list = DrawList.init(&list_carver, 1, 1, 1);
+    var canvases = [1]lcgf.draw_list.CanvasDraw{.{ .instances = &s, .camera = cam, .ranges = ranges.items, .palette = &pal, .overrides = overrides.items }};
+    list.canvases = &canvases;
+    list.customs[0] = .{ .rect = node[0..4].*, .clip = node[4..8].*, .data = 0, .id = 0, .node = 0, .opacity = node[8] };
+    list.custom_len = 1;
+    sw.canvas.draw(t, &list, 0, 1, atlas);
 }
 
 fn unorm(x: f32) u8 {
