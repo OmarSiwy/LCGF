@@ -3,6 +3,8 @@
 //!
 //!     zig build draw-dump -- <scene> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
+//! `paragraphs` draws styled text: glyphs from `MonoParagraphs.quads` over the stand-in atlas.
+//!
 //! The shader and instance layout are src/render/shaders/quad.zig's (`lcgf.quad_shader`). ci/jobs/draw-golden.sh renders every scene
 //! and compares it with tools/golden/ref/draw/<scene>.png.
 const std = @import("std");
@@ -294,6 +296,85 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = t.buffered() });
 }
 
+/// Styled text (MonoParagraphs): a tall line with letter spacing, spans in other sizes and
+/// colours, underline with line-through, and a wrapped paragraph clamped to two lines with an
+/// ellipsis. Its glyph quads are `MonoParagraphs.quads`'s over the stand-in atlas, and the
+/// decorations are the draw list's own quads, so the pixels check both.
+fn paragraphScene(io: std.Io, out_path: []const u8) !void {
+    var carver: lcgf.mem.Carver = .{ .buf = &buf };
+    var sc = Scene.carve(&carver);
+    var bytes: [256]u8 = undefined;
+    var strings: lcgf.strings.Strings = .{ .buf = &bytes };
+    const t = &sc.t;
+    const tx = &sc.tx;
+    _ = t.push(0, Id.from("root"), &.{ .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(20), .gap = 16 });
+    const Run = struct { text: []const u8, ts: lcgf.types.TextStyle, style: Style = .{} };
+    const runs = [_]Run{
+        .{ .text = "TALL LINE, SPACED", .ts = .{ .px = 20 } },
+        .{ .text = "SPANS: BIG RED, SMALL BLUE.", .ts = .{ .px = 20 } },
+        .{ .text = "UNDER AND THROUGH", .ts = .{ .px = 20, .color = .rgb(255, 220, 120) } },
+        .{ .text = "A LONG PARAGRAPH THAT WRAPS INTO A NARROW BOX AND IS CUT SHORT AT TWO LINES", .ts = .{ .px = 16, .wrap = true }, .style = .{ .size = .{ .px(300), .fit }, .shrink = true } },
+    };
+    for (runs) |r| {
+        const k = t.push(0, .none, &r.style);
+        t.c.text[k] = tx.push(k, strings.add(r.text), &r.ts);
+    }
+    t.seal(0);
+    const Span = lcgf.protocol.Span;
+    const spans = [_]Span{
+        .{ .start = 7, .style = .{ .px = 32, .color = .rgb(255, 80, 80) } },
+        .{ .start = 14, .style = .{ .px = 20 } },
+        .{ .start = 16, .style = .{ .px = 12, .color = .rgb(100, 160, 255) } },
+        .{ .start = 26, .style = .{ .px = 20 } },
+    };
+    const font: lcgf.protocol.MonoParagraphs = .{
+        .rows = &.{ 0, 1, 2, 3 },
+        .styles = &.{ 0, 1, 2, 3 },
+        .table = &.{ .{ .line_height = .{ .px = 44 }, .letter_spacing = 3 }, .{}, .{}, .{ .max_lines = 2, .ellipsis = true } },
+        .decorations = &.{ .{}, .{}, .{ .underline = true, .strike = true, .thickness = 2 }, .{} },
+        .spans = &.{ &.{}, &spans, &.{}, &.{} },
+        .strings = strings.buf[0..strings.len],
+    };
+    font.measure(tx);
+    lcgf.layout.prepare(t);
+    lcgf.layout.applyText(t, tx, .x);
+    lcgf.layout.fit(t, .x);
+    lcgf.layout.resolve(t, .x, viewport[0]);
+    lcgf.layout.textAvail(t, tx);
+    font.wrap(tx);
+    lcgf.layout.applyText(t, tx, .y);
+    lcgf.layout.fit(t, .y);
+    lcgf.layout.resolve(t, .y, viewport[1]);
+    lcgf.layout.place(t);
+    lcgf.layout.finalize(t);
+    lcgf.inherit.opacity(t);
+    lcgf.inherit.transform(t);
+    lcgf.inherit.clip(t);
+    lcgf.paint.emit(t, tx, &sc.cu, strings.buf[0..strings.len], &sc.d);
+    font.decorate(&sc.d, tx);
+    var glyphs: [256]Quad = undefined;
+    var first: [4]u32 = undefined;
+    var count: [4]u32 = undefined;
+    const n = font.quads(&sc.d, tx, &glyphs, .{ .first = &first, .count = &count });
+
+    const cwd = std.Io.Dir.cwd();
+    var dir = try cwd.createDirPathOpen(io, out_path, .{});
+    defer dir.close(io);
+    try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
+    try dir.writeFile(io, .{ .sub_path = "quads.bin", .data = sc.d.quadBytes() });
+    try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = std.mem.sliceAsBytes(glyphs[0..n]) });
+    var text: [16 * 1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&text);
+    try w.print("stride {d}\n", .{gfx.stride});
+    for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
+    for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
+        .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
+        .text => |k| try w.print("text {d} {d}\n", .{ first[k], count[k] }),
+        .custom, .canvas => return error.SceneHasCustom,
+    };
+    try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = w.buffered() });
+}
+
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     var args = try init.minimal.args.iterateAllocator(init.gpa);
@@ -312,6 +393,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     if (std.mem.eql(u8, name, "canvas")) return canvasScene(io, out_path);
+    if (std.mem.eql(u8, name, "paragraphs")) return paragraphScene(io, out_path);
     if (!found) return error.UnknownScene;
     lcgf.layout.run(&sc.t, &sc.tx, viewport);
     lcgf.inherit.opacity(&sc.t);
