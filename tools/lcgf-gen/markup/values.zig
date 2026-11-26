@@ -100,6 +100,7 @@ pub const Prop = enum(u8) {
     @"column-count",
     @"column-width",
     transition,
+    animation,
 
     /// Inherited properties take the parent's computed value when nothing is declared.
     pub fn inherited(p: Prop) bool {

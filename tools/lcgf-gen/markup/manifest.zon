@@ -242,7 +242,8 @@
         .{ .kind = "property", .name = "transition-duration", .status = .planned, .diagnostic = "write the transition shorthand" },
         .{ .kind = "property", .name = "transition-timing-function", .status = .planned, .diagnostic = "write the transition shorthand" },
         .{ .kind = "property", .name = "transition-delay", .status = .planned, .diagnostic = "write the transition shorthand" },
-        .{ .kind = "property", .name = "animation", .status = .planned, .diagnostic = "keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)" },
+        .{ .kind = "property", .name = "animation", .status = .mapped, .target = "on a recipe widget or box: controls.Animation tracks from its @keyframes over the root's colours and opacity, its clock in a generated <id>_clock field", .fixture = "transitions" },
+        .{ .kind = "at-rule", .name = "@keyframes", .status = .mapped, .target = "controls.Animation keyframes.Key tracks, by Fade channel", .fixture = "transitions" },
         .{ .kind = "property", .name = "transform-origin", .status = .mapped, .target = "Style.transform_origin", .fixture = "landmarks" },
 
         // ---- CSS: selectors and at-rules

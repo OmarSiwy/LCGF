@@ -683,20 +683,43 @@ pub const Emit = struct {
     /// transition with the fade field (by name, or by address at run time).
     fn config(e: *Emit, n: ir.Node, runtime: bool) []const u8 {
         var validation: std.ArrayList(u8) = .empty;
-        if (!std.meta.eql(n.validation, @TypeOf(n.validation){})) {
+        if (!std.meta.eql(n.live.validation, @TypeOf(n.live.validation){})) {
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
             e.write(", .validation = ");
-            e.structure(n.validation, .{});
+            e.structure(n.live.validation, .{});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
-        if (n.transition.seconds > 0) {
+        if (n.live.transition.seconds > 0) {
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
             e.write(", .transition = ");
-            e.structure(n.transition, .{});
+            e.structure(n.live.transition, .{});
             if (runtime) e.print(", .fade = &ui.signals.state.{f}", .{std.zig.fmtId(e.fadeName(n))}) else e.print(", .fade_field = \"{s}\"", .{e.fadeName(n)});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
-        return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.disabled) ", .states = .{ .disabled = true }" else "", validation.items }) catch unreachable;
+        if (n.live.animation.tracks.len > 0) {
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+            e.print(", .animation = .{{ .seconds = {d}, .iterations = ", .{n.live.animation.seconds});
+            if (std.math.isInf(n.live.animation.iterations)) e.write("lcgf.types.inf") else e.print("{d}", .{n.live.animation.iterations});
+            if (n.live.animation.alternate) e.write(", .alternate = true");
+            e.write(", .tracks = &.{");
+            for (n.live.animation.tracks, 0..) |t, k| {
+                e.print("{s}.{{ .channel = {d}, .keys = &.{{", .{ if (k == 0) " " else ", ", t.channel });
+                for (t.keys, 0..) |key, j| {
+                    e.print("{s}.{{ .at = {d}, .value = {d}", .{ if (j == 0) " " else ", ", key.at, key.value });
+                    if (key.ease != .linear) e.print(", .ease = .{s}", .{@tagName(key.ease)});
+                    e.write(" }");
+                }
+                e.write(" } }");
+            }
+            e.write(" } }");
+            if (runtime) e.print(", .clock = &ui.signals.state.{f}", .{std.zig.fmtId(e.clockName(n))}) else e.print(", .clock_field = \"{s}\"", .{e.clockName(n)});
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+        }
+        return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.live.disabled) ", .states = .{ .disabled = true }" else "", validation.items }) catch unreachable;
+    }
+
+    fn clockName(e: *Emit, n: ir.Node) []const u8 {
+        return std.fmt.allocPrint(e.arena, "{s}_clock", .{n.id}) catch unreachable;
     }
 
     fn fadeName(e: *Emit, n: ir.Node) []const u8 {
@@ -877,6 +900,7 @@ pub const Emit = struct {
             .menu => "lcgf.widgets_menu.MenuState",
             .pair => "[2]f32",
             .fade => "lcgf.theme_recipes.controls.Fade",
+            .clock => "lcgf.theme_recipes.controls.Clock",
             .@"enum" => "enum {}",
         };
     }
@@ -887,7 +911,7 @@ pub const Emit = struct {
             .str => "\"\"",
             .bool => "false",
             .f32, .u32 => "0",
-            .text, .number, .pair, .@"enum", .select, .tip, .menu, .fade => ".{}",
+            .text, .number, .pair, .@"enum", .select, .tip, .menu, .fade, .clock => ".{}",
         };
     }
 

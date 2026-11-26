@@ -1,7 +1,9 @@
 //! transitions, written by hand: `transition` on a widget makes it a recipe widget that
 //! eases its root (`controls.Transition`), its leg kept in a generated `<id>_fade` field;
 //! Plain has no state CSS of its own, so the stock hover fill eases. On a box with state CSS
-//! the transition eases the box. Both frontends step by the input's dt.
+//! the transition eases the box. `animation` plays its @keyframes as tracks over the root's
+//! channels from a generated `<id>_clock`: Pulse for ever, back and forth; Glow twice, then
+//! held at its end (forwards). Both frontends step by the input's dt.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -16,7 +18,9 @@ const Color = lcgf.types.Color;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { go_fade: Fade = .{}, plain_fade: Fade = .{}, card_fade: Fade = .{} };
+const Clock = recipes.controls.Clock;
+
+pub const State = struct { go_fade: Fade = .{}, plain_fade: Fade = .{}, card_fade: Fade = .{}, glow_fade: Fade = .{}, box_5_clock: Clock = .{}, glow_clock: Clock = .{} };
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -34,6 +38,16 @@ const recipe_card: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .b
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.opacity, 0.5)} },
 } };
 
+const recipe_pulse: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(4) } } }}, .rules = &[_]style.Rule{} };
+const recipe_glow: recipes.Recipe = .{ .parts = recipes.model.button.parts, .rules = &(recipes.model.button_rules ++ [_]style.Rule{}) };
+const pulse: recipes.controls.Animation = .{ .seconds = 0.2, .iterations = lcgf.types.inf, .alternate = true, .tracks = &.{.{ .channel = 12, .keys = &.{ .{ .at = 0, .value = 1 }, .{ .at = 0.1, .value = 0.6 }, .{ .at = 0.2, .value = 0.2 } } }} };
+const glow: recipes.controls.Animation = .{ .seconds = 0.1, .iterations = 2, .tracks = &.{
+    .{ .channel = 0, .keys = &.{ .{ .at = 0, .value = 0 }, .{ .at = 0.1, .value = 255, .ease = .in_out } } },
+    .{ .channel = 1, .keys = &.{ .{ .at = 0, .value = 0 }, .{ .at = 0.1, .value = 128, .ease = .in_out } } },
+    .{ .channel = 2, .keys = &.{ .{ .at = 0, .value = 0 }, .{ .at = 0.1, .value = 0, .ease = .in_out } } },
+    .{ .channel = 3, .keys = &.{ .{ .at = 0, .value = 255 }, .{ .at = 0.1, .value = 255, .ease = .in_out } } },
+} };
+
 const button_transition: recipes.controls.Transition = .{ .seconds = 0.1, .ease = .linear, .fill = true, .text_color = true };
 const card_transition: recipes.controls.Transition = .{ .seconds = 0.2, .opacity = true };
 
@@ -43,6 +57,8 @@ pub const spec = s.col(body, .{
     recipes.ct.button(.go, "Go", .{ .recipe = recipe_go, .tokens = recipe_tokens, .transition = button_transition, .fade_field = "go_fade" }),
     recipes.ct.button(.plain, "Plain", .{ .recipe = recipe_plain, .tokens = recipe_tokens, .transition = button_transition, .fade_field = "plain_fade" }),
     recipes.ct.box(.card, .{ .recipe = recipe_card, .transition = card_transition, .fade_field = "card_fade" }, .{label.ct.label(theme, "Card")}),
+    recipes.ct.box(null, .{ .recipe = recipe_pulse, .animation = pulse, .clock_field = "box_5_clock" }, .{label.ct.label(theme, "Pulse")}),
+    recipes.ct.button(.glow, "Glow", .{ .recipe = recipe_glow, .tokens = recipe_tokens, .transition = button_transition, .fade_field = "glow_fade", .animation = glow, .clock_field = "glow_clock" }),
 });
 
 pub const limits: lcgf.context.Limits = .{ .nodes = 32, .texts = 8, .customs = 4, .strings = 256, .depth = 8 };
@@ -58,6 +74,10 @@ pub const App = struct {
         _ = recipes.beginBox(f, .from("card"), true, .{ .recipe = recipe_card, .transition = card_transition, .fade = &app.state.card_fade }) catch unreachable;
         _ = label.label(f, &theme, "Card");
         recipes.endBox(f);
+        _ = recipes.beginBox(f, .none, false, .{ .recipe = recipe_pulse, .animation = pulse, .clock = &app.state.box_5_clock }) catch unreachable;
+        _ = label.label(f, &theme, "Pulse");
+        recipes.endBox(f);
+        _ = recipes.button(f, .from("glow"), "Glow", .{ .recipe = recipe_glow, .tokens = recipe_tokens, .transition = button_transition, .fade = &app.state.glow_fade, .animation = glow, .clock = &app.state.glow_clock }) catch unreachable;
         f.close();
     }
 };
@@ -110,4 +130,7 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     try std.testing.expect(t.c.look[go].fill != rest and t.c.look[go].fill != hot.bitsOf());
     for (0..3) |_| t = p.frame(h, &in).tree;
     try std.testing.expectEqual(hot.bitsOf(), t.c.look[go].fill);
+    // Glow has played its two 100 ms iterations by now and holds its last keyframe.
+    for (0..8) |_| t = p.frame(h, &in).tree;
+    try std.testing.expectEqual(Color.rgb(255, 128, 0).bitsOf(), t.c.look[t.find(.from("glow"))].fill);
 }

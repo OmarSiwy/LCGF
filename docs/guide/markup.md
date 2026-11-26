@@ -431,8 +431,15 @@ frontends. A widget with a transition is a recipe widget even without state CSS,
 stock hover and press colours ease too. One duration and easing per element (`linear`,
 `ease`, `ease-in`, `ease-out`, `ease-in-out`); delays, other properties and transitions on
 other widgets are errors. On a box nothing restyles at run time a transition never runs and
-nothing is emitted; `none` or zero durations animate nothing anywhere. Keyframe `animation`
-is not lowered yet.
+nothing is emitted; `none` or zero durations animate nothing anywhere.
+
+`animation: <name> <duration> [<easing>] [<count>|infinite] [alternate] [forwards]` on a
+recipe widget or box plays `@keyframes <name>` over the root's `background-color`,
+`border-color`, `color` and `opacity` (`controls.Animation`, one track per colour channel),
+its clock in a generated `<id>_clock` field. Each animated property is given at `from` and
+`to`; a finite animation needs `forwards`, since returning to the element's own style at
+the end is not lowered. A delay, `reverse`, `paused`, several animations on one element and
+other properties are errors.
 
 ## What is not lowered
 

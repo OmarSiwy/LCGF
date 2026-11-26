@@ -160,12 +160,20 @@ pub const Node = struct {
     /// A widget with state CSS (`button:hover`) is a recipe widget: these rules follow the
     /// stock recipe's, in cascade order. Empty for the theme widget.
     recipe: []const RecipeRule = &.{},
+    /// What a recipe widget or box takes beside its rules.
+    live: Live = .{},
+};
+
+/// A recipe widget's or box's options beside its rules.
+pub const Live = struct {
     /// HTML disabled (its attribute or a `<fieldset disabled>`): the recipe's `States.disabled`.
     disabled: bool = false,
     /// A text field's `required`, `minlength` and `maxlength`, for `:invalid` and `:valid`.
     validation: lcgf.theme_recipes.controls.Validation = .{},
-    /// CSS `transition` of a recipe widget or box; its state is the `<id>_fade` field.
+    /// CSS `transition`; its state is the `<id>_fade` field.
     transition: lcgf.theme_recipes.controls.Transition = .{},
+    /// CSS `animation`; its clock is the `<id>_clock` field.
+    animation: lcgf.theme_recipes.controls.Animation = .{},
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed
@@ -256,6 +264,8 @@ pub const FieldType = enum(u8) {
     pair,
     /// `theme_recipes.controls.Fade`: a transition's state.
     fade,
+    /// `theme_recipes.controls.Clock`: an animation's.
+    clock,
     /// An enum of `Field.cases` (`lcgf-switch`).
     @"enum",
     /// `widgets_select.SelectState`; its value is `.selected`.

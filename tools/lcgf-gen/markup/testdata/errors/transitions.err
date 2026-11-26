@@ -1,24 +1,36 @@
 transitions.html:5:7: error: write the transition shorthand
-  p { transition-duration: 1s; animation: spin 1s; }
+  p { transition-duration: 1s; animation: spin 1s infinite; }
       ^
-transitions.html:5:32: error: keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)
-  p { transition-duration: 1s; animation: spin 1s; }
-                               ^
-transitions.html:6:3: error: keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)
-  @keyframes spin { to { opacity: 0; } }
-  ^
 transitions.html:4:14: error: transition under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform
   #b:hover { transition: color 1s; }
              ^
 transitions.html:3:20: error: a transition of transform is not lowered; background-color, border-color, color and opacity ease
   #a { transition: transform 1s; }
                    ^
-transitions.html:8:29: error: a transition delay is not lowered
+transitions.html:13:29: error: a transition delay is not lowered
   #c { transition: color 1s 0.5s; }
                             ^
-transitions.html:9:8: error: transitions of one element share one duration and easing here
+transitions.html:14:8: error: transitions of one element share one duration and easing here
   #d { transition: color 1s, opacity 2s; }
        ^
-transitions.html:10:11: error: transition on <input>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly
+transitions.html:15:11: error: transition on <input>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly
   input { transition: color 1s; }
           ^
+transitions.html:5:32: error: animation on <p> is not lowered: it plays on a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each
+  p { transition-duration: 1s; animation: spin 1s infinite; }
+                               ^
+transitions.html:6:8: error: a finite animation returns to the element's own style when it ends, which is not lowered; add forwards or make it infinite
+  #a { animation: spin 1s; }
+       ^
+transitions.html:7:27: error: an animation delay is not lowered
+  #b { animation: spin 1s 0.2s infinite; }
+                          ^
+transitions.html:8:8: error: no @keyframes nothing
+  #c { animation: nothing 1s infinite; }
+       ^
+transitions.html:9:27: error: animation reverse is not lowered
+  #d { animation: spin 1s reverse infinite; }
+                          ^
+transitions.html:11:3: error: @keyframes spin: give opacity at from and at to; a keyframe taking the element's own value is not lowered
+  @keyframes spin { to { opacity: 0; } 50% { width: 10px; } }
+  ^

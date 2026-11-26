@@ -100,6 +100,17 @@ pub const Cond = struct {
     loc: Loc,
 };
 
+pub const Keyframes = struct {
+    name: []const u8,
+    first: u32,
+    end: u32,
+    loc: Loc,
+    stops: []const Stop = &.{},
+
+    /// `from` (0), `to` (1) or a percentage, and its declarations `decl_first..+decl_count`.
+    pub const Stop = struct { at: f32, decl_first: u32, decl_count: u32, loc: Loc };
+};
+
 pub const FontFace = struct { decl_first: u32, decl_count: u32, loc: Loc };
 
 pub const Css = struct {
@@ -114,8 +125,9 @@ pub const Css = struct {
     conds: std.ArrayList(Cond) = .empty,
     layers: std.ArrayList([]const u8) = .empty,
     fonts: std.ArrayList(FontFace) = .empty,
-    /// `@keyframes` names, for `animation-name` (their blocks are parsed as rules of `kf`).
-    keyframes: std.ArrayList(struct { name: []const u8, first: u32, end: u32, loc: Loc }) = .empty,
+    /// `@keyframes`: each name and its stops, in source order. A stop's declarations belong
+    /// to a rule without selectors, which the cascade skips.
+    keyframes: std.ArrayList(Keyframes) = .empty,
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -319,7 +331,7 @@ pub const Css = struct {
                     const d = c.declarations(p + 1, inner, r);
                     ok(c.fonts.append(c.arena, .{ .decl_first = d[0], .decl_count = d[1] - d[0], .loc = loc }));
                 } else if (eq(name, "keyframes")) {
-                    ok(c.keyframes.append(c.arena, .{ .name = c.text(pa, pe), .first = p + 1, .end = inner, .loc = loc }));
+                    ok(c.keyframes.append(c.arena, .{ .name = c.text(pa, pe), .first = p + 1, .end = inner, .loc = loc, .stops = c.keyframeStops(p + 1, inner, origin, layer) }));
                 } else if (eq(name, "page") or eq(name, "namespace") or eq(name, "property") or eq(name, "scope") or eq(name, "counter-style") or eq(name, "charset") or eq(name, "container")) {
                     c.ds.err(loc, "@{s} is not supported", .{name});
                 } else c.ds.err(loc, "unknown at-rule @{s}", .{name});
@@ -339,6 +351,49 @@ pub const Css = struct {
             c.rules.items(.decl_first)[r] = d[0];
             c.rules.items(.decl_count)[r] = d[1] - d[0];
         }
+    }
+
+    /// The stops of a `@keyframes` block `[a, b)`: `from, 50% { … }` gives one stop per
+    /// selector, sharing the block's declarations.
+    fn keyframeStops(c: *Css, a: u32, b: u32, origin: Origin, layer: u16) []const Keyframes.Stop {
+        const ty = c.toks.items(.type);
+        var out: std.ArrayList(Keyframes.Stop) = .empty;
+        var i = a;
+        while (i < b) {
+            while (i < b and ty[i] == .whitespace) i += 1;
+            if (i >= b) break;
+            var open = i;
+            while (open < b and ty[open] != .lc_bracket) open += 1;
+            if (open >= b) {
+                c.ds.err(c.tokLoc(i), "expected '{{' after a keyframe selector", .{});
+                break;
+            }
+            const close = c.skipBlock(open, b);
+            const r: u32 = @intCast(c.rules.len);
+            ok(c.rules.append(c.arena, .{ .origin = origin, .sel_first = none, .sel_count = 0, .decl_first = 0, .decl_count = 0, .cond = none, .layer = layer }));
+            const d = c.declarations(open + 1, close - 1, r);
+            var t = i;
+            while (t < open) : (t += 1) {
+                const at: ?f32 = switch (ty[t]) {
+                    .whitespace, .comma => continue,
+                    .percentage => @as(f32, @floatCast(c.toks.items(.num)[t])) / 100,
+                    .ident => if (eq(c.toks.items(.str)[t], "from")) 0 else if (eq(c.toks.items(.str)[t], "to")) 1 else null,
+                    else => null,
+                };
+                if (at == null or at.? < 0 or at.? > 1) {
+                    c.ds.err(c.tokLoc(t), "a keyframe selector is from, to or a percentage from 0% to 100%", .{});
+                    continue;
+                }
+                ok(out.append(c.arena, .{ .at = at.?, .decl_first = d[0], .decl_count = d[1] - d[0], .loc = c.tokLoc(t) }));
+            }
+            i = close;
+        }
+        std.mem.sort(Keyframes.Stop, out.items, {}, struct {
+            fn less(_: void, x: Keyframes.Stop, y: Keyframes.Stop) bool {
+                return x.at < y.at;
+            }
+        }.less);
+        return out.items;
     }
 
     /// Parses a selector list over tokens `[a, b)` into `sels`; null after reporting an error

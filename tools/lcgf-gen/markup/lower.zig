@@ -516,7 +516,6 @@ pub const Lowerer = struct {
         for (l.c.conds.items) |cnd| if (cnd.kind == .media) {
             _ = l.mediaList(cnd);
         };
-        for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
 
     // ---- state CSS ------------------------------------------------------------------------
@@ -532,7 +531,7 @@ pub const Lowerer = struct {
             const n: u32 = @intCast(n_);
             const x = l.ir_of[n];
             if (x == none or !l.disabledElement(n)) continue;
-            nodes.items(.disabled)[x] = true;
+            nodes.items(.live)[x].disabled = true;
             switch (nodes.items(.kind)[x]) {
                 .button, .checkbox, .@"switch", .container, .slider, .textfield => {},
                 else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a checkbox, a switch, a range or a text field", .{l.tag(n)}),
@@ -552,8 +551,10 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             if (x == none or nodes.items(.recipe)[x].len > 0) continue;
             const kind = nodes.items(.kind)[x];
-            const eases = l.transitionOf(n) != null and (kind == .button or kind == .checkbox or kind == .@"switch" or kind == .slider or (kind == .textfield and !nodes.items(.secure)[x])) and l.eachOf(n) == none;
-            if ((nodes.items(.disabled)[x] and kind != .container) or eases) l.recipeOf(n, &reported);
+            const control = (kind == .button or kind == .checkbox or kind == .@"switch" or kind == .slider or (kind == .textfield and !nodes.items(.secure)[x])) and l.eachOf(n) == none;
+            const eases = l.transitionOf(n) != null and control;
+            const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.eachOf(n) == none));
+            if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
         }
     }
 
@@ -604,7 +605,7 @@ pub const Lowerer = struct {
             const node = l.page.nodes.get(x);
             if (node.recipe.len > 0) {
                 const t = l.transition(r, at) orelse continue;
-                l.page.nodes.items(.transition)[x] = t;
+                l.page.nodes.items(.live)[x].transition = t;
                 l.field(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition");
                 continue;
             }
@@ -614,6 +615,137 @@ pub const Lowerer = struct {
             };
             if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
         }
+    }
+
+    /// `animation: <name> <duration> [<easing>] [<count>|infinite] [alternate] [forwards]` on a
+    /// recipe widget or box, as its `controls.Animation`, with a generated `<id>_clock`.
+    fn checkAnimations(l: *Lowerer) void {
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            const x = l.ir_of[n];
+            const e = l.k.get(n, .animation);
+            if (x == none or e.decl == none) continue;
+            const d = l.c.decls.get(e.decl);
+            const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
+            if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
+            const node = l.page.nodes.get(x);
+            if (node.recipe.len == 0) {
+                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
+                continue;
+            }
+            const a = l.animation(r, d.loc) orelse continue;
+            l.page.nodes.items(.live)[x].animation = a;
+            l.field(ok(std.fmt.allocPrint(l.arena, "{s}_clock", .{node.id})), .clock, d.loc, "an animation");
+        }
+    }
+
+    fn animation(l: *Lowerer, r: [2]u32, at: Loc) ?lcgf.theme_recipes.controls.Animation {
+        const Key = lcgf.keyframes.Key;
+        var out: lcgf.theme_recipes.controls.Animation = .{};
+        var name: []const u8 = "";
+        var ease: lcgf.tweens.Ease = .in_out;
+        var forwards = false;
+        var timed = false;
+        var rd: values.Reader = .init(l.c, r[0], r[1]);
+        while (rd.next()) |t| {
+            const ty = l.c.toks.items(.type)[t];
+            const str = l.c.toks.items(.str)[t];
+            if (ty == .comma) {
+                l.ds.err(l.c.tokLoc(t), "one animation per element is lowered", .{});
+                return null;
+            }
+            if (ty == .dimension and (css.eq(str, "s") or css.eq(str, "ms"))) {
+                const v: f32 = @floatCast(l.c.toks.items(.num)[t]);
+                const secs = if (css.eq(str, "ms")) v / 1000 else v;
+                if (timed) {
+                    if (secs != 0) {
+                        l.ds.err(l.c.tokLoc(t), "an animation delay is not lowered", .{});
+                        return null;
+                    }
+                } else out.seconds = secs;
+                timed = true;
+                continue;
+            }
+            if (ty == .number) {
+                out.iterations = @floatCast(l.c.toks.items(.num)[t]);
+                continue;
+            }
+            if (ty != .ident) {
+                l.ds.err(l.c.tokLoc(t), "animation takes a name, a duration, an easing, a count, alternate and forwards", .{});
+                return null;
+            }
+            const easings = .{ .{ "linear", .linear }, .{ "ease", .in_out }, .{ "ease-in-out", .in_out }, .{ "ease-in", .in_cubic }, .{ "ease-out", .out_cubic } };
+            const found = inline for (easings) |pe| {
+                if (css.eq(str, pe[0])) {
+                    ease = pe[1];
+                    break true;
+                }
+            } else false;
+            if (found or css.eq(str, "normal") or css.eq(str, "running")) continue;
+            if (css.eq(str, "infinite")) {
+                out.iterations = std.math.inf(f32);
+            } else if (css.eq(str, "alternate")) {
+                out.alternate = true;
+            } else if (css.eq(str, "forwards") or css.eq(str, "both")) {
+                forwards = true;
+            } else if (css.eq(str, "reverse") or css.eq(str, "alternate-reverse") or css.eq(str, "backwards") or css.eq(str, "paused")) {
+                l.ds.err(l.c.tokLoc(t), "animation {s} is not lowered", .{str});
+                return null;
+            } else name = str;
+        }
+        if (out.seconds <= 0) return .{}; // plays nothing
+        if (!std.math.isInf(out.iterations) and !forwards) {
+            l.ds.err(at, "a finite animation returns to the element's own style when it ends, which is not lowered; add forwards or make it infinite", .{});
+            return null;
+        }
+        const kf = for (l.c.keyframes.items) |k| {
+            if (std.mem.eql(u8, k.name, name)) break k;
+        } else {
+            l.ds.err(at, "no @keyframes {s}", .{name});
+            return null;
+        };
+        // One track per channel of each property a stop sets; every property at 0% and 100%.
+        const Channels = struct { prop: []const u8, first: u8, count: u8 };
+        const props = [_]Channels{ .{ .prop = "background-color", .first = 0, .count = 4 }, .{ .prop = "border-color", .first = 4, .count = 4 }, .{ .prop = "color", .first = 8, .count = 4 }, .{ .prop = "opacity", .first = 12, .count = 1 } };
+        var tracks: std.ArrayList(lcgf.theme_recipes.controls.Animation.Track) = .empty;
+        for (props) |pc| {
+            var keys: [4]std.ArrayList(Key) = @splat(.empty);
+            for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
+                const dd = l.c.decls.get(di);
+                const is = std.mem.eql(u8, dd.name, pc.prop) or (pc.first == 0 and std.mem.eql(u8, dd.name, "background"));
+                if (!is) continue;
+                const v = if (pc.count == 1) blk: {
+                    const ok_num = dd.end - dd.first == 1 and l.c.toks.items(.type)[dd.first] == .number;
+                    if (!ok_num) {
+                        l.ds.err(dd.loc, "opacity in a keyframe takes a number", .{});
+                        return null;
+                    }
+                    break :blk [4]f32{ @floatCast(l.c.toks.items(.num)[dd.first]), 0, 0, 0 };
+                } else blk: {
+                    const c = values.color(l.c, dd.first, dd.end) orelse {
+                        l.ds.err(dd.loc, "{s} in a keyframe takes a colour", .{dd.name});
+                        return null;
+                    };
+                    break :blk [4]f32{ @floatFromInt(c.r), @floatFromInt(c.g), @floatFromInt(c.b), @floatFromInt(c.a) };
+                };
+                for (0..pc.count) |k| ok(keys[k].append(l.arena, .{ .at = stop.at * out.seconds, .value = v[k], .ease = if (keys[k].items.len == 0) .linear else ease }));
+            };
+            if (keys[0].items.len == 0) continue;
+            if (keys[0].items[0].at != 0 or keys[0].items[keys[0].items.len - 1].at != out.seconds) {
+                l.ds.err(kf.loc, "@keyframes {s}: give {s} at from and at to; a keyframe taking the element's own value is not lowered", .{ name, pc.prop });
+                return null;
+            }
+            for (0..pc.count) |k| ok(tracks.append(l.arena, .{ .channel = @intCast(pc.first + k), .keys = keys[k].items }));
+        }
+        for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
+            const nm = l.c.decls.items(.name)[di];
+            const known = for ([_][]const u8{ "background-color", "background", "border-color", "color", "opacity" }) |k| {
+                if (std.mem.eql(u8, k, nm)) break true;
+            } else false;
+            if (!known) l.ds.err(l.c.decls.items(.loc)[di], "{s} in a keyframe is not lowered; background-color, border-color, color and opacity animate", .{nm});
+        };
+        out.tracks = tracks.items;
+        return out;
     }
 
     /// `transition: <property> <duration> [<easing>], …` as one `controls.Transition`: one
@@ -1066,6 +1198,7 @@ pub const Lowerer = struct {
         l.gridItems();
         l.stateRules();
         l.checkTransitions();
+        l.checkAnimations();
         l.checkFields();
         l.checkRegions();
         l.checkProps();
@@ -4069,9 +4202,9 @@ pub const Lowerer = struct {
         }
         var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind, .one_way = one_way };
         node.secure = kind == .textfield and css.eq(l.attr(n, "type") orelse "", "password");
-        if (l.attr(n, "required") != null) node.validation.required = true;
-        if (l.numberAttr(n, "minlength")) |v| node.validation.min_length = @intFromFloat(@max(0, v));
-        if (l.numberAttr(n, "maxlength")) |v| node.validation.max_length = @intFromFloat(@max(0, v));
+        if (l.attr(n, "required") != null) node.live.validation.required = true;
+        if (l.numberAttr(n, "minlength")) |v| node.live.validation.min_length = @intFromFloat(@max(0, v));
+        if (l.numberAttr(n, "maxlength")) |v| node.live.validation.max_length = @intFromFloat(@max(0, v));
         node.id = l.widgetId(n, bind, what) orelse return true;
         const hint = l.attr(n, "placeholder") orelse "";
         l.caption(&node, hint, l.valueLoc(n, "placeholder"));

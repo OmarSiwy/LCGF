@@ -7,11 +7,17 @@
     #go:hover { background-color: #c86400; }
     .card { padding: 8px; background-color: #303440; transition: opacity 0.2s; }
     .card:hover { opacity: 0.5; }
+    .pulse { padding: 4px; animation: pulse 0.2s linear infinite alternate; }
+    @keyframes pulse { from { opacity: 1; } 50% { opacity: 0.6; } to { opacity: 0.2; } }
+    #glow { animation: glow 0.1s 2 forwards; }
+    @keyframes glow { from { background-color: #000000; } to { background-color: #ff8000; } }
   </style>
 </head>
 <body>
   <button id="go" on:click="go">Go</button>
   <button id="plain">Plain</button>
   <div class="card" id="card"><span>Card</span></div>
+  <div class="pulse"><span>Pulse</span></div>
+  <button id="glow">Glow</button>
 </body>
 </html>
