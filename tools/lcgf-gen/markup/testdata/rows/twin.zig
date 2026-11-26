@@ -1,7 +1,8 @@
 //! rows, written by hand: per-item view state inside a run-time region. The checkbox binds the
 //! item's `selected` and the details show while the item's `expanded` holds; both fields are
 //! the app's, written through the mutable slice it passes; lcgf-else shows "more" otherwise.
-//! Margins in the region's content are flex rules of its own Frame (`endFlex`).
+//! Margins in the region's content are flex rules of its own Frame (`endFlex`). Each row's
+//! <img> draws in both frontends (parity.zig).
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -38,11 +39,19 @@ fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
 
 /// A click on row 1's checkbox selects that item only; an expanded item shows its details.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
-    _ = page;
     var rows = [_]Row{ .{ .name = "one", .detail = "first" }, .{ .name = "two", .detail = "second" } };
     var in: lcgf.input.Input = .{};
     var out = p.frame(h, &in, .{ .rows = &rows });
     try std.testing.expect(runOf(out.draw, "first") == null);
+    // Each row draws its <img>: one quad of the asset's texture.
+    var pictures: u32 = 0;
+    for (0..out.draw.cmd_len) |k| switch (out.draw.command(@intCast(k))) {
+        .quads => |q| if (q.texture == page.assets[0].texture) {
+            pictures += q.count;
+        },
+        else => {},
+    };
+    try std.testing.expectEqual(2, pictures);
     // The checkbox sits left of its row's text, past the two margins between them.
     const two = runOf(out.draw, "two").?;
     in.pointer = .{ two[0] - 20, (two[1] + two[3]) / 2 };
