@@ -140,6 +140,19 @@ Today a comptime page folds the theme: `var()` is substituted by the compiler (`
 12. F10.
 13. SVG icons in markup.
 
-## Pins
+## Landed (on `main`)
 
-No pin until a piece lands. Each landing is announced to Schemify with its commit on `main`.
+| What | Commits |
+|---|---|
+| C0: GL ES first instance, sint32x2/x4, instancing check (web and Metal too) | 386337b3, 41c86462, 6a84e326 |
+| C1–C3: `lcgf.canvas` (palette layers, overrides, dirty ranges, chains and dashes, turned glyphs), `Frame.canvas`, sw | 0149d626..1ece7576 |
+| C4: `canvas.wgsl`, one pipeline; vk, wgpu, gles, web, d3d12 at 0 bad pixels; metal cross-built only | a2b7c437, 6a71ab01, 83571bd1, 37c89e7d, 68c6b4b1, a656aee3, c59dee32 |
+| C5 (sw): canvas golden scene, integer cull, 100k benchmark, per-frame tile bin (`sw.Setup.bins`) | 68b6ec7a..70481997, 7bb8710f, d3844a9e |
+| T-RT, T-CT: run-time theme tokens on runtime and comptime pages | ac391ab0, dba544f2, aad15faf, de869134 |
+| Engine for the markup gaps: flex, placeholders, roles, link, choice, heading, button text style | 472f74c9..c49d9be2 |
+| N-FE runtime front end; N-SUBMIT on:submit | e863cf0e, 999c2329 |
+| M8.2 `<each of>`; E2 several regions; per-row view state; E1 fit-sized regions; one-way per-item on:change over `[]const T` | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
+
+**Next:** text fields inside regions (one region-owned editor for the focused row); the GPU benchmark and GPU golden wiring; canvas under `Frame.reuse` and transformed or rounded-clip parents; C6 (C, C++ and Rust canvas exposure).
+
+LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.
