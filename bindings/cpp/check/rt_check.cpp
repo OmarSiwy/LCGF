@@ -45,7 +45,7 @@ int rows(const char* path) {
         const char* zig = data.data() + off + sizeof st;
         const lcgf::Row mine(st);
         lcgf_row lib;
-        lcgf_row_from_style(st.raw(), &lib);
+        lcgf_template_from(st.raw(), &lib);
         if (std::memcmp(&mine, zig, sizeof mine) != 0 || std::memcmp(&lib, zig, sizeof lib) != 0) {
             if (bad++ < 5) {
                 const auto* a = reinterpret_cast<const std::uint32_t*>(&mine);
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
     const std::uint32_t frames = std::uint32_t(std::atoi(argv[2]));
     // The style the library has for `Style{}` must be this header's: the words are the contract.
     lcgf_style lib_default;
-    lcgf_default_style(&lib_default);
+    lcgf_style_default(&lib_default);
     const lcgf::Style mine{};
     if (std::memcmp(&lib_default, &mine, sizeof mine) != 0) {
         std::fprintf(stderr, "lcgf::Style{} is not the library's default style\n");

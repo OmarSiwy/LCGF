@@ -177,6 +177,7 @@ pub fn build(b: *std.Build) void {
     }
     abi_step.dependOn(&b.addInstallArtifact(lcgf_dump, .{}).step);
     abi_step.dependOn(&b.addInstallFile(b.path("src/abi/lcgf.h"), "include/lcgf.h").step);
+    abi_step.dependOn(&b.addInstallFile(b.path("src/abi/lcgf_lanes.h"), "include/lcgf_lanes.h").step);
     abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("bindings/cpp/include"), .install_dir = .header, .install_subdir = "" }).step);
     abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("bindings/cpp/cmake"), .install_dir = .lib, .install_subdir = "cmake/lcgf" }).step);
 
@@ -311,7 +312,7 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_csrc.root_module })).step);
-    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf_api.h, from src/abi/api.zig) and
+    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf.h, from src/abi/api.zig) and
     // the bindings' row stores (bindings/cpp/include/lcgf/rows.hpp, bindings/rust/lcgf/src/rows.rs),
     // committed. `zig build abi-gen` writes it; the test fails when it is stale, when a pub fn
     // of a container api.zig lists is neither exported nor skipped (the tripwire), or when the
@@ -329,7 +330,7 @@ pub fn build(b: *std.Build) void {
     abi_gen_check.addDirectoryArg(b.path("."));
     abi_gen_check.has_side_effects = true;
     test_step.dependOn(&abi_gen_check.step);
-    const abi_h_check = b.addObject(.{ .name = "lcgf_api_h", .root_module = b.createModule(.{ .target = b.graph.host }) });
+    const abi_h_check = b.addObject(.{ .name = "lcgf_h", .root_module = b.createModule(.{ .target = b.graph.host }) });
     abi_h_check.root_module.addCSourceFile(.{ .file = b.path("tools/abi-gen/check.c"), .flags = &.{ "-std=c11", "-Wall", "-Werror" } });
     abi_h_check.root_module.addIncludePath(b.path("src/abi"));
     test_step.dependOn(&abi_h_check.step);

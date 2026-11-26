@@ -1,6 +1,6 @@
 //! The export list: which Zig functions liblcgf exports to C, under which names, and which C
 //! name each type that crosses has (docs/plans/bindings-rust.md §6). tools/abi-gen writes the
-//! header from it (src/abi/lcgf_api.h), and fails `zig build test` when a `pub fn` of a listed
+//! header from it (src/abi/lcgf.h), and fails `zig build test` when a `pub fn` of a listed
 //! container is neither exported nor skipped with a reason (the tripwire).
 //!
 //! A function of container `k` is exported as `lcgf_<k.prefix>_<snake name>`, or
@@ -21,6 +21,7 @@ const plan = @import("plan.zig");
 const seam = @import("seam.zig");
 const runtime = @import("runtime.zig");
 const abi_canvas = @import("canvas.zig");
+const ct = @import("ct.zig");
 const types = @import("../core/types.zig");
 const tree = @import("../core/tree.zig");
 const context = @import("../runtime/context.zig");
@@ -68,6 +69,21 @@ pub const names = .{
     .{ canvas.Layer, "canvas_layer" },
     .{ canvas.Range, "canvas_range" },
     .{ canvas.Override, "canvas_override" },
+    .{ abi_canvas.CLine, "canvas_line_style" },
+    .{ abi_canvas.CBox, "canvas_box_style" },
+    .{ abi_canvas.CArc, "canvas_arc_style" },
+    .{ abi_canvas.CArea, "canvas_area_style" },
+    .{ abi_canvas.CText, "canvas_text_style" },
+    .{ ct.CShortcut, "shortcut" },
+};
+
+/// The seam's own C functions, exported where they are (the tables UIs, static UIs and the
+/// canvas batch): the header declares them too, with their doc comments and parameter names.
+/// The lane-named frames are in the hand-written lcgf_lanes.h.
+pub const declared = .{
+    .{ "src/abi/seam.zig", seam.exports },
+    .{ "src/abi/ct.zig", ct.exports },
+    .{ "src/abi/canvas.zig", abi_canvas.exports },
 };
 
 pub const column_align = @import("../core/mem.zig").column_align;

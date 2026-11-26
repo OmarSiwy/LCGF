@@ -404,17 +404,6 @@ test "runtime: FlatRow is a Template's words, field for field" {
     }
 }
 
-test "runtime: lcgf.h's LCGF_RT_LAYOUT is the layout the library reads" {
-    const h = @embedFile("lcgf.h");
-    const bit = std.mem.indexOf(u8, h, "#define LCGF_RT_DEPTH_BIT ").? + "#define LCGF_RT_DEPTH_BIT ".len;
-    try std.testing.expectEqual(@as(u32, depth_bit), try std.fmt.parseInt(u32, std.mem.sliceTo(h[bit..], '\n'), 10));
-    // lcgf_extra and lcgf_look: f32 and u32 fields in order, as extern structs lay them out.
-    try std.testing.expectEqual(37 * 4, @sizeOf(Extra));
-    try std.testing.expectEqual(8 * 4, @sizeOf(Look));
-    const at = std.mem.indexOf(u8, h, "#define LCGF_RT_LAYOUT 0x").? + "#define LCGF_RT_LAYOUT 0x".len;
-    try std.testing.expectEqual(layout, try std.fmt.parseInt(u32, h[at..][0..8], 16));
-}
-
 test "runtime: a row pushed through the C calls is the node its style makes" {
     const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
     const a = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(mem.column_align), cLimitsBytes(&l));

@@ -1421,8 +1421,8 @@ fn cBytes(words: [*]const u32, len: usize) callconv(.c) usize {
     return Ui.bytes(words[0..len]) catch 0;
 }
 
-fn cInit(words: [*]const u32, len: usize, buf: [*]u8, buf_len: usize) callconv(.c) c_int {
-    _ = Ui.init(words[0..len], buf[0..buf_len]) catch |e| return status(e);
+fn cInit(words: [*]const u32, len: usize, buf: *anyopaque, buf_len: usize) callconv(.c) c_int {
+    _ = Ui.init(words[0..len], @as([*]u8, @ptrCast(buf))[0..buf_len]) catch |e| return status(e);
     return 0;
 }
 
@@ -1430,24 +1430,24 @@ fn cLayout() callconv(.c) u32 {
     return layout_hash;
 }
 
-fn cFrame(buf: [*]u8, state: [*]const u8, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
+fn cFrame(buf: *anyopaque, state: *const anyopaque, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
     const ui: *Ui = @ptrCast(@alignCast(buf));
-    out.* = seam.cDraw(ui.frame(state, .{ width, height }));
+    out.* = seam.cDraw(ui.frame(@ptrCast(state), .{ width, height }));
 }
 
 fn uiOf(buf: *anyopaque) *Ui {
     return @ptrCast(@alignCast(buf));
 }
 
-fn cRelayout(buf: *anyopaque, state: [*]const u8, field: u32, out: *seam.CDraw) callconv(.c) c_int {
+fn cRelayout(buf: *anyopaque, state: *const anyopaque, field: u32, out: *seam.CDraw) callconv(.c) c_int {
     const ui = uiOf(buf);
-    const done = ui.relayout(state, field);
+    const done = ui.relayout(@ptrCast(state), field);
     out.* = seam.cDraw(&ui.d);
     return @intFromBool(done);
 }
 
-fn cPatch(buf: *anyopaque, state: [*]const u8, field: u32) callconv(.c) void {
-    uiOf(buf).patch(state, field);
+fn cPatch(buf: *anyopaque, state: *const anyopaque, field: u32) callconv(.c) void {
+    uiOf(buf).patch(@ptrCast(state), field);
 }
 
 fn cDirty(buf: *anyopaque) callconv(.c) [*]const u8 {

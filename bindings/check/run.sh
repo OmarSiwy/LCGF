@@ -159,7 +159,7 @@ else
 fi
 
 # Rows made by the caller: a sweep of styles, each made into a row by Zig's `Template.from`, by
-# lcgf::Row in C++ and by Row::from in Rust, and by the library's lcgf_row_from_style.
+# lcgf::Row in C++ and by Row::from in Rust, and by the library's lcgf_template_from.
 "$prefix/bin/lcgf-rt-dump" rows 4096 "$work/rows.bin"
 "$work/cpp/lcgf-cpp-rt-check" rows "$work/rows.bin"
 langs="C++"

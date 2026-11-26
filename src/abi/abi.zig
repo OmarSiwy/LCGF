@@ -40,6 +40,7 @@ fn isDirect(comptime T: type) bool {
         .int, .float, .bool, .void, .@"opaque" => true,
         .@"struct" => |s| s.layout == .@"extern",
         .pointer => |p| p.size != .slice and isDirect(p.child),
+        .array => |x| isDirect(x.child),
         .optional => |o| @typeInfo(o.child) == .pointer and isDirect(o.child),
         else => false,
     };

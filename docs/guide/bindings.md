@@ -135,11 +135,14 @@ A UI built in code each frame, as a Zig program does with `ctx.begin` and `f.ope
   `constexpr lcgf::Row` or a `const` `Row` makes it once for good; `Open`, `Leaf` and `Custom`
   take a style or a row (Rust: `open_row`, `leaf_row`, `custom_row`).
 - **The row is pushed inline.** `Begin` asks liblcgf where this frame's tree columns are
-  (`lcgf_rt_view`), and `Open` and `Leaf` store the row into them as Zig's inlined `open` does:
+  (`lcgf_frame_view`), and `Open` and `Leaf` store the row into them as Zig's inlined `open` does:
   no call. The stores, one per column, are generated from Zig's types (`lcgf/rows.hpp`,
   `rows.rs`, `zig build abi-gen`); only pushRow's few decisions are written by hand. Text, widgets, `Close`, `Custom` and `Animate` are one direct call each.
-- **The layouts are checked.** `lcgf_style`, `lcgf_row` and `lcgf_view` are words and pointers
-  in a fixed order, hashed into `LCGF_RT_LAYOUT`; making a context fails with
+- **The C API is generated.** `lcgf.h` comes from src/abi/api.zig (`zig build abi-gen`): each
+  call is a Zig function under its mechanical name (`Frame.open` is `lcgf_frame_open`,
+  `base.button` is `lcgf_button`), and each type crosses as itself (an extern struct) or as
+  its words in declaration order (`lcgf_style`, `lcgf_theme`).
+- **The layouts are checked.** Every type the header names is hashed into `LCGF_LAYOUT`; making a context fails with
   `Status::layout_hash` / `Status::LayoutHash` if the library was built with another layout.
 
 ```cpp
@@ -182,7 +185,7 @@ Each language's own idioms carry what Zig's runtime front end has besides:
 - **Formatted text, in place.** `lcgf::LabelF(f, "Gain {:.1f}", gain)` and `f.TextF(ts, ...)`
   (`std::format`), `lcgf::label!(f, "Gain {:.1}", gain)` and `lcgf::text!(f, &ts, ...)`
   (`format_args!`): the text is formatted straight into the frame's strings
-  (`lcgf_rt_room`, then `lcgf_rt_label_written` or `lcgf_rt_text_written`), with no buffer of
+  (`lcgf_frame_room`, then `lcgf_frame_text_written`), with no buffer of
   yours, as Zig's `f.textf` does. Each uses its language's own formatting.
 - **Animating any value.** `Animate` / `animate` and `Tween` / `tween` (with `Ease`) move a
   float, a `Color`, an array, a Rust tuple, or a type of yours: specialize
@@ -467,7 +470,7 @@ CMake and the Rust crates with cargo, against that prefix only. bindings/check/r
 - links the UIs and three of the scenes against `liblcgf_auto.a` and runs them with each lane
   width forced; every width must make the same frames;
 - makes rows from 4,096 styles (every size kind, ties, signed zeros, infinities, NaN) in Zig,
-  through liblcgf's `lcgf_row_from_style`, with `lcgf::Row` and with `Row::from`. They must be
+  through liblcgf's `lcgf_template_from`, with `lcgf::Row` and with `Row::from`. They must be
   equal word for word;
 - draws the comptime examples (mixer, card, settings, badge, dash, todo and feed with their
   regions, and sized controls) through Zig's comptime pipeline, and their `.zon`

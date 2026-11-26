@@ -122,7 +122,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 /// The gate's scene for what lcgf.h's runtime functions add to the reference widgets: a label
-/// formatted into the frame (`lcgf_rt_label_written`), a text leaf (`lcgf_rt_text_written`),
+/// formatted into the frame (`lcgf_frame_text_written` with the label style), a text leaf (`lcgf_frame_text_written`),
 /// the widgets, a colour and an array on springs, a tween. Floats are formatted at values every
 /// language writes alike (quarters).
 const Kit = struct {

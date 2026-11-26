@@ -65,9 +65,10 @@ fn cBytes(rows: u32, verts: u32, dirty: u32, marks: c_int) callconv(.c) usize {
 
 /// The batch at the start of `buf`, or null when `buf` is unaligned or too small; `marks`
 /// nonzero carves a mark a row (`lcgf_canvas_mark`).
-fn cInit(buf: [*]u8, len: usize, rows: u32, verts: u32, dirty: u32, marks: c_int) callconv(.c) ?*Instances {
+fn cInit(buf: *anyopaque, len: usize, rows: u32, verts: u32, dirty: u32, marks: c_int) callconv(.c) ?*Instances {
+    const bytes: [*]u8 = @ptrCast(buf);
     if (@intFromPtr(buf) % mem.column_align != 0 or len < cBytes(rows, verts, dirty, marks)) return null;
-    var carver: mem.Carver = .{ .buf = @alignCast(buf[head..len]) };
+    var carver: mem.Carver = .{ .buf = @alignCast(bytes[head..len]) };
     const s: *Instances = @ptrCast(@alignCast(buf));
     s.* = Instances.init(&carver, @max(rows, 1), verts, dirty, .{ .marks = marks != 0 });
     return s;

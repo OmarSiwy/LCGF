@@ -523,15 +523,15 @@ fn cUiBytes(words: [*]const u32, len: usize) callconv(.c) usize {
     return Ui.bytes(words[0..len]) catch 0;
 }
 
-fn cUiInit(words: [*]const u32, len: usize, buf: [*]u8, buf_len: usize) callconv(.c) c_int {
-    _ = Ui.init(words[0..len], buf[0..buf_len]) catch |e| return @backingInt(status(e));
+fn cUiInit(words: [*]const u32, len: usize, buf: *anyopaque, buf_len: usize) callconv(.c) c_int {
+    _ = Ui.init(words[0..len], @as([*]u8, @ptrCast(buf))[0..buf_len]) catch |e| return @backingInt(status(e));
     return 0;
 }
 
-fn cFrame(buf: [*]u8, state: [*]u8, in: *const CInput, out: *CFrame) callconv(.c) void {
+fn cFrame(buf: *anyopaque, state: *anyopaque, in: *const CInput, out: *CFrame) callconv(.c) void {
     const ui: *Ui = @ptrCast(@alignCast(buf));
     const input = in.input();
-    const o = ui.frame(state, &input);
+    const o = ui.frame(@ptrCast(state), &input);
     out.* = .{ .draw = cDraw(o.draw), .widget = o.widget, .value = o.value, .focus = o.focus, .wake = o.wake };
 }
 

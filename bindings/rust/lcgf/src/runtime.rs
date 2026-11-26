@@ -1,7 +1,7 @@
 //! LCGF's runtime front end from Rust: build the UI each frame in code, as a Zig program does
 //! with `ctx.begin(&in)` and `f.open(...)`. A style becomes its row here (`Row::from`, folded
 //! at compile time when the style is constant), and `open` and `leaf` store it into the frame's
-//! columns inline (`lcgf_rt_view`); the rest is one direct call each into the prebuilt liblcgf
+//! columns inline (`lcgf_frame_view`); the rest is one direct call each into the prebuilt liblcgf
 //! (`lcgf.h`, src/abi/runtime.zig). Your buffer holds everything.
 //!
 //! ```ignore
@@ -188,7 +188,7 @@ impl TextStyle {
     };
 }
 
-/// The reference widgets' theme, as the library has it (`lcgf_default_theme`).
+/// The reference widgets' theme, as the library has it (`lcgf_theme_default`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Theme {
@@ -248,8 +248,8 @@ impl Default for Limits {
     }
 }
 
-/// The layout hash of the rows this crate makes (`LCGF_RT_LAYOUT` in lcgf.h).
-pub const RT_LAYOUT: u32 = 0x6645_151e;
+/// The layout hash of every type this crate passes (`LCGF_LAYOUT` in lcgf.h).
+pub const RT_LAYOUT: u32 = 0x17bc_1ff0;
 
 /// A node's row as the library stores it (`lcgf_row`, Zig's `Template`). `Row::from` is
 /// `Template.from`, run here (at compile time in a `const`), so only the row crosses the seam.
@@ -485,11 +485,11 @@ struct View {
 
 include!("rows.rs");
 
-/// The bit of `View::status` that `enter` sets when the stack overflows (`LCGF_RT_DEPTH_BIT`).
+/// The bit of `View::status` that `enter` sets when the stack overflows (`LCGF_DEPTH_BIT`).
 const DEPTH_BIT: u32 = 4;
 
 impl View {
-    /// `Tree.pushRow` into the columns `lcgf_rt_view` gave, what Zig's inlined `open` does, with
+    /// `Tree.pushRow` into the columns `lcgf_frame_view` gave, what Zig's inlined `open` does, with
     /// no call: the stores are generated from Zig's types (rows.rs, tools/abi-gen); what is here
     /// is the rest of pushRow. bindings/check/run.sh holds the frames byte-identical.
     #[inline(always)]
@@ -570,41 +570,54 @@ impl View {
 
 type Rt = *mut u8;
 
+/// `lcgf_frame`: a frame in progress, two pointers only the library reads.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawFrameH([*mut u8; 2]);
+type FrameP = *mut RawFrameH;
+
 unsafe extern "C" {
-    fn lcgf_rt_bytes(l: *const Limits) -> usize;
-    fn lcgf_anim_int(x: f32, lo: i64, hi: i64) -> i64;
-    fn lcgf_rt_init(buf: *mut u8, len: usize, l: *const Limits) -> i32;
-    fn lcgf_rt_needs_frame(rt: Rt, input: *const Input) -> i32;
-    fn lcgf_rt_begin(rt: Rt, input: *const Input);
-    fn lcgf_rt_end(rt: Rt, out: *mut RawFrame);
-    fn lcgf_rt_close(rt: Rt);
-    fn lcgf_rt_text(rt: Rt, s: *const u8, len: usize, ts: *const TextStyle) -> u32;
-    fn lcgf_rt_text_styled(
-        rt: Rt,
+    fn lcgf_context_required_bytes(l: *const Limits) -> usize;
+    fn lcgf_values_int_of(x: f32, lo: i64, hi: i64) -> i64;
+    fn lcgf_context_init(buf: *mut u8, len: usize, l: *const Limits) -> i32;
+    fn lcgf_context_needs_frame(ctx: Rt, input: *const Input) -> i32;
+    fn lcgf_context_begin(ctx: Rt, input: *const Input, frame: FrameP);
+    fn lcgf_frame_end(f: FrameP, out: *mut RawFrame);
+    fn lcgf_frame_close(f: FrameP);
+    fn lcgf_frame_text(f: FrameP, s: *const u8, len: usize, ts: *const TextStyle) -> u32;
+    fn lcgf_frame_text_styled(
+        f: FrameP,
         s: *const u8,
         len: usize,
         ts: *const TextStyle,
         st: *const Style,
     ) -> u32;
-    fn lcgf_rt_view(rt: Rt, out: *mut View);
-    fn lcgf_rt_custom_row(rt: Rt, id: u32, r: *const Row, data: u64) -> u32;
-    pub fn lcgf_row_from_style(s: *const Style, out: *mut Row);
-    fn lcgf_rt_layout() -> u32;
-    fn lcgf_rt_animate(rt: Rt, id: u32, target: f32, stiffness: f32, damping: f32) -> f32;
-    fn lcgf_rt_tween(rt: Rt, id: u32, target: f32, seconds: f32, ease: u32) -> f32;
-    fn lcgf_rt_room(rt: Rt, len: *mut usize) -> *mut u8;
-    fn lcgf_rt_text_written(rt: Rt, len: usize, ts: *const TextStyle) -> u32;
-    fn lcgf_rt_label_written(rt: Rt, len: usize) -> u32;
-    fn lcgf_rt_label(rt: Rt, s: *const u8, len: usize) -> u32;
-    fn lcgf_rt_button(rt: Rt, id: u32, s: *const u8, len: usize) -> u8;
-    fn lcgf_rt_checkbox(rt: Rt, id: u32, value: *mut bool, s: *const u8, len: usize) -> u8;
-    fn lcgf_rt_slider(rt: Rt, id: u32, value: *mut f32, lo: f32, hi: f32) -> u8;
-    fn lcgf_default_theme(out: *mut Theme);
-    pub fn lcgf_default_style(out: *mut Style);
-    fn lcgf_rt_canvas_bytes(l: *const Limits) -> usize;
-    fn lcgf_rt_enable_canvas(rt: Rt, buf: *mut u8, len: usize) -> i32;
-    fn lcgf_rt_canvas(
-        rt: Rt,
+    fn lcgf_frame_view(f: FrameP, out: *mut View);
+    fn lcgf_frame_custom_row(f: FrameP, id: u32, r: *const Row, data: u64) -> u32;
+    pub fn lcgf_template_from(s: *const Style, out: *mut Row);
+    fn lcgf_layout() -> u32;
+    fn lcgf_frame_animate(f: FrameP, id: u32, target: f32, spring: *const Spring) -> f32;
+    fn lcgf_frame_tween(f: FrameP, id: u32, target: f32, seconds: f32, ease: u32) -> f32;
+    fn lcgf_frame_room(f: FrameP, len: *mut usize) -> *mut u8;
+    fn lcgf_frame_text_written(f: FrameP, len: usize, ts: *const TextStyle) -> u32;
+    fn lcgf_label(f: FrameP, th: *const Theme, s: *const u8, len: usize) -> u32;
+    fn lcgf_label_text(th: *const Theme, out: *mut TextStyle);
+    fn lcgf_button(f: FrameP, th: *const Theme, id: u32, s: *const u8, len: usize) -> u8;
+    fn lcgf_checkbox(
+        f: FrameP,
+        th: *const Theme,
+        id: u32,
+        value: *mut bool,
+        s: *const u8,
+        len: usize,
+    ) -> u8;
+    fn lcgf_slider(f: FrameP, th: *const Theme, id: u32, value: *mut f32, lo: f32, hi: f32) -> u8;
+    fn lcgf_theme_default(out: *mut Theme);
+    pub fn lcgf_style_default(out: *mut Style);
+    fn lcgf_context_canvas_bytes(l: *const Limits) -> usize;
+    fn lcgf_context_enable_canvas(ctx: Rt, buf: *mut u8, len: usize) -> i32;
+    fn lcgf_frame_canvas(
+        f: FrameP,
         id: u32,
         s: *const Style,
         c: crate::canvas::Raw,
@@ -616,6 +629,8 @@ unsafe extern "C" {
 pub struct Context<'a> {
     rt: Rt,
     theme: Theme,
+    label: TextStyle,
+    frame: RawFrameH,
     last: core::mem::MaybeUninit<RawFrame>,
     _buf: PhantomData<&'a mut [u8]>,
 }
@@ -623,23 +638,30 @@ pub struct Context<'a> {
 impl<'a> Context<'a> {
     /// Bytes a context of `limits` needs, aligned to `COLUMN_ALIGN`.
     pub fn bytes(limits: &Limits) -> usize {
-        unsafe { lcgf_rt_bytes(limits) }
+        unsafe { lcgf_context_required_bytes(limits) }
     }
 
     pub fn new(buf: &'a mut [u8], limits: &Limits) -> Result<Self, Status> {
         // Rows are made here, so the library must lay them out as this crate does.
-        if unsafe { lcgf_rt_layout() } != RT_LAYOUT {
+        if unsafe { lcgf_layout() } != RT_LAYOUT {
             return Err(Status::LayoutHash);
         }
-        let r = unsafe { lcgf_rt_init(buf.as_mut_ptr(), buf.len(), limits) };
+        let r = unsafe { lcgf_context_init(buf.as_mut_ptr(), buf.len(), limits) };
         if r != 0 {
             return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
         }
         let mut theme = Theme::default();
-        unsafe { lcgf_default_theme(&mut theme) };
+        let mut label = core::mem::MaybeUninit::<TextStyle>::uninit();
+        let label = unsafe {
+            lcgf_theme_default(&mut theme);
+            lcgf_label_text(&theme, label.as_mut_ptr());
+            label.assume_init()
+        };
         Ok(Self {
             rt: buf.as_mut_ptr(),
             theme,
+            label,
+            frame: RawFrameH([core::ptr::null_mut(); 2]),
             last: core::mem::MaybeUninit::uninit(),
             _buf: PhantomData,
         })
@@ -651,12 +673,12 @@ impl<'a> Context<'a> {
 
     /// Bytes [`enable_canvas`](Self::enable_canvas) needs for `limits`, aligned to a pointer.
     pub fn canvas_bytes(limits: &Limits) -> usize {
-        unsafe { lcgf_rt_canvas_bytes(limits) }
+        unsafe { lcgf_context_canvas_bytes(limits) }
     }
 
     /// Lets frames hold canvas nodes ([`Frame::canvas`]), their rows kept in `buf`.
     pub fn enable_canvas(&mut self, buf: &'a mut [u8]) -> Result<(), Status> {
-        let r = unsafe { lcgf_rt_enable_canvas(self.rt, buf.as_mut_ptr(), buf.len()) };
+        let r = unsafe { lcgf_context_enable_canvas(self.rt, buf.as_mut_ptr(), buf.len()) };
         if r != 0 {
             return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
         }
@@ -665,19 +687,21 @@ impl<'a> Context<'a> {
 
     /// Whether this input needs a frame (a host that sleeps between events asks first).
     pub fn needs_frame(&mut self, input: &Input) -> bool {
-        unsafe { lcgf_rt_needs_frame(self.rt, input) != 0 }
+        unsafe { lcgf_context_needs_frame(self.rt, input) != 0 }
     }
 
     /// Begins a frame; build it, then [`Frame::end`] it.
     pub fn begin(&mut self, input: &Input) -> Frame<'_> {
         let mut view = core::mem::MaybeUninit::<View>::uninit();
         let view = unsafe {
-            lcgf_rt_begin(self.rt, input);
-            lcgf_rt_view(self.rt, view.as_mut_ptr());
+            lcgf_context_begin(self.rt, input, &mut self.frame);
+            lcgf_frame_view(&mut self.frame, view.as_mut_ptr());
             view.assume_init()
         };
         Frame {
-            rt: self.rt,
+            f: &mut self.frame,
+            theme: &self.theme,
+            label: &self.label,
             view,
             last: &mut self.last,
         }
@@ -687,7 +711,9 @@ impl<'a> Context<'a> {
 /// A frame being built: it borrows its context, and what its canvas nodes draw, until its draw
 /// list (from [`end`](Frame::end)) is dropped.
 pub struct Frame<'f> {
-    rt: Rt,
+    f: FrameP,
+    theme: *const Theme,
+    label: *const TextStyle,
     view: View,
     last: &'f mut core::mem::MaybeUninit<RawFrame>,
 }
@@ -698,7 +724,7 @@ impl<'f> Frame<'f> {
     /// needed though nothing happened.
     pub fn end(self) -> (DrawList<'f>, f32) {
         let f = unsafe {
-            lcgf_rt_end(self.rt, self.last.as_mut_ptr());
+            lcgf_frame_end(self.f, self.last.as_mut_ptr());
             self.last.assume_init_read()
         };
         (
@@ -720,7 +746,7 @@ impl<'f> Frame<'f> {
         unsafe { self.view.enter(self.view.push(id.0, r)) }
     }
     pub fn close(&mut self) {
-        unsafe { lcgf_rt_close(self.rt) }
+        unsafe { lcgf_frame_close(self.f) }
     }
     #[inline(always)]
     pub fn leaf(&mut self, id: Id, s: &Style) -> u32 {
@@ -736,10 +762,10 @@ impl<'f> Frame<'f> {
         }
     }
     pub fn text(&mut self, s: &str, ts: &TextStyle) -> u32 {
-        unsafe { lcgf_rt_text(self.rt, s.as_ptr(), s.len(), ts) }
+        unsafe { lcgf_frame_text(self.f, s.as_ptr(), s.len(), ts) }
     }
     pub fn text_styled(&mut self, s: &str, ts: &TextStyle, st: &Style) -> u32 {
-        unsafe { lcgf_rt_text_styled(self.rt, s.as_ptr(), s.len(), ts, st) }
+        unsafe { lcgf_frame_text_styled(self.f, s.as_ptr(), s.len(), ts, st) }
     }
     /// A node the host draws itself: its rect comes back in the draw list's customs.
     #[inline(always)]
@@ -748,7 +774,7 @@ impl<'f> Frame<'f> {
     }
     #[inline(always)]
     pub fn custom_row(&mut self, id: Id, r: &Row, data: u64) -> u32 {
-        unsafe { lcgf_rt_custom_row(self.rt, id.0, r, data) }
+        unsafe { lcgf_frame_custom_row(self.f, id.0, r, data) }
     }
     /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
     /// [`Context::enable_canvas`]. `u32::MAX` past the limits' customs. The draw list reads
@@ -761,7 +787,7 @@ impl<'f> Frame<'f> {
         o: &crate::canvas::Options<'f>,
     ) -> u32 {
         let raw = o.raw();
-        unsafe { lcgf_rt_canvas(self.rt, id.0, s, c.raw(), &raw) }
+        unsafe { lcgf_frame_canvas(self.f, id.0, s, c.raw(), &raw) }
     }
     /// A value that eases toward `target` on a spring keyed by `id` (`Frame.animate`): an
     /// `f32`, or anything [`Animatable`] (a [`Color`], an array, a tuple, a type of yours),
@@ -770,29 +796,29 @@ impl<'f> Frame<'f> {
         self.animate_with(id, target, Spring::default())
     }
     pub fn animate_with<T: Animatable>(&mut self, id: Id, target: T, sp: Spring) -> T {
-        let rt = self.rt;
+        let f = self.f;
         each(id, target, |id, x| unsafe {
-            lcgf_rt_animate(rt, id.0, x, sp.stiffness, sp.damping)
+            lcgf_frame_animate(f, id.0, x, &sp)
         })
     }
     /// A value that moves to `target` over `seconds` along `ease` (`Frame.tween`), keyed as
     /// `animate` keys.
     pub fn tween<T: Animatable>(&mut self, id: Id, target: T, seconds: f32, ease: Ease) -> T {
-        let rt = self.rt;
+        let f = self.f;
         each(id, target, |id, x| unsafe {
-            lcgf_rt_tween(rt, id.0, x, seconds, ease as u32)
+            lcgf_frame_tween(f, id.0, x, seconds, ease as u32)
         })
     }
     /// Text of `args` (`format_args!`) written straight into the frame's strings: no buffer of
     /// yours, cut where the strings end. `lcgf::text!(f, &ts, "Gain {:.1}", g)` writes it.
     pub fn text_fmt(&mut self, ts: &TextStyle, args: core::fmt::Arguments<'_>) -> u32 {
         let n = self.write_room(args);
-        unsafe { lcgf_rt_text_written(self.rt, n, ts) }
+        unsafe { lcgf_frame_text_written(self.f, n, ts) }
     }
     /// `label` of `args`, written as `text_fmt` writes: `lcgf::label!(f, "Gain {:.1}", g)`.
     pub fn label_fmt(&mut self, args: core::fmt::Arguments<'_>) -> u32 {
         let n = self.write_room(args);
-        unsafe { lcgf_rt_label_written(self.rt, n) }
+        unsafe { lcgf_frame_text_written(self.f, n, self.label) }
     }
     fn write_room(&mut self, args: core::fmt::Arguments<'_>) -> usize {
         struct Room {
@@ -804,7 +830,7 @@ impl<'f> Frame<'f> {
         impl core::fmt::Write for Room {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
                 let n = s.len().min(self.cap - self.len);
-                // SAFETY: `p` is the frame's free strings, `cap` bytes (`lcgf_rt_room`).
+                // SAFETY: `p` is the frame's free strings, `cap` bytes (`lcgf_frame_room`).
                 unsafe { core::ptr::copy_nonoverlapping(s.as_ptr(), self.p.add(self.len), n) };
                 self.len += n;
                 self.want += s.len();
@@ -812,7 +838,7 @@ impl<'f> Frame<'f> {
             }
         }
         let mut cap = 0usize;
-        let p = unsafe { lcgf_rt_room(self.rt, &mut cap) };
+        let p = unsafe { lcgf_frame_room(self.f, &mut cap) };
         let mut room = Room {
             p,
             cap,
@@ -837,7 +863,8 @@ macro_rules! text {
     ($f:expr, $ts:expr, $($arg:tt)*) => { $f.text_fmt($ts, core::format_args!($($arg)*)) };
 }
 
-/// A spring's constants (`anims.Spring`).
+/// A spring's constants (`anims.Spring`), as `lcgf_spring`.
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Spring {
     pub stiffness: f32,
@@ -922,7 +949,7 @@ macro_rules! animatable_int {
             }
             fn take(x: &[f32]) -> Self {
                 // Zig's `values.intOf`: rounded half away from zero, clamped, NaN to 0.
-                unsafe { lcgf_anim_int(x[0], <$t>::MIN as i64, <$t>::MAX as i64) as $t }
+                unsafe { lcgf_values_int_of(x[0], <$t>::MIN as i64, <$t>::MAX as i64) as $t }
             }
         }
     )*};
@@ -985,16 +1012,16 @@ fn each<T: Animatable>(id: Id, target: T, mut one: impl FnMut(Id, f32) -> f32) -
 }
 
 pub fn label(f: &mut Frame<'_>, s: &str) -> u32 {
-    unsafe { lcgf_rt_label(f.rt, s.as_ptr(), s.len()) }
+    unsafe { lcgf_label(f.f, f.theme, s.as_ptr(), s.len()) }
 }
 pub fn button(f: &mut Frame<'_>, id: Id, s: &str) -> Response {
-    Response(unsafe { lcgf_rt_button(f.rt, id.0, s.as_ptr(), s.len()) })
+    Response(unsafe { lcgf_button(f.f, f.theme, id.0, s.as_ptr(), s.len()) })
 }
 pub fn checkbox(f: &mut Frame<'_>, id: Id, value: &mut bool, s: &str) -> Response {
-    Response(unsafe { lcgf_rt_checkbox(f.rt, id.0, value, s.as_ptr(), s.len()) })
+    Response(unsafe { lcgf_checkbox(f.f, f.theme, id.0, value, s.as_ptr(), s.len()) })
 }
 pub fn slider(f: &mut Frame<'_>, id: Id, value: &mut f32, lo: f32, hi: f32) -> Response {
-    Response(unsafe { lcgf_rt_slider(f.rt, id.0, value, lo, hi) })
+    Response(unsafe { lcgf_slider(f.f, f.theme, id.0, value, lo, hi) })
 }
 
 /// A button's options: `ButtonOptions { label: "Save" }`.

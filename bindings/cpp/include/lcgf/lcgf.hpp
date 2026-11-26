@@ -93,7 +93,7 @@ template <class Widget>
 class Events {
 public:
     Events() = default;
-    explicit Events(const lcgf_frame& f) : widget_(f.widget), value_(f.value), focus_(f.focus), wake_(f.wake) {}
+    explicit Events(const lcgf_ui_output& f) : widget_(f.widget), value_(f.value), focus_(f.focus), wake_(f.wake) {}
     /// The widget was clicked: a button, or a checkbox (already toggled in the state).
     bool clicked(Widget w) const { return widget_ == static_cast<std::uint32_t>(w); }
     /// A slider's new value (already written to the state), while it is dragged.
@@ -150,7 +150,7 @@ public:
 private:
     std::byte* buf_;
     Status status_;
-    lcgf_frame last_{};
+    lcgf_ui_output last_{};
     DrawList draw_{last_.draw};
     Events<Widget> events_{};
 };

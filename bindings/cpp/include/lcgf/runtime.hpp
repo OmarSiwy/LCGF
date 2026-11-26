@@ -1,8 +1,8 @@
 // lcgf/runtime.hpp: LCGF's runtime front end for C++20: build the UI each frame in code, as a
 // Zig program does with `ctx.begin(&in)` and `f.open(...)`. A style becomes its row here
 // (`Row`, folded at compile time when the style is constant), and `Open` and `Leaf` store it
-// into the frame's columns inline (lcgf_rt_view); the rest is one direct call each into the
-// prebuilt liblcgf (lcgf.h, src/abi/runtime.zig). Your buffer holds everything.
+// into the frame's columns inline (lcgf_frame_view); the rest is one direct call each into the
+// prebuilt liblcgf (lcgf.h, generated from src/abi/api.zig). Your buffer holds everything.
 //
 //   lcgf::Context ctx(buffer, limits);
 //   lcgf::Frame f = ctx.Begin(input);
@@ -241,12 +241,14 @@ struct TextStyle {
 };
 static_assert(sizeof(TextStyle) == sizeof(lcgf_text_style));
 
-/// The reference widgets' theme, as the library has it (`lcgf_default_theme`).
+/// The reference widgets' theme, as the library has it (`lcgf_theme_default`).
 struct Theme : lcgf_theme {};
 
 struct Spring {
     float stiffness = 170, damping = 26;
+    const lcgf_spring* raw() const { return reinterpret_cast<const lcgf_spring*>(this); }
 };
+static_assert(sizeof(Spring) == sizeof(lcgf_spring));
 
 /// A tween's curve (`tweens.Ease`).
 enum class Ease : std::uint32_t { linear,
@@ -281,7 +283,7 @@ struct Components<T, std::enable_if_t<std::is_arithmetic_v<T>>> {
             return T(x[0]);
         } else {
             static_assert(sizeof(T) <= 4, "lcgf::Animate: integers of up to 32 bits");
-            return T(lcgf_anim_int(x[0], std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max()));
+            return T(lcgf_values_int_of(x[0], std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max()));
         }
     }
 };
@@ -444,11 +446,12 @@ private:
 /// A frame being built. Valid between `Context::Begin` and `Context::End`.
 class Frame {
 public:
-    Frame(void* rt, const lcgf_view* view) : rt_(rt), v_(view) {}
+    Frame(lcgf_frame* f, const lcgf_view* view, const lcgf_theme* theme, const lcgf_text_style* label)
+        : f_(f), v_(view), theme_(theme), label_(label) {}
     LCGF_INLINE Node Open(Id id) { return Open(id, kDefault); }
     LCGF_INLINE Node Open(Id id, const Style& s) { return Open(id, Row(s)); }
     LCGF_INLINE Node Open(Id id, const Row& r) { return {Enter(Push(id.value, r))}; }
-    void Close() { lcgf_rt_close(rt_); }
+    void Close() { lcgf_frame_close(f_); }
     Node Leaf(Id id) { return Leaf(id, kDefault); }
     LCGF_INLINE Node Leaf(Id id, const Style& s) { return Leaf(id, Row(s)); }
     LCGF_INLINE Node Leaf(Id id, const Row& r) {
@@ -457,13 +460,13 @@ public:
         *v_->depth = (*v_->depth > 2 ? *v_->depth : 2) - 1;
         return {i};
     }
-    Node Text(std::string_view str, const TextStyle& ts = {}) { return {lcgf_rt_text(rt_, str.data(), str.size(), ts.raw())}; }
+    Node Text(std::string_view str, const TextStyle& ts = {}) { return {lcgf_frame_text(f_, str.data(), str.size(), ts.raw())}; }
     Node TextStyled(std::string_view str, const TextStyle& ts, const Style& s) {
-        return {lcgf_rt_text_styled(rt_, str.data(), str.size(), ts.raw(), s.raw())};
+        return {lcgf_frame_text_styled(f_, str.data(), str.size(), ts.raw(), s.raw())};
     }
     /// A node the host draws itself: its rect comes back in the draw list's customs.
     LCGF_INLINE Node Custom(Id id, const Style& s, std::uint64_t data) { return Custom(id, Row(s), data); }
-    LCGF_INLINE Node Custom(Id id, const Row& r, std::uint64_t data) { return {lcgf_rt_custom_row(rt_, id.value, r.raw(), data)}; }
+    LCGF_INLINE Node Custom(Id id, const Row& r, std::uint64_t data) { return {lcgf_frame_custom_row(f_, id.value, r.raw(), data)}; }
     /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
     /// `Context::EnableCanvas`. LCGF_NO_WIDGET past the limits' customs. Lifetimes: the draw
     /// list `Context::End` returns reads `c` and the layers, ranges and overrides `o` points
@@ -471,37 +474,41 @@ public:
     /// the next frame if that frame reuses this node.
     Node Canvas(Id id, const Style& s, const lcgf::Canvas& c, const canvas::Options& o) {
         const lcgf_canvas_options r = o.raw();
-        return {lcgf_rt_canvas(rt_, id.value, s.raw(), c.raw(), &r)};
+        return {lcgf_frame_canvas(f_, id.value, s.raw(), c.raw(), &r)};
     }
     /// A value that eases toward `target` on a spring keyed by `id` (`Frame.animate`): a float,
     /// or anything `Components` takes apart (a `Color`, a `std::array<float, 4>`, a type of
     /// yours), each number on its own spring keyed `id.With(k)`, as in Zig.
-    float Animate(Id id, float target, Spring sp = {}) { return lcgf_rt_animate(rt_, id.value, target, sp.stiffness, sp.damping); }
+    float Animate(Id id, float target, Spring sp = {}) { return lcgf_frame_animate(f_, id.value, target, sp.raw()); }
     template <Animatable T>
         requires(!std::is_same_v<T, float>)
     T Animate(Id id, const T& target, Spring sp = {}) {
-        return Each(target, [&](std::uint32_t k, float x) { return lcgf_rt_animate(rt_, id.With(k).value, x, sp.stiffness, sp.damping); });
+        return Each(target, [&](std::uint32_t k, float x) { return lcgf_frame_animate(f_, id.With(k).value, x, sp.raw()); });
     }
     /// A value that moves to `target` over `seconds` along `ease` (`Frame.tween`), keyed as
     /// `Animate` keys.
     float Tween(Id id, float target, float seconds, Ease ease = Ease::in_out) {
-        return lcgf_rt_tween(rt_, id.value, target, seconds, std::uint32_t(ease));
+        return lcgf_frame_tween(f_, id.value, target, seconds, std::uint32_t(ease));
     }
     template <Animatable T>
         requires(!std::is_same_v<T, float>)
     T Tween(Id id, const T& target, float seconds, Ease ease = Ease::in_out) {
-        return Each(target, [&](std::uint32_t k, float x) { return lcgf_rt_tween(rt_, id.With(k).value, x, seconds, std::uint32_t(ease)); });
+        return Each(target, [&](std::uint32_t k, float x) { return lcgf_frame_tween(f_, id.With(k).value, x, seconds, std::uint32_t(ease)); });
     }
     /// Text of `args` formatted by `fmt` (`std::format`), written straight into the frame's
-    /// strings (`lcgf_rt_room`): no buffer of yours, cut where the strings end.
+    /// strings (`lcgf_frame_room`): no buffer of yours, cut where the strings end.
     template <class... A>
     Node TextF(const TextStyle& ts, std::format_string<A...> fmt, A&&... args) {
         std::size_t room = 0;
-        char* p = lcgf_rt_room(rt_, &room);
+        char* p = lcgf_frame_room(f_, &room);
         const auto r = std::format_to_n(p, std::ptrdiff_t(room), fmt, std::forward<A>(args)...);
-        return {lcgf_rt_text_written(rt_, std::size_t(r.size), ts.raw())};
+        return {lcgf_frame_text_written(f_, std::size_t(r.size), ts.raw())};
     }
-    void* raw() const { return rt_; }
+    lcgf_frame* raw() const { return f_; }
+    /// The context's theme, which the widgets draw with.
+    const lcgf_theme* theme() const { return theme_; }
+    /// The theme's label text style (`Label`'s).
+    const lcgf_text_style* label_style() const { return label_; }
 
 private:
     template <class T, class F>
@@ -517,7 +524,7 @@ public:
 private:
     static constexpr Row kDefault{Style{}};
 
-    // `Tree.pushRow` into the columns lcgf_rt_view gave, what Zig's inlined `open` does, with no
+    // `Tree.pushRow` into the columns lcgf_frame_view gave, what Zig's inlined `open` does, with no
     // call: the stores are generated from Zig's types (lcgf/rows.hpp, tools/abi-gen); what is
     // here is the rest of pushRow. bindings/check/run.sh holds the frames byte-identical to Zig's.
     LCGF_INLINE std::uint32_t Push(std::uint32_t id, const Row& r) const {
@@ -570,31 +577,33 @@ private:
         const lcgf_view& v = *v_;
         const std::uint32_t depth = *v.depth;
         const std::uint32_t d = depth < v.depth_cap - 1 ? depth : v.depth_cap - 1;
-        *v.status = std::uint8_t(*v.status | (depth >= v.depth_cap) << LCGF_RT_DEPTH_BIT);
+        *v.status = std::uint8_t(*v.status | (depth >= v.depth_cap) << LCGF_DEPTH_BIT);
         v.stack[d] = i;
         *v.depth = d + 1;
         return i;
     }
 
-    void* rt_;
+    lcgf_frame* f_;
     const lcgf_view* v_;
+    const lcgf_theme* theme_;
+    const lcgf_text_style* label_;
 };
 
-inline Node Label(Frame& f, std::string_view str) { return {lcgf_rt_label(f.raw(), str.data(), str.size())}; }
-inline Response Button(Frame& f, Id id, std::string_view str) { return {lcgf_rt_button(f.raw(), id.value, str.data(), str.size())}; }
+inline Node Label(Frame& f, std::string_view str) { return {lcgf_label(f.raw(), f.theme(), str.data(), str.size())}; }
+inline Response Button(Frame& f, Id id, std::string_view str) { return {lcgf_button(f.raw(), f.theme(), id.value, str.data(), str.size())}; }
 inline Response Checkbox(Frame& f, Id id, bool& value, std::string_view str) {
-    return {lcgf_rt_checkbox(f.raw(), id.value, &value, str.data(), str.size())};
+    return {lcgf_checkbox(f.raw(), f.theme(), id.value, &value, str.data(), str.size())};
 }
-inline Response Slider(Frame& f, Id id, float& value, float lo, float hi) { return {lcgf_rt_slider(f.raw(), id.value, &value, lo, hi)}; }
+inline Response Slider(Frame& f, Id id, float& value, float lo, float hi) { return {lcgf_slider(f.raw(), f.theme(), id.value, &value, lo, hi)}; }
 
 /// `Label` of `args` formatted by `fmt` (`std::format`), written straight into the frame's
 /// strings: `lcgf::LabelF(f, "Gain {:.1f} dB", gain)`.
 template <class... A>
 Node LabelF(Frame& f, std::format_string<A...> fmt, A&&... args) {
     std::size_t room = 0;
-    char* p = lcgf_rt_room(f.raw(), &room);
+    char* p = lcgf_frame_room(f.raw(), &room);
     const auto r = std::format_to_n(p, std::ptrdiff_t(room), fmt, std::forward<A>(args)...);
-    return {lcgf_rt_label_written(f.raw(), std::size_t(r.size))};
+    return {lcgf_frame_text_written(f.raw(), std::size_t(r.size), f.label_style())};
 }
 
 // Options by name: `lcgf::Slider(f, id, gain, {.max = 4})`. The positional forms above stay.
@@ -611,16 +620,18 @@ inline Response Button(Frame& f, Id id, const ButtonOptions& o) { return Button(
 inline Response Checkbox(Frame& f, Id id, bool& value, const CheckboxOptions& o) { return Checkbox(f, id, value, o.label); }
 inline Response Slider(Frame& f, Id id, float& value, const SliderOptions& o = {}) { return Slider(f, id, value, o.min, o.max); }
 
-/// The runtime front end in your buffer (`lcgf_rt_bytes` bytes, aligned to column_align).
+/// The runtime front end in your buffer (`lcgf_context_required_bytes` bytes, aligned to
+/// column_align).
 class Context {
 public:
-    static std::size_t Bytes(const lcgf_limits& l) { return lcgf_rt_bytes(&l); }
+    static std::size_t Bytes(const lcgf_limits& l) { return lcgf_context_required_bytes(&l); }
 
-    Context(std::span<std::byte> buffer, const lcgf_limits& limits) : rt_(buffer.data()) {
+    Context(std::span<std::byte> buffer, const lcgf_limits& limits) : ctx_(reinterpret_cast<lcgf_context*>(buffer.data())) {
         // Rows are made here, so the library must lay them out as this header does.
-        status_ = lcgf_rt_layout() != LCGF_RT_LAYOUT ? Status::layout_hash
-                                                     : static_cast<Status>(lcgf_rt_init(buffer.data(), buffer.size(), &limits));
-        lcgf_default_theme(&theme_);
+        status_ = lcgf_layout() != LCGF_LAYOUT ? Status::layout_hash
+                                               : static_cast<Status>(lcgf_context_init(buffer.data(), buffer.size(), &limits));
+        lcgf_theme_default(&theme_);
+        lcgf_label_text(&theme_, &label_);
     }
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
@@ -628,18 +639,18 @@ public:
     Status status() const { return status_; }
     const Theme& theme() const { return theme_; }
     /// Memory for `EnableCanvas` (aligned to a pointer), alive as long as the context.
-    static std::size_t CanvasBytes(const lcgf_limits& l) { return lcgf_rt_canvas_bytes(&l); }
-    Status EnableCanvas(std::span<std::byte> buffer) { return static_cast<Status>(lcgf_rt_enable_canvas(rt_, buffer.data(), buffer.size())); }
+    static std::size_t CanvasBytes(const lcgf_limits& l) { return lcgf_context_canvas_bytes(&l); }
+    Status EnableCanvas(std::span<std::byte> buffer) { return static_cast<Status>(lcgf_context_enable_canvas(ctx_, buffer.data(), buffer.size())); }
     /// Whether this input needs a frame (a host that sleeps between events asks first).
-    bool NeedsFrame(const Input& in) { return lcgf_rt_needs_frame(rt_, &in) != 0; }
+    bool NeedsFrame(const Input& in) { return lcgf_context_needs_frame(ctx_, &in) != 0; }
     Frame Begin(const Input& in) {
-        lcgf_rt_begin(rt_, &in);
-        lcgf_rt_view(rt_, &view_);
-        return Frame(rt_, &view_);
+        lcgf_context_begin(ctx_, &in, &frame_);
+        lcgf_frame_view(&frame_, &view_);
+        return Frame(&frame_, &view_, &theme_, &label_);
     }
     /// Lays out and paints the frame; its draw list stays valid until the next `End`.
     const DrawList& End() {
-        lcgf_rt_end(rt_, &last_);
+        lcgf_frame_end(&frame_, &last_);
         draw_ = DrawList(last_.draw);
         return draw_;
     }
@@ -647,10 +658,12 @@ public:
     float wake() const { return last_.wake; }
 
 private:
-    void* rt_;
+    lcgf_context* ctx_;
     Status status_;
     Theme theme_{};
-    lcgf_frame last_{};
+    lcgf_text_style label_{};
+    lcgf_frame frame_{};
+    lcgf_ui_output last_{};
     lcgf_view view_{};
     DrawList draw_{last_.draw};
 };
