@@ -18,10 +18,16 @@ pub const components = struct {
         return s.col(.{ .gap = 2, .pad = @splat(4) }, .{ lcgf.widgets_label.ct.label(theme, props.heading), s.row(.{ .gap = 4 }, props.children) });
     }
 
-    /// A tool button; the page's on:click names its widget through `id`.
-    pub fn @"sfy-tool"(comptime theme: Theme, comptime props: struct { id: @EnumLiteral(), icon: []const u8 }) s.Spec {
-        return lcgf.widgets_button.ct.button(theme, props.id, props.icon);
-    }
+    /// A tool button in both forms under one name: `spec` on the page, `frame` per item of a
+    /// run-time region. The page's on:click names its widget through `id`.
+    pub const @"sfy-tool" = struct {
+        pub fn spec(comptime theme: Theme, comptime props: struct { id: @EnumLiteral(), icon: []const u8 }) s.Spec {
+            return lcgf.widgets_button.ct.button(theme, props.id, props.icon);
+        }
+        pub fn frame(f: *lcgf.frame.Frame, theme: *const Theme, props: struct { id: lcgf.types.Id, icon: []const u8 }) lcgf.types.Response {
+            return lcgf.widgets_button.button(f, theme, props.id, props.icon);
+        }
+    };
 
     /// One row of the run-time list: a button with the item's name.
     pub fn @"sfy-net"(f: *lcgf.frame.Frame, theme: *const Theme, props: struct { id: lcgf.types.Id, name: []const u8 }) lcgf.types.Response {

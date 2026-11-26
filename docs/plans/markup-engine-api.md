@@ -57,7 +57,8 @@ Requests, by usage:
 - **Landed:** `spec.col`/`spec.row` take a slice of specs as well as a tuple, so a component
   passes its `children: []const Spec` prop on as it is. A component takes the page's `theme`
   first; a `var(--t-*)` prop is the token's field name, for `spec.tokened` (no engine change:
-  `ComptimeUiTokens` already pushes token fields of every node).
+  `ComptimeUiTokens` already pushes token fields of every node). One name may hold both
+  forms as a namespace with `spec` and `frame`; the call site picks by context.
 - **Open:**
   - A runtime component (inside an lcgf-each) takes no content; a slot there would be a
     callback into the generated code.

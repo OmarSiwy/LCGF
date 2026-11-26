@@ -116,11 +116,15 @@ Inside `<template lcgf-each="net in nets">`, a component is the runtime form,
 called once per item with `.id` made unique by the item's index and `{net.name}` as the item's value. Its
 on:click reads `Response.clicked` and gets the index. It takes no content yet.
 
+A component used in both places declares both forms under one name, as a namespace:
+`pub const @"sfy-tool" = struct { pub fn spec(…) Spec; pub fn frame(f, …) Response; }`.
+The page calls `spec`, and a region calls `frame`. The check requires the form each use needs.
+
 Before the spec is built, the generated `checkComponents` checks each component and each prop
 against the app's declaration: whether it is present, its type, and props without a default
 that the markup does not pass. Each message starts at the HTML:
 
-    page.html:14:5: component <sfy-tool> is missing from app.components: add `pub fn @"sfy-tool"(comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec`
+    page.html:18:5: <sfy-tool> is used inside lcgf-each, so its namespace needs `pub fn frame(f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …`
 
 Components are lowered on comptime pages only so far.
 

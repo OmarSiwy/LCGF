@@ -20,7 +20,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "Tools"),
         s.row(.{ .gap = 4 }, .{ button.ct.button(theme, .save, "Save"), button.ct.button(theme, .zoom, "+") }),
     }),
-    lcgf.ct_interop.region(.each_nets, .{ .size = .{ .px(300), .px(120) }, .gap = 2 }),
+    lcgf.ct_interop.region(.each_nets, .{ .size = .{ .px(300), .px(200) }, .gap = 2 }),
 });
 
 pub fn Handlers(comptime Ui: type) type {
@@ -28,6 +28,7 @@ pub fn Handlers(comptime Ui: type) type {
         saves: u32 = 0,
         zooms: u32 = 0,
         picked: ?u32 = null,
+        row_zoomed: ?u32 = null,
 
         pub fn save(h: *@This(), _: *Ui) void {
             h.saves += 1;
@@ -37,6 +38,9 @@ pub fn Handlers(comptime Ui: type) type {
         }
         pub fn pick(h: *@This(), _: *Ui, index: u32) void {
             h.picked = index;
+        }
+        pub fn row_zoom(h: *@This(), _: *Ui, index: u32) void {
+            h.row_zoomed = index;
         }
     };
 }
@@ -57,7 +61,8 @@ fn click(p: anytype, h: anytype, in: *lcgf.input.Input, nets: []const Net, at: [
 }
 
 /// A click on the component's button reaches the page's `zoom`; a click on a region row
-/// built by the runtime component reaches `pick` with the item's index.
+/// built by the runtime component reaches `pick` with the item's index; sfy-tool, declared
+/// in both forms, also reaches `row_zoom` from inside the region.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     const nets: []const Net = &.{ .{ .name = "vdd" }, .{ .name = "gnd" } };
@@ -70,4 +75,13 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     try std.testing.expectEqual(0, h.saves);
     click(p, h, &in, nets, gnd);
     try std.testing.expectEqual(@as(?u32, 1), h.picked);
+    // The same component name inside the region: its `frame` form, once per item.
+    var z: u32 = 0;
+    for (out.draw.runs[0..out.draw.run_len]) |r| if (std.mem.eql(u8, out.draw.strings[r.start..][0..r.bytes], "z")) {
+        z += 1;
+        if (z == 2) click(p, h, &in, nets, r.rect);
+    };
+    try std.testing.expectEqual(2, z);
+    try std.testing.expectEqual(@as(?u32, 1), h.row_zoomed);
+    try std.testing.expectEqual(1, h.zooms);
 }

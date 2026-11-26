@@ -3,7 +3,7 @@
 <head>
   <title>Components</title>
   <style>
-    .list { width: 300px; height: 120px; gap: 2px; }
+    .list { width: 300px; height: 200px; gap: 2px; }
   </style>
 </head>
 <body>
@@ -15,6 +15,7 @@
   </sfy-panel>
   <template lcgf-each="net in nets" class="list">
     <sfy-net id="pick" name="{net.name}" on:click="pick"></sfy-net>
+    <sfy-tool id="row_zoom" icon="z" on:click="row_zoom"></sfy-tool>
   </template>
 </body>
 </html>
