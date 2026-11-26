@@ -1,12 +1,21 @@
 content.html:3:8: error: accent-color is lowered on :root only, as the theme's accent
   .x { accent-color: red; }
        ^
-content.html:7:3: error: a link shows one literal or one field; its content cannot hold elements
+content.html:9:3: error: a link shows one literal or one field; its content cannot hold elements
   <a href="#" on:click="go"><span>b</span></a>
   ^
-content.html:8:3: error: <details> needs bind:open="field", the bool it shows its content by
+content.html:10:3: error: <details> needs bind:open="field", the bool it shows its content by
   <details><summary>c</summary><p>d</p></details>
   ^
-content.html:9:3: error: <details> takes a <summary> first and then its content
+content.html:11:3: error: <details> takes a <summary> first and then its content
   <details bind:open="e"><p>f</p></details>
   ^
+content.html:12:3: error: text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app
+  <p class="t">{name}</p>
+  ^
+content.html:13:3: error: text-transform maps ASCII letters only, at build time; write this text in the case it shows
+  <p class="t">café</p>
+  ^
+content.html:5:24: error: text-transform: 'full-width' is not a supported value
+  .u { text-transform: full-width; }
+                       ^

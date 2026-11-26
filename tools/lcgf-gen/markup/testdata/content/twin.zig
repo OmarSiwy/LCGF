@@ -1,5 +1,6 @@
 //! content, written by hand: the document elements over widgets and roles: a link, lists, a
-//! details section, the accent colour.
+//! details section, the accent colour,
+//! text-transform.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -16,6 +17,8 @@ pub const State = struct { more_open: bool = true };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
+    // text-transform: applied to the literal text at build time, inherited.
+    s.col(.{}, .{ label.ct.label(theme, "SHOUT"), label.ct.label(theme, "Two Words") }),
     // <ul>, <ol>: role list; <li>: role list_item, on the label of text-only content.
     s.col(.{ .role = .list }, .{
         s.styled(label.ct.label(theme, "Plain"), .{ .role = .list_item }),

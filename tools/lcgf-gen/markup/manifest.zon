@@ -206,7 +206,7 @@
         .{ .kind = "property", .name = "letter-spacing", .status = .mapped, .target = "Paragraph.letter_spacing via spec.paragraph; MonoParagraphs", .fixture = "paragraphs" },
         .{ .kind = "property", .name = "word-spacing", .status = .mapped, .target = "Paragraph.word_spacing (after each space) via spec.paragraph; MonoParagraphs", .fixture = "paragraphs" },
         .{ .kind = "property", .name = "text-overflow", .status = .mapped, .target = "ellipsis: Paragraph.ellipsis via spec.paragraph (MonoParagraphs cuts with ...); clip: the default", .fixture = "paragraphs" },
-        .{ .kind = "property", .name = "text-transform", .status = .planned, .diagnostic = "text-transform is not lowered yet" },
+        .{ .kind = "property", .name = "text-transform", .status = .mapped, .target = "uppercase, lowercase, capitalize: applied at build time to literal ASCII text; on text that shows a field, or non-ASCII text, an error", .fixture = "content" },
         .{ .kind = "property", .name = "text-decoration", .status = .planned, .diagnostic = "text-decoration is not lowered yet (text/layout/decorations.zig, P2)" },
         .{ .kind = "property", .name = "content", .status = .planned, .diagnostic = "::before and ::after content is not lowered yet" },
         .{ .kind = "property", .name = "accent-color", .status = .mapped, .target = "on :root: Theme.accent base.zig:103, over --lcgf-accent; on any other element an error", .fixture = "content" },

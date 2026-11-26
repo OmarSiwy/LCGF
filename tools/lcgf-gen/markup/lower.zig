@@ -1782,6 +1782,24 @@ pub const Lowerer = struct {
             ok(args.append(l.arena, name));
             i = close + 1;
         }
+        const tt = l.textTransform(l.current);
+        if (tt != .none and args.items.len > 0) {
+            l.ds.err(at, "text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app", .{});
+        } else if (tt != .none) {
+            if (!std.unicode.utf8ValidateSlice(literal.items) or for (literal.items) |ch| {
+                if (ch >= 0x80) break true;
+            } else false) l.ds.err(at, "text-transform maps ASCII letters only, at build time; write this text in the case it shows", .{});
+            var start = true;
+            for (literal.items) |*ch| {
+                ch.* = switch (tt) {
+                    .uppercase => std.ascii.toUpper(ch.*),
+                    .lowercase => std.ascii.toLower(ch.*),
+                    .capitalize => if (start) std.ascii.toUpper(ch.*) else ch.*,
+                    .none => unreachable,
+                };
+                start = std.ascii.isWhitespace(ch.*);
+            }
+        }
         if (args.items.len == 0) {
             node.text_kind = .literal;
             node.text = literal.items;
@@ -1798,6 +1816,20 @@ pub const Lowerer = struct {
                 node.base_style = .{ .role = .label };
             }
         }
+    }
+
+    const TextTransform = enum { none, uppercase, lowercase, capitalize };
+
+    /// The inherited `text-transform` of document node `n`: its own or its nearest ancestor's.
+    fn textTransform(l: *Lowerer, n: u32) TextTransform {
+        var i = n;
+        while (i != none) : (i = l.doc.nodes.items(.parent)[i]) if (l.k.get(i, .@"text-transform").decl != none) {
+            const kw = l.keyword(i, .@"text-transform") orelse return .none;
+            for ([_]TextTransform{ .none, .uppercase, .lowercase, .capitalize }) |x| if (css.eq(kw, @tagName(x))) return x;
+            l.badValue(l.declared(i, .@"text-transform").?.first, .@"text-transform", l.declared(i, .@"text-transform").?.end);
+            return .none;
+        };
+        return .none;
     }
 
     /// Checks a field or handler name: `[a-z][a-z0-9_]*` and no keyword of Zig, C++ or Rust,
