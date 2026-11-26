@@ -160,6 +160,8 @@ pub const Node = struct {
     /// A widget with state CSS (`button:hover`) is a recipe widget: these rules follow the
     /// stock recipe's, in cascade order. Empty for the theme widget.
     recipe: []const RecipeRule = &.{},
+    /// HTML disabled (its attribute or a `<fieldset disabled>`): the recipe's `States.disabled`.
+    disabled: bool = false,
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed
@@ -194,6 +196,8 @@ pub const Placed = struct {
 /// widget's static CSS) and the values it sets; null sets nothing.
 pub const RecipeRule = struct {
     require: lcgf.style.States = .{},
+    /// `:enabled` forbids `disabled`.
+    forbid: lcgf.style.States = .{},
     /// `@media` around the rule, as the environment conditions the recipe matches.
     when: lcgf.style.environment.Conditions = .{},
     fill: ?lcgf.types.Color = null,

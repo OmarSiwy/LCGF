@@ -1,0 +1,21 @@
+<!doctype html>
+<html lcgf-page="disabled">
+<head>
+  <title>Disabled</title>
+  <style>
+    button:disabled { background-color: #202020; }
+    button:enabled:hover { background-color: #5078c8; }
+    .group { padding: 4px; }
+    .group:focus-within { background-color: #283040; }
+    input:indeterminate { background-color: #ff0000; }
+  </style>
+</head>
+<body>
+  <button id="off" on:click="off" disabled>Off</button>
+  <button id="on" on:click="on">On</button>
+  <fieldset disabled>
+    <label><input type="checkbox" bind:checked="agree"> Agree</label>
+  </fieldset>
+  <div class="group"><button id="inner" on:click="on">Inner</button></div>
+</body>
+</html>

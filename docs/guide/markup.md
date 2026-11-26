@@ -386,8 +386,8 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 
 ### State CSS
 
-`:hover`, `:active`, `:focus`, `:focus-visible` and `:checked` on a `<button>`, a checkbox or a
-switch make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
+`:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
+`:disabled` and `:enabled` on a `<button>`, a checkbox or a switch make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
 `recipes.button` on a runtime one, with a generated `recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
@@ -397,10 +397,15 @@ box's. The recipes read the page's theme as tokens (`recipe_tokens`), so a recip
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.
 
+The `disabled` attribute, or a `<fieldset disabled>` around the control (outside its first
+`<legend>`), makes it a recipe widget with `States.disabled`: no pointer or keyboard input, no
+Tab stop, the stock muted text, and `:disabled` rules. On other controls it is an error, as
+is a bound `disabled="{f}"`. A bool checkbox is never `:indeterminate`.
+
 A `<div>`-like box with state CSS or `@media` is a recipe box (`recipes.ct.box`,
 `recipes.beginBox`): its static style is the recipe's base and each such rule one recipe
 rule. With a state rule it takes hover and press (no focus); with `@media` alone it is no
-widget. `color` there is an error, since it would restyle the text inside. While the pointer
+widget. `:focus-within` on it holds while the focused widget is inside. `color` there is an error, since it would restyle the text inside. While the pointer
 is over a widget inside the box, the widget has it, not the box.
 
 `@media` around a rule that styles such a widget makes it one too: the rule's recipe rule

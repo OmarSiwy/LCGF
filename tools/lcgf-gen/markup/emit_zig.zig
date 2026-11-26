@@ -381,7 +381,7 @@ pub const Emit = struct {
         } else switch (n.kind) {
             .container => if (n.recipe.len > 0) {
                 if (boxInteractive(n)) e.print("recipes.ct.box(.{f}, ", .{std.zig.fmtId(n.id)}) else e.write("recipes.ct.box(null, ");
-                e.print(".{{ .recipe = {s} }}, .{{", .{e.recipeName(n)});
+                e.print("{s}, .{{", .{e.config(n)});
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             } else {
                 e.write(if (n.dir == .x) "s.row(" else "s.col(");
@@ -417,7 +417,7 @@ pub const Emit = struct {
             .button, .link => if (n.recipe.len > 0) {
                 e.print("recipes.ct.button(.{f}, ", .{std.zig.fmtId(n.id)});
                 e.caption(n.text_kind, n.text);
-                e.print(", .{{ .recipe = {s}, .tokens = recipe_tokens }})", .{e.recipeName(n)});
+                e.print(", {s})", .{e.config(n)});
             } else {
                 // Text CSS on a <button> draws its caption.
                 const ts = n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
@@ -432,7 +432,7 @@ pub const Emit = struct {
             .checkbox, .@"switch" => if (n.recipe.len > 0) {
                 e.print("recipes.ct.{s}(.{f}, .{f}, ", .{ if (n.kind == .checkbox) "checkbox" else "switchControl", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
-                e.print(", .{{ .recipe = {s}, .tokens = recipe_tokens }})", .{e.recipeName(n)});
+                e.print(", {s})", .{e.config(n)});
             } else e.boolSpec(n),
             .toggle => e.boolSpec(n),
             .slider => {
@@ -670,9 +670,21 @@ pub const Emit = struct {
         return std.fmt.allocPrint(e.arena, "recipe_{s}", .{n.id}) catch unreachable;
     }
 
+    /// The recipe `Config` (spec) or `Options` (runtime) of recipe widget `n`: its recipe, the
+    /// page's tokens on a widget, and `disabled` when HTML disables it.
+    fn config(e: *Emit, n: ir.Node) []const u8 {
+        return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.disabled) ", .states = .{ .disabled = true }" else "" }) catch unreachable;
+    }
+
     /// A box whose rules ask for a state takes hover and press: it is a widget.
     fn boxInteractive(n: ir.Node) bool {
-        for (n.recipe) |r| if (r.require.bits() != 0) return true;
+        for (n.recipe) |r| if (r.require.hovered or r.require.held) return true;
+        return false;
+    }
+
+    /// The runtime box finds its subtree by id for `:focus-within`, so it needs one then too.
+    fn boxNamed(n: ir.Node) bool {
+        for (n.recipe) |r| if (r.require.hovered or r.require.held or r.require.focus_within) return true;
         return false;
     }
 
@@ -755,6 +767,10 @@ pub const Emit = struct {
         if (r.require.bits() != 0) {
             e.write(", .require = ");
             e.structure(r.require, .{});
+        }
+        if (r.forbid.bits() != 0) {
+            e.write(", .forbid = ");
+            e.structure(r.forbid, .{});
         }
         if (!std.meta.eql(r.when, lcgf.style.environment.Conditions{})) {
             e.write(", .when = ");
@@ -1000,8 +1016,7 @@ pub const Emit = struct {
         switch (n.kind) {
             .container, .landmark => {
                 if (n.recipe.len > 0) {
-                    const live = boxInteractive(n);
-                    e.print("_ = recipes.beginBox(f, {s}, {s}, .{{ .recipe = {s} }}) catch unreachable;", .{ if (live) e.rtId(n.id, list_depth) else ".none", if (live) "true" else "false", e.recipeName(n) });
+                    e.print("_ = recipes.beginBox(f, {s}, {s}, {s}) catch unreachable;", .{ if (boxNamed(n)) e.rtId(n.id, list_depth) else ".none", if (boxInteractive(n)) "true" else "false", e.config(n) });
                     return "recipes.endBox(f);";
                 }
                 var st = n.style;
@@ -1069,7 +1084,7 @@ pub const Emit = struct {
                     e.structure(n.text_style, types.TextStyle{});
                 } else if (face.len > 0 and n.kind == .button) e.print(", {s}.labelText(&theme)", .{e.use("label")});
                 e.write(face);
-                if (n.recipe.len > 0) e.print(", .{{ .recipe = {s}, .tokens = recipe_tokens }}) catch unreachable", .{e.recipeName(n)});
+                if (n.recipe.len > 0) e.print(", {s}) catch unreachable", .{e.config(n)});
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
                 else
@@ -1092,7 +1107,7 @@ pub const Emit = struct {
                 if (n.recipe.len > 0) {
                     e.print("_ = recipes.{s}(f, {s}, {s}, ", .{ if (n.kind == .checkbox) "checkbox" else "switchControl", e.rtId(n.id, list_depth), e.ref(n.bind) });
                     e.rtCaption(n.text_kind, n.text);
-                    e.print(", .{{ .recipe = {s}, .tokens = recipe_tokens }}) catch unreachable;", .{e.recipeName(n)});
+                    e.print(", {s}) catch unreachable;", .{e.config(n)});
                     return "";
                 }
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});

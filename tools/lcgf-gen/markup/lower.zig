@@ -528,12 +528,49 @@ pub const Lowerer = struct {
     fn stateRules(l: *Lowerer) void {
         var reported: std.AutoHashMapUnmanaged(u32, void) = .empty;
         const dyn = l.k.dynamic.items;
+        const nodes = l.page.nodes.slice();
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            const x = l.ir_of[n];
+            if (x == none or !l.disabledElement(n)) continue;
+            nodes.items(.disabled)[x] = true;
+            switch (nodes.items(.kind)[x]) {
+                .button, .checkbox, .@"switch", .container => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a checkbox or a switch", .{l.tag(n)}),
+            }
+            if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
+        }
         for (dyn, 0..) |d, i| {
             const first = for (dyn[0..i]) |e| {
                 if (e.node == d.node) break false;
             } else true;
             if (first) l.recipeOf(d.node, &reported);
         }
+        // A disabled widget without state CSS is a recipe widget too: only recipes disable.
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            const x = l.ir_of[n];
+            if (x == none or !nodes.items(.disabled)[x] or nodes.items(.recipe)[x].len > 0 or nodes.items(.kind)[x] == .container) continue;
+            l.recipeOf(n, &reported);
+        }
+    }
+
+    /// HTML's disabled form control: its own `disabled`, or a `<fieldset disabled>` around it
+    /// that it is not in the first `<legend>` of.
+    fn disabledElement(l: *const Lowerer, n: u32) bool {
+        if (l.attr(n, "disabled") != null) return true;
+        const parents = l.doc.nodes.items(.parent);
+        var child = n;
+        var p = parents[n];
+        while (p != none) : ({
+            child = p;
+            p = parents[p];
+        }) {
+            if (!l.doc.isElement(p, "fieldset") or l.attr(p, "disabled") == null) continue;
+            if (l.doc.isElement(child, "legend") and l.k.first_el[p] == child) continue;
+            return true;
+        }
+        return false;
     }
 
     /// A `transition` animates a change of style. On a box nothing restyles at run time it
@@ -645,10 +682,12 @@ pub const Lowerer = struct {
     }
 
     /// The states selector `sel` requires of its subject, or null after an error.
-    fn subjectStates(l: *Lowerer, sel: u32, media: bool) ?lcgf.style.States {
+    const Subject = struct { require: lcgf.style.States = .{}, forbid: lcgf.style.States = .{} };
+
+    fn subjectStates(l: *Lowerer, sel: u32, media: bool) ?Subject {
         const first = l.c.sels.items(.first)[sel];
         const last = first + l.c.sels.items(.count)[sel] - 1;
-        var st: lcgf.style.States = .{};
+        var st: Subject = .{};
         var any = false;
         for (first..last + 1) |comp| {
             const f = l.c.comps.items(.first)[comp];
@@ -661,7 +700,7 @@ pub const Lowerer = struct {
                 }
                 const mapped = inline for (state_bits) |b| {
                     if (std.mem.eql(u8, simple.name, b[0])) {
-                        @field(st, b[1]) = true;
+                        if (b[2]) @field(st.require, b[1]) = true else @field(st.forbid, b[1]) = true;
                         break true;
                     }
                 } else false;
@@ -711,7 +750,7 @@ pub const Lowerer = struct {
             // The declaration alone in the row, so the value readers see only it.
             @memset(row_, .{});
             cascade.apply(l.k, l.k.table, l.c, n, d.decl, d.key);
-            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st, .when = when };
+            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st.require, .forbid = st.forbid, .when = when };
             last_sel = d.sel;
             for (row_, saved, 0..) |e, was, p_| {
                 if (e.decl == none or (was.decl != none and was.key > e.key)) continue;
@@ -4699,7 +4738,15 @@ const counter_styles = blk: {
 /// The state pseudo-classes lowered onto recipe rules, and their `style.States` fields.
 const Conditions = lcgf.style.environment.Conditions;
 
-const state_bits = .{ .{ "hover", "hovered" }, .{ "active", "held" }, .{ "focus", "focused" }, .{ "focus-visible", "focus_visible" }, .{ "checked", "checked" } };
+/// The state pseudo-classes lowered onto recipe rules: their `style.States` field, and
+/// whether the rule requires it (else forbids it).
+const state_bits = .{
+    .{ "hover", "hovered", true },             .{ "active", "held", true },
+    .{ "focus", "focused", true },             .{ "focus-visible", "focus_visible", true },
+    .{ "checked", "checked", true },           .{ "indeterminate", "indeterminate", true },
+    .{ "disabled", "disabled", true },         .{ "enabled", "disabled", false },
+    .{ "focus-within", "focus_within", true },
+};
 
 /// The state pseudo-classes of plan §2.3, resolved at run time (style.States).
 const states = [_][]const u8{ "hover", "active", "focus", "focus-visible", "focus-within", "checked", "indeterminate", "disabled", "enabled", "read-only", "read-write", "required", "optional", "invalid", "valid", "open", "placeholder-shown" };
