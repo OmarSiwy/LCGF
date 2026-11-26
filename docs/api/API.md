@@ -6765,7 +6765,7 @@ The functions and types `Renderer(gpu)` uses.
 
 ### `Renderer(..)` (generic struct)
 
-Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`, `material_count`, `textures`, `texture_count`, `glyphs`
+Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`, `material_count`, `textures`, `views`, `texture_count`, `glyphs`, `canvas`, `device`, `list`, `extent`
 
 - `Queue = gpu.Queue`
 - `Pass = gpu.RenderPass`
@@ -6779,6 +6779,7 @@ Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`,
 - `fn addMaterial(self: *Self, device: gpu.Device, wgsl: [:0]const u8) types.Material`: A quad pipeline with your fragment logic.
 - `fn prepare(self: *Self, queue: gpu.Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void`: Uploads the frame: one write per buffer.
 - `fn preparePatched(self: *Self, queue: gpu.Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32, dirty: anytype) void`: Upload the rows touched since the last frame on this buffer.
+- `fn drawCanvas(self: *const Self, pass: gpu.RenderPass, k: u32) void`: Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas pipeline, scissored to the node.
 - `fn drawBatch(self: *const Self, pass: gpu.RenderPass, batch: draw_list.Batch) void`: One instanced draw call for a run of quads.
 - `fn drawText(self: *const Self, pass: gpu.RenderPass, run: u32) void`: One instanced draw call for a text run's glyphs.
 - `fn drawGlyphSpan(self: *const Self, pass: gpu.RenderPass, span: [2]u32) void`: The `span[1]` glyph quads from `span[0]`: consecutive text runs in one draw (`iface.drawUntilCustom`).
@@ -6786,7 +6787,7 @@ Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`,
 
 ### `Renderer(..).Desc` (struct)
 
-Fields: `format`, `sample_count`, `max_quads`, `max_glyphs`
+Fields: `format`, `sample_count`, `max_quads`, `max_glyphs`, `canvas_rows`, `canvas_verts`
 
 
 ### `Renderer(..).PipelineDesc` (struct)
