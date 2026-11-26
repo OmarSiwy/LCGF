@@ -20,5 +20,13 @@ curl -fsSL --retry 3 -o "$dx/dx.tar.gz" https://github.com/microsoft/DirectX-Hea
 echo "2b916ef1be5db35313f56d60499274fed39db37b54a1f0befa8aa49041c14855  $dx/dx.tar.gz" | sha256sum -c --quiet
 tar -xzf "$dx/dx.tar.gz" -C "$dx"
 zig build abi -Doptimize=ReleaseFast -Dwgpu-native=v29 -Ddirectx-headers="$dx/DirectX-Headers-1.620.2"
-# The Zig side is built for this CPU; so is Rust, or the gate would time a narrower build.
-RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}" sh bindings/check/run.sh "$PWD/zig-out"
+# The Zig side is built for this CPU; so are Rust and C++, or the gate would time (and the
+# parity check below count) a narrower build. No FMA contraction in C++: Zig and Rust do not
+# contract, and the frames must stay byte-identical.
+# Nix's cc-wrapper drops -march=native unless told not to (C++ would then link 4 lanes).
+export NIX_ENFORCE_NO_NATIVE=0
+RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}" CXXFLAGS="${CXXFLAGS:--march=native -ffp-contract=off}" \
+    sh bindings/check/run.sh "$PWD/zig-out"
+# The runtime scenes' instructions per frame, C++ and Rust against Zig, at most 1.05x
+# (bindings/check/parity.sh; skipped where the runner has no user-space counters).
+sh bindings/check/parity.sh "$PWD/zig-out" "$PWD/zig-out/bindings-check" 3

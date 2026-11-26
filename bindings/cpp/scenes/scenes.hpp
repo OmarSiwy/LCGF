@@ -2,6 +2,7 @@
 // lcgf/runtime.hpp, line for line as the Zig ones: bindings/check/run.sh compares their frames
 // with Zig's byte for byte, and bench/vs/lcgf-cpp times them beside the other harnesses.
 #pragma once
+#include <charconv>
 #include <cstdio>
 #include <string_view>
 
@@ -126,6 +127,13 @@ inline void build_form(lcgf::Frame& f, const lcgf::Theme& th) {
     f.Close();
 }
 
+// `prefix` and `n` in decimal into `buf`, as Zig's scenes format with bufPrint("{d}"): a parity
+// scene measures the bindings, not printf against Zig's formatter.
+inline std::string_view Decimal(char (&buf)[16], std::string_view prefix, std::uint32_t n) {
+    prefix.copy(buf, prefix.size());
+    return {buf, std::size_t(std::to_chars(buf + prefix.size(), buf + sizeof buf, n).ptr - buf)};
+}
+
 inline void build_list(lcgf::Frame& f, const lcgf::Theme& th) {
     const std::uint32_t first = scroll / row_h;
     const std::uint32_t end = first + visible < total ? first + visible : total;
@@ -135,8 +143,7 @@ inline void build_list(lcgf::Frame& f, const lcgf::Theme& th) {
     char buf[16];
     for (std::uint32_t r = first; r < end; ++r) {
         f.Open(Id::none, {.dir = Dir::x, .size = {Size::Fill(), Size::Px(row_h)}, .pad = {8, 0, 8, 0}, .gap = th.gap, .cross = Align::center, .fill = fills[r % 2]});
-        const int n = std::snprintf(buf, sizeof buf, "Row %u", r);
-        lcgf::Label(f, {buf, std::size_t(n)});
+        lcgf::Label(f, Decimal(buf, "Row ", r));
         lcgf::Label(f, list_names[r % 7]);
         f.Leaf(Id::none, {.size = {Size::Px(12), Size::Px(12)}, .fill = th.accent});
         f.Close();
@@ -150,14 +157,12 @@ inline void build_text(lcgf::Frame& f, const lcgf::Theme& th) {
     f.Open(Id::none, {.size = {Size::Px(160), Size::Fill()}, .gap = 2});
     char buf[16];
     for (int i = 0; i < 120; ++i) {
-        const int n = std::snprintf(buf, sizeof buf, "Chapter %d", i + 1);
-        lcgf::Label(f, {buf, std::size_t(n)});
+        lcgf::Label(f, Decimal(buf, "Chapter ", std::uint32_t(i + 1)));
     }
     f.Close();
     f.Open(Id::none, {.size = {Size::Grow(1), Size::Fit()}, .gap = 8, .shrink = 1});
     for (int s = 0; s < 12; ++s) {
-        const int n = std::snprintf(buf, sizeof buf, "Section %d", s + 1);
-        f.Text({buf, std::size_t(n)}, {.px = 20, .color = th.text});
+        f.Text(Decimal(buf, "Section ", std::uint32_t(s + 1)), {.px = 20, .color = th.text});
         for (int p = 0; p < 4; ++p) f.Text(prose[(s + p) % 4], {.px = th.text_px, .color = th.text, .wrap = 1});
     }
     f.Close();

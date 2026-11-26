@@ -4,7 +4,6 @@
 
 use lcgf::Input;
 use lcgf::runtime::{self, Align, Dir, Frame, Id, Limits, Size, Style, TextStyle, Theme};
-use std::fmt::Write;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scene {
@@ -43,6 +42,26 @@ const PROSE: [&str; 4] = [
     "Idle costs nothing: when no input arrives and no spring moves, no frame is built, so the process sleeps until the next event and the battery is left alone.",
 ];
 
+/// `prefix` and `n` in decimal in `buf`, as Zig's scenes format with bufPrint("{d}"): a parity
+/// scene measures the bindings, not `core::fmt` against Zig's formatter.
+fn decimal<'b>(buf: &'b mut [u8; 16], prefix: &str, mut n: u32) -> &'b str {
+    let mut digits = [0u8; 10];
+    let mut k = digits.len();
+    loop {
+        k -= 1;
+        digits[k] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    let len = prefix.len() + digits.len() - k;
+    buf[..prefix.len()].copy_from_slice(prefix.as_bytes());
+    buf[prefix.len()..len].copy_from_slice(&digits[k..]);
+    // SAFETY: ASCII.
+    unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
+}
+
 /// A scene and the state it keeps between frames.
 pub struct State {
     pub scene: Scene,
@@ -50,7 +69,7 @@ pub struct State {
     values: [f32; 21],
     scroll: u32,
     tick: u32,
-    buf: String,
+    digits: [u8; 16],
 }
 
 impl State {
@@ -61,7 +80,7 @@ impl State {
             values: [0.5; 21],
             scroll: 0,
             tick: 0,
-            buf: String::new(),
+            digits: [0; 16],
         }
     }
 
@@ -253,9 +272,7 @@ impl State {
                     ..Style::DEFAULT
                 },
             );
-            self.buf.clear();
-            let _ = write!(self.buf, "Row {r}");
-            runtime::label(f, &self.buf);
+            runtime::label(f, decimal(&mut self.digits, "Row ", r));
             runtime::label(f, LIST_NAMES[(r % 7) as usize]);
             f.leaf(
                 Id::NONE,
@@ -298,9 +315,7 @@ impl State {
             },
         );
         for i in 0..120 {
-            self.buf.clear();
-            let _ = write!(self.buf, "Chapter {}", i + 1);
-            runtime::label(f, &self.buf);
+            runtime::label(f, decimal(&mut self.digits, "Chapter ", i + 1));
         }
         f.close();
         f.open(
@@ -324,9 +339,10 @@ impl State {
             ..TextStyle::DEFAULT
         };
         for s in 0..12 {
-            self.buf.clear();
-            let _ = write!(self.buf, "Section {}", s + 1);
-            f.text(&self.buf, &heading);
+            f.text(
+                decimal(&mut self.digits, "Section ", s as u32 + 1),
+                &heading,
+            );
             for p in 0..4 {
                 f.text(PROSE[(s + p) % 4], &body);
             }
