@@ -92,8 +92,9 @@ const a11y = @import("../a11y/tree.zig");
 
 /// Design tokens: every colour and size a widget uses comes from here, so restyling is one
 /// value. Plain data with defaults, usable at compile time (the `ct` builders take a comptime
-/// `Theme`). The defaults are the prototype's dark theme.
-pub const Theme = struct {
+/// `Theme`). The defaults are the prototype's dark theme. An extern struct: C, C++ and Rust
+/// pass it by pointer as it is (`lcgf_theme`), with nothing to decode per widget call.
+pub const Theme = extern struct {
     /// Label text.
     text: Color = Color.rgb(230, 230, 235),
     /// Label text size, logical pixels.

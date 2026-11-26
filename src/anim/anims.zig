@@ -10,8 +10,8 @@ const Id = types.Id;
 const none = types.none;
 
 /// A damped spring's constants. The defaults settle in about a third of a second without
-/// overshoot you can see.
-pub const Spring = struct {
+/// overshoot you can see. An extern struct: C passes it by pointer as it is (`lcgf_spring`).
+pub const Spring = extern struct {
     stiffness: f32 = 170,
     damping: f32 = 26,
 };

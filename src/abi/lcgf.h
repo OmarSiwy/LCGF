@@ -217,7 +217,7 @@ typedef struct {
     float stiffness;
     float damping;
 } lcgf_spring;
-LCGF_STATIC_ASSERT(sizeof(lcgf_spring) == 2 * 4, "lcgf_spring: words");
+LCGF_STATIC_ASSERT(sizeof(lcgf_spring) == 8, "lcgf_spring");
 
 typedef struct {
     float rect[4];
@@ -370,7 +370,7 @@ typedef struct {
     float pad;
     float gap;
 } lcgf_theme;
-LCGF_STATIC_ASSERT(sizeof(lcgf_theme) == 10 * 4, "lcgf_theme: words");
+LCGF_STATIC_ASSERT(sizeof(lcgf_theme) == 40, "lcgf_theme");
 
 /* Bits, from bit 0: hovered held pressed released clicked focused. */
 typedef uint8_t lcgf_response;

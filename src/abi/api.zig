@@ -369,8 +369,8 @@ fn frameCanvas(f: *FrameH, id: u32, style: *const abi.Words(types.Style), shapes
     return runtime.cCanvas(rtOf(fr), id, &style.w, @ptrCast(@alignCast(shapes)), options);
 }
 
-fn frameAnimate(f: *Frame, id: types.Id, target: f32, spring: Spring) f32 {
-    return f.animate(id, target, spring);
+fn frameAnimate(f: *Frame, id: types.Id, target: f32, spring: *const Spring) f32 {
+    return f.animate(id, target, spring.*);
 }
 
 fn frameTween(f: *Frame, id: types.Id, target: f32, seconds: f32, ease: Ease) f32 {
@@ -402,8 +402,8 @@ fn styleDefault(out: *abi.Words(types.Style)) callconv(.c) void {
 }
 
 /// The reference widgets' default theme.
-fn themeDefault(out: *abi.Words(base.Theme)) callconv(.c) void {
-    words.put(base.Theme, .default, &out.w);
+fn themeDefault(out: *base.Theme) callconv(.c) void {
+    out.* = .default;
 }
 
 /// The layout this library reads (`LCGF_LAYOUT`): compare before making a context.
@@ -427,15 +427,14 @@ test "api: a frame through the new names draws what the old names draw" {
     const in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } };
     var s: abi.Words(types.Style) = undefined;
     words.put(types.Style, .{ .size = .{ .fill, .fill }, .pad = @splat(4), .fill = .rgb(10, 20, 30) }, &s.w);
-    var th: abi.Words(base.Theme) = undefined;
+    var th: base.Theme = undefined;
     themeDefault(&th);
     const open = abi.Wrap(Frame.open, handles).c;
     const close = abi.Wrap(Frame.close, handles).c;
     const button = abi.Wrap(base.button, handles).c;
     const slider = abi.Wrap(base.slider, handles).c;
     const animate = abi.Wrap(frameAnimate, handles).c;
-    var sp: abi.Words(Spring) = undefined;
-    words.put(Spring, .{}, &sp.w);
+    const sp: Spring = .{};
     for (bufs, &outs, 0..) |b, *out, k| {
         try testing.expectEqual(0, contextInit(b.ptr, b.len, &l));
         var v: f32 = 0.25;
