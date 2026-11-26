@@ -351,15 +351,7 @@ fn main() {
                 }
             }
             out.extend_from_slice(&(d.customs().len() as u32).to_le_bytes());
-            let at = out.len();
             out.extend_from_slice(bytes(d.customs()));
-            // A canvas's damage key hashes the batch's address, which differs between processes.
-            if plot_scene {
-                let size = core::mem::size_of::<lcgf::CustomDraw>();
-                for i in 0..d.customs().len() {
-                    out[at + i * size + 32..at + i * size + 40].fill(0);
-                }
-            }
             out.extend_from_slice(&u32::MAX.to_le_bytes());
             out.extend_from_slice(&u32::MAX.to_le_bytes());
             out.extend_from_slice(&wake.to_bits().to_le_bytes());

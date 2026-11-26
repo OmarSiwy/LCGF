@@ -204,13 +204,15 @@ pub const Frame = struct {
     /// command in paint order, clipped to the node. Needs `Context.enableCanvas`. It is a
     /// custom row, so it takes a `Limits.customs` row, orders, layers and damages like a
     /// custom node; its damage covers the camera, the palette, the ranges, the overrides and
-    /// `shapes.revision`, so a pan, a recolour or an edit redraws it. An overlay is a second
+    /// `shapes.revision`, so a pan, a recolour or an edit redraws it; not the batch's address, so
+    /// a batch moved in memory does not redraw (bump `revision` when a node switches to another
+    /// batch at the same revision). An overlay is a second
     /// canvas node over it (a float) or more ranges. Everything passed is the caller's and
     /// must outlive the frame's drawing, and a subtree `reuse` keeps draws it again as it was.
     pub fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node {
         const ctx = f.ctx;
         std.debug.assert(ctx.canvas_hook != null);
-        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, zoom: f32, revision: u32, len: u32, verts: u32, zoom_scale: u32, shapes: u64 }{
+        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, zoom: f32, revision: u32, len: u32, verts: u32, zoom_scale: u32 }{
             .origin = o.camera.origin,
             .scale = o.camera.scale,
             .offset = o.camera.offset,
@@ -219,7 +221,6 @@ pub const Frame = struct {
             .revision = shapes.revision,
             .len = shapes.len,
             .verts = shapes.vert_len,
-            .shapes = @intFromPtr(shapes),
         };
         var h = std.hash.Wyhash.init(3);
         h.update(std.mem.asBytes(&view));

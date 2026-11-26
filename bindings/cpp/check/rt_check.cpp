@@ -206,12 +206,7 @@ int main(int argc, char** argv) {
             put(out, c.key);
         }
         put(out, std::uint32_t(d.customs().size()));
-        const std::size_t at = out.size();
         put_bytes(out, d.customs());
-        // A canvas's damage key hashes the batch's address, which differs between processes.
-        if (plot_scene)
-            for (std::size_t i = 0; i < d.customs().size(); ++i)
-                std::memset(out.data() + at + i * sizeof(d.customs()[0]) + offsetof(lcgf_custom_draw, data), 0, 8);
         put(out, LCGF_NO_WIDGET);
         put(out, LCGF_NO_WIDGET);
         const float wake = ctx.wake();

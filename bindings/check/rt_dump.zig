@@ -87,12 +87,7 @@ pub fn main(init: std.process.Init) !void {
             try put(arena, &out, d.cmd.key[i]);
         }
         try put(arena, &out, d.custom_len);
-        const at = out.items.len;
         try out.appendSlice(arena, std.mem.sliceAsBytes(d.customs[0..d.custom_len]));
-        // A canvas's damage key hashes the batch's address, which differs between processes.
-        if (plot_scene) for (0..d.custom_len) |i| {
-            @memset(out.items[at + i * @sizeOf(lcgf.draw_list.CustomDraw) + @offsetOf(lcgf.draw_list.CustomDraw, "data") ..][0..8], 0);
-        };
         try put(arena, &out, 0xffff_ffff);
         try put(arena, &out, 0xffff_ffff);
         try put(arena, &out, @bitCast(o.wake));
