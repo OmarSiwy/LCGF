@@ -1,7 +1,7 @@
 //! Draws every render conformance scene (src/render/conformance.zig) with the GL ES back end
 //! and writes each as a PNG, for comparison with the golden images (ci/jobs/gles.sh):
 //!
-//!     gles-play OUT [es3|es2]      ->  OUT/<scene>.png
+//!     gles-play OUT [es3|es2]      ->  OUT/<scene>.png (es3: and OUT/canvas.png)
 //!
 //! es3 (default) is the instanced renderer on a GL ES 3 context, es2 the path without instancing
 //! (es2.zig) on a GL ES 2 context.
@@ -22,6 +22,7 @@ const gpu = gles.gpu;
 const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
+var canvas: conformance.CanvasStorage = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -57,7 +58,29 @@ pub fn main(init: std.process.Init) !void {
         var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
         defer gfx.deinit();
         try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas));
+        try drawCanvas(io, gpa, out, &h, atlas);
     }
+}
+
+/// The canvas scene (golden tools/golden/ref/draw/canvas.png), by a renderer with the canvas
+/// pipeline.
+fn drawCanvas(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, atlas: gl.Uint) !void {
+    const sc = conformance.canvas_scene;
+    canvas.load();
+    var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts });
+    defer gfx.deinit();
+    const handle = gfx.addTexture(atlas);
+    const w: u32 = @intFromFloat(sc.viewport[0]);
+    const ht: u32 = @intFromFloat(sc.viewport[1]);
+    var target = try host.Target.init(h, w, ht);
+    defer target.deinit(h);
+    gfx.prepare({}, &canvas.draw, .{ .texture = handle }, sc.viewport, 1);
+    target.begin(h, .{ 13.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1 });
+    iface.render(&gfx, {}, &canvas.draw);
+    const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
+    h.readback(w, ht, px);
+    try h.check();
+    try out.writeFile(io, .{ .sub_path = "canvas.png", .data = try png(gpa, w, ht, px) });
 }
 
 /// The custom command's draw on either path: the projection's on GL ES 3, the hand-written

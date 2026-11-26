@@ -13,4 +13,5 @@ for mode in es3 es2; do
     for s in rects clip text custom; do
         python3 tools/golden/golden.py "$out/$s.png" "src/render/conformance/$s.png"
     done
+    if [ "$mode" = es3 ]; then python3 tools/golden/golden.py "$out/canvas.png" tools/golden/ref/draw/canvas.png; fi
 done

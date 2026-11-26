@@ -20,6 +20,7 @@ const std = @import("std");
 const lcgf = @import("lcgf");
 const gl = @import("gl.zig");
 const program = @import("program.zig");
+const gpu = @import("gpu.zig");
 const types = lcgf.types;
 const draw_list = lcgf.draw_list;
 const quad_shader = lcgf.quad_shader;
@@ -33,9 +34,20 @@ pub const max_materials = quad_shader.max_materials;
 pub const Desc = struct {
     max_quads: u32 = 16 * 1024,
     max_glyphs: u32 = 32 * 1024,
+    /// Canvas instance rows and polygon vertices kept on the GPU (32 and 8 bytes each); 0
+    /// rows: no canvas pipeline, and canvases draw nothing.
+    canvas_rows: u32 = 0,
+    canvas_verts: u32 = 0,
 };
 
-pub const Error = program.Error;
+pub const Error = program.Error || gpu.Error;
+
+/// canvas.wgsl as GLSL ES 3.0, vertices from a texture (src/render/gpu/canvas.zig).
+pub const Canvas = lcgf.gpu_canvas.Canvas(gpu, struct {
+    pub const wgsl = lcgf.canvas_shader.wgsl_es;
+    pub const glsl_vs = @embedFile("canvas_vert");
+    pub const glsl_fs = @embedFile("canvas_frag");
+});
 
 pub const Renderer = struct {
     f: *const gl.Fns,
@@ -54,6 +66,8 @@ pub const Renderer = struct {
     extent: [2]u32 = .{ 0, 0 },
     scale: f32 = 1,
     glyphs: Glyphs = .{},
+    canvas: ?Canvas = null,
+    list: ?*const DrawList = null,
 
     pub const max_textures = 64;
     /// GL uploads through the current context: nothing to pass.
@@ -91,11 +105,16 @@ pub const Renderer = struct {
         f.glTexImage2D(gl.TEXTURE_2D, 0, @intCast(gl.RGBA), 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, &white_px);
         r.textures[0] = r.white; // Texture.white
         r.texture_count = 1;
+        if (desc.canvas_rows > 0) {
+            r.canvas = @as(Canvas, undefined);
+            try r.canvas.?.init(r.device(), .{ .format = .rgba8_unorm }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts });
+        }
         return r;
     }
 
     pub fn deinit(r: *Renderer) void {
         const f = r.f;
+        if (r.canvas) |*cv| cv.deinit(r.device());
         for (r.programs[0..r.material_count]) |p| f.glDeleteProgram(p);
         if (r.vao != 0) r.f3.glDeleteVertexArrays(1, @ptrCast(&r.vao));
         if (r.instances != 0) f.glDeleteBuffers(1, @ptrCast(&r.instances));
@@ -153,6 +172,25 @@ pub const Renderer = struct {
         r.glyphs = glyphs;
         r.scale = scale;
         r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
+        r.list = draw;
+        if (r.canvas) |*cv| {
+            var up: gpu.Upload = .begin(r.device(), {});
+            const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+            cv.prepare(r.device(), &up, draw, 0, scale, r.extent, .{ .texture = r.textures[atlas], .width = 0, .height = 0 }, atlas);
+        }
+    }
+
+    fn device(r: *const Renderer) gpu.Device {
+        return .wrap(r.f, r.f3, null);
+    }
+
+    /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas
+    /// program, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+    /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+    pub fn drawCanvas(r: *const Renderer, _: Pass, k: u32) void {
+        const cv = if (r.canvas) |*cv| cv else return;
+        var pass: gpu.RenderPass = .wrap(r.device(), {}, r.extent[0], r.extent[1]);
+        cv.draw(&pass, r.list.?, k);
     }
 
     fn instanceBytes(r: *const Renderer) usize {
@@ -269,6 +307,32 @@ test "renderer: a draw after the host's own state still lands where it should" {
     h.readback(160, 120, &px);
     try h.check();
     try testing.expectEqualSlices(u8, &.{ 30, 31, 36, 255 }, px[(60 * 160 + 80) * 4 ..][0..4]);
+}
+
+test "renderer: a canvas re-sends only appended rows, and appended vertices by texture row" {
+    var h: host.Host = undefined;
+    try h.init(.{ .major = 3 });
+    defer h.deinit();
+    const conformance = lcgf.render_conformance;
+    const sc = conformance.canvas_scene;
+    var r = try Renderer.init(&h.gl, &h.gl3, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts });
+    defer r.deinit();
+    const st = try testing.allocator.create(conformance.CanvasStorage);
+    defer testing.allocator.destroy(st);
+    st.load();
+    const s = &st.shapes;
+    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
+    const row_bytes = lcgf.canvas_shader.verts_width * 4;
+    r.prepare({}, &st.draw, .{}, sc.viewport, 1);
+    s.clearDirty();
+    // Every row, the vertex texture's one row and the row-index buffer.
+    try testing.expectEqual(32 * s.len + row_bytes + uniforms + 4 * sc.rows, r.canvas.?.uploaded);
+    r.prepare({}, &st.draw, .{}, sc.viewport, 1);
+    try testing.expectEqual(uniforms, r.canvas.?.uploaded);
+    _ = s.polygon(&.{ .{ 0, 0 }, .{ 10, 0 }, .{ 0, 10 } }, .{});
+    r.prepare({}, &st.draw, .{}, sc.viewport, 1);
+    try testing.expectEqual(32 + row_bytes + uniforms, r.canvas.?.uploaded);
+    try h.check();
 }
 
 test "renderer: textures register in order, clamp past the cap and can be re-pointed" {

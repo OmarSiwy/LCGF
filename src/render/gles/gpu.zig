@@ -480,6 +480,16 @@ pub const Upload = struct {
         up.f.glPixelStorei(UNPACK_ROW_LENGTH, 0);
     }
 
+    /// Replaces `rows` whole rows of `t` from row `y` with `bytes`, tightly packed: GL's
+    /// partial upload, which the canvas pipeline's vertex texture uses (src/render/gpu/canvas.zig).
+    pub fn writeTextureRows(up: *Upload, t: Texture, y: u32, rows: u32, bytes: []const u8) Error!void {
+        const fmt = try glFormat(t.format);
+        std.debug.assert(bytes.len == @as(usize, t.width) * rows * t.format.bytesPerPixel());
+        up.f.glBindTexture(gl.TEXTURE_2D, t.handle);
+        up.f.glPixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        up.f.glTexSubImage2D(gl.TEXTURE_2D, 0, 0, @intCast(y), @intCast(t.width), @intCast(rows), fmt.format, fmt.type, bytes.ptr);
+    }
+
     pub fn prepare(_: *Upload, _: Texture) void {}
 
     pub fn finish(up: *Upload) Encoder {
