@@ -70,6 +70,30 @@ pub fn build(b: *std.Build) void {
         abi_lib.bundle_compiler_rt = true;
         abi_step.dependOn(&b.addInstallArtifact(abi_lib, .{}).step);
     }
+    // The static-UI engine as C source (src/abi/ct_c.zig through Zig's C backend, its pointer
+    // arithmetic made foldable by tools/ct-csrc), one file per lane count, with the zig.h it
+    // includes: lcgf-gen --static's per-UI C compiles it with the UI's words as constants.
+    const ct_csrc = b.addExecutable(.{ .name = "ct-csrc", .root_module = b.createModule(.{ .root_source_file = b.path("tools/ct-csrc/main.zig"), .target = b.graph.host, .optimize = .ReleaseSafe }) });
+    for ([_]u32{ 4, 8, 16 }) |abi_lanes| {
+        const copt = b.addOptions();
+        copt.addOption(?u32, "lanes", abi_lanes);
+        copt.addOption(bool, "fixed_point", false);
+        const ctarget = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = target.result.os.tag, .abi = target.result.abi, .ofmt = .c });
+        const cm = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = ctarget, .optimize = optimize });
+        cm.addOptions("build_options", copt);
+        cm.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
+        const cobj = b.addObject(.{ .name = b.fmt("lcgf_ct_l{d}", .{abi_lanes}), .root_module = b.createModule(.{
+            .root_source_file = b.path("src/abi/ct_c.zig"),
+            .target = ctarget,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "lcgf", .module = cm }},
+        }) });
+        const fix = b.addRunArtifact(ct_csrc);
+        fix.addFileArg(cobj.getEmittedBin());
+        const fixed = fix.addOutputFileArg(b.fmt("lcgf_ct_l{d}.c", .{abi_lanes}));
+        abi_step.dependOn(&b.addInstallFile(fixed, b.fmt("share/lcgf/lcgf_ct_l{d}.c", .{abi_lanes})).step);
+    }
+    abi_step.dependOn(&b.addInstallFile(.{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe).?, "..", "lib", "zig.h" }) }, "share/lcgf/zig.h").step);
     // liblcgf_auto.a (x86-64 ELF): the three widths again, each built for the CPU level it suits
     // and its C names suffixed, under the dispatcher of src/abi/auto.zig, which picks one at the
     // first call. CMake's LCGF_LANES=auto and the crate's `lanes-auto` feature link it.
@@ -269,6 +293,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_csrc.root_module })).step);
     test_step.dependOn(&b.addRunArtifact(tests).step);
     if (markup_step) |s| test_step.dependOn(s);
     // For targets this machine cannot run (ci/run.sh cross).
