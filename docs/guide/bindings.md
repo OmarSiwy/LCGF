@@ -136,7 +136,8 @@ A UI built in code each frame, as a Zig program does with `ctx.begin` and `f.ope
   take a style or a row (Rust: `open_row`, `leaf_row`, `custom_row`).
 - **The row is pushed inline.** `Begin` asks liblcgf where this frame's tree columns are
   (`lcgf_rt_view`), and `Open` and `Leaf` store the row into them as Zig's inlined `open` does:
-  no call. Text, widgets, `Close`, `Custom` and `Animate` are one direct call each.
+  no call. The stores, one per column, are generated from Zig's types (`lcgf/rows.hpp`,
+  `rows.rs`, `zig build abi-gen`); only pushRow's few decisions are written by hand. Text, widgets, `Close`, `Custom` and `Animate` are one direct call each.
 - **The layouts are checked.** `lcgf_style`, `lcgf_row` and `lcgf_view` are words and pointers
   in a fixed order, hashed into `LCGF_RT_LAYOUT`; making a context fails with
   `Status::layout_hash` / `Status::LayoutHash` if the library was built with another layout.

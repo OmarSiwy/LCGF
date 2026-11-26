@@ -242,6 +242,7 @@ One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes a
 
 Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `cursor`
 
+- `collapsed = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" }`: The layout inputs a collapsed node (`Participation.layout` off) has zeroed: `pct` to -1, the others to 0 (`Tree.pushRow`; tools/abi-gen writes the bindings' copy from it).
 - `fn from(s: *const Style) Template`
 
 ### `FlatRow` (struct)

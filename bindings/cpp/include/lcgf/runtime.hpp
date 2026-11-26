@@ -34,6 +34,8 @@
 #define LCGF_INLINE [[gnu::always_inline]] inline
 #endif
 
+#include <lcgf/rows.hpp>
+
 namespace lcgf {
 
 /// A node's identity: FNV-1a of its name, never 0 (`Id.hash` in Zig, inline here).
@@ -515,8 +517,9 @@ public:
 private:
     static constexpr Row kDefault{Style{}};
 
-    // `Tree.pushRow`, store for store, into the columns lcgf_rt_view gave: what Zig's inlined
-    // `open` does, with no call. bindings/check/run.sh holds the frames byte-identical to Zig's.
+    // `Tree.pushRow` into the columns lcgf_rt_view gave, what Zig's inlined `open` does, with no
+    // call: the stores are generated from Zig's types (lcgf/rows.hpp, tools/abi-gen); what is
+    // here is the rest of pushRow. bindings/check/run.sh holds the frames byte-identical to Zig's.
     LCGF_INLINE std::uint32_t Push(std::uint32_t id, const Row& r) const {
         const lcgf_view& v = *v_;
         const std::uint32_t parent_in = v.stack[*v.depth - 1];
@@ -530,29 +533,13 @@ private:
         v.id[i] = id;
         v.parent[i] = parent;
         v.end[i] = i + 1;
-        for (int a = 0; a < 2; ++a) {
-            v.min[a][i] = r.min[a], v.max[a][i] = r.max[a];
-            v.grow[a][i] = r.grow[a], v.pct[a][i] = r.pct[a];
-            v.pad_lo[a][i] = r.pad_lo[a], v.pad_hi[a][i] = r.pad_hi[a];
-            v.offset[a][i] = r.offset[a], v.scroll[a][i] = r.scroll[a];
-            v.main[a][i] = r.main[a];
-        }
-        v.gap[i] = r.gap, v.flow[i] = r.flow, v.shrink[i] = r.shrink;
-        v.align_main[i] = r.align_main, v.align_cross[i] = r.align_cross;
-        v.clips[i] = std::uint8_t(r.clips), v.sense[i] = std::uint8_t(r.sense);
-        v.look[i] = {{r.params[0], r.params[1], r.params[2], r.params[3]}, r.fill, r.border_color, r.radius, std::uint16_t(r.texture), std::uint16_t(r.material)};
-        v.role[i] = std::uint8_t(r.role), v.value[i] = r.value;
-        v.text[i] = r.text, v.custom[i] = r.custom;
+        gen::StoreNode(v, i, r);
         // Participation narrows down the tree; without layout the node collapses.
         const std::uint8_t up = i == 0 ? 15 : v.x_row[v.scope[parent]].active_participation;
         std::uint8_t active = std::uint8_t(r.participation) & up;
         if (!(active & 1)) {
             active = 0;
-            for (int a = 0; a < 2; ++a) {
-                v.min[a][i] = 0, v.max[a][i] = 0, v.grow[a][i] = 0, v.pct[a][i] = -1;
-                v.pad_lo[a][i] = 0, v.pad_hi[a][i] = 0;
-            }
-            v.flow[i] = 0, v.gap[i] = 0;
+            gen::CollapseNode(v, i);
         }
         v.role[i] &= std::uint8_t(0u - ((active >> 3) & 1));
         v.sense[i] &= std::uint8_t(0u - ((active >> 2) & 1));
@@ -569,16 +556,10 @@ private:
         if (!own) return i;
         v.x_node[x] = i;
         lcgf_extra& e = v.x_row[x];
-        e.border = r.border;
-        for (int k = 0; k < 4; ++k) e.uv[k] = r.uv[k], e.radii[k] = r.radii[k];
-        e.opacity = r.opacity;
-        for (int k = 0; k < 6; ++k) e.transform[k] = r.transform[k];
-        e.transform_origin[0] = r.transform_origin[0], e.transform_origin[1] = r.transform_origin[1];
-        e.paint_reference = r.paint_reference;
-        for (int k = 0; k < 4; ++k) e.paint_outset[k] = r.paint_outset[k];
-        e.prepared_texture = r.prepared_texture, e.paint_revision = r.paint_revision;
-        e.participation = std::uint8_t(r.participation), e.active_participation = active;
-        e.cursor = std::uint8_t(r.cursor);
+        gen::StoreExtra(e, r);
+        // A reference to this row or a later one paints from the node itself (Tree.pushRow).
+        e.paint_reference = r.paint_reference < i ? r.paint_reference : 0xffffffffu;
+        e.active_participation = active;
         e.active_cursor = r.cursor != 255 ? std::uint8_t(r.cursor) : i == 0 ? 255
                                                                             : v.x_row[v.scope[parent]].active_cursor;
         return i;

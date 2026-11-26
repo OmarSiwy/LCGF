@@ -120,7 +120,8 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   plan, made at comptime, through the same `plan.emit` the seam's frame calls; only its walk of
   the spec (regions, custom widgets with Zig code) is its own. The runtime front end crosses too
   (src/abi/runtime.zig): C++ and Rust make each row from its style themselves (folded at compile
-  time when the style is constant) and store it into the frame's columns inline, so a runtime
+  time when the style is constant) and store it into the frame's columns inline (the stores
+  generated from Zig's types by tools/abi-gen), so a runtime
   UI costs what it costs in Zig; the other calls are one direct call each. Static UIs cross
   as well (src/abi/ct.zig): `lcgf-gen --static` makes the comptime pipeline's tables (fold,
   constant columns, paint templates) with the functions `ct_layout` and `ct_paint` call at

@@ -121,8 +121,12 @@ pub const Template = struct {
     participation: types.Participation = .all,
     cursor: u8 = 255,
 
+    /// The layout inputs a collapsed node (`Participation.layout` off) has zeroed: `pct` to -1,
+    /// the others to 0 (`Tree.pushRow`; tools/abi-gen writes the bindings' copy from it).
+    pub const collapsed = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" };
+
     /// Names of the node-column fields, in column order.
-    const node_fields = blk: {
+    pub const node_fields = blk: {
         const all = @typeInfo(Template).@"struct".field_names;
         break :blk all[0..std.meta.fieldIndex(Template, "own").?];
     };
@@ -467,10 +471,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             return t.pushRow(parent, id, &Template.from(s));
         }
 
-        /// The layout inputs a collapsed node (`Participation.layout` off) has zeroed.
         fn collapses(comptime name: []const u8) bool {
-            const names = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" };
-            inline for (names) |n| if (comptime std.mem.eql(u8, n, name)) return true;
+            inline for (Template.collapsed) |n| if (comptime std.mem.eql(u8, n, name)) return true;
             return false;
         }
 

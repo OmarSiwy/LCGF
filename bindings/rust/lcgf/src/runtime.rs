@@ -483,12 +483,15 @@ struct View {
     x_row: *mut Extra,
 }
 
+include!("rows.rs");
+
 /// The bit of `View::status` that `enter` sets when the stack overflows (`LCGF_RT_DEPTH_BIT`).
 const DEPTH_BIT: u32 = 4;
 
 impl View {
-    /// `Tree.pushRow`, store for store, into the columns `lcgf_rt_view` gave: what Zig's
-    /// inlined `open` does, with no call. bindings/check/run.sh holds the frames byte-identical.
+    /// `Tree.pushRow` into the columns `lcgf_rt_view` gave, what Zig's inlined `open` does, with
+    /// no call: the stores are generated from Zig's types (rows.rs, tools/abi-gen); what is here
+    /// is the rest of pushRow. bindings/check/run.sh holds the frames byte-identical.
     #[inline(always)]
     unsafe fn push(&self, id: u32, r: &Row) -> u32 {
         unsafe {
@@ -503,36 +506,7 @@ impl View {
             *self.id.add(iu) = id;
             *self.parent.add(iu) = parent;
             *self.end.add(iu) = i + 1;
-            for a in 0..2 {
-                *self.min[a].add(iu) = r.min[a];
-                *self.max[a].add(iu) = r.max[a];
-                *self.grow[a].add(iu) = r.grow[a];
-                *self.pct[a].add(iu) = r.pct[a];
-                *self.pad_lo[a].add(iu) = r.pad_lo[a];
-                *self.pad_hi[a].add(iu) = r.pad_hi[a];
-                *self.offset[a].add(iu) = r.offset[a];
-                *self.scroll[a].add(iu) = r.scroll[a];
-                *self.main[a].add(iu) = r.main[a];
-            }
-            *self.gap.add(iu) = r.gap;
-            *self.flow.add(iu) = r.flow;
-            *self.shrink.add(iu) = r.shrink;
-            *self.align_main.add(iu) = r.align_main;
-            *self.align_cross.add(iu) = r.align_cross;
-            *self.clips.add(iu) = r.clips as u8;
-            *self.sense.add(iu) = r.sense as u8;
-            *self.look.add(iu) = Look {
-                params: r.params,
-                fill: r.fill,
-                border_color: r.border_color,
-                radius: r.radius,
-                texture: r.texture as u16,
-                material: r.material as u16,
-            };
-            *self.role.add(iu) = r.role as u8;
-            *self.value.add(iu) = r.value;
-            *self.text.add(iu) = r.text;
-            *self.custom.add(iu) = r.custom;
+            store_node(self, iu, r);
             // Participation narrows down the tree; without layout the node collapses.
             let up = if i == 0 {
                 15
@@ -542,16 +516,7 @@ impl View {
             let mut active = r.participation as u8 & up;
             if active & 1 == 0 {
                 active = 0;
-                for a in 0..2 {
-                    *self.min[a].add(iu) = 0.0;
-                    *self.max[a].add(iu) = 0.0;
-                    *self.grow[a].add(iu) = 0.0;
-                    *self.pct[a].add(iu) = -1.0;
-                    *self.pad_lo[a].add(iu) = 0.0;
-                    *self.pad_hi[a].add(iu) = 0.0;
-                }
-                *self.flow.add(iu) = 0.0;
-                *self.gap.add(iu) = 0.0;
+                collapse_node(self, iu);
             }
             *self.role.add(iu) &= 0u8.wrapping_sub((active >> 3) & 1);
             *self.sense.add(iu) &= 0u8.wrapping_sub((active >> 2) & 1);
@@ -570,19 +535,14 @@ impl View {
             }
             *self.x_node.add(x as usize) = i;
             let e = &mut *self.x_row.add(x as usize);
-            e.border = r.border;
-            e.uv = r.uv;
-            e.radii = r.radii;
-            e.opacity = r.opacity;
-            e.transform = r.transform;
-            e.transform_origin = r.transform_origin;
-            e.paint_reference = r.paint_reference;
-            e.paint_outset = r.paint_outset;
-            e.prepared_texture = r.prepared_texture;
-            e.paint_revision = r.paint_revision;
-            e.participation = r.participation as u8;
+            store_extra(e, r);
+            // A reference to this row or a later one paints from the node itself (Tree.pushRow).
+            e.paint_reference = if r.paint_reference < i {
+                r.paint_reference
+            } else {
+                u32::MAX
+            };
             e.active_participation = active;
-            e.cursor = r.cursor as u8;
             e.active_cursor = if r.cursor != 255 {
                 r.cursor as u8
             } else if i == 0 {

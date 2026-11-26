@@ -311,7 +311,8 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_csrc.root_module })).step);
-    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf_api.h, from src/abi/api.zig),
+    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf_api.h, from src/abi/api.zig) and
+    // the bindings' row stores (bindings/cpp/include/lcgf/rows.hpp, bindings/rust/lcgf/src/rows.rs),
     // committed. `zig build abi-gen` writes it; the test fails when it is stale, when a pub fn
     // of a container api.zig lists is neither exported nor skipped (the tripwire), or when the
     // header does not compile as C.
