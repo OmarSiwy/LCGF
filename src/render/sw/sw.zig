@@ -1184,7 +1184,8 @@ pub fn shade(comptime kind: features.Kind, t: Target, q: *const Quad, img: Image
 /// The shader loop over the pixels of `q`'s box. A scale or transform the vertex shader could
 /// not invert draws nothing.
 fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime encoding: ImageEncoding, t: Target, q: *const Quad, img: Image, scale: f32) void {
-    if (!std.math.isFinite(scale) or scale <= 0 or @import("../../draw/geometry.zig").inverse(q.xform) == null) return;
+    // Not drawn: the box below is emptied, so the row loops run zero times (no gate jump).
+    const drawn = std.math.isFinite(scale) & (scale > 0) & @import("../../draw/geometry.zig").invertible(q.xform);
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;
@@ -1214,12 +1215,13 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime
         hi = @max(hi, sc);
     }
     const clip = q.clip;
-    const box = clampBox(toPixels(.{
+    const shown = clampBox(toPixels(.{
         @max(lo[0], clip[0]) * scale,
         @max(lo[1], clip[1]) * scale,
         @min(hi[0], clip[2]) * scale + 1,
         @min(hi[1], clip[3]) * scale + 1,
     }), t.scissor);
+    const box: [4]u32 = @select(u32, @as(@Vector(4, bool), @splat(drawn)), @as(@Vector(4, u32), shown), @as(@Vector(4, u32), @splat(0)));
 
     const fill = rgba(q.fill);
     const edge = rgba(q.border_color);
