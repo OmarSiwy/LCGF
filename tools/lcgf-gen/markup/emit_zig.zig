@@ -1055,7 +1055,13 @@ pub const Emit = struct {
         var seen: std.StringHashMapUnmanaged(void) = .empty;
         e.print("                comptime {{\n                    const Item = @import(\"std\").meta.Elem(@TypeOf(data.{f}));\n", .{std.zig.fmtId(n.bind)});
         for (e.page.item_fields.items) |f| {
-            if (!std.mem.eql(u8, f.each, n.id) or seen.contains(f.field)) continue;
+            if (!std.mem.eql(u8, f.each, n.id)) continue;
+            if (f.bound) |ty| {
+                // A bound field: the type the control writes, through a mutable item list.
+                e.print("                    if (@hasField(Item, \"{s}\") and @FieldType(Item, \"{s}\") != {s}) @compileError(\"{s}: '{s}.{s}' is bound as {s} here; the item's field is \" ++ @typeName(@FieldType(Item, \"{s}\")));\n", .{ f.field, f.field, fieldType(ty), e.whereFull(f.loc), n.text, f.field, fieldType(ty), f.field });
+                e.print("                    if (@typeInfo(@TypeOf(data.{f})) != .pointer or @typeInfo(@TypeOf(data.{f})).pointer.attrs.@\"const\") @compileError(\"{s}: '{s}.{s}' is bound here, so pass {s} as a mutable slice\");\n", .{ std.zig.fmtId(n.bind), std.zig.fmtId(n.bind), e.whereFull(f.loc), n.text, f.field, n.bind });
+            }
+            if (seen.contains(f.field)) continue;
             seen.put(e.arena, f.field, {}) catch unreachable;
             e.print("                    if (!@hasField(Item, \"{s}\")) @compileError(\"{s}: the items of '{s}' have no field '{s}'\");\n", .{ f.field, e.whereFull(f.loc), n.bind, f.field });
         }
@@ -1076,7 +1082,7 @@ pub const Emit = struct {
             \\                const f = &region_frame;
             \\                // The copies are laid out in the region as its CSS says.
             \\                _ = f.open(.none, {s});
-            \\                for (data.{f}, 0..) |{f}, copy0| {{
+            \\                for (data.{f}, 0..) |*{f}, copy0| {{
             \\
         , .{ n.id, n.id, n.id, n.id, n.id, n.id, e.styleText(.{ .size = .{ .fill, .fill }, .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text) });
         e.write(body.items);

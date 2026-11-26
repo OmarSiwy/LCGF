@@ -1028,6 +1028,13 @@ pub const Lowerer = struct {
         }
         var node: ir.Node = .{ .kind = .when, .parent = parent, .loc = at };
         if (l.attr(n, "lcgf-if")) |f| {
+            if (l.eachOf(n) != none) {
+                // Per item: a bool field of the item (`row.expanded`).
+                node.bind = l.itemBinding(n, f, l.valueLoc(n, "lcgf-if"), .bool);
+                if (node.bind.len == 0) return;
+                l.ir_of[n] = l.addNode(node);
+                return;
+            }
             if (!l.identifier(f, l.valueLoc(n, "lcgf-if"))) return;
             l.field(f, .bool, l.valueLoc(n, "lcgf-if"), "lcgf-if");
             node.bind = f;
@@ -1130,6 +1137,24 @@ pub const Lowerer = struct {
         if (nodes == 0 or texts == 0 or texts > 255 * 64) l.ds.err(at, "lcgf-nodes and lcgf-texts take positive counts", .{});
         const id = ok(std.fmt.allocPrint(l.arena, "each_{s}", .{list}));
         l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), 0, 0 } });
+    }
+
+    /// A binding inside an lcgf-each region: per-item state lives in the app's item, so it names
+    /// a field of the item (`bind:checked="row.selected"`), typed by the control.
+    fn itemBinding(l: *Lowerer, n: u32, f: []const u8, at: Loc, ty: ir.FieldType) []const u8 {
+        const each = l.eachOf(n);
+        const item = l.page.nodes.items(.text)[each];
+        const dot = std.mem.indexOfScalar(u8, f, '.');
+        if (dot == null or !std.mem.eql(u8, f[0..dot.?], item) or !l.identifier(f[dot.? + 1 ..], at)) {
+            l.ds.err(at, "inside lcgf-each, bind a field of the item: \"{s}.field\" (per-item state is the app's)", .{item});
+            return "";
+        }
+        if (ty != .bool and ty != .f32 and ty != .u32) {
+            l.ds.err(at, "inside lcgf-each, only checkboxes, switches, toggles, sliders, radio groups and lcgf-if bind an item field so far", .{});
+            return "";
+        }
+        ok(l.page.item_fields.append(l.arena, .{ .each = l.page.nodes.items(.id)[each], .field = f[dot.? + 1 ..], .loc = at, .bound = ty }));
+        return f;
     }
 
     /// The `each` region around document node `n`, as its IR node, or none.
@@ -1325,6 +1350,10 @@ pub const Lowerer = struct {
                     l.ds.err(doc.attrLoc(a), "on:change on a text control is not lowered yet; use on:submit", .{});
                     continue;
                 }
+                if (std.mem.indexOfScalar(u8, bind, '.') != null) {
+                    l.ds.err(doc.attrLoc(a), "on:change on a per-item control is not lowered yet; read the item after the frame", .{});
+                    continue;
+                }
                 if (bind.len == 0) {
                     l.ds.err(doc.attrLoc(a), "on:change needs a bound value (bind:value or bind:checked)", .{});
                     continue;
@@ -1392,7 +1421,8 @@ pub const Lowerer = struct {
     /// A widget's id: its `id`, else its bound field, else its click handler's name.
     fn widgetId(l: *Lowerer, n: u32, bind: []const u8, what: []const u8) ?[]const u8 {
         if (l.attr(n, "id")) |id| return if (l.identifier(id, l.valueLoc(n, "id"))) id else null;
-        if (bind.len > 0) return bind;
+        // A per-item field (`row.selected`) names the widget by the field; the copy index makes it unique.
+        if (bind.len > 0) return if (std.mem.indexOfScalar(u8, bind, '.')) |dot| bind[dot + 1 ..] else bind;
         if (l.attr(n, "on:click")) |h| return h;
         l.ds.err(l.loc(n), "{s} needs an id, a binding or an on:click handler to name it", .{what});
         return null;
@@ -1404,10 +1434,7 @@ pub const Lowerer = struct {
         const name = std.fmt.bufPrint(&buf, "bind:{s}", .{what}) catch unreachable;
         const f = l.attr(n, name) orelse return "";
         const at = l.valueLoc(n, name);
-        if (l.eachOf(n) != none) {
-            l.ds.err(at, "a control inside lcgf-each cannot bind view state yet: per-item state is the app's", .{});
-            return "";
-        }
+        if (l.eachOf(n) != none) return l.itemBinding(n, f, at, ty);
         if (!l.identifier(f, at)) return "";
         l.field(f, ty, at, why);
         return f;

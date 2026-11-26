@@ -158,7 +158,14 @@ pub const Handler = struct {
 };
 
 /// A field of an `each` item the page reads (`{file.name}`), checked against the app's type.
-pub const ItemField = struct { each: []const u8, field: []const u8, loc: diag.Loc };
+pub const ItemField = struct {
+    each: []const u8,
+    field: []const u8,
+    loc: diag.Loc,
+    /// Set when a control or a template binds the field: the type it must have, and the item
+    /// list must then be mutable.
+    bound: ?FieldType = null,
+};
 
 pub const Page = struct {
     /// `<html lcgf-page>`, or the file's stem.

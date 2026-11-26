@@ -1,0 +1,23 @@
+<!doctype html>
+<html lcgf-page="rows">
+<head>
+  <title>Rows</title>
+  <style>
+    .list { width: 400px; height: 300px; gap: 2px; }
+    .row { display: flex; gap: 6px; align-items: center; }
+  </style>
+</head>
+<body>
+  <template lcgf-each="row in rows" class="list">
+    <div>
+      <div class="row">
+        <input type="checkbox" bind:checked="row.selected">
+        <span>{row.name}</span>
+      </div>
+      <template lcgf-if="row.expanded">
+        <span>{row.detail}</span>
+      </template>
+    </div>
+  </template>
+</body>
+</html>
