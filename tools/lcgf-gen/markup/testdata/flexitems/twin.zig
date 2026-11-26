@@ -31,4 +31,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     }), .{ .wrap = true, .lines = .center }),
     // aspect-ratio: Flex.Style.aspect, width over height.
     s.flexed(s.col(.{ .size = .{ .px(40), .fit }, .fill = .rgb(192, 64, 64) }, .{}), .{ .aspect = 2 }),
+    // justify-content: space-*: Flex.Style.space, on rows and columns.
+    s.flexed(s.row(.{ .size = .{ .px(200), .fit }, .gap = 4 }, .{
+        label.ct.label(theme, "L"),
+        label.ct.label(theme, "M"),
+        label.ct.label(theme, "R"),
+    }), .{ .space = .between }),
+    s.flexed(s.col(.{ .size = .{ .fit, .px(60) } }, .{ label.ct.label(theme, "x"), label.ct.label(theme, "y") }), .{ .space = .evenly }),
 });

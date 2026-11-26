@@ -17,8 +17,11 @@ flex.html:5:49: error: align-content: space-between is not lowered; use start, c
   .rw { display: flex; flex-wrap: wrap-reverse; align-content: space-between; }
                                                 ^
 flex.html:8:43: error: a wrapping row has one gap: give row-gap and column-gap the same length
-  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; }
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
                                           ^
+flex.html:8:97: error: justify-content: space-around is not lowered on a wrapping row
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
+                                                                                                ^
 flex.html:8:74: error: align-items: baseline is not lowered on a wrapping row
-  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; }
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
                                                                          ^

@@ -1398,7 +1398,11 @@ pub const Lowerer = struct {
             l.use(.gap);
         }
         if (l.keyword(n, .@"justify-content")) |kw| {
-            if (alignOf(kw)) |a| s.main = a else if (!l.refused("value", kw, "justify-content", l.declared(n, .@"justify-content").?.loc)) l.badValue(l.declared(n, .@"justify-content").?.first, .@"justify-content", l.declared(n, .@"justify-content").?.end);
+            const space = std.meta.stringToEnum(lcgf.flex.Flex.Space, if (std.mem.startsWith(u8, kw, "space-")) kw[6..] else "");
+            if (space) |sp| {
+                // Flex.Style.space; a wrapping row's lines keep Style.main.
+                if (l.flex.wrap) l.ds.err(l.declared(n, .@"justify-content").?.loc, "justify-content: {s} is not lowered on a wrapping row", .{kw}) else l.flex.space = sp;
+            } else if (alignOf(kw)) |a| s.main = a else if (!l.refused("value", kw, "justify-content", l.declared(n, .@"justify-content").?.loc)) l.badValue(l.declared(n, .@"justify-content").?.first, .@"justify-content", l.declared(n, .@"justify-content").?.end);
         }
         if (l.keyword(n, .@"align-items")) |kw| {
             if (alignOf(kw)) |a| s.cross = a else if (css.eq(kw, "baseline")) {
