@@ -12,7 +12,8 @@ pub fn addLexbor(b: *Build, root: Build.LazyPath, lexbor: *Build.Dependency, tar
     const windows = target.result.os.tag == .windows;
     const flags: []const []const u8 = if (windows) &.{ "-std=c99", "-DLEXBOR_STATIC" } else &.{ "-std=c99", "-DLEXBOR_STATIC", "-D_POSIX_C_SOURCE=199309L" };
     // The pinned Zig keeps the archive's top-level directory.
-    const source = "lexbor-3.0.1/source";
+    // The pinned Zig strips the archive's top directory (CI fetches it fresh).
+    const source = "source";
     module.addIncludePath(lexbor.path(source));
     module.addCSourceFiles(.{ .root = root, .files = &.{"tools/lcgf-gen/markup/lexbor.c"}, .flags = flags });
     const port = if (windows) "ports/windows_nt" else "ports/posix";
