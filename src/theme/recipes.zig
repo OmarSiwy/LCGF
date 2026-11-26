@@ -35,6 +35,7 @@ pub const switchControl = controls.switchControl;
 pub const slider = controls.slider;
 pub const progress = controls.progress;
 pub const textfield = controls.textfield;
+pub const number = controls.number;
 pub const textarea = parts.textarea;
 pub const radio = extra_controls.radio;
 pub const range = extra_controls.range;

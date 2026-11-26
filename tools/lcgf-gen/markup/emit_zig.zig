@@ -479,8 +479,12 @@ pub const Emit = struct {
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
             .number => {
-                e.print("{s}.ct.number(theme, .{f}, .{f}, ", .{ e.use("number"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                if (n.recipe.len > 0)
+                    e.print("recipes.ct.number(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
+                else
+                    e.print("{s}.ct.number(theme, .{f}, .{f}, ", .{ e.use("number"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
+                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
                 e.write(")");
             },
             .radio => {
@@ -796,6 +800,7 @@ pub const Emit = struct {
                 .textfield => "input",
                 .search => "search",
                 .textarea => "editor",
+                .number => "input",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
@@ -1234,11 +1239,13 @@ pub const Emit = struct {
                 return "";
             },
             .number => {
-                const face = e.rtFace(n);
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use("number"), e.faced("number", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
+                if (n.recipe.len > 0)
+                    e.print("_ = recipes.number(f, {s}, &{s}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) })
+                else
+                    e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use("number"), e.faced("number", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
-                e.write(face);
-                e.write(");");
+                if (n.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
                 return "";
             },
             .radio => {

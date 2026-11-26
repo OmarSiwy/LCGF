@@ -21,6 +21,7 @@ const link_zig = @import("../widgets/link.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
 const search_zig = @import("../widgets/search.zig");
 const textarea_zig = @import("../widgets/textarea.zig");
+const number_zig = @import("../widgets/number.zig");
 const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
@@ -158,7 +159,7 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
     };
 }
 
-const Kind = enum { button, link, toggle, checkbox, switch_control, slider, input, search };
+const Kind = enum { button, link, toggle, checkbox, switch_control, slider, input, search, number };
 
 /// `text` is the caption: a `[]const u8` field of the State (`.save`) or a literal ("Save").
 pub fn button(comptime id: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
@@ -189,7 +190,13 @@ fn captionName(comptime text: anytype) []const u8 {
 }
 pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime limits: slider_zig.Range, comptime config: Config) Spec {
     if (!(limits.lo < limits.hi)) @compileError("recipe slider requires lo below hi");
-    return build(.slider, @tagName(id), @tagName(bind), "", limits, config, false);
+    return build(.slider, @tagName(id), @tagName(bind), "", .{ .lo = limits.lo, .hi = limits.hi }, config, false);
+}
+/// A number field over the `number.Number` field `bind`, as `controls.number`; its events
+/// carry the value on a frame that changed it. `config.validation.range` gives `:invalid`.
+pub fn number(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime ends: number_zig.Range, comptime config: Config) Spec {
+    if (comptime number_zig.rangeError(@tagName(id), ends)) |msg| @compileError(msg);
+    return build(.number, @tagName(id), @tagName(bind), "", ends, config, true);
 }
 /// `hint` is the placeholder: a `[]const u8` field of the State or a literal.
 pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype, comptime config: Config) Spec {
@@ -292,18 +299,19 @@ fn stock(comptime kind: Kind) model.Recipe {
         .slider => model.slider,
         .input => model.input,
         .search => model.search,
+        .number => model.input,
     };
 }
 
-fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) Spec {
-    const captioned = kind != .slider and kind != .input and kind != .search;
+fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: number_zig.Range, comptime config: Config, comptime literal: bool) Spec {
+    const captioned = kind != .slider and kind != .input and kind != .search and kind != .number;
     const label_node: Spec = if (literal) .{ .kind = .label, .text = text } else .{ .kind = .label, .bind = if (captioned) text else null };
     const mark: Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
     const children: []const Spec = switch (kind) {
         .button, .link, .toggle => &.{ label_node, .{ .kind = .col } },
         .checkbox, .switch_control => &.{ mark, label_node, .{ .kind = .col } },
         .slider => &.{ .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col }, .{ .kind = .col } },
-        .input, .search => blk: {
+        .input, .search, .number => blk: {
             const bands: [textfield_zig.bands]Spec = @splat(.{ .kind = .col });
             const overlays: [controls.selection_sections]Spec = @splat(.{ .kind = .col, .children = &.{label_node} });
             const nodes = bands ++ [1]Spec{label_node} ++ overlays ++ [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
@@ -319,12 +327,13 @@ fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []cons
     };
 }
 
-fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) type {
+fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: number_zig.Range, comptime config: Config, comptime literal: bool) type {
     return struct {
         pub const focusable = true;
         pub const Payload = switch (kind) {
             .slider => f32,
             .input, .search => edit.Result,
+            .number => f32,
             else => void,
         };
 
@@ -336,6 +345,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.recipe_field) |f| if (base.fieldError(State, "recipe", f, model.Recipe)) |err| return err;
             if (config.fade_field) |f| if (base.fieldError(State, "recipe fade", f, controls.Fade)) |err| return err;
             if (config.clock_field) |f| if (base.fieldError(State, "recipe clock", f, controls.Clock)) |err| return err;
+            if (kind == .number) return number_zig.bindError(State, bind);
             if (kind == .input or kind == .search) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
             if (kind == .toggle) {
@@ -347,6 +357,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             }
             if (literal) return null;
             return base.fieldError(State, "recipe label", text, []const u8);
+        }
+
+        /// The edited text: the field itself, or a number field's text.
+        fn textOf(ui: anytype) if (kind == .number) *@FieldType(number_zig.Number, "text") else *@FieldType(@TypeOf(ui.signals.state), bind) {
+            return if (kind == .number) &@field(ui.signals.state, bind).text else &@field(ui.signals.state, bind);
         }
 
         fn caption(ui: anytype) []const u8 {
@@ -372,7 +387,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 states.checked = @field(ui.signals.state, bind);
             } else if (kind == .toggle) {
                 states.toggled = @field(ui.signals.state, bind);
-            } else if (kind == .input or kind == .search) states = config.validation.states(states, @field(ui.signals.state, bind).text());
+            } else if (kind == .input or kind == .search or kind == .number) states = config.validation.states(states, textOf(ui).text());
             return .{
                 .tokens = if (config.tokens_field) |field| @field(ui.signals.state, field) else config.tokens,
                 .scope = config.scope,
@@ -394,7 +409,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 ui.fail(err);
                 return .{ .enabled = false, .activates = false };
             };
-            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .link or kind == .input or kind == .search };
+            return .{ .enabled = !states.disabled and root.box.participation.layout and root.box.participation.hit, .activates = !states.read_only or kind == .button or kind == .link or kind == .input or kind == .search or kind == .number };
         }
 
         fn resolvePart(ui: anytype, part: types.Id, use: model.Use) style.Computed {
@@ -436,9 +451,9 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     root.box.cross = .center;
                     value = @field(ui.signals.state, bind);
                 },
-                .input => {
+                .input, .number => {
                     root.box.role = .text_input;
-                    root.box.scroll = .{ @field(ui.signals.state, bind).scroll, 0 };
+                    root.box.scroll = .{ textOf(ui).scroll, 0 };
                 },
                 .search => {},
             }
@@ -446,7 +461,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             // A search field's root is the box around it (`SearchBox`); the field keeps the text field's layout.
             const field_box = if (kind == .search) search_zig.inputStyle(&controls.fieldMetrics(root, resolvePart(ui, Parts.content, child), true), @field(ui.signals.state, bind).scroll) else root.box;
             const row = tb.t.push(parent, .hash(name), &field_box);
-            if (kind != .checkbox and kind != .switch_control and kind != .slider) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
+            if (kind != .checkbox and kind != .switch_control and kind != .slider) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input or kind == .search or kind == .number) .text else .pointer, response.hovered);
             switch (kind) {
                 .button, .link, .toggle => {
                     if (kind == .toggle) tb.t.c.role[row] = toggle_zig.role;
@@ -476,8 +491,8 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     _ = tb.t.push(row, .none, &.{ .size = .{ .grow(1 - fraction), .px(0) } });
                     next.* += 6;
                 },
-                .input, .search => {
-                    const field = &@field(ui.signals.state, bind);
+                .input, .search, .number => {
+                    const field = textOf(ui);
                     const content = resolvePart(ui, Parts.content, child);
                     const hint = resolvePart(ui, Parts.placeholder, child);
                     const selection = resolvePart(ui, Parts.selection, child);
@@ -498,6 +513,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     part.size[1] = .px(textfield_zig.lineHeight(&th));
                     _ = tb.t.push(row, .none, &part);
                     next.* += textfield_zig.bands + controls.selection_sections * 2 + 4;
+                    if (kind == .number) number_zig.expose(&tb.t, row, @field(ui.signals.state, bind).value);
                 },
             }
             _ = outline.append(&tb.t, row, @fromBackingInt(row), controls.outlineOptions(focus_part, config.focus_offset));
@@ -539,7 +555,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     ui.signals.set(Ui.field(bind), value);
                     if (value != before) return @unionInit(Ui.Events.Event, name, value);
                 },
-                .input => {
+                .input, .number => {
+                    if (kind == .number and (states.disabled or states.read_only)) {
+                        number_zig.commit(&@field(ui.signals.state, bind), limits);
+                        return null;
+                    }
                     const use = useFor(ui, in, response);
                     const root = resolvePart(ui, Parts.root, use);
                     var child = use;
@@ -547,7 +567,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     child.local = &.{};
                     const content = resolvePart(ui, Parts.content, child);
                     const th = controls.fieldMetrics(root, content, false);
-                    const field = &@field(ui.signals.state, bind);
+                    const field = textOf(ui);
                     const editor = field.editor();
                     const previous = editor.mode.read_only;
                     editor.mode.read_only = previous or states.read_only or states.disabled;
@@ -555,6 +575,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     var last: types.Rect = if (ui.built) ui.tables.t.rect(row + 1) else .{};
                     last.x1 -= root.box.pad[2] - root.box.pad[0];
                     last.y0 += root.box.pad[1] - textfield_zig.padding(&th)[1];
+                    if (kind == .number) {
+                        const s = &@field(ui.signals.state, bind);
+                        if (number_zig.behave(s, &th, .hash(name), response, last, limits, in)) return @unionInit(Ui.Events.Event, name, s.value);
+                        return null;
+                    }
                     textfield_zig.behave(field, &th, .hash(name), response, last, in);
                     if (field.result.changed or field.result.submitted) return @unionInit(Ui.Events.Event, name, field.result);
                 },

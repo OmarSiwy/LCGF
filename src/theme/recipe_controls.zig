@@ -16,6 +16,7 @@ const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const search_zig = @import("../widgets/search.zig");
+const number_zig = @import("../widgets/number.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
 const simd = @import("../core/simd.zig");
 const tweens = @import("../anim/tweens.zig");
@@ -29,10 +30,20 @@ pub const Validation = struct {
     required: bool = false,
     min_length: u32 = 0,
     max_length: u32 = std.math.maxInt(u32),
+    /// A number field's `min` and `max`: typed text that is not a number, or one outside
+    /// them, is invalid (HTML's bad input, underflow and overflow); empty text is not.
+    range: ?[2]f32 = null,
 
     pub fn invalid(v: Validation, text: []const u8) bool {
         const n = std.unicode.utf8CountCodepoints(text) catch text.len;
-        return (v.required and n == 0) or (n > 0 and n < v.min_length) or n > v.max_length;
+        return (v.required and n == 0) or (n > 0 and n < v.min_length) or n > v.max_length or (v.range != null and outside(text, v.range.?));
+    }
+
+    fn outside(text: []const u8, range: [2]f32) bool {
+        const trimmed = std.mem.trim(u8, text, " ");
+        if (trimmed.len == 0) return false;
+        const value = std.fmt.parseFloat(f32, trimmed) catch return true;
+        return !(value >= range[0] and value <= range[1]);
     }
 
     /// `base` with the validation's states for `text`.
@@ -591,14 +602,20 @@ pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node 
 /// Uses the existing editor and shaping view. Only paint/layout parts are replaced. The
 /// caller's existing read-only policy is retained; options may restrict it further.
 pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
-    return textControl(f, id, field, placeholder, options, false);
+    return textControl(f, id, field, placeholder, options, .field, null, .{});
+}
+
+/// A number field over `value` (`number.Number`), running `range`, as `number.number`: a
+/// recipe text field over its text. Give `Options.validation.range` the ends for `:invalid`.
+pub fn number(f: *Frame, id: types.Id, value: *number_zig.Number, range: number_zig.Range, options: Options) style.Error!types.Response {
+    return textControl(f, id, &value.text, "", options, .number, value, range);
 }
 
 /// A search field: a text field and a Clear button in one box, which takes the recipe's root
 /// (`model.search`). Escape or the button clears it and the button gives focus back
 /// (`search.behave`); the field is `id`, the button `search.clearId(id)`.
 pub fn search(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
-    return textControl(f, id, field, placeholder, options, true);
+    return textControl(f, id, field, placeholder, options, .search, null, .{});
 }
 
 /// The text field's metrics from its resolved root and content; a search field's own field
@@ -611,7 +628,10 @@ pub fn fieldMetrics(root: style.Computed, content: style.Computed, comptime in_b
     return th;
 }
 
-fn textControl(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options, comptime in_box: bool) style.Error!types.Response {
+pub const TextKind = enum { field, search, number };
+
+fn textControl(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options, comptime kind: TextKind, value: ?*number_zig.Number, range: number_zig.Range) style.Error!types.Response {
+    const in_box = kind == .search;
     try checkSemantics(f, options);
     const recipe = options.recipe orelse if (in_box) model.search else model.input;
     var response = try policyResponse(f, id, recipe, options, options.states);
@@ -638,7 +658,13 @@ fn textControl(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8,
         last.y0 += control.root.box.pad[1] - textfield_zig.padding(&th)[1];
     }
     const was_invalid = options.validation.invalid(field.text());
-    if (in_box and live) search_zig.behave(field, &th, id, response, clear.clicked, last, f.in) else textfield_zig.behave(field, &th, id, response, last, f.in);
+    switch (kind) {
+        .field => textfield_zig.behave(field, &th, id, response, last, f.in),
+        .search => if (live) search_zig.behave(field, &th, id, response, clear.clicked, last, f.in) else textfield_zig.behave(field, &th, id, response, last, f.in),
+        .number => if (live) {
+            _ = number_zig.behave(value.?, &th, id, response, last, range, f.in);
+        } else number_zig.commit(value.?, range),
+    }
     // The comptime front end resolves after this frame's edit: validity follows the new text.
     if (options.validation.invalid(field.text()) != was_invalid) {
         states.invalid = options.states.invalid or options.validation.invalid(field.text());
@@ -687,6 +713,7 @@ fn textControl(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8,
         f.close();
         search_zig.expose(f.tree(), box.ix(), b.ix(), some);
     }
+    if (kind == .number) number_zig.expose(f.tree(), control.node.ix(), value.?.value);
     expose(options.semantics, control.node, states);
     return response;
 }

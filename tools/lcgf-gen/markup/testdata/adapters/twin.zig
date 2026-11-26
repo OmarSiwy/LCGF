@@ -3,7 +3,8 @@
 //! `toggle`, …) followed by their rules. A link keeps its Enter-only activation and its
 //! on:click; a toggle button flips its bound field; a radio group's state rules style each
 //! option under that option's own states; a search field's root is the box around its field and
-//! Clear button, which still clears it; a text area takes the editor recipe and its validation.
+//! Clear button, which still clears it; a text area takes the editor recipe and its validation;
+//! a number field is :invalid while its typed text is outside min..max.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -16,7 +17,7 @@ const Color = lcgf.types.Color;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{} };
+pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{}, qty: lcgf.widgets_number.Number = .{} };
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -49,6 +50,11 @@ const recipe_notes: recipes.Recipe = .{ .parts = recipes.model.editor.parts, .ru
     .{ .part = style.Parts.root, .require = .{ .invalid = true }, .declarations = &.{style.set(.border_color, red)} },
 }) };
 
+const recipe_qty: recipes.Recipe = .{ .parts = recipes.model.input.parts, .rules = &(recipes.model.input_rules ++ [_]style.Rule{
+    .{ .part = style.Parts.root, .require = .{ .invalid = true }, .declarations = &.{style.set(.border_color, red)} },
+}) };
+const qty_range: lcgf.widgets_number.Range = .{ .lo = 0, .hi = 10 };
+
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 
 pub const spec = s.col(body, .{
@@ -57,6 +63,7 @@ pub const spec = s.col(body, .{
     recipes.ct.radio(.size, .size, .{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }),
     recipes.ct.search(.find, .find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }),
     recipes.ct.textarea(.notes, .notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }),
+    recipes.ct.number(.qty, .qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }),
 });
 
 pub const limits: lcgf.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4, .strings = 1024, .depth = 8 };
@@ -67,6 +74,7 @@ pub const App = struct {
     size: u32 = 1,
     find: lcgf.widgets_textfield.Text(256) = .{},
     notes: lcgf.widgets_textfield.Text(256) = .{},
+    qty: lcgf.widgets_number.Number = .{},
 
     pub fn build(app: *App, f: *Frame) void {
         _ = f.open(.none, body);
@@ -75,12 +83,14 @@ pub const App = struct {
         _ = recipes.radio(f, .from("size"), &app.size, &.{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.search(f, .from("find"), &app.find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.textarea(f, .from("notes"), &app.notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }) catch unreachable;
+        _ = recipes.number(f, .from("qty"), &app.qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }) catch unreachable;
         f.close();
     }
 };
 
 /// Hover the link and click it, click the toggle button twice, pick Small, then type into the
-/// search field and clear it, then type into the text area.
+/// search field and clear it, type into the text area, then type past the number's max and
+/// press Enter.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -121,6 +131,15 @@ pub const replay =
     \\frame
     \\text ok
     \\frame
+    \\pointer 40 215
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\text 42
+    \\frame
+    \\press 40
+    \\frame
 ;
 
 pub fn Handlers(comptime Ui: type) type {
@@ -143,7 +162,8 @@ fn center(r: lcgf.types.Rect) [2]f32 {
 /// The link takes its hover fill and its click reaches open_docs; the toggle button takes
 /// its hover fill and flips `bold`; the Small option alone takes its hover fill, and its click
 /// selects it; the search field takes its hover fill on the box, Escape empties it and reaches
-/// found, and the Clear button empties it; the required text area is :invalid until it has text.
+/// found, and the Clear button empties it; the required text area is :invalid until it has text;
+/// the number field is :invalid while its text reads above max, and Enter clamps it to max.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
@@ -223,4 +243,24 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     in.events = &.{};
     try std.testing.expectEqualStrings("zig", p.ui.signals.state.notes.text());
     try std.testing.expect(red.bitsOf() != t.c.look[notes].border_color);
+    const qty = t.find(.from("qty"));
+    try std.testing.expect(red.bitsOf() != t.c.look[qty].border_color);
+    in.pointer = center(t.rect(qty));
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    const digits = [_]lcgf.input.Input.Event{.{ .kind = .text, .at = 0, .len = 2 }};
+    in.events = &digits;
+    in.text = "42";
+    t = p.frame(h, &in).tree;
+    in.text = "";
+    try std.testing.expectEqual(red.bitsOf(), t.c.look[qty].border_color);
+    const enter = [_]lcgf.input.Input.Event{.{ .kind = .press, .code = 0x28 }};
+    in.events = &enter;
+    _ = p.frame(h, &in);
+    in.events = &.{};
+    t = p.frame(h, &in).tree;
+    try std.testing.expectEqual(10, p.ui.signals.state.qty.value);
+    try std.testing.expect(red.bitsOf() != t.c.look[qty].border_color);
 }

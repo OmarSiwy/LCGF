@@ -533,8 +533,8 @@ pub const Lowerer = struct {
             if (x == none or !l.disabledElement(n)) continue;
             nodes.items(.live)[x].disabled = true;
             switch (nodes.items(.kind)[x]) {
-                .button, .toggle, .checkbox, .radio, .@"switch", .container, .slider, .textfield, .search, .textarea => {},
-                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a radio group, a switch, a range, a text field, a search field or a text area", .{l.tag(n)}),
+                .button, .toggle, .checkbox, .radio, .@"switch", .container, .slider, .textfield, .search, .textarea, .number => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a radio group, a switch, a range, a text, search or number field or a text area", .{l.tag(n)}),
             }
             if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
         }
@@ -613,7 +613,7 @@ pub const Lowerer = struct {
                 .container, .landmark, .label, .text, .heading, .when, .choice, .list, .each, .spacer, .separator => false,
                 else => true,
             };
-            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
+            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a link, a toggle button, a checkbox, a switch, a range or a text or number field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
         }
     }
 
@@ -630,7 +630,7 @@ pub const Lowerer = struct {
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
             if (node.recipe.len == 0 or l.composite(node.kind)) {
-                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
+                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text or number field outside lcgf-each", .{l.tag(n)});
                 continue;
             }
             const a = l.animation(r, d.loc) orelse continue;
@@ -1000,7 +1000,7 @@ pub const Lowerer = struct {
         };
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field, a search field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1086,7 +1086,7 @@ pub const Lowerer = struct {
         return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield, .search => !l.page.nodes.items(.secure)[x],
-            .textarea => true,
+            .textarea, .number => true,
             else => false,
         };
     }
@@ -4212,6 +4212,8 @@ pub const Lowerer = struct {
         const def: lcgf.widgets_number.Range = .{};
         var node: ir.Node = .{ .kind = .number, .parent = parent, .loc = l.loc(n), .bind = bind, .range = .{ l.numberAttr(n, "min") orelse def.lo, l.numberAttr(n, "max") orelse def.hi, l.numberAttr(n, "step") orelse def.step } };
         if (!(node.range[0] < node.range[1]) or !(node.range[2] > 0)) l.ds.err(l.loc(n), "<input type=number>: min must be below max and step above 0", .{});
+        // Typed text outside min..max is :invalid until it is committed (clamped).
+        node.live.validation.range = .{ node.range[0], node.range[1] };
         node.id = l.widgetId(n, bind, "<input type=number>") orelse return true;
         l.widgetStyle(n, parent, row(lcgf.widgets_number.numberStyle(&th, false, 0)), &node);
         l.handlers(n, node.id, "", null);

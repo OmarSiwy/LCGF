@@ -361,14 +361,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
-    const has_input_availability = blk: {
-        var found = false;
-        for (customRows(spec)) |row| {
-            const n = nodeAt(spec, row);
-            if (n.id != null and @hasDecl(n.widget.?, "inputAvailability")) found = true;
-        }
-        break :blk found;
-    };
+    // One walk, not a `nodeAt` per widget: a spec of many recipe text rows stays in quota.
+    const has_input_availability = gatesInput(spec);
     // One root row (the runtime front end's) above the spec's rows.
     const rows: u32 = flatten.count(spec) + 1;
     @setEvalBranchQuota(1000 + 100 * rows);
@@ -1196,6 +1190,13 @@ fn namedWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32)
     if (n.name != null) rows.* = rows.* ++ .{next.*};
     next.* += 1;
     for (n.children) |c| namedWalk(c, next, rows);
+}
+
+/// Whether a widget of `n` (itself included) decides its own input (`inputAvailability`).
+fn gatesInput(comptime n: Spec) bool {
+    if (n.id != null and n.widget != null and @hasDecl(n.widget.?, "inputAvailability")) return true;
+    for (n.children) |c| if (gatesInput(c)) return true;
+    return false;
 }
 
 fn customWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32) void {

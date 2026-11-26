@@ -8,6 +8,7 @@
     input[type=radio]:hover { background-color: #50c878; }
     input[type=search]:hover { background-color: #c8b450; }
     textarea:invalid { border-color: #c85050; }
+    input[type=number]:invalid { border-color: #c85050; }
   </style>
 </head>
 <body>
@@ -17,5 +18,6 @@
   <label><input type="radio" name="size" checked> Large</label>
   <input type="search" id="find" bind:value="find" placeholder="Find" on:change="found">
   <textarea id="notes" bind:value="notes" rows="2" placeholder="Notes" required></textarea>
+  <input type="number" id="qty" bind:value="qty" min="0" max="10">
 </body>
 </html>

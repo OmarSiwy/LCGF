@@ -388,9 +388,9 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 
 `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
 `:disabled`, `:enabled`, `:invalid`, `:valid`, `:required` and `:optional` on a `<button>`, a link, a toggle button
-(`<button aria-pressed>`), a checkbox, a radio group, a switch, a range, a text field, a search field or a `<textarea>`
+(`<button aria-pressed>`), a checkbox, a radio group, a switch, a range, a text, search or number field or a `<textarea>`
 make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
-`recipes.button` on a runtime one (`link`, `toggle`, `radio`, `slider`, `textfield`, `search`, `textarea` likewise), with a generated
+`recipes.button` on a runtime one (`link`, `toggle`, `radio`, `slider`, `textfield`, `search`, `textarea`, `number` likewise), with a generated
 `recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
@@ -411,7 +411,9 @@ The `disabled` attribute, or a `<fieldset disabled>` around the control (outside
 `<legend>`), makes it (one of those widgets but a link) a recipe widget with `States.disabled`: no pointer or keyboard input, no
 Tab stop, the stock muted text, and `:disabled` rules. On other controls it is an error, as
 is a bound `disabled="{f}"`. A bool checkbox is never `:indeterminate`. A text field's `required`, `minlength` and
-`maxlength` are its validation (`controls.Validation`), checked on every edit; `pattern` is
+`maxlength` are its validation (`controls.Validation`), checked on every edit; a number
+field's `min` and `max` are its `Validation.range`, so it is `:invalid` while its typed text is
+no number or lies outside them, until Enter or a blur clamps it; `pattern` is
 an error, since LCGF has no regular-expression engine.
 
 A `<div>`-like box with state CSS or `@media` is a recipe box (`recipes.ct.box`,
