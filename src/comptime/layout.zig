@@ -24,7 +24,10 @@
 //! bytes per row (28 KB at 129 rows, against 617 bytes rolled), and every sweep would need the
 //! same: a second copy of each tier-0 pass to keep equal. Code size is the comptime front
 //! end's budget on microcontrollers, so the rolled passes stay; unrolling below a node count is
-//! for the budget lane (ct-budget) to take up with a flash limit to weigh it against.
+//! for the budget lane (ct-budget) to take up with a flash limit to weigh it against. The rolled
+//! passes are inlined into each UI's instantiation (`layout.pass_call`), so its constant
+//! columns and axis fold: 16 to 49% fewer instructions per frame on the static UIs
+//! (docs/research/static-ports). Size-optimized builds keep one shared copy instead.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -356,7 +359,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             try validateRounding(C.Coordinate, grid_options);
             passesLiveText(scratch, viewport, sel, spans, font);
             var v = view(scratch);
-            try layout.finalizeWith(&v, grid_options);
+            try @call(layout.pass_call, layout.finalizeWith, .{ &v, grid_options });
             keep(scratch, ram);
         }
 
@@ -410,12 +413,12 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                 @memset(scratch.used[a][first..last], 0);
             }
             @memset(scratch.cursor[first..last], 0);
-            if (needs.text) layout.applyText(&v, &tx, .x);
+            if (needs.text) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .x });
             layout.fitSpan(&v, .x, first, last);
             layout.resolveSpan(&v, .x, first, last);
             if (needs.wrap) layout.textAvail(&v, &tx);
             if (needs.wrap) font.wrap(&tx);
-            if (needs.text) layout.applyText(&v, &tx, .y);
+            if (needs.text) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .y });
             layout.fitSpan(&v, .y, first, last);
             layout.resolveSpan(&v, .y, first, last);
             layout.placeSpan(&v, first, last);
@@ -453,20 +456,20 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                         if (region.window != null) scratch.scroll[1][region.row] = selected.offset;
                     }
                 }
-                layout.prepare(&v);
+                @call(layout.pass_call, layout.prepare, .{&v});
             } else clear(scratch);
             // resolve assigns the viewport directly to the root, bypassing its masked maximum.
             const root_when = if (spec.region) |r| r.kind == .when else false;
             const shown = if (root_when) sel[0].n != 0 else true;
-            if (measure) layout.applyText(&v, &tx, .x);
-            layout.fit(&v, .x);
-            layout.resolve(&v, .x, simd.selF(shown, viewport[0], 0));
+            if (measure) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .x });
+            @call(layout.pass_call, layout.fit, .{ &v, .x });
+            @call(layout.pass_call, layout.resolve, .{ &v, .x, simd.selF(shown, viewport[0], 0) });
             if (measure and needs.wrap) layout.textAvail(&v, &tx);
             if (measure and needs.wrap) font.wrap(&tx);
-            if (measure) layout.applyText(&v, &tx, .y);
-            layout.fit(&v, .y);
-            layout.resolve(&v, .y, simd.selF(shown, viewport[1], 0));
-            layout.place(&v);
+            if (measure) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .y });
+            @call(layout.pass_call, layout.fit, .{ &v, .y });
+            @call(layout.pass_call, layout.resolve, .{ &v, .y, simd.selF(shown, viewport[1], 0) });
+            @call(layout.pass_call, layout.place, .{&v});
         }
 
         /// Writes the masked columns from their tables: a dead row (mask 0) gets `max` 0 on both
@@ -713,7 +716,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
                 for (&full.sense, m) |*x, k| x.* &= @truncate(k);
             }
             var v = P.view(full);
-            try layout.finalizeWith(&v, grid_options);
+            try @call(layout.pass_call, layout.finalizeWith, .{ &v, grid_options });
             P.keep(full, ram);
         }
     };

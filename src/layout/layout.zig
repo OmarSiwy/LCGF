@@ -16,6 +16,7 @@
 //! read-only tables for the columns a pass only reads; src/comptime/layout.zig).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const simd = @import("../core/simd.zig");
 const geometry = @import("../draw/geometry.zig");
 const inherit = @import("../draw/inherit.zig");
@@ -33,6 +34,15 @@ const b01 = simd.b2f;
 const inf = types.inf;
 
 /// SIMD. Clears per-frame scratch and derives `gap_total`.
+/// How the frame's passes are called from code that knows its tree at compile time (the comptime
+/// static pipeline): inlined into that instantiation, so its constant columns and axis fold
+/// (docs/research/static-ports, about 16-49% fewer instructions per frame), except in builds
+/// optimized for size, where one shared copy keeps microcontroller flash down (C0165).
+pub const pass_call: std.builtin.CallModifier = if (inline_passes) .always_inline else .auto;
+// Measured: routing a size build's calls through `@call(.auto, …)` here still grew the rv32
+// demo by 3 KB, so size builds keep plain calls below.
+const inline_passes = builtin.mode != .small;
+
 pub fn prepare(t: anytype) void {
     const c = &t.c;
     const n = simd.padded(t.len);
@@ -271,7 +281,7 @@ pub fn place(t: anytype) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
-    placeOf(t, {}, 0, t.len);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, 0, t.len }) else placeOf(t, {}, 0, t.len);
 }
 
 /// `place` with the extra placement rules of `fx` (flex.zig).
@@ -279,14 +289,14 @@ pub fn placeFlex(t: *Tree, fx: *const Flex) void {
     if (t.len == 0) return;
     t.c.pos[0][0] = 0;
     t.c.pos[1][0] = 0;
-    placeOf(t, fx, 0, t.len);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, fx, 0, t.len }) else placeOf(t, fx, 0, t.len);
 }
 
 /// `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row
 /// after `first` from its parent, with `first`'s own position taken as given. `cursor` of the
 /// rows must be cleared first, as `prepare` does for the whole tree.
 pub fn placeSpan(t: anytype, first: u32, last: u32) void {
-    placeOf(t, {}, first, last);
+    if (inline_passes) @call(.always_inline, placeOf, .{ t, {}, first, last }) else placeOf(t, {}, first, last);
 }
 
 fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
@@ -346,7 +356,7 @@ pub fn finalize(t: anytype) void {
 pub fn finalizeWith(t: anytype, options: rounding.Options) error{InvalidScale}!void {
     try options.validate();
     if (t.len == 0) return;
-    try finalizeSpanWith(t, 0, t.len, options);
+    if (inline_passes) try @call(.always_inline, finalizeSpanWith, .{ t, 0, t.len, options }) else try finalizeSpanWith(t, 0, t.len, options);
     @memset(t.c.sense[t.len..simd.padded(t.len)], 0);
 }
 
@@ -359,7 +369,7 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
 pub fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void {
     try options.validate();
     switch (options.mode) {
-        inline else => |mode| finalizeSpanMode(t, first, last, mode, options),
+        inline else => |mode| if (inline_passes) @call(.always_inline, finalizeSpanMode, .{ t, first, last, mode, options }) else finalizeSpanMode(t, first, last, mode, options),
     }
 }
 
