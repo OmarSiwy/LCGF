@@ -338,9 +338,11 @@ A `<p>` of text and phrasing elements (`span`, `strong`, `b`, `em`, `i`, `code`,
 `mark`, …, nested or not) is one paragraph: one label whose text is all of it, white space
 collapsed across the elements, with a style run (`spec.spans`, `protocol.Span`) at every change
 of size, colour or font. It wraps as one paragraph, each byte in its run's size and colour
-(`MonoParagraphs`), and a line is as tall as its largest size (`testdata/inline`). For now the
-paragraph has one paragraph style and one decoration, set on the `<p>`, and no bound text;
-other elements inside it are errors.
+(`MonoParagraphs`), and a line is as tall as its largest size (`testdata/inline`). A
+`text-decoration` on part of it (`<u>`, `<s>`, a styled span) draws under that part only
+(`Span.decoration`). The paragraph has one paragraph style, set on the `<p>`: spacing that
+changes inside it is an error, and so is bound text, whose length is only known at run time
+while the runs' byte offsets are fixed at build time. Other elements inside it are errors too.
 
 ## What is not lowered
 

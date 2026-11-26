@@ -207,24 +207,48 @@ pub const Stack = struct {
     /// (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
     /// `rects` is scratch of at least the glyph rows. A run that does not fit is left bare.
     pub fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void {
-        if (s.decorations.len == 0) return;
+        if (s.decorations.len == 0 and s.spans.len == 0) return;
         var j: u32 = 0;
         while (j < d.op_len) : (j += 1) {
             if (d.op.kind[j] != @backingInt(DrawList.Kind.text)) continue;
             const k = d.op.ref[j];
             const at = std.mem.indexOfScalar(u32, s.rows, k) orelse continue;
-            const deco = s.decorations[s.styles[at]];
-            if (!(deco.underline or deco.overline or deco.strike) or !st.serves(tx, k)) continue;
+            const row_style = s.styles[at];
+            const list = if (s.spans.len > 0) s.spans[row_style] else &.{};
+            const whole: decorations_.Style = if (s.decorations.len > 0) s.decorations[row_style] else .{};
+            var any = lined(whole);
+            for (list) |x| any = any or lined(x.decoration);
+            if (!any or !st.serves(tx, k)) continue;
             st.paragraph(tx, strings, k) catch continue;
             const face = &st.shapers[tx.c.font[k]].face;
-            const first = d.quad_len;
-            const room = d.quads[first .. d.quads.len - 1];
             const run = d.runs[k];
-            const n = decorations_.quads(run, &st.l, &st.g, st.text, .{ 0, @intCast(st.text.len) }, deco, .of(face, run.px), &.{}, rects, room) catch 0;
-            d.quad_len += n;
+            const metrics: decorations_.Metrics = .of(face, run.px);
+            const first = d.quad_len;
+            const len: u32 = @intCast(st.text.len);
+            // The paragraph's lines under all of it; a span's under its bytes (display
+            // offsets when the stack collapsed white space).
+            st.decorateRange(run, .{ 0, len }, whole, metrics, rects, d);
+            for (list, 0..) |x, i| {
+                const end = if (i + 1 < list.len) list[i + 1].start else len;
+                st.decorateRange(run, .{ st.displayOf(x.start), st.displayOf(end) }, x.decoration, metrics, rects, d);
+            }
             j += protocol.insertAfter(d, j, first);
         }
         @import("../../draw/paint.zig").encode(d);
+    }
+
+    fn lined(x: decorations_.Style) bool {
+        return x.underline or x.overline or x.strike;
+    }
+
+    fn displayOf(st: *const Stack, source: u32) u32 {
+        return if (st.normalized) st.normalization.?.displayOffset(source) else @min(source, @as(u32, @intCast(st.text.len)));
+    }
+
+    fn decorateRange(st: *Stack, run: @import("../../draw/draw_list.zig").TextRun, range: [2]u32, deco: decorations_.Style, metrics: decorations_.Metrics, rects: []Rect, d: *DrawList) void {
+        if (!lined(deco) or range[0] >= range[1]) return;
+        const room = d.quads[d.quad_len .. d.quads.len - 1];
+        d.quad_len += decorations_.quads(run, &st.l, &st.g, st.text, range, deco, metrics, &.{}, rects, room) catch 0;
     }
 
     /// Whether this stack measures row `k`.

@@ -737,7 +737,7 @@ test "endTextStyled: paragraph styles, spans and decorations reach a real shaper
     var metrics: [8]lines.Metrics = undefined;
     var rects: [64]types.Rect = undefined;
     const rows: text_stack.StyledRows = .{ .paragraphs = &p_rows, .rich = &rich, .spans = &sp, .start = &start, .font = &font, .px = &px, .color = &color, .metrics = &metrics };
-    const big = [_]protocol.Span{.{ .start = 2, .style = .{ .px = 40, .color = .rgb(255, 0, 0) } }};
+    const big = [_]protocol.Span{.{ .start = 2, .style = .{ .px = 40, .color = .rgb(255, 0, 0) }, .decoration = .{ .strike = true } }};
     const styled: protocol.Styled = .{
         .rows = &.{ 0, 1 },
         .styles = &.{ 0, 1 },
@@ -781,6 +781,10 @@ test "endTextStyled: paragraph styles, spans and decorations reach a real shaper
         else => after_text = false,
     };
     try testing.expect(underlined);
+    // The 40 px span's own line-through: a bar that starts past the run's left edge.
+    var struck = false;
+    for (out.draw.quads[0..out.draw.quad_len]) |q| struck = struck or q.xform[4] > out.draw.runs[1].rect[0] + 1;
+    try testing.expect(struck);
 }
 
 test "endText consumes real paragraph metrics in an ordinary frame" {

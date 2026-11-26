@@ -1947,7 +1947,7 @@ test "decorated: one bar per line, painted right after its run, in both front en
 
 test "spans: one paragraph in two sizes and colours lays out the same in both front ends" {
     const th: Theme = .default;
-    const runs = comptime [_]@import("../text/protocol.zig").Span{ .{ .start = 4, .style = .{ .px = 28, .color = .rgb(255, 0, 0) } }, .{ .start = 7, .style = labelText(&Theme.default) } };
+    const runs = comptime [_]@import("../text/protocol.zig").Span{ .{ .start = 4, .style = .{ .px = 28, .color = .rgb(255, 0, 0) }, .decoration = .{ .underline = true } }, .{ .start = 7, .style = labelText(&Theme.default) } };
     const spec = comptime spec_zig.col(.{}, .{spec_zig.spans(spec_zig.label("one two three"), &runs)});
     const Ui = ComptimeUi(struct {}, spec, th);
     const App = struct {
@@ -1965,7 +1965,16 @@ test "spans: one paragraph in two sizes and colours lays out the same in both fr
     var h: Harness(App, Ui, .{ .nodes = 8, .texts = 2, .strings = 64, .depth = 4 }) = undefined;
     h.init();
     const in: Input = .{ .viewport = .{ 320, 180 } };
-    const t = (try h.frame(&in)).comptime_.tree;
+    const out = (try h.frame(&in)).comptime_;
+    const t = out.tree;
     // Ten bytes at 14 px and "two" at 28: 10 * 8.4 + 3 * 16.8.
     try std.testing.expectApproxEqAbs(10 * 8.4 + 3 * 16.8, t.rect(2).w(), 1);
+    // "two" alone is underlined: one bar from after "one " for its three wide bytes.
+    var bars: u32 = 0;
+    for (out.draw.quads[0..out.draw.quad_len]) |q| if (q.rect[3] - q.rect[1] <= 2) {
+        bars += 1;
+        try std.testing.expectApproxEqAbs(t.rect(2).x0 + 4 * 8.4, q.rect[0], 0.01);
+        try std.testing.expectApproxEqAbs(3 * 16.8, q.rect[2] - q.rect[0], 0.01);
+    };
+    try std.testing.expectEqual(1, bars);
 }

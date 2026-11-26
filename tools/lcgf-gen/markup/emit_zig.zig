@@ -1688,6 +1688,10 @@ pub const Emit = struct {
         for (spans, 0..) |sp, k| {
             e.print("{s} .{{ .start = {d}, .style = ", .{ if (k == 0) "" else ",", sp.start });
             e.structure(sp.style, types.TextStyle{});
+            if (!std.meta.eql(sp.decoration, lcgf.text_decorations.Style{})) {
+                e.write(", .decoration = ");
+                e.decoration(sp.decoration);
+            }
             e.write(" }");
         }
         e.write(if (spans.len > 0) " }" else "}");

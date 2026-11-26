@@ -1,5 +1,5 @@
 //! inline, written by hand: one <p> of mixed phrasing (strong, em, code, a span with a nested
-//! b) as one label in style runs (`spec.spans`), measured by `MonoParagraphs` in both front
+//! b, a <u> underlined on its own) as one label in style runs (`spec.spans`), measured by `MonoParagraphs` in both front
 //! ends. Bold selects the 700 face of the font table, code the theme's monospace at 12 px.
 
 const lcgf = @import("lcgf");
@@ -13,7 +13,7 @@ const Span = lcgf.protocol.Span;
 pub const theme: w.Theme = .{};
 
 const body: types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
-const text = "Plain, bold, emphasis and code in one nested paragraph.";
+const text = "Plain, bold, emphasis and code underlined in one nested paragraph.";
 const regular: types.TextStyle = .{ .px = theme.text_px, .color = theme.text, .font = @fromBackingInt(1), .wrap = true };
 
 fn with(comptime color: types.Color, comptime font: u16, comptime px: f32) types.TextStyle {
@@ -28,10 +28,12 @@ const spans = [_]Span{
     .{ .start = 21, .style = regular },
     .{ .start = 26, .style = with(theme.text, 0, 12) }, // code
     .{ .start = 30, .style = regular },
-    .{ .start = 34, .style = with(note, 1, theme.text_px) }, // one
-    .{ .start = 38, .style = with(note, 2, theme.text_px) }, // nested
-    .{ .start = 44, .style = with(note, 1, theme.text_px) }, // paragraph
-    .{ .start = 54, .style = regular },
+    .{ .start = 31, .style = regular, .decoration = .{ .underline = true } }, // underlined
+    .{ .start = 41, .style = regular },
+    .{ .start = 45, .style = with(note, 1, theme.text_px) }, // one
+    .{ .start = 49, .style = with(note, 2, theme.text_px) }, // nested
+    .{ .start = 55, .style = with(note, 1, theme.text_px) }, // paragraph
+    .{ .start = 65, .style = regular },
 };
 
 pub const spec = s.col(body, .{

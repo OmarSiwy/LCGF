@@ -1920,7 +1920,10 @@ pub const Lowerer = struct {
             return;
         }
         ok(in.bytes.appendSlice(l.arena, bytes));
-        for (bytes) |_| ok(in.styles.append(l.arena, l.text[p]));
+        for (bytes) |_| {
+            ok(in.styles.append(l.arena, l.text[p]));
+            ok(in.decos.append(l.arena, l.deco[p]));
+        }
     }
 
     fn inlineElement(l: *Lowerer, i: u32) void {
@@ -1938,11 +1941,11 @@ pub const Lowerer = struct {
         if (std.mem.eql(u8, t, "br")) {
             ok(in.bytes.append(l.arena, 0));
             ok(in.styles.append(l.arena, l.text[i]));
+            ok(in.decos.append(l.arena, l.deco[i]));
             return;
         }
-        // One paragraph style and one decoration for the whole paragraph, for now.
+        // One paragraph style for the whole paragraph; decorations go by span.
         const e = in.element;
-        if (!std.meta.eql(l.deco[i], l.deco[e])) l.ds.err(l.loc(i), "text-decoration on part of a paragraph is not lowered yet; decorate the whole <p>", .{});
         var a = l.para[i];
         var b = l.para[e];
         a.ellipsis = false;
@@ -1956,11 +1959,16 @@ pub const Lowerer = struct {
         for (l.inlines.items) |in| {
             var text: std.ArrayList(u8) = .empty;
             var styles: std.ArrayList(TextStyle) = .empty;
+            var decos: std.ArrayList(Decoration) = .empty;
             var space = false;
             var space_style: TextStyle = .{};
-            for (in.bytes.items, in.styles.items) |ch, st| {
+            var space_deco: Decoration = .{};
+            for (in.bytes.items, in.styles.items, in.decos.items) |ch, st, de| {
                 if (std.ascii.isWhitespace(ch)) {
-                    if (!space) space_style = st;
+                    if (!space) {
+                        space_style = st;
+                        space_deco = de;
+                    }
                     space = text.items.len > 0;
                     continue;
                 }
@@ -1968,17 +1976,30 @@ pub const Lowerer = struct {
                 if (space and ch != 0 and (text.items.len == 0 or text.items[text.items.len - 1] != '\n')) {
                     ok(text.append(l.arena, ' '));
                     ok(styles.append(l.arena, space_style));
+                    ok(decos.append(l.arena, space_deco));
                 }
                 space = false;
                 ok(text.append(l.arena, if (ch == 0) '\n' else ch));
                 ok(styles.append(l.arena, st));
+                ok(decos.append(l.arena, de));
             }
             const base = l.text[in.element];
+            const whole = l.deco[in.element];
             var spans: std.ArrayList(lcgf.protocol.Span) = .empty;
             var prev = base;
-            for (styles.items, 0..) |st, k| {
-                if (!std.meta.eql(st, prev)) ok(spans.append(l.arena, .{ .start = @intCast(k), .style = st }));
+            var prev_deco = whole;
+            for (styles.items, decos.items, 0..) |st, de, k| {
+                if (!std.meta.eql(st, prev) or !std.meta.eql(de, prev_deco)) {
+                    // A span's own lines: the ones the whole paragraph does not draw already.
+                    var own = de;
+                    own.underline = de.underline and !whole.underline;
+                    own.overline = de.overline and !whole.overline;
+                    own.strike = de.strike and !whole.strike;
+                    if (!(own.underline or own.overline or own.strike)) own = .{};
+                    ok(spans.append(l.arena, .{ .start = @intCast(k), .style = st, .decoration = own }));
+                }
                 prev = st;
+                prev_deco = de;
             }
             const nodes = l.page.nodes.slice();
             nodes.items(.text)[in.ir] = text.items;
@@ -3385,6 +3406,7 @@ const Inline = struct {
     ir: u32,
     bytes: std.ArrayList(u8) = .empty,
     styles: std.ArrayList(TextStyle) = .empty,
+    decos: std.ArrayList(Decoration) = .empty,
 };
 
 /// The inherited font properties of an element.

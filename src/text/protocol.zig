@@ -165,7 +165,8 @@ pub const Mono = struct {
 
 /// One style run of a paragraph: from byte `start` of its text on (to the next span's
 /// start), `style`'s size, colour and font instead of the run's. Spans are sorted by `start`.
-pub const Span = struct { start: u32, style: types.TextStyle };
+/// `decoration` adds lines under its bytes to the paragraph's own.
+pub const Span = struct { start: u32, style: types.TextStyle, decoration: Decoration = .{} };
 
 /// Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`,
 /// and `decorations` and `spans`, when not empty, have one row per `table` row.
@@ -321,8 +322,8 @@ pub const MonoParagraphs = struct {
     /// painted right after the run's text and encoded into commands again. Lines are those
     /// `quads` draws. Quads and ops past the draw list's rows are dropped.
     pub fn decorate(p: MonoParagraphs, d: *DrawList, tx: *const Texts) void {
-        if (p.decorations.len == 0) return;
-        std.debug.assert(p.decorations.len == p.table.len);
+        if (p.decorations.len == 0 and p.spans.len == 0) return;
+        std.debug.assert(p.decorations.len == 0 or p.decorations.len == p.table.len);
         var j: u32 = 0;
         while (j < d.op_len) : (j += 1) {
             if (d.op.kind[j] != @backingInt(DrawList.Kind.text)) continue;
@@ -341,34 +342,49 @@ pub const MonoParagraphs = struct {
     }
 
     fn decorationQuads(p: MonoParagraphs, d: *DrawList, tx: *const Texts, k: u32, style: u16) void {
-        const deco = p.decorations[style];
-        const r = d.runs[k];
         const l = p.placed(d, tx, k, style);
+        const dots: u32 = if (l.f.cut < l.bytes.len and l.w.st.ellipsis) 3 else 0;
+        // The paragraph's lines under all of it, dots included; a span's under its bytes.
+        if (p.decorations.len > 0) rangeBars(d, d.runs[k], l, 0, l.f.cut + dots, p.decorations[style]);
+        for (l.w.spans, 0..) |sp, i| {
+            const end = if (i + 1 < l.w.spans.len) l.w.spans[i + 1].start else l.f.cut + dots;
+            rangeBars(d, d.runs[k], l, sp.start, @min(end, l.f.cut + dots), sp.decoration);
+        }
+    }
+
+    /// One bar per line and decoration line under bytes `a..b` of the run as `quads` draws it.
+    fn rangeBars(d: *DrawList, r: draw_list.TextRun, l: anytype, a: u32, b: u32, deco: Decoration) void {
+        if (!(deco.underline or deco.overline or deco.strike) or a >= b) return;
         const w = l.w;
         const cell = r.px * w.mono.line;
         const top = (w.line() - cell) * std.math.clamp(w.st.leading, 0, 1);
         const thickness = deco.thickness orelse @max(1, @round(r.px / 14));
         const color = if (deco.color) |authored| paint.fade(authored, r.opacity) else r.color;
-        // Where each line ends: the walk `quads` makes, dots included.
         var pen: Pen = .{};
-        var line_end: f32 = 0;
+        var x0: f32 = 0;
+        var x1: f32 = 0;
         var line_no: u32 = 0;
-        const dots: u32 = if (l.f.cut < l.bytes.len and w.st.ellipsis) 3 else 0;
-        for (0..l.f.cut + dots) |i| {
-            const b = if (i < l.f.cut) l.bytes[i] else '.';
+        var any = false;
+        for (0..b) |i| {
+            const byte = if (i < l.f.cut) l.bytes[i] else '.';
+            const at: u32 = @intCast(@min(i, @max(l.f.cut, 1) - 1));
             const before = pen.line;
-            pen.advance(w, @intCast(@min(i, @max(l.f.cut, 1) - 1)), b, l.avail, l.wraps and i < l.f.cut);
-            if (pen.line != before) {
-                bars(d, r, line_no, line_end, w.line(), top, cell, thickness, color, deco);
-                line_no = pen.line;
+            pen.advance(w, at, byte, l.avail, l.wraps and i < l.f.cut);
+            if (pen.line != before and any) {
+                bars(d, r, line_no, x0, x1, w.line(), top, cell, thickness, color, deco);
+                any = false;
             }
-            line_end = pen.x;
+            line_no = pen.line;
+            if (i < a) continue;
+            if (!any) x0 = pen.x - w.width(at, byte);
+            x1 = pen.x;
+            any = true;
         }
-        if (l.f.cut + dots > 0) bars(d, r, line_no, line_end, w.line(), top, cell, thickness, color, deco);
+        if (any) bars(d, r, line_no, x0, x1, w.line(), top, cell, thickness, color, deco);
     }
 
-    /// The decoration bars of one line, `width` px long.
-    fn bars(d: *DrawList, r: draw_list.TextRun, line_no: u32, width: f32, line: f32, top: f32, cell: f32, thickness: f32, color: u32, deco: Decoration) void {
+    /// The decoration bars of one line, from `x0` to `x1` px into the run.
+    fn bars(d: *DrawList, r: draw_list.TextRun, line_no: u32, x0: f32, x1: f32, line: f32, top: f32, cell: f32, thickness: f32, color: u32, deco: Decoration) void {
         const cell_top = r.rect[1] + @as(f32, @floatFromInt(line_no)) * line + top;
         // Mono has no face metrics: the underline below the baseline, the strike through
         // the x-height's middle, the overline at the cell's top.
@@ -376,7 +392,7 @@ pub const MonoParagraphs = struct {
         for ([_]bool{ deco.underline, deco.overline, deco.strike }, ys) |on, y| {
             if (!on or d.quad_len + 1 >= d.quads.len) continue;
             d.quads[d.quad_len] = .{
-                .rect = .{ r.rect[0], y, r.rect[0] + width, y + thickness },
+                .rect = .{ r.rect[0] + x0, y, r.rect[0] + x1, y + thickness },
                 .clip = r.clip,
                 .params = @splat(0),
                 .uv = .{ 0, 0, 1, 1 },
