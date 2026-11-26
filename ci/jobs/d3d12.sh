@@ -6,7 +6,7 @@
 # (ci/jobs/d3d12-windows.sh runs the same checks on WARP on a Windows runner). One test draws
 # every render conformance scene, offscreen and through the swapchain, against its golden;
 # d3d12-play writes the same frames as PNGs and tools/golden/golden.py compares them, the check
-# every back end's job applies.
+# every back end's job applies; the canvas scene is compared with sw's golden of it.
 # DXGI also opens a display for offscreen device creation. Keep one X server for all Wine calls.
 if [[ -z "${DISPLAY:-}" ]]; then exec xvfb-run -a ci/run.sh d3d12; fi
 zig build d3d12 --summary all
@@ -20,4 +20,5 @@ for mode in offscreen present; do
     for ref in src/render/conformance/*.png; do
         python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref"
     done
+    python3 tools/golden/golden.py "$out/canvas.png" tools/golden/ref/draw/canvas.png
 done

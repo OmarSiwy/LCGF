@@ -159,6 +159,33 @@ pub const Player = struct {
         try p.readback.read(px);
     }
 
+    /// The canvas scene (conformance.canvas_scene) offscreen, with a renderer of its own that
+    /// has the canvas pipeline: RGBA rows into `px`.
+    pub fn drawCanvas(p: *Player, st: *const conformance.CanvasStorage, px: []u8) !void {
+        const sc = conformance.canvas_scene;
+        const w: u32 = @intFromFloat(sc.viewport[0]);
+        const h: u32 = @intFromFloat(sc.viewport[1]);
+        var gfx = try Renderer.init(&p.d, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white);
+        defer gfx.deinit();
+        const atlas = gfx.addTexture(&p.d, p.atlas);
+        var target = try host.Target.init(&p.d, w, h);
+        defer target.deinit();
+        var readback = try host.Readback.init(&p.d, w, h);
+        defer readback.deinit();
+        gfx.prepare(0, &st.draw, .{ .texture = atlas }, sc.viewport, 1);
+        const l = try p.once.begin();
+        const rtv = target.rtv();
+        l.omSetRenderTarget(rtv);
+        const bg = sc.clear;
+        l.clearRenderTargetView(rtv, .{ @as(f32, @floatFromInt(bg.r)) / 255, @as(f32, @floatFromInt(bg.g)) / 255, @as(f32, @floatFromInt(bg.b)) / 255, 1 });
+        iface.render(&gfx, l, &st.draw);
+        l.resourceBarrier(&.{transition(target.texture, c.D3D12_RESOURCE_STATE_RENDER_TARGET, c.D3D12_RESOURCE_STATE_COPY_SOURCE)});
+        readback.copy(l, target.texture);
+        l.resourceBarrier(&.{transition(target.texture, c.D3D12_RESOURCE_STATE_COPY_SOURCE, c.D3D12_RESOURCE_STATE_RENDER_TARGET)});
+        try p.once.submit(&p.d);
+        try readback.read(px);
+    }
+
     /// Clear, the scene, and a copy of the target into the read-back buffer, leaving the
     /// target in RENDER_TARGET as it found it.
     fn drawFrame(p: *Player, l: *com.GraphicsCommandList, target: *com.Resource, rtv: c.D3D12_CPU_DESCRIPTOR_HANDLE) void {

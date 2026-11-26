@@ -22,6 +22,13 @@ const quad_shader = lcgf.quad_shader;
 const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
+const gpu = @import("gpu.zig");
+
+/// canvas.wgsl as HLSL, for the canvas pipeline (src/render/gpu/canvas.zig).
+pub const Canvas = lcgf.gpu_canvas.Canvas(gpu, struct {
+    pub const wgsl = lcgf.canvas_shader.wgsl;
+    pub const hlsl = @embedFile("canvas_hlsl");
+});
 
 pub const Globals = lcgf.render_null.Globals;
 pub const Glyphs = iface.Glyphs;
@@ -33,6 +40,10 @@ pub const Desc = struct {
     max_glyphs: u32 = 32 * 1024,
     /// Frames the host lets the GPU work on while it prepares the next: one ring slot each.
     frames: u32 = 2,
+    /// Canvas instance rows and polygon vertices kept on the GPU (`frames` copies of 32 and 8
+    /// bytes each, in an UPLOAD heap); 0 rows: no canvas pipeline, and canvases draw nothing.
+    canvas_rows: u32 = 0,
+    canvas_verts: u32 = 0,
 };
 
 /// Bytes kept for the globals at the start of each slot: a root CBV's address must be
@@ -65,12 +76,18 @@ pub const Renderer = struct {
     textures: *com.DescriptorHeap,
     srv_stride: u32,
     texture_count: u16 = 0,
+    /// The resources behind `textures`, for the canvas pipeline's glyph atlas.
+    resources: [max_textures]*com.Resource = undefined,
+    /// The device it was created on; must outlive it.
+    dev: *const Device,
+    canvas: ?Canvas = null,
+    list: ?*const DrawList = null,
 
     pub const max_textures = 64;
 
     /// `white` is a 1x1 opaque white RGBA8 texture in PIXEL_SHADER_RESOURCE; it becomes
     /// `Texture.white`.
-    pub fn init(d: *const Device, desc: Desc, white: *com.Resource) Error!Renderer {
+    pub fn init(d: *const Device, desc: Desc, white: *com.Resource) gpu.Error!Renderer {
         const root = try pipeline.rootSignature(d.handle);
         errdefer com.release(root);
         const slot_bytes = std.mem.alignForward(u64, globals_slot + (@as(u64, desc.max_quads) + desc.max_glyphs) * quad_shader.stride, globals_slot);
@@ -88,15 +105,22 @@ pub const Renderer = struct {
             .slot_bytes = slot_bytes,
             .textures = heap,
             .srv_stride = d.handle.getDescriptorHandleIncrementSize(c.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
+            .dev = d,
         };
         errdefer r.deinit();
         _ = try r.addMaterial(d, pipeline.stock_hlsl); // Material.solid
         _ = r.addTexture(d, white); // Texture.white
+        if (desc.canvas_rows > 0) {
+            r.canvas = @as(Canvas, undefined);
+            try r.canvas.?.init(.wrap(d), .{ .format = targetFormat(desc.format), .samples = 1 }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .frames = desc.frames });
+        }
         return r;
     }
 
     /// The GPU must be done with every frame that used the renderer.
     pub fn deinit(r: *Renderer) void {
+        if (r.canvas) |*cv| cv.deinit(.wrap(r.dev));
+        r.canvas = null;
         for (r.pipelines[0..r.material_count]) |p| com.release(p);
         r.material_count = 0;
         com.release(r.textures);
@@ -137,7 +161,8 @@ pub const Renderer = struct {
         writeTexture(r, d, @min(@backingInt(texture), r.texture_count - 1), res);
     }
 
-    fn writeTexture(r: *const Renderer, d: *const Device, i: u16, res: *com.Resource) void {
+    fn writeTexture(r: *Renderer, d: *const Device, i: u16, res: *com.Resource) void {
+        r.resources[i] = res;
         var srv: c.D3D12_SHADER_RESOURCE_VIEW_DESC = std.mem.zeroes(c.D3D12_SHADER_RESOURCE_VIEW_DESC);
         srv.Format = res.getDesc().Format;
         srv.ViewDimension = c.D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -194,6 +219,20 @@ pub const Renderer = struct {
         r.glyphs = glyphs;
         r.scale = scale;
         r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
+        r.list = draw;
+        if (r.canvas) |*cv| {
+            const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+            cv.prepare(.wrap(r.dev), null, draw, frame, scale, r.extent, .{ .resource = r.resources[atlas], .width = 0, .height = 0 }, atlas);
+        }
+    }
+
+    /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas
+    /// pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+    /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+    pub fn drawCanvas(r: *const Renderer, l: Pass, k: u32) void {
+        const cv = if (r.canvas) |*cv| cv else return;
+        var pass = gpu.RenderPass.wrap(.wrap(r.dev), l, r.extent[0], r.extent[1]);
+        cv.draw(&pass, r.list.?, k);
     }
 
     /// The host's command list, recording, with its render target set (and cleared, if it
@@ -246,6 +285,17 @@ pub const Renderer = struct {
 
 comptime {
     iface.check(Renderer);
+}
+
+/// The projection's name for a render target format.
+fn targetFormat(f: c.DXGI_FORMAT) gpu.TextureFormat {
+    return switch (f) {
+        c.DXGI_FORMAT_B8G8R8A8_UNORM => .bgra8_unorm,
+        c.DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => .bgra8_unorm_srgb,
+        c.DXGI_FORMAT_R8G8B8A8_UNORM_SRGB => .rgba8_unorm_srgb,
+        c.DXGI_FORMAT_R16G16B16A16_FLOAT => .rgba16_float,
+        else => .rgba8_unorm,
+    };
 }
 
 const testing = std.testing;

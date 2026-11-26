@@ -1,7 +1,7 @@
 //! Draws every render conformance scene (src/render/conformance.zig) with the Direct3D 12 back
 //! end and writes each as a PNG, for comparison with the golden images (ci/jobs/d3d12.sh):
 //!
-//!     d3d12-play.exe OUT [offscreen|present]      ->  OUT/<scene>.png
+//!     d3d12-play.exe OUT [offscreen|present]      ->  OUT/<scene>.png, OUT/canvas.png
 //!
 //! The drawing is scenes.zig's `Player`: offscreen into an RGBA8 texture, or presented through
 //! a hidden window's waitable flip-model swapchain.
@@ -11,6 +11,7 @@ const scenes = @import("scenes.zig");
 const conformance = lcgf.render_conformance;
 
 var player: scenes.Player = undefined;
+var canvas: conformance.CanvasStorage = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -32,6 +33,14 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, scenes.width, scenes.height, px) });
     }
+    // The canvas scene (golden tools/golden/ref/draw/canvas.png), offscreen in either mode.
+    canvas.load();
+    const sc = conformance.canvas_scene;
+    const cw: u32 = @intFromFloat(sc.viewport[0]);
+    const ch: u32 = @intFromFloat(sc.viewport[1]);
+    const cpx = try gpa.alloc(u8, @as(usize, cw) * ch * 4);
+    try player.drawCanvas(&canvas, cpx);
+    try out.writeFile(io, .{ .sub_path = "canvas.png", .data = try png(gpa, cw, ch, cpx) });
 }
 
 /// RGBA rows as a PNG (filter byte 0 before each row).
