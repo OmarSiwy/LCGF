@@ -1,0 +1,12 @@
+1 settings engine    ns=1208 ins=13534 cyc=5998 br=539 miss=0.3
+1 todo engine    ns=1528 ins=17180 cyc=7900 br=737 miss=1.3
+1 dash engine    ns=421 ins=5516 cyc=2519 br=262 miss=0.0
+1 mixer engine    ns=209 ins=3266 cyc=1174 br=198 miss=0.0
+2 settings engine    ns=1248 ins=13534 cyc=6083 br=539 miss=0.3
+2 todo engine    ns=1634 ins=17180 cyc=8071 br=737 miss=1.3
+2 dash engine    ns=517 ins=5516 cyc=2581 br=262 miss=0.0
+2 mixer engine    ns=298 ins=3266 cyc=1431 br=198 miss=0.0
+3 settings engine    ns=1275 ins=13534 cyc=6263 br=539 miss=0.3
+3 todo engine    ns=1701 ins=17180 cyc=8099 br=737 miss=1.3
+3 dash engine    ns=547 ins=5516 cyc=2558 br=262 miss=0.0
+3 mixer engine    ns=295 ins=3266 cyc=1449 br=198 miss=0.0

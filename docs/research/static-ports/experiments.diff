@@ -1,0 +1,260 @@
+--- a/bindings/check/ct_dump.zig
++++ b/bindings/check/ct_dump.zig
+@@ -71,7 +71,10 @@
+     const name = args.next() orelse return error.Usage;
+     const frames = try std.fmt.parseInt(u32, args.next() orelse return error.Usage, 10);
+     const out_path = args.next() orelse return error.Usage;
+-    const partial = if (args.next()) |a| std.mem.eql(u8, a, "partial") else false;
++    const a4 = args.next();
++    const partial = if (a4) |a| std.mem.eql(u8, a, "partial") else false;
++    if (a4) |a| g_mode = a;
++    if (args.next()) |r| g_reps = try std.fmt.parseInt(u32, r, 10);
+     inline for (ct.static_examples) |e| if (std.mem.eql(u8, e.name, name)) {
+         if (partial) return runPartial(e, init.io, arena, frames, out_path);
+         return run(e, init.io, arena, frames, out_path);
+@@ -99,9 +102,10 @@
+     const bench = std.mem.eql(u8, out_path, "--bench");
+     var out: std.ArrayList(u8) = .empty;
+     var events: std.ArrayList(u8) = .empty;
+-    const reps: u32 = if (bench) 50 else 1;
++    const reps: u32 = if (bench) envReps() else 1;
++    const skip_zig = bench and std.mem.eql(u8, g_mode, "engine");
+     var best: u64 = std.math.maxInt(u64);
+-    for (0..reps) |_| {
++    for (0..if (skip_zig) 0 else reps) |_| {
+         const start = std.Io.Timestamp.now(io, .awake);
+         for (0..frames) |fi| {
+             const f: u32 = @intCast(fi);
+@@ -109,7 +113,17 @@
+             // The labels' text, gathered in label order as the static UI's frame does.
+             const at = ct.gatherText(e.State, &nodes, &state, &strings, spans);
+             const sel = L.Regions.select(e.State, &state);
++            if (std.mem.eql(u8, g_mode, "gather")) {
++                std.mem.doNotOptimizeAway(&strings);
++                std.mem.doNotOptimizeAway(&spans_buf);
++                std.mem.doNotOptimizeAway(&sel);
++                continue;
++            }
+             L.runLiveText(&scratch, &ram, viewport(f), sel, spans, lcgf.protocol.Mono{});
++            if (std.mem.eql(u8, g_mode, "layout")) {
++                std.mem.doNotOptimizeAway(&ram);
++                continue;
++            }
+             Pt.rebuildLiveText(&state, &ram, sel, spans, strings[0..at], &d, &dirty);
+             if (!bench) {
+                 try dumpDraw(arena, &out, &d);
+@@ -142,7 +156,8 @@
+         best = @min(best, ns);
+     }
+     if (bench) {
+-        std.debug.print("ct {s:<9} zig     {d:>7} ns/frame\n", .{ e.name, best / frames });
++        if (!skip_zig) std.debug.print("ct {s:<9} zig     {d:>7} ns/frame\n", .{ e.name, best / frames });
++        if (!std.mem.eql(u8, g_mode, "engine") and g_mode.len > 0) return;
+         return benchEngine(e, io, arena, frames);
+     }
+     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = out.items });
+@@ -160,7 +175,7 @@
+     const ui = try ct.Ui.init(words, buf);
+     const cstate = try arena.alignedAlloc(u8, .@"8", @max(st.size, 1));
+     var best: u64 = std.math.maxInt(u64);
+-    for (0..50) |_| {
++    for (0..envReps()) |_| {
+         const start = std.Io.Timestamp.now(io, .awake);
+         for (0..frames) |fi| {
+             const f: u32 = @intCast(fi);
+@@ -246,3 +261,10 @@
+     }
+     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = out.items });
+ }
++
++var g_mode: []const u8 = "";
++var g_reps: u32 = 50;
++fn envReps() u32 {
++    return g_reps;
++}
++
+--- a/src/comptime/layout.zig
++++ b/src/comptime/layout.zig
+@@ -356,7 +356,7 @@
+             try validateRounding(C.Coordinate, grid_options);
+             passesLiveText(scratch, viewport, sel, spans, font);
+             var v = view(scratch);
+-            try layout.finalizeWith(&v, grid_options);
++            try @call(.always_inline, layout.finalizeWith, .{&v, grid_options});
+             keep(scratch, ram);
+         }
+ 
+@@ -410,12 +410,12 @@
+                 @memset(scratch.used[a][first..last], 0);
+             }
+             @memset(scratch.cursor[first..last], 0);
+-            if (needs.text) layout.applyText(&v, &tx, .x);
++            if (needs.text) @call(.always_inline, layout.applyText, .{&v, &tx, .x});
+             layout.fitSpan(&v, .x, first, last);
+             layout.resolveSpan(&v, .x, first, last);
+             if (needs.wrap) layout.textAvail(&v, &tx);
+             if (needs.wrap) font.wrap(&tx);
+-            if (needs.text) layout.applyText(&v, &tx, .y);
++            if (needs.text) @call(.always_inline, layout.applyText, .{&v, &tx, .y});
+             layout.fitSpan(&v, .y, first, last);
+             layout.resolveSpan(&v, .y, first, last);
+             layout.placeSpan(&v, first, last);
+@@ -453,20 +453,20 @@
+                         if (region.window != null) scratch.scroll[1][region.row] = selected.offset;
+                     }
+                 }
+-                layout.prepare(&v);
++                @call(.always_inline, layout.prepare, .{&v});
+             } else clear(scratch);
+             // resolve assigns the viewport directly to the root, bypassing its masked maximum.
+             const root_when = if (spec.region) |r| r.kind == .when else false;
+             const shown = if (root_when) sel[0].n != 0 else true;
+-            if (measure) layout.applyText(&v, &tx, .x);
+-            layout.fit(&v, .x);
+-            layout.resolve(&v, .x, simd.selF(shown, viewport[0], 0));
++            if (measure) @call(.always_inline, layout.applyText, .{&v, &tx, .x});
++            @call(.always_inline, layout.fit, .{&v, .x});
++            @call(.always_inline, layout.resolve, .{&v, .x, simd.selF(shown, viewport[0], 0)});
+             if (measure and needs.wrap) layout.textAvail(&v, &tx);
+             if (measure and needs.wrap) font.wrap(&tx);
+-            if (measure) layout.applyText(&v, &tx, .y);
+-            layout.fit(&v, .y);
+-            layout.resolve(&v, .y, simd.selF(shown, viewport[1], 0));
+-            layout.place(&v);
++            if (measure) @call(.always_inline, layout.applyText, .{&v, &tx, .y});
++            @call(.always_inline, layout.fit, .{&v, .y});
++            @call(.always_inline, layout.resolve, .{&v, .y, simd.selF(shown, viewport[1], 0)});
++            @call(.always_inline, layout.place, .{&v});
+         }
+ 
+         /// Writes the masked columns from their tables: a dead row (mask 0) gets `max` 0 on both
+@@ -713,7 +713,7 @@
+                 for (&full.sense, m) |*x, k| x.* &= @truncate(k);
+             }
+             var v = P.view(full);
+-            try layout.finalizeWith(&v, grid_options);
++            try @call(.always_inline, layout.finalizeWith, .{&v, grid_options});
+             P.keep(full, ram);
+         }
+     };
+--- a/src/layout/layout.zig
++++ b/src/layout/layout.zig
+@@ -289,7 +289,7 @@
+     placeOf(t, {}, first, last);
+ }
+ 
+-fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
++inline fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
+     const flexed = @TypeOf(fx) != void;
+     std.debug.assert(first < last and last <= t.len);
+     const parent = t.c.parent;
+@@ -356,14 +356,14 @@
+     finalizeSpanWith(t, first, last, .{}) catch unreachable;
+ }
+ 
+-pub fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void {
++pub inline fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void {
+     try options.validate();
+     switch (options.mode) {
+         inline else => |mode| finalizeSpanMode(t, first, last, mode, options),
+     }
+ }
+ 
+-fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.Mode, options: rounding.Options) void {
++inline fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.Mode, options: rounding.Options) void {
+     std.debug.assert(first < last and last <= t.len);
+     const c = &t.c;
+     const n = simd.padded(last);
+--- a/src/abi/ct.zig
++++ b/src/abi/ct.zig
+@@ -842,7 +842,7 @@
+                     c.scroll[1][g.row] = s.offset;
+                 };
+             }
+-            layout.prepare(&r.v);
++            @call(.always_inline, layout.prepare, .{&r.v});
+         } else {
+             // `clear`: the accumulators fit, resolve and place add into.
+             inline for (0..2) |a| {
+@@ -855,15 +855,15 @@
+         // resolve assigns the viewport directly to the root, bypassing its masked maximum.
+         const shown = if (r.root_when) sel[0].n != 0 else true;
+         const wrap = comptime (TextStyle{}).wrap;
+-        if (measure) layout.applyText(&r.v, tx, .x);
+-        layout.fit(&r.v, .x);
+-        layout.resolve(&r.v, .x, simd.selF(shown, viewport[0], 0));
++        if (measure) @call(.always_inline, layout.applyText, .{&r.v, tx, .x});
++        @call(.always_inline, layout.fit, .{&r.v, .x});
++        @call(.always_inline, layout.resolve, .{&r.v, .x, simd.selF(shown, viewport[0], 0)});
+         if (measure and wrap) layout.textAvail(&r.v, tx);
+         if (measure and wrap) (Mono{}).wrap(tx);
+-        if (measure) layout.applyText(&r.v, tx, .y);
+-        layout.fit(&r.v, .y);
+-        layout.resolve(&r.v, .y, simd.selF(shown, viewport[1], 0));
+-        layout.place(&r.v);
++        if (measure) @call(.always_inline, layout.applyText, .{&r.v, tx, .y});
++        @call(.always_inline, layout.fit, .{&r.v, .y});
++        @call(.always_inline, layout.resolve, .{&r.v, .y, simd.selF(shown, viewport[1], 0)});
++        @call(.always_inline, layout.place, .{&r.v});
+     }
+ };
+ 
+@@ -1030,7 +1030,7 @@
+                 ui.slot_source[slot] = simd.selU(live != 0, @intCast(i), ui.slot_source[slot]);
+             }
+         }
+-        layout.finalize(&full.v);
++        @call(.always_inline, layout.finalize, .{&full.v});
+         ui.paint(ui.strings[0..at_]);
+         ui.patchAll(state);
+         return &ui.d;
+--- a/bindings/cpp/check/ct_check.cpp
++++ b/bindings/cpp/check/ct_check.cpp
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ // The C++ side of the static UIs' gate (bindings/check/run.sh): the comptime examples' `.zon`
+ // (src/abi/testdata/static/) through lcgf-gen --static and lcgf::StaticUi, over the frames of
+ // bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's comptime pipeline's.
+@@ -92,7 +93,8 @@
+     const bool bench = std::strcmp(out_path, "--bench") == 0;
+     std::vector<char> o, ev;
+     long long best = -1;
+-    for (int rep = 0; rep < (bench ? 50 : 1); ++rep) {
++    const int reps_ = std::getenv("LCGF_REPS") ? std::atoi(std::getenv("LCGF_REPS")) : 50;
++    for (int rep = 0; rep < (bench ? reps_ : 1); ++rep) {
+         const auto t0 = std::chrono::steady_clock::now();
+         for (std::uint32_t f = 0; f < frames; ++f) {
+             texts_of(ui.state, f);
+--- a/bindings/rust/lcgf-check/src/ct_check.rs
++++ b/bindings/rust/lcgf-check/src/ct_check.rs
+@@ -133,7 +133,8 @@
+     let mut o = Vec::new();
+     let mut ev = Vec::new();
+     let mut best = u128::MAX;
+-    for _ in 0..(if bench { 50 } else { 1 }) {
++    let reps_: u32 = std::env::var("LCGF_REPS").ok().and_then(|v| v.parse().ok()).unwrap_or(50);
++    for _ in 0..(if bench { reps_ } else { 1 }) {
+         let t0 = std::time::Instant::now();
+         for f in 0..frames {
+             set(&mut ui, f);
+--- a/build.zig
++++ b/build.zig
+@@ -59,6 +59,18 @@
+         abi_lib.bundle_compiler_rt = true;
+         abi_step.dependOn(&b.addInstallArtifact(abi_lib, .{}).step);
+     }
++    {
++        const copt = b.addOptions();
++        copt.addOption(?u32, "lanes", 8);
++        copt.addOption(bool, "fixed_point", false);
++        const ctarget = b.resolveTargetQuery(.{ .ofmt = .c });
++        const cm = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = ctarget, .optimize = .ReleaseFast });
++        cm.addOptions("build_options", copt);
++        cm.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
++        const cobj = b.addObject(.{ .name = "lcgf_ct", .root_module = b.createModule(.{ .root_source_file = b.path("probe/ct_c.zig"), .target = ctarget, .optimize = .ReleaseFast, .imports = &.{.{ .name = "lcgf", .module = cm }} }) });
++        const cstep = b.step("cprobe", "C backend probe of the static UI engine");
++        cstep.dependOn(&b.addInstallFile(cobj.getEmittedBin(), "cprobe/lcgf_ct.c").step);
++    }
+     // liblcgf_auto.a (x86-64 ELF): the three widths again, each built for the CPU level it suits
+     // and its C names suffixed, under the dispatcher of src/abi/auto.zig, which picks one at the
+     // first call. CMake's LCGF_LANES=auto and the crate's `lanes-auto` feature link it.
