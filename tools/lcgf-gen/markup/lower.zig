@@ -1702,8 +1702,9 @@ pub const Lowerer = struct {
         }
         if (l.keyword(n, .@"align-items")) |kw| {
             if (alignOf(kw)) |a| s.cross = a else if (css.eq(kw, "baseline")) {
-                // Flex.Style.baseline lines up a row's children; a column has one per line.
-                if (l.flex.wrap) l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is not lowered on a wrapping row", .{}) else if (dir == .x) l.flex.baseline = true else l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is lowered on rows only (flex-direction: row)", .{});
+                // Flex.Style.baseline lines up a row's children. A column's cross axis is
+                // horizontal, where no baseline runs: CSS falls back to start there.
+                if (l.flex.wrap) l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is not lowered on a wrapping row", .{}) else if (dir == .x) l.flex.baseline = true else s.cross = .start;
             } else if (!css.eq(kw, "stretch") and !css.eq(kw, "normal")) {
                 if (!l.refused("value", kw, "align-items", l.declared(n, .@"align-items").?.loc)) l.badValue(l.declared(n, .@"align-items").?.first, .@"align-items", l.declared(n, .@"align-items").?.end);
             }
