@@ -26,6 +26,7 @@ the API (GPU drivers, windowing, accessibility); CI-only tools come from the Nix
 | wgpu-native | Library, run time | render-wgpu | Optional | One portable GPU back end; the route to raw wgpu access. | Costs baseline memory compared with a native back end; measured in lane render-vk. |
 | AccessKit C 0.23.2 (accesskit-c release archive) | Library, build.zig.zon (lazy) | a11y-bridge | Optional | Bridges the semantic tree to UI Automation, NSAccessibility and AT-SPI. | The release's header and prebuilt static libraries, fetched only for the `zig build accesskit*` steps; no cargo needed. Alternative: write the three platform adapters by hand. |
 | HarfBuzz 13.2.1 | Source, build.zig.zon (lazy) | shaping (adapter) | Optional | Complex-script shaping beyond the built-in simple shaper. | Built from its single-file amalgamation by `zig build harfbuzz`; fetched only for that step. No system library. |
+| Lexbor 3.0.1 (Apache-2.0) | Source, build.zig.zon (lazy) | lcgf-gen markup | Optional | HTML5 tree construction, CSS syntax and selectors | Host only; never linked into an application |
 | fontconfig | System, run time | font-fallback on Linux | Optional | System font discovery. |  |
 | Platform text input services | System, run time | text-edit, shells | Optional | IME on each platform. | Text Services Framework, NSTextInputClient, Wayland text-input, IBus or Fcitx. |
 | Software GPU drivers (llvmpipe, lavapipe, WARP) | CI | Renderer conformance tests | CI only | Pixel tests without hardware. | The earlier pixel check ran on llvmpipe. |
