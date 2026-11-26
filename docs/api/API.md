@@ -7352,6 +7352,7 @@ Fields: `len`, `cap`, `c`, `next`, `overflow`
 - `fn reserveScan(a: *Anims, id: Id, initial: f32) error{NoSpace}!u32`
 - `fn slot(a: *Anims, id: Id, initial: f32) u32`: Legacy row-returning operation.
 - `fn slotScan(a: *Anims, id: Id, initial: f32) u32`: `slot` by a SIMD scan only, with no branch on the ids: for callers that look springs up inside a per-row loop (`flip.apply`), where the branch census applies.
+- `fn place(a: *Anims, k: u32, initial: f32, found: u32) u32`: The row for id `k`, given where it was `found` (or `none`): creates it if new.
 - `fn land(a: *Anims, i: u32) void`: Puts row `i` at its target, at rest (reduced motion: the end state, no movement).
 - `fn step(a: *Anims, dt: f32) f32`: SIMD.
 - `fn sweep(a: *Anims, frame: u32) void`: Drops springs nobody asked for in frame `frame` (`seen` differs).

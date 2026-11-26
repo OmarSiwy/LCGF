@@ -81,8 +81,9 @@ pub const Anims = struct {
         return a.place(k, initial, simd.find(a.c.id, a.len, k));
     }
 
-    /// The row for id `k`, given where it was `found` (or `none`): creates it if new.
-    inline fn place(a: *Anims, k: u32, initial: f32, found: u32) u32 {
+    /// The row for id `k`, given where it was `found` (or `none`): creates it if new. For a
+    /// caller that already scanned for `k` (`flip.apply`).
+    pub inline fn place(a: *Anims, k: u32, initial: f32, found: u32) u32 {
         const c = &a.c;
         const is_new = found == none;
         const spare: u32 = @intCast(c.x.len - 1);

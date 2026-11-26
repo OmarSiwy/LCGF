@@ -90,7 +90,9 @@ pub fn apply(t: *Tree, prev: *const Tree, fl: *Flips, an: *Anims, frame: u32) f3
         inline for (0..2) |a| {
             const target = pos[a][n];
             const key = id.with(a);
-            const i = an.reserveScan(key, target) catch unreachable;
+            // Room was checked above, and `known` is still current: placing axis 0 does not
+            // add axis 1's id.
+            const i = an.place(@backingInt(key), target, known[a]);
             // A spring new this frame for a node shown last frame starts at the shown rect.
             // Select the row to write, not the value (a value select re-branches on Zig 0.18;
             // docs/CHECKS.md): otherwise the rect goes to the spare row no pass reads.
