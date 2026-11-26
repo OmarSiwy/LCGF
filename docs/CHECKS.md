@@ -94,7 +94,7 @@ Counts raised after the styling, perf, gpu-projection and software-renderer merg
 jump those merges added was removed). Each remaining jump was read in the disassembly:
 
 - `p_finalize` jcc 3 -> 5, `p_damage_cull` 4 -> 5, `p_a11y_flatten` 7 -> 8,
-  `p_merge_across_text` 12 -> 14: `geometry.transformRect`'s one test for the identity, per call
+  `p_merge_across_text` 12 -> 15: `geometry.transformRect`'s one test for the identity, per call
   site. The branch-free form computes the inverse and corners for every row: on the rows bench
   finalize took 7.4G instead of 3.2G instructions:u and `nodeBounds` 1.9G instead of 0.8G.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
