@@ -451,6 +451,53 @@ pub const Lowerer = struct {
         l.checkFields();
         l.checkRegions();
         l.checkProps();
+        l.swapElse();
+    }
+
+    /// The `<template lcgf-else>` that is the next element after template `n`, or none.
+    fn elseOf(l: *const Lowerer, n: u32) u32 {
+        const parents = l.doc.nodes.items(.parent);
+        for (l.k.end[n]..l.doc.nodes.len) |i| {
+            if (parents[i] != parents[n]) continue;
+            if (l.doc.nodes.items(.kind)[i] == .text and isBlank(l.doc.nodes.items(.name)[i])) continue;
+            const ok_ = l.doc.isElement(@intCast(i), "template") and l.attr(@intCast(i), "lcgf-else") != null;
+            return if (ok_) @intCast(i) else none;
+        }
+        return none;
+    }
+
+    /// An lcgf-if/lcgf-else choice lists its alternatives as the markup does, then before else;
+    /// `spec.choice` over a bool takes false first, so the two subtrees trade places.
+    fn swapElse(l: *Lowerer) void {
+        if (l.ds.errors > 0) return;
+        const nodes = &l.page.nodes;
+        var i: u32 = 0;
+        while (i < nodes.len) : (i += 1) {
+            if (nodes.items(.kind)[i] != .choice or nodes.items(.level)[i] != 1) continue;
+            const a = i + 1;
+            const b = l.subtreeEnd(a);
+            const c = l.subtreeEnd(b);
+            if (b == c or c > nodes.len) continue; // reported: an alternative is missing
+            var moved: std.ArrayList(ir.Node) = .empty;
+            for (b..c) |k| ok(moved.append(l.arena, nodes.get(k)));
+            for (a..b) |k| ok(moved.append(l.arena, nodes.get(k)));
+            for (moved.items, a..) |*m, k| {
+                if (m.parent >= a and m.parent < b) m.parent += c - b else if (m.parent >= b and m.parent < c) m.parent -= b - a;
+                nodes.set(k, m.*);
+            }
+        }
+    }
+
+    /// The first IR node after `x` that is not in `x`'s subtree.
+    fn subtreeEnd(l: *const Lowerer, x: u32) u32 {
+        const parents = l.page.nodes.items(.parent);
+        var k = x + 1;
+        while (k < parents.len) : (k += 1) {
+            var p = parents[k];
+            while (p != none and p != x) p = parents[p];
+            if (p == none) return k;
+        }
+        return @intCast(parents.len);
     }
 
     /// `<sfy-name …>`: an app component (plan §3.4). Its attributes are props: a literal
@@ -1093,8 +1140,11 @@ pub const Lowerer = struct {
     fn template(l: *Lowerer, n: u32, parent: u32) void {
         const at = l.loc(n);
         if (l.attr(n, "lcgf-else") != null) {
-            _ = l.refused("attribute", "lcgf-else", "", l.attrLoc(n, "lcgf-else"));
-            l.skip[n] = true;
+            // Its lcgf-if made the choice and gave this template its node, the content's parent.
+            if (l.ir_of[n] == none) {
+                l.ds.err(at, "<template lcgf-else> belongs right after a <template lcgf-if>", .{});
+                l.skip[n] = true;
+            }
             return;
         }
         if (l.attr(n, "lcgf-case")) |case| {
@@ -1109,16 +1159,27 @@ pub const Lowerer = struct {
         }
         var node: ir.Node = .{ .kind = .when, .parent = parent, .loc = at };
         if (l.attr(n, "lcgf-if")) |f| {
+            // With an lcgf-else after it: `spec.choice` over the bool (engine spec T4), whose
+            // false alternative comes first (`level` 1; `swapElse` reorders the nodes).
+            const other = l.elseOf(n);
+            if (other != none) {
+                node.kind = .choice;
+                node.level = 1;
+                if (l.content(n).elements != 1 or l.content(other).elements != 1)
+                    l.ds.err(at, "<template lcgf-if> and its lcgf-else each hold exactly one element (wrap them in a <div>)", .{});
+            }
             if (l.eachOf(n) != none) {
                 // Per item: a bool field of the item (`row.expanded`).
                 node.bind = l.itemBinding(n, f, l.valueLoc(n, "lcgf-if"), .bool, false);
                 if (node.bind.len == 0) return;
-                l.ir_of[n] = l.addNode(node);
-                return;
+            } else {
+                if (!l.identifier(f, l.valueLoc(n, "lcgf-if"))) return;
+                l.field(f, .bool, l.valueLoc(n, "lcgf-if"), "lcgf-if");
+                node.bind = f;
             }
-            if (!l.identifier(f, l.valueLoc(n, "lcgf-if"))) return;
-            l.field(f, .bool, l.valueLoc(n, "lcgf-if"), "lcgf-if");
-            node.bind = f;
+            l.ir_of[n] = l.addNode(node);
+            if (other != none) l.ir_of[other] = l.ir_of[n];
+            return;
         } else if (l.attr(n, "lcgf-each")) |f| {
             if (std.mem.indexOf(u8, f, " in ")) |at_in| {
                 l.eachRegion(n, parent, std.mem.trim(u8, f[0..at_in], " "), std.mem.trim(u8, f[at_in + 4 ..], " "));

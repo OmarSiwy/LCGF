@@ -1,6 +1,6 @@
 //! rows, written by hand: per-item view state inside a run-time region. The checkbox binds the
 //! item's `selected` and the details show while the item's `expanded` holds; both fields are
-//! the app's, written through the mutable slice it passes.
+//! the app's, written through the mutable slice it passes; lcgf-else shows "more" otherwise.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -43,4 +43,8 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     rows[0].expanded = true;
     out = p.frame(h, &in, .{ .rows = &rows });
     try std.testing.expect(runOf(out.draw, "first") != null and runOf(out.draw, "second") == null);
+    // lcgf-else: the other rows show "more" in place of their details.
+    var more: u32 = 0;
+    for (out.draw.runs[0..out.draw.run_len]) |r| more += @intFromBool(std.mem.eql(u8, out.draw.strings[r.start..][0..r.bytes], "more"));
+    try std.testing.expectEqual(1, more);
 }

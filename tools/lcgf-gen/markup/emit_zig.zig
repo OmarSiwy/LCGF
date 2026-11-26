@@ -992,10 +992,13 @@ pub const Emit = struct {
             if (in_choice) {
                 var k: usize = 0;
                 for (nodes.items(.parent)[0..i]) |p| k += @intFromBool(p == parent);
-                const field = for (e.page.fields.items) |fd| {
-                    if (std.mem.eql(u8, fd.name, nodes.items(.bind)[parent])) break fd;
-                } else unreachable;
-                e.print(".{f} => {{ ", .{std.zig.fmtId(field.cases[k])});
+                // lcgf-if/lcgf-else: a bool, false first.
+                if (nodes.items(.level)[parent] == 1) e.print("{s} => {{ ", .{if (k == 0) "false" else "true"}) else {
+                    const field = for (e.page.fields.items) |fd| {
+                        if (std.mem.eql(u8, fd.name, nodes.items(.bind)[parent])) break fd;
+                    } else unreachable;
+                    e.print(".{f} => {{ ", .{std.zig.fmtId(field.cases[k])});
+                }
             }
             var close = e.rtOpenFlex(i, lists);
             if (in_choice) close = std.fmt.allocPrint(e.arena, "{s}{s}}},", .{ close, if (close.len > 0) " " else "" }) catch unreachable;

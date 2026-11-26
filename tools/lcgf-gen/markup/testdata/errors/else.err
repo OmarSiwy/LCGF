@@ -1,0 +1,6 @@
+else.html:4:3: error: <template lcgf-else> belongs right after a <template lcgf-if>
+  <template lcgf-else><span>Alone</span></template>
+  ^
+else.html:5:3: error: <template lcgf-if> and its lcgf-else each hold exactly one element (wrap them in a <div>)
+  <template lcgf-if="open"><span>A</span><span>B</span></template>
+  ^
