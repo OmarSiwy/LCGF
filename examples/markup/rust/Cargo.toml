@@ -1,0 +1,17 @@
+[package]
+name = "example-markup-rust"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# examples/markup's page from Rust: `lcgf::include_ui!` runs lcgf-gen on ../ui/counter.html
+# while the crate compiles. Build against an installed `zig build abi` prefix:
+#   LCGF_PREFIX=<prefix> cargo run --manifest-path examples/markup/rust/Cargo.toml
+[workspace]
+
+[dependencies]
+lcgf = { path = "../../../bindings/rust/lcgf" }
+
+[[bin]]
+name = "example-markup-rust"
+path = "main.rs"

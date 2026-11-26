@@ -13,7 +13,8 @@ Nothing of HTML or CSS remains at run time. `ci/run.sh markup-zero-cost` checks 
 fixture's generated page compiles to the same machine code as the same page written by hand.
 
 The example is `examples/markup/`: `ui/counter.html`, `ui/counter.css`, a `build.zig` that
-calls `lcgf.addMarkup`, and `app.zig` with the handlers.
+calls `lcgf.addMarkup`, and `app.zig` with the handlers. `cpp/` and `rust/` run the same page
+from C++ and Rust (see "C++ and Rust" below).
 
 ## Build
 
@@ -49,15 +50,23 @@ lcgf-gen --mappings                    # what every element, attribute and prope
   <link rel="stylesheet" href="counter.css">
 </head>
 <body>
-  <main>
-    <h1>Counter</h1>
+  <div class="card">
+    <span>Counter</span>
     <div class="row">
       <button id="dec" on:click="dec">-</button>
-      <span class="count">{count:.0}</span>
+      <span>{count:.0}</span>
       <button id="inc" on:click="inc">+</button>
     </div>
     <label><input type="checkbox" id="step10" bind:checked="by_ten" on:change="step_changed"> Count by ten</label>
-  </main>
+    <div class="row">
+      <input type="range" id="level" bind:value="level" value="0.5">
+      <span>Level {level:.2}</span>
+    </div>
+    <template lcgf-if="by_ten"><div class="note"><span>Steps of ten</span></div></template>
+    <div class="row">
+      <template lcgf-each="clicks" lcgf-max="8"><div class="dot"></div></template>
+    </div>
+  </div>
 </body>
 </html>
 ```
@@ -189,6 +198,55 @@ The page then exports `Tokens`, with those defaults, and `ThemeTable`
 the next frame lays the page out with the new values. Pages that use no token compile to the
 same code as without the option (`ci/run.sh markup-zero-cost`). Both frontends read them: a
 comptime page is `ComptimeUiTokens(State, spec, theme, Tokens)` over `spec.tokened` nodes.
+
+## C++ and Rust
+
+A page in the subset the C seam's tables carry also builds from C++ and Rust. `lcgf-gen` lowers
+it to the `.zon` spec those bindings read (docs/guide/bindings.md) and generates from that, so
+the output is what the `.zon` file would give:
+
+```sh
+lcgf-gen ui/page.html --lang zon                  # the lowered spec, for inspection
+lcgf-gen ui/page.html --lang cpp -o page.lcgf.hpp --depfile page.d
+```
+
+```cmake
+lcgf_add_ui(app ui/counter.html)       # counter.lcgf.hpp; the depfile reruns it on HTML or CSS edits
+```
+
+```rust
+lcgf::include_ui!("ui/counter.html");  // a tool error is a compile_error! naming the HTML line
+```
+
+The subset:
+
+- Containers such as `<div>`, as rows and columns. Their CSS may set what the seam's styles
+  hold: size, minimum and maximum size, padding, gap, alignment, background, border, radius,
+  opacity and clipping. The cascade, classes and custom properties resolve at build time, as
+  for Zig.
+- Text: a literal, `{field}` or a format such as `Level {level:.2}`, in the theme's text style.
+- `<button>` with a literal or `{field}` caption, `<input type=checkbox>` with `bind:checked`,
+  `<input type=range>` (0 to 1) with `bind:value`.
+- `<template lcgf-if="f">` over one element, and `<template lcgf-each="n" lcgf-max="N">`.
+- State fields of type string, bool, f32 and u32. A literal caption becomes a string field
+  named `<id>_text`, because the seam's buttons and checkboxes show a field.
+
+Anything else is an error at its HTML location, for example:
+
+    page.html:6:5: error: <input type=text> is not in the seam's widget tables (C++/Rust); use the Zig frontend
+
+The errors cover headings, landmarks such as `<main>`, other form controls, `lcgf-else`,
+`lcgf-switch`, `lcgf-each="x in xs"`, components, accessible names, text styles (`color` and
+`font-size` on text), CSS on a button, checkbox or text node, margins, theme overrides
+(`--lcgf-*`) and run-time tokens.
+
+C++ and Rust have no handler type. The app polls the frame's events
+(`ui.events().clicked(counter::Widget::inc)`, `frame.events.clicked(counter::Widget::Inc)`) and
+writes state through the generated setters. The seam's widgets behave like the reference
+widgets, not the Zig frontend's widgets, in two ways. Tab skips buttons. A slider reports its
+event on each change while it is held, not when it is released. Draw lists are the same:
+`bindings/check/run.sh` replays the example page in Zig's spec frontend, in Zig through the
+seam, in C++ and in Rust, and compares them.
 
 ## Handlers
 

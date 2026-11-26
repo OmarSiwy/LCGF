@@ -170,7 +170,20 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             step.dependOn(&case.step);
         }
     }
-    // Diagnostics: each testdata/errors/<case>.html must fail with exactly <case>.err.
+    // The example page in the seam's spec language: exactly testdata/seam/counter.zon.
+    {
+        const run = b.addRunArtifact(gen);
+        run.setCwd(b.path("."));
+        run.addArgs(&.{ "examples/markup/ui/counter.html", "--lang", "zon" });
+        run.addFileInput(b.path("examples/markup/ui/counter.html"));
+        run.addFileInput(b.path("examples/markup/ui/counter.css"));
+        run.addFileInput(b.path(dir ++ "/seam/counter.zon"));
+        const io = b.graph.io;
+        run.expectStdOutEqual(b.root.root_dir.handle.readFileAlloc(io, b.pathJoin(&.{ b.root.sub_path, dir ++ "/seam/counter.zon" }), b.allocator, .limited(1 << 20)) catch @panic("cannot read " ++ dir ++ "/seam/counter.zon"));
+        step.dependOn(&run.step);
+    }
+    // Diagnostics: each testdata/errors/<case>.html must fail with exactly <case>.err; a
+    // `zon-*` case through the seam's lowering (`--lang zon`).
     {
         const io = b.graph.io;
         const sub = dir ++ "/errors";

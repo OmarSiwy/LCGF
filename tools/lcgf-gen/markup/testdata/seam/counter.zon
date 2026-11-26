@@ -1,0 +1,50 @@
+.{
+    .name = "counter",
+    .state = .{
+        .{ .name = "count", .f32 = 0 },
+        .{ .name = "by_ten", .bool = false },
+        .{ .name = "level", .f32 = 0.5 },
+        .{ .name = "clicks", .u32 = 0 },
+        .{ .name = "dec_text", .str = "-" },
+        .{ .name = "inc_text", .str = "+" },
+        .{ .name = "step10_text", .str = "Count by ten" },
+    },
+    .ui = .{ .col = .{ .style = .{ .size = .{ .fill, .fill }, .fill = .{ .rgba = .{ 30, 31, 36, 255 } } }, .children = .{.{ .col = .{ .style = .{
+        .pad = .{ 16, 16, 16, 16 },
+        .gap = 12,
+        .fill = .{ .rgba = .{ 38, 40, 47, 255 } },
+        .radius = 8,
+    }, .children = .{
+        .{ .text = .{ .format = "Counter" } },
+        .{ .row = .{ .style = .{ .gap = 8, .cross = .center }, .children = .{
+            .{ .button = .{ .id = "dec", .text = "dec_text" } },
+            .{ .text = .{ .format = "{.0}", .args = .{"count"} } },
+            .{ .button = .{ .id = "inc", .text = "inc_text" } },
+        } } },
+        .{ .checkbox = .{
+            .id = "step10",
+            .bind = "by_ten",
+            .text = "step10_text",
+        } },
+        .{ .row = .{ .style = .{ .gap = 8, .cross = .center }, .children = .{ .{ .slider = .{ .id = "level", .bind = "level" } }, .{ .text = .{ .format = "Level {.2}", .args = .{"level"} } } } } },
+        .{ .col = .{
+            .style = .{
+                .pad = .{ 8, 4, 8, 4 },
+                .border_color = .{ .rgba = .{ 60, 179, 113, 255 } },
+                .border = 1,
+                .radius = 4,
+            },
+            .children = .{.{ .text = .{ .format = "Steps of ten" } }},
+            .when = "by_ten",
+        } },
+        .{ .row = .{ .style = .{ .gap = 8, .cross = .center }, .children = .{.{ .list = .{
+            .count = "clicks",
+            .max = 8,
+            .template = .{.{ .col = .{ .style = .{
+                .size = .{ .{ .px = 8 }, .{ .px = 8 } },
+                .fill = .{ .rgba = .{ 60, 179, 113, 255 } },
+                .radius = 4,
+            } } }},
+        } }} } },
+    } } }} } },
+}

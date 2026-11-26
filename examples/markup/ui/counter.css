@@ -1,5 +1,6 @@
-:root { --lcgf-accent: #3cb371; }
+:root { --space: 8px; --card: #26282f; --mark: #3cb371; }
 
-main { padding: 16px; gap: 12px; }
-.row { display: flex; gap: 8px; align-items: center; }
-.count { min-width: 48px; font-size: 1.5em; color: var(--lcgf-accent); }
+.card { padding: 16px; gap: 12px; background: var(--card); border-radius: 8px; }
+.row { display: flex; gap: var(--space); align-items: center; }
+.note { padding: 4px var(--space); border: 1px solid var(--mark); border-radius: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 4px; background: var(--mark); }

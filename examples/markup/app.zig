@@ -1,6 +1,7 @@
 //! A counter written in HTML and CSS (ui/counter.html): the build generates `counter_ui`, a
 //! comptime page, with `lcgf.addMarkup`. The app supplies only the handlers the markup names;
-//! the view state (`count`, `by_ten`) is generated from the bindings.
+//! the view state (`count`, `by_ten`, `level`, `clicks`) is generated from the bindings.
+//! cpp/main.cpp and rust/main.rs run the same page from C++ and Rust.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -11,10 +12,17 @@ pub const Handlers = struct {
 
     pub fn inc(h: *Handlers, view: *ui.Ui) void {
         view.signals.set(.count, view.signals.state.count + h.step);
+        clicked(view);
     }
 
     pub fn dec(h: *Handlers, view: *ui.Ui) void {
         view.signals.set(.count, view.signals.state.count - h.step);
+        clicked(view);
+    }
+
+    /// One more dot under the counter, up to the page's lcgf-max of 8.
+    fn clicked(view: *ui.Ui) void {
+        view.signals.set(.clicks, @min(view.signals.state.clicks + 1, 8));
     }
 
     pub fn step_changed(h: *Handlers, _: *ui.Ui, by_ten: bool) void {
@@ -57,4 +65,5 @@ test "a click on + counts one; with 'Count by ten' checked, ten" {
     }
     try std.testing.expect(page.ui.signals.state.by_ten);
     try std.testing.expectEqual(11, page.ui.signals.state.count);
+    try std.testing.expectEqual(2, page.ui.signals.state.clicks);
 }

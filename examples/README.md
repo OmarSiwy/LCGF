@@ -20,7 +20,7 @@ sources and headless tests. Use the repository's pinned Zig
 | [mvvm-c](mvvm-c/) | MVVM-C: a coordinator owns navigation |
 | [mcu](mcu/) | A thermostat replay and Cortex-M7 image |
 | [embedded](embedded/) | A simulated SPI counter board and two firmware targets |
-| [markup](markup/) | A counter written in HTML and CSS, compiled to a comptime page by `addMarkup` |
+| [markup](markup/) | A counter written in HTML and CSS: a comptime page by `addMarkup` in Zig, the same page from C++ (`cpp/`) and Rust (`rust/`) |
 
 From a project directory, `zig build` installs the application, `zig build run`
 runs it and `zig build test` runs its headless checks. The original seven desktop
