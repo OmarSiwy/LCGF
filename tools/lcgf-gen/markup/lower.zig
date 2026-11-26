@@ -1030,7 +1030,7 @@ pub const Lowerer = struct {
         if (l.attr(n, "lcgf-if")) |f| {
             if (l.eachOf(n) != none) {
                 // Per item: a bool field of the item (`row.expanded`).
-                node.bind = l.itemBinding(n, f, l.valueLoc(n, "lcgf-if"), .bool);
+                node.bind = l.itemBinding(n, f, l.valueLoc(n, "lcgf-if"), .bool, false);
                 if (node.bind.len == 0) return;
                 l.ir_of[n] = l.addNode(node);
                 return;
@@ -1141,7 +1141,7 @@ pub const Lowerer = struct {
 
     /// A binding inside an lcgf-each region: per-item state lives in the app's item, so it names
     /// a field of the item (`bind:checked="row.selected"`), typed by the control.
-    fn itemBinding(l: *Lowerer, n: u32, f: []const u8, at: Loc, ty: ir.FieldType) []const u8 {
+    fn itemBinding(l: *Lowerer, n: u32, f: []const u8, at: Loc, ty: ir.FieldType, writes: bool) []const u8 {
         const each = l.eachOf(n);
         const item = l.page.nodes.items(.text)[each];
         const dot = std.mem.indexOfScalar(u8, f, '.');
@@ -1153,8 +1153,18 @@ pub const Lowerer = struct {
             l.ds.err(at, "inside lcgf-each, only checkboxes, switches, toggles, sliders, radio groups and lcgf-if bind an item field so far", .{});
             return "";
         }
-        ok(l.page.item_fields.append(l.arena, .{ .each = l.page.nodes.items(.id)[each], .field = f[dot.? + 1 ..], .loc = at, .bound = ty }));
+        ok(l.page.item_fields.append(l.arena, .{ .each = l.page.nodes.items(.id)[each], .field = f[dot.? + 1 ..], .loc = at, .bound = ty, .writes = writes }));
         return f;
+    }
+
+    /// A one-way control inside an lcgf-each: `attr="{row.field}"` shows the item's field and
+    /// its on:change reports the new value; the app writes it, if it wants (a one-way view).
+    fn oneWay(l: *Lowerer, n: u32, attr_name: []const u8, ty: ir.FieldType) []const u8 {
+        if (l.eachOf(n) == none) return "";
+        const v = l.attr(n, attr_name) orelse return "";
+        if (!isBound(v)) return "";
+        const f = std.mem.trim(u8, std.mem.trim(u8, v, " ")[1 .. std.mem.trim(u8, v, " ").len - 1], " ");
+        return l.itemBinding(n, f, l.valueLoc(n, attr_name), ty, false);
     }
 
     /// The `each` region around document node `n`, as its IR node, or none.
@@ -1351,7 +1361,9 @@ pub const Lowerer = struct {
                     continue;
                 }
                 if (std.mem.indexOfScalar(u8, bind, '.') != null) {
-                    l.ds.err(doc.attrLoc(a), "on:change on a per-item control is not lowered yet; read the item after the frame", .{});
+                    // Per item: the handler gets the item's index and the new value.
+                    const each = l.eachOf(n);
+                    ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .change, .widget = id, .field = bind, .payload = payload, .loc = at, .each = l.page.nodes.items(.id)[each] }));
                     continue;
                 }
                 if (bind.len == 0) {
@@ -1434,7 +1446,7 @@ pub const Lowerer = struct {
         const name = std.fmt.bufPrint(&buf, "bind:{s}", .{what}) catch unreachable;
         const f = l.attr(n, name) orelse return "";
         const at = l.valueLoc(n, name);
-        if (l.eachOf(n) != none) return l.itemBinding(n, f, at, ty);
+        if (l.eachOf(n) != none) return l.itemBinding(n, f, at, ty, true);
         if (!l.identifier(f, at)) return "";
         l.field(f, ty, at, why);
         return f;
@@ -1508,19 +1520,23 @@ pub const Lowerer = struct {
             .@"switch" => "<input type=checkbox switch>",
             else => "<input type=checkbox>",
         };
-        const bind = l.binding(n, what, .bool, why);
+        var bind = l.binding(n, what, .bool, why);
+        const shown = if (kind == .toggle) "aria-pressed" else "checked";
+        const one_way = bind.len == 0 and l.oneWay(n, shown, .bool).len > 0;
+        if (one_way) bind = l.oneWay(n, shown, .bool);
         if (bind.len == 0) {
             l.ds.err(l.loc(n), "{s} needs bind:{s}=\"field\"", .{ why, what });
             l.skip[n] = true;
             return true;
         }
-        const on = if (kind == .toggle) std.mem.eql(u8, l.attr(n, "aria-pressed") orelse "", "true") else l.attr(n, "checked") != null;
+        const on = !one_way and (if (kind == .toggle) std.mem.eql(u8, l.attr(n, "aria-pressed") orelse "", "true") else l.attr(n, "checked") != null);
         if (on) l.setDefault(bind, "true");
         var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind };
         node.id = l.widgetId(n, bind, why) orelse return true;
         const cap = if (kind == .toggle) collapse(l.arena, l.ownText(n)) else l.controlCaption(n);
         l.caption(&node, cap, l.loc(n));
         node.kind = kind;
+        node.one_way = one_way;
         if (node.text_kind == .format) l.ds.err(l.loc(n), "a control's caption is one literal or one field", .{});
         const base_style = switch (kind) {
             .checkbox => lcgf.widgets_checkbox.checkboxStyle(&th),
@@ -1536,7 +1552,9 @@ pub const Lowerer = struct {
 
     fn slider(l: *Lowerer, n: u32, parent: u32) bool {
         const th = l.page.theme;
-        const bind = l.binding(n, "value", .f32, "<input type=range>");
+        var bind = l.binding(n, "value", .f32, "<input type=range>");
+        const one_way = bind.len == 0 and l.oneWay(n, "value", .f32).len > 0;
+        if (one_way) bind = l.oneWay(n, "value", .f32);
         if (bind.len == 0) {
             l.ds.err(l.loc(n), "<input type=range> needs bind:value=\"field\"", .{});
             l.skip[n] = true;
@@ -1545,8 +1563,8 @@ pub const Lowerer = struct {
         const lo = l.numberAttr(n, "min") orelse 0;
         const hi = l.numberAttr(n, "max") orelse 1;
         if (!(lo < hi)) l.ds.err(l.valueLoc(n, "max"), "max ({d}) must be above min ({d})", .{ hi, lo });
-        if (l.numberAttr(n, "value")) |v| l.setDefault(bind, ok(std.fmt.allocPrint(l.arena, "{d}", .{v})));
-        var node: ir.Node = .{ .kind = .slider, .parent = parent, .loc = l.loc(n), .bind = bind, .range = .{ lo, hi, 0 } };
+        if (!one_way) if (l.numberAttr(n, "value")) |v| l.setDefault(bind, ok(std.fmt.allocPrint(l.arena, "{d}", .{v})));
+        var node: ir.Node = .{ .kind = .slider, .parent = parent, .loc = l.loc(n), .bind = bind, .range = .{ lo, hi, 0 }, .one_way = one_way };
         node.id = l.widgetId(n, bind, "<input type=range>") orelse return true;
         l.widgetStyle(n, parent, row(lcgf.widgets_slider.sliderTrack(&th)), &node);
         l.handlers(n, node.id, bind, .f32);

@@ -110,6 +110,7 @@
         .{ .kind = "attribute", .name = "lcgf-switch", .applies_to = "template", .status = .mapped, .target = "spec.choice spec.zig:286 over a generated enum of the lcgf-case names", .fixture = "todo" },
         .{ .kind = "attribute", .name = "lcgf-case", .applies_to = "template", .status = .mapped, .target = "one alternative of spec.choice", .fixture = "todo" },
         .{ .kind = "attribute", .name = "lcgf-else", .status = .planned, .diagnostic = "lcgf-else is not lowered yet: spec.choice takes no bool selector (engine spec T4); use lcgf-switch", .spec = "T4" },
+        .{ .kind = "attribute", .name = "on:change", .applies_to = "lcgf-each item", .status = .mapped, .target = "h.name(ui, index, value) after the frame; with checked=\"{item.f}\" or value=\"{item.f}\" the control is one-way and the item (a const slice is fine) is not written", .fixture = "intents" },
         .{ .kind = "attribute", .name = "bind:checked", .applies_to = "lcgf-each item", .status = .mapped, .target = "&item.field of the mutable item list (per-item view state is the app's); lcgf-if=\"item.field\" likewise", .fixture = "rows" },
         .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "in", .status = .mapped, .target = "ct_interop.region in the Spec, sized by its CSS; Page.frame(h, in, data) builds data.<list> into a runtime Context in the region's rect (regionInput) and composes the draw lists (ct_interop.compose); {item.field} reads the item, handlers get the index", .fixture = "files" },
 
@@ -233,6 +234,7 @@
         .{ .name = "files", .spec_only = true },
         .{ .name = "rows", .spec_only = true },
         .{ .name = "palette", .spec_only = true },
+        .{ .name = "intents", .spec_only = true },
         .{ .name = "form" },
         .{ .name = "flexitems" },
     },

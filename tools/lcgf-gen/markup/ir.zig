@@ -89,6 +89,9 @@ pub const Node = struct {
     max: u32 = 0,
     /// Engine API from docs/plans/markup-engine-api.md: flex item margins (F2), or null.
     margin: ?[4]f32 = null,
+    /// Inside an lcgf-each: the control shows the item's field (`checked="{row.done}"`) and
+    /// reports changes (on:change) without writing it.
+    one_way: bool = false,
     /// Style fields read from run-time theme tokens, and the text style's.
     uses: []const TokenUse = &.{},
     text_uses: TextTokens = .{},
@@ -162,9 +165,10 @@ pub const ItemField = struct {
     each: []const u8,
     field: []const u8,
     loc: diag.Loc,
-    /// Set when a control or a template binds the field: the type it must have, and the item
-    /// list must then be mutable.
+    /// Set when a control or a template reads the field as a value: the type it must have.
     bound: ?FieldType = null,
+    /// A two-way binding writes the field: the item list must then be mutable.
+    writes: bool = false,
 };
 
 pub const Page = struct {

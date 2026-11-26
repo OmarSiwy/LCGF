@@ -442,12 +442,13 @@ pub const Emit = struct {
 
     /// The handler's function type, as the app writes it.
     fn signature(e: *Emit, h: ir.Handler, comptime H: []const u8) []const u8 {
-        const extra = if (h.each.len > 0) ", index: u32" else if (h.payload) |p| std.fmt.allocPrint(e.arena, ", value: {s}", .{fieldType(p)}) catch unreachable else "";
+        const value_param = if (h.payload) |p| std.fmt.allocPrint(e.arena, ", value: {s}", .{fieldType(p)}) catch unreachable else "";
+        const extra = if (h.each.len > 0) std.fmt.allocPrint(e.arena, ", index: u32{s}", .{value_param}) catch unreachable else value_param;
         return std.fmt.allocPrint(e.arena, "pub fn {s}(h: *{s}, ui: *Ui{s}) void", .{ h.name, H, extra }) catch unreachable;
     }
 
     fn fnType(e: *Emit, h: ir.Handler) []const u8 {
-        if (h.each.len > 0) return "fn (*H, *Ui, u32) void";
+        if (h.each.len > 0) return if (h.payload) |p| std.fmt.allocPrint(e.arena, "fn (*H, *Ui, u32, {s}) void", .{fieldType(p)}) catch unreachable else "fn (*H, *Ui, u32) void";
         return std.fmt.allocPrint(e.arena, "fn (*H, *Ui{s}{s}) void", .{ if (h.payload != null) ", " else "", if (h.payload) |p| fieldType(p) else "" }) catch unreachable;
     }
 
@@ -632,13 +633,19 @@ pub const Emit = struct {
                     else => "toggle",
                 };
                 const fn_name = if (n.kind == .@"switch") "@\"switch\"" else m;
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), fn_name, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const item = e.eachOf(i) != none;
+                if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
+                e.print("_ = {s}.{s}(f, &theme, {s}, {s}, ", .{ e.use(m), fn_name, e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind) });
                 e.rtCaption(n.text_kind, n.text);
                 e.write(");");
+                if (item) e.itemChange(n);
                 return "";
             },
             .slider => {
-                e.print("_ = {s}.slider(f, &theme, {s}, &{s}, {d}, {d});", .{ e.use("slider"), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.range[0], n.range[1] });
+                const item = e.eachOf(i) != none;
+                if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
+                e.print("_ = {s}.slider(f, &theme, {s}, {s}, {d}, {d});", .{ e.use("slider"), e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1] });
+                if (item) e.itemChange(n);
                 return "";
             },
             .progress => {
@@ -696,6 +703,25 @@ pub const Emit = struct {
             },
             .spacer, .spinner, .each => unreachable,
         }
+    }
+
+    /// `&field`: the address a runtime control writes through.
+    fn ref(e: *Emit, name: []const u8) []const u8 {
+        return std.fmt.allocPrint(e.arena, "&{s}", .{e.stateRef(name)}) catch unreachable;
+    }
+
+    /// After a per-item control's call over its copy `value`: a change is recorded for its
+    /// on:change handler (index, value), and written to the item only when the control binds
+    /// it two-way (`bind:`); a one-way control (`checked="{row.done}"`) leaves the item as it is.
+    fn itemChange(e: *Emit, n: ir.Node) void {
+        const h = for (e.page.handlers.items) |h| {
+            if (h.event == .change and std.mem.eql(u8, h.widget, n.id) and h.each.len > 0) break h;
+        } else null;
+        e.print(" if (value != {s}) {{", .{e.stateRef(n.bind)});
+        if (h) |hh| e.print(" {s}.{f} = .{{ @intCast(copy0), value }};", .{ e.events_var, std.zig.fmtId(hh.widget) });
+        if (!n.one_way) e.print(" {s} = value;", .{e.stateRef(n.bind)});
+        if (h == null and n.one_way) e.write(" _ = &value;");
+        e.write(" } }");
     }
 
     /// After a text control's call: its submit (`result.submitted`) recorded for dispatch.
@@ -951,11 +977,11 @@ pub const Emit = struct {
         var changes = false;
         var clicks: u32 = 0;
         for (hs) |h| {
-            changes = changes or h.event == .change;
+            changes = changes or (h.event == .change and h.each.len == 0);
             clicks += @intFromBool(h.event == .click or h.event == .submit);
         }
         var item_clicks: u32 = 0;
-        for (hs) |h| item_clicks += @intFromBool(h.each.len > 0);
+        for (hs) |h| item_clicks += @intFromBool(h.each.len > 0 and h.event != .change);
         clicks -= item_clicks;
         if (hs.len == 0) e.write("            _ = h;\n");
         if (changes) e.write("            const before = p.ui.signals.state;\n");
@@ -974,7 +1000,9 @@ pub const Emit = struct {
         }
         for (hs) |h| if (h.event == .click and h.each.len > 0)
             e.print("            if (events_{s}.{f}) |index| h.{f}(&p.ui, index); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
-        for (hs) |h| if (h.event == .change)
+        for (hs) |h| if (h.event == .change and h.each.len > 0)
+            e.print("            if (events_{s}.{f}) |change| h.{f}(&p.ui, change[0], change[1]); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+        for (hs) |h| if (h.event == .change and h.each.len == 0)
             e.print("            if (p.ui.signals.state.{f} != before.{f}) h.{f}(&p.ui, p.ui.signals.state.{f}); // {s}\n", .{ std.zig.fmtId(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.where(h.loc) });
         e.write("            return out;\n        }\n    };\n}\n\n");
     }
@@ -1035,7 +1063,10 @@ pub const Emit = struct {
             const n = e.page.nodes.get(i);
             if (n.kind != .each) continue;
             var events: std.ArrayList(u8) = .empty;
-            for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.each, n.id)) events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable;
+            for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.each, n.id)) switch (h.event) {
+                .change => events.print(e.arena, " {f}: ?struct {{ u32, {s} }} = null,", .{ std.zig.fmtId(h.widget), fieldType(h.payload.?) }) catch unreachable,
+                else => events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable,
+            };
             if (events.items.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events.items });
         }
         var k: u32 = 0;
@@ -1060,7 +1091,7 @@ pub const Emit = struct {
             if (f.bound) |ty| {
                 // A bound field: the type the control writes, through a mutable item list.
                 e.print("                    if (@hasField(Item, \"{s}\") and @FieldType(Item, \"{s}\") != {s}) @compileError(\"{s}: '{s}.{s}' is bound as {s} here; the item's field is \" ++ @typeName(@FieldType(Item, \"{s}\")));\n", .{ f.field, f.field, fieldType(ty), e.whereFull(f.loc), n.text, f.field, fieldType(ty), f.field });
-                e.print("                    if (@typeInfo(@TypeOf(data.{f})) != .pointer or @typeInfo(@TypeOf(data.{f})).pointer.attrs.@\"const\") @compileError(\"{s}: '{s}.{s}' is bound here, so pass {s} as a mutable slice\");\n", .{ std.zig.fmtId(n.bind), std.zig.fmtId(n.bind), e.whereFull(f.loc), n.text, f.field, n.bind });
+                if (f.writes) e.print("                    if (@typeInfo(@TypeOf(data.{f})) != .pointer or @typeInfo(@TypeOf(data.{f})).pointer.attrs.@\"const\") @compileError(\"{s}: '{s}.{s}' is bound here, so pass {s} as a mutable slice\");\n", .{ std.zig.fmtId(n.bind), std.zig.fmtId(n.bind), e.whereFull(f.loc), n.text, f.field, n.bind });
             }
             if (seen.contains(f.field)) continue;
             seen.put(e.arena, f.field, {}) catch unreachable;

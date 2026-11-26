@@ -1,0 +1,19 @@
+<!doctype html>
+<html lcgf-page="intents">
+<head>
+  <title>Intents</title>
+  <style>
+    .list { width: 400px; height: 200px; gap: 4px; }
+    .row { display: flex; gap: 6px; align-items: center; }
+  </style>
+</head>
+<body>
+  <template lcgf-each="task in tasks" class="list">
+    <div class="row">
+      <input type="checkbox" checked="{task.done}" on:change="toggled">
+      <input type="range" value="{task.level}" min="0" max="1" on:change="leveled">
+      <span>{task.title}</span>
+    </div>
+  </template>
+</body>
+</html>
