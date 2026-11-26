@@ -36,6 +36,7 @@ pub fn wrap(t: *const Tree, fx: *const Flex) void {
     var lines: u32 = 0;
     f.line[0] = sink;
     f.head[0] = 0;
+    fx.spaceShares(t, 0);
     openLines(c, f, 0, &lines);
     for (1..t.len) |i| {
         // As a child: stay on the parent's open line or break to a new one.
@@ -60,6 +61,7 @@ pub fn wrap(t: *const Tree, fx: *const Flex) void {
         f.line[i] = sink +% wu *% (l2 -% sink);
         f.open[p] = l2;
         // As a row, once its own line is known.
+        fx.spaceShares(t, i);
         openLines(c, f, i, &lines);
     }
 }
@@ -110,26 +112,7 @@ pub inline fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usiz
 /// row gets on y: its line's cross size instead of the whole row. Zero otherwise.
 pub inline fn lineCross(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, inner: f32) f32 {
     const on_y: f32 = @floatFromInt(a);
-    return on_y * wraps(t, fx, p) * (fx.c.line_cross[fx.c.line[i]] + lineExtra(t, fx, p) - inner);
-}
-
-/// The height wrapping row `p`'s lines leave inside it, once `p` is sized.
-inline fn spareOf(t: *const Tree, fx: *const Flex, p: usize) f32 {
-    const c = &t.c;
-    const inner = c.size[1][p] - c.pad_lo[1][p] - c.pad_hi[1][p];
-    return @max(inner - c.fit[1][p] - linesGap(t, fx, 1, p), 0);
-}
-
-/// What `Style.line_space` divides `spare` by: `nlines + n` of the kind, at least 1.
-inline fn lineShare(fx: *const Flex, p: usize, spare: f32, comptime k: []const f32, comptime n: []const f32) f32 {
-    const s = fx.c.line_space[p];
-    return spare * k[s] / @max(fx.c.nlines[p] + n[s], 1);
-}
-
-/// The height `align-content: stretch` adds to each line of row `p` (0 otherwise).
-inline fn lineExtra(t: *const Tree, fx: *const Flex, p: usize) f32 {
-    const S = Flex.LineSpace;
-    return lineShare(fx, p, spareOf(t, fx, p), &S.stretch_k, &S.stretch_n);
+    return on_y * wraps(t, fx, p) * (fx.c.line_cross[fx.c.line[i]] + fx.c.line_extra[p] - inner);
 }
 
 /// placeFlex, before child `i` is placed: the first child of a line sets the line's offset
@@ -140,10 +123,7 @@ pub inline fn openLine(t: *const Tree, fx: *const Flex, i: usize, p: usize) void
     const f = &fx.c;
     const l = f.line[i];
     const h = f.head[i];
-    const S = Flex.LineSpace;
-    const spare = spareOf(t, fx, p);
-    const lead = spare * f.align_lines[p] * S.lines_k[f.line_space[p]] + lineShare(fx, p, spare, &S.lead_k, &S.lead_n);
-    f.line_off[l] += h * (c.cursor[p] + lead - f.line_off[l]);
+    f.line_off[l] += h * (c.cursor[p] + f.line_lead[p] - f.line_off[l]);
 }
 
 /// placeFlex: child `i`'s offset inside a wrapping row's content box. Along x: its line's
@@ -157,7 +137,7 @@ pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, 
     const at = if (a == 0)
         @max(inner - f.line_main[l], 0) * c.align_main[p] + f.line_cursor[l]
     else
-        f.line_off[l] + @max(f.line_cross[l] + lineExtra(t, fx, p) - c.size[1][i] - fx.margin(1, i), 0) * cross;
+        f.line_off[l] + @max(f.line_cross[l] + f.line_extra[p] - c.size[1][i] - fx.margin(1, i), 0) * cross;
     return in_flow + wraps(t, fx, p) * (at + f.margin_lo[a][i] - in_flow);
 }
 
@@ -168,9 +148,7 @@ pub inline fn advance(t: *const Tree, fx: *const Flex, i: usize, p: usize, plain
     const l = f.line[i];
     const w = wraps(t, fx, p);
     f.line_cursor[l] += w * t.c.flow[i] * (t.c.size[0][i] + fx.margin(0, i) + t.c.gap[p]);
-    const S = Flex.LineSpace;
-    const spare = spareOf(t, fx, p);
-    const down = f.head[i] * (f.line_cross[l] + t.c.gap[p] + lineShare(fx, p, spare, &S.stretch_k, &S.stretch_n) + lineShare(fx, p, spare, &S.step_k, &S.step_n));
+    const down = f.head[i] * (f.line_cross[l] + t.c.gap[p] + f.line_extra[p] + f.line_step[p]);
     return plain + w * (down - plain);
 }
 

@@ -45,6 +45,16 @@ pub const Flex = struct {
         line_space: []u32,
 
         // ---- scratch, rewritten by the passes every frame
+        /// What placeFlex multiplies a node's free main-axis space by for the lead before its
+        /// first child (its `Style.main` factor, or its `space` share) and for the step after
+        /// each child (`wrap`, from `nkids`).
+        space_lead: []f32,
+        space_step: []f32,
+        /// A wrapping row's spare height shares (`resolveFlex` on the row, from `nlines`):
+        /// before its first line, after each line, and added to each line's height.
+        line_lead: []f32,
+        line_step: []f32,
+        line_extra: []f32,
         /// Sum over in-flow children of shrink flag * weight * natural size, per axis (`fitFlex`).
         shrink_sum: [2][]f32,
         /// Free space per unit of grow weight that the second round hands to each child that its
@@ -153,11 +163,9 @@ pub const Flex = struct {
 
         pub const lines_k = [5]f32{ 1, 0, 0, 0, 0 };
         pub const lead_k = [5]f32{ 0, 0, 0.5, 1, 0 };
-        pub const lead_n = [5]f32{ 1, 1, 0, 1, 1 };
         pub const step_k = [5]f32{ 0, 1, 1, 1, 0 };
-        pub const step_n = [5]f32{ 1, -1, 0, 1, 1 };
         pub const stretch_k = [5]f32{ 0, 0, 0, 0, 1 };
-        pub const stretch_n = [5]f32{ 1, 1, 1, 1, 0 };
+        pub const per_n = [5]f32{ 1, -1, 0, 1, 0 };
     };
 
     /// `Style.space`: where free main-axis space goes, for `n` in-flow children.
@@ -170,13 +178,13 @@ pub const Flex = struct {
         /// `n + 1` equal shares, at the ends and between (`space-evenly`).
         evenly,
 
-        /// Free space before the first child: `free * lead_k / max(n + lead_n, 1)`; and
-        /// between two children: the same with `step_k`, `step_n`. Indexed by the tag.
+        /// Free space before the first child: `free * lead_k / max(n + per_n, 1)`; between
+        /// two children: `free * step_k / max(n + per_n, 1)`. One divide per container.
+        /// Indexed by the tag.
         const main_k = [4]f32{ 1, 0, 0, 0 };
         const lead_k = [4]f32{ 0, 0, 0.5, 1 };
-        const lead_n = [4]f32{ 1, 1, 0, 1 };
         const step_k = [4]f32{ 0, 1, 1, 1 };
-        const step_n = [4]f32{ 1, -1, 0, 1 };
+        const per_n = [4]f32{ 1, -1, 0, 1 };
     };
 
     /// Carves the columns from `carver` for a tree of `cap` nodes, every row `Style{}`.
@@ -203,18 +211,30 @@ pub const Flex = struct {
         fx.c.line_space[i] = @backingInt(s.line_space);
     }
 
-    /// place: what node `p` puts before its first child of its free main-axis space `free`:
-    /// `plain` (the `Style.main` share) without `Style.space`, else the space's share. A table
-    /// lookup, not a branch.
-    pub inline fn spaceLead(fx: *const Flex, t: *const Tree, p: usize, free: f32, plain: f32) f32 {
-        const k = fx.c.space[p];
-        return plain * Space.main_k[k] + free * Space.lead_k[k] / @max(t.c.nkids[p] + Space.lead_n[k], 1);
+    /// wrap, once per node: node `i`'s lead and step factors over its in-flow children
+    /// (`Style.space`, or its `Style.main` factor without one). Table lookups, no branch, so
+    /// placeFlex adds one multiply per child for them.
+    pub inline fn spaceShares(fx: *const Flex, t: *const Tree, i: usize) void {
+        const k = fx.c.space[i];
+        const n = t.c.nkids[i];
+        const per = 1 / @max(n + Space.per_n[k], 1);
+        fx.c.space_lead[i] = t.c.align_main[i] * Space.main_k[k] + Space.lead_k[k] * per;
+        fx.c.space_step[i] = Space.step_k[k] * per;
     }
 
-    /// place: the share of `free` that node `p` puts after each child, before the next.
-    pub inline fn spaceStep(fx: *const Flex, t: *const Tree, p: usize, free: f32) f32 {
-        const k = fx.c.space[p];
-        return free * Space.step_k[k] / @max(t.c.nkids[p] + Space.step_n[k], 1);
+    /// resolve, once node `i` has its size: how a wrapping row shares the height its lines
+    /// leave (`Style.lines` and `line_space`), for placeFlex and its children's resolve.
+    pub inline fn lineShares(fx: *const Flex, t: *const Tree, i: usize) void {
+        const c = &t.c;
+        const f = &fx.c;
+        const S = LineSpace;
+        const k = f.line_space[i];
+        const lines_gap = f.wrap[i] * c.main[0][i] * @max(f.nlines[i] - 1, 0) * c.gap[i];
+        const spare = @max(c.size[1][i] - c.pad_lo[1][i] - c.pad_hi[1][i] - c.fit[1][i] - lines_gap, 0);
+        const per = spare / @max(f.nlines[i] + S.per_n[k], 1);
+        f.line_lead[i] = spare * f.align_lines[i] * S.lines_k[k] + S.lead_k[k] * per;
+        f.line_step[i] = S.step_k[k] * per;
+        f.line_extra[i] = S.stretch_k[k] * per;
     }
 
     /// resolve, once node `p` has its size: the first round's leftover per unit of weight that

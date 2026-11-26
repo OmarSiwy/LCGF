@@ -221,7 +221,10 @@ inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) 
     const shrink = t.c.shrink;
     const used = t.c.used[a];
 
-    if (flexed) fx.secondRound(t, a, first);
+    if (flexed) {
+        fx.secondRound(t, a, first);
+        fx.lineShares(t, first);
+    }
     for (first + 1..last) |i| {
         const p = parent[i];
         const nat = nat_[i];
@@ -263,7 +266,10 @@ inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) 
         s = simd.minF(simd.maxF(s, min[i]), max[i]);
         size[i] = s;
         used[p] += (s + m) * fl;
-        if (flexed) fx.secondRound(t, a, i);
+        if (flexed) {
+            fx.secondRound(t, a, i);
+            fx.lineShares(t, i);
+        }
     }
 }
 
@@ -323,14 +329,13 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
         const fl = flow[i];
         if (flexed) wrap.openLine(t, fx, i, p);
         var free_main: f32 = 0;
+        // Flex: the parent's lead factor holds its Style.main factor or its space share.
+        const lead_k = if (flexed) fx.c.space_lead[p] else align_main[p];
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
             const free = simd.maxF(inner - used[a][p] - gap_total[p], 0);
-            var lead = free * align_main[p];
-            if (flexed) {
-                lead = fx.spaceLead(t, p, free, lead);
-                free_main += free * main[a][p];
-            }
+            const lead = free * lead_k;
+            if (flexed) free_main += free * main[a][p];
             var cross = align_cross[p];
             if (flexed) cross = fx.selfCross(i, cross);
             const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
@@ -346,7 +351,7 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
         var step = size[0][i] * main[0][p] + size[1][i] * main[1][p];
         if (flexed) step += fx.margin(0, i) * main[0][p] + fx.margin(1, i) * main[1][p];
         var advance = step + gap[p];
-        if (flexed) advance = wrap.advance(t, fx, i, p, advance + fx.spaceStep(t, p, free_main));
+        if (flexed) advance = wrap.advance(t, fx, i, p, advance + free_main * fx.c.space_step[p]);
         cursor[p] += advance * fl;
     }
 }
