@@ -93,7 +93,7 @@ test "DTCG generated transition timing and custom stroke use native playback and
     path.lineTo(20, 0);
     var source = source_buffer.polyline();
     api.paths.flatten(&path, 0.25, &source);
-    var dash_buffer: api.paths.TestBuffers(32, 64) = .{};
+    var dash_buffer: api.paths.TestBuffers(32, 128) = .{};
     var stroke_buffer: api.paths.TestBuffers(128, 512) = .{};
     var dashes = dash_buffer.polyline();
     var stroked = stroke_buffer.polyline();
