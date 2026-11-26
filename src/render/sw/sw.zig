@@ -247,7 +247,7 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
         }
 
         pub fn drawText(s: *const Self, t: Target, run: u32) void {
-            s.drawGlyphSpan(t, s.glyphs.span(run));
+            if (use.text) s.drawGlyphSpan(t, s.glyphs.span(run));
         }
 
         /// The `span[1]` glyph quads from `span[0]`: consecutive text runs at once
@@ -360,7 +360,7 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
             } else t.fb.fill(t.scissor, background);
             while (i < list.cmd_len) : (i += 1) switch (list.command(i)) {
                 .quads => |batch| s.drawBatch(t, batch),
-                .text => |run| {
+                .text => |run| if (use.text) {
                     const span = iface.glyphSpan(s.glyphs, list, &i, run);
                     s.drawGlyphSpan(t, span);
                 },

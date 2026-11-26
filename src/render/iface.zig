@@ -107,7 +107,8 @@ pub fn drawUntilCustom(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawLis
     var i = from;
     while (i < draw.cmd_len) : (i += 1) switch (draw.command(i)) {
         .quads => |batch| b.drawBatch(pass, batch),
-        .text => |run| if (comptime @hasDecl(B, "drawGlyphSpan"))
+        // A back end built without text keeps `glyphs: void`; its `drawText` draws nothing.
+        .text => |run| if (comptime @hasDecl(B, "drawGlyphSpan") and @TypeOf(b.glyphs) == Glyphs)
             b.drawGlyphSpan(pass, glyphSpan(b.glyphs, draw, &i, run))
         else
             b.drawText(pass, run),
