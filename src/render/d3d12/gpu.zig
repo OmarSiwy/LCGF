@@ -1030,9 +1030,15 @@ test "gpu: instanced draws from a first instance, integer attributes, an offset 
     try lcgf.gpu_check.instancing(@This(), shaders, .wrap(&d), &k);
 }
 
-test "gpu: a compute pass writes a storage buffer the host reads (WARP, or vkd3d under Wine)" {
+test "gpu: a compute pass writes a storage buffer the host reads (WARP; skipped under Wine)" {
     var d = try device_mod.Device.init(.{ .adapter = .warp });
     defer d.deinit();
+    if (!d.warp) {
+        // No WARP means Wine's vkd3d, whose shader compiler rejects the GetDimensions naga emits
+        // for fill.wgsl's arrayLength (E5005). ci/jobs/windows.sh runs this check on WARP.
+        std.debug.print("skipped: vkd3d-shader lacks RWByteAddressBuffer.GetDimensions\n", .{});
+        return error.SkipZigTest;
+    }
     var once = try host.Once.init(&d);
     defer once.deinit();
     var k: Check = .{ .d = &d, .once = &once };
