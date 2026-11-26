@@ -3318,6 +3318,7 @@ Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `row_written`, `atlas`, `atl
 - `fn deinit(cv: *C, dev: gpu.Device) void`
 - `fn prepare(cv: *C, dev: gpu.Device, up: ?*gpu.Upload, list: *const draw_list.DrawList, slot: u32, scale: f32, size: [2]u32, atlas: gpu.TextureView, atlas_key…`: Uploads the canvas commands of `list` for ring slot `slot` (0 when `frames` is 1), before the pass: `up` writes when the memory is not mapped.
 - `fn draw(cv: *const C, pass: *gpu.RenderPass, list: *const draw_list.DrawList, k: u32) void`: Draws canvas command `k` of the last `prepare` into `pass`: one instanced draw per range, scissored to the node.
+- `fn find(cv: *const C, shapes: *const Instances) ?u32`: The batch `shapes` is drawn from, if `placeAll` placed it.
 
 ## `lcgf.gpu_check` (src/render/gpu/check.zig)
 

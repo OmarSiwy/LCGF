@@ -198,6 +198,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 cv.row_written = true;
             }
             cv.atlas_group = cv.atlasGroup(dev, atlas, atlas_key) orelse return;
+            cv.placeAll(list);
             const s = &cv.slots[cv.slot];
             var uniforms: shader.Uniforms = undefined;
             for (0..list.cmd_len) |i| {
@@ -207,7 +208,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 };
                 if (cv.draw_len == max_draws) break;
                 const shapes = list.canvases[k].instances;
-                const b = cv.batchOf(shapes) orelse continue;
+                const b = cv.find(shapes) orelse continue;
                 if (cv.batches[b].seen != cv.frame) cv.uploadBatch(up, b);
                 cv.batches[b].seen = cv.frame;
                 const j = cv.draw_len;
@@ -267,33 +268,65 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             return @intCast(i);
         }
 
-        /// The batch `shapes` is drawn from, placed in the buffers if it is new.
-        fn batchOf(cv: *C, shapes: *const Instances) ?u32 {
-            for (&cv.batches, 0..) |*b, i| {
-                if (b.shapes != shapes) continue;
-                if (b.rows == shapes.cap and b.verts == shapes.vert_cap) return @intCast(i);
-                b.shapes = null; // re-initialised in place: placed again
+        /// The batch `shapes` is drawn from, if `placeAll` placed it.
+        pub fn find(cv: *const C, shapes: *const Instances) ?u32 {
+            for (cv.batches, 0..) |b, i| {
+                if (b.shapes == shapes and b.rows == shapes.cap and b.verts == shapes.vert_cap) return @intCast(i);
             }
-            if (shapes.cap > cv.cap.rows or shapes.vert_cap > @max(cv.cap.verts, 1)) return null;
-            // A free entry, or else one not drawn this frame.
-            var pick: ?usize = null;
-            for (&cv.batches, 0..) |*b, i| if (b.shapes == null or b.seen != cv.frame) {
-                pick = i;
-                if (b.shapes == null) break;
+            return null;
+        }
+
+        /// Places the batches of `list`'s canvas commands that are not placed yet, before any
+        /// upload. When they do not fit after what is placed, the buffers start over with this
+        /// frame's batches only (each then uploaded whole); one that does not fit even then
+        /// draws nothing.
+        fn placeAll(cv: *C, list: *const draw_list.DrawList) void {
+            var need: [max_draws]*const Instances = undefined;
+            var n: usize = 0;
+            var draws: u32 = 0;
+            for (0..list.cmd_len) |i| {
+                const k = switch (list.command(@intCast(i))) {
+                    .canvas => |k| k,
+                    else => continue,
+                };
+                if (draws == max_draws) break;
+                draws += 1;
+                const shapes = list.canvases[k].instances;
+                if (std.mem.indexOfScalar(*const Instances, need[0..n], shapes) == null) {
+                    need[n] = shapes;
+                    n += 1;
+                }
+            }
+            var rows = cv.next_row;
+            var verts = cv.next_vert;
+            var new: u32 = 0;
+            for (need[0..n]) |shapes| if (cv.find(shapes) == null) {
+                rows += shapes.cap;
+                verts = vertAt(verts) + shapes.vert_cap;
+                new += 1;
             };
-            const i = pick orelse return null;
-            if (cv.next_row + shapes.cap > cv.cap.rows or vertAt(cv.next_vert) + shapes.vert_cap > cv.vertCap()) {
-                // Out of room: start the buffers over with the batches drawn this frame.
+            if (new == 0) return;
+            var free: u32 = 0;
+            for (cv.batches) |b| free += @intFromBool(!live(b, need[0..n]));
+            if (rows > cv.cap.rows or verts > cv.vertCap() or new > free) {
+                cv.batches = @splat(.{});
                 cv.next_row = 0;
                 cv.next_vert = 0;
-                for (&cv.batches) |*b| if (b.shapes != null and b.seen == cv.frame) {
-                    cv.place(b, b.shapes.?);
-                } else {
-                    b.shapes = null;
+            }
+            for (need[0..n]) |shapes| {
+                if (cv.find(shapes) != null) continue;
+                if (cv.next_row + shapes.cap > cv.cap.rows or vertAt(cv.next_vert) + shapes.vert_cap > cv.vertCap()) continue;
+                for (&cv.batches) |*b| if (!live(b.*, need[0..n])) {
+                    cv.place(b, shapes);
+                    break;
                 };
             }
-            cv.place(&cv.batches[i], shapes);
-            return @intCast(i);
+        }
+
+        /// Whether `b` holds one of this frame's batches as it is now.
+        fn live(b: Batch, need: []const *const Instances) bool {
+            const shapes = b.shapes orelse return false;
+            return std.mem.indexOfScalar(*const Instances, need, shapes) != null and b.rows == shapes.cap and b.verts == shapes.vert_cap;
         }
 
         /// Where a batch's vertices start: on GL ES at a texture row, so a row is one batch's.

@@ -541,6 +541,71 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     try testing.expectEqual(uniforms, cv.uploaded);
 }
 
+test "renderer: a canvas batch that no longer fits starts the buffers over with this frame's" {
+    var h: host.Host = undefined;
+    try h.init();
+    defer h.deinit();
+    var white = try h.sampled(1, 1, &.{ 255, 255, 255, 255 });
+    defer h.device.destroyImage(&white);
+    const sampler = try host.nearestSampler(&h.device);
+    defer h.device.fns.vkDestroySampler.?(h.device.handle, sampler, null);
+    var r = try Renderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .frames = 1, .canvas_rows = 90 }, white.view, sampler);
+    defer r.deinit(&h.device);
+    const canvas = lcgf.canvas;
+    const B = struct {
+        buf: [canvas.Instances.requiredBytes(40, 0, 1)]u8 align(lcgf.mem.column_align) = undefined,
+        s: canvas.Instances = undefined,
+        fn init(b: *@This(), cap: u32) void {
+            var carver: lcgf.mem.Carver = .{ .buf = &b.buf };
+            b.s = .init(&carver, cap, 0, 1);
+            for (0..cap) |_| _ = b.s.segment(.{ 0, 0 }, .{ 10, 10 }, .{});
+        }
+    };
+    var a: B = .{};
+    var b: B = .{};
+    var big: B = .{};
+    a.init(30);
+    b.init(30);
+    big.init(40);
+    const list_bytes = comptime blk: {
+        var counter: lcgf.mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 1, 1, 2);
+        break :blk counter.off;
+    };
+    var list_buf: [list_bytes]u8 align(lcgf.mem.column_align) = undefined;
+    var carver: lcgf.mem.Carver = .{ .buf = &list_buf };
+    var list = DrawList.init(&carver, 1, 1, 2);
+    const pal: canvas.Palette = .{ .layers = &.{.of(.{})} };
+    var rows: [2]draw_list.CanvasDraw = undefined;
+    list.canvases = &rows;
+    for (0..2) |k| {
+        list.customs[k] = .{ .rect = .{ 0, 0, 16, 16 }, .clip = .{ 0, 0, 16, 16 }, .data = 0, .id = 0, .node = 0 };
+        list.cmd.kind[k] = @backingInt(DrawList.Kind.canvas);
+        list.cmd.first[k] = @intCast(k);
+        list.cmd.count[k] = 1;
+    }
+    list.custom_len = 2;
+    list.cmd_len = 2;
+    const all: []const canvas.Range = &.{.{ .first = 0, .count = 40 }};
+    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(1);
+    const cv = &r.canvas.?;
+    rows = .{ .{ .instances = &a.s, .ranges = all, .palette = &pal, .camera = .{} }, .{ .instances = &b.s, .ranges = all, .palette = &pal, .camera = .{} } };
+    r.prepare(0, &list, .{}, .{ 16, 16 }, 1);
+    try testing.expectEqual(2 * (32 * 30 + uniforms), cv.uploaded);
+    a.s.clearDirty();
+    b.s.clearDirty();
+    // 30 + 40 rows still fit after `a` once `b` is gone, but not after both: start over.
+    rows[1].instances = &big.s;
+    r.prepare(0, &list, .{}, .{ 16, 16 }, 1);
+    try testing.expectEqual(32 * 30 + 32 * 40 + 2 * uniforms, cv.uploaded);
+    try testing.expectEqual(@as(u32, 30), cv.batches[cv.find(&big.s).?].row_base);
+    try testing.expectEqual(@as(?u32, null), cv.find(&b.s));
+    a.s.clearDirty();
+    big.s.clearDirty();
+    r.prepare(0, &list, .{}, .{ 16, 16 }, 1);
+    try testing.expectEqual(2 * uniforms, cv.uploaded);
+}
+
 test "renderer: prepare writes each frame into its own slot of the mapped ring" {
     var h: host.Host = undefined;
     try h.init();
