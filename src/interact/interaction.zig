@@ -214,10 +214,12 @@ pub fn Touches(comptime n: comptime_int) type {
             // Leaving an eligible target retains capture; losing the owner does not. In
             // particular an omitted lifted contact must not click a stale `under` id.
             var owners = t.active;
+            // A free slot searches no rows (find over 0 rows gives `none`), with no jump.
             for (&owners) |*owner| {
-                if (owner.* == 0) continue;
-                const row = simd.find(prev.c.id, prev.len, owner.*);
-                if (row == none or prev.c.sense[row] == 0 or !prev.participation(row).hit) owner.* = 0;
+                const row = simd.find(prev.c.id, prev.len * @intFromBool(owner.* != 0), owner.*);
+                const r = simd.selU(row == none, 0, row);
+                const eligible = simd.andB(simd.andB(row != none, prev.c.sense[r] != 0), prev.participation(r).hit);
+                owner.* = simd.selU(eligible, owner.*, 0);
             }
             const held: V = owners;
             const previous: V = t.active;
