@@ -745,6 +745,29 @@ test "tree export: names come from labels, from content for the roles that take 
     try testing.expectEqual(none, s.c.name[slider]); // cleared: no longer labelled
 }
 
+test "tree export: a subtree without semantics gives no name from content" {
+    var fx: TreeFixture(8) = .{};
+    var t = fx.init();
+    var sx: SemFixture(8) = .{};
+    var s = sx.init();
+    // button { hidden { label "A" }, label "B" }: the button is named "B".
+    const button = t.push(0, .none, &.{ .role = .button });
+    const hidden = t.push(button, .none, &.{ .participation = .hidden });
+    const a = t.push(hidden, .none, &.{ .role = .label });
+    t.c.text[a] = 0;
+    t.seal(a);
+    t.seal(hidden);
+    const b = t.push(button, .none, &.{ .role = .label });
+    t.c.text[b] = 1;
+    t.seal(b);
+    t.seal(button);
+    try t.check();
+    names(&t, &s);
+    try testing.expectEqual(1, s.c.name[button]);
+    try testing.expectEqual(none, s.c.first_text[hidden]);
+    try testing.expectEqual(none, s.c.first_text[a]);
+}
+
 test "tree export: states come from the application, checkable values and disabled ancestors" {
     var fx: TreeFixture(16) = .{};
     var t = fx.init();
