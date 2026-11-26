@@ -729,8 +729,11 @@ pub const Emit = struct {
             },
             .button, .link => {
                 const h = e.clickHandler(n.id);
-                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), @tagName(n.kind), e.rtId(n.id, list_depth) });
+                // A link has no Face function; lower.checkRuntime refuses CSS on it.
+                const face = if (n.kind == .button) e.rtFace(n) else "";
+                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), if (face.len > 0) "buttonFace" else @tagName(n.kind), e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
+                if (face.len > 0) e.print(", {s}.labelText(&theme){s}", .{ e.use("label"), face });
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
                 else
@@ -743,11 +746,17 @@ pub const Emit = struct {
                     .@"switch" => "switch_",
                     else => "toggle",
                 };
-                const fn_name = if (n.kind == .@"switch") "@\"switch\"" else m;
+                const face = e.rtFace(n);
+                const fn_name = if (face.len > 0) switch (n.kind) {
+                    .checkbox => "checkboxFace",
+                    .@"switch" => "switchFace",
+                    else => "toggleFace",
+                } else if (n.kind == .@"switch") "@\"switch\"" else m;
                 const item = e.eachOf(i) != none;
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
                 e.print("_ = {s}.{s}(f, &theme, {s}, {s}, ", .{ e.use(m), fn_name, e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind) });
                 e.rtCaption(n.text_kind, n.text);
+                e.write(face);
                 e.write(");");
                 if (item) e.itemChange(n);
                 return "";
@@ -755,7 +764,8 @@ pub const Emit = struct {
             .slider => {
                 const item = e.eachOf(i) != none;
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
-                e.print("_ = {s}.slider(f, &theme, {s}, {s}, {d}, {d});", .{ e.use("slider"), e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1] });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}, {s}, {d}, {d}{s});", .{ e.use("slider"), if (face.len > 0) "sliderFace" else "slider", e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1], face });
                 if (item) e.itemChange(n);
                 return "";
             },
@@ -870,6 +880,13 @@ pub const Emit = struct {
             e.write(if (k == 0) " " else ", ");
             e.string(c);
         }
+    }
+
+    /// `, style` for a widget whose CSS restyles its root (`<widget>Face`, as `spec.styled`
+    /// restyles the comptime one; engine spec R1), or "" for the widget's own look.
+    fn rtFace(e: *Emit, n: ir.Node) []const u8 {
+        if (std.meta.eql(n.style, n.base_style) and n.params_expr.len == 0) return "";
+        return std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable;
     }
 
     /// `app.components.@"tag"(.{ .prop = value, … })`, or in a run-time region the runtime

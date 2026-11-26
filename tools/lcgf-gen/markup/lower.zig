@@ -1682,8 +1682,8 @@ pub const Lowerer = struct {
         l.ir_of[n] = l.addNode(node);
     }
 
-    /// What the runtime frontend cannot say yet: CSS that restyles a widget (the runtime
-    /// widget functions take no style; engine spec R1).
+    /// What the runtime frontend cannot say yet: CSS that restyles a widget without a runtime
+    /// function that takes its style (`<widget>Face`; engine spec R1), and margins on widgets.
     pub fn checkRuntime(l: *Lowerer) void {
         const nodes = l.page.nodes.slice();
         for (0..nodes.len) |i| {
@@ -1699,7 +1699,14 @@ pub const Lowerer = struct {
                 },
                 else => {},
             }
-            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.flex)[i], lcgf.flex.Flex.Style{}) or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
+            // These restyle their root through `<widget>Face`, as `spec.styled` does; a margin
+            // is a flex rule on the node a statement makes, which a click handler's `if` is not.
+            const faced = switch (kind) {
+                .button, .toggle, .checkbox, .@"switch", .slider => true,
+                else => false,
+            };
+            const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
+            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.flex)[i], lcgf.flex.Flex.Style{}) or (restyled and !faced))
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }
     }
