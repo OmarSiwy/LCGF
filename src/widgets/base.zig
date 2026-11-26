@@ -69,6 +69,7 @@ const DrawList = @import("../draw/draw_list.zig").DrawList;
 const paint = @import("../draw/paint.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
+const grid = @import("../layout/grid.zig");
 const Mono = @import("../text/protocol.zig").Mono;
 const Paragraph = @import("../text/layout/stack.zig").Paragraph;
 const Frame = @import("../runtime/frame.zig").Frame;
@@ -382,6 +383,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const decoration_table = comptime paragraph_styles.decorations[0..paragraph_styles.decorations.len].*;
     const span_table = comptime paragraph_styles.spans[0..paragraph_styles.spans.len].*;
     const paragraph_slots = comptime paragraphCount(spec);
+    // Grid columns and passes only for a page with a `spec.grid` node.
+    const grid_cap = comptime gridCapacity(spec);
+    const has_grid = grid_cap.grids > 0;
+    if (has_flex and has_grid) @compileError("a page with both spec.flexed and spec.grid nodes is not supported yet");
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -463,6 +468,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             strings: Strings,
             d: DrawList,
             fx: if (has_flex) Flex else void,
+            gs: if (has_grid) grid.Grids else void,
 
             fn carve(carver: *mem.Carver) Tables {
                 return .{
@@ -472,6 +478,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     .strings = .{ .buf = carver.slice(u8, string_bytes) },
                     .d = DrawList.init(carver, rows, runs, customs),
                     .fx = if (has_flex) .{ .c = carver.columns(Flex.Columns, simd.rows(rows)) } else {},
+                    .gs = if (has_grid) grid.Grids.init(carver, grid_cap) else {},
                 };
             }
         };
@@ -629,6 +636,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 // edge; call baseline.apply here when the font gives one.
                 @memset(tb.fx.c.text_has, 0);
             }
+            if (has_grid) tb.gs.reset();
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
             if (dynamic) {
@@ -687,6 +695,18 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.fitFlexOpts(t, fx, .y, flex_opts);
                 layout.resolveFlex(t, fx, .y, in.viewport[1]);
                 layout.placeFlexOpts(t, fx, flex_opts);
+            } else if (has_grid) {
+                // `grid.run`'s sequence, with the font's measure and wrap.
+                const gs = &tb.gs;
+                grid.autoPlace(gs);
+                grid.fit(t, gs, .x);
+                grid.resolve(t, gs, .x, in.viewport[0]);
+                layout.textAvail(t, tx);
+                ui.font.wrap(tx);
+                layout.applyText(t, tx, .y);
+                grid.fit(t, gs, .y);
+                grid.resolve(t, gs, .y, in.viewport[1]);
+                layout.place(t);
             } else {
                 layout.fit(t, .x);
                 layout.resolve(t, .x, in.viewport[0]);
@@ -814,7 +834,15 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     // A container with an id is a button.
                     if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
                     const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
-                    inline for (n.children) |c| ui.push(c, i, next, in);
+                    if (comptime n.grid) |decl| {
+                        const gs = &tb.gs;
+                        const k = gs.declare(i, decl, comptime grid.implicitTracks(decl, spec_zig.gridItems(n)));
+                        inline for (n.children) |c| {
+                            // Placed before it is pushed: its row is the tree's next one.
+                            if (!dynamic or ui.tree_rows[next.*] != types.none) _ = gs.place(k, tb.t.len, comptime c.cell orelse .{});
+                            ui.push(c, i, next, in);
+                        }
+                    } else inline for (n.children) |c| ui.push(c, i, next, in);
                     tb.t.seal(i);
                 },
             }
@@ -1003,6 +1031,25 @@ fn anyLineBaseline(comptime n: Spec) bool {
     if (n.flex) |f| if (f.wrap and f.baseline) return true;
     for (n.children) |c| if (anyLineBaseline(c)) return true;
     return false;
+}
+
+/// The grid rows, track rows, item rows and auto-placement cells `n`'s subtree needs, every
+/// grid at its most implicit tracks; zero grids when it has none.
+fn gridCapacity(comptime n: Spec) grid.Grids.Capacity {
+    comptime {
+        var cap: grid.Grids.Capacity = .{ .grids = 0, .tracks = 0, .items = 0, .cells = 1 };
+        if (n.grid) |decl| {
+            const extra = grid.implicitTracks(decl, spec_zig.gridItems(n));
+            var count: [2]u32 = .{ @max(decl.columns.len, 1), @max(decl.rows.len, 1) };
+            count[decl.growAxis()] = @max(count[decl.growAxis()], @as(u32, if (decl.growAxis() == 0) decl.columns.len else decl.rows.len) + extra);
+            cap = .{ .grids = 1, .tracks = count[0] + count[1], .items = n.children.len, .cells = count[0] * count[1] };
+        }
+        for (n.children) |c| {
+            const sub = gridCapacity(c);
+            cap = .{ .grids = cap.grids + sub.grids, .tracks = cap.tracks + sub.tracks, .items = cap.items + sub.items, .cells = @max(cap.cells, sub.cells) };
+        }
+        return cap;
+    }
 }
 
 fn anyFlex(comptime n: Spec) bool {
@@ -1851,6 +1898,66 @@ test "flexed: margins, wrap and align-self lay out the same in both front ends" 
         try std.testing.expectEqual(@as(f32, 86), out.rect(4).x0);
         try std.testing.expect(out.rect(5).y0 >= 24);
         try std.testing.expectEqual(@as(f32, 10), out.rect(6).x0);
+    }
+}
+
+test "grid: tracks, spans, placed cells and implicit rows lay out the same in both front ends" {
+    const th: Theme = .default;
+    const box: Style = comptime .{ .size = .{ .fit, .px(20) }, .fill = .rgb(200, 0, 0) };
+    const decl: grid.Decl = comptime .{ .columns = &.{ .px(60), .fr(1) }, .gap = .{ 4, 2 }, .justify = .{ .stretch, .start } };
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.grid(.{ .size = .{ .px(200), .fit }, .pad = @splat(3) }, decl, .{
+            spec_zig.label("A"),
+            spec_zig.styled(spec_zig.row(.{}, .{}), box),
+            spec_zig.cell(spec_zig.styled(spec_zig.row(.{}, .{}), box), .{ .span = .{ 2, 1 } }),
+            spec_zig.cell(spec_zig.label("B"), .{ .cell = .{ 1, 3 } }),
+        }),
+        spec_zig.label("after"),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        buf: [32 * 1024]u8 align(mem.column_align) = undefined,
+        gs: ?grid.Grids = null,
+        pub fn build(app: *@This(), f: *Frame) void {
+            if (app.gs == null) {
+                var c: mem.Carver = .{ .buf = &app.buf };
+                app.gs = grid.Grids.init(&c, .{ .grids = 1, .tracks = 9, .items = 4, .cells = 14 });
+            }
+            const gs = &app.gs.?;
+            var b = box;
+            b.dir = .x;
+            b.float = true;
+            const items = [_]grid.Item{ .{}, .{}, .{ .span = .{ 2, 1 } }, .{ .cell = .{ 1, 3 } } };
+            _ = f.open(.none, .{});
+            const g = f.open(.none, .{ .size = .{ .px(200), .fit }, .pad = @splat(3) });
+            const k = gs.declare(@backingInt(g), decl, grid.implicitTracks(decl, &items));
+            _ = gs.place(k, @intCast(f.tree().len), items[0]);
+            _ = f.textStyled("A", labelText(&th), .{ .float = true });
+            _ = gs.place(k, @intCast(f.tree().len), items[1]);
+            _ = f.leaf(.none, b);
+            _ = gs.place(k, @intCast(f.tree().len), items[2]);
+            _ = f.leaf(.none, b);
+            _ = gs.place(k, @intCast(f.tree().len), items[3]);
+            _ = f.textStyled("B", labelText(&th), .{ .float = true });
+            f.close();
+            _ = f.textStyled("after", labelText(&th), .{});
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endGrid(font, &app.gs.?);
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 64, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    for (0..2) |_| {
+        const out = (try h.frame(&in)).comptime_.tree;
+        // Root, col, grid, then A, the box, the spanning box, B, after.
+        try std.testing.expectEqual(@as(f32, 3), out.rect(3).x0);
+        try std.testing.expectEqual(types.Rect{ .x0 = 67, .y0 = 3, .x1 = 197, .y1 = 23 }, out.rect(4));
+        try std.testing.expectEqual(types.Rect{ .x0 = 3, .y0 = 25, .x1 = 197, .y1 = 45 }, out.rect(5));
+        try std.testing.expectEqual(@as(f32, 67), out.rect(6).x0);
+        try std.testing.expect(out.rect(7).y0 >= out.rect(6).y1);
     }
 }
 

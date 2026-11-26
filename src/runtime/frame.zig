@@ -34,6 +34,7 @@ const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
 const FlexOptions = @import("../layout/flex.zig").FlexOptions;
+const grid = @import("../layout/grid.zig");
 const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
@@ -516,6 +517,39 @@ pub const Frame = struct {
         layout.placeFlexOpts(t, fx, opts);
         f.finalizeLayout(.{}) catch unreachable;
         for (0..t.len) |i| fx.set(@intCast(i), &.{});
+    }
+
+    /// `end` with the grids the caller declared into `gs` this frame: `gs.declare` after
+    /// opening a grid node, and `gs.place(k, @intCast(f.tree().len), item)` before pushing
+    /// each of its children, which float (`.float = true`). `gs` is caller-owned
+    /// (`Grids.init` once) and is reset afterwards, so each frame declares its own grids. A
+    /// frame without grids calls `end` and carves nothing.
+    pub fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output {
+        f.layoutGrid(font, gs);
+        return f.finish();
+    }
+
+    /// The layout half of `endGrid`: `grid.run`'s passes over the whole tree, with the font's
+    /// measure and wrap.
+    pub fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void {
+        const t = f.tree();
+        const tx = f.texts();
+        t.seal(0);
+        f.ctx.memos.kept_len = 0;
+        font.measure(tx);
+        grid.autoPlace(gs);
+        layout.prepare(t);
+        layout.applyText(t, tx, .x);
+        grid.fit(t, gs, .x);
+        grid.resolve(t, gs, .x, f.in.viewport[0]);
+        layout.textAvail(t, tx);
+        font.wrap(tx);
+        layout.applyText(t, tx, .y);
+        grid.fit(t, gs, .y);
+        grid.resolve(t, gs, .y, f.in.viewport[1]);
+        layout.place(t);
+        f.finalizeLayout(.{}) catch unreachable;
+        gs.reset();
     }
 
     /// A frame on a caller-selected device grid; no second arrangement or finalization pass.

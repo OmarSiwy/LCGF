@@ -9,6 +9,8 @@
 //!   fit          `layout.fit` with each grid's content size set from its tracks
 //!   resolve      `layout.resolve` with each grid item sized to its cell
 //!   run          every pass in order, as `layout.run`, for trees with grids
+//!   Decl, Item   a grid and an item as one value each, for the front ends (`Grids.declare`,
+//!                `Grids.place`, `implicitTracks`)
 //!
 //! A grid item is a child of the grid node pushed with `Style.float = true`, so the flow passes
 //! leave it alone; the grid owns its size and its `offset` (the cell's place in the grid). The
@@ -112,6 +114,13 @@ pub const Grids = struct {
         /// Opt-in bounded fractional solver, preserving the original single-pass default.
         bounded: []u8,
         distribution: [2][]u8,
+        /// Tracks given by the caller, and tracks reserved for auto-placement to add after
+        /// them (`declare`); `autoPlace` sets `count` between the two.
+        explicit: [2][]u32,
+        reserved: [2][]u32,
+        /// `Justify` of the grid's items that `place` gets none for (CSS `justify-items`,
+        /// `align-items`).
+        justify: [2][]u8,
         /// Optional parent grid whose resolved tracks this axis shares.
         parent: [2][]u32,
         parent_first: [2][]u32,
@@ -174,8 +183,13 @@ pub const Grids = struct {
     /// Makes `node` a grid with these columns (tracks along x) and rows (along y). Push grids
     /// in row order. Returns the grid's row.
     pub fn grid(gs: *Grids, node: u32, columns: []const Track, rows: []const Track) u32 {
+        return gs.pushGrid(node, .{ columns, rows }, .{ 0, 0 }, .{ .fit, .fit });
+    }
+
+    /// `grid` with `extra[a]` tracks of size `auto[a]` after the given ones on axis `a`.
+    fn pushGrid(gs: *Grids, node: u32, lists: [2][]const Track, extra: [2]u32, auto: [2]Track) u32 {
         const k = @min(gs.len, gs.cap.grids - 1);
-        const need = gs.tracks_len + columns.len + rows.len;
+        const need = gs.tracks_len + lists[0].len + lists[1].len + extra[0] + extra[1];
         gs.overflow = simd.orB(gs.overflow, simd.orB(gs.len >= gs.cap.grids, need > gs.cap.tracks));
         // On overflow the grid keeps no tracks, so nothing is written out of bounds.
         const fits = need <= gs.cap.tracks;
@@ -187,16 +201,21 @@ pub const Grids = struct {
         gs.g.last_item[k] = none;
         gs.g.flow[k] = 0;
         gs.g.bounded[k] = 0;
-        inline for (.{ columns, rows }, 0..) |list, a| {
+        inline for (lists, 0..) |list, a| {
             gs.g.distribution[a][k] = 0;
+            gs.g.justify[a][k] = @backingInt(Justify.stretch);
             gs.g.parent[a][k] = none;
             gs.g.parent_first[a][k] = 0;
-            const n: u32 = if (fits) @intCast(list.len) else 0;
+            const given: u32 = if (fits) @intCast(list.len) else 0;
+            const n: u32 = if (fits) given + extra[a] else 0;
+            gs.g.explicit[a][k] = given;
+            gs.g.reserved[a][k] = n;
             // A grid with no tracks on an axis points at the spare row past `cap.tracks`, which
             // its items may write and no other grid owns.
             gs.g.first[a][k] = if (n == 0) gs.cap.tracks else gs.tracks_len;
             gs.g.count[a][k] = n;
-            for (list[0..n], gs.tracks_len..) |tk, j| {
+            for (0..n, gs.tracks_len..) |i, j| {
+                const tk = if (i < given) list[i] else auto[a];
                 gs.tr.k_px[j] = tk.k_px;
                 gs.tr.k_fit[j] = tk.k_fit;
                 gs.tr.k_fr[j] = tk.k_fr;
@@ -246,8 +265,33 @@ pub const Grids = struct {
         gs.it.auto[r] = 1;
         return r;
     }
-    /// Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks
-    /// the grid has.
+    /// Makes `node` the grid `decl` describes, with `implicit` more tracks of `decl.auto` on
+    /// the axis auto-placement grows (`implicitTracks` gives a bound). An axis with no tracks
+    /// gets one `auto` track, as CSS's implicit grid. Push grids in row order. Returns the
+    /// grid's row.
+    pub fn declare(gs: *Grids, node: u32, decl: Decl, implicit: u32) u32 {
+        const g = decl.growAxis();
+        var extra: [2]u32 = .{ @intFromBool(decl.columns.len == 0), @intFromBool(decl.rows.len == 0) };
+        extra[g] = @max(extra[g], implicit);
+        const k = gs.pushGrid(node, .{ decl.columns, decl.rows }, extra, decl.auto);
+        gs.gaps(k, decl.gap);
+        gs.autoFlow(k, decl.flow);
+        gs.distribute(k, decl.distribution);
+        inline for (0..2) |a| gs.g.justify[a][k] = @backingInt(decl.justify[a]);
+        return k;
+    }
+
+    /// Makes `node`, a floating child of grid `k`'s node, the grid item `at` describes.
+    /// Push items in row order; a front end places an item before pushing its subtree, as
+    /// the item's row is then the tree's next row. Returns the item's row.
+    pub fn place(gs: *Grids, k: u32, node: u32, at: Item) u32 {
+        const r = if (at.cell) |c| gs.item(k, node, c) else gs.autoItem(k, node);
+        gs.span(r, at.span);
+        const def: [2]Justify = .{ @fromBackingInt(gs.g.justify[0][k]), @fromBackingInt(gs.g.justify[1][k]) };
+        gs.justify(r, at.justify orelse def);
+        return r;
+    }
+
     /// Sets grid `k`'s space between columns (`g[0]`) and between rows (`g[1]`).
     pub fn gaps(gs: *Grids, k: u32, g: [2]f32) void {
         gs.g.gap[0][k] = g[0];
@@ -275,6 +319,8 @@ pub const Grids = struct {
             gs.it.factor[a][r] = Justify.factor[@backingInt(j[a])];
         }
     }
+    /// Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks
+    /// the grid has.
     pub fn span(gs: *Grids, r: u32, n: [2]u32) void {
         const k = gs.it.grid[r];
         inline for (0..2) |a| {
@@ -299,6 +345,50 @@ pub const Grids = struct {
         gs.it.subgrid[a][parent_item] = child;
     }
 };
+
+/// A grid container as one value (CSS `grid-template-*`, `grid-auto-*`, `gap`,
+/// `grid-auto-flow`, `justify-content`/`align-content`, `justify-items`/`align-items`), for
+/// `Grids.declare`. Index 0 is the column axis (x), 1 the row axis (y).
+pub const Decl = struct {
+    columns: []const Track = &.{},
+    rows: []const Track = &.{},
+    /// Size of the tracks auto-placement adds past the given ones (`grid-auto-columns`,
+    /// `grid-auto-rows`).
+    auto: [2]Track = .{ .fit, .fit },
+    gap: [2]f32 = .{ 0, 0 },
+    flow: AutoFlow = .row,
+    distribution: [2]Distribution = .{ .start, .start },
+    justify: [2]Justify = .{ .stretch, .stretch },
+
+    /// The axis auto-placement adds tracks on: rows for row flow, columns for column flow.
+    pub fn growAxis(d: Decl) u1 {
+        return @intFromBool(@backingInt(d.flow) & 1 == 0);
+    }
+};
+
+/// A grid item as one value (CSS `grid-column`, `grid-row`, `grid-area`, `justify-self`,
+/// `align-self`), for `Grids.place`.
+pub const Item = struct {
+    /// Column and row of its first cell, from 0; null lets `autoPlace` choose.
+    cell: ?[2]u32 = null,
+    span: [2]u32 = .{ 1, 1 },
+    /// Null takes the grid's `Decl.justify`.
+    justify: ?[2]Justify = null,
+};
+
+/// How many tracks past `decl`'s own auto-placement of `items` can need on `decl.growAxis()`,
+/// at most: every item past the last explicit cell, one after another. `declare` reserves them
+/// and `autoPlace` keeps the ones it used.
+pub fn implicitTracks(decl: Decl, items: []const Item) u32 {
+    const g = decl.growAxis();
+    const given: u32 = @intCast(if (g == 0) decl.columns.len else decl.rows.len);
+    var end = given;
+    var auto: u32 = 0;
+    for (items) |it| {
+        if (it.cell) |c| end = @max(end, c[g] + @max(it.span[g], 1)) else auto += @max(it.span[g], 1);
+    }
+    return end + auto - given;
+}
 
 pub const Repeat = enum { auto_fill, auto_fit };
 
@@ -415,6 +505,9 @@ fn boundedShare(gs: *const Grids, first: u32, n: u32, available: f32) f32 {
 // per grid at worst; a per-row run-length of free cells would make it O(cells) if grids get big.
 pub fn autoPlace(gs: *Grids) void {
     for (0..gs.len) |k| {
+        // Reserved implicit tracks are all open to placement, then trimmed to what it used.
+        inline for (0..2) |a| gs.g.count[a][k] = gs.g.reserved[a][k];
+        defer trim(gs, @intCast(k));
         const cols = gs.g.count[0][k];
         const rows = gs.g.count[1][k];
         const cells = cols * rows;
@@ -452,6 +545,18 @@ pub fn autoPlace(gs: *Grids) void {
             mark(gs, occ, cols, it);
             cursor = if (found) at + (if (column) sr else sc) else cells;
         }
+    }
+}
+
+/// Grid `k`'s track count on each axis: its explicit tracks, or as many as its items reach
+/// when it reserved more.
+fn trim(gs: *Grids, k: u32) void {
+    for (0..2) |a| {
+        if (gs.g.reserved[a][k] == gs.g.explicit[a][k]) continue;
+        var used = gs.g.explicit[a][k];
+        var it = gs.g.first_item[k];
+        while (it != none) : (it = gs.it.next[it]) used = @max(used, gs.it.cell[a][it] + gs.it.span[a][it]);
+        gs.g.count[a][k] = @min(used, gs.g.reserved[a][k]);
     }
 }
 
@@ -701,7 +806,7 @@ const Scene = struct {
         var carver: mem.Carver = .{ .buf = &s.raw };
         s.t = Tree.init(&carver, 64);
         s.tx = Texts.init(&carver, 1);
-        s.gs = Grids.init(&carver, .{ .grids = 4, .tracks = 16, .items = 32, .cells = 16 });
+        s.gs = Grids.init(&carver, .{ .grids = 4, .tracks = 16, .items = 32, .cells = 32 });
     }
     /// A floating grid item holding one fixed-size child, so its natural size is the child's.
     fn cell(s: *Scene, grid_node: u32, k: u32, at: [2]u32, content: [2]f32) u32 {
@@ -1060,4 +1165,46 @@ test "grid: a settings form of text labels and fields, auto-placed, inside a flo
     // The flow after the grid continues below it.
     try testing.expectEqual(rect(10, 126, 290, 136), t.rect(footer));
     try testing.expect(!s.gs.overflow);
+}
+
+test "declare, place: a table of auto-placed cells grows rows, and only as many as it uses" {
+    var s: Scene = .{};
+    s.init();
+    const decl: Decl = .{ .columns = &.{ .px(30), .px(40), .px(50) }, .gap = .{ 2, 3 } };
+    // Seven cells, the second two columns wide: rows of 3, 2 + 1 (the span), 1.
+    const items = [_]Item{ .{}, .{ .span = .{ 2, 1 } }, .{}, .{}, .{}, .{}, .{} };
+    const implicit = implicitTracks(decl, &items);
+    try testing.expectEqual(7, implicit);
+    const g = s.t.push(0, .none, &.{});
+    const k = s.gs.declare(g, decl, implicit);
+    var nodes: [items.len]u32 = undefined;
+    for (items, &nodes) |it, *n| {
+        _ = s.gs.place(k, s.t.len, it);
+        n.* = s.t.push(g, .none, &.{ .float = true, .size = .{ .fit, .px(10) } });
+        s.t.seal(n.*);
+    }
+    s.t.seal(g);
+    run(&s.t, &s.tx, &s.gs, .{ 200, 200 });
+    try testing.expectEqual(3, s.gs.g.count[1][k]);
+    // Row 0: 0 1(span 2); row 1: 2 3 4; row 2: 5 6.
+    try testing.expectEqual(rect(0, 0, 30, 10), s.t.rect(nodes[0]));
+    try testing.expectEqual(rect(32, 0, 124, 10), s.t.rect(nodes[1]));
+    try testing.expectEqual(rect(0, 13, 30, 23), s.t.rect(nodes[2]));
+    try testing.expectEqual(rect(32, 26, 72, 36), s.t.rect(nodes[6]));
+    try testing.expectEqual(rect(0, 26, 30, 36), s.t.rect(nodes[5]));
+    // A second placement opens the reserve again and keeps the same rows.
+    autoPlace(&s.gs);
+    try testing.expectEqual(3, s.gs.g.count[1][k]);
+}
+
+test "declare: no tracks on an axis is one auto track; items take the grid's justify" {
+    var s: Scene = .{};
+    s.init();
+    const g = s.t.push(0, .none, &.{});
+    const k = s.gs.declare(g, .{ .justify = .{ .center, .end } }, 0);
+    try testing.expectEqualSlices(u32, &.{ 1, 1 }, &.{ s.gs.g.count[0][k], s.gs.g.count[1][k] });
+    const r = s.gs.place(k, 1, .{});
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 0.5, 1 }, &.{ s.gs.it.stretch[0][r], s.gs.it.stretch[1][r], s.gs.it.factor[0][r], s.gs.it.factor[1][r] });
+    const r2 = s.gs.place(k, 2, .{ .cell = .{ 0, 0 }, .justify = .{ .stretch, .start } });
+    try testing.expectEqual(1, s.gs.it.stretch[0][r2]);
 }

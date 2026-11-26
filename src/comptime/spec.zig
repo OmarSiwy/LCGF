@@ -12,6 +12,7 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const fmt = @import("../core/fmt.zig");
 const FlexStyle = @import("../layout/flex.zig").Flex.Style;
+const grid_zig = @import("../layout/grid.zig");
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
@@ -41,6 +42,11 @@ pub const Spec = struct {
     /// Flex item and container rules beyond `style` (margins, wrap, align-self, aspect,
     /// baselines; layout/flex.zig), set with `flexed`. A page with none carves no flex columns.
     flex: ?FlexStyle = null,
+    /// The tracks a `grid` container lays its children out in (layout/grid.zig). A page with
+    /// none carves no grid columns.
+    grid: ?grid_zig.Decl = null,
+    /// Where a child of a `grid` sits (`cell`); null is the next free cell.
+    cell: ?grid_zig.Item = null,
     children: []const Spec = &.{},
     /// A widget that builds this node itself, for widgets the kinds above do not cover: a
     /// namespace with `push` (and optionally `step`), which the widgets' comptime front end
@@ -338,6 +344,38 @@ pub fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec {
     return out;
 }
 
+/// A grid container: its children in the cells of `decl`'s tracks, one per child unless
+/// `cell` places one: `grid(.{}, .{ .columns = &.{ .px(80), .fr(1) } }, .{ label("A"), ... })`.
+/// Rows past `decl.rows` are added for the children that need them. Each child floats, so
+/// the container's `dir` and `gap` do not apply; `decl.gap` does.
+pub fn grid(comptime style: Style, comptime decl: grid_zig.Decl, comptime children: anytype) Spec {
+    var s = style;
+    s.dir = .y;
+    const given = kids(children);
+    var items: [given.len]Spec = given[0..given.len].*;
+    for (&items) |*c| c.style.float = true;
+    const final = items;
+    return .{ .kind = .col, .style = s, .grid = decl, .children = &final };
+}
+
+/// `s`, a child of a `grid`, placed at `item` (CSS `grid-column`/`grid-row`/`grid-area`):
+/// `cell(label("A"), .{ .cell = .{ 1, 0 }, .span = .{ 2, 1 } })`.
+pub fn cell(comptime s: Spec, comptime item: grid_zig.Item) Spec {
+    var out = s;
+    out.cell = item;
+    return out;
+}
+
+/// The cells `n`'s children ask for, for `grid.implicitTracks`.
+pub fn gridItems(comptime n: Spec) []const grid_zig.Item {
+    comptime {
+        var items: [n.children.len]grid_zig.Item = undefined;
+        for (n.children, &items) |c, *it| it.* = c.cell orelse .{};
+        const final = items;
+        return &final;
+    }
+}
+
 /// `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
     var out = s;
@@ -546,6 +584,16 @@ test "flexed: sets the flex rules and nothing else" {
         const m = flexed(plain, .{ .margin = .{ 6, 2, 6, 2 }, .wrap = true });
         std.debug.assert(plain.flex == null and m.flex.?.margin[0] == 6 and m.flex.?.wrap);
         std.debug.assert(std.mem.eql(u8, m.text.?, "A") and std.meta.eql(m.style, plain.style));
+    }
+}
+
+test "grid, cell: children float in a grid container; cell places one" {
+    comptime {
+        const g = grid(.{ .pad = @splat(4) }, .{ .columns = &.{ .px(10), .fr(1) } }, .{ label("A"), cell(label("B"), .{ .cell = .{ 1, 0 } }) });
+        std.debug.assert(g.grid.?.columns.len == 2 and g.style.pad[0] == 4);
+        std.debug.assert(g.children[0].style.float and g.children[1].style.float);
+        std.debug.assert(g.children[0].cell == null and g.children[1].cell.?.cell.?[0] == 1);
+        std.debug.assert(gridItems(g).len == 2 and gridItems(g)[1].cell.?[0] == 1);
     }
 }
 
