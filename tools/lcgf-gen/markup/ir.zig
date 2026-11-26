@@ -134,11 +134,8 @@ pub const Node = struct {
     /// The node's other flex rules (align-self, wrap, baseline, lines, aspect): `spec.flexed`
     /// with `margin` when either differs from the default.
     flex: lcgf.flex.Flex.Style = .{},
-    /// Engine spec F7: the tracks of a `display: grid` container, or null.
-    grid: ?lcgf.grid.Decl = null,
-    /// F7: where a grid container's child sits (`grid-column`, `grid-row`, `grid-area`), or
-    /// null for the next free cell.
-    cell: ?lcgf.grid.Item = null,
+    /// Engine spec F17: positioning (`Placed`).
+    placed: Placed = .{},
     /// Inside an lcgf-each: the control shows the item's field (`checked="{row.done}"`) and
     /// reports changes (on:change) without writing it.
     one_way: bool = false,
@@ -170,6 +167,18 @@ pub const Part = union(enum) {
     /// A `<select>`'s option rows and their text, as CSS on its `<option>`s restyles them
     /// (`widgets_select.Options.option`, `.option_text`).
     option: struct { face: Style, text: TextStyle },
+};
+
+/// Engine spec F7 and F17: grid tracks and cells, `right`/`bottom` insets and `position: fixed` (`spec.anchored`), the top
+/// inset of `position: sticky` (`spec.sticky`), and `z-index` (`spec.layer`).
+pub const Placed = struct {
+    /// F7: the tracks of a `display: grid` container, and where a grid's child sits
+    /// (`grid-column`, `grid-row`, `grid-area`; null for the next free cell).
+    grid: ?lcgf.grid.Decl = null,
+    cell: ?lcgf.grid.Item = null,
+    anchor: ?lcgf.overlay.Place = null,
+    sticky: ?f32 = null,
+    layer: u8 = 0,
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

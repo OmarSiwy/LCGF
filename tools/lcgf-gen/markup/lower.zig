@@ -82,6 +82,11 @@ pub const Lowerer = struct {
     marker: []const u8 = "",
     /// `grid-template-areas` of each grid container, by IR node (engine spec F7).
     areas: std.AutoHashMapUnmanaged(u32, []const lcgf.grid_names.Area) = .empty,
+    /// What `position` and `z-index` gave the box being lowered (engine spec F17), taken by
+    /// the next `addNode`.
+    placed: Placed = .{},
+
+    const Placed = ir.Placed;
 
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
     const Outline = struct { width: f32, offset: f32, color: types.Color };
@@ -1068,6 +1073,10 @@ pub const Lowerer = struct {
             l.uses.clearRetainingCapacity();
         }
         if (l.current != none) node.text_uses = l.text_tokens[l.current];
+        node.placed.anchor = l.placed.anchor;
+        node.placed.sticky = l.placed.sticky;
+        node.placed.layer = l.placed.layer;
+        l.placed = .{};
         node.flex = l.flex;
         l.flex = .{};
         if (l.marker.len > 0) l.markItem(&node);
@@ -1192,6 +1201,12 @@ pub const Lowerer = struct {
         wrapper.flex = .{ .cross = node.flex.cross, .aspect = node.flex.aspect };
         node.flex.cross = null;
         node.flex.aspect = 0;
+        // Positioning moves the whole decorated box (engine spec F17).
+        // Positioning moves the whole decorated box; its tracks stay with it.
+        inline for (.{ "anchor", "sticky", "layer" }) |f| {
+            @field(wrapper.placed, f) = @field(node.placed, f);
+            @field(node.placed, f) = @field(ir.Placed{}, f);
+        }
         node.margin = null;
         node.style.size = .{ .fill, .fill };
         inline for (.{ "min", "max", "shrink", "float", "offset", "transform", "transform_origin", "opacity", "participation" }) |f| @field(node.style, f) = @field(d, f);
@@ -1672,19 +1687,75 @@ pub const Lowerer = struct {
     }
 
     fn position(l: *Lowerer, n: u32, s: *Style) void {
-        const kw = l.keyword(n, .position) orelse return;
-        if (css.eq(kw, "static")) return;
-        const left = l.px(n, .left) orelse 0;
-        const top = l.px(n, .top) orelse 0;
+        l.placed = .{};
+        const kw = l.keyword(n, .position) orelse "static";
+        const positioned = !css.eq(kw, "static");
+        if (l.declared(n, .@"z-index")) |v| if (l.zIndex(n, v)) |z| {
+            if (!positioned) l.ds.err(v.loc, "z-index applies to a positioned box (position: relative, absolute, fixed or sticky)", .{});
+            l.placed.layer = z;
+        };
+        if (!positioned) return;
+        const set = [4]bool{ l.k.get(n, .left).decl != none, l.k.get(n, .top).decl != none, l.k.get(n, .right).decl != none, l.k.get(n, .bottom).decl != none };
+        const inset = [4]f32{ l.px(n, .left) orelse 0, l.px(n, .top) orelse 0, l.px(n, .right) orelse 0, l.px(n, .bottom) orelse 0 };
         if (css.eq(kw, "relative")) {
-            s.transform[4] += left;
-            s.transform[5] += top;
-        } else if (css.eq(kw, "absolute")) {
-            s.float = true;
-            s.offset = .{ left, top };
-        } else l.ds.err(l.declared(n, .position).?.loc, "position: {s} needs anchors (engine spec F17), not lowered yet", .{kw});
-        for ([_]Prop{ .right, .bottom }) |p| if (l.k.get(n, p).decl != none)
-            l.ds.err(l.declared(n, p).?.loc, "{s} needs anchors (engine spec F17), not lowered yet; position with top and left", .{@tagName(p)});
+            // `right`/`bottom` move the other way, and `left`/`top` win over them.
+            s.transform[4] += if (set[0]) inset[0] else -inset[2];
+            s.transform[5] += if (set[1]) inset[1] else -inset[3];
+            return;
+        }
+        if (css.eq(kw, "sticky")) {
+            if (set[0] or set[2] or set[3]) l.ds.err(l.declared(n, .position).?.loc, "position: sticky is lowered with top only", .{});
+            l.placed.sticky = inset[1];
+            return;
+        }
+        const fixed = css.eq(kw, "fixed");
+        if (!fixed and !css.eq(kw, "absolute")) {
+            l.badValue(l.declared(n, .position).?.first, .position, l.declared(n, .position).?.end);
+            return;
+        }
+        s.float = true;
+        // Per axis: which edge the box keeps its inset from (0 the start, 1 the end).
+        var side: [2]u1 = .{ 0, 0 };
+        var offset: [2]f32 = .{ inset[0], inset[1] };
+        inline for (0..2) |a| {
+            if (set[a] and set[a + 2]) {
+                // Both insets and no size: CSS stretches the box between them.
+                if (inset[a] == 0 and inset[a + 2] == 0 and l.k.get(n, if (a == 0) .width else .height).decl == none)
+                    s.size[a] = .pct(1)
+                else if (l.k.get(n, if (a == 0) .width else .height).decl == none)
+                    l.ds.err(l.declared(n, if (a == 0) .right else .bottom).?.loc, "{s} with {s} stretches the box, which is lowered only for 0 and 0; give a {s}", .{ if (a == 0) "left" else "top", if (a == 0) "right" else "bottom", if (a == 0) "width" else "height" });
+            } else if (set[a + 2]) {
+                side[a] = 1;
+                offset[a] = -inset[a + 2];
+            }
+        }
+        if (!fixed and side[0] == 0 and side[1] == 0) {
+            s.offset = offset;
+            return;
+        }
+        const corner: lcgf.overlay.Anchor = @fromBackingInt(@intCast(@as(u8, side[1]) * 6 + @as(u8, side[0]) * 2));
+        l.placed.anchor = .{ .at = corner, .pivot = corner, .offset = offset, .viewport = fixed };
+    }
+
+    /// A `z-index` as a stacking layer: `auto` and 0 to 255.
+    fn zIndex(l: *Lowerer, n: u32, v: Value) ?u8 {
+        _ = n;
+        if (v.end - v.first == 1 and values.isIdent(l.c, v.first, "auto")) return 0;
+        const ty = l.c.toks.items(.type)[v.first];
+        const x = l.c.toks.items(.num)[v.first];
+        if (v.end - v.first != 1 or ty != .number or x != @floor(x)) {
+            l.badValue(v.first, .@"z-index", v.end);
+            return null;
+        }
+        if (x < 0) {
+            l.ds.err(v.loc, "a negative z-index is not supported; raise the boxes in front instead", .{});
+            return null;
+        }
+        if (x > 255) {
+            l.ds.err(v.loc, "z-index above 255 is not supported (one byte of stacking layers)", .{});
+            return null;
+        }
+        return @intFromFloat(x);
     }
 
     fn transform(l: *Lowerer, n: u32, s: *Style) void {
@@ -1837,7 +1908,7 @@ pub const Lowerer = struct {
     /// Whether element `n`'s box is a child of a grid container.
     fn inGrid(l: *const Lowerer, n: u32) bool {
         const p = l.irParent(n);
-        return p != none and l.page.nodes.items(.grid)[p] != null;
+        return p != none and l.page.nodes.items(.placed)[p].grid != null;
     }
 
     /// A `display: grid` box: `spec.grid(style, decl, children)`.
@@ -1905,7 +1976,7 @@ pub const Lowerer = struct {
                 break :blk .stretch;
             };
         };
-        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = style, .params_expr = params, .margin = margin, .grid = d };
+        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = style, .params_expr = params, .margin = margin, .placed = .{ .grid = d } };
         node.style.dir = .y;
         node.style.gap = 0;
         if (parent == none) node.style.size = .{ .fill, .fill };
@@ -1954,7 +2025,7 @@ pub const Lowerer = struct {
         inline for (.{ Prop.@"column-gap", Prop.@"row-gap" }, 0..) |p, a| if (l.px(n, p)) |g| {
             d.gap[a] = g;
         };
-        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = st, .params_expr = params, .margin = margin, .grid = d };
+        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = st, .params_expr = params, .margin = margin, .placed = .{ .grid = d } };
         node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
     }
@@ -1963,12 +2034,12 @@ pub const Lowerer = struct {
     /// are the table's (`Decl.subgrid`), so its cells line up with the other rows'; role `row`.
     fn tableRow(l: *Lowerer, n: u32, parent: u32) void {
         const nodes = l.page.nodes.slice();
-        if (parent == none or l.tableOf(n) == none or nodes.items(.grid)[parent] == null or nodes.items(.style)[parent].role != .table) {
+        if (parent == none or l.tableOf(n) == none or nodes.items(.placed)[parent].grid == null or nodes.items(.style)[parent].role != .table) {
             l.ds.err(l.loc(n), "<tr> belongs in a <table>, <thead>, <tbody> or <tfoot>", .{});
             l.skip[n] = true;
             return;
         }
-        const columns = nodes.items(.grid)[parent].?.columns;
+        const columns = nodes.items(.placed)[parent].grid.?.columns;
         var at: u32 = 0;
         for (nodes.items(.parent)) |p| at += @intFromBool(p == parent);
         var params: []const u8 = "";
@@ -1984,8 +2055,7 @@ pub const Lowerer = struct {
             .style = st,
             .params_expr = params,
             .margin = margin,
-            .grid = .{ .columns = columns, .rows = &.{.fit}, .subgrid = .{ true, false } },
-            .cell = .{ .cell = .{ 0, at }, .span = .{ @intCast(columns.len), 1 } },
+            .placed = .{ .grid = .{ .columns = columns, .rows = &.{.fit}, .subgrid = .{ true, false } }, .cell = .{ .cell = .{ 0, at }, .span = .{ @intCast(columns.len), 1 } } },
             .name = l.accessibleName(n),
         });
     }
@@ -2093,11 +2163,14 @@ pub const Lowerer = struct {
         const nodes = l.page.nodes.slice();
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
-            const i = l.ir_of[n];
+            var i = l.ir_of[n];
             if (i == none or l.doc.nodes.items(.kind)[n] != .element) continue;
+            // A box with a shadow or outline sits in a wrapper (`decorate`): the wrapper is the item.
+            const w = nodes.items(.parent)[i];
+            if (w != none and nodes.items(.parent)[w] != none and nodes.items(.placed)[w].grid == null and nodes.items(.placed)[nodes.items(.parent)[w]].grid != null and std.meta.eql(nodes.items(.loc)[w], nodes.items(.loc)[i])) i = w;
             const p = nodes.items(.parent)[i];
-            if (p != none and nodes.items(.grid)[p] != null) {
-                if (l.gridItem(n, p)) |it| nodes.items(.cell)[i] = it;
+            if (p != none and nodes.items(.placed)[p].grid != null) {
+                if (l.gridItem(n, p)) |it| nodes.items(.placed)[i].cell = it;
                 const td = l.doc.isElement(n, "td");
                 if (td or l.doc.isElement(n, "th")) {
                     // A table cell: its role, and colspan as its span across the row's columns.
@@ -2105,9 +2178,9 @@ pub const Lowerer = struct {
                     nodes.items(.style)[i].role = if (td) .cell else if (std.mem.eql(u8, scope, "row")) .row_header else .column_header;
                     const cols = l.cellSpan(n, "colspan");
                     if (cols > 1) {
-                        var it = nodes.items(.cell)[i] orelse lcgf.grid.Item{};
+                        var it = nodes.items(.placed)[i].cell orelse lcgf.grid.Item{};
                         it.span[0] = cols;
-                        nodes.items(.cell)[i] = it;
+                        nodes.items(.placed)[i].cell = it;
                     }
                 }
             } else inline for (.{ Prop.@"grid-column", Prop.@"grid-row", Prop.@"grid-area", Prop.@"justify-self" }) |q| if (l.declared(n, q)) |v|
@@ -2115,8 +2188,8 @@ pub const Lowerer = struct {
         }
         var grids = false;
         var margins = false;
-        for (nodes.items(.grid), nodes.items(.margin)) |g, m| {
-            grids = grids or g != null;
+        for (nodes.items(.placed), nodes.items(.margin)) |pl, m| {
+            grids = grids or pl.grid != null;
             margins = margins or m != null;
         }
         if (grids and margins) for (nodes.items(.margin), nodes.items(.loc)) |m, at| if (m != null)
@@ -2124,7 +2197,7 @@ pub const Lowerer = struct {
     }
 
     fn gridItem(l: *Lowerer, n: u32, grid_node: u32) ?lcgf.grid.Item {
-        const d = l.page.nodes.items(.grid)[grid_node].?;
+        const d = l.page.nodes.items(.placed)[grid_node].grid.?;
         const counts: [2]u32 = .{ @intCast(d.columns.len), @intCast(d.rows.len) };
         var start: [2]?u32 = .{ null, null };
         var span: [2]u32 = .{ 1, 1 };
@@ -2512,6 +2585,11 @@ pub const Lowerer = struct {
     /// function that takes its style (`<widget>Face`; engine spec R1).
     pub fn checkRuntime(l: *Lowerer) void {
         const nodes = l.page.nodes.slice();
+        // Frame.endFlex and Frame.endSides are two frame ends; a page takes one.
+        var positioned = false;
+        for (nodes.items(.placed)) |pl| positioned = positioned or pl.anchor != null or pl.sticky != null or pl.layer != 0;
+        if (positioned) for (nodes.items(.margin), nodes.items(.loc)) |m, at| if (m != null)
+            l.ds.err(at, "margins on a page with positioned boxes (right, bottom, fixed, sticky, z-index) are carried on comptime pages only so far", .{});
         for (0..nodes.len) |i| {
             const kind = nodes.items(.kind)[i];
             switch (kind) {
@@ -2527,6 +2605,9 @@ pub const Lowerer = struct {
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
+            const pl = nodes.items(.placed)[i];
+            const placed = pl.anchor != null or pl.sticky != null or pl.layer != 0;
+            if (placed) l.ds.err(nodes.items(.loc)[i], "positioning a control (right, bottom, fixed, sticky, z-index) is carried on comptime pages only so far; position a <div> around it", .{});
             if (restyled and !faced)
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }

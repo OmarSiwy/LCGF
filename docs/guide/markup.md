@@ -303,6 +303,14 @@ lowered. Rows past the template are added for the children that need them. Not y
 `repeat(auto-fill)`, named lines, `%` tracks, a line on one axis only, and margins on a page
 with a grid. A control directly in a cell needs a `<div>` around it on runtime pages.
 
+Positioning: `relative` is a translate (`right` and `bottom` move the other way). `absolute`
+floats the box at its parent's content box: `top`/`left` are its offset, `right`/`bottom`
+anchor it to that edge (`spec.anchored`), and `left: 0; right: 0` with no width makes it as
+wide as the parent (`top`/`bottom` alike). `fixed` anchors the box to the viewport. `sticky`
+with `top` holds the box that far below the top of the viewport (`spec.sticky`); scroll
+containers are not lowered yet. `z-index` from 0 to 255 on a positioned box paints it and its
+subtree above every lower layer (`spec.layer`); hit testing still follows the tree order.
+
 A `<table>` is a grid of `fit` columns, one per cell of its widest row. Each `<tr>` is a row
 grid that shares the table's columns (`grid.Decl.subgrid`), so the cells line up and the row
 keeps its node. The roles are `table`, `row`, `cell` and `column_header` (`row_header` for

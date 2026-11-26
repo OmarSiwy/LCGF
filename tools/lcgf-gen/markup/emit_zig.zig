@@ -151,6 +151,17 @@ pub const Emit = struct {
         e.write(if (any) " }" else "}");
     }
 
+    /// An `overlay.Place` literal; `at` and `pivot` have no default.
+    fn anchorPlace(e: *Emit, p: lcgf.overlay.Place) void {
+        e.print(".{{ .at = .{s}, .pivot = .{s}", .{ @tagName(p.at), @tagName(p.pivot) });
+        const d: lcgf.overlay.Place = .{ .at = p.at, .pivot = p.pivot };
+        inline for (.{ "offset", "viewport", "flip" }) |name| if (!std.meta.eql(@field(p, name), @field(d, name))) {
+            e.write(", ." ++ name ++ " = ");
+            e.value(@field(p, name));
+        };
+        e.write(" }");
+    }
+
     fn gridItem(e: *Emit, it: lcgf.grid.Item) void {
         e.structure(it, .{});
     }
@@ -312,7 +323,7 @@ pub const Emit = struct {
         }
         // A grid child's cell: engine spec F7, `spec.cell(s, grid.Item)`.
         var cell_close: []const u8 = "";
-        if (n.cell) |c| {
+        if (n.placed.cell) |c| {
             e.write("s.cell(");
             var buf: std.ArrayList(u8) = .empty;
             std.mem.swap(std.ArrayList(u8), &buf, &e.out);
@@ -322,6 +333,20 @@ pub const Emit = struct {
             std.mem.swap(std.ArrayList(u8), &buf, &e.out);
             cell_close = buf.items;
         }
+        // Positioning: engine spec F17, `spec.layer`, `spec.sticky`, `spec.anchored`.
+        var pos_close: std.ArrayList(u8) = .empty;
+        if (n.placed.layer != 0) e.write("s.layer(");
+        if (n.placed.sticky != null) e.write("s.sticky(");
+        if (n.placed.anchor != null) e.write("s.anchored(");
+        if (n.placed.anchor) |a| {
+            std.mem.swap(std.ArrayList(u8), &pos_close, &e.out);
+            e.write(", ");
+            e.anchorPlace(a);
+            e.write(")");
+            std.mem.swap(std.ArrayList(u8), &pos_close, &e.out);
+        }
+        if (n.placed.sticky) |top| pos_close.print(e.arena, ", {d})", .{top}) catch unreachable;
+        if (n.placed.layer != 0) pos_close.print(e.arena, ", {d})", .{n.placed.layer}) catch unreachable;
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
             .container, .landmark, .when, .choice, .list, .dialog, .section, .popover => true,
@@ -338,7 +363,7 @@ pub const Emit = struct {
         if (n.paragraph != null) e.write("s.paragraph(");
         if (text_styled) e.write("s.textStyled(");
         if (restyle and !has_children) e.write("s.styled(");
-        if (n.grid) |d| {
+        if (n.placed.grid) |d| {
             // A grid container, landmark or not: `spec.grid(style, decl, children)`.
             var st = n.style;
             if (n.kind == .landmark) st.role = std.meta.stringToEnum(types.Role, n.landmark).?;
@@ -544,6 +569,7 @@ pub const Emit = struct {
         }
         var all: std.ArrayList(u8) = .empty;
         all.appendSlice(e.arena, inner_close.items) catch unreachable;
+        all.appendSlice(e.arena, pos_close.items) catch unreachable;
         all.appendSlice(e.arena, cell_close) catch unreachable;
         all.appendSlice(e.arena, margin_close) catch unreachable;
         all.appendSlice(e.arena, tokens_close) catch unreachable;
@@ -842,7 +868,7 @@ pub const Emit = struct {
     fn rtOpen(e: *Emit, i: u32, list_depth: u32) []const u8 {
         var n = e.page.nodes.get(i);
         // A grid's children float: the grid places them (`Grids.place`).
-        if (n.parent != none and e.page.nodes.items(.grid)[n.parent] != null) n.style.float = true;
+        if (n.parent != none and e.page.nodes.items(.placed)[n.parent].grid != null) n.style.float = true;
         e.uses = n.uses;
         e.text_uses = n.text_uses;
         switch (n.kind) {
@@ -1465,23 +1491,29 @@ pub const Emit = struct {
             if (flex) ", &ui.flex.?" else "",
         });
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
-        const grids = e.hasGrid();
-        if (grids) e.write(
-            \\    /// The grids (layout/grid.zig) the page declares while it builds, used by `end`.
-            \\    /// They point into `grid_buf`: a Ui does not move once built.
-            \\    grid_buf: [grid_bytes]u8 align(lcgf.mem.column_align) = undefined,
-            \\    grids: ?lcgf.grid.Grids = null,
+        const sides = e.hasSides();
+        if (sides) e.write(
+            \\    /// The side tables (grids, anchors, sticky nodes, layers) the page writes while it
+            \\    /// builds, used by `end`. They point into `side_buf`: a Ui does not move once built.
+            \\    side_buf: [side_bytes]u8 align(lcgf.mem.column_align) = undefined,
+            \\    sides: ?Sides = null,
             \\
         );
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
-        if (grids) e.write(
-            \\    /// Ends the frame with this page's grids (`Frame.endGrid`).
-            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
-            \\        return f.endGrid(font, &ui.grids.?);
-            \\    }
-            \\
-            \\
-        );
+        if (sides) {
+            e.write(
+                \\    /// Ends the frame with this page's side tables (`Frame.endSides`).
+                \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
+                \\        const sd = &ui.sides.?;
+                \\        return f.endSides(font, .{
+            );
+            const pos = e.positionedRows();
+            if (e.hasGrid()) e.write(" .grids = &sd.gs,");
+            if (pos[0] > 0) e.write(" .anchors = &sd.an,");
+            if (pos[1] > 0) e.write(" .sticky = &sd.st,");
+            if (e.hasLayers()) e.write(" .layers = &sd.ly,");
+            e.write(" });\n    }\n\n");
+        }
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (tokens.len > 0) e.write(
             \\    /// The caller's theme tokens; point it at your table.
@@ -1532,14 +1564,20 @@ pub const Emit = struct {
             \\        const fx = &ui.flex.?;
             \\
         );
-        if (grids) e.write(
-            \\        if (ui.grids == null) {
-            \\            var carver: lcgf.mem.Carver = .{ .buf = &ui.grid_buf };
-            \\            ui.grids = lcgf.grid.Grids.init(&carver, grid_cap);
-            \\        }
-            \\        const gs = &ui.grids.?;
-            \\
-        );
+        if (sides) {
+            e.write(
+                \\        if (ui.sides == null) {
+                \\            var carver: lcgf.mem.Carver = .{ .buf = &ui.side_buf };
+                \\            ui.sides = carveSides(&carver);
+                \\        }
+                \\
+            );
+            const pos = e.positionedRows();
+            if (e.hasGrid()) e.write("        const gs = &ui.sides.?.gs;\n");
+            if (pos[0] > 0) e.write("        const an = &ui.sides.?.an;\n        const vp: lcgf.types.Rect = .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] };\n");
+            if (pos[1] > 0) e.write("        const st = &ui.sides.?.st;\n");
+            if (e.hasLayers()) e.write("        const ly = &ui.sides.?.ly;\n");
+        }
         e.rtWalk(none, 0);
         e.write("    }\n\n");
         e.rtDispatch();
@@ -1945,53 +1983,104 @@ pub const Emit = struct {
         return e.rtOpen(i, list_depth);
     }
 
+    /// Whether the runtime page writes side tables: grids (F7), anchors, sticky nodes or
+    /// layers (F17).
+    fn hasSides(e: *Emit) bool {
+        const pos = e.positionedRows();
+        return e.hasGrid() or pos[0] > 0 or pos[1] > 0 or e.hasLayers();
+    }
+
     /// Whether a node is a grid container (engine spec F7).
     fn hasGrid(e: *Emit) bool {
-        for (e.page.nodes.items(.grid)) |g| if (g != null) return true;
+        for (e.page.nodes.items(.placed)) |pl| if (pl.grid != null) return true;
         return false;
     }
 
     /// The items of grid container `i`: its children's cells.
     fn gridItemsOf(e: *Emit, i: u32) []const lcgf.grid.Item {
         var out: std.ArrayList(lcgf.grid.Item) = .empty;
-        for (e.page.nodes.items(.parent), e.page.nodes.items(.cell)) |p, c| if (p == i) out.append(e.arena, c orelse .{}) catch unreachable;
+        for (e.page.nodes.items(.parent), e.page.nodes.items(.placed)) |p, pl| if (p == i) out.append(e.arena, pl.cell orelse .{}) catch unreachable;
         return out.items;
     }
 
-    /// `rtOpenFlex`, with a grid child placed before its statement (`Grids.place`) and a grid
-    /// container declared after its `open` (`Grids.declare`).
+    /// `rtOpenFlex`, with a grid child placed before its statement (`Grids.place`), and the
+    /// side-table rows of a grid container (`Grids.declare`) or a positioned node
+    /// (`Anchors.place`, `Sticky.push`, `Layers.own`) written for the node its statement makes.
     fn rtOpenGrid(e: *Emit, i: u32, list_depth: u32) []const u8 {
         const nodes = e.page.nodes.slice();
         const parent = nodes.items(.parent)[i];
-        if (parent != none and nodes.items(.grid)[parent] != null) {
+        if (parent != none and nodes.items(.placed)[parent].grid != null) {
             e.print("_ = gs.place(k{d}, @intCast(f.tree().len), ", .{parent});
-            e.gridItem(nodes.items(.cell)[i] orelse .{});
+            e.gridItem(nodes.items(.placed)[i].cell orelse .{});
             e.write("); ");
         }
-        const d = nodes.items(.grid)[i] orelse return e.rtOpenFlex(i, list_depth);
+        const n = nodes.get(i);
+        if (n.placed.grid == null and n.placed.anchor == null and n.placed.sticky == null and n.placed.layer == 0) return e.rtOpenFlex(i, list_depth);
         var statement: std.ArrayList(u8) = .empty;
         std.mem.swap(std.ArrayList(u8), &statement, &e.out);
         const close = e.rtOpen(i, list_depth);
         std.mem.swap(std.ArrayList(u8), &statement, &e.out);
-        // A container's statement is `_ = f.open(…);`.
-        e.print("const k{d} = gs.declare(@backingInt({s}), ", .{ i, statement.items[4 .. statement.items.len - 1] });
-        e.gridDecl(d);
-        e.print(", {d});", .{lcgf.grid.implicitTracks(d, e.gridItemsOf(i))});
+        // lower.checkRuntime admits these only on nodes whose statement is `_ = call;`.
+        e.print("const n{d}: u32 = @backingInt({s});", .{ i, statement.items[4 .. statement.items.len - 1] });
+        if (n.margin) |m| {
+            e.print(" fx.set(n{d}, &.{{ .margin = ", .{i});
+            e.value(m);
+            e.write(" });");
+        }
+        if (n.placed.grid) |d| {
+            e.print(" const k{d} = gs.declare(n{d}, ", .{ i, i });
+            e.gridDecl(d);
+            e.print(", {d});", .{lcgf.grid.implicitTracks(d, e.gridItemsOf(i))});
+        }
+        if (n.placed.anchor) |a| {
+            e.print(" _ = an.place(n{d}, ", .{i});
+            e.anchorPlace(a);
+            e.write(", vp);");
+        }
+        if (n.placed.sticky) |top| e.print(" _ = st.push(n{d}, 0, .{{ 0, {d} }}, .{{ false, true }});", .{ i, top });
+        if (n.placed.layer != 0) e.print(" ly.c.own[n{d}] = {d};", .{ i, n.placed.layer });
         return close;
     }
 
-    /// The runtime page's grid capacity: its grids at their most implicit tracks.
+    /// How many copies of node `i` a frame can build: the product of its lists' maxima.
+    fn copies(e: *Emit, i: u32) u32 {
+        var k: u32 = 1;
+        var p = e.page.nodes.items(.parent)[i];
+        while (p != none) : (p = e.page.nodes.items(.parent)[p]) if (e.page.nodes.items(.kind)[p] == .list) {
+            k *= e.page.nodes.items(.max)[p];
+        };
+        return k;
+    }
+
+    /// Rows of anchors and sticky nodes the runtime page needs, counting list copies.
+    fn positionedRows(e: *Emit) [2]u32 {
+        var out: [2]u32 = .{ 0, 0 };
+        for (e.page.nodes.items(.placed), 0..) |pl, i| {
+            if (pl.anchor != null) out[0] += e.copies(@intCast(i));
+            if (pl.sticky != null) out[1] += e.copies(@intCast(i));
+        }
+        return out;
+    }
+
+    fn hasLayers(e: *Emit) bool {
+        for (e.page.nodes.items(.placed)) |pl| if (pl.layer != 0) return true;
+        return false;
+    }
+
+    /// The runtime page's grid capacity: its grids at their most implicit tracks, once per
+    /// copy of the list each is in.
     fn gridCapacity(e: *Emit) lcgf.grid.Grids.Capacity {
         var cap: lcgf.grid.Grids.Capacity = .{ .grids = 0, .tracks = 0, .items = 0, .cells = 1 };
-        for (e.page.nodes.items(.grid), 0..) |g, i| if (g) |d| {
+        for (e.page.nodes.items(.placed), 0..) |pl, i| if (pl.grid) |d| {
+            const times = e.copies(@intCast(i));
             const items = e.gridItemsOf(@intCast(i));
             const extra = lcgf.grid.implicitTracks(d, items);
             var count: [2]u32 = .{ @max(@as(u32, @intCast(d.columns.len)), 1), @max(@as(u32, @intCast(d.rows.len)), 1) };
             const given: u32 = @intCast(if (d.growAxis() == 0) d.columns.len else d.rows.len);
             count[d.growAxis()] = @max(count[d.growAxis()], given + extra);
-            cap.grids += 1;
-            cap.tracks += count[0] + count[1];
-            cap.items += @intCast(items.len);
+            cap.grids += times;
+            cap.tracks += times * (count[0] + count[1]);
+            cap.items += times * @as(u32, @intCast(items.len));
             cap.cells = @max(cap.cells, count[0] * count[1]);
         };
         return cap;
@@ -2032,20 +2121,34 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions or e.hasGrid()) "p.ui.end(&f, .{})" else "f.end(.{})" });
-        if (e.hasGrid()) {
-            const cap = e.gridCapacity();
-            e.print(
-                \\/// The runtime page's grid rows, and their bytes.
-                \\const grid_cap: lcgf.grid.Grids.Capacity = .{{ .grids = {d}, .tracks = {d}, .items = {d}, .cells = {d} }};
-                \\const grid_bytes = blk: {{
-                \\    var carver: lcgf.mem.Carver = .{{ .buf = null }};
-                \\    _ = lcgf.grid.Grids.init(&carver, grid_cap);
+        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions or e.hasSides()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        if (e.hasSides()) {
+            const pos = e.positionedRows();
+            e.write("/// The runtime page's side tables, and their bytes.\nconst Sides = struct {");
+            if (e.hasGrid()) e.write(" gs: lcgf.grid.Grids,");
+            if (pos[0] > 0) e.write(" an: lcgf.overlay.Anchors,");
+            if (pos[1] > 0) e.write(" st: lcgf.scroll.Sticky,");
+            if (e.hasLayers()) e.write(" ly: lcgf.overlay.Layers,");
+            e.write(" };\n\nfn carveSides(carver: *lcgf.mem.Carver) Sides {\n    var sd: Sides = undefined;\n");
+            if (e.hasGrid()) {
+                const cap = e.gridCapacity();
+                e.print("    sd.gs = lcgf.grid.Grids.init(carver, .{{ .grids = {d}, .tracks = {d}, .items = {d}, .cells = {d} }});\n", .{ cap.grids, cap.tracks, @max(cap.items, 1), cap.cells });
+            }
+            if (pos[0] > 0) e.print("    sd.an = lcgf.overlay.Anchors.init(carver, {d});\n", .{pos[0]});
+            if (pos[1] > 0) e.print("    sd.st = lcgf.scroll.Sticky.init(carver, {d});\n", .{pos[1]});
+            if (e.hasLayers()) e.write("    sd.ly = lcgf.overlay.Layers.init(carver, limits.nodes);\n    if (carver.buf != null) sd.ly.reset();\n");
+            e.write(
+                \\    return sd;
+                \\}
+                \\
+                \\const side_bytes = blk: {
+                \\    var carver: lcgf.mem.Carver = .{ .buf = null };
+                \\    _ = carveSides(&carver);
                 \\    break :blk carver.off;
-                \\}};
+                \\};
                 \\
                 \\
-            , .{ cap.grids, cap.tracks, @max(cap.items, 1), cap.cells });
+            );
         }
         if (e.hasFlex()) e.write(
             \\/// The bytes of the runtime page's flex columns.
