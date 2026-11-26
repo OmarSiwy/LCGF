@@ -1555,7 +1555,7 @@ pub const Emit = struct {
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size, for the region's next layout.\n                const content = region_out.tree.rect(1);\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content.x1 - content.x0, content.y1 - content.y0 }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size before snapping, for the region's next layout, so the\n                // page around it lays out as it would around the content itself.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
     }
 
     /// A fit region's content is measured in the page's viewport on its fit axes.
