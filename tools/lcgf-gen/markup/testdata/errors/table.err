@@ -1,6 +1,3 @@
-table.html:8:28: error: rowspan is not supported yet; a cell spans columns only (colspan)
-    <tr class="padded"><td rowspan="2">a</td><td>b</td></tr>
-                           ^
 table.html:9:5: error: a table's rows are static; repeat rows with display: grid and lcgf-each instead
     <template lcgf-each="n" lcgf-max="4"><tr><td>c</td></tr></template>
     ^
@@ -8,7 +5,7 @@ table.html:7:5: error: <caption> is not lowered yet; put a heading before the ta
     <caption>Nets</caption>
     ^
 table.html:8:5: error: padding on the sides of a table row is not supported; pad its cells
-    <tr class="padded"><td rowspan="2">a</td><td>b</td></tr>
+    <tr class="padded"><td>a</td><td>b</td></tr>
     ^
 table.html:9:42: error: <tr> belongs in a <table>, <thead>, <tbody> or <tfoot>
     <template lcgf-each="n" lcgf-max="4"><tr><td>c</td></tr></template>

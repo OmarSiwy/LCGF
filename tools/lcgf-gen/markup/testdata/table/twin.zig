@@ -38,4 +38,18 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         tr(2, .{}, .{ th("Overheads", .row_header), td("-12 dB"), td("Wide") }),
         tr(3, .{ .fill = .rgb(0x30, 0x34, 0x40) }, .{ s.cell(td("Two channels"), .{ .span = .{ 2, 1 } }), td("Stereo") }),
     }), "Channels"),
+    // A rowspan: the first row covers the two rows its first cell reaches, and every cell
+    // sits at its slot from the table algorithm.
+    s.grid(.{ .pad = @splat(4), .fill = .rgb(0x26, 0x28, 0x2e), .role = .table }, .{ .columns = &.{ .fit, .fit }, .rows = &.{ .fit, .fit, .fit }, .gap = .{ 12, 2 } }, .{
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{ .fit, .fit }, .subgrid = .{ true, true } }, .{
+            s.cell(td("Bus"), .{ .cell = .{ 0, 0 }, .span = .{ 1, 2 } }),
+            s.cell(td("Left"), .{ .cell = .{ 1, 0 } }),
+        }), .{ .cell = .{ 0, 0 }, .span = .{ 2, 2 } }),
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
+            s.cell(td("Right"), .{ .cell = .{ 1, 0 } }),
+        }), .{ .cell = .{ 0, 1 }, .span = .{ 2, 1 } }),
+        s.cell(s.grid(.{ .role = .row }, .{ .columns = &.{ .fit, .fit }, .rows = &.{.fit}, .subgrid = .{ true, false } }, .{
+            s.cell(td("Master"), .{ .cell = .{ 0, 0 }, .span = .{ 2, 1 } }),
+        }), .{ .cell = .{ 0, 2 }, .span = .{ 2, 1 } }),
+    }),
 });

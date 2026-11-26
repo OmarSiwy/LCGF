@@ -80,6 +80,10 @@ pub const Lowerer = struct {
     /// The marker text of the list item being lowered (`• `, `3. `), which `addNode` puts
     /// in a row before the item's content.
     marker: []const u8 = "",
+    /// Each table row's first row and the rows it covers, and on a table with a rowspan each
+    /// cell's slot in its row (`table`), by document node.
+    rows: std.AutoHashMapUnmanaged(u32, [2]u32) = .empty,
+    slots: std.AutoHashMapUnmanaged(u32, lcgf.grid.Item) = .empty,
     /// `grid-template-areas` of each grid container, by IR node (engine spec F7).
     areas: std.AutoHashMapUnmanaged(u32, []const lcgf.grid_names.Area) = .empty,
     /// What `position` and `z-index` gave the box being lowered (engine spec F17), taken by
@@ -2004,23 +2008,49 @@ pub const Lowerer = struct {
     /// `<table>`: a grid of one `fit` column per cell of its widest row and one row per
     /// `<tr>`, role `table`. Its rows are static: a template inside is an error.
     fn table(l: *Lowerer, n: u32, parent: u32) void {
-        var rows: u32 = 0;
-        var cols: u32 = 0;
+        // The HTML table algorithm's slots: each cell at the first free column of its row,
+        // covering colspan columns and rowspan rows.
+        var taken: std.AutoHashMapUnmanaged([2]u32, void) = .empty;
+        var trs: std.ArrayList(u32) = .empty;
+        var cells: std.ArrayList(struct { node: u32, row: u32, at: [2]u32, span: [2]u32 }) = .empty;
+        var rowspans = false;
         for (n + 1..l.k.end[n]) |i_| {
             const i: u32 = @intCast(i_);
             if (l.doc.nodes.items(.kind)[i] != .element or l.tableOf(i) != n) continue;
             if (l.doc.isElement(i, "template")) l.ds.err(l.loc(i), "a table's rows are static; repeat rows with display: grid and lcgf-each instead", .{});
-            if (!l.doc.isElement(i, "tr")) continue;
-            rows += 1;
-            var width: u32 = 0;
-            for (i + 1..l.k.end[i]) |c_| {
-                const c: u32 = @intCast(c_);
-                if (l.doc.nodes.items(.parent)[c] != i or !(l.doc.isElement(c, "td") or l.doc.isElement(c, "th"))) continue;
-                width += l.cellSpan(c, "colspan");
-                if (l.cellSpan(c, "rowspan") > 1) l.ds.err(l.attrLoc(c, "rowspan"), "rowspan is not supported yet; a cell spans columns only (colspan)", .{});
-            }
-            cols = @max(cols, width);
+            if (l.doc.isElement(i, "tr")) ok(trs.append(l.arena, i));
         }
+        const rows: u32 = @intCast(trs.items.len);
+        var cols: u32 = 0;
+        for (trs.items, 0..) |tr, r_| {
+            const r: u32 = @intCast(r_);
+            var c: u32 = 0;
+            for (tr + 1..l.k.end[tr]) |x_| {
+                const x: u32 = @intCast(x_);
+                if (l.doc.nodes.items(.parent)[x] != tr or !(l.doc.isElement(x, "td") or l.doc.isElement(x, "th"))) continue;
+                while (taken.contains(.{ c, r })) c += 1;
+                const w = l.cellSpan(x, "colspan");
+                // rowspan="0" runs to the last row; a span past it stops there.
+                const h_attr = l.attr(x, "rowspan");
+                const h_raw: u32 = if (h_attr != null and std.mem.eql(u8, std.mem.trim(u8, h_attr.?, " "), "0")) rows - r else l.cellSpan(x, "rowspan");
+                const h = @min(h_raw, rows - r);
+                rowspans = rowspans or h > 1;
+                for (r..r + h) |y| for (c..c + w) |cx| ok(taken.put(l.arena, .{ @intCast(cx), @intCast(y) }, {}));
+                ok(cells.append(l.arena, .{ .node = x, .row = r, .at = .{ c, r }, .span = .{ w, h } }));
+                c += w;
+                cols = @max(cols, c);
+            }
+        }
+        // With a rowspan, each row covers the rows its cells reach, and its cells sit at their
+        // slots; without, the cells flow into their row's columns (auto-placement).
+        for (trs.items, 0..) |tr, r| {
+            var extent: u32 = 1;
+            for (cells.items) |cl| if (cl.row == r) {
+                extent = @max(extent, cl.span[1]);
+            };
+            ok(l.rows.put(l.arena, tr, .{ @intCast(r), extent }));
+        }
+        if (rowspans) for (cells.items) |cl| ok(l.slots.put(l.arena, cl.node, .{ .cell = .{ cl.at[0], 0 }, .span = cl.span }));
         var params: []const u8 = "";
         var margin: ?[4]f32 = null;
         var st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
@@ -2045,8 +2075,7 @@ pub const Lowerer = struct {
             return;
         }
         const columns = nodes.items(.placed)[parent].grid.?.columns;
-        var at: u32 = 0;
-        for (nodes.items(.parent)) |p| at += @intFromBool(p == parent);
+        const tr = l.rows.get(n).?;
         var params: []const u8 = "";
         var margin: ?[4]f32 = null;
         var st = l.boxStyle(n, .{}, .y, &params, &margin);
@@ -2060,7 +2089,7 @@ pub const Lowerer = struct {
             .style = st,
             .params_expr = params,
             .margin = margin,
-            .placed = .{ .grid = .{ .columns = columns, .rows = &.{.fit}, .subgrid = .{ true, false } }, .cell = .{ .cell = .{ 0, at }, .span = .{ @intCast(columns.len), 1 } } },
+            .placed = .{ .grid = .{ .columns = columns, .rows = l.padTracks(&.{}, tr[1]), .subgrid = .{ true, tr[1] > 1 } }, .cell = .{ .cell = .{ 0, tr[0] }, .span = .{ @intCast(columns.len), tr[1] } } },
             .name = l.accessibleName(n),
         });
     }
@@ -2181,11 +2210,19 @@ pub const Lowerer = struct {
                     // A table cell: its role, and colspan as its span across the row's columns.
                     const scope = l.attr(n, "scope") orelse "";
                     nodes.items(.style)[i].role = if (td) .cell else if (std.mem.eql(u8, scope, "row")) .row_header else .column_header;
-                    const cols = l.cellSpan(n, "colspan");
-                    if (cols > 1) {
+                    if (l.slots.get(n)) |slot| {
+                        // A table with a rowspan: the cell's slot, from the table algorithm.
                         var it = nodes.items(.placed)[i].cell orelse lcgf.grid.Item{};
-                        it.span[0] = cols;
+                        it.cell = slot.cell;
+                        it.span = slot.span;
                         nodes.items(.placed)[i].cell = it;
+                    } else {
+                        const cols = l.cellSpan(n, "colspan");
+                        if (cols > 1) {
+                            var it = nodes.items(.placed)[i].cell orelse lcgf.grid.Item{};
+                            it.span[0] = cols;
+                            nodes.items(.placed)[i].cell = it;
+                        }
                     }
                 }
             } else inline for (.{ Prop.@"grid-column", Prop.@"grid-row", Prop.@"grid-area", Prop.@"justify-self" }) |q| if (l.declared(n, q)) |v|
