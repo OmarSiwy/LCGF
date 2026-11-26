@@ -236,7 +236,7 @@ test "a runtime token error in a comptime recipe is returned as frame data" {
     try std.testing.expectEqual(@as(?anyerror, null), ui.frame(&.{}).failure);
 }
 
-test "a literal caption draws as a bound one, and a hover rule changes the face in both front ends" {
+test "a literal caption or placeholder draws as a bound one, and a hover rule changes the face in both front ends" {
     @setEvalBranchQuota(200_000);
     const Literal = struct {
         const hot: types.Color = .rgb(200, 10, 10);
@@ -247,13 +247,15 @@ test "a literal caption draws as a bound one, and a hover rule changes the face 
                 _ = f.open(.none, panel);
                 _ = controls.button(f, .from("go"), "Go", .{ .recipe = recipe }) catch unreachable;
                 _ = controls.checkbox(f, .from("on"), &on, "On", .{}) catch unreachable;
+                _ = controls.textfield(f, .from("name"), &name, "Hint", .{}) catch unreachable;
                 f.close();
             }
             var on = false;
+            var name: textfield_zig.Text(16) = .{};
         };
-        const State_ = struct { on: bool = false };
-        const LUi = base.ComptimeUi(State_, spec.col(panel, .{ ct.button(.go, "Go", .{ .recipe = recipe }), ct.checkbox(.on, .on, "On", .{}) }), .default);
-        const LRun = base.Harness(App, LUi, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
+        const State_ = struct { on: bool = false, name: textfield_zig.Text(16) = .{} };
+        const LUi = base.ComptimeUi(State_, spec.col(panel, .{ ct.button(.go, "Go", .{ .recipe = recipe }), ct.checkbox(.on, .on, "On", .{}), ct.textfield(.name, .name, "Hint", .{}) }), .default);
+        const LRun = base.Harness(App, LUi, .{ .nodes = 64, .texts = 16, .customs = 2, .strings = 256, .depth = 8 });
         var run: LRun = .{};
     };
     const hot = Literal.hot;

@@ -105,8 +105,9 @@ pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), compti
     if (!(limits.lo < limits.hi)) @compileError("recipe slider requires lo below hi");
     return build(.slider, @tagName(id), @tagName(bind), "", limits, config, false);
 }
-pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral(), comptime config: Config) Spec {
-    return build(.input, @tagName(id), @tagName(bind), @tagName(hint), .{}, config, false);
+/// `hint` is the placeholder: a `[]const u8` field of the State or a literal.
+pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype, comptime config: Config) Spec {
+    return build(.input, @tagName(id), @tagName(bind), captionName(hint), .{}, config, isLiteral(hint));
 }
 
 fn stock(comptime kind: Kind) model.Recipe {
@@ -158,7 +159,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.environment_field) |f| if (base.fieldError(State, "recipe environment", f, model.Environment)) |err| return err;
             if (config.tokens_field) |f| if (base.fieldError(State, "recipe tokens", f, style.tokens.Table)) |err| return err;
             if (config.recipe_field) |f| if (base.fieldError(State, "recipe", f, model.Recipe)) |err| return err;
-            if (kind == .input) return textfield_zig.bindError(State, bind, text);
+            if (kind == .input) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
             if (kind == .checkbox) {
                 if (checkbox_zig.bindError(State, bind)) |err| return err;
@@ -291,7 +292,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     var th = model.metrics(root);
                     th.text_px = content.text.px;
                     th.text = content.text.color;
-                    const shown = textfield_zig.shown(field, &th, @field(ui.signals.state, text));
+                    const shown = textfield_zig.shown(field, &th, caption(ui));
                     for (shown.band) |band| {
                         var part = selection.box;
                         part.float = true;
