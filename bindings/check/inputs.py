@@ -7,8 +7,8 @@ hovered, clicked and, for sliders, dragged. Between sweeps, Tab presses move key
 and the panel's list and choice change.
 
 The second file, when given, is for examples/markup's page: clicks in place (its buttons are
-narrower than the drags above) and drags over its 166 x 166 card, `set count` and `set clicks`
-between them. It has no Tab: the seam's buttons are no Tab stops, the Zig widgets' buttons are."""
+narrower than the drags above) and drags over its 166 x 166 card, Tab and Shift+Tab presses,
+`set count` and `set clicks` between them."""
 import sys
 
 out = []
@@ -30,7 +30,7 @@ if len(sys.argv) > 2:
             for x in range(4, 170, 6):
                 out.extend([f"{x} {y} 0", f"{x} {y} 1", f"{x} {y} 0", f"{x} {y} 1", f"{x + 20} {y} 1", f"{x + 20} {y} 0"])
     clicks(range(20, 170, 7))
-    out += ["set count 7", "-1 -1 0", "set clicks 3", "-1 -1 0", "set clicks 8", "-1 -1 0"]
+    out += ["-1 -1 0 1"] * 6 + ["set count 7", "-1 -1 0", "set clicks 3", "-1 -1 0", "set clicks 8", "-1 -1 0"]
     clicks((62, 100, 129))
     out += ["set clicks 0", "set count 0", "-1 -1 0"]
     open(sys.argv[2], "w").write("\n".join(out) + "\n")

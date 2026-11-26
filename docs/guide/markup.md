@@ -246,11 +246,9 @@ The errors cover headings, landmarks such as `<main>`, other form controls, `lcg
 
 C++ and Rust have no handler type. The app polls the frame's events
 (`ui.events().clicked(counter::Widget::inc)`, `frame.events.clicked(counter::Widget::Inc)`) and
-writes state through the generated setters. The seam's widgets behave like the reference
-widgets, not the Zig frontend's widgets, in two ways. Tab skips buttons. A slider reports its
-event on each change while it is held, not when it is released. Draw lists are the same:
-`bindings/check/run.sh` replays the example page in Zig's spec frontend, in Zig through the
-seam, in C++ and in Rust, and compares them.
+writes state through the generated setters. `bindings/check/run.sh` replays the example page in
+Zig's spec frontend, in Zig through the seam, in C++ and in Rust: the draw lists, events and
+focus are byte-identical.
 
 ## Handlers
 
