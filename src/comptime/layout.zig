@@ -1049,12 +1049,13 @@ test "rounded runtime, plain and folded layouts retain shared fractional geometr
     }
     const before = lr;
     try testing.expectError(error.InvalidScale, L.runRounded(&ls, &lr, .{ 100, 100 }, .{ .scale = 0 }));
-    try testing.expectEqual(before, lr);
+    // Bytes, not values: padding rows the layout never writes may hold NaN.
+    try testing.expectEqualSlices(u8, std.mem.asBytes(&before), std.mem.asBytes(&lr));
     const Compact = Layout(spec, .{ .viewport = .{ 100, 100 } });
     var cs: Compact.Scratch = undefined;
     var cr: Compact.Cols.Dynamic = undefined;
     Compact.run(&cs, &cr, .{ 100, 100 });
     const compact_before = cr;
     try testing.expectError(error.FractionalCoordinatesRequired, Compact.runRounded(&cs, &cr, .{ 100, 100 }, .{ .scale = 1.25 }));
-    try testing.expectEqual(compact_before, cr);
+    try testing.expectEqualSlices(u8, std.mem.asBytes(&compact_before), std.mem.asBytes(&cr));
 }
