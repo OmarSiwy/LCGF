@@ -180,6 +180,24 @@ pub fn fieldStyle(th: *const Theme, focused: bool, scroll: f32) Style {
     };
 }
 
+/// A text control's root `face` (its theme style, or as CSS restyles it) as the control shows
+/// itself: the accent border while focused, `face`'s own otherwise. Both front ends build
+/// the root through it, so CSS restyles it in both as `spec.styled` does.
+pub fn focusFace(th: *const Theme, face: Style, focused: bool) Style {
+    const border = base.OnOff{ face.border_color, th.accent };
+    var s = face;
+    s.border_color = border[@intFromBool(focused)];
+    return s;
+}
+
+/// The field's root `face` shown focused or not and scrolled `scroll` across (`fieldStyle`
+/// over a restyled root).
+pub fn fieldFace(th: *const Theme, face: Style, focused: bool, scroll: f32) Style {
+    var s = focusFace(th, face, focused);
+    s.scroll = .{ scroll, 0 };
+    return s;
+}
+
 /// The placeholder's colour: the text colour at half strength.
 pub fn hintColor(th: *const Theme) Color {
     return .rgba(th.text.r, th.text.g, th.text.b, 128);
@@ -436,20 +454,32 @@ pub fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, fi
 /// A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns its
 /// response; what the input did to the text is `s.result`.
 pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
-    return fieldAs(false, f, th, id, s, hint);
+    return fieldAs(false, f, th, id, s, hint, fieldStyle(th, false, 0));
+}
+
+/// `textfield` with its root laid out by `face` instead of `fieldStyle(th, false, 0)`, as
+/// `spec.styled` restyles `ct.textfield` (CSS on an `<input type=text>`); focus still sets
+/// the border and the text still scrolls (`fieldFace`).
+pub fn textfieldFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response {
+    return fieldAs(false, f, th, id, s, hint, face);
 }
 
 /// A password field (`<input type=password>`): a text field that shows one `mask` per
 /// grapheme, never puts its text on the clipboard and asks for secure input.
 pub fn password(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
-    return fieldAs(true, f, th, id, s, hint);
+    return fieldAs(true, f, th, id, s, hint, fieldStyle(th, false, 0));
 }
 
-fn fieldAs(comptime secure: bool, f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
+/// `password` with its root laid out by `face`, as `textfieldFace`.
+pub fn passwordFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response {
+    return fieldAs(true, f, th, id, s, hint, face);
+}
+
+fn fieldAs(comptime secure: bool, f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response {
     const r0 = f.ctx.inter.response(id);
     behaveAs(secure, s, th, id, r0, f.lastRect(id), f.in);
     platform(f, s);
-    const node = f.open(id, fieldStyle(th, r0.focused, s.scroll));
+    const node = f.open(id, fieldFace(th, face, r0.focused, s.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
     var buf: [if (secure) @TypeOf(s.*).capacity else 0]u8 = undefined;
@@ -514,14 +544,14 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            _ = .{ n, in };
+            _ = in;
             const Ui = @TypeOf(ui.*);
             const th = &Ui.theme;
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
             next.* += bands + 3; // the box, the selection bands, the text and the caret
-            const i = t.push(parent, .hash(name), &fieldStyle(th, focused, s.scroll));
+            const i = t.push(parent, .hash(name), &fieldFace(th, n.style, focused, s.scroll));
             var buf: [if (secure) @TypeOf(s.*).capacity else 0]u8 = undefined;
             const v = shownAs(secure, s, th, spec_zig.labelBytes(hint, &ui.signals.state), &buf);
             for (v.band) |b| _ = t.push(i, .none, &selectionStyle(th, b, 0));

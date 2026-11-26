@@ -156,8 +156,10 @@ By default the page is a comptime page (`ComptimeUi`).
 - `Ui.build(ui, frame)`, made of `Frame`, widget and component calls, and `Ui.dispatch(ui, h)`;
 - `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
 
-CSS on a button, toggle, checkbox, switch or range restyles it there through the widget's
-`…Face` function, as `spec.styled` restyles the comptime one. A box-shadow or an outline on one of them
+CSS on a button, toggle, checkbox, switch, range or text control (text, password, search,
+number, textarea) restyles it there through the widget's `…Face` function, as `spec.styled`
+restyles the comptime one. A focused text control still takes the accent border; unfocused it
+shows the CSS border colour, in both frontends. A box-shadow or an outline on one of them
 works there too: its column of floating nodes is built around the restyled widget. Margins and
 the other flex item rules on a widget or a component go on the row it pushes first, its root.
 CSS that changes the look of another control is refused on a runtime page for now.

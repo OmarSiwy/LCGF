@@ -173,10 +173,16 @@ pub fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32, range
 /// A number field named `id` over `s`, running `range`. Returns its response; whether the
 /// value changed is `s.value` against what it was.
 pub fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Response {
+    return numberFace(f, th, id, s, range, numberStyle(th, false, 0));
+}
+
+/// `number` with its root laid out by `face` instead of `numberStyle(th, false, 0)`, as
+/// `spec.styled` restyles `ct.number`; focus still sets the border (`textfield.fieldFace`).
+pub fn numberFace(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range, face: Style) Response {
     const r0 = f.ctx.inter.response(id);
     _ = behave(s, th, id, r0, f.lastRect(id), range, f.in);
     tf.platform(f, &s.text);
-    const node = f.open(id, numberStyle(th, r0.focused, s.text.scroll));
+    const node = f.open(id, tf.fieldFace(th, face, r0.focused, s.text.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
     const v = tf.shown(&s.text, th, "");
@@ -218,14 +224,14 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            _ = .{ n, in };
+            _ = in;
             const Ui = @TypeOf(ui.*);
             const th = &Ui.theme;
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
             next.* += 4;
-            const i = t.push(parent, .hash(name), &numberStyle(th, focused, s.text.scroll));
+            const i = t.push(parent, .hash(name), &tf.fieldFace(th, n.style, focused, s.text.scroll));
             const v = tf.shown(&s.text, th, "");
             _ = t.push(i, .none, &tf.selectionStyle(th, v.sel, 0));
             tf.pushText(ui, i, v.str, tf.textStyle(th, false));

@@ -778,8 +778,10 @@ pub const Emit = struct {
                 return "";
             },
             .number => {
-                e.print("_ = {s}.number(f, &theme, {s}, &{s}, ", .{ e.use("number"), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use("number"), e.faced("number", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
+                e.write(face);
                 e.write(");");
                 return "";
             },
@@ -796,15 +798,19 @@ pub const Emit = struct {
                 e.itemText(n, list_depth);
                 return "";
             } else if (n.kind == .textarea) {
-                e.print("_ = {s}.textarea(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.faced("textarea", face), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.write(face);
                 e.write(");");
                 e.submitFlag(n);
                 return "";
             } else {
                 const m = if (n.kind == .search) "search" else "textfield";
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), if (n.secure) "password" else m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), e.faced(if (n.secure) "password" else m, face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.write(face);
                 e.write(");");
                 e.submitFlag(n);
                 return "";
@@ -887,6 +893,12 @@ pub const Emit = struct {
     fn rtFace(e: *Emit, n: ir.Node) []const u8 {
         if (std.meta.eql(n.style, n.base_style) and n.params_expr.len == 0) return "";
         return std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable;
+    }
+
+    /// The runtime function `name`, or `<name>Face` when the widget is restyled (`face`).
+    fn faced(e: *Emit, name: []const u8, face: []const u8) []const u8 {
+        if (face.len == 0) return name;
+        return std.fmt.allocPrint(e.arena, "{s}Face", .{name}) catch unreachable;
     }
 
     /// `app.components.@"tag"(.{ .prop = value, … })`, or in a run-time region the runtime
@@ -1013,9 +1025,11 @@ pub const Emit = struct {
         const id = n.id;
         const o = e.owner;
         e.print("{{ const editing = {s}.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &{s}.edit_{s} else &scratch; ", .{ o, id, e.stateRef(n.bind), o, id });
-        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), if (n.secure) "password" else m, e.rtId(id, list_depth) });
+        const face = e.rtFace(n);
+        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), e.faced(if (n.secure) "password" else m, face), e.rtId(id, list_depth) });
         if (n.kind == .textarea) e.print("{d}, ", .{n.level});
         e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+        e.write(face);
         e.print("); if (r.focused and !editing) {{ {s}.edit_{s} = st.*; {s}.edit_{s}_row = @intCast(copy0); }} ", .{ o, id, o, id });
         e.print("if ({s}.edit_{s}_row == @as(u32, @intCast(copy0))) {{ ", .{ o, id });
         for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.widget, id) and h.each.len > 0) switch (h.event) {

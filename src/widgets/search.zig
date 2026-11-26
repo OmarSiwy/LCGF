@@ -130,6 +130,12 @@ pub const textValue = tf.textValue;
 /// A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns the
 /// field's response; what the input did is `s.result` (`submitted`: Enter).
 pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
+    return searchFace(f, th, id, s, hint, boxStyle(th, false));
+}
+
+/// `search` with its box laid out by `face` instead of `boxStyle(th, false)`, as
+/// `spec.styled` restyles `ct.search`; focus still sets the border (`textfield.focusFace`).
+pub fn searchFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response {
     const inter = &f.ctx.inter;
     const clear = inter.response(clearId(id));
     const some = s.text().len > 0;
@@ -140,7 +146,7 @@ pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8)
     behave(s, th, id, r0, clear.clicked, f.lastRect(id), f.in);
     tf.platform(f, s);
     const shown = s.text().len > 0;
-    const box = f.open(.none, boxStyle(th, r0.focused));
+    const box = f.open(.none, tf.focusFace(th, face, r0.focused));
     const node = f.open(id, inputStyle(th, s.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
@@ -210,7 +216,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const row = next.*;
             next.* += 7; // box, field, selection, text, caret, button, caption
             const shown = s.text().len > 0;
-            const box = t.push(parent, .none, &boxStyle(th, focused));
+            const box = t.push(parent, .none, &tf.focusFace(th, n.style, focused));
             const i = t.push(box, .hash(name), &inputStyle(th, s.scroll));
             const v = tf.shown(s, th, spec_zig.labelBytes(hint, &ui.signals.state));
             _ = t.push(i, .none, &tf.selectionStyle(th, v.sel, 0));
@@ -222,7 +228,6 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             t.c.text[k] = ui.tables.tx.push(k, ui.tables.strings.add(clear_text), &clearText(th, shown));
             t.seal(b);
             t.seal(box);
-            _ = n;
             expose(t, box, b, shown);
         }
 

@@ -1794,7 +1794,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
-                .button, .toggle, .checkbox, .@"switch", .slider => true,
+                .button, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;

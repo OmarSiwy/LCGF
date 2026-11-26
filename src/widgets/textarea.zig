@@ -243,10 +243,16 @@ pub const textValue = tf.textValue;
 /// comptime twin, if any), the placeholder `hint` on its first line while empty. Returns its
 /// response; what the input did is `s.result`.
 pub fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response {
+    return textareaFace(f, th, id, s, rows, hint, areaStyle(th, rows, false));
+}
+
+/// `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)`, as
+/// `spec.styled` restyles `ct.textarea`; focus still sets the border (`textfield.focusFace`).
+pub fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8, face: Style) Response {
     const r0 = f.ctx.inter.response(id);
     behave(s, th, id, r0, f.lastRect(id), rows, f.in);
     tf.platform(f, s);
-    const node = f.open(id, areaStyle(th, rows, r0.focused));
+    const node = f.open(id, tf.focusFace(th, face, r0.focused));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
     const v = view(s, th, rows, r0.focused);
@@ -326,14 +332,14 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
-            _ = .{ n, in };
+            _ = in;
             const Ui = @TypeOf(ui.*);
             const th = &Ui.theme;
             const s = &@field(ui.signals.state, bind);
             const focused = ui.focus == @field(Ui.Events.Widget, name);
             const t = &ui.tables.t;
             next.* += (tf.bands + 1) * rows + 2; // box, bands per line, lines, caret
-            const i = t.push(parent, .hash(name), &areaStyle(th, rows, focused));
+            const i = t.push(parent, .hash(name), &tf.focusFace(th, n.style, focused));
             const v = view(s, th, rows, focused);
             for (0..rows) |k| {
                 const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);

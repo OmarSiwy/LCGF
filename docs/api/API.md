@@ -6345,6 +6345,8 @@ Text field: one line of editable text.
 - `fn lineHeight(th: *const Theme) f32`: Height of one line of text, px.
 - `fn padding(th: *const Theme) [4]f32`: The field's padding: the theme's `pad` across, half of it up and down.
 - `fn fieldStyle(th: *const Theme, focused: bool, scroll: f32) Style`: The box: as wide as it is given (at least 80), one line tall, inset (`control_held`), its border the accent while focused; it clips its text, scrolled by `scroll` px.
+- `fn focusFace(th: *const Theme, face: Style, focused: bool) Style`: A text control's root `face` (its theme style, or as CSS restyles it) as the control shows itself: the accent border while focused, `face`'s own otherwise.
+- `fn fieldFace(th: *const Theme, face: Style, focused: bool, scroll: f32) Style`: The field's root `face` shown focused or not and scrolled `scroll` across (`fieldStyle` over a restyled root).
 - `fn hintColor(th: *const Theme) Color`: The placeholder's colour: the text colour at half strength.
 - `fn textStyle(th: *const Theme, hint: bool) TextStyle`: The text, or the placeholder (`hint`) in its colour when the field is empty.
 - `fn selectionColor(th: *const Theme) Color`: The selection's colour: the accent at less than half strength.
@@ -6366,7 +6368,9 @@ Text field: one line of editable text.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void`: The semantics the tree columns cannot carry, for field `name` in either front end's tree: its name is the row `label` (its caption, `aria-labelledby`; `none` for none).
 - `fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, field: anytype, hint: []const u8) void`: What field `name` (over `field`, a `*Text(cap)`, showing `hint` while empty) holds, for assistive technology: its text and its placeholder, copied to the frame's strings `str` (`a11y.setText`).
 - `fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty.
+- `fn textfieldFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response`: `textfield` with its root laid out by `face` instead of `fieldStyle(th, false, 0)`, as `spec.styled` restyles `ct.textfield` (CSS on an `<input type=text>`); focus still sets the border and the text still scrolls (`fieldFace`).
 - `fn password(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A password field (`<input type=password>`): a text field that shows one `mask` per grapheme, never puts its text on the clipboard and asks for secure input.
+- `fn passwordFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response`: `password` with its root laid out by `face`, as `textfieldFace`.
 - `fn platform(f: *Frame, s: anytype) void`: Copies what field `s` asks of the host this frame to the runtime front end's `Platform`: text input with its purpose and, but for a password, the text and selection around the caret for the IME and autocorrect; the clipboard text it copied, and a paste.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec, comptime secure: bool) type`: The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
 - `fn pushText(ui: anytype, parent: u32, str: []const u8, ts: TextStyle) void`: Pushes a text leaf showing `str` under row `parent` of comptime front end `ui`, as `Frame.textStyled(str, ts, .{})` does in the runtime front end.
@@ -6450,6 +6454,7 @@ Search field: a text field with a clear button.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, clear_clicked: bool, last: Rect, in: *const Input) void`: Applies a frame's input to search field `s` named `id`, laid out last frame at `last`: a click on the shown clear button (`clear_clicked`) or Escape on the focused field empties it; then everything a text field does (`textfield.behave`).
 - `fn expose(t: *Tree, box: u32, button: u32, shown: bool) void`: Roles of the box (a search landmark around the field), of the field (a search box, its first child) and of the clear button (a button while shown, presentational otherwise), written to rows `box`, `box + 1` and `button` of `t`.
 - `fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty.
+- `fn searchFace(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8, face: Style) Response`: `search` with its box laid out by `face` instead of `boxStyle(th, false)`, as `spec.styled` restyles `ct.search`; focus still sets the border (`textfield.focusFace`).
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type`: The comptime search field named `name` over field `bind`, placeholder `hint` (`textfield.hintSpec`; `Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
 
 ### `ct` (struct)
@@ -6509,6 +6514,7 @@ Number field: a number typed as text or stepped by keys and the wheel (WAI-ARIA 
 - `fn expose(t: *Tree, i: u32, value: f32) void`: Marks row `i` of tree `t` a spin button (ARIA spinbutton) holding `value` in the value column, which is where the accessibility bridge reads them.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32, range: Range) void`: The semantics the tree columns cannot carry, for the field `name` in `t`: its name is the row `label` (its caption, `aria-labelledby`), as for the text field, and its range is `range` (`aria-valuemin`, `aria-valuemax`, and the step a screen reader's increment moves by, as Up and Down do).
 - `fn number(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range) Response`: A number field named `id` over `s`, running `range`.
+- `fn numberFace(f: *Frame, th: *const Theme, id: Id, s: *Number, range: Range, face: Style) Response`: `number` with its root laid out by `face` instead of `numberStyle(th, false, 0)`, as `spec.styled` restyles `ct.number`; focus still sets the border (`textfield.fieldFace`).
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime range: Range) type`: The comptime number field named `name` over field `bind`, running `range` (`Spec.widget`): the same rows as `number`, the same input applied (`behave`).
 
 ### `Number` (struct)
@@ -6573,6 +6579,7 @@ Text area: several lines of editable text, scrolled by whole lines.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, rows: u32, in: *const Input) void`: Applies a frame's input to text area `s` (a `*Text(cap)`) named `id` showing `rows` lines, laid out last frame at `last`: as `textfield.behave` (pointer, keys, typed text, IME), with Enter inserting a newline, Up and Down moving between lines in their column, and the wheel scrolling by lines while the pointer is over it.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void`: The semantics the tree columns cannot carry, for text area `name`: its name is the row `label` (its caption, `aria-labelledby`; `none` for none), as for the text field (`textfield.semantics`), and it is multiline (`aria-multiline`).
 - `fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response`: A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its comptime twin, if any), the placeholder `hint` on its first line while empty.
+- `fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8, face: Style) Response`: `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)`, as `spec.styled` restyles `ct.textarea`; focus still sets the border (`textfield.focusFace`).
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: Spec) type`: The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder `hint` (`textfield.hintSpec`; `Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
 
 ### `ct` (struct)
