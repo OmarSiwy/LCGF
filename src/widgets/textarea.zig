@@ -298,30 +298,31 @@ fn view(s: anytype, th: *const Theme, rows: u32, focused: bool) View {
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// A text area named `id` over the `Text(cap)` field `bind`, showing `rows` lines and the
-    /// string field `hint` while empty. Its events carry the `edit.Result` of a frame that
-    /// changed the text.
-    pub fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: @EnumLiteral()) Spec {
+    /// A text area named `id` over the `Text(cap)` field `bind`, showing `rows` lines and
+    /// `hint` while empty, a literal or a string field (`textfield.hintSpec`). Its events
+    /// carry the `edit.Result` of a frame that changed the text.
+    pub fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: anytype) Spec {
         const sel: [rows * tf.bands]Spec = @splat(.{ .kind = .col });
         const lines: [rows]Spec = @splat(.{ .kind = .label });
         const kids = sel ++ lines ++ [1]Spec{.{ .kind = .col }};
         var s = spec_zig.col(areaStyle(&th, rows, false), kids);
         s.id = @tagName(id);
         s.bind = @tagName(bind);
-        s.widget = Comptime(@tagName(id), @tagName(bind), rows, @tagName(hint));
+        s.widget = Comptime(@tagName(id), @tagName(bind), rows, tf.hintSpec(hint));
         return s;
     }
 };
 
 /// The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder
-/// field `hint` (`Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
-pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: []const u8) type {
+/// `hint` (`textfield.hintSpec`; `Spec.widget`): the same rows as `textarea`, the same input
+/// applied (`behave`).
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: Spec) type {
     return struct {
         pub const focusable = true;
         pub const Payload = edit.Result;
 
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
-            return textarea_zig.bindError(State, field, rows) orelse base.fieldError(State, "textarea placeholder", hint, []const u8);
+            return textarea_zig.bindError(State, field, rows) orelse tf.hintError(State, "textarea", hint);
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -342,7 +343,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             for (0..rows) |k| {
                 const l = shownLine(v.t, v.scroll, @intCast(k), v.sel, v.adv);
                 const hint_line = v.empty and k == 0;
-                tf.pushText(ui, i, if (hint_line) @field(ui.signals.state, hint) else l.str, tf.textStyle(th, hint_line));
+                tf.pushText(ui, i, if (hint_line) spec_zig.labelBytes(hint, &ui.signals.state) else l.str, tf.textStyle(th, hint_line));
             }
             _ = t.push(i, .none, &tf.caretStyle(th, v.caret.x, v.caret.y, v.caret.shown and focused));
             t.seal(i);

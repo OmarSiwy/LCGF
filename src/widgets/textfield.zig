@@ -130,6 +130,19 @@ pub fn bindError(comptime State: type, comptime name: []const u8, comptime hint:
     return textError(State, "textfield", name) orelse base.fieldError(State, "textfield placeholder", hint, []const u8);
 }
 
+/// A comptime text control's placeholder, taken as `ct.label` takes its text: a literal
+/// (`"Your name"`) or a string field (`.name_hint`). Read it with `spec.labelBytes`.
+pub fn hintSpec(comptime hint: anytype) Spec {
+    return spec_zig.label(hint);
+}
+
+/// Why `State` cannot show the placeholder `hint` (`hintSpec`) of `widget`, or null. A literal
+/// always can.
+pub fn hintError(comptime State: type, comptime widget: []const u8, comptime hint: Spec) ?[]const u8 {
+    const f = hint.bind orelse return null;
+    return base.fieldError(State, widget ++ " placeholder", f, []const u8);
+}
+
 // ---- look -----------------------------------------------------------------------------------
 
 /// Width of one byte of text, px: the front ends measure with `Mono`.
@@ -407,28 +420,28 @@ pub fn platform(f: *Frame, s: anytype) void {
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// A text field named `id` over the `Text(cap)` field `bind`, showing the string field
-    /// `hint` while empty. Its events carry the `edit.Result` of a frame that changed the text
-    /// or submitted it.
-    pub fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec {
+    /// A text field named `id` over the `Text(cap)` field `bind`, showing `hint` while empty:
+    /// a literal or a string field (`hintSpec`). Its events carry the `edit.Result` of a frame
+    /// that changed the text or submitted it.
+    pub fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec {
         const band: [bands]Spec = @splat(.{ .kind = .col });
         var s = spec_zig.row(fieldStyle(&th, false, 0), band ++ [2]Spec{ .{ .kind = .label }, .{ .kind = .col } });
         s.id = @tagName(id);
         s.bind = @tagName(bind);
-        s.widget = Comptime(@tagName(id), @tagName(bind), @tagName(hint));
+        s.widget = Comptime(@tagName(id), @tagName(bind), hintSpec(hint));
         return s;
     }
 };
 
-/// The comptime text field named `name` over field `bind`, placeholder field `hint`
+/// The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`)
 /// (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
-pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type {
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type {
     return struct {
         pub const focusable = true;
         pub const Payload = edit.Result;
 
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
-            return textfield_zig.bindError(State, field, hint);
+            return textError(State, "textfield", field) orelse hintError(State, "textfield", hint);
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -440,7 +453,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const t = &ui.tables.t;
             next.* += bands + 3; // the box, the selection bands, the text and the caret
             const i = t.push(parent, .hash(name), &fieldStyle(th, focused, s.scroll));
-            const v = shown(s, th, @field(ui.signals.state, hint));
+            const v = shown(s, th, spec_zig.labelBytes(hint, &ui.signals.state));
             for (v.band) |b| _ = t.push(i, .none, &selectionStyle(th, b, 0));
             pushText(ui, i, v.str, textStyle(th, v.hint));
             _ = t.push(i, .none, &caretStyle(th, v.caret, 0, focused));
@@ -545,6 +558,27 @@ test "bindError: a text field binds a Text(cap) and a string placeholder" {
     try testing.expect(!isText(struct {
         pub const capacity = 4;
     }));
+}
+
+test "ct.textfield, ct.search, ct.textarea: a literal placeholder draws as the same text in a field" {
+    const th = Theme.default;
+    const search = @import("search.zig");
+    const textarea = @import("textarea.zig");
+    const Lit = struct { a: Text(16) = .{}, b: Text(16) = .{}, c: Text(16) = .{} };
+    const Bound = struct { a: Text(16) = .{}, b: Text(16) = .{}, c: Text(16) = .{}, h: []const u8 = "Your name" };
+    const lit = comptime spec_zig.col(.{}, .{ ct.textfield(th, .a, .a, "Your name"), search.ct.search(th, .b, .b, "Your name"), textarea.ct.textarea(th, .c, .c, 2, "Your name") });
+    const bound = comptime spec_zig.col(.{}, .{ ct.textfield(th, .a, .a, .h), search.ct.search(th, .b, .b, .h), textarea.ct.textarea(th, .c, .c, 2, .h) });
+    try testing.expectEqual(null, comptime hintError(Lit, "textfield", hintSpec("Your name")));
+    try testing.expectEqualStrings("textfield placeholder 'h': the state has no such field", comptime hintError(Lit, "textfield", hintSpec(.h)).?);
+    const S = struct {
+        var a: base.ComptimeUi(Lit, lit, th) = .{};
+        var b: base.ComptimeUi(Bound, bound, th) = .{};
+    };
+    const in: Input = .{ .viewport = .{ 320, 200 } };
+    const x = S.a.frame(&in);
+    const y = S.b.frame(&in);
+    try testing.expect(base.sameDraw(x.draw, y.draw));
+    try testing.expect(std.mem.count(u8, x.draw.strings, "Your name") == 3);
 }
 
 test "ct.textfield: a focusable widget whose events carry an edit.Result" {

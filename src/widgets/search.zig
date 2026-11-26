@@ -163,10 +163,10 @@ pub fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8)
 // ---- comptime front end ---------------------------------------------------------------------
 
 pub const ct = struct {
-    /// A search field named `id` over the `Text(cap)` field `bind`, showing the string field
-    /// `hint` while empty; its clear button is the widget `<id>.clear`. Its events carry the
+    /// A search field named `id` over the `Text(cap)` field `bind`, showing `hint` while empty,
+    /// a literal or a string field (`textfield.hintSpec`); its clear button is the widget `<id>.clear`. Its events carry the
     /// `edit.Result` of a frame that changed, cleared or submitted the text.
-    pub fn search(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec {
+    pub fn search(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec {
         const name = @tagName(id);
         var field = spec_zig.row(inputStyle(&th, 0), .{ Spec{ .kind = .col }, Spec{ .kind = .label }, Spec{ .kind = .col } });
         field.id = name;
@@ -175,7 +175,7 @@ pub const ct = struct {
         button.id = name ++ ".clear";
         var s = spec_zig.row(boxStyle(&th, false), .{ field, button });
         s.bind = @tagName(bind);
-        s.widget = Comptime(name, @tagName(bind), @tagName(hint));
+        s.widget = Comptime(name, @tagName(bind), tf.hintSpec(hint));
         return s;
     }
 };
@@ -192,12 +192,13 @@ pub const Stop = struct {
     }
 };
 
-/// The comptime search field named `name` over field `bind`, placeholder field `hint`
-/// (`Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
-pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type {
+/// The comptime search field named `name` over field `bind`, placeholder `hint`
+/// (`textfield.hintSpec`; `Spec.widget` of the box): the same rows as `search`, the same
+/// input applied (`behave`).
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type {
     return struct {
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
-            return search_zig.bindError(State, field, hint);
+            return tf.textError(State, "search", field) orelse tf.hintError(State, "search", hint);
         }
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
@@ -211,7 +212,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const shown = s.text().len > 0;
             const box = t.push(parent, .none, &boxStyle(th, focused));
             const i = t.push(box, .hash(name), &inputStyle(th, s.scroll));
-            const v = tf.shown(s, th, @field(ui.signals.state, hint));
+            const v = tf.shown(s, th, spec_zig.labelBytes(hint, &ui.signals.state));
             _ = t.push(i, .none, &tf.selectionStyle(th, v.sel, 0));
             tf.pushText(ui, i, v.str, tf.textStyle(th, v.hint));
             _ = t.push(i, .none, &tf.caretStyle(th, v.caret, 0, focused));

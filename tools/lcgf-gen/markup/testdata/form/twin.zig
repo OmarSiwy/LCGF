@@ -1,5 +1,4 @@
-//! form, written by hand: text controls with literal placeholders. Waits for engine spec T1
-//! (the text builders take a literal hint, docs/plans/markup-engine-api.md).
+//! form, written by hand: text controls with literal placeholders.
 
 const lcgf = @import("lcgf");
 const s = lcgf.spec;

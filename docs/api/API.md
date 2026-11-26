@@ -5965,6 +5965,8 @@ Text field: one line of editable text.
 - `fn isText(comptime T: type) bool`: Whether `T` is a `Text(cap)`.
 - `fn textError(comptime State: type, comptime widget: []const u8, comptime name: []const u8) ?[]const u8`: Why `State`'s field `name` cannot be the text of a `widget` (a `Text(cap)`), or null.
 - `fn bindError(comptime State: type, comptime name: []const u8, comptime hint: []const u8) ?[]const u8`: Why `State` cannot hold a text field over `name` with its placeholder in string field `hint`, or null when it can.
+- `fn hintSpec(comptime hint: anytype) Spec`: A comptime text control's placeholder, taken as `ct.label` takes its text: a literal (`"Your name"`) or a string field (`.name_hint`).
+- `fn hintError(comptime State: type, comptime widget: []const u8, comptime hint: Spec) ?[]const u8`: Why `State` cannot show the placeholder `hint` (`hintSpec`) of `widget`, or null.
 - `fn advance(th: *const Theme) f32`: Width of one byte of text, px: the front ends measure with `Mono`.
 - `fn lineHeight(th: *const Theme) f32`: Height of one line of text, px.
 - `fn padding(th: *const Theme) [4]f32`: The field's padding: the theme's `pad` across, half of it up and down.
@@ -5989,7 +5991,7 @@ Text field: one line of editable text.
 - `fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, field: anytype, hint: []const u8) void`: What field `name` (over `field`, a `*Text(cap)`, showing `hint` while empty) holds, for assistive technology: its text and its placeholder, copied to the frame's strings `str` (`a11y.setText`).
 - `fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty.
 - `fn platform(f: *Frame, s: anytype) void`: Copies what field `s` asks of the host this frame to the runtime front end's `Platform`: text input with its purpose and, but for a password, the text and selection around the caret for the IME and autocorrect; the clipboard text it copied, and a paste.
-- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type`: The comptime text field named `name` over field `bind`, placeholder field `hint` (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
+- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type`: The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
 - `fn pushText(ui: anytype, parent: u32, str: []const u8, ts: TextStyle) void`: Pushes a text leaf showing `str` under row `parent` of comptime front end `ui`, as `Frame.textStyled(str, ts, .{})` does in the runtime front end.
 
 ### `Text(..)` (generic struct)
@@ -6011,10 +6013,10 @@ Fields: `str`, `hint`, `caret`, `sel`, `band`
 
 ### `ct` (struct)
 
-- `fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec`: A text field named `id` over the `Text(cap)` field `bind`, showing the string field `hint` while empty.
+- `fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec`: A text field named `id` over the `Text(cap)` field `bind`, showing `hint` while empty: a literal or a string field (`hintSpec`).
 
 ### `Comptime(..)` (generic struct)
-The comptime text field named `name` over field `bind`, placeholder field `hint` (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
+The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
 
 - `focusable = true`
 - `Payload = edit.Result`
@@ -6070,11 +6072,11 @@ Search field: a text field with a clear button.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, clear_clicked: bool, last: Rect, in: *const Input) void`: Applies a frame's input to search field `s` named `id`, laid out last frame at `last`: a click on the shown clear button (`clear_clicked`) or Escape on the focused field empties it; then everything a text field does (`textfield.behave`).
 - `fn expose(t: *Tree, box: u32, button: u32, shown: bool) void`: Roles of the box (a search landmark around the field), of the field (a search box, its first child) and of the clear button (a button while shown, presentational otherwise), written to rows `box`, `box + 1` and `button` of `t`.
 - `fn search(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A search field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty.
-- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: []const u8) type`: The comptime search field named `name` over field `bind`, placeholder field `hint` (`Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
+- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type`: The comptime search field named `name` over field `bind`, placeholder `hint` (`textfield.hintSpec`; `Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
 
 ### `ct` (struct)
 
-- `fn search(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral()) Spec`: A search field named `id` over the `Text(cap)` field `bind`, showing the string field `hint` while empty; its clear button is the widget `<id>.clear`.
+- `fn search(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec`: A search field named `id` over the `Text(cap)` field `bind`, showing `hint` while empty, a literal or a string field (`textfield.hintSpec`); its clear button is the widget `<id>.clear`.
 
 ### `Stop` (struct)
 The field inside a comptime search box: a focus stop whose events carry an `edit.Result`, pushed and stepped by the box (`Comptime`).
@@ -6084,7 +6086,7 @@ The field inside a comptime search box: a focus stop whose events carry an `edit
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
 ### `Comptime(..)` (generic struct)
-The comptime search field named `name` over field `bind`, placeholder field `hint` (`Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
+The comptime search field named `name` over field `bind`, placeholder `hint` (`textfield.hintSpec`; `Spec.widget` of the box): the same rows as `search`, the same input applied (`behave`).
 
 - `fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8`
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
@@ -6193,14 +6195,14 @@ Text area: several lines of editable text, scrolled by whole lines.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, rows: u32, in: *const Input) void`: Applies a frame's input to text area `s` (a `*Text(cap)`) named `id` showing `rows` lines, laid out last frame at `last`: as `textfield.behave` (pointer, keys, typed text, IME), with Enter inserting a newline, Up and Down moving between lines in their column, and the wheel scrolling by lines while the pointer is over it.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void`: The semantics the tree columns cannot carry, for text area `name`: its name is the row `label` (its caption, `aria-labelledby`; `none` for none), as for the text field (`textfield.semantics`), and it is multiline (`aria-multiline`).
 - `fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response`: A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its comptime twin, if any), the placeholder `hint` on its first line while empty.
-- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: []const u8) type`: The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder field `hint` (`Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
+- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: Spec) type`: The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder `hint` (`textfield.hintSpec`; `Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
 
 ### `ct` (struct)
 
-- `fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: @EnumLiteral()) Spec`: A text area named `id` over the `Text(cap)` field `bind`, showing `rows` lines and the string field `hint` while empty.
+- `fn textarea(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: anytype) Spec`: A text area named `id` over the `Text(cap)` field `bind`, showing `rows` lines and `hint` while empty, a literal or a string field (`textfield.hintSpec`).
 
 ### `Comptime(..)` (generic struct)
-The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder field `hint` (`Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
+The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder `hint` (`textfield.hintSpec`; `Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
 
 - `focusable = true`
 - `Payload = edit.Result`
