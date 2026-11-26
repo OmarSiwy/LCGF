@@ -52,11 +52,11 @@ pub inline fn invertible(m: [6]f32) bool {
 
 /// `m`, its determinant and `inv` all finite, the determinant not 0.
 inline fn invertibleRaw(m: [6]f32, inv: [6]f32) bool {
-    const V6 = @Vector(6, f32);
-    const big: V6 = @splat(std.math.floatMax(f32));
+    // x * 0 is 0 for a finite x and NaN otherwise, so the sum is 0 exactly when all are finite.
     const det = m[0] * m[3] - m[1] * m[2];
-    return @reduce(.And, @abs(@as(V6, m)) <= big) & @reduce(.And, @abs(@as(V6, inv)) <= big) &
-        (det != 0) & (@abs(det) <= std.math.floatMax(f32));
+    var zero: f32 = det * 0;
+    inline for (m ++ inv) |v| zero += v * 0;
+    return (zero == 0) & (det != 0);
 }
 
 pub fn hasArea(rect: [4]f32) bool {
@@ -75,8 +75,12 @@ pub fn expand(rect: [4]f32, amount: [4]f32) [4]f32 {
 /// the empty and the transformed rect are both computed, then selected. Computing the
 /// transform for the identity too costs the per-row passes about twice their instructions
 /// (finalize 3.2G -> 7.4G on the rows bench).
-pub fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
-    if (isIdentity(m)) return rect;
+pub inline fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
+    if (isIdentity(m)) {
+        // Kept a jump: LLVM otherwise if-converts it and computes the transform for every row.
+        @branchHint(.likely);
+        return rect;
+    }
     const shown = hasArea(rect) & invertible(m);
     const xx: V4 = .{ rect[0], rect[2], rect[2], rect[0] };
     const yy: V4 = .{ rect[1], rect[1], rect[3], rect[3] };
