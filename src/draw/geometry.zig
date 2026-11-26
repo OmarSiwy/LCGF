@@ -71,11 +71,12 @@ pub fn expand(rect: [4]f32, amount: [4]f32) [4]f32 {
     return .{ rect[0] - amount[0], rect[1] - amount[1], rect[2] + amount[2], rect[3] + amount[3] };
 }
 
-/// Branch-free: the identity, the empty and the transformed rect are all computed, then
-/// selected, so the per-row passes (finalize, paint, hit, damage) keep no jump on the matrix.
+/// One jump, on the identity (nearly every node: well predicted). The rest is branch-free:
+/// the empty and the transformed rect are both computed, then selected. Computing the
+/// transform for the identity too costs the per-row passes about twice their instructions
+/// (finalize 3.2G -> 7.4G on the rows bench).
 pub fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
-    const V6 = @Vector(6, f32);
-    const is_identity = @reduce(.And, @as(V6, m) == @as(V6, identity));
+    if (isIdentity(m)) return rect;
     const shown = hasArea(rect) & invertible(m);
     const xx: V4 = .{ rect[0], rect[2], rect[2], rect[0] };
     const yy: V4 = .{ rect[1], rect[1], rect[3], rect[3] };
@@ -86,8 +87,13 @@ pub fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
     const lo = lanesMin(x, y);
     const hi = -lanesMin(-x, -y);
     const moved: V4 = .{ lo[0], lo[1], hi[0], hi[1] };
-    const out = @select(f32, @as(@Vector(4, bool), @splat(shown)), moved, @as(V4, empty));
-    return @select(f32, @as(@Vector(4, bool), @splat(is_identity)), @as(V4, rect), out);
+    return @select(f32, @as(@Vector(4, bool), @splat(shown)), moved, @as(V4, empty));
+}
+
+/// `m` equals the identity (as `==`: -0 counts as 0), as one vector compare.
+pub inline fn isIdentity(m: [6]f32) bool {
+    const V6 = @Vector(6, f32);
+    return @reduce(.And, @as(V6, m) == @as(V6, identity));
 }
 
 /// `.{ min of x, min of y }` over four lanes with `minnum`'s NaN rule, without a jump.

@@ -2085,7 +2085,8 @@ Shared paint and input geometry.
 - `fn hasArea(rect: [4]f32) bool`
 - `fn intersect(a: [4]f32, b: [4]f32) [4]f32`
 - `fn expand(rect: [4]f32, amount: [4]f32) [4]f32`
-- `fn transformRect(rect: [4]f32, m: [6]f32) [4]f32`: Branch-free: the identity, the empty and the transformed rect are all computed, then selected, so the per-row passes (finalize, paint, hit, damage) keep no jump on the matrix.
+- `fn transformRect(rect: [4]f32, m: [6]f32) [4]f32`: One jump, on the identity (nearly every node: well predicted).
+- `fn isIdentity(m: [6]f32) bool`: `m` equals the identity (as `==`: -0 counts as 0), as one vector compare.
 - `fn localPaintBounds(rect: [4]f32, params: [4]f32) [4]f32`: The stock shadow shader expands its local source by three standard deviations.
 - `fn paintBounds(rect: [4]f32, params: [4]f32, xform: [6]f32, clip: [4]f32) [4]f32`: Shared by damage, visibility and overlap-sensitive batching.
 - `fn quadBounds(q: anytype) [4]f32`
