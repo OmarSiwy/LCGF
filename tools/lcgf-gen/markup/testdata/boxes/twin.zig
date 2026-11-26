@@ -1,7 +1,8 @@
 //! boxes, written by hand: a <div> with state CSS is a recipe box whose base is its static
 //! style and whose rules are its CSS's: `.card:hover` requires `hovered`, `:active` `held`,
 //! so the card is a widget (hover and press, no focus). The bar has only `@media`, so it is
-//! no widget and follows the viewport.
+//! no widget and follows the viewport. Rules set layout too: padding and a transform while
+//! the card is pressed, width and gap on a narrow viewport.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -21,10 +22,10 @@ const narrow: Color = .rgb(96, 32, 32);
 
 const recipe_card: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10), .fill = rest, .border_color = .rgb(80, 88, 104), .border = 1 } } }}, .rules = &[_]style.Rule{
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{ style.set(.fill, hot), style.set(.border_color, .rgb(128, 160, 255)) } },
-    .{ .part = style.Parts.root, .require = .{ .held = true }, .declarations = &.{style.set(.opacity, 0.8)} },
+    .{ .part = style.Parts.root, .require = .{ .held = true }, .declarations = &.{ style.set(.opacity, 0.8), style.set(.transform, .{ 1, 0, 0, 1, 0, 2 }), style.set(.padding_left, 14), style.set(.padding_top, 14), style.set(.padding_right, 14), style.set(.padding_bottom, 14) } },
 } };
 const recipe_bar: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .dir = .x, .gap = 4 } } }}, .rules = &[_]style.Rule{
-    .{ .part = style.Parts.root, .when = .{ .width = .{ .max = 500 } }, .declarations = &.{style.set(.fill, narrow)} },
+    .{ .part = style.Parts.root, .when = .{ .width = .{ .max = 500 } }, .declarations = &.{ style.set(.fill, narrow), style.set(.width, .pct(1)), style.set(.gap, 12) } },
 } };
 
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
@@ -80,9 +81,16 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
     t = p.frame(h, &in).tree;
     try std.testing.expectEqual(hot.bitsOf(), t.c.look[card].fill);
+    const rest_w = t.rect(card).w();
+    in.buttons.left = true;
+    t = p.frame(h, &in).tree;
+    try std.testing.expectEqual(rest_w + 8, t.rect(card).w());
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
     in.viewport = .{ 400, 600 };
     t = p.frame(h, &in).tree;
     try std.testing.expectEqual(narrow.bitsOf(), t.c.look[bar].fill);
+    try std.testing.expectEqual(@as(f32, 400), t.rect(bar).w());
 }
 
 pub fn Handlers(comptime Ui: type) type {

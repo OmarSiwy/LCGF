@@ -31,9 +31,12 @@ states.html:10:3: error: state CSS on <p> is not lowered: it restyles a <div>-li
 states.html:11:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles
   div:hover button { color: red; }
      ^
-states.html:13:15: error: width under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity
-  #go:hover { width: 10px; }
+states.html:13:15: error: margin-left under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform
+  #go:hover { margin-left: 4px; }
               ^
-states.html:17:47: error: a <button> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet
+states.html:13:15: error: a margin under a state pseudo-class or @media is not lowered
+  #go:hover { margin-left: 4px; }
+              ^
+states.html:17:47: error: a <button> with state CSS takes colours, border, radius, opacity, padding, gap, size and transform from its CSS; its other properties are not lowered with state rules yet
 <body><p>x</p><div><button id="go">Go</button><button id="wide">Wide</button></div></body>
                                               ^

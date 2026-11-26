@@ -393,9 +393,11 @@ make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime pag
 `recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
-browser. A state rule sets `background-color`, `color`, `border-color`, `border-width`,
-`border-style: solid` and `opacity`; on a checkbox or switch, the colours and border are the
-box's. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
+browser. A state rule sets background and border colours, `color`, border width and style
+(`solid` or `none`), radius, `opacity`, padding, the main-axis gap, width, height, min and max
+sizes and `transform`; layout properties lay the page out again when the state changes. On a
+checkbox or switch the colours and border are the box's. Margins and `box-shadow` there are
+errors. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.
 

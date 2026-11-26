@@ -7,7 +7,7 @@ transitions.html:5:32: error: keyframe animations are not lowered yet: they run 
 transitions.html:6:3: error: keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)
   @keyframes spin { to { opacity: 0; } }
   ^
-transitions.html:4:14: error: transition under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity
+transitions.html:4:14: error: transition under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform
   #b:hover { transition: color 1s; }
              ^
 transitions.html:3:12: error: transition on <button>: its look changes at run time (hover, press, state CSS, @media or a run-time token) and LCGF restyles instantly; transitions are not lowered yet

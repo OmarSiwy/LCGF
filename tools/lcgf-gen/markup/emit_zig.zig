@@ -734,7 +734,7 @@ pub const Emit = struct {
                 e.print("const {s}: recipes.Recipe = .{{ .parts = &.{{.{{ .id = style.Parts.root, .base = .{{ .box = ", .{e.recipeName(n)});
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                 e.write(" } }}, .rules = &[_]style.Rule{\n");
-                for (n.recipe) |r| e.rule(r, "root", r);
+                for (n.recipe) |r| e.rule(r, "root", .all);
                 e.write("} };\n\n");
                 continue;
             }
@@ -758,26 +758,36 @@ pub const Emit = struct {
             e.print("/// The recipe of `{s}` ({s}): the stock {s}'s, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc), stock });
             e.print("const {s}: recipes.Recipe = .{{ .parts = recipes.model.{s}.parts, .rules = &(recipes.model.{s}_rules ++ [_]style.Rule{{\n", .{ e.recipeName(n), stock, rules });
             for (n.recipe) |r| {
-                const own = std.mem.eql(u8, box, "root");
-                e.rule(r, "root", .{ .text_color = r.text_color, .opacity = r.opacity, .fill = if (own) r.fill else null, .border_color = if (own) r.border_color else null, .border = if (own) r.border else null });
-                if (!own) e.rule(r, box, .{ .fill = r.fill, .border_color = r.border_color, .border = r.border });
+                if (std.mem.eql(u8, box, "root")) {
+                    e.rule(r, "root", .all);
+                } else {
+                    e.rule(r, "root", .unboxed);
+                    e.rule(r, box, .boxed);
+                }
             }
             e.write("}) };\n\n");
         }
     }
 
-    /// `.{ .part = …, .require = …, .declarations = … }` of what `set` sets; nothing when it
-    /// sets nothing.
-    fn rule(e: *Emit, r: ir.RecipeRule, part: []const u8, set: ir.RecipeRule) void {
+    const Which = enum { all, unboxed, boxed };
+
+    /// `.{ .part = …, .require = …, .declarations = … }` of `r`'s declarations that `which`
+    /// takes (on a checkbox or a switch the colours and border are the box part's); nothing
+    /// when it takes none.
+    fn rule(e: *Emit, r: ir.RecipeRule, part: []const u8, which: Which) void {
         var decls: std.ArrayList(u8) = .empty;
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         var any = false;
-        inline for (.{ .{ "fill", "fill" }, .{ "text_color", "text_color" }, .{ "border_color", "border_color" }, .{ "border", "border_width" }, .{ "opacity", "opacity" } }) |f| if (@field(set, f[0])) |v| {
-            e.print("{s}style.set(.{s}, ", .{ if (any) ", " else " ", f[1] });
-            e.value(v);
+        for (r.set) |d| {
+            const boxed = d.property == .fill or d.property == .border_color or d.property == .border_width;
+            if ((which == .boxed and !boxed) or (which == .unboxed and boxed)) continue;
+            e.print("{s}style.set(.{s}, ", .{ if (any) ", " else " ", @tagName(d.property) });
+            switch (d.value) {
+                inline else => |v| e.value(v),
+            }
             e.write(")");
             any = true;
-        };
+        }
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (!any) return;
         e.print("    .{{ .part = style.Parts.{s}", .{part});

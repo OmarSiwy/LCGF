@@ -755,28 +755,49 @@ pub const Lowerer = struct {
             cascade.apply(l.k, l.k.table, l.c, n, d.decl, d.key);
             var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st.require, .forbid = st.forbid, .when = when };
             last_sel = d.sel;
+            var params: []const u8 = "";
+            var margin: ?[4]f32 = null;
+            const box = l.boxStyle(n, .{}, l.parentDir(nodes.items(.parent)[x]), &params, &margin);
+            l.uses.clearRetainingCapacity();
+            var set: std.ArrayList(ir.Set) = .fromOwnedSlice(@constCast(r.set));
+            const at = l.c.decls.items(.loc)[d.decl];
             for (row_, saved, 0..) |e, was, p_| {
                 if (e.decl == none or (was.decl != none and was.key > e.key)) continue;
                 const p: Prop = @fromBackingInt(@intCast(p_));
                 switch (p) {
-                    .@"background-color" => r.fill = l.colorOf(n, p),
-                    .color => if (is_box)
-                        l.ds.err(l.c.decls.items(.loc)[d.decl], "color under a state pseudo-class or @media on a box would restyle the text inside it; set it on the text's own element", .{})
-                    else {
-                        r.text_color = l.colorOf(n, p);
-                    },
-                    .@"border-color" => r.border_color = l.colorOf(n, p),
-                    .@"border-top-width" => r.border = l.px(n, p),
-                    .opacity => r.opacity = if (l.number(n, p)) |o| std.math.clamp(o, 0, 1) else null,
+                    .@"background-color" => put(&set, l.arena, .fill, .{ .color = box.fill }),
+                    .@"border-color" => put(&set, l.arena, .border_color, .{ .color = box.border_color }),
+                    .@"border-top-width" => put(&set, l.arena, .border_width, .{ .number = box.border }),
                     .@"border-style" => if (l.keyword(n, p)) |kw| {
-                        if (css.eq(kw, "none") or css.eq(kw, "hidden")) r.border = 0 else if (!css.eq(kw, "solid")) l.ds.err(l.c.decls.items(.loc)[d.decl], "border-style: {s} under a state pseudo-class is not lowered; use solid", .{kw});
+                        if (css.eq(kw, "none") or css.eq(kw, "hidden")) put(&set, l.arena, .border_width, .{ .number = 0 }) else if (!css.eq(kw, "solid")) l.ds.err(at, "border-style: {s} under a state pseudo-class or @media is not lowered; use solid", .{kw});
                     },
-                    .@"background-image" => if (l.keyword(n, p)) |kw| {
-                        if (!css.eq(kw, "none")) l.ds.err(l.c.decls.items(.loc)[d.decl], "under a state pseudo-class, background takes a colour", .{});
+                    .@"background-image" => if (params.len > 0) l.ds.err(at, "under a state pseudo-class or @media, background takes a colour", .{}),
+                    .@"border-top-left-radius", .@"border-top-right-radius", .@"border-bottom-right-radius", .@"border-bottom-left-radius" => if (box.radii[0] < 0) put(&set, l.arena, .radius, .{ .number = box.radius }) else put(&set, l.arena, .radii, .{ .vector4 = box.radii }),
+                    .opacity => put(&set, l.arena, .opacity, .{ .number = box.opacity }),
+                    .@"padding-left" => put(&set, l.arena, .padding_left, .{ .number = box.pad[0] }),
+                    .@"padding-top" => put(&set, l.arena, .padding_top, .{ .number = box.pad[1] }),
+                    .@"padding-right" => put(&set, l.arena, .padding_right, .{ .number = box.pad[2] }),
+                    .@"padding-bottom" => put(&set, l.arena, .padding_bottom, .{ .number = box.pad[3] }),
+                    .width => put(&set, l.arena, .width, .{ .size = box.size[0] }),
+                    .height => put(&set, l.arena, .height, .{ .size = box.size[1] }),
+                    .@"min-width" => put(&set, l.arena, .min_width, .{ .number = box.min[0] }),
+                    .@"min-height" => put(&set, l.arena, .min_height, .{ .number = box.min[1] }),
+                    .@"max-width" => put(&set, l.arena, .max_width, .{ .number = box.max[0] }),
+                    .@"max-height" => put(&set, l.arena, .max_height, .{ .number = box.max[1] }),
+                    // The gap along the box's main axis, as its static gap is read.
+                    .@"row-gap", .@"column-gap" => if (p == (if (nodes.items(.style)[x].dir == .x) Prop.@"column-gap" else Prop.@"row-gap")) {
+                        if (l.px(n, p)) |g| put(&set, l.arena, .gap, .{ .number = g });
                     },
-                    else => l.ds.err(l.c.decls.items(.loc)[d.decl], "{s} under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity", .{@tagName(p)}),
+                    .transform => put(&set, l.arena, .transform, .{ .matrix = box.transform }),
+                    .color => if (is_box)
+                        l.ds.err(at, "color under a state pseudo-class or @media on a box would restyle the text inside it; set it on the text's own element", .{})
+                    else if (l.colorOf(n, p)) |c| put(&set, l.arena, .text_color, .{ .color = c }),
+                    .@"box-shadow" => l.ds.err(at, "box-shadow is drawn by a node of its own; it is not lowered under a state pseudo-class or @media yet", .{}),
+                    else => l.ds.err(at, "{s} under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform", .{@tagName(p)}),
                 }
             }
+            if (margin != null) l.ds.err(at, "a margin under a state pseudo-class or @media is not lowered", .{});
+            r.set = set.items;
             ok(rules.append(l.arena, r));
         }
         nodes.items(.recipe)[x] = rules.items;
@@ -808,24 +829,37 @@ pub const Lowerer = struct {
             l.page.nodes.items(.id)[x] = if (l.attr(n, "id")) |id| (if (l.identifier(id, l.valueLoc(n, "id"))) id else "box") else ok(std.fmt.allocPrint(l.arena, "box_{d}", .{x}));
             return .{};
         }
+        // What the widget's own look does not say, as declarations; anything else is an error.
         var st = node.style;
-        var r: ir.RecipeRule = .{};
-        if (st.fill.bitsOf() != node.base_style.fill.bitsOf()) r.fill = st.fill;
-        if (st.border_color.bitsOf() != node.base_style.border_color.bitsOf()) r.border_color = st.border_color;
-        if (st.border != node.base_style.border) r.border = st.border;
-        if (st.opacity != node.base_style.opacity) r.opacity = st.opacity;
-        if (node.kind == .button and node.text_style.color.bitsOf() != node.base_text.color.bitsOf()) r.text_color = node.text_style.color;
-        st.fill = node.base_style.fill;
-        st.border_color = node.base_style.border_color;
-        st.border = node.base_style.border;
-        st.opacity = node.base_style.opacity;
+        const b = node.base_style;
+        var set: std.ArrayList(ir.Set) = .empty;
+        if (st.fill.bitsOf() != b.fill.bitsOf()) put(&set, l.arena, .fill, .{ .color = st.fill });
+        if (st.border_color.bitsOf() != b.border_color.bitsOf()) put(&set, l.arena, .border_color, .{ .color = st.border_color });
+        if (st.border != b.border) put(&set, l.arena, .border_width, .{ .number = st.border });
+        if (st.radius != b.radius) put(&set, l.arena, .radius, .{ .number = st.radius });
+        if (st.opacity != b.opacity) put(&set, l.arena, .opacity, .{ .number = st.opacity });
+        inline for (.{ .padding_left, .padding_top, .padding_right, .padding_bottom }, 0..) |prop, k| if (st.pad[k] != b.pad[k]) put(&set, l.arena, prop, .{ .number = st.pad[k] });
+        if (!std.meta.eql(st.size[0], b.size[0])) put(&set, l.arena, .width, .{ .size = st.size[0] });
+        if (!std.meta.eql(st.size[1], b.size[1])) put(&set, l.arena, .height, .{ .size = st.size[1] });
+        if (st.gap != b.gap) put(&set, l.arena, .gap, .{ .number = st.gap });
+        if (!std.meta.eql(st.transform, b.transform)) put(&set, l.arena, .transform, .{ .matrix = st.transform });
+        if (node.kind == .button and node.text_style.color.bitsOf() != node.base_text.color.bitsOf()) put(&set, l.arena, .text_color, .{ .color = node.text_style.color });
+        st.fill = b.fill;
+        st.border_color = b.border_color;
+        st.border = b.border;
+        st.radius = b.radius;
+        st.opacity = b.opacity;
+        st.pad = b.pad;
+        st.size = b.size;
+        st.gap = b.gap;
+        st.transform = b.transform;
         var ts = node.text_style;
         ts.color = node.base_text.color;
-        if (!std.meta.eql(st, node.base_style) or node.params_expr.len > 0 or node.uses.len > 0 or (node.kind == .button and !std.meta.eql(ts, node.base_text))) {
-            l.ds.err(l.loc(n), "a <{s}> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet", .{l.tag(n)});
+        if (!std.meta.eql(st, b) or node.params_expr.len > 0 or node.uses.len > 0 or (node.kind == .button and !std.meta.eql(ts, node.base_text))) {
+            l.ds.err(l.loc(n), "a <{s}> with state CSS takes colours, border, radius, opacity, padding, gap, size and transform from its CSS; its other properties are not lowered with state rules yet", .{l.tag(n)});
             return null;
         }
-        return r;
+        return .{ .set = set.items };
     }
 
     // ---- the walk -------------------------------------------------------------------------
@@ -4741,6 +4775,18 @@ const counter_styles = blk: {
         .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } }, "lcgf.text_counters.Style{ .system = .{ .alphabetic = &.{ \"\\u{3B1}\", \"\\u{3B2}\", \"\\u{3B3}\", \"\\u{3B4}\", \"\\u{3B5}\", \"\\u{3B6}\", \"\\u{3B7}\", \"\\u{3B8}\", \"\\u{3B9}\", \"\\u{3BA}\", \"\\u{3BB}\", \"\\u{3BC}\", \"\\u{3BD}\", \"\\u{3BE}\", \"\\u{3BF}\", \"\\u{3C0}\", \"\\u{3C1}\", \"\\u{3C3}\", \"\\u{3C4}\", \"\\u{3C5}\", \"\\u{3C6}\", \"\\u{3C7}\", \"\\u{3C8}\", \"\\u{3C9}\" } } }" },
     };
 };
+/// `set` with `property` taking `value`, kept in `style.Property` order: a later declaration
+/// of the same rule replaces an earlier one.
+fn put(set: *std.ArrayList(ir.Set), arena: std.mem.Allocator, property: lcgf.style.Property, value: lcgf.style.Value) void {
+    for (set.items) |*d| if (d.property == property) {
+        d.value = value;
+        return;
+    };
+    var at: usize = set.items.len;
+    while (at > 0 and @backingInt(set.items[at - 1].property) > @backingInt(property)) at -= 1;
+    set.insert(arena, at, .{ .property = property, .value = value }) catch @panic("out of memory");
+}
+
 /// The state pseudo-classes lowered onto recipe rules, and their `style.States` fields.
 const Conditions = lcgf.style.environment.Conditions;
 

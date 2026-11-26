@@ -195,19 +195,18 @@ pub const Placed = struct {
 };
 
 /// One rule of a widget's recipe: the states and environment it requires (none for the
-/// widget's static CSS) and the values it sets; null sets nothing.
+/// widget's static CSS) and the declarations it makes, in order.
 pub const RecipeRule = struct {
     require: lcgf.style.States = .{},
     /// `:enabled` forbids `disabled`.
     forbid: lcgf.style.States = .{},
     /// `@media` around the rule, as the environment conditions the recipe matches.
     when: lcgf.style.environment.Conditions = .{},
-    fill: ?lcgf.types.Color = null,
-    text_color: ?lcgf.types.Color = null,
-    border_color: ?lcgf.types.Color = null,
-    border: ?f32 = null,
-    opacity: ?f32 = null,
+    set: []const Set = &.{},
 };
+
+/// `style.set(property, value)`.
+pub const Set = struct { property: lcgf.style.Property, value: lcgf.style.Value };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as
 /// `.f` in the spec, its value in a region) or a field of the region's item (`{x.f}`).
