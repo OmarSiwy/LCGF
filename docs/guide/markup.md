@@ -397,6 +397,13 @@ box's. The recipes read the page's theme as tokens (`recipe_tokens`), so a recip
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.
 
+`@media` around a rule that styles such a widget makes it one too: the rule's recipe rule
+gets environment conditions (`Rule.when`) that the recipe matches every frame, so resizing
+the window restyles it. A query is `[only] screen` or `all` and features joined by `and`:
+`min-`/`max-width`, `min-`/`max-height` (px or em), `orientation`, `prefers-color-scheme`,
+`prefers-reduced-motion` and `prefers-contrast`; nested queries combine. `@media` on other
+boxes waits for style variants (engine spec F3) and is an error.
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

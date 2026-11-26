@@ -7,24 +7,33 @@ states.html:3:8: error: state pseudo-classes (:hover, :checked, …) are not low
 states.html:4:7: error: unknown pseudo-class :hovr
   span:hovr { color: red; }
       ^
-states.html:9:14: error: :focus inside :not(), :is(), :where() or :has() is not lowered yet
+states.html:12:14: error: :focus inside :not(), :is(), :where() or :has() is not lowered yet
   button:not(:focus) { color: red; }
              ^
 states.html:5:3: error: ::before is not lowered yet
   p::before { content: "x"; }
   ^
-states.html:6:3: error: @media rules are not lowered yet
+states.html:7:10: error: @media print is not lowered; a query is [only] screen or all, then (feature) joined by and
+  @media print { button { color: red; } }
+         ^
+states.html:8:11: error: media feature 'hover' is not lowered; use min-/max-width, min-/max-height, orientation, prefers-color-scheme, prefers-reduced-motion or prefers-contrast
+  @media (hover: hover) { button { color: red; } }
+          ^
+states.html:9:26: error: a media query list is not lowered; write one @media per query
+  @media (min-width: 1px), (max-width: 2px) { button { color: red; } }
+                         ^
+states.html:6:31: error: @media on <p> is not lowered: it restyles a <button>, a checkbox or a switch outside lcgf-each; other boxes need style variants (engine spec F3)
   @media (min-width: 600px) { p { gap: 2px; } }
-  ^
-states.html:7:3: error: state CSS on <p> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)
+                              ^
+states.html:10:3: error: state CSS on <p> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)
   p:hover { color: red; }
   ^
-states.html:8:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles
+states.html:11:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles
   div:hover button { color: red; }
      ^
-states.html:10:15: error: width under a state pseudo-class is not lowered; a state rule sets background-color, color, border-color, border-width, border-style or opacity
+states.html:13:15: error: width under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity
   #go:hover { width: 10px; }
               ^
-states.html:14:47: error: a <button> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet
+states.html:17:47: error: a <button> with state CSS takes background-color, color, border and opacity from its CSS; its other properties are not lowered with state rules yet
 <body><p>x</p><div><button id="go">Go</button><button id="wide">Wide</button></div></body>
                                               ^

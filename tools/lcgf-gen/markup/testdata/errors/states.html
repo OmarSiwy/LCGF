@@ -4,6 +4,9 @@
   span:hovr { color: red; }
   p::before { content: "x"; }
   @media (min-width: 600px) { p { gap: 2px; } }
+  @media print { button { color: red; } }
+  @media (hover: hover) { button { color: red; } }
+  @media (min-width: 1px), (max-width: 2px) { button { color: red; } }
   p:hover { color: red; }
   div:hover button { color: red; }
   button:not(:focus) { color: red; }

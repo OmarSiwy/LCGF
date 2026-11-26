@@ -736,6 +736,10 @@ pub const Emit = struct {
             e.write(", .require = ");
             e.structure(r.require, .{});
         }
+        if (!std.meta.eql(r.when, lcgf.style.environment.Conditions{})) {
+            e.write(", .when = ");
+            e.structure(r.when, .{});
+        }
         e.print(", .declarations = &.{{{s} }} }},\n", .{decls.items});
     }
 

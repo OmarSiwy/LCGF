@@ -262,7 +262,7 @@
         .{ .kind = "at-rule", .name = "@import", .status = .mapped, .target = "build time, depfile entry", .fixture = "counter" },
         .{ .kind = "at-rule", .name = "@font-face", .status = .mapped, .target = "pub const fonts: font_match.Face rows (family, weight, style, a vendored url()), depfile entry", .fixture = "fonts" },
         .{ .kind = "at-rule", .name = "@layer", .status = .mapped, .target = "cascade order", .fixture = "landmarks" },
-        .{ .kind = "at-rule", .name = "@media", .status = .planned, .diagnostic = "@media rules are not lowered yet", .spec = "F3" },
+        .{ .kind = "at-rule", .name = "@media", .status = .mapped, .target = "on a button, checkbox or switch: the recipe rule's .when (min-/max-width, min-/max-height, orientation, prefers-color-scheme, prefers-reduced-motion, prefers-contrast); other boxes wait for style variants (F3)", .fixture = "media" },
         .{ .kind = "custom-property", .name = "--x", .status = .mapped, .target = "build-time var() substitution", .fixture = "landmarks" },
         .{ .kind = "custom-property", .name = "--t-*", .applies_to = "runtime", .status = .mapped, .target = "--runtime-vars=t-: a field of Tokens, read from the caller's ThemeTable (theme/table.zig) while the runtime page builds", .fixture = "tokens" },
         .{ .kind = "custom-property", .name = "--t-*", .applies_to = "spec", .status = .mapped, .target = "--runtime-vars=t-: spec.tokened(s, uses) with the CSS defaults in the Spec; ComptimeUiTokens(State, spec, theme, Tokens) pushes the rows from ui.tokens", .fixture = "tokens" },
@@ -305,5 +305,6 @@
         .{ .name = "inline" },
         .{ .name = "states" },
         .{ .name = "supports" },
+        .{ .name = "media" },
     },
 }

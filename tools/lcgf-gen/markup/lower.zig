@@ -512,30 +512,114 @@ pub const Lowerer = struct {
             l.noted[x.decl] = true;
             l.ds.err(l.c.decls.items(.loc)[x.decl], "custom property '{s}' on ::backdrop is not lowered; declare it on the <dialog>", .{l.c.decls.items(.name)[x.decl]});
         };
+        // Every query is checked here, whether or not it matches anything (stateRules).
         for (l.c.conds.items) |cnd| if (cnd.kind == .media) {
-            _ = l.refused("at-rule", "@media", "", cnd.loc);
+            var out: Conditions = .{};
+            _ = l.mediaQuery(cnd, &out);
         };
         for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
 
     // ---- state CSS ------------------------------------------------------------------------
 
-    /// Widgets with state CSS (`button:hover`) become recipe widgets (plan §2.3): every
-    /// state rule that matches one is a recipe rule over the states of its subject.
+    /// Widgets with state CSS (`button:hover`) or `@media` rules become recipe widgets (plan
+    /// §2.3): every such rule that matches one is a recipe rule over the states of its
+    /// subject and the conditions of its queries.
     fn stateRules(l: *Lowerer) void {
         var reported: std.AutoHashMapUnmanaged(u32, void) = .empty;
         const dyn = l.k.dynamic.items;
         for (dyn, 0..) |d, i| {
-            if (d.cond != none) continue; // @media, refused in checkDeclarations
             const first = for (dyn[0..i]) |e| {
-                if (e.node == d.node and e.cond == none) break false;
+                if (e.node == d.node) break false;
             } else true;
             if (first) l.recipeOf(d.node, &reported);
         }
     }
 
+    /// The environment conditions of `@media` `cond` and those around it; null after an error.
+    fn mediaConditions(l: *Lowerer, cond: u32) ?Conditions {
+        var out: Conditions = .{};
+        var x = cond;
+        while (x != none) : (x = l.c.conds.items[x].parent) {
+            if (l.c.conds.items[x].kind == .media and !l.mediaQuery(l.c.conds.items[x], &out)) return null;
+        }
+        return out;
+    }
+
+    /// One media query into `out`: `[only] screen|all and (feature)…`. Viewport ranges in px,
+    /// `orientation`, `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`;
+    /// false after an error.
+    fn mediaQuery(l: *Lowerer, cnd: css.Cond, out: *Conditions) bool {
+        const ty = l.c.toks.items(.type);
+        const str = l.c.toks.items(.str);
+        var t = cnd.first;
+        var after_feature = false;
+        while (t < cnd.end) {
+            if (ty[t] == .whitespace) {
+                t += 1;
+                continue;
+            }
+            if (ty[t] == .comma) {
+                l.ds.err(l.c.tokLoc(t), "a media query list is not lowered; write one @media per query", .{});
+                return false;
+            }
+            if (ty[t] == .ident) {
+                const w = str[t];
+                if (css.eq(w, "and") or css.eq(w, "only") or css.eq(w, "screen") or css.eq(w, "all")) {
+                    t += 1;
+                    after_feature = false;
+                    continue;
+                }
+                l.ds.err(l.c.tokLoc(t), "@media {s} is not lowered; a query is [only] screen or all, then (feature) joined by and", .{w});
+                return false;
+            }
+            if (ty[t] != .l_parenthesis or after_feature) {
+                l.ds.err(l.c.tokLoc(t), "expected 'and' and a media feature in parentheses", .{});
+                return false;
+            }
+            const close = values.closeOf(l.c, t, cnd.end);
+            if (!l.mediaFeature(t + 1, close - 1, out)) return false;
+            t = close;
+            after_feature = true;
+        }
+        return true;
+    }
+
+    fn mediaFeature(l: *Lowerer, a: u32, b: u32, out: *Conditions) bool {
+        var r: values.Reader = .init(l.c, a, b);
+        const name_t = r.next() orelse a;
+        const name = values.ident(l.c, name_t) orelse "";
+        var colon = r.i;
+        while (colon < b and l.c.toks.items(.type)[colon] != .colon) colon += 1;
+        var v: values.Reader = .init(l.c, @min(colon + 1, b), b);
+        const value_t = v.next();
+        const at = l.c.tokLoc(name_t);
+        inline for (.{ .{ "min-width", "width", "min" }, .{ "max-width", "width", "max" }, .{ "min-height", "height", "min" }, .{ "max-height", "height", "max" } }) |f| if (css.eq(name, f[0])) {
+            const len = if (value_t) |vt| values.len(l.c, vt) else null;
+            const x = if (len) |ln| values.px(ln, 16, 16) else null;
+            if (x == null) {
+                l.ds.err(at, "{s} takes a length in px or em", .{name});
+                return false;
+            }
+            const range = &@field(out, f[1]);
+            if (comptime std.mem.eql(u8, f[2], "min")) range.min = @max(range.min, x.?) else range.max = @min(range.max, x.?);
+            return true;
+        };
+        const kw = if (value_t) |vt| values.ident(l.c, vt) orelse "" else "";
+        inline for (.{ .{ "orientation", "portrait", "portrait", "landscape" }, .{ "prefers-color-scheme", "dark", "dark", "light" }, .{ "prefers-reduced-motion", "reduced_motion", "reduce", "no-preference" }, .{ "prefers-contrast", "high_contrast", "more", "no-preference" } }) |f| if (css.eq(name, f[0])) {
+            if (css.eq(kw, f[2]) or css.eq(kw, f[3])) {
+                @field(out, f[1]) = css.eq(kw, f[2]);
+                return true;
+            }
+            l.ds.err(at, "{s} takes {s} or {s}", .{ name, f[2], f[3] });
+            return false;
+        };
+        l.ds.err(at, "media feature '{s}' is not lowered; use min-/max-width, min-/max-height, orientation, prefers-color-scheme, prefers-reduced-motion or prefers-contrast", .{name});
+        return false;
+    }
+
     /// The states selector `sel` requires of its subject, or null after an error.
-    fn subjectStates(l: *Lowerer, sel: u32) ?lcgf.style.States {
+    fn subjectStates(l: *Lowerer, sel: u32, media: bool) ?lcgf.style.States {
         const first = l.c.sels.items(.first)[sel];
         const last = first + l.c.sels.items(.count)[sel] - 1;
         var st: lcgf.style.States = .{};
@@ -559,8 +643,9 @@ pub const Lowerer = struct {
                 any = true;
             }
         }
-        // None: the state is inside :is() and its kin, refused in checkDeclarations.
-        return if (any) st else null;
+        // None: the state is inside :is() and its kin, refused in checkDeclarations; or the
+        // rule is under @media alone.
+        return if (any or media) st else null;
     }
 
     /// The recipe rules of document node `n`: its static CSS, then each state declaration
@@ -574,10 +659,14 @@ pub const Lowerer = struct {
             else => false,
         };
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
-        for (l.k.dynamic.items) |d| if (d.node == n and d.cond == none) ok(entries.append(l.arena, d));
+        for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
         if (!fits) {
-            for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing)
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "state CSS on <{s}> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)", .{l.tag(n)});
+            for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
+                if (l.hasState(d.sel))
+                    l.ds.err(l.c.sels.items(.loc)[d.sel], "state CSS on <{s}> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)", .{l.tag(n)})
+                else
+                    l.ds.err(l.c.sels.items(.loc)[d.sel], "@media on <{s}> is not lowered: it restyles a <button>, a checkbox or a switch outside lcgf-each; other boxes need style variants (engine spec F3)", .{l.tag(n)});
+            };
             return;
         }
         std.mem.sort(cascade.Dynamic, entries.items, {}, struct {
@@ -592,11 +681,12 @@ pub const Lowerer = struct {
         defer @memcpy(row_, saved);
         var last_sel: u32 = none;
         for (entries.items) |d| {
-            const st = l.subjectStates(d.sel) orelse continue;
+            const st = l.subjectStates(d.sel, d.cond != none) orelse continue;
+            const when = if (d.cond == none) Conditions{} else l.mediaConditions(d.cond) orelse continue;
             // The declaration alone in the row, so the value readers see only it.
             @memset(row_, .{});
             cascade.apply(l.k, l.k.table, l.c, n, d.decl, d.key);
-            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st };
+            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st, .when = when };
             last_sel = d.sel;
             for (row_, saved, 0..) |e, was, p_| {
                 if (e.decl == none or (was.decl != none and was.key > e.key)) continue;
@@ -613,12 +703,21 @@ pub const Lowerer = struct {
                     .@"background-image" => if (l.keyword(n, p)) |kw| {
                         if (!css.eq(kw, "none")) l.ds.err(l.c.decls.items(.loc)[d.decl], "under a state pseudo-class, background takes a colour", .{});
                     },
-                    else => l.ds.err(l.c.decls.items(.loc)[d.decl], "{s} under a state pseudo-class is not lowered; a state rule sets background-color, color, border-color, border-width, border-style or opacity", .{@tagName(p)}),
+                    else => l.ds.err(l.c.decls.items(.loc)[d.decl], "{s} under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity", .{@tagName(p)}),
                 }
             }
             ok(rules.append(l.arena, r));
         }
         nodes.items(.recipe)[x] = rules.items;
+    }
+
+    fn hasState(l: *const Lowerer, sel: u32) bool {
+        const first = l.c.sels.items(.first)[sel];
+        for (first..first + l.c.sels.items(.count)[sel]) |comp| {
+            const f = l.c.comps.items(.first)[comp];
+            for (f..f + l.c.comps.items(.count)[comp]) |i| if (l.c.simples.items(.kind)[i] == .state) return true;
+        }
+        return false;
     }
 
     /// The recipe rule of IR node `x`'s static CSS: what its style sets over the widget's own.
@@ -4554,6 +4653,8 @@ const counter_styles = blk: {
     };
 };
 /// The state pseudo-classes lowered onto recipe rules, and their `style.States` fields.
+const Conditions = lcgf.style.environment.Conditions;
+
 const state_bits = .{ .{ "hover", "hovered" }, .{ "active", "held" }, .{ "focus", "focused" }, .{ "focus-visible", "focus_visible" }, .{ "checked", "checked" } };
 
 /// The state pseudo-classes of plan §2.3, resolved at run time (style.States).

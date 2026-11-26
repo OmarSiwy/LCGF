@@ -190,10 +190,12 @@ pub const Placed = struct {
     below: i16 = 0,
 };
 
-/// One rule of a widget's recipe: the states it requires (none for the widget's static CSS)
-/// and the values it sets; null sets nothing.
+/// One rule of a widget's recipe: the states and environment it requires (none for the
+/// widget's static CSS) and the values it sets; null sets nothing.
 pub const RecipeRule = struct {
     require: lcgf.style.States = .{},
+    /// `@media` around the rule, as the environment conditions the recipe matches.
+    when: lcgf.style.environment.Conditions = .{},
     fill: ?lcgf.types.Color = null,
     text_color: ?lcgf.types.Color = null,
     border_color: ?lcgf.types.Color = null,
