@@ -252,11 +252,10 @@ pub fn clipsContain(t: anytype, node: u32, screen: [2]f32) bool {
 /// One coarse decision keeps rectangular trees on their existing SIMD hit path.
 /// Every extras row is read, with no early exit: the loop's jumps are its bound alone.
 pub fn needsExactHit(t: anytype) bool {
-    const V6 = @Vector(6, f32);
     var exact = false;
     for (1..t.xlen) |r| {
         const extra = t.x.row[r];
-        const moved = !@reduce(.And, @as(V6, extra.transform) == @as(V6, identity));
+        const moved = !isIdentity(extra.transform);
         const rounded = (t.c.clips[t.x.node[r]] != 0) & @reduce(.Or, @as(V4, extra.radii) > @as(V4, @splat(0)));
         exact = exact | moved | rounded;
     }
