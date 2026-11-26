@@ -177,7 +177,7 @@
         .{ .kind = "property", .name = "position", .status = .mapped, .target = "relative -> Style.transform translate; absolute -> float + offset, or spec.anchored with right/bottom; fixed -> spec.anchored to the viewport; sticky + top -> spec.sticky (F17)", .fixture = "landmarks" },
         .{ .kind = "property", .name = "right", .status = .mapped, .target = "absolute/fixed: spec.anchored at the right edge (overlay.Place); relative: Style.transform; left and right 0 with no width -> width 100%", .fixture = "positioned" },
         .{ .kind = "property", .name = "bottom", .status = .mapped, .target = "as right, on the bottom edge", .fixture = "positioned" },
-        .{ .kind = "property", .name = "z-index", .status = .mapped, .target = "spec.layer(s, z) (overlay.Layers, paint.emitLayered) on a positioned box: auto, 0 to 255; negative is an error", .fixture = "positioned" },
+        .{ .kind = "property", .name = "z-index", .status = .mapped, .target = "spec.layer(s, N + 1) (overlay.Layers, paint.emitLayered) on a positioned box, N 0 to 254; auto is layer 1 on fixed and sticky boxes, 0 otherwise; hits follow paint order", .fixture = "positioned" },
         .{ .kind = "property", .name = "transform", .status = .mapped, .target = "one affine Style.transform", .fixture = "landmarks" },
         .{ .kind = "property", .name = "opacity", .status = .mapped, .target = "Style.opacity", .fixture = "landmarks" },
         .{ .kind = "property", .name = "visibility", .status = .mapped, .target = "Participation.hidden", .fixture = "landmarks" },

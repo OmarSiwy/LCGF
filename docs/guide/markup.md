@@ -308,8 +308,10 @@ floats the box at its parent's content box: `top`/`left` are its offset, `right`
 anchor it to that edge (`spec.anchored`), and `left: 0; right: 0` with no width makes it as
 wide as the parent (`top`/`bottom` alike). `fixed` anchors the box to the viewport. `sticky`
 with `top` holds the box that far below the top of the viewport (`spec.sticky`); scroll
-containers are not lowered yet. `z-index` from 0 to 255 on a positioned box paints it and its
-subtree above every lower layer (`spec.layer`); hit testing still follows the tree order.
+containers are not lowered yet. Fixed and sticky boxes paint above the in-flow ones, and
+`z-index` N from 0 to 254 on a positioned box paints it and its subtree above that, in layer
+N + 1 (`spec.layer`); absolute and relative boxes with `z-index: auto` keep tree order. Clicks
+go to the widget painted on top.
 
 A `<table>` is a grid of `fit` columns, one per cell of its widest row. Each `<tr>` is a row
 grid that shares the table's columns (`grid.Decl.subgrid`), so the cells line up and the row

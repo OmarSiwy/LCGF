@@ -21,10 +21,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         // position: relative; right: 5px; bottom: 2px.
         s.styled(label.ct.label(theme, "Title"), .{ .transform = .{ 1, 0, 0, 1, -5, -2 }, .role = .label }),
         // inset 0: as large as the parent's content box.
-        s.layer(s.col(.{ .size = .{ .pct(1), .pct(1) }, .float = true, .fill = .rgba(0, 0, 0, 0x40) }, .{}), 1),
-        s.layer(s.anchored(floating("3", .{ .fill = .rgb(0xc0, 0x30, 0x30) }), .{ .at = .top_right, .pivot = .top_right, .offset = .{ -4, 4 } }), 2),
+        s.layer(s.col(.{ .size = .{ .pct(1), .pct(1) }, .float = true, .fill = .rgba(0, 0, 0, 0x40) }, .{}), 2),
+        s.layer(s.anchored(floating("3", .{ .fill = .rgb(0xc0, 0x30, 0x30) }), .{ .at = .top_right, .pivot = .top_right, .offset = .{ -4, 4 } }), 3),
         s.anchored(floating("More", .{}), .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -8, -6 } }),
     }),
-    s.sticky(label.ct.label(theme, "Section"), 140),
-    s.layer(s.anchored(floating("Saved", .{ .pad = @splat(4), .fill = .rgb(0x20, 0x50, 0x30) }), .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -10, -10 }, .viewport = true }), 3),
+    // Fixed and sticky boxes sit above the in-flow ones; z-index N is layer N + 1.
+    s.layer(s.sticky(label.ct.label(theme, "Section"), 140), 1),
+    s.layer(s.anchored(floating("Saved", .{ .pad = @splat(4), .fill = .rgb(0x20, 0x50, 0x30) }), .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -10, -10 }, .viewport = true }), 4),
 });

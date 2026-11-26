@@ -17,5 +17,5 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.col(.{}, .{s.flexed(label.ct.label(theme, "One"), .{ .margin = .{ 5, 0, 0, 0 } })}),
         label.ct.label(theme, "Two"),
     }), .{ .margin = .{ 10, 8, 0, 0 } }),
-    s.flexed(s.layer(s.anchored(s.styled(label.ct.label(theme, "Note"), .{ .float = true, .role = .label }), .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -4, -4 } }), 1), .{ .margin = .{ 2, 2, 2, 2 } }),
+    s.flexed(s.layer(s.anchored(s.styled(label.ct.label(theme, "Note"), .{ .float = true, .role = .label }), .{ .at = .bottom_right, .pivot = .bottom_right, .offset = .{ -4, -4 } }), 2), .{ .margin = .{ 2, 2, 2, 2 } }),
 });

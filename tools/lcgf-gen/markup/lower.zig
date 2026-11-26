@@ -1690,7 +1690,12 @@ pub const Lowerer = struct {
         l.placed = .{};
         const kw = l.keyword(n, .position) orelse "static";
         const positioned = !css.eq(kw, "static");
-        if (l.declared(n, .@"z-index")) |v| if (l.zIndex(n, v)) |z| {
+        // Stacking layers: a fixed or sticky box sits above the in-flow boxes (CSS's positioned
+        // level), and z-index N above that (N + 1). Absolute and relative boxes with z-index
+        // auto keep tree order.
+        const raised = css.eq(kw, "fixed") or css.eq(kw, "sticky");
+        l.placed.layer = @intFromBool(raised);
+        if (l.declared(n, .@"z-index")) |v| if (l.zIndex(v, raised)) |z| {
             if (!positioned) l.ds.err(v.loc, "z-index applies to a positioned box (position: relative, absolute, fixed or sticky)", .{});
             l.placed.layer = z;
         };
@@ -1737,10 +1742,10 @@ pub const Lowerer = struct {
         l.placed.anchor = .{ .at = corner, .pivot = corner, .offset = offset, .viewport = fixed };
     }
 
-    /// A `z-index` as a stacking layer: `auto` and 0 to 255.
-    fn zIndex(l: *Lowerer, n: u32, v: Value) ?u8 {
-        _ = n;
-        if (v.end - v.first == 1 and values.isIdent(l.c, v.first, "auto")) return 0;
+    /// A `z-index` as a stacking layer: `auto` is the box's own level (1 for fixed and sticky),
+    /// N from 0 to 254 is layer N + 1.
+    fn zIndex(l: *Lowerer, v: Value, raised: bool) ?u8 {
+        if (v.end - v.first == 1 and values.isIdent(l.c, v.first, "auto")) return @intFromBool(raised);
         const ty = l.c.toks.items(.type)[v.first];
         const x = l.c.toks.items(.num)[v.first];
         if (v.end - v.first != 1 or ty != .number or x != @floor(x)) {
@@ -1751,11 +1756,11 @@ pub const Lowerer = struct {
             l.ds.err(v.loc, "a negative z-index is not supported; raise the boxes in front instead", .{});
             return null;
         }
-        if (x > 255) {
-            l.ds.err(v.loc, "z-index above 255 is not supported (one byte of stacking layers)", .{});
+        if (x > 254) {
+            l.ds.err(v.loc, "z-index above 254 is not supported (one byte of stacking layers)", .{});
             return null;
         }
-        return @intFromFloat(x);
+        return @as(u8, @intFromFloat(x)) + 1;
     }
 
     fn transform(l: *Lowerer, n: u32, s: *Style) void {
