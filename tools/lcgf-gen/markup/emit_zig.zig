@@ -24,6 +24,8 @@ pub const Emit = struct {
     runtime: bool = false,
     /// The events of the run-time region being written (`events_<id>`).
     events_var: []const u8 = "events",
+    /// Where a styled label records its texts row: the page's rows, or its region's.
+    para_var: []const u8 = "ui.paragraphs",
     /// What owns a region's text editors (`edit_<id>`): the comptime `Page` (`p`) or the
     /// runtime `Ui` (`ui`).
     owner: []const u8 = "p",
@@ -687,6 +689,7 @@ pub const Emit = struct {
                 e.write("\npub const Ui = w.ComptimeUiTokens(State, spec, theme, Tokens);\npub const Widget = Ui.Events.Widget;\n\n")
             else
                 e.write("\npub const Ui = w.ComptimeUi(State, spec, theme);\npub const Widget = Ui.Events.Widget;\n\n");
+            if (e.anyRegionStyled()) e.styledTables();
             e.write(rt.items);
         }
         e.checkBlock();
@@ -812,7 +815,7 @@ pub const Emit = struct {
                 e.write(", ");
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                 e.write(");");
-                if (styled(n)) e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(n)});
+                if (styled(n)) e.print(" {s}.rows[{s}.len] = f.texts().len - 1; {s}.styles[{s}.len] = {d}; {s}.len += 1;", .{ e.para_var, e.para_var, e.para_var, e.para_var, e.paragraphIndex(n), e.para_var });
                 return "";
             },
             .button, .link => {
@@ -1254,33 +1257,7 @@ pub const Emit = struct {
     /// `build(ui, f)`, which builds the page into a runtime `Frame` and records its events.
     fn runtimeUi(e: *Emit) void {
         const tokens = e.page.tokens.items;
-        if (e.paragraphTable().len > 0) {
-            e.write("\n/// The page's paragraph styles, indexed by `Ui.paragraphs.styles`.\nconst paragraph_table = [_]lcgf.text_stack.Paragraph{");
-            for (e.paragraphTable()) |pa| {
-                e.write(" ");
-                e.paragraph(pa.paragraph);
-                e.write(",");
-            }
-            e.write(" };\n");
-        }
-        if (e.anySpans()) {
-            e.write("/// Their style runs, row for row.\nconst span_table = [_][]const lcgf.protocol.Span{");
-            for (e.paragraphTable()) |pa| {
-                e.write(" ");
-                e.spanList(pa.spans);
-                e.write(",");
-            }
-            e.write(" };\n");
-        }
-        if (e.anyDecoration()) {
-            e.write("/// Their decorations, row for row.\nconst decoration_table = [_]lcgf.text_decorations.Style{");
-            for (e.paragraphTable()) |pa| {
-                e.write(" ");
-                e.decoration(pa.decoration);
-                e.write(",");
-            }
-            e.write(" };\n");
-        }
+        e.styledTables();
         e.owner = "ui";
         e.write(
             \\
@@ -1345,15 +1322,6 @@ pub const Emit = struct {
             \\    paragraphs: struct { rows: [limits.texts]u32 = undefined, styles: [limits.texts]u16 = undefined, len: u32 = 0 } = .{},
             \\
         );
-        if (paragraphs) e.print(
-            \\    /// This frame's styled runs, for a host with a real shaper: `f.endTextStyled(stack,
-            \\    /// ascent, ui.styled(), rows, rects)` in place of `end`.
-            \\    pub fn styled(ui: *const Ui) lcgf.protocol.Styled {{
-            \\        return {s};
-            \\    }}
-            \\
-            \\
-        , .{e.styledExpr()});
         const regions = e.hasRegions();
         if (regions) e.print(
             \\    /// Tree rows of the page's regions as this frame built them (none for one it did not
@@ -1436,6 +1404,15 @@ pub const Emit = struct {
             \\
             \\
         );
+        if (paragraphs) e.print(
+            \\    /// This frame's styled runs, for a host with a real shaper: `f.endTextStyled(stack,
+            \\    /// ascent, ui.styled(), rows, rects)` in place of `end`.
+            \\    pub fn styled(ui: *const Ui) lcgf.protocol.Styled {{
+            \\        return {s};
+            \\    }}
+            \\
+            \\
+        , .{e.styledExpr()});
         e.write(if (regions) "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame, data: anytype) void {\n" else "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame) void {\n");
         e.write("        ui.events = .{};\n");
         for (0..e.page.nodes.len) |i| if (e.page.nodes.items(.kind)[i] == .each and e.regionEvents(@intCast(i)).len > 0)
@@ -1716,6 +1693,49 @@ pub const Emit = struct {
         e.write(if (spans.len > 0) " }" else "}");
     }
 
+    /// The page's style table (paragraphs, and spans and decorations when any label has
+    /// them), at file scope.
+    fn styledTables(e: *Emit) void {
+        if (e.paragraphTable().len > 0) {
+            e.write("\n/// The page's paragraph styles, indexed by `Ui.paragraphs.styles`.\nconst paragraph_table = [_]lcgf.text_stack.Paragraph{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.paragraph(pa.paragraph);
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
+        if (e.anySpans()) {
+            e.write("/// Their style runs, row for row.\nconst span_table = [_][]const lcgf.protocol.Span{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.spanList(pa.spans);
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
+        if (e.anyDecoration()) {
+            e.write("/// Their decorations, row for row.\nconst decoration_table = [_]lcgf.text_decorations.Style{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.decoration(pa.decoration);
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
+    }
+
+    /// Whether a styled label is inside region `each`, which then keeps its own rows.
+    fn regionStyled(e: *Emit, each: u32) bool {
+        for (0..e.page.nodes.len) |i| if (styled(e.page.nodes.get(i)) and e.eachOf(@intCast(i)) == each) return true;
+        return false;
+    }
+
+    fn anyRegionStyled(e: *Emit) bool {
+        for (0..e.page.nodes.len) |i| if (e.page.nodes.items(.kind)[i] == .each and e.regionStyled(@intCast(i))) return true;
+        return false;
+    }
+
     /// The page's `protocol.Styled` over `ui.paragraphs`.
     fn styledExpr(e: *Emit) []const u8 {
         return std.fmt.allocPrint(e.arena, ".{{ .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s}{s} }}", .{
@@ -1954,6 +1974,11 @@ pub const Emit = struct {
                 \\        {s}_measure: ?lcgf.context.Context = null,
                 \\
             , .{ n.id, n.id, n.id, n.id });
+            if (e.regionStyled(@intCast(i))) e.print(
+                \\        /// The region's labels with a paragraph style, decoration or inline runs this frame.
+                \\        {s}_paragraphs: struct {{ rows: [{s}_limits.texts]u32 = undefined, styles: [{s}_limits.texts]u16 = undefined, len: u32 = 0 }} = .{{}},
+                \\
+            , .{ n.id, n.id, n.id });
             decls.print(e.arena, "        const {s}_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};\n", .{ n.id, n.max, @as(u32, @intFromFloat(n.range[0])) }) catch unreachable;
             rows.print(e.arena, " + {s}_limits.nodes", .{n.id}) catch unreachable;
             e.editorFields(@intCast(i), "        ");
@@ -2054,10 +2079,14 @@ pub const Emit = struct {
         e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}{s}\n", .{ n.text, n.bind, e.where(n.loc), if (measure) ", measured" else "" });
         if (!measure) e.eachChecks(each, "                ");
         // The copies' statements first: they name `ui` only when they read the view state.
+        const region_styled = !e.runtime and e.regionStyled(each);
+        const para_var = std.fmt.allocPrint(e.arena, "p.{s}_paragraphs", .{n.id}) catch unreachable;
+        if (region_styled) e.para_var = para_var;
         const owner = e.owner;
         if (measure) e.owner = "measure";
         const body = e.eachLoop(each);
         e.owner = owner;
+        e.para_var = "ui.paragraphs";
         if (measure) {
             // What the body writes, kept from the Page: the editors' state, copied. Its events
             // are the frame's, which a measure with no input never sets.
@@ -2093,8 +2122,19 @@ pub const Emit = struct {
             \\                const fx = &p.{s}_flex.?;
             \\
         , .{ n.id, n.id, n.id, n.id, n.id });
+        if (region_styled) e.print("                {s}.len = 0;\n", .{para_var});
         e.write(body);
-        const end = if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})";
+        // Styled labels end through the paragraph forms, flex rules through the flex ones.
+        const end = if (region_styled) std.fmt.allocPrint(e.arena, "f.{s}(.{{ .rows = {s}.rows[0..{s}.len], .styles = {s}.styles[0..{s}.len], .table = &paragraph_table{s}{s} }}{s})", .{
+            if (flex) "endFlexParagraphs" else "endParagraphs",
+            para_var,
+            para_var,
+            para_var,
+            para_var,
+            if (e.anyDecoration()) ", .decorations = &decoration_table" else "",
+            if (e.anySpans()) ", .spans = &span_table" else "",
+            if (flex) ", fx" else "",
+        }) catch unreachable else if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})";
         if (measure) e.print(
             \\                // The content's size before snapping, for the page's layout, so the page
             \\                // around it lays out as it would around the content itself.

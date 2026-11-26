@@ -1,6 +1,7 @@
 //! palette, written by hand: a region sized by its content (E1), for menus and palette results.
 //! The comptime layout runs before the items exist; the page builds the region, keeps the size
-//! its content measured, and lays itself out again around it in the same frame.
+//! its content measured, and lays itself out again around it in the same frame. Each hit's
+//! hint is a styled label (30 px lines, underlined): the measure ends through the paragraph forms.
 
 const std = @import("std");
 const lcgf = @import("lcgf");

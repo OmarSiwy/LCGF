@@ -2182,14 +2182,6 @@ pub const Lowerer = struct {
     fn checkRegions(l: *Lowerer) void {
         const kinds = l.page.nodes.items(.kind);
         const parents = l.page.nodes.items(.parent);
-        // A run-time region builds in a Context of its own, without the page's paragraph rows.
-        for (l.page.nodes.items(.paragraph), l.page.nodes.items(.decoration), l.page.nodes.items(.spans), 0..) |pa, de, sp, i| if (pa != null or de != null or sp.len > 0) {
-            var p = parents[i];
-            while (p != none) : (p = parents[p]) if (kinds[p] == .each) {
-                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles, text decorations and inline runs inside lcgf-each are not supported yet", .{});
-                break;
-            };
-        };
         for (kinds, 0..) |k, i| {
             if (k != .when and k != .list) continue;
             var children: u32 = 0;

@@ -5,11 +5,13 @@
   <style>
     body { align-items: center; }
     .hits { gap: 2px; }
+    .hint { line-height: 30px; text-decoration: underline; }
   </style>
 </head>
 <body>
   <template lcgf-each="hit in hits" class="hits">
     <button on:click="pick">{hit.title}</button>
+    <small class="hint">enter</small>
   </template>
   <span>Footer</span>
 </body>

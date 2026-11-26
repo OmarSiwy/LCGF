@@ -71,7 +71,7 @@ test "the runtime and the spec frontend draw the same frames" {
 }
 
 test "a page with styled runs lists them for a real shaper" {
-    if (!@hasDecl(rt.Ui, "styled")) return;
+    if (regions or !@hasDecl(rt.Ui, "styled")) return;
     const h = &harness;
     h.init();
     var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
@@ -204,5 +204,7 @@ test "a page with regions draws the same frames in both frontends over the same 
             inline for (comptime @typeInfo(@TypeOf(hc)).@"struct".field_names) |f|
                 try std.testing.expectEqualDeep(@field(hc, f), @field(hr, f));
         }
+        // Styled labels inside the regions are listed for a real shaper as well.
+        if (@hasDecl(rt.Ui, "styled")) try std.testing.expect(S.rp.ui.styled().rows.len > 0);
     }
 }

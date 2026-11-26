@@ -322,8 +322,9 @@ The host loads `fonts[k].path` as the shaper or atlas of font `fonts[k].entry.fo
 `protocol.MonoParagraphs`, and the host draws them with its `quads`; a page without them
 measures with plain `Mono` and carries no paragraph rows (`testdata/paragraphs`). A host with
 real fonts ends a runtime page with `f.endTextStyled(stack, ascent, ui.styled(), rows, rects)`
-instead of `ui.end`, and the same styles, decorations and inline runs go through its shaper. Not yet inside
-`lcgf-each`.
+instead of `ui.end`, and the same styles, decorations and inline runs go through its shaper.
+Styled labels work inside `lcgf-each` too: on a comptime page each region keeps its own rows
+and ends its frame with `endParagraphs` (`testdata/files`).
 
 `text-decoration` (`underline`, `overline`, `line-through`, a colour) applies to the text inside
 the element, adding up with its ancestors' (`none` removes none), as in CSS. It becomes
