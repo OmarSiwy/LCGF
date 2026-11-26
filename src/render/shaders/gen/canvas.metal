@@ -47,7 +47,8 @@ struct Row {
     metal::int4 pos;
     metal::uint4 look;
     uint row;
-    char _pad3[12];
+    uint mark;
+    char _pad4[8];
 };
 struct Frag {
     metal::float4 position;
@@ -331,6 +332,7 @@ struct vsInput {
     metal::int4 pos [[attribute(0)]];
     metal::uint4 look [[attribute(1)]];
     uint row [[attribute(2)]];
+    uint mark [[attribute(3)]];
 };
 struct vsOutput {
     metal::float4 position [[position]];
@@ -349,7 +351,7 @@ vertex vsOutput vs(
 , uint vi [[vertex_id]]
 , constant Draw& u [[user(fake0)]]
 ) {
-    const Row r = { varyings.pos, varyings.look, varyings.row };
+    const Row r = { varyings.pos, varyings.look, varyings.row, varyings.mark };
     Frag out = {};
     bool local = {};
     bool local_1 = {};
@@ -471,50 +473,53 @@ vertex vsOutput vs(
             box = metal::float4((metal::min(corner.x, corner.z) - _e375) - 1.0, (metal::min(corner.y, corner.w) - _e382) - 1.0, (metal::max(corner.x, corner.z) + _e389) + 1.0, (metal::max(corner.y, corner.w) + _e396) + 1.0);
         }
     }
-    uint _e404 = u.row_base;
-    uint _e407 = override_of(r.row - _e404, row.x, u);
-    uint _e411 = u.row_base;
-    uint _e414 = override_of(r.row - _e411, row.y, u);
+    bool marked = r.mark != 0u;
+    uint _e407 = u.row_base;
+    uint _e410 = override_of(r.row - _e407, row.x, u);
+    uint colour_2 = marked ? r.mark : _e410;
+    uint _e416 = u.row_base;
+    uint _e419 = override_of(r.row - _e416, row.y, u);
+    uint fill = marked ? r.mark : _e419;
     if ((h & 64u) != 0u) {
         local_4 = (row.w & 1u) != 0u;
     } else {
         local_4 = false;
     }
     bool filled = local_4;
-    metal::float4 _e429 = rgba(_e407);
-    out.stroke = _e429;
-    metal::float4 _e432 = out.stroke;
-    metal::float4 _e436 = rgba(_e414);
-    out.base = filled ? _e436 : metal::float4(_e432.xyz, 0.0);
-    metal::float4 _e439 = p;
-    out.p = _e439;
-    float _e441 = radius;
-    float _e445 = chain;
-    out.m0_ = metal::float4(half_2, _e441, static_cast<float>(cap == 1u), _e445);
-    metal::float4 _e448 = m1_;
-    out.m1_ = _e448;
-    float _e451 = m2_.x;
-    float _e453 = m2_.y;
-    float _e456 = m2_.z;
-    out.m2_ = metal::float4(_e451, _e453, (kind == 2u) ? _e456 : static_cast<float>(stroked), half_2 * static_cast<float>(stroked));
-    metal::float4 _e464 = m3_;
-    out.m3_ = _e464;
+    metal::float4 _e436 = rgba(colour_2);
+    out.stroke = _e436;
+    metal::float4 _e439 = out.stroke;
+    metal::float4 _e443 = rgba(fill);
+    out.base = filled ? _e443 : metal::float4(_e439.xyz, 0.0);
+    metal::float4 _e446 = p;
+    out.p = _e446;
+    float _e448 = radius;
+    float _e452 = chain;
+    out.m0_ = metal::float4(half_2, _e448, static_cast<float>(cap == 1u), _e452);
+    metal::float4 _e455 = m1_;
+    out.m1_ = _e455;
+    float _e458 = m2_.x;
+    float _e460 = m2_.y;
+    float _e463 = m2_.z;
+    out.m2_ = metal::float4(_e458, _e460, (kind == 2u) ? _e463 : static_cast<float>(stroked), half_2 * static_cast<float>(stroked));
+    metal::float4 _e471 = m3_;
+    out.m3_ = _e471;
     out.k = metal::uint4(kind, static_cast<uint>(cap == 2u), r.look.y, r.look.z);
-    metal::float4 _e474 = box;
-    metal::float2 _e476 = screen(_e474.xy, u);
-    metal::float4 _e477 = box;
-    metal::float2 _e479 = screen(_e477.zy, u);
-    metal::float4 _e480 = box;
-    metal::float2 _e482 = screen(_e480.xw, u);
-    metal::float4 _e483 = box;
-    metal::float2 _e485 = screen(_e483.zw, u);
-    metal::float2 lo = metal::clamp(metal::floor(metal::min(metal::min(_e476, _e479), metal::min(_e482, _e485))), metal::float2(0.0), metal::float2(16777216.0));
-    metal::float2 hi = metal::clamp(metal::ceil(metal::max(metal::max(_e476, _e479), metal::max(_e482, _e485))), metal::float2(0.0), metal::float2(16777216.0));
+    metal::float4 _e481 = box;
+    metal::float2 _e483 = screen(_e481.xy, u);
+    metal::float4 _e484 = box;
+    metal::float2 _e486 = screen(_e484.zy, u);
+    metal::float4 _e487 = box;
+    metal::float2 _e489 = screen(_e487.xw, u);
+    metal::float4 _e490 = box;
+    metal::float2 _e492 = screen(_e490.zw, u);
+    metal::float2 lo = metal::clamp(metal::floor(metal::min(metal::min(_e483, _e486), metal::min(_e489, _e492))), metal::float2(0.0), metal::float2(16777216.0));
+    metal::float2 hi = metal::clamp(metal::ceil(metal::max(metal::max(_e483, _e486), metal::max(_e489, _e492))), metal::float2(0.0), metal::float2(16777216.0));
     metal::float2 at_1 = metal::select(lo, hi, metal::bool2((vi & 1u) != 0u, (vi & 2u) != 0u));
-    metal::float2 _e517 = u.size;
-    out.position = metal::float4(((at_1 / _e517) * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0);
-    Frag _e530 = out;
-    const auto _tmp_1 = _e530;
+    metal::float2 _e524 = u.size;
+    out.position = metal::float4(((at_1 / _e524) * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0);
+    Frag _e537 = out;
+    const auto _tmp_1 = _e537;
     return vsOutput { _tmp_1.position, _tmp_1.p, _tmp_1.m0_, _tmp_1.m1_, _tmp_1.m2_, _tmp_1.m3_, _tmp_1.stroke, _tmp_1.base, _tmp_1.k, _tmp_1.uv };
 }
 

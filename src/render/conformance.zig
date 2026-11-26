@@ -259,6 +259,10 @@ pub const canvas_scene = struct {
         pub const camera: canvas.Camera = .{ .origin = .{ far + 380 * 20, -far + 20 * 20 }, .scale = 0.05, .zoom = 2 };
     };
 
+    /// Rows marked (`Instances.mark`), -1 for the selection's first, and their colours.
+    pub const marked = [_]i32{ 1, 6, 17, 40, -1 };
+    pub const mark_colors = [_]Color{ .rgb(255, 60, 60), .rgb(60, 255, 255), .rgb(255, 0, 200), .rgb(255, 160, 0), .rgb(255, 255, 255) };
+
     pub const viewport = [2]f32{ 800, 600 };
     /// What the golden is drawn over (sw-play's 0d0d0f).
     pub const clear = Color.rgb(13, 13, 15);
@@ -271,7 +275,7 @@ pub const canvas_scene = struct {
 /// The canvas scene as a draw list of one canvas command, in caller-owned memory.
 pub const CanvasStorage = struct {
     list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
-    shape_buf: [canvas.Instances.requiredBytes(canvas_scene.rows, canvas_scene.verts, 4)]u8 align(mem.column_align) = undefined,
+    shape_buf: [canvas.Instances.requiredBytes(canvas_scene.rows, canvas_scene.verts, 4, .{ .marks = true })]u8 align(mem.column_align) = undefined,
     draw: DrawList = undefined,
     shapes: canvas.Instances = undefined,
     ranges: [2]canvas.Range = undefined,
@@ -291,8 +295,11 @@ pub const CanvasStorage = struct {
         var a: mem.Carver = .{ .buf = &st.list_buf };
         st.draw = DrawList.init(&a, 1, 1, 2);
         var b: mem.Carver = .{ .buf = &st.shape_buf };
-        st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4);
+        st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4, .{ .marks = true });
         st.ranges = sc.build(&st.shapes);
+        // Marked rows: two caps' segments, a rect, a glyph, and a selection row whose mark wins
+        // over the selection's override.
+        for (sc.marked, sc.mark_colors) |i, color| st.shapes.mark(if (i < 0) st.ranges[1].first else @intCast(i), @bitCast(color));
         st.overrides = .{.{ .range = st.ranges[1], .color = @bitCast(sc.tint) }};
         st.inset_ranges = .{st.ranges[0]};
         st.rows = .{

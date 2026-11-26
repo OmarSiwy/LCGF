@@ -542,7 +542,7 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     for (0..2) |slot| {
         r.prepare(@intCast(slot), &st.draw, .{}, sc.viewport, 1);
         s.clearDirty();
-        try testing.expectEqual(32 * s.len + 8 * s.vert_len + uniforms, cv.uploaded);
+        try testing.expectEqual(36 * s.len + 8 * s.vert_len + uniforms, cv.uploaded);
         try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(s.c.look[0..s.len]), cv.slots[slot].look.mapped.?[0 .. 16 * s.len]);
     }
     // A pan: the camera only.
@@ -550,16 +550,17 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     r.prepare(0, &st.draw, .{}, sc.viewport, 1);
     s.clearDirty();
     try testing.expectEqual(uniforms, cv.uploaded);
-    // An edit of two rows: written into this frame's slot, and into the other on its turn.
+    // An edit of two rows (32 bytes and a 4-byte mark each): written into this frame's slot,
+    // and into the other on its turn.
     s.kill(3);
     s.kill(4);
     r.prepare(1, &st.draw, .{}, sc.viewport, 1);
     s.clearDirty();
-    try testing.expectEqual(2 * 32 + uniforms, cv.uploaded);
+    try testing.expectEqual(2 * 36 + uniforms, cv.uploaded);
     try testing.expect(cv.slots[0].look.mapped.?[16 * 3 + 1] & 2 == 0);
     r.prepare(0, &st.draw, .{}, sc.viewport, 1);
     s.clearDirty();
-    try testing.expectEqual(2 * 32 + uniforms, cv.uploaded);
+    try testing.expectEqual(2 * 36 + uniforms, cv.uploaded);
     try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(s.c.look[0..s.len]), cv.slots[0].look.mapped.?[0 .. 16 * s.len]);
     r.prepare(1, &st.draw, .{}, sc.viewport, 1);
     try testing.expectEqual(uniforms, cv.uploaded);
@@ -606,11 +607,11 @@ test "renderer: a canvas batch that no longer fits starts the buffers over with 
     defer r.deinit(&h.device);
     const canvas = lcgf.canvas;
     const B = struct {
-        buf: [canvas.Instances.requiredBytes(40, 0, 1)]u8 align(lcgf.mem.column_align) = undefined,
+        buf: [canvas.Instances.requiredBytes(40, 0, 1, .{})]u8 align(lcgf.mem.column_align) = undefined,
         s: canvas.Instances = undefined,
         fn init(b: *@This(), cap: u32) void {
             var carver: lcgf.mem.Carver = .{ .buf = &b.buf };
-            b.s = .init(&carver, cap, 0, 1);
+            b.s = .init(&carver, cap, 0, 1, .{});
             for (0..cap) |_| _ = b.s.segment(.{ 0, 0 }, .{ 10, 10 }, .{});
         }
     };

@@ -166,15 +166,23 @@ pub const Instances = struct {
     c: Columns,
     /// Polygon vertices, world units.
     verts: [][2]i32,
+    /// Per-row override colours (`Options.marks`, else empty): 0 for none, else an rgba8
+    /// colour that replaces the row's stroke and fill, over any range override. For selections
+    /// and diff tints too scattered for `Override` ranges. Set with `mark`.
+    marks: []u32 = &.{},
+
+    /// What `init` carves besides the rows.
+    pub const Options = struct { marks: bool = false };
 
     pub const Columns = struct {
         pos: [][4]i32,
         look: [][4]u32,
     };
 
-    /// Carves `simd.rows(cap)` instance rows, `verts` polygon vertices and `dirty` dirty
-    /// ranges from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
-    pub fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32) Instances {
+    /// Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges
+    /// and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer
+    /// instead (`requiredBytes`).
+    pub fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances {
         std.debug.assert(cap > 0);
         return .{
             .cap = cap,
@@ -182,13 +190,21 @@ pub const Instances = struct {
             .c = carver.columns(Columns, simd.rows(cap)),
             .verts = carver.slice([2]i32, @max(verts, 1)),
             .dirty = carver.slice(Range, @max(dirty, 1)),
+            .marks = if (o.marks) carver.slice(u32, cap) else &.{},
         };
     }
 
-    pub fn requiredBytes(cap: u32, verts: u32, dirty: u32) usize {
+    pub fn requiredBytes(cap: u32, verts: u32, dirty: u32, o: Options) usize {
         var counter: mem.Carver = .{ .buf = null };
-        _ = init(&counter, cap, verts, dirty);
+        _ = init(&counter, cap, verts, dirty, o);
         return counter.off;
+    }
+
+    /// Row `i` drawn in `color` (rgba8) from now on, over its layer and any range override; 0
+    /// takes the mark off. Needs `Options.marks`.
+    pub fn mark(s: *Instances, i: u32, color: u32) void {
+        s.marks[i] = color;
+        s.markDirty(.{ .first = i, .count = 1 });
     }
 
     /// Empties the batch; everything is dirty.
@@ -248,6 +264,7 @@ pub const Instances = struct {
         s.len = k + 1;
         s.c.pos[k] = pos;
         s.c.look[k] = look;
+        if (s.marks.len != 0) s.marks[k] = 0;
         s.markDirty(.{ .first = k, .count = 1 });
         return k;
     }
@@ -514,6 +531,13 @@ pub inline fn shown(look: [4]u32, layer: Layer) bool {
 }
 
 /// The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
+/// The colour that replaces row `i`'s stroke and fill, if any: its mark, else the last of
+/// `overrides` whose range holds it.
+pub fn inkOf(s: *const Instances, overrides: []const Override, i: u32) ?u32 {
+    if (s.marks.len != 0 and s.marks[i] != 0) return s.marks[i];
+    return overrideOf(overrides, i);
+}
+
 pub fn overrideOf(overrides: []const Override, i: u32) ?u32 {
     var found: ?u32 = null;
     for (overrides) |o| {
@@ -715,10 +739,10 @@ const testing = std.testing;
 
 fn Fixture(comptime cap: u32, comptime verts: u32) type {
     return struct {
-        buf: [Instances.requiredBytes(cap, verts, 4)]u8 align(mem.column_align) = undefined,
+        buf: [Instances.requiredBytes(cap, verts, 4, .{})]u8 align(mem.column_align) = undefined,
         fn instances(f: *@This()) Instances {
             var carver: mem.Carver = .{ .buf = &f.buf };
-            return Instances.init(&carver, cap, verts, 4);
+            return Instances.init(&carver, cap, verts, 4, .{});
         }
     };
 }
@@ -894,4 +918,21 @@ test "distances: caps, a full turn with no seam, dashes and overrides" {
     try testing.expectEqual(@as(?u32, 2), overrideOf(&marks, 5));
     try testing.expectEqual(@as(?u32, 1), overrideOf(&marks, 6));
     try testing.expectEqual(@as(?u32, null), overrideOf(&marks, 10));
+}
+
+test "marks: a row's mark wins over range overrides; a new row starts unmarked" {
+    var buf: [Instances.requiredBytes(4, 0, 4, .{ .marks = true })]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var s = Instances.init(&carver, 4, 0, 4, .{ .marks = true });
+    for (0..3) |_| _ = s.segment(.{ 0, 0 }, .{ 1, 1 }, .{});
+    s.clearDirty();
+    s.mark(1, 0xff0000ff);
+    try testing.expectEqualSlices(Range, &.{.{ .first = 1, .count = 1 }}, s.dirty[0..s.dirty_len]);
+    const picked = [_]Override{.{ .range = .{ .first = 0, .count = 3 }, .color = 7 }};
+    try testing.expectEqual(@as(?u32, 7), inkOf(&s, &picked, 0));
+    try testing.expectEqual(@as(?u32, 0xff0000ff), inkOf(&s, &picked, 1));
+    try testing.expectEqual(@as(?u32, null), inkOf(&s, &.{}, 2));
+    s.marks[3] = 9; // stale memory under a row not yet written
+    try testing.expectEqual(3, s.segment(.{ 0, 0 }, .{ 1, 1 }, .{}));
+    try testing.expectEqual(0, s.marks[3]);
 }

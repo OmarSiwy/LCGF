@@ -153,7 +153,7 @@ const Kit = struct {
 /// through lcgf.h's builders. Values are ones every language computes alike (quarters).
 const Plot = struct {
     const canvas = lcgf.canvas;
-    buf: [canvas.Instances.requiredBytes(32, 16, 8)]u8 align(lcgf.mem.column_align) = undefined,
+    buf: [canvas.Instances.requiredBytes(32, 16, 8, .{})]u8 align(lcgf.mem.column_align) = undefined,
     s: canvas.Instances = undefined,
     all: [1]canvas.Range = undefined,
     const layers = [_]canvas.Layer{
@@ -166,7 +166,7 @@ const Plot = struct {
 
     fn init(p: *Plot) void {
         var carver: lcgf.mem.Carver = .{ .buf = &p.buf };
-        p.s = .init(&carver, 32, 16, 8);
+        p.s = .init(&carver, 32, 16, 8, .{});
         const s = &p.s;
         for (0..8) |i| {
             const x: i32 = @intCast(i * 100);

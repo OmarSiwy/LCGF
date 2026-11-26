@@ -2178,7 +2178,8 @@ canvas: many 2D primitives in caller-owned columns, drawn under a camera with a 
 - `fn reach(pos: [4]i32, look: [4]u32, origin: [2]i32) [4]i32`: The box instance `pos`, `look` can touch, in world units from `origin` (wrapping), widened by its world width but not by a palette width: integers only, so a renderer can cull most rows of a big batch before decoding them (`Shape.of`).
 - `fn layerRow(pal: *const Palette, layer: u8) Layer`: Palette row `layer`, or an invisible one past the palette.
 - `fn shown(look: [4]u32, layer: Layer) bool`: Whether instance `look` on `layer` draws at all: alive and on a visible layer.
-- `fn overrideOf(overrides: []const Override, i: u32) ?u32`: The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
+- `fn inkOf(s: *const Instances, overrides: []const Override, i: u32) ?u32`: The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
+- `fn overrideOf(overrides: []const Override, i: u32) ?u32`
 - `fn segmentDist(comptime V: type, px: V, py: V, sh: *const Shape) [2]V`: The segment `sh` (a to b, `half` either side, its caps).
 - `fn dashCover(comptime V: type, at: V, sh: *const Shape) V`: How much of a dash is on at chain distance `at` (pixels): 1 for a solid line.
 - `fn rectDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The rounded box `sh` (the shader's `rounded_box` with one radius), outline at distance 0.
@@ -2229,16 +2230,18 @@ Fields: `origin`, `base`, `scale`, `line`, `px`, `zoom_scale`
 
 ### `Instances` (struct)
 
-Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`
+Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`, `marks`
 
+- `Options = struct { marks: bool = false }`: What `init` carves besides the rows.
 - `Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`: What every stroked builder takes.
 - `Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
 - `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`
 - `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
 - `Glyph = struct { layer: u8 = 0, turns: u2 = 0 }`
 - `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} }`
-- `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices and `dirty` dirty ranges from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
-- `fn requiredBytes(cap: u32, verts: u32, dirty: u32) usize`
+- `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
+- `fn requiredBytes(cap: u32, verts: u32, dirty: u32, o: Options) usize`
+- `fn mark(s: *Instances, i: u32, color: u32) void`: Row `i` drawn in `color` (rgba8) from now on, over its layer and any range override; 0 takes the mark off.
 - `fn reset(s: *Instances) void`: Empties the batch; everything is dirty.
 - `fn since(s: *const Instances, first: u32) Range`: The instances added since `len` was `first`.
 - `fn markDirty(s: *Instances, r: Range) void`: Records `r` as written: merged into the last dirty range when they touch (builders append in order, so a batch is one range), else appended; past capacity, everything.
@@ -3015,6 +3018,8 @@ The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes acros
 - `far: i64 = 2_000_000_000`: Twenty world units per pixel, centred on a point two billion units out.
 - `camera: canvas.Camera = .{ .origin = .{ far, -far }, .scale = 0.05, .offset = .{ 10, 5 }, .zoom = 2 }`
 - `palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true }`
+- `marked = [_]i32{ 1, 6, 17, 40, -1 }`: Rows marked (`Instances.mark`), -1 for the selection's first, and their colours.
+- `mark_colors = [_]Color{ .rgb(255, 60, 60), .rgb(60, 255, 255), .rgb(255, 0, 200), .rgb(255, 160, 0), .rgb(255, 255, 255) }`
 - `viewport = [2]f32{ 800, 600 }`
 - `clear = Color.rgb(13, 13, 15)`: What the golden is drawn over (sw-play's 0d0d0f).
 - `tint = Color.rgb(80, 255, 120)`: The selection's override colour.
@@ -3322,7 +3327,7 @@ Fields: `rows`, `verts`, `frames`, `batches`, `draws`, `overrides`
 
 ### `Canvas(..)` (generic struct)
 
-Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `row_written`, `atlas`, `atlas_len`, `batches`, `next_row`, `next_vert`, `frame`, `slot`, `draws`, `draw_len`, `atlas_group`, `size`, `scale`, `uploaded`, `err`
+Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `zeros`, `row_written`, `atlas`, `atlas_len`, `batches`, `next_row`, `next_vert`, `frame`, `slot`, `draws`, `draw_len`, `atlas_group`, `size`, `scale`, `uploaded`, `err`
 
 - `Shader = gpu.Shader(source)`
 - `fn init(cv: *C, dev: gpu.Device, target: desc.Target, cap: Capacity) !void`: Fills `cv` in place (its arena must not move).

@@ -11,8 +11,8 @@ run, gets the stand-in glyph atlas below. Ported from prototype/render.py; the d
 checks are unchanged.
 
 A `canvas` line (tools/golden/draw.zig `canvasScene`) draws canvas.bin and verts.bin with
-canvas.wgsl as src/render/gpu/canvas.zig does: rows from two instance buffers and a third of row
-indices, the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per `range`.
+canvas.wgsl as src/render/gpu/canvas.zig does: rows from two instance buffers, a third of row
+indices and a fourth of marks (marks.bin, or zeros), the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per `range`.
 """
 import math, struct, sys
 from pathlib import Path
@@ -152,7 +152,8 @@ if any(l[0] == "canvas" for l in lines):
         vertex={"module": cmod, "entry_point": "vs", "buffers": [
             {"array_stride": 16, "step_mode": "instance", "attributes": [{"shader_location": 0, "offset": 0, "format": "sint32x4"}]},
             {"array_stride": 16, "step_mode": "instance", "attributes": [{"shader_location": 1, "offset": 0, "format": "uint32x4"}]},
-            {"array_stride": 4, "step_mode": "instance", "attributes": [{"shader_location": 2, "offset": 0, "format": "uint32"}]}]},
+            {"array_stride": 4, "step_mode": "instance", "attributes": [{"shader_location": 2, "offset": 0, "format": "uint32"}]},
+            {"array_stride": 4, "step_mode": "instance", "attributes": [{"shader_location": 3, "offset": 0, "format": "uint32"}]}]},
         primitive={"topology": "triangle-strip"},
         fragment={"module": cmod, "entry_point": "fs", "targets": [{"format": "rgba8unorm", "blend": {"color": blend, "alpha": blend}}]})
     def buf(data, usage):
@@ -162,6 +163,8 @@ if any(l[0] == "canvas" for l in lines):
     V = wgpu.BufferUsage.VERTEX
     pos_buf, look_buf = buf(pos, V), buf(look, V)
     row_buf = buf(struct.pack(f"<{n}I", *range(n)), V)
+    marks_path = d / "marks.bin"
+    mark_buf = buf(marks_path.read_bytes() if marks_path.exists() else bytes(4 * n), V)
     vert_buf = buf(verts, wgpu.BufferUsage.STORAGE)
     at_tex = device.create_texture(size=(64, 64, 1), format="rgba8unorm", usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
     device.queue.write_texture({"texture": at_tex}, bytes(atlas), {"bytes_per_row": 256, "rows_per_image": 64}, (64, 64, 1))
@@ -199,7 +202,7 @@ if any(l[0] == "canvas" for l in lines):
         if x1 <= x0 or y1 <= y0: continue
         rp.set_scissor_rect(x0, y0, x1 - x0, y1 - y0)
         rp.set_pipeline(cpipe); rp.set_bind_group(0, cg0); rp.set_bind_group(1, cg1)
-        for slot, bb in enumerate((pos_buf, look_buf, row_buf)): rp.set_vertex_buffer(slot, bb)
+        for slot, bb in enumerate((pos_buf, look_buf, row_buf, mark_buf)): rp.set_vertex_buffer(slot, bb)
         for first, count in c["ranges"]:
             rp.draw(4, count, 0, first); draws += 1
 rp.end()

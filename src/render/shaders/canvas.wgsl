@@ -5,12 +5,12 @@
 // `rectDist`, `arcDist`, `polygonDist`, `glyphLocal`, `coverage`) in the same order. Per-row
 // constants are worked out once in the vertex stage and passed flat.
 //
-// Rows come from two instance-step buffers, `pos` (sint32x4) and `look` (uint32x4), and a third
+// Rows come from two instance-step buffers, `pos` (sint32x4) and `look` (uint32x4), a third
 // that holds each row's own index (uint32), so overrides find the row without
 // @builtin(instance_index) (docs/guide/gpu.md: GL ES emulates the first instance by offsetting
-// the buffers). Polygon vertices are read by `vert`, which canvas.zig `shader` appends: from a
-// storage buffer, or on GL ES 3.0 (no storage buffers in the fragment stage) from an r32uint
-// texture of two texels a vertex.
+// the buffers), and a fourth of marks (uint32; zeros for a batch without). Polygon vertices
+// are read by `vert`, which canvas.zig `shader` appends: from a storage buffer, or on GL ES 3.0
+// (no storage buffers in the fragment stage) from an r32uint texture of two texels a vertex.
 
 // The canvas.zig `View`, then the node and the draw's own values, then the palette and the
 // overrides: canvas.zig `Uniforms`.
@@ -61,6 +61,8 @@ struct Row {
     @location(0) pos: vec4i,
     @location(1) look: vec4u,
     @location(2) row: u32,
+    // The row's mark (canvas.zig `Instances.marks`): 0, or a colour over everything else.
+    @location(3) mark: u32,
 }
 
 struct Frag {
@@ -186,8 +188,9 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         box = vec4f(min(corner.x, corner.z) - grow - 1.0, min(corner.y, corner.w) - grow - 1.0,
                     max(corner.x, corner.z) + grow + 1.0, max(corner.y, corner.w) + grow + 1.0);
     }
-    let colour = override_of(r.row - u.row_base, row.x);
-    let fill = override_of(r.row - u.row_base, row.y);
+    let marked = r.mark != 0u;
+    let colour = select(override_of(r.row - u.row_base, row.x), r.mark, marked);
+    let fill = select(override_of(r.row - u.row_base, row.y), r.mark, marked);
     let filled = (h & 64u) != 0u && (row.w & 1u) != 0u;
     out.stroke = rgba(colour);
     out.base = select(vec4f(out.stroke.rgb, 0.0), rgba(fill), filled);

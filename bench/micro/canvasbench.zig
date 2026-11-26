@@ -22,7 +22,7 @@ pub const count = 100_000;
 /// One primitive per cell of a 320-wide grid, 6,000 world units a cell.
 pub const cols = 320;
 pub const cell = 6_000;
-var shape_buf: [canvas.Instances.requiredBytes(count, count / 10 * 3, 4)]u8 align(lcgf.mem.column_align) = undefined;
+var shape_buf: [canvas.Instances.requiredBytes(count, count / 10 * 3, 4, .{})]u8 align(lcgf.mem.column_align) = undefined;
 var list_buf: [list_bytes]u8 align(lcgf.mem.column_align) = undefined;
 var bin_buf: [sw.canvas.Bin.requiredBytes(count, 2 * count)]u8 align(lcgf.mem.column_align) = undefined;
 const list_bytes = blk: {
@@ -75,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var carver: lcgf.mem.Carver = .{ .buf = &shape_buf };
-    var shapes = canvas.Instances.init(&carver, count, count / 10 * 3, 4);
+    var shapes = canvas.Instances.init(&carver, count, count / 10 * 3, 4, .{});
     build(&shapes);
     var bc: lcgf.mem.Carver = .{ .buf = &bin_buf };
     var bin = sw.canvas.Bin.init(&bc, count, 2 * count);

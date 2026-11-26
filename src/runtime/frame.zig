@@ -812,9 +812,9 @@ test "canvas: canvas commands in paint order, an overlay over them; other custom
     var rows: [2 * limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
     ctx.enableCanvas(&rows);
     ctx.trackDamage();
-    var buf: [canvas_mod.Instances.requiredBytes(4, 0, 1)]u8 align(mem.column_align) = undefined;
+    var buf: [canvas_mod.Instances.requiredBytes(4, 0, 1, .{})]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
-    var shapes: canvas_mod.Instances = .init(&carver, 4, 0, 1);
+    var shapes: canvas_mod.Instances = .init(&carver, 4, 0, 1, .{});
     _ = shapes.segment(.{ 0, 0 }, .{ 1_000, 0 }, .{});
     const in: Input = .{ .viewport = .{ 200, 100 } };
     var layers = [_]canvas_mod.Layer{.of(.{ .width = 2 })};

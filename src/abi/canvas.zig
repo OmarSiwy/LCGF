@@ -60,7 +60,7 @@ fn cap(c: u8) canvas.Cap {
 }
 
 fn cBytes(rows: u32, verts: u32, dirty: u32) callconv(.c) usize {
-    return head + Instances.requiredBytes(@max(rows, 1), verts, dirty);
+    return head + Instances.requiredBytes(@max(rows, 1), verts, dirty, .{});
 }
 
 /// The batch at the start of `buf`, or null when `buf` is unaligned or too small.
@@ -68,7 +68,7 @@ fn cInit(buf: [*]u8, len: usize, rows: u32, verts: u32, dirty: u32) callconv(.c)
     if (@intFromPtr(buf) % mem.column_align != 0 or len < cBytes(rows, verts, dirty)) return null;
     var carver: mem.Carver = .{ .buf = @alignCast(buf[head..len]) };
     const s: *Instances = @ptrCast(@alignCast(buf));
-    s.* = Instances.init(&carver, @max(rows, 1), verts, dirty);
+    s.* = Instances.init(&carver, @max(rows, 1), verts, dirty, .{});
     return s;
 }
 
@@ -158,9 +158,9 @@ test "canvas: the C builders write the rows the Zig builders do" {
     defer std.testing.allocator.free(a);
     try std.testing.expectEqual(null, cInit(a.ptr, bytes - 1, 8, 8, 2));
     const s = cInit(a.ptr, a.len, 8, 8, 2).?;
-    var buf: [Instances.requiredBytes(8, 8, 2)]u8 align(mem.column_align) = undefined;
+    var buf: [Instances.requiredBytes(8, 8, 2, .{})]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
-    var z = Instances.init(&carver, 8, 8, 2);
+    var z = Instances.init(&carver, 8, 8, 2, .{});
     _ = cSegment(s, 0, 0, 10, 5, &.{ .layer = 2, .weight = 3, .cap = 2, .dash = 1, .width = 40 });
     _ = z.segment(.{ 0, 0 }, .{ 10, 5 }, .{ .layer = 2, .weight = 3, .cap = .round, .dash = 1, .width = 40 });
     _ = cArc(s, 1, 2, 30, &.{ .start = 0.5, .sweep = -2, .dash = 3 });

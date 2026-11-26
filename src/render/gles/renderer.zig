@@ -350,13 +350,13 @@ test "renderer: a canvas re-sends only appended rows, and appended vertices by t
     const row_bytes = lcgf.canvas_shader.verts_width * 4;
     r.prepare({}, &st.draw, .{}, sc.viewport, 1);
     s.clearDirty();
-    // Every row, the vertex texture's one row and the row-index buffer.
-    try testing.expectEqual(32 * s.len + row_bytes + uniforms + 4 * sc.rows, r.canvas.?.uploaded);
+    // Every row and its mark, the vertex texture's one row, the row-index and zero buffers.
+    try testing.expectEqual(36 * s.len + row_bytes + uniforms + 8 * sc.rows, r.canvas.?.uploaded);
     r.prepare({}, &st.draw, .{}, sc.viewport, 1);
     try testing.expectEqual(uniforms, r.canvas.?.uploaded);
     _ = s.polygon(&.{ .{ 0, 0 }, .{ 10, 0 }, .{ 0, 10 } }, .{});
     r.prepare({}, &st.draw, .{}, sc.viewport, 1);
-    try testing.expectEqual(32 + row_bytes + uniforms, r.canvas.?.uploaded);
+    try testing.expectEqual(36 + row_bytes + uniforms, r.canvas.?.uploaded);
     try h.check();
 }
 

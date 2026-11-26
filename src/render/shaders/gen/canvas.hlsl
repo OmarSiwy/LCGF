@@ -32,6 +32,7 @@ struct Row {
     int4 pos : LOC0;
     uint4 look : LOC1;
     uint row : LOC2;
+    uint mark : LOC3;
 };
 
 struct Frag {
@@ -432,50 +433,53 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Row r)
             box = float4(((min(corner.x, corner.z) - _e375) - 1.0), ((min(corner.y, corner.w) - _e382) - 1.0), ((max(corner.x, corner.z) + _e389) + 1.0), ((max(corner.y, corner.w) + _e396) + 1.0));
         }
     }
-    uint _e404 = u.row_base;
-    const uint _e407 = override_of((r.row - _e404), row.x);
-    uint _e411 = u.row_base;
-    const uint _e414 = override_of((r.row - _e411), row.y);
+    bool marked = (r.mark != 0u);
+    uint _e407 = u.row_base;
+    const uint _e410 = override_of((r.row - _e407), row.x);
+    uint colour_2 = (marked ? r.mark : _e410);
+    uint _e416 = u.row_base;
+    const uint _e419 = override_of((r.row - _e416), row.y);
+    uint fill = (marked ? r.mark : _e419);
     if (((h & 64u) != 0u)) {
         local_4 = ((row.w & 1u) != 0u);
     } else {
         local_4 = false;
     }
     bool filled = local_4;
-    const float4 _e429 = rgba(_e407);
-    out_.stroke = _e429;
-    float4 _e432 = out_.stroke;
-    const float4 _e436 = rgba(_e414);
-    out_.base = (filled ? _e436 : float4(_e432.xyz, 0.0));
-    float4 _e439 = p;
-    out_.p = _e439;
-    float _e441 = radius;
-    float _e445 = chain;
-    out_.m0_ = float4(half_2, _e441, float((cap == 1u)), _e445);
-    float4 _e448 = m1_;
-    out_.m1_ = _e448;
-    float _e451 = m2_.x;
-    float _e453 = m2_.y;
-    float _e456 = m2_.z;
-    out_.m2_ = float4(_e451, _e453, ((kind == 2u) ? _e456 : float(stroked)), (half_2 * float(stroked)));
-    float4 _e464 = m3_;
-    out_.m3_ = _e464;
+    const float4 _e436 = rgba(colour_2);
+    out_.stroke = _e436;
+    float4 _e439 = out_.stroke;
+    const float4 _e443 = rgba(fill);
+    out_.base = (filled ? _e443 : float4(_e439.xyz, 0.0));
+    float4 _e446 = p;
+    out_.p = _e446;
+    float _e448 = radius;
+    float _e452 = chain;
+    out_.m0_ = float4(half_2, _e448, float((cap == 1u)), _e452);
+    float4 _e455 = m1_;
+    out_.m1_ = _e455;
+    float _e458 = m2_.x;
+    float _e460 = m2_.y;
+    float _e463 = m2_.z;
+    out_.m2_ = float4(_e458, _e460, ((kind == 2u) ? _e463 : float(stroked)), (half_2 * float(stroked)));
+    float4 _e471 = m3_;
+    out_.m3_ = _e471;
     out_.k = uint4(kind, uint((cap == 2u)), r.look.y, r.look.z);
-    float4 _e474 = box;
-    const float2 _e476 = screen(_e474.xy);
-    float4 _e477 = box;
-    const float2 _e479 = screen(_e477.zy);
-    float4 _e480 = box;
-    const float2 _e482 = screen(_e480.xw);
-    float4 _e483 = box;
-    const float2 _e485 = screen(_e483.zw);
-    float2 lo = clamp(floor(min(min(_e476, _e479), min(_e482, _e485))), (0.0).xx, (16777216.0).xx);
-    float2 hi = clamp(ceil(max(max(_e476, _e479), max(_e482, _e485))), (0.0).xx, (16777216.0).xx);
+    float4 _e481 = box;
+    const float2 _e483 = screen(_e481.xy);
+    float4 _e484 = box;
+    const float2 _e486 = screen(_e484.zy);
+    float4 _e487 = box;
+    const float2 _e489 = screen(_e487.xw);
+    float4 _e490 = box;
+    const float2 _e492 = screen(_e490.zw);
+    float2 lo = clamp(floor(min(min(_e483, _e486), min(_e489, _e492))), (0.0).xx, (16777216.0).xx);
+    float2 hi = clamp(ceil(max(max(_e483, _e486), max(_e489, _e492))), (0.0).xx, (16777216.0).xx);
     float2 at_1 = (bool2(((vi & 1u) != 0u), ((vi & 2u) != 0u)) ? hi : lo);
-    float2 _e517 = u.size;
-    out_.position = float4((((at_1 / _e517) * float2(2.0, -2.0)) + float2(-1.0, 1.0)), 0.0, 1.0);
-    Frag _e530 = out_;
-    const Frag frag_2 = _e530;
+    float2 _e524 = u.size;
+    out_.position = float4((((at_1 / _e524) * float2(2.0, -2.0)) + float2(-1.0, 1.0)), 0.0, 1.0);
+    Frag _e537 = out_;
+    const Frag frag_2 = _e537;
     const VertexOutput_vs frag_2_ = { frag_2.p, frag_2.m0_, frag_2.m1_, frag_2.m2_, frag_2.m3_, frag_2.stroke, frag_2.base, frag_2.k, frag_2.uv, frag_2.position };
     return frag_2_;
 }

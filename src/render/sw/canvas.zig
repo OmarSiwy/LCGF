@@ -320,7 +320,7 @@ fn instance(t: sw.Target, p: *const Prep, atlas: sw.Image, i: usize) void {
     const on_screen = if (p.transformed) p.space.screen(sh.box) else sh.box;
     const box = clampBox(pixels(.{ @floor(on_screen[0]), @floor(on_screen[1]), @ceil(on_screen[2]), @ceil(on_screen[3]) }), p.area);
     if (box[0] >= box[2] or box[1] >= box[3]) return;
-    const over = canvas.overrideOf(p.c.overrides, @intCast(i));
+    const over = canvas.inkOf(s, p.c.overrides, @intCast(i));
     const ink: Ink = .{
         .fill = rgba(over orelse layer.fill),
         .stroke = rgba(over orelse layer.stroke),
@@ -503,7 +503,7 @@ fn Scene(comptime cap: u32) type {
     return struct {
         const Self = @This();
         list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
-        shape_buf: [canvas.Instances.requiredBytes(cap, 8, 1)]u8 align(mem.column_align) = undefined,
+        shape_buf: [canvas.Instances.requiredBytes(cap, 8, 1, .{})]u8 align(mem.column_align) = undefined,
         px: [sw.Framebuffer.len(64, 32)]u32 = undefined,
         rows: [1]draw_list.CanvasDraw = undefined,
         list: DrawList = undefined,
@@ -521,7 +521,7 @@ fn Scene(comptime cap: u32) type {
             var a: mem.Carver = .{ .buf = &s.list_buf };
             s.list = DrawList.init(&a, 1, 1, 1);
             var b: mem.Carver = .{ .buf = &s.shape_buf };
-            s.shapes = .init(&b, cap, 8, 1);
+            s.shapes = .init(&b, cap, 8, 1, .{});
             s.list.customs[0] = .{ .rect = rect, .clip = clip, .data = 0, .id = 0, .node = 0 };
             s.list.custom_len = 1;
             s.list.canvases = &s.rows;

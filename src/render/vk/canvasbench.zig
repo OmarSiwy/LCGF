@@ -20,7 +20,7 @@ const canvas = lcgf.canvas;
 const DrawList = lcgf.draw_list.DrawList;
 const iface = lcgf.render_iface;
 
-var shape_buf: [canvas.Instances.requiredBytes(bench.count, bench.count / 10 * 3, 64)]u8 align(lcgf.mem.column_align) = undefined;
+var shape_buf: [canvas.Instances.requiredBytes(bench.count, bench.count / 10 * 3, 64, .{})]u8 align(lcgf.mem.column_align) = undefined;
 var list_buf: [list_bytes]u8 align(lcgf.mem.column_align) = undefined;
 const list_bytes = blk: {
     var counter: lcgf.mem.Carver = .{ .buf = null };
@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
     const hf: f32 = @floatFromInt(size[1]);
 
     var carver: lcgf.mem.Carver = .{ .buf = &shape_buf };
-    var shapes = canvas.Instances.init(&carver, bench.count, bench.count / 10 * 3, 64);
+    var shapes = canvas.Instances.init(&carver, bench.count, bench.count / 10 * 3, 64, .{});
     bench.build(&shapes);
     var lc: lcgf.mem.Carver = .{ .buf = &list_buf };
     var list = DrawList.init(&lc, 1, 1, 1);

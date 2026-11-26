@@ -35,6 +35,7 @@ struct Row {
     ivec4 pos;
     uvec4 look;
     uint row;
+    uint mark;
 };
 struct Frag {
     vec4 position;

@@ -232,6 +232,7 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
     for (0..s.len) |i| rows[i] = @as([4]u32, @bitCast(s.c.pos[i])) ++ s.c.look[i];
     try dir.writeFile(io, .{ .sub_path = "canvas.bin", .data = std.mem.sliceAsBytes(rows[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "verts.bin", .data = std.mem.sliceAsBytes(s.verts[0..@max(s.vert_len, 1)]) });
+    try dir.writeFile(io, .{ .sub_path = "marks.bin", .data = std.mem.sliceAsBytes(s.marks[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "canvas.wgsl", .data = lcgf.canvas_shader.wgsl });
     try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
     // No quads or text; one zero row each, because gpu.py cannot upload an empty buffer.

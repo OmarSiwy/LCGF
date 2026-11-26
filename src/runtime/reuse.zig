@@ -502,9 +502,9 @@ test "reuse: a canvas in a kept subtree stays a canvas, with its row" {
     var ctx = try Fx.context();
     var rows: [2 * limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
     ctx.enableCanvas(&rows);
-    var buf: [canvas.Instances.requiredBytes(2, 0, 1)]u8 align(mem.column_align) = undefined;
+    var buf: [canvas.Instances.requiredBytes(2, 0, 1, .{})]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
-    var shapes: canvas.Instances = .init(&carver, 2, 0, 1);
+    var shapes: canvas.Instances = .init(&carver, 2, 0, 1, .{});
     _ = shapes.segment(.{ 0, 0 }, .{ 10, 0 }, .{});
     const pal: canvas.Palette = .{ .layers = &.{.of(.{})} };
     const all = [_]canvas.Range{shapes.since(0)};
