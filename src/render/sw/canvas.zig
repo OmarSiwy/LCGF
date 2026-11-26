@@ -373,10 +373,16 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
         .{ stroke[0], stroke[1], stroke[2], simd.f(0) };
     const stroked = simd.f(simd.b2f(ink.stroked));
     const hw = simd.f(sh.half * simd.b2f(ink.stroked));
-    const solid = kind == .segment or kind == .arc;
+    // One colour over the whole instance (segments, arcs, alpha-atlas glyphs, unstroked
+    // fills): its 8-bit channels are rounded once here, as `overColor` rounds them per pixel.
+    const solid = switch (kind) {
+        .segment, .arc => true,
+        .glyph => x.alpha8,
+        .rect, .polygon => !ink.stroked,
+    };
+    const one: [4]f32 = if (kind == .rect or kind == .polygon) (if (ink.filled) ink.fill else .{ ink.stroke[0], ink.stroke[1], ink.stroke[2], 0 }) else ink.stroke;
     var c8: [3]U = undefined;
-    inline for (0..3) |i| c8[i] = simd.u(@intFromFloat(@round(std.math.clamp(ink.stroke[i], 0, 1) * 255)));
-    const ca = ink.stroke[3];
+    inline for (0..3) |i| c8[i] = simd.u(@intFromFloat(@round(std.math.clamp(one[i], 0, 1) * 255)));
     // Glyph: texel coordinates per pixel, nearest, clamped to the atlas.
     const tu0 = unorm16(x.uv[1]);
     const tv0 = unorm16(x.uv[1] >> 16);
@@ -451,9 +457,8 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
             if (!@reduce(.Or, a > simd.f(0))) continue;
             const old: U = row[at..][0..W].*;
             const mask = sw.spanMask(at, box[0], box[2]);
-            // Segments, arcs and glyphs from an alpha atlas have one colour: its 8-bit channels
-            // are rounded once per instance, as `overColor` would round them per pixel.
-            const out = if (comptime solid) sw.overSa(c8, @intFromFloat(@round(@min(@max(simd.f(ca) * a, simd.f(0)), simd.f(1)) * simd.f(255))), old, red) else sw.overColor(color, a, old, red);
+            // The source alpha exactly as `overColor` makes it, from the colour's alpha.
+            const out = if (solid) sw.overSa(c8, @intFromFloat(@round(@min(@max(color[3] * a, simd.f(0)), simd.f(1)) * simd.f(255))), old, red) else sw.overColor(color, a, old, red);
             row[at..][0..W].* = @select(u32, mask, out, old);
         }
     }
