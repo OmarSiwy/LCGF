@@ -243,7 +243,31 @@ pub const Emit = struct {
                 e.print("s.choice(.{f}, .{{}}, .{{", .{std.zig.fmtId(n.bind)});
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
-            .spinner, .radio, .textfield, .search, .textarea, .number => unreachable,
+            .number => {
+                e.print("{s}.ct.number(theme, .{f}, .{f}, ", .{ e.use("number"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
+                e.write(")");
+            },
+            .radio => {
+                e.print("{s}.ct.radio(theme, .{f}, .{f}, .{{", .{ e.use("radio"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                for (n.captions, 0..) |c, k| {
+                    e.write(if (k == 0) " " else ", ");
+                    e.string(c);
+                }
+                e.write(" })");
+            },
+            .textfield, .search => {
+                const m = if (n.kind == .search) "search" else "textfield";
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.write(")");
+            },
+            .textarea => {
+                e.print("{s}.ct.textarea(theme, .{f}, .{f}, {d}, ", .{ e.use("textarea"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind), n.level });
+                e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.write(")");
+            },
+            .spinner => unreachable,
         }
         if (restyle and !has_children) {
             e.write(", ");

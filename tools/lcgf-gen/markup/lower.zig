@@ -619,7 +619,8 @@ pub const Lowerer = struct {
                 params.* = ok(std.fmt.allocPrint(l.arena, "lcgf.features.dotted({d})", .{@max(s.border, 1)}));
             } else if (!css.eq(kw, "solid")) l.ds.err(l.declared(n, .@"border-style").?.loc, "border-style: {s} is not supported; use solid, dashed or dotted", .{kw});
         }
-        if (s.border > 0 and l.k.get(n, .@"border-color").decl == none) s.border_color = l.text[n].color;
+        // CSS's border colour defaults to currentcolor; a widget's own border keeps its colour.
+        if (l.k.get(n, .@"border-top-width").decl != none and l.k.get(n, .@"border-color").decl == none) s.border_color = l.text[n].color;
         var radii: [4]f32 = .{ -1, -1, -1, -1 };
         var any_radius = false;
         inline for (.{ Prop.@"border-top-left-radius", Prop.@"border-top-right-radius", Prop.@"border-bottom-right-radius", Prop.@"border-bottom-left-radius" }, 0..) |p, i| if (l.px(n, p)) |v| {
@@ -1141,6 +1142,9 @@ pub const Lowerer = struct {
                 l.skip[n] = true;
                 return true;
             }
+            if (css.eq(ty, "number")) return l.numberField(n, parent);
+            if (css.eq(ty, "radio")) return l.radio(n, parent);
+            for ([_][]const u8{ "text", "email", "url", "tel", "search" }) |x| if (css.eq(ty, x)) return l.textInput(n, parent, if (css.eq(ty, "search")) .search else .textfield);
             if (l.refused("attribute", "type", ty, l.valueLoc(n, "type"))) {
                 l.skip[n] = true;
                 return true;
@@ -1149,6 +1153,7 @@ pub const Lowerer = struct {
             l.skip[n] = true;
             return true;
         }
+        if (std.mem.eql(u8, t, "textarea")) return l.textInput(n, parent, .textarea);
         if (std.mem.eql(u8, t, "progress")) {
             l.progress(n, parent);
             return true;
@@ -1327,6 +1332,97 @@ pub const Lowerer = struct {
         l.widgetStyle(n, parent, .{ .dir = .x }, &node);
         l.skip[n] = true;
         l.ir_of[n] = l.addNode(node);
+    }
+
+    fn numberField(l: *Lowerer, n: u32, parent: u32) bool {
+        const th = l.page.theme;
+        const bind = l.binding(n, "value", .number, "<input type=number>");
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "<input type=number> needs bind:value=\"field\"", .{});
+            l.skip[n] = true;
+            return true;
+        }
+        const def: lcgf.widgets_number.Range = .{};
+        var node: ir.Node = .{ .kind = .number, .parent = parent, .loc = l.loc(n), .bind = bind, .range = .{ l.numberAttr(n, "min") orelse def.lo, l.numberAttr(n, "max") orelse def.hi, l.numberAttr(n, "step") orelse def.step } };
+        if (!(node.range[0] < node.range[1]) or !(node.range[2] > 0)) l.ds.err(l.loc(n), "<input type=number>: min must be below max and step above 0", .{});
+        node.id = l.widgetId(n, bind, "<input type=number>") orelse return true;
+        l.widgetStyle(n, parent, row(lcgf.widgets_number.numberStyle(&th, false, 0)), &node);
+        l.handlers(n, node.id, "", null);
+        l.ir_of[n] = l.addNode(node);
+        return true;
+    }
+
+    /// A text control over a `Text(256)` field; `placeholder` is its hint (engine spec T1: the
+    /// builders take a literal hint).
+    fn textInput(l: *Lowerer, n: u32, parent: u32, kind: ir.Kind) bool {
+        const th = l.page.theme;
+        const what = switch (kind) {
+            .search => "<input type=search>",
+            .textarea => "<textarea>",
+            else => "<input type=text>",
+        };
+        const bind = l.binding(n, "value", .text, what);
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "{s} needs bind:value=\"field\"", .{what});
+            l.skip[n] = true;
+            return true;
+        }
+        var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind };
+        node.id = l.widgetId(n, bind, what) orelse return true;
+        const hint = l.attr(n, "placeholder") orelse "";
+        l.caption(&node, hint, l.valueLoc(n, "placeholder"));
+        node.kind = kind;
+        const rows: u32 = if (l.numberAttr(n, "rows")) |r| @intFromFloat(@max(1, r)) else 2;
+        node.level = @intCast(@min(rows, 255));
+        const base_style = switch (kind) {
+            .search => row(lcgf.widgets_search.boxStyle(&th, false)),
+            .textarea => lcgf.widgets_textarea.areaStyle(&th, rows, false),
+            else => row(lcgf.widgets_textfield.fieldStyle(&th, false, 0)),
+        };
+        l.widgetStyle(n, parent, base_style, &node);
+        l.skip[n] = true;
+        l.ir_of[n] = l.addNode(node);
+        return true;
+    }
+
+    /// The first `<input type=radio>` of a `name` group makes the group: one `radio` whose
+    /// options are every radio of that name, captioned by their labels; the rest are its.
+    fn radio(l: *Lowerer, n: u32, parent: u32) bool {
+        const th = l.page.theme;
+        const group = l.attr(n, "name") orelse {
+            l.ds.err(l.loc(n), "<input type=radio> needs name=\"group\"", .{});
+            l.skip[n] = true;
+            return true;
+        };
+        var captions: std.ArrayList([]const u8) = .empty;
+        var bind: []const u8 = "";
+        var first = true;
+        var selected: ?usize = null;
+        for (0..l.doc.nodes.len) |i_| {
+            const i: u32 = @intCast(i_);
+            if (!l.doc.isElement(i, "input") or !css.eq(l.attr(i, "type") orelse "", "radio")) continue;
+            if (!std.mem.eql(u8, l.attr(i, "name") orelse "", group)) continue;
+            if (i < n) {
+                first = false;
+                break;
+            }
+            if (bind.len == 0) bind = l.binding(i, "selected", .u32, "<input type=radio>");
+            if (l.attr(i, "checked") != null) selected = captions.items.len;
+            ok(captions.append(l.arena, l.controlCaption(i)));
+            l.skip[i] = true;
+        }
+        if (!first) return true; // an option of an earlier radio's group
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "the radio group '{s}' needs bind:selected=\"field\" on one of its radios", .{group});
+            return true;
+        }
+        if (selected) |s| l.setDefault(bind, ok(std.fmt.allocPrint(l.arena, "{d}", .{s})));
+        var node: ir.Node = .{ .kind = .radio, .parent = parent, .loc = l.loc(n), .bind = bind, .captions = captions.items };
+        node.id = if (l.identifier(group, l.valueLoc(n, "name"))) group else return true;
+        l.widgetStyle(n, parent, lcgf.widgets_radio.groupStyle(&th), &node);
+        l.handlers(n, node.id, bind, .u32);
+        l.ir_of[n] = l.addNode(node);
+        return true;
     }
 
     fn numberAttr(l: *Lowerer, n: u32, name: []const u8) ?f32 {
