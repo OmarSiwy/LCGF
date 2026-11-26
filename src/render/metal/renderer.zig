@@ -369,7 +369,7 @@ test "renderer: textures register in order with their samplers, clamp past the c
 
 test "renderer: a text run samples the glyph atlas, a quad batch its own texture" {
     var st: conformance.Storage = .{};
-    st.load(&conformance.scenes[2]); // text: batch | text | text | batch
+    st.load(&conformance.scenes[2]); // text: batch | text | text | batch, its two runs one draw
     var memory: [(conformance.max_quads + conformance.max_glyphs) * quad_shader.stride]u8 = undefined;
     var r = recording(&memory, .{ .max_quads = conformance.max_quads, .max_glyphs = conformance.max_glyphs, .frames_in_flight = 1 });
     var glyphs = st.glyphs();
@@ -388,7 +388,7 @@ test "renderer: a text run samples the glyph atlas, a quad batch its own texture
         },
         else => {},
     };
-    try testing.expectEqualSlices(u16, &.{ 0, 1, 1, 0 }, bound[0..n]);
+    try testing.expectEqualSlices(u16, &.{ 0, 1, 0 }, bound[0..n]);
 }
 
 test "renderer: the custom scene's host draw gets its rect as a scissor in the pass's pixels" {
