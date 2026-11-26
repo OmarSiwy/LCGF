@@ -14,6 +14,7 @@ const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
+const radio_zig = @import("../widgets/radio.zig");
 pub const Parts = style.Parts;
 pub const Id = types.Id;
 pub const States = style.States;
@@ -254,6 +255,27 @@ pub const checkbox: Recipe = .{
         focus_part,
     },
     .rules = &checkbox_rules,
+};
+
+/// A radio group (`radio.zig`'s look): options stacked, each a ring outlined in the hot
+/// colour around a dot that takes the accent while the option is selected (`States.checked`).
+pub const radio_rules = text_rules ++ [_]Rule{
+    .{ .part = Parts.root, .declarations = &.{style.token(.gap, Names.space[2])} },
+    .{ .part = Parts.row, .declarations = &.{style.token(.gap, Names.space[2])} },
+    .{ .part = Parts.background, .declarations = &.{ style.token(.fill, Names.control), style.token(.border_color, Names.hot) } },
+    .{ .part = Parts.indicator, .declarations = &.{style.set(.fill, .transparent)} },
+    .{ .part = Parts.indicator, .require = .{ .checked = true }, .declarations = &.{style.token(.fill, Names.accent)}, .source = .from("radio.selected") },
+};
+pub const radio: Recipe = .{
+    .parts = &.{
+        .{ .id = Parts.root, .base = .{ .box = radio_zig.groupStyle(&.default) } },
+        .{ .id = Parts.row, .base = .{ .box = radio_zig.optionStyle(&.default) } },
+        .{ .id = Parts.background, .base = .{ .box = radio_zig.ringStyle(&.default) } },
+        .{ .id = Parts.indicator, .base = .{ .box = radio_zig.dotStyle(&.default, false) } },
+        .{ .id = Parts.label, .base = .{ .box = .{ .role = .label } } },
+        .{ .id = Parts.focus },
+    },
+    .rules = &radio_rules,
 };
 
 pub const switch_rules = text_rules ++ [_]Rule{

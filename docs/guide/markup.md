@@ -388,16 +388,19 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 
 `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
 `:disabled`, `:enabled`, `:invalid`, `:valid`, `:required` and `:optional` on a `<button>`, a link, a toggle button
-(`<button aria-pressed>`), a checkbox, a switch, a range or a text field
+(`<button aria-pressed>`), a checkbox, a radio group, a switch, a range or a text field
 make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
-`recipes.button` on a runtime one (`link`, `toggle`, `slider`, `textfield` likewise), with a generated
+`recipes.button` on a runtime one (`link`, `toggle`, `radio`, `slider`, `textfield` likewise), with a generated
 `recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
 browser. A state rule sets background and border colours, `color`, border width and style
 (`solid` or `none`), radius, `opacity`, padding, the main-axis gap, width, height, min and max
 sizes and `transform`; layout properties lay the page out again when the state changes. On a
-checkbox or switch the colours and border are the box's. Margins and `box-shadow` there are
+checkbox or switch the colours and border are the box's. A radio group's static CSS styles the
+group, as without state CSS, and its state rules style each option under that option's own
+states (`:checked` is the selected one); every radio of a group takes the same state rules,
+and a radio group neither eases nor animates. Margins and `box-shadow` there are
 errors. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.

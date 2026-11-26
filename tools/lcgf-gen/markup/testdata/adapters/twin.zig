@@ -1,7 +1,8 @@
 //! adapters, written by hand: widgets beyond the button, checkbox, switch, range and text field
 //! with state CSS are recipe widgets too, over their stock recipes (`recipes.model.link`,
 //! `toggle`, …) followed by their rules. A link keeps its Enter-only activation and its
-//! on:click; a toggle button flips its bound field.
+//! on:click; a toggle button flips its bound field; a radio group's state rules style each
+//! option under that option's own states.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -14,7 +15,7 @@ const Color = lcgf.types.Color;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { bold: bool = false };
+pub const State = struct { bold: bool = false, size: u32 = 1 };
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -25,6 +26,7 @@ const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes
 
 const blue: Color = .rgb(80, 120, 200);
 const red: Color = .rgb(200, 80, 80);
+const green: Color = .rgb(80, 200, 120);
 
 const recipe_docs: recipes.Recipe = .{ .parts = recipes.model.link.parts, .rules = &(recipes.model.link_rules ++ [_]style.Rule{
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, blue)} },
@@ -33,11 +35,16 @@ const recipe_bold: recipes.Recipe = .{ .parts = recipes.model.toggle.parts, .rul
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, red)} },
 }) };
 
+const recipe_size: recipes.Recipe = .{ .parts = recipes.model.radio.parts, .rules = &(recipes.model.radio_rules ++ [_]style.Rule{
+    .{ .part = style.Parts.row, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, green)} },
+}) };
+
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 
 pub const spec = s.col(body, .{
     recipes.ct.link(.docs, "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }),
     recipes.ct.toggle(.bold, .bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }),
+    recipes.ct.radio(.size, .size, .{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }),
 });
 
 pub const limits: lcgf.context.Limits = .{ .nodes = 64, .texts = 16, .customs = 4, .strings = 1024, .depth = 8 };
@@ -45,16 +52,18 @@ pub const limits: lcgf.context.Limits = .{ .nodes = 64, .texts = 16, .customs = 
 /// The same page in the runtime front end, for the draw lists.
 pub const App = struct {
     bold: bool = false,
+    size: u32 = 1,
 
     pub fn build(app: *App, f: *Frame) void {
         _ = f.open(.none, body);
         _ = recipes.link(f, .from("docs"), "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.toggle(f, .from("bold"), &app.bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }) catch unreachable;
+        _ = recipes.radio(f, .from("size"), &app.size, &.{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }) catch unreachable;
         f.close();
     }
 };
 
-/// Hover the link and click it, then click the toggle button twice.
+/// Hover the link and click it, click the toggle button twice, then pick Small.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -68,6 +77,12 @@ pub const replay =
     \\buttons left
     \\frame
     \\buttons
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\pointer 20 75
     \\frame
     \\buttons left
     \\frame
@@ -89,7 +104,8 @@ fn center(r: lcgf.types.Rect) [2]f32 {
 }
 
 /// The link takes its hover fill and its click reaches open_docs; the toggle button takes
-/// its hover fill and flips `bold`.
+/// its hover fill and flips `bold`; the Small option alone takes its hover fill, and its click
+/// selects it.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
@@ -112,4 +128,15 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     in.buttons.left = false;
     _ = p.frame(h, &in);
     try std.testing.expect(p.ui.signals.state.bold);
+    const small = t.find(lcgf.types.Id.from("size").with(0));
+    const large = t.find(lcgf.types.Id.from("size").with(1));
+    in.pointer = center(t.rect(small));
+    t = p.frame(h, &in).tree;
+    try std.testing.expectEqual(green.bitsOf(), t.c.look[small].fill);
+    try std.testing.expect(green.bitsOf() != t.c.look[large].fill);
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    try std.testing.expectEqual(0, p.ui.signals.state.size);
 }

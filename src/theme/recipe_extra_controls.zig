@@ -25,17 +25,7 @@ const Config = @import("recipe_comptime.zig").Config;
 const Parts = style.Parts;
 const none = types.none;
 
-pub const radio_recipe: model.Recipe = .{
-    .parts = &.{
-        .{ .id = Parts.root, .base = .{ .box = radio_native.groupStyle(&.default) } },
-        .{ .id = Parts.row, .base = .{ .box = radio_native.optionStyle(&.default) } },
-        .{ .id = Parts.background, .base = .{ .box = radio_native.ringStyle(&.default) } },
-        .{ .id = Parts.indicator, .base = .{ .box = radio_native.dotStyle(&.default, false) } },
-        .{ .id = Parts.label, .base = .{ .box = .{ .role = .label } } },
-        .{ .id = Parts.focus },
-    },
-    .rules = &model.checkbox_rules,
-};
+pub const radio_recipe = model.radio;
 pub const range_recipe: model.Recipe = .{
     .parts = &.{
         .{ .id = Parts.root, .base = .{ .box = range_native.trackStyle(&.default) } },
@@ -440,12 +430,13 @@ fn failedRows(ui: anytype, comptime node: specs.Spec, parent: u32, next: *u32, i
 }
 
 pub const ct = struct {
+    /// `captions` is a tuple of `[]const u8` State fields (`.first`) or literals ("First").
     pub fn radio(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime captions: anytype, comptime config: Config) specs.Spec {
         if (captions.len == 0) @compileError("recipe radio needs at least one caption");
         const name = @tagName(id);
         var children: [captions.len]specs.Spec = undefined;
-        for (&children, captions, 0..) |*child, caption, i| {
-            const label: specs.Spec = .{ .kind = .label, .bind = @tagName(caption) };
+        inline for (&children, captions, 0..) |*child, caption, i| {
+            const label: specs.Spec = if (@TypeOf(caption) == @EnumLiteral()) .{ .kind = .label, .bind = @tagName(caption) } else .{ .kind = .label, .text = caption };
             const ring: specs.Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
             child.* = .{ .kind = .row, .id = childName(name, i), .widget = Gate(.radio, childName(name, i), @tagName(bind), i, config), .children = &.{ ring, label, .{ .kind = .col } } };
         }
@@ -480,7 +471,7 @@ fn RadioWidget(comptime name: []const u8, comptime bind: []const u8, comptime ca
             var labels: [captions.len][]const u8 = undefined;
             var visual: Visual = .{ .focus_visible = B.visible(ui, in) };
             inline for (captions, 0..) |caption, i| {
-                labels[i] = @field(ui.signals.state, @tagName(caption));
+                labels[i] = if (@TypeOf(caption) == @EnumLiteral()) @field(ui.signals.state, @tagName(caption)) else caption;
                 var response = ui.response(next.* + 1 + radio_rows * @as(u32, @intCast(i)), in);
                 response.focused = ui.focus == @field(Ui.Events.Widget, childName(name, i));
                 visual.add(i, response);

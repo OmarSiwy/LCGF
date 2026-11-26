@@ -533,8 +533,8 @@ pub const Lowerer = struct {
             if (x == none or !l.disabledElement(n)) continue;
             nodes.items(.live)[x].disabled = true;
             switch (nodes.items(.kind)[x]) {
-                .button, .toggle, .checkbox, .@"switch", .container, .slider, .textfield => {},
-                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a switch, a range or a text field", .{l.tag(n)}),
+                .button, .toggle, .checkbox, .radio, .@"switch", .container, .slider, .textfield => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a radio group, a switch, a range or a text field", .{l.tag(n)}),
             }
             if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
         }
@@ -551,7 +551,8 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             if (x == none or nodes.items(.recipe)[x].len > 0) continue;
             const kind = nodes.items(.kind)[x];
-            const control = l.recipeWidget(n, x) and kind != .container;
+            // ponytail: a recipe radio group neither eases nor plays; add Fade/Clock to it when asked.
+            const control = l.recipeWidget(n, x) and kind != .container and kind != .radio;
             const eases = l.transitionOf(n) != null and control;
             const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.eachOf(n) == none));
             if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
@@ -603,7 +604,7 @@ pub const Lowerer = struct {
             const r = l.transitionOf(n) orelse continue;
             const at = l.c.decls.items(.loc)[l.k.get(n, .transition).decl];
             const node = l.page.nodes.get(x);
-            if (node.recipe.len > 0) {
+            if (node.recipe.len > 0 and node.kind != .radio) {
                 const t = l.transition(r, at) orelse continue;
                 l.page.nodes.items(.live)[x].transition = t;
                 l.field(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition");
@@ -629,7 +630,7 @@ pub const Lowerer = struct {
             const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
-            if (node.recipe.len == 0) {
+            if (node.recipe.len == 0 or node.kind == .radio) {
                 l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
                 continue;
             }
@@ -986,9 +987,21 @@ pub const Lowerer = struct {
         const fits = x != none and l.recipeWidget(n, x);
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
         for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
+        // A later radio of a group: the group's recipe is its first radio's, so each takes the same rules.
+        if (x == none) if (l.radioLead(n)) |lead| {
+            const same = outer: for (l.k.dynamic.items) |d| {
+                if (d.node != n and d.node != lead) continue;
+                const other = if (d.node == n) lead else n;
+                for (l.k.dynamic.items) |e| {
+                    if (e.node == other and e.sel == d.sel and e.decl == d.decl) break;
+                } else break :outer false;
+            } else true;
+            if (!same) l.ds.err(l.loc(n), "every radio of group '{s}' takes the same state CSS and @media rules as its first, whose recipe styles each option", .{l.attr(n, "name").?});
+            return;
+        };
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range or a text field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1072,10 +1085,21 @@ pub const Lowerer = struct {
     /// Whether document node `n` (IR node `x`) can be a recipe widget or box.
     fn recipeWidget(l: *const Lowerer, n: u32, x: u32) bool {
         return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
-            .button, .link, .toggle, .checkbox, .@"switch", .container, .slider => true,
+            .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield => !l.page.nodes.items(.secure)[x],
             else => false,
         };
+    }
+
+    /// The first `<input type=radio>` of document node `n`'s group when `n` is a later one.
+    fn radioLead(l: *const Lowerer, n: u32) ?u32 {
+        if (!l.doc.isElement(n, "input") or !css.eq(l.attr(n, "type") orelse "", "radio")) return null;
+        const group = l.attr(n, "name") orelse return null;
+        for (0..n) |i_| {
+            const i: u32 = @intCast(i_);
+            if (l.doc.isElement(i, "input") and css.eq(l.attr(i, "type") orelse "", "radio") and std.mem.eql(u8, l.attr(i, "name") orelse "", group)) return i;
+        }
+        return null;
     }
 
     fn hasState(l: *const Lowerer, sel: u32) bool {

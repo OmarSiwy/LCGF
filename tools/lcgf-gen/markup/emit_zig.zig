@@ -484,12 +484,17 @@ pub const Emit = struct {
                 e.write(")");
             },
             .radio => {
-                e.print("{s}.ct.radio(theme, .{f}, .{f}, .{{", .{ e.use("radio"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                if (n.recipe.len > 0)
+                    e.print("recipes.ct.radio(.{f}, .{f}, .{{", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
+                else
+                    e.print("{s}.ct.radio(theme, .{f}, .{f}, .{{", .{ e.use("radio"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 for (n.captions, 0..) |c, k| {
                     e.write(if (k == 0) " " else ", ");
                     e.string(c);
                 }
-                e.write(" })");
+                e.write(" }");
+                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
+                e.write(")");
             },
             .textfield, .search => if (n.recipe.len > 0) {
                 e.print("recipes.ct.textfield(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
@@ -782,6 +787,7 @@ pub const Emit = struct {
                 .link => "link",
                 .toggle => "toggle",
                 .checkbox => "checkbox",
+                .radio => "radio",
                 .slider => "slider",
                 .textfield => "input",
                 else => "switch_control",
@@ -798,8 +804,11 @@ pub const Emit = struct {
             };
             e.print("/// The recipe of `{s}` ({s}): the stock {s}'s, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc), stock });
             e.print("const {s}: recipes.Recipe = .{{ .parts = recipes.model.{s}.parts, .rules = &(recipes.model.{s}_rules ++ [_]style.Rule{{\n", .{ e.recipeName(n), stock, rules });
-            for (n.recipe) |r| {
-                if (std.mem.eql(u8, box, "root")) {
+            for (n.recipe, 0..) |r, k| {
+                // A radio group's static CSS styles the group, its state rules each option.
+                if (n.kind == .radio) {
+                    e.rule(r, if (k == 0) "root" else "row", .all);
+                } else if (std.mem.eql(u8, box, "root")) {
                     e.rule(r, "root", .all);
                 } else {
                     e.rule(r, "root", .unboxed);
@@ -1226,15 +1235,16 @@ pub const Emit = struct {
                 return "";
             },
             .radio => {
-                const face = e.rtFace(n);
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, &.{{", .{ e.use("radio"), e.faced("radio", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
+                if (n.recipe.len > 0)
+                    e.print("_ = recipes.radio(f, {s}, &{s}, &.{{", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) })
+                else
+                    e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, &.{{", .{ e.use("radio"), e.faced("radio", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 for (n.captions, 0..) |c, k| {
                     e.write(if (k == 0) " " else ", ");
                     e.string(c);
                 }
-                e.write(" }");
-                e.write(face);
-                e.write(");");
+                if (n.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
                 return "";
             },
             .textfield, .search, .textarea => if (e.eachOf(i) != none) {
