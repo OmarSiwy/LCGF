@@ -739,6 +739,8 @@ pub const Lowerer = struct {
                 return a.key < b.key;
             }
         }.less);
+        if (kind == .textfield and l.attr(n, "pattern") != null)
+            l.ds.err(l.attrLoc(n, "pattern"), "pattern needs a regular-expression engine, which LCGF does not have; validate in a handler", .{});
         var rules: std.ArrayList(ir.RecipeRule) = .empty;
         ok(rules.append(l.arena, l.staticRule(n, x) orelse return));
         const row_ = l.k.table[n * values.prop_count ..][0..values.prop_count];
@@ -3895,6 +3897,9 @@ pub const Lowerer = struct {
         }
         var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind, .one_way = one_way };
         node.secure = kind == .textfield and css.eq(l.attr(n, "type") orelse "", "password");
+        if (l.attr(n, "required") != null) node.validation.required = true;
+        if (l.numberAttr(n, "minlength")) |v| node.validation.min_length = @intFromFloat(@max(0, v));
+        if (l.numberAttr(n, "maxlength")) |v| node.validation.max_length = @intFromFloat(@max(0, v));
         node.id = l.widgetId(n, bind, what) orelse return true;
         const hint = l.attr(n, "placeholder") orelse "";
         l.caption(&node, hint, l.valueLoc(n, "placeholder"));
@@ -4746,7 +4751,9 @@ const state_bits = .{
     .{ "focus", "focused", true },             .{ "focus-visible", "focus_visible", true },
     .{ "checked", "checked", true },           .{ "indeterminate", "indeterminate", true },
     .{ "disabled", "disabled", true },         .{ "enabled", "disabled", false },
-    .{ "focus-within", "focus_within", true },
+    .{ "focus-within", "focus_within", true }, .{ "invalid", "invalid", true },
+    .{ "valid", "invalid", false },            .{ "required", "required", true },
+    .{ "optional", "required", false },
 };
 
 /// The state pseudo-classes of plan §2.3, resolved at run time (style.States).

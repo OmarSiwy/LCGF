@@ -162,6 +162,8 @@ pub const Node = struct {
     recipe: []const RecipeRule = &.{},
     /// HTML disabled (its attribute or a `<fieldset disabled>`): the recipe's `States.disabled`.
     disabled: bool = false,
+    /// A text field's `required`, `minlength` and `maxlength`, for `:invalid` and `:valid`.
+    validation: lcgf.theme_recipes.controls.Validation = .{},
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed

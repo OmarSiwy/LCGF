@@ -5,10 +5,12 @@
   <style>
     input[type=range]:hover { background-color: #5078c8; }
     input[type=text]:focus { border-color: #ffd040; }
+    input:required:invalid { background-color: #402020; }
+    input:valid { background-color: #203020; }
   </style>
 </head>
 <body>
   <input type="range" id="level" bind:value="level" on:change="moved">
-  <input type="text" id="name" bind:value="name" placeholder="Your name" on:submit="done">
+  <input type="text" id="name" bind:value="name" placeholder="Your name" on:submit="done" required maxlength="8">
 </body>
 </html>

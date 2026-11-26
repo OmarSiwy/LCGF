@@ -387,7 +387,7 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 ### State CSS
 
 `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
-`:disabled` and `:enabled` on a `<button>`, a checkbox, a switch, a range or a text field
+`:disabled`, `:enabled`, `:invalid`, `:valid`, `:required` and `:optional` on a `<button>`, a checkbox, a switch, a range or a text field
 make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
 `recipes.button` on a runtime one (`slider`, `textfield` likewise), with a generated
 `recipe_<id>`. The recipe is the stock
@@ -402,7 +402,9 @@ looks like the theme widgets beside it until its CSS says otherwise. State CSS o
 The `disabled` attribute, or a `<fieldset disabled>` around the control (outside its first
 `<legend>`), makes it (one of those widgets) a recipe widget with `States.disabled`: no pointer or keyboard input, no
 Tab stop, the stock muted text, and `:disabled` rules. On other controls it is an error, as
-is a bound `disabled="{f}"`. A bool checkbox is never `:indeterminate`.
+is a bound `disabled="{f}"`. A bool checkbox is never `:indeterminate`. A text field's `required`, `minlength` and
+`maxlength` are its validation (`controls.Validation`), checked on every edit; `pattern` is
+an error, since LCGF has no regular-expression engine.
 
 A `<div>`-like box with state CSS or `@media` is a recipe box (`recipes.ct.box`,
 `recipes.beginBox`): its static style is the recipe's base and each such rule one recipe

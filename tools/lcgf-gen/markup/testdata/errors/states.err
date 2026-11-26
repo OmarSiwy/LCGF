@@ -2,7 +2,7 @@ states.html:5:15: error: ::before and ::after content is not lowered yet
   p::before { content: "x"; }
               ^
 states.html:3:8: error: state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)
-  input:invalid { color: red; }
+  input:read-only { color: red; }
        ^
 states.html:4:7: error: unknown pseudo-class :hovr
   span:hovr { color: red; }

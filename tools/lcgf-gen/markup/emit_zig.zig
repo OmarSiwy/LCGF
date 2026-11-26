@@ -681,7 +681,14 @@ pub const Emit = struct {
     /// The recipe `Config` (spec) or `Options` (runtime) of recipe widget `n`: its recipe, the
     /// page's tokens on a widget, and `disabled` when HTML disables it.
     fn config(e: *Emit, n: ir.Node) []const u8 {
-        return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.disabled) ", .states = .{ .disabled = true }" else "" }) catch unreachable;
+        var validation: std.ArrayList(u8) = .empty;
+        if (!std.meta.eql(n.validation, @TypeOf(n.validation){})) {
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+            e.write(", .validation = ");
+            e.structure(n.validation, .{});
+            std.mem.swap(std.ArrayList(u8), &validation, &e.out);
+        }
+        return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.disabled) ", .states = .{ .disabled = true }" else "", validation.items }) catch unreachable;
     }
 
     /// A box whose rules ask for a state takes hover and press: it is a widget.
