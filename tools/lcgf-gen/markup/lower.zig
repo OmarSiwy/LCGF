@@ -1449,7 +1449,8 @@ pub const Lowerer = struct {
         // `url(x.png)` or `url("x.png")`: the asset's texture over the box, stretched to it.
         const url: ?[]const u8 = if (ty == .url) l.c.toks.items(.str)[t] else if (ty == .function and css.eq(l.c.toks.items(.str)[t], "url") and t + 1 < r[1] and l.c.toks.items(.type)[t + 1] == .string) l.c.toks.items(.str)[t + 1] else null;
         if (url) |src| {
-            const k = l.asset(src, l.c.tokLoc(t)) orelse return;
+            const box: [2]f32 = .{ if (s.size[0].kind == .px) s.size[0].v else 0, if (s.size[1].kind == .px) s.size[1].v else 0 };
+            const k = l.asset(src, l.c.tokLoc(t), box) orelse return;
             if (l.k.get(n, .@"background-color").decl != none and !std.meta.eql(s.fill, types.Color.transparent))
                 l.ds.err(l.c.tokLoc(t), "a background-color under a background-image is not drawn: one quad per box; set one of them", .{});
             s.texture = @fromBackingInt(@as(u16, @intCast(k + 1)));
@@ -3061,23 +3062,26 @@ pub const Lowerer = struct {
 
     /// Asset `src` as named at `at` (an `<img src>`, a stylesheet's `url()`), resolved against
     /// the file that names it; one entry per file. Null after reporting a remote or non-PNG one.
-    fn asset(l: *Lowerer, src: []const u8, at: Loc) ?u32 {
+    fn asset(l: *Lowerer, src: []const u8, at: Loc, raster: [2]f32) ?u32 {
         for ([_][]const u8{ "http:", "https:", "//", "data:" }) |p| if (std.mem.startsWith(u8, src, p)) {
             l.ds.err(at, "{s}", .{manifest.refusal("value", "remote-url", "").?});
             return null;
         };
-        if (!std.ascii.endsWithIgnoreCase(src, ".png")) {
-            l.ds.err(at, "only PNG images are decoded so far; '{s}' is not one", .{src});
+        const svg = std.ascii.endsWithIgnoreCase(src, ".svg");
+        if (!svg and !std.ascii.endsWithIgnoreCase(src, ".png")) {
+            l.ds.err(at, "images are PNG or SVG; '{s}' is neither", .{src});
             return null;
         }
+        // A PNG has its own size; an SVG is drawn at the size it is shown.
+        const size: [2]f32 = if (svg) raster else .{ 0, 0 };
         const dir = std.fs.path.dirname(l.ds.files.items[at.file].path) orelse ".";
         const path = ok(std.fs.path.join(l.arena, &.{ dir, src }));
-        for (l.page.assets.items, 0..) |a, k| if (std.mem.eql(u8, a.path, path)) return @intCast(k);
+        for (l.page.assets.items, 0..) |a, k| if (std.mem.eql(u8, a.path, path) and std.meta.eql(a.raster, size)) return @intCast(k);
         if (l.page.assets.items.len + 1 >= std.math.maxInt(u16)) {
             l.ds.err(at, "too many images on one page", .{});
             return null;
         }
-        ok(l.page.assets.append(l.arena, .{ .src = src, .path = path, .loc = at }));
+        ok(l.page.assets.append(l.arena, .{ .src = src, .path = path, .loc = at, .raster = size }));
         return @intCast(l.page.assets.items.len - 1);
     }
 
@@ -3090,7 +3094,6 @@ pub const Lowerer = struct {
             l.ds.err(l.loc(n), "<img> needs src", .{});
             return true;
         };
-        const k = l.asset(src, l.valueLoc(n, "src")) orelse return true;
         const alt = l.attr(n, "alt") orelse {
             l.ds.err(l.loc(n), "<img> needs alt: the picture's text, or alt=\"\" when it only decorates", .{});
             return true;
@@ -3105,6 +3108,7 @@ pub const Lowerer = struct {
             .fit => box[a] = l.numberAttr(n, name) orelse 0,
             else => l.ds.err(l.loc(n), "<img>: give its " ++ name ++ " in px", .{}),
         };
+        const k = l.asset(src, l.valueLoc(n, "src"), box) orelse return true;
         var fit: lcgf.widgets_image.Fit = .stretch;
         if (l.keyword(n, .@"object-fit")) |kw| {
             if (css.eq(kw, "contain")) fit = .contain else if (css.eq(kw, "cover")) fit = .cover else if (!css.eq(kw, "fill"))

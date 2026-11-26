@@ -258,6 +258,9 @@ pub const Asset = struct {
     src: []const u8,
     path: []const u8,
     loc: diag.Loc,
+    /// An SVG's raster size in px: where it is drawn; a side of 0 follows the other by the
+    /// SVG's shape, and both 0 is its own size.
+    raster: [2]f32 = .{ 0, 0 },
     w: u32 = 0,
     h: u32 = 0,
     /// Premultiplied RGBA8 rows, `w * h * 4` bytes.

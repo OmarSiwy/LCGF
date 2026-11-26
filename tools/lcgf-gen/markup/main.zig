@@ -300,6 +300,10 @@ fn loadAssets(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.
             ds.err(a.loc, "cannot read {s}: {s}", .{ a.path, @errorName(e) });
             continue;
         };
+        if (std.ascii.endsWithIgnoreCase(a.path, ".svg")) {
+            rasterSvg(arena, ds, a, bytes);
+            continue;
+        }
         const i = png.info(bytes) catch |e| {
             ds.err(a.loc, "{s} is not a decodable PNG: {s}", .{ a.src, @errorName(e) });
             continue;
@@ -316,6 +320,94 @@ fn loadAssets(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.
         };
         a.* = .{ .src = a.src, .path = a.path, .loc = a.loc, .w = i.w, .h = i.h, .pixels = pixels };
     }
+}
+
+/// Draws SVG asset `a` (`bytes`) with draw/svg.zig at its raster size, or its own size from
+/// its root's width and height (else its viewBox), into premultiplied RGBA8 rows.
+fn rasterSvg(arena: std.mem.Allocator, ds: *diag.Diags, a: *ir.Asset, bytes: []const u8) void {
+    const svg = lcgf.svg;
+    const own = svgSize(bytes) orelse {
+        ds.err(a.loc, "{s}: its <svg> needs a width and height, or a viewBox", .{a.src});
+        return;
+    };
+    var size = a.raster;
+    if (size[0] == 0 and size[1] == 0) size = own;
+    if (size[0] == 0) size[0] = size[1] * own[0] / own[1];
+    if (size[1] == 0) size[1] = size[0] * own[1] / own[0];
+    const w: u32 = @intFromFloat(@ceil(size[0]));
+    const h: u32 = @intFromFloat(@ceil(size[1]));
+    if (w == 0 or h == 0 or @as(u64, w) * h > 512 * 512) {
+        ds.err(a.loc, "{s} draws at {d} x {d}; an embedded image is 1 to 512 x 512 pixels", .{ a.src, w, h });
+        return;
+    }
+    const oom = "out of memory";
+    const Big = lcgf.paths.TestBuffers(4096, 65536);
+    const bufs = arena.alloc(Big, 3) catch @panic(oom);
+    var p = bufs[0].path();
+    var center = bufs[0].polyline();
+    var work = bufs[1].polyline();
+    var outline = bufs[2].polyline();
+    const n = lcgf.surface.requiredPixels(w, h) catch unreachable;
+    var layers: [4]lcgf.surface.Surface = undefined;
+    for (&layers) |*layer| layer.* = lcgf.surface.init(arena.alloc(u32, n) catch @panic(oom), w, h) catch unreachable;
+    const dst = lcgf.surface.init(arena.alloc(u32, n) catch @panic(oom), w, h) catch unreachable;
+    const cells = n + 64;
+    svg.paint(bytes, dst, .{ .viewport = .{ .x1 = size[0], .y1 = size[1] } }, .{
+        .path = &p,
+        .centerline = &center,
+        .work = &work,
+        .outline = &outline,
+        .fill = bufs[2].scratch(),
+        .accumulator = arena.alloc(f32, cells) catch @panic(oom),
+        .coverage = arena.alloc(u8, cells) catch @panic(oom),
+        .gradients = arena.alloc(svg.Gradient, 64) catch @panic(oom),
+        .stops = arena.alloc(lcgf.brushes.Stop, 256) catch @panic(oom),
+        .segments = arena.alloc(lcgf.brushes.Segment, 256) catch @panic(oom),
+        .stack = arena.alloc(svg.Frame, 64) catch @panic(oom),
+        .layers = &layers,
+        .dashes = arena.alloc(f32, 64) catch @panic(oom),
+        .clips = arena.alloc(lcgf.decoration.Clip, 4) catch @panic(oom),
+    }) catch |e| {
+        ds.err(a.loc, "{s} is not an SVG this build draws: {s}", .{ a.src, @errorName(e) });
+        return;
+    };
+    const pixels = arena.alloc(u32, @as(usize, w) * h) catch @panic(oom);
+    for (0..h) |y| @memcpy(pixels[y * w ..][0..w], dst.pixels[y * dst.stride ..][0..w]);
+    a.w = w;
+    a.h = h;
+    a.pixels = std.mem.sliceAsBytes(pixels);
+}
+
+/// The size an SVG gives itself: its root's width and height in px, else its viewBox's.
+fn svgSize(bytes: []const u8) ?[2]f32 {
+    const start = std.mem.indexOf(u8, bytes, "<svg") orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, bytes, start, '>') orelse return null;
+    const tag = bytes[start..end];
+    const value = struct {
+        fn of(t: []const u8, comptime name: []const u8) ?[]const u8 {
+            var at: usize = 0;
+            while (std.mem.indexOfPos(u8, t, at, " " ++ name ++ "=")) |i| : (at = i + 1) {
+                const q = i + name.len + 2;
+                if (q >= t.len) return null;
+                const close = std.mem.indexOfScalarPos(u8, t, q + 1, t[q]) orelse return null;
+                return t[q + 1 .. close];
+            }
+            return null;
+        }
+        fn px(v: []const u8) ?f32 {
+            const num = std.mem.trimEnd(u8, std.mem.trim(u8, v, " "), "px");
+            return std.fmt.parseFloat(f32, num) catch null;
+        }
+    };
+    if (value.of(tag, "width")) |wv| if (value.of(tag, "height")) |hv| {
+        if (value.px(wv)) |w| if (value.px(hv)) |h| if (w > 0 and h > 0) return .{ w, h };
+    };
+    const vb = value.of(tag, "viewBox") orelse return null;
+    var it = std.mem.tokenizeAny(u8, vb, " ,");
+    var f: [4]f32 = undefined;
+    for (&f) |*x| x.* = std.fmt.parseFloat(f32, it.next() orelse return null) catch return null;
+    if (f[2] <= 0 or f[3] <= 0) return null;
+    return .{ f[2], f[3] };
 }
 
 /// Which lowering `--frontend` asks for; `auto` takes the page's `lcgf-frontend`, else spec.
