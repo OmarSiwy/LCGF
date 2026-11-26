@@ -112,7 +112,9 @@ The same styled runs reach a real shaper. `protocol.Styled` is the description w
 font (`MonoParagraphs.styled()`), `Stack.style(tx, styled, rows)` writes it into the stack's
 paragraph and rich rows (caller-owned `StyledRows`), and `Stack.decorate` paints the decorations
 from each run's laid-out lines with the face's metrics. `Frame.endTextStyled(stack, ascent,
-styled, rows, rects)` does all three around `endText`.
+styled, rows, rects)` does all three around `endText`; on a comptime page,
+`ComptimeUi.frameText(in, .{ .stack = &stack, .ascent = &ascent, .rows = rows, .rects = &rects })`
+does the same for the page's styled labels.
 
 ## Drawing text
 

@@ -3960,6 +3960,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.…`: Optional caller-owned direction rows and device grid, sequenced at the same points as style.locale.end.
 - `fn rebuild(ui: *Self, in: *const Input) Output`: Builds, lays out and paints the frame again from the state as it is now, applying no input: for a caller that changed what the layout reads after `frame` (a fit region's kept size, `ct_interop.setFit`), so the frame shows it without waiting for the next.
+- `fn frameText(ui: *Self, in: *const Input, text: Shaped) Output`
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
 - `fn semantics(ui: *Self, s: *a11y.Semantics) void`: Names each live node of this frame that has an accessible name (`Spec.name`, set with `spec.named`) in `s` (`Semantics.label`), its bytes added to this frame's strings.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
@@ -3969,6 +3970,12 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn setCursor(ui: *Self, cursor: types.Cursor, when: bool) void`: Explicit override as on Frame.
 - `fn response(ui: *const Self, row: u32, in: *const Input) Response`
 - `fn field(comptime name: []const u8) S.Field`
+
+### `Shaped` (struct)
+A real shaper for `ComptimeUi.frameText`: the caller's stack, `ascent` scratch (a row per label), and for a page with styled labels the rows `Stack.style` points the stack at and `rects` scratch for `Stack.decorate` (at least the glyph rows), as `Frame.endTextStyled`.
+
+Fields: `stack`, `ascent`, `rows`, `rects`
+
 
 ### `Harness(..)` (generic struct)
 Runs one UI through both front ends, frame by frame, and checks they agree.

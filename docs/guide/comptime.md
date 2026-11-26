@@ -247,7 +247,10 @@ complete example.
   `validate.check` raise their own branch quotas, so large specs need nothing from you; the walks
   recurse once per level, and about 2,000 levels is the compiler's stack limit (measured in
   `src/comptime/flatten.zig`).
-- `ComptimeUi` keeps 1,024 bytes for strings and measures labels with the monospace `Mono` font.
+- `ComptimeUi` keeps 1,024 bytes for strings. `frame` measures labels with the monospace `Mono`
+  font. `frameText(in, shaped)` measures them on a real shaper instead: `widgets_base.Shaped`
+  holds the caller's `text_stack.Stack`, ascent scratch, and the rows and rects that styled
+  labels need, as `Frame.endTextStyled` takes them.
 
 ## Choosing a front end
 

@@ -73,7 +73,8 @@ const grid = @import("../layout/grid.zig");
 const overlay = @import("../layout/overlay.zig");
 const scroll_zig = @import("../layout/scroll.zig");
 const Mono = @import("../text/protocol.zig").Mono;
-const Paragraph = @import("../text/layout/stack.zig").Paragraph;
+const text_stack = @import("../text/layout/stack.zig");
+const Paragraph = text_stack.Paragraph;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -532,7 +533,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// Optional caller-owned direction rows and device grid, sequenced at the same
         /// points as style.locale.end. Tree/keyboard/semantic order is never reversed.
         pub fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation) @import("../style/locale.zig").LayoutError!Output {
-            return ui.frameAs(false, in, settings, presentation);
+            return ui.frameAs(false, in, settings, presentation, {});
         }
 
         /// Builds, lays out and paints the frame again from the state as it is now, applying no
@@ -540,10 +541,22 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// kept size, `ct_interop.setFit`), so the frame shows it without waiting for the next.
         /// The event of the frame stays `frame`'s; this one reports none.
         pub fn rebuild(ui: *Self, in: *const Input) Output {
-            return ui.frameAs(true, in, &ui.frame_settings, .{}) catch unreachable;
+            return ui.frameAs(true, in, &ui.frame_settings, .{}, {}) catch unreachable;
         }
 
-        inline fn frameAs(ui: *Self, comptime replay: bool, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation) @import("../style/locale.zig").LayoutError!Output {
+        /// `frame` on a real shaper (`Frame.endText`, or `endTextStyled` when the page has
+        /// styled labels): `text.stack` measures and wraps every label, and the page's
+        /// paragraph styles, spans and decorations reach it through `text.rows` and
+        /// `text.rects`, as a runtime page's `Ui.styled()` does. Styles that do not fit the
+        /// rows are dropped (`stack.overflow`) and the labels drawn plain.
+        // ponytail: no shaped `rebuild`; add one when a fit-region page runs on a real shaper.
+        pub fn frameText(ui: *Self, in: *const Input, text: Shaped) Output {
+            return ui.frameAs(false, in, &.{}, .{}, text) catch unreachable;
+        }
+
+        /// The frame, with labels measured by `ui.font` (`text` void) or by a `Shaped` stack.
+        inline fn frameAs(ui: *Self, comptime replay: bool, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation, text: anytype) @import("../style/locale.zig").LayoutError!Output {
+            const shaped = comptime @TypeOf(text) == Shaped;
             try presentation.rounding.validate();
             if (presentation.directions) |directions| try @import("../style/locale.zig").validateDirections(directions, rows);
             var event: ?E.Event = null;
@@ -689,7 +702,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 @import("../layout/rtl.zig").direction(t, directions);
                 @import("../layout/rtl.zig").startEnd(t, directions);
             }
-            const font = if (comptime paragraph_slots > 0) @import("../text/protocol.zig").MonoParagraphsOf(.{ .spans = anySpans(spec), .decorations = decorates(spec) }){
+            const mono = if (comptime paragraph_slots > 0) @import("../text/protocol.zig").MonoParagraphsOf(.{ .spans = anySpans(spec), .decorations = decorates(spec) }){
                 .mono = ui.font,
                 .rows = ui.paragraphs.rows[0..ui.paragraphs.len],
                 .styles = ui.paragraphs.styles[0..ui.paragraphs.len],
@@ -698,6 +711,15 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 .spans = if (comptime anySpans(spec)) &span_table else &.{},
                 .strings = tb.strings.buf[0..tb.strings.len],
             } else ui.font;
+            if (shaped) {
+                text.stack.overflow = false;
+                if (comptime paragraph_slots > 0) text.stack.style(tx, mono.styled(), text.rows) catch {
+                    text.stack.overflow = true;
+                    text.stack.paragraphs = &.{};
+                    text.stack.rich = &.{};
+                };
+            }
+            const font = if (shaped) StackFont{ .stack = text.stack, .strings = &tb.strings, .ascent = text.ascent } else mono;
             font.measure(tx);
             layout.prepare(t);
             layout.applyText(t, tx, .x);
@@ -738,6 +760,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.resolve(t, .y, in.viewport[1]);
                 layout.place(t);
             }
+            if (shaped) tx.overflow = tx.overflow or text.stack.overflow;
             if (anchor_rows > 0) overlay.anchor(t, &tb.an, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
             if (sticky_rows > 0) scroll_zig.stick(t, &tb.st);
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
@@ -746,7 +769,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 overlay.order(t, &tb.ly.l);
                 paint.emitLayered(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.ly.l, &tb.d);
             } else paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
-            if (comptime paragraph_slots > 0) font.decorate(&tb.d, tx);
+            if (comptime paragraph_slots > 0) {
+                if (shaped) text.stack.decorate(tx, &tb.strings, mono.styled(), &tb.d, text.rects) else mono.decorate(&tb.d, tx);
+            }
 
             if (dynamic) {
                 // ponytail: no exact (transformed) hits on dynamic pages; Rects maps rows by a
@@ -988,6 +1013,32 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
 fn styledLabel(comptime n: Spec) bool {
     return n.kind == .label and (n.paragraph != null or n.decoration != null or n.spans.len > 0);
 }
+
+/// A real shaper for `ComptimeUi.frameText`: the caller's stack, `ascent` scratch (a row per
+/// label), and for a page with styled labels the rows `Stack.style` points the stack at and
+/// `rects` scratch for `Stack.decorate` (at least the glyph rows), as `Frame.endTextStyled`.
+pub const Shaped = struct {
+    stack: *text_stack.Stack,
+    ascent: []f32,
+    rows: text_stack.StyledRows = .{ .paragraphs = &.{}, .rich = &.{}, .spans = &.{}, .start = &.{}, .font = &.{}, .px = &.{}, .color = &.{}, .metrics = &.{} },
+    rects: []types.Rect = &.{},
+};
+
+/// A `Stack` as a font of the text protocol: `measure` and `wrap` as `Frame.arrangeText`
+/// calls them.
+const StackFont = struct {
+    stack: *text_stack.Stack,
+    strings: *const Strings,
+    ascent: []f32,
+
+    fn measure(f: StackFont, tx: *Texts) void {
+        f.stack.measure(tx, f.strings, f.ascent);
+    }
+
+    fn wrap(f: StackFont, tx: *Texts) void {
+        f.stack.wrap(tx, f.strings, f.ascent);
+    }
+};
 
 /// Whether a label of `n` draws a decoration, its own or a span's: only then is
 /// `MonoParagraphsOf.decorate` compiled in.
@@ -2292,6 +2343,64 @@ test "decorated: one bar per line, painted right after its run, in both front en
         else => {},
     };
     try std.testing.expect(text_at != null);
+}
+
+test "frameText: styled labels on a real shaper lay out and draw the same in both front ends" {
+    const protocol = @import("../text/protocol.zig");
+    const golden = @import("../text/layout/golden.zig");
+    const shape = @import("../text/shape/shape.zig");
+    const lines = @import("../text/layout/lines.zig");
+    const span_rows = @import("../text/layout/spans.zig");
+    const th: Theme = .default;
+    const tall: Paragraph = .{ .line_height = .{ .px = 30 } };
+    const under: @import("../text/layout/decorations.zig").Style = .{ .underline = true };
+    const big = comptime [_]protocol.Span{.{ .start = 2, .style = .{ .px = 40, .color = .rgb(255, 0, 0) }, .decoration = .{ .strike = true } }};
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.paragraph(spec_zig.label("AVTa"), tall),
+        spec_zig.decorated(spec_zig.spans(spec_zig.label("AVTa"), &big), under),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const face = try @import("../text/font/opentype.zig").Face.parse(golden.font, 0);
+    const shapers = [_]shape.Shaper{.init(face)};
+    var para: golden.Para = .{};
+    para.bind();
+    var cols: golden.RunCols = .{};
+    var stack: text_stack.Stack = .{ .shapers = &shapers, .run = cols.run(), .g = para.g, .l = para.l };
+    var ascent: [4]f32 = undefined;
+    var p_rows: [4]Paragraph = undefined;
+    var rich: [4]?text_stack.Rich = undefined;
+    var sp: [2]span_rows.Spans = undefined;
+    var start: [8]u32 = undefined;
+    var font: [8]u16 = undefined;
+    var px: [8]f32 = undefined;
+    var color: [8]u32 = undefined;
+    var metrics: [8]lines.Metrics = undefined;
+    var rects: [64]types.Rect = undefined;
+    const rows: text_stack.StyledRows = .{ .paragraphs = &p_rows, .rich = &rich, .spans = &sp, .start = &start, .font = &font, .px = &px, .color = &color, .metrics = &metrics };
+    const in: Input = .{ .viewport = .{ 300, 200 } };
+
+    const caps: context.Limits = .{ .nodes = 8, .texts = 4, .strings = 64, .depth = 4 };
+    var buf: [context.Context.requiredBytes(caps)]u8 align(mem.column_align) = undefined;
+    var ctx = try context.Context.init(&buf, caps);
+    var f = ctx.begin(&in);
+    _ = f.open(.none, .{});
+    _ = f.textStyled("AVTa", labelText(&th), .{});
+    _ = f.textStyled("AVTa", labelText(&th), .{});
+    f.close();
+    const styled: protocol.Styled = .{ .rows = &.{ 0, 1 }, .styles = &.{ 0, 1 }, .table = &.{ tall, .{} }, .decorations = &.{ .{}, under }, .spans = &.{ &.{}, &big } };
+    const rt = f.endTextStyled(&stack, &ascent, styled, rows, &rects);
+    try std.testing.expect(!stack.overflow);
+
+    var ui: Ui = .{};
+    const cp = ui.frameText(&in, .{ .stack = &stack, .ascent = &ascent, .rows = rows, .rects = &rects });
+    try std.testing.expect(!stack.overflow);
+    try std.testing.expect(sameDraw(rt.draw, cp.draw));
+    try std.testing.expectEqual(rt.tree.len, cp.tree.len);
+    for (0..rt.tree.len) |r| try std.testing.expectEqual(rt.tree.rect(@intCast(r)), cp.tree.rect(@intCast(r)));
+    // The stack laid the labels out, not Mono: the first is one 30 px line, and the
+    // decorations (an underline and the span's strike) are in the draw list.
+    try std.testing.expectEqual(@as(f32, 30), cp.tree.rect(2).h());
+    try std.testing.expect(cp.draw.quad_len >= 2);
 }
 
 test "spans: one paragraph in two sizes and colours lays out the same in both front ends" {
