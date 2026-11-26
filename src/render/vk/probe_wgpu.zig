@@ -1,9 +1,9 @@
 //! The wgpu side of probe.zig: the same measurements through the wgpu back end over
-//! wgpu-native (which runs on the same Vulkan driver), for tools/bench/probe.py:
+//! wgpu-native (which runs on the same Vulkan driver), for bench/micro/probe.py:
 //!
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe-wgpu device
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe-wgpu empty
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe-wgpu scenes
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe-wgpu device
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe-wgpu empty
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe-wgpu scenes
 //!
 //! Lives with the Vulkan back end because lane render-vk owns the comparison; it uses
 //! src/render/wgpu/native.zig unchanged, as a module (build.zig, -Dwgpu-native).

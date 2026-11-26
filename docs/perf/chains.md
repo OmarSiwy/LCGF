@@ -49,6 +49,6 @@ alternated runs, medians of 4,000 reps:
 | transform | 14.79 14.81 15.09 15.11 15.11 | 15.09 | 12.99 13.00 13.00 13.01 13.03 | 13.00 (-14%) |
 | clip | 5.91 5.97 6.45 6.48 6.52 | 6.45 | 5.42 5.45 5.54 5.54 5.65 | 5.54 (-14%) |
 
-Census (`ci/run.sh census-src`): every pass within tools/census/baseline-src.json; `p_fit` 4 jcc,
+Census (`ci/run.sh census-src`): every pass within bench/census/baseline-src.json; `p_fit` 4 jcc,
 `p_finalize` 3, `p_inherit_transform` and `p_inherit_clip` 2, as before. The bench's differential
 check (src paint against the prototype's draw list) passes, so the layout results are unchanged.

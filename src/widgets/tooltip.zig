@@ -139,7 +139,7 @@ pub fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *cons
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example page: a toolbar with a button and a label, and the button's tooltip, in both
-/// front ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+/// front ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
@@ -179,14 +179,14 @@ pub fn Example(comptime th: Theme) type {
 /// Input for `Example(.default)` at 800 x 600, one commented line per frame.
 pub const replay = @embedFile("testdata/tooltip.replay");
 
-/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+/// The frames of `replay` kept as golden images, by name (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "tooltip-resting", 2 },
     .{ "tooltip-shown", 3 },
     .{ "tooltip-dismissed", 9 },
 };
 
-/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+/// What tools/golden/ dumps: the page's harness over `replay`.
 pub const golden = struct {
     pub const Run = Example(.default).Run;
     pub const src = replay;

@@ -145,7 +145,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime removable: bool) type {
 /// front ends. The application counts the removals it is asked for (a comptime spec cannot
 /// drop a node; a runtime application would stop building the chip). Its replay
 /// (testdata/chip.replay) clicks and uses the keys; its golden images
-/// (tools/widgetgolden/ref/chip-*.png) show the remove button at rest, hovered and held.
+/// (tools/golden/ref/widgets/chip-*.png) show the remove button at rest, hovered and held.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
@@ -174,7 +174,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/chip.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/chip-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/chip-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } };
 };
 

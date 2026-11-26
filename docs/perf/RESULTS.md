@@ -204,7 +204,7 @@ and cleanup 24%, tracking and validation code 17%, extra driver calls 14%, back-
 Resident memory after the render-select fixes (commits e524dbb, 97974a9): the wgpu host's
 instance is Vulkan-only (Metal on Apple), and the Vulkan back end's default ring is sized to a
 frame of the default `Limits` (4096 quads, 16K glyphs: 5.6 MB host-visible instead of 13 MB).
-`tools/bench/probe.py`, ReleaseFast, golden shell, one batch, MB = 1000 KiB; device only /
+`bench/micro/probe.py`, ReleaseFast, golden shell, one batch, MB = 1000 KiB; device only /
 empty 800x600 frame / after the scenes drawn 2000 times:
 
 | Driver | Vulkan, before | Vulkan, after | wgpu, before | wgpu, after |

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check commit messages in a git range against CONTRIBUTING.md.
 
-    python3 tools/commitlint/commitlint.py main..HEAD
-    python3 tools/commitlint/commitlint.py --self-test
+    python3 ci/commitlint.py main..HEAD
+    python3 ci/commitlint.py --self-test
 
 Subjects are 1 to 72 characters. Merge commits are skipped.
 """

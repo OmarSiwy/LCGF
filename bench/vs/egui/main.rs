@@ -1,7 +1,7 @@
 //! The scenes of bench/scenes/ on egui (https://github.com/emilk/egui), for the comparison of
 //! docs/perf/vs.md. A frame is `Context::run_ui` (input, widgets, layout, shapes) plus
 //! `Context::tessellate` (shapes to triangle meshes, text included as glyph quads), which is what
-//! egui hands a renderer. That matches tools/bench's `frame` (build, layout, paint into a draw
+//! egui hands a renderer. That matches bench/micro's `frame` (build, layout, paint into a draw
 //! list); neither rasterises. No window and no eframe: egui alone, with its default fonts at 14 and
 //! 20 px. Springs come from bench/vs/harness.rs (egui's own animation helpers are tweens).
 //!

@@ -23,7 +23,7 @@ Every claim carries one tag:
    prior art has: the count past the limit.
 2. **Cost.** Turning each table's `overflow` bool into a `lost` counter adds 2 instructions to
    `Tree.pushRow` (`xor`, `add` to memory) and no conditional jump anywhere: the census of all
-   117 probes has the same `jcc` counts, and `--baseline tools/census/baseline-src.json` passes
+   117 probes has the same `jcc` counts, and `--baseline bench/census/baseline-src.json` passes
    [M]. Building the 3,961-node bench tree, two copies of lcgf interleaved in one process: +0.0 to
    +0.6 us on 108 us (at most 0.5%), inside the noise at load 14 [M]. The per-frame fold is one
    16-lane max, compare and select.
@@ -70,7 +70,7 @@ Every claim carries one tag:
   memos sets nothing anywhere [S]. The design below reports all eleven.
 - **`docs/perf/bytes.md` is stale.** It says 874 bytes per node; the pinned test
   (`src/runtime/context.zig:275`) and `docs/guide/perf.md:75` say 924, which is what measures [M].
-- **The bench's buffers break `initZeroed` in Debug.** `tools/bench/bench.zig:76,80` declare
+- **The bench's buffers break `initZeroed` in Debug.** `bench/micro/bench.zig:76,80` declare
   `= undefined` and `bench.zig:406` carves them with `initZeroed` [S]; correct only in release
   builds (see question 4). Declaring them `= @splat(0)` puts them in `.bss` in every mode [M].
 
@@ -97,11 +97,11 @@ The probes are in `docs/research/usage/`:
   against the patched copy, printing peak, given, frames hit and the first.
 
 Census: `src/census_probes.zig` built as `zig build census-src-obj` builds it (`-O ReleaseFast
--mcpu x86_64_v3`) from both trees, then `python3 tools/census/census.py OBJ` and `--baseline
-tools/census/baseline-src.json`.
+-mcpu x86_64_v3`) from both trees, then `python3 bench/census/census.py OBJ` and `--baseline
+bench/census/baseline-src.json`.
 
-Resident memory: `tools/bench/bench.zig` built by hand with `zig build-exe` in each mode (the
-build script fixes it at ReleaseFast), run under `python3 tools/bench/probe.py -- bench --idle`,
+Resident memory: `bench/micro/bench.zig` built by hand with `zig build-exe` in each mode (the
+build script fixes it at ReleaseFast), run under `python3 bench/micro/probe.py -- bench --idle`,
 twice each.
 
 ## 1. Prior art
@@ -173,7 +173,7 @@ Replacing `overflow` by `lost != 0` (the design) drops the `or`, so the net is o
 | `p_flip` (calls `Anims.place` per row) | 507 | 524 | 30 | 30 |
 | `p_anim`, `p_tween`, every other probe | same | same | same | same |
 
-`census.py --baseline tools/census/baseline-src.json` exits 0 on both objects.
+`census.py --baseline bench/census/baseline-src.json` exits 0 on both objects.
 
 **Time.** `pushab.zig`, the 3,961-node scene, medians per frame over 20,000 interleaved reps,
 five processes, pinned to CPU 8, load 14 [M]:
@@ -531,7 +531,7 @@ In `src/runtime/context.zig` and `src/runtime/frame.zig` unless named:
 9. "run prints once when the shell is done": in `src/shell/iface.zig`, the `Manual` shell with a
    `report` declaration captures the text; under `-Dlcgf-usage=never` it is not called.
 10. The bare-metal build (`ci/run.sh baremetal`) still links, for Cortex-M7 and RV32IMAC.
-11. Census: `tools/census/baseline-src.json` unchanged.
+11. Census: `bench/census/baseline-src.json` unchanged.
 
 ### Measured cost, for the commit message
 

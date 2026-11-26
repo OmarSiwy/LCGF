@@ -1,8 +1,8 @@
 # shell: golden
 # all: no
-# Golden images of the draw features (tools/drawgolden/): every scene is dumped from src/, drawn
-# by tools/golden/gpu.py on Mesa lavapipe and compared with tools/drawgolden/ref/<scene>.png.
-for ref in tools/drawgolden/ref/*.png; do
+# Golden images of the draw features (tools/golden/): every scene is dumped from src/, drawn
+# by tools/golden/gpu.py on Mesa lavapipe and compared with tools/golden/ref/draw/<scene>.png.
+for ref in tools/golden/ref/draw/*.png; do
     scene=$(basename "$ref" .png)
     out=zig-out/drawgolden/$scene
     zig build draw-dump -- "$scene" "$PWD/$out"

@@ -1,5 +1,5 @@
 //! Branch-census probe for the ported layout and hit passes: one exported function per pass, so
-//! tools/census/census.py can count the conditional jumps each one compiles to (docs/CHECKS.md
+//! bench/census/census.py can count the conditional jumps each one compiles to (docs/CHECKS.md
 //! section 2). Built as an object by `zig build census-src-obj`; not exported from src/lcgf.zig,
 //! because the library itself must not export symbols. Same arguments as prototype/asm_probe.zig.
 const lcgf = @import("lcgf");

@@ -243,7 +243,7 @@ const step_ = step;
 
 /// The range slider's example page: a frequency band (20..200) under its label on a panel, in
 /// both front ends. Its replay (testdata/range.replay) drags each thumb and uses the keys; its
-/// golden images (tools/widgetgolden/ref/range-*.png) show the span moving.
+/// golden images (tools/golden/ref/widgets/range-*.png) show the span moving.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
@@ -273,7 +273,7 @@ pub const Page = struct {
         }
     }
     pub const replay = @embedFile("testdata/range.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/range-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/range-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "dragged", 2 }, .{ "keys", 6 } };
 };
 

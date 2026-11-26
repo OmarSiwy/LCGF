@@ -105,7 +105,7 @@ pub fn Comptime(comptime name: [:0]const u8) type {
 
 /// The button's example page: two buttons on a panel, in both front ends, counting their
 /// clicks. Its replay (testdata/button.replay) clicks, drags off and uses Enter and Space; its
-/// golden images (tools/widgetgolden/ref/button-*.png) are the face at rest, hovered, held.
+/// golden images (tools/golden/ref/widgets/button-*.png) are the face at rest, hovered, held.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
@@ -125,7 +125,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/button.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/button-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/button-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } };
 };
 

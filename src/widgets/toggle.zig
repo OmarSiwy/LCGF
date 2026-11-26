@@ -127,7 +127,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
 
 /// The toggle button's example page: B, I and U (pressed) on a toolbar, in both front ends.
 /// Its replay (testdata/toggle.replay) clicks, uses Enter and Space and drags off; its golden
-/// images (tools/widgetgolden/ref/toggle-*.png) show pressed and released faces.
+/// images (tools/golden/ref/widgets/toggle-*.png) show pressed and released faces.
 pub const Page = struct {
     const th = Theme.default;
     const bar: Style = .{ .dir = .x, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .cross = .start, .fill = th.panel };
@@ -160,7 +160,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/toggle.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/toggle-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/toggle-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "held", 1 }, .{ "pressed", 2 } };
 };
 

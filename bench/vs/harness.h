@@ -1,7 +1,7 @@
 // Shared driver for the C and C++ comparison harnesses (bench/vs/clay, imgui, lvgl). It mirrors
-// tools/bench/bench.zig so the numbers line up: the same six scenes of bench/scenes/ by name, the
+// bench/micro/bench.zig so the numbers line up: the same six scenes of bench/scenes/ by name, the
 // same input per frame, 3,000 frames timed on the monotonic clock, median and p99 in microseconds,
-// and `--idle` prints a "ready" line after one frame for tools/bench/probe.py.
+// and `--idle` prints a "ready" line after one frame for bench/micro/probe.py.
 //
 //   harness --scene NAME     time NAME's frames
 //   harness --idle           build one frame of the idle scene, print "ready", then idle until
@@ -118,7 +118,7 @@ static uint64_t vs_frame(int scene, uint32_t k);
 static void vs_idle(void);
 
 // Blocks on stdin until it closes: the host loop of a library that has no event loop of its own,
-// as tools/bench/bench.zig --idle does.
+// as bench/micro/bench.zig --idle does.
 static void vs_block_on_stdin(void) {
     char byte;
     ssize_t n;

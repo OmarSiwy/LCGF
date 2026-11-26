@@ -3,7 +3,7 @@
 //! what iced_winit does per redraw, without the window: `view`, `UserInterface::build` (diff against
 //! the widget tree cache and layout), `update` with that frame's events, and `draw` into the
 //! tiny-skia renderer, which records layers of primitives (quads, text) and rasterises only on
-//! `present`. That matches tools/bench's `frame` (build, layout, paint into a draw list); neither
+//! `present`. That matches bench/micro's `frame` (build, layout, paint into a draw list); neither
 //! rasterises. Text is shaped and laid out by cosmic-text with the font Iced embeds (Fira Sans) at
 //! 14 and 20 px; Iced keeps each text's layout in its widget tree between frames. Springs come from
 //! bench/vs/harness.rs.

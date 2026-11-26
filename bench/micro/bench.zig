@@ -14,14 +14,14 @@
 //! rows holding 4,000 auto-placed items, laid out `grid_frames` times.
 //!
 //!   zig build bench                    print median and p99 per pass, in microseconds
-//!   zig build bench -- --json PATH     also write them as JSON for tools/bench/compare.py
+//!   zig build bench -- --json PATH     also write them as JSON for bench/micro/compare.py
 //!   zig build bench -- --scene NAME    run another scene of bench/scenes/ (frame passes only)
 //!   zig build bench -- --counters      also count cycles, instructions, L1D and LLC read misses
 //!                                      per pass (perf_event_open; pin to one core with taskset)
 //!   zig build bench -- --huge          put benchmark columns in 2 MB transparent huge pages
 //!                                      (mmap + madvise; docs/perf/huge-pages.md)
 //!   zig build probe                    build one frame, then idle: resident memory and wake-ups
-//!                                      (bench --idle under tools/bench/probe.py)
+//!                                      (bench --idle under bench/micro/probe.py)
 const std = @import("std");
 const lcgf = @import("lcgf");
 const scenes = @import("scenes");

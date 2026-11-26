@@ -392,7 +392,7 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/colorpicker-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/golden/ref/widgets/colorpicker-<name>.png), as tools/golden/widgets.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/colorpicker.replay");

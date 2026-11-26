@@ -217,7 +217,7 @@ pub fn Page(comptime th: Theme) type {
 /// Input for `Page(.default)` at 320 x 200, one commented line per frame.
 pub const replay = @embedFile("testdata/toolbar.replay");
 
-/// The frames of `replay` kept as golden images (tools/widgetgolden/ref/toolbar-<name>.png).
+/// The frames of `replay` kept as golden images (tools/golden/ref/widgets/toolbar-<name>.png).
 pub const golden_frames = .{
     .{ "rest", 0 },
     .{ "hover", 1 },

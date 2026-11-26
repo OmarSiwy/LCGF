@@ -1,6 +1,6 @@
 # Cache misses per pass (C0799)
 
-Hardware counters per pass of `tools/bench`, user space only, means per built frame:
+Hardware counters per pass of `bench/micro`, user space only, means per built frame:
 
 ```
 nix develop .#bench -c ci/run.sh perf-cache        # every scene, plus perf stat per run

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resident-memory and idle-wakeup probe (Linux, reads /proc).
 
-    python3 tools/bench/probe.py [--seconds 2] -- COMMAND [ARGS...]
+    python3 bench/micro/probe.py [--seconds 2] -- COMMAND [ARGS...]
 
 Starts COMMAND with a pipe on stdin, waits for it to print a line starting with "ready" (its first
 frame is done and it is waiting for events), then samples /proc/PID/task/*/status twice, SECONDS

@@ -2,14 +2,14 @@
 """Compare a benchmark run with a stored baseline and print a delta table per pass.
 
     zig build bench -- --json "$PWD/run.json"
-    python3 tools/bench/compare.py tools/bench/baseline.json run.json [--tolerance 0.5]
+    python3 bench/micro/compare.py bench/micro/baseline.json run.json [--tolerance 0.5]
 
 Exits 1 when a gated pass median is slower than the baseline by more than the tolerance (a
 fraction: 0.5 means 50 percent). Gated by default are the frame passes; the layout sub-passes are
 printed but not gated, because the small ones (1 to 70 us) moved by 50 to 100 percent between two
 runs on a loaded machine. Timings move by about a third between runs on one machine (docs/CHECKS.md)
 and are not comparable across machines: record the baseline on the machine that compares.
-To record one: zig build bench -- --json "$PWD/tools/bench/baseline.json"
+To record one: zig build bench -- --json "$PWD/bench/micro/baseline.json"
 """
 import argparse
 import json

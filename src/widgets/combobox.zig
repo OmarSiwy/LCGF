@@ -437,7 +437,7 @@ pub const fruits: menu.Def = .{ .items = &.{ "apple", "apricot", "banana", "cher
 pub const fruit_texts = [_][]const u8{ "Apple", "Apricot", "Banana", "Cherry" };
 
 /// The example page: a toolbar with a caption and the combo box, and the combo box's list, in
-/// both front ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+/// both front ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
@@ -480,7 +480,7 @@ pub fn Example(comptime th: Theme) type {
 /// Input for `Example(.default)` at 800 x 600, one commented line per frame.
 pub const replay = @embedFile("testdata/combobox.replay");
 
-/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+/// The frames of `replay` kept as golden images, by name (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "combobox-open", 2 },
     .{ "combobox-filtered", 3 },
@@ -489,7 +489,7 @@ pub const golden_frames = .{
     .{ "combobox-hover", 9 },
 };
 
-/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+/// What tools/golden/ dumps: the page's harness over `replay`.
 pub const golden = struct {
     pub const Run = Example(.default).Run;
     pub const src = replay;

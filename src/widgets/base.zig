@@ -22,7 +22,7 @@
 //!    `role` and `value` columns, which the accessibility bridge reads).
 //! 5. **tests**: scripted input with exact expectations, run through both front ends, which must
 //!    produce the same draw list: a page (as `Reference`), a replay file under testdata/, a test
-//!    driving `Harness` over it, and golden images of chosen frames (tools/widgetgolden/).
+//!    driving `Harness` over it, and golden images of chosen frames (tools/golden/).
 //!
 //! ## Two front ends, one widget
 //!
@@ -978,7 +978,7 @@ pub fn Semantic(comptime cap: u32) type {
 
 /// The reference page: the prototype example's toolbar (a button, a checkbox, a slider and a
 /// label on a panel) in both front ends, in theme `th`. The harness's own tests and the golden
-/// images (tools/widgetgolden/) run it; a widget lane copies it for its own page.
+/// images (tools/golden/) run it; a widget lane copies it for its own page.
 pub fn Reference(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
@@ -1027,7 +1027,7 @@ pub fn Reference(comptime th: Theme) type {
 pub const reference_replay = @embedFile("testdata/reference.replay");
 
 /// The frames of `reference_replay` kept as golden images, by name
-/// (tools/widgetgolden/ref/<name>.png).
+/// (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "rest", 0 },
     .{ "hover", 1 },

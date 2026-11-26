@@ -3663,7 +3663,7 @@ The label's example page: three labels in a column on a panel, in both front end
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/label.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 2 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/label-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 2 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/label-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -3705,7 +3705,7 @@ The button's example page: two buttons on a panel, in both front ends, counting 
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/button.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/button-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/button-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -3753,7 +3753,7 @@ The checkbox's example page: a tri-state "All" that starts mixed and two plain b
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/checkbox.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "keys", 5 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/checkbox-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "keys", 5 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/checkbox-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -3805,7 +3805,7 @@ The radio group's example page: three quality levels on a panel, in both front e
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/radio.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "clicked", 2 }, .{ "down", 3 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/radio-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "clicked", 2 }, .{ "down", 3 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/radio-<name>.png.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, str: *Strings) void`: The page's accessibility beyond the tree, for either front end's tree `t`: the group's name, which no caption on the page shows (`Semantics.label`, added to the frame's strings `str`).
 
 ### `Page.App` (struct)
@@ -3847,7 +3847,7 @@ The switch's example page: VSync, HDR (on) and Bloom on a panel, in both front e
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/switch.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "flipped", 6 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/switch-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "flipped", 6 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/switch-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -3891,7 +3891,7 @@ The toggle button's example page: B, I and U (pressed) on a toolbar, in both fro
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/toggle.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "held", 1 }, .{ "pressed", 2 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/toggle-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "held", 1 }, .{ "pressed", 2 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/toggle-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -3938,7 +3938,7 @@ The slider's example page: Volume (0..100) and Gain (-12..12), each under its la
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/slider.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 1 }, .{ "keys", 6 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/slider-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 1 }, .{ "keys", 6 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/slider-<name>.png.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics) void`: The page's accessibility beyond the tree, for either front end's tree `t`: each slider labelled by the caption above it, and its range.
 
 ### `Page.App` (struct)
@@ -3990,7 +3990,7 @@ The range slider's example page: a frequency band (20..200) under its label on a
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/range.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "dragged", 2 }, .{ "keys", 6 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/range-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "dragged", 2 }, .{ "keys", 6 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/range-<name>.png.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, str: *Strings, values: [2]f32) void`: The page's accessibility beyond the tree, for either front end's tree `t` over the band `values`, whose names go to the frame's strings `str`: each thumb's range, and a name for each (`Semantics.label`), as one caption cannot tell the two apart.
 
 ### `Page.App` (struct)
@@ -4028,7 +4028,7 @@ The chip's example page: removable chips Zig and Rust and a plain Draft on a pan
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 })`
 - `replay = @embedFile("testdata/chip.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/chip-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "hover", 1 }, .{ "held", 2 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/chip-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -4101,7 +4101,7 @@ Fields: `title`, `selected`, `apple`, `banana`, `cherry`, `damson`, `elder`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/list-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/list-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/list.replay")`
@@ -4154,7 +4154,7 @@ Fields: `title`, `options`, `selected`, `scroll`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/vlist-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/vlist-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/vlist.replay")`
@@ -4239,7 +4239,7 @@ Fields: `title`, `headers`, `cells`, `table`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/table-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/table-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/table.replay")`
@@ -4304,7 +4304,7 @@ Fields: `title`, `labels`, `depths`, `outline`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/tree-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/tree-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/tree.replay")`
@@ -4350,7 +4350,7 @@ Fields: `download_text`, `download`, `install_text`, `install`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/progress-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/progress-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/progress.replay")`
@@ -4402,7 +4402,7 @@ Fields: `busy`, `caption`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/spinner-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/spinner-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/spinner.replay")`
@@ -4471,7 +4471,7 @@ Fields: `title`, `color`
 
 
 ### `Page` (struct)
-The example page in the default theme, its replay and the frames kept as golden images (tools/widgetgolden/ref/colorpicker-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+The example page in the default theme, its replay and the frames kept as golden images (tools/golden/ref/widgets/colorpicker-<name>.png), as tools/golden/widgets.zig takes a page.
 
 - `Run = Example(.default).Run`
 - `replay = @embedFile("testdata/colorpicker.replay")`
@@ -5166,7 +5166,7 @@ Fields: `open`, `layer`, `exposure`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5223,7 +5223,7 @@ Fields: `tip`, `save_text`, `scene`, `save_tip`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5302,7 +5302,7 @@ Fields: `menu`, `file_text`, `doc`, `new`, `open`, `recent`, `quit`, `scene1`, `
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5380,7 +5380,7 @@ Fields: `bar`, `file`, `edit`, `status`, `new`, `open`, `recent`, `quit`, `scene
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5437,7 +5437,7 @@ Fields: `ctx`, `hint`, `canvas_text`, `cut`, `copy`, `paste`, `arrange`, `front`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5518,7 +5518,7 @@ Fields: `dialog`, `delete_text`, `scene`, `title`, `message`, `cancel`, `ok`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5577,7 +5577,7 @@ Fields: `toast`, `save_text`, `scene`, `saved_text`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5640,7 +5640,7 @@ Fields: `shape`, `caption`, `shape_text`, `circle`, `square`, `triangle`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5717,7 +5717,7 @@ Fields: `fruit`, `caption`, `fruit_text`, `apple`, `apricot`, `banana`, `cherry`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5848,7 +5848,7 @@ Fields: `due`, `caption`
 
 
 ### `golden` (struct)
-What tools/widgetgolden/ dumps: the page's harness over `replay`.
+What tools/golden/ dumps: the page's harness over `replay`.
 
 - `Run = Example(.default).Run`
 - `src = replay`
@@ -5988,7 +5988,7 @@ The text field's example page: Name (empty, placeholder "Your name") and City ("
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 512, .depth = 8 })`
 - `replay = @embedFile("testdata/textfield.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "selected", 3 }, .{ "drag", 8 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/textfield-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "selected", 3 }, .{ "drag", 8 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/textfield-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -6056,7 +6056,7 @@ The search field's example page: Find, placeholder "Search", under its caption o
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 })`
 - `replay = @embedFile("testdata/search.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "hover", 4 }, .{ "cleared", 6 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/search-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "hover", 4 }, .{ "cleared", 6 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/search-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -6118,7 +6118,7 @@ The number field's example page: Quantity (0 to 10 by 1, at 3) and Scale (-1 to 
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 })`
 - `replay = @embedFile("testdata/number.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "stepped", 3 }, .{ "typing", 5 }, .{ "wheel", 8 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/number-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "stepped", 3 }, .{ "typing", 5 }, .{ "wheel", 8 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/number-<name>.png.
 
 ### `Page.App` (struct)
 
@@ -6175,7 +6175,7 @@ The text area's example page: Notes, three lines shown, holding "one\ntwo", unde
 - `Ui = base.ComptimeUi(State, spec, th)`
 - `Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 512, .depth = 8 })`
 - `replay = @embedFile("testdata/textarea.replay")`
-- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 3 }, .{ "scrolled", 5 }, .{ "selected", 7 } }`: Frames kept as golden images, by name: tools/widgetgolden/ref/textarea-<name>.png.
+- `golden_frames = .{ .{ "rest", 0 }, .{ "typed", 3 }, .{ "scrolled", 5 }, .{ "selected", 7 } }`: Frames kept as golden images, by name: tools/golden/ref/widgets/textarea-<name>.png.
 
 ### `Page.App` (struct)
 

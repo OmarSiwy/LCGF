@@ -215,7 +215,7 @@ in this branch.
 
 ## The LCGF row's harness, and capacity
 
-Until the perf-gaps branch the LCGF row was the per-pass benchmark (`tools/bench`): it carried
+Until the perf-gaps branch the LCGF row was the per-pass benchmark (`bench/micro`): it carried
 the prototype core, the differential check against it, static buffers for 4,096 nodes and
 std's formatting, so its size (280 KB loaded, 11.8 MB bss) said little about LCGF.
 `bench/vs/lcgf/main.zig` now does what the Clay harness does and nothing else: harness.h's

@@ -252,7 +252,7 @@ const items_200: [200][]const u8 = blk: {
 };
 
 /// The example page: a caption and a virtual list of 200 options, five rows tall, on a panel,
-/// in both front ends, in theme `th`. Its tests and golden images (tools/widgetgolden/) run it.
+/// in both front ends, in theme `th`. Its tests and golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
@@ -291,7 +291,7 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/vlist-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/golden/ref/widgets/vlist-<name>.png), as tools/golden/widgets.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/vlist.replay");

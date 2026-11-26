@@ -1,7 +1,7 @@
 // The scenes of bench/scenes/ on Clay (https://github.com/nicbarker/clay), for the comparison of
 // docs/perf/vs.md. Clay is a layout library: a frame here is Clay_BeginLayout, the element
 // declarations, and Clay_EndLayout, which lays out and emits the render commands. That matches
-// what tools/bench times as `frame` (build, layout, paint into a draw list); neither rasterises.
+// what bench/micro times as `frame` (build, layout, paint into a draw list); neither rasterises.
 // Clay has no widgets, text measuring or animation, so the harness supplies them as a Clay user
 // would: widgets built from elements as prototype/ui.zig builds them, the monospace measure of
 // src/text/protocol.zig (0.6 em per byte, 1.25 em lines), and the springs of bench/vs/harness.h.
@@ -174,7 +174,7 @@ static uint64_t vs_frame(int scene, uint32_t k) {
     return (uint64_t)cmds.length;
 }
 
-// Clay has no event loop: the host sleeps until input arrives, as tools/bench does.
+// Clay has no event loop: the host sleeps until input arrives, as bench/micro does.
 static void vs_idle(void) { vs_block_on_stdin(); }
 
 int main(int argc, char **argv) { return vs_main(argc, argv, "clay-0.14"); }

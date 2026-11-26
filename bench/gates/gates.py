@@ -93,7 +93,7 @@ def check_frame(runs, recorded):
 
 def check_rss(runs, recorded):
     """Resident memory: VmRSS after the idle scene's first frame, while it waits for input
-    (tools/bench/probe.py), against the lightest other framework. Pages the process maps and
+    (bench/micro/probe.py), against the lightest other framework. Pages the process maps and
     touches count, shared libraries included; the GPU driver's are not there to count, since no
     harness opens a device."""
     values = {n: r["rss_kib"] for n, r in runs.items()}
@@ -131,7 +131,7 @@ CHECKS = {"frame": (check_frame, True), "rss": (check_rss, False), "first-frame"
 
 
 def check_size(text, budgets):
-    """Binary size: `zig build size` output (tools/bench/size.zig, ReleaseSmall) against the
+    """Binary size: `zig build size` output (bench/micro/size.zig, ReleaseSmall) against the
     budget of each example, loaded bytes (text + rodata + data) and bss separately. Sizes do not
     depend on load, so this gate always applies. Returns (sizes, rows, failed)."""
     sizes, rows, failed = {}, [], False
@@ -180,7 +180,7 @@ def run_size(path, record):
 
 def check_idle(text):
     """Idle (target D5): in the output of the benchmark's idle scene, frames built of its 3,000
-    unchanged polls, and in tools/bench/probe.py's, wake-ups while waiting after the first frame.
+    unchanged polls, and in bench/micro/probe.py's, wake-ups while waiting after the first frame.
     The two frames allowed are the first frame and the one settle frame after it
     (bench/scenes/idle.zig); every poll after them must build nothing. Not timed: always applies.
     Returns failure lines, empty when the gate holds."""
@@ -284,7 +284,7 @@ def check_compile_time(seconds, budgets, load):
 
 def check_census(src, separate=()):
     """Branches in hot loops (docs/CHECKS.md section 2): the census jobs fail when a function of
-    a census object gains a conditional jump over tools/census/baseline*.json, but only for
+    a census object gains a conditional jump over bench/census/baseline*.json, but only for
     functions in the object. A probe file (src/**/census_probe*.zig) that src/census_probes.zig
     does not import needs its own checked object. separate contains roots whose build, CI and
     baseline wiring has been verified by check_census_coverage. Returns uncovered probe files,
@@ -297,7 +297,7 @@ def check_census(src, separate=()):
 
 # Independent objects prevent LLVM from merging equivalent format loops into uncensused
 # helpers. Register each root explicitly; an arbitrary unimported probe must still fail.
-SEPARATE_CENSUS = (("render/sw/census_probe_alpha8.zig", "census_alpha8", "tools/census/baseline-alpha8.json"),)
+SEPARATE_CENSUS = (("render/sw/census_probe_alpha8.zig", "census_alpha8", "bench/census/baseline-alpha8.json"),)
 
 
 def check_census_coverage(repo):
@@ -323,7 +323,7 @@ def check_census_coverage(repo):
             errors.append(f"census-src-obj does not install {name}.o from src/{probe}")
         if not any(re.fullmatch(r"zig\s+build\s+census-src-obj(?:\s+.*)?", command) for command in commands):
             errors.append("ci/jobs/census-src.sh does not build census-src-obj")
-        expected = ["python3", "tools/census/census.py", f"zig-out/{name}.o", "--baseline", baseline]
+        expected = ["python3", "bench/census/census.py", f"zig-out/{name}.o", "--baseline", baseline]
         if not any(command.split() == expected for command in commands):
             errors.append(f"ci/jobs/census-src.sh does not check {name}.o against {baseline}")
         try:
@@ -502,8 +502,8 @@ def self_test():
             census.dependOn(&b.addInstallFile(alpha.getEmittedBin(), "census_alpha8.o").step);
             ''',
             "ci/jobs/census-src.sh": "zig build census-src-obj -Dcpu=x86_64_v3\n"
-                "python3 tools/census/census.py zig-out/census_alpha8.o --baseline tools/census/baseline-alpha8.json\n",
-            "tools/census/baseline-alpha8.json": '{"p_alpha8": {"jcc": 4, "back": 2, "short_fwd": 0}}\n',
+                "python3 bench/census/census.py zig-out/census_alpha8.o --baseline bench/census/baseline-alpha8.json\n",
+            "bench/census/baseline-alpha8.json": '{"p_alpha8": {"jcc": 4, "back": 2, "short_fwd": 0}}\n',
         }
 
         def write(rel, contents):
@@ -520,10 +520,10 @@ def self_test():
             ("build.zig", "alpha.getEmittedBin()", "other.getEmittedBin()"),
             ("build.zig", "census.dependOn", "other_step.dependOn"),
             ("ci/jobs/census-src.sh", "zig build census-src-obj", "# zig build census-src-obj"),
-            ("ci/jobs/census-src.sh", "python3 tools/census/census.py", "# python3 tools/census/census.py"),
+            ("ci/jobs/census-src.sh", "python3 bench/census/census.py", "# python3 bench/census/census.py"),
             ("ci/jobs/census-src.sh", "zig-out/census_alpha8.o", "zig-out/census_src.o"),
             ("ci/jobs/census-src.sh", "baseline-alpha8.json", "baseline-src.json"),
-            ("tools/census/baseline-alpha8.json", "p_alpha8", "p_other"),
+            ("bench/census/baseline-alpha8.json", "p_alpha8", "p_other"),
         )
         for rel, before, after in broken:
             write(rel, files[rel].replace(before, after))
@@ -533,7 +533,7 @@ def self_test():
         write(probe, files[probe] + "export fn p_new() void {}\n")
         assert check_census_coverage(d)  # Adding a probe without its baseline must fail.
         write(probe, files[probe])
-        baseline = "tools/census/baseline-alpha8.json"
+        baseline = "bench/census/baseline-alpha8.json"
         os.remove(os.path.join(d, baseline))
         assert check_census_coverage(d)
         write(baseline, files[baseline])

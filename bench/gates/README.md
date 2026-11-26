@@ -39,13 +39,13 @@ met" is a finding: the gate's threshold is not moved to make it hold.
 | Gate | Measured by | What is measured | Fails CI when |
 |---|---|---|---|
 | Frame CPU time | `gates.py frame` in gates-vs | Median of 3,000 frames per scene of `bench/scenes/` (form, list, text, springs, resize), median of 5 runs, through `bench/vs/measure.py`; what a frame contains in each harness is in `docs/perf/vs.md` | a scene that held stops holding, or one that did not hold misses by 50% more than recorded |
-| Resident memory | `gates.py rss` in gates-vs | VmRSS after the idle scene's first frame, waiting for input (`tools/bench/probe.py`), median of 5; shared libraries' touched pages count, GPU driver memory is not there (no harness opens a device) | as above, with 10% |
+| Resident memory | `gates.py rss` in gates-vs | VmRSS after the idle scene's first frame, waiting for input (`bench/micro/probe.py`), median of 5; shared libraries' touched pages count, GPU driver memory is not there (no harness opens a device) | as above, with 10% |
 | Time to first frame | `gates.py first-frame` in gates-vs | Process start to the harness's "ready" line (`--idle --scene idle`), median of 11 starts | as frame time |
 | Binary size | `gates.py size` in gates | `zig build size` (ReleaseSmall, x86_64-linux, x86_64_v3): text + rodata + data, and bss, per example | either grows more than 2% over its budget |
 | Input-to-photon latency | `gates.py latency` in gates | `bench/gates/latency.zig`: the example in the headless shell, 4,000 pointer moves on and off a button, poll to the end of the software raster | a move shows a frame late; the median exceeds the budget by 50% |
 | Compile time | `gates.py compile-time` in gates | `zig build-obj -fno-emit-bin` of a generated spec flattened by the comptime front end, empty cache, median of 5 | a size exceeds its budget by 50% |
 | Idle | `gates.py idle` in gates | Frames built in 3,000 unchanged polls of the idle scene; context switches in 2 s once idle | more than the first and the settle frame, or any wake-up |
-| Branches in hot loops | census jobs and `gates.py census` in gates | `tools/census/census.py` over the census objects (x86_64_v3) | a function gains a jump over its baseline, or a probe file is not in the census object |
+| Branches in hot loops | census jobs and `gates.py census` in gates | `bench/census/census.py` over the census objects (x86_64_v3) | a function gains a jump over its baseline, or a probe file is not in the census object |
 
 Timed gates are printed and not applied when the 1-minute load average is above a quarter of the
 CPU count; budgets recorded on one machine (latency, compile time) are not applied on GitHub

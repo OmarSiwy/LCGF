@@ -1,6 +1,6 @@
 // The scenes of bench/scenes/ on Dear ImGui (https://github.com/ocornut/imgui), for the comparison
 // of docs/perf/vs.md. A frame is input, ImGui::NewFrame, the widgets, and ImGui::Render, which
-// fills ImDrawData (vertex and index buffers per draw command). That matches what tools/bench times
+// fills ImDrawData (vertex and index buffers per draw command). That matches what bench/micro times
 // as `frame` (build, layout, paint into a draw list); neither rasterises. The renderer is ImGui's
 // own null back end (backends/imgui_impl_null.cpp): it accepts the font atlas and draws nothing.
 // Widgets are ImGui's own (InputText, Checkbox, SliderFloat, Button, TextWrapped, a list clipper);
@@ -133,7 +133,7 @@ static uint64_t vs_frame(int scene, uint32_t k) {
 
 // Dear ImGui has no event loop or idle mode: the application decides when to build a frame
 // (https://github.com/ocornut/imgui/wiki/Implementing-Power-Save%2C-aka-Idling-outside-of-ImGui).
-// Here the host sleeps until input arrives, as tools/bench does.
+// Here the host sleeps until input arrives, as bench/micro does.
 static void vs_idle(void) { vs_block_on_stdin(); }
 
 int main(int argc, char **argv) {

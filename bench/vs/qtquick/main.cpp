@@ -3,7 +3,7 @@
 // a frame sets that frame's changes (a mouse move, the ListView's contentY, the bar widths, the
 // window size) and QQuickWindow::grabWindow, which polishes (layouts), syncs the scene graph and
 // renders it with Qt Quick's software back end into an image. So a frame includes rasterisation
-// of the whole window, which tools/bench's does not, and Qt cannot be asked to skip an unchanged
+// of the whole window, which bench/micro's does not, and Qt cannot be asked to skip an unchanged
 // frame here: grabWindow always renders. The idle scene instead lets Qt's own render loop decide
 // (events processed, frames counted by frameSwapped), and `--idle` runs QGuiApplication::exec.
 //

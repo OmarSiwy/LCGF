@@ -36,7 +36,7 @@ export fn stage_volume(rt: *App.Runtime, v: f32) void {
 }
 
 /// The comptime hit sweep over the probe's widgets, for the branch census
-/// (`tools/census/census.py zig-out/ct_setter.o --prefix p_`).
+/// (`bench/census/census.py zig-out/ct_setter.o --prefix p_`).
 const Hit = lcgf.events.Events(s.col(.{ .pad = @splat(8), .gap = 4 }, .{
     s.label(.title),
     s.row(.{ .gap = 8 }, .{ s.checkbox(.mute, .muted), s.slider(.volume, .volume) }),

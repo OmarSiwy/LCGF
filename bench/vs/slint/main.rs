@@ -4,7 +4,7 @@
 //! viewport, bar widths, window size) and calls `draw_if_needed` on a `MinimalSoftwareWindow`,
 //! which evaluates the dirty bindings and layouts and redraws the dirty region with the software
 //! renderer into a 32-bit buffer. So, as for LVGL, a frame includes rasterisation, which
-//! tools/bench's does not, and a frame where nothing visible changed costs little and draws nothing.
+//! bench/micro's does not, and a frame where nothing visible changed costs little and draws nothing.
 //! Slint evaluates layout lazily while it renders, so there is no layout-only time to give.
 //!
 //! No window and no winit: a platform of our own hands Slint the software window. Widgets are

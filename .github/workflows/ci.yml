@@ -18,7 +18,7 @@ jobs:
         run: nix develop -c zig build fmt
       - name: Commit messages
         run: |
-          python3 tools/commitlint/commitlint.py --self-test
+          python3 ci/commitlint.py --self-test
           if [ "${{ github.event_name }}" = pull_request ]; then
             range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
           elif [ "$GITHUB_REF_NAME" = experiment/metal-custom-draw ]; then
@@ -28,7 +28,7 @@ jobs:
           else
             range="${{ github.sha }}"
           fi
-          python3 tools/commitlint/commitlint.py "$range"
+          python3 ci/commitlint.py "$range"
 
   # One matrix entry per ci/jobs/<name>.sh, so adding a job never edits this file.
   jobs:

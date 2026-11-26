@@ -145,7 +145,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
 
 /// The switch's example page: VSync, HDR (on) and Bloom on a panel, in both front ends. Its
 /// replay (testdata/switch.replay) clicks and uses Space; its golden images
-/// (tools/widgetgolden/ref/switch-*.png) show the knobs moving.
+/// (tools/golden/ref/widgets/switch-*.png) show the knobs moving.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
@@ -178,7 +178,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/switch.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/switch-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/switch-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "flipped", 6 } };
 };
 

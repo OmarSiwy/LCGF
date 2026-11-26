@@ -1,12 +1,12 @@
 # The bench on lcgf's front end
 
-This report records the comparison made while both front ends were available. To reproduce its two-core commands, use the archived checkout. The current command, `nix develop -c zig build bench`, measures the production runtime and verifies its first frame against `Frame.end`. [Archived benchmark](https://github.com/OmarSiwy/LCGF/blob/b6c1319/tools/bench/bench.zig)
+This report records the comparison made while both front ends were available. To reproduce its two-core commands, use the archived checkout. The current command, `nix develop -c zig build bench`, measures the production runtime and verifies its first frame against `Frame.end`. [Archived benchmark](https://github.com/OmarSiwy/LCGF/blob/b6c1319/bench/micro/bench.zig)
 
-tools/bench now times lcgf's runtime front end end to end: `Context.begin` is begin+hit, the
+bench/micro now times lcgf's runtime front end end to end: `Context.begin` is begin+hit, the
 scene building through `Frame` and the reference widgets (src/widgets/base.zig) is build, the
 body of `Frame.end` split at each pass is layout, and `Frame.finish` is paint. Every scene of
 bench/scenes/ builds against either core from one source: the build roots a second copy of the
-directory with module `ui` set to tools/bench/src_ui.zig, which names lcgf's `Frame`,
+directory with module `ui` set to bench/micro/src_ui.zig, which names lcgf's `Frame`,
 `Input`, `Theme`, `Id`, `Color` and widgets. `--core=prototype` runs the old path.
 
 What each core times:
@@ -86,5 +86,5 @@ Reading it:
   `coefs` directly; the difference is not split further here.
 - idle builds two cold frames, so its row is noise.
 
-tools/bench/baseline.json is re-recorded from `--core=src` (rows: frame 340.2 us median, against
+bench/micro/baseline.json is re-recorded from `--core=src` (rows: frame 340.2 us median, against
 334.5 in the table above).

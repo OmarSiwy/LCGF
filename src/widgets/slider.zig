@@ -180,7 +180,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
 
 /// The slider's example page: Volume (0..100) and Gain (-12..12), each under its label, on a
 /// panel, in both front ends. Its replay (testdata/slider.replay) drags and uses the keys;
-/// its golden images (tools/widgetgolden/ref/slider-*.png) show the fill following.
+/// its golden images (tools/golden/ref/widgets/slider-*.png) show the fill following.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
@@ -224,7 +224,7 @@ pub const Page = struct {
         }
     }
     pub const replay = @embedFile("testdata/slider.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/slider-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/slider-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 1 }, .{ "keys", 6 } };
 };
 

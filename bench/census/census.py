@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Branch census: count conditional jumps in the hot functions of an object file.
 
-    python3 tools/census/census.py OBJ [--prefix p_] [--baseline FILE] [--write-baseline FILE]
-    python3 tools/census/census.py --self-test
+    python3 bench/census/census.py OBJ [--prefix p_] [--baseline FILE] [--write-baseline FILE]
+    python3 bench/census/census.py --self-test
 
 Disassembles OBJ with objdump and reports, for every function whose name starts
 with the prefix, its conditional jumps. A backward jump is loop control. A short
@@ -10,7 +10,7 @@ forward jump inside a per-row loop is a branch the data can mispredict: the gate
 is that per-row loops contain loop-control jumps only (docs/CHECKS.md section 2).
 
 Build the production probes with `zig build census-src-obj -Dcpu=x86_64_v3`
-and pass `zig-out/census_src.o` and `--baseline tools/census/baseline-src.json`.
+and pass `zig-out/census_src.o` and `--baseline bench/census/baseline-src.json`.
 
 --baseline FILE fails (exit 1) when a function has more conditional jumps,
 backward jumps or short forward jumps than FILE records, or when the functions

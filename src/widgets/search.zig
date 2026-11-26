@@ -273,7 +273,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
     pub const replay = @embedFile("testdata/search.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/search-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/search-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 2 }, .{ "hover", 4 }, .{ "cleared", 6 } };
 };
 

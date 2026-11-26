@@ -363,7 +363,7 @@ fn nodeWalk(comptime n: Spec, comptime row: comptime_int, comptime next: *compti
 // ---- example page -----------------------------------------------------------------------------
 
 /// The example page: a caption and a list of five fruits on a panel, in both front ends, in
-/// theme `th`. Its tests and golden images (tools/widgetgolden/) run it.
+/// theme `th`. Its tests and golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
@@ -403,7 +403,7 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/list-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/golden/ref/widgets/list-<name>.png), as tools/golden/widgets.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/list.replay");

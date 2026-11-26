@@ -7,7 +7,7 @@ blocks are checked by `docs/guide/perf.zig`, which `zig build docs` runs.
 Timings move with the machine and its load: compare runs on one machine, never across machines.
 These were taken on an i9-14900HX (32 CPUs, not pinned) while other builds ran (1-minute load
 average 15.6 to 18.2), ReleaseFast, 8 SIMD lanes, so treat them as an upper bound for this
-machine. The bench job's baseline and gate are in `tools/bench/`; the per-change investigations
+machine. The bench job's baseline and gate are in `bench/micro/`; the per-change investigations
 are in `docs/perf/`.
 
 ## Measure first
@@ -18,7 +18,7 @@ are in `docs/perf/`.
 | How much memory does the runtime front end take? | `Context.requiredBytes(limits)` | bytes, exactly; callable at compile time |
 | Resident memory and idle wake-ups of a running UI | `zig build probe` | RSS after one frame, wake-ups in 2 s of idling |
 | Binary size | `zig build size` | text, rodata, data and bss per example (ReleaseSmall) |
-| Did a per-row loop gain a branch? | `zig build census-src-obj -Dcpu=x86_64_v3`, then `python3 tools/census/census.py zig-out/census_src.o --baseline tools/census/baseline-src.json` | conditional jumps per pass, against the baseline |
+| Did a per-row loop gain a branch? | `zig build census-src-obj -Dcpu=x86_64_v3`, then `python3 bench/census/census.py zig-out/census_src.o --baseline bench/census/baseline-src.json` | conditional jumps per pass, against the baseline |
 | Cache misses per pass | `nix develop .#bench`, see `docs/perf/cache.md` | hardware counters per pass |
 
 ## Frame time

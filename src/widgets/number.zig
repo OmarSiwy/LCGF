@@ -284,7 +284,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512, .depth = 8 });
     pub const replay = @embedFile("testdata/number.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/number-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/number-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "stepped", 3 }, .{ "typing", 5 }, .{ "wheel", 8 } };
 };
 

@@ -27,7 +27,7 @@ context.zig) and `Frame.end` builds it and resolves by level when `kept` is empt
 frame; with kept subtrees it keeps `incremental.resolveKept`. One branch per frame
 (`frame.resolve`). Sizes are the same bit for bit (levels.zig's test against `coefs.resolveK`,
 and the bench's first-frame draw-list check against the prototype, still passing for all seven
-scenes). src/devtools/timing.zig and tools/bench mirror `Frame.end` and changed with it.
+scenes). src/devtools/timing.zig and bench/micro mirror `Frame.end` and changed with it.
 
 Not adopted: `coefs.placeRows` + `placeK` for place, measured 22.6 -> 20.6 us on rows (pinned,
 five alternated runs, noisy), for a 48-byte `Place` row per node (+5% bytes per node). Layout is

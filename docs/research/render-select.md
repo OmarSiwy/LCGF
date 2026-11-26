@@ -74,7 +74,7 @@ Commands (golden shell; `nix develop .#golden -c ...`):
 ```
 zig build vk-play -Doptimize=ReleaseFast                      # vk-probe
 zig build vk-probe-wgpu -Dwgpu-native=v29 -Doptimize=ReleaseFast
-python3 tools/bench/probe.py -- BIN device|empty|scenes        # resident memory (C0389's tool)
+python3 bench/micro/probe.py -- BIN device|empty|scenes        # resident memory (C0389's tool)
 BIN scenes </dev/null                                         # CPU and frame time, 2000 frames
 VK_ICD_FILENAMES=/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json ...   # NVIDIA instead of lavapipe
 perf record -F 16000 --call-graph dwarf,16384 -o OUT BIN scenes </dev/null    # self time

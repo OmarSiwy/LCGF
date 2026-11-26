@@ -320,7 +320,7 @@ const outline_start: State(8) = .{ .expanded = .{ true, false, false, false, fal
 
 /// The example page: a caption and a tree view of eight items (two top-level folders, `src`
 /// expanded) on a panel, in both front ends, in theme `th`. Its tests and golden images
-/// (tools/widgetgolden/) run it.
+/// (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(16), .gap = 8, .fill = th.panel };
@@ -356,7 +356,7 @@ pub fn Example(comptime th: Theme) type {
 }
 
 /// The example page in the default theme, its replay and the frames kept as golden images
-/// (tools/widgetgolden/ref/tree-<name>.png), as tools/widgetgolden/dump.zig takes a page.
+/// (tools/golden/ref/widgets/tree-<name>.png), as tools/golden/widgets.zig takes a page.
 pub const Page = struct {
     pub const Run = Example(.default).Run;
     pub const replay = @embedFile("testdata/tree.replay");

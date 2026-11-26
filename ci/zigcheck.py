@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Checks docs/ZIG_0_17_1.md against the compiler you actually have.
 
-    python3 tools/zigcheck/zigcheck.py            run every case
-    python3 tools/zigcheck/zigcheck.py vector     only cases whose name contains "vector"
-    ZIG="python3 -m ziglang" python3 tools/zigcheck/zigcheck.py   use another compiler command
+    python3 ci/zigcheck.py            run every case
+    python3 ci/zigcheck.py vector     only cases whose name contains "vector"
+    ZIG="python3 -m ziglang" python3 ci/zigcheck.py   use another compiler command
 
 Each case is a few lines of Zig and whether it is expected to compile (and pass,
 if it is a test). A mismatch means the notes are wrong for your compiler: fix

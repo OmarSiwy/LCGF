@@ -1,12 +1,12 @@
-//! Benchmark scenes for tools/bench: one harness, many scenes (`zig build bench -- --scene NAME`).
+//! Benchmark scenes for bench/micro: one harness, many scenes (`zig build bench -- --scene NAME`).
 //! A scene sets each frame's input and builds the frame through module "ui": lcgf's runtime front
-//! end (tools/bench/src_ui.zig) or, under `--core=prototype`, the prototype core. The harness
+//! end (bench/micro/src_ui.zig) or, under `--core=prototype`, the prototype core. The harness
 //! runs and times every pass the same way for each scene.
 const ui = @import("ui");
 
 pub const Scene = struct {
     name: []const u8,
-    /// Frames the harness runs; at most tools/bench's `frames`.
+    /// Frames the harness runs; at most bench/micro's `frames`.
     frames: u32,
     /// Sets the input of frame `k` (counted from 0).
     input: *const fn (in: *ui.Input, k: u32) void,

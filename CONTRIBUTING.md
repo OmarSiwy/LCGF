@@ -32,4 +32,4 @@ that directory, so neither `ci/run.sh` nor `.github/workflows/ci.yml` needs edit
 
 ## Commit messages
 
-Use an imperative subject of at most 72 characters. Include the reason for the change and relevant tests or measurements in the body. CI checks the commit range with `python3 tools/commitlint/commitlint.py main..HEAD`.
+Use an imperative subject of at most 72 characters. Include the reason for the change and relevant tests or measurements in the body. CI checks the commit range with `python3 ci/commitlint.py main..HEAD`.

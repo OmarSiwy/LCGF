@@ -212,7 +212,7 @@ pub const edit_menu: menu.Def = .{ .items = &.{ "cut", "copy", "paste", "arrange
 pub const edit_texts = [_][]const u8{ "Cut", "Copy", "Paste", "Arrange", "To front", "To back" };
 
 /// The example page: a caption, the canvas the menu belongs to, and the menu, in both front
-/// ends, in theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+/// ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const canvas_style: Style = .{ .dir = .x, .size = .{ .px(300), .px(160) }, .pad = @splat(th.pad), .radius = th.radius };
@@ -265,7 +265,7 @@ pub fn Example(comptime th: Theme) type {
 /// Input for `Example(.default)` at 800 x 600, one commented line per frame.
 pub const replay = @embedFile("testdata/contextmenu.replay");
 
-/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+/// The frames of `replay` kept as golden images, by name (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "contextmenu-open", 1 },
     .{ "contextmenu-keyed", 5 },
@@ -273,7 +273,7 @@ pub const golden_frames = .{
     .{ "contextmenu-key", 10 },
 };
 
-/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+/// What tools/golden/ dumps: the page's harness over `replay`.
 pub const golden = struct {
     pub const Run = Example(.default).Run;
     pub const src = replay;

@@ -375,7 +375,7 @@ pub const bar_texts = [_][]const u8{ "File", "Edit" };
 pub const item_texts = [_][]const []const u8{ &menu.file_texts, &.{ "Undo", "Redo" } };
 
 /// The example page: the bar above a status label, and its menus, in both front ends, in
-/// theme `th`. The tests and the golden images (tools/widgetgolden/) run it.
+/// theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const page_style: Style = .{ .size = .{ .fill, .fill } };
@@ -417,7 +417,7 @@ pub fn Example(comptime th: Theme) type {
 /// Input for `Example(.default)` at 800 x 600, one commented line per frame.
 pub const replay = @embedFile("testdata/menubar.replay");
 
-/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+/// The frames of `replay` kept as golden images, by name (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "menubar-file", 2 },
     .{ "menubar-edit", 3 },
@@ -425,7 +425,7 @@ pub const golden_frames = .{
     .{ "menubar-closed", 8 },
 };
 
-/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+/// What tools/golden/ dumps: the page's harness over `replay`.
 pub const golden = struct {
     pub const Run = Example(.default).Run;
     pub const src = replay;

@@ -296,9 +296,9 @@ pub fn build(b: *std.Build) void {
     census_step.dependOn(&b.addInstallFile(census_probe.getEmittedBin(), "census_src.o").step);
     census_step.dependOn(&b.addInstallFile(census_alpha8_probe.getEmittedBin(), "census_alpha8.o").step);
 
-    // tools/drawgolden: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
+    // tools/golden/: dumps a draw-feature scene for tools/golden/gpu.py (ci/run.sh draw-golden).
     const draw_dump_mod = b.createModule(.{
-        .root_source_file = b.path("tools/drawgolden/dump.zig"),
+        .root_source_file = b.path("tools/golden/draw.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgf", .module = lcgf }},
@@ -307,9 +307,9 @@ pub fn build(b: *std.Build) void {
     draw_dump.addPassthruArgs();
     b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
 
-    // tools/widgetgolden: dumps a reference-widget frame for tools/golden/gpu.py (ci/run.sh widget-golden).
+    // tools/golden/: dumps a reference-widget frame for tools/golden/gpu.py (ci/run.sh widget-golden).
     const widget_dump = b.addRunArtifact(b.addExecutable(.{ .name = "widget-dump", .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/widgetgolden/dump.zig"),
+        .root_source_file = b.path("tools/golden/widgets.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgf", .module = lcgf }},
@@ -319,7 +319,7 @@ pub fn build(b: *std.Build) void {
 
     // The benchmark and comparison harnesses drive the production runtime.
     const src_scenes_root = b.path("bench/scenes/scenes.zig");
-    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
+    const bench_src_ui = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
     const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
     // The runtime front end's bindings gate (bindings/check/rt_dump.zig): the same scenes in Zig.
     const rt_dump = b.addExecutable(.{ .name = "lcgf-rt-dump", .root_module = b.createModule(.{
@@ -338,7 +338,7 @@ pub fn build(b: *std.Build) void {
     }) });
     abi_step.dependOn(&b.addInstallArtifact(ct_dump, .{}).step);
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/bench/bench.zig"),
+        .root_source_file = b.path("bench/micro/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_src_scenes } },
@@ -346,7 +346,7 @@ pub fn build(b: *std.Build) void {
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
     b.step("bench", "Run the frame benchmark (Linux)").dependOn(&bench_run.step);
-    const probe = b.addSystemCommand(&.{ "python3", "tools/bench/probe.py", "--" });
+    const probe = b.addSystemCommand(&.{ "python3", "bench/micro/probe.py", "--" });
     probe.addArtifactArg(bench);
     probe.addArg("--idle");
     b.step("probe", "Print resident memory and idle wake-ups after one frame (Linux)").dependOn(&probe.step);
@@ -370,13 +370,13 @@ pub fn build(b: *std.Build) void {
 
     // Section sizes of the software frame dumper and benchmark (ReleaseSmall, ELF64).
     const size_tool = b.addExecutable(.{ .name = "size", .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/bench/size.zig"),
+        .root_source_file = b.path("bench/micro/size.zig"),
         .target = b.graph.host,
     }) });
     const size_run = b.addRunArtifact(size_tool);
     const lcgf_small = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgf_small.addOptions("build_options", options);
-    const small_src_ui = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_small }} });
+    const small_src_ui = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
     // The reference row of docs/perf/vs.md: bench/vs/lcgf/, harness.h's driver over LCGF's
     // frame, fast and small (bench/vs/measure.py).
@@ -385,7 +385,7 @@ pub fn build(b: *std.Build) void {
     for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgf", "vs-lcgf-small" }) |mode, name| {
         const core = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = mode });
         core.addOptions("build_options", options);
-        const ui_mod = b.createModule(.{ .root_source_file = b.path("tools/bench/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = core }} });
+        const ui_mod = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = core }} });
         const scenes_mod = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
         const exe = b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
             .root_source_file = b.path("bench/vs/lcgf/main.zig"),
@@ -395,7 +395,7 @@ pub fn build(b: *std.Build) void {
         }) });
         vs_lcgf.dependOn(&b.addInstallArtifact(exe, .{}).step);
     }
-    for ([_][2][]const u8{ .{ "golden-dump", "tools/golden/dump.zig" }, .{ "bench", "tools/bench/bench.zig" } }) |ex| {
+    for ([_][2][]const u8{ .{ "golden-dump", "tools/golden/dump.zig" }, .{ "bench", "bench/micro/bench.zig" } }) |ex| {
         const exe = b.addExecutable(.{ .name = ex[0], .root_module = b.createModule(.{
             .root_source_file = b.path(ex[1]),
             .target = target,

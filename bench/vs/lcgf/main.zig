@@ -3,7 +3,7 @@
 //! and p99, `--idle` and its "ready" line), so every row runs the same loop; only the frame is
 //! LCGF's. A frame asks `Context.needsFrame` first, as an LCGF host does, and builds only when it
 //! says yes (list and springs always build: their state changes outside `Input`). It does what
-//! the Clay harness does and nothing else; the per-pass benchmark and its checks are tools/bench.
+//! the Clay harness does and nothing else; the per-pass benchmark and its checks are bench/micro.
 //!
 //! No libc: a Zig program needs none, so start-up, output and the clock are system calls. The
 //! context's buffer is mapped on first use, as Clay mallocs its arena: memory the scenes never

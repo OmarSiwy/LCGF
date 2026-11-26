@@ -292,7 +292,7 @@ pub const confirm_texts = [_][]const u8{ "Cancel", "Delete" };
 
 /// The example page: a toolbar with the button that opens the dialog and a label, and the
 /// dialog, in both front ends, in theme `th`. The tests and the golden images
-/// (tools/widgetgolden/) run it.
+/// (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
         const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
@@ -336,7 +336,7 @@ pub fn Example(comptime th: Theme) type {
 /// Input for `Example(.default)` at 800 x 600, one commented line per frame.
 pub const replay = @embedFile("testdata/dialog.replay");
 
-/// The frames of `replay` kept as golden images, by name (tools/widgetgolden/ref/<name>.png).
+/// The frames of `replay` kept as golden images, by name (tools/golden/ref/widgets/<name>.png).
 pub const golden_frames = .{
     .{ "dialog-open", 2 },
     .{ "dialog-tab", 3 },
@@ -344,7 +344,7 @@ pub const golden_frames = .{
     .{ "dialog-closed", 9 },
 };
 
-/// What tools/widgetgolden/ dumps: the page's harness over `replay`.
+/// What tools/golden/ dumps: the page's harness over `replay`.
 pub const golden = struct {
     pub const Run = Example(.default).Run;
     pub const src = replay;

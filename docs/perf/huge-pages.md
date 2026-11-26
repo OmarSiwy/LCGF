@@ -26,5 +26,5 @@ working set passes its reach. The read-mostly passes stream few columns at a tim
 
 Result: adopted as a recommendation for hosts, not as core code (tier 0 has no OS). A host that
 can should allocate the buffer it gives `Context.init` from 2 MB huge pages; on Linux with THP in
-`madvise` mode that is `mmap` + `madvise(MADV_HUGEPAGE)` as in `hugeBuffer` in tools/bench/bench.zig.
+`madvise` mode that is `mmap` + `madvise(MADV_HUGEPAGE)` as in `hugeBuffer` in bench/micro/bench.zig.
 The gain is about 5% of a frame at 4,000 nodes; smaller trees fit the TLB without them.

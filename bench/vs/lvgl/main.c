@@ -4,7 +4,7 @@
 // texts, widths or resolution), then lv_refr_now lays out and redraws the invalidated areas.
 //
 // So a frame here includes software rasterisation into a 32-bit partial buffer (LVGL renders as
-// it draws; it has no draw list to stop at), where tools/bench stops at the draw list. In
+// it draws; it has no draw list to stop at), where bench/micro stops at the draw list. In
 // exchange LVGL only redraws what changed, so a scene where little changes costs little. The
 // `layout` line times the changes plus lv_obj_update_layout alone, without the redraw.
 // Text is LVGL's Montserrat at 14 and 20 px; springs come from bench/vs/harness.h.

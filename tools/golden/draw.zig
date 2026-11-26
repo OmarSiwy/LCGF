@@ -4,7 +4,7 @@
 //!     zig build draw-dump -- <scene> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
 //!
 //! The shader and instance layout are src/render/shaders/quad.zig's (`lcgf.quad_shader`). ci/jobs/draw-golden.sh renders every scene
-//! and compares it with tools/drawgolden/ref/<scene>.png.
+//! and compares it with tools/golden/ref/draw/<scene>.png.
 const std = @import("std");
 const lcgf = @import("lcgf");
 const Tree = lcgf.tree.Tree;

@@ -11,7 +11,7 @@ for s in "$out"/conformance/*/; do
     zig-out/bin/sw-play "$s" "$s/sw.png"
     python3 tools/golden/golden.py "$s/sw.png" "src/render/conformance/$n.png"
 done
-for ref in tools/drawgolden/ref/*.png; do
+for ref in tools/golden/ref/draw/*.png; do
     scene=$(basename "$ref" .png)
     zig build draw-dump -- "$scene" "$PWD/$out/draw/$scene"
     zig-out/bin/sw-play "$out/draw/$scene" "$out/draw/$scene/sw.png" 0d0d0f

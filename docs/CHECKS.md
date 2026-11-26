@@ -30,7 +30,7 @@ wgpu-py on lavapipe, Xvfb, weston and Wine), `# all: no` leaves it out of `ci/ru
 nix develop -c ci/run.sh census-src
 ```
 
-The job builds `src/census_probes.zig` for `x86_64_v3`, disassembles the object with `objdump` and checks conditional jumps against `tools/census/baseline-src.json`. Backward jumps usually control loops. The table below records the original prototype census.
+The job builds `src/census_probes.zig` for `x86_64_v3`, disassembles the object with `objdump` and checks conditional jumps against `bench/census/baseline-src.json`. Backward jumps usually control loops. The table below records the original prototype census.
 
 ```
 function      insns  jcc  back  fwd short-fwd   vec
@@ -81,13 +81,13 @@ turns a select into a branch around a load when one operand is a field loaded on
 select (masks, `simd.selU`, `b2f` products and bit selects alike). An `if` whose body starts with
 `@branchHint(.unpredictable)` marks the select `!unpredictable` and it stays a cmov (`pick` in
 `src/interact/interaction.zig`). When even that fails, select the address and then load
-(`step`'s id under the pointer: the real row or a constant zero id). The recorded disassembly showed no additional per-row jump. The production limits live in `tools/census/baseline-src.json`.
+(`step`'s id under the pointer: the real row or a constant zero id). The recorded disassembly showed no additional per-row jump. The production limits live in `bench/census/baseline-src.json`.
 
 The selects are not enough on their own (found by lane simd, x86_64_v3). In a per-row loop where
 one operand is loaded only for the select, `out[i] = simd.selU(c[i] > a[i], a[i], b[i])` compiles to
 the same branches as a plain `if` (13 jumps, no cmov); with both operands already loaded for the
 compare it is a cmov. Those branches span 0x36 bytes, past the census's 32-byte short-forward rule,
-so they show only in the `jcc` column. The production gate checks the per-pass counts in `tools/census/baseline-src.json`. Prefer whole-vector selects (`@select` over `F`/`U`) in
+so they show only in the `jcc` column. The production gate checks the per-pass counts in `bench/census/baseline-src.json`. Prefer whole-vector selects (`@select` over `F`/`U`) in
 batch loops.
 
 ## 3. Benchmark
@@ -179,7 +179,7 @@ nix develop -c ci/run.sh docs
 ## 6. Compiler facts
 
 ```
-python3 tools/zigcheck/zigcheck.py
+python3 ci/zigcheck.py
 ```
 
 70 small cases behind `docs/ZIG_0_17_1.md`. All agree on 0.17.1 and on 0.18.0-dev.1151+8dfb7a7cc (after the `bitpack` rename).

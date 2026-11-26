@@ -12,7 +12,7 @@
 //!
 //! Frame names are a page's prefix plus one of its `golden_frames` (`rest`, `card-rest`): one
 //! line per page in `pages` below. ci/jobs/widget-golden.sh renders each one and compares it
-//! with tools/widgetgolden/ref/<frame>.png.
+//! with tools/golden/ref/widgets/<frame>.png.
 const std = @import("std");
 const lcgf = @import("lcgf");
 const w = lcgf.widgets_base;

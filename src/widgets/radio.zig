@@ -247,7 +247,7 @@ const step_ = step;
 
 /// The radio group's example page: three quality levels on a panel, in both front ends. Its
 /// replay (testdata/radio.replay) clicks and uses the arrows; its golden images
-/// (tools/widgetgolden/ref/radio-*.png) show the selection moving.
+/// (tools/golden/ref/widgets/radio-*.png) show the selection moving.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .fill = th.panel };
@@ -278,7 +278,7 @@ pub const Page = struct {
         if (g != none) s.c.label[g] = str.add("Quality");
     }
     pub const replay = @embedFile("testdata/radio.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/radio-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/radio-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "clicked", 2 }, .{ "down", 3 } };
 };
 

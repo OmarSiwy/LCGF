@@ -175,7 +175,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type {
 
 /// The checkbox's example page: a tri-state "All" that starts mixed and two plain boxes on a
 /// panel, in both front ends. Its replay (testdata/checkbox.replay) clicks and uses Space; its
-/// golden images (tools/widgetgolden/ref/checkbox-*.png) show mixed, on and off.
+/// golden images (tools/golden/ref/widgets/checkbox-*.png) show mixed, on and off.
 pub const Page = struct {
     const th = Theme.default;
     const panel: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(12), .gap = 8, .fill = th.panel };
@@ -208,7 +208,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/checkbox.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/checkbox-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/checkbox-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "on", 2 }, .{ "keys", 5 } };
 };
 

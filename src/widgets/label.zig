@@ -66,7 +66,7 @@ pub const ct = struct {
 // ---- example page -------------------------------------------------------------------------
 
 /// The label's example page: three labels in a column on a panel, in both front ends. Its
-/// replay (testdata/label.replay) and golden images (tools/widgetgolden/ref/label-*.png)
+/// replay (testdata/label.replay) and golden images (tools/golden/ref/widgets/label-*.png)
 /// show that input leaves it as it is.
 pub const Page = struct {
     const th = Theme.default;
@@ -90,7 +90,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 256, .depth = 8 });
     pub const replay = @embedFile("testdata/label.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/label-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/label-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "pressed", 2 } };
 };
 

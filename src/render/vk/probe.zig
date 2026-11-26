@@ -1,9 +1,9 @@
 //! Memory and frame-time probe for the Vulkan back end, the counterpart of probe_wgpu.zig, for
-//! tools/bench/probe.py:
+//! bench/micro/probe.py:
 //!
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe device
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe empty
-//!     python3 tools/bench/probe.py -- zig-out/bin/vk-probe scenes
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe device
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe empty
+//!     python3 bench/micro/probe.py -- zig-out/bin/vk-probe scenes
 //!
 //! device: instance and device only, no back end: the driver's own share (lavapipe is large).
 //! empty: what an empty window costs: device, renderer (default capacities), an 800x600 target

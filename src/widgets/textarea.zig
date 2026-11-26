@@ -393,7 +393,7 @@ pub const Page = struct {
     pub const Ui = base.ComptimeUi(State, spec, th);
     pub const Run = base.Harness(App, Ui, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 512, .depth = 8 });
     pub const replay = @embedFile("testdata/textarea.replay");
-    /// Frames kept as golden images, by name: tools/widgetgolden/ref/textarea-<name>.png.
+    /// Frames kept as golden images, by name: tools/golden/ref/widgets/textarea-<name>.png.
     pub const golden_frames = .{ .{ "rest", 0 }, .{ "typed", 3 }, .{ "scrolled", 5 }, .{ "selected", 7 } };
 };
 

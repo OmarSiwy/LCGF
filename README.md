@@ -31,7 +31,7 @@ Post-release design work is tracked in [TODO.md](TODO.md).
 | `docs/DESIGN.md` | Architecture, the four rules, settled decisions, and the three decisions that are yours. |
 | `docs/CHECKS.md` | How to repeat every measurement, with the recorded output. |
 | `docs/TARGETS.md`, `GATES.md`, `DEPENDENCIES.md`, `REFERENCES.md` | Framework targets, release gates, dependencies and implementation references. |
-| `tools/zigcheck/` | 70 compile checks behind the Zig notes. Run it on your machine first. |
+| `ci/zigcheck.py` | 70 compile checks behind the Zig notes. Run it on your machine first. |
 | `.claude/skills/` | The two design guides the API follows (system API design, data-oriented design). |
 
 ## Build and verify

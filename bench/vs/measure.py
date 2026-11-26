@@ -4,13 +4,13 @@
     python3 bench/vs/measure.py --name clay --exe zig-out/bin/vs-clay --small zig-out/bin/vs-clay-small
 
 For every scene of bench/scenes/ it runs `EXE --scene NAME` RUNS times and keeps the median of the
-per-run poll medians and p99s (each run times 3,000 polls). Then it runs tools/bench/probe.py on
+per-run poll medians and p99s (each run times 3,000 polls). Then it runs bench/micro/probe.py on
 `EXE --idle --scene idle` (resident memory after one frame and wake-ups while idle, median of RUNS)
-and tools/bench/size.zig on SMALL (bytes of text, rodata and data: what the binary loads, without
+and bench/micro/size.zig on SMALL (bytes of text, rodata and data: what the binary loads, without
 symbols or debug info). The 1-minute load average is printed before and after: timings taken on a
 loaded machine mean little, and timings never compare across machines.
 
-Every harness speaks the protocol of tools/bench/bench.zig: a header line with `frames=N`, a line
+Every harness speaks the protocol of bench/micro/bench.zig: a header line with `frames=N`, a line
 `frame MEDIAN P99` in microseconds over every poll (LCGF's `poll` line, when there is one), and with `--idle` a line starting "ready". So `--exe` may also be
 the LCGF benchmark itself (zig build vs-lcgf), which gives the reference row.
 """
@@ -125,7 +125,7 @@ def summarize_scene(name, scene, samples):
 
 def probe(cmd, seconds):
     out = subprocess.run(
-        [sys.executable, "tools/bench/probe.py", "--seconds", str(seconds), "--"] + cmd,
+        [sys.executable, "bench/micro/probe.py", "--seconds", str(seconds), "--"] + cmd,
         check=True, capture_output=True, text=True).stdout
     rss, hwm = map(int, re.search(r"resident\s+(\d+) KiB\s+\(peak (\d+) KiB\)", out).groups())
     wakeups = int(re.search(r"idle\s+(\d+) wake-ups", out).group(1))
