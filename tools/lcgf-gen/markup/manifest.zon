@@ -198,7 +198,9 @@
         .{ .kind = "property", .name = "grid-auto-flow", .status = .mapped, .target = "Decl.flow: row, column, dense", .fixture = "grid" },
         .{ .kind = "property", .name = "writing-mode", .status = .planned, .diagnostic = "writing modes other than horizontal-tb are not lowered (layout/logical.zig)" },
         .{ .kind = "property", .name = "float", .status = .planned, .diagnostic = "float is not lowered; use flex" },
-        .{ .kind = "property", .name = "columns", .status = .planned, .diagnostic = "multi-column layout is not lowered; use flex" },
+        .{ .kind = "property", .name = "columns", .status = .mapped, .target = "a count N (as column-count); a column width is an error", .fixture = "grid" },
+        .{ .kind = "property", .name = "column-count", .status = .mapped, .target = "spec.grid of N fr(1) columns and ceil(children / N) fit rows, Decl.flow = .column (each column filled in turn, a child never split); column-gap normal = 1em; text children and templates are errors", .fixture = "grid" },
+        .{ .kind = "property", .name = "column-width", .status = .rejected, .diagnostic = "a column width is not lowered; give a column count (columns: 3), or tiles with display: grid and repeat(auto-fill, minmax(W, 1fr))" },
 
         // ---- CSS: paint
         .{ .kind = "property", .name = "background-color", .status = .mapped, .target = "Style.fill", .fixture = "counter" },

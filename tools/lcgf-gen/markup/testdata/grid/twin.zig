@@ -1,6 +1,6 @@
 //! grid, written by hand: display: grid with tracks (px, fr, auto, minmax, repeat), named
 //! areas, gaps, placed and spanning cells, implicit rows, column dense flow and alignment
-//! (`spec.grid`, `spec.cell`).
+//! (`spec.grid`, `spec.cell`), and multi-column layout (`columns: N`) as a column-flow grid.
 
 const lcgf = @import("lcgf");
 const s = lcgf.spec;
@@ -36,6 +36,14 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "t4"),
         label.ct.label(theme, "t5"),
         label.ct.label(theme, "t6"),
+    }),
+    // columns: 3 over five children: two rows, filled down each column in turn.
+    s.grid(.{ .size = .{ .px(240), .fit } }, .{ .columns = &.{ .fr(1), .fr(1), .fr(1) }, .rows = &.{ .fit, .fit }, .flow = .column, .gap = .{ 6, 0 } }, .{
+        label.ct.label(theme, "n1"),
+        label.ct.label(theme, "n2"),
+        label.ct.label(theme, "n3"),
+        label.ct.label(theme, "n4"),
+        label.ct.label(theme, "n5"),
     }),
     s.grid(.{}, .{ .rows = &.{ .fit, .fit }, .flow = .column_dense, .distribution = .{ .space_between, .start } }, .{
         label.ct.label(theme, "1"),

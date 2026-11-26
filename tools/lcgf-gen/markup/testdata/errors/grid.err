@@ -10,8 +10,14 @@ grid.html:3:79: error: grid-template-columns: give a track in px, em, rem or fr
 grid.html:3:115: error: every row of grid-template-areas needs the same number of cells (2, not 1)
   .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
                                                                                                                   ^
-grid.html:9:22: error: a grid item with a line on one axis needs one on the other too (grid-column and grid-row); auto-placement on one axis is not supported
-<body><div class="g"><span class="one">1</span><span class="bad">2</span><span class="loose">3</span></div><p class="out">x</p></body>
+grid.html:8:18: error: a column width is not lowered; give a column count (columns: 3), or tiles with display: grid and repeat(auto-fill, minmax(W, 1fr))
+  .cw { columns: 120px; }
+                 ^
+grid.html:9:9: error: columns lays out child boxes and does not split text across columns; put the text in <p> elements
+  .ct { column-count: 2; }
+        ^
+grid.html:11:22: error: a grid item with a line on one axis needs one on the other too (grid-column and grid-row); auto-placement on one axis is not supported
+<body><div class="g"><span class="one">1</span><span class="bad">2</span><span class="loose">3</span></div><p class="out">x</p><div class="cw"><p>a</p></div><div class="ct">loose <p>b</p></div></body>
                      ^
 grid.html:5:10: error: grid-row: the end line must come after the start line
   .bad { grid-row: 3 / 1; }

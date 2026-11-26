@@ -303,6 +303,10 @@ lowered. Rows past the template are added for the children that need them. Not y
 named lines, `%` tracks and a line on one axis only. `repeat(auto-fill | auto-fit, T)` as the
 whole column list makes as many columns as the grid's laid-out width fits (at most 64). Flex rules
 (margins, wrap, align-self) apply around and inside grids. A control directly in a cell needs a `<div>` around it on runtime pages.
+`columns: N` (or `column-count`) on a block is a grid of N equal columns that fills each column
+in turn (`column-gap` defaults to 1em). Children are never split, so the columns balance by
+child, not by height; text directly inside, a template among the children and a column width
+are errors.
 
 Positioning: `relative` is a translate (`right` and `bottom` move the other way). `absolute`
 floats the box at its parent's content box: `top`/`left` are its offset, `right`/`bottom`

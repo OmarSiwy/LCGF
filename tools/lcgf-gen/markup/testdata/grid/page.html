@@ -26,6 +26,7 @@
     .wide { grid-column: span 2; }
     .placed { grid-column: 3; grid-row: 2 / 4; }
     .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; width: 280px; }
+    .news { columns: 3; column-gap: 6px; width: 240px; }
     .flow { display: grid; grid-template-rows: auto auto; grid-auto-flow: column dense; justify-content: space-between; }
   </style>
 </head>
@@ -45,6 +46,7 @@
     <div class="foot">Foot</div>
   </div>
   <div class="tiles"><span>t1</span><span>t2</span><span>t3</span><span>t4</span><span>t5</span><span>t6</span></div>
+  <div class="news"><div>n1</div><div>n2</div><div>n3</div><div>n4</div><div>n5</div></div>
   <div class="flow"><span>1</span><span>2</span><span>3</span></div>
 </body>
 </html>

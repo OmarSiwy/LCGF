@@ -97,6 +97,7 @@ pub const Prop = enum(u8) {
     @"caption-side",
     @"text-decoration",
     @"object-fit",
+    @"column-count",
 
     /// Inherited properties take the parent's computed value when nothing is declared.
     pub fn inherited(p: Prop) bool {
@@ -116,6 +117,7 @@ pub const shorthands = [_]Shorthand{
     .{ .name = "padding", .longhands = &.{ .@"padding-top", .@"padding-right", .@"padding-bottom", .@"padding-left" } },
     .{ .name = "margin", .longhands = &.{ .@"margin-top", .@"margin-right", .@"margin-bottom", .@"margin-left" } },
     .{ .name = "gap", .longhands = &.{ .@"row-gap", .@"column-gap" } },
+    .{ .name = "columns", .longhands = &.{.@"column-count"} },
     .{ .name = "overflow", .longhands = &.{ .@"overflow-x", .@"overflow-y" } },
     .{ .name = "flex", .longhands = &.{ .@"flex-grow", .@"flex-shrink", .@"flex-basis" } },
     .{ .name = "background", .longhands = &.{ .@"background-color", .@"background-image" } },
