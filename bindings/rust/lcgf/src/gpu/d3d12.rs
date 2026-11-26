@@ -1159,12 +1159,21 @@ impl Device<'_> {
             },
             ..Default::default()
         };
-        let heap = heap_props(if upload {
+        // An upload heap's resources stay in GENERIC_READ and the GPU never writes them: a host
+        // buffer the GPU writes (storage, or a copy's destination) lives in a custom heap the
+        // CPU maps write-back, in system memory (L0), resting in COMMON (src/render/d3d12/gpu.zig).
+        let gpu_written = d.usage.has(BufferUsages::STORAGE) || d.usage.has(BufferUsages::COPY_DST);
+        let mut heap = heap_props(if upload {
             D3D12_HEAP_TYPE_UPLOAD
         } else {
             D3D12_HEAP_TYPE_DEFAULT
         });
-        let state = if upload {
+        if upload && gpu_written {
+            heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+            heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+            heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+        }
+        let state = if upload && !gpu_written {
             D3D12_RESOURCE_STATE_GENERIC_READ
         } else {
             D3D12_RESOURCE_STATE_COMMON

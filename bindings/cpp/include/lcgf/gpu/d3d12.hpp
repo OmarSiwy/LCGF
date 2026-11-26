@@ -294,9 +294,18 @@ inline Result CreateBuffer(const Device& d, Arena& arena, const BufferDescriptor
     rd.SampleDesc = {1, 0};
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     if (desc.usage & BufferUsage::Storage) rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    const D3D12_HEAP_PROPERTIES heap = detail::heapProps(upload ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_DEFAULT);
+    // An upload heap's resources stay in GENERIC_READ and the GPU never writes them: a host
+    // buffer the GPU writes (storage, or a copy's destination) lives in a custom heap the CPU
+    // maps write-back, in system memory (L0), resting in COMMON (src/render/d3d12/gpu.zig).
+    const bool gpuWritten = (desc.usage & BufferUsage::Storage) || (desc.usage & BufferUsage::CopyDst);
+    D3D12_HEAP_PROPERTIES heap = detail::heapProps(upload ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_DEFAULT);
+    if (upload && gpuWritten) {
+        heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+        heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+        heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+    }
     ID3D12Resource* r = nullptr;
-    if (const HRESULT h = d.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, upload ? D3D12_RESOURCE_STATE_GENERIC_READ : D3D12_RESOURCE_STATE_COMMON,
+    if (const HRESULT h = d.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, upload && !gpuWritten ? D3D12_RESOURCE_STATE_GENERIC_READ : D3D12_RESOURCE_STATE_COMMON,
                                                             nullptr, detail::kResource, reinterpret_cast<void**>(&r));
         FAILED(h))
         return h;

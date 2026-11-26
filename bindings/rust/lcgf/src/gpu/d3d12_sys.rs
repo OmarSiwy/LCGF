@@ -304,6 +304,8 @@ pub struct D3D12_CPU_DESCRIPTOR_HANDLE {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_CPU_PAGE_PROPERTY(pub i32);
 pub const D3D12_CPU_PAGE_PROPERTY_UNKNOWN: D3D12_CPU_PAGE_PROPERTY = D3D12_CPU_PAGE_PROPERTY(0i32);
+pub const D3D12_CPU_PAGE_PROPERTY_WRITE_BACK: D3D12_CPU_PAGE_PROPERTY =
+    D3D12_CPU_PAGE_PROPERTY(3i32);
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_CULL_MODE(pub i32);
@@ -635,6 +637,7 @@ pub struct D3D12_HEAP_PROPERTIES {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_HEAP_TYPE(pub i32);
+pub const D3D12_HEAP_TYPE_CUSTOM: D3D12_HEAP_TYPE = D3D12_HEAP_TYPE(4i32);
 pub const D3D12_HEAP_TYPE_DEFAULT: D3D12_HEAP_TYPE = D3D12_HEAP_TYPE(1i32);
 pub const D3D12_HEAP_TYPE_UPLOAD: D3D12_HEAP_TYPE = D3D12_HEAP_TYPE(2i32);
 #[repr(transparent)]
@@ -747,6 +750,7 @@ pub const D3D12_LOGIC_OP_NOOP: D3D12_LOGIC_OP = D3D12_LOGIC_OP(4i32);
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_MEMORY_POOL(pub i32);
+pub const D3D12_MEMORY_POOL_L0: D3D12_MEMORY_POOL = D3D12_MEMORY_POOL(1i32);
 pub const D3D12_MEMORY_POOL_UNKNOWN: D3D12_MEMORY_POOL = D3D12_MEMORY_POOL(0i32);
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
