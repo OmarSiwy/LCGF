@@ -6,6 +6,7 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const features = @import("features.zig");
+const simd = @import("../core/simd.zig");
 const V4 = @Vector(4, f32);
 
 pub const identity: [6]f32 = .{ 1, 0, 0, 1, 0, 0 };
@@ -172,7 +173,9 @@ pub fn nodeClipRadii(t: anytype, i: usize) [4]f32 {
 pub fn nodeAlpha(t: anytype, i: usize) f32 {
     const source = paintSource(t, i);
     const inherited = t.x.row[t.c.scope[source]].alpha;
-    return if (source == i) inherited else inherited * t.x.row[t.c.extra[i]].opacity;
+    // Row 0 holds the defaults (opacity 1): the row is selected, then loaded, which stays a
+    // cmov; a select on the loaded opacity compiled to a jump around its load.
+    return inherited * t.x.row[simd.selU(source == i, 0, t.c.extra[i])].opacity;
 }
 
 /// World-space node bounds after layout and inherit.transform. Includes an optional paint

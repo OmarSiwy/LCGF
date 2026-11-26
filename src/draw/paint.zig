@@ -113,7 +113,9 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
             .fill = look.fill,
             .border_color = look.border_color,
             .radii = @select(f32, @as(@Vector(4, bool), @splat(x.row[own].prepared_texture != 0)), @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), radiiOf(x.row[own].radii, look.radius))),
-            .border = simd.selF(x.row[own].prepared_texture != 0, 0, x.row[own].border),
+            // Row 0 (the defaults) has border 0: the row is selected, then loaded. A select on
+            // the loaded border compiled to a jump around its load.
+            .border = x.row[simd.selU(x.row[own].prepared_texture != 0, 0, own)].border,
             .opacity = alpha,
             .xform = geometry.nodeWorld(t, i),
             .clip_radii = geometry.nodeClipRadii(t, i),
