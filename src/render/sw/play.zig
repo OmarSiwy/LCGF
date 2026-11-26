@@ -33,6 +33,8 @@ pub fn main(init: std.process.Init) !void {
 
     var w: u32 = 800;
     var h: u32 = 600;
+    // `texture ID W H FILE`: an RGBA8 texture of its own (gpu.py binds it the same way).
+    var own: ?struct { id: u32, img: sw.Image } = null;
     var first: std.ArrayList(u32) = .empty;
     var count: std.ArrayList(u32) = .empty;
     var lines = std.mem.tokenizeScalar(u8, cmds, '\n');
@@ -42,6 +44,14 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, key, "size")) {
             w = try std.fmt.parseInt(u32, f.next().?, 10);
             h = try std.fmt.parseInt(u32, f.next().?, 10);
+        } else if (std.mem.eql(u8, key, "texture")) {
+            const id = try std.fmt.parseInt(u32, f.next().?, 10);
+            const tw = try std.fmt.parseInt(u32, f.next().?, 10);
+            const th = try std.fmt.parseInt(u32, f.next().?, 10);
+            const bytes = try dir.readFileAlloc(io, f.next().?, gpa, .limited(64 << 20));
+            const pixels = try gpa.alloc(u32, tw * th);
+            @memcpy(std.mem.sliceAsBytes(pixels), bytes[0 .. tw * th * 4]);
+            own = .{ .id = id, .img = .{ .pixels = pixels, .width = tw, .height = th } };
         } else if (std.mem.eql(u8, key, "text")) {
             try first.append(gpa, try std.fmt.parseInt(u32, f.next().?, 10));
             try count.append(gpa, try std.fmt.parseInt(u32, f.next().?, 10));
@@ -54,10 +64,13 @@ pub fn main(init: std.process.Init) !void {
         atlas[((byte >> 4) * 4 + y) * 64 + (byte & 15) * 4 + x] = 0xffff_ffff;
     };
     const atlas_tex: lcgf.types.Texture = @fromBackingInt(1);
+    // The own texture is image 2; its id must be 2 too, the rows the renderer indexes by id.
+    const images = [_]sw.Image{ sw.Image.white, .{ .pixels = &atlas, .width = 64, .height = 64 }, if (own) |o| o.img else sw.Image.white };
+    if (own) |o| if (o.id != 2) return error.TextureIdNotTwo;
     const s: sw.Software = .{
         .quads = quads,
         .glyphs = .{ .quads = glyph_quads, .first = first.items, .count = count.items, .texture = atlas_tex },
-        .images = &.{ sw.Image.white, .{ .pixels = &atlas, .width = 64, .height = 64 } },
+        .images = images[0 .. @as(usize, 2) + @intFromBool(own != null)],
     };
 
     const px = try gpa.alloc(u32, sw.Framebuffer.len(w, h));
@@ -72,8 +85,9 @@ pub fn main(init: std.process.Init) !void {
         var v: [5]f32 = undefined;
         for (&v) |*x| x.* = std.fmt.parseFloat(f32, f.next() orelse "0") catch 0;
         if (std.mem.eql(u8, key, "quads")) {
-            // Texture 0 is white, any other the stand-in atlas.
-            const tex: lcgf.types.Texture = if (v[2] == 0) .white else atlas_tex;
+            // Texture 0 is white, a `texture` line's id its own, any other the stand-in atlas.
+            const own_id: f32 = if (own) |o| @floatFromInt(o.id) else -1;
+            const tex: lcgf.types.Texture = if (v[2] == 0) .white else if (v[2] == own_id) @fromBackingInt(2) else atlas_tex;
             s.drawBatch(t, .{ .first = @intFromFloat(v[0]), .count = @intFromFloat(v[1]), .texture = tex, .material = .solid });
         } else if (std.mem.eql(u8, key, "text")) {
             s.drawText(t, run);

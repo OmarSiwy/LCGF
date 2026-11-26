@@ -40,6 +40,8 @@ pub fn stockFor(comptime use: Usage) [:0]const u8 {
         const nine = tex and use.kinds.contains(.nine_slice);
         const pattern = use.border and (use.kinds.contains(.dashed) or use.kinds.contains(.dotted));
         const shadow = use.kinds.contains(.shadow);
+        // A ramp reads the bound texture, which a quad that uses one always has.
+        const ramp = tex and use.kinds.contains(.ramp);
         const head = stock_source[0..std.mem.indexOf(u8, stock_source, "@vertex").?];
         const vs = function("vs");
         const grow = "select(0.0, 3.0 * bitcast<f32>(inst.params.y), inst.params.x == k_shadow)";
@@ -55,12 +57,14 @@ pub fn stockFor(comptime use: Usage) [:0]const u8 {
             (if (grad) function("gradient") else "") ++
             (if (nine) function("nine_axis") ++ function("nine_uv") else "") ++
             (if (pattern) function("border_pattern") else "") ++
-            (if (shadow) function("shadow_coverage") else "");
+            (if (shadow) function("shadow_coverage") else "") ++
+            (if (ramp) function("ramp") else "");
         // As in the stock shader: per-instance branches, the texture sampled after them.
         const mat = (if (nine) "var uv = nearest_uv(in);\nif (in.params.x == k_nine) {\nuv = nine_uv(in);\n}\n" else "") ++
             (if (grad) "var fill = in.fill;\nif (in.params.x == k_linear || in.params.x == k_radial) {\nfill = gradient(in);\n}\n" else "let fill = in.fill;\n") ++
-            "let material = fill" ++
-            (if (nine) " * textureSample(tex, samp, uv)" else if (tex) " * textureSample(tex, samp, nearest_uv(in))" else "") ++ ";\n";
+            (if (ramp) "var material = fill" else "let material = fill") ++
+            (if (nine) " * textureSample(tex, samp, uv)" else if (tex) " * textureSample(tex, samp, nearest_uv(in))" else "") ++ ";\n" ++
+            (if (ramp) "if (in.params.x == k_ramp) {\nmaterial = ramp(in);\n}\n" else "");
         break :result head ++ constants ++ "@vertex\n" ++ vertex ++ helpers ++
             "@fragment fn fs(in: Frag) -> @location(0) vec4f {\n" ++
             "let r = " ++ (if (use.radius) "corner_radius(in.local, in.half, in.radii)" else "0.0") ++ ";\n" ++

@@ -1332,29 +1332,33 @@ pub const Lowerer = struct {
             s.fill = .white;
             return;
         }
-        if (ty != .function or !css.eq(l.c.toks.items(.str)[t], "linear-gradient")) {
-            l.ds.err(l.c.tokLoc(t), "background-image: only url() and linear-gradient() with two colours are lowered", .{});
+        const name = if (ty == .function) l.c.toks.items(.str)[t] else "";
+        const radial = css.eq(name, "radial-gradient");
+        if (!radial and !css.eq(name, "linear-gradient")) {
+            l.ds.err(l.c.tokLoc(t), "background-image: only url(), linear-gradient() and radial-gradient() are lowered", .{});
             return;
         }
         const close = values.closeOf(l.c, t, r[1]);
         var rd: values.Reader = .init(l.c, t + 1, close - 1);
-        var item: [3][2]u32 = undefined;
+        var item: [65][2]u32 = undefined;
         var count: usize = 0;
         while (!rd.done()) {
             const s0 = rd.i;
             const e = rd.untilComma();
             if (count == item.len) {
-                l.ds.err(l.c.tokLoc(t), "{s}", .{manifest.refusal("value", "linear-gradient", "stops").?});
+                l.ds.err(l.c.tokLoc(t), "a gradient takes at most 64 colours", .{});
                 return;
             }
             item[count] = .{ s0, e };
             count += 1;
             rd.i = @min(e + 1, rd.end);
         }
+        // The first item is the gradient's shape unless it is a colour stop.
+        const shaped = count > 0 and values.color(l.c, item[0][0], item[0][1]) == null;
         var angle: f32 = std.math.pi; // `to bottom`, CSS's default
-        var first: usize = 0;
-        if (count == 3) {
-            first = 1;
+        var centre: [2]f32 = .{ 0.5, 0.5 };
+        var radius: ?f32 = null;
+        if (shaped and !radial) {
             var a: values.Reader = .init(l.c, item[0][0], item[0][1]);
             const at = a.next().?;
             if (values.angle(l.c, at)) |x| angle = x else if (values.isIdent(l.c, at, "to")) {
@@ -1365,20 +1369,113 @@ pub const Lowerer = struct {
                 l.ds.err(l.c.tokLoc(at), "expected an angle or 'to <side>' in linear-gradient()", .{});
                 return;
             }
-        } else if (count != 2) {
-            l.ds.err(l.c.tokLoc(t), "{s}", .{manifest.refusal("value", "linear-gradient", "stops").?});
+        } else if (shaped) {
+            // `circle`, a radius in px, `at X Y` (percentages or keywords); in any order CSS allows.
+            var a: values.Reader = .init(l.c, item[0][0], item[0][1]);
+            var after_at: u2 = 0;
+            while (a.next()) |x| {
+                if (values.isIdent(l.c, x, "at")) {
+                    after_at = 1;
+                    continue;
+                }
+                if (after_at > 0 and after_at < 3) {
+                    const axis = after_at - 1;
+                    const kw = values.ident(l.c, x);
+                    const v: ?f32 = if (kw) |k| (if (css.eq(k, "center")) 0.5 else if (css.eq(k, "left") or css.eq(k, "top")) 0 else if (css.eq(k, "right") or css.eq(k, "bottom")) 1 else null) else if (values.len(l.c, x)) |len| (if (len.unit == .pct) len.v / 100 else null) else null;
+                    centre[axis] = v orelse {
+                        l.ds.err(l.c.tokLoc(x), "radial-gradient(): the centre is given in % or by keywords", .{});
+                        return;
+                    };
+                    after_at += 1;
+                    continue;
+                }
+                if (values.isIdent(l.c, x, "circle")) continue;
+                if (values.len(l.c, x)) |len| if (values.px(len, l.text[n].px, l.root_px)) |v| {
+                    radius = v;
+                    continue;
+                };
+                l.ds.err(l.c.tokLoc(x), "radial-gradient(): only a circle, its radius in px and 'at X Y' are lowered", .{});
+                return;
+            }
+        }
+        if (radial and radius == null) {
+            // CSS's farthest-corner, from a box whose size is known while building.
+            if (s.size[0].kind != .px or s.size[1].kind != .px) {
+                l.ds.err(l.c.tokLoc(t), "radial-gradient(): give its radius in px, or the box a px width and height", .{});
+                return;
+            }
+            const w = s.size[0].v;
+            const h = s.size[1].v;
+            const dx = @max(centre[0], 1 - centre[0]) * w;
+            const dy = @max(centre[1], 1 - centre[1]) * h;
+            radius = @sqrt(dx * dx + dy * dy);
+        }
+        // Colour stops: a colour and an optional percentage.
+        var stops: [64]lcgf.features.Stop = undefined;
+        var given: [64]bool = undefined;
+        const n_stops = count - @intFromBool(shaped);
+        if (n_stops < 2) {
+            l.ds.err(l.c.tokLoc(t), "a gradient needs at least two colours", .{});
             return;
         }
-        const c1 = values.color(l.c, item[first][0], item[first][1]);
-        const c2 = values.color(l.c, item[first + 1][0], item[first + 1][1]);
-        if (c1 == null or c2 == null) {
-            l.ds.err(l.c.tokLoc(t), "linear-gradient(): expected two colours", .{});
-            return;
+        for (item[@intFromBool(shaped)..count], 0..) |it, k| {
+            var a: values.Reader = .init(l.c, it[0], it[1]);
+            const c0 = a.next().?;
+            stops[k] = .{ .color = values.color(l.c, c0, it[1]) orelse {
+                l.ds.err(l.c.tokLoc(c0), "expected a colour stop", .{});
+                return;
+            }, .at = 0 };
+            given[k] = false;
+            if (a.next()) |p| {
+                const len = values.len(l.c, p);
+                if (len == null or len.?.unit != .pct or a.next() != null) {
+                    l.ds.err(l.c.tokLoc(p), "a colour stop's position is one percentage", .{});
+                    return;
+                }
+                stops[k].at = len.?.v / 100;
+                given[k] = true;
+            }
         }
-        s.fill = c1.?;
+        fixStops(stops[0..n_stops], given[0..n_stops]);
+        const plain = n_stops == 2 and stops[0].at == 0 and stops[1].at == 1;
         // CSS angles start at the top, clockwise; features.linear's 0 runs left to right.
         const rad = angle - std.math.pi / 2.0;
-        params.* = ok(std.fmt.allocPrint(l.arena, "lcgf.features.linear({s}, {d})", .{ colorExpr(l.arena, c2.?), rad }));
+        if (plain) {
+            s.fill = stops[0].color;
+            params.* = if (radial)
+                ok(std.fmt.allocPrint(l.arena, "lcgf.features.radial({s}, .{{ {d}, {d} }}, {d})", .{ colorExpr(l.arena, stops[1].color), centre[0], centre[1], radius.? }))
+            else
+                ok(std.fmt.allocPrint(l.arena, "lcgf.features.linear({s}, {d})", .{ colorExpr(l.arena, stops[1].color), rad }));
+            return;
+        }
+        // More colours, or stops not at the ends: a ramp row in the asset table (features.ramp).
+        if (l.k.get(n, .@"background-color").decl != none and !std.meta.eql(s.fill, types.Color.transparent))
+            l.ds.err(l.c.tokLoc(t), "a background-color under a gradient of more than two colours is not drawn: one quad per box; set one of them", .{});
+        const k = l.ramp(stops[0..n_stops], l.c.text(t, close), l.c.tokLoc(t)) orelse return;
+        s.texture = @fromBackingInt(@as(u16, @intCast(k + 1)));
+        s.fill = .white;
+        params.* = if (radial)
+            ok(std.fmt.allocPrint(l.arena, "lcgf.features.radialRamp(.{{ {d}, {d} }}, {d})", .{ centre[0], centre[1], radius.? }))
+        else
+            ok(std.fmt.allocPrint(l.arena, "lcgf.features.linearRamp({d})", .{rad}));
+    }
+
+    /// The asset of a gradient's ramp row (`ramp_texels` wide), made here; one per distinct row.
+    fn ramp(l: *Lowerer, stops: []const lcgf.features.Stop, text: []const u8, at: Loc) ?u32 {
+        const texels = ok(l.arena.alloc(u32, ramp_texels));
+        lcgf.features.rampPixels(stops, texels);
+        const bytes = std.mem.sliceAsBytes(texels);
+        for (l.page.assets.items, 0..) |a, k| if (a.path.len == 0 and std.mem.eql(u8, a.pixels, bytes)) return @intCast(k);
+        if (l.page.assets.items.len + 1 >= std.math.maxInt(u16)) {
+            l.ds.err(at, "too many images on one page", .{});
+            return null;
+        }
+        const src = ok(l.arena.dupe(u8, text));
+        for (src) |*c| if (c.* == '\n' or c.* == '\r') {
+            c.* = ' ';
+        };
+        ok(l.page.assets.append(l.arena, .{ .src = src, .path = "", .loc = at, .w = ramp_texels, .h = 1, .pixels = bytes }));
+        return @intCast(l.page.assets.items.len - 1);
     }
 
     fn position(l: *Lowerer, n: u32, s: *Style) void {
@@ -2554,7 +2651,7 @@ pub const Lowerer = struct {
         var params: []const u8 = "";
         var margin: ?[4]f32 = null;
         const st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
-        if (params.len > 0) l.ds.err(l.loc(n), "<img> takes no gradient or dashed border", .{});
+        if (params.len > 0 or st.texture != .white) l.ds.err(l.loc(n), "<img> takes no gradient, background image or dashed border", .{});
         var box: [2]f32 = .{ 0, 0 };
         inline for (.{ "width", "height" }, 0..) |name, a| switch (st.size[a].kind) {
             .px => box[a] = st.size[a].v,
@@ -2587,6 +2684,35 @@ pub const Lowerer = struct {
         };
     }
 };
+
+/// Texels of a gradient's ramp row: a 1 KiB asset, an eighth of a texel's colour step for a
+/// two-colour run across the row.
+const ramp_texels = 256;
+
+/// CSS's colour stop fix-up: a first stop without a position at 0, a last one at 1, each
+/// at least the largest before it, and runs without one spread evenly between their
+/// neighbours.
+fn fixStops(stops: []lcgf.features.Stop, given: []const bool) void {
+    const last = stops.len - 1;
+    if (!given[0]) stops[0].at = 0;
+    if (!given[last]) stops[last].at = 1;
+    var hi: f32 = stops[0].at;
+    var k: usize = 1;
+    while (k < stops.len) : (k += 1) {
+        if (given[k] or k == last) {
+            stops[k].at = @max(stops[k].at, hi);
+            hi = stops[k].at;
+            continue;
+        }
+        // A run of stops without positions: k up to the next one with a position.
+        var e = k;
+        while (e < last and !given[e]) e += 1;
+        const to = @max(stops[e].at, hi);
+        const step = (to - hi) / @as(f32, @floatFromInt(e - k + 1));
+        for (k..e) |j| stops[j].at = hi + step * @as(f32, @floatFromInt(j - k + 1));
+        k = e - 1;
+    }
+}
 
 pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: *css.Css, k: *const cascade.Cascade, name: []const u8, source: []const u8) Lowerer {
     const n = doc.nodes.len;

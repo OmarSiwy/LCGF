@@ -221,6 +221,13 @@ Layout is flexbox on LCGF's passes. Block flow is a column, and these deviations
   otherwise.
 - A flex container has one gap.
 
+Backgrounds: a colour, `url(local.png)`, or a gradient. A two-colour `linear-gradient` or
+`radial-gradient(circle …)` is a quad feature (`features.linear`, `features.radial`). One with
+more colours, or with stops away from the ends, becomes a 256-texel ramp row in the asset
+table (`features.rampPixels`, uploaded with the images) drawn by `features.linearRamp` or
+`features.radialRamp`. Stop positions are percentages; a radial gradient without a radius
+takes the farthest corner of a box with a px size. Ellipses and conic gradients are errors.
+
 Lengths are folded to px: `em` and `rem` from the resolved font size, `in`, `cm`, `mm`, `pt` and
 `pc` at 96 px per inch.
 

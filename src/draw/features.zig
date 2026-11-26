@@ -12,7 +12,7 @@ const types = @import("../core/types.zig");
 const Color = types.Color;
 
 /// What `params.x` selects in the stock material. `solid` is all-zero params, the default.
-pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6 };
+pub const Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6, ramp = 7 };
 
 /// Features a renderer must support for one statically described UI.
 pub const Usage = struct {
@@ -45,6 +45,60 @@ pub fn linear(to: Color, angle: f32) [4]f32 {
 /// is the middle.
 pub fn radial(to: Color, centre: [2]f32, radius: f32) [4]f32 {
     return words(.{ @backingInt(Kind.radial), to.bitsOf(), half2(centre), @bitCast(radius) });
+}
+
+/// One colour of a ramp: `color` at `at`, from 0 (the gradient's start) to 1 (its end).
+pub const Stop = struct { color: Color, at: f32 };
+
+/// `Style.params` for a gradient of any number of colours, read from a ramp: one row of the
+/// node's texture (`rampPixels` fills it; `Style.uv` is its rect, the row at the rect's middle).
+/// The gradient runs along `angle` as `linear`'s does; the colour at each point is the ramp at
+/// that fraction, interpolated between its two nearest texels, times the node's `fill` (white
+/// for the ramp's own colours).
+pub fn linearRamp(angle: f32) [4]f32 {
+    return words(.{ @backingInt(Kind.ramp), 0, @bitCast(angle), 0 });
+}
+
+/// `Style.params` for a radial gradient read from a ramp (`linearRamp`): from `centre` (a
+/// fraction of the node's size) to `radius` pixels from it, as `radial`'s.
+pub fn radialRamp(centre: [2]f32, radius: f32) [4]f32 {
+    return words(.{ @backingInt(Kind.ramp), 1, half2(centre), @bitCast(radius) });
+}
+
+/// Fills the ramp row `out` (straight RGBA8, `Color.bitsOf`) with the colours of `stops`,
+/// whose `at` must rise from 0 to 1: texel k holds the gradient at (k + 0.5) / out.len,
+/// interpolated between the stops around it in premultiplied colour, as CSS gradients are,
+/// and the first and last stops' colours before and after them. Upload `out` as a
+/// `out.len` x 1 texture and draw with `linearRamp` or `radialRamp`.
+pub fn rampPixels(stops: []const Stop, out: []u32) void {
+    std.debug.assert(stops.len > 0);
+    const n: f32 = @floatFromInt(out.len);
+    var s: usize = 0;
+    for (out, 0..) |*o, k| {
+        const t = (@as(f32, @floatFromInt(k)) + 0.5) / n;
+        while (s + 1 < stops.len and stops[s + 1].at <= t) s += 1;
+        const a = stops[s];
+        const b = stops[@min(s + 1, stops.len - 1)];
+        const span = b.at - a.at;
+        // Past the last stop `b` is `a`: its colour, as before the first one is the first's.
+        const f: f32 = if (span <= 0) @floatFromInt(@intFromBool(t >= b.at)) else std.math.clamp((t - a.at) / span, 0, 1);
+        o.* = mixPremultiplied(a.color, b.color, f).bitsOf();
+    }
+}
+
+/// `a` to `b` by `f`, interpolated in premultiplied colour and returned straight.
+fn mixPremultiplied(a: Color, b: Color, f: f32) Color {
+    const aa: f32 = @floatFromInt(a.a);
+    const ba: f32 = @floatFromInt(b.a);
+    const alpha = aa + (ba - aa) * f;
+    var out: Color = .{ .a = @intFromFloat(@round(alpha)) };
+    inline for (.{ "r", "g", "b" }) |c| {
+        const pa = @as(f32, @floatFromInt(@field(a, c))) * aa;
+        const pb = @as(f32, @floatFromInt(@field(b, c))) * ba;
+        const p = pa + (pb - pa) * f;
+        @field(out, c) = if (alpha > 0) @intFromFloat(@round(std.math.clamp(p / alpha, 0, 255))) else 0;
+    }
+    return out;
 }
 
 /// `Style.params` for an analytic box shadow: the node's rounded rect (its `radius`) blurred by a
@@ -117,6 +171,28 @@ test "features: solid is the zero default, kind and colour travel as exact words
     try testing.expectEqual([4]u32{ @backingInt(Kind.dashed), @bitCast(@as(f32, 8)), @bitCast(@as(f32, 4)), 0 }, da);
     const dt: [4]u32 = @bitCast(dotted(3));
     try testing.expectEqual([4]u32{ @backingInt(Kind.dotted), 0, @bitCast(@as(f32, 3)), 0 }, dt);
+    const lr: [4]u32 = @bitCast(linearRamp(0.5));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.ramp), 0, @bitCast(@as(f32, 0.5)), 0 }, lr);
+    const rr: [4]u32 = @bitCast(radialRamp(.{ 0.25, 1 }, 40));
+    try testing.expectEqual([4]u32{ @backingInt(Kind.ramp), 1, 0x3c00_3400, @bitCast(@as(f32, 40)) }, rr);
     const sh: [4]u32 = @bitCast(shadow(6));
     try testing.expectEqual([4]u32{ @backingInt(Kind.shadow), @bitCast(@as(f32, 6)), 0, 0 }, sh);
+}
+
+test "rampPixels: stops at their places, premultiplied mixing, the ends held" {
+    var px: [4]u32 = undefined;
+    // Red, then green at the middle, then blue: texel centres at 1/8, 3/8, 5/8, 7/8.
+    rampPixels(&.{ .{ .color = .rgb(255, 0, 0), .at = 0 }, .{ .color = .rgb(0, 255, 0), .at = 0.5 }, .{ .color = .rgb(0, 0, 255), .at = 1 } }, &px);
+    try testing.expectEqual(Color.rgb(191, 64, 0).bitsOf(), px[0]);
+    try testing.expectEqual(Color.rgb(64, 191, 0).bitsOf(), px[1]);
+    try testing.expectEqual(Color.rgb(0, 191, 64).bitsOf(), px[2]);
+    try testing.expectEqual(Color.rgb(0, 64, 191).bitsOf(), px[3]);
+    // Before the first stop and after the last, their colours; a hard stop switches at once.
+    rampPixels(&.{ .{ .color = .rgb(10, 10, 10), .at = 0.3 }, .{ .color = .rgb(200, 0, 0), .at = 0.5 }, .{ .color = .rgb(0, 0, 200), .at = 0.5 } }, &px);
+    try testing.expectEqual(Color.rgb(10, 10, 10).bitsOf(), px[0]);
+    try testing.expectEqual(Color.rgb(0, 0, 200).bitsOf(), px[2]);
+    try testing.expectEqual(Color.rgb(0, 0, 200).bitsOf(), px[3]);
+    // To transparent: the colour holds while it fades (premultiplied), not toward black.
+    rampPixels(&.{ .{ .color = .rgb(255, 0, 0), .at = 0 }, .{ .color = .rgba(0, 0, 0, 0), .at = 1 } }, &px);
+    try testing.expectEqual(Color.rgba(255, 0, 0, 96).bitsOf(), px[2]);
 }

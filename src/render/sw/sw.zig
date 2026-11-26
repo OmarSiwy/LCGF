@@ -1146,6 +1146,22 @@ inline fn sample(comptime encoding: ImageEncoding, img: Image, u: F, v: F) [4]F 
     return unpack(texel, 0);
 }
 
+/// The shader's `ramp`: the ramp row of the uv rect `uv` (its middle row) at fraction `g`,
+/// between its two nearest texels.
+inline fn rampAt(comptime encoding: ImageEncoding, img: Image, g: F, uv: [4]f32) [4]F {
+    const n: f32 = @floatFromInt(img.width);
+    const x = (simd.f(uv[0]) + simd.f(uv[2] - uv[0]) * g) * simd.f(n) - simd.f(0.5);
+    const k0 = @min(@max(@floor(x), simd.f(0)), simd.f(n - 1));
+    const k1 = @min(k0 + simd.f(1), simd.f(n - 1));
+    const v = simd.f((uv[1] + uv[3]) * 0.5);
+    const lo = sample(encoding, img, (k0 + simd.f(0.5)) / simd.f(n), v);
+    const hi = sample(encoding, img, (k1 + simd.f(0.5)) / simd.f(n), v);
+    const f = sat(x - k0);
+    var out: [4]F = undefined;
+    inline for (0..4) |i| out[i] = lo[i] + (hi[i] - lo[i]) * f;
+    return out;
+}
+
 inline fn unpack(p: U, red: u5) [4]F {
     const m = simd.u(255);
     const k = simd.f(1.0 / 255.0);
@@ -1223,6 +1239,8 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime
     const rc_x = (@as(f32, centre[0]) * 2 - 1) * hx;
     const rc_y = (@as(f32, centre[1]) * 2 - 1) * hy;
     const radius = @max(@as(f32, @bitCast(p[3])), 1e-6);
+    // A ramp runs from a centre (as radial) when params.y is 1, else along the angle.
+    const ramp_radial: B = @splat(p[1] == 1);
     // Nine-slice insets.
     const dst: [4]f32 = rgba(p[1]) * @as(@Vector(4, f32), @splat(255));
     const src = [4]f32{ unorm16(p[2]), unorm16(p[2] >> 16), unorm16(p[3]), unorm16(p[3] >> 16) };
@@ -1261,6 +1279,7 @@ fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime
         .reach = reach,
         .rc = .{ rc_x, rc_y },
         .radius = radius,
+        .ramp_radial = ramp_radial,
         .dst = dst,
         .src = src,
         .dash = dash,
@@ -1297,6 +1316,7 @@ const Consts = struct {
     reach: f32,
     rc: [2]f32,
     radius: f32,
+    ramp_radial: B,
     dst: [4]f32,
     src: [4]f32,
     dash: f32,
@@ -1331,6 +1351,7 @@ inline fn shadeRows(comptime use: features.Usage, comptime kind: features.Kind, 
     const reach = kc.reach;
     const rc_x, const rc_y = kc.rc;
     const radius = kc.radius;
+    const ramp_radial = kc.ramp_radial;
     const dst = kc.dst;
     const src = kc.src;
     const dash = kc.dash;
@@ -1391,6 +1412,12 @@ inline fn shadeRows(comptime use: features.Usage, comptime kind: features.Kind, 
                     len2(lx - simd.f(rc_x), ly - simd.f(rc_y)) / simd.f(radius));
                 inline for (0..4) |i| base[i] += (simd.f(to[i]) - base[i]) * g;
             }
+            if (kind == .ramp) {
+                const g_lin = sat((lx * simd.f(dir_x) + ly * simd.f(dir_y)) / simd.f(reach) * simd.f(0.5) + simd.f(0.5));
+                const g_rad = sat(len2(lx - simd.f(rc_x), ly - simd.f(rc_y)) / simd.f(radius));
+                const ramp = rampAt(encoding, img, @select(f32, ramp_radial, g_rad, g_lin), uv);
+                inline for (0..4) |i| base[i] *= ramp[i];
+            }
             var color: [4]F = undefined;
             var cover = shape;
             if (kind == .shadow) {
@@ -1402,7 +1429,8 @@ inline fn shadeRows(comptime use: features.Usage, comptime kind: features.Kind, 
                 cover = simd.f(0.5) - simd.f(0.5) * erf;
                 color = base;
             } else {
-                const tex: [4]F = if (use.image or use.text) tex: {
+                // A ramp's texture is its colours, already in `base`.
+                const tex: [4]F = if (kind != .ramp and (use.image or use.text)) tex: {
                     var tu = texelCentre(px, 2 * hx, uv[0], uv[2], tex_w);
                     var tv = texelCentre(py, 2 * hy, uv[1], uv[3], tex_h);
                     if (kind == .nine_slice) {
@@ -1502,6 +1530,32 @@ test "SoftwareOf: a kind left out of the build draws as missing_kind, the others
         const want = if (x < 8) ref.at(@intCast(x), @intCast(y)) else missing_kind;
         try testing.expectEqual(want, fb.at(@intCast(x), @intCast(y)));
     };
+}
+
+test "ramp: a gradient of any number of colours, read from its row between texels" {
+    var f: Frame(16, 4) = .{};
+    var fb = f.fb(.rgba8);
+    fb.clear(.black);
+    var row: [4]u32 = undefined;
+    features.rampPixels(&.{ .{ .color = .rgb(255, 0, 0), .at = 0 }, .{ .color = .rgb(0, 255, 0), .at = 0.5 }, .{ .color = .rgb(0, 0, 255), .at = 1 } }, &row);
+    // Left to right over a 16-pixel quad: pixel x reads the ramp at (x + 0.5) / 16, which
+    // lands between texels (x + 0.5) / 4 - 0.5 and the next.
+    var q = testQuad(.{ 0, 0, 16, 4 }, .white);
+    q.params = features.linearRamp(0);
+    const s: Software = .{ .quads = &.{q}, .images = &.{ Image.white, .{ .pixels = &row, .width = 4, .height = 1 } } };
+    s.drawBatch(.{ .fb = &fb, .scissor = fb.all() }, .{ .first = 0, .count = 1, .texture = @fromBackingInt(1), .material = .solid });
+    const texel = struct {
+        fn at(px: []const u32, k: usize) Color {
+            return @bitCast(px[k]);
+        }
+    }.at;
+    // The ends hold the end texels; pixel 6 reads at texel 1.125: an eighth of the way from
+    // texel 1 (64, 191, 0) to texel 2 (0, 191, 64).
+    try testing.expectEqual(texel(&row, 0), fb.at(0, 2));
+    try testing.expectEqual(texel(&row, 3), fb.at(15, 2));
+    const mid = fb.at(6, 2);
+    try testing.expectEqual(Color.rgb(56, 191, 8), mid);
+    try testing.expectEqual(@as(u8, 255), mid.a);
 }
 
 test "opaque rects: filled exactly, cut by the clip's pixel centres and the scissor" {
@@ -1814,6 +1868,7 @@ test "white binding specialization matches the complete shader for every materia
                     .nine_slice => features.nineSlice(.{ 3, 2, 4, 5 }, .{ 0.2, 0.3, 0.8, 0.7 }),
                     .dashed => features.dashed(3.25, 1.5),
                     .dotted => features.dotted(1.75),
+                    .ramp => features.linearRamp(0.7),
                 };
                 for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
                 @memcpy(reference.pixels, fb.pixels);
@@ -1974,6 +2029,7 @@ test "Alpha8 general materials transforms borders and rounded clips match expand
             .nine_slice => features.nineSlice(.{ 3, 2, 4, 5 }, .{ 0.2, 0.3, 0.8, 0.7 }),
             .dashed => features.dashed(3.25, 1.5),
             .dotted => features.dotted(1.75),
+            .ramp => features.radialRamp(.{ 0.3, 0.8 }, 9.5),
         };
         for ([_]Format{ .rgba8, .bgra8 }) |format|
             for ([_]f32{ 0.75, 1.25, 2 }) |scale|
@@ -2003,6 +2059,7 @@ test "the size build's run-time encoding shades exactly as each specialised enco
             .nine_slice => features.nineSlice(.{ 3, 2, 4, 5 }, .{ 0.2, 0.3, 0.8, 0.7 }),
             .dashed => features.dashed(3.25, 1.5),
             .dotted => features.dotted(1.75),
+            .ramp => features.radialRamp(.{ 0.3, 0.8 }, 9.5),
         };
         for (images) |img| for ([_]f32{ 0.75, 1.25, 2 }) |scale| {
             var any: Frame(67, 53) = .{};

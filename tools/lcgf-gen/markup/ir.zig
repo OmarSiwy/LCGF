@@ -222,8 +222,9 @@ pub const ItemField = struct {
     writes: bool = false,
 };
 
-/// A local image the page draws (`<img src>`, `background-image: url()`): asset k is
-/// texture k + 1. Lowering finds it; the driver (main.zig) reads and decodes it.
+/// A local image the page draws (`<img src>`, `background-image: url()`), or the ramp row of
+/// a gradient of more than two colours: asset k is texture k + 1. Lowering finds an image and
+/// the driver (main.zig) reads and decodes it; lowering makes a ramp itself (no `path`).
 pub const Asset = struct {
     /// As written, and resolved against the file that names it.
     src: []const u8,

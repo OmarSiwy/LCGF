@@ -431,7 +431,7 @@ pub const Emit = struct {
     fn assetsDecl(e: *Emit) void {
         const assets = e.page.assets.items;
         if (assets.len == 0) return;
-        e.write("/// The page's images, decoded by lcgf-gen. Before the first frame, upload each\n/// `assets[k].image.pixels` (premultiplied RGBA8 rows, `w` by `h`) as texture `assets[k].texture`.\npub const assets = [_]lcgf.widgets_image.Asset{\n");
+        e.write("/// The page's images, decoded by lcgf-gen, and its gradients' ramp rows. Before the first\n/// frame, upload each `assets[k].image.pixels` (RGBA8 rows, `w` by `h`) as texture `assets[k].texture`.\npub const assets = [_]lcgf.widgets_image.Asset{\n");
         for (assets, 1..) |a, k| {
             e.print("    .{{ .texture = @fromBackingInt({d}), .image = .{{ .w = {d}, .h = {d}, .pixels = \"", .{ k, a.w, a.h });
             for (a.pixels) |b| e.print("\\x{x:0>2}", .{b});

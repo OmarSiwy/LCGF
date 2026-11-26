@@ -133,6 +133,7 @@ const k_shadow = 3u;
 const k_nine = 4u;
 const k_dashed = 5u;
 const k_dotted = 6u;
+const k_ramp = 7u;
 
 // Gradients: fill is the start colour, params.y the end colour (rgba8).
 //   linear: params.z = angle in radians (0 runs left to right, y points down). t runs 0..1
@@ -149,6 +150,28 @@ fn gradient(in: Frag) -> vec4f {
     let t = clamp(select(t_lin, t_rad, in.params.x == k_radial), 0.0, 1.0);
     let graded = in.params.x == k_linear || in.params.x == k_radial;
     return select(in.fill, mix(in.fill, to, t), graded);
+}
+
+// Ramp: a gradient of any number of colours, read from one row of the texture (the uv rect's,
+// at its middle row): params.y = 0 runs it along an angle (params.z, as linear), 1 from a
+// centre (params.z, params.w, as radial). The ramp is read at that fraction of the uv rect,
+// between its two nearest texels (textureLoad: exact texels, no sampler), times the fill.
+fn ramp(in: Frag) -> vec4f {
+    let a = bitcast<f32>(in.params.z);
+    let dir = vec2f(cos(a), sin(a));
+    let reach = abs(in.half.x * dir.x) + abs(in.half.y * dir.y);
+    let t_lin = dot(in.local, dir) / max(reach, 1e-6) * 0.5 + 0.5;
+    let centre = (unpack2x16float(in.params.z) * 2.0 - 1.0) * in.half;
+    let t_rad = length(in.local - centre) / max(bitcast<f32>(in.params.w), 1e-6);
+    let t = clamp(select(t_lin, t_rad, in.params.y == 1u), 0.0, 1.0);
+    let n = vec2f(textureDimensions(tex));
+    let x = (in.uv_rect.x + (in.uv_rect.z - in.uv_rect.x) * t) * n.x - 0.5;
+    let i0 = clamp(floor(x), 0.0, n.x - 1.0);
+    let i1 = min(i0 + 1.0, n.x - 1.0);
+    let row = i32(clamp(floor((in.uv_rect.y + in.uv_rect.w) * 0.5 * n.y), 0.0, n.y - 1.0));
+    let lo = textureLoad(tex, vec2i(i32(i0), row), 0);
+    let hi = textureLoad(tex, vec2i(i32(i1), row), 0);
+    return in.fill * (lo + (hi - lo) * clamp(x - i0, 0.0, 1.0));
 }
 
 // Box shadow: the rounded rect blurred by a Gaussian of sigma = params.y pixels, in the fill

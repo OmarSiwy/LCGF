@@ -46,6 +46,7 @@ const uint k_radial = 2u;
 const uint k_nine = 4u;
 const uint k_dashed = 5u;
 const uint k_dotted = 6u;
+const uint k_ramp = 7u;
 
 layout(std140) uniform Globals_block_0Fragment { Globals _group_0_binding_0_fs; };
 
@@ -126,10 +127,28 @@ vec4 gradient(Frag in_3) {
     return (graded ? mix(in_3.fill, to, t) : in_3.fill);
 }
 
+vec4 ramp(Frag in_4) {
+    float a_2 = uintBitsToFloat(in_4.params.z);
+    vec2 dir_1 = vec2(cos(a_2), sin(a_2));
+    float reach_1 = (abs((in_4.half_.x * dir_1.x)) + abs((in_4.half_.y * dir_1.y)));
+    float t_lin_1 = (((dot(in_4.local, dir_1) / max(reach_1, 1e-6)) * 0.5) + 0.5);
+    vec2 centre_1 = (((unpackHalf2x16(in_4.params.z) * 2.0) - vec2(1.0)) * in_4.half_);
+    float t_rad_1 = (length((in_4.local - centre_1)) / max(uintBitsToFloat(in_4.params.w), 1e-6));
+    float t_1 = clamp(((in_4.params.y == 1u) ? t_rad_1 : t_lin_1), 0.0, 1.0);
+    vec2 n_2 = vec2(uvec2(textureSize(_group_1_binding_0_fs, 0).xy));
+    float x = (((in_4.uv_rect.x + ((in_4.uv_rect.z - in_4.uv_rect.x) * t_1)) * n_2.x) - 0.5);
+    float i0_ = clamp(floor(x), 0.0, (n_2.x - 1.0));
+    float i1_ = min((i0_ + 1.0), (n_2.x - 1.0));
+    int row = int(clamp(floor((((in_4.uv_rect.y + in_4.uv_rect.w) * 0.5) * n_2.y)), 0.0, (n_2.y - 1.0)));
+    vec4 lo_1 = texelFetch(_group_1_binding_0_fs, ivec2(int(i0_), row), 0);
+    vec4 hi_1 = texelFetch(_group_1_binding_0_fs, ivec2(int(i1_), row), 0);
+    return (in_4.fill * (lo_1 + ((hi_1 - lo_1) * clamp((x - i0_), 0.0, 1.0))));
+}
+
 float shadow_coverage(float d, float sigma) {
-    float x = (d / (max(sigma, 0.001) * 1.4142135));
-    float x2_ = (x * x);
-    float e = (sign(x) * sqrt((1.0 - exp(((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_)))))));
+    float x_1 = (d / (max(sigma, 0.001) * 1.4142135));
+    float x2_ = (x_1 * x_1);
+    float e = (sign(x_1) * sqrt((1.0 - exp(((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_)))))));
     return (0.5 - (0.5 * e));
 }
 
@@ -140,62 +159,67 @@ float nine_axis(float pos_1, float size_1, float lo, float hi, float src_lo, flo
     return ((pos_1 < lo) ? start : ((pos_1 > (size_1 - hi)) ? end : mid));
 }
 
-vec2 nine_uv(Frag in_4) {
-    uint _e2 = in_4.params.y;
+vec2 nine_uv(Frag in_5) {
+    uint _e2 = in_5.params.y;
     vec4 dst = ((vec4(_e2 & 0xFFu, _e2 >> 8 & 0xFFu, _e2 >> 16 & 0xFFu, _e2 >> 24) / 255.0) * 255.0);
-    vec4 src = vec4(unpackUnorm2x16(in_4.params.z), unpackUnorm2x16(in_4.params.w));
-    vec2 pos_2 = (in_4.local + in_4.half_);
-    vec2 size_3 = (in_4.half_ * 2.0);
+    vec4 src = vec4(unpackUnorm2x16(in_5.params.z), unpackUnorm2x16(in_5.params.w));
+    vec2 pos_2 = (in_5.local + in_5.half_);
+    vec2 size_3 = (in_5.half_ * 2.0);
     float _e25 = nine_axis(pos_2.x, size_3.x, dst.x, dst.z, src.x, src.z);
     float _e32 = nine_axis(pos_2.y, size_3.y, dst.y, dst.w, src.y, src.w);
     vec2 f = vec2(_e25, _e32);
-    return mix(in_4.uv_rect.xy, in_4.uv_rect.zw, f);
+    return mix(in_5.uv_rect.xy, in_5.uv_rect.zw, f);
 }
 
-float border_pattern(Frag in_5) {
-    vec2 _e1 = rect_pos(in_5);
-    vec2 edge = (in_5.half_ - abs((_e1 - in_5.half_)));
+float border_pattern(Frag in_6) {
+    vec2 _e1 = rect_pos(in_6);
+    vec2 edge = (in_6.half_ - abs((_e1 - in_6.half_)));
     bool along_y = (edge.x < edge.y);
     float s_1 = (along_y ? _e1.y : _e1.x);
     float across = min(edge.x, edge.y);
-    float dash = ((in_5.params.x == k_dotted) ? in_5.border : uintBitsToFloat(in_5.params.y));
-    float period = max((dash + uintBitsToFloat(in_5.params.z)), 0.001);
+    float dash = ((in_6.params.x == k_dotted) ? in_6.border : uintBitsToFloat(in_6.params.y));
+    float period = max((dash + uintBitsToFloat(in_6.params.z)), 0.001);
     float _e31 = floor_div(s_1, period);
     float at = (s_1 - (_e31 * period));
     float _e40 = _group_0_binding_0_fs.scale;
     float dashed = clamp(((min(at, (dash - at)) + 0.5) * _e40), 0.0, 1.0);
-    float r_1 = (in_5.border * 0.5);
+    float r_1 = (in_6.border * 0.5);
     float _e55 = _group_0_binding_0_fs.scale;
     float dotted = clamp((0.5 - ((length(vec2((at - r_1), (across - r_1))) - r_1) * _e55)), 0.0, 1.0);
-    return ((in_5.params.x == k_dotted) ? dotted : ((in_5.params.x == k_dashed) ? dashed : 1.0));
+    return ((in_6.params.x == k_dotted) ? dotted : ((in_6.params.x == k_dashed) ? dashed : 1.0));
 }
 
-vec4 material(Frag in_6) {
+vec4 material(Frag in_7) {
     vec2 uv = vec2(0.0);
     vec4 color = vec4(0.0);
     bool local_2 = false;
-    if ((in_6.params.x == k_nine)) {
-        vec2 _e6 = nine_uv(in_6);
+    if ((in_7.params.x == k_nine)) {
+        vec2 _e6 = nine_uv(in_7);
         uv = _e6;
     } else {
-        vec2 _e7 = nearest_uv(in_6);
+        vec2 _e7 = nearest_uv(in_7);
         uv = _e7;
     }
-    color = in_6.fill;
-    if (!((in_6.params.x == k_linear))) {
-        local_2 = (in_6.params.x == k_radial);
+    color = in_7.fill;
+    if (!((in_7.params.x == k_linear))) {
+        local_2 = (in_7.params.x == k_radial);
     } else {
         local_2 = true;
     }
     bool _e22 = local_2;
     if (_e22) {
-        vec4 _e23 = gradient(in_6);
+        vec4 _e23 = gradient(in_7);
         color = _e23;
     }
     vec4 _e24 = color;
     vec2 _e27 = uv;
     vec4 _e28 = texture(_group_1_binding_0_fs, vec2(_e27));
-    return (_e24 * _e28);
+    vec4 sampled = (_e24 * _e28);
+    if ((in_7.params.x == k_ramp)) {
+        vec4 _e34 = ramp(in_7);
+        return _e34;
+    }
+    return sampled;
 }
 
 void main() {

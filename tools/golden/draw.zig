@@ -65,6 +65,40 @@ fn gradients(t: *Tree) void {
     });
 }
 
+/// Texture 2: four ramp rows of 64 texels (`features.rampPixels`), one per box below.
+const ramp_w = 64;
+const ramp_rows = 4;
+fn rampTexture() [ramp_w * ramp_rows]u32 {
+    const stops = [ramp_rows][]const features.Stop{
+        &.{ .{ .color = .rgb(220, 40, 40), .at = 0 }, .{ .color = .rgb(250, 220, 40), .at = 0.5 }, .{ .color = .rgb(40, 60, 220), .at = 1 } },
+        &.{ .{ .color = .rgb(20, 20, 30), .at = 0 }, .{ .color = .rgb(40, 200, 120), .at = 0.3 }, .{ .color = .rgb(240, 240, 240), .at = 0.6 }, .{ .color = .rgb(160, 40, 200), .at = 1 } },
+        &.{ .{ .color = .white, .at = 0 }, .{ .color = .rgb(255, 150, 30), .at = 0.4 }, .{ .color = .rgba(60, 20, 90, 0), .at = 1 } },
+        // Hard stops: stripes.
+        &.{ .{ .color = .rgb(255, 0, 0), .at = 0.25 }, .{ .color = .rgb(0, 200, 0), .at = 0.25 }, .{ .color = .rgb(0, 200, 0), .at = 0.75 }, .{ .color = .rgb(0, 0, 255), .at = 0.75 } },
+    };
+    var px: [ramp_w * ramp_rows]u32 = undefined;
+    for (stops, 0..) |st, r| features.rampPixels(st, px[r * ramp_w ..][0..ramp_w]);
+    return px;
+}
+
+/// Gradients of more than two colours from the ramp rows of texture 2: three stops left to
+/// right, four at 45 degrees in a rounded, bordered box, a radial fade to transparent, and
+/// hard stops top to bottom.
+fn ramps(t: *Tree) void {
+    const tex: lcgf.types.Texture = @fromBackingInt(2);
+    const row = struct {
+        fn uv(r: f32) [4]f32 {
+            return .{ 0, r / ramp_rows, 1, (r + 1) / ramp_rows };
+        }
+    }.uv;
+    Scene.row(t, &.{
+        .{ .fill = .white, .texture = tex, .uv = row(0), .params = features.linearRamp(0) },
+        .{ .fill = .white, .texture = tex, .uv = row(1), .params = features.linearRamp(std.math.pi / 4.0), .radius = 24, .border = 3, .border_color = .white },
+        .{ .fill = .white, .texture = tex, .uv = row(2), .params = features.radialRamp(.{ 0.5, 0.5 }, 80) },
+        .{ .fill = .white, .texture = tex, .uv = row(3), .params = features.linearRamp(std.math.pi / 2.0), .radius = 60 },
+    });
+}
+
 /// Cards on a light page, each with its shadow node underneath: offset (6, 8), sigma 2 to 16.
 fn shadows(t: *Tree) void {
     _ = t.push(0, Id.from("root"), &.{ .dir = .x, .size = .{ .px(viewport[0]), .px(viewport[1]) }, .pad = @splat(40), .gap = 40, .fill = .rgb(230, 232, 236) });
@@ -200,6 +234,7 @@ fn roundedClip(t: *Tree) void {
 
 const scenes = .{
     .{ "gradients", gradients },
+    .{ "ramps", ramps },
     .{ "shadows", shadows },
     .{ "images", images },
     .{ "nine-slice", nineSlices },
@@ -300,5 +335,10 @@ pub fn main(init: std.process.Init) !void {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text, .custom, .canvas => return error.SceneHasTextOrCustom,
     };
+    if (std.mem.eql(u8, name, "ramps")) {
+        const px = rampTexture();
+        try dir.writeFile(io, .{ .sub_path = "ramps.rgba", .data = std.mem.sliceAsBytes(&px) });
+        try w.print("texture 2 {d} {d} ramps.rgba\n", .{ ramp_w, ramp_rows });
+    }
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = w.buffered() });
 }

@@ -46,6 +46,7 @@ const uint k_radial = 2u;
 const uint k_nine = 4u;
 const uint k_dashed = 5u;
 const uint k_dotted = 6u;
+const uint k_ramp = 7u;
 
 layout(std140) uniform Globals_block_0Vertex { Globals _group_0_binding_0_vs; };
 
@@ -140,41 +141,41 @@ float nine_axis(float pos_1, float size_1, float lo, float hi, float src_lo, flo
     return ((pos_1 < lo) ? start : ((pos_1 > (size_1 - hi)) ? end : mid));
 }
 
-vec2 nine_uv(Frag in_4) {
-    uint _e2 = in_4.params.y;
+vec2 nine_uv(Frag in_5) {
+    uint _e2 = in_5.params.y;
     vec4 dst = ((vec4(_e2 & 0xFFu, _e2 >> 8 & 0xFFu, _e2 >> 16 & 0xFFu, _e2 >> 24) / 255.0) * 255.0);
-    vec4 src = vec4(unpackUnorm2x16(in_4.params.z), unpackUnorm2x16(in_4.params.w));
-    vec2 pos_2 = (in_4.local + in_4.half_);
-    vec2 size_2 = (in_4.half_ * 2.0);
+    vec4 src = vec4(unpackUnorm2x16(in_5.params.z), unpackUnorm2x16(in_5.params.w));
+    vec2 pos_2 = (in_5.local + in_5.half_);
+    vec2 size_2 = (in_5.half_ * 2.0);
     float _e25 = nine_axis(pos_2.x, size_2.x, dst.x, dst.z, src.x, src.z);
     float _e32 = nine_axis(pos_2.y, size_2.y, dst.y, dst.w, src.y, src.w);
     vec2 f = vec2(_e25, _e32);
-    return mix(in_4.uv_rect.xy, in_4.uv_rect.zw, f);
+    return mix(in_5.uv_rect.xy, in_5.uv_rect.zw, f);
 }
 
-float border_pattern(Frag in_5) {
-    vec2 _e1 = rect_pos(in_5);
-    vec2 edge = (in_5.half_ - abs((_e1 - in_5.half_)));
+float border_pattern(Frag in_6) {
+    vec2 _e1 = rect_pos(in_6);
+    vec2 edge = (in_6.half_ - abs((_e1 - in_6.half_)));
     bool along_y = (edge.x < edge.y);
     float s_1 = (along_y ? _e1.y : _e1.x);
     float across = min(edge.x, edge.y);
-    float dash = ((in_5.params.x == k_dotted) ? in_5.border : uintBitsToFloat(in_5.params.y));
-    float period = max((dash + uintBitsToFloat(in_5.params.z)), 0.001);
+    float dash = ((in_6.params.x == k_dotted) ? in_6.border : uintBitsToFloat(in_6.params.y));
+    float period = max((dash + uintBitsToFloat(in_6.params.z)), 0.001);
     float _e31 = floor_div(s_1, period);
     float at = (s_1 - (_e31 * period));
     float _e40 = _group_0_binding_0_vs.scale;
     float dashed = clamp(((min(at, (dash - at)) + 0.5) * _e40), 0.0, 1.0);
-    float r_1 = (in_5.border * 0.5);
+    float r_1 = (in_6.border * 0.5);
     float _e55 = _group_0_binding_0_vs.scale;
     float dotted = clamp((0.5 - ((length(vec2((at - r_1), (across - r_1))) - r_1) * _e55)), 0.0, 1.0);
-    return ((in_5.params.x == k_dotted) ? dotted : ((in_5.params.x == k_dashed) ? dashed : 1.0));
+    return ((in_6.params.x == k_dotted) ? dotted : ((in_6.params.x == k_dashed) ? dashed : 1.0));
 }
 
-vec4 material(Frag in_6) {
-    float width = max(uintBitsToFloat(in_6.params.z), 1.0);
-    float band = fract(((in_6.local.x + in_6.local.y) / (2.0 * width)));
-    uint _e17 = in_6.params.y;
-    return ((band > 0.5) ? (vec4(_e17 & 0xFFu, _e17 >> 8 & 0xFFu, _e17 >> 16 & 0xFFu, _e17 >> 24) / 255.0) : in_6.fill);
+vec4 material(Frag in_7) {
+    float width = max(uintBitsToFloat(in_7.params.z), 1.0);
+    float band = fract(((in_7.local.x + in_7.local.y) / (2.0 * width)));
+    uint _e17 = in_7.params.y;
+    return ((band > 0.5) ? (vec4(_e17 & 0xFFu, _e17 >> 8 & 0xFFu, _e17 >> 16 & 0xFFu, _e17 >> 24) / 255.0) : in_7.fill);
 }
 
 void main() {

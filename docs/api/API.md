@@ -2521,9 +2521,13 @@ features: the built-in visual features of the stock quad material, as `Style.par
 
 ### Top level
 
-- `Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6 }`: What `params.x` selects in the stock material.
+- `Kind = enum(u32) { solid = 0, linear = 1, radial = 2, shadow = 3, nine_slice = 4, dashed = 5, dotted = 6, ramp = 7 }`: What `params.x` selects in the stock material.
+- `Stop = struct { color: Color, at: f32 }`: One colour of a ramp: `color` at `at`, from 0 (the gradient's start) to 1 (its end).
 - `fn linear(to: Color, angle: f32) [4]f32`: `Style.params` for a linear gradient from the node's `fill` to `to`.
 - `fn radial(to: Color, centre: [2]f32, radius: f32) [4]f32`: `Style.params` for a radial gradient from the node's `fill` at `centre` to `to` at `radius` pixels from it and beyond.
+- `fn linearRamp(angle: f32) [4]f32`: `Style.params` for a gradient of any number of colours, read from a ramp: one row of the node's texture (`rampPixels` fills it; `Style.uv` is its rect, the row at the rect's middle).
+- `fn radialRamp(centre: [2]f32, radius: f32) [4]f32`: `Style.params` for a radial gradient read from a ramp (`linearRamp`): from `centre` (a fraction of the node's size) to `radius` pixels from it, as `radial`'s.
+- `fn rampPixels(stops: []const Stop, out: []u32) void`: Fills the ramp row `out` (straight RGBA8, `Color.bitsOf`) with the colours of `stops`, whose `at` must rise from 0 to 1: texel k holds the gradient at (k + 0.5) / out.len, interpolated between the stops around it in premultiplied colour, as CSS gradients are, and the first and last stops' colours before and after them.
 - `fn shadow(sigma: f32) [4]f32`: `Style.params` for an analytic box shadow: the node's rounded rect (its `radius`) blurred by a Gaussian of `sigma` pixels, in the node's `fill`.
 - `fn nineSlice(dst: [4]f32, src: [4]f32) [4]f32`: `Style.params` for a nine-slice image: the node's texture rect (`Style.uv`) is cut into a 3x3 grid.
 - `fn dashed(dash: f32, gap: f32) [4]f32`: `Style.params` for a dashed border: dashes of `dash` pixels with `gap` pixels between, in the node's `border_color` and `border` width.

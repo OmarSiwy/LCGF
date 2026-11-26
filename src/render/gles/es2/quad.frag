@@ -2,7 +2,7 @@
 // quad.wgsl's fragment stage with the stock material by hand in GLSL ES 1.00 for the GL ES 2
 // path (src/render/gles/es2.zig). Same formulas as src/render/shaders/gen/stock.frag for fill,
 // rounded corners, border, texture (nearest texel centre), clip and opacity.
-// ponytail: no `params` features (gradients, shadow, nine-slice, dashed and dotted borders):
+// ponytail: no `params` features (gradients, ramps, shadow, nine-slice, dashed and dotted borders):
 // they read u32 bit patterns GLSL ES 1.00 cannot; add them by decoding params to floats in
 // es2.zig `prepare` when an ES 2 device needs them.
 precision highp float;

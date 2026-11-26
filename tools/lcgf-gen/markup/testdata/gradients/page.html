@@ -1,0 +1,26 @@
+<!doctype html>
+<html lcgf-page="gradients">
+<head>
+  <title>Gradients</title>
+  <style>
+    .row { display: flex; gap: 8px; padding: 8px; }
+    .row div { width: 80px; height: 60px; }
+    .three { background: linear-gradient(to right, red, yellow, blue); }
+    .four { background-image: linear-gradient(45deg, #102030 0%, #40c080 30%, white 60%, #a030c0); border-radius: 8px; }
+    .fade { background-image: radial-gradient(circle 40px at 50% 50%, white, orange 40%, rgba(60, 20, 90, 0)); }
+    .stripes { background-image: linear-gradient(red 25%, green 25%, green 75%, blue 75%); }
+    .glow { background-image: radial-gradient(circle at 25% 25%, #ff9620, #3c145a); }
+    .inset { background-image: linear-gradient(90deg, black 20%, white 80%); }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <div class="three"></div>
+    <div class="four"></div>
+    <div class="fade"></div>
+    <div class="stripes"></div>
+    <div class="glow"></div>
+    <div class="inset"></div>
+  </div>
+</body>
+</html>

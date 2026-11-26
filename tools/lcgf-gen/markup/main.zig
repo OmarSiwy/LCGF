@@ -294,6 +294,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
 fn loadAssets(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.ArrayList([]const u8), page: *ir.Page) void {
     const png = lcgf.png;
     for (page.assets.items) |*a| {
+        if (a.path.len == 0) continue; // a gradient's ramp, made while lowering
         deps.append(arena, a.path) catch @panic("out of memory");
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, a.path, arena, .limited(16 << 20)) catch |e| {
             ds.err(a.loc, "cannot read {s}: {s}", .{ a.path, @errorName(e) });

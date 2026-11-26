@@ -51,6 +51,7 @@ constant uint k_radial = 2u;
 constant uint k_nine = 4u;
 constant uint k_dashed = 5u;
 constant uint k_dotted = 6u;
+constant uint k_ramp = 7u;
 
 float corner_radius(
     metal::float2 p,
@@ -133,13 +134,38 @@ metal::float4 gradient(
     return graded ? metal::mix(in_3.fill, to, t) : in_3.fill;
 }
 
+int naga_f2i32(float value) {
+    return static_cast<int>(metal::clamp(value, -2147483600.0, 2147483500.0));
+}
+
+metal::float4 ramp(
+    Frag in_4,
+    metal::texture2d<float, metal::access::sample> tex
+) {
+    float a_2 = as_type<float>(in_4.params.z);
+    metal::float2 dir_1 = metal::float2(metal::cos(a_2), metal::sin(a_2));
+    float reach_1 = metal::abs(in_4.half_.x * dir_1.x) + metal::abs(in_4.half_.y * dir_1.y);
+    float t_lin_1 = ((metal::dot(in_4.local, dir_1) / metal::max(reach_1, 0.000001)) * 0.5) + 0.5;
+    metal::float2 centre_1 = ((float2(as_type<half2>(in_4.params.z)) * 2.0) - metal::float2(1.0)) * in_4.half_;
+    float t_rad_1 = metal::length(in_4.local - centre_1) / metal::max(as_type<float>(in_4.params.w), 0.000001);
+    float t_1 = metal::clamp((in_4.params.y == 1u) ? t_rad_1 : t_lin_1, 0.0, 1.0);
+    metal::float2 n_2 = static_cast<metal::float2>(metal::uint2(tex.get_width(), tex.get_height()));
+    float x = ((in_4.uv_rect.x + ((in_4.uv_rect.z - in_4.uv_rect.x) * t_1)) * n_2.x) - 0.5;
+    float i0_ = metal::clamp(metal::floor(x), 0.0, n_2.x - 1.0);
+    float i1_ = metal::min(i0_ + 1.0, n_2.x - 1.0);
+    int row = naga_f2i32(metal::clamp(metal::floor(((in_4.uv_rect.y + in_4.uv_rect.w) * 0.5) * n_2.y), 0.0, n_2.y - 1.0));
+    metal::float4 lo_1 = tex.read(metal::uint2(metal::int2(naga_f2i32(i0_), row)), 0);
+    metal::float4 hi_1 = tex.read(metal::uint2(metal::int2(naga_f2i32(i1_), row)), 0);
+    return in_4.fill * (lo_1 + ((hi_1 - lo_1) * metal::clamp(x - i0_, 0.0, 1.0)));
+}
+
 float shadow_coverage(
     float d,
     float sigma
 ) {
-    float x = d / (metal::max(sigma, 0.001) * 1.4142135);
-    float x2_ = x * x;
-    float e = metal::sign(x) * metal::sqrt(1.0 - metal::exp((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_))));
+    float x_1 = d / (metal::max(sigma, 0.001) * 1.4142135);
+    float x2_ = x_1 * x_1;
+    float e = metal::sign(x_1) * metal::sqrt(1.0 - metal::exp((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_))));
     return 0.5 - (0.5 * e);
 }
 
@@ -158,48 +184,48 @@ float nine_axis(
 }
 
 metal::float2 nine_uv(
-    Frag in_4
+    Frag in_5
 ) {
-    metal::float4 dst = metal::unpack_unorm4x8_to_float(in_4.params.y) * 255.0;
-    metal::float4 src = metal::float4(metal::unpack_unorm2x16_to_float(in_4.params.z), metal::unpack_unorm2x16_to_float(in_4.params.w));
-    metal::float2 pos_2 = in_4.local + in_4.half_;
-    metal::float2 size_3 = in_4.half_ * 2.0;
+    metal::float4 dst = metal::unpack_unorm4x8_to_float(in_5.params.y) * 255.0;
+    metal::float4 src = metal::float4(metal::unpack_unorm2x16_to_float(in_5.params.z), metal::unpack_unorm2x16_to_float(in_5.params.w));
+    metal::float2 pos_2 = in_5.local + in_5.half_;
+    metal::float2 size_3 = in_5.half_ * 2.0;
     float _e25 = nine_axis(pos_2.x, size_3.x, dst.x, dst.z, src.x, src.z);
     float _e32 = nine_axis(pos_2.y, size_3.y, dst.y, dst.w, src.y, src.w);
     metal::float2 f = metal::float2(_e25, _e32);
-    return metal::mix(in_4.uv_rect.xy, in_4.uv_rect.zw, f);
+    return metal::mix(in_5.uv_rect.xy, in_5.uv_rect.zw, f);
 }
 
 float border_pattern(
-    Frag in_5,
+    Frag in_6,
     constant Globals& globals
 ) {
-    metal::float2 _e1 = rect_pos(in_5);
-    metal::float2 edge = in_5.half_ - metal::abs(_e1 - in_5.half_);
+    metal::float2 _e1 = rect_pos(in_6);
+    metal::float2 edge = in_6.half_ - metal::abs(_e1 - in_6.half_);
     bool along_y = edge.x < edge.y;
     float s_1 = along_y ? _e1.y : _e1.x;
     float across = metal::min(edge.x, edge.y);
-    float dash = (in_5.params.x == k_dotted) ? in_5.border : as_type<float>(in_5.params.y);
-    float period = metal::max(dash + as_type<float>(in_5.params.z), 0.001);
+    float dash = (in_6.params.x == k_dotted) ? in_6.border : as_type<float>(in_6.params.y);
+    float period = metal::max(dash + as_type<float>(in_6.params.z), 0.001);
     float _e31 = floor_div(s_1, period);
     float at = s_1 - (_e31 * period);
     float _e40 = globals.scale;
     float dashed = metal::clamp((metal::min(at, dash - at) + 0.5) * _e40, 0.0, 1.0);
-    float r_1 = in_5.border * 0.5;
+    float r_1 = in_6.border * 0.5;
     float _e55 = globals.scale;
     float dotted = metal::clamp(0.5 - ((metal::length(metal::float2(at - r_1, across - r_1)) - r_1) * _e55), 0.0, 1.0);
-    return (in_5.params.x == k_dotted) ? dotted : ((in_5.params.x == k_dashed) ? dashed : 1.0);
+    return (in_6.params.x == k_dotted) ? dotted : ((in_6.params.x == k_dashed) ? dashed : 1.0);
 }
 
 metal::float4 material(
-    Frag in_6
+    Frag in_7
 ) {
-    float strength = metal::clamp(as_type<float>(in_6.params.x), 0.0, 1.0);
-    float t_1 = metal::clamp(0.5 - (in_6.local.y / metal::max(2.0 * in_6.half_.y, 1.0)), 0.0, 1.0);
-    float edge_1 = (in_6.local.y < (1.0 - in_6.half_.y)) ? 0.5 : 0.0;
-    float lift = strength * ((t_1 * t_1) + edge_1);
-    metal::float3 rgb = metal::mix(in_6.fill.xyz, metal::float3(in_6.fill.w), metal::clamp(lift, 0.0, 1.0));
-    return metal::float4(rgb, in_6.fill.w);
+    float strength = metal::clamp(as_type<float>(in_7.params.x), 0.0, 1.0);
+    float t_2 = metal::clamp(0.5 - (in_7.local.y / metal::max(2.0 * in_7.half_.y, 1.0)), 0.0, 1.0);
+    float edge_1 = (in_7.local.y < (1.0 - in_7.half_.y)) ? 0.5 : 0.0;
+    float lift = strength * ((t_2 * t_2) + edge_1);
+    metal::float3 rgb = metal::mix(in_7.fill.xyz, metal::float3(in_7.fill.w), metal::clamp(lift, 0.0, 1.0));
+    return metal::float4(rgb, in_7.fill.w);
 }
 
 struct vsInput {
@@ -260,7 +286,7 @@ vertex vsOutput vs(
     out.clip = inst.clip;
     out.params = inst.params;
     out.uv_rect = inst.uv;
-    metal::float4 a_2 = inst.xform_abcd;
+    metal::float4 a_3 = inst.xform_abcd;
     float _e121 = globals.scale;
     float k_1 = 1.0 / (((inst.xform_abcd.x * inst.xform_abcd.w) - (inst.xform_abcd.y * inst.xform_abcd.z)) * _e121);
     out.to_rect = metal::float4(inst.xform_abcd.w * k_1, -(inst.xform_abcd.y) * k_1, -(inst.xform_abcd.z) * k_1, inst.xform_abcd.x * k_1);

@@ -44,6 +44,7 @@ static const uint k_radial = 2u;
 static const uint k_nine = 4u;
 static const uint k_dashed = 5u;
 static const uint k_dotted = 6u;
+static const uint k_ramp = 7u;
 
 cbuffer globals : register(b0) { Globals globals; }
 Texture2D<float4> tex : register(t0, space1);
@@ -164,11 +165,35 @@ float4 gradient(Frag in_3)
     return (graded ? lerp(in_3.fill, to, t) : in_3.fill);
 }
 
+int naga_f2i32(float value) {
+    return int(clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float4 ramp(Frag in_4)
+{
+    float a_2 = asfloat(in_4.params.z);
+    float2 dir_1 = float2(cos(a_2), sin(a_2));
+    float reach_1 = (abs((in_4.half_.x * dir_1.x)) + abs((in_4.half_.y * dir_1.y)));
+    float t_lin_1 = (((dot(in_4.local, dir_1) / max(reach_1, 1e-6)) * 0.5) + 0.5);
+    uint _e28 = in_4.params.z;
+    float2 centre_1 = (((float2(f16tof32(_e28), f16tof32((_e28) >> 16)) * 2.0) - (1.0).xx) * in_4.half_);
+    float t_rad_1 = (length((in_4.local - centre_1)) / max(asfloat(in_4.params.w), 1e-6));
+    float t_1 = clamp(((in_4.params.y == 1u) ? t_rad_1 : t_lin_1), 0.0, 1.0);
+    float2 n_2 = float2(NagaDimensions2D(tex));
+    float x = (((in_4.uv_rect.x + ((in_4.uv_rect.z - in_4.uv_rect.x) * t_1)) * n_2.x) - 0.5);
+    float i0_ = clamp(floor(x), 0.0, (n_2.x - 1.0));
+    float i1_ = min((i0_ + 1.0), (n_2.x - 1.0));
+    int row = naga_f2i32(clamp(floor((((in_4.uv_rect.y + in_4.uv_rect.w) * 0.5) * n_2.y)), 0.0, (n_2.y - 1.0)));
+    float4 lo_1 = tex.Load(int3(int2(naga_f2i32(i0_), row), int(0)));
+    float4 hi_1 = tex.Load(int3(int2(naga_f2i32(i1_), row), int(0)));
+    return (in_4.fill * (lo_1 + ((hi_1 - lo_1) * clamp((x - i0_), 0.0, 1.0))));
+}
+
 float shadow_coverage(float d, float sigma)
 {
-    float x = (d / (max(sigma, 0.001) * 1.4142135));
-    float x2_ = (x * x);
-    float e = (sign(x) * sqrt((1.0 - exp(((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_)))))));
+    float x_1 = (d / (max(sigma, 0.001) * 1.4142135));
+    float x2_ = (x_1 * x_1);
+    float e = (sign(x_1) * sqrt((1.0 - exp(((-(x2_) * (1.2732395 + (0.147 * x2_))) / (1.0 + (0.147 * x2_)))))));
     return (0.5 - (0.5 * e));
 }
 
@@ -180,68 +205,73 @@ float nine_axis(float pos_1, float size_1, float lo, float hi, float src_lo, flo
     return ((pos_1 < lo) ? start : ((pos_1 > (size_1 - hi)) ? end : mid));
 }
 
-float2 nine_uv(Frag in_4)
+float2 nine_uv(Frag in_5)
 {
-    uint _e2 = in_4.params.y;
+    uint _e2 = in_5.params.y;
     float4 dst_ = ((float4(_e2 & 0xFF, _e2 >> 8 & 0xFF, _e2 >> 16 & 0xFF, _e2 >> 24) / 255.0) * 255.0);
-    uint _e7 = in_4.params.z;
-    uint _e10 = in_4.params.w;
+    uint _e7 = in_5.params.z;
+    uint _e10 = in_5.params.w;
     float4 src = float4((float2(_e7 & 0xFFFF, _e7 >> 16) / 65535.0), (float2(_e10 & 0xFFFF, _e10 >> 16) / 65535.0));
-    float2 pos_2 = (in_4.local + in_4.half_);
-    float2 size_3 = (in_4.half_ * 2.0);
+    float2 pos_2 = (in_5.local + in_5.half_);
+    float2 size_3 = (in_5.half_ * 2.0);
     const float _e25 = nine_axis(pos_2.x, size_3.x, dst_.x, dst_.z, src.x, src.z);
     const float _e32 = nine_axis(pos_2.y, size_3.y, dst_.y, dst_.w, src.y, src.w);
     float2 f = float2(_e25, _e32);
-    return lerp(in_4.uv_rect.xy, in_4.uv_rect.zw, f);
+    return lerp(in_5.uv_rect.xy, in_5.uv_rect.zw, f);
 }
 
-float border_pattern(Frag in_5)
+float border_pattern(Frag in_6)
 {
-    const float2 _e1 = rect_pos(in_5);
-    float2 edge = (in_5.half_ - abs((_e1 - in_5.half_)));
+    const float2 _e1 = rect_pos(in_6);
+    float2 edge = (in_6.half_ - abs((_e1 - in_6.half_)));
     bool along_y = (edge.x < edge.y);
     float s_1 = (along_y ? _e1.y : _e1.x);
     float across = min(edge.x, edge.y);
-    float dash = ((in_5.params.x == k_dotted) ? in_5.border : asfloat(in_5.params.y));
-    float period = max((dash + asfloat(in_5.params.z)), 0.001);
+    float dash = ((in_6.params.x == k_dotted) ? in_6.border : asfloat(in_6.params.y));
+    float period = max((dash + asfloat(in_6.params.z)), 0.001);
     const float _e31 = floor_div(s_1, period);
     float at = (s_1 - (_e31 * period));
     float _e40 = globals.scale;
     float dashed = clamp(((min(at, (dash - at)) + 0.5) * _e40), 0.0, 1.0);
-    float r_1 = (in_5.border * 0.5);
+    float r_1 = (in_6.border * 0.5);
     float _e55 = globals.scale;
     float dotted = clamp((0.5 - ((length(float2((at - r_1), (across - r_1))) - r_1) * _e55)), 0.0, 1.0);
-    return ((in_5.params.x == k_dotted) ? dotted : ((in_5.params.x == k_dashed) ? dashed : 1.0));
+    return ((in_6.params.x == k_dotted) ? dotted : ((in_6.params.x == k_dashed) ? dashed : 1.0));
 }
 
-float4 material(Frag in_6)
+float4 material(Frag in_7)
 {
     float2 uv = (float2)0;
     float4 color = (float4)0;
     bool local_2 = (bool)0;
 
-    if ((in_6.params.x == k_nine)) {
-        const float2 _e6 = nine_uv(in_6);
+    if ((in_7.params.x == k_nine)) {
+        const float2 _e6 = nine_uv(in_7);
         uv = _e6;
     } else {
-        const float2 _e7 = nearest_uv(in_6);
+        const float2 _e7 = nearest_uv(in_7);
         uv = _e7;
     }
-    color = in_6.fill;
-    if (!((in_6.params.x == k_linear))) {
-        local_2 = (in_6.params.x == k_radial);
+    color = in_7.fill;
+    if (!((in_7.params.x == k_linear))) {
+        local_2 = (in_7.params.x == k_radial);
     } else {
         local_2 = true;
     }
     bool _e22 = local_2;
     if (_e22) {
-        const float4 _e23 = gradient(in_6);
+        const float4 _e23 = gradient(in_7);
         color = _e23;
     }
     float4 _e24 = color;
     float2 _e27 = uv;
     float4 _e28 = tex.Sample(samp, _e27);
-    return (_e24 * _e28);
+    float4 sampled = (_e24 * _e28);
+    if ((in_7.params.x == k_ramp)) {
+        const float4 _e34 = ramp(in_7);
+        return _e34;
+    }
+    return sampled;
 }
 
 VertexOutput_vs vs(uint vi : SV_VertexID, Instance inst)
@@ -267,10 +297,10 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Instance inst)
     out_.clip_ = inst.clip_;
     out_.params = inst.params;
     out_.uv_rect = inst.uv;
-    float4 a_2 = inst.xform_abcd;
+    float4 a_3 = inst.xform_abcd;
     float _e121 = globals.scale;
-    float k_1 = (1.0 / (((a_2.x * a_2.w) - (a_2.y * a_2.z)) * _e121));
-    out_.to_rect = float4((a_2.w * k_1), (-(a_2.y) * k_1), (-(a_2.z) * k_1), (a_2.x * k_1));
+    float k_1 = (1.0 / (((a_3.x * a_3.w) - (a_3.y * a_3.z)) * _e121));
+    out_.to_rect = float4((a_3.w * k_1), (-(a_3.y) * k_1), (-(a_3.z) * k_1), (a_3.x * k_1));
     float4 _e139 = out_.to_rect;
     float _e145 = globals.scale;
     float4 _e149 = out_.to_rect;

@@ -261,7 +261,7 @@ test "es2: the GLSL ES 1.00 program links on a real driver and draws past the ho
 
 /// Wyhash of quad.wgsl's stock shader (quad.wgsl + material.wgsl) that es2/quad.vert and
 /// es2/quad.frag were last ported from.
-const ported_from: u64 = 0x7a75299c00b1d569;
+const ported_from: u64 = 0x1fd4c0dd5e88af3b;
 
 test "es2: the hand-written GLSL ES 1.00 shaders were ported from the current quad.wgsl" {
     // Fails when quad.wgsl or material.wgsl change: port the change into es2/quad.vert and

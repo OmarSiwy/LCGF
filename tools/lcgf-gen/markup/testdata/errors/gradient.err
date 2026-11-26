@@ -1,0 +1,18 @@
+gradient.html:4:76: error: radial-gradient(): only a circle, its radius in px and 'at X Y' are lowered
+  <div style="width: 40px; height: 40px; background-image: radial-gradient(ellipse at 50% 50%, red, blue)"></div>
+                                                                           ^
+gradient.html:5:80: error: a colour stop's position is one percentage
+  <div style="width: 40px; height: 40px; background-image: linear-gradient(red 10px, blue)"></div>
+                                                                               ^
+gradient.html:6:60: error: a gradient needs at least two colours
+  <div style="width: 40px; height: 40px; background-image: linear-gradient(red)"></div>
+                                                           ^
+gradient.html:7:33: error: radial-gradient(): give its radius in px, or the box a px width and height
+  <div style="background-image: radial-gradient(red, blue)"></div>
+                                ^
+gradient.html:8:58: error: a background-color under a gradient of more than two colours is not drawn: one quad per box; set one of them
+  <div style="background-color: white; background-image: linear-gradient(red, green, blue)"></div>
+                                                         ^
+gradient.html:9:33: error: background-image: only url(), linear-gradient() and radial-gradient() are lowered
+  <div style="background-image: conic-gradient(red, blue)"></div>
+                                ^
