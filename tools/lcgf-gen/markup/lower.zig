@@ -2112,19 +2112,20 @@ pub const Lowerer = struct {
         if (tt != .none and args.items.len > 0) {
             l.ds.err(at, "text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app", .{});
         } else if (tt != .none) {
-            if (!std.unicode.utf8ValidateSlice(literal.items) or for (literal.items) |ch| {
-                if (ch >= 0x80) break true;
-            } else false) l.ds.err(at, "text-transform maps ASCII letters only, at build time; write this text in the case it shows", .{});
-            var start = true;
-            for (literal.items) |*ch| {
-                ch.* = switch (tt) {
-                    .uppercase => std.ascii.toUpper(ch.*),
-                    .lowercase => std.ascii.toLower(ch.*),
-                    .capitalize => if (start) std.ascii.toUpper(ch.*) else ch.*,
-                    .none => unreachable,
-                };
-                start = std.ascii.isWhitespace(ch.*);
-            }
+            // Unicode 16 casing (text/layout/display.zig): ß -> SS, final sigma, the lang's rules.
+            const casemap = lcgf.text_display;
+            const buf = ok(l.arena.alloc(u8, 3 * literal.items.len + 16));
+            var out: casemap.Buffer = .{ .bytes = buf, .source = ok(l.arena.alloc(u32, buf.len + 1)) };
+            const casing: casemap.Casing = switch (tt) {
+                .uppercase => .upper,
+                .lowercase => .lower,
+                .capitalize => .capitalize,
+                .none => unreachable,
+            };
+            if (casemap.prepare(&out, literal.items, .{ .casing = casing, .locale = l.localeOf(l.current) })) |mapped| {
+                literal.clearRetainingCapacity();
+                ok(literal.appendSlice(l.arena, mapped));
+            } else |e| l.ds.err(at, "text-transform: the text cannot be case-mapped ({t})", .{e});
         }
         if (args.items.len == 0) {
             node.text_kind = .literal;
@@ -2145,6 +2146,18 @@ pub const Lowerer = struct {
     }
 
     const TextTransform = enum { none, uppercase, lowercase, capitalize };
+
+    /// The casing locale of document node `n`, from the nearest `lang` (tr, az, lt and nl
+    /// change case mapping; any other is the root locale).
+    fn localeOf(l: *const Lowerer, n: u32) lcgf.text_display.Locale {
+        var i = n;
+        while (i != none) : (i = l.doc.nodes.items(.parent)[i]) if (l.doc.nodes.items(.kind)[i] == .element) if (l.attr(i, "lang")) |lang| {
+            const primary = lang[0 .. std.mem.indexOfAny(u8, lang, "-_") orelse lang.len];
+            inline for (.{ "tr", "az", "lt", "nl" }) |x| if (std.ascii.eqlIgnoreCase(primary, x)) return @field(lcgf.text_display.Locale, x);
+            return .root;
+        };
+        return .root;
+    }
 
     /// The inherited `text-transform` of document node `n`: its own or its nearest ancestor's.
     fn textTransform(l: *Lowerer, n: u32) TextTransform {

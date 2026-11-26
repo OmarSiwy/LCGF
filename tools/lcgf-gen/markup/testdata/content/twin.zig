@@ -17,8 +17,8 @@ pub const State = struct { more_open: bool = true };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
-    // text-transform: applied to the literal text at build time, inherited.
-    s.col(.{}, .{ label.ct.label(theme, "SHOUT"), label.ct.label(theme, "Two Words") }),
+    // text-transform: Unicode casing of the literal text at build time, inherited; lang=tr.
+    s.col(.{}, .{ label.ct.label(theme, "SHOUT"), label.ct.label(theme, "Two Words"), label.ct.label(theme, "STRASSE"), label.ct.label(theme, "İSTANBUL") }),
     // <ul>, <ol>: role list; <li>: role list_item, on the label of text-only content.
     s.col(.{ .role = .list }, .{
         s.styled(label.ct.label(theme, "Plain"), .{ .role = .list_item }),
