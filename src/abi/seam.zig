@@ -230,15 +230,17 @@ pub const Ui = struct {
         return active;
     }
 
-    /// `Events.focusKeys`: Tab and Shift+Tab move focus through the focusable widgets in row
-    /// order, wrapping.
-    fn focusKeys(ui: *Ui, in: *const Input, tab: u8) void {
+    /// `ComptimeUi`'s Tab: Tab and Shift+Tab move focus through the focusable widgets that
+    /// the state shows this frame, in row order, wrapping. Focus on a widget a region now
+    /// leaves out is dropped first.
+    fn focusKeys(ui: *Ui, state: [*]u8, in: *const Input, tab: u8) void {
         const n = ui.tables.header.widgets;
+        if (ui.focus != none and !ui.shown(state, ui.tables.widget(ui.focus).row)) ui.focus = none;
         for (in.events) |e| {
             if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
             var count: u32 = 0;
             var pos: u32 = none;
-            for (0..n) |k| if (ui.tables.widget(@intCast(k)).focusable) {
+            for (0..n) |k| if (ui.stop(state, @intCast(k))) {
                 if (k == ui.focus) pos = count;
                 count += 1;
             };
@@ -249,10 +251,26 @@ pub const Ui = struct {
             const back = e.mods.shift;
             const want = if (pos == none) (if (back) count - 1 else 0) else if (back) (pos + count - 1) % count else (pos + 1) % count;
             var seen: u32 = 0;
-            for (0..n) |k| if (ui.tables.widget(@intCast(k)).focusable) {
+            for (0..n) |k| if (ui.stop(state, @intCast(k))) {
                 if (seen == want) ui.focus = @intCast(k);
                 seen += 1;
             };
+        }
+    }
+
+    fn stop(ui: *const Ui, state: [*]u8, k: u32) bool {
+        const w = ui.tables.widget(k);
+        return w.focusable and ui.shown(state, w.row);
+    }
+
+    /// Whether spec row `r` and every row above it are live this frame.
+    fn shown(ui: *const Ui, state: [*]u8, r: u32) bool {
+        var i = r;
+        while (true) {
+            const row = ui.tables.row(i);
+            if (!ui.live(state, row)) return false;
+            if (row.parent == 0) return true;
+            i = row.parent - 1;
         }
     }
 
@@ -316,7 +334,7 @@ pub const Ui = struct {
         const press = in.buttons.left and !ui.down;
         const event = ui.pointer(in);
         if (press) ui.focus = ui.pressed;
-        ui.focusKeys(in, (focus_mod.Keymap{}).tab);
+        ui.focusKeys(state, in, (focus_mod.Keymap{}).tab);
         if (event) |e| {
             out.widget = e.widget;
             out.value = e.value;
