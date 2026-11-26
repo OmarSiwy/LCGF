@@ -384,9 +384,9 @@ pub fn anchored(comptime s: Spec, comptime place: overlay.Place) Spec {
     return out;
 }
 
-/// `s` held at least `top` pixels below the top of the viewport while its parent's content
-/// box has room, as CSS `position: sticky; top: …`. Scroll containers are not modelled yet,
-/// so the viewport is the scroller.
+/// `s` held at least `top` pixels below the top of its scroller while its parent's content box
+/// has room, as CSS `position: sticky; top: …`. The scroller is the nearest scroll area's
+/// viewport (`widgets_scroll`), or the viewport.
 pub fn sticky(comptime s: Spec, comptime top: f32) Spec {
     var out = s;
     out.sticky = top;

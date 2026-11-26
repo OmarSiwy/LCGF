@@ -155,6 +155,14 @@ pub const role: u8 = @backingInt(a11y.Role.scroll_bar);
 /// The viewport's role byte.
 pub const view_role: u8 = @backingInt(a11y.Role.scroll_view);
 
+/// The viewport of the nearest scroll area at or above tree row `row`, or the root (0): the
+/// scroller a sticky node (`scroll.Sticky`, `spec.sticky`) sticks in.
+pub fn scrollerOf(t: *const @import("../core/tree.zig").Tree, row: u32) u32 {
+    var p = row;
+    while (p != 0 and t.c.role[p] != view_role) p = t.c.parent[p];
+    return p;
+}
+
 /// How far through the content `offset` is, 0 to 1; 0 when the content fits.
 pub fn position(offset: f32, g: Geometry) f32 {
     return base.unit(clamp(offset, g) / @max(g.limit(), 1e-6));
@@ -493,4 +501,37 @@ test "golden_frames: name frames the scroll replay has" {
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(ct);
+}
+
+test "scrollerOf: a sticky header sticks at the top of its scroll area's viewport" {
+    const th: Theme = .default;
+    const label_zig = @import("label.zig");
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.col(.{ .size = .{ .px(160), .px(60) } }, .{
+            ct.scroll(th, .list, .offset, .{
+                spec_zig.col(.{}, .{
+                    spec_zig.sticky(label_zig.ct.label(th, "Head"), 0),
+                    label_zig.ct.label(th, "a"),
+                    label_zig.ct.label(th, "b"),
+                    label_zig.ct.label(th, "c"),
+                    label_zig.ct.label(th, "d"),
+                }),
+                label_zig.ct.label(th, "e"),
+                label_zig.ct.label(th, "f"),
+            }),
+        }),
+    });
+    const Ui = base.ComptimeUi(struct { offset: f32 = 0 }, spec, th);
+    var ui: Ui = .{};
+    var in: Input = .{ .viewport = .{ 300, 200 } };
+    var out = ui.frame(&in);
+    // Root, col, box, area, viewport, content, section, head.
+    const viewport = out.tree.rect(4);
+    try testing.expectEqual(@as(u32, 4), scrollerOf(out.tree, 7));
+    try testing.expectEqual(viewport.y0, out.tree.rect(7).y0);
+    ui.signals.set(.offset, 20);
+    out = ui.frame(&in);
+    // The section moved up 20; its head stays at the viewport's top.
+    try testing.expect(out.tree.rect(6).y0 < viewport.y0);
+    try testing.expectEqual(viewport.y0, out.tree.rect(7).y0);
 }

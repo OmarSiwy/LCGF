@@ -798,7 +798,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             defer if (comptime n.flex) |fs| ui.tables.fx.set(at, &fs);
             // In row order, before the subtree: a nested anchor sees its parent's final place.
             if (comptime n.anchor) |pl| _ = ui.tables.an.place(at, pl, .{ .x1 = in.viewport[0], .y1 = in.viewport[1] });
-            if (comptime n.sticky) |top| _ = ui.tables.st.push(at, 0, .{ 0, top }, .{ false, true });
+            if (comptime n.sticky) |top| _ = ui.tables.st.push(at, @import("scroll.zig").scrollerOf(&ui.tables.t, parent), .{ 0, top }, .{ false, true });
             if (comptime n.layer != 0) ui.tables.ly.l.c.own[at] = n.layer;
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             if (comptime n.custom) |data| {
