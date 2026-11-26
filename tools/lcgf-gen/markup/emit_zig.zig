@@ -856,9 +856,9 @@ pub const Emit = struct {
 
     /// After a text control's call: its submit (`result.submitted`) recorded for dispatch.
     fn submitFlag(e: *Emit, n: ir.Node) void {
-        for (e.page.handlers.items) |h| if (h.event == .submit and std.mem.eql(u8, h.widget, n.id)) {
-            e.print(" if ({s}.result.submitted) ui.events.{f} = true;", .{ e.stateRef(n.bind), std.zig.fmtId(n.id) });
-            return;
+        for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.widget, n.id)) {
+            if (h.event == .submit) e.print(" if ({s}.result.submitted) ui.events.{f} = true;", .{ e.stateRef(n.bind), std.zig.fmtId(n.id) });
+            if (textChange(h)) e.print(" if ({s}.result.changed) ui.events.{s}_change = true;", .{ e.stateRef(n.bind), n.id });
         };
     }
 
@@ -909,6 +909,9 @@ pub const Emit = struct {
         var any = false;
         for (e.page.handlers.items) |h| if (h.event == .click or h.event == .submit) {
             e.print(" {f}: bool = false,", .{std.zig.fmtId(h.widget)});
+            any = true;
+        } else if (textChange(h)) {
+            e.print(" {s}_change: bool = false,", .{h.widget});
             any = true;
         };
         e.write(if (any) " } = .{},\n" else "} = .{},\n");
@@ -1026,7 +1029,10 @@ pub const Emit = struct {
         if (e.page.handlers.items.len == 0) e.write("        _ = ui;\n        _ = h;\n");
         for (e.page.handlers.items) |h| switch (h.event) {
             .click, .submit => e.print("        if (ui.events.{f}) h.{f}(ui); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) }),
-            .change => e.print("        if ({s} != ui.before.{f}) h.{f}(ui, {s}); // {s}\n", .{ e.stateRef(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) }),
+            .change => if (textChange(h))
+                e.print("        if (ui.events.{s}_change) h.{f}(ui, {s}.text()); // {s}\n", .{ h.widget, std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) })
+            else
+                e.print("        if ({s} != ui.before.{f}) h.{f}(ui, {s}); // {s}\n", .{ e.stateRef(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) }),
         };
         e.write("    }\n};\n\n");
     }
@@ -1108,14 +1114,13 @@ pub const Emit = struct {
         if (each != none) e.eachFields();
         e.write(if (each != none) "        pub fn frame(p: *@This(), h: *H, in: *const lcgf.input.Input, data: anytype) Ui.Output {\n" else "        pub fn frame(p: *@This(), h: *H, in: *const lcgf.input.Input) Ui.Output {\n");
         var changes = false;
-        var clicks: u32 = 0;
+        // One prong per widget: a click, or a text control's submit and change.
+        var prongs: std.StringArrayHashMapUnmanaged(void) = .empty;
         for (hs) |h| {
-            changes = changes or (h.event == .change and h.each.len == 0);
-            clicks += @intFromBool(h.event == .click or h.event == .submit);
+            changes = changes or (h.event == .change and h.each.len == 0 and !textChange(h));
+            if (h.each.len == 0 and (h.event != .change or textChange(h))) prongs.put(e.arena, h.widget, {}) catch unreachable;
         }
-        var item_clicks: u32 = 0;
-        for (hs) |h| item_clicks += @intFromBool(h.each.len > 0 and h.event != .change);
-        clicks -= item_clicks;
+        const clicks: u32 = @intCast(prongs.count());
         if (hs.len == 0) e.write("            _ = h;\n");
         if (changes) e.write("            const before = p.ui.signals.state;\n");
         e.write(if (each != none) "            var out = p.ui.frame(in);\n" else "            const out = p.ui.frame(in);\n");
@@ -1124,10 +1129,28 @@ pub const Emit = struct {
         if (clicks > 0) {
             e.write("            if (out.event) |event| switch (event) {\n");
             for (hs) |h| if (h.event == .click and h.each.len == 0) e.print("                .{f} => h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
-            // A text control's event is what its input did; submit is one part of it.
-            for (hs) |h| if (h.event == .submit and h.each.len == 0) e.print("                .{f} => |result| if (result.submitted) h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+            // A text control's event is what its input did: a submit, a change of the text, or both.
+            for (prongs.keys()) |widget| {
+                var calls: std.ArrayList(u8) = .empty;
+                var n: u32 = 0;
+                for (hs) |h| if (h.each.len == 0 and std.mem.eql(u8, h.widget, widget)) {
+                    if (h.event == .submit) {
+                        calls.print(e.arena, "if (result.submitted) h.{f}(&p.ui); // {s}\n", .{ std.zig.fmtId(h.name), e.where(h.loc) }) catch unreachable;
+                    } else if (textChange(h)) {
+                        calls.print(e.arena, "if (result.changed) h.{f}(&p.ui, p.ui.signals.state.{f}.text()); // {s}\n", .{ std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.where(h.loc) }) catch unreachable;
+                    } else continue;
+                    n += 1;
+                };
+                if (n == 1) {
+                    const semi = std.mem.indexOf(u8, calls.items, "; //").?;
+                    e.print("                .{f} => |result| {s},{s}", .{ std.zig.fmtId(widget), calls.items[0..semi], calls.items[semi + 1 ..] });
+                } else if (n > 1) e.print("                .{f} => |result| {{\n{s}}},\n", .{ std.zig.fmtId(widget), calls.items });
+            }
             var widgets: u32 = 0;
-            for (e.page.nodes.items(.id), 0..) |id, k| widgets += @intFromBool(id.len > 0 and (e.eachOf(@intCast(k)) == none or e.page.nodes.items(.kind)[k] == .each));
+            for (e.page.nodes.items(.id), e.page.nodes.items(.kind), 0..) |id, kind, k| {
+                // A search field is two widgets: the field and its clear button (`id.clear`).
+                if (id.len > 0 and (e.eachOf(@intCast(k)) == none or kind == .each)) widgets += @as(u32, 1) + @intFromBool(kind == .search);
+            }
             // An app component's widgets are tags of `Widget` the markup does not see.
             if (widgets > clicks or e.specComponents()) e.write("                else => {},\n");
             e.write("            };\n");
@@ -1138,9 +1161,14 @@ pub const Emit = struct {
             e.print("            if (events_{s}.{f}) |index| h.{f}(&p.ui, index); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change and h.each.len > 0)
             e.print("            if (events_{s}.{f}) |change| h.{f}(&p.ui, change[0], change[1]); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
-        for (hs) |h| if (h.event == .change and h.each.len == 0)
+        for (hs) |h| if (h.event == .change and h.each.len == 0 and !textChange(h))
             e.print("            if (p.ui.signals.state.{f} != before.{f}) h.{f}(&p.ui, p.ui.signals.state.{f}); // {s}\n", .{ std.zig.fmtId(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.where(h.loc) });
         e.write("            return out;\n        }\n    };\n}\n\n");
+    }
+
+    /// on:change on a text control outside a region: reported from its event, with its text.
+    fn textChange(h: ir.Handler) bool {
+        return h.event == .change and h.each.len == 0 and h.payload == .str;
     }
 
     /// The Page fields of its run-time regions: each region's runtime Context, and the two draw

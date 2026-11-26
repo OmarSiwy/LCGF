@@ -1514,7 +1514,8 @@ pub const Lowerer = struct {
                     continue;
                 }
                 if (payload == .text) {
-                    l.ds.err(doc.attrLoc(a), "on:change on a text control is not lowered yet; use on:submit", .{});
+                    // A text control reports its text as it is edited.
+                    ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .change, .widget = id, .field = bind, .payload = .str, .loc = at }));
                     continue;
                 }
                 if (std.mem.indexOfScalar(u8, bind, '.') != null) {

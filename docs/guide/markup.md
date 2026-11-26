@@ -71,7 +71,7 @@ lcgf-gen --mappings                    # what every element, attribute and prope
 | `bind:value="f"` | Two-way binding: `f32` for range, `Number` for number, `Text(256)` for text controls. |
 | `bind:selected="f"` | A radio group's `u32` index. |
 | `on:click="name"` | Calls `pub fn name(h: *H, ui: *Ui) void`. |
-| `on:change="name"` | Calls `pub fn name(h: *H, ui: *Ui, value: T) void` with the new value. |
+| `on:change="name"` | Calls `pub fn name(h: *H, ui: *Ui, value: T) void` with the new value. On a text field, search field or textarea, `value` is the text (`[]const u8`), reported as it is edited. |
 | `on:submit="name"` | On a text field, search field or textarea: calls `pub fn name(h: *H, ui: *Ui) void` on Enter (Ctrl+Enter or Cmd+Enter in a textarea, where Enter adds a line). |
 | `<template lcgf-if="f">` | `spec.when` over a `bool`. |
 | `<template lcgf-else>` right after it | Both make `spec.choice` over the `bool`: the else content while `f` is false, the if content while it is true. Each template holds one element. |

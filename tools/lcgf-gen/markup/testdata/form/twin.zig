@@ -25,12 +25,24 @@ pub fn Handlers(comptime Ui: type) type {
     return struct {
         names: u32 = 0,
         bios: u32 = 0,
+        edits: u32 = 0,
+        name: [16]u8 = undefined,
+        name_len: usize = 0,
+        finds: u32 = 0,
 
         pub fn name_done(h: *@This(), _: *Ui) void {
             h.names += 1;
         }
         pub fn bio_done(h: *@This(), _: *Ui) void {
             h.bios += 1;
+        }
+        pub fn name_edited(h: *@This(), _: *Ui, text: []const u8) void {
+            h.edits += 1;
+            @memcpy(h.name[0..text.len], text);
+            h.name_len = text.len;
+        }
+        pub fn found(h: *@This(), _: *Ui, _: []const u8) void {
+            h.finds += 1;
         }
     };
 }
@@ -51,6 +63,17 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = p.frame(h, &in);
     in.buttons.left = false;
     _ = p.frame(h, &in);
+    // on:change reports the text as it is typed; focus alone changes nothing.
+    try std.testing.expectEqual(0, h.edits);
+    const typed = [_]Event{.{ .kind = .text, .at = 0, .len = 2 }};
+    in.events = &typed;
+    in.text = "ab";
+    _ = p.frame(h, &in);
+    in.text = "";
+    in.events = &.{};
+    _ = p.frame(h, &in);
+    try std.testing.expectEqual(1, h.edits);
+    try std.testing.expectEqualStrings("ab", h.name[0..h.name_len]);
     const enter = [_]Event{.{ .kind = .press, .code = 0x28 }};
     in.events = &enter;
     _ = p.frame(h, &in);
@@ -71,4 +94,7 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = p.frame(h, &in);
     try std.testing.expectEqual(1, h.bios);
     try std.testing.expectEqual(1, h.names);
+    // Enter submitted the name without changing it.
+    try std.testing.expectEqual(1, h.edits);
+    try std.testing.expectEqual(0, h.finds);
 }

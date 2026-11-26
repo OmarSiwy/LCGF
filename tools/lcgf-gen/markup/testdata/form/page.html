@@ -3,8 +3,8 @@
 <head><title>Sign up</title></head>
 <body>
   <form aria-label="Sign up">
-    <input type="text" id="name" bind:value="name" placeholder="Your name" on:submit="name_done">
-    <input type="search" id="find" bind:value="find" placeholder="Find">
+    <input type="text" id="name" bind:value="name" placeholder="Your name" on:submit="name_done" on:change="name_edited">
+    <input type="search" id="find" bind:value="find" placeholder="Find" on:change="found">
     <textarea id="bio" bind:value="bio" rows="4" placeholder="About you" on:submit="bio_done"></textarea>
   </form>
 </body>
