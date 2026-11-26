@@ -18,10 +18,10 @@ const DrawList = lcgf.draw_list.DrawList;
 
 pub const std_options: std.Options = .{ .signal_stack_size = null };
 
-const count = 100_000;
+pub const count = 100_000;
 /// One primitive per cell of a 320-wide grid, 6,000 world units a cell.
-const cols = 320;
-const cell = 6_000;
+pub const cols = 320;
+pub const cell = 6_000;
 var shape_buf: [canvas.Instances.requiredBytes(count, count / 10 * 3, 4)]u8 align(lcgf.mem.column_align) = undefined;
 var list_buf: [list_bytes]u8 align(lcgf.mem.column_align) = undefined;
 var bin_buf: [sw.canvas.Bin.requiredBytes(count, 2 * count)]u8 align(lcgf.mem.column_align) = undefined;
@@ -37,11 +37,11 @@ const layers = [_]canvas.Layer{
     .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 1 }),
     .of(.{ .stroke = .rgb(250, 250, 120), .width = 1 }),
 };
-const palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true };
+pub const palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true };
 
 /// Wires (30 %, a tenth of them dashed), rects (20 %), circles (10 %), arcs (10 %),
 /// triangles (10 %) and glyphs (20 %), each inside its cell.
-fn build(s: *canvas.Instances) void {
+pub fn build(s: *canvas.Instances) void {
     var i: u32 = 0;
     while (s.len < count) : (i += 1) {
         const x: i32 = @intCast((i % cols) * cell);
@@ -145,7 +145,7 @@ pub fn main(init: std.process.Init) !void {
     };
 }
 
-fn zoomed(scale: f32, wf: f32, hf: f32, world_w: f32) canvas.Camera {
+pub fn zoomed(scale: f32, wf: f32, hf: f32, world_w: f32) canvas.Camera {
     const cx = world_w / 2 - wf / 2 / scale;
     const cy = world_w / 2 - hf / 2 / scale;
     return .{ .origin = .{ @intFromFloat(cx), @intFromFloat(cy) }, .scale = scale, .zoom = scale * world_w / wf };

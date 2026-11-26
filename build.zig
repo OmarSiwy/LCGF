@@ -951,6 +951,18 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk_c", .module = vk_c }, .{ .name = "gpu_shaders", .module = vk_shaders } },
         }) });
         b.step("gpu-probe", "Build zig-out/gpu-probe.o, the projection's zero-cost check (ci/run.sh gpu-zero-cost)").dependOn(&b.addInstallFile(gpu_probe.getEmittedBin(), "gpu-probe.o").step);
+        // The canvas benchmark on Vulkan: 100k primitives panned, zoomed and edited, ReleaseFast.
+        const vk_canvasbench = b.addExecutable(.{ .name = "vk-canvasbench", .root_module = b.createModule(.{
+            .root_source_file = b.path("src/render/vk/canvasbench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "vk_c", .module = vk_c } },
+        }) });
+        vk_canvasbench.root_module.addAnonymousImport("canvasbench", .{ .root_source_file = b.path("bench/micro/canvasbench.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
+        for ([_][]const u8{ "stock", "example", "canvas" }) |v|
+            vk_canvasbench.root_module.addAnonymousImport(b.fmt("{s}_spv", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.spv", .{v})) });
+        b.step("vk-canvasbench", "Build zig-out/bin/vk-canvasbench (the canvas benchmark on Vulkan)").dependOn(&b.addInstallArtifact(vk_canvasbench, .{}).step);
         vk_step.dependOn(&b.addRunArtifact(vk_tests).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_play, .{}).step);
         vk_play_step.dependOn(&b.addInstallArtifact(vk_probe, .{}).step);
