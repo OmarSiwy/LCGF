@@ -1,0 +1,3 @@
+details.html:9:39: error: CSS on a <summary> lays out the header: margins, gradients, box-shadow and outline are not lowered there
+  <details id="more" bind:open="more"><summary>More</summary><span>x</span></details>
+                                      ^

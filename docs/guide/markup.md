@@ -169,13 +169,13 @@ By default the page is a comptime page (`ComptimeUi`).
 - `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
 
 CSS on a button, link, toggle, checkbox, switch, range, text control (text, password, search,
-number, textarea), progress bar, separator, radio group, select (its button) or dialog (its panel) restyles
-it there through the widget's `…Face` function, as `spec.styled`
+number, textarea), progress bar, separator, radio group, select (its button), dialog (its panel) or details
+(the section, and its summary the header) restyles it there through the widget's `…Face` function, as `spec.styled`
 restyles the comptime one. A focused text control still takes the accent border; unfocused it
 shows the CSS border colour, in both frontends. A box-shadow or an outline on one of them
 works there too: its column of floating nodes is built around the restyled widget. Margins and
 the other flex item rules on a widget or a component go on the row it pushes first, its root.
-CSS on a `<details>` sets only its margins, in either frontend.
+A margin, gradient, box-shadow or outline on a `<summary>` is an error.
 
 A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame, data)` and
 `Page(H).frame(p, ctx, h, input, data)`.

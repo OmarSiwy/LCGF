@@ -31,8 +31,15 @@ const Tree = @import("../core/tree.zig").Tree;
 /// `expanded.*` is set. Everything built until `close` goes in the panel. Returns the
 /// header's response.
 pub fn open(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const u8) Response {
-    _ = f.open(.none, sectionStyle(th));
-    const head = f.open(id, headerStyle(th));
+    return openFace(f, th, id, expanded, title, sectionStyle(th), headerStyle(th));
+}
+
+/// `open` with the section laid out by `section` and the header by `header` instead of the
+/// theme's styles, as `ct.sectionFace` lays out the comptime one (CSS on a `<details>` and its
+/// `<summary>`); the header's fill still follows hover and held.
+pub fn openFace(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const u8, section: Style, header: Style) Response {
+    _ = f.open(.none, section);
+    const head = f.open(id, header);
     const r = f.interact(head, .button);
     expanded.* = expand(expanded.*, r.clicked, r.focused, f.in);
     f.setFill(head, base.buttonFill(th, r));
@@ -117,10 +124,18 @@ pub const ct = struct {
     /// compile errors: an empty `children`, an `expanded` that is not a bool field or a
     /// `title` that is not a string field of the state struct.
     pub fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime children: anytype) Spec {
+        return sectionFace(th, id, expanded, title, sectionStyle(&th), headerStyle(&th), children);
+    }
+
+    /// `section` laid out by `section_style` and `header` instead of the theme's styles (CSS on
+    /// a `<details>` and its `<summary>`); the runtime twin is `openFace`.
+    pub fn sectionFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime section_style: Style, comptime header: Style, comptime children: anytype) Spec {
         if (children.len == 0) @compileError("accordion section '" ++ @tagName(id) ++ "' has an empty panel");
-        var head = spec_zig.row(headerStyle(&th), .{ Spec{ .kind = .col }, base.ct.label(th, title) });
+        var head = spec_zig.row(header, .{ Spec{ .kind = .col }, base.ct.label(th, title) });
+        head.style.dir = header.dir;
         head.id = @tagName(id);
-        var s = spec_zig.col(sectionStyle(&th), .{ head, spec_zig.col(.{}, children) });
+        var s = spec_zig.col(section_style, .{ head, spec_zig.col(.{}, children) });
+        s.style.dir = section_style.dir;
         s.widget = Section(@tagName(id), @tagName(expanded));
         return s;
     }

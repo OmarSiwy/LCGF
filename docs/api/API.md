@@ -5065,6 +5065,7 @@ Accordion (tier 2): sections stacked in a column, each a header that shows or hi
 - `region: u8 = @backingInt(a11y.Role.region)`: What assistive technology sees of a section (WAI-ARIA APG accordion pattern): the section is a `group`, its header a `button` named by its title (from content) whose value is 1 while expanded, and the panel a `region`.
 - `replay = @embedFile("testdata/accordion.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn open(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const u8) Response`: Starts a section with header `title` and the identity `id`, showing its panel while `expanded.*` is set.
+- `fn openFace(f: *Frame, th: *const Theme, id: Id, expanded: *bool, title: []const u8, section: Style, header: Style) Response`: `open` with the section laid out by `section` and the header by `header` instead of the theme's styles, as `ct.sectionFace` lays out the comptime one (CSS on a `<details>` and its `<summary>`); the header's fill still follows hover and held.
 - `fn close(f: *Frame) void`: Ends the section `open` started.
 - `fn sectionStyle(th: *const Theme) Style`: A section spans its parent's width: the header above, the panel below.
 - `fn headerStyle(th: *const Theme) Style`: The header: a row across the section holding the indicator and the title, padded and rounded as a button.
@@ -5078,6 +5079,7 @@ Accordion (tier 2): sections stacked in a column, each a header that shows or hi
 The accordion's sections as spec nodes.
 
 - `fn section(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime children: anytype) Spec`: A section whose header is the widget `id`, titled by the string field `title`, showing `children` (a tuple of specs) while the bool field `expanded` is set.
+- `fn sectionFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime section_style: Style, co…`: `section` laid out by `section_style` and `header` instead of the theme's styles (CSS on a `<details>` and its `<summary>`); the runtime twin is `openFace`.
 
 ### `Page(..)` (generic struct)
 The example page: two sections, "General" (open) holding a checkbox and "Advanced" (closed) holding a slider, in both front ends, in theme `th`.

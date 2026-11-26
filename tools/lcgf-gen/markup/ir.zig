@@ -150,6 +150,8 @@ pub const Node = struct {
     secure: bool = false,
     /// A component's props, in attribute order.
     props: []const Prop = &.{},
+    /// A `<details>`'s header, as CSS on its `<summary>` restyles it; null for the theme's.
+    header: ?Style = null,
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

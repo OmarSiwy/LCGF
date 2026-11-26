@@ -2078,7 +2078,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
-                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select, .dialog => true,
+                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select, .dialog, .section => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
@@ -2624,10 +2624,21 @@ pub const Lowerer = struct {
             l.skip[n] = true;
             return;
         };
-        const base_style = lcgf.widgets_accordion.sectionStyle(&th);
-        l.widgetStyle(n, parent, base_style, &node);
-        if (!std.meta.eql(node.style, base_style) or node.params_expr.len > 0)
-            l.ds.err(l.loc(n), "CSS sets only the margins of a <details>; style its content", .{});
+        // CSS on the <details> lays out the section, and on its <summary> the header.
+        l.widgetStyle(n, parent, lcgf.widgets_accordion.sectionStyle(&th), &node);
+        const flex = l.flex;
+        const shadow = l.shadow;
+        const outline = l.outline;
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        const head_base = lcgf.widgets_accordion.headerStyle(&th);
+        const header = l.boxStyle(summary, head_base, .y, &params, &margin);
+        if (params.len > 0 or margin != null or l.shadow != null or l.outline != null or !std.meta.eql(l.flex, lcgf.flex.Flex.Style{}))
+            l.ds.err(l.loc(summary), "CSS on a <summary> lays out the header: margins, gradients, box-shadow and outline are not lowered there", .{});
+        if (!std.meta.eql(header, head_base)) node.header = header;
+        l.flex = flex;
+        l.shadow = shadow;
+        l.outline = outline;
         l.handlers(n, node.id, bind, .bool);
         l.ir_of[n] = l.addNode(node);
     }

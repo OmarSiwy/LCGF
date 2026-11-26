@@ -16,6 +16,20 @@ pub const theme: w.Theme = .{ .accent = .rgb(48, 128, 224) };
 
 pub const State = struct { more_open: bool = true };
 
+/// `details { width: 200px }` and `summary { padding: 4px 10px; border: 1px solid #ffcc00 }`.
+const more_section: lcgf.types.Style = blk: {
+    var st = accordion.sectionStyle(&theme);
+    st.size[0] = .px(200);
+    break :blk st;
+};
+const more_header: lcgf.types.Style = blk: {
+    var st = accordion.headerStyle(&theme);
+    st.pad = .{ 10, 4, 10, 4 };
+    st.border = 1;
+    st.border_color = .rgb(255, 204, 0);
+    break :blk st;
+};
+
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
     // text-transform: Unicode casing of the literal text at build time, inherited; lang=tr.
@@ -56,7 +70,8 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.col(.{ .size = .{ .fill, .fill }, .radius = 3 }, .{label.ct.label(theme, "Ringed")}),
     }),
     // <details open bind:open>: an accordion section, its <summary> the header.
-    accordion.ct.section(theme, .more, .more_open, "More", .{
+    // CSS on the <details> and its <summary>: the section's and the header's styles.
+    accordion.ct.sectionFace(theme, .more, .more_open, "More", more_section, more_header, .{
         s.textStyled(label.ct.label(theme, "Hidden text"), .{ .color = theme.text, .wrap = true }),
     }),
 });

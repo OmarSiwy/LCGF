@@ -332,8 +332,15 @@ pub const Emit = struct {
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
             .section => {
-                e.print("{s}.ct.section(theme, .{f}, .{f}, ", .{ e.use("accordion"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                const faced_ = restyle or n.header != null;
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("accordion"), if (faced_) "sectionFace" else "section", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
+                if (faced_) {
+                    e.write(", ");
+                    e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                    e.write(", ");
+                    e.fields(n.header orelse lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
+                }
                 e.write(", .{");
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
@@ -754,8 +761,15 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .section => {
-                e.print("_ = {s}.open(f, &theme, {s}, {s}, ", .{ e.use("accordion"), e.rtId(n.id, list_depth), e.ref(n.bind) });
+                const faced_ = e.rtFace(n).len > 0 or n.header != null;
+                e.print("_ = {s}.{s}(f, &theme, {s}, {s}, ", .{ e.use("accordion"), if (faced_) "openFace" else "open", e.rtId(n.id, list_depth), e.ref(n.bind) });
                 e.rtCaption(n.text_kind, n.text);
+                if (faced_) {
+                    e.write(", ");
+                    e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                    e.write(", ");
+                    e.fields(n.header orelse lcgf.widgets_accordion.headerStyle(&e.page.theme), types.Style{}, &.{}, "");
+                }
                 e.write(");");
                 return "accordion.close(f);";
             },
