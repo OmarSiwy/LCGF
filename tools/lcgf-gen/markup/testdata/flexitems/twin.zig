@@ -23,12 +23,13 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.textStyled(label.ct.label(theme, "Big"), .{ .px = 24, .color = .rgb(230, 230, 235) }),
         label.ct.label(theme, "small"),
     }), .{ .baseline = true }),
-    // flex-wrap: wrap on a row: Flex.Style.wrap; align-content: Flex.Style.lines.
-    s.flexed(s.row(.{ .size = .{ .px(60), .px(80) }, .gap = 4 }, .{
+    // flex-wrap: wrap on a row: Flex.Style.wrap; align-content: Flex.Style.lines. Named, so
+    // the runtime page has both flex columns and `semantics`.
+    s.named(s.flexed(s.row(.{ .size = .{ .px(60), .px(80) }, .gap = 4 }, .{
         label.ct.label(theme, "one"),
         label.ct.label(theme, "two"),
         label.ct.label(theme, "three"),
-    }), .{ .wrap = true, .lines = .center }),
+    }), .{ .wrap = true, .lines = .center }), "Tags"),
     // align-content: space-between, and normal (unset): Flex.Style.line_space.
     s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two"), label.ct.label(theme, "three") }), .{ .wrap = true, .line_space = .between }),
     s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two") }), .{ .wrap = true, .line_space = .stretch }),

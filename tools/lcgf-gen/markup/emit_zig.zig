@@ -1176,12 +1176,17 @@ pub const Emit = struct {
             \\    before: State = .{},
             \\
         );
+        // Fields first, then the declarations: Zig allows no declaration between fields.
+        var decls: std.ArrayList(u8) = .empty;
         const named = e.namedCount();
         if (named > 0) e.print(
             \\    /// Tree rows of the nodes with an accessible name, as this frame built them (none
             \\    /// for one it did not build).
             \\    named: [{d}]u32 = @splat(lcgf.types.none),
             \\
+        , .{named});
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
+        if (named > 0) e.print(
             \\    /// Names the nodes with an accessible name (`aria-label`, a `<label>`'s text) in `sem`
             \\    /// (`Semantics.label`), their bytes added to the frame's strings `str`. A host with
             \\    /// an accessibility bridge calls it after each built frame, before `a11y.names`.
@@ -1194,7 +1199,8 @@ pub const Emit = struct {
             \\    }}
             \\
             \\
-        , .{ named, e.namedList() });
+        , .{e.namedList()});
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         const flex = e.hasFlex();
         const paragraphs = e.paragraphTable().len > 0;
         if (flex) e.write(
@@ -1216,6 +1222,9 @@ pub const Emit = struct {
             \\    /// page does (`layout.snapSubtree`).
             \\    regions: [{d}]u32 = @splat(lcgf.types.none),
             \\
+        , .{e.regionCount()});
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
+        if (regions) e.print(
             \\    /// Lays the frame out (with this page's {s}), puts each region's content on the
             \\    /// grid from the region's snapped corner, and paints.
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
@@ -1226,7 +1235,6 @@ pub const Emit = struct {
             \\
             \\
         , .{
-            e.regionCount(),
             if (flex and paragraphs) "flex rules and paragraph styles" else if (flex) "flex rules" else if (paragraphs) "paragraph styles" else "font",
             if (flex and paragraphs) "layoutFlexParagraphs" else if (flex) "layoutFlex" else if (paragraphs) "layoutParagraphs" else "layoutWith",
             e.fontExpr(paragraphs),
@@ -1246,12 +1254,17 @@ pub const Emit = struct {
             e.fontExpr(paragraphs),
             if (flex) ", &ui.flex.?" else "",
         });
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (tokens.len > 0) e.write(
             \\    /// The caller's theme tokens; point it at your table.
             \\    tokens: *const ThemeTable = &default_tokens,
             \\    /// The table's generation the last build read.
             \\    seen: u32 = 0,
             \\
+            \\
+        );
+        e.write(decls.items);
+        if (tokens.len > 0) e.write(
             \\    /// Whether the tokens changed since the last build, which then lays the page out again.
             \\    pub fn themeChanged(ui: *const Ui) bool {
             \\        return ui.tokens.changedSince(ui.seen);
