@@ -580,10 +580,6 @@ pub const Lowerer = struct {
                 l.ds.err(l.c.sels.items(.loc)[d.sel], "state CSS on <{s}> is not lowered: it styles a <button>, a checkbox or a switch outside lcgf-each; other boxes need an interactive box (engine spec F8)", .{l.tag(n)});
             return;
         }
-        if (!std.meta.eql(l.page.theme, ir.Theme{})) {
-            l.ds.err(l.loc(n), "a widget with state CSS is a recipe widget, drawn with the stock tokens; it cannot take the page's --lcgf-* theme yet", .{});
-            return;
-        }
         std.mem.sort(cascade.Dynamic, entries.items, {}, struct {
             fn less(_: void, a: cascade.Dynamic, b: cascade.Dynamic) bool {
                 return a.key < b.key;

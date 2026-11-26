@@ -1,7 +1,8 @@
 //! states, written by hand: buttons and a checkbox with state CSS are recipe widgets. Each
 //! recipe is the stock one with a rule per CSS rule: `button:hover` requires `hovered`,
 //! `:active` `held`, `:focus-visible` `focus_visible`, `:checked` `checked`. `#keep`'s
-//! background outranks `button:hover`'s, so its hover rule only sets the text colour.
+//! background outranks `button:hover`'s, so its hover rule only sets the text colour. The
+//! recipes read the page theme as tokens.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -36,12 +37,20 @@ const recipe_on: recipes.Recipe = .{ .parts = recipes.model.checkbox.parts, .rul
     .{ .part = style.Parts.background, .require = .{ .checked = true }, .declarations = &.{style.set(.fill, .rgb(64, 160, 96))} },
 }) };
 
+/// The page theme as recipe tokens, so the recipe widgets match the theme widgets.
+const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
+    .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
+    .space = .{ 2, 4, theme.gap, theme.pad, 12 },
+    .radius = .{ 0, 2, theme.radius, 6, 8 },
+    .text_size = .{ 11, 12, theme.text_px, 18, 24 },
+}, .{}) }} };
+
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 
 pub const spec = s.col(body, .{
-    recipes.ct.button(.go, "Go", .{ .recipe = recipe_go }),
-    recipes.ct.button(.keep, "Keep", .{ .recipe = recipe_keep }),
-    recipes.ct.checkbox(.on, .on, "On", .{ .recipe = recipe_on }),
+    recipes.ct.button(.go, "Go", .{ .recipe = recipe_go, .tokens = recipe_tokens }),
+    recipes.ct.button(.keep, "Keep", .{ .recipe = recipe_keep, .tokens = recipe_tokens }),
+    recipes.ct.checkbox(.on, .on, "On", .{ .recipe = recipe_on, .tokens = recipe_tokens }),
 });
 
 pub const limits: lcgf.context.Limits = .{ .nodes = 32, .texts = 8, .customs = 4, .strings = 1024, .depth = 8 };
@@ -52,9 +61,9 @@ pub const App = struct {
 
     pub fn build(app: *App, f: *Frame) void {
         _ = f.open(.none, body);
-        _ = recipes.button(f, .from("go"), "Go", .{ .recipe = recipe_go }) catch unreachable;
-        _ = recipes.button(f, .from("keep"), "Keep", .{ .recipe = recipe_keep }) catch unreachable;
-        _ = recipes.checkbox(f, .from("on"), &app.on, "On", .{ .recipe = recipe_on }) catch unreachable;
+        _ = recipes.button(f, .from("go"), "Go", .{ .recipe = recipe_go, .tokens = recipe_tokens }) catch unreachable;
+        _ = recipes.button(f, .from("keep"), "Keep", .{ .recipe = recipe_keep, .tokens = recipe_tokens }) catch unreachable;
+        _ = recipes.checkbox(f, .from("on"), &app.on, "On", .{ .recipe = recipe_on, .tokens = recipe_tokens }) catch unreachable;
         f.close();
     }
 };

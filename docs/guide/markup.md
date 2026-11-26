@@ -393,8 +393,8 @@ one, then one rule per CSS rule in cascade order: the widget's static CSS, then 
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
 browser. A state rule sets `background-color`, `color`, `border-color`, `border-width`,
 `border-style: solid` and `opacity`; on a checkbox or switch, the colours and border are the
-box's. A recipe widget draws with the stock tokens, so it does not take the page's
-`--lcgf-*` theme yet. State CSS on any other box, on an ancestor (`div:hover button`), inside
+box's. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
+looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.
 
 ## What is not lowered
