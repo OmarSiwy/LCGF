@@ -334,8 +334,11 @@ pub const ct = struct {
 
     /// The scrim and the list of select `id`, with the same arguments as its `select`.
     pub fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec {
-        const W = Comptime(th, @tagName(id), @tagName(field), opts);
-        const name = @tagName(id);
+        return listOf(Comptime(th, @tagName(id), @tagName(field), opts), @tagName(id), field, opts);
+    }
+
+    /// `list` for the comptime select `W` (`ComptimeWith`), whose button draws another way.
+    pub fn listOf(comptime W: type, comptime name: [:0]const u8, comptime field: @EnumLiteral(), comptime opts: Options) Spec {
         comptime var rows: []const Spec = &.{};
         inline for (opts.texts, 0..) |_, k| {
             inline for (opts.groups) |g| if (g.at == k) {
@@ -352,6 +355,12 @@ pub const ct = struct {
 /// every part's response and the keys through `advance`, as `button` does at run time, and
 /// keeps the button's rect for the list's `push`.
 pub fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options) type {
+    return ComptimeWith(th, id, field, opts, null);
+}
+
+/// `Comptime` whose button `Face.push` builds instead (a recipe's look, `recipes.ct.select`);
+/// the list, the keys and the pointer stay this select's.
+pub fn ComptimeWith(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options, comptime Face: ?type) type {
     if (opts.texts.len == 0) @compileError("select '" ++ id ++ "': no options");
     if (opts.texts.len >= menu.no_item) @compileError("select '" ++ id ++ "': too many options");
     return struct {
@@ -376,6 +385,7 @@ pub fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: [
             }
 
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                if (Face) |F| return F.push(ui, n, parent, next, in);
                 const tb = &ui.tables;
                 const st: SelectState = @field(ui.signals.state, field);
                 const b = tb.t.push(parent, .hash(id), &valued(faced(&th, n.style, ui.response(next.*, in)), st));

@@ -1000,7 +1000,7 @@ pub const Lowerer = struct {
         };
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a select, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1086,16 +1086,16 @@ pub const Lowerer = struct {
         return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield, .search => !l.page.nodes.items(.secure)[x],
-            .textarea, .number => true,
+            .textarea, .number, .select => true,
             else => false,
         };
     }
 
     /// Recipe widgets whose builders take no Fade or Clock: a transition or animation on them
     /// stays an error.
-    // ponytail: add Fade/Clock to the radio, search and text area builders when asked.
+    // ponytail: add Fade/Clock to the radio, search, text area and select builders when asked.
     fn composite(_: *const Lowerer, kind: ir.Kind) bool {
-        return kind == .radio or kind == .search or kind == .textarea;
+        return kind == .radio or kind == .search or kind == .textarea or kind == .select;
     }
 
     /// The first `<input type=radio>` of document node `n`'s group when `n` is a later one.

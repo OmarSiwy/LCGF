@@ -4,7 +4,8 @@
 //! on:click; a toggle button flips its bound field; a radio group's state rules style each
 //! option under that option's own states; a search field's root is the box around its field and
 //! Clear button, which still clears it; a text area takes the editor recipe and its validation;
-//! a number field is :invalid while its typed text is outside min..max.
+//! a number field is :invalid while its typed text is outside min..max; a select's button takes
+//! the recipe while its list stays the theme select's.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -17,7 +18,7 @@ const Color = lcgf.types.Color;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{}, qty: lcgf.widgets_number.Number = .{} };
+pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{}, qty: lcgf.widgets_number.Number = .{}, shape: lcgf.widgets_select.SelectState = .{} };
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -55,16 +56,24 @@ const recipe_qty: recipes.Recipe = .{ .parts = recipes.model.input.parts, .rules
 }) };
 const qty_range: lcgf.widgets_number.Range = .{ .lo = 0, .hi = 10 };
 
-const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
+const recipe_shape: recipes.Recipe = .{ .parts = recipes.model.select.parts, .rules = &(recipes.model.button_rules ++ [_]style.Rule{
+    .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, blue)} },
+}) };
+const shapes: lcgf.widgets_select.Options = .{ .texts = &.{ "Circle", "Square" } };
+const shape_config: recipes.ct.Config = .{ .recipe = recipe_shape, .tokens = recipe_tokens };
 
-pub const spec = s.col(body, .{
+const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
+const page_root: lcgf.types.Style = .{ .size = .{ .fill, .fill } };
+
+pub const spec = s.col(page_root, .{ s.col(body, .{
     recipes.ct.link(.docs, "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }),
     recipes.ct.toggle(.bold, .bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }),
     recipes.ct.radio(.size, .size, .{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }),
     recipes.ct.search(.find, .find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }),
     recipes.ct.textarea(.notes, .notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }),
     recipes.ct.number(.qty, .qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }),
-});
+    recipes.ct.select(theme, .shape, .shape, shapes, shape_config),
+}), recipes.ct.selectList(theme, .shape, .shape, shapes, shape_config) });
 
 pub const limits: lcgf.context.Limits = .{ .nodes = 256, .texts = 64, .customs = 4, .strings = 1024, .depth = 8 };
 
@@ -75,8 +84,10 @@ pub const App = struct {
     find: lcgf.widgets_textfield.Text(256) = .{},
     notes: lcgf.widgets_textfield.Text(256) = .{},
     qty: lcgf.widgets_number.Number = .{},
+    shape: lcgf.widgets_select.SelectState = .{},
 
     pub fn build(app: *App, f: *Frame) void {
+        _ = f.open(.none, page_root);
         _ = f.open(.none, body);
         _ = recipes.link(f, .from("docs"), "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.toggle(f, .from("bold"), &app.bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }) catch unreachable;
@@ -84,13 +95,16 @@ pub const App = struct {
         _ = recipes.search(f, .from("find"), &app.find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.textarea(f, .from("notes"), &app.notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }) catch unreachable;
         _ = recipes.number(f, .from("qty"), &app.qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }) catch unreachable;
+        _ = recipes.select(f, "shape", comptime lcgf.widgets_select.positional(2), &app.shape, shapes.texts, .{ .recipe = recipe_shape, .tokens = recipe_tokens }) catch unreachable;
+        f.close();
+        lcgf.widgets_select.listGrouped(f, &theme, "shape", comptime lcgf.widgets_select.positional(2), &app.shape, shapes.texts, &.{});
         f.close();
     }
 };
 
 /// Hover the link and click it, click the toggle button twice, pick Small, then type into the
 /// search field and clear it, type into the text area, then type past the number's max and
-/// press Enter.
+/// press Enter, then open the select and pick Square.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -140,17 +154,31 @@ pub const replay =
     \\frame
     \\press 40
     \\frame
+    \\pointer 40 250
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\press 81
+    \\frame
+    \\press 40
+    \\frame
 ;
 
 pub fn Handlers(comptime Ui: type) type {
     return struct {
         opens: u32 = 0,
         finds: u32 = 0,
+        shape: u32 = 99,
         pub fn open_docs(h: *@This(), _: *Ui) void {
             h.opens += 1;
         }
         pub fn found(h: *@This(), _: *Ui, _: []const u8) void {
             h.finds += 1;
+        }
+        pub fn reshaped(h: *@This(), _: *Ui, value: u32) void {
+            h.shape = value;
         }
     };
 }
@@ -163,7 +191,8 @@ fn center(r: lcgf.types.Rect) [2]f32 {
 /// its hover fill and flips `bold`; the Small option alone takes its hover fill, and its click
 /// selects it; the search field takes its hover fill on the box, Escape empties it and reaches
 /// found, and the Clear button empties it; the required text area is :invalid until it has text;
-/// the number field is :invalid while its text reads above max, and Enter clamps it to max.
+/// the number field is :invalid while its text reads above max, and Enter clamps it to max;
+/// the select's button takes its hover fill, opens its list, and Down and Enter pick Square.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
@@ -263,4 +292,18 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     t = p.frame(h, &in).tree;
     try std.testing.expectEqual(10, p.ui.signals.state.qty.value);
     try std.testing.expect(red.bitsOf() != t.c.look[qty].border_color);
+    const shape = t.find(.from("shape"));
+    in.pointer = center(t.rect(shape));
+    t = p.frame(h, &in).tree;
+    try std.testing.expectEqual(blue.bitsOf(), t.c.look[shape].fill);
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    _ = p.frame(h, &in);
+    try std.testing.expect(p.ui.signals.state.shape.menu.open);
+    const down_enter = [_]lcgf.input.Input.Event{ .{ .kind = .press, .code = 0x51 }, .{ .kind = .press, .code = 0x28 } };
+    in.events = &down_enter;
+    _ = p.frame(h, &in);
+    in.events = &.{};
+    try std.testing.expectEqual(1, h.shape);
 }

@@ -592,7 +592,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                         ui.focus = null;
                         for (0..E.focus_order.len) |_| {
                             w = E.nextFocus(w, e.mods.shift);
-                            if (active[@backingInt(w.?)] != 0 and (comptime !has_input_availability or ui.input_mask.allows(w.?))) {
+                            if (active[@backingInt(w.?)] != 0 and ((comptime !has_input_availability) or ui.input_mask.allows(w.?))) {
                                 ui.focus = w;
                                 break;
                             }

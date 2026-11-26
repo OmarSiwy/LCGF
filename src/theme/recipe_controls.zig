@@ -17,6 +17,10 @@ const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const search_zig = @import("../widgets/search.zig");
 const number_zig = @import("../widgets/number.zig");
+const select_zig = @import("../widgets/select.zig");
+const menu_zig = @import("../widgets/menu.zig");
+const popover_zig = @import("../widgets/popover.zig");
+const a11y_tree = @import("../a11y/tree.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
 const simd = @import("../core/simd.zig");
 const tweens = @import("../anim/tweens.zig");
@@ -421,6 +425,30 @@ pub fn link(f: *Frame, id: types.Id, text: []const u8, options: Options) style.E
     _ = label(f, &control, text);
     end(f, &control);
     return control.response;
+}
+
+/// The button of select `name` (`select.button`) in the recipe's look (`model.select`); its
+/// list is `select.list` or `listGrouped`, as for the theme select.
+pub fn select(f: *Frame, comptime name: []const u8, comptime def: menu_zig.Def, st: *select_zig.SelectState, texts: []const []const u8, options: Options) style.Error!types.Response {
+    std.debug.assert(texts.len == def.items.len);
+    try checkSemantics(f, options);
+    const recipe = options.recipe orelse model.select;
+    const inter = &f.ctx.inter;
+    // Every response before anything is built, as `select.button` asks them.
+    const response = try policyResponse(f, .from(name), recipe, options, options.states);
+    var hits: menu_zig.Hits = .{ .toggle = response.clicked, .outside = inter.response(.from(popover_zig.partName(name, "scrim"))).pressed };
+    inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(popover_zig.partName(name, o))));
+    st.* = select_zig.advance(def, st.*, hits, f.in.events);
+    const states = statesFor(options.states, response, visibleFocus(f, options));
+    var control = try resolvedControl(f, recipe, options, states);
+    control.node = f.open(.from(name), select_zig.valued(control.root.box, st.*));
+    _ = f.interact(control.node, .button);
+    f.tree().c.role[control.node.ix()] = @backingInt(a11y_tree.Role.combobox);
+    _ = label(f, &control, texts[st.selected]);
+    control.response = response;
+    end(f, &control);
+    expose(options.semantics, control.node, states);
+    return response;
 }
 
 /// A toggle button over `value`, `States.toggled` while pressed; it flips as a button fires

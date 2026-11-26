@@ -22,6 +22,8 @@ const toggle_zig = @import("../widgets/toggle.zig");
 const search_zig = @import("../widgets/search.zig");
 const textarea_zig = @import("../widgets/textarea.zig");
 const number_zig = @import("../widgets/number.zig");
+const select_zig = @import("../widgets/select.zig");
+const a11y = @import("../a11y/tree.zig");
 const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
@@ -585,6 +587,48 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 },
             }
             return null;
+        }
+    };
+}
+
+/// The button of select `id` over the `SelectState` field `field`, as `select.ct.select`, in
+/// the recipe's look (`model.select`); its list is `selectList` with the same arguments.
+pub fn select(comptime th: base.Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: select_zig.Options, comptime config: Config) Spec {
+    const S = SelectOf(th, @tagName(id), @tagName(field), opts, config);
+    return .{ .kind = .row, .id = @tagName(id), .bind = @tagName(field), .widget = S.Button, .children = &.{ .{ .kind = .label }, .{ .kind = .col } } };
+}
+
+/// The scrim and the list of a recipe `select`, with the same arguments.
+pub fn selectList(comptime th: base.Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: select_zig.Options, comptime config: Config) Spec {
+    return select_zig.ct.listOf(SelectOf(th, @tagName(id), @tagName(field), opts, config), @tagName(id), field, opts);
+}
+
+fn SelectOf(comptime th: base.Theme, comptime name: [:0]const u8, comptime field: []const u8, comptime opts: select_zig.Options, comptime config: Config) type {
+    return select_zig.ComptimeWith(th, name, field, opts, SelectFace(name, field, opts.texts, config));
+}
+
+fn SelectFace(comptime name: [:0]const u8, comptime field: []const u8, comptime texts: []const []const u8, comptime config: Config) type {
+    comptime var stocked = config;
+    if (stocked.recipe == null) stocked.recipe = model.select;
+    const W = Widget(.button, name, "", "", .{}, stocked, true);
+    return struct {
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const st: select_zig.SelectState = @field(ui.signals.state, field);
+            var response = ui.response(next.*, in);
+            response.focused = ui.focus == @field(Ui.Events.Widget, name);
+            const use = W.useFor(ui, in, response);
+            const root = W.resolvePart(ui, Parts.root, use);
+            var child = use;
+            child.parent = &root;
+            child.local = &.{};
+            const t = &ui.tables.t;
+            const b = t.push(parent, .hash(name), &select_zig.valued(root.box, st));
+            t.c.role[b] = @backingInt(a11y.Role.combobox);
+            pushText(ui, b, texts[st.selected], W.resolvePart(ui, Parts.label, child));
+            _ = outline.append(t, b, @fromBackingInt(b), controls.outlineOptions(W.resolvePart(ui, Parts.focus, child), config.focus_offset));
+            t.seal(b);
+            next.* += comptime @import("../comptime/flatten.zig").count(n);
         }
     };
 }

@@ -530,7 +530,12 @@ pub const Emit = struct {
                 e.componentCall(n, false, 0, has_children);
                 if (has_children) inner_close.appendSlice(e.arena, "} })") catch unreachable;
             },
-            .select, .select_list => {
+            .select, .select_list => if (e.selectOf(n)) |b| {
+                // A recipe select: its list is of the same comptime select, so it takes the button's config.
+                e.print("recipes.ct.{s}(theme, .{f}, .{f}, ", .{ if (n.kind == .select) "select" else "selectList", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.selectOptions(n);
+                e.print(", {s})", .{e.config(b, false)});
+            } else {
                 e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("select"), if (n.kind == .select) "select" else "list", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.selectOptions(n);
                 e.write(")");
@@ -643,6 +648,13 @@ pub const Emit = struct {
             e.string(c);
         }
         e.write(" }");
+    }
+
+    /// The button of recipe select `n` (the button or its list), or null when it is a theme one.
+    fn selectOf(e: *Emit, n: ir.Node) ?ir.Node {
+        const nodes = e.page.nodes.slice();
+        for (0..nodes.len) |i| if (nodes.items(.kind)[i] == .select and nodes.items(.recipe)[i].len > 0 and std.mem.eql(u8, nodes.items(.id)[i], n.id)) return nodes.get(i);
+        return null;
     }
 
     /// A select's `widgets_select.Options`: its captions and group headers.
@@ -801,11 +813,13 @@ pub const Emit = struct {
                 .search => "search",
                 .textarea => "editor",
                 .number => "input",
+                .select => "select",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
                 .@"switch" => "switch",
                 .search => "input",
+                .select => "button",
                 else => stock,
             };
             // A checkbox's or switch's colours and border are its box's; the others' their root's.
@@ -1361,12 +1375,13 @@ pub const Emit = struct {
                 return "";
             },
             .select => {
-                const face = e.rtFace(n);
-                e.print("_ = {s}.{s}(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), e.faced("button", face), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
+                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
+                if (n.recipe.len > 0)
+                    e.print("_ = recipes.select(f, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) })
+                else
+                    e.print("_ = {s}.{s}(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), e.faced("button", face), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
                 e.rtTexts(n.captions);
-                e.write(" }");
-                e.write(face);
-                e.write(");");
+                if (n.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
                 return "";
             },
             .select_list => {

@@ -16,6 +16,7 @@ const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const radio_zig = @import("../widgets/radio.zig");
 const search_zig = @import("../widgets/search.zig");
+const select_zig = @import("../widgets/select.zig");
 pub const Parts = style.Parts;
 pub const Id = types.Id;
 pub const States = style.States;
@@ -214,6 +215,13 @@ const focus_part: Part = .{ .id = Parts.focus, .base = .{ .box = .{ .float = tru
 
 pub const button: Recipe = .{
     .parts = &.{ .{ .id = Parts.root, .base = .{ .box = button_zig.buttonStyle(&.default) } }, label_part, icon_part, focus_part },
+    .rules = &button_rules,
+};
+
+/// A select's button: the button's look, at least 120 wide, its text at the start
+/// (`select.buttonStyle`).
+pub const select: Recipe = .{
+    .parts = &.{ .{ .id = Parts.root, .base = .{ .box = select_zig.buttonStyle(&.default, .{}) } }, label_part, icon_part, focus_part },
     .rules = &button_rules,
 };
 

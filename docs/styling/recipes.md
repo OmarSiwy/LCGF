@@ -135,8 +135,8 @@ the represented values. The geometry helper maps pointer positions through the t
 transform and padding before calling the existing value behavior.
 
 The compile-time builders are `recipes.ct.button`, `link`, `toggle`, `checkbox`,
-`switchControl`, `slider`, `textfield`, `search`, `textarea`, `number`, `radio`, `range` and
-`spinner`. Their `Config` can bind `states_field`,
+`switchControl`, `slider`, `textfield`, `search`, `textarea`, `number`, `select` (with
+`selectList`), `radio`, `range` and `spinner`. Their `Config` can bind `states_field`,
 `environment_field`, `tokens_field` and `recipe_field` to ordinary application state fields.
 Actual pointer/keyboard replay tests compare production draw output and semantic role/value
 columns with runtime builders. A runtime resolution failure in this frontend is returned in

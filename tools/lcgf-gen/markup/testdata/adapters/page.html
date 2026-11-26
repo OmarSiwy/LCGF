@@ -9,6 +9,7 @@
     input[type=search]:hover { background-color: #c8b450; }
     textarea:invalid { border-color: #c85050; }
     input[type=number]:invalid { border-color: #c85050; }
+    select:hover { background-color: #5078c8; }
   </style>
 </head>
 <body>
@@ -19,5 +20,6 @@
   <input type="search" id="find" bind:value="find" placeholder="Find" on:change="found">
   <textarea id="notes" bind:value="notes" rows="2" placeholder="Notes" required></textarea>
   <input type="number" id="qty" bind:value="qty" min="0" max="10">
+  <select id="shape" bind:value="shape" on:change="reshaped"><option>Circle</option><option>Square</option></select>
 </body>
 </html>
