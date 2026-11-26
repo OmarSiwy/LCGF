@@ -164,6 +164,8 @@ pub const Node = struct {
     disabled: bool = false,
     /// A text field's `required`, `minlength` and `maxlength`, for `:invalid` and `:valid`.
     validation: lcgf.theme_recipes.controls.Validation = .{},
+    /// CSS `transition` of a recipe widget or box; its state is the `<id>_fade` field.
+    transition: lcgf.theme_recipes.controls.Transition = .{},
 };
 
 /// One node field for every widget's restyled part: one more field per part would exceed
@@ -252,6 +254,8 @@ pub const FieldType = enum(u8) {
     number,
     /// `[2]f32`.
     pair,
+    /// `theme_recipes.controls.Fade`: a transition's state.
+    fade,
     /// An enum of `Field.cases` (`lcgf-switch`).
     @"enum",
     /// `widgets_select.SelectState`; its value is `.selected`.

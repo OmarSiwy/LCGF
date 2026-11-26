@@ -237,7 +237,7 @@
         .{ .kind = "property", .name = "accent-color", .status = .mapped, .target = "on :root: Theme.accent base.zig:103, over --lcgf-accent; on any other element an error", .fixture = "content" },
         .{ .kind = "property", .name = "direction", .status = .planned, .diagnostic = "direction is not lowered yet" },
         .{ .kind = "property", .name = "box-sizing", .status = .planned, .diagnostic = "box-sizing is not lowered yet; LCGF sizes are border-box" },
-        .{ .kind = "property", .name = "transition", .status = .mapped, .target = "on a box nothing restyles at run time (no widget, state CSS, @media or run-time token): it never runs, so nothing to emit; elsewhere an error, as LCGF restyles instantly", .fixture = "supports" },
+        .{ .kind = "property", .name = "transition", .status = .mapped, .target = "on a recipe widget or box: controls.Transition over its root's colours and opacity, its leg in a generated <id>_fade field; on a box nothing restyles at run time, nothing to emit", .fixture = "transitions" },
         .{ .kind = "property", .name = "transition-property", .status = .planned, .diagnostic = "write the transition shorthand" },
         .{ .kind = "property", .name = "transition-duration", .status = .planned, .diagnostic = "write the transition shorthand" },
         .{ .kind = "property", .name = "transition-timing-function", .status = .planned, .diagnostic = "write the transition shorthand" },
@@ -323,5 +323,6 @@
         .{ .name = "boxes" },
         .{ .name = "disabled" },
         .{ .name = "inputs" },
+        .{ .name = "transitions" },
     },
 }

@@ -1,9 +1,12 @@
 <!doctype html>
 <style>
-  button { transition: background-color 150ms; }
+  #a { transition: transform 1s; }
   #b:hover { transition: color 1s; }
   p { transition-duration: 1s; animation: spin 1s; }
   @keyframes spin { to { opacity: 0; } }
   div { transition: color 0s, opacity 0ms; }
+  #c { transition: color 1s 0.5s; }
+  #d { transition: color 1s, opacity 2s; }
+  input { transition: color 1s; }
 </style>
-<body><p>x</p><div><button id="a">A</button><button id="b">B</button></div></body>
+<body><p>x</p><div><button id="a">A</button><button id="b">B</button><button id="c">C</button><button id="d">D</button><input type="number" id="n" bind:value="n"></div></body>

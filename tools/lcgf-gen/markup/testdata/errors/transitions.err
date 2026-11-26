@@ -10,6 +10,15 @@ transitions.html:6:3: error: keyframe animations are not lowered yet: they run w
 transitions.html:4:14: error: transition under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform
   #b:hover { transition: color 1s; }
              ^
-transitions.html:3:12: error: transition on <button>: its look changes at run time (hover, press, state CSS, @media or a run-time token) and LCGF restyles instantly; transitions are not lowered yet
-  button { transition: background-color 150ms; }
-           ^
+transitions.html:3:20: error: a transition of transform is not lowered; background-color, border-color, color and opacity ease
+  #a { transition: transform 1s; }
+                   ^
+transitions.html:8:29: error: a transition delay is not lowered
+  #c { transition: color 1s 0.5s; }
+                            ^
+transitions.html:9:8: error: transitions of one element share one duration and easing here
+  #d { transition: color 1s, opacity 2s; }
+       ^
+transitions.html:10:11: error: transition on <input>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly
+  input { transition: color 1s; }
+          ^

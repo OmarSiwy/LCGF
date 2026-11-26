@@ -545,12 +545,15 @@ pub const Lowerer = struct {
             } else true;
             if (first) l.recipeOf(d.node, &reported);
         }
-        // A disabled widget without state CSS is a recipe widget too: only recipes disable.
+        // A disabled widget, or one with a transition, is a recipe widget without state CSS
+        // too: only recipes disable and ease.
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
             const x = l.ir_of[n];
-            if (x == none or !nodes.items(.disabled)[x] or nodes.items(.recipe)[x].len > 0 or nodes.items(.kind)[x] == .container) continue;
-            l.recipeOf(n, &reported);
+            if (x == none or nodes.items(.recipe)[x].len > 0) continue;
+            const kind = nodes.items(.kind)[x];
+            const eases = l.transitionOf(n) != null and (kind == .button or kind == .checkbox or kind == .@"switch" or kind == .slider or (kind == .textfield and !nodes.items(.secure)[x])) and l.eachOf(n) == none;
+            if ((nodes.items(.disabled)[x] and kind != .container) or eases) l.recipeOf(n, &reported);
         }
     }
 
@@ -572,30 +575,118 @@ pub const Lowerer = struct {
         return false;
     }
 
-    /// A `transition` animates a change of style. On a box nothing restyles at run time it
-    /// never runs, which is honoured by emitting nothing; on a widget, a recipe widget or a
-    /// box with run-time tokens it would, and LCGF restyles instantly, so it is an error. A
+    /// The tokens of node `n`'s `transition` when it animates anything (a duration above 0),
+    /// else null.
+    fn transitionOf(l: *Lowerer, n: u32) ?[2]u32 {
+        const e = l.k.get(n, .transition);
+        if (e.decl == none) return null;
+        const d = l.c.decls.get(e.decl);
+        const r = l.substitute(n, d.first, d.end, d.loc) orelse return null;
+        for (r[0]..r[1]) |t| {
+            const time = l.c.toks.items(.type)[t] == .dimension and (css.eq(l.c.toks.items(.str)[t], "s") or css.eq(l.c.toks.items(.str)[t], "ms"));
+            if (time and l.c.toks.items(.num)[t] != 0) return r;
+        }
+        return null;
+    }
+
+    /// A `transition` animates a change of style. On a recipe widget or box it eases the
+    /// root's colours and opacity (`controls.Transition`, kept in a generated `<id>_fade`
+    /// field). On a box nothing restyles at run time it never runs, which is honoured by
+    /// emitting nothing; on a theme widget or a box with run-time tokens it is an error. A
     /// transition of `none` or of zero durations animates nothing anywhere.
     fn checkTransitions(l: *Lowerer) void {
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
-            const e = l.k.get(n, .transition);
             const x = l.ir_of[n];
-            if (e.decl == none or x == none) continue;
-            const d = l.c.decls.get(e.decl);
-            const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
-            const animates = for (r[0]..r[1]) |t| {
-                const time = l.c.toks.items(.type)[t] == .dimension and (css.eq(l.c.toks.items(.str)[t], "s") or css.eq(l.c.toks.items(.str)[t], "ms"));
-                if (time and l.c.toks.items(.num)[t] != 0) break true;
-            } else false;
-            if (!animates) continue;
+            if (x == none) continue;
+            const r = l.transitionOf(n) orelse continue;
+            const at = l.c.decls.items(.loc)[l.k.get(n, .transition).decl];
             const node = l.page.nodes.get(x);
-            const restyled = node.recipe.len > 0 or node.uses.len > 0 or node.text_uses.color != none or node.text_uses.px != none or switch (node.kind) {
+            if (node.recipe.len > 0) {
+                const t = l.transition(r, at) orelse continue;
+                l.page.nodes.items(.transition)[x] = t;
+                l.field(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition");
+                continue;
+            }
+            const restyled = node.uses.len > 0 or node.text_uses.color != none or node.text_uses.px != none or switch (node.kind) {
                 .container, .landmark, .label, .text, .heading, .when, .choice, .list, .each, .spacer, .separator => false,
                 else => true,
             };
-            if (restyled) l.ds.err(d.loc, "transition on <{s}>: its look changes at run time (hover, press, state CSS, @media or a run-time token) and LCGF restyles instantly; transitions are not lowered yet", .{l.tag(n)});
+            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a checkbox, a switch, a range or a text field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
         }
+    }
+
+    /// `transition: <property> <duration> [<easing>], …` as one `controls.Transition`: one
+    /// duration and easing for all, colours and opacity only, no delay.
+    fn transition(l: *Lowerer, r: [2]u32, at: Loc) ?lcgf.theme_recipes.controls.Transition {
+        var out: lcgf.theme_recipes.controls.Transition = .{};
+        var timed = false;
+        var rd: values.Reader = .init(l.c, r[0], r[1]);
+        while (!rd.done()) {
+            const s0 = rd.i;
+            const e = rd.untilComma();
+            rd.i = @min(e + 1, rd.end);
+            var item: values.Reader = .init(l.c, s0, e);
+            var seconds: ?f32 = null;
+            var ease: ?lcgf.tweens.Ease = null;
+            var props: [4]bool = @splat(false);
+            while (item.next()) |t| {
+                const ty = l.c.toks.items(.type)[t];
+                const str = l.c.toks.items(.str)[t];
+                if (ty == .dimension and (css.eq(str, "s") or css.eq(str, "ms"))) {
+                    const v: f32 = @floatCast(l.c.toks.items(.num)[t]);
+                    const secs = if (css.eq(str, "ms")) v / 1000 else v;
+                    if (seconds != null) {
+                        if (secs != 0) {
+                            l.ds.err(l.c.tokLoc(t), "a transition delay is not lowered", .{});
+                            return null;
+                        }
+                    } else seconds = secs;
+                    continue;
+                }
+                if (ty != .ident) {
+                    l.ds.err(l.c.tokLoc(t), "transition takes properties, a duration and linear, ease, ease-in, ease-out or ease-in-out", .{});
+                    return null;
+                }
+                const easings = .{ .{ "linear", .linear }, .{ "ease", .in_out }, .{ "ease-in-out", .in_out }, .{ "ease-in", .in_cubic }, .{ "ease-out", .out_cubic } };
+                const found = inline for (easings) |pe| {
+                    if (css.eq(str, pe[0])) {
+                        ease = pe[1];
+                        break true;
+                    }
+                } else false;
+                if (found) continue;
+                if (css.eq(str, "all")) {
+                    props = @splat(true);
+                } else if (css.eq(str, "background-color") or css.eq(str, "background")) {
+                    props[0] = true;
+                } else if (css.eq(str, "border-color")) {
+                    props[1] = true;
+                } else if (css.eq(str, "color")) {
+                    props[2] = true;
+                } else if (css.eq(str, "opacity")) {
+                    props[3] = true;
+                } else if (!css.eq(str, "none")) {
+                    l.ds.err(l.c.tokLoc(t), "a transition of {s} is not lowered; background-color, border-color, color and opacity ease", .{str});
+                    return null;
+                }
+            }
+            const secs = seconds orelse 0;
+            if (secs == 0) continue;
+            if (timed and (secs != out.seconds or (ease orelse .in_out) != out.ease)) {
+                l.ds.err(at, "transitions of one element share one duration and easing here", .{});
+                return null;
+            }
+            timed = true;
+            out.seconds = secs;
+            out.ease = ease orelse .in_out;
+            if (std.mem.allEqual(bool, &props, false)) props = @splat(true); // `transition: 0.2s` is `all`
+            out.fill = out.fill or props[0];
+            out.border_color = out.border_color or props[1];
+            out.text_color = out.text_color or props[2];
+            out.opacity = out.opacity or props[3];
+        }
+        return out;
     }
 
     /// The alternatives of `@media` `cond` and the queries around it: the rule holds while

@@ -424,11 +424,15 @@ A list is one recipe rule per query, `not` one per negated feature, `print` neve
 nested queries combine. `@media` on other
 boxes waits for style variants (engine spec F3) and is an error.
 
-`transition` is honoured where nothing restyles the box at run time: a container or text
-with no state CSS, `@media` or run-time token never changes, so its transition never runs
-and nothing is emitted. On a widget, whose face changes with hover and press, or a recipe
-widget, LCGF restyles instantly, so a transition there is an error; one of `none` or zero
-durations is accepted anywhere. Keyframe `animation` is not lowered yet.
+`transition` on a recipe widget or box eases its root's `background-color`, `border-color`,
+`color` and `opacity` (`all` is those four) to each new value: `controls.Transition`, its leg
+kept in a generated `<id>_fade` field of the State and stepped by the input's `dt` in both
+frontends. A widget with a transition is a recipe widget even without state CSS, so the
+stock hover and press colours ease too. One duration and easing per element (`linear`,
+`ease`, `ease-in`, `ease-out`, `ease-in-out`); delays, other properties and transitions on
+other widgets are errors. On a box nothing restyles at run time a transition never runs and
+nothing is emitted; `none` or zero durations animate nothing anywhere. Keyframe `animation`
+is not lowered yet.
 
 ## What is not lowered
 

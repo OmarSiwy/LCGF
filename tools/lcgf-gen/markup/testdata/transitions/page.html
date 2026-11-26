@@ -1,0 +1,17 @@
+<!doctype html>
+<html lcgf-page="transitions">
+<head>
+  <title>Transitions</title>
+  <style>
+    button { transition: background-color 100ms linear, color 100ms linear; }
+    #go:hover { background-color: #c86400; }
+    .card { padding: 8px; background-color: #303440; transition: opacity 0.2s; }
+    .card:hover { opacity: 0.5; }
+  </style>
+</head>
+<body>
+  <button id="go" on:click="go">Go</button>
+  <button id="plain">Plain</button>
+  <div class="card" id="card"><span>Card</span></div>
+</body>
+</html>
