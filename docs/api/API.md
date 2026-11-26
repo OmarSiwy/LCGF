@@ -43,11 +43,12 @@ Input: one plain struct per frame, filled by the host from any window layer.
 ### `Input` (struct)
 Everything the core reads from the host for one frame.
 
-Fields: `time`, `dt`, `viewport`, `scale`, `pointer`, `buttons`, `wheel`, `scroll`, `mods`, `keys`, `text`, `events`, `contacts`, `safe_area`, `appearance`, `redraw`
+Fields: `time`, `dt`, `viewport`, `scale`, `pointer`, `buttons`, `wheel`, `scroll`, `mods`, `keys`, `text`, `events`, `contacts`, `safe_area`, `appearance`, `primary_pointer`, `redraw`
 
 - `outside: [2]f32 = .{ -1, -1 }`: `pointer` when the pointer is outside the window.
 - `Buttons = bitpack struct(u8) { left: bool = false, right: bool = false, middle: bool = false, _: u5 = 0 }`: Mouse buttons held down this frame, one bit each.
 - `Mods = bitpack struct(u8) { shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false, _: u4 = 0 }`: Modifier keys held down this frame, one bit each.
+- `Pointer = enum(u8) { fine, coarse }`
 - `none = types.none`: No contact has the id (`contact` result).
 - `fn contact(in: *const Input, id: u32) u32`: Row of the contact with pointer id `id` in `contacts`, or `none`.
 - `fn typed(in: *const Input, e: Event) []const u8`: The UTF-8 a `.text` event typed; empty for key events.
@@ -2210,6 +2211,8 @@ Optional component recipes with caller-owned data and independent resolution.
 - `icon = controls.icon`
 - `directionalIcon = controls.directionalIcon`
 - `end = controls.end`
+- `beginBox = controls.beginBox`
+- `endBox = controls.endBox`
 - `button = controls.button`
 - `checkbox = controls.checkbox`
 - `switchControl = controls.switchControl`
