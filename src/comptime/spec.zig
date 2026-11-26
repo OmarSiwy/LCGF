@@ -340,8 +340,10 @@ pub fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral
 }
 
 /// `subtree`, live only while the bool state field `condition` is true: `when(.advanced,
-/// col(...))`. Its rows are reserved either way; while the condition is false they take no
-/// space, are not drawn and are not hit, and the parent lays out as if it had no such child.
+/// col(...))`. The field may also be a widget's state struct with `pub fn shown(s) bool`
+/// (an overlay's open flag, as `widgets_select.SelectState` has). Its rows are reserved
+/// either way; while the condition is false they take no space, are not drawn and are not
+/// hit, and the parent lays out as if it had no such child.
 /// A node has one region: to make a list conditional, wrap it in a `col`.
 pub fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec {
     if (subtree.region != null) @compileError("when: the subtree already has a region; wrap it in a col");

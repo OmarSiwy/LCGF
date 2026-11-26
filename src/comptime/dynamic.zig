@@ -226,12 +226,15 @@ pub inline fn maskRegion(m: anytype, kind: RegionKind, row: u32, end: u32, strid
     for (first..end) |j| m[j] &= 0 -% @as(u32, @intFromBool(@as(u32, @intCast(j)) -% lo < len));
 }
 
-/// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1.
+/// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1, a
+/// widget state struct its `shown()`.
 fn number(v: anytype) u32 {
     return switch (@typeInfo(@TypeOf(v))) {
         .int => std.math.cast(u32, v) orelse if (v < 0) 0 else std.math.maxInt(u32),
         .bool => @intFromBool(v),
         .@"enum" => std.math.cast(u32, @backingInt(v)) orelse std.math.maxInt(u32),
+        // A widget's state (an overlay's open flag inside it) says itself: `pub fn shown`.
+        .@"struct" => @intFromBool(v.shown()),
         else => @compileError("a region selects by an integer or bool field, not " ++ @typeName(@TypeOf(v))),
     };
 }
@@ -401,6 +404,22 @@ test "choice: a bool selector is an if/else, false the first alternative, true t
         try testing.expectEqual(!on, m[r.row + 1] != 0);
         try testing.expectEqual(on, m[r.row + 2] != 0);
     }
+}
+
+test "when: a widget state struct selects by its shown()" {
+    const s = @import("spec.zig");
+    const Open = struct {
+        open: bool = false,
+        pub fn shown(o: @This()) bool {
+            return o.open;
+        }
+    };
+    const ui = comptime s.col(.{}, .{s.when(.menu, s.label("list"))});
+    const State = struct { menu: Open = .{} };
+    comptime std.debug.assert(@import("validate.zig").regionError(State, ui.children[0].region.?) == null);
+    comptime std.debug.assert(@import("validate.zig").regionError(struct { menu: struct { open: bool } }, ui.children[0].region.?) != null);
+    const D = Regions(ui);
+    for ([_]bool{ false, true }) |open| try testing.expectEqual(open, D.mask(D.select(State, &.{ .menu = .{ .open = open } }))[1] != 0);
 }
 
 test "nested choices share geometry, and the following sibling has its own row" {
