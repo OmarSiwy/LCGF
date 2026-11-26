@@ -114,14 +114,16 @@ pub const VertexFormat = enum {
     uint32x2,
     uint32x4,
     sint32,
+    sint32x2,
+    sint32x4,
     unorm8x4,
 
     pub fn size(f: VertexFormat) u32 {
         return switch (f) {
             .float32, .uint32, .sint32, .unorm8x4 => 4,
-            .float32x2, .uint32x2 => 8,
+            .float32x2, .uint32x2, .sint32x2 => 8,
             .float32x3 => 12,
-            .float32x4, .uint32x4 => 16,
+            .float32x4, .uint32x4, .sint32x4 => 16,
         };
     }
 };

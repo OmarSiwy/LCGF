@@ -870,6 +870,8 @@ fn vertexFormat(f: VertexFormat) c.DXGI_FORMAT {
         .uint32x2 => c.DXGI_FORMAT_R32G32_UINT,
         .uint32x4 => c.DXGI_FORMAT_R32G32B32A32_UINT,
         .sint32 => c.DXGI_FORMAT_R32_SINT,
+        .sint32x2 => c.DXGI_FORMAT_R32G32_SINT,
+        .sint32x4 => c.DXGI_FORMAT_R32G32B32A32_SINT,
         .unorm8x4 => c.DXGI_FORMAT_R8G8B8A8_UNORM,
     };
 }
@@ -1009,6 +1011,15 @@ test "gpu: upload, render to a texture, sample it in a second pass (WARP, or vkd
     defer once.deinit();
     var k: Check = .{ .d = &d, .once = &once };
     try lcgf.gpu_check.renderToTexture(@This(), shaders, .wrap(&d), &k);
+}
+
+test "gpu: instanced draws from a first instance, integer attributes, an offset buffer (WARP, or vkd3d under Wine)" {
+    var d = try device_mod.Device.init(.{ .adapter = .warp });
+    defer d.deinit();
+    var once = try host.Once.init(&d);
+    defer once.deinit();
+    var k: Check = .{ .d = &d, .once = &once };
+    try lcgf.gpu_check.instancing(@This(), shaders, .wrap(&d), &k);
 }
 
 test "gpu: a compute pass writes a storage buffer the host reads (WARP, or vkd3d under Wine)" {

@@ -228,6 +228,7 @@ pub const Device = struct {
             }
         }
         p.buffer_count = @intCast(d.vertex.buffers.len);
+        p.instance_index = std.mem.indexOf(u8, vs, "gl_InstanceID") != null;
         p.cull = d.primitive.cull_mode;
         p.front_ccw = d.primitive.front_face == .ccw;
         p.restart = d.primitive.strip_index_format != null;
@@ -368,6 +369,9 @@ pub fn RenderPipeline(comptime S: type) type {
         front_ccw: bool = true,
         restart: bool = false,
         alpha_to_coverage: bool = false,
+        /// The vertex shader reads `@builtin(instance_index)`: GL ES's `gl_InstanceID` starts at
+        /// 0 whatever the first instance, so `draw` cannot emulate a first instance for it.
+        instance_index: bool = false,
         blend: ?BlendState = null,
         write_mask: desc.ColorWriteMask = .all,
         pub const Shader = S;
@@ -535,7 +539,14 @@ pub const RenderPass = struct {
     resolve: ?struct { from: gl.Uint, to: gl.Uint } = null,
     mode: gl.Enum = gl.TRIANGLES,
     buffers: [max_vertex_buffers]VertexBuffer = undefined,
+    buffer_count: u8 = 0,
     attributes: [max_vertex_attributes]Attribute = undefined,
+    /// What `setVertexBuffer` bound per slot, so `draw` can rebind the instance-step slots at
+    /// its first instance.
+    bound: [max_vertex_buffers]struct { handle: gl.Uint, offset: u64 } = undefined,
+    /// The first instance the instance-step slots are bound at now.
+    base: u32 = 0,
+    instance_index: bool = false,
     index_type: gl.Enum = gl.UNSIGNED_SHORT,
     index_offset: u64 = 0,
     debug: if (debug_checks) struct { pipeline: bool = false } else void = if (debug_checks) .{} else {},
@@ -553,7 +564,10 @@ pub const RenderPass = struct {
         p.f3.glBindVertexArray(pipeline.vao);
         p.mode = pipeline.mode;
         p.buffers = pipeline.buffers;
+        p.buffer_count = pipeline.buffer_count;
         p.attributes = pipeline.attributes;
+        p.base = 0;
+        p.instance_index = pipeline.instance_index;
         if (pipeline.blend) |b| {
             f.glEnable(gl.BLEND);
             f.glBlendFuncSeparate(blendFactor(b.color.src_factor), blendFactor(b.color.dst_factor), blendFactor(b.alpha.src_factor), blendFactor(b.alpha.dst_factor));
@@ -580,9 +594,18 @@ pub const RenderPass = struct {
     }
 
     pub fn setVertexBuffer(p: *RenderPass, slot: u32, buffer: Buffer, offset: u64) void {
+        p.bound[slot] = .{ .handle = buffer.handle, .offset = offset };
+        p.bindSlot(slot, p.base);
+    }
+
+    /// Points slot `slot`'s attributes at its bound buffer; an instance-step slot starts at
+    /// instance `first`. GL ES has no base instance (`glDrawArraysInstancedBaseInstance` is
+    /// desktop GL 4.2), so a first instance is emulated by this offset.
+    fn bindSlot(p: *RenderPass, slot: u32, first: u32) void {
         const f = p.f;
         const vb = p.buffers[slot];
-        f.glBindBuffer(gl.ARRAY_BUFFER, buffer.handle);
+        const offset = p.bound[slot].offset + @as(u64, first) * vb.stride * @intFromBool(vb.instance);
+        f.glBindBuffer(gl.ARRAY_BUFFER, p.bound[slot].handle);
         for (p.attributes[vb.first..][0..vb.count]) |a| {
             const n: gl.Int, const ty: gl.Enum, const kind: enum { float, int, norm } = switch (a.format) {
                 .float32 => .{ 1, gl.FLOAT, .float },
@@ -593,6 +616,8 @@ pub const RenderPass = struct {
                 .uint32x2 => .{ 2, gl.UNSIGNED_INT, .int },
                 .uint32x4 => .{ 4, gl.UNSIGNED_INT, .int },
                 .sint32 => .{ 1, INT, .int },
+                .sint32x2 => .{ 2, INT, .int },
+                .sint32x4 => .{ 4, INT, .int },
                 .unorm8x4 => .{ 4, gl.UNSIGNED_BYTE, .norm },
             };
             const at: ?*const anyopaque = @ptrFromInt(@as(usize, @intCast(offset)) + a.offset);
@@ -628,14 +653,26 @@ pub const RenderPass = struct {
     }
 
     pub fn draw(p: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
-        if (debug_checks) std.debug.assert(p.debug.pipeline and first_instance == 0);
+        if (debug_checks) std.debug.assert(p.debug.pipeline);
+        p.firstInstance(first_instance);
         p.f3.glDrawArraysInstanced(p.mode, @intCast(first_vertex), @intCast(vertex_count), @intCast(instance_count));
     }
 
     pub fn drawIndexed(p: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
-        if (debug_checks) std.debug.assert(p.debug.pipeline and base_vertex == 0 and first_instance == 0);
+        if (debug_checks) std.debug.assert(p.debug.pipeline and base_vertex == 0);
+        p.firstInstance(first_instance);
         const size: u64 = if (p.index_type == gl.UNSIGNED_SHORT) 2 else 4;
         p.f3.glDrawElementsInstanced(p.mode, @intCast(index_count), p.index_type, @ptrFromInt(@as(usize, @intCast(p.index_offset + first_index * size))), @intCast(instance_count));
+    }
+
+    /// Rebinds the instance-step slots at `first` when they are bound elsewhere. A vertex shader
+    /// that reads its instance index would see it start at 0, not `first`: that cannot be
+    /// emulated, and stops the program in every build mode rather than draw the wrong instances.
+    fn firstInstance(p: *RenderPass, first: u32) void {
+        if (first == p.base) return;
+        if (first != 0 and p.instance_index) @panic("gles: first_instance > 0 with a vertex shader that reads @builtin(instance_index), which GL ES cannot offset; read per-instance data from instance-step vertex buffers instead");
+        for (0..p.buffer_count) |slot| if (p.buffers[slot].instance) p.bindSlot(@intCast(slot), first);
+        p.base = first;
     }
 
     /// Ends a pass the projection began: resolves a multisampled target, unbinds the
@@ -892,6 +929,14 @@ test "gpu: upload, render to a texture, sample it in a second pass, on a real dr
     defer h.deinit();
     var k: Check = .{ .h = &h };
     try lcgf.gpu_check.renderToTexture(@This(), shaders, k.device(), &k);
+}
+
+test "gpu: instanced draws from a first instance, emulated by offsetting the instance buffers" {
+    var h: host.Host = undefined;
+    try h.init(.{ .major = 3 });
+    defer h.deinit();
+    var k: Check = .{ .h = &h };
+    try lcgf.gpu_check.instancing(@This(), shaders, k.device(), &k);
 }
 
 test "gpu: a compute pass writes a storage buffer the host reads (GL ES 3.1)" {

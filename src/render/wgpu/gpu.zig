@@ -548,6 +548,8 @@ fn vertexFormat(f: VertexFormat) c.WGPUVertexFormat {
         .uint32x2 => c.WGPUVertexFormat_Uint32x2,
         .uint32x4 => c.WGPUVertexFormat_Uint32x4,
         .sint32 => c.WGPUVertexFormat_Sint32,
+        .sint32x2 => c.WGPUVertexFormat_Sint32x2,
+        .sint32x4 => c.WGPUVertexFormat_Sint32x4,
         .unorm8x4 => c.WGPUVertexFormat_Unorm8x4,
     };
 }
@@ -652,6 +654,13 @@ test "gpu: upload, render to a texture, sample it in a second pass, on a real ad
     defer h.deinit();
     var k: Check = .{ .h = &h };
     try lcgf.gpu_check.renderToTexture(@This(), shaders, k.device(), &k);
+}
+
+test "gpu: instanced draws from a first instance, integer attributes, an offset buffer" {
+    var h = try host.Host.init();
+    defer h.deinit();
+    var k: Check = .{ .h = &h };
+    try lcgf.gpu_check.instancing(@This(), shaders, k.device(), &k);
 }
 
 test "gpu: a compute pass writes a storage buffer the host reads" {

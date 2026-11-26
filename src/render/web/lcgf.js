@@ -154,7 +154,7 @@ export function webgpu(ui) {
 /// enums.
 export function gpuProjection(ui) {
     const formats = ["r8unorm", "rg8unorm", "rgba8unorm", "rgba8unorm-srgb", "bgra8unorm", "bgra8unorm-srgb", "r16float", "rgba16float", "r32float", "rg32float", "rgba32float", "r32uint", "depth32float"];
-    const vertexFormats = ["float32", "float32x2", "float32x3", "float32x4", "uint32", "uint32x2", "uint32x4", "sint32", "unorm8x4"];
+    const vertexFormats = ["float32", "float32x2", "float32x3", "float32x4", "uint32", "uint32x2", "uint32x4", "sint32", "sint32x2", "sint32x4", "unorm8x4"];
     const topologies = ["point-list", "line-list", "line-strip", "triangle-list", "triangle-strip"];
     const indexFormats = ["uint16", "uint32"];
     const frontFaces = ["ccw", "cw"];

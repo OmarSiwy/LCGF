@@ -1744,6 +1744,7 @@ fn repo_gpu_shaders(b: *std.Build) []const GpuShader {
         .{ .name = "gradient", .path = b.path("src/render/gpu/gradient.wgsl") },
         .{ .name = "textured", .path = b.path("src/render/gpu/textured.wgsl") },
         .{ .name = "fill", .path = b.path("src/render/gpu/fill.wgsl") },
+        .{ .name = "instanced", .path = b.path("src/render/gpu/instanced.wgsl") },
     }) catch @panic("OOM");
 }
 

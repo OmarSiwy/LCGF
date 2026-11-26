@@ -153,6 +153,116 @@ pub fn Compute(comptime gpu: type, comptime shaders: type) type {
     };
 }
 
+/// Instanced draws (instanced.wgsl): a vertex-step buffer of corners, an instance-step buffer
+/// of `sint32x2` and `uint32` attributes, and a second instance-step buffer of `sint32x4` bound
+/// at an offset, drawn three times with first instances 5, 0 and 2. Each instance fills one
+/// column of an 8 x 1 target; the shader turns any wrong value into magenta.
+pub fn Instancing(comptime gpu: type, comptime shaders: type) type {
+    return struct {
+        const I = @This();
+        const S = gpu.Shader(shaders.instanced);
+        pub const width = 8;
+        /// The columns drawn: instances 5 and 6, then 0, then 2.
+        pub const drawn = [width]bool{ true, false, true, false, false, true, true, false };
+        const Row = extern struct { at: [2]i32, rgba: u32 };
+
+        arena: gpu.Arena,
+        host_arena: gpu.Arena,
+        staging: gpu.Staging,
+        target: gpu.Texture,
+        corners: gpu.Buffer,
+        rows: gpu.Buffer,
+        checks: gpu.Buffer,
+        pipeline: gpu.RenderPipeline(S),
+
+        pub fn init(r: *I, dev: gpu.Device) !void {
+            r.arena = try .init(dev, .{ .bytes = 1 << 16 });
+            r.host_arena = try .init(dev, .{ .bytes = 1 << 16, .memory = .host });
+            r.staging = try .init(dev, &r.host_arena, 1 << 12);
+            r.target = try dev.createTexture(&r.arena, .{ .size = .{ .width = width, .height = 1 }, .format = .rgba8_unorm, .usage = .{ .render_attachment = true, .copy_src = true } });
+            r.corners = try dev.createBuffer(&r.arena, .{ .size = 6 * 8, .usage = .{ .vertex = true, .copy_dst = true } });
+            r.rows = try dev.createBuffer(&r.arena, .{ .size = width * @sizeOf(Row), .usage = .{ .vertex = true, .copy_dst = true } });
+            r.checks = try dev.createBuffer(&r.arena, .{ .size = (width + 1) * 16, .usage = .{ .vertex = true, .copy_dst = true } });
+            r.pipeline = try dev.createRenderPipeline(S, .{
+                .vertex = .{ .buffers = &.{
+                    .{ .array_stride = 8, .attributes = &.{.{ .format = .float32x2, .offset = 0, .shader_location = 0 }} },
+                    .{ .array_stride = @sizeOf(Row), .step_mode = .instance, .attributes = &.{
+                        .{ .format = .sint32x2, .offset = @offsetOf(Row, "at"), .shader_location = 1 },
+                        .{ .format = .uint32, .offset = @offsetOf(Row, "rgba"), .shader_location = 2 },
+                    } },
+                    .{ .array_stride = 16, .step_mode = .instance, .attributes = &.{.{ .format = .sint32x4, .offset = 0, .shader_location = 3 }} },
+                } },
+                .fragment = .{ .targets = &.{.{ .format = .rgba8_unorm }} },
+            });
+        }
+
+        pub fn deinit(r: *I, dev: gpu.Device) void {
+            dev.destroyRenderPipeline(r.pipeline);
+            dev.destroyBuffer(r.checks);
+            dev.destroyBuffer(r.rows);
+            dev.destroyBuffer(r.corners);
+            dev.destroyTexture(r.target);
+            r.staging.deinit(dev);
+            r.host_arena.deinit();
+            r.arena.deinit();
+        }
+
+        /// Column `i`'s colour, as `unpack4x8unorm` reads it (red in the low byte).
+        pub fn color(i: u32) [4]u8 {
+            return .{ @intCast(30 * i), @intCast(255 - 30 * i), @intCast(10 * i), 255 };
+        }
+
+        pub fn record(r: *I, up: *gpu.Upload) void {
+            const corners = [_][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 } };
+            var rows: [width]Row = undefined;
+            // Row 0 of `checks` is never read: the buffer is bound 16 bytes in.
+            var checks: [width + 1][4]i32 = undefined;
+            checks[0] = @splat(99);
+            for (0..width) |i| {
+                const k: i32 = @intCast(i);
+                rows[i] = .{ .at = .{ -k, k }, .rgba = @bitCast(color(@intCast(i))) };
+                checks[i + 1] = .{ k, -k, 2 * k, -7 };
+            }
+            up.writeBuffer(r.corners, 0, std.mem.sliceAsBytes(&corners));
+            up.writeBuffer(r.rows, 0, std.mem.sliceAsBytes(&rows));
+            up.writeBuffer(r.checks, 0, std.mem.sliceAsBytes(&checks));
+            var enc = up.finish();
+            var pass = enc.beginRenderPass(.{ .color_attachments = &.{.{ .view = r.target.createView(), .clear_value = .{ .a = 1 } }} });
+            pass.setPipeline(r.pipeline);
+            pass.setVertexBuffer(0, r.corners, 0);
+            pass.setVertexBuffer(1, r.rows, 0);
+            pass.setVertexBuffer(2, r.checks, 16);
+            pass.draw(6, 2, 0, 5);
+            pass.draw(6, 1, 0, 0);
+            pass.draw(6, 1, 0, 2);
+            pass.end();
+        }
+
+        /// Whether `px` (the target's RGBA8 row) has each drawn column's colour and the clear
+        /// colour elsewhere.
+        pub fn verify(px: []const u8) bool {
+            for (0..width) |i| {
+                const want: [4]u8 = if (drawn[i]) color(@intCast(i)) else .{ 0, 0, 0, 255 };
+                if (!std.mem.eql(u8, px[i * 4 ..][0..4], &want)) return false;
+            }
+            return true;
+        }
+    };
+}
+
+pub fn instancing(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void {
+    const I = Instancing(gpu, shaders);
+    var r: I = undefined;
+    try r.init(dev);
+    defer r.deinit(dev);
+    var up: gpu.Upload = try h.upload(&r.staging);
+    r.record(&up);
+    try h.submit();
+    var px: [I.width * 4]u8 = undefined;
+    try h.readTexture(r.target, &px);
+    try std.testing.expect(I.verify(&px));
+}
+
 pub fn renderToTexture(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void {
     const R = RenderToTexture(gpu, shaders);
     var r: R = undefined;

@@ -660,6 +660,8 @@ fn vertexFormat(f: VertexFormat) U {
         .uint32x2 => 37,
         .uint32x4 => 39,
         .sint32 => 32,
+        .sint32x2 => 33,
+        .sint32x4 => 35,
         .unorm8x4 => 9,
     };
 }

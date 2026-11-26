@@ -928,6 +928,8 @@ fn vertexFormat(f: VertexFormat) c.VkFormat {
         .uint32x2 => c.VK_FORMAT_R32G32_UINT,
         .uint32x4 => c.VK_FORMAT_R32G32B32A32_UINT,
         .sint32 => c.VK_FORMAT_R32_SINT,
+        .sint32x2 => c.VK_FORMAT_R32G32_SINT,
+        .sint32x4 => c.VK_FORMAT_R32G32B32A32_SINT,
         .unorm8x4 => c.VK_FORMAT_R8G8B8A8_UNORM,
     };
 }
@@ -1068,6 +1070,14 @@ test "gpu: upload, render to a texture, sample it in a second pass, on a real de
     defer h.deinit();
     var k: Check = .{ .h = &h };
     try lcgf.gpu_check.renderToTexture(@This(), shaders, .wrap(&h.device), &k);
+}
+
+test "gpu: instanced draws from a first instance, integer attributes, an offset buffer" {
+    var h: host.Host = undefined;
+    try h.init();
+    defer h.deinit();
+    var k: Check = .{ .h = &h };
+    try lcgf.gpu_check.instancing(@This(), shaders, .wrap(&h.device), &k);
 }
 
 test "gpu: a compute pass writes a storage buffer the host reads" {
