@@ -206,8 +206,7 @@ pub const Frame = struct {
     /// custom node; its damage covers the camera, the palette, the ranges, the overrides and
     /// `shapes.revision`, so a pan, a recolour or an edit redraws it. An overlay is a second
     /// canvas node over it (a float) or more ranges. Everything passed is the caller's and
-    /// must outlive the frame's drawing. Not for a subtree kept by `reuse`, whose copied
-    /// custom rows are ordinary custom draws.
+    /// must outlive the frame's drawing, and a subtree `reuse` keeps draws it again as it was.
     pub fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node {
         const ctx = f.ctx;
         std.debug.assert(ctx.canvas_hook != null);
@@ -230,8 +229,7 @@ pub const Frame = struct {
         const key = h.final();
         const n = f.custom(id, style, key);
         const k = f.tree().c.custom[n.ix()];
-        ctx.canvas_frame = ctx.frame;
-        ctx.draw.canvases[k] = .{ .stamp = ctx.frame, .instances = shapes, .camera = o.camera, .ranges = o.ranges, .palette = o.palette, .overrides = o.overrides };
+        ctx.canvasRows()[0][k] = .{ .stamp = ctx.frame, .instances = shapes, .camera = o.camera, .ranges = o.ranges, .palette = o.palette, .overrides = o.overrides };
         return n;
     }
 
@@ -810,7 +808,7 @@ test "canvas: canvas commands in paint order, an overlay over them; other custom
     const limits: @import("context.zig").Limits = .{ .nodes = 8, .texts = 1, .customs = 3, .strings = 16, .depth = 4, .damage = true };
     const Fx = Fixture(limits);
     var ctx = try Fx.context();
-    var rows: [limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
+    var rows: [2 * limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
     ctx.enableCanvas(&rows);
     ctx.trackDamage();
     var buf: [canvas_mod.Instances.requiredBytes(4, 0, 1)]u8 align(mem.column_align) = undefined;

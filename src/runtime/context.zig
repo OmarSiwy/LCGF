@@ -178,7 +178,7 @@ pub const Context = struct {
     /// Set by `enableCanvas`: turns this frame's canvas nodes' custom commands into `canvas`
     /// commands after paint.
     canvas_hook: ?*const fn (ctx: *Context) void = null,
-    /// `frame` when `Frame.canvas` last ran: a frame without a canvas skips the marking.
+    /// `frame` when `DrawList.canvases` last moved to its generation's rows.
     canvas_frame: u32 = 0,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
@@ -225,32 +225,67 @@ pub const Context = struct {
         ctx.redraw_all = false;
     }
 
-    /// Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `limits.customs` of
-    /// them, the caller's, alive as long as the context) become `DrawList.canvases`, one per
-    /// custom row. Like `trackDamage`, a program that never calls it links none of its code.
+    /// Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `2 * limits.customs`
+    /// of them, the caller's, alive as long as the context) hold `DrawList.canvases`, one per
+    /// custom row, in two generations as the customs are, so `Frame.reuse` can carry a canvas
+    /// over from the last frame. Like `trackDamage`, a program that never calls it links none
+    /// of its code.
     pub fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void {
-        std.debug.assert(rows.len >= ctx.limits.customs);
-        // No stamp may be this frame's or a later one's: those rows would read as canvases.
-        for (rows) |*r| r.stamp = ctx.frame -% 1;
-        ctx.draw.canvases = rows;
+        const n = ctx.limits.customs;
+        std.debug.assert(rows.len >= 2 * n);
+        // No stamp may be this frame's or the last one's: those rows would read as canvases.
+        for (rows) |*r| r.stamp = ctx.frame -% 2;
+        ctx.draw.canvases = rows[@as(usize, ctx.cur) * n ..][0..n];
+        ctx.canvas_frame = ctx.frame;
         ctx.canvas_hook = &markCanvases;
+    }
+
+    /// This frame's canvas rows and last frame's. `DrawList.canvases` holds one generation:
+    /// until it moves in a frame it is last frame's, and the other lies `limits.customs` rows
+    /// before or after it, by generation. (No field for the rows: one cost the embedded
+    /// image's `Context.build` 70 bytes.)
+    pub fn canvasRows(ctx: *Context) [2][]draw_list.CanvasDraw {
+        const n = ctx.limits.customs;
+        const d = &ctx.draw;
+        if (ctx.canvas_frame != ctx.frame) {
+            const held = ctx.cur ^ 1;
+            const base = d.canvases.ptr - @as(usize, held) * n;
+            d.canvases = base[@as(usize, ctx.cur) * n ..][0..n];
+            ctx.canvas_frame = ctx.frame;
+        }
+        const base = d.canvases.ptr - @as(usize, ctx.cur) * n;
+        return .{ d.canvases, base[@as(usize, ctx.cur ^ 1) * n ..][0..n] };
     }
 
     /// Custom ops and commands whose row was written by `Frame.canvas` this frame become
     /// canvas ones. The ops too, so a pass that encodes them again (`order.mergeAcrossText`)
     /// keeps them; both index `customs` and `canvases` by the same row.
     fn markCanvases(ctx: *Context) void {
-        if (ctx.canvas_frame != ctx.frame) return;
+        const now, const last = ctx.canvasRows();
+        // A canvas in a subtree `Frame.reuse` copied: its custom row came over with its id and
+        // data (the canvas's hash), but not its canvas row. Found by those, then carried over.
+        // ponytail: rows times last frame's rows, at most `customs` squared a frame.
+        const cu = &ctx.customs[ctx.cur];
+        const pcu = &ctx.customs[ctx.cur ^ 1];
+        for (0..cu.len) |k| {
+            if (now[k].stamp == ctx.frame) continue;
+            for (0..pcu.len) |j| {
+                if (last[j].stamp != ctx.frame -% 1 or pcu.c.id[j] != cu.c.id[k] or pcu.c.data[j] != cu.c.data[k]) continue;
+                now[k] = last[j];
+                now[k].stamp = ctx.frame;
+                break;
+            }
+        }
         const d = &ctx.draw;
         const custom = @backingInt(DrawList.Kind.custom);
         const canvas = @backingInt(DrawList.Kind.canvas);
-        const last = d.canvases.len - 1;
+        const top = d.canvases.len - 1;
         for (d.op.kind[0..d.op_len], d.op.ref[0..d.op_len]) |*kind, ref| {
-            const is = (kind.* == custom) & (d.canvases[@min(ref, last)].stamp == ctx.frame);
+            const is = (kind.* == custom) & (d.canvases[@min(ref, top)].stamp == ctx.frame);
             kind.* = @intCast(simd.selU(is, canvas, kind.*));
         }
         for (d.cmd.kind[0..d.cmd_len], d.cmd.first[0..d.cmd_len]) |*kind, ref| {
-            const is = (kind.* == custom) & (d.canvases[@min(ref, last)].stamp == ctx.frame);
+            const is = (kind.* == custom) & (d.canvases[@min(ref, top)].stamp == ctx.frame);
             kind.* = @intCast(simd.selU(is, canvas, kind.*));
         }
     }

@@ -3414,7 +3414,8 @@ Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signal
 
 - `needsFrame = scheduler.needsFrame`
 - `fn trackDamage(ctx: *Context) void`: From the next frame on, keeps in the draw list only the quads that reach what changed since the last frame, with `DrawList.damage` saying where: for a host that keeps last frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the bare-metal flush).
-- `fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void`: Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `limits.customs` of them, the caller's, alive as long as the context) become `DrawList.canvases`, one per custom row.
+- `fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void`: Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `2 * limits.customs` of them, the caller's, alive as long as the context) hold `DrawList.canvases`, one per custom row, in two generations as the customs are, so `Frame.reuse` can carry a canvas over from the last frame.
+- `fn canvasRows(ctx: *Context) [2][]draw_list.CanvasDraw`: This frame's canvas rows and last frame's.
 - `fn redrawAll(ctx: *Context) void`: With `trackDamage`: the next frame's draw list covers the whole window, as for a host that has lost last frame's pixels (a new buffer).
 - `fn requiredBytes(limits: Limits) usize`: Bytes `init` needs.
 - `fn init(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: The buffer is the only memory the library will ever use.

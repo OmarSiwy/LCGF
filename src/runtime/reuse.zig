@@ -495,6 +495,60 @@ test "reuse: unchanged signals copy the subtree; a changed one rebuilds it once"
     try testing.expectEqualStrings("row 0|row 1|row 2|row 3|tail|", runText(out, &ctx, &b0));
 }
 
+test "reuse: a canvas in a kept subtree stays a canvas, with its row" {
+    const canvas = @import("../draw/canvas.zig");
+    const limits: @import("context.zig").Limits = .{ .nodes = 16, .texts = 4, .customs = 4, .strings = 64, .signals = 2, .memos = 2, .depth = 6 };
+    const Fx = Fixture(limits);
+    var ctx = try Fx.context();
+    var rows: [2 * limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
+    ctx.enableCanvas(&rows);
+    var buf: [canvas.Instances.requiredBytes(2, 0, 1)]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var shapes: canvas.Instances = .init(&carver, 2, 0, 1);
+    _ = shapes.segment(.{ 0, 0 }, .{ 10, 0 }, .{});
+    const pal: canvas.Palette = .{ .layers = &.{.of(.{})} };
+    const all = [_]canvas.Range{shapes.since(0)};
+    const cam: canvas.Camera = .{ .origin = .{ 7, 8 }, .scale = 2 };
+    const sig = ctx.signals.create();
+    const S = struct {
+        builds: u32 = 0,
+        lead: u32 = 0,
+        fn frame(st: *@This(), c: *Context, in: *const Input, sh: *const canvas.Instances, p: *const canvas.Palette, r: []const canvas.Range, cm: canvas.Camera, dep: Signal) Output {
+            var f = c.begin(in);
+            _ = f.open(.from("body"), .{ .dir = .x, .size = .{ .fill, .fill } });
+            // Custom rows before the panel, so the copy lands on other rows than last frame's.
+            for (0..st.lead) |_| _ = f.custom(.none, .{ .size = .{ .px(4), .px(4) } }, 1);
+            if (!f.reuse(id_panel, &.{dep})) {
+                st.builds += 1;
+                _ = f.open(id_panel, .{ .size = .{ .px(100), .px(80) } });
+                _ = f.canvas(.from("sheet"), .{ .size = .{ .fill, .fill } }, sh, .{ .camera = cm, .palette = p, .ranges = r });
+                f.close();
+            }
+            f.close();
+            return f.end(.{});
+        }
+    };
+    var st: S = .{};
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+    _ = st.frame(&ctx, &in, &shapes, &pal, &all, cam, sig);
+    for (0..3) |lead| {
+        st.lead = @intCast(lead);
+        const out = st.frame(&ctx, &in, &shapes, &pal, &all, cam, sig);
+        try testing.expectEqual(@as(u32, 1), st.builds);
+        var found: u32 = 0;
+        for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
+            .canvas => |k| {
+                found += 1;
+                try testing.expectEqual(&shapes, out.draw.canvases[k].instances);
+                try testing.expectEqual(cam, out.draw.canvases[k].camera);
+                try testing.expectEqual(@as(f32, 100), out.draw.customs[k].rect[2] - out.draw.customs[k].rect[0]);
+            },
+            else => {},
+        };
+        try testing.expectEqual(1, found);
+    }
+}
+
 test "reuse: a copy moved to other rows has its links rebased" {
     const Fx = Fixture(.{ .nodes = 32, .texts = 16, .customs = 4, .strings = 512, .signals = 4, .memos = 4, .depth = 8 });
     var ctx = try Fx.context();
