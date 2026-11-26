@@ -227,14 +227,14 @@ pub inline fn maskRegion(m: anytype, kind: RegionKind, row: u32, end: u32, strid
 }
 
 /// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1, a
-/// widget state struct its `shown()`.
+/// widget state struct its `visible()`.
 fn number(v: anytype) u32 {
     return switch (@typeInfo(@TypeOf(v))) {
         .int => std.math.cast(u32, v) orelse if (v < 0) 0 else std.math.maxInt(u32),
         .bool => @intFromBool(v),
         .@"enum" => std.math.cast(u32, @backingInt(v)) orelse std.math.maxInt(u32),
-        // A widget's state (an overlay's open flag inside it) says itself: `pub fn shown`.
-        .@"struct" => @intFromBool(v.shown()),
+        // A widget's state (an overlay's open flag inside it) says itself: `pub fn visible`.
+        .@"struct" => @intFromBool(v.visible()),
         else => @compileError("a region selects by an integer or bool field, not " ++ @typeName(@TypeOf(v))),
     };
 }
@@ -406,11 +406,11 @@ test "choice: a bool selector is an if/else, false the first alternative, true t
     }
 }
 
-test "when: a widget state struct selects by its shown()" {
+test "when: a widget state struct selects by its visible()" {
     const s = @import("spec.zig");
     const Open = struct {
         open: bool = false,
-        pub fn shown(o: @This()) bool {
+        pub fn visible(o: @This()) bool {
             return o.open;
         }
     };

@@ -45,7 +45,7 @@ pub const SelectState = struct {
     menu: menu.MenuState = .{},
 
     /// Whether the list is shown: what `spec.when` over this field selects by (`ct.list`).
-    pub fn shown(s: SelectState) bool {
+    pub fn visible(s: SelectState) bool {
         return s.menu.open;
     }
 };
@@ -290,7 +290,7 @@ pub fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, compt
 
 /// The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, and its list,
 /// last in the page's root (so it is drawn above the rest), live while the list is open
-/// (`spec.when` over the field, `SelectState.shown`). Their runtime twins are `button` and
+/// (`spec.when` over the field, `SelectState.visible`). Their runtime twins are `button` and
 /// `listGrouped` with `positional(opts.texts.len)`.
 pub const ct = struct {
     /// The button of select `id`, bound to the `SelectState` field `field`, showing the chosen

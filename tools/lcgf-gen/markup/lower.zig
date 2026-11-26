@@ -1256,7 +1256,8 @@ pub const Lowerer = struct {
         }
         if (disp == .contents) return; // children go to the nearest box
         if (isComponent(t)) return l.appComponent(n, parent);
-        if (l.widget(n, t, parent)) return;
+        if (l.widget(n, t, parent)) return l.tooltip(n);
+        if (l.attr(n, "title") != null) l.ds.err(l.attrLoc(n, "title"), "title= is a tooltip, which only a widget shows (a button or a control)", .{});
         const content_ = l.content(n);
         const heading = headingLevel(t);
         const text_like = (content_.elements == 0 or content_.br_only) and (content_.text or heading != 0 or std.mem.eql(u8, t, "p"));
@@ -2316,8 +2317,13 @@ pub const Lowerer = struct {
         // Widget ids: unique, and not also a field of another type's meaning.
         const ids = l.page.nodes.items(.id);
         const kinds = l.page.nodes.items(.kind);
-        // A select's list names the select it belongs to.
-        for (ids, 0..) |id, i| if (id.len > 0 and kinds[i] != .select_list) for (ids[0..i], 0..) |o, j| if (kinds[j] != .select_list and std.mem.eql(u8, o, id)) {
+        // A select's list and a tooltip name the widget they belong to.
+        const owned = struct {
+            fn is(k: ir.Kind) bool {
+                return k == .select_list or k == .tooltip;
+            }
+        }.is;
+        for (ids, 0..) |id, i| if (id.len > 0 and !owned(kinds[i])) for (ids[0..i], 0..) |o, j| if (!owned(kinds[j]) and std.mem.eql(u8, o, id)) {
             const a = l.ds.where(l.page.nodes.items(.loc)[j]);
             l.ds.err(l.page.nodes.items(.loc)[i], "id '{s}' is used twice; the first is at {d}:{d}", .{ id, a.line, a.col });
         };
@@ -2830,6 +2836,26 @@ pub const Lowerer = struct {
         list.name = "";
         ok(l.overlays.append(l.arena, l.addNode(list)));
         return true;
+    }
+
+    /// `title="text"` on widget `n`: its tooltip, a `Tip` field `<id>_tip`, shown once the
+    /// pointer rests on the widget (`widgets_tooltip.ct.tooltip`), moved last into the root.
+    fn tooltip(l: *Lowerer, n: u32) void {
+        const text = l.attr(n, "title") orelse return;
+        const at = l.attrLoc(n, "title");
+        const i = l.ir_of[n];
+        const ok_target = i != none and l.page.nodes.items(.id)[i].len > 0 and !l.inRepeat(i) and switch (l.page.nodes.items(.kind)[i]) {
+            .dialog, .image, .component => false,
+            else => true,
+        };
+        if (!ok_target) {
+            l.ds.err(at, "title= is a tooltip, which only a widget with an id outside lcgf-each shows (a button or a control)", .{});
+            return;
+        }
+        const id = l.page.nodes.items(.id)[i];
+        const field_name = ok(std.fmt.allocPrint(l.arena, "{s}_tip", .{id}));
+        l.field(field_name, .tip, at, "title=");
+        ok(l.overlays.append(l.arena, l.addNode(.{ .kind = .tooltip, .parent = l.page.nodes.items(.parent)[i], .loc = at, .id = id, .bind = field_name, .text = collapse(l.arena, text) })));
     }
 
     /// `<dialog bind:open>`: a modal dialog over the page while the bool field is true; its

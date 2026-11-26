@@ -79,7 +79,7 @@ pub fn regionError(comptime State: type, comptime r: spec_zig.Region) ?[]const u
     const valid = switch (r.kind) {
         .list => @typeInfo(T) == .int,
         .choice => @typeInfo(T) == .int or @typeInfo(T) == .@"enum" or T == bool,
-        .when => T == bool or (@typeInfo(T) == .@"struct" and @hasDecl(T, "shown")),
+        .when => T == bool or (@typeInfo(T) == .@"struct" and @hasDecl(T, "visible")),
     };
     if (!valid) return @tagName(r.kind) ++ " selector has incompatible type " ++ @typeName(T);
     if (r.window) |w| {

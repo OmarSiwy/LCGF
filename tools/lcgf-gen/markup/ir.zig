@@ -70,6 +70,9 @@ pub const Kind = enum(u8) {
     dialog,
     /// `<img>`: `widgets_image.ct.image(theme, assets[asset].picture(), image)`.
     image,
+    /// `title="text"` on widget `id`: `widgets_tooltip.ct.tooltip(theme, .id, .bind, text)`,
+    /// `bind` a `Tip`, moved last into the root.
+    tooltip,
 };
 
 /// Where a caption's text comes from.
@@ -185,6 +188,8 @@ pub const FieldType = enum(u8) {
     @"enum",
     /// `widgets_select.SelectState`; its value is `.selected`.
     select,
+    /// `widgets_tooltip.Tip`.
+    tip,
 };
 
 pub const Field = struct {

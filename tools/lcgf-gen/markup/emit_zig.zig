@@ -391,6 +391,11 @@ pub const Emit = struct {
                 e.selectOptions(n);
                 e.write(")");
             },
+            .tooltip => {
+                e.print("{s}.ct.tooltip(theme, .{f}, .{f}, ", .{ e.use("tooltip"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.string(n.text);
+                e.write(")");
+            },
             .image => {
                 e.print("{s}.ct.image(theme, assets[{d}].picture(), ", .{ e.use("image"), n.asset });
                 e.structure(n.image, lcgf.widgets_image.Options{});
@@ -528,6 +533,7 @@ pub const Emit = struct {
             .text => "lcgf.widgets_textfield.Text(256)",
             .number => "lcgf.widgets_number.Number",
             .select => "lcgf.widgets_select.SelectState",
+            .tip => "lcgf.widgets_tooltip.Tip",
             .pair => "[2]f32",
             .@"enum" => "enum {}",
         };
@@ -539,7 +545,7 @@ pub const Emit = struct {
             .str => "\"\"",
             .bool => "false",
             .f32, .u32 => "0",
-            .text, .number, .pair, .@"enum", .select => ".{}",
+            .text, .number, .pair, .@"enum", .select, .tip => ".{}",
         };
     }
 
@@ -874,6 +880,12 @@ pub const Emit = struct {
                 }
                 if (!content) return "";
                 return std.fmt.allocPrint(e.arena, "app.components.{f}.close(f, &theme);", .{std.zig.fmtId(n.text)}) catch unreachable;
+            },
+            .tooltip => {
+                e.print("{s}.update(f, &{s}, f.ctx.inter.response(.from(\"{s}\"))); {s}.show(f, &theme, \"{s}\", &{s}, ", .{ e.use("tooltip"), e.stateRef(n.bind), n.id, e.use("tooltip"), n.id, e.stateRef(n.bind) });
+                e.string(n.text);
+                e.write(");");
+                return "";
             },
             .image => {
                 e.print("_ = {s}.image(f, &theme, assets[{d}].picture(), ", .{ e.use("image"), n.asset });

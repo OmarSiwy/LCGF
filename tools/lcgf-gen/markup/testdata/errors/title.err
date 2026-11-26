@@ -1,0 +1,3 @@
+title.html:4:8: error: title= is a tooltip, which only a widget shows (a button or a control)
+  <div title="Not a widget"><span>A</span></div>
+       ^

@@ -11,7 +11,8 @@
 //! `show(f, th, "target", &tip, text)`.
 //!
 //! Comptime: `const T = Tooltip(th, .save, .tip);` gives the spec builder `T.bubble` and the
-//! hooks `popover.ComptimePage(State, spec, th, T)` runs.
+//! hooks `popover.ComptimePage(State, spec, th, T)` runs. Or, in `base.ComptimeUi` beside any
+//! widget: `ct.tooltip(th, .save, .tip, "text")` last in the root.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -40,6 +41,11 @@ pub const Tip = struct {
     dismissed: bool = false,
     /// The bubble is shown this frame.
     shown: bool = false,
+
+    /// Whether the bubble is shown: what `spec.when` over this field selects by (`ct.tooltip`).
+    pub fn visible(t: Tip) bool {
+        return t.shown;
+    }
 };
 
 /// Seconds the pointer rests on the target before the tooltip shows: `Interaction.hover_delay`.
@@ -136,13 +142,62 @@ pub fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *cons
     f.close();
 }
 
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+pub const ct = struct {
+    /// The tooltip of the widget named `target` (elsewhere on the page), bound to the `Tip`
+    /// field `tip`, showing `text`. Put it last in the page's root so it is drawn above the rest;
+    /// it is live while the tip is shown (`spec.when`, `Tip.visible`). Its runtime twin:
+    /// `update(f, &tip, f.ctx.inter.response(.from("target")))` and `show(...)` there.
+    pub fn tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip: @EnumLiteral(), comptime text: []const u8) Spec {
+        return spec_zig.when(tip, .{ .kind = .col, .bind = @tagName(tip), .widget = Bubble(th, @tagName(target), @tagName(tip), text), .children = &.{.{ .kind = .label }} });
+    }
+};
+
+/// The custom widget (`Spec.widget`) of `ct.tooltip`: its `step` runs while the bubble is
+/// hidden too (`steps_hidden`), advancing the tip from the target's hover, and keeps the
+/// target's rect for `push`.
+pub fn Bubble(comptime th: Theme, comptime target: []const u8, comptime tip: []const u8, comptime text: []const u8) type {
+    return struct {
+        pub const steps_hidden = true;
+
+        pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+            return base.fieldError(State, "tooltip", bound, Tip);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = row;
+            _ = event;
+            const U = @TypeOf(ui.*);
+            const at_row: u32 = comptime @backingInt(@field(U.Events.Widget, target));
+            const at = ui.lastRect(at_row);
+            ui.keep(@This()).* = .{ at.x0, at.y0, at.x1, at.y1 };
+            const hovered = ui.response(at_row, in).hovered;
+            ui.signals.set(comptime U.field(tip), advance(@field(ui.signals.state, tip), hovered, in.dt, popover.keyPressed(in, popover.keys.escape)));
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            const tb = &ui.tables;
+            const k = ui.keep(@This()).*;
+            const b = tb.t.push(parent, .none, &bubbleStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] }));
+            tb.t.c.role[b] = @backingInt(role);
+            const l = tb.t.push(b, .none, &.{ .role = .label });
+            tb.t.c.text[l] = tb.tx.push(l, tb.strings.add(text), &base.labelText(&th));
+            tb.t.seal(l);
+            tb.t.seal(b);
+            next.* += comptime @import("../comptime/flatten.zig").count(n);
+        }
+    };
+}
+
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example page: a toolbar with a button and a label, and the button's tooltip, in both
 /// front ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
-        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
+        pub const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
         pub const App = struct {
             tip: Tip = .{},
@@ -224,6 +279,38 @@ test "Tooltip: the page agrees in both front ends, hidden and shown" {
     const at = t.rect(t.find(.from("save")));
     try testing.expectEqual(at.x0, t.rect(6).x0);
     try testing.expectEqual(at.y1 + Theme.default.gap, t.rect(6).y0);
+}
+
+/// The example page with the tooltip as `ct.tooltip` in `base.ComptimeUi`; the runtime side
+/// is `Example`'s app.
+const CtPage = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    pub const State = struct { tip: Tip = .{} };
+    pub const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{ base.ct.button(th, .save, "Save"), base.ct.label(th, "Scene 1") }),
+        ct.tooltip(th, .save, .tip, "Save the scene (Ctrl+S)"),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(E.App, Ui, E.limits);
+};
+var ct_harness: CtPage.Run = .{};
+
+test "ct.tooltip: the example replay in base.ComptimeUi gives the runtime tooltip's frames" {
+    const Replay = @import("../core/input.zig").Replay;
+    const h = &ct_harness;
+    h.init();
+    var text: [16]u8 = undefined;
+    var evs: [8]Input.Event = undefined;
+    var contacts: [1]Input.Contact = undefined;
+    var r: Replay = .{ .src = replay };
+    var shown: u32 = 0;
+    while (try r.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| {
+        _ = try h.frame(in);
+        try testing.expectEqual(h.app.tip, h.ui.signals.state.tip);
+        shown += @intFromBool(h.app.tip.shown);
+    }
+    try testing.expect(shown > 0);
 }
 
 test "bubbleStyle: the theme's tokens, below the target" {

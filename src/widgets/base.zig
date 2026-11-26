@@ -50,7 +50,9 @@
 //! may declare `pub const focusable: bool` (default false): whether a press focuses it and Tab
 //! stops on it (`Events.focus_order`). And `pub const Payload: type` (default void): what its
 //! `Event` carries; a widget with a payload reports its events from `step`, not on a click.
-//! A focusable node that its owner pushes itself has `.widget = FocusStop`.
+//! A focusable node that its owner pushes itself has `.widget = FocusStop`. A `W` whose region
+//! hides it (`spec.when`) steps only while it is live, unless it declares `pub const
+//! steps_hidden = true` (a tooltip decides from its target's hover when to show).
 //! `ctResponse` gives a step what `Frame.interact` gives a runtime widget.
 
 const std = @import("std");
@@ -569,7 +571,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 // A step may return an event of its own (a key that activates the widget),
                 // which the frame reports when the pointer made none.
                 if (comptime @hasDecl(W_, "step")) {
-                    if (!dynamic or (active[row] != 0 and (!ui.built or ui.tree_rows[row] != types.none))) {
+                    // `steps_hidden`: a widget whose own region hides it (a tooltip's bubble)
+                    // still steps, to decide when to show; it reads only other rows.
+                    const hidden_ok = comptime @hasDecl(W_, "steps_hidden") and W_.steps_hidden;
+                    if (!dynamic or hidden_ok or (active[row] != 0 and (!ui.built or ui.tree_rows[row] != types.none))) {
                         const got = W_.step(ui, row, event, in);
                         if (@TypeOf(got) == ?E.Event) {
                             const accepted = if (comptime has_input_availability) ui.allowedEvent(got) else got;
