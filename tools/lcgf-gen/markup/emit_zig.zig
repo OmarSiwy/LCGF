@@ -1036,10 +1036,11 @@ pub const Emit = struct {
         };
     }
 
-    /// Whether a list's template holds a widget, whose id needs the copy index.
+    /// Whether a list's template holds a widget, whose id needs the copy index, or a named node.
     fn usesCopy(e: *Emit, list: u32) bool {
         const parents = e.page.nodes.items(.parent);
-        for (e.page.nodes.items(.id), 0..) |id, k| if (id.len > 0) {
+        // A named node's slot reads every enclosing copy index.
+        for (e.page.nodes.items(.id), e.page.nodes.items(.name), 0..) |id, name, k| if (id.len > 0 or name.len > 0) {
             var p = parents[k];
             while (p != none) : (p = parents[p]) if (p == list) return true;
         };
@@ -1273,7 +1274,7 @@ pub const Emit = struct {
                 }
             }
             // A named node: its row, which `Ui.semantics` names (engine spec R2).
-            if (within == none) if (e.namedIndex(i)) |k| e.print("ui.named[{d}] = f.tree().len; ", .{k});
+            if (within == none and e.isNamed(i)) e.print("ui.named[{s}] = f.tree().len; ", .{e.namedSlot(i)});
             var close = if (nodes.items(.kind)[i] == .each) blk: {
                 e.rtRegion(i);
                 break :blk "";
@@ -1320,25 +1321,63 @@ pub const Emit = struct {
     }
 
     /// Whether node `i` has an accessible name the runtime page carries (outside run-time
-    /// regions): its index among them.
+    /// regions): the index of its first row slot. A node inside lcgf-each lcgf-max has a slot
+    /// per copy (`namedSlots`).
     fn namedIndex(e: *Emit, i: u32) ?u32 {
-        const nodes = e.page.nodes.slice();
-        if (nodes.items(.name)[i].len == 0 or e.eachOf(i) != none) return null;
+        if (!e.isNamed(i)) return null;
         var k: u32 = 0;
-        for (0..i) |j| k += @intFromBool(nodes.items(.name)[j].len > 0 and e.eachOf(@intCast(j)) == none);
+        for (0..i) |j| if (e.isNamed(@intCast(j))) {
+            k += e.namedSlots(@intCast(j));
+        };
         return k;
+    }
+
+    fn isNamed(e: *Emit, i: u32) bool {
+        return e.page.nodes.items(.name)[i].len > 0 and e.eachOf(i) == none;
+    }
+
+    /// The copies of node `i`: the product of its enclosing lists' maxima.
+    fn namedSlots(e: *Emit, i: u32) u32 {
+        const nodes = e.page.nodes.slice();
+        var n: u32 = 1;
+        var p = nodes.items(.parent)[i];
+        while (p != none) : (p = nodes.items(.parent)[p]) if (nodes.items(.kind)[p] == .list) {
+            n *= nodes.items(.max)[p];
+        };
+        return n;
+    }
+
+    /// The slot of node `i`'s copy: `copy0`, `copy1`, … of its lists, outermost first.
+    fn namedSlot(e: *Emit, i: u32) []const u8 {
+        const nodes = e.page.nodes.slice();
+        var maxima: std.ArrayList(u32) = .empty;
+        var p = nodes.items(.parent)[i];
+        while (p != none) : (p = nodes.items(.parent)[p]) if (nodes.items(.kind)[p] == .list) maxima.append(e.arena, nodes.items(.max)[p]) catch unreachable;
+        var out: std.ArrayList(u8) = .empty;
+        out.print(e.arena, "{d}", .{e.namedIndex(i).?}) catch unreachable;
+        if (maxima.items.len == 0) return out.items;
+        // Outermost list first: copy0 * m1 * m2 + copy1 * m2 + copy2.
+        const lists = maxima.items.len;
+        for (0..lists) |d| {
+            out.print(e.arena, " + copy{d}", .{d}) catch unreachable;
+            for (maxima.items[0 .. lists - 1 - d]) |m| out.print(e.arena, " * {d}", .{m}) catch unreachable;
+        }
+        return out.items;
     }
 
     fn namedCount(e: *Emit) u32 {
         var k: u32 = 0;
-        for (0..e.page.nodes.len) |i| k += @intFromBool(e.namedIndex(@intCast(i)) != null);
+        for (0..e.page.nodes.len) |i| if (e.isNamed(@intCast(i))) {
+            k += e.namedSlots(@intCast(i));
+        };
         return k;
     }
 
     fn namedList(e: *Emit) []const u8 {
         var out: std.ArrayList(u8) = .empty;
-        for (e.page.nodes.items(.name), 0..) |name, i| if (e.namedIndex(@intCast(i)) != null)
+        for (e.page.nodes.items(.name), 0..) |name, i| if (e.isNamed(@intCast(i))) for (0..e.namedSlots(@intCast(i))) |_| {
             out.print(e.arena, " \"{f}\",", .{std.zig.fmtString(name)}) catch unreachable;
+        };
         if (out.items.len > 0) out.items.len -= 1;
         return out.items;
     }

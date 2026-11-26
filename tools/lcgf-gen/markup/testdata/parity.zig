@@ -53,6 +53,7 @@ test "the runtime and the spec frontend draw the same frames" {
     const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
     inline for (.{ if (@hasDecl(twin, "replay")) twin.replay else sweep, sweep }) |src| {
         h.init();
+        if (@hasDecl(twin, "prepare")) twin.prepare(h);
         var replay: Replay = .{ .src = src };
         while (try replay.next(buf)) |in| {
             _ = try h.frame(in);
@@ -79,6 +80,7 @@ test "both front ends give assistive technology the same tree and names" {
     var evs: [8]lcgf.input.Input.Event = undefined;
     var contacts: [1]lcgf.input.Input.Contact = undefined;
     const buf: Replay.Buffers = .{ .text = &text, .events = &evs, .contacts = &contacts };
+    if (@hasDecl(twin, "prepare")) twin.prepare(h);
     var replay: Replay = .{ .src = sweep };
     while (try replay.next(buf)) |in| {
         _ = try h.frame(in);

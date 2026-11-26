@@ -16,13 +16,22 @@ pub const State = struct { show_done: bool = false, count: u32 = 0, mode: enum {
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     checkbox.ct.checkbox(theme, .show, .show_done, "Show done"),
     s.when(.show_done, label.ct.label(theme, "Done items are shown")),
-    s.list(.count, 3, .{ .gap = 2 }, s.col(.{}, .{label.ct.label(theme, "Item")})),
+    s.list(.count, 3, .{ .gap = 2 }, s.named(s.landmark(.region, .{}, .{label.ct.label(theme, "Item")}), "Todo item")),
     s.choice(.mode, .{}, .{
         label.ct.label(theme, "Compact"),
         s.col(.{}, .{label.ct.label(theme, "Detailed")}),
     }),
     s.choice(.busy, .{}, .{ label.ct.label(theme, "Saved"), label.ct.label(theme, "Saving") }),
 });
+
+/// Accessible names the a11y export must carry (parity.zig): each live copy's.
+pub const names = .{"Todo item"};
+
+/// Two copies of the list in both frontends, for parity.zig.
+pub fn prepare(h: anytype) void {
+    h.app.signals.set(.count, 2);
+    h.ui.signals.set(.count, 2);
+}
 
 pub fn Handlers(comptime Ui: type) type {
     return struct {
