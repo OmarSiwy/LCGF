@@ -1,0 +1,15 @@
+transitions.html:5:7: error: write the transition shorthand
+  p { transition-duration: 1s; animation: spin 1s; }
+      ^
+transitions.html:5:32: error: keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)
+  p { transition-duration: 1s; animation: spin 1s; }
+                               ^
+transitions.html:6:3: error: keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)
+  @keyframes spin { to { opacity: 0; } }
+  ^
+transitions.html:4:14: error: transition under a state pseudo-class or @media is not lowered on a widget; such a rule sets background-color, color, border-color, border-width, border-style or opacity
+  #b:hover { transition: color 1s; }
+             ^
+transitions.html:3:12: error: transition on <button>: its look changes at run time (hover, press, state CSS, @media or a run-time token) and LCGF restyles instantly; transitions are not lowered yet
+  button { transition: background-color 150ms; }
+           ^

@@ -237,8 +237,12 @@
         .{ .kind = "property", .name = "accent-color", .status = .mapped, .target = "on :root: Theme.accent base.zig:103, over --lcgf-accent; on any other element an error", .fixture = "content" },
         .{ .kind = "property", .name = "direction", .status = .planned, .diagnostic = "direction is not lowered yet" },
         .{ .kind = "property", .name = "box-sizing", .status = .planned, .diagnostic = "box-sizing is not lowered yet; LCGF sizes are border-box" },
-        .{ .kind = "property", .name = "transition", .status = .planned, .diagnostic = "transitions are not lowered yet (P2)" },
-        .{ .kind = "property", .name = "animation", .status = .planned, .diagnostic = "animations are not lowered yet (P2)" },
+        .{ .kind = "property", .name = "transition", .status = .mapped, .target = "on a box nothing restyles at run time (no widget, state CSS, @media or run-time token): it never runs, so nothing to emit; elsewhere an error, as LCGF restyles instantly", .fixture = "supports" },
+        .{ .kind = "property", .name = "transition-property", .status = .planned, .diagnostic = "write the transition shorthand" },
+        .{ .kind = "property", .name = "transition-duration", .status = .planned, .diagnostic = "write the transition shorthand" },
+        .{ .kind = "property", .name = "transition-timing-function", .status = .planned, .diagnostic = "write the transition shorthand" },
+        .{ .kind = "property", .name = "transition-delay", .status = .planned, .diagnostic = "write the transition shorthand" },
+        .{ .kind = "property", .name = "animation", .status = .planned, .diagnostic = "keyframe animations are not lowered yet: they run without input, and the generated pages drive no animation tables (Frame.sequence, P2)" },
         .{ .kind = "property", .name = "transform-origin", .status = .mapped, .target = "Style.transform_origin", .fixture = "landmarks" },
 
         // ---- CSS: selectors and at-rules

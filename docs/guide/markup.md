@@ -404,6 +404,12 @@ the window restyles it. A query is `[only] screen` or `all` and features joined 
 `prefers-reduced-motion` and `prefers-contrast`; nested queries combine. `@media` on other
 boxes waits for style variants (engine spec F3) and is an error.
 
+`transition` is honoured where nothing restyles the box at run time: a container or text
+with no state CSS, `@media` or run-time token never changes, so its transition never runs
+and nothing is emitted. On a widget, whose face changes with hover and press, or a recipe
+widget, LCGF restyles instantly, so a transition there is an error; one of `none` or zero
+durations is accepted anywhere. Keyframe `animation` is not lowered yet.
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

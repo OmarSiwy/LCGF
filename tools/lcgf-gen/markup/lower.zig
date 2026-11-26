@@ -536,6 +536,32 @@ pub const Lowerer = struct {
         }
     }
 
+    /// A `transition` animates a change of style. On a box nothing restyles at run time it
+    /// never runs, which is honoured by emitting nothing; on a widget, a recipe widget or a
+    /// box with run-time tokens it would, and LCGF restyles instantly, so it is an error. A
+    /// transition of `none` or of zero durations animates nothing anywhere.
+    fn checkTransitions(l: *Lowerer) void {
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            const e = l.k.get(n, .transition);
+            const x = l.ir_of[n];
+            if (e.decl == none or x == none) continue;
+            const d = l.c.decls.get(e.decl);
+            const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
+            const animates = for (r[0]..r[1]) |t| {
+                const time = l.c.toks.items(.type)[t] == .dimension and (css.eq(l.c.toks.items(.str)[t], "s") or css.eq(l.c.toks.items(.str)[t], "ms"));
+                if (time and l.c.toks.items(.num)[t] != 0) break true;
+            } else false;
+            if (!animates) continue;
+            const node = l.page.nodes.get(x);
+            const restyled = node.recipe.len > 0 or node.uses.len > 0 or node.text_uses.color != none or node.text_uses.px != none or switch (node.kind) {
+                .container, .landmark, .label, .text, .heading, .when, .choice, .list, .each, .spacer, .separator => false,
+                else => true,
+            };
+            if (restyled) l.ds.err(d.loc, "transition on <{s}>: its look changes at run time (hover, press, state CSS, @media or a run-time token) and LCGF restyles instantly; transitions are not lowered yet", .{l.tag(n)});
+        }
+    }
+
     /// The environment conditions of `@media` `cond` and those around it; null after an error.
     fn mediaConditions(l: *Lowerer, cond: u32) ?Conditions {
         var out: Conditions = .{};
@@ -808,6 +834,7 @@ pub const Lowerer = struct {
         l.finishInlines();
         l.gridItems();
         l.stateRules();
+        l.checkTransitions();
         l.checkFields();
         l.checkRegions();
         l.checkProps();
