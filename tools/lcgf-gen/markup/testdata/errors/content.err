@@ -31,9 +31,6 @@ content.html:9:9: error: outline-style: dashed is not lowered; use solid
 content.html:10:9: error: an outline inside the box (negative width or offset) is not lowered
   .o2 { outline: 1px solid red; outline-offset: -2px; }
         ^
-content.html:24:23: error: list-style-type: armenian is not lowered; use a bullet, a string, none, or decimal, decimal-leading-zero, lower- or upper-alpha, -latin, -roman, or lower-greek
-  <ol reversed style="list-style-type: armenian"><li>m</li></ol>
-                      ^
-content.html:25:7: error: a reversed list is not lowered; number it in the markup's order
-  <ol reversed><li>n</li></ol>
-      ^
+content.html:24:14: error: list-style-type: armenian is not lowered; use a bullet, a string, none, or decimal, decimal-leading-zero, lower- or upper-alpha, -latin, -roman, or lower-greek
+  <ol style="list-style-type: armenian"><li>m</li></ol>
+             ^

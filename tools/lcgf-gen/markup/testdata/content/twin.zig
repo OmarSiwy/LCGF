@@ -40,6 +40,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "\u{3B5}. "), s.styled(label.ct.label(theme, "Five"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
     }),
     s.col(.{ .role = .list }, .{s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "- "), s.styled(label.ct.label(theme, "Dash"), .{ .size = .{ .fill, .fit }, .role = .label }) })}),
+    // <ol reversed>: down from its item count.
+    s.col(.{ .role = .list }, .{
+        s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "2. "), s.styled(label.ct.label(theme, "Two"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
+        s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "1. "), s.styled(label.ct.label(theme, "One"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
+    }),
     // box-shadow: a column in the box's place, a floating shadow node of its size first.
     s.flexed(s.col(.{ .size = .{ .px(120), .fit } }, .{
         s.col(.{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = .rgba(0, 0, 0, 128), .radius = 5, .params = lcgf.features.shadow(3), .paint_outset = .{ 1, -1, 1, 3 } }, .{}),

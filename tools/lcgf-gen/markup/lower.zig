@@ -1050,7 +1050,8 @@ pub const Lowerer = struct {
     /// The marker of list item `n` by its inherited `list-style-type`, or "" for none: a
     /// bullet (disc, circle, square, disclosure-open, disclosure-closed), a string as written,
     /// or a counter (`counter_styles`) of the item's place among its siblings from the
-    /// list's `start`, formatted at build time by text_counters.
+    /// list's `start` (down from it under `reversed`), formatted at build time by
+    /// text_counters.
     fn markerOf(l: *Lowerer, n: u32) []const u8 {
         var i = n;
         while (i != none and l.k.get(i, .@"list-style-type").decl == none) i = l.doc.nodes.items(.parent)[i];
@@ -1071,11 +1072,18 @@ pub const Lowerer = struct {
             l.ds.err(l.loc(n), "a counter marker inside a template needs the item's index; use a bullet or none there", .{});
             return "";
         }
-        if (p != none and l.attr(p, "reversed") != null) l.ds.err(l.attrLoc(p, "reversed"), "a reversed list is not lowered; number it in the markup's order", .{});
-        var ordinal: i64 = if (p != none) (if (l.attr(p, "start")) |st| std.fmt.parseInt(i64, std.mem.trim(u8, st, " "), 10) catch 1 else 1) else 1;
-        if (p != none) for (p + 1..n) |k| {
-            if (l.doc.nodes.items(.parent)[k] == p and l.doc.isElement(@intCast(k), "li")) ordinal += 1;
+        // The item's place among the list's items; a reversed list counts down, by default
+        // from its item count (HTML).
+        var before: i64 = 0;
+        var items: i64 = 0;
+        if (p != none) for (p + 1..l.k.end[p]) |k| {
+            if (l.doc.nodes.items(.parent)[k] != p or !l.doc.isElement(@intCast(k), "li")) continue;
+            items += 1;
+            if (k < n) before += 1;
         };
+        const reversed = p != none and l.attr(p, "reversed") != null;
+        const start: i64 = if (p != none) (if (l.attr(p, "start")) |st| std.fmt.parseInt(i64, std.mem.trim(u8, st, " "), 10) catch 1 else if (reversed) items else 1) else 1;
+        const ordinal = if (reversed) start - before else start + before;
         const counters = lcgf.text_counters;
         const out = ok(l.arena.alloc(u8, counters.required(ordinal, style) catch 64));
         return counters.format(ordinal, style, out) catch |e| {
