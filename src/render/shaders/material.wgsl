@@ -1,6 +1,17 @@
 // The stock material: the fill (or its gradient) times the bound texture. quad.zig `shader`
 // appends it to quad.wgsl; a user material is a function with the same signature.
+// The branches test per-instance values (quad.wgsl `fs`); the sample comes after them, in
+// uniform control flow.
 fn material(in: Frag) -> vec4f {
-    let uv = select(nearest_uv(in), nine_uv(in), in.params.x == k_nine);
-    return gradient(in) * textureSample(tex, samp, uv);
+    var uv: vec2f;
+    if (in.params.x == k_nine) {
+        uv = nine_uv(in);
+    } else {
+        uv = nearest_uv(in);
+    }
+    var color = in.fill;
+    if (in.params.x == k_linear || in.params.x == k_radial) {
+        color = gradient(in);
+    }
+    return color * textureSample(tex, samp, uv);
 }

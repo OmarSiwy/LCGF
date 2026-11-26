@@ -64,11 +64,15 @@ void main() {
                    texel_centre(rect_pos.y, size.y, v_uv_rect.y, v_uv_rect.w, u_texture_size.y));
     vec4 color = mix(v_fill * texture2D(u_texture, uv), v_border_color, on_border);
     vec2 inside = (step(v_clip.xy, pixel) * step(pixel, v_clip.zw));
-    vec2 clip_centre = ((v_clip.xy + v_clip.zw) * 0.5);
-    vec2 clip_half = ((v_clip.zw - v_clip.xy) * 0.5);
-    vec2 to_clip = (pixel - clip_centre);
-    float clip_d = rounded_box(to_clip, clip_half, corner_radius(to_clip, clip_half, v_clip_radii)) * scale;
-    float rounded = (any(greaterThan(v_clip_radii, vec4(0.0))) ? clamp((0.5 - clip_d), 0.0, 1.0) : 1.0);
+    // As quad.wgsl: the rounded clip's field only for a quad whose clip has radii.
+    float rounded = 1.0;
+    if (any(greaterThan(v_clip_radii, vec4(0.0)))) {
+        vec2 clip_centre = ((v_clip.xy + v_clip.zw) * 0.5);
+        vec2 clip_half = ((v_clip.zw - v_clip.xy) * 0.5);
+        vec2 to_clip = (pixel - clip_centre);
+        float clip_d = rounded_box(to_clip, clip_half, corner_radius(to_clip, clip_half, v_clip_radii)) * scale;
+        rounded = clamp((0.5 - clip_d), 0.0, 1.0);
+    }
     float alpha = ((((shape * inside.x) * inside.y) * rounded) * opacity);
     gl_FragColor = (vec4((color.xyz * color.w), color.w) * alpha);
 }

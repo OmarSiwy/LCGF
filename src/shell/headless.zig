@@ -110,14 +110,14 @@ pub const Headless = struct {
         h.applied = p.*;
     }
 
-    /// Draws the frame into `fb`: clear, then every command but the custom ones.
+    /// Draws the frame into `fb`: clear, then every command but the custom ones. With a context
+    /// that tracks damage (`Context.trackDamage`), only the rects that changed; `fb` keeps the rest.
     pub fn present(h: *Headless, out: *const Output) void {
         h.presents += 1;
         const g = h.glyphs;
         const n = h.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
         h.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, .{ 0, 0 }, h.scale);
-        h.fb.clear(h.background);
-        render.render(&h.gfx, .{ .fb = &h.fb, .scissor = h.fb.all() }, out.draw);
+        h.gfx.redraw(&h.fb, h.fb.all(), out.draw, h.background);
     }
 
     /// While recorded frames remain, returns at once: the next one is the next event, and it is
@@ -214,6 +214,57 @@ test "headless: runs the example from a recording and draws it" {
     try testing.expectEqual(shell.background, shell.fb.at(400, 300));
     // A glyph cell of "Add layer" is the text colour.
     try testing.expectEqual(th.text, shell.fb.at(20, 70));
+}
+
+test "damage: redrawing only what changed gives every frame's full picture" {
+    const limits: context.Limits = .{ .nodes = example_limits.nodes, .texts = example_limits.texts, .damage = true };
+    const Store = struct {
+        var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+        var pixels: [sw.Framebuffer.len(fb_w, fb_h)]u32 = undefined;
+        var glyphs: [512]Quad = undefined;
+        var first: [limits.texts]u32 = undefined;
+        var count: [limits.texts]u32 = undefined;
+        var text: [64]u8 = undefined;
+        var events: [16]Input.Event = undefined;
+        var contacts: [4]Input.Contact = undefined;
+    };
+    const recording = @embedFile("testdata/example.replay");
+    var full_ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var part_ctx = try context.Context.init(&Store.ctx_buffer, limits);
+    part_ctx.trackDamage();
+    var full_app: example.App = .{};
+    var part_app: example.App = .{};
+    var full = Fixture.shell(recording);
+    var part: Headless = .init(testing.io, recording, fb_w, fb_h, .{
+        .replay = .{ .text = &Store.text, .events = &Store.events, .contacts = &Store.contacts },
+        .pixels = &Store.pixels,
+        .glyphs = &Store.glyphs,
+        .first = &Store.first,
+        .count = &Store.count,
+    });
+    var full_ev: Events = .{};
+    var part_ev: Events = .{};
+    var partial: u32 = 0;
+    while (full.poll(&full_ev)) {
+        try testing.expect(part.poll(&part_ev));
+        if (!full_ctx.needsFrame(&full_ev.in)) {
+            try testing.expect(!part_ctx.needsFrame(&part_ev.in));
+            continue;
+        }
+        try testing.expect(part_ctx.needsFrame(&part_ev.in));
+        var f = full_ctx.begin(&full_ev.in);
+        full_app.build(&f, &full_ev);
+        const full_out = f.end(.{});
+        full.present(&full_out);
+        var g = part_ctx.begin(&part_ev.in);
+        part_app.build(&g, &part_ev);
+        const part_out = g.end(.{});
+        part.present(&part_out);
+        partial += @intFromBool(part_out.draw.damage.pixels() < fb_w * fb_h);
+        try testing.expectEqualSlices(u32, full.fb.pixels, part.fb.pixels);
+    }
+    // Some frames really were partial.
+    try testing.expect(partial > 0);
 }
 
 test "run: the headless shell runs the example in one call" {

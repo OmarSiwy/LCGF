@@ -96,8 +96,14 @@ pub const Null = struct {
     }
 
     pub fn drawText(n: *const Null, pass: Pass, run: u32) void {
+        n.drawGlyphSpan(pass, n.glyphs.span(run));
+    }
+
+    /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+    /// draw (`iface.drawUntilCustom`).
+    pub fn drawGlyphSpan(n: *const Null, pass: Pass, span: [2]u32) void {
         bind(pass, .solid, n.glyphs.texture, .glyphs);
-        pass.push(.{ .draw = .{ .vertices = 4, .instances = n.glyphs.span(run)[1], .first_instance = n.glyphs.span(run)[0] } });
+        pass.push(.{ .draw = .{ .vertices = 4, .instances = span[1], .first_instance = span[0] } });
     }
 };
 
@@ -108,7 +114,7 @@ comptime {
 const testing = std.testing;
 const conformance = @import("conformance.zig");
 
-test "null: one upload per buffer, one draw per command, state rebound every time" {
+test "null: one upload per buffer, one draw per command (adjacent text runs as one), state rebound every time" {
     var st: conformance.Storage = .{};
     const scene = &conformance.scenes[2]; // text: batch | text | text | batch
     try testing.expectEqualStrings("text", scene.name);
@@ -128,13 +134,13 @@ test "null: one upload per buffer, one draw per command, state rebound every tim
 
     log.len = 0;
     iface.render(&gfx, &log, &st.draw);
-    try testing.expectEqual(4 * 5, log.len);
+    try testing.expectEqual(3 * 5, log.len);
     try testing.expectEqualSlices(Call, &.{
         .{ .pipeline = .solid },
         .{ .group = .{ .index = 0, .texture = .white } },
         .{ .group = .{ .index = 1, .texture = atlas } },
         .{ .vertex_buffer = .glyphs },
-        .{ .draw = .{ .vertices = 4, .instances = 3, .first_instance = 0 } },
+        .{ .draw = .{ .vertices = 4, .instances = 8, .first_instance = 0 } },
     }, log.recorded()[5..10]);
 }
 

@@ -346,6 +346,17 @@ pub fn build(b: *std.Build) void {
     const bench_run = b.addRunArtifact(bench);
     bench_run.addPassthruArgs();
     b.step("bench", "Run the frame benchmark (Linux)").dependOn(&bench_run.step);
+    // The software renderer over whole frames and isolated quad kinds (bench/micro/swbench.zig).
+    const swbench = b.addExecutable(.{ .name = "swbench", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/micro/swbench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_src_scenes } },
+    }) });
+    const swbench_run = b.addRunArtifact(swbench);
+    swbench_run.addPassthruArgs();
+    b.step("swbench", "Run the software renderer benchmark (Linux)").dependOn(&swbench_run.step);
+    b.step("swbench-build", "Build zig-out/bin/swbench").dependOn(&b.addInstallArtifact(swbench, .{}).step);
     const probe = b.addSystemCommand(&.{ "python3", "bench/micro/probe.py", "--" });
     probe.addArtifactArg(bench);
     probe.addArg("--idle");

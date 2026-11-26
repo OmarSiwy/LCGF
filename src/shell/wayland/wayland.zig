@@ -485,9 +485,20 @@ pub const Wayland = struct {
             return;
         };
         var fb = win.shm.framebuffer(slot);
+        // A frame that redraws only its damage (`Context.trackDamage`) goes over the last frame, but
+        // this buffer holds the one before: first copy in what the last frame drew.
+        if (slot != win.shown) {
+            const last = win.shm.framebuffer(win.shown);
+            const rows = win.shm.drawn_rows;
+            const from = @min(rows[0], fb.height) * fb.stride;
+            const to = @min(rows[1], fb.height) * fb.stride;
+            @memcpy(fb.pixels[from..to], last.pixels[from..to]);
+        }
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
         w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, win.scale);
+        const r = lcgf.damage.Region.scissor(out.draw.damage.bounds(), px, win.scale);
+        win.shm.drawn_rows = .{ r[1], r[1] + r[3] };
         win.shm.busy[slot] = true;
         win.shown = @intCast(slot);
         w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });
@@ -498,7 +509,7 @@ pub const Wayland = struct {
         } else {
             w.request(win.surface, op.surface_set_buffer_scale, .{@as(i32, @intFromFloat(win.scale))});
         }
-        w.request(win.surface, op.surface_damage_buffer, .{ @as(i32, 0), @as(i32, 0), @as(i32, @intCast(px[0])), @as(i32, @intCast(px[1])) });
+        w.request(win.surface, op.surface_damage_buffer, .{ @as(i32, @intCast(r[0])), @as(i32, @intCast(r[1])), @as(i32, @intCast(r[2])), @as(i32, @intCast(r[3])) });
         // Ask when this frame is shown: `wait` paces animations to it.
         if (win.frame == 0) {
             win.frame = w.new(.frame);
@@ -945,6 +956,9 @@ pub const Shm = struct {
     height: u32 = 0,
     stride: u32 = 0,
     one: usize = 0,
+    /// Rows the last frame drew (all, unless its draw list tracked damage): the other buffer,
+    /// a frame older, still has the frame before there.
+    drawn_rows: [2]u32 = .{ 0, std.math.maxInt(u32) },
 
     pub fn framebuffer(s: *const Shm, slot: usize) sw.Framebuffer {
         const px: [*]u32 = @ptrCast(@alignCast(s.map[s.one * slot ..].ptr));

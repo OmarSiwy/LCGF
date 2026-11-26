@@ -56,30 +56,35 @@ pub fn stockFor(comptime use: Usage) [:0]const u8 {
             (if (nine) function("nine_axis") ++ function("nine_uv") else "") ++
             (if (pattern) function("border_pattern") else "") ++
             (if (shadow) function("shadow_coverage") else "");
-        const mat = (if (grad) "gradient(in)" else "in.fill") ++
-            (if (nine) " * textureSample(tex, samp, select(nearest_uv(in), nine_uv(in), in.params.x == k_nine))" else if (tex) " * textureSample(tex, samp, nearest_uv(in))" else "");
+        // As in the stock shader: per-instance branches, the texture sampled after them.
+        const mat = (if (nine) "var uv = nearest_uv(in);\nif (in.params.x == k_nine) {\nuv = nine_uv(in);\n}\n" else "") ++
+            (if (grad) "var fill = in.fill;\nif (in.params.x == k_linear || in.params.x == k_radial) {\nfill = gradient(in);\n}\n" else "let fill = in.fill;\n") ++
+            "let material = fill" ++
+            (if (nine) " * textureSample(tex, samp, uv)" else if (tex) " * textureSample(tex, samp, nearest_uv(in))" else "") ++ ";\n";
         break :result head ++ constants ++ "@vertex\n" ++ vertex ++ helpers ++
             "@fragment fn fs(in: Frag) -> @location(0) vec4f {\n" ++
             "let r = " ++ (if (use.radius) "corner_radius(in.local, in.half, in.radii)" else "0.0") ++ ";\n" ++
             "let d = rounded_box(in.local, in.half, r) * globals.scale;\n" ++
             "let shape = clamp(0.5 - d, 0.0, 1.0);\n" ++
-            "let material = " ++ mat ++ ";\n" ++
+            mat ++
             (if (use.border)
                 "let inner = clamp(0.5 - (d + in.border * globals.scale), 0.0, 1.0);\n" ++
+                    (if (pattern) "var pattern = 1.0;\nif (in.params.x == k_dashed || in.params.x == k_dotted) {\npattern = border_pattern(in);\n}\n" else "") ++
                     "let edge = (1.0 - mix(1.0, inner, step(0.001, in.border)))" ++
-                    (if (pattern) " * border_pattern(in)" else "") ++ ";\nlet painted = mix(material, in.border_color, edge);\n"
+                    (if (pattern) " * pattern" else "") ++ ";\nlet painted = mix(material, in.border_color, edge);\n"
             else
                 "let painted = material;\n") ++
             (if (shadow)
                 "let shadow = in.params.x == k_shadow;\nlet color = select(painted, in.fill, shadow);\n" ++
-                    "let cover = select(shape, shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y)), shadow);\n"
+                    "var cover = shape;\nif (shadow) {\ncover = shadow_coverage(d / globals.scale, bitcast<f32>(in.params.y));\n}\n"
             else
                 "let color = painted;\nlet cover = shape;\n") ++
             "let inside = step(in.clip.xy, in.pixel) * step(in.pixel, in.clip.zw);\n" ++
             (if (use.radius)
-                "let delta = in.pixel - (in.clip.xy + in.clip.zw) * 0.5;\nlet half = (in.clip.zw - in.clip.xy) * 0.5;\n" ++
+                "var rounded = 1.0;\nif (any(in.clip_radii > vec4f(0.0))) {\n" ++
+                    "let delta = in.pixel - (in.clip.xy + in.clip.zw) * 0.5;\nlet half = (in.clip.zw - in.clip.xy) * 0.5;\n" ++
                     "let clip_d = rounded_box(delta, half, corner_radius(delta, half, in.clip_radii)) * globals.scale;\n" ++
-                    "let rounded = select(1.0, clamp(0.5 - clip_d, 0.0, 1.0), any(in.clip_radii > vec4f(0.0)));\n"
+                    "rounded = clamp(0.5 - clip_d, 0.0, 1.0);\n}\n"
             else
                 "let rounded = 1.0;\n") ++
             "let alpha = cover * inside.x * inside.y * rounded * in.opacity;\nreturn vec4f(color.rgb * color.a, color.a) * alpha;\n}\n";
