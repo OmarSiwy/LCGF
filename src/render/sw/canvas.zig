@@ -15,6 +15,7 @@ const simd = @import("../../core/simd.zig");
 const canvas = @import("../../draw/canvas.zig");
 const DrawList = @import("../../draw/draw_list.zig").DrawList;
 const sw = @import("sw.zig");
+const draw_list = @import("../../draw/draw_list.zig");
 
 const W = simd.lanes;
 const F = simd.F;
@@ -38,36 +39,68 @@ pub fn draw(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.I
     if (area[0] >= area[2] or area[1] >= area[3]) return;
     const v = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
     const red: u5 = @as(u5, @intFromBool(t.fb.format == .bgra8)) * 16;
+    // The area in world units from the origin, widened by the widest stroke the palette can
+    // give and a pixel of antialiasing: an instance whose `reach` misses it is skipped on four
+    // integer compares, before it is decoded.
+    var widest: f32 = 0;
+    for (c.palette.layers) |l| widest = @max(widest, l.width);
+    const slop = (widest * 4 * v.line + 2) / v.scale;
+    const limit: f32 = 2e9;
+    const world = [4]i32{
+        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[0])) - v.base[0]) / v.scale - slop), -limit, limit)),
+        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[1])) - v.base[1]) / v.scale - slop), -limit, limit)),
+        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[2])) - v.base[0]) / v.scale + slop), -limit, limit)),
+        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[3])) - v.base[1]) / v.scale + slop), -limit, limit)),
+    };
+    const pos = s.c.pos;
+    const looks = s.c.look;
     for (c.ranges) |r| {
         const end = @min(r.first +| r.count, s.len);
-        for (@min(r.first, end)..end) |i| {
-            const look = s.c.look[i];
-            const layer = canvas.layerRow(c.palette, canvas.layerOf(look));
-            if (!canvas.shown(look, layer)) continue;
-            const sh = canvas.Shape.of(v, s.c.pos[i], look, layer);
-            const box = clampBox(pixels(.{ @floor(sh.box[0]), @floor(sh.box[1]), @ceil(sh.box[2]), @ceil(sh.box[3]) }), area);
-            // The one coarse branch: most instances of a big canvas are outside this band.
-            if (box[0] >= box[2] or box[1] >= box[3]) continue;
-            const over = canvas.overrideOf(c.overrides, @intCast(i));
-            const ink: Ink = .{
-                .fill = rgba(over orelse layer.fill),
-                .stroke = rgba(over orelse layer.stroke),
-                .filled = sh.filled and layer.flags & 1 != 0,
-                .stroked = sh.stroked,
-                .opacity = node.opacity,
-            };
-            switch (sh.kind) {
-                .polygon => {
-                    const first = @min(look[1], s.vert_len);
-                    rows(.polygon, t.fb, red, box, &sh, ink, .{ .view = v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
-                },
-                .glyph => if (atlas.alpha8.len != 0)
-                    rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
-                else
-                    rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
-                inline else => |kind| rows(kind, t.fb, red, box, &sh, ink, .{}),
+        var base: usize = @min(r.first, end);
+        while (base < end) : (base += 64) {
+            // A tight pass over 64 rows marks the ones that reach the area; only those are
+            // decoded and shaded, so a band pays a few instructions for each row it skips.
+            const n = @min(64, end - base);
+            var hits: u64 = 0;
+            for (0..n) |j| {
+                const b = canvas.reach(pos[base + j], looks[base + j], v.origin);
+                const in = (b[2] >= world[0]) & (b[0] <= world[2]) & (b[3] >= world[1]) & (b[1] <= world[3]);
+                hits |= @as(u64, @intFromBool(in)) << @intCast(j);
+            }
+            while (hits != 0) : (hits &= hits - 1) {
+                const i = base + @ctz(hits);
+                instance(t, s, &c, v, area, red, node.opacity, atlas, i);
             }
         }
+    }
+}
+
+/// Decodes and shades row `i`.
+inline fn instance(t: sw.Target, s: *const canvas.Instances, c: *const draw_list.CanvasDraw, v: canvas.View, area: [4]u32, red: u5, opacity: f32, atlas: sw.Image, i: usize) void {
+    const look = s.c.look[i];
+    const layer = canvas.layerRow(c.palette, canvas.layerOf(look));
+    if (!canvas.shown(look, layer)) return;
+    const sh = canvas.Shape.of(v, s.c.pos[i], look, layer);
+    const box = clampBox(pixels(.{ @floor(sh.box[0]), @floor(sh.box[1]), @ceil(sh.box[2]), @ceil(sh.box[3]) }), area);
+    if (box[0] >= box[2] or box[1] >= box[3]) return;
+    const over = canvas.overrideOf(c.overrides, @intCast(i));
+    const ink: Ink = .{
+        .fill = rgba(over orelse layer.fill),
+        .stroke = rgba(over orelse layer.stroke),
+        .filled = sh.filled and layer.flags & 1 != 0,
+        .stroked = sh.stroked,
+        .opacity = opacity,
+    };
+    switch (sh.kind) {
+        .polygon => {
+            const first = @min(look[1], s.vert_len);
+            rows(.polygon, t.fb, red, box, &sh, ink, .{ .view = v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
+        },
+        .glyph => if (atlas.alpha8.len != 0)
+            rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
+        else
+            rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
+        inline else => |kind| rows(kind, t.fb, red, box, &sh, ink, .{}),
     }
 }
 
@@ -178,7 +211,6 @@ fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
 
 const testing = std.testing;
 const mem = @import("../../core/mem.zig");
-const draw_list = @import("../../draw/draw_list.zig");
 const Color = @import("../../core/types.zig").Color;
 
 /// Layers of the tests: 0 red 4 px, 1 white fill and blue stroke 2 px, 2 translucent blue

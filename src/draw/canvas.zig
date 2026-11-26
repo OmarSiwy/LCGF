@@ -382,6 +382,26 @@ pub inline fn layerOf(look: [4]u32) u8 {
     return @truncate(look[0] >> 24);
 }
 
+/// The box instance `pos`, `look` can touch, in world units from `origin` (wrapping), widened
+/// by its world width but not by a palette width: integers only, so a renderer can cull most
+/// rows of a big batch before decoding them (`Shape.of`). Wrapping arithmetic: a row within
+/// 2^30 units of the origin is placed exactly, which is what is drawn anyway.
+pub inline fn reach(pos: [4]i32, look: [4]u32, origin: [2]i32) [4]i32 {
+    // Arcs and glyphs are their first point grown by `e` (an arc's pos[3] is 0); the others
+    // span their two points. Masks, not branches: this runs for every row of every band.
+    const kind = look[0] & 15;
+    const centred = -%@as(i32, @intFromBool(kind == @backingInt(Kind.arc) or kind == @backingInt(Kind.glyph)));
+    const e = @max(pos[2], pos[3]) & centred;
+    const pad: i32 = @bitCast(look[3] & -%((look[0] >> 8) & 1));
+    const a: @Vector(2, i32) = .{ pos[0] -% origin[0], pos[1] -% origin[1] };
+    const far: @Vector(2, i32) = .{ pos[2] -% origin[0], pos[3] -% origin[1] };
+    const b = far ^ ((far ^ a) & @as(@Vector(2, i32), @splat(centred)));
+    const grow: @Vector(2, i32) = @splat(e +% pad);
+    const lo = @min(a, b) -% grow;
+    const hi = @max(a, b) +% grow;
+    return .{ lo[0], lo[1], hi[0], hi[1] };
+}
+
 /// One instance in pixels: what the shaders read, decoded once per instance.
 pub const Shape = struct {
     kind: Kind,
@@ -689,6 +709,20 @@ test "builders: one 32-byte row per primitive, the layout the table documents" {
     try testing.expectEqual([4]i32{ 2_000, 600, 600, 1_250 }, s.c.pos[5]);
     try testing.expectEqual(unorm16(1.0 / 16.0) | (unorm16(4.0 / 16.0) << 16), s.c.look[4][1]);
     try testing.expectEqual(4 | (1 << 16) | (7 << 24), s.c.look[4][0]);
+}
+
+test "reach: every kind's box holds its geometry, the world width included" {
+    var fx: Fixture(8, 4) = .{};
+    var s = fx.instances();
+    _ = s.segment(.{ 10, 50 }, .{ -20, 30 }, .{ .width = 6 });
+    _ = s.arc(.{ 100, 100 }, 40, .{});
+    _ = s.glyph(.{ 0, 0 }, .{ 8, 20 }, .{ 0, 0, 1, 1 }, .{ .turns = 2 });
+    _ = s.polygon(&.{ .{ 0, 0 }, .{ 9, 3 }, .{ 2, 7 } }, .{});
+    const o = [2]i32{ 5, -5 };
+    try testing.expectEqual([4]i32{ -31, 29, 11, 61 }, reach(s.c.pos[0], s.c.look[0], o));
+    try testing.expectEqual([4]i32{ 55, 65, 135, 145 }, reach(s.c.pos[1], s.c.look[1], o));
+    try testing.expectEqual([4]i32{ -25, -15, 15, 25 }, reach(s.c.pos[2], s.c.look[2], o));
+    try testing.expectEqual([4]i32{ -5, 5, 4, 12 }, reach(s.c.pos[3], s.c.look[3], o));
 }
 
 test "polyline: one segment per edge, each with its distance along the chain" {
