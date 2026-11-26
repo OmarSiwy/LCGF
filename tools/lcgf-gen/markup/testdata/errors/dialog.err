@@ -1,0 +1,6 @@
+dialog.html:9:3: error: a <dialog> is centred over the page: margins and flex item rules do not apply; set its width or padding
+  <dialog id="d" bind:open="d"><span>Hi</span></dialog>
+  ^
+dialog.html:9:3: error: box-shadow and outline on a <dialog> are not lowered; give its panel a border
+  <dialog id="d" bind:open="d"><span>Hi</span></dialog>
+  ^

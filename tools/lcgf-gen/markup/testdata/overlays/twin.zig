@@ -1,7 +1,7 @@
 //! overlays, written by hand: a select with a group of options, a button's tooltip (title=),
 //! a dialog of any content, a popover and a menu (engine spec F10), each moved last into a
 //! root over the viewport so they float from its origin and draw above the page. CSS on the
-//! select restyles its button in both frontends.
+//! select restyles its button, and on the dialog its panel, in both frontends.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -40,6 +40,15 @@ const shape_face: lcgf.types.Style = blk: {
     break :blk st;
 };
 
+/// `dialog { width: 320px; padding: 24px; background-color: #283040 }` over its panel.
+const prefs_face: lcgf.types.Style = blk: {
+    var st = dialog.panelStyle(&theme);
+    st.size[0] = .px(320);
+    st.pad = @splat(24);
+    st.fill = .rgb(40, 48, 64);
+    break :blk st;
+};
+
 pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
     s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.row(.{ .pad = @splat(8), .gap = 8 }, .{
@@ -51,7 +60,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
     }),
     select.ct.list(theme, .shape, .shape, shapes),
     tooltip.ct.tooltip(theme, .settings, .settings_tip, "Open the preferences"),
-    dialog.ct.dialog(theme, .prefs, .prefs_open, .{
+    dialog.ct.dialogFace(theme, .prefs, .prefs_open, prefs_face, .{
         label.ct.label(theme, "Preferences"),
         checkbox.ct.checkbox(theme, .snap, .snap, "Snap"),
         button.ct.button(theme, .done, "Done"),

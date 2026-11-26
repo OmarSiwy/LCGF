@@ -5913,6 +5913,7 @@ Dialog (tier 2): a modal window over the page, with a title, a message and butto
 - `fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []const u8) Response`: The button that opens dialog `name`, showing `text`.
 - `fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *DialogState, title: []const u8, message: []const u8, texts: []const […`: Builds dialog `name` (buttons `def`, labelled `texts`) showing `title` and `message`, if it is open.
 - `fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool`: Opens the backdrop and the panel of dialog `name` if `open.*`, and returns whether it did; the caller then adds the content and calls `end`.
+- `fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style) bool`: `begin` with the panel laid out by `face` instead of `panelStyle(th)`, as `ct.dialogFace` lays out the comptime one (CSS on a `<dialog>`).
 - `fn end(f: *Frame) void`: Closes the panel and the backdrop `begin` opened.
 - `fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8, comptime rows: u32) type`: The custom widget (`Spec.widget`) of `ct.dialog`'s backdrop: it pushes the backdrop and the panel as `begin` does, then the content; its `step` closes on Escape and keeps focus inside (focus outside the dialog, by a Tab past an end or a dialog just opened, goes to its first widget in Tab order, or its last after Shift+Tab).
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the button that opens the dialog and a label, and the dialog, in both front ends, in theme `th`.
@@ -5948,6 +5949,7 @@ Fields: `open`, `pressed`, `clicked`
 ### `ct` (struct)
 
 - `fn dialog(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec`: Dialog `id`, shown while the bool field `open` is true, holding `children` (any spec nodes, as `spec.col` takes them).
+- `fn dialogFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime children: anytype) Spec`: `dialog` with its panel laid out by `face` instead of `panelStyle(th)` (CSS on a `<dialog>`); the runtime twin is `beginFace`.
 
 ### `Modal(..)` (generic struct)
 The custom widget (`Spec.widget`) of `ct.dialog`'s backdrop: it pushes the backdrop and the panel as `begin` does, then the content; its `step` closes on Escape and keeps focus inside (focus outside the dialog, by a Tab past an end or a dialog just opened, goes to its first widget in Tab order, or its last after Shift+Tab).

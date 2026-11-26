@@ -169,8 +169,8 @@ By default the page is a comptime page (`ComptimeUi`).
 - `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
 
 CSS on a button, link, toggle, checkbox, switch, range, text control (text, password, search,
-number, textarea), progress bar, separator, radio group or select (its button) restyles it
-there through the widget's `…Face` function, as `spec.styled`
+number, textarea), progress bar, separator, radio group, select (its button) or dialog (its panel) restyles
+it there through the widget's `…Face` function, as `spec.styled`
 restyles the comptime one. A focused text control still takes the accent border; unfocused it
 shows the CSS border colour, in both frontends. A box-shadow or an outline on one of them
 works there too: its column of floating nodes is built around the restyled widget. Margins and

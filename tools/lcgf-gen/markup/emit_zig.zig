@@ -418,7 +418,11 @@ pub const Emit = struct {
                 e.write(")");
             },
             .dialog => {
-                e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                if (restyle) {
+                    e.print("{s}.ct.dialogFace(theme, .{f}, .{f}, ", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                    e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                    e.write(", .{");
+                } else e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
             .spinner => unreachable,
@@ -973,7 +977,8 @@ pub const Emit = struct {
                 return "";
             },
             .dialog => {
-                e.print("if ({s}.begin(f, &theme, \"{s}\", &{s})) {{", .{ e.use("dialog"), n.id, e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("if ({s}.{s}(f, &theme, \"{s}\", &{s}{s})) {{", .{ e.use("dialog"), e.faced("begin", face), n.id, e.stateRef(n.bind), face });
                 return e.arena.dupe(u8, "dialog.end(f); }") catch unreachable;
             },
             .spacer, .spinner, .each => unreachable,

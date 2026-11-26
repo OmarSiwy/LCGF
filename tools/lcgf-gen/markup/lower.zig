@@ -2078,7 +2078,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
-                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select => true,
+                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select, .dialog => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
@@ -3104,6 +3104,20 @@ pub const Lowerer = struct {
             l.skip[n] = true;
             return true;
         };
+        // CSS on the <dialog> lays out its panel; the panel is centred over the viewport, so a
+        // margin there means nothing.
+        var node_style = node;
+        l.widgetStyle(n, parent, lcgf.widgets_dialog.panelStyle(&l.page.theme), &node_style);
+        node.style = node_style.style;
+        node.base_style = node_style.base_style;
+        node.params_expr = node_style.params_expr;
+        if (node_style.margin != null or !std.meta.eql(l.flex, lcgf.flex.Flex.Style{}))
+            l.ds.err(l.loc(n), "a <dialog> is centred over the page: margins and flex item rules do not apply; set its width or padding", .{});
+        l.flex = .{};
+        if (l.shadow != null or l.outline != null)
+            l.ds.err(l.loc(n), "box-shadow and outline on a <dialog> are not lowered; give its panel a border", .{});
+        l.shadow = null;
+        l.outline = null;
         l.ir_of[n] = l.addNode(node);
         ok(l.overlays.append(l.arena, l.ir_of[n]));
         return true;

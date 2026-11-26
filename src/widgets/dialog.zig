@@ -296,10 +296,16 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
 /// of the page, so it is drawn on top. Escape closes it first. The panel is a modal focus layer
 /// (`focus.Scopes.trap`): Tab stays inside it.
 pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool {
+    return beginFace(f, th, name, open, panelStyle(th));
+}
+
+/// `begin` with the panel laid out by `face` instead of `panelStyle(th)`, as
+/// `ct.dialogFace` lays out the comptime one (CSS on a `<dialog>`).
+pub fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style) bool {
     open.* = open.* and !popover.keyPressed(f.in, popover.keys.escape);
     if (!open.*) return false;
     _ = f.interact(f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport)), popover.overlay_sense);
-    const panel = f.open(.from(partName(name, "panel")), panelStyle(th));
+    const panel = f.open(.from(partName(name, "panel")), face);
     _ = f.interact(panel, popover.overlay_sense);
     f.tree().c.role[panel.ix()] = @backingInt(role);
     f.focusScope(panel, focus.Scopes.trap);
@@ -317,8 +323,15 @@ pub const ct = struct {
     /// nodes, as `spec.col` takes them). Put it last in the page's root so it is drawn above
     /// the rest. Escape closes it (sets `open`); Tab and Shift+Tab stay among its widgets.
     pub fn dialog(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec {
+        return dialogFace(th, id, open, panelStyle(&th), children);
+    }
+
+    /// `dialog` with its panel laid out by `face` instead of `panelStyle(th)` (CSS on a
+    /// `<dialog>`); the runtime twin is `beginFace`.
+    pub fn dialogFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime children: anytype) Spec {
         const name = @tagName(id);
-        var panel = spec_zig.col(.{}, children);
+        var panel = spec_zig.col(face, children);
+        panel.style.dir = face.dir;
         panel.id = partName(name, "panel");
         const rows = 1 + @import("../comptime/flatten.zig").count(panel);
         return spec_zig.when(open, .{ .kind = .col, .id = partName(name, "backdrop"), .bind = @tagName(open), .widget = Modal(th, name, @tagName(open), rows), .children = &.{panel} });
@@ -367,7 +380,7 @@ pub fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []c
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
             const t = &ui.tables.t;
             const b = t.push(parent, .hash(partName(name, "backdrop")), &backdropStyle(&th, in.viewport));
-            const p = t.push(b, .hash(partName(name, "panel")), &panelStyle(&th));
+            const p = t.push(b, .hash(partName(name, "panel")), &n.children[0].style);
             t.c.role[p] = @backingInt(role);
             next.* += 2;
             inline for (n.children[0].children) |c| ui.push(c, p, next, in);
