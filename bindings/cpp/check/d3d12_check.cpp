@@ -37,10 +37,12 @@ int main(int argc, char** argv) {
     TRY(gpu::CreateStaging(d, host, 4096, &staging));
     d.staging = &staging;
     using BU = gpu::BufferUsage;
-    gpu::Buffer buffer, storage, base;
+    gpu::Buffer buffer, storage, base, shared;
     TRY(gpu::CreateBuffer(d, arena, {64, BU::Vertex | BU::Index | BU::Uniform | BU::CopyDst}, &buffer));
     TRY(gpu::CreateBuffer(d, arena, {256, BU::Storage | BU::CopySrc}, &storage));
     TRY(gpu::CreateBuffer(d, arena, {16, BU::Uniform | BU::CopyDst}, &base));
+    // A host buffer the GPU writes: a custom heap, not the upload heap (gpu::CreateBuffer).
+    TRY(gpu::CreateBuffer(d, host, {16, BU::Uniform | BU::CopyDst}, &shared));
     gpu::Texture texture;
     TRY(gpu::CreateTexture(d, arena, {64, 32, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::TextureBinding | gpu::TextureUsage::RenderAttachment},
                            &texture));
@@ -64,6 +66,7 @@ int main(int argc, char** argv) {
     gpu::Upload up(d, list);
     const float data[4] = {1, 2, 3, 4};
     up.WriteBuffer(buffer, 0, data, sizeof data);
+    up.WriteBuffer(shared, 0, data, sizeof data);
     const gpu::CommandEncoder enc = std::move(up).Finish();
 
     const gpu::RenderPassColorAttachment color{.view = view, .clearValue = {.a = 1}};
@@ -96,7 +99,7 @@ int main(int argc, char** argv) {
     gpu::DestroyPipeline(d, pipeline);
     gpu::DestroySampler(d, sampler);
     gpu::DestroyTexture(d, texture);
-    for (const gpu::Buffer* b : {&base, &storage, &buffer, &staging.buffer}) gpu::DestroyBuffer(d, *b);
+    for (const gpu::Buffer* b : {&shared, &base, &storage, &buffer, &staging.buffer}) gpu::DestroyBuffer(d, *b);
     gpu::DestroyArena(d, host);
     gpu::DestroyArena(d, arena);
 

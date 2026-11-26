@@ -58,6 +58,16 @@ fn main() {
             },
         )
         .unwrap();
+    // A host buffer the GPU writes: a custom heap, not the upload heap (create_buffer).
+    let shared = d
+        .create_buffer(
+            &mut host,
+            &gpu::BufferDescriptor {
+                size: 16,
+                usage: BU::UNIFORM | BU::COPY_DST,
+            },
+        )
+        .unwrap();
     let texture = d
         .create_texture(
             &mut arena,
@@ -141,6 +151,7 @@ fn main() {
         .flat_map(|f| f.to_le_bytes())
         .collect();
     up.write_buffer(&buffer, 0, &data);
+    up.write_buffer(&shared, 0, &data);
     let encoder = up.finish();
 
     {
@@ -193,6 +204,7 @@ fn main() {
     d.destroy_render_pipeline(&pipeline);
     d.destroy_sampler(&sampler);
     d.destroy_texture(&texture);
+    d.destroy_buffer(&shared);
     d.destroy_buffer(&base);
     d.destroy_buffer(&storage);
     d.destroy_buffer(&buffer);

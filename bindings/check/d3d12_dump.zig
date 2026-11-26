@@ -55,6 +55,8 @@ pub fn main(init: std.process.Init) !void {
     const buffer = try dev.createBuffer(&arena, .{ .size = 64, .usage = .{ .vertex = true, .index = true, .uniform = true, .copy_dst = true } });
     const storage = try dev.createBuffer(&arena, .{ .size = 256, .usage = .{ .storage = true, .copy_src = true } });
     const base = try dev.createBuffer(&arena, .{ .size = 16, .usage = .{ .uniform = true, .copy_dst = true } });
+    // A host buffer the GPU writes: a custom heap, not the upload heap (gpu.createBuffer).
+    const shared = try dev.createBuffer(&host, .{ .size = 16, .usage = .{ .uniform = true, .copy_dst = true } });
     const texture = try dev.createTexture(&arena, .{ .size = .{ .width = 64, .height = 32 }, .format = .rgba8_unorm, .usage = .{ .texture_binding = true, .render_attachment = true } });
     const sampler = try dev.createSampler(.{ .address_mode_u = .repeat, .mag_filter = .linear, .min_filter = .linear });
 
@@ -71,6 +73,7 @@ pub fn main(init: std.process.Init) !void {
 
     var up: gpu.Upload = .begin(dev, list);
     up.writeBuffer(buffer, 0, std.mem.asBytes(&[4]f32{ 1, 2, 3, 4 }));
+    up.writeBuffer(shared, 0, std.mem.asBytes(&[4]f32{ 1, 2, 3, 4 }));
     const enc = up.finish();
 
     var pass = enc.beginRenderPass(.{ .color_attachments = &.{.{ .view = texture.createView(), .clear_value = .{ .a = 1 } }} });
@@ -102,6 +105,7 @@ pub fn main(init: std.process.Init) !void {
     dev.destroyRenderPipeline(pipeline);
     dev.destroySampler(sampler);
     dev.destroyTexture(texture);
+    dev.destroyBuffer(shared);
     dev.destroyBuffer(base);
     dev.destroyBuffer(storage);
     dev.destroyBuffer(buffer);
