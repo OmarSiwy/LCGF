@@ -239,7 +239,7 @@ pub fn exportRGBA(comptime T: type, src: LinearSurface, dst: []T, stride: usize,
                 const value = values[c][lane];
                 interleaved[lane * 4 + c] = @floatCast(if (T == f16) std.math.clamp(value, -65504, 65504) else value);
             };
-            const active = @min(simd.lanes, src.width - x);
+            const active: usize = @min(simd.lanes, src.width - x);
             @memcpy(dst[(y * stride + x) * 4 ..][0 .. active * 4], interleaved[0 .. active * 4]);
         }
     }
@@ -266,7 +266,7 @@ pub fn importRGBA(comptime T: type, dst: LinearSurface, src: []const T, stride: 
         var x: usize = 0;
         while (x < simd.padded(dst.width)) : (x += simd.lanes) {
             var interleaved: [simd.lanes * 4]T = @splat(0);
-            const active = @min(simd.lanes, dst.width - x);
+            const active: usize = @min(simd.lanes, dst.width - x);
             @memcpy(interleaved[0 .. active * 4], src[(y * stride + x) * 4 ..][0 .. active * 4]);
             var values: Batch = undefined;
             inline for (0..simd.lanes) |lane| inline for (0..4) |c| {
