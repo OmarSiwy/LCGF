@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const Tree = @import("../core/tree.zig").Tree;
+const geometry = @import("geometry.zig");
 const simd = @import("../core/simd.zig");
 
 /// The row a row's node inherits from: its parent's `scope`, or row 0 (the defaults) for the
@@ -27,11 +28,8 @@ inline fn sweep(t: *Tree, comptime alpha: bool, comptime world: bool, comptime r
         const inherited = &x.row[up(t, i)];
         if (alpha) row.alpha = row.opacity * inherited.alpha;
         if (world) {
-            const m = row.transform;
-            const cx = (c.rect[0][i] + c.rect[2][i]) * 0.5;
-            const cy = (c.rect[1][i] + c.rect[3][i]) * 0.5;
-            const local: [6]f32 = .{ m[0], m[1], m[2], m[3], m[4] + cx - (m[0] * cx + m[2] * cy), m[5] + cy - (m[1] * cx + m[3] * cy) };
-            row.world = compose(inherited.world, local);
+            const rect: [4]f32 = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] };
+            row.world = geometry.compose(inherited.world, geometry.about(row.transform, rect, row.transform_origin));
         }
         if (radii) {
             const own = @max(@as(V4, row.radii) - @as(V4, @splat(row.border)), @as(V4, @splat(0)));
@@ -81,18 +79,6 @@ pub fn worldOf(t: *const Tree, i: u32) [6]f32 {
 /// Corner radii of the clip node `i` hands its children, after `clip`.
 pub fn clipRadiiOf(t: *const Tree, i: u32) [4]f32 {
     return t.x.row[t.c.scope[i]].clip_radii;
-}
-
-/// p after l: x -> p(l(x)).
-inline fn compose(p: [6]f32, l: [6]f32) [6]f32 {
-    return .{
-        p[0] * l[0] + p[2] * l[1],
-        p[1] * l[0] + p[3] * l[1],
-        p[0] * l[2] + p[2] * l[3],
-        p[1] * l[2] + p[3] * l[3],
-        p[0] * l[4] + p[2] * l[5] + p[4],
-        p[1] * l[4] + p[3] * l[5] + p[5],
-    };
 }
 
 /// Where `world` sends the point (x, y).

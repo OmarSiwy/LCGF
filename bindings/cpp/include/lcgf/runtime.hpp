@@ -81,6 +81,8 @@ struct Size {
 /// Zig's `Style`, field for field, with its defaults: the words lcgf_style is. Fill it with
 /// designated initializers, in declaration order.
 struct Style {
+    std::uint32_t participation = 15;
+    std::uint32_t cursor = 0xffffffffu;
     Dir dir = Dir::y;
     Size size[2] = {Size::Fit(), Size::Fit()};
     float min[2] = {0, 0};
@@ -104,13 +106,16 @@ struct Style {
     float radii[4] = {-1, -1, -1, -1};
     float opacity = 1;
     float transform[6] = {1, 0, 0, 1, 0, 0};
+    float transform_origin[2] = {0.5f, 0.5f};
     float uv[4] = {0, 0, 1, 1};
+    std::uint32_t paint_reference = 0xffffffffu;
+    float paint_outset[4] = {0, 0, 0, 0};
     Role role = Role::none;
     float value = 0;
 
     const lcgf_style* raw() const { return reinterpret_cast<const lcgf_style*>(this); }
 };
-static_assert(sizeof(Style) == sizeof(lcgf_style) && sizeof(Style) == 50 * 4);
+static_assert(sizeof(Style) == sizeof(lcgf_style) && sizeof(Style) == 59 * 4);
 
 /// A node's row as the library stores it (lcgf_row, Zig's `Template`): `Row(style)` is
 /// `Template.from`, run here, at compile time for a constexpr style, so only the row crosses.
@@ -164,7 +169,10 @@ struct Row : lcgf_row {
                          (s.uv[0] != 0) | (s.uv[1] != 0) | (s.uv[2] != 1) | (s.uv[3] != 1) |        //
                          (c[0] >= 0) | (c[1] >= 0) | (c[2] >= 0) | (c[3] >= 0) |                    //
                          (t[0] != 1) | (t[1] != 0) | (t[2] != 0) | (t[3] != 1) | (t[4] != 0) | (t[5] != 0);
-        own = (off ? 1u : 0u) | (s.clip ? 1u : 0u);
+        const float* o = s.paint_outset;
+        const bool styled = (o[0] != 0) | (o[1] != 0) | (o[2] != 0) | (o[3] != 0) | (s.cursor != none) |
+                            (s.paint_reference != none) | ((s.participation & 0xffu) != 15);
+        own = (off ? 1u : 0u) | (s.clip ? 1u : 0u) | (styled ? 1u : 0u);
         border = s.border;
         uv[0] = s.uv[0], uv[1] = s.uv[1], uv[2] = s.uv[2], uv[3] = s.uv[3];
         const float r = s.radius;
@@ -173,6 +181,13 @@ struct Row : lcgf_row {
         opacity = s.opacity;
         transform[0] = t[0], transform[1] = t[1], transform[2] = t[2];
         transform[3] = t[3], transform[4] = t[4], transform[5] = t[5];
+        transform_origin[0] = s.transform_origin[0], transform_origin[1] = s.transform_origin[1];
+        paint_reference = s.paint_reference;
+        paint_outset[0] = o[0], paint_outset[1] = o[1], paint_outset[2] = o[2], paint_outset[3] = o[3];
+        prepared_texture = 0;
+        paint_revision = 0;
+        participation = s.participation & 0xffu;
+        cursor = s.cursor == none ? 255u : s.cursor & 0xffu;
     }
     static constexpr Row From(const Style& s) { return Row(s); }
     const lcgf_row* raw() const { return this; }
@@ -182,7 +197,7 @@ private:
     static constexpr float Max(float a, float b) { return a > b ? a : b; }
     static constexpr float Min(float a, float b) { return a < b ? a : b; }
 };
-static_assert(sizeof(Row) == 55 * 4);
+static_assert(sizeof(Row) == 66 * 4);
 
 struct TextStyle {
     float px = 14;
@@ -376,8 +391,21 @@ private:
                      std::uint16_t(r.texture), std::uint16_t(r.material)};
         v.role[i] = std::uint8_t(r.role), v.value[i] = r.value;
         v.text[i] = r.text, v.custom[i] = r.custom;
+        // Participation narrows down the tree; without layout the node collapses.
+        const std::uint8_t up = i == 0 ? 15 : v.x_row[v.scope[parent]].active_participation;
+        std::uint8_t active = std::uint8_t(r.participation) & up;
+        if (!(active & 1)) {
+            active = 0;
+            for (int a = 0; a < 2; ++a) {
+                v.min[a][i] = 0, v.max[a][i] = 0, v.grow[a][i] = 0, v.pct[a][i] = -1;
+                v.pad_lo[a][i] = 0, v.pad_hi[a][i] = 0;
+            }
+            v.flow[i] = 0, v.gap[i] = 0;
+        }
+        v.role[i] &= std::uint8_t(0u - ((active >> 3) & 1));
+        v.sense[i] &= std::uint8_t(0u - ((active >> 2) & 1));
         // Counted in its parent, its own count cleared (the root is its own parent).
-        v.nkids[parent] += r.flow;
+        v.nkids[parent] += v.flow[i];
         v.nkids[i] = 0;
         // The extras row, appended when the row has one.
         const bool own = r.own != 0;
@@ -393,6 +421,13 @@ private:
         for (int k = 0; k < 4; ++k) e.uv[k] = r.uv[k], e.radii[k] = r.radii[k];
         e.opacity = r.opacity;
         for (int k = 0; k < 6; ++k) e.transform[k] = r.transform[k];
+        e.transform_origin[0] = r.transform_origin[0], e.transform_origin[1] = r.transform_origin[1];
+        e.paint_reference = r.paint_reference;
+        for (int k = 0; k < 4; ++k) e.paint_outset[k] = r.paint_outset[k];
+        e.prepared_texture = r.prepared_texture, e.paint_revision = r.paint_revision;
+        e.participation = std::uint8_t(r.participation), e.active_participation = active;
+        e.cursor = std::uint8_t(r.cursor);
+        e.active_cursor = r.cursor != 255 ? std::uint8_t(r.cursor) : i == 0 ? 255 : v.x_row[v.scope[parent]].active_cursor;
         return i;
     }
 

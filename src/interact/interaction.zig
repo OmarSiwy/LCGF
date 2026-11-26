@@ -62,7 +62,13 @@ pub const Interaction = struct {
 
     /// Advances by one frame, from last frame's geometry and this frame's pointer.
     pub fn step(s: *Interaction, prev: *const Tree, in: *const Input) void {
-        const node = hit.at(prev, in.pointer[0], in.pointer[1], .any);
+        s.stepWithHit(prev, in, hit.at(prev, in.pointer[0], in.pointer[1], .any));
+    }
+
+    /// Caller-supplied hit from the completed tree, for layers, enlarged targets or a custom
+    /// scene query. The same capture/drag/click/focus machinery consumes the selected row.
+    pub fn stepWithHit(s: *Interaction, prev: *const Tree, in: *const Input, selected: u32) void {
+        const node = if (selected < prev.len and prev.c.sense[selected] != 0 and prev.participation(selected).hit) selected else none;
         // Clamp instead of branching: the read stays in bounds when nothing is hit. The prototype
         // then selected the id on `node != none`; Zig 0.18's LLVM turns a select (or a mask) on a
         // loaded value into a `je` around the load (`pick` too). Selecting the address, between the
@@ -126,6 +132,17 @@ pub const Interaction = struct {
         s.buttons = in.buttons;
     }
 
+    /// Cancel capture, focus and pending activation when a built control stops participating.
+    pub fn cancel(s: *Interaction, id: types.Id) void {
+        const k = @backingInt(id);
+        if (k == 0) return;
+        if (s.hot == k) s.hot_node = none;
+        if (s.active == k) s.active_node = none;
+        inline for (.{ "hot", "under", "active", "focus", "pressed", "released", "clicked", "double_clicked", "long_pressed", "dragging", "hover_intent", "last_click" }) |name| {
+            if (@field(s, name) == k) @field(s, name) = 0;
+        }
+    }
+
     /// Pointer movement this frame while `id` is dragged; zero otherwise.
     pub fn drag(s: *const Interaction, id: types.Id) [2]f32 {
         const k = @backingInt(id);
@@ -153,7 +170,8 @@ pub const Interaction = struct {
 /// Each contact is followed by its platform pointer id in one of `n` slots, so a widget keeps
 /// the finger that pressed it however the host orders its rows. Contacts beyond `n` are
 /// ignored. Fingers find widgets with `hit.near` (within `slop`), as fingers are wide. Focus
-/// stays with the mouse `Interaction`.
+/// stays with the mouse `Interaction`. Captures are cancelled when their owner disappears
+/// or stops participating in input; call the step even when there are no contacts.
 pub fn Touches(comptime n: comptime_int) type {
     return struct {
         const Self = @This();
@@ -180,20 +198,46 @@ pub fn Touches(comptime n: comptime_int) type {
 
         /// Advances by one frame, from last frame's geometry and this frame's contacts.
         pub fn step(t: *Self, prev: *const Tree, in: *const Input) void {
+            t.stepOf(prev, in, &.{}, false);
+        }
+
+        /// One caller-supplied hit row per contact, in `Input.contacts` order. Use the same
+        /// completed-tree query as the primary pointer for enlarged, layered or path targets.
+        /// Capture still follows platform contact ids when the host reorders contacts. A
+        /// mismatched count fails before state changes; invalid/ineligible rows mean no hit.
+        pub fn stepWithHits(t: *Self, prev: *const Tree, in: *const Input, selected: []const u32) error{InvalidHits}!void {
+            if (selected.len != in.contacts.len) return error.InvalidHits;
+            t.stepOf(prev, in, selected, true);
+        }
+
+        fn stepOf(t: *Self, prev: *const Tree, in: *const Input, selected: []const u32, comptime supplied: bool) void {
+            // Leaving an eligible target retains capture; losing the owner does not. In
+            // particular an omitted lifted contact must not click a stale `under` id.
+            var owners = t.active;
+            for (&owners) |*owner| {
+                if (owner.* == 0) continue;
+                const row = simd.find(prev.c.id, prev.len, owner.*);
+                if (row == none or prev.c.sense[row] == 0 or !prev.participation(row).hit) owner.* = 0;
+            }
+            const held: V = owners;
+            const previous: V = t.active;
             var ptr: V = t.pointer;
-            var under: V = t.under;
+            var under = @select(u32, (previous != @as(V, @splat(0))) & (held == @as(V, @splat(0))) & (@as(V, t.under) == previous), @as(V, @splat(0)), @as(V, t.under));
             var x: F = t.x;
             var y: F = t.y;
             var seen: B = @splat(false);
             var down: B = @splat(false);
-            for (in.contacts) |c| {
+            for (in.contacts, 0..) |c, contact| {
                 // The slot already following this id, else the first free one, else none
                 // (dropped: `mine` is then all false).
                 const same = ptr == @as(V, @splat(c.id));
                 const own = @reduce(.Min, @select(u32, same, iota, @as(V, @splat(none))));
                 const free = @reduce(.Min, @select(u32, ptr == @as(V, @splat(none)), iota, @as(V, @splat(none))));
                 const mine = iota == @as(V, @splat(pick(u32, own != none, own, free)));
-                const node = hit.near(prev, c.pos[0], c.pos[1], .any, t.slop);
+                const node = if (supplied) blk: {
+                    const candidate = selected[contact];
+                    break :blk if (candidate < prev.len and prev.c.sense[candidate] != 0 and prev.participation(candidate).hit) candidate else none;
+                } else hit.near(prev, c.pos[0], c.pos[1], .any, t.slop);
                 const row = @min(node, prev.cap - 1);
                 const id_at = [2]*const u32{ &zero_id, &prev.c.id[row] };
                 const id = id_at[@intFromBool(node +% 1 != 0)].*;
@@ -206,7 +250,6 @@ pub fn Touches(comptime n: comptime_int) type {
             }
             const zero: V = @splat(0);
             const was: B = t.down;
-            const held: V = t.active;
             const press = down & !was;
             const release = !down & was;
             t.clicked = @select(u32, release & (held == under) & (under != zero), under, zero);
@@ -674,6 +717,83 @@ test "Touches: each finger keeps the widget it pressed, by pointer id, whatever 
         try testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(s.response(.none))));
     }
     try testing.expectEqual(@as(usize, 6), f);
+}
+
+test "Touches: enlarged caller targets preserve capture across reordered contacts and reject count changes atomically" {
+    const targets = @import("targets.zig");
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    const t = twoButtons(&raw);
+    const entries = [_]targets.Entry{
+        .{ .node = 1, .policy = .{ .minimum = .{ 64, 64 } } },
+        .{ .node = 2, .policy = .{ .minimum = .{ 64, 64 } } },
+    };
+    var contacts = [_]Input.Contact{
+        .{ .id = 7, .pos = .{ -10, 20 } },
+        .{ .id = 9, .pos = .{ 100, 20 } },
+    };
+    var in: Input = .{ .contacts = &contacts };
+    var selected: [2]u32 = undefined;
+    for (contacts, &selected) |c, *row| {
+        try testing.expectEqual(none, hit.near(&t, c.pos[0], c.pos[1], .any, 8));
+        row.* = try targets.at(&t, &entries, c.pos, .any, &.{});
+    }
+    try testing.expectEqualSlices(u32, &.{ 1, 2 }, &selected);
+    var s: Touches(2) = .{};
+    try s.stepWithHits(&t, &in, &selected);
+    try testing.expect(s.response(id_a).pressed and s.response(id_b).pressed);
+    const before = s;
+    try testing.expectError(error.InvalidHits, s.stepWithHits(&t, &in, selected[0..1]));
+    try testing.expectEqualDeep(before, s);
+
+    std.mem.swap(Input.Contact, &contacts[0], &contacts[1]);
+    contacts[0].down = false;
+    for (contacts, &selected) |c, *row| row.* = try targets.at(&t, &entries, c.pos, .any, &.{});
+    try s.stepWithHits(&t, &in, &selected);
+    try testing.expect(s.response(id_a).held and !s.response(id_a).released);
+    try testing.expect(s.response(id_b).released and s.response(id_b).clicked);
+    in.contacts = &.{};
+    try s.stepWithHits(&t, &in, &.{});
+    try testing.expect(s.response(id_a).released and s.response(id_a).clicked);
+
+    in.contacts = &contacts;
+    contacts[0].down = true;
+    try s.stepWithHits(&t, &in, &.{ 0, t.len + 100 });
+    try testing.expect(!s.response(id_a).pressed and !s.response(id_b).pressed);
+    try testing.expectEqualSlices(u32, &.{ 0, 0 }, &s.under);
+}
+
+test "Touches: removed hidden or nonsensing owners cancel before missing-contact release and cannot reactivate mid-press" {
+    inline for (.{ false, true }) |supplied| {
+        inline for (.{ false, true }) |omitted| {
+            for (0..3) |reason| {
+                var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+                var t = twoButtons(&raw);
+                var contacts = [_]Input.Contact{.{ .id = 7, .pos = .{ 20, 20 } }};
+                var in: Input = .{ .contacts = &contacts };
+                var s: Touches(1) = .{};
+                if (supplied) try s.stepWithHits(&t, &in, &.{1}) else s.step(&t, &in);
+                try testing.expect(s.response(id_a).held);
+                switch (reason) {
+                    0 => t.c.id[1] = 0,
+                    1 => t.c.sense[1] = 0,
+                    2 => t.x.row[0].active_participation.hit = false,
+                    else => unreachable,
+                }
+                if (omitted) in.contacts = &.{};
+                if (supplied) try s.stepWithHits(&t, &in, if (omitted) &.{} else &.{none}) else s.step(&t, &in);
+                const cancelled = s.response(id_a);
+                try testing.expect(!cancelled.held and !cancelled.released and !cancelled.clicked);
+                t.c.id[1] = @backingInt(id_a);
+                t.c.sense[1] = @bitCast(Sense.button);
+                t.x.row[0].active_participation = .all;
+                contacts[0].down = false;
+                in.contacts = &contacts;
+                if (supplied) try s.stepWithHits(&t, &in, &.{1}) else s.step(&t, &in);
+                const restored = s.response(id_a);
+                try testing.expect(!restored.held and !restored.released and !restored.clicked);
+            }
+        }
+    }
 }
 
 test "step: hover intent after the pointer rests on one widget for hover_delay" {

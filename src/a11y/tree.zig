@@ -172,7 +172,13 @@ pub const State = bitpack struct(u16) {
     focused: bool = false,
     /// Shown but not editable (`aria-readonly`). The application's to set.
     read_only: bool = false,
-    _: u5 = 0,
+    /// The value fails the application's validation (`aria-invalid`).
+    invalid: bool = false,
+    /// A value is required before the related action can complete (`aria-required`).
+    required: bool = false,
+    /// Content is being updated; independent from whether input is disabled (`aria-busy`).
+    busy: bool = false,
+    _: u2 = 0,
 
     pub inline fn bitsOf(st: State) u16 {
         return @bitCast(st);
@@ -272,7 +278,7 @@ pub fn names(t: *const Tree, s: *Semantics) void {
     const c = &t.c;
     const n = t.len;
     const first = s.c.first_text;
-    @memcpy(first[0..n], c.text[0..n]);
+    for (0..n) |k| first[k] = simd.selU(t.participation(@intCast(k)).semantics, c.text[k], none);
     // ponytail: the first run only; ARIA joins every text run of the content. Join spans in the
     // bridge if a name made of several runs is ever needed.
     var i = n;
@@ -398,7 +404,7 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
     ix[0] = none; // the root's parent is itself: it reads `none` before writing its own row
     var w: u32 = 0;
     for (0..t.len) |k| {
-        const keep = c.role[k] != 0;
+        const keep = (c.role[k] != 0) and t.participation(@intCast(k)).semantics;
         const par = ix[c.parent[k]];
         ix[k] = simd.selU(keep, w, par);
         const pi = @min(par, spare);
@@ -436,7 +442,8 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
         o.text[w] = s.c.text[k];
         o.hint[w] = s.c.hint[k];
         o.name_hash[w] = std.hash.Fnv1a_32.hash(strings[start..][0..bytes]) ^ s.c.text_hash[k];
-        inline for (0..4) |e| o.rect[e][w] = c.rect[e][k];
+        const screen = @import("../draw/geometry.zig").transformRect(t.rect(@intCast(k)).array(), t.x.row[c.scope[k]].world);
+        inline for (0..4) |e| o.rect[e][w] = screen[e];
         o.kids[w] = 0;
         o.kids_hash[w] = 0;
         w += @intFromBool(keep);
@@ -1207,6 +1214,23 @@ test "tree export: the focused node is marked focused; multiline and read-only a
     try testing.expectEqual(State{ .multiline = true, .focused = true }, @as(State, @bitCast(e.c.state[1])));
     try testing.expectEqual(State{ .multiline = true, .read_only = true }, @as(State, @bitCast(e.c.state[2])));
     try testing.expectEqual(State{}, @as(State, @bitCast(e.c.state[0])));
+}
+
+test "tree export: validation requirement and busy state retain the existing compact state ABI" {
+    try testing.expectEqual(@as(usize, 2), @sizeOf(State));
+    try testing.expectEqual(@as(u16, 1 << 10), State.bitsOf(.{ .read_only = true }));
+    try testing.expectEqual(@as(u16, (1 << 11) | (1 << 12) | (1 << 13)), State.bitsOf(.{ .invalid = true, .required = true, .busy = true }));
+    var f: FrameFixture(8) = .{};
+    f.init();
+    const root = f.t.push(0, types.Id.from("app"), &.{ .role = .group });
+    const field = f.t.push(root, types.Id.from("email"), &.{ .role = .text_input });
+    f.t.seal(field);
+    f.t.seal(root);
+    f.s.c.state[field] = State.bitsOf(.{ .invalid = true, .required = true, .busy = true });
+    const output = f.run(0);
+    const semantic_state: State = @bitCast(output.c.state[1]);
+    try testing.expect(semantic_state.invalid and semantic_state.required and semantic_state.busy);
+    try testing.expect(!semantic_state.disabled and !semantic_state.read_only);
 }
 
 test "tree export: a presentational root leaves several top-level rows with distinct ids" {

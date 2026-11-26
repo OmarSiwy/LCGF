@@ -1,0 +1,40 @@
+{
+  "$description": "Consumer fixture: semantic identity, real font selection, decoration and motion.",
+  "$extensions": {"org.lcgf.test": {"preserved": true}},
+  "lcgf": {"$type": "number", "$value": 2},
+  "Typography": {"$type": "number", "$value": 3},
+  "color": {
+    "$type": "color",
+    "base": {"$description": "Primary role", "$value": {"colorSpace": "srgb", "components": [0.1, 0.2, 0.3]}},
+    "accent": {"$value": "{color.base}"},
+    "white": {"$value": {"colorSpace": "srgb", "components": [1, 1, 1]}},
+    "pink": {"$value": {"colorSpace": "hsl", "components": [330, 100, 50]}},
+    "wide": {"$value": {"colorSpace": "display-p3", "components": [1, 0, 0]}}
+  },
+  "space": {
+    "$type": "dimension",
+    "base": {"$value": {"value": 0.5, "unit": "rem"}},
+    "alias": {"$value": {"$ref": "#/space/base/$value"}}
+  },
+  "font": {
+    "families": {"$type": "fontFamily", "$value": ["UI", "fallback"]},
+    "weight": {"$type": "fontWeight", "$value": "bold"}
+  },
+  "body": {
+    "$type": "typography",
+    "$value": {"fontFamily": "{font.families}", "fontSize": {"value": 1, "unit": "rem"}, "fontWeight": "{font.weight}", "letterSpacing": {"value": 1, "unit": "px"}, "lineHeight": 1.5}
+  },
+  "motion": {
+    "duration": {"$type": "duration", "$value": {"value": 120, "unit": "ms"}},
+    "curve": {"$type": "cubicBezier", "$value": [0.25, 0.1, 0.25, 1]},
+    "enter": {"$type": "transition", "$value": {"duration": "{motion.duration}", "delay": {"value": 10, "unit": "ms"}, "timingFunction": "{motion.curve}"}}
+  },
+  "stroke": {"$type": "strokeStyle", "$value": {"dashArray": [{"value": 2, "unit": "px"}, {"value": 1, "unit": "px"}, {"value": 3, "unit": "px"}], "lineCap": "round"}},
+  "border": {"$type": "border", "$value": {"color": "{color.accent}", "width": {"value": 1, "unit": "px"}, "style": "solid"}},
+  "elevation": {
+    "soft": {"$type": "shadow", "$value": {"color": {"colorSpace": "srgb", "components": [0, 0, 0], "alpha": 0.25}, "offsetX": {"value": 1, "unit": "px"}, "offsetY": {"value": 2, "unit": "px"}, "blur": {"value": 4, "unit": "px"}, "spread": {"value": 0, "unit": "px"}, "inset": true}}
+  },
+  "gradient": {
+    "brand": {"$type": "gradient", "$value": [{"color": "{color.accent}", "position": -2}, {"color": "{color.white}", "position": 9}]}
+  }
+}

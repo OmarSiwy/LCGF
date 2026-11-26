@@ -690,6 +690,7 @@ fn shadeRect(comptime encoding: ImageEncoding, comptime direct_coverage: bool, t
 }
 
 fn shadeFor(comptime use: features.Usage, comptime kind: features.Kind, comptime encoding: ImageEncoding, t: Target, q: *const Quad, img: Image, scale: f32) void {
+    if (!std.math.isFinite(scale) or scale <= 0 or @import("../../draw/geometry.zig").inverse(q.xform) == null) return;
     const p: [4]u32 = @bitCast(q.params);
     const x0, const y0, const x1, const y1 = q.rect;
     const hx = (x1 - x0) * 0.5;

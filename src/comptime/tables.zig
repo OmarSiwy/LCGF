@@ -110,18 +110,14 @@ pub fn expand(n: usize, root: []const bool, inside: []const bool, pos: [2][]cons
     return k;
 }
 
-pub const TransformError = error{Transform};
-
 /// `draw.inherit`'s opacity and clip sweeps over the extras rows: `alpha[r]` and
-/// `clip_radii[r]` for extras row r (`p.xlen` rows). A transform needs the laid-out rect for
-/// its centre, so it is refused.
-pub fn inherit(p: anytype, alpha: []f32, clip_radii: [][4]f32) TransformError!void {
+/// `clip_radii[r]` for extras row r (`p.xlen` rows).
+pub fn inherit(p: anytype, alpha: []f32, clip_radii: [][4]f32) void {
     alpha[0] = tree.Extra.defaults.alpha;
     clip_radii[0] = tree.Extra.defaults.clip_radii;
     for (1..p.xlen) |r| {
         const i = p.x.node[r];
         const x = p.x.row[r];
-        if (!std.mem.eql(f32, &x.transform, &identity)) return error.Transform;
         const up = if (i == 0) 0 else p.c.scope[p.c.parent[i]];
         alpha[r] = x.opacity * alpha[up];
         const own: [4]f32 = @max(@as(V4, x.radii) - @as(V4, @splat(x.border)), @as(V4, @splat(0)));
@@ -139,7 +135,7 @@ pub fn paintRows(p: anytype, n: usize, alpha: []const f32, out: []u32) usize {
     var m: usize = 0;
     for (0..n) |i| {
         const look = p.c.look[i];
-        if (((look.fill | look.border_color) >> 24) != 0 and alpha[p.c.scope[i]] > 0) {
+        if (((look.fill | look.border_color) >> 24) != 0 and alpha[p.c.scope[i]] > 0 and p.x.row[p.c.scope[i]].active_participation.paint) {
             out[m] = @intCast(i);
             m += 1;
         }
@@ -177,6 +173,8 @@ pub fn sortByKey(p: anytype, rows: []const u32, group: []const u32, pos: [2][]co
     const m = rows.len;
     @memcpy(out[0..m], rows);
     if (m < 3) return;
+    // Layout-space disjointness cannot authorize reordering transformed or expanded paint.
+    for (p.x.row[1..p.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &identity) or x.paint_reference != none or !std.mem.eql(f32, &x.paint_outset, &@as([4]f32, @splat(0)))) return;
     // With one batch key the input is already in its final order.
     if (for (rows[1..]) |r| {
         if (keyOf(p.c.look[r]) != keyOf(p.c.look[rows[0]])) break false;
@@ -247,6 +245,7 @@ pub fn templates(p: anytype, painted: []const u32, alpha: []const f32, clip_radi
     for (out[0..painted.len], painted) |*q, i| {
         const look = p.c.look[i];
         const own = p.x.row[p.c.extra[i]];
+        const source = if (own.paint_reference == none) i else own.paint_reference;
         q.* = .{
             .rect = @splat(0),
             .clip = @splat(0),
@@ -256,9 +255,9 @@ pub fn templates(p: anytype, painted: []const u32, alpha: []const f32, clip_radi
             .border_color = look.border_color,
             .radii = tree.radiiOf(own.radii, look.radius),
             .border = own.border,
-            .opacity = alpha[p.c.scope[i]],
+            .opacity = alpha[p.c.scope[source]] * (if (source == i) @as(f32, 1) else own.opacity),
             .xform = identity,
-            .clip_radii = clip_radii[p.c.scope[p.c.parent[i]]],
+            .clip_radii = clip_radii[p.c.scope[p.c.parent[source]]],
         };
     }
 }

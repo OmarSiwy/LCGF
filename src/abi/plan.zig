@@ -542,6 +542,7 @@ pub inline fn emit(host: anytype, c: anytype, looks: *const Looks, r: u32, row: 
 pub fn wordsOf(comptime T: type) comptime_int {
     return switch (@typeInfo(T)) {
         .float, .int, .bool, .@"enum" => 1,
+        .optional => |o| wordsOf(o.child),
         .array => |a| a.len * wordsOf(a.child),
         .@"struct" => |s| if (s.backing_integer != null) 1 else blk: {
             var n: comptime_int = 0;
@@ -560,6 +561,10 @@ pub fn put(comptime T: type, v: T, out: []u32) void {
         .int => out[0] = @intCast(v),
         .bool => out[0] = @intFromBool(v),
         .@"enum" => out[0] = @intCast(@backingInt(v)),
+        // An optional enum: null is all ones.
+        .optional => |o| if (v) |x| put(o.child, x, out) else {
+            out[0] = std.math.maxInt(u32);
+        },
         .array => |a| for (v, 0..) |e, k| put(a.child, e, out[k * wordsOf(a.child) ..]),
         .@"struct" => |s| if (s.backing_integer != null) {
             out[0] = @as(s.backing_integer.?, @bitCast(v));
@@ -580,6 +585,7 @@ pub fn get(comptime T: type, in: []const u32) T {
         .int => return @intCast(in[0]),
         .bool => return in[0] != 0,
         .@"enum" => |e| return @fromBackingInt(@as(e.tag_type, @intCast(in[0]))),
+        .optional => |o| return if (in[0] == std.math.maxInt(u32)) null else get(o.child, in),
         .array => |a| {
             var v: T = undefined;
             for (&v, 0..) |*e, k| e.* = get(a.child, in[k * wordsOf(a.child) ..]);

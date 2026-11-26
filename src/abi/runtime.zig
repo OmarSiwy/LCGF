@@ -332,10 +332,10 @@ pub fn exportAll() void {
 }
 
 test "runtime: the words a binding passes for a style" {
-    try std.testing.expectEqual(50, style_words);
+    try std.testing.expectEqual(59, style_words);
     try std.testing.expectEqual(4, text_style_words);
     try std.testing.expectEqual(10, theme_words);
-    try std.testing.expectEqual(55, row_words);
+    try std.testing.expectEqual(66, row_words);
 }
 
 test "runtime: FlatRow is a Template's words, field for field" {
@@ -350,6 +350,7 @@ test "runtime: FlatRow is a Template's words, field for field" {
                 try std.testing.expectEqual(@as(@FieldType(FlatRow, g), @field(t.look, g)), @field(flat, g));
         } else switch (@typeInfo(@FieldType(Template, name))) {
             .int => try std.testing.expectEqual(@as(u32, @field(t, name)), @field(flat, name)),
+            .@"struct" => try std.testing.expectEqual(@as(u32, @as(u8, @bitCast(@field(t, name)))), @field(flat, name)),
             else => try std.testing.expectEqual(@field(t, name), @field(flat, name)),
         }
     }
@@ -360,7 +361,7 @@ test "runtime: lcgf.h's LCGF_RT_LAYOUT is the layout the library reads" {
     const bit = std.mem.indexOf(u8, h, "#define LCGF_RT_DEPTH_BIT ").? + "#define LCGF_RT_DEPTH_BIT ".len;
     try std.testing.expectEqual(@as(u32, depth_bit), try std.fmt.parseInt(u32, std.mem.sliceTo(h[bit..], '\n'), 10));
     // lcgf_extra and lcgf_look: f32 and u32 fields in order, as extern structs lay them out.
-    try std.testing.expectEqual(27 * 4, @sizeOf(Extra));
+    try std.testing.expectEqual(37 * 4, @sizeOf(Extra));
     try std.testing.expectEqual(8 * 4, @sizeOf(Look));
     const at = std.mem.indexOf(u8, h, "#define LCGF_RT_LAYOUT 0x").? + "#define LCGF_RT_LAYOUT 0x".len;
     try std.testing.expectEqual(layout, try std.fmt.parseInt(u32, h[at..][0..8], 16));

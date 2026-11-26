@@ -3,7 +3,7 @@ UI has got at least one event: the replay exercised input, not just drawing. Pri
 with focus set, with a spring moving and with custom draws, for the record."""
 import struct, sys
 
-QUAD, RUN, CUSTOM = 136, 52, 48
+QUAD, RUN, CUSTOM = 136, 96, 96
 data = open(sys.argv[1], "rb").read()
 i, frames, events, focused, moving, customs = 0, 0, {}, 0, 0, 0
 while i < len(data):

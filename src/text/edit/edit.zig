@@ -80,6 +80,10 @@ pub const Mode = struct {
     /// are), and the host is asked for secure input.
     password: bool = false,
     bullet: []const u8 = "\u{2022}",
+    /// Selection, navigation and copying remain available; typing, cut/paste, deletion,
+    /// history mutations and IME composition are disabled. Existing transient preedit is
+    /// canceled on the next update, leaving the committed buffer intact.
+    read_only: bool = false,
 };
 
 /// What `update` reads besides the keyboard.
@@ -179,6 +183,7 @@ pub const Editor = struct {
     /// so the window does not follow every keystroke. `v` is the layout of `text()`, drawn
     /// with its top left at `origin`, logical px.
     pub fn requestInput(ed: *Editor, out: *keyboard.TextInput, v: moves.View, origin: [2]f32) void {
+        if (ed.mode.read_only) return;
         const at = if (ed.composing()) ed.preedit[0] else ed.caret;
         var rect = v.caretRect(ed.toDisplay(at));
         rect.x0 += origin[0];
@@ -254,6 +259,7 @@ pub const Editor = struct {
         var it = k.events(id);
         while (it.next()) |e| {
             if (e.kind == .text) {
+                if (ed.mode.read_only) continue;
                 ed.typeText(k.in.typed(e), &r);
                 ed.goal = std.math.nan(f32);
                 continue;
@@ -262,7 +268,7 @@ pub const Editor = struct {
             const view = if (r.changed) null else fresh;
             ed.key(e, view, cx, &r);
         }
-        ed.compose(cx.composition, &r);
+        if (!ed.mode.read_only) ed.compose(cx.composition, &r);
         return r;
     }
 
@@ -322,16 +328,19 @@ pub const Editor = struct {
         const vertical = c == ks.up or c == ks.down;
         if (!vertical) ed.goal = std.math.nan(f32);
         if (c == ks.backspace) {
+            if (ed.mode.read_only) return;
             if (some) return ed.remove(sel[0], sel[1], false, r);
             const from = if (word) ed.wordBefore(t, at) else moves.prevGrapheme(t, at);
             return ed.remove(from, at, ed.run == .deleting, r);
         }
         if (c == ks.delete) {
+            if (ed.mode.read_only) return;
             if (some) return ed.remove(sel[0], sel[1], false, r);
             const to = if (word) ed.wordAfter(t, at) else moves.nextGrapheme(t, at);
             return ed.remove(at, to, ed.run == .deleting, r);
         }
         if (c == ks.enter or c == ks.keypad_enter) {
+            if (ed.mode.read_only) return;
             if (!single) return ed.insert("\n", r);
             ed.run = .none;
             r.submitted = true;
@@ -343,6 +352,7 @@ pub const Editor = struct {
         cmd_shift.shift = true;
         const redo = (cmd and c == ks.redo) or (c == ks.undo and @as(u8, @bitCast(e.mods)) == @as(u8, @bitCast(cmd_shift)));
         if ((cmd and c == ks.undo) or redo) {
+            if (ed.mode.read_only) return;
             const s = (if (redo) ed.history.redo(&ed.b) else ed.history.undo(&ed.b)) orelse return;
             ed.caret = s.caret;
             ed.anchor = s.anchor;
@@ -355,6 +365,7 @@ pub const Editor = struct {
             return;
         }
         if (cmd and (c == ks.clipboard.copy or c == ks.clipboard.cut)) {
+            if (ed.mode.read_only and c == ks.clipboard.cut) return;
             const clip = cx.clipboard orelse return;
             if (!some or ed.mode.password) return;
             if (sel[1] - sel[0] > cx.copy_buf.len) {
@@ -369,6 +380,7 @@ pub const Editor = struct {
             return;
         }
         if (cmd and c == ks.clipboard.paste) {
+            if (ed.mode.read_only) return;
             if (cx.clipboard) |clip| clip.requestPaste();
             return;
         }
@@ -824,6 +836,55 @@ test "replayed input: cut, copy and paste through the clipboard rows" {
         \\press 27 ctrl
     );
     try testing.expectEqualStrings("copy_", ed.text());
+}
+
+test "read-only input preserves selection copy and navigation while rejecting every edit path" {
+    const mem = @import("../../core/mem.zig");
+    var cols: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &cols };
+    var raw: [64]u8 = undefined;
+    var ed = try Editor.init(&raw, "edit");
+    ed.history = History.init(&carver, 16, 64);
+    _ = try replay(&ed,
+        \\frame
+        \\text !
+    );
+    ed.mode.read_only = true;
+    var clip: keyboard.Clipboard = .{};
+    var copied: [16]u8 = undefined;
+    const r = try replayWith(&ed,
+        \\frame
+        \\press 4 ctrl
+        \\text replacement
+        \\press 42
+        \\press 76
+        \\press 40
+        \\press 29 ctrl
+        \\press 28 ctrl
+        \\press 27 ctrl
+        \\press 25 ctrl
+        \\press 6 ctrl
+    , .{
+        .clipboard = &clip,
+        .copy_buf = &copied,
+        .compositions = &.{.{ .text = "preedit", .range = .{ 0, 7 } }},
+    });
+    try testing.expectEqualStrings("edit!", ed.text());
+    try testing.expectEqualStrings("edit!", clip.set);
+    try testing.expect(!clip.paste and !r.changed and !r.submitted and !ed.composing());
+    _ = try replay(&ed,
+        \\frame
+        \\press 80
+        \\press 79 shift
+    );
+    try testing.expectEqualStrings("e", ed.selected());
+    // Read-only undo did not consume the existing history step.
+    ed.mode.read_only = false;
+    _ = try replay(&ed,
+        \\frame
+        \\press 29 ctrl
+    );
+    try testing.expectEqualStrings("edit", ed.text());
 }
 
 test "replayed input: undo and redo whole runs of typing and deleting" {

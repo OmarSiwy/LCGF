@@ -41,8 +41,11 @@ pub const Tweens = struct {
     /// The row `slot` tries first: the one after the row it last returned, from row 0 after
     /// each `sweep` (as `Anims.next`). In a steady UI every `slot` is one compare, not a scan.
     next: u32 = 0,
+    /// At least one new ID could not be reserved since the caller last cleared this flag.
+    overflow: bool = false,
 
-    /// `simd.rows(cap)` rows each. Rows past `len` are kept zero (inert for `step`).
+    /// `simd.rows(cap)` rows each. Padding through `padded(len)` stays inert. The last spare
+    /// row is a discard destination, never stepped or retained as a live tween.
     pub const Columns = struct {
         id: []u32,
         /// This frame's value.
@@ -68,9 +71,14 @@ pub const Tweens = struct {
         return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
     }
 
-    /// Row for `id`, created resting at `initial` on first use. Past `cap` new ids share the
-    /// last row. O(1) when `id` sits at the row after the previous call's (see `next`), else a
-    /// SIMD scan of the ids: one coarse, well-predicted branch per call, none per row.
+    /// Checked reservation. Exhaustion reports NoSpace and leaves every live tween intact.
+    pub fn reserve(t: *Tweens, id: Id, initial: f32) error{NoSpace}!u32 {
+        const i = t.slot(id, initial);
+        return if (i < t.cap) i else error.NoSpace;
+    }
+
+    /// Legacy row-returning operation. Exhaustion returns a discard row (index >= cap) and
+    /// sets overflow; it never replaces a live ID. Prefer reserve to choose a settled fallback.
     pub fn slot(t: *Tweens, id: Id, initial: f32) u32 {
         const c = &t.c;
         const k = @backingInt(id);
@@ -82,15 +90,18 @@ pub const Tweens = struct {
         }
         const found = simd.find(c.id, t.len, k);
         const is_new = found == none;
-        const i = simd.selU(is_new, @min(t.len, t.cap - 1), found);
-        t.len = @min(t.len + @intFromBool(is_new), t.cap);
+        const spare: u32 = @intCast(c.x.len - 1);
+        const available = t.len < t.cap;
+        const i = simd.selU(is_new, simd.selU(available, t.len, spare), found);
+        t.overflow = simd.orB(t.overflow, simd.andB(is_new, !available));
+        t.len += @intFromBool(simd.andB(is_new, available));
         c.id[i] = k;
         c.x[i] = simd.selF(is_new, initial, c.x[i]);
         c.to[i] = simd.selF(is_new, initial, c.to[i]);
         c.from[i] = simd.selF(is_new, initial, c.from[i]);
         c.elapsed[i] = simd.selF(is_new, 0, c.elapsed[i]);
         c.duration[i] = simd.selF(is_new, 0, c.duration[i]);
-        t.next = i + 1;
+        t.next = simd.selU(i < t.cap, i + 1, 0);
         return i;
     }
 
@@ -248,4 +259,22 @@ test "slot: the row after the last one is tried first; any order still finds the
         try testing.expectEqual(@backingInt(Id.from("t").with(k)), t.c.id[r]);
     }
     try testing.expectEqual(@as(u32, 5), t.len);
+}
+
+test "tween reservation exhaustion preserves live playback and never steps the discard row" {
+    var t = fixture(1);
+    const first = try t.reserve(.from("live"), 2);
+    t.retarget(first, 6, 1, .linear);
+    try testing.expectError(error.NoSpace, t.reserve(.from("overflow"), 100));
+    const discarded = t.slot(.from("legacy-overflow"), 500);
+    try testing.expect(discarded >= simd.padded(t.cap));
+    t.retarget(discarded, 2000, 100, .linear);
+    try testing.expectEqual(@as(f32, 0.5), t.step(0.5));
+    try testing.expectEqual(@as(f32, 4), t.c.x[first]);
+    try testing.expectEqual(@backingInt(Id.from("live")), t.c.id[first]);
+    try testing.expectEqual(@as(u32, 1), t.len);
+    try testing.expect(t.overflow);
+    var empty = fixture(0);
+    try testing.expectError(error.NoSpace, empty.reserve(.from("empty"), 7));
+    try testing.expectEqual(@as(f32, 0), empty.step(1));
 }

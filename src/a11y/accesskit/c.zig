@@ -94,6 +94,7 @@ pub const Action = enum(u8) {
 pub const Toggled = enum(u8) { false, true, mixed };
 pub const Live = enum(u8) { off, polite, assertive };
 pub const AriaCurrent = enum(u8) { false, true, page, step, location, date, time };
+pub const Invalid = enum(u8) { true, grammar, spelling };
 
 pub const Rect = extern struct { x0: f64, y0: f64, x1: f64, y1: f64 };
 pub const Affine = extern struct { m: [6]f64 };
@@ -142,6 +143,9 @@ pub extern fn accesskit_node_set_expanded(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_selected(node: *Node, value: bool) void;
 pub extern fn accesskit_node_set_disabled(node: *Node) void;
 pub extern fn accesskit_node_set_read_only(node: *Node) void;
+pub extern fn accesskit_node_set_required(node: *Node) void;
+pub extern fn accesskit_node_set_busy(node: *Node) void;
+pub extern fn accesskit_node_set_invalid(node: *Node, value: Invalid) void;
 pub extern fn accesskit_node_set_live(node: *Node, value: Live) void;
 pub extern fn accesskit_node_set_aria_current(node: *Node, value: AriaCurrent) void;
 pub extern fn accesskit_node_set_min_numeric_value(node: *Node, value: f64) void;

@@ -9,6 +9,7 @@
 //!   5. hand the region to the renderer in `DrawList.damage`, with the scissor rects to clip to
 
 const std = @import("std");
+const geometry = @import("geometry.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Look = @import("../core/tree.zig").Look;
@@ -120,7 +121,7 @@ pub const Region = struct {
 };
 
 /// Everything sweep 1 of `paint.emit` reads for one node's quad, as one hashed row.
-const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border: f32, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32 };
+const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border: f32, uv: [4]f32, radii: [4]f32, alpha: f32, world: [6]f32, clip_radii: [4]f32, prepared_texture: u32, paint_revision: u32 };
 
 /// Writes, for every node of `t`, a hash of what painting it reads: its rect, its visible
 /// (clipped) rect, its look, and the text run or custom draw it owns. Two frames that paint a
@@ -131,17 +132,18 @@ pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: 
     for (0..t.len) |i| {
         const x = &t.x;
         const own = c.extra[i];
-        const scope = c.scope[i];
         const row: QuadInputs = .{
-            .rect = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] },
+            .rect = geometry.nodeRect(t, i),
             .vis = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] },
             .look = c.look[i],
             .border = x.row[own].border,
             .uv = x.row[own].uv,
             .radii = @import("../core/tree.zig").radiiOf(x.row[own].radii, c.look[i].radius),
-            .alpha = x.row[scope].alpha,
-            .world = x.row[scope].world,
-            .clip_radii = x.row[c.scope[c.parent[i]]].clip_radii,
+            .alpha = geometry.nodeAlpha(t, i),
+            .world = geometry.nodeWorld(t, i),
+            .clip_radii = geometry.nodeClipRadii(t, i),
+            .prepared_texture = x.row[own].prepared_texture,
+            .paint_revision = x.row[own].paint_revision,
         };
         out[i] = @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&row)));
     }
@@ -223,7 +225,10 @@ pub const Damage = struct {
 
         // The dirty rows as a list, then their rects into the region. A row that exists in one
         // frame only adds that frame's rect; the other is masked to an empty box.
-        inline for (0..4) |k| @memcpy(now.vis[k][0..t.len], t.c.vis[k][0..t.len]);
+        for (0..t.len) |r| {
+            const bounds = geometry.nodeBounds(t, r);
+            inline for (0..4) |k| now.vis[k][r] = bounds[k];
+        }
         var w: u32 = 0;
         for (0..@max(now.len, last.len)) |r| w = simd.emit(u32, dm.list, w, @intCast(r), dm.dirty[r] != 0);
         dm.dirty_len = w;
@@ -261,10 +266,7 @@ pub fn cull(d: *DrawList, g: *const Region) void {
         for (0..d.cmd.count[i] * @intFromBool(is_quads)) |j| {
             const quad = d.quads[first + j];
             d.quads[q] = quad;
-            const box: [4]f32 = .{
-                @max(quad.rect[0], quad.clip[0]), @max(quad.rect[1], quad.clip[1]),
-                @min(quad.rect[2], quad.clip[2]), @min(quad.rect[3], quad.clip[3]),
-            };
+            const box = geometry.quadBounds(quad);
             q += @intFromBool(g.touches(box));
         }
         d.cmd.kind[n] = d.cmd.kind[i];

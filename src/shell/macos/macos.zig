@@ -277,6 +277,7 @@ fn onEvent(view: Id, _: Sel, e: Id) callconv(.c) void {
     if (kind == .key_down) ev.repeat = msg(bool, e, "isARepeat", .{});
     const m = shellOf(view);
     m.t.feed(.{ .event = ev });
+    m.applyCursor(m.applied.cursor, m.t.in.pointer[0] >= 0);
     if (kind != .key_down) return;
     // While a widget wants text the input method sees the key (and may compose); otherwise
     // the key's own characters are typed, and no input method runs.
@@ -354,7 +355,7 @@ fn doCommandBySelector(_: Id, _: Sel, _: Sel) callconv(.c) void {}
 /// the frame's cursor is shown instead.
 fn cursorUpdate(view: Id, _: Sel, _: Id) callconv(.c) void {
     const m = shellOf(view);
-    msg(void, m.cursors[@backingInt(m.applied.cursor)], "set", .{});
+    m.applyCursor(m.applied.cursor, true);
 }
 
 /// Light or dark changed: the view's effective appearance follows the system's.
@@ -470,6 +471,8 @@ pub const Macos = struct {
     /// The system cursors, by `Platform.cursor` (`translate.cursor_names`); shared objects
     /// AppKit owns.
     cursors: [translate.cursor_names.len]Id = undefined,
+    cursor_hidden: bool = false,
+    effect_view: ?Id = null,
     /// The system's light or dark mode and accent, read at `init` and again when AppKit says
     /// they changed. `appearanceChanged` hands a change to the host once.
     appearance: translate.Appearance = .{},
@@ -528,7 +531,10 @@ pub const Macos = struct {
             .appearance = readAppearance(),
         };
         rt.object_setIvar(view, shell_ivar, m);
-        inline for (translate.cursor_names, &m.cursors) |name, *c| c.* = msg(Id, objc.class("NSCursor"), name, .{});
+        inline for (translate.cursor_names, &m.cursors) |name, *c| {
+            const cls = objc.class("NSCursor");
+            c.* = if (msg(bool, cls, "respondsToSelector:", .{objc.sel(name)})) msg(Id, cls, name, .{}) else msg(Id, cls, "arrowCursor", .{});
+        }
         m.t.resize(.{ size[0], size[1] });
         msg(void, window, "setReleasedWhenClosed:", .{false});
         msg(void, window, "setTitle:", .{objc.string(opt.title)});
@@ -556,11 +562,13 @@ pub const Macos = struct {
     pub fn deinit(m: *Macos) void {
         const pool = objc.Pool.push();
         defer pool.pop();
+        m.applyCursor(.arrow, false);
         m.frames.deinit();
         msg(void, msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "removeObserver:", .{m.view});
         msg(void, m.window, "setDelegate:", .{@as(?Id, null)});
         msg(void, m.window, "close", .{});
         objc.release(m.window);
+        if (m.effect_view) |effect| objc.release(effect);
         objc.release(m.view);
         m.layer.deinit();
         m.gfx.deinit();
@@ -610,9 +618,55 @@ pub const Macos = struct {
             if (msg(?Id, m.view, "inputContext", .{})) |ic| msg(void, ic, "invalidateCharacterCoordinates", .{});
         }
         // Shown now if the pointer is over the view; `cursorUpdate:` shows it on the way in.
-        if (p.cursor != m.applied.cursor and m.t.in.pointer[0] >= 0) msg(void, m.cursors[@backingInt(p.cursor)], "set", .{});
+        m.applyCursor(p.cursor, m.t.in.pointer[0] >= 0);
         if (p.clipboard.len > 0) copy(p.clipboard);
         m.applied = p.*;
+    }
+
+    /// Places a real NSVisualEffectView behind the Metal content view. Clear `background`
+    /// transparently (and leave the relevant UI background unpainted) to reveal it. The
+    /// material changes no text colors and does not automatically enable AppKit vibrancy
+    /// for shader-drawn text. Passing null removes it; the caller retains its clear color.
+    pub fn setMaterial(m: *Macos, options: ?lcgf.shell_materials.AppKit) error{ InvalidMaterial, UnsupportedMaterial }!void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        if (options) |config| {
+            if (config.material == .titlebar and config.blending != .within_window) return error.InvalidMaterial;
+            if (m.effect_view == null) {
+                const rect = msgRect(m.view, "frame", .{});
+                const effect = msg(?Id, msg(Id, objc.class("NSVisualEffectView"), "alloc", .{}), "initWithFrame:", .{rect}) orelse return error.UnsupportedMaterial;
+                m.effect_view = effect;
+                msg(void, m.view, "setAutoresizingMask:", .{@as(U, 2 | 16)});
+                msg(void, m.window, "setContentView:", .{effect});
+                msg(void, effect, "addSubview:", .{m.view});
+            }
+            const effect = m.effect_view.?;
+            msg(void, effect, "setMaterial:", .{@backingInt(config.material)});
+            msg(void, effect, "setBlendingMode:", .{@backingInt(config.blending)});
+            msg(void, effect, "setState:", .{@backingInt(config.state)});
+            msg(void, effect, "setEmphasized:", .{config.emphasized});
+            msg(void, m.window, "setOpaque:", .{false});
+            msg(void, m.window, "setBackgroundColor:", .{msg(Id, objc.class("NSColor"), "clearColor", .{})});
+            msg(void, m.layer.layer, "setOpaque:", .{false});
+        } else if (m.effect_view) |effect| {
+            msg(void, m.view, "removeFromSuperview", .{});
+            msg(void, m.window, "setContentView:", .{m.view});
+            m.effect_view = null;
+            objc.release(effect);
+            msg(void, m.window, "setOpaque:", .{true});
+            msg(void, m.window, "setBackgroundColor:", .{msg(Id, objc.class("NSColor"), "windowBackgroundColor", .{})});
+            msg(void, m.layer.layer, "setOpaque:", .{true});
+        }
+        _ = msg(bool, m.window, "makeFirstResponder:", .{m.view});
+    }
+
+    fn applyCursor(m: *Macos, cursor: context.Cursor, inside: bool) void {
+        const hide = inside and cursor == .hidden;
+        if (hide != m.cursor_hidden) {
+            if (hide) msg(void, objc.class("NSCursor"), "hide", .{}) else msg(void, objc.class("NSCursor"), "unhide", .{});
+            m.cursor_hidden = hide;
+        }
+        if (inside and !hide) msg(void, m.cursors[@backingInt(cursor)], "set", .{});
     }
 
     /// Puts UTF-8 text on the general pasteboard. Called by `apply` for `Platform.clipboard`.
@@ -976,4 +1030,21 @@ test "macos: a real window runs the example from posted events" {
     // The arrow is back after leaving the slider, and it is AppKit's.
     try testing.expectEqual(context.Cursor.arrow, m.applied.cursor);
     try testing.expectEqual(msg(Id, objc.class("NSCursor"), "arrowCursor", .{}), m.cursors[0]);
+}
+
+test "macos: a real material wraps the Metal view and can be removed" {
+    var m: Macos = undefined;
+    try Fixture.open(&m);
+    defer m.deinit();
+    m.background = .transparent;
+    try m.setMaterial(.{ .material = .sidebar, .state = .active });
+    const effect = m.effect_view.?;
+    try testing.expectEqual(@as(isize, 7), msg(isize, effect, "material", .{}));
+    try testing.expectEqual(@as(isize, 1), msg(isize, effect, "state", .{}));
+    try testing.expectEqual(effect, msg(Id, m.view, "superview", .{}));
+    try testing.expect(!msg(bool, m.layer.layer, "isOpaque", .{}));
+    try testing.expectError(error.InvalidMaterial, m.setMaterial(.{ .material = .titlebar }));
+    try m.setMaterial(null);
+    try testing.expectEqual(@as(?Id, null), m.effect_view);
+    try testing.expectEqual(m.view, msg(Id, m.window, "contentView", .{}));
 }

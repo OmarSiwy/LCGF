@@ -35,6 +35,7 @@ const encode = @import("../draw/paint.zig").encode;
 const Mono = @import("../text/protocol.zig").Mono;
 const Texts = @import("../core/texts.zig").Texts;
 const plan = @import("plan.zig");
+const geometry = @import("../draw/geometry.zig");
 const Style = types.Style;
 const TextStyle = types.TextStyle;
 const Id = types.Id;
@@ -603,7 +604,13 @@ pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u
     // Paint.
     const alpha = try arena.alloc(f32, t.xlen);
     const clip_radii = try arena.alloc([4]f32, t.xlen);
-    tables.inherit(&t, alpha, clip_radii) catch return error.Transform;
+    // A transform needs the laid-out rect for its centre, which static tables do not keep.
+    // ponytail: paint references, outsets and partial participation are refused the same way;
+    // carry the extras rows in the tables when a static UI needs them.
+    for (t.x.row[1..t.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &.{ 1, 0, 0, 1, 0, 0 }) or
+        x.paint_reference != tables.none or !std.mem.eql(f32, &x.paint_outset, &@as([4]f32, @splat(0))) or
+        @as(u8, @bitCast(x.participation)) != @as(u8, @bitCast(types.Participation.all))) return error.Transform;
+    tables.inherit(&t, alpha, clip_radii);
     const in_rows = try arena.alloc(u32, n);
     const m = tables.paintRows(&t, n, alpha, in_rows);
     const group = try arena.alloc(u32, n);
@@ -1035,17 +1042,15 @@ pub const Ui = struct {
         const h = ui.h;
         if (h.patch_count == 0) return;
         const all = ui.d.quad_len == h.quads;
-        const visible = ui.full.v.c.visible;
-        const paint_node = ui.get(u32, h.paint_node, h.quads);
         var cursor: u32 = 0;
         var seen: u32 = 0;
         for (ui.get([4]u32, h.patches, h.patch_count)) |p| {
             const k = p[1];
             var row = k;
             if (!all) {
-                for (cursor..k) |j| seen += @intFromBool(visible[paint_node[j]] != 0);
+                for (cursor..k) |j| seen += ui.shown(j);
                 cursor = k;
-                if (visible[paint_node[k]] == 0) continue;
+                if (ui.shown(k) == 0) continue;
                 row = seen;
             }
             const bits = std.mem.readInt(u32, state[p[3]..][0..4], .little) & 0xffffff;
@@ -1081,6 +1086,17 @@ pub const Ui = struct {
         return @as(V4, ui.full.v.c.child_clip[ui.geometryRow(i)]) * sign;
     }
 
+    /// Whether template k paints this frame: comptime paint's `quadVisible` for the rows a
+    /// static UI keeps (no transform, reference, outset or partial participation).
+    inline fn shown(ui: *const Ui, k: usize) u32 {
+        const h = ui.h;
+        const i = ui.get(u32, h.paint_node, h.quads)[k];
+        const q = ui.get(Quad, h.templates, h.quads)[k];
+        const clip = ui.clipOf(ui.get(u32, h.clip_node, h.quads)[k]);
+        const present = if (h.regions != 0) ui.full.v.c.visible[i] else 1;
+        return present & @intFromBool(geometry.hasArea(geometry.paintBounds(ui.rectOf(i), q.params, .{ 1, 0, 0, 1, 0, 0 }, clip)));
+    }
+
     const Cursor = struct { quad: u32 = 0, op: u32 = 0 };
 
     fn emitQuads(ui: *Ui, first: usize, end: usize, cursor: *Cursor) void {
@@ -1090,7 +1106,6 @@ pub const Ui = struct {
         const clip_node = ui.get(u32, h.clip_node, m);
         const templates = ui.get(Quad, h.templates, m);
         const keys = ui.get(u32, h.keys, m);
-        const visible = ui.full.v.c.visible;
         const d = &ui.d;
         for (first..end) |k| {
             const i = node[k];
@@ -1101,8 +1116,9 @@ pub const Ui = struct {
             d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
             d.op.key[cursor.op] = keys[k];
             d.op.ref[cursor.op] = cursor.quad;
-            cursor.quad += visible[i];
-            cursor.op += visible[i];
+            const shown_k = ui.shown(k);
+            cursor.quad += shown_k;
+            cursor.op += shown_k;
         }
     }
 

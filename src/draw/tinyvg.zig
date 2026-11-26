@@ -9,10 +9,10 @@
 //!
 //! What the paths carry from the specification: fills are even-odd ("fill polygon", "fill
 //! path"); rectangles drawn first to last are their union; lines have round caps and joins (a
-//! Minkowski sum with a disc) and are at least one pixel wide. Not carried: gradients draw in
-//! their first colour (`Item.gradient` says so; the quad material has no gradient yet), a line
-//! width change inside a path (the command's width is used throughout), and text hints, which
-//! must not change the picture and are skipped.
+//! Minkowski sum with a disc) and are at least one pixel wide. `fill_paint`/`line_paint` retain
+//! gradients; `nextWithWidths` also writes endpoint widths for the width-aware flattener.
+//! Legacy fill/line colors remain available for callers deliberately choosing the flat-color
+//! route. `paint` consumes the rich styles and varying-width geometry. Text hints are skipped.
 
 const std = @import("std");
 const paths = @import("paths.zig");
@@ -20,6 +20,12 @@ const types = @import("../core/types.zig");
 const Path = paths.Path;
 const Color = types.Color;
 const Verb = paths.Verb;
+const brushes = @import("brushes.zig");
+const color_math = @import("color_math.zig");
+const surface = @import("surface.zig");
+const decoration = @import("decoration.zig");
+const vector = @import("vector.zig");
+const simd = @import("../core/simd.zig");
 
 pub const Error = error{
     /// Not a TinyVG file: wrong magic.
@@ -74,7 +80,19 @@ pub const Image = struct {
     /// Decodes the next draw command into `path` (cleared first), its coordinates mapped to
     /// `x * scale + ox`, `y * scale + oy` px. Null at the end of the document.
     pub fn next(img: *Image, scale: f32, ox: f32, oy: f32, path: *Path) Error!?Item {
-        var r: Reader = .{ .img = img, .at = img.at, .scale = scale, .ox = ox, .oy = oy };
+        return img.nextImpl(scale, ox, oy, path, &.{});
+    }
+
+    /// Writes one endpoint width per emitted path verb, including arc subdivision. The width
+    /// span has at least path.verb.len entries; it is reusable across streamed commands.
+    pub fn nextWithWidths(img: *Image, scale: f32, ox: f32, oy: f32, path: *Path, widths: []f32) Error!?Item {
+        if (widths.len < path.verb.len) return error.NoSpace;
+        return img.nextImpl(scale, ox, oy, path, widths);
+    }
+
+    fn nextImpl(img: *Image, scale: f32, ox: f32, oy: f32, path: *Path, widths: []f32) Error!?Item {
+        var r: Reader = .{ .img = img, .at = img.at, .scale = scale, .ox = ox, .oy = oy, .widths = widths };
+        @memset(widths, 1);
         path.clear();
         const head = try r.byte();
         const index: u6 = @truncate(head);
@@ -84,22 +102,26 @@ pub const Image = struct {
             0 => return null,
             1, 2, 3 => {
                 const n = try r.varCount();
-                item.fill = try r.style(kind, &item.gradient);
+                item.fill = try r.style(kind, &item.gradient, &item.fill_paint);
                 item.rule = if (index == 2) .nonzero else .even_odd;
                 try r.shape(index, n, path);
             },
             4, 5, 6, 7 => {
                 const n = try r.varCount();
-                item.line = try r.style(kind, &item.gradient);
+                item.line = try r.style(kind, &item.gradient, &item.line_paint);
                 item.width = try r.width();
+                r.default_width = item.width;
+                @memset(widths, item.width);
                 try r.lines(index, n, path);
             },
             8, 9, 10 => {
                 const b = try r.byte();
                 const n = @as(u32, b & 63) + 1;
-                item.fill = try r.style(kind, &item.gradient);
-                item.line = try r.style(@intCast(b >> 6), &item.gradient);
+                item.fill = try r.style(kind, &item.gradient, &item.fill_paint);
+                item.line = try r.style(@intCast(b >> 6), &item.gradient, &item.line_paint);
                 item.width = try r.width();
+                r.default_width = item.width;
+                @memset(widths, item.width);
                 item.rule = if (index == 9) .nonzero else .even_odd;
                 try r.shape(index - 7, n, path);
             },
@@ -113,6 +135,7 @@ pub const Image = struct {
             else => return error.BadData,
         }
         img.at = r.at;
+        item.variable_width = r.variable_width;
         return item;
     }
 };
@@ -125,14 +148,97 @@ pub const Item = struct {
     rule: paths.Rule = .even_odd,
     /// Line width in px, at least 1.
     width: f32 = 1,
-    /// A style was a gradient, drawn in its first colour.
+    /// At least one rich style is a gradient. Legacy fill/line fields retain its first color.
     gradient: bool = false,
+    fill_paint: ?Paint = null,
+    line_paint: ?Paint = null,
+    variable_width: bool = false,
 
     /// The stroke style for `line`: TinyVG lines have round caps and joins.
     pub fn stroke(it: Item) paths.Stroke {
         return .{ .width = it.width, .join = .round, .cap = .round };
     }
 };
+
+pub const Gradient = struct { from: [2]f32, to: [2]f32, colors: [2]Color };
+pub const Paint = union(enum) { solid: Color, linear: Gradient, radial: Gradient };
+
+/// TinyVG requires RGB interpolation in linear light and independent linear alpha. The
+/// returned brush borrows two caller-owned segment rows and retains both endpoints/colors.
+pub fn preparePaint(paint_style: Paint, segments: []brushes.Segment) brushes.Error!brushes.Brush {
+    const gradient = switch (paint_style) {
+        .solid => |c| return .{ .solid = color_math.fromColor(c) },
+        .linear, .radial => |g| g,
+    };
+    const stops = [2]brushes.Stop{
+        .{ .position = 0, .color = color_math.fromColor(gradient.colors[0]) },
+        .{ .position = 1, .color = color_math.fromColor(gradient.colors[1]) },
+    };
+    const ramp = try brushes.prepareStops(&stops, segments, .{ .space = .linear_srgb, .premultiplied = false }, .pad);
+    return switch (paint_style) {
+        .solid => unreachable,
+        .linear => .{ .linear = .{ .ramp = ramp, .from = gradient.from, .to = gradient.to } },
+        .radial => blk: {
+            const radius = std.math.hypot(gradient.to[0] - gradient.from[0], gradient.to[1] - gradient.from[1]);
+            if (radius <= 0) break :blk .{ .solid = color_math.fromColor(gradient.colors[1]) };
+            break :blk .{ .radial = .{ .ramp = ramp, .center = gradient.from, .radius = .{ radius, radius } } };
+        },
+    };
+}
+
+pub const RasterBuffers = struct {
+    path: *Path,
+    command_widths: []f32,
+    centerline: *paths.Polyline,
+    point_widths: []f32,
+    outline: *paths.Polyline,
+    fill: paths.Scratch,
+    accumulator: []f32,
+    coverage: []u8,
+    gradient_segments: []brushes.Segment,
+};
+pub const PaintError = Error || vector.Error;
+
+fn paintPolyline(dst: surface.Surface, polyline: *const paths.Polyline, rule: paths.Rule, paint_style: Paint, view: decoration.View, buffers: RasterBuffers) PaintError!void {
+    const box = paths.bounds(polyline);
+    if (box.w == 0 or box.h == 0) return;
+    if (buffers.accumulator.len < paths.accLen(box) or buffers.coverage.len < paths.imageLen(box)) return error.InsufficientStorage;
+    const points = polyline.points;
+    if (buffers.fill.x0.len < points or buffers.fill.y0.len < points or buffers.fill.y1.len < points or buffers.fill.dxdy.len < points or buffers.fill.cross_x.len < points or buffers.fill.cross_d.len < points) return error.InsufficientStorage;
+    const brush = try preparePaint(paint_style, buffers.gradient_segments);
+    paths.fill(polyline, box, rule, buffers.fill, buffers.accumulator);
+    paths.coverage(buffers.accumulator, buffers.coverage, @as(usize, box.w) * box.h);
+    try vector.paintCoverage(dst, .{ .bytes = buffers.coverage, .box = box }, brush, view, 1);
+}
+
+/// Renders the remaining document from an Image value without retaining or advancing it.
+/// Fill/line gradients and interpolated endpoint widths are consumed. On malformed input or
+/// exhausted scratch, completed earlier commands remain painted; the caller can clear/replay
+/// with larger storage. This streaming contract avoids an implicit whole-document allocation.
+pub fn paint(image: Image, scale: f32, origin: [2]f32, dst: surface.Surface, view: decoration.View, tolerance: f32, buffers: RasterBuffers) PaintError!void {
+    try dst.validate();
+    if (!std.math.isFinite(scale) or scale <= 0 or !std.math.isFinite(origin[0]) or !std.math.isFinite(origin[1]) or !std.math.isFinite(tolerance) or tolerance <= 0) return error.InvalidGeometry;
+    if (surface.overlapsBytes(std.mem.sliceAsBytes(dst.pixels), image.data)) return error.AliasedStorage;
+    try decoration.validateClipSources(dst.pixels, view.clips);
+    var cursor = image;
+    while (try cursor.nextWithWidths(scale, origin[0], origin[1], buffers.path, buffers.command_widths)) |item| {
+        if (item.fill_paint == null and item.line_paint == null) continue;
+        const required = paths.flattenWidthsLen(buffers.path, tolerance);
+        if (buffers.centerline.x.len < required.points or buffers.centerline.y.len < required.points or buffers.point_widths.len < required.points or buffers.centerline.end.len < required.contours or buffers.centerline.closed.len < required.contours) return error.InsufficientStorage;
+        paths.flattenWidths(buffers.path, buffers.command_widths, tolerance, buffers.centerline, buffers.point_widths);
+        if (item.fill_paint) |fill| try paintPolyline(dst, buffers.centerline, item.rule, fill, view, buffers);
+        if (item.line_paint) |line| {
+            if (item.variable_width) {
+                try vector.variableStroke(buffers.centerline, buffers.point_widths, tolerance, buffers.outline);
+            } else {
+                const needed = paths.strokeLen(buffers.centerline, item.stroke(), tolerance);
+                if (buffers.outline.x.len < needed.points or buffers.outline.y.len < needed.points or buffers.outline.end.len < needed.contours or buffers.outline.closed.len < needed.contours) return error.InsufficientStorage;
+                paths.stroke(buffers.centerline, item.stroke(), tolerance, buffers.outline);
+            }
+            try paintPolyline(dst, buffers.outline, .nonzero, line, view, buffers);
+        }
+    }
+}
 
 /// Parses the header and colour table of `data`.
 pub fn parse(data: []const u8) Error!Image {
@@ -192,6 +298,9 @@ const Reader = struct {
     scale: f32 = 1,
     ox: f32 = 0,
     oy: f32 = 0,
+    widths: []f32 = &.{},
+    default_width: f32 = 1,
+    variable_width: bool = false,
 
     fn skip(r: *Reader, n: usize) Error!usize {
         if (n > r.img.data.len - r.at) return error.Truncated;
@@ -253,15 +362,20 @@ const Reader = struct {
         return @max(try r.unit() * r.scale, 1);
     }
 
-    fn style(r: *Reader, kind: u2, gradient: *bool) Error!Color {
+    fn style(r: *Reader, kind: u2, gradient: *bool, detailed: *?Paint) Error!Color {
         switch (kind) {
-            0 => return r.img.color(try r.varUint()),
+            0 => {
+                const c = try r.img.color(try r.varUint());
+                detailed.* = .{ .solid = c };
+                return c;
+            },
             1, 2 => {
-                // Gradient: two points, two colours. Drawn in the first colour.
-                _ = try r.point();
-                _ = try r.point();
+                const from = try r.point();
+                const to = try r.point();
                 const c0 = try r.img.color(try r.varUint());
-                _ = try r.img.color(try r.varUint());
+                const c1 = try r.img.color(try r.varUint());
+                const paint_gradient: Gradient = .{ .from = from, .to = to, .colors = .{ c0, c1 } };
+                detailed.* = if (kind == 1) .{ .linear = paint_gradient } else .{ .radial = paint_gradient };
                 gradient.* = true;
                 return c0;
             },
@@ -338,9 +452,13 @@ const Reader = struct {
             try room(path, 1, 1);
             path.moveTo(start[0], start[1]);
             var cur = start;
+            var previous_width = r.default_width;
+            if (r.widths.len > 0) r.widths[path.verbs - 1] = previous_width;
             for (0..len) |_| {
                 const tag = try r.byte();
-                if (tag & 0x10 != 0) _ = try r.unit(); // a line width change: not carried
+                const new_width = if (tag & 0x10 != 0) try r.width() else previous_width;
+                if (tag & 0x10 != 0) r.variable_width = true;
+                const verb_first = path.verbs;
                 switch (tag & 7) {
                     0 => {
                         cur = try r.point();
@@ -387,6 +505,15 @@ const Reader = struct {
                     },
                     else => unreachable,
                 }
+                if (r.widths.len > 0) {
+                    const pieces = path.verbs - verb_first;
+                    for (verb_first..path.verbs) |verb_index| {
+                        const fraction = @as(f32, @floatFromInt(verb_index - verb_first + 1)) / @as(f32, @floatFromInt(pieces));
+                        r.widths[verb_index] = previous_width + (new_width - previous_width) * fraction;
+                    }
+                    if (pieces == 0 and path.verbs > 0) r.widths[path.verbs - 1] = new_width;
+                }
+                previous_width = new_width;
             }
         }
     }
@@ -467,6 +594,61 @@ const testing = std.testing;
 const icon_all = @embedFile("testdata/paths/icon_all.tvg");
 const icon_565 = @embedFile("testdata/paths/icon_565.tvg");
 const icon_f32 = @embedFile("testdata/paths/icon_f32.tvg");
+
+test "rich decoding retains both gradient colors and endpoint width changes" {
+    var buffers: paths.TestBuffers(128, 2048) = .{};
+    var path = buffers.path();
+    var widths: [128]f32 = undefined;
+    var image = try parse(icon_all);
+    var saw_gradient = false;
+    var saw_width = false;
+    while (try image.nextWithWidths(1, 0, 0, &path, &widths)) |item| {
+        if (item.fill_paint) |fill| if (fill == .linear) {
+            saw_gradient = true;
+            try testing.expect(fill.linear.colors[0].bitsOf() != fill.linear.colors[1].bitsOf());
+        };
+        if (item.variable_width) {
+            saw_width = true;
+            try testing.expectEqual(@as(f32, 1.5), widths[0]);
+            try testing.expectEqual(@as(f32, 3), widths[path.verbs - 1]);
+        }
+    }
+    try testing.expect(saw_gradient and saw_width);
+}
+
+test "TinyVG rich paint actually renders its gradient into a caller surface" {
+    const bytes = "\x72\x56\x01\x40\x10\x08\x02" ++
+        "\xff\x00\x00\xff\x00\x00\xff\xff" ++
+        "\x42\x00\x00\x00\x10\x00\x00\x01\x00\x00\x10\x08\x00";
+    var source: paths.TestBuffers(16, 256) = .{};
+    var output: paths.TestBuffers(64, 2048) = .{};
+    var path = source.path();
+    var center = source.polyline();
+    var outline = output.polyline();
+    var command_widths: [16]f32 = undefined;
+    var point_widths: [256]f32 = undefined;
+    var accumulator: [512]f32 = undefined;
+    var coverage: [512]u8 = undefined;
+    var segments: [2]brushes.Segment = undefined;
+    var pixels: [simd.rows(16) * 8]u32 = undefined;
+    const target = try surface.init(&pixels, 16, 8);
+    try paint(try parse(bytes), 1, .{ 0, 0 }, target, .{}, 0.1, .{
+        .path = &path,
+        .command_widths = &command_widths,
+        .centerline = &center,
+        .point_widths = &point_widths,
+        .outline = &outline,
+        .fill = output.scratch(),
+        .accumulator = &accumulator,
+        .coverage = &coverage,
+        .gradient_segments = &segments,
+    });
+    const left = color_math.unpack(target.pixels[3 * target.stride]);
+    const right = color_math.unpack(target.pixels[3 * target.stride + 15]);
+    try testing.expect(left[0] > 0.9 and left[2] < 0.3);
+    try testing.expect(right[2] > 0.9 and right[0] < 0.3);
+    try testing.expectEqual(@as(f32, 1), left[3]);
+}
 
 /// Decodes every command of `data`; returns the items, or the first error.
 fn testDecode(data: []const u8, path: *Path, items: []Item) Error![]Item {

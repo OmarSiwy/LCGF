@@ -119,7 +119,20 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
         (c1 -% c0) <= ctx.customs[ctx.cur].cap - ctx.customs[ctx.cur].len,
     ));
     const busy = moving(ctx, a, count, f.in.time);
-    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), !busy));
+    // Collapsing masks layout inputs while building. A parent participation change must
+    // rebuild original inputs instead of reviving rows whose stored dimensions were zeroed.
+    const new_parent = ctx.stack[ctx.depth - 1];
+    const same_participation = @as(u8, @bitCast(t.participation(new_parent))) == @as(u8, @bitCast(prev.participation(prev.c.parent[a])));
+    var references_valid = true;
+    if (from_last_frame and fits) {
+        for (x0..x1) |r| {
+            const source = prev.x.row[r].paint_reference;
+            if (source == none or (source >= a and source < b) or source == prev.c.parent[a]) continue;
+            references_valid = references_valid and source < prev.len and prev.c.id[@min(source, prev.cap - 1)] != 0;
+            if (references_valid) references_valid = t.find(@fromBackingInt(prev.c.id[source])) != none;
+        }
+    }
+    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), andB(!busy, andB(andB(same_participation, t.cursor(new_parent) == prev.cursor(prev.c.parent[a])), references_valid))));
 
     // The subtree starts at the next row whether it is copied or rebuilt.
     m.c.id[slot] = k;
@@ -226,6 +239,10 @@ fn copySubtree(f: *Frame, a: u32, b: u32, ks: [2]u32, cs: [2]u32, xs: [2]u32) vo
     const xn = x1 - x0;
     mem.copyRows(Tree.Extras, &t.x, t.xlen, &prev.x, x0, xn);
     rebaseNodes(t.x.node, t.xlen, xn, delta);
+    for (t.xlen..t.xlen + xn) |r| {
+        const source = t.x.row[r].paint_reference;
+        if (source != none) t.x.row[r].paint_reference = if (source >= a and source < b) source +% delta else if (source == prev.c.parent[a]) parent else t.find(@fromBackingInt(prev.c.id[source]));
+    }
     t.xlen += xn;
 
     keepAlive(ctx, a, count, delta);
@@ -1085,4 +1102,52 @@ test "reuse finalization matches rebuilding through ancestor clips, transforms, 
         try expectFrameEqual(want, got);
         if (step > 0) try testing.expectEqual(1, retained.memos.kept_len);
     }
+}
+
+test "reuse rebuilds collapsed and cursor-dependent children when their parent changes" {
+    const Fx = Fixture(.{ .nodes = 24, .texts = 1, .customs = 1, .strings = 16, .signals = 2, .memos = 2, .depth = 5 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var builds: u32 = 0;
+    for (0..4) |step| {
+        var f = ctx.begin(&in);
+        _ = f.open(.from("parent"), .{ .participation = if (step == 0) .collapsed else .all, .cursor = if (step < 2) .crosshair else .pointer, .size = .{ .fill, .fill } });
+        if (!f.reuse(.from("memo"), &.{})) {
+            builds += 1;
+            _ = f.leaf(.from("memo"), .{ .fill = .white, .size = .{ .px(20), .px(10) } });
+        }
+        f.close();
+        const out = f.end(.{});
+        const n = out.tree.find(.from("memo"));
+        try testing.expectEqual(@as(f32, if (step == 0) 0 else 10), out.tree.rect(n).h());
+        try testing.expectEqual(@as(?types.Cursor, if (step < 2) .crosshair else .pointer), out.tree.cursor(n));
+    }
+    try testing.expectEqual(@as(u32, 3), builds);
+}
+
+test "reuse rebases paint references when an unchanged decorated subtree moves in row storage" {
+    const Fx = Fixture(.{ .nodes = 32, .texts = 1, .customs = 1, .strings = 16, .signals = 2, .memos = 2, .depth = 6 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var builds: u32 = 0;
+    for (0..2) |step| {
+        var f = ctx.begin(&in);
+        if (step != 0) _ = f.leaf(.none, .{ .size = .{ .px(5), .px(5) } });
+        const owner = f.open(.from("outside"), .{ .size = .{ .px(60), .px(40) } });
+        if (!f.reuse(.from("paint-memo"), &.{})) {
+            builds += 1;
+            const box = f.open(.from("paint-memo"), .{ .size = .{ .px(20), .px(20) }, .fill = .white });
+            _ = f.leaf(.from("outline"), .{ .float = true, .paint_reference = box.ix(), .paint_outset = @splat(2), .border = 1, .border_color = .white });
+            _ = f.leaf(.from("external-outline"), .{ .float = true, .paint_reference = owner.ix(), .paint_outset = @splat(1), .border = 1, .border_color = .white });
+            f.close();
+        }
+        f.close();
+        const out = f.end(.{});
+        const tree = out.tree;
+        const internal = tree.find(.from("outline"));
+        const external = tree.find(.from("external-outline"));
+        try testing.expectEqual(tree.find(.from("paint-memo")), tree.x.row[tree.c.extra[internal]].paint_reference);
+        try testing.expectEqual(owner.ix(), tree.x.row[tree.c.extra[external]].paint_reference);
+    }
+    try testing.expectEqual(@as(u32, 1), builds);
 }

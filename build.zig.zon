@@ -75,7 +75,7 @@
         // `zig build abi` on x86-64 Linux.
         .directx_headers = .{
             .url = "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.620.2.tar.gz",
-            .hash = "N-V-__8AAIZwSwA-WqlE0RAVarbjd_oh1wTRG3XZ6BwfCjM8",
+            .hash = "N-V-__8AAIZwSwDTT67j9bNP3zlS0WTCcmy7O9qxwY3fBlS4",
             .lazy = true,
         },
         // Khronos Vulkan-Headers: vulkan_core.h, translated by build.zig for the Vulkan back end

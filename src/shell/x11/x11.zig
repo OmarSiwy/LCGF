@@ -553,7 +553,45 @@ pub const Connection = struct {
 /// Glyphs of the core cursor font (X11 cursorfont.h) for each `context.Cursor`: left_ptr,
 /// hand2, xterm, fleur, sb_h_double_arrow, sb_v_double_arrow. Desktops' Xcursor themes are
 /// files read by libXcursor on the client; this shell draws the server's own glyphs instead.
-const cursor_glyphs = [_]u16{ 68, 60, 152, 52, 108, 116 };
+// X11 core cursor font. It lacks busy-arrow, hand-closed, zoom and drag-copy artwork;
+// nearest semantic glyphs are explicit here. Hidden uses a zero mask, not a font glyph.
+const cursor_glyphs = std.enums.EnumArray(context.Cursor, u16).init(.{
+    .arrow = 68,
+    .pointer = 60,
+    .text = 152,
+    .grab = 52,
+    .resize_h = 108,
+    .resize_v = 116,
+    .crosshair = 34,
+    .move = 52,
+    .grabbing = 52,
+    .resize_nwse = 134,
+    .resize_nesw = 136,
+    .resize_n = 138,
+    .resize_e = 96,
+    .resize_s = 16,
+    .resize_w = 70,
+    .resize_ne = 136,
+    .resize_nw = 134,
+    .resize_se = 14,
+    .resize_sw = 12,
+    .not_allowed = 24,
+    .no_drop = 24,
+    .progress = 150,
+    .wait = 150,
+    .help = 92,
+    .copy = 90,
+    .alias = 50,
+    .context_menu = 68,
+    .cell = 34,
+    .vertical_text = 152,
+    .zoom_in = 90,
+    .zoom_out = 24,
+    .all_scroll = 52,
+    .col_resize = 108,
+    .row_resize = 116,
+    .hidden = 0,
+}).values;
 
 comptime {
     std.debug.assert(cursor_glyphs.len == @typeInfo(context.Cursor).@"enum".field_names.len);
@@ -1054,7 +1092,18 @@ pub const Window = struct {
             }
             if (c.cursors[k] == 0) {
                 c.cursors[k] = c.id();
-                _ = c.send(wire.create_glyph_cursor_size, wire.createGlyphCursor, .{ c.cursors[k], c.cursor_font, cursor_glyphs[k] });
+                if (p.cursor == .hidden) {
+                    const bitmap = c.id();
+                    const gc = c.id();
+                    _ = c.send(wire.create_pixmap_size, wire.createPixmap, .{ bitmap, w.id, 1, 1, 1 });
+                    _ = c.send(wire.create_gc_size, wire.createGc, .{ gc, bitmap });
+                    _ = c.send(wire.clear_bitmap_size, wire.clearBitmap, .{ bitmap, gc });
+                    _ = c.send(wire.create_cursor_size, wire.createCursor, .{ c.cursors[k], bitmap, bitmap });
+                    _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.free_gc, gc });
+                    _ = c.send(wire.window_size, wire.onWindow, .{ wire.op.free_pixmap, bitmap });
+                } else {
+                    _ = c.send(wire.create_glyph_cursor_size, wire.createGlyphCursor, .{ c.cursors[k], c.cursor_font, cursor_glyphs[k] });
+                }
             }
             _ = c.send(wire.change_cursor_size, wire.changeCursor, .{ w.id, c.cursors[k] });
             c.flush() catch {};
@@ -1672,14 +1721,18 @@ test "x11: the cursor the frame asks for is the one the server shows" {
     defer w.close();
     _ = c.send(wire.fake_input_size, wire.fakeInput, .{ xtest, wire.motion_notify, 0, c.setup.root, 100, 100 });
 
-    // Each shape shows a different glyph (size and hot spot) and a different cursor object.
+    // Each shape has a cursor object; native fallbacks may share artwork. Hidden is transparent.
     const Shape = struct { size: [4]u16, serial: u32 };
     var shapes: [cursor_glyphs.len]Shape = undefined;
     for (&shapes, 0..) |*sh, k| {
         w.apply(&.{ .cursor = @fromBackingInt(@intCast(k)) });
         const r = try c.reply(c.send(wire.xfixes_get_cursor_image_size, wire.xfixesGetCursorImage, .{xfixes}));
         sh.* = .{ .size = .{ wire.get(u16, r, 12), wire.get(u16, r, 14), wire.get(u16, r, 16), wire.get(u16, r, 18) }, .serial = wire.get(u32, r, 20) };
-        for (shapes[0..k]) |other| try testing.expect(other.serial != sh.serial and !std.meta.eql(other.size, sh.size));
+        for (shapes[0..k]) |other| try testing.expect(other.serial != sh.serial);
+        if (k == @backingInt(context.Cursor.hidden)) {
+            const bytes = @as(usize, sh.size[0]) * sh.size[1] * 4;
+            for (r[32..][0..bytes]) |byte| try testing.expectEqual(@as(u8, 0), byte);
+        }
     }
     // Back to the arrow: the same cursor as before, created once.
     w.apply(&.{ .cursor = .arrow });

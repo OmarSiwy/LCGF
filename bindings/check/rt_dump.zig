@@ -128,7 +128,7 @@ const row_words = plan.wordsOf(Template);
 /// branch of `Template.from`: each size kind, ties, signed zeros, infinities, NaN, textures with
 /// and without a fill, negative and set corners.
 fn rowSweep(arena: std.mem.Allocator, count: u32) ![]u32 {
-    comptime std.debug.assert(style_words == 50 and row_words == 55);
+    comptime std.debug.assert(style_words == 59 and row_words == 66);
     const floats = [_]f32{ 0, -0.0, 1, -1, 0.5, 8, 123.25, -7, std.math.inf(f32), -std.math.inf(f32), std.math.nan(f32), 1e-30, 3e38, 2 };
     const colors = [_]u32{ 0, 0xffffffff, 0x00ff8040, 0x80102030, 0x01000000, 0x00ffffff };
     var rng = std.Random.DefaultPrng.init(0x1a47_2cab);
@@ -142,12 +142,15 @@ fn rowSweep(arena: std.mem.Allocator, count: u32) ![]u32 {
         for (0..style_words) |i| {
             if (r.boolean()) continue;
             w[i] = switch (i) {
-                0, 16, 17, 20 => r.uintLessThan(u32, 2), // dir, shrink, float, clip
-                1, 3 => r.uintLessThan(u32, 4), // size kind
-                14, 15 => r.uintLessThan(u32, 3), // main, cross
-                23, 24 => colors[r.uintLessThan(usize, colors.len)], // fill, border_color
-                27, 28 => if (r.boolean()) 0 else r.uintLessThan(u32, 0x10000), // texture, material
-                48 => r.uintLessThan(u32, 8), // role
+                0 => r.uintLessThan(u32, 16), // participation bits
+                1 => if (r.boolean()) std.math.maxInt(u32) else r.uintLessThan(u32, @typeInfo(lcgf.types.Cursor).@"enum".field_names.len), // cursor
+                2, 18, 19, 22 => r.uintLessThan(u32, 2), // dir, shrink, float, clip
+                3, 5 => r.uintLessThan(u32, 4), // size kind
+                16, 17 => r.uintLessThan(u32, 3), // main, cross
+                25, 26 => colors[r.uintLessThan(usize, colors.len)], // fill, border_color
+                29, 30 => if (r.boolean()) 0 else r.uintLessThan(u32, 0x10000), // texture, material
+                52 => if (r.boolean()) std.math.maxInt(u32) else r.uintLessThan(u32, 64), // paint_reference
+                57 => r.uintLessThan(u32, 8), // role
                 else => @bitCast(floats[r.uintLessThan(usize, floats.len)]),
             };
         }

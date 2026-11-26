@@ -20,6 +20,7 @@ pub const Flips = struct {
     len: u32 = 0,
     cap: u32,
     c: Columns,
+    overflow: bool = false,
 
     pub const Columns = struct {
         node: []u32,
@@ -34,15 +35,24 @@ pub const Flips = struct {
         return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
     }
 
-    /// Registers row `node`, whose id `id` must be stable across frames, for this frame. Past `cap` the last
-    /// registration is overwritten.
-    pub fn add(fl: *Flips, node: u32, id: Id, spring: Spring) void {
-        const k = @min(fl.len, fl.cap - 1);
+    /// Checked registration. A failed row stays at its settled layout without replacing an
+    /// already registered subtree. Its ID must be stable across frames.
+    pub fn reserve(fl: *Flips, node: u32, id: Id, spring: Spring) error{NoSpace}!void {
+        if (fl.len == fl.cap) {
+            fl.overflow = true;
+            return error.NoSpace;
+        }
+        const k = fl.len;
         fl.c.node[k] = node;
         fl.c.id[k] = @backingInt(id);
         fl.c.stiffness[k] = spring.stiffness;
         fl.c.damping[k] = spring.damping;
         fl.len = k + 1;
+    }
+
+    /// Compatibility operation; failed registration is ignored and observable in overflow.
+    pub fn add(fl: *Flips, node: u32, id: Id, spring: Spring) void {
+        fl.reserve(node, id, spring) catch {};
     }
 };
 
@@ -63,15 +73,28 @@ pub fn apply(t: *Tree, prev: *const Tree, fl: *Flips, an: *Anims, frame: u32) f3
         const id: Id = @fromBackingInt(c.id[k]);
         const was = prev.find(id);
         const row = @min(was, prev.cap - 1);
+        const known = [2]u32{
+            simd.find(an.c.id, an.len, @backingInt(id.with(0))),
+            simd.find(an.c.id, an.len, @backingInt(id.with(1))),
+        };
+        // Reserve both axes atomically. A half-registered layout transition would spend
+        // capacity on an invisible row and move only one axis; exhaustion instead settles
+        // the complete node and never changes another control's spring.
+        const needed: u32 = @as(u32, @intFromBool(known[0] == none)) + @as(u32, @intFromBool(known[1] == none));
+        if (needed > an.cap - an.len) {
+            an.overflow = true;
+            c.delta[0][k] = 0;
+            c.delta[1][k] = 0;
+            continue;
+        }
         inline for (0..2) |a| {
             const target = pos[a][n];
             const key = id.with(a);
-            const known = simd.find(an.c.id, an.len, @backingInt(key));
-            const i = an.slotScan(key, target);
+            const i = an.reserveScan(key, target) catch unreachable;
             // A spring new this frame for a node shown last frame starts at the shown rect.
             // Select the row to write, not the value (a value select re-branches on Zig 0.18;
             // docs/CHECKS.md): otherwise the rect goes to the spare row no pass reads.
-            const restart = simd.andB(known == none, was != none);
+            const restart = simd.andB(known[a] == none, was != none);
             an.c.x[simd.selU(restart, i, @intCast(an.c.x.len - 1))] = prev.c.rect[a][row];
             an.c.target[i] = target;
             an.c.stiffness[i] = c.stiffness[k];

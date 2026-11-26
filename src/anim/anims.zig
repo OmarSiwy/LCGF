@@ -24,8 +24,11 @@ pub const Anims = struct {
     /// each `sweep`. A frame asks for its springs in the same order every frame and `sweep`
     /// keeps that order, so in a steady UI every `slot` is one compare instead of a scan.
     next: u32 = 0,
+    /// At least one new ID could not be reserved since the caller last cleared this flag.
+    overflow: bool = false,
 
-    /// `simd.rows(cap)` rows each. Rows past `len` are kept zero (inert for `step`).
+    /// `simd.rows(cap)` rows each. Padding through `padded(len)` stays inert. The last spare
+    /// row is a discard destination, never part of `len` and never stepped or retained.
     pub const Columns = struct {
         id: []u32,
         x: []f32,
@@ -44,9 +47,20 @@ pub const Anims = struct {
         return .{ .cap = cap, .c = carver.columns(Columns, simd.rows(cap)) };
     }
 
-    /// Row for `id`, created resting at `initial` on first use. Past `cap` new ids share the
-    /// last row. O(1) when `id` sits at the row after the previous call's (see `next`), else a
-    /// SIMD scan of the ids: one coarse, well-predicted branch per call, none per row.
+    /// Checked reservation. Exhaustion reports NoSpace and leaves every live spring intact.
+    pub fn reserve(a: *Anims, id: Id, initial: f32) error{NoSpace}!u32 {
+        const i = a.slot(id, initial);
+        return if (i < a.cap) i else error.NoSpace;
+    }
+
+    pub fn reserveScan(a: *Anims, id: Id, initial: f32) error{NoSpace}!u32 {
+        const i = a.slotScan(id, initial);
+        return if (i < a.cap) i else error.NoSpace;
+    }
+
+    /// Legacy row-returning operation. Past `cap`, new IDs receive an explicitly discarded
+    /// spare row (index >= cap), and set overflow; no live row is overwritten. Prefer reserve
+    /// when choosing a settled fallback. O(1) for the next expected ID, otherwise a SIMD scan.
     pub fn slot(a: *Anims, id: Id, initial: f32) u32 {
         const k = @backingInt(id);
         const guess = @min(a.next, a.len -| 1);
@@ -56,7 +70,7 @@ pub const Anims = struct {
             return guess;
         }
         const i = a.place(k, initial, simd.find(a.c.id, a.len, k));
-        a.next = i + 1;
+        a.next = simd.selU(i < a.cap, i + 1, 0);
         return i;
     }
 
@@ -71,16 +85,24 @@ pub const Anims = struct {
     inline fn place(a: *Anims, k: u32, initial: f32, found: u32) u32 {
         const c = &a.c;
         const is_new = found == none;
-        const i = simd.selU(is_new, @min(a.len, a.cap - 1), found);
-        a.len = @min(a.len + @intFromBool(is_new), a.cap);
+        const spare: u32 = @intCast(c.x.len - 1);
+        const available = a.len < a.cap;
+        const i = simd.selU(is_new, simd.selU(available, a.len, spare), found);
+        a.overflow = simd.orB(a.overflow, simd.andB(is_new, !available));
+        a.len += @intFromBool(simd.andB(is_new, available));
         c.id[i] = k;
         // Select the row to write, not the value: a new spring's start goes to its row, an
         // existing one's to the last spare row, which no pass reads (it is past
         // `padded(cap)`). A select of a value loaded only for it becomes a branch on Zig 0.18
         // (docs/CHECKS.md), and `flip.apply` calls this once per registered node.
-        const dst = simd.selU(is_new, i, @intCast(c.x.len - 1));
+        const dst = simd.selU(is_new, i, spare);
         c.x[dst] = initial;
         c.v[dst] = 0;
+        c.target[dst] = initial;
+        c.stiffness[dst] = 0;
+        c.damping[dst] = 0;
+        c.seen[dst] = 0;
+        c.node[dst] = none;
         return i;
     }
 
@@ -232,15 +254,27 @@ test "slot: one row per id, created at rest at its initial value" {
     try testing.expectEqual(@as(f32, 100), a.c.x[j]);
 }
 
-test "slot: past capacity, new ids share the last row" {
+test "spring reservation exhaustion discards overflow without changing a live row" {
     var a = fixture(2);
     _ = a.slot(Id.from("a"), 1);
     const b = a.slot(Id.from("b"), 2);
     const c = a.slot(Id.from("c"), 3);
-    try testing.expectEqual(b, c);
+    try testing.expect(c >= simd.padded(a.cap));
     try testing.expectEqual(@as(u32, 2), a.len);
     try testing.expectEqual(@as(f32, 3), a.c.x[c]);
     try testing.expectEqual(@backingInt(Id.from("c")), a.c.id[c]);
+    try testing.expectEqual(@backingInt(Id.from("b")), a.c.id[b]);
+    try testing.expectEqual(@as(f32, 2), a.c.x[b]);
+    try testing.expect(a.overflow);
+    try testing.expectError(error.NoSpace, a.reserve(Id.from("d"), 4));
+    try testing.expectError(error.NoSpace, a.reserveScan(Id.from("e"), 5));
+    try testing.expectEqual(b, try a.reserve(Id.from("b"), 99));
+    a.c.target[c] = 100;
+    a.c.stiffness[c] = 170;
+    try testing.expectEqual(@as(f32, 0), a.step(1.0 / 60.0));
+    var empty = fixture(0);
+    try testing.expectError(error.NoSpace, empty.reserve(.from("none"), 9));
+    try testing.expectEqual(@as(u32, 0), empty.len);
 }
 
 /// A spring pulled from `from` to `to`: the row as `Frame.animate` leaves it.

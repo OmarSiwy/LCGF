@@ -179,12 +179,33 @@ pub fn flattenLen(p: *const Path, tolerance: f32) struct { points: usize, contou
 /// `out` (emptied first; sized by `flattenLen` with the same tolerance). A point equal to the one before it is dropped, so no chord has zero length,
 /// and a closed contour does not repeat its first point at the end.
 pub fn flatten(p: *const Path, tolerance: f32, out: *Polyline) void {
+    flattenImpl(false, p, &.{}, tolerance, out, &.{});
+}
+
+/// Capacity for width-aware flattening. A closed endpoint with a different width remains
+/// explicit, even at the same position, so the varying-radius stroke can cover both discs.
+pub fn flattenWidthsLen(p: *const Path, tolerance: f32) struct { points: usize, contours: usize } {
+    const n = flattenLen(p, tolerance);
+    return .{ .points = n.points + p.verbs, .contours = n.contours };
+}
+
+/// One endpoint width per authored verb, and one output width per flattened point. Curves
+/// interpolate width linearly in their parameter. The ordinary flatten specialization contains
+/// no width loads/stores; both paths share the geometry implementation.
+pub fn flattenWidths(p: *const Path, command_widths: []const f32, tolerance: f32, out: *Polyline, point_widths: []f32) void {
+    const needed = flattenWidthsLen(p, tolerance);
+    std.debug.assert(command_widths.len >= p.verbs and point_widths.len >= needed.points);
+    flattenImpl(true, p, command_widths, tolerance, out, point_widths);
+}
+
+fn flattenImpl(comptime carry_widths: bool, p: *const Path, command_widths: []const f32, tolerance: f32, out: *Polyline, point_widths: []f32) void {
     std.debug.assert(tolerance > 0);
     out.points = 0;
     out.contours = 0;
-    var f: Flattener = .{ .out = out, .tolerance = tolerance };
+    var f: Flattener(carry_widths) = .{ .out = out, .tolerance = tolerance, .widths = point_widths };
     var at: usize = 0;
-    for (p.verb[0..p.verbs]) |v| {
+    for (p.verb[0..p.verbs], 0..) |v, verb_index| {
+        if (carry_widths) f.next_width = command_widths[verb_index];
         const px = p.x[at..];
         const py = p.y[at..];
         switch (v) {
@@ -204,7 +225,10 @@ pub fn flatten(p: *const Path, tolerance: f32, out: *Polyline) void {
                 f.reopen();
                 f.curve(.{ f.cx, f.cy, px[0], py[0], px[1], py[1], px[2], py[2] }, false);
             },
-            .close => f.finish(true),
+            .close => {
+                if (carry_widths and f.open and f.next_width != f.start_width) f.push(f.sx, f.sy);
+                f.finish(true);
+            },
         }
         at += switch (v) {
             .move, .line => 1,
@@ -216,90 +240,113 @@ pub fn flatten(p: *const Path, tolerance: f32, out: *Polyline) void {
     f.finish(false);
 }
 
-const Flattener = struct {
-    out: *Polyline,
-    tolerance: f32,
-    /// First point of the open contour, in `out`.
-    first: u32 = 0,
-    open: bool = false,
-    /// The pen: the last point written, or the start of the last closed contour.
-    cx: f32 = 0,
-    cy: f32 = 0,
-    sx: f32 = 0,
-    sy: f32 = 0,
+fn Flattener(comptime carry_widths: bool) type {
+    return struct {
+        widths: []f32,
+        width: f32 = 0,
+        next_width: f32 = 0,
+        start_width: f32 = 0,
+        out: *Polyline,
+        tolerance: f32,
+        /// First point of the open contour, in `out`.
+        first: u32 = 0,
+        open: bool = false,
+        /// The pen: the last point written, or the start of the last closed contour.
+        cx: f32 = 0,
+        cy: f32 = 0,
+        sx: f32 = 0,
+        sy: f32 = 0,
 
-    fn start(f: *Flattener, x: f32, y: f32) void {
-        f.first = f.out.points;
-        f.open = true;
-        f.sx = x;
-        f.sy = y;
-        f.cx = x;
-        f.cy = y;
-        f.out.x[f.out.points] = x;
-        f.out.y[f.out.points] = y;
-        f.out.points += 1;
-    }
-
-    /// A drawing verb with no open contour starts one at the last start point.
-    fn reopen(f: *Flattener) void {
-        if (!f.open) f.start(f.sx, f.sy);
-    }
-
-    /// Writes always; advances unless the point repeats the last one.
-    fn push(f: *Flattener, x: f32, y: f32) void {
-        const o = f.out;
-        o.x[o.points] = x;
-        o.y[o.points] = y;
-        o.points += @intFromBool(x != f.cx) | @intFromBool(y != f.cy);
-        f.cx = x;
-        f.cy = y;
-    }
-
-    /// Ends the open contour, if any. A closed contour drops a last point equal to its first.
-    fn finish(f: *Flattener, closed: bool) void {
-        if (!f.open) return;
-        const o = f.out;
-        const last = o.points - 1;
-        const repeats = @intFromBool(closed) & @intFromBool(last > f.first) &
-            @intFromBool(o.x[last] == o.x[f.first]) & @intFromBool(o.y[last] == o.y[f.first]);
-        o.points -= repeats;
-        o.end[o.contours] = o.points;
-        o.closed[o.contours] = closed;
-        o.contours += 1;
-        f.open = false;
-        f.cx = f.sx;
-        f.cy = f.sy;
-    }
-
-    /// A cubic Bezier (a quadratic one is passed as a cubic whose two controls are its one:
-    /// `quadratic` evaluates it as a quadratic), cut into `curveSteps` chords of equal steps in t. The
-    /// inner points are evaluated a vector of t values at a time and written whole, the count
-    /// advancing by the ones that are real; the end point goes through `push`.
-    fn curve(f: *Flattener, c: [8]f32, comptime quadratic: bool) void {
-        const n = curveSteps(c, quadratic, f.tolerance);
-        const o = f.out;
-        const F = simd.F;
-        const inv: F = @splat(1 / @as(f32, @floatFromInt(n)));
-        var k: u32 = 1;
-        while (k < n) : (k += simd.lanes) {
-            const t = @as(F, @floatFromInt(simd.iota + simd.u(k))) * inv;
-            const s = simd.f(1) - t;
-            // Quadratic: s^2 p0 + 2 s t p1 + t^2 p2. Cubic: s^3 p0 + 3 s^2 t p1 + 3 s t^2 p2 + t^3 p3.
-            const b0 = if (quadratic) s * s else s * s * s;
-            const b1 = if (quadratic) simd.f(2) * s * t else simd.f(3) * s * s * t;
-            const b2 = if (quadratic) simd.f(0) else simd.f(3) * s * t * t;
-            const b3 = if (quadratic) t * t else t * t * t;
-            const x = b0 * simd.f(c[0]) + b1 * simd.f(c[2]) + b2 * simd.f(c[4]) + b3 * simd.f(c[6]);
-            const y = b0 * simd.f(c[1]) + b1 * simd.f(c[3]) + b2 * simd.f(c[5]) + b3 * simd.f(c[7]);
-            o.x[o.points..][0..simd.lanes].* = x;
-            o.y[o.points..][0..simd.lanes].* = y;
-            o.points += @min(simd.lanes, n - k);
+        fn start(f: *@This(), x: f32, y: f32) void {
+            f.first = f.out.points;
+            f.open = true;
+            f.sx = x;
+            f.sy = y;
+            f.cx = x;
+            f.cy = y;
+            f.out.x[f.out.points] = x;
+            f.out.y[f.out.points] = y;
+            if (carry_widths) {
+                f.width = f.next_width;
+                f.start_width = f.next_width;
+                f.widths[f.out.points] = f.next_width;
+            }
+            f.out.points += 1;
         }
-        f.cx = o.x[o.points - 1];
-        f.cy = o.y[o.points - 1];
-        f.push(c[6], c[7]);
-    }
-};
+
+        /// A drawing verb with no open contour starts one at the last start point.
+        fn reopen(f: *@This()) void {
+            if (!f.open) {
+                const next_width = f.next_width;
+                if (carry_widths) f.next_width = f.start_width;
+                f.start(f.sx, f.sy);
+                f.next_width = next_width;
+            }
+        }
+
+        /// Writes always; advances unless the point repeats the last one.
+        fn push(f: *@This(), x: f32, y: f32) void {
+            const o = f.out;
+            o.x[o.points] = x;
+            o.y[o.points] = y;
+            if (carry_widths) f.widths[o.points] = f.next_width;
+            const width_changed = if (carry_widths) f.next_width != f.width else false;
+            o.points += @intFromBool(x != f.cx) | @intFromBool(y != f.cy) | @intFromBool(width_changed);
+            if (carry_widths) f.width = f.next_width;
+            f.cx = x;
+            f.cy = y;
+        }
+
+        /// Ends the open contour, if any. A closed contour drops a last point equal to its first.
+        fn finish(f: *@This(), closed: bool) void {
+            if (!f.open) return;
+            const o = f.out;
+            const last = o.points - 1;
+            const repeats = @intFromBool(closed) & @intFromBool(last > f.first) &
+                @intFromBool(o.x[last] == o.x[f.first]) & @intFromBool(o.y[last] == o.y[f.first]) &
+                @intFromBool(if (carry_widths) f.widths[last] == f.widths[f.first] else true);
+            o.points -= repeats;
+            o.end[o.contours] = o.points;
+            o.closed[o.contours] = closed;
+            o.contours += 1;
+            f.open = false;
+            f.cx = f.sx;
+            f.cy = f.sy;
+            if (carry_widths) f.width = f.start_width;
+        }
+
+        /// A cubic Bezier (a quadratic one is passed as a cubic whose two controls are its one:
+        /// `quadratic` evaluates it as a quadratic), cut into `curveSteps` chords of equal steps in t. The
+        /// inner points are evaluated a vector of t values at a time and written whole, the count
+        /// advancing by the ones that are real; the end point goes through `push`.
+        fn curve(f: *@This(), c: [8]f32, comptime quadratic: bool) void {
+            const n = curveSteps(c, quadratic, f.tolerance);
+            const o = f.out;
+            const F = simd.F;
+            const inv: F = @splat(1 / @as(f32, @floatFromInt(n)));
+            var k: u32 = 1;
+            while (k < n) : (k += simd.lanes) {
+                const t = @as(F, @floatFromInt(simd.iota + simd.u(k))) * inv;
+                const s = simd.f(1) - t;
+                // Quadratic: s^2 p0 + 2 s t p1 + t^2 p2. Cubic: s^3 p0 + 3 s^2 t p1 + 3 s t^2 p2 + t^3 p3.
+                const b0 = if (quadratic) s * s else s * s * s;
+                const b1 = if (quadratic) simd.f(2) * s * t else simd.f(3) * s * s * t;
+                const b2 = if (quadratic) simd.f(0) else simd.f(3) * s * t * t;
+                const b3 = if (quadratic) t * t else t * t * t;
+                const x = b0 * simd.f(c[0]) + b1 * simd.f(c[2]) + b2 * simd.f(c[4]) + b3 * simd.f(c[6]);
+                const y = b0 * simd.f(c[1]) + b1 * simd.f(c[3]) + b2 * simd.f(c[5]) + b3 * simd.f(c[7]);
+                o.x[o.points..][0..simd.lanes].* = x;
+                o.y[o.points..][0..simd.lanes].* = y;
+                if (carry_widths) f.widths[o.points..][0..simd.lanes].* = simd.f(f.width) + simd.f(f.next_width - f.width) * t;
+                o.points += @min(simd.lanes, n - k);
+            }
+            f.cx = o.x[o.points - 1];
+            f.cy = o.y[o.points - 1];
+            if (carry_widths) f.width = f.widths[o.points - 1];
+            f.push(c[6], c[7]);
+        }
+    };
+}
 
 /// How two segments of a stroke meet.
 pub const Join = enum(u8) {

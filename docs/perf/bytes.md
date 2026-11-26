@@ -1,5 +1,18 @@
 # Bytes per node (C0804)
 
+## Current styling branch
+
+The current `Context.requiredBytes` capacity test measures **1005 bytes per node**: the styling
+work below (1004) plus the copied-subtree scope-kind byte (next section).
+The upstream baseline at `ed94db3` measured 924 bytes; transform origins, paint-reference/outset geometry, and prepared-texture revision
+metadata and subtree participation add 40 bytes to each of the two generations of sparse paint-extra capacity.
+`Look` remains 32 bytes and the GPU `Quad` remains 136 bytes. Text and custom rows
+now carry their inherited transform and rounded clip; those costs follow the
+separate `texts` and `customs` limits. The historical measurements below are retained
+for their original optimization comparison.
+
+## Historical C0804 measurements
+
 Measured with `docs/perf/build/bytes.zig` (`Context.requiredBytes` at 8,192 nodes minus 4,096,
 divided by 4,096; the same at every lane count) and pinned by the test "requiredBytes: 874 bytes
 per node of capacity" in src/runtime/context.zig.
@@ -53,7 +66,7 @@ to the renderer contract across several lanes' homes, not a footprint commit; re
 
 The current runtime keeps one additional `u8` scope-kind column with the previous tree
 generation, so `Frame.reuse` can restore focus groups and modal traps after an idle copy.
-Its per-node capacity slope is now **925 bytes**, pinned by the corresponding
+It adds one byte per node (924 to 925 before the styling work), pinned by the corresponding
 `Context.requiredBytes` regression. The preceding table is the historical C0804 result.
 Timer ownership adds four bytes per timer row; memo focus state and kept-source mapping add
 twelve bytes per memo row. These capacities are independent of the node count.

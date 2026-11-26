@@ -28,6 +28,16 @@ pub const Extra = extern struct {
     opacity: f32,
     /// `Style.transform` of this node alone, about its centre.
     transform: [6]f32,
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
+    paint_reference: u32 = none,
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Prepared RGBA owns border/radius painting; layout still reads the original border.
+    prepared_texture: u32 = 0,
+    paint_revision: u32 = 0,
+    participation: types.Participation = .all,
+    active_participation: types.Participation = .all,
+    cursor: u8 = 255,
+    active_cursor: u8 = 255,
     /// Opacity paint applies: the product of `opacity` over the row's node and its
     /// ancestors. Written by `draw.inherit.opacity`.
     alpha: f32,
@@ -102,6 +112,14 @@ pub const Template = struct {
     radii: [4]f32,
     opacity: f32,
     transform: [6]f32,
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
+    paint_reference: u32 = none,
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Prepared RGBA owns border/radius painting; layout still reads the original border.
+    prepared_texture: u32 = 0,
+    paint_revision: u32 = 0,
+    participation: types.Participation = .all,
+    cursor: u8 = 255,
 
     /// Names of the node-column fields, in column order.
     const node_fields = blk: {
@@ -160,12 +178,19 @@ pub const Template = struct {
         const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= @as(V4, @splat(0))) |
             (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
             (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
-        r.own = @intFromBool(@reduce(.Or, lanes)) | @intFromBool(s.clip);
+        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.cursor != null) | @intFromBool(s.paint_reference != none) | @intFromBool(@as(u8, @bitCast(s.participation)) != @as(u8, @bitCast(types.Participation.all)));
         r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
         r.opacity = s.opacity;
         r.transform = s.transform;
+        r.transform_origin = s.transform_origin;
+        r.paint_reference = s.paint_reference;
+        r.paint_outset = s.paint_outset;
+        r.prepared_texture = 0;
+        r.paint_revision = 0;
+        r.participation = s.participation;
+        r.cursor = if (s.cursor) |cursor| @backingInt(cursor) else 255;
         return r;
     }
 };
@@ -206,6 +231,14 @@ pub const FlatRow = extern struct {
     radii: [4]f32,
     opacity: f32,
     transform: [6]f32,
+    transform_origin: [2]f32,
+    paint_reference: u32,
+    paint_outset: [4]f32,
+    prepared_texture: u32,
+    paint_revision: u32,
+    /// `Participation`'s bits.
+    participation: u32,
+    cursor: u32,
 };
 
 /// Field `name` of a row, `Template` or `FlatRow`, as the column of that name stores it.
@@ -222,6 +255,7 @@ inline fn rowField(row: anytype, comptime name: []const u8) @FieldType(Template,
     };
     return switch (@typeInfo(T)) {
         .int => @truncate(@field(row, name)),
+        .@"struct" => |st| @bitCast(@as(st.backing_integer.?, @truncate(@field(row, name)))),
         else => @field(row, name),
     };
 }
@@ -455,10 +489,27 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                     inline for (0..2) |a| @field(c, name)[a][i] = v[a];
                 } else @field(c, name)[i] = v;
             }
+            const up = if (i == 0) types.Participation.all else t.x.row[c.scope[parent]].active_participation;
+            var active: types.Participation = @bitCast(@as(u8, @bitCast(rowField(row, "participation"))) & @as(u8, @bitCast(up)));
+            if (!active.layout) {
+                active = .collapsed;
+                inline for (0..2) |axis| {
+                    c.min[axis][i] = 0;
+                    c.max[axis][i] = 0;
+                    c.grow[axis][i] = 0;
+                    c.pct[axis][i] = -1;
+                    c.pad_lo[axis][i] = 0;
+                    c.pad_hi[axis][i] = 0;
+                }
+                c.flow[i] = 0;
+                c.gap[i] = 0;
+            }
+            c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
+            c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             // Count this node in its parent, then clear its own count. The root is its own
             // parent, so the clear also removes its self-count: no `i != 0` test, which
             // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
-            c.nkids[parent] += row.flow;
+            c.nkids[parent] += c.flow[i];
             c.nkids[i] = 0;
 
             // The extras row, appended when the style has one. `xlen <= cap + 1` holds while
@@ -482,7 +533,27 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.radii = row.radii;
             x.opacity = row.opacity;
             x.transform = row.transform;
+            x.transform_origin = rowField(row, "transform_origin");
+            x.paint_reference = rowField(row, "paint_reference");
+            x.paint_outset = rowField(row, "paint_outset");
+            x.prepared_texture = rowField(row, "prepared_texture");
+            x.paint_revision = rowField(row, "paint_revision");
+            x.participation = rowField(row, "participation");
+            x.active_participation = active;
+            x.cursor = rowField(row, "cursor");
+            x.active_cursor = if (rowField(row, "cursor") != 255) rowField(row, "cursor") else if (i == 0) 255 else t.x.row[c.scope[parent]].active_cursor;
             return i;
+        }
+
+        /// Effective pointer shape, available while building without an extra ancestor walk.
+        pub fn cursor(t: *const Self, i: u32) ?types.Cursor {
+            const value = t.x.row[t.c.scope[i]].active_cursor;
+            return if (value == 255) null else @fromBackingInt(value);
+        }
+
+        /// Effective subtree participation, available immediately while building.
+        pub fn participation(t: *const Self, i: u32) types.Participation {
+            return t.x.row[t.c.scope[i]].active_participation;
         }
 
         /// Border width of node `i` (`Style.border`).
@@ -608,8 +679,8 @@ test "Columns: structure first, then layout, outputs, semantics and links, in pa
     // u32 links (with extra and scope), layout inputs, scratch, outputs, child clip, three u8
     // flags, look, role, value. The paint extras are a side table (`Extras`).
     try testing.expectEqual(4 * 7 + 4 * (9 * 2 + 6) + 4 * (5 * 2 + 2) + 4 * 12 + 16 + 3 + @sizeOf(Look) + 1 + 4, rowBytes(Tree.Columns));
-    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 4 + 24 + 16, rowBytes(Tree.Extras));
-    try testing.expectEqual(108, @sizeOf(Extra));
+    try testing.expectEqual(4 + 4 + 16 + 16 + 4 + 24 + 8 + 4 + 16 + 8 + 4 + 24 + 16 + 4, rowBytes(Tree.Extras));
+    try testing.expectEqual(148, @sizeOf(Extra));
 }
 
 test "Look: one 32-byte row, params first" {

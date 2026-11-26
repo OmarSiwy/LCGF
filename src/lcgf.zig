@@ -20,6 +20,7 @@ pub const overlay = @import("layout/overlay.zig");
 pub const scroll = @import("layout/scroll.zig");
 pub const grid = @import("layout/grid.zig");
 pub const rtl = @import("layout/rtl.zig");
+pub const hit_targets = @import("interact/targets.zig");
 pub const hit = @import("interact/hit.zig");
 pub const flex = @import("layout/flex.zig");
 pub const wrap = @import("layout/wrap.zig");
@@ -44,6 +45,24 @@ pub const ct_examples = @import("comptime/examples.zig");
 pub const ct_dynamic = @import("comptime/dynamic.zig");
 pub const signals = @import("comptime/signals.zig");
 pub const events = @import("comptime/events.zig");
+pub const prepared = @import("render/prepared.zig");
+pub const color_output = @import("draw/color_output.zig");
+pub const filter_primitives = @import("draw/filter_primitives.zig");
+pub const units = @import("layout/units.zig");
+pub const logical = @import("layout/logical.zig");
+pub const decoration = @import("draw/decoration.zig");
+pub const projective = @import("draw/projective.zig");
+pub const motion = @import("anim/motion.zig");
+pub const font_match = @import("text/font/match.zig");
+pub const text_decorations = @import("text/layout/decorations.zig");
+pub const compositor = @import("draw/compositor.zig");
+pub const brushes = @import("draw/brushes.zig");
+pub const color_math = @import("draw/color_math.zig");
+pub const surface = @import("draw/surface.zig");
+pub const geometry = @import("draw/geometry.zig");
+pub const outline = @import("draw/outline.zig");
+pub const theme_recipes = @import("theme/recipes.zig");
+pub const style = @import("style/style.zig");
 pub const draw_list = @import("draw/draw_list.zig");
 pub const opentype = @import("text/font/opentype.zig");
 pub const unicode_property = @import("text/unicode/property.zig");
@@ -156,6 +175,7 @@ pub const text_history = @import("text/edit/history.zig");
 pub const text_edit_tests = @import("text/edit/tests.zig");
 pub const fallback = @import("text/fallback/fallback.zig");
 pub const fallback_tests = @import("text/fallback/tests.zig");
+pub const shell_materials = @import("shell/materials.zig");
 pub const shell_iface = @import("shell/iface.zig");
 pub const shell_example = @import("shell/example.zig");
 pub const runtime_signals = @import("runtime/signals.zig");
@@ -204,3 +224,43 @@ pub const embedded_fixed = @import("embedded/fixed.zig");
 pub const embedded_framebuffer = @import("embedded/framebuffer.zig");
 pub const embedded_font = @import("embedded/font.zig");
 pub const embedded_spi = @import("embedded/spi.zig");
+
+pub const vertical_text = @import("text/layout/vertical.zig");
+
+pub const inline_objects = @import("text/layout/inline_objects.zig");
+
+pub const image_sampling = @import("draw/image_sampling.zig");
+pub const svg = @import("draw/svg.zig");
+pub const vector = @import("draw/vector.zig");
+
+pub const effects = @import("render/effects.zig");
+
+pub const text_break_policy = @import("text/layout/break_policy.zig");
+pub const text_display = @import("text/layout/display.zig");
+
+pub const cursor = @import("draw/cursor.zig");
+pub const capabilities = @import("render/capabilities.zig");
+
+pub const scroll_policy = @import("layout/scroll_policy.zig");
+
+pub const scroll_area = @import("widgets/scroll_area.zig");
+
+pub const special_layout = @import("layout/special.zig");
+
+pub const document_layout = @import("layout/document.zig");
+
+pub const rounding = @import("layout/rounding.zig");
+pub const text_intrinsic = @import("text/layout/intrinsic.zig");
+pub const math_text = @import("text/layout/math.zig");
+pub const ornamental_text = @import("text/layout/ornament.zig");
+pub const text_counters = @import("text/layout/counters.zig");
+
+pub const backgrounds = @import("draw/backgrounds.zig");
+pub const image_variants = @import("draw/image_variants.zig");
+
+pub const masks = @import("draw/masks.zig");
+
+pub const grid_names = @import("layout/grid_names.zig");
+pub const text_metrics = @import("text/layout/metrics.zig");
+
+pub const text_emphasis = @import("text/layout/emphasis.zig");

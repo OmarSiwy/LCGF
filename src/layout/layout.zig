@@ -17,12 +17,15 @@
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
+const geometry = @import("../draw/geometry.zig");
+const inherit = @import("../draw/inherit.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Flex = @import("flex.zig").Flex;
 const wrap = @import("wrap.zig");
 const baseline = @import("baseline.zig");
+const rounding = @import("rounding.zig");
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -332,19 +335,35 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
     }
 }
 
-/// Pixel-snapped rects (SIMD), then clip rects and visibility (one forward
-/// sweep with a 4-lane op per node).
+/// Legacy whole-pixel finalization. Use finalizeWith for a device grid or fractional layout.
 pub fn finalize(t: anytype) void {
+    finalizeWith(t, .{}) catch unreachable;
+}
+
+/// Snap cumulative endpoints on the selected device grid, then derive exact transforms,
+/// ancestor clips and hit visibility. The uniform policy dispatch occurs outside the SIMD loop.
+/// Invalid options leave geometry unchanged.
+pub fn finalizeWith(t: anytype, options: rounding.Options) error{InvalidScale}!void {
+    try options.validate();
     if (t.len == 0) return;
-    finalizeSpan(t, 0, t.len);
-    // Padding rows must never be hit.
+    try finalizeSpanWith(t, 0, t.len, options);
     @memset(t.c.sense[t.len..simd.padded(t.len)], 0);
 }
 
-/// `finalize` over the subtree [first, last), `last = end[first]` (incremental layout). The
-/// snap covers the whole vectors around the span: a rect depends on its own row alone, so
-/// neighbouring rows get the value they already hold.
+/// Legacy finalization over an incremental subtree. Neighbouring SIMD lanes are recomputed
+/// from their original positions, so shared endpoints use the same grid.
 pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
+    finalizeSpanWith(t, first, last, .{}) catch unreachable;
+}
+
+pub fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void {
+    try options.validate();
+    switch (options.mode) {
+        inline else => |mode| finalizeSpanMode(t, first, last, mode, options),
+    }
+}
+
+fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.Mode, options: rounding.Options) void {
     std.debug.assert(first < last and last <= t.len);
     const c = &t.c;
     const n = simd.padded(last);
@@ -352,11 +371,13 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     while (j < n) : (j += W) {
         const x = simd.loadF(c.pos[0], j);
         const y = simd.loadF(c.pos[1], j);
-        simd.storeF(c.rect[0], j, @round(x));
-        simd.storeF(c.rect[1], j, @round(y));
-        simd.storeF(c.rect[2], j, @round(x + simd.loadF(c.size[0], j)));
-        simd.storeF(c.rect[3], j, @round(y + simd.loadF(c.size[1], j)));
+        simd.storeF(c.rect[0], j, rounding.vector(mode, x, options.scale, options.origin[0]));
+        simd.storeF(c.rect[1], j, rounding.vector(mode, y, options.scale, options.origin[1]));
+        simd.storeF(c.rect[2], j, rounding.vector(mode, x + simd.loadF(c.size[0], j), options.scale, options.origin[0]));
+        simd.storeF(c.rect[3], j, rounding.vector(mode, y + simd.loadF(c.size[1], j), options.scale, options.origin[1]));
     }
+    if (comptime @TypeOf(t) == *Tree) inherit.all(t);
+    const transformed = comptime @TypeOf(t) == *Tree or (@hasDecl(@TypeOf(t.*), "has_transforms") and @TypeOf(t.*).has_transforms);
     const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
     const everything: V4 = @splat(-inf);
@@ -372,7 +393,11 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
     if (first == 0) child_clip[0] = everything;
     for (first..last) |i| {
-        const r = V4{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] } * sign;
+        c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
+        const local: [4]f32 = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] };
+        const world = if (comptime transformed) geometry.worldAt(t, i) else geometry.identity;
+        const screen: [4]f32 = if (comptime transformed) geometry.transformRect(local, world) else local;
+        const r = @as(V4, screen) * sign;
         // child_clip[i] feeds the next row whose parent is i, so the path from this load to
         // that store is the pass's latency chain: keep it to one max. The clip-or-not select
         // is on the other operand, off the chain (docs/perf/chains.md).
@@ -381,7 +406,9 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        const inner = @select(f32, clips, r + @as(V4, @splat(xrow[extra[i]].border)), everything);
+        const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
+        const inner_rect: [4]f32 = if (comptime transformed) geometry.transformRect(inset, world) else inset;
+        const inner = @select(f32, clips, @as(V4, inner_rect) * sign, everything);
         child_clip[i] = simd.maxF(inherited, inner);
         const out = v * sign;
         vis[0][i] = out[0];

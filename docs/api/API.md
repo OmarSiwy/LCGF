@@ -99,7 +99,7 @@ Small value types of the core: identities, indices, colours, rects, sizing and s
 - `none: u32 = 0xffff_ffff`: "No index" for every u32 link in the core.
 - `Axis = enum(u1) { x = 0, y = 1 }`
 - `inf = std.math.inf(f32)`
-- `Texture = enum(u16) { white = 0, _ }`: Handles the renderer gives out.
+- `Texture = enum(u16) { white = 0, _ }`
 - `Material = enum(u16) { solid = 0, _ }`
 - `Font = enum(u16) { default = 0, _ }`
 
@@ -174,10 +174,22 @@ Fields: `hovered`, `held`, `pressed`, `released`, `clicked`, `focused`
 What a node is to assistive technology.
 
 
-### `Style` (struct)
+### `Cursor` (enum)
+Handles the renderer gives out.
+
+
+### `Participation` (struct)
 Everything a node can be told at creation.
 
-Fields: `dir`, `size`, `min`, `max`, `pad`, `gap`, `main`, `cross`, `shrink`, `float`, `offset`, `clip`, `scroll`, `fill`, `border_color`, `border`, `radius`, `texture`, `material`, `params`, `radii`, `opacity`, `transform`, `uv`, `role`, `value`
+Fields: `layout`, `paint`, `hit`, `semantics`
+
+- `all: Participation = .{}`
+- `hidden: Participation = .{ .paint = false, .hit = false, .semantics = false }`
+- `collapsed: Participation = .{ .layout = false, .paint = false, .hit = false, .semantics = false }`
+
+### `Style` (struct)
+
+Fields: `participation`, `cursor`, `dir`, `size`, `min`, `max`, `pad`, `gap`, `main`, `cross`, `shrink`, `float`, `offset`, `clip`, `scroll`, `fill`, `border_color`, `border`, `radius`, `texture`, `material`, `params`, `radii`, `opacity`, `transform`, `transform_origin`, `uv`, `paint_reference`, `paint_outset`, `role`, `value`
 
 
 ### `TextStyle` (struct)
@@ -216,7 +228,7 @@ Tree: the node columns.
 ### `Extra` (struct)
 One row of a tree's paint extras (`Tree.Extras`).
 
-Fields: `border`, `uv`, `radii`, `opacity`, `transform`, `alpha`, `world`, `clip_radii`
+Fields: `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `active_participation`, `cursor`, `active_cursor`, `alpha`, `world`, `clip_radii`
 
 
 ### `Look` (struct)
@@ -228,14 +240,14 @@ Fields: `params`, `fill`, `border_color`, `radius`, `texture`, `material`
 ### `Template` (struct)
 One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes as coefficients, enums as factors, paint fields as their GPU row.
 
-Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`
+Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `cursor`
 
 - `fn from(s: *const Style) Template`
 
 ### `FlatRow` (struct)
 A `Template` as the C ABI lays it out (`lcgf_row` in src/abi/lcgf.h): one 32-bit word per field, `look` spelled out.
 
-Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `params`, `fill`, `border_color`, `radius`, `texture`, `material`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`
+Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `params`, `fill`, `border_color`, `radius`, `texture`, `material`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `cursor`
 
 
 ### `Storage` (union)
@@ -256,6 +268,8 @@ Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`
 - `fn reset(t: *Self) void`: Empties the tree for the next frame.
 - `fn push(t: *Self, parent: Index, id: Id, noalias s: *const Style) Index`: Appends a node as the last child of `parent` and returns its row.
 - `fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column.
+- `fn cursor(t: *const Self, i: u32) ?types.Cursor`: Effective pointer shape, available while building without an extra ancestor walk.
+- `fn participation(t: *const Self, i: u32) types.Participation`: Effective subtree participation, available immediately while building.
 - `fn border(t: *const Self, i: u32) f32`: Border width of node `i` (`Style.border`).
 - `fn seal(t: *Self, i: Index) void`: Closes node `i`: everything pushed since belongs to its subtree.
 - `fn rect(t: *const Self, i: u32) Rect`
@@ -381,8 +395,10 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn place(t: anytype) void`: Top-down: position of every node on both axes.
 - `fn placeFlex(t: *Tree, fx: *const Flex) void`: `place` with the extra placement rules of `fx` (flex.zig).
 - `fn placeSpan(t: anytype, first: u32, last: u32) void`: `place` over the subtree [first, last), `last = end[first]` (incremental layout): every row after `first` from its parent, with `first`'s own position taken as given.
-- `fn finalize(t: anytype) void`: Pixel-snapped rects (SIMD), then clip rects and visibility (one forward sweep with a 4-lane op per node).
-- `fn finalizeSpan(t: anytype, first: u32, last: u32) void`: `finalize` over the subtree [first, last), `last = end[first]` (incremental layout).
+- `fn finalize(t: anytype) void`: Legacy whole-pixel finalization.
+- `fn finalizeWith(t: anytype, options: rounding.Options) error{InvalidScale}!void`: Snap cumulative endpoints on the selected device grid, then derive exact transforms, ancestor clips and hit visibility.
+- `fn finalizeSpan(t: anytype, first: u32, last: u32) void`: Legacy finalization over an incremental subtree.
+- `fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void`
 - `fn run(t: anytype, tx: *Texts, viewport: [2]f32) void`: Diagonal: every pass in order, for text that does not wrap (or whose `w`/`h` the caller has already settled).
 - `fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void`: `run` with the extra sizing rules of `fx` (flex.zig), and wrapping rows (wrap.zig).
 
@@ -463,6 +479,11 @@ grid: two-dimensional layout in rows and columns of tracks, after CSS Grid (http
 
 ### Top level
 
+- `AutoFlow = enum(u8) { row = 0, column = 1, row_dense = 2, column_dense = 3 }`
+- `Distribution = enum(u8) { start, center, end, space_between, space_around, space_evenly }`
+- `Repeat = enum { auto_fill, auto_fit }`
+- `fn repeatAuto(extent: f32, gap: f32, minimum: f32, occupied_tracks: u32, mode: Repeat, track: Track, out: []Track) error{ NoSpace, InvalidGeometry }![]const …`: Resolves an automatic repeat against a definite content extent, before constructing the grid.
+- `fn expandTracks(explicit: []const Track, required: u32, pattern: []const Track, out: []Track) error{ NoSpace, MissingPattern }![]const Track`: Materializes bounded implicit tracks by repeating the caller's pattern after explicit tracks.
 - `fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32`: Sizes the tracks of grid `k` on axis `a` inside `inner`, the grid's content size, writes each track's `size` and `start` (a running sum), and returns the total.
 - `fn autoPlace(gs: *Grids) void`
 - `fn fit(t: *Tree, gs: *Grids, axis: Axis) void`: `layout.fit` for a tree with grids.
@@ -472,11 +493,14 @@ grid: two-dimensional layout in rows and columns of tracks, after CSS Grid (http
 ### `Track` (struct)
 The size of one track (a column or a row).
 
-Fields: `k_px`, `k_fit`, `k_fr`
+Fields: `k_px`, `k_fit`, `k_fr`, `min`, `max`, `content_floor`
 
 - `fit: Track = .{ .k_fit = 1 }`: As large as the largest item in it (CSS `auto` / `max-content`).
 - `fn px(v: f32) Track`: Exactly `v` pixels.
 - `fn fr(w: f32) Track`: A share `w` of the space the other tracks leave (CSS `fr`), never less than its content.
+- `fn minmax(minimum: f32, maximum: f32) Track`: Content-sized track bounded by explicit logical-pixel minimum and maximum.
+- `fn minmaxFr(minimum: f32, weight: f32, maximum: f32) Track`: Fractional growth above an explicit minimum, independently of intrinsic content.
+- `fn fitContent(maximum: f32) Track`: Fit content up to a pixel limit.
 
 ### `Justify` (enum)
 Where an item sits inside its cell on one axis (CSS `justify-self` / `align-self`).
@@ -496,22 +520,26 @@ Fields: `len`, `tracks_len`, `items_len`, `overflow`, `cap`, `g`, `tr`, `it`, `o
 - `fn item(gs: *Grids, k: u32, node: u32, cell: [2]u32) u32`: Places `node`, a floating child of grid `k`'s node, in the cell at column `cell[0]`, row `cell[1]`.
 - `fn autoItem(gs: *Grids, k: u32, node: u32) u32`: Places `node`, a floating child of grid `k`'s node, in the next free cell in row order, chosen by `autoPlace`.
 - `fn gaps(gs: *Grids, k: u32, g: [2]f32) void`: Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks the grid has.
+- `fn autoFlow(gs: *Grids, k: u32, flow: AutoFlow) void`: Auto-placement traverses rows or columns, with optional hole filling from the start for every item.
+- `fn boundedFractions(gs: *Grids, k: u32, enabled: bool) void`: Distribute fractional tracks subject to their minima/maxima.
+- `fn distribute(gs: *Grids, k: u32, modes: [2]Distribution) void`: Align the group of tracks inside free content-box space on each axis.
 - `fn justify(gs: *Grids, r: u32, j: [2]Justify) void`: Sets where item `r` sits in its cell across (`j[0]`) and down (`j[1]`).
 - `fn span(gs: *Grids, r: u32, n: [2]u32) void`
+- `fn shareAxis(gs: *Grids, child: u32, parent_item: u32, axis: Axis) error{InvalidSubgrid}!void`: Shares an existing parent item's tracks with its child grid.
 
 ### `Grids.GridColumns` (struct)
 
-Fields: `node`, `first`, `count`, `first_item`, `last_item`, `gap`
+Fields: `node`, `first`, `count`, `first_item`, `last_item`, `gap`, `flow`, `bounded`, `distribution`, `parent`, `parent_first`
 
 
 ### `Grids.TrackColumns` (struct)
 
-Fields: `k_px`, `k_fit`, `k_fr`, `content`, `size`, `start`
+Fields: `k_px`, `k_fit`, `k_fr`, `min`, `max`, `content_floor`, `content`, `size`, `start`
 
 
 ### `Grids.ItemColumns` (struct)
 
-Fields: `node`, `grid`, `cell`, `span`, `auto`, `next`, `cell_size`, `cell_start`, `stretch`, `factor`
+Fields: `node`, `grid`, `cell`, `span`, `auto`, `next`, `cell_size`, `cell_start`, `stretch`, `factor`, `subgrid`
 
 
 ## `lcgf.rtl` (src/layout/rtl.zig)
@@ -543,6 +571,33 @@ Fields: `c`
 ### `Rtl.Columns` (struct)
 
 Fields: `dir`, `sign`, `shift`, `logical`, `start`, `end`
+
+
+## `lcgf.hit_targets` (src/interact/targets.zig)
+
+Optional visual-independent hit targets.
+
+### Top level
+
+- `Entry = struct { node: u32, policy: Policy }`
+- `Error = error{ InvalidNode, InvalidPolicy, InvalidPath, InvalidLayers }`
+- `fn validate(entries: []const Entry, nodes: usize) Error!void`
+- `fn validatePolicy(policy: Policy) Error!void`
+- `fn policyAt(entries: []const Entry, node: u32) Policy`: Find a policy in a validated sorted list.
+- `fn rect(border: [4]f32, policy: Policy) [4]f32`
+- `fn contains(border: [4]f32, radii: [4]f32, point: [2]f32, policy: Policy) bool`: The same local target calculation is shared by runtime and pure comptime hit testing.
+- `fn pathContains(path: *const paths.Polyline, rule: paths.Rule, point: [2]f32) bool`: Point-in-path for the same flattened geometry and winding rules used by paths.fill.
+- `fn nodeContains(tree: *const Tree, node: u32, screen: [2]f32, policy: Policy) bool`
+- `fn at(tree: *const Tree, entries: []const Entry, screen: [2]f32, want: types.Sense, layers: []const u8) Error!u32`: Highest (layer,row) wins overlapping targets; an empty layers slice uses row order.
+
+### `Shape` (union)
+
+Fields: `path`
+
+
+### `Policy` (struct)
+
+Fields: `padding`, `minimum`, `shape`
 
 
 ## `lcgf.hit` (src/interact/hit.zig)
@@ -730,6 +785,8 @@ Pointer state carried from frame to frame.
 Fields: `hot`, `under`, `active`, `focus`, `pressed`, `released`, `clicked`, `hot_node`, `active_node`, `pointer`, `delta`, `buttons`, `double_clicked`, `long_pressed`, `double_time`, `long_time`, `last_click`, `click_at`, `press_at`, `long_fired`, `dragging`, `drag_delta`, `drag_threshold`, `drag_from`, `hover_intent`, `hover_delay`, `hot_at`
 
 - `fn step(s: *Interaction, prev: *const Tree, in: *const Input) void`: Advances by one frame, from last frame's geometry and this frame's pointer.
+- `fn stepWithHit(s: *Interaction, prev: *const Tree, in: *const Input, selected: u32) void`: Caller-supplied hit from the completed tree, for layers, enlarged targets or a custom scene query.
+- `fn cancel(s: *Interaction, id: types.Id) void`: Cancel capture, focus and pending activation when a built control stops participating.
 - `fn drag(s: *const Interaction, id: types.Id) [2]f32`: Pointer movement this frame while `id` is dragged; zero otherwise.
 - `fn response(s: *const Interaction, id: types.Id) types.Response`: What happened to widget `id` this frame.
 
@@ -739,6 +796,7 @@ Press, release and click for up to `n` fingers or pens at once, from `Input.cont
 Fields: `pointer`, `under`, `active`, `pressed`, `released`, `clicked`, `down`, `x`, `y`, `slop`
 
 - `fn step(t: *Self, prev: *const Tree, in: *const Input) void`: Advances by one frame, from last frame's geometry and this frame's contacts.
+- `fn stepWithHits(t: *Self, prev: *const Tree, in: *const Input, selected: []const u32) error{InvalidHits}!void`: One caller-supplied hit row per contact, in `Input.contacts` order.
 - `fn response(t: *const Self, id: types.Id) types.Response`: What any contact did to widget `id` this frame.
 
 ## `lcgf.focus` (src/interact/focus.zig)
@@ -1062,7 +1120,7 @@ Validate: mistakes in a comptime spec become compile errors, before anything is 
 ### `Options` (struct)
 Which optional rules `check` applies.
 
-Fields: `require_names`, `viewport`
+Fields: `require_names`, `viewport`, `fractional_coordinates`
 
 
 ## `lcgf.columns` (src/comptime/columns.zig)
@@ -1092,7 +1150,7 @@ The column split of the UI declared by `spec`.
 - `specification = spec`
 - `slots = @import("dynamic.zig").Slots(spec)`
 - `slot_count = slots.count`
-- `Coordinate = Coord(options.viewport)`: The type of `rect` and `vis` rows in `Dynamic`: `Coord(options.viewport)`.
+- `Coordinate = if (options.fractional_coordinates) f32 else Coord(options.viewport)`: The type of `rect` and `vis` rows in `Dynamic`: `Coord(options.viewport)`.
 - `names = info.field_names`: The names of `Tree.Columns`, in declaration order.
 - `paletted = classOf("look") == .constant and !isDropped("look") and palette.len <= 256`: `look` stores palette indices (`PalettedLook`) when the palette fits a byte.
 - `palette_table: [palette.len]u32 = palette[0..palette.len].*`: The palette, as the read-only table `PalettedLook` rows index.
@@ -1125,6 +1183,7 @@ Layout for a comptime UI: the generic tier-0 layout passes (src/layout/layout.zi
 
 ### Top level
 
+- `RoundingError = error{ InvalidScale, FractionalCoordinatesRequired }`
 - `fn labelRows(comptime s: Spec) []const u32`: Rows of the labels of `s`, depth-first: label k of the UI is node `labelRows(s)[k]`.
 - `fn Plain(comptime spec: Spec, comptime options: Options) type`: Layout of `spec` over its own columns, every row through every pass (see the file comment).
 - `fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: bool) type`: `Plain`, with the row count a compile-time constant of the view when `unroll`: every pass loop then has a constant trip count the optimizer may unroll (C0165 measures it).
@@ -1148,6 +1207,10 @@ Layout of `spec` over its own columns, every row through every pass (see the fil
 - `fn runText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void`: Lays the UI out in a `viewport`-sized area, `Frame.end`'s sequence: `font` measures the labels' text (`spans[k]` is label k's bytes in the caller's strings), the passes run with the text extents, `font` wraps, then finalize, and the kept outputs go to `ram`.
 - `fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void`: Geometry-only layout with a selection for this frame.
 - `fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void`: Measures every declared label and lays out the selected rows.
+- `fn runRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, grid_options: rounding.Options) RoundingError!void`
+- `fn runTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) Round…`
+- `fn runLiveRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, grid_options: rounding.Options) RoundingError!void`
+- `fn runLiveTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype, grid_options: r…`: Invalid options or integer-only retained columns leave scratch and RAM unchanged.
 - `fn dirtySpan(comptime field: []const u8) ?[2]u32`: The rows to lay out again when the state field `field` changes: the subtree of the common boundary of every label bound to it (`tables.dirtySpan`).
 - `fn relayout(comptime field: []const u8, scratch: *Scratch, ram: *C.Dynamic, spans: *const [label_count]Span, font: anytype) void`: Lays out again only what the state field `field` moves, after a frame of `run` with the same `scratch` (it keeps last frame's layout): the partial routine for that field's dirty mask, decided while compiling (`dirtySpan`).
 - `fn passes(scratch: *Scratch, viewport: [2]f32) void`
@@ -1180,6 +1243,10 @@ Layout of `spec`: as `Plain`, except that subtrees whose layout does not depend 
 - `fn runText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void`
 - `fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void`: Geometry-only layout with a selection for this frame.
 - `fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void`: Measures every declared label and lays out the selected rows.
+- `fn runRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, grid_options: rounding.Options) RoundingError!void`
+- `fn runTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype, grid_options: rounding.Options) Round…`
+- `fn runLiveRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, grid_options: rounding.Options) RoundingError!void`
+- `fn runLiveTextRounded(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype, grid_options: r…`: Invalid options or integer-only retained columns leave scratch and RAM unchanged.
 
 ## `lcgf.ct_paint` (src/comptime/paint.zig)
 
@@ -1205,6 +1272,9 @@ Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comm
 - `fn Binding(comptime State: type) type`
 - `fn Patches(comptime State: type, comptime bindings: []const Binding(State)) type`: Resolve state fields to template indices while compiling.
 - `fn emit(ram: *const C.Dynamic, d: *DrawList) void`: One frame's draw list from the layout outputs in `ram`: every template whose node is visible, with its rect and its parent's clip; then the commands: `batches` when every template is visible, else `paint.encode` over the ops (a hidden quad shifts the batches after it and may join its neighbours).
+- `fn worldOf(ram: *const C.Dynamic, node_id: u32) [6]f32`
+- `fn hit(ram: *const C.Dynamic, i: u32, screen: [2]f32) bool`: Exact pointer query over the same world matrices and all rounded ancestor clips.
+- `fn hitTarget(ram: *const C.Dynamic, i: u32, screen: [2]f32, policy: @import("../interact/targets.zig").Policy) bool`: Caller-owned policy, with the same local shape and ancestor clips as runtime hits.
 - `fn emitText(ram: *const C.Dynamic, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void`: Paint a measured layout from its original spans, indexed in `strings`.
 - `fn emitLiveText(ram: *const C.Dynamic, sel: D.Selection, spans: *const [label_count]Span, strings: []const u8, d: *DrawList) void`: As in runtime paint, clipped live labels retain runs and only visible labels emit commands.
 
@@ -1321,6 +1391,7 @@ Events: the comptime front end's input side.
 
 ### Top level
 
+- `Availability = struct { enabled: bool = true, activates: bool = true }`: Input eligibility, kept separate from visuals.
 - `fn Events(comptime spec: Spec) type`: The interactive widgets of `spec` and how input reaches them.
 
 ### `Events(..)` (generic struct)
@@ -1338,19 +1409,34 @@ The interactive widgets of `spec` and how input reaches them.
 - `fn slot(comptime w: Widget) usize`: The widget's position in widget order: its index into the per-widget tables.
 - `fn widget(k: usize) Widget`: The widget at position `k` of widget order.
 - `fn at(r: *const Rects, x: f32, y: f32) ?Widget`: Topmost widget under (x, y), or null.
+- `fn atPaintTargets(comptime PaintType: type, ram: anytype, entries: []const @import("../interact/targets.zig").Entry, x: f32, y: f32) @import("../interact/tar…`: Pure compile-time geometry route, with no runtime Tree or stored geometry table.
+- `fn atPaint(comptime PaintType: type, ram: *const PaintType.Cols.Dynamic, x: f32, y: f32) ?Widget`: PaintType is ct_paint.Paint(spec, options); use the same ram as its emit call.
+- `fn atEnabled(r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget`
 - `fn Payload(comptime kind: Kind) type`: What an event on a widget of `kind` carries: a slider its new value, 0 at the left edge to 1 at the right; a checkbox nothing (it was toggled); any other widget nothing (it was clicked).
 - `fn focusable(comptime kind: Kind) bool`: Whether keyboard focus stops at a widget of `kind`: the ones that take input.
 - `fn nextFocus(from: ?Widget, back: bool) ?Widget`: The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from `from`, wrapping at the ends.
 - `fn focusKeys(focus: *?Widget, in: *const Input, tab: u8) void`: Moves `focus` for every Tab press (and auto-repeat) in this frame's key events, in order; Shift goes back.
+- `fn nextFocusEnabled(from: ?Widget, back: bool, mask: *const InputMask) ?Widget`: Tab walks the existing order, skipping dynamically disabled widgets.
+- `fn focusKeysEnabled(focused: *?Widget, in: *const Input, tab: u8, mask: *const InputMask) void`
 - `fn Shortcuts(comptime shortcuts: []const Shortcut) type`: The shortcut table for `shortcuts`, built while compiling as a perfect hash: every chord lands in a slot of its own, so a lookup is one multiply, one shift and one compare, with no probing and no collision path.
 - `fn pointer(p: *Pointer, r: *const Rects, in: *const Input) ?Event`: The event this frame's mouse makes, or null.
+- `fn pointerEnabled(p: *Pointer, r: *const Rects, mask: *const InputMask, in: *const Input) ?Event`
 
 ### `Events(..).Rects` (struct)
 Where each widget is on screen, in widget order: the static rect table.
 
-Fields: `c`
+Fields: `c`, `exact_tree`, `node_offset`
 
 - `fn fromTree(t: anytype) Rects`: The widgets' rows of a laid-out tree's `vis` columns (a tree built from this spec, so row numbers agree).
+- `fn fromTreeOffset(t: anytype, offset: u32) Rects`: Widgets.Ui has one host root before the spec's rows; raw specs use zero.
+
+### `Events(..).InputMask` (struct)
+Caller-owned input masks, in widget order and padded like Rects.
+
+Fields: `enabled`, `activates`
+
+- `fn set(mask: *InputMask, target: Widget, availability: Availability) void`
+- `fn allows(mask: *const InputMask, target: Widget) bool`
 
 ### `Events(..).Payload(..)` (generic struct)
 What an event on a widget of `kind` carries: a slider its new value, 0 at the left edge to 1 at the right; a checkbox nothing (it was toggled); any other widget nothing (it was clicked).
@@ -1370,6 +1456,679 @@ Pointer state across frames.
 Fields: `pressed`, `down`
 
 
+## `lcgf.prepared` (src/render/prepared.zig)
+
+Portable surface preparation and ordinary frame integration.
+
+### Top level
+
+- `TreeInput = struct { value: *const tree.Tree, nodes: NodeMap, scratch: []decoration.Clip }`
+- `fn measure(shape: decoration.RoundedRect, description: decoration.Description, scale: f32, limits: Limits) Error!decoration.Dimensions`: Query before allocating/carving.
+- `fn bake(shape: decoration.RoundedRect, description: decoration.Description, scale: f32, clips: []const decoration.Clip, quality: decoration.Quality, limits: …`: Bake the declared decoration model (including analytic box shadows) into supplied pixels.
+- `fn row(style: *const types.Style) tree.Template`: Reserve the one sparse paint-extra row while building the node, before its descendants.
+- `fn bind(t: *tree.Tree, node: types.Node, painted: Painted, texture: types.Texture, revision: u32) Error!void`: Bind after layout and before Frame.finish/paint.emit.
+- `fn mapNodes(t: *const tree.Tree, text: *const Texts, list: *const draw.DrawList, order: []const u32, quads: []u32) Error!NodeMap`: Same row/layer ordering used for paint.emit/emitLayered.
+- `fn treeClips(t: *const tree.Tree, node: u32, storage: []decoration.Clip) Error![]const decoration.Clip`: Caller-owned exact clips from the actual ancestor geometry, before raster antialiasing.
+- `fn drawRange(dst: surface.Surface, scratch: surface.Surface, list: *const draw.DrawList, first: u32, count: u32, resources: Resources, view: View, limits: Li…`: Paint ordinary draw commands into a caller surface.
+- `fn applyClips(dst: surface.Surface, clips: []const decoration.Clip, view: View) Error!void`: Applies the intersection at each coverage sample, avoiding double-darkening where two identical rounded edges meet.
+
+### `Limits` (struct)
+
+Fields: `width`, `height`, `bytes`, `clips`, `layers`, `blur_sigma`
+
+- `fn pixels(limits: Limits, width: u32, height: u32) Error!usize`
+
+### `Painted` (struct)
+
+Fields: `image`, `source`, `rect`, `scale`
+
+
+### `NodeMap` (struct)
+Optional node indices for the portable clipping/subtree path.
+
+Fields: `quads`, `runs`, `len`
+
+- `fn init(carver: *mem.Carver, nodes: u32, text: *const Texts) NodeMap`
+
+### `Resources` (struct)
+
+Fields: `images`, `glyphs`, `customs`
+
+
+### `View` (struct)
+
+Fields: `origin`, `scale`, `quality`, `clips`, `tree`, `nodes`
+
+
+## `lcgf.color_output` (src/draw/color_output.zig)
+
+Optional wide-gamut/HDR color processing on caller-owned floating-point planes.
+
+### Top level
+
+- `Error = surface.Error || error{ InvalidEncoding, InvalidColor, InvalidOpacity }`
+- `Primaries = enum { srgb, display_p3, rec2020 }`
+- `Transfer = union(enum) { linear: f32, srgb: f32, pq, hlg: f32 }`: Payloads are reference-white luminance in cd/m^2.
+- `Encoding = struct { primaries: Primaries = .srgb, transfer: Transfer = .{ .srgb = 203 } }`
+- `ToneMap = enum { clip, reinhard }`
+- `SdrOptions = struct { white_nits: f32 = 203, exposure: f32 = 1, tone_map: ToneMap = .clip, dither: bool = false }`
+- `fn requiredFloats(width: u32, height: u32) Error!usize`
+- `fn init(storage: []f32, width: u32, height: u32, primaries: Primaries) Error!LinearSurface`
+- `fn load(src: LinearSurface, x: usize, y: usize) Batch`
+- `fn store(dst: LinearSurface, x: usize, y: usize, values: Batch) void`
+- `fn clear(dst: LinearSurface, straight_nits: color.Rgba) Error!void`
+- `fn primaryMatrix(from: Primaries, to: Primaries) [9]f32`: One conversion matrix per pass, composed through D65 XYZ.
+- `fn convertPrimaries(value: Batch, matrix: [9]f32) Batch`
+- `fn decode(value: F, transfer: Transfer) F`
+- `fn encode(value_nits: F, transfer: Transfer) F`
+- `fn fromRGBA8(dst: LinearSurface, src: surface.Image, white_nits: f32) Error!void`
+- `fn over(dst: LinearSurface, src: LinearSurface, opacity: f32) Error!void`: Real linear-light source-over, preserving highlights above reference white.
+- `fn exportRGBA(comptime T: type, src: LinearSurface, dst: []T, stride: usize, encoding: Encoding, alpha: surface.Alpha) Error!void`: Interleaved RGBA half or full float.
+- `fn importRGBA(comptime T: type, dst: LinearSurface, src: []const T, stride: usize, encoding: Encoding, alpha: surface.Alpha) Error!void`: Imports interleaved encoded floating-point color, including HDR values above one for linear/scRGB.
+- `fn exportRGB10A2(src: LinearSurface, dst: []u32, stride: usize, encoding: Encoding) Error!void`
+- `fn toRGBA8(dst: surface.Surface, src: LinearSurface, options: SdrOptions) Error!void`: Explicit SDR fallback with hue-preserving luminance Reinhard mapping or clipping.
+
+### `LinearSurface` (struct)
+
+Fields: `channels`, `width`, `height`, `stride`, `primaries`
+
+- `fn validate(s: LinearSurface) Error!void`
+
+## `lcgf.filter_primitives` (src/draw/filter_primitives.zig)
+
+Specialist image filters built from the same caller-owned surfaces.
+
+### Top level
+
+- `Error = surface.Error || error{ InvalidFilter, InvalidColor }`
+- `fn convolve(dst: surface.Surface, src: surface.Image, kernel: Kernel) Error!void`: General signed 2D convolution.
+- `fn componentTransfer(dst: surface.Surface, components: [4]Component, space: compositor.FilterSpace) Error!void`
+- `fn turbulence(dst: surface.Surface, options: Noise) Error!void`: Four decorrelated gradient-noise channels, with RGB premultiplied by the generated alpha.
+- `fn lighting(dst: surface.Surface, height_map: surface.Image, options: Lighting) Error!void`
+- `fn arithmetic(dst: surface.Surface, a: surface.Image, b: surface.Image, coefficients: [4]f32) Error!void`
+
+### `Kernel` (struct)
+
+Fields: `values`, `width`, `height`, `anchor`, `divisor`, `bias`, `preserve_alpha`, `space`, `edge`
+
+
+### `Component` (union)
+
+Fields: `table`, `discrete`, `linear`, `gamma`
+
+
+### `Noise` (struct)
+
+Fields: `frequency`, `octaves`, `seed`, `turbulence`, `period`
+
+
+### `Light` (union)
+
+Fields: `distant`, `point`, `spot`
+
+
+### `Lighting` (struct)
+
+Fields: `light`, `color`, `surface_scale`, `constant`, `specular_exponent`
+
+
+## `lcgf.units` (src/layout/units.zig)
+
+Typed lengths and bounded expressions resolved before writing ordinary layout inputs.
+
+### Top level
+
+- `Value = struct { amount: f32, unit: Unit = .px }`
+- `Error = error{ Indefinite, NonFinite, NoSpace, InvalidExpression }`
+- `Op = union(enum) { value: Value, add, subtract, min, max, clamp, scale: f32 }`: Reverse Polish expression instructions.
+- `fn resolve(value: Value, cx: Context) Error!f32`: Resolves one value.
+- `fn size(value: Value, cx: Context) Error!Size`: Size percentages remain deferred native coefficients when their parent is indefinite.
+- `fn evaluate(program: []const Op, cx: Context, scratch: []f32) Error!f32`: Bounded calc/min/max/clamp evaluation; all stack storage is the caller's.
+
+### `Context` (struct)
+
+Fields: `reference`, `font_px`, `root_font_px`, `x_height`, `zero_advance`, `line_height`, `root_line_height`, `viewport`, `small_viewport`, `large_viewport`, `dynamic_viewport`, `container`, `inline_axis`, `device_scale`, `safe_area`
+
+
+## `lcgf.logical` (src/layout/logical.zig)
+
+Logical box dimensions and edges resolved to the existing physical layout columns.
+
+### Top level
+
+- `WritingMode = enum(u8) { horizontal_tb, vertical_rl, vertical_lr, sideways_rl, sideways_lr }`
+- `Direction = enum { ltr, rtl }`
+- `Axis = enum { inline_axis, block_axis }`
+- `fn mirror(t: *Tree, m: *Mirrors) void`: After place, before finalize/anchors: mirror each parent's children on its negative axes and carry the displacement through descendants.
+
+### `Flow` (struct)
+
+Fields: `writing`, `direction`
+
+- `Axes = struct { inline_axis: u1, block_axis: u1, inline_sign: f32, block_sign: f32 }`
+- `fn axes(flow: Flow) Axes`
+- `fn edges(flow: Flow, logical: [4]f32) [4]f32`: inline-start, block-start, inline-end, block-end to left, top, right, bottom.
+- `fn sizes(flow: Flow, inline_size: types.Size, block_size: types.Size) [2]types.Size`: Logical inline/block sizes, directly usable as Style.size.
+- `fn offset(flow: Flow, inline_delta: f32, block_delta: f32) [2]f32`: A displacement along the logical axes, directly usable as Style.offset.
+- `fn mainAxis(flow: Flow, axis: Axis) types.Axis`
+- `fn margins(flow: Flow, flex: *Flex, node: u32, logical: [4]f32) void`: Applies logical margins directly to the optional Flex table, before fitFlex.
+
+### `Mirrors` (struct)
+Optional physical direction coefficients.
+
+Fields: `sign`, `shift`
+
+- `fn init(carver: *mem.Carver, capacity: u32) Mirrors`
+- `fn set(m: *Mirrors, node: u32, flow: Flow) void`
+
+## `lcgf.decoration` (src/draw/decoration.zig)
+
+Composed decoration rasterization into caller-owned RGBA8 surfaces.
+
+### Top level
+
+- `Error = brushes.Error || error{ InvalidDecoration, InvalidTransform, InvalidScale }`
+- `Corner = enum { round, square, bevel, scoop, notch, squircle, superellipse }`
+- `RoundedClip = struct { shape: RoundedRect, inverse: [6]f32 = identity }`
+- `Clip = union(enum) { rounded: RoundedClip, coverage: CoverageClip }`
+- `Quality = enum { one, four, sixteen }`
+- `View = struct { origin: [2]f32 = .{ 0, 0 }, scale: f32 = 1, quality: Quality = .four, clips: []const Clip = &.{} }`
+- `Box = enum { border, padding, content }`
+- `Alignment = enum { inside, center, outside }`
+- `BorderStyle = enum { none, solid, dashed, dotted, double, groove, ridge, inset, outset }`
+- `Border = struct { edges: [4]Edge = @splat(.{}), alignment: Alignment = .inside }`
+- `Outline = struct { width: f32, offset: f32 = 0, brush: brushes.Brush, style: BorderStyle = .solid, dash: f32 = 0, gap: f32 = 0, phase: f32 = 0 }`
+- `Dimensions = struct { width: u32, height: u32, origin: [2]f32, rect: Rect }`
+- `fn normalize(shape: RoundedRect) Error!RoundedRect`: CSS-style proportional radius normalization: when sums overlap, every radius is scaled by one common factor.
+- `fn contains(shape: RoundedRect, x: F, y: F) simd.B`: Boolean geometry at SIMD points.
+- `fn validateClips(clips: []const Clip) Error!void`
+- `fn validateClipSources(destination: []const u32, clips: []const Clip) Error!void`
+- `fn validateSources(destination: []const u32, description: Description, clips: []const Clip) Error!void`: Checks all borrowed paint/clip images before a clear or write.
+- `fn transformed(matrix: [6]f32, x: F, y: F) [2]F`
+- `fn clipCoverage(clips: []const Clip, x: F, y: F) F`
+- `fn pathClip(coverage: []const u8, box: paths.Box, scale: f32, rgba: []u32) Error!Clip`: Converts the existing path rasterizer's u8 output to a borrowed RGBA coverage clip.
+- `fn validate(description: Description) Error!void`
+- `fn bounds(shape: RoundedRect, description: Description) Error!Rect`: Conservative logical paint bounds, including outward border, outline, and three-sigma shadow halos.
+- `fn dimensions(rect: Rect, scale: f32) Error!Dimensions`: Device-pixel alignment is outward and includes fractional origins.
+- `fn paintShape(dst: surface.Surface, shape: RoundedRect, layer: Layer, view: View) Error!void`: Low-level shape paint on an existing surface, also used by the full decoration helper.
+- `fn paint(dst: surface.Surface, shape: RoundedRect, description: Description, view: View) Error!void`: Paints into an existing surface.
+- `fn rasterize(dst: surface.Surface, shape: RoundedRect, description: Description, view: View) Error!void`: Common prepared-texture sequence.
+
+### `RoundedRect` (struct)
+
+Fields: `rect`, `radii`, `corners`, `powers`
+
+
+### `CoverageClip` (struct)
+
+Fields: `image`, `inverse`, `sampling`, `mode`, `invert`
+
+
+### `Layer` (struct)
+
+Fields: `brush`, `clip`, `inverse`, `opacity`, `blend`, `operator`
+
+
+### `Edge` (struct)
+
+Fields: `width`, `brush`, `style`, `dash`, `gap`, `phase`
+
+
+### `Shadow` (struct)
+
+Fields: `offset`, `sigma`, `spread`, `color`, `inset`
+
+
+### `Description` (struct)
+
+Fields: `backgrounds`, `border`, `shadows`, `outline`, `padding`
+
+
+## `lcgf.projective` (src/draw/projective.zig)
+
+Optional perspective flattening on caller-owned surfaces.
+
+### Top level
+
+- `Error = decoration.Error || error{ SingularProjection, CrossesProjectionPlane, InvalidOpacity }`
+- `Matrix = [9]f32`: Row-major matrices multiplying a column vector.
+- `Matrix4 = [16]f32`
+- `identity: Matrix = .{ 1, 0, 0, 0, 1, 0, 0, 0, 1 }`
+- `identity4: Matrix4 = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }`
+- `Cull = enum { none, back, front }`
+- `Options = struct { sampling: brushes.Sampling = .linear, cull: Cull = .none, opacity: f32 = 1, operator: compositor.Operator = .source_over, blend: composito…`
+- `Projection = struct { forward: Matrix, inverse: Matrix }`
+- `fn affine(m: [6]f32) Matrix`
+- `fn plane(matrix: Matrix4) Matrix`
+- `fn multiply(a: Matrix4, b: Matrix4) Matrix4`
+- `fn translate(x: f32, y: f32, z: f32) Matrix4`
+- `fn scale(x: f32, y: f32, z: f32) Matrix4`
+- `fn rotateX(radians: f32) Matrix4`
+- `fn rotateY(radians: f32) Matrix4`
+- `fn rotateZ(radians: f32) Matrix4`
+- `fn perspective(distance: f32) Error!Matrix4`: Perspective with w=1-z/distance, matching the usual positive-z-toward-viewer convention.
+- `fn around(origin: [3]f32, matrix: Matrix4) Matrix4`
+- `fn prepare(matrix: Matrix) Error!Projection`
+- `fn point(matrix: Matrix, x: f32, y: f32) Error![2]f32`
+- `fn bounds(rect: Rect, matrix: Matrix) Error!Rect`: A rectangle crossing w=0 has unbounded projected extent.
+- `fn backFacing(rect: Rect, matrix: Matrix) Error!bool`
+- `fn paint(dst: surface.Surface, src: surface.Image, projection: Projection, view: decoration.View, options: Options) Error!void`: Samples a source image plane into an existing effect surface.
+
+## `lcgf.motion` (src/anim/motion.zig)
+
+Explicit motion, tier 0.
+
+### Top level
+
+- `Error = error{ InvalidCurve, InvalidTiming, InvalidKeys, IncompatiblePath, NoSpace, EmptyPath }`
+- `Stop = struct { at: f32, value: f32 }`
+- `StepPosition = enum { jump_start, jump_end, jump_none, jump_both }`
+- `Direction = enum { normal, reverse, alternate, alternate_reverse }`
+- `Fill = enum { none, backwards, forwards, both }`
+- `Hidden = enum { continue_playing, pause, finish, cancel }`
+- `fn Key(comptime property: properties.Property) type`
+- `fn interpolate(comptime property: properties.Property, a: properties.Type(property), b: properties.Type(property), t: f32, color: colors.Interpolation) prope…`
+- `fn sample(comptime property: properties.Property, keys: []const Key(property), progress: f32, color: colors.Interpolation) Error!properties.Type(property)`
+- `fn apply(comptime property: properties.Property, computed: *properties.Computed, keys: []const Key(property), value: Sample, color: colors.Interpolation) Err…`: Apply exactly one property and report its invalidation domains.
+- `fn alongPath(path: *const paths.Polyline, distance: f32) Error!PathSample`: Distance along flattened contours; a contour break never creates a connecting segment.
+- `fn morph(a: *const paths.Path, b: *const paths.Path, t: f32, out: *paths.Path) Error!void`: Compatible path interpolation.
+- `fn layoutTransform(before: [4]f32, after: [4]f32, progress: f32) [6]f32`: FLIP matrix mapping the newly laid-out box to an interpolated old/new visual box.
+
+### `Curve` (union)
+
+Fields: `standard`, `cubic`, `steps`, `linear`, `samples`
+
+- `fn validate(curve: Curve) Error!void`
+- `fn at(curve: Curve, fraction: f32) f32`: Validate authoring data once; evaluation is bounded (24 bisection steps for Bézier).
+
+### `Timing` (struct)
+
+Fields: `duration`, `delay`, `iterations`, `direction`, `fill`, `essential`
+
+- `fn validate(timing: Timing) Error!void`
+
+### `Sample` (struct)
+
+Fields: `progress`, `iteration`, `active`, `complete`
+
+
+### `Playback` (struct)
+
+Fields: `timing`, `time`, `rate`, `paused`, `cancelled`, `finished`, `completed_now`
+
+- `fn init(timing: Timing) Error!Playback`
+- `fn seek(playback: *Playback, time: f64) Error!Sample`
+- `fn advance(playback: *Playback, dt: f64, visible: bool, hidden: Hidden, reduced_motion: bool) Error!Sample`
+- `fn pause(playback: *Playback) void`
+- `fn play(playback: *Playback) void`
+- `fn cancel(playback: *Playback) void`
+- `fn restart(playback: *Playback) void`
+- `fn reverse(playback: *Playback) void`
+- `fn finish(playback: *Playback) Sample`: An endless decorative animation lands at the end of its current iteration.
+- `fn sample(playback: *const Playback) Sample`
+- `fn wake(playback: *const Playback) f32`: Positive seconds until an active/delayed clock needs progress; infinity when idle.
+
+### `PathSample` (struct)
+
+Fields: `position`, `tangent`
+
+- `fn matrix(value: PathSample, anchor: [2]f32, rotate: bool, offset: f32) [6]f32`
+
+## `lcgf.font_match` (src/text/font/match.zig)
+
+Font selection over a caller-owned catalog.
+
+### Top level
+
+- `Style = enum { normal, italic, oblique }`
+- `Metric = enum { x_height, cap_height, zero_advance, ideograph_advance }`
+- `AdjustError = error{ InvalidSize, MissingMetric }`
+- `fn find(catalog: []const Entry, families: []const []const u8, request: Request) ?usize`: First matching family, then closest width, style, and weight.
+- `fn apply(tx: *Texts, row: u32, catalog: []const Entry, families: []const []const u8, request: Request) bool`: Resolves a font directly into a text row, ready for Stack.measure.
+- `fn metricRatio(face: *const opentype.Face, metric: Metric) error{MissingMetric}!f32`: Selected font metric as a fraction of its em.
+- `fn adjustedSize(face: *const opentype.Face, px: f32, target_ratio: f32, metric: Metric) AdjustError!f32`
+- `fn applySizeAdjust(tx: *Texts, row: u32, face: *const opentype.Face, target_ratio: f32, metric: Metric) AdjustError!void`: Direct font-size-adjust consumer: normal Stack measurement/shaping uses the new px.
+
+### `Request` (struct)
+
+Fields: `weight`, `width`, `style`
+
+
+### `Entry` (struct)
+
+Fields: `family`, `font`, `weight`, `width`, `style`
+
+- `fn of(face: *const opentype.Face, family: []const u8, font: u16) Entry`: Reads static OS/2 selection metadata, falling back to head.macStyle.
+
+## `lcgf.text_decorations` (src/text/layout/decorations.zig)
+
+Text decorations, selections and carets as ordinary quads.
+
+### Top level
+
+- `Pattern = enum { solid, double, dotted, dashed, wavy }`
+- `CaretShape = enum { bar, block, underline }`
+- `fn quads(run: draw.TextRun, l: *const lines.Lines, g: *const lines.Glyphs, text: []const u8, range: [2]u32, style: Style, metrics: Metrics, ink: []const imag…`: Emits decorations for the source byte range.
+- `fn selection(run: draw.TextRun, l: *const lines.Lines, g: *const lines.Glyphs, text: []const u8, range: [2]u32, color: u32, scratch: []Rect, out: []draw.Quad…`: Highlight backgrounds from bidi-aware selection geometry.
+- `fn caret(run: draw.TextRun, l: *const lines.Lines, g: *const lines.Glyphs, text: []const u8, at: u32, shape: CaretShape, thickness: f32, advance: f32, color:…`: A caret at a grapheme boundary.
+
+### `Style` (struct)
+
+Fields: `underline`, `overline`, `strike`, `pattern`, `color`, `thickness`, `underline_offset`, `overline_offset`, `strike_offset`, `skip_ink`
+
+
+### `Metrics` (struct)
+
+Fields: `thickness`, `underline`, `overline`, `strike`
+
+- `fn of(face: *const Face, px: f32) Metrics`: OpenType post underline and OS/2 strikeout metrics, scaled to logical pixels.
+
+## `lcgf.compositor` (src/draw/compositor.zig)
+
+Optional CPU compositing and filters, tier 0.
+
+### Top level
+
+- `Error = surface.Error || error{ InvalidOpacity, InvalidFilter, InvalidColor }`
+- `Operator = enum { clear, source, destination, source_over, destination_over, source_in, destination_in, source_out, destination_out, source_atop, destination…`
+- `Blend = enum { normal, multiply, screen, overlay, darken, lighten, color_dodge, color_burn, hard_light, soft_light, difference, exclusion, hue, saturation, c…`
+- `Options = struct { offset: [2]i32 = .{ 0, 0 }, opacity: f32 = 1, operator: Operator = .source_over, blend: Blend = .normal }`
+- `MaskMode = enum { alpha, luminance, linear_luminance }`
+- `MaskOperator = enum { add, subtract, intersect, exclude }`
+- `FilterSpace = enum { srgb, linear_srgb }`
+- `Morphology = enum { dilate, erode }`
+- `MaskOptions = struct { origin: [2]f32 = .{ 0, 0 }, mode: MaskMode = .alpha, invert: bool = false, opacity: f32 = 1, sampling: brushes.Sampling = .linear }`
+- `Displacement = struct { scale: [2]f32, channels: [2]u2 = .{ 0, 1 }, sampling: brushes.Sampling = .linear, edge: [2]brushes.Address = .{ .transparent, .transp…`
+- `fn blendColor(backdrop: Batch, source: Batch, mode: Blend) Batch`: W3C compositing blend functions on straight encoded-sRGB channels.
+- `fn combine(backdrop: Batch, source: Batch, alpha: F, operator: Operator, blend: Blend) Batch`: Combines batches of premultiplied colors.
+- `fn composite(dst: surface.Surface, src: surface.Image, options: Options) Error!void`
+- `fn capture(dst: surface.Surface, src: surface.Image, origin: [2]i32, edge: [2]brushes.Address) Error!void`: Takes a bounded backdrop snapshot at an explicit origin.
+- `fn maskCoverage(pixels: Batch, mode: MaskMode) F`
+- `fn applyMask(dst: surface.Surface, mask: surface.Image, options: MaskOptions) Error!void`
+- `fn combineMask(dst: surface.Surface, src: surface.Image, mode: MaskMode, operator: MaskOperator) Error!void`: Combines multiple mask layers into an alpha surface.
+- `fn brightness(amount: f32) ColorMatrix`
+- `fn contrast(amount: f32) ColorMatrix`
+- `fn saturate(amount: f32) ColorMatrix`
+- `fn grayscale(amount: f32) ColorMatrix`
+- `fn invert(amount: f32) ColorMatrix`
+- `fn sepia(amount: f32) ColorMatrix`
+- `fn hueRotate(radians: f32) ColorMatrix`
+- `fn opacity(amount: f32) ColorMatrix`
+- `fn concatenate(first: ColorMatrix, second: ColorMatrix) Error!ColorMatrix`: `first`, then `second`.
+- `fn colorMatrix(dst: surface.Surface, matrix: ColorMatrix) Error!void`
+- `fn gaussianKernelLength(sigma: f32) Error!usize`
+- `fn gaussianKernel(sigma: f32, storage: []f32) Error![]const f32`: Symmetric, normalized Gaussian, truncated at three sigma.
+- `fn blur(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, kernel: []const f32, edge: [2]brushes.Address) Error!void`: Separable convolution of premultiplied RGBA.
+- `fn blurXY(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, kernel_x: []const f32, kernel_y: []const f32, edge: [2]brushes.Address) Error…`: Independent horizontal and vertical kernels support anisotropic Gaussian sigma.
+- `fn morphology(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, radius: [2]u32, mode: Morphology, edge: [2]brushes.Address) Error!void`
+- `fn dropShadow(src: surface.Surface, dst: surface.Surface, scratch: surface.Surface, kernel: []const f32, offset: [2]i32, tint: color.Rgba) Error!void`: A true alpha-shaped drop shadow, as distinct from the inexpensive analytic box-shadow primitive.
+- `fn displace(dst: surface.Surface, src: surface.Image, map: surface.Image, options: Displacement) Error!void`
+
+### `ColorMatrix` (struct)
+A 4x5 matrix on straight color, in the selected space.
+
+Fields: `values`, `space`
+
+
+## `lcgf.brushes` (src/draw/brushes.zig)
+
+Rich brushes, with caller-owned prepared stops and borrowed images.
+
+### Top level
+
+- `Error = surface.Error || error{ InvalidColor, InvalidStops, InvalidGeometry }`
+- `Spread = enum { pad, repeat, reflect }`
+- `Sampling = enum { nearest, linear }`
+- `Address = enum { clamp, repeat, mirror, transparent }`
+- `Fit = enum { fill, contain, cover, none, scale_down }`
+- `Repeat = enum { none, repeat, mirror, round, space }`
+- `Orientation = enum { normal, mirror_x, rotate_180, mirror_y, transpose, rotate_90, transverse, rotate_270 }`: EXIF orientations 1..8, applied to the selected source crop before fitting/tiling.
+- `Stop = struct { position: f32, color: color.Rgba, midpoint: f32 = 0.5 }`: Positions may extend outside 0..1 and may coincide for a hard stop.
+- `Linear = struct { ramp: Ramp, from: [2]f32, to: [2]f32 }`
+- `Radial = struct { ramp: Ramp, center: [2]f32, radius: [2]f32, focus: ?[2]f32 = null }`: The center and radii define the final ellipse; the optional focus shifts the zero-radius point.
+- `TwoCircle = struct { ramp: Ramp, start: [2]f32, start_radius: f32, end: [2]f32, end_radius: f32 }`: General radial cone, including two nonzero radii and an external focal circle.
+- `Conic = struct { ramp: Ramp, center: [2]f32, angle: f32 = 0 }`: Angle zero points up; positive angles turn clockwise.
+- `Sweep = struct { ramp: Ramp, center: [2]f32, start_angle: f32, end_angle: f32 }`: OpenType/COLRv1 sweep: atan2(y-cy,x-cx) normalized to [0,2pi), with an arbitrary, possibly reversed interval.
+- `fn prepareStops(stops: []const Stop, out: []Segment, interpolation: color.Interpolation, spread: Spread) Error!Ramp`: Writes one segment per supplied stop, including the final constant segment.
+- `fn validRect(r: Rect) bool`
+- `fn validate(b: Brush) Error!void`
+- `fn validateSource(b: Brush, destination: []const u32) Error!void`: Validate borrowed image storage before a pass writes its destination.
+- `fn orientedSize(size: [2]f32, orientation: Orientation) [2]f32`
+- `fn orientedUv(u: F, v: F, orientation: Orientation) [2]F`: Inverse orientation: display-normalized coordinates to encoded source-normalized ones.
+- `fn imageLod(dx: [2]f32, dy: [2]f32) Error!f32`: Explicit footprint-to-LOD helper.
+- `fn sampleRamp(r: Ramp, position: F) Batch`
+- `fn averageRamp(r: Ramp) Batch`: Mean of one complete gradient period in its interpolation coordinates.
+- `fn angle(y: F, x: F) F`: SIMD atan2 for finite coordinates, including a stable zero-angle at the center.
+- `fn sampleImage(im: surface.Image, x: F, y: F, sampling: Sampling, modes: [2]Address) Batch`: Pixel-space sample coordinates: pixel (0,0) is centered at (.5,.5).
+- `fn sample(b: Brush, x: F, y: F) Batch`
+- `fn fitRect(intrinsic: [2]f32, box: Rect, fit: Fit, alignment: [2]f32) Error!Rect`: Stable-box image placement: alignment is a fraction of the leftover space (0=start, .5=center, 1=end).
+- `fn nineSlice(image: surface.Image, source: Rect, destination: Rect, source_cuts: [4]f32, destination_cuts: [4]f32, repeat: [2]Repeat, fill_center: bool, samp…`: Expands nine-slice into the same image brushes used by backgrounds.
+
+### `Segment` (struct)
+
+Fields: `position`, `reciprocal_span`, `from`, `to`, `exponent`
+
+
+### `Ramp` (struct)
+
+Fields: `segments`, `interpolation`, `spread`
+
+
+### `ImageBrush` (struct)
+
+Fields: `image`, `source`, `destination`, `area`, `repeat`, `sampling`, `tint`, `orientation`, `mipmaps`, `lod`, `mip_filter`
+
+
+### `Brush` (union)
+
+Fields: `solid`, `linear`, `radial`, `two_circle`, `conic`, `sweep`, `image`
+
+
+## `lcgf.color_math` (src/draw/color_math.zig)
+
+Color values and conversion, tier 0.
+
+### Top level
+
+- `Rgba = @Vector(4, f32)`
+- `Space = enum { srgb, linear_srgb, oklab, oklch }`
+- `Hue = enum { shorter, longer, increasing, decreasing }`
+- `fn rgba(r: f32, g: f32, b: f32, a: f32) Rgba`
+- `fn fromColor(c: Color) Rgba`
+- `fn pack(c: Rgba) u32`: Packs the supplied channels as-is, clipping and rounding once.
+- `fn unpack(bits: u32) Rgba`
+- `fn premultiply(c: Rgba) Rgba`
+- `fn unpremultiply(c: Rgba) Rgba`
+- `fn finite(c: Rgba) bool`
+- `fn srgbToLinear(v: f32) f32`
+- `fn linearToSrgb(v: f32) f32`
+- `fn linear(c: Rgba) Rgba`
+- `fn encoded(c: Rgba) Rgba`
+- `fn hsl(hue_degrees: f32, saturation: f32, lightness: f32, alpha: f32) Rgba`: HSL hue is in degrees; saturation/lightness/alpha are fractions.
+- `fn hwb(hue_degrees: f32, whiteness: f32, blackness: f32, alpha: f32) Rgba`
+- `fn toOklab(c: Rgba) Rgba`
+- `fn oklab(lightness: f32, a: f32, b: f32, alpha: f32) Rgba`
+- `fn oklch(lightness: f32, chroma: f32, hue_degrees: f32, alpha: f32) Rgba`
+- `fn toOklch(c: Rgba) Rgba`
+- `fn lab(lightness: f32, a: f32, b: f32, alpha: f32) Rgba`: CIE Lab uses the D50 reference white, with Bradford D50 -> D65 adaptation before sRGB.
+- `fn xyzD65(c: Rgba) Rgba`
+- `fn xyzD50(c: Rgba) Rgba`
+- `fn a98Rgb(c: Rgba) Rgba`: CSS Color 4 predefined RGB spaces, converted to extended straight sRGB.
+- `fn prophotoRgb(c: Rgba) Rgba`
+- `fn rec2020(c: Rgba) Rgba`
+- `fn lch(lightness: f32, chroma: f32, hue_degrees: f32, alpha: f32) Rgba`
+- `fn displayP3(c: Rgba) Rgba`: Converts an encoded Display-P3 authoring value to extended sRGB.
+- `fn mix(a: Rgba, b: Rgba, fraction: f32, opt: Interpolation) Rgba`: Interpolates straight authoring colors and returns straight sRGB.
+
+### `Interpolation` (struct)
+
+Fields: `space`, `premultiplied`, `hue`
+
+
+## `lcgf.surface` (src/draw/surface.zig)
+
+Caller-owned CPU effect surfaces.
+
+### Top level
+
+- `Alpha = enum { straight, premultiplied }`
+- `Error = error{ InvalidSize, InvalidStride, InsufficientStorage, AliasedStorage, SizeMismatch }`
+- `Batch = [4]simd.F`: Structure-of-vectors channels; a batch is `simd.lanes` independent pixels.
+- `fn rowPixels(width: u32) Error!usize`
+- `fn requiredPixels(width: u32, height: u32) Error!usize`
+- `fn init(pixels: []u32, width: u32, height: u32) Error!Surface`: Initializes the used storage to transparent.
+- `fn overlaps(a: []const u32, b: []const u32) bool`
+- `fn overlapsBytes(a: []const u8, b: []const u8) bool`
+- `fn unpack(v: simd.U) Batch`
+- `fn pack(channels: Batch) simd.U`
+- `fn premultiply(v: Batch) Batch`
+- `fn unpremultiply(v: Batch) Batch`
+- `fn splat(v: color.Rgba) Batch`
+- `fn load(s: Surface, x: usize, y: usize) Batch`
+- `fn store(s: Surface, x: usize, y: usize, v: Batch) void`: Writes a complete SIMD batch; lanes past the active width are explicitly transparent.
+- `fn clear(s: Surface, straight: color.Rgba) Error!void`
+- `fn importImage(dst: Surface, src: Image) Error!void`: Imports a same-sized image.
+- `fn exportRGBA(src: Surface, dst: []u32, stride: usize, alpha: Alpha) Error!void`: Writes tightly packed or caller-strided RGBA words.
+
+### `Image` (struct)
+Borrowed image.
+
+Fields: `pixels`, `width`, `height`, `stride`, `alpha`
+
+- `fn validate(im: Image) Error!void`
+
+### `Surface` (struct)
+
+Fields: `pixels`, `width`, `height`, `stride`
+
+- `fn view(s: Surface) Image`
+- `fn validate(s: Surface) Error!void`
+
+## `lcgf.geometry` (src/draw/geometry.zig)
+
+Shared paint and input geometry.
+
+### Top level
+
+- `identity: [6]f32 = .{ 1, 0, 0, 1, 0, 0 }`
+- `empty: [4]f32 = .{ 0, 0, 0, 0 }`
+- `unbounded: [4]f32 = .{ -types.inf, -types.inf, types.inf, types.inf }`
+- `fn compose(p: [6]f32, l: [6]f32) [6]f32`: Parent after local: p(l(point)).
+- `fn point(m: [6]f32, p: [2]f32) [2]f32`
+- `fn about(m: [6]f32, rect: [4]f32, origin: [2]f32) [6]f32`: Normalized origin in a reference rectangle; values outside 0..1 are intentional.
+- `fn inverse(m: [6]f32) ?[6]f32`
+- `fn hasArea(rect: [4]f32) bool`
+- `fn intersect(a: [4]f32, b: [4]f32) [4]f32`
+- `fn expand(rect: [4]f32, amount: [4]f32) [4]f32`
+- `fn transformRect(rect: [4]f32, m: [6]f32) [4]f32`
+- `fn localPaintBounds(rect: [4]f32, params: [4]f32) [4]f32`: The stock shadow shader expands its local source by three standard deviations.
+- `fn paintBounds(rect: [4]f32, params: [4]f32, xform: [6]f32, clip: [4]f32) [4]f32`: Shared by damage, visibility and overlap-sensitive batching.
+- `fn quadBounds(q: anytype) [4]f32`
+- `fn paintSource(t: anytype, i: usize) usize`: An explicit paint reference reads an earlier border box, never another reference.
+- `fn nodeRect(t: anytype, i: usize) [4]f32`
+- `fn worldFromColumns(t: anytype, node: usize) [6]f32`: Reconstruct world geometry from immutable extras and current rectangle columns.
+- `fn worldAt(t: anytype, i: usize) [6]f32`
+- `fn nodeWorld(t: anytype, i: usize) [6]f32`
+- `fn nodeClip(t: anytype, i: usize) [4]f32`
+- `fn nodeClipRadii(t: anytype, i: usize) [4]f32`
+- `fn nodeAlpha(t: anytype, i: usize) f32`
+- `fn nodeBounds(t: anytype, i: usize) [4]f32`: World-space node bounds after layout and inherit.transform.
+- `fn contains(rect: [4]f32, p: [2]f32) bool`
+- `fn normalizeRadii(rect: [4]f32, radii: [4]f32) [4]f32`: Normalizes overlapping circular corner radii with one common factor.
+- `fn roundedContains(rect: [4]f32, radii: [4]f32, p: [2]f32) bool`
+- `fn hitNode(t: anytype, node: u32, screen: [2]f32) bool`: Exact transformed box and every ancestor's rounded clip.
+- `fn clipsContain(t: anytype, node: u32, screen: [2]f32) bool`: Exact ancestor clip test independent of the node's own visual or input target.
+- `fn needsExactHit(t: anytype) bool`: One coarse decision keeps rectangular trees on their existing SIMD hit path.
+- `fn snap(value: f32, device_scale: f32) f32`: Maps a logical edge to a physical pixel boundary without changing layout measurements.
+
+## `lcgf.outline` (src/draw/outline.zig)
+
+Outside focus/selection rings without a layout box or a retained decoration queue.
+
+### Top level
+
+- `fn append(t: *tree.Tree, parent: u32, target: types.Node, options: Outline) types.Node`: Append at the desired point in paint order.
+
+### `Outline` (struct)
+
+Fields: `width`, `color`, `offset`, `radii`
+
+
+## `lcgf.theme_recipes` (src/theme/recipes.zig)
+
+Optional component recipes with caller-owned data and independent resolution.
+
+### Top level
+
+- `model = @import("recipe.zig")`
+- `controls = @import("recipe_controls.zig")`
+- `ct = @import("recipe_comptime.zig")`
+- `tests = @import("recipe_tests.zig")`
+- `parts = @import("recipe_parts.zig")`
+- `comptime_parts = @import("recipe_part_comptime.zig")`
+- `extra_controls = @import("recipe_extra_controls.zig")`
+- `extra_tests = @import("recipe_extra_tests.zig")`
+- `overlays = @import("recipe_overlays.zig")`
+- `defaults = model`
+- `Recipe = model.Recipe`
+- `Part = model.Part`
+- `Use = model.Use`
+- `Names = model.Names`
+- `tokenRows = model.tokenRows`
+- `Options = controls.Options`
+- `OpenControl = controls.OpenControl`
+- `beginButton = controls.beginButton`
+- `label = controls.label`
+- `icon = controls.icon`
+- `directionalIcon = controls.directionalIcon`
+- `end = controls.end`
+- `button = controls.button`
+- `checkbox = controls.checkbox`
+- `switchControl = controls.switchControl`
+- `slider = controls.slider`
+- `progress = controls.progress`
+- `textfield = controls.textfield`
+- `radio = extra_controls.radio`
+- `range = extra_controls.range`
+- `spinner = extra_controls.spinner`
+
+## `lcgf.style` (src/style/style.zig)
+
+Typed styling as independently callable operations.
+
+### Top level
+
+- `properties = @import("properties.zig")`
+- `tokens = @import("tokens.zig")`
+- `environment = @import("environment.zig")`
+- `resolution = @import("resolve.zig")`
+- `storage = @import("storage.zig")`
+- `paragraph = @import("paragraph.zig")`
+- `compiler = @import("compiler.zig")`
+- `inspector = @import("inspector.zig")`
+- `accessibility = @import("accessibility.zig")`
+- `system_colors = @import("system_colors.zig")`
+- `locale = @import("locale.zig")`
+- `import_tests = @import("import_tests.zig")`
+- `Property = properties.Property`
+- `Value = properties.Value`
+- `Computed = properties.Computed`
+- `Invalidation = properties.Invalidation`
+- `Declaration = resolution.Declaration`
+- `Rule = resolution.Rule`
+- `Request = resolution.Request`
+- `Parts = resolution.Parts`
+- `States = resolution.States`
+- `Origin = resolution.Origin`
+- `Error = resolution.Error`
+- `set = resolution.set`
+- `inherit = resolution.inherit`
+- `initial = resolution.initial`
+- `token = resolution.token`
+- `patch = resolution.patch`
+- `resolve = resolution.resolve`
+- `inspect = resolution.inspect`
+
 ## `lcgf.draw_list` (src/draw/draw_list.zig)
 
 Draw list: what a renderer consumes.
@@ -1387,13 +2146,13 @@ Fields: `rect`, `clip`, `params`, `uv`, `radii`, `fill`, `border_color`, `border
 ### `TextRun` (struct)
 One text node's run, for the renderer's text pass.
 
-Fields: `rect`, `clip`, `start`, `bytes`, `px`, `color`, `font`
+Fields: `rect`, `clip`, `start`, `bytes`, `px`, `color`, `font`, `opacity`, `xform`, `clip_radii`
 
 
 ### `CustomDraw` (struct)
 A rectangle handed back to the host, which draws it with its own pipeline.
 
-Fields: `rect`, `clip`, `data`, `id`, `node`
+Fields: `rect`, `clip`, `data`, `id`, `node`, `xform`, `clip_radii`, `opacity`
 
 
 ### `Cmd` (union)
@@ -1655,6 +2414,8 @@ Vector paths: a builder, a flattener and a coverage rasteriser.
 - `fn curveSteps(c: [8]f32, comptime quadratic: bool, tolerance: f32) u32`: Chords that keep a curve within `tolerance` px of its polyline, cut at equal steps in t: a chord over a step h of t is at most |B''| h^2 / 8 from the curve.
 - `fn flattenLen(p: *const Path, tolerance: f32) struct { points: usize, contours: usize }`: Rows `flatten` needs for `p` at `tolerance`: an upper bound on the points (plus the vector slack) and the contours.
 - `fn flatten(p: *const Path, tolerance: f32, out: *Polyline) void`: The polylines of `p`, curves cut into chords that stay within `tolerance` px of them, into `out` (emptied first; sized by `flattenLen` with the same tolerance).
+- `fn flattenWidthsLen(p: *const Path, tolerance: f32) struct { points: usize, contours: usize }`: Capacity for width-aware flattening.
+- `fn flattenWidths(p: *const Path, command_widths: []const f32, tolerance: f32, out: *Polyline, point_widths: []f32) void`: One endpoint width per authored verb, and one output width per flattened point.
 - `fn discSteps(r: f32, tolerance: f32) u32`: Points of a polygon that stays within `tolerance` px of a circle of radius `r`: the sagitta of a chord over angle 2 pi / n is r (1 - cos(pi / n)).
 - `fn strokeLen(l: *const Polyline, st: Stroke, tolerance: f32) struct { points: usize, contours: usize }`: Rows `stroke` needs for `l` in style `st` at `tolerance`.
 - `fn stroke(l: *const Polyline, st: Stroke, tolerance: f32, out: *Polyline) void`: The outline of `l` stroked in style `st`, into `out` (emptied first; sized by `strokeLen`) as closed contours to fill under `Rule.nonzero`: one quadrilateral per segment, one piece per join and per cap, all wound the same way so their union is what fills.
@@ -1734,6 +2495,11 @@ TinyVG decoding: a .tvg file's draw commands as paths for src/draw/paths.zig.
 
 ### Top level
 
+- `Gradient = struct { from: [2]f32, to: [2]f32, colors: [2]Color }`
+- `Paint = union(enum) { solid: Color, linear: Gradient, radial: Gradient }`
+- `PaintError = Error || vector.Error`
+- `fn preparePaint(paint_style: Paint, segments: []brushes.Segment) brushes.Error!brushes.Brush`: TinyVG requires RGB interpolation in linear light and independent linear alpha.
+- `fn paint(image: Image, scale: f32, origin: [2]f32, dst: surface.Surface, view: decoration.View, tolerance: f32, buffers: RasterBuffers) PaintError!void`: Renders the remaining document from an Image value without retaining or advancing it.
 - `fn parse(data: []const u8) Error!Image`: Parses the header and colour table of `data`.
 
 ### `Image` (struct)
@@ -1743,13 +2509,19 @@ Fields: `data`, `width`, `height`, `scale_bits`, `unit_bytes`, `color_encoding`,
 
 - `fn color(img: *const Image, index: u32) Error!Color`: The colour at `index` of the colour table, as 8-bit sRGB with straight alpha.
 - `fn next(img: *Image, scale: f32, ox: f32, oy: f32, path: *Path) Error!?Item`: Decodes the next draw command into `path` (cleared first), its coordinates mapped to `x * scale + ox`, `y * scale + oy` px.
+- `fn nextWithWidths(img: *Image, scale: f32, ox: f32, oy: f32, path: *Path, widths: []f32) Error!?Item`: Writes one endpoint width per emitted path verb, including arc subdivision.
 
 ### `Item` (struct)
 What to draw with a decoded path: fill it under `rule` in `fill`, then stroke it with round joins and caps at `width` px in `line`.
 
-Fields: `fill`, `line`, `rule`, `width`, `gradient`
+Fields: `fill`, `line`, `rule`, `width`, `gradient`, `fill_paint`, `line_paint`, `variable_width`
 
 - `fn stroke(it: Item) paths.Stroke`: The stroke style for `line`: TinyVG lines have round caps and joins.
+
+### `RasterBuffers` (struct)
+
+Fields: `path`, `command_widths`, `centerline`, `point_widths`, `outline`, `fill`, `accumulator`, `coverage`, `gradient_segments`
+
 
 ## `lcgf.unicode_line` (src/text/unicode/line.zig)
 
@@ -2033,6 +2805,11 @@ Fields: `offset`, `x`, `len`
 
 Shaping cache: shaped glyph runs kept across frames, so a run is shaped once while its text, font and features stay the same.
 
+### Top level
+
+- `Identity = struct { font: u64, generation: u64 = 0 }`: Caller identity is independent of table position.
+- `Context = struct { identity: Identity, engine: u64 = 0, configuration: u64 = 0 }`: An optional external adapter hashes every shaping-affecting setting into configuration.
+
 ### `Cache` (struct)
 
 Fields: `mask`, `per_slot`, `keys`, `lens`, `glyphs`
@@ -2040,9 +2817,12 @@ Fields: `mask`, `per_slot`, `keys`, `lens`, `glyphs`
 - `fn init(carver: *mem.Carver, slots: u32, per_slot: u32) Cache`: Carves a table of `slots` entries (a power of two) of up to `per_slot` glyphs each, all empty.
 - `fn clear(c: *Cache) void`: Forgets every entry, e.g.
 - `fn key(text: []const u8, font: u16, features: shaping.Features) u64`: The key of a run: Wyhash of its bytes, seeded with the font and the features.
+- `fn keyContext(text: []const u8, context: Context) u64`
+- `fn keyVersioned(text: []const u8, identity: Identity, features: shaping.Features) u64`
 - `fn get(c: *const Cache, k: u64) ?shaping.Run`: The cached run of key `k`, as a view of its slot (valid until the slot is replaced), or null.
 - `fn put(c: *Cache, k: u64, run: *const shaping.Run) bool`: Records `run` under key `k`, replacing what the slot held.
 - `fn shape(c: *Cache, shaper: *const shaping.Shaper, font: u16, text: []const u8, features: shaping.Features, scratch: *shaping.Run) error{NoSpace}!shaping.Run`: The common case in one call: the shaped run of `text` in `font` with `features`, from the cache, else shaped into `scratch` and stored.
+- `fn shapeVersioned(c: *Cache, shaper: *const shaping.Shaper, identity: Identity, text: []const u8, features: shaping.Features, scratch: *shaping.Run) error{No…`: Generation-aware diagonal convenience; get/put and the uncached shaper remain public.
 
 ## `lcgf.render_iface` (src/render/iface.zig)
 
@@ -2398,7 +3178,7 @@ Context: the runtime front end's state that outlives a frame (tier 1).
 
 ### Top level
 
-- `Cursor = enum(u8) { arrow, pointer, text, grab, resize_h, resize_v }`
+- `Cursor = types.Cursor`
 - `Purpose = @import("../interact/keyboard.zig").Purpose`
 - `root_id = types.Id.from("ui.root")`
 
@@ -2411,7 +3191,7 @@ Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `tweens`, `flips`, `sig
 ### `Status` (struct)
 Capacity problems this frame.
 
-Fields: `nodes`, `texts`, `customs`, `strings`, `depth`
+Fields: `nodes`, `texts`, `customs`, `strings`, `depth`, `anims`, `tweens`, `flips`
 
 - `fn ok(s: Status) bool`
 
@@ -2437,6 +3217,7 @@ Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signal
 - `fn init(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: The buffer is the only memory the library will ever use.
 - `fn initZeroed(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: `init` over a buffer that is all zero bytes (a static buffer never used before, fresh `mmap` memory): it is not cleared, so capacity the frames never reach stays untouched and costs no resident memory.
 - `fn begin(ctx: *Context, in: *const Input) Frame`: Starts a frame: swaps generations, empties the new one, steps interaction against last frame's geometry and opens the root, sized to the viewport.
+- `fn beginWithHit(ctx: *Context, in: *const Input, node: u32) Frame`: Starts the ordinary frame with a caller-computed row in the previous completed tree (`ctx.trees[ctx.cur]` before this call).
 
 ## `lcgf.frame` (src/runtime/frame.zig)
 
@@ -2456,6 +3237,7 @@ Fields: `ctx`, `in`
 - `fn tree(f: *const Frame) *Tree`
 - `fn texts(f: *const Frame) *Texts`
 - `fn prevTree(f: *const Frame) *const Tree`
+- `fn outline(f: *Frame, node: Node, options: outlines.Outline) Node`: Paint an outside ring at this point in the command order.
 - `fn open(f: *Frame, id: Id, style: Style) Node`: Starts a node.
 - `fn close(f: *Frame) void`
 - `fn leaf(f: *Frame, id: Id, style: Style) Node`: A node with no children.
@@ -2479,10 +3261,20 @@ Fields: `ctx`, `in`
 - `fn animate(f: *Frame, id: Id, target: anytype, spring: Spring) values.Of(@TypeOf(target))`: A value that eases toward `target` across frames on a spring keyed by `id`.
 - `fn animateLayout(f: *Frame, node: Node, spring: Spring) void`: Slides `node` (and its subtree) on a spring whenever its laid-out position changes, starting from where it was shown last frame.
 - `fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32`: Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
-- `fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color`: A colour that moves to `target` along `tr` whenever `target` changes, instead of jumping: `tween` over its channels, keyed by `id.with(0..3)`.
+- `fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color`: A colour that moves to `target` along `tr` whenever `target` changes, instead of jumping: one tween per channel, keyed by `id.with(0..3)`.
 - `fn setFillAnimated(f: *Frame, node: Node, id: Id, color: Color, tr: Transition) void`: `setFill` with a transition: a fill that changes between frames (hover, press, theme) fades to the new colour along `tr`.
 - `fn tween(f: *Frame, id: Id, target: anytype, seconds: f32, ease: Ease) values.Of(@TypeOf(target))`: A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the target changes, a new leg starts from the current value.
 - `fn end(f: *Frame, font: Mono) Output`: Diagonal: measure with `font`, lay out, paint.
+- `fn layoutWith(f: *Frame, font: Mono) void`: Measure and arrange without painting: insert prepared textures or explicit passes, then call finish.
+- `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
+- `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
+- `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
+- `fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void`: Apply layout transitions after all placement passes, then snap, transform and clip.
+- `fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output`: Font-backed counterpart of `end`.
+- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and arrangement only, the public half of endText.
+- `fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output`
+- `fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void`
+- `fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and placement before caller passes and finalizeLayout.
 - `fn finish(f: *Frame) Output`: Paint and bookkeeping only, for callers who ran layout themselves.
 
 ## `lcgf.text_lines` (src/text/layout/lines.zig)
@@ -2493,9 +3285,12 @@ Paragraph layout: shaped glyphs broken into lines and placed.
 
 - `slack: f32 = 1.0 / 64.0`: Widths may exceed the limit by this much and still fit: layout hands back the width it was given after adding and removing padding, which can differ from it in the last bit.
 - `fn breakLines(g: *const Glyphs, text: []const u8, width: f32, lines: *Lines) error{NoSpace}!void`: Breaks the glyphs of `text` (shaped from it, so clusters are offsets into it) into lines no wider than `width` px.
+- `fn breakFlow(g: *Glyphs, text: []const u8, width: f32, out: *Lines, flow: Flow) error{NoSpace}!void`: Breaks with word, grapheme, or mandatory-only wrapping and line-relative tab stops.
+- `fn spacing(g: *Glyphs, text: []const u8, letter: f32, word: f32) void`: Adds spacing once per shaped grapheme cluster, after its last glyph.
 - `fn ellipsize(lines: *Lines, g: *const Glyphs, text: []const u8, width: f32, max_lines: u32, ellipsis: f32) void`: Keeps at most `max_lines` lines (at least 1) and, when lines were dropped or the last one is wider than `width`, cuts the last line to end in an ellipsis `ellipsis` px wide: whole clusters are dropped from its end until its ink (trailing spaces hang, as always) and the ellipsis fit, or nothing is left.
 - `fn isSpace(text: []const u8, at: u32) bool`: Whether the character at `at` hangs at a line's end: a space or a mandatory break.
 - `fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metrics, a: Align) void`: Stacks the lines from the paragraph's top, aligns each in `a`, and writes each glyph's pen x from the line's left edge.
+- `fn graphemeClusters(g: *Glyphs, text: []const u8) void`: Coarsens a shaper's monotonic byte clusters to extended grapheme boundaries.
 - `fn reorder(lines: *Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScratch) error{NoSpace}!void`: Call after `place`: resolves the bidi levels of the text (UAX #9 to L1, per line), writes `Glyphs.level`, and rewrites `Glyphs.x` so each line's glyphs sit in display order (L2).
 - `fn stackHeight(lines: *const Lines) f32`: Height of the stacked lines, px.
 - `fn widest(lines: *const Lines) f32`: Width of the widest line's ink, px.
@@ -2503,8 +3298,10 @@ Paragraph layout: shaped glyphs broken into lines and placed.
 ### `Glyphs` (struct)
 A paragraph's glyphs in pixels, in text order.
 
-Fields: `glyph`, `cluster`, `advance`, `x_offset`, `y_offset`, `span`, `x`, `level`, `len`
+Fields: `fonts`, `glyph`, `cluster`, `advance`, `x_offset`, `y_offset`, `span`, `x`, `level`, `len`
 
+- `Fonts = union(enum) { one: u16, spans: []const u16, indices }`: Actual shaper/atlas face identity, separate from the span used for metrics and paint.
+- `fn fontAt(g: *const Glyphs, glyph: usize) u16`
 - `fn append(g: *Glyphs, run: *const shape.Run, scale: f32, base: u32, span: u32) error{NoSpace}!void`: Appends a shaped run at `scale` px per font unit (px / units_per_em), shaped in span `span`.
 
 ### `Lines` (struct)
@@ -2516,7 +3313,7 @@ Fields: `first`, `end`, `ink`, `start`, `width`, `hard`, `x`, `top`, `baseline`,
 ### `Align` (struct)
 Where lines sit in a box `width` px wide.
 
-Fields: `width`, `factor`, `justify`, `direction`
+Fields: `width`, `line_widths`, `factor`, `justify`, `direction`, `physical`
 
 
 ### `Metrics` (struct)
@@ -2526,6 +3323,13 @@ Fields: `ascent`, `descent`, `gap`
 
 - `fn of(face: *const @import("../font/opentype.zig").Face, px: f32) Metrics`: The face's hhea metrics at `px` pixels per em.
 - `fn height(m: Metrics) f32`
+
+### `Flow` (struct)
+Breaking options which require glyph advances to be resolved at a line's actual origin.
+
+Fields: `wrap`, `tab_width`
+
+- `Wrap = enum { word, grapheme, none }`
 
 ### `BidiScratch` (struct)
 Scratch for `reorder`.
@@ -2540,6 +3344,8 @@ Rich text: one paragraph in several styles.
 ### Top level
 
 - `fn shape(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs) error{NoSpace}!void`: Shapes every span of `text` with `shapers[spans.font[k]]` and its size into `g`, which it empties first.
+- `fn shapeFeatures(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features) error{…`: The same segmentation with explicit shaping features.
+- `fn shapeCached(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features, cache: ?…`: Optional caller-owned shaping cache.
 - `fn metrics(shapers: []const shape_.Shaper, spans: *const Spans, out: []lines.Metrics) void`: Vertical metrics of each span, for `lines.place`.
 
 ### `Spans` (struct)
@@ -2577,16 +3383,40 @@ The full text stack on the measure / wrap protocol (src/text/protocol.zig): shap
 
 ### Top level
 
+- `emit = @import("emit.zig")`
 - `fn breakWidth(tx: *const Texts, k: usize) f32`: The width run `k` is broken at: `avail` when it wraps, else infinite.
+
+### `Paragraph` (struct)
+Paragraph inputs, passed directly or in caller-owned rows.
+
+Fields: `alignment`, `last_align`, `direction`, `wrap`, `whitespace`, `tab_size`, `tab_width`, `letter_spacing`, `word_spacing`, `line_height`, `leading`, `max_lines`, `ellipsis`, `features`, `baseline_source`
+
+- `Alignment = enum { start, center, end, left, right, justify }`
+- `LineHeight = union(enum) { font, px: f32, multiple: f32 }`
+
+### `Fallback` (struct)
+Optional plain-paragraph fallback.
+
+Fields: `chain`, `runs`, `metrics`
+
+
+### `Rich` (struct)
+Optional rich paragraph row.
+
+Fields: `spans`, `metrics`, `normalized_spans`
+
 
 ### `Stack` (struct)
 Shapers by font index, and scratch for one paragraph.
 
-Fields: `shapers`, `run`, `g`, `l`, `bidi`, `direction`, `overflow`
+Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
 - `fn serves(st: *const Stack, tx: *const Texts, k: usize) bool`: Whether this stack measures row `k`.
 - `fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void`: Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and, with `bidi`, `lines.reorder`.
 - `fn paragraph(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize) error{NoSpace}!void`: Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.
+- `fn sourceOffset(st: *const Stack, display: u32) u32`: Maps a current layout/query byte offset back to the original text after collapse.
+- `fn pxAt(st: *const Stack, glyph: usize) f32`: Actual pixel size for a glyph's font/atlas lookup, independent of metric-span identity.
+- `fn quads(st: *const Stack, run: @import("../../draw/draw_list.zig").TextRun, images: emit.Images, out: []@import("../../draw/draw_list.zig").Quad) emit.Error…`: Run-aware rendering convenience over the same public emission pass and caller images.
 - `fn measure(st: *Stack, tx: *Texts, strings: *const Strings, ascent: []f32) void`: Step 1 of the protocol: every run's extent unbroken (newlines still break): `w` the widest line, `h` the stacked lines, `ascent` the first baseline.
 - `fn wrap(st: *Stack, tx: *Texts, strings: *const Strings, ascent: []f32) void`: Step 2: runs flagged `wrap` broken at `avail` (written by `layout.textAvail`); `w`, `h` and `ascent` rewritten.
 
@@ -2727,21 +3557,24 @@ The reference widgets as spec nodes.
 ### `ComptimeUi(..)` (generic struct)
 The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
 
-Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
+Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `focus_visible`, `frame_settings`, `failure`, `input_mask`, `previous_input_mask`, `build_hit`, `building`, `platform_cursor`, `cursor_set`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
 
 - `Events = E`
 - `Signals = S`
 - `Springs = @import("../anim/anims.zig").BoundSprings(State)`
 - `theme = th`: The theme the page was built with, for widgets that build their own rows.
-- `Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf }`
+- `Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null, cursor: types.Cursor = .arrow }`
 - `fn needsAnimationFrame(ui: *const Self) bool`: True while a declared spring moves or its target has changed since the last frame.
 - `fn animated(ui: *const Self, comptime target: S.Field) f32`: The displayed value of a bool/f32 field, interpolated if State declares a spring for it.
 - `fn frame(ui: *Self, in: *const Input) Output`: Steps input against last frame's rects, applies each widget's behaviour to the state, then builds, lays out and paints the frame.
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
+- `fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.…`: Optional caller-owned direction rows and device grid, sequenced at the same points as style.locale.end.
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
 - `fn treeRow(ui: *const Self, row: u32) u32`: Current tree row of a spec descriptor, or types.none when its subtree is inactive.
 - `fn lastRect(ui: *const Self, row: u32) types.Rect`: During a widget step, geometry of a descriptor in the last completed frame.
+- `fn fail(ui: *Self, err: anyerror) void`: Custom widgets keep the existing non-error-returning frame API and report failure as output data.
+- `fn setCursor(ui: *Self, cursor: types.Cursor, when: bool) void`: Explicit override as on Frame.
 - `fn response(ui: *const Self, row: u32, in: *const Input) Response`
 - `fn field(comptime name: []const u8) S.Field`
 
@@ -4222,7 +5055,6 @@ Popover (tier 2): a button that opens a floating panel next to it, the WAI-ARIA 
 ### Top level
 
 - `Open = bool`: The application state a popover binds: whether it is open.
-- `Part = struct { style: Style, role: ?a11y.Role = null }`: What `ComptimePage` pushes for one spec row: its style, and a role from the accessibility roles (`a11y.Role`) where `types.Role` has none, written to the `role` column after `push`.
 - `toggle = base.toggle`: Clicking the trigger toggles the popover.
 - `overlay_sense: types.Sense = .{ .hover = true, .click = true }`: How the scrim and the panel take the pointer: they are hit, so what is under them is not.
 - `role: a11y.Role = .dialog`: The panel's role: a non-modal dialog (WAI-ARIA APG dialog pattern).
@@ -4248,6 +5080,12 @@ Popover (tier 2): a button that opens a floating panel next to it, the WAI-ARIA 
 - `fn rowOf(comptime n: Spec, comptime name: []const u8) u32`: Depth-first row of the spec node with id `name`; a compile error if there is none.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the trigger and a label, and the popover's panel with two labels, in both front ends, in theme `th`.
 - `fn exportRow(e: *const a11y.Export, node: u32) u32`: The export row of tree row `node`; `none` if it is not exported.
+
+### `Part` (struct)
+What `ComptimePage` pushes for one spec row: its style, and a role from the accessibility roles (`a11y.Role`) where `types.Role` has none, written to the `role` column after `push`.
+
+Fields: `style`, `role`, `text`, `content`
+
 
 ### `Popover(..)` (generic struct)
 The popover named `name` bound to the bool field `open`, in theme `th`: its spec builders and the hooks `ComptimePage` calls.
@@ -5375,7 +6213,7 @@ What a node is to assistive technology: the roles the WAI-ARIA Authoring Practic
 ### `State` (struct)
 States a node reports, one bit each, in `Semantics.Columns.state`.
 
-Fields: `checked`, `expandable`, `expanded`, `selected`, `disabled`, `mixed`, `pressed`, `current`, `multiline`, `focused`, `read_only`
+Fields: `checked`, `expandable`, `expanded`, `selected`, `disabled`, `mixed`, `pressed`, `current`, `multiline`, `focused`, `read_only`, `invalid`, `required`, `busy`
 
 - `fn bitsOf(st: State) u16`
 
@@ -5751,7 +6589,7 @@ Fields: `at`, `press`, `held`, `double`, `shift`
 ### `Mode` (struct)
 How the editor treats its text (Iced 0.14 `text_input` and its `secure` flag, DVUI's `TextEntryWidget` `multiline` and `password_char`).
 
-Fields: `single_line`, `password`, `bullet`
+Fields: `single_line`, `password`, `bullet`, `read_only`
 
 
 ### `Context` (struct)
@@ -5826,6 +6664,7 @@ Font fallback: which of the caller's faces draws each part of a text.
 - `test_georgian = @embedFile("testdata/georgian.ttf")`
 - `test_sample = "Hi, Բարեւ! გამარჯობა αβγ"`
 - `fn resolve(chain: *const Chain, text: []const u8, runs: *Runs) error{NoSpace}!void`: Splits `text` into `runs` by script and face (see the file comment).
+- `fn resolveClusters(chain: *const Chain, text: []const u8, runs: *Runs) error{NoSpace}!void`: Cluster-preserving fallback.
 - `fn faceByName(data: []const u8, ps: []const u8) opentype.Error!?u32`: The face of a font file whose PostScript name (name table, ID 6) is `ps`, or null.
 - `fn testChain(faces: *[3]Face) !Chain`: The sample's chain: one face per script, then all three in order.
 
@@ -5835,6 +6674,7 @@ The candidate faces and their order.
 Fields: `faces`, `script`, `face`, `default`
 
 - `fn pick(c: *const Chain, s: Script, cp: u21) ?u16`: The first face for `s` whose cmap has `cp`, or null.
+- `fn pickCluster(c: *const Chain, s: Script, text: []const u8) ?u16`: The first candidate whose cmap covers every visible scalar in one grapheme.
 
 ### `Runs` (struct)
 Runs of one face and one script, in text order: run k covers bytes `end[k-1]..end[k]` (0 first).
@@ -5852,6 +6692,34 @@ Fields: `end`, `face`, `script`
 ## `lcgf.fallback_tests` (src/text/fallback/tests.zig)
 
 Fallback chain tests beyond the mixed-script sample of fallback.zig: each rule of `resolve` on its own, over the lane's test fonts.
+
+## `lcgf.shell_materials` (src/shell/materials.zig)
+
+Native window material descriptors, separate from portable surface filters.
+
+### Top level
+
+- `WindowsBackdrop = enum(u32) { auto = 0, none = 1, window = 2, transient = 3, tabbed = 4 }`: DWM_SYSTEMBACKDROP_TYPE.
+- `WindowsCorners = enum(u32) { system = 0, square = 1, round = 2, small_round = 3 }`
+- `AppKitBlend = enum(isize) { behind_window = 0, within_window = 1 }`
+- `AppKitState = enum(isize) { follows_window = 0, active = 1, inactive = 2 }`
+- `fn windowsEffective(requested: WindowsBackdrop, reduce_transparency: ?bool) WindowsBackdrop`: Preference policy is separate from native submission.
+- `fn appKitEffective(requested: ?AppKit, reduce_transparency: ?bool) ?AppKit`
+
+### `WindowsColor` (union)
+
+Fields: `color`
+
+- `fn colorref(value: WindowsColor) u32`
+
+### `AppKitMaterial` (enum)
+NSVisualEffectMaterial semantic roles (AppKit), independent of the effective appearance.
+
+
+### `AppKit` (struct)
+
+Fields: `material`, `blending`, `state`, `emphasized`
+
 
 ## `lcgf.shell_iface` (src/shell/iface.zig)
 
@@ -5959,10 +6827,12 @@ Fields: `stiffness`, `damping`
 
 ### `Anims` (struct)
 
-Fields: `len`, `cap`, `c`, `next`
+Fields: `len`, `cap`, `c`, `next`, `overflow`
 
 - `fn init(carver: *mem.Carver, cap: u32) Anims`
-- `fn slot(a: *Anims, id: Id, initial: f32) u32`: Row for `id`, created resting at `initial` on first use.
+- `fn reserve(a: *Anims, id: Id, initial: f32) error{NoSpace}!u32`: Checked reservation.
+- `fn reserveScan(a: *Anims, id: Id, initial: f32) error{NoSpace}!u32`
+- `fn slot(a: *Anims, id: Id, initial: f32) u32`: Legacy row-returning operation.
 - `fn slotScan(a: *Anims, id: Id, initial: f32) u32`: `slot` by a SIMD scan only, with no branch on the ids: for callers that look springs up inside a per-row loop (`flip.apply`), where the branch census applies.
 - `fn land(a: *Anims, i: u32) void`: Puts row `i` at its target, at rest (reduced motion: the end state, no movement).
 - `fn step(a: *Anims, dt: f32) f32`: SIMD.
@@ -6000,10 +6870,11 @@ Fields: `seconds`, `ease`
 
 ### `Tweens` (struct)
 
-Fields: `len`, `cap`, `c`, `next`
+Fields: `len`, `cap`, `c`, `next`, `overflow`
 
 - `fn init(carver: *mem.Carver, cap: u32) Tweens`
-- `fn slot(t: *Tweens, id: Id, initial: f32) u32`: Row for `id`, created resting at `initial` on first use.
+- `fn reserve(t: *Tweens, id: Id, initial: f32) error{NoSpace}!u32`: Checked reservation.
+- `fn slot(t: *Tweens, id: Id, initial: f32) u32`: Legacy row-returning operation.
 - `fn retarget(t: *Tweens, i: u32, to: f32, duration: f32, ease: Ease) void`: Points row `i` at `to`.
 - `fn land(t: *Tweens, i: u32) void`: Ends row `i`'s leg now, at its target (reduced motion: the end state, no movement).
 - `fn step(t: *Tweens, dt: f32) f32`: SIMD.
@@ -6040,10 +6911,11 @@ Layout animation (tier 0): a node whose laid-out position changes between frames
 ### `Flips` (struct)
 The nodes asked to animate their layout this frame.
 
-Fields: `len`, `cap`, `c`
+Fields: `len`, `cap`, `c`, `overflow`
 
 - `fn init(carver: *mem.Carver, cap: u32) Flips`
-- `fn add(fl: *Flips, node: u32, id: Id, spring: Spring) void`: Registers row `node`, whose id `id` must be stable across frames, for this frame.
+- `fn reserve(fl: *Flips, node: u32, id: Id, spring: Spring) error{NoSpace}!void`: Checked registration.
+- `fn add(fl: *Flips, node: u32, id: Id, spring: Spring) void`: Compatibility operation; failed registration is ignored and observable in overflow.
 
 ### `Flips.Columns` (struct)
 
@@ -6281,6 +7153,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `delete_property_size = 12`
 - `randr_select_input_size = 12`
 - `randr_set_screen_size_size = 20`
+- `create_cursor_size = 32`
+- `clear_bitmap_size = 28`
 - `create_glyph_cursor_size = 32`
 - `xfixes_query_version_size = 12`
 - `xfixes_get_cursor_image_size = 4`
@@ -6327,6 +7201,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn randrSetScreenSize(b: *Buf, randr: u8, window: u32, w: u16, h: u16, mm_w: u32, mm_h: u32) void`: RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
 - `fn openFontSize(name: []const u8) usize`
 - `fn openFont(b: *Buf, id: u32, name: []const u8) void`
+- `fn createCursor(b: *Buf, id: u32, source: u32, mask: u32) void`: Core CreateCursor: a depth-one bitmap and mask, black on white, hotspot at (0,0).
+- `fn clearBitmap(b: *Buf, bitmap: u32, gc: u32) void`: One zero bit, padded to the server's 32-bit scanline unit.
 - `fn createGlyphCursor(b: *Buf, id: u32, font: u32, glyph: u16) void`: A cursor from glyph `glyph` of the core "cursor" font, its mask the next glyph, black on white.
 - `fn xfixesQueryVersion(b: *Buf, xfixes: u8) void`: XFIXES QueryVersion 4.0 (minor 0), required before other XFIXES requests; has a reply.
 - `fn xfixesGetCursorImage(b: *Buf, xfixes: u8) void`: XFIXES GetCursorImage (minor 4): the cursor shown now.
@@ -6428,6 +7304,7 @@ Modifier and button bits of an event's `state`.
 - `copy_area = 62`
 - `put_image = 72`
 - `get_image = 73`
+- `create_cursor = 93`
 - `create_glyph_cursor = 94`
 - `query_extension = 98`
 - `get_keyboard_mapping = 101`
@@ -6543,6 +7420,7 @@ Win32 window messages as `Events`: the part of the Win32 shell (win32.zig) that 
 - `dpi_default = 96`: The DPI at which one logical pixel is one physical pixel (`USER_DEFAULT_SCREEN_DPI`).
 - `infinite: u32 = 0xffff_ffff`: `INFINITE`: a wait with no timeout.
 - `fn lparam(lo: i32, hi: i32) isize`: `MAKELPARAM(lo, hi)`: two 16-bit words, as most mouse and size messages pack them.
+- `fn cursorExact(cursor: Cursor) bool`
 - `fn appearance(apps_use_light_theme: ?u32, accent_color: ?u32) Input.Appearance`: The system's light or dark mode and accent colour, as Settings > Personalization sets them, from the registry values the shell reads (null when missing): `AppsUseLightTheme` (0 is dark; missing is light, as Windows before 10 1809 shows apps) under HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize, and `AccentColor` (0xAABBGGRR) under HKCU\Software\Microsoft\Windows\DWM.
 - `fn waitMs(seconds: f32, pace: Pace, hz: u32) u32`: Milliseconds `wait` blocks for (`MsgWaitForMultipleObjectsEx`), for a wait of `seconds` (`scheduler.wake`) at `pace` on a display refreshing `hz` times a second.
 - `fn physicalRect(r: Rect, scale: f32) [4]i32`: `r` (logical pixels) in physical pixels at `scale`, rounded out to whole pixels: left, top, right, bottom, for the IME's candidate and composition windows.
@@ -6697,6 +7575,7 @@ AppKit events as `Events`: the part of the macOS shell (macos.zig) that touches 
 - `flag_option: u64 = 1 << 19`
 - `flag_command: u64 = 1 << 20`
 - `MenuItem = struct { title: [:0]const u8 = "", action: [:0]const u8 = "", key: [:0]const u8 = "", option: bool = false, named: bool = false }`: One item of the menu bar the shell builds: its title, the action AppKit sends up the responder chain, its key equivalent with Command (and Option when `option`).
+- `fn cursorExact(cursor: Cursor) bool`
 - `fn waitSeconds(seconds: f32, pace: Pace, hz: f64) ?f64`: Seconds `wait` blocks for (the `untilDate:` of `nextEventMatchingMask:`), for a wait of `seconds` (`scheduler.wake`) at `pace` on a display refreshing `hz` times a second; null waits for the next event however long it takes (`distantFuture`).
 - `fn windowRect(r: Rect, height: f32) [4]f64`: `r` (logical pixels, origin top left) as an NSRect in window coordinates (origin bottom left) of content `height` points tall: x, y, width, height.
 
@@ -7214,14 +8093,13 @@ The tables of a comptime UI as pure functions over arrays.
 
 - `none = types.none`
 - `Fold = struct { folded_rows: usize }`: What a fold plan decides: see `foldPlan`.
-- `TransformError = error{Transform}`
 - `Label = extern struct { node: u32, parent: u32, quad_end: u32, padding: [4]f32, color: u32 }`: How a label's run is placed among the sorted quads.
 - `fn gapTotal(p: anytype, n: usize, out: []f32) void`: `prepare`'s gap totals: the gap times the in-flow child count less one.
 - `fn foldPlan(p: anytype, n: usize, labels: []const u32, volatile_rows: ?[]const bool, has_label: []bool, indep: []bool, root: []bool, inside: []bool) Fold`: Which rows fold (ct_layout.FoldPlan).
 - `fn skeletonRows(n: usize, inside: []const bool, skel_row: []u32) u32`: The skeleton rows of a fold: row j of the UI is skeleton row `skel_row[j]`, or `none` for a row inside a fold root.
 - `fn foldedLeaf(s: types.Style, size: [2]f32) types.Style`: The style a fold root becomes in the skeleton: a leaf of its laid-out size.
 - `fn expand(n: usize, root: []const bool, inside: []const bool, pos: [2][]const f32, size: [2][]const f32, base: []u32, rel: [2][]f32, out_size: [2][]f32, keep…`: For each row: the skeleton row its position starts from (itself, or its fold root), the constant offset from there, and, for folded rows, its constant size and 0 in `keep_size` (1 for skeleton rows, whose size comes from the passes).
-- `fn inherit(p: anytype, alpha: []f32, clip_radii: [][4]f32) TransformError!void`: `draw.inherit`'s opacity and clip sweeps over the extras rows: `alpha[r]` and `clip_radii[r]` for extras row r (`p.xlen` rows).
+- `fn inherit(p: anytype, alpha: []f32, clip_radii: [][4]f32) void`: `draw.inherit`'s opacity and clip sweeps over the extras rows: `alpha[r]` and `clip_radii[r]` for extras row r (`p.xlen` rows).
 - `fn keyOf(look: tree.Look) u32`
 - `fn paintRows(p: anytype, n: usize, alpha: []const f32, out: []u32) usize`: The rows that paint a quad, in row order: `paint.emit`'s condition without `visible`.
 - `fn foldGroups(p: anytype, n: usize, root: []const bool, group: []u32) void`: The fold root each row lies under (itself for a root), or `none`.
@@ -7307,3 +8185,729 @@ Bus.select(active), Bus.dataMode(is_data) and fallible Bus.write(bytes).
 Fields: `bus`, `scratch`
 
 - `fn write(d: @This(), a: Area, pixels: []const u32, stride: u32, order: sw.Format) !void`
+
+## `lcgf.vertical_text` (src/text/layout/vertical.zig)
+
+Vertical glyph rows to bounded column layout and draw quads.
+
+### Top level
+
+- `Orientation = enum { upright, clockwise, counter_clockwise }`
+- `Position = struct { pen: [2]f32, column: u32, orientation: Orientation, visible: bool }`
+- `Result = struct { size: [2]f32, columns: u32, clamped: bool }`
+- `fn orient(items: []Item, text: []const u8, vertical_alternates: bool, sideways: Orientation) void`: Resolves mixed orientation using the pinned Unicode 16 UAX #50 property.
+- `fn fromRun(run: *const shape.Run, vertical_advance: []const i32, scale: f32, orientation: Orientation, out: []Item) error{NoSpace}![]const Item`: Converts the existing horizontal glyph columns plus explicit vertical advances from a shaping adapter into logical-pixel rows.
+- `fn place(items: []const Item, text: []const u8, style: Style, heights: []f32, out: []Position) error{NoSpace}!Result`: Groups monotonic shaping clusters into columns without splitting them.
+- `fn quads(run: draw.TextRun, positions: []const Position, images: []const glyph_images.Image, out: []draw.Quad) error{NoSpace}!u32`: Emits vertical upright/sideways images in the original glyph order.
+
+### `Item` (struct)
+
+Fields: `cluster`, `advance`, `cross_advance`, `offset`, `orientation`
+
+
+### `Style` (struct)
+
+Fields: `inline_limit`, `column_extent`, `gap`, `right_to_left`, `bottom_to_top`, `inline_factor`, `max_columns`
+
+
+## `lcgf.inline_objects` (src/text/layout/inline_objects.zig)
+
+Inline replaced content and ruby composition, over caller-owned paragraph data.
+
+### Top level
+
+- `Alignment = enum { baseline, text_top, text_bottom, text_center, line_top, line_bottom }`
+- `Placement = struct { rect: [4]f32, line: u32, glyph: u32 }`
+- `Error = error{ NoSpace, MissingPlaceholder, InvalidSpan }`
+- `Image = struct { uv: [4]f32 = .{ 0, 0, 1, 1 }, color: u32 = 0xffffffff }`
+- `Box = struct { width: f32, height: f32, baseline: f32 }`
+- `Ruby = struct { box: Box, base: [4]f32, annotation: [4]f32 }`
+- `fn measure(g: *lines.Glyphs, text: []const u8, objects: []const Object, metrics: []lines.Metrics, parent: lines.Metrics) Error!void`: After shaping, before breakLines: replace U+FFFC's nominal advance with the object's width and write its dedicated font-metric row.
+- `fn place(l: *const lines.Lines, g: *const lines.Glyphs, objects: []const Object, metrics: []const lines.Metrics, out: []Placement) Error!u32`: After line placement/reordering, locate each visible object's box.
+- `fn quads(run: draw.TextRun, placements: []const Placement, images: []const Image, out: []draw.Quad) error{NoSpace}!u32`: Object image quads share the text run's transform, rounded clip and inherited opacity.
+- `fn ruby(base: Box, annotation: Box, options: RubyOptions) Ruby`: Compose measured base and annotation paragraphs.
+
+### `Object` (struct)
+
+Fields: `byte`, `size`, `span`, `alignment`, `baseline`
+
+
+### `RubyOptions` (struct)
+
+Fields: `side`, `gap`, `base_factor`, `annotation_factor`, `overhang`, `reserve_block_space`
+
+
+## `lcgf.image_sampling` (src/draw/image_sampling.zig)
+
+Optional image preparation: orientation, area/linear resampling, and caller-owned mipmaps.
+
+### Top level
+
+- `Space = enum { srgb, linear_srgb }`
+- `Filter = enum { nearest, linear, area }`
+- `Options = struct { filter: Filter = .area, space: Space = .linear_srgb }`
+- `Error = brushes.Error`
+- `fn orient(dst: surface.Surface, src: surface.Image, orientation: brushes.Orientation) Error!void`: Materializes EXIF orientation.
+- `fn resample(dst: surface.Surface, src: surface.Image, options: Options) Error!void`: Resizes the entire source.
+- `fn mipCount(width: u32, height: u32) u32`: Number of levels after level zero.
+- `fn mipSize(width: u32, height: u32, level: u32) [2]u32`
+- `fn mipChain(src: surface.Image, levels: []surface.Surface, space: Space) Error!void`: Produces as many successive levels as supplied.
+
+## `lcgf.svg` (src/draw/svg.zig)
+
+Bounded static SVG import and painting over Path, brushes and caller-owned surfaces.
+
+### Top level
+
+- `Error = vector.Error || compositor.Error || error{ InvalidXml, InvalidNumber, InvalidColorSyntax, UnsupportedElement, UnsupportedAttribute, UnsupportedCss, U…`
+- `Paint = union(enum) { none, solid: color.Rgba, current_color, gradient: []const u8 }`
+- `ResolvedPaint = struct { brush: brushes.Brush, inverse: [6]f32 = identity }`
+- `fn parseLength(bytes: []const u8) Error!Length`
+- `fn pathData(bytes: []const u8, p: *paths.Path) Error!void`: All SVG path-data commands, including compact arc flags, relative/repeated commands and smooth-control reflection.
+- `fn transformList(bytes: []const u8) Error![6]f32`
+- `fn parseColor(bytes: []const u8) Error!color.Rgba`: Hex, numeric/percentage rgb[a], hsl[a], transparent and all CSS named colors.
+- `fn collectGradients(data: []const u8, rows: []Gradient, stops: []brushes.Stop, stack: []Frame, foreground: color.Rgba) Error![]Gradient`: The borrowed ID/stop rows are an optional import result, not a runtime resource manager.
+- `fn collectGradientsWithPalette(data: []const u8, rows: []Gradient, stops: []brushes.Stop, stack: []Frame, foreground: color.Rgba, palette: []const color.Rgba…`
+- `fn resolvePaint(paint_value: Paint, current_color: color.Rgba, gradients: []const Gradient, object_bounds: Rect, matrix: [6]f32, viewport_size: [2]f32, segme…`: Prepares a native brush plus its coordinate inverse, usable independently of the importer.
+- `fn pathBounds(p: *const paths.Path) Rect`: Tight authored curve bounds, avoiding integer/tessellation rounding in object-box paint.
+- `fn paint(data: []const u8, dst: surface.Surface, options: Options, buffers: Buffers) Error!void`: Actual static SVG renderer.
+
+### `Length` (struct)
+
+Fields: `value`, `percent`
+
+
+### `Style` (struct)
+
+Fields: `palette`, `color`, `fill`, `stroke`, `fill_opacity`, `stroke_opacity`, `stroke_width`, `cap`, `join`, `miter_limit`, `dash_array`, `dash_offset`, `rule`, `non_scaling`, `visible`, `stroke_first`, `interpolation`, `stop_color`, `stop_opacity`
+
+
+### `Gradient` (struct)
+
+Fields: `id`, `href`, `radial`, `coordinates`, `specified`, `object_box`, `matrix`, `spread`, `interpolation`, `stops`, `resolved`, `stop_start`
+
+
+### `Frame` (struct)
+
+Fields: `name`, `style`, `matrix`, `displayed`, `selected`, `shape`, `opacity`, `layer`, `gradient`
+
+
+### `Buffers` (struct)
+
+Fields: `path`, `centerline`, `work`, `outline`, `fill`, `accumulator`, `coverage`, `gradients`, `stops`, `segments`, `stack`, `layers`, `dashes`, `clips`
+
+
+### `Options` (struct)
+
+Fields: `viewport`, `view`, `tolerance`, `current_color`, `fragment`, `clip_viewport`, `initial_transform`, `fragment_ancestors`, `use_intrinsic_size`, `palette`
+
+
+## `lcgf.vector` (src/draw/vector.zig)
+
+Optional vector styling on the existing Path/Polyline representation.
+
+### Top level
+
+- `Error = decoration.Error || error{ InvalidPath, InvalidDash, InvalidStroke, IncompatiblePath }`
+- `Capacity = struct { points: usize, contours: usize }`
+- `Arc = struct { radius: [2]f32, rotation_degrees: f32 = 0, large: bool = false, sweep: bool = true }`
+- `StrokeUnits = enum { geometry, logical, device }`
+- `DashStyle = struct { array: []const f32, offset: f32 = 0, cap: paths.Cap = .butt }`
+- `MarkerKind = enum { start, mid, end }`
+- `Marker = struct { position: [2]f32, tangent: [2]f32, kind: MarkerKind }`
+- `Orient = union(enum) { auto, auto_start_reverse, angle: f32 }`
+- `MarkerUnits = enum { user, stroke_width, device }`
+- `MarkerOptions = struct { orient: Orient = .auto, units: MarkerUnits = .user, size: [2]f32 = .{ 1, 1 }, reference: [2]f32 = .{ 0, 0 }, stroke_width: f32 = 1, …`
+- `Coverage = struct { bytes: []const u8, box: paths.Box, scale: f32 = 1 }`: Existing paths.coverage output, interpreted in its raster coordinate space.
+- `fn arcTo(path: *Path, from: [2]f32, to: [2]f32, options: Arc) Error!void`: SVG endpoint-parameterized elliptical arc.
+- `fn transform(src: *const Polyline, matrix: [6]f32, out: *Polyline) Error!void`: Transforms padded columns, allowing exact in-place use.
+- `fn strokeTransformed(src: *const Polyline, style: paths.Stroke, matrix: [6]f32, units: StrokeUnits, device_scale: f32, tolerance: f32, scratch: *Polyline, ou…`: Stroke before transform for geometry-scaled widths; transform the centerline first for logical/device widths.
+- `fn variableStrokeCapacity(src: *const Polyline, widths: []const f32, tolerance: f32) Error!Capacity`
+- `fn variableStroke(src: *const Polyline, widths: []const f32, tolerance: f32, out: *Polyline) Error!void`: Round-capped/round-joined varying-width outline: the union of vertex discs and tangent quadrilaterals between them.
+- `fn dashCapacity(src: *const Polyline, pattern: []const f32) Error!Capacity`
+- `fn dash(src: *const Polyline, pattern: []const f32, phase: f32, out: *Polyline) Error!void`: Splits centerlines into on-contours.
+- `fn strokeDashed(src: *const Polyline, style: paths.Stroke, dashes: DashStyle, tolerance: f32, scratch: *Polyline, out: *Polyline) Error!void`: Common dash + stroke sequence.
+- `fn markers(path: *const Path, out: []Marker) Error![]Marker`: Markers occur at authored path vertices, not at the flattening tessellation vertices.
+- `fn markerTransform(marker: Marker, options: MarkerOptions) Error![6]f32`
+- `fn paintCoverage(dst: surface.Surface, coverage: Coverage, brush: brushes.Brush, view: decoration.View, opacity: f32) Error!void`: Paints path fill/stroke coverage using any rich gradient/image/solid brush.
+- `fn paintCoverageTransformed(dst: surface.Surface, coverage: Coverage, brush: brushes.Brush, inverse: [6]f32, view: decoration.View, opacity: f32) Error!void`: The inverse maps logical painting coordinates into the brush coordinate system.
+
+## `lcgf.effects` (src/render/effects.zig)
+
+Explicit optional filter graphs and backdrop snapshots.
+
+### Top level
+
+- `Error = prepared.Error || primitives.Error || error{ InvalidGraph, InvalidReference }`
+- `Ref = union(enum) { external: u32, node: u32 }`
+- `Node = struct { a: Ref = .{ .external = 0 }, b: Ref = .{ .external = 0 }, operation: Operation }`
+- `Storage = struct { outputs: []const surface.Surface, work: [2]surface.Surface, kernel: []f32 }`
+- `Report = struct { image: surface.Image, passes: u32, peak_bytes: usize }`
+- `fn validate(nodes: []const Node, external: []const surface.Image, storage: Storage, limits: Limits) Error!usize`: Validate shape, references, resource budgets and aliasing before modifying any pixels.
+- `fn run(nodes: []const Node, external: []const surface.Image, storage: Storage, limits: Limits) Error!Report`: Execute in the supplied order; backward-only references make cycles impossible.
+- `fn changes(nodes: []const Node, external: []const bool, node_changes: []const bool, out: []bool) Error!void`: Propagate changed external resources through the graph into caller-owned flags.
+
+### `Operation` (union)
+
+Fields: `copy`, `composite`, `mask`, `combine_mask`, `matrix`, `components`, `blur`, `blur_xy`, `morphology`, `shadow`, `displacement`, `convolution`, `arithmetic`, `turbulence`, `lighting`
+
+
+### `Limits` (struct)
+
+Fields: `surfaces`, `convolution_taps`, `morphology_radius`, `noise_octaves`
+
+
+### `Backdrop` (struct)
+A backdrop samples the already-painted scene over this world-space region.
+
+Fields: `origin`, `size`, `sigma`, `edge`
+
+- `fn dependency(value: Backdrop) Error![4]f32`
+- `fn affected(value: Backdrop, damaged: []const [4]f32) Error!bool`
+- `fn dimensions(value: Backdrop, limits: prepared.Limits) Error!struct { origin: [2]i32, size: [2]u32 }`: Halo-inclusive dimensions required by captureFiltered.
+- `fn captureFiltered(value: Backdrop, scene: surface.Image, out: surface.Surface, captured: surface.Surface, scratch: surface.Surface, kernel_storage: []f32, l…`: Capture before drawing this panel, blur including its halo, then let the caller mask to the intended panel shape and composite exactly once at the returned world origin.
+
+## `lcgf.text_break_policy` (src/text/layout/break_policy.zig)
+
+Optional paragraph break policies, caller-provided hyphenation patterns and bounded balanced breaking.
+
+### Top level
+
+- `tailoring = @import("tailoring.zig")`
+- `Error = error{ NoSpace, InvalidInput, LimitExceeded, UnsupportedPolicy }`
+- `Hyphen = struct { byte: u32, advance: f32, penalty: f32 = 50 }`
+- `Opportunity = struct { end: u32, ink: u32, byte: u32, mandatory: bool = false, emergency: bool = false, penalty: f32 = 0, marker: f32 = 0 }`
+- `Marker = struct { advance: f32 = 0, byte: u32 = 0, x: f32 = 0 }`
+- `Scratch = struct { prefix: []f32, cost: []f64, previous: []u32, choices: []u32 }`
+- `Pattern = struct { letters: []const u21, weights: []const u8 }`: Liang-style patterns are caller-owned scalar sequences and inter-scalar weights.
+- `Truncation = struct { prefix: u32, suffix: u32, omitted: [2]u32, width: f32, truncated: bool }`
+- `Truncate = enum { start, middle, end }`
+- `MarkerGlyph = struct { glyph: u16, advance: f32, span: u32 = 0, x_offset: f32 = 0, y_offset: f32 = 0 }`
+- `fn opportunities(g: *lines.Glyphs, text: []const u8, policy: Policy, hyphens: []const Hyphen, out: []Opportunity) Error![]const Opportunity`: Builds opportunities only at shaped grapheme boundaries.
+- `fn breakLines(g: *const lines.Glyphs, text: []const u8, points: []const Opportunity, options: Options, scratch: Scratch, out: *lines.Lines, markers: []Marker…`: `markers` has one row per possible output line.
+- `fn placeMarkers(l: *const lines.Lines, g: *lines.Glyphs, markers: []Marker, rtl: []const bool) error{NoSpace}!void`: After bidi reorder, reserve the marker on the paragraph's visual end.
+- `fn markerQuads(run: draw.TextRun, l: *const lines.Lines, markers: []const Marker, images: []const Image, out: []draw.Quad) error{NoSpace}!u32`
+- `fn hyphenate(word: []const u8, patterns: []const Pattern, minimum: [2]u32, marker_advance: f32, scalars: []u21, offsets: []u32, weights: []u8, out: []Hyphen)…`
+- `fn truncate(g: *const lines.Glyphs, text_len: u32, available: f32, marker: f32, mode: Truncate) Error!Truncation`
+- `fn copyTruncated(g: *const lines.Glyphs, cut: Truncation, marker: MarkerGlyph, out: *lines.Glyphs, sources: []u32) error{NoSpace}!void`: Copies visible original rows plus one caller-shaped marker into a disjoint Glyphs table.
+
+### `Policy` (struct)
+
+Fields: `word`, `emergency`, `soft_hyphen_advance`, `tailoring`
+
+
+### `Options` (struct)
+
+Fields: `width`, `line_widths`, `algorithm`, `max_candidates`, `balance_last`
+
+
+## `lcgf.text_display` (src/text/layout/display.zig)
+
+Display-only Unicode 16 casing, width conversion and grapheme masking, with original byte offsets preserved for selections and editing.
+
+### Top level
+
+- `Buffer = @import("whitespace.zig").Buffer`
+- `Casing = enum { none, lower, upper, title, capitalize }`
+- `Locale = enum { root, tr, az, lt, nl }`
+- `Vertical = enum(u2) { rotated, upright, transformed_upright, transformed_rotated }`: UAX #50 orientation: rotated, upright, upright with vertical substitution, or rotated when no vertical substitution is available.
+- `fn prepare(out: *Buffer, text: []const u8, options: Options) error{ NoSpace, InvalidScalar }![]const u8`
+- `fn vertical(cp: u21) Vertical`
+
+### `Options` (struct)
+
+Fields: `casing`, `locale`, `full_width`, `mask`, `preserve_breaks`, `reveal`
+
+
+## `lcgf.cursor` (src/draw/cursor.zig)
+
+Custom cursor artwork as an ordinary last draw command.
+
+### Top level
+
+- `Error = error{ InvalidImage, InvalidGeometry, NoSpace }`
+- `fn bounds(input: Input, image: Image) Error!?types.Rect`
+- `fn damageBounds(region: *damage.Region, previous: ?types.Rect, current: ?types.Rect) void`
+- `fn emit(list: *draw.DrawList, input: Input, image: Image) Error!?types.Rect`: After scene paint, preparation, ordering and optional damage culling.
+
+### `Image` (struct)
+
+Fields: `texture`, `size`, `hotspot`, `uv`, `tint`
+
+
+## `lcgf.capabilities` (src/render/capabilities.zig)
+
+Renderer support is a checked data contract.
+
+### Top level
+
+- `Set = std.enums.EnumSet(Feature)`
+- `Support = enum { exact, approximation, unsupported }`
+- `Route = enum { direct, prepared }`
+- `Finding = struct { feature: Feature, support: Support, route: Route }`
+- `Error = prepared.Error || error{ ApproximationRejected, PreparationRequired, InvalidDrawList }`
+- `fn support(profile: Profile, feature: Feature) Finding`
+- `fn plan(requirements: Set, profile: Profile, policy: Policy) Plan`: No mutation.
+- `fn decorationRequirements(shape: decoration.RoundedRect, value: decoration.Description, clips: []const decoration.Clip) Set`: Requirements are derived from data that the actual rasterizer will consume.
+- `fn bake(shape: decoration.RoundedRect, value: decoration.Description, scale: f32, clips: []const decoration.Clip, quality: decoration.Quality, profile: Profi…`: Checked preparation.
+- `fn checkDraw(list: *const draw.DrawList, glyphs: iface.Glyphs, t: ?*const tree.Tree, profile: Profile, policy: Policy) Error!void`: Validate the exact stock specialization and draw resources before a backend sees commands.
+- `fn render(backend: anytype, pass: @TypeOf(backend.*).Pass, list: *const draw.DrawList, glyphs: iface.Glyphs, t: ?*const tree.Tree, profile: Profile, policy: …`: Normal rendering with validation.
+
+### `Policy` (struct)
+
+Fields: `preparation`, `approximations`
+
+
+### `Profile` (struct)
+
+Fields: `native`, `portable`, `linear_hdr`, `native_material`, `custom_material`, `inline_custom`, `depth_scene`
+
+- `stock: Profile = .{}`
+- `portable_sdr: Profile = .{ .portable = true }`
+
+### `Plan` (struct)
+
+Fields: `direct`, `prepared`, `approximations`, `rejected`
+
+- `fn require(value: Plan) Error!void`
+
+## `lcgf.scroll_policy` (src/layout/scroll_policy.zig)
+
+Scroll geometry and policy, independently callable over application-owned state.
+
+### Top level
+
+- `Error = error{ InvalidGeometry, NoSpace, InvalidNode }`
+- `Bar = enum { auto, always, hidden }`
+- `Gutter = enum { overlay, automatic, stable, both_edges }`
+- `Side = enum { start, end }`
+- `Overscroll = enum { chain, contain, elastic }`
+- `Consumed = struct { offset: f32, remaining: f32, overshoot: f32 }`
+- `Alignment = enum { nearest, start, center, end }`
+- `Point = struct { position: f32, stop_always: bool = false }`
+- `Snap = enum { none, proximity, mandatory }`
+- `Reveal = struct { node: u32, maximum: [2]f32, padding: [4]f32 = @splat(0) }`
+- `fn measure(outer: Rect, content: [2]f32, offset: [2]f32, options: Options) Error!Metrics`: Two coupled auto bars reach a fixed point in at most three iterations: a vertical gutter can make horizontal content overflow, which can in turn require the vertical gutter.
+- `fn consume(offset: f32, delta: f32, maximum: f32, policy: Overscroll, resistance: f32) Error!Consumed`: Remaining delta is passed explicitly to the next ancestor.
+- `fn snap(current: f32, proposed: f32, maximum: f32, points: []const Point, mode: Snap, proximity: f32) Error!f32`: Snap candidates are final scroll offsets, already adjusted for alignment/padding.
+- `fn reveal(offset: [2]f32, viewport: Rect, target: Rect, maximum: [2]f32, padding: [4]f32, margin: [4]f32, alignment: [2]Alignment) [2]f32`: Viewport and target are in the same current layout space.
+- `fn revealNested(t: *const Tree, target: u32, containers: []const Reveal, margin: [4]f32, out: [][2]f32) Error!void`: Containers are listed innermost first.
+- `fn anchor(offset: f32, previous_position: f32, current_position: f32, maximum: f32) f32`: Preserve an explicitly selected content anchor through insertion/removal above it.
+- `fn translate(t: *Tree, node: u32, delta: [2]f32) Error!void`: Move a subtree without changing its measured size.
+- `fn fixed(t: *Tree, node: u32, viewport_origin: [2]f32, inset: [2]f32) Error!void`
+- `fn sticky(t: *Tree, node: u32, scroller: u32, start: [2]?f32, end: [2]?f32) Error!void`: Both start and end constraints, clamped inside the containing block.
+
+### `Options` (struct)
+
+Fields: `axes`, `bars`, `gutter`, `vertical_side`, `horizontal_side`, `thickness`, `minimum_thumb`, `arrows`, `show_overlay`
+
+
+### `Metrics` (struct)
+
+Fields: `outer`, `viewport`, `maximum`, `offset`, `tracks`, `thumbs`, `shown`, `start_buttons`, `end_buttons`, `corner`
+
+
+## `lcgf.scroll_area` (src/widgets/scroll_area.zig)
+
+Styled two-axis viewport for known content extents (technical canvases and virtual lists).
+
+### Top level
+
+- `State = struct { offset: [2]f32 = @splat(0) }`
+- `fn open(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior) policy.Error!Handle`: Opens the content box.
+- `fn close(f: *Frame, handle: Handle) void`: Emit scrollbar parts after content so overlay bars remain above it.
+
+### `Appearance` (struct)
+
+Fields: `viewport`, `tracks`, `thumbs`, `hovered_thumbs`, `held_thumbs`, `arrows`, `arrow_text`, `corner`
+
+
+### `Behavior` (struct)
+
+Fields: `geometry`, `overscroll`, `line`, `snaps`, `snap_mode`, `snap_distance`
+
+
+### `Handle` (struct)
+
+Fields: `id`, `metrics`, `appearance`, `remainder`, `overshoot`, `outer`, `viewport`
+
+
+## `lcgf.special_layout` (src/layout/special.zig)
+
+Optional bounded layout algorithms over measured values.
+
+### Top level
+
+- `Error = error{ NoSpace, InvalidGeometry, InvalidSpan }`
+- `Item = struct { size: [2]f32, span: u32 = 1, break_before: bool = false }`
+- `Placement = struct { rect: Rect }`
+- `Distribution = enum { start, center, end, space_between, space_around, space_evenly }`
+- `Dock = enum { left, top, right, bottom, fill }`
+- `Radial = struct { center: [2]f32, radius: [2]f32, start: f32 = -std.math.pi / 2.0, sweep: f32 = 2 * std.math.pi, include_end: bool = false, pivot: [2]f32 = .…`
+- `Flow = struct { axis: u1 = 0, gap: [2]f32 = .{ 0, 0 }, distribution: Distribution = .start, cross_factor: f32 = 0 }`
+- `Flex = struct { axis: u1 = 0, gap: f32 = 0, distribution: Distribution = .start, cross: f32 = 0, baseline: bool = false }`
+- `fn style(placement: Placement, base: types.Style, origin: [2]f32) types.Style`: Lowers a placement to the existing tree/layout path.
+- `fn dock(box: Rect, items: []const Item, sides: []const Dock, gap: f32, out: []Placement) Error!Rect`
+- `fn radial(items: []const Item, options: Radial, out: []Placement) Error!void`
+- `fn masonry(box: Rect, items: []const Item, columns: u32, gap: [2]f32, heights: []f32, out: []Placement) Error!f32`: Stable shortest-column masonry.
+- `fn flow(box: Rect, items: []const Item, options: Flow, out: []Placement) Error![2]f32`
+- `fn flex(box: Rect, items: []const FlexItem, options: Flex, sizes: []f32, out: []Placement) Error!void`: One flex line with explicit basis, bounded water filling, auto margins and baseline alignment.
+
+### `FlexItem` (struct)
+
+Fields: `size`, `basis`, `min`, `max`, `grow`, `shrink`, `margin`, `auto_margin`, `cross`, `stretch`, `baseline`
+
+
+## `lcgf.document_layout` (src/layout/document.zig)
+
+Optional document/table geometry over caller-measured lines and cells.
+
+### Top level
+
+- `Error = error{ NoSpace, InvalidGeometry, InvalidSpan }`
+- `Cell = struct { column: u32, row: u32, columns: u32 = 1, rows: u32 = 1, size: [2]f32 }`
+- `Track = struct { min: f32 = 0, max: f32 = std.math.floatMax(f32), grow: f32 = 0 }`
+- `Break = enum { auto, column, page, left, right }`
+- `Page = struct { size: [2]f32, margin: [4]f32 = @splat(0), columns: u32 = 1, column_gap: f32 = 0, page_gap: f32 = 0, discard_leading_space: bool = true }`
+- `Fragment = struct { block: u32, first: u32, count: u32, page: u32, column: u32, rect: Rect }`
+- `Result = struct { fragments: u32, pages: u32, relaxed_constraints: bool }`
+- `fn tableAxis(cells: []const Cell, axis: u1, tracks: []const Track, available: f32, gap: f32, sizes: []f32, starts: []f32) Error!f32`: Auto table track contributions, shortest spans first.
+- `fn table(cells: []const Cell, column_sizes: []const f32, column_starts: []const f32, row_sizes: []const f32, row_starts: []const f32, origin: [2]f32, out: []…`
+- `fn paginate(blocks: []const Block, page: Page, out: []Fragment) Error!Result`: Splits only at already-shaped line boundaries, honoring widow/orphan, keep-next and page/column/parity breaks where the constraints fit one column.
+- `fn placeLines(lines: *text_lines.Lines, block: u32, fragments: []const Fragment) error{InvalidSpan}!void`: Applies one paragraph's document fragments to its existing positioned Lines.
+- `fn balancedHeight(heights: []const f32, columns: u32, gap: f32) Error!f32`: Minimum balanced column height for whole measured blocks, with a fixed 32-step solve.
+
+### `Block` (struct)
+
+Fields: `heights`, `before`, `after`, `break_before`, `break_after`, `keep_next`, `avoid_split`, `orphans`, `widows`
+
+
+## `lcgf.rounding` (src/layout/rounding.zig)
+
+Explicit device-grid rounding.
+
+### Top level
+
+- `Mode = enum { none, nearest, floor, ceil }`
+- `Interval = struct { start: f32, end: f32 }`
+- `fn validate(options: Options) error{InvalidScale}!void`
+- `fn vector(comptime mode: Mode, values: simd.F, scale: f32, origin: f32) simd.F`
+- `fn scalar(comptime mode: Mode, value: f32, scale: f32, origin: f32) f32`
+- `fn rect(value: Rect, options: Options) error{InvalidScale}!Rect`
+- `fn tracks(start: f32, sizes: []const f32, gap: f32, axis: u1, options: Options, out: []Interval) error{ InvalidScale, InvalidGeometry, NoSpace }!void`: Outputs track intervals directly consumable by grid/table/custom placement.
+- `fn text(run_origin: [2]f32, l: *lines.Lines, g: *lines.Glyphs, bytes: []const u8, options: Options) error{InvalidScale}!void`: Call after line placement/bidi reorder, before glyph, selection, decoration and caret emission.
+
+### `Options` (struct)
+
+Fields: `mode`, `scale`, `origin`
+
+- `fn validate(options: Options) error{InvalidScale}!void`
+
+## `lcgf.text_intrinsic` (src/text/layout/intrinsic.zig)
+
+Intrinsic sizes from real shaped glyph advances.
+
+### Top level
+
+- `Range = struct { min_content: f32, max_content: f32 }`
+- `Kind = enum { min_content, max_content, fit_content }`
+- `Error = error{InvalidMeasure}`
+- `fn text(g: *const lines.Glyphs, bytes: []const u8, options: Options) Error!Range`: Whitespace normalization/casing happens before shaping.
+- `fn fromOpportunities(g: *const lines.Glyphs, points: []const @import("break_policy.zig").Opportunity, anywhere: bool) Range`: Explicit dictionary/soft-hyphen opportunities can supply a more detailed min-content measure.
+- `fn size(range: Range, kind: Kind, available: f32) Error!Size`: fit-content = min(max-content, max(min-content, available)).
+- `fn boxes(children: []const Range, stacked: bool, gap: f32, padding: f32) Error!Range`: Intrinsic contribution of already-measured child boxes, for custom row/column/overlay measurement.
+
+### `Options` (struct)
+
+Fields: `wrap`, `tab_width`
+
+
+## `lcgf.math_text` (src/text/layout/math.zig)
+
+Mathematical composition over measured inline boxes.
+
+### Top level
+
+- `Box = @import("inline_objects.zig").Box`
+- `Error = ot.Error || error{ InvalidInput, NoVariant, LimitExceeded }`
+- `Axis = enum { horizontal, vertical }`
+- `Corner = enum(u2) { top_right, top_left, bottom_right, bottom_left }`
+- `Variant = struct { glyph: u16, advance: f32 }`
+- `Stretch = struct { count: u32, length: f32, italic: f32, assembled: bool }`
+- `FractionOptions = struct { display: bool = false, padding: f32 = 0, thickness: ?f32 = null }`
+- `ScriptOptions = struct { cramped: bool = false, italic: f32 = 0, sub_kern: f32 = 0, super_kern: f32 = 0 }`
+- `Scripts = struct { box: Box, base: [2]f32, subscript: ?[2]f32, superscript: ?[2]f32 }`
+- `Limits = struct { box: Box, base: [2]f32, above: ?[2]f32, below: ?[2]f32 }`
+- `Radical = struct { box: Box, sign: [2]f32, body: [2]f32, degree: ?[2]f32, rules: [1][4]f32 }`
+- `fn Composite(comptime children: usize, comptime rules: usize) type`
+- `fn fraction(numerator: Box, denominator: Box, m: Metrics, options: FractionOptions) Error!Composite(2, 1)`
+- `fn scripts(base: Box, subscript: ?Box, superscript: ?Box, m: Metrics, options: ScriptOptions) Error!Scripts`
+- `fn limits(base: Box, above: ?Box, below: ?Box, m: Metrics, italic: f32) Error!Limits`
+- `fn radical(sign: Box, body: Box, degree: ?Box, m: Metrics, display: bool) Error!Radical`: Supply an already measured sign/assembly at least as tall as the body plus rule and gap.
+- `fn bar(base: Box, side: enum { over, under }, m: Metrics) Error!Composite(1, 1)`
+- `fn matrix(items: []const Box, columns: usize, column_gap: f32, row_gap: f32, axis_height: f32, alignment: []const f32, column_widths: []f32, rows: []Box, off…`: Matrices and aligned equation arrays.
+- `fn childRun(run: draw.TextRun, offset: [2]f32, box: Box) draw.TextRun`: Place an existing shaped paragraph in a composed child rectangle, retaining clipping, world transform, colour, font and source byte range.
+- `fn ruleQuads(run: draw.TextRun, rules: []const [4]f32, out: []draw.Quad) error{NoSpace}!u32`: Rules are ordinary solid quads; append them with the renderer's solid material/texture.
+- `fn stretchQuads(run: draw.TextRun, pieces: []const Piece, axis: Axis, images: []const Image, out: []draw.Quad) error{NoSpace}!u32`: Atlas images match the returned Piece glyphs.
+
+### `Constant` (enum)
+The 51 MathValueRecords, in the table's specified order.
+
+
+### `Metrics` (struct)
+
+Fields: `values`, `script_scale`, `scriptscript_scale`, `delimited_min_height`, `display_operator_min_height`, `degree_raise`
+
+- `fn get(m: Metrics, field: Constant) f32`
+- `fn set(m: *Metrics, field: Constant, value: f32) void`
+- `fn proportional(em: f32) Error!Metrics`: Explicit synthetic metrics for a font without MATH.
+
+### `Piece` (struct)
+
+Fields: `glyph`, `offset`
+
+
+### `Font` (struct)
+A borrowed, bounded MATH table.
+
+Fields: `data`, `scale`, `constants`, `glyph_info`, `variants`
+
+- `fn fromFace(face: *const ot.Face, px: f32) Error!?Font`
+- `fn parse(data: []const u8, units_per_em: u16, px: f32) Error!Font`
+- `fn metrics(font: Font) Metrics`
+- `fn italic(font: Font, glyph: u16) Error!f32`
+- `fn accent(font: Font, glyph: u16, fallback_center: f32) Error!f32`
+- `fn extended(font: Font, glyph: u16) Error!bool`
+- `fn kern(font: Font, glyph: u16, corner: Corner, height: f32) Error!f32`: `height` is positive above the glyph's baseline, in logical pixels.
+- `fn variant(font: Font, glyph: u16, axis: Axis, target: f32) Error!?Variant`: Smallest font-supplied variant meeting the target, null if none meets it.
+- `fn stretch(font: Font, glyph: u16, axis: Axis, target: f32, pieces: []Piece) Error!Stretch`: Select a variant, otherwise repeat extender parts and distribute legal connector overlap.
+
+## `lcgf.ornamental_text` (src/text/layout/ornament.zig)
+
+Optional ornamental text passes.
+
+### Top level
+
+- `Error = error{ NoSpace, InvalidInput, EmptyPath }`
+- `Segment = struct { from: [2]f32, tangent: [2]f32, start: f32, end: f32 }`
+- `Track = struct { segments: []const Segment, length: f32, closed: bool }`
+- `Position = struct { pen: [2]f32, tangent: [2]f32, cluster: u32, span: u32, visible: bool }`
+- `DropOptions = struct { side: enum { start, end } = .start, rtl: bool = false, gap: f32 = 0, top: f32 = 0 }`
+- `Drop = struct { initial: [4]f32, widths: []const f32, origins: []const f32 }`
+- `Margin = struct { left: f32 = 0, right: f32 = 0 }`
+- `fn track(polyline: *const paths.Polyline, contour: u32, out: []Segment) Error!Track`: Precompute lengths for one native flattened contour.
+- `fn fromLine(g: *const lines.Glyphs, l: *const lines.Lines, line: u32, out: []Item) Error![]const Item`
+- `fn onPath(path: Track, items: []const Item, options: PathOptions, out: []Position) Error![]const Position`: Map each glyph's advance midpoint to a path tangent; offsets (including combining marks) rotate in that tangent's coordinate system.
+- `fn pathQuads(run: draw.TextRun, positions: []const Position, images: []const Image, colors: []const u32, out: []draw.Quad) Error!u32`: Ordinary text-material quads, with tangent and TextRun transforms composed.
+- `fn dropCap(initial: Box, paragraph_width: f32, line_height: f32, options: DropOptions, widths: []f32, origins: []f32) Error!Drop`: A measured initial alongside a paragraph with a fixed line-height.
+- `fn dropBands(initial: Box, paragraph_width: f32, bands: []const [2]f32, options: DropOptions, widths: []f32, origins: []f32) Error!Drop`
+- `fn applyOrigins(l: *lines.Lines, origins: []const f32) Error!void`
+- `fn opticalMargins(l: *const lines.Lines, g: *const lines.Glyphs, text: []const u8, policy: Punctuation, out: []Margin) Error![]const Margin`: Measure visual edge punctuation after bidi placement.
+- `fn hang(l: *lines.Lines, margins: []const Margin, factors: []const f32) Error!void`: Align the optical body, retaining existing line breaks.
+
+### `Item` (struct)
+
+Fields: `distance`, `advance`, `offset`, `cluster`, `span`
+
+
+### `PathOptions` (struct)
+
+Fields: `offset`, `factor`, `baseline_offset`, `reverse`, `overflow`
+
+
+### `Punctuation` (struct)
+
+Fields: `left`, `right`, `fraction`
+
+
+## `lcgf.text_counters` (src/text/layout/counters.zig)
+
+List counters, numbering systems and marker placement.
+
+### Top level
+
+- `Box = @import("inline_objects.zig").Box`
+- `Error = error{ NoSpace, InvalidStyle, OutOfRange, Overflow, NoScope }`
+- `Additive = struct { weight: u64, symbol: []const u8 }`
+- `decimal_digits = [_][]const u8{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" }`
+- `lower_letters = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "…`
+- `upper_letters = [_][]const u8{ "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "…`
+- `decimal: Style = .{}`
+- `decimal_leading_zero: Style = .{ .minimum_symbols = 2 }`
+- `lower_alpha: Style = .{ .system = .{ .alphabetic = &lower_letters } }`
+- `upper_alpha: Style = .{ .system = .{ .alphabetic = &upper_letters } }`
+- `lower_roman: Style = .{ .system = .{ .additive = &.{ .{ .weight = 1000, .symbol = "m" }, .{ .weight = 900, .symbol = "cm" }, .{ .weight = 500, .symbol = "d" …`
+- `upper_roman: Style = .{ .system = .{ .additive = &.{ .{ .weight = 1000, .symbol = "M" }, .{ .weight = 900, .symbol = "CM" }, .{ .weight = 500, .symbol = "D" …`
+- `Counter = struct { id: Id, value: i64, depth: u32 }`
+- `Placement = struct { box: Box, marker: [2]f32, content: [2]f32 }`
+- `MarkerOptions = struct { inside: bool = false, side: enum { start, end } = .start, rtl: bool = false, gap: f32 = 4 }`
+- `Bullet = enum { disc, circle, square }`
+- `fn required(value: i64, style: Style) Error!usize`: Returns required bytes without writing.
+- `fn format(value: i64, style: Style, out: []u8) Error![]const u8`
+- `fn place(marker: Box, content: Box, options: MarkerOptions) Error!Placement`: Baseline-aligned marker.
+- `fn markerRun(run: draw.TextRun, placement: Placement, box: Box) draw.TextRun`
+- `fn bullet(run: draw.TextRun, kind: Bullet, position: [2]f32, size: f32, ring_width: f32) Error!draw.Quad`
+
+### `System` (union)
+
+Fields: `numeric`, `alphabetic`, `symbolic`, `cyclic`, `additive`
+
+
+### `Style` (struct)
+
+Fields: `system`, `prefix`, `suffix`, `negative_prefix`, `negative_suffix`, `minimum_symbols`, `pad_symbol`, `range`, `decimal_fallback`
+
+
+### `Stack` (struct)
+
+Fields: `rows`, `len`, `depth`
+
+- `fn enter(stack: *Stack) Error!void`
+- `fn leave(stack: *Stack) Error!void`
+- `fn get(stack: Stack, id: Id) ?i64`
+- `fn reset(stack: *Stack, id: Id, value: i64) Error!void`
+- `fn set(stack: *Stack, id: Id, value: i64) Error!void`
+- `fn increment(stack: *Stack, id: Id, amount: i64) Error!i64`
+- `fn formatChain(stack: Stack, id: Id, style: Style, separator: []const u8, out: []u8) Error![]const u8`: Nested numbering (e.g.
+
+## `lcgf.backgrounds` (src/draw/backgrounds.zig)
+
+Background geometry and authoring helpers over the same decoration/brush primitives.
+
+### Top level
+
+- `Error = decoration.Error`
+- `Boxes = struct { border: decoration.RoundedRect, border_widths: [4]f32 = @splat(0), padding: [4]f32 = @splat(0) }`
+- `Units = enum { logical, normalized }`
+- `Layout = struct { origin: decoration.Box = .padding, clip: decoration.Box = .border, attachment: Attachment = .scroll, units: Units = .normalized }`
+- `Prepared = struct { shape: decoration.RoundedRect, layer: decoration.Layer, positioning: Rect, window_clip: ?decoration.Clip = null }`
+- `Length = struct { px: f32 = 0, percent: f32 = 0 }`
+- `Position = struct { fraction: [2]f32 = .{ 0.5, 0.5 }, offset: [2]f32 = .{ 0, 0 } }`
+- `RadialShape = enum { circle, ellipse }`
+- `Extent = enum { closest_side, farthest_side, closest_corner, farthest_corner }`
+- `RadialSize = union(enum) { extent: Extent, radii: [2]f32 }`
+- `fn boxShape(boxes: Boxes, selected: decoration.Box) Error!decoration.RoundedRect`
+- `fn prepare(boxes: Boxes, layout: Layout, brush: brushes.Brush) Error!Prepared`: The brush is authored relative to the selected origin: logical pixels or a unit square.
+- `fn paint(dst: surface.Surface, prepared: Prepared, view: decoration.View, clip_rows: []decoration.Clip) Error!void`: Paint one prepared layer; local attachment needs view.clips.len + 1 temporary clip rows.
+- `fn radii(rect: Rect, values: [4][2]Length) Error!decoration.RoundedRect`: Resolve mixed absolute/percentage corner radii against the border box, then apply the shared proportional overlap normalization.
+- `fn capsule(rect: Rect) Error!decoration.RoundedRect`
+- `fn linear(ramp: brushes.Ramp, rect: Rect, angle_radians: f32) Error!brushes.Brush`: CSS-style gradient angle: zero points up, positive clockwise.
+- `fn radial(ramp: brushes.Ramp, rect: Rect, center_position: Position, shape: RadialShape, size: RadialSize) Error!brushes.Brush`: Closest/farthest radial size, including centers outside the box.
+
+### `Attachment` (union)
+
+Fields: `local`, `fixed`
+
+
+## `lcgf.image_variants` (src/draw/image_variants.zig)
+
+Resource selection is a pure operation on caller metadata, before decoding/loading.
+
+### Top level
+
+- `Error = brushes.Error || error{ NoCandidates, InvalidDensity, InconsistentIntrinsicSize }`
+- `Candidate = struct { source_id: u64, pixel_size: [2]u32, pixels_per_logical: f32 = 1, orientation: brushes.Orientation = .normal }`
+- `Request = struct { box: Rect, device_scale: f32 = 1, fit: brushes.Fit = .contain, alignment: [2]f32 = .{ 0.5, 0.5 } }`
+- `fn select(candidates: []const Candidate, request: Request) Error!Selection`: Chooses the smallest sufficient resource; if all are undersized, chooses the greatest available density.
+- `fn bind(selection: Selection, loaded: surface.Image, mipmaps: []const surface.Image, sampling: brushes.Sampling, tint: color.Rgba) Error!brushes.Brush`: Consumes the selected loaded image.
+
+### `Selection` (struct)
+
+Fields: `index`, `source_id`, `logical_intrinsic`, `destination`, `box`, `source_size`, `decode_size`, `orientation`, `device_scale`
+
+
+## `lcgf.masks` (src/draw/masks.zig)
+
+Explicit mask placement and combination.
+
+### Top level
+
+- `Error = decoration.Error || compositor.Error`
+- `fn rasterize(dst: surface.Surface, layers: []const Layer, view: decoration.View, initial: f32) Error!void`: Layers are supplied back-to-front.
+- `fn nineSlice(image: surface.Image, source: Rect, destination: Rect, source_cuts: [4]f32, destination_cuts: [4]f32, repeat: [2]brushes.Repeat, fill_center: bo…`: Prepares an actual nine-slice mask border.
+
+### `Layer` (struct)
+
+Fields: `brush`, `inverse`, `region`, `mode`, `invert`, `opacity`, `operator`
+
+
+## `lcgf.grid_names` (src/layout/grid_names.zig)
+
+Optional named grid authoring, resolved once into existing bounded numeric grid rows.
+
+### Top level
+
+- `Error = error{ NoSpace, MissingName, InvalidLine, InvalidArea, InvalidGrid }`
+- `Line = struct { name: []const u8, index: u32 }`
+- `Cell = struct { first: [2]u32, span: [2]u32 }`
+- `Area = struct { name: []const u8, cell: Cell }`
+- `Names = struct { lines: [2][]const Line = .{ &.{}, &.{} }, areas: []const Area = &.{} }`
+- `fn line(names: []const Line, reference: Reference, track_count: u32) Error!u32`
+- `fn between(names: Names, counts: [2]u32, first: [2]Reference, end: [2]Reference) Error!Cell`
+- `fn area(names: Names, name: []const u8) Error!Cell`
+- `fn template(cells: []const []const u8, columns: u32, out: []Area) Error![]const Area`: A row-major template with one borrowed name per cell.
+- `fn item(grids: *grid.Grids, grid_index: u32, node: u32, cell: Cell) Error!u32`: Applies a resolved named placement to real Grids item rows.
+
+### `Named` (struct)
+
+Fields: `name`, `occurrence`
+
+
+### `Reference` (union)
+
+Fields: `index`, `named`
+
+
+## `lcgf.text_metrics` (src/text/layout/metrics.zig)
+
+Explicit baseline and text-edge metrics over the ordinary glyph/line columns.
+
+### Top level
+
+- `Error = error{ InvalidMetric, MissingMetric, InvalidRow, NoSpace }`
+- `Source = enum { first, last }`
+- `Over = enum { font, em, cap_height, x_height, alphabetic }`
+- `Under = enum { font, em, alphabetic }`
+- `Removed = struct { before: f32, after: f32 }`
+- `Baseline = enum { alphabetic, central, hanging, mathematical, ideographic }`
+- `fn edges(font: Font, over: ?Over, under: ?Under) Error!Trim`
+- `fn trim(l: *lines.Lines, value: Trim) error{InvalidMetric}!Removed`: After placement/reorder, before query/emission: removes only outside first/last leading.
+- `fn baseline(l: *const lines.Lines, source: Source) f32`
+- `fn commit(tx: *Texts, row: u32, l: *const lines.Lines, source: Source, baselines: []f32) Error!void`: Writes the real extents and selected baseline into the existing text-measure protocol.
+- `fn alignSpan(g: *lines.Glyphs, metrics: []lines.Metrics, span: u32, source: Baselines, source_kind: Baseline, target: Baselines, target_kind: Baseline, extra…`: Before lines.place: align one reserved span's chosen baseline and an explicit shift.
+
+### `Font` (struct)
+
+Fields: `ascent`, `descent`, `em_over`, `em_under`, `cap_height`, `x_height`
+
+- `fn of(face: *const opentype.Face, px: f32) Error!Font`: Native static-face metrics.
+
+### `Trim` (struct)
+
+Fields: `before`, `after`
+
+
+### `Baselines` (struct)
+Coordinates in logical pixels, positive above the face's alphabetic baseline.
+
+Fields: `alphabetic`, `central`, `hanging`, `mathematical`, `ideographic`
+
+- `fn get(value: Baselines, which: Baseline) error{MissingMetric}!f32`
+
+## `lcgf.text_emphasis` (src/text/layout/emphasis.zig)
+
+Emphasis marks on actual grapheme/ligature geometry, including vertical upright marks.
+
+### Top level
+
+- `Shape = enum { dot, circle, double_circle, triangle, sesame }`
+- `Fill = enum { filled, open }`
+- `Error = error{ NoSpace, InvalidGeometry, InvalidRange }`
+- `Placement = struct { rect: [4]f32, byte: u32, line: u32 }`
+- `Options = struct { side: enum { over, under } = .over, gap: f32 = 1, reserve_space: bool = true }`
+- `VerticalOptions = struct { side: enum { left, right } = .right, gap: f32 = 1 }`
+- `fn markText(shape: Shape, fill: Fill) []const u8`
+- `fn shapeMark(shaper: *const shape_.Shaper, shape: Shape, fill: Fill, out: *shape_.Run) error{ NoSpace, MissingGlyph }!void`: Optional native shaping convenience; atlas allocation/raster policy stays with the host.
+- `fn place(l: *lines.Lines, g: *const lines.Glyphs, text: []const u8, range: [2]u32, size: [2]f32, options: Options, out: []Placement) Error!u32`: After ordinary place/reorder.
+- `fn placeVertical(items: []const vertical_.Item, positions: []const vertical_.Position, columns: []const Rect, text: []const u8, range: [2]u32, size: [2]f32, …`: Uses actual vertical pens/advances and caller-arranged column rectangles.
+- `fn quads(run: draw.TextRun, positions: []const Placement, image: Image, color: ?u32, out: []draw.Quad) error{NoSpace}!u32`

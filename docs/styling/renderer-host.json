@@ -1,0 +1,20 @@
+{
+  "egl_version": "1.5",
+  "platform": "EGL_MESA_platform_surfaceless",
+  "contexts": [
+    {
+      "requested_context_major": 2,
+      "vendor": "Mesa",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1"
+    },
+    {
+      "requested_context_major": 3,
+      "vendor": "Mesa",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1"
+    }
+  ],
+  "hardware_gpu_validation": false,
+  "note": "Headless driver execution validates GL ES backend/shader/texture behavior. llvmpipe is software execution, not a physical GPU test."
+}

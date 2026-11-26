@@ -397,9 +397,9 @@ public:
             const u32 k = p[1];
             u32 row = k;
             if (raw_.quad_len != quads) {
-                for (u32 j = cursor; j < k; ++j) seen += visible_[T::paint_node[j]];
+                for (u32 j = cursor; j < k; ++j) seen += shown(j);
                 cursor = k;
-                row = visible_[T::paint_node[k]] ? seen : none;
+                row = shown(k) ? seen : none;
             }
             if (row == none) continue;
             Quad& q = quads_[row];
@@ -663,6 +663,21 @@ private:
         }
     }
 
+    /// Whether template k paints this frame (ct.zig's `shown`): present, and its paint bounds
+    /// (a shadow grows by three sigma) inside its parent's clip have area.
+    u32 shown(u32 k) const {
+        const u32 i = T::paint_node[k];
+        const Quad q = std::bit_cast<Quad>(T::templates[k]);
+        const V4 r = rect_of(i), c = clip_of(T::clip_node[k]);
+        const float sigma = q.params[1];
+        const float g = std::bit_cast<u32>(q.params[0]) == 3 && std::isfinite(sigma) ? std::fmax(0.f, sigma) * 3 : 0.f;
+        const float b0 = std::fmax(r[0] - g, c[0]), b1 = std::fmax(r[1] - g, c[1]);
+        const float b2 = std::fmin(r[2] + g, c[2]), b3 = std::fmin(r[3] + g, c[3]);
+        u32 present = 1;
+        if constexpr (T::regions > 0) present = visible_[i];
+        return present & u32(b0 < b2) & u32(b1 < b3);
+    }
+
     void emit_quads(u32 first, u32 end, u32& quad, u32& op) {
         for (u32 k = first; k < end; ++k) {
             const u32 i = T::paint_node[k];
@@ -674,8 +689,9 @@ private:
             op_kind_[op] = 0;
             op_key_[op] = T::keys[k];
             op_ref_[op] = quad;
-            quad += visible_[i];
-            op += visible_[i];
+            const u32 s = shown(k);
+            quad += s;
+            op += s;
         }
     }
 
@@ -732,6 +748,9 @@ private:
                 run.px = F(T::text_px);
                 run.color = plan[7];
                 run.font = T::text_font;
+                run.opacity = 1;
+                run.xform[0] = 1, run.xform[1] = 0, run.xform[2] = 0, run.xform[3] = 1, run.xform[4] = 0, run.xform[5] = 0;
+                for (int k = 0; k < 4; ++k) run.clip_radii[k] = 0;
                 op_kind_[op] = 1;
                 op_key_[op] = 0;
                 op_ref_[op] = r;

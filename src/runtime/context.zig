@@ -54,14 +54,16 @@ pub const Status = bitpack struct(u8) {
     customs: bool = false,
     strings: bool = false,
     depth: bool = false,
-    _: u3 = 0,
+    anims: bool = false,
+    tweens: bool = false,
+    flips: bool = false,
 
     pub fn ok(s: Status) bool {
         return @as(u8, @bitCast(s)) == 0;
     }
 };
 
-pub const Cursor = enum(u8) { arrow, pointer, text, grab, resize_h, resize_v };
+pub const Cursor = types.Cursor;
 
 /// Effects the host should apply, returned as data instead of called back.
 pub const Platform = struct {
@@ -230,6 +232,13 @@ pub const Context = struct {
     /// Starts a frame: swaps generations, empties the new one, steps interaction against last
     /// frame's geometry and opens the root, sized to the viewport.
     pub fn begin(ctx: *Context, in: *const Input) Frame {
+        return ctx.beginWithHit(in, @import("../interact/hit.zig").at(&ctx.trees[ctx.cur], in.pointer[0], in.pointer[1], .any));
+    }
+
+    /// Starts the ordinary frame with a caller-computed row in the previous completed tree
+    /// (`ctx.trees[ctx.cur]` before this call). Use hit_targets.at, hit.atLayered or a custom
+    /// scene query; `types.none` means nothing hit. Invalid/ineligible rows are ignored.
+    pub fn beginWithHit(ctx: *Context, in: *const Input, node: u32) Frame {
         // Cleared before the app drains its mailboxes, so a result posted after this point
         // wakes the next frame instead of being missed.
         _ = ctx.waker.flag.swap(false, .acq_rel);
@@ -243,11 +252,14 @@ pub const Context = struct {
         const text_input = ctx.platform.wants_text;
         ctx.platform = .{};
         ctx.status = .{};
+        ctx.anims.overflow = false;
+        ctx.tweens.overflow = false;
+        ctx.flips.overflow = false;
         ctx.frame +%= 1;
         ctx.memos.kept_len = 0;
 
         const prev = &ctx.trees[ctx.cur ^ 1];
-        ctx.inter.step(prev, in);
+        ctx.inter.stepWithHit(prev, in, node);
         // Keyboard focus. Its sweeps (the scope scan, `step`'s searches of the id column) run
         // only on frames with key events, after a frame that set a scope, or while a modal
         // layer is open; otherwise nothing they compute is read, and the frame does only the
@@ -316,7 +328,7 @@ test "requiredBytes: the sum of every column, so it grows with each limit" {
     try testing.expectEqual(base + 64, Context.requiredBytes(more));
 }
 
-test "requiredBytes: 925 bytes per node of capacity (docs/perf/bytes.md)" {
+test "requiredBytes: 1005 bytes per node of capacity (docs/perf/bytes.md)" {
     // Two tree generations of 276 bytes a row and a 112-byte extras row each, less the 48
     // bytes of layout scratch they share, plus 170 bytes of draw list, 16 of level-order
     // index (docs/perf/port-perf.md) and 11 of focus scopes, including the previous kind byte.
@@ -325,7 +337,7 @@ test "requiredBytes: 925 bytes per node of capacity (docs/perf/bytes.md)" {
     a.nodes = 4096;
     var b = a;
     b.nodes = 8192;
-    try testing.expectEqual(925 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
+    try testing.expectEqual(1005 * 4096, Context.requiredBytes(b) - Context.requiredBytes(a));
 }
 
 test "init: carves every table from the caller's buffer, or refuses a short one" {

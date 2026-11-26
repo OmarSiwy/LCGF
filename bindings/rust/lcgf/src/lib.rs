@@ -180,6 +180,9 @@ pub struct TextRun {
     pub px: f32,
     pub color: u32,
     pub font: u32,
+    pub opacity: f32,
+    pub xform: [f32; 6],
+    pub clip_radii: [f32; 4],
 }
 
 /// A rectangle the host draws itself (`lcgf_custom_draw`).
@@ -191,6 +194,9 @@ pub struct CustomDraw {
     pub data: u64,
     pub id: u32,
     pub node: u32,
+    pub xform: [f32; 6],
+    pub clip_radii: [f32; 4],
+    pub opacity: f32,
 }
 
 #[repr(C)]
@@ -472,4 +478,4 @@ impl<'a, S, W: WidgetEnum> Ui<'a, S, W> {
     }
 }
 
-const _: () = assert!(core::mem::size_of::<Quad>() == 136 && core::mem::size_of::<TextRun>() == 52);
+const _: () = assert!(core::mem::size_of::<Quad>() == 136 && core::mem::size_of::<TextRun>() == 96);

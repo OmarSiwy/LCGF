@@ -15,6 +15,7 @@ pub const es2 = @import("es2.zig");
 pub const custom = @import("custom.zig");
 /// lcgf_render.gpu on GL ES 3: WebGPU's object model projected onto this back end (gpu.zig).
 pub const gpu = @import("gpu.zig");
+const styling = @import("styling.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -26,4 +27,5 @@ test {
     std.testing.refAllDecls(es2);
     std.testing.refAllDecls(custom);
     std.testing.refAllDecls(gpu);
+    std.testing.refAllDecls(styling);
 }

@@ -21,6 +21,7 @@ const none = types.none;
 const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
+const TextStack = @import("../text/layout/stack.zig").Stack;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const values = @import("../anim/values.zig");
@@ -29,9 +30,11 @@ const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
+const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
+const outlines = @import("../draw/outline.zig");
 const scheduler = @import("scheduler.zig");
 
 // Ordinary text leaves differ only in whether they may shrink to wrap.
@@ -53,6 +56,12 @@ pub const Frame = struct {
     }
     pub fn prevTree(f: *const Frame) *const Tree {
         return &f.ctx.trees[f.ctx.cur ^ 1];
+    }
+
+    /// Paint an outside ring at this point in the command order. It follows `node` after
+    /// layout without reserving space or replacing the control's border/selected appearance.
+    pub fn outline(f: *Frame, node: Node, options: outlines.Outline) Node {
+        return outlines.append(f.tree(), f.ctx.stack[f.ctx.depth - 1], node, options);
     }
 
     // ---- building -----------------------------------------------------------
@@ -186,8 +195,15 @@ pub const Frame = struct {
     /// been created with an id; anonymous nodes report nothing.
     pub fn interact(f: *Frame, node: Node, sense: Sense) Response {
         const c = &f.tree().c;
+        if (!f.tree().participation(node.ix()).hit) {
+            c.sense[node.ix()] = 0;
+            f.ctx.inter.cancel(@fromBackingInt(c.id[node.ix()]));
+            return .{};
+        }
         c.sense[node.ix()] = @bitCast(sense);
-        return f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
+        const response = f.ctx.inter.response(@fromBackingInt(c.id[node.ix()]));
+        if (f.tree().cursor(node.ix())) |cursor| f.setCursor(cursor, response.hovered);
+        return response;
     }
 
     /// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
@@ -238,6 +254,7 @@ pub const Frame = struct {
     /// `target` is an f32 (or a number literal), or anything made of numbers: a `Color`, a
     /// `Rect`, `[2]f32`, a vector or a struct of them (src/anim/values.zig). Each component
     /// moves on its own spring, keyed `id.with(k)` for the k-th; an f32 is keyed `id` itself.
+    /// Exhaustion returns target immediately and reports Output.status.anims.
     pub fn animate(f: *Frame, id: Id, target: anytype, spring: Spring) values.Of(@TypeOf(target)) {
         const T = values.Of(@TypeOf(target));
         if (T == f32) return f.animateOne(id, target, spring);
@@ -250,7 +267,7 @@ pub const Frame = struct {
     fn animateOne(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
         const ctx = f.ctx;
         const a = &ctx.anims;
-        const i = a.slot(id, target);
+        const i = a.reserve(id, target) catch return target;
         a.c.target[i] = target;
         a.c.stiffness[i] = spring.stiffness;
         a.c.damping[i] = spring.damping;
@@ -267,19 +284,21 @@ pub const Frame = struct {
     /// Position only: a size change still takes effect at once. `end` runs the slide
     /// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
     /// themselves call it there too.
+    /// Exhaustion keeps settled layout and reports Output.status.flips or .anims.
     pub fn animateLayout(f: *Frame, node: Node, spring: Spring) void {
-        f.ctx.flips.add(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring);
+        f.ctx.flips.reserve(node.ix(), @fromBackingInt(f.tree().c.id[node.ix()]), spring) catch {};
     }
 
     /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
     /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
     /// key; stop asking for one frame and the next ask plays it again from the start.
+    /// Exhaustion returns the final key's value and reports Output.status.tweens.
     pub fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
         const total = keyframes.duration(keys);
         // A new row rests at 0, so the first retarget starts the clock's only leg.
-        const i = t.slot(id, 0);
+        const i = t.reserve(id, 0) catch return keyframes.sample(keys, total);
         t.retarget(i, total, total, .linear);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
@@ -289,8 +308,17 @@ pub const Frame = struct {
     }
 
     /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
-    /// jumping: `tween` over its channels, keyed by `id.with(0..3)`. Returns this frame's colour.
+    /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    /// All four keys are preflighted together. Exhaustion settles the whole color and reports
+    /// status.tweens, without reserving a partial transition or touching unrelated controls.
     pub fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color {
+        const table = &f.ctx.tweens;
+        var needed: u32 = 0;
+        inline for (0..4) |k| needed += @intFromBool(simd.find(table.c.id, table.len, @backingInt(id.with(k))) == none);
+        if (needed > table.cap - table.len) {
+            table.overflow = true;
+            return target;
+        }
         return f.tween(id, target, tr.seconds, tr.ease);
     }
 
@@ -304,6 +332,7 @@ pub const Frame = struct {
     /// target changes, a new leg starts from the current value. Returns this frame's value
     /// (`target` on first use). Keeps the host awake until it lands; a tween not asked for in
     /// a frame is dropped. `target` is what `animate` takes, keyed the same way.
+    /// Exhaustion returns target immediately and reports Output.status.tweens.
     pub fn tween(f: *Frame, id: Id, target: anytype, seconds: f32, ease: Ease) values.Of(@TypeOf(target)) {
         const T = values.Of(@TypeOf(target));
         if (T == f32) return f.tweenOne(id, target, seconds, ease);
@@ -316,7 +345,7 @@ pub const Frame = struct {
     fn tweenOne(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
-        const i = t.slot(id, target);
+        const i = t.reserve(id, target) catch return target;
         t.retarget(i, target, seconds, ease);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
@@ -330,6 +359,32 @@ pub const Frame = struct {
     /// Diagonal: measure with `font`, lay out, paint. Each line below is a public tier-0 call;
     /// copy this body to put your own shaper, or your own pass, between any two of them.
     pub fn end(f: *Frame, font: Mono) Output {
+        f.layoutWith(font);
+        return f.finish();
+    }
+
+    /// Measure and arrange without painting: insert prepared textures or explicit passes,
+    /// then call finish. This is exactly the layout half of end.
+    pub fn layoutWith(f: *Frame, font: Mono) void {
+        f.arrangeWith(font);
+        f.finalizeLayout(.{}) catch unreachable;
+    }
+
+    /// A frame on a caller-selected device grid; no second arrangement or finalization pass.
+    pub fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output {
+        try f.layoutRounded(font, options);
+        return f.finish();
+    }
+
+    pub fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        f.arrangeWith(font);
+        try f.finalizeLayout(options);
+    }
+
+    /// Measure and place, leaving original fractional positions available for explicit RTL,
+    /// grid, sticky or custom placement passes. Call finalizeLayout before finish.
+    pub fn arrangeWith(f: *Frame, font: Mono) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -352,17 +407,75 @@ pub const Frame = struct {
         incremental.fitKept(t, .y, kept);
         resolve(t, lv, .y, f.in.viewport[1], kept);
         incremental.placeKept(t, kept);
-        // Reduced motion: no slide, the layout as it is (the springs go unseen and are dropped).
+    }
+
+    /// Apply layout transitions after all placement passes, then snap, transform and clip.
+    /// Calling this once preserves FLIP's comparison with the previous final arrangement.
+    pub fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        const t = f.tree();
         if (!f.ctx.settings.reduced_motion) f.ctx.motion = @max(f.ctx.motion, flip.apply(t, f.prevTree(), &f.ctx.flips, &f.ctx.anims, f.ctx.frame));
         // The copied interiors already contain finalized columns. Ancestor clip changes or
         // fractional movement invalidate that shortcut; FLIP can edit descendant positions
-        // after placement, so its frames retain the complete reference pass.
-        if (f.ctx.flips.len == 0) {
+        // after placement, so its frames retain the complete reference pass. The shortcut is
+        // the default grid's: any other rounding takes the complete pass.
+        // ponytail: assumes last frame used the default grid too; track the previous options
+        // if an app alternates end and endRounded on reused subtrees.
+        const m = &f.ctx.memos;
+        const kept = m.kept[0..simd.selU(t.overflow, 0, m.kept_len)];
+        if (f.ctx.flips.len == 0 and std.meta.eql(options, rounding.Options{})) {
             incremental.finalizeKept(t, f.prevTree(), kept, m.kept_source[0..kept.len]);
         } else {
-            layout.finalize(t);
+            try layout.finalizeWith(t, options);
         }
+    }
+
+    /// Font-backed counterpart of `end`. The caller owns the shapers, paragraph options,
+    /// glyph/line scratch and one ascent row per text. `stack.paragraph` and `stack.quads`
+    /// use these same options when the host draws the resulting runs. Copy these public
+    /// passes to insert a custom layout, grid or baseline pass at either measurement point.
+    /// A scratch overflow is reported in Output.status.texts as well as stack.overflow.
+    pub fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output {
+        f.layoutText(stack, ascent);
         return f.finish();
+    }
+
+    /// Font-backed measurement and arrangement only, the public half of endText.
+    pub fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void {
+        f.arrangeText(stack, ascent);
+        f.finalizeLayout(.{}) catch unreachable;
+    }
+
+    pub fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output {
+        try f.layoutTextRounded(stack, ascent, options);
+        return f.finish();
+    }
+
+    pub fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void {
+        try options.validate();
+        f.arrangeText(stack, ascent);
+        try f.finalizeLayout(options);
+    }
+
+    /// Font-backed measurement and placement before caller passes and finalizeLayout.
+    pub fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void {
+        const t = f.tree();
+        const tx = f.texts();
+        const strings = &f.ctx.strings[f.ctx.cur];
+        t.seal(0);
+        stack.overflow = false;
+        stack.measure(tx, strings, ascent);
+        layout.prepare(t);
+        layout.applyText(t, tx, .x);
+        layout.fit(t, .x);
+        layout.resolve(t, .x, f.in.viewport[0]);
+        layout.textAvail(t, tx);
+        stack.wrap(tx, strings, ascent);
+        layout.applyText(t, tx, .y);
+        layout.fit(t, .y);
+        layout.resolve(t, .y, f.in.viewport[1]);
+        layout.place(t);
+        tx.overflow = tx.overflow or stack.overflow;
     }
 
     /// Paint and bookkeeping only, for callers who ran layout themselves.
@@ -384,6 +497,9 @@ pub const Frame = struct {
             .customs = cu.overflow,
             .strings = strings.overflow,
             .depth = ctx.status.depth,
+            .anims = ctx.anims.overflow,
+            .tweens = ctx.tweens.overflow,
+            .flips = ctx.flips.overflow,
         };
         ctx.timers.sweep(ctx.frame);
         return .{
@@ -429,6 +545,36 @@ fn Fixture(comptime limits: @import("context.zig").Limits) type {
             return Context.init(&buffer, limits);
         }
     };
+}
+
+test "endText consumes real paragraph metrics in an ordinary frame" {
+    const golden = @import("../text/layout/golden.zig");
+    const shape = @import("../text/shape/shape.zig");
+    const face = try @import("../text/font/opentype.zig").Face.parse(golden.font, 0);
+    const shapers = [_]shape.Shaper{.init(face)};
+    var para: golden.Para = .{};
+    para.bind();
+    var cols: golden.RunCols = .{};
+    var stack: TextStack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = para.g,
+        .l = para.l,
+        .default_paragraph = .{ .line_height = .{ .px = 30 }, .max_lines = 2, .ellipsis = true },
+    };
+    var ascent: [4]f32 = undefined;
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 128, .depth = 4 });
+    var ctx = try Fx.context();
+    const input: Input = .{ .viewport = .{ 100, 200 } };
+    var frame = ctx.begin(&input);
+    _ = frame.open(.none, .{ .size = .{ .px(80), .fit }, .transform = .{ 1, 0, 0, 1, 5, 7 } });
+    const label = frame.text("one two three four five six", .{ .px = 20, .wrap = true });
+    frame.close();
+    const output = frame.endText(&stack, &ascent);
+    try testing.expect(!output.status.texts);
+    try testing.expectEqual(@as(f32, 60), output.tree.rect(label.ix()).h());
+    try testing.expectEqual([6]f32{ 1, 0, 0, 1, 5, 7 }, output.draw.runs[0].xform);
+    try testing.expect(ascent[0] > 0);
 }
 
 test "open, close, leaf: children nest under the open node, in depth-first rows" {
@@ -824,11 +970,137 @@ test "limits: a frame past every limit at once reports it and never crashes" {
         }
         for (0..10) |_| f.close();
         const out = f.end(.{});
-        try testing.expect(ctx.status.nodes and ctx.status.texts and ctx.status.customs and ctx.status.strings and ctx.status.depth);
+        try testing.expect(ctx.status.nodes and ctx.status.texts and ctx.status.customs and ctx.status.strings and ctx.status.depth and ctx.status.anims and ctx.status.tweens and ctx.status.flips);
         try testing.expect(out.tree.len <= 8);
         // Every row's parent comes before it (the rewritten last row included), which
         // levels.build, the parent-following passes and paint rely on.
         for (1..out.tree.len) |i| try testing.expect(out.tree.c.parent[i] < i);
         _ = frame;
+    }
+}
+
+test "animation exhaustion returns settled values without retargeting another control" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 8, .anims = 1, .tweens = 1, .flips = 1, .signals = 1, .timers = 1, .memos = 1 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 }, .dt = 1.0 / 60.0 };
+    const spring_id: Id = .from("reserved-spring");
+    const tween_id: Id = .from("reserved-tween");
+    const keys = [_]keyframes.Key{ .{ .at = 0, .value = 3 }, .{ .at = 2, .value = 7 } };
+    var f = ctx.begin(&in);
+    _ = f.animate(spring_id, 0, .{});
+    _ = f.tween(tween_id, 0, 1, .linear);
+    try testing.expect(f.end(.{}).status.ok());
+    f = ctx.begin(&in);
+    try testing.expectEqual(@as(f32, 0), f.animate(spring_id, 10, .{}));
+    try testing.expectEqual(@as(f32, 999), f.animate(.from("extra-spring"), 999, .{}));
+    try testing.expectEqual(@as(f32, 0), f.tween(tween_id, 10, 1, .linear));
+    try testing.expectEqual(@as(f32, 999), f.tween(.from("extra-tween"), 999, 5, .linear));
+    try testing.expectEqual(@as(f32, 7), f.sequence(.from("extra-sequence"), &keys));
+    const out = f.end(.{});
+    try testing.expect(out.status.anims and out.status.tweens and !out.status.flips);
+    try testing.expectEqual(@backingInt(spring_id), ctx.anims.c.id[0]);
+    try testing.expectEqual(@backingInt(tween_id), ctx.tweens.c.id[0]);
+    try testing.expectEqual(@as(f32, 10), ctx.anims.c.target[0]);
+    try testing.expectEqual(@as(f32, 10), ctx.tweens.c.to[0]);
+    f = ctx.begin(&in);
+    _ = f.animate(spring_id, 10, .{});
+    _ = f.tween(tween_id, 10, 1, .linear);
+    try testing.expect(f.end(.{}).status.ok());
+}
+
+test "color transition exhaustion settles all channels without partial reservations" {
+    const Fx = Fixture(.{ .nodes = 8, .texts = 1, .customs = 1, .strings = 16, .depth = 4, .anims = 1, .tweens = 4, .flips = 1, .signals = 1, .timers = 1, .memos = 1 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    var f = ctx.begin(&in);
+    _ = f.tween(.from("unrelated"), 5, 1, .linear);
+    const target: Color = .rgba(80, 120, 160, 200);
+    try testing.expectEqual(target, f.transition(.from("overflow-color"), target, .{}));
+    try testing.expectEqual(@as(u32, 1), ctx.tweens.len);
+    try testing.expectEqual(@backingInt(Id.from("unrelated")), ctx.tweens.c.id[0]);
+    try testing.expectEqual(@as(f32, 5), ctx.tweens.c.to[0]);
+    try testing.expect(f.end(.{}).status.tweens);
+}
+
+test "FLIP exhaustion preserves prior registrations and reserves its two spring axes atomically" {
+    const Ui = struct {
+        fn frame(c: *Context, input: *const Input, top: f32, second: bool) Output {
+            var f = c.begin(input);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .px(top) } });
+            const a = f.leaf(.from("first-layout"), .{ .size = .{ .fill, .px(10) } });
+            f.animateLayout(a, .{});
+            const b = f.leaf(.from("second-layout"), .{ .size = .{ .fill, .px(10) } });
+            if (second) f.animateLayout(b, .{});
+            return f.end(.{});
+        }
+    };
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    const limits: @import("context.zig").Limits = .{ .nodes = 16, .texts = 1, .customs = 1, .strings = 16, .depth = 8, .anims = 2, .tweens = 1, .flips = 1, .signals = 1, .timers = 1, .memos = 1 };
+    var ctx = try Fixture(limits).context();
+    _ = Ui.frame(&ctx, &in, 10, true);
+    const out = Ui.frame(&ctx, &in, 30, true);
+    try testing.expect(out.status.flips and !out.status.anims);
+    try testing.expectEqual(@as(f32, 10), out.tree.rect(out.tree.find(.from("first-layout"))).y0);
+    try testing.expectEqual(@as(f32, 40), out.tree.rect(out.tree.find(.from("second-layout"))).y0);
+    const short_limits = comptime blk: {
+        var value = limits;
+        value.anims = 1;
+        break :blk value;
+    };
+    var short = try Fixture(short_limits).context();
+    _ = Ui.frame(&short, &in, 10, false);
+    const settled = Ui.frame(&short, &in, 30, false);
+    try testing.expect(settled.status.anims and !settled.status.flips);
+    try testing.expectEqual(@as(u32, 0), short.anims.len);
+    try testing.expectEqual(@as(f32, 30), settled.tree.rect(settled.tree.find(.from("first-layout"))).y0);
+}
+
+test "participation reserves hidden space, collapses layout and cancels descendant input" {
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 2, .strings = 128, .depth = 8 });
+    var ctx = try Fx.context();
+    var f = ctx.begin(&.{ .viewport = .{ 200, 200 } });
+    const stack = f.open(.from("stack"), .{ .gap = 4 });
+    const hidden = f.open(.from("hidden"), .{ .size = .{ .px(40), .px(20) }, .fill = .white, .participation = .hidden });
+    const control = f.leaf(.from("hidden-button"), .{ .size = .{ .px(40), .px(20) }, .role = .button, .fill = .white });
+    ctx.inter.active = @backingInt(Id.from("hidden-button"));
+    ctx.inter.focus = ctx.inter.active;
+    ctx.inter.clicked = ctx.inter.active;
+    try testing.expectEqual(Response{}, f.interact(control, .button));
+    try testing.expectEqual(@as(u32, 0), ctx.inter.active);
+    try testing.expectEqual(@as(u32, 0), ctx.inter.focus);
+    _ = f.text("hidden", .{});
+    _ = f.custom(.none, .{ .float = true, .size = .{ .px(20), .px(20) } }, 1);
+    f.close();
+    const collapsed = f.open(.from("collapsed"), .{ .size = .{ .px(50), .px(50) }, .pad = @splat(8), .participation = .collapsed });
+    _ = f.text("must not restore the collapsed size", .{});
+    f.close();
+    const shown = f.leaf(.from("shown"), .{ .size = .{ .px(40), .px(10) }, .fill = .white, .role = .button });
+    _ = f.interact(shown, .button);
+    f.close();
+    const result = f.end(.{});
+    try testing.expectEqual(@as(f32, 20), result.tree.rect(hidden.ix()).h());
+    try testing.expectEqual(@as(f32, 0), result.tree.rect(collapsed.ix()).h());
+    try testing.expectEqual(@as(f32, 24), result.tree.rect(shown.ix()).y0 - result.tree.rect(stack.ix()).y0);
+    try testing.expectEqual(@as(u32, 1), result.draw.quad_len);
+    try testing.expectEqual(@as(u32, 1), result.draw.cmd_len);
+    try testing.expectEqual(@as(u8, 0), result.tree.c.role[control.ix()]);
+    try testing.expectEqual(types.none, @import("../interact/hit.zig").at(result.tree, 10, 10, .any));
+    try testing.expectEqual(shown.ix(), @import("../interact/hit.zig").at(result.tree, 10, 28, .any));
+}
+
+test "style cursor inherits through paint extras and explicit arrow overrides it" {
+    const Fx = Fixture(.{ .nodes = 12, .texts = 1, .customs = 1, .strings = 16, .depth = 5 });
+    var ctx = try Fx.context();
+    const in: Input = .{ .viewport = .{ 100, 60 }, .pointer = .{ 10, 10 } };
+    for (0..3) |step| {
+        var f = ctx.begin(&in);
+        _ = f.open(.from("cursor-parent"), .{ .cursor = .crosshair, .size = .{ .fill, .fill } });
+        const n = f.leaf(.from("cursor-child"), .{ .cursor = if (step == 2) .arrow else null, .radius = 3, .opacity = 0.8, .size = .{ .px(30), .px(25) }, .fill = .white });
+        _ = f.interact(n, .button);
+        f.close();
+        const out = f.end(.{});
+        try testing.expectEqual(@as(?Cursor, if (step == 2) .arrow else .crosshair), out.tree.cursor(n.ix()));
+        if (step == 1) try testing.expectEqual(Cursor.crosshair, out.platform.cursor);
+        if (step == 2) try testing.expectEqual(Cursor.arrow, out.platform.cursor);
     }
 }

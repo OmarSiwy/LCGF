@@ -24,8 +24,8 @@ pub const Request = struct { kind: wl.Kind, id: u32, opcode: u16, arg0: u32, arg
 pub const Fake = struct {
     conn: wire.Conn,
     serial: u32 = 100,
-    pool: []align(4096) u8 = &.{},
-    buffers: [8]Buffer = @splat(.{}),
+    pools: [16]Pool = @splat(.{}),
+    buffers: [32]Buffer = @splat(.{}),
     attached: u32 = 0,
     committed: u32 = 0,
     log: [512]Request = undefined,
@@ -36,10 +36,13 @@ pub const Fake = struct {
     hold_frames: bool = false,
     held_frame: u32 = 0,
 
-    const Buffer = struct { id: u32 = 0, offset: u32 = 0, width: u32 = 0, height: u32 = 0, stride: u32 = 0 };
+    const Pool = struct { id: u32 = 0, map: []align(4096) u8 = &.{} };
+    const Buffer = struct { pool: u32 = 0, id: u32 = 0, offset: u32 = 0, width: u32 = 0, height: u32 = 0, stride: u32 = 0 };
 
     pub fn deinit(f: *Fake) void {
-        if (f.pool.len > 0) _ = linux.munmap(f.pool.ptr, f.pool.len);
+        for (f.pools) |pool| if (pool.map.len > 0) {
+            _ = linux.munmap(pool.map.ptr, pool.map.len);
+        };
         f.conn.close();
     }
 
@@ -91,34 +94,45 @@ pub const Fake = struct {
             if (m.id >= 0xff00_0000 and m.opcode == 1) f.received = f.conn.takeFd();
             switch (kind) {
                 .shm => if (m.opcode == 0) {
-                    _ = a.uint();
+                    const pool_id = a.uint();
                     const fd = f.conn.takeFd();
                     const size: usize = @intCast(a.int());
-                    if (f.pool.len > 0) _ = linux.munmap(f.pool.ptr, f.pool.len);
                     const addr = linux.mmap(null, size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
                     std.debug.assert(linux.errno(addr) == .SUCCESS);
-                    f.pool = @as([*]align(4096) u8, @ptrFromInt(addr))[0..size];
+                    const pool = for (&f.pools) |*entry| {
+                        if (entry.id == 0) break entry;
+                    } else unreachable;
+                    pool.* = .{ .id = pool_id, .map = @as([*]align(4096) u8, @ptrFromInt(addr))[0..size] };
                     _ = linux.close(fd);
                 },
                 .shm_pool, .dead => if (kind == .shm_pool and m.opcode == 0) {
-                    const b: Buffer = .{ .id = a.uint(), .offset = a.uint(), .width = a.uint(), .height = a.uint(), .stride = a.uint() };
+                    const b: Buffer = .{ .pool = m.id, .id = a.uint(), .offset = a.uint(), .width = a.uint(), .height = a.uint(), .stride = a.uint() };
                     for (&f.buffers) |*s| if (s.id == 0 or s.id == b.id) {
                         s.* = b;
                         break;
                     };
                 } else {
                     // A destructor (buffer.destroy, pool.destroy): the id may be reused.
+                    for (&f.pools) |*pool| if (pool.id == m.id) {
+                        if (pool.map.len > 0) _ = linux.munmap(pool.map.ptr, pool.map.len);
+                        pool.* = .{};
+                    };
+                    for (&f.buffers) |*buffer| if (buffer.id == m.id) {
+                        buffer.* = .{};
+                    };
                     f.send(1, 1, .{m.id});
                 },
                 .surface => switch (m.opcode) {
-                    1 => f.attached = arg0,
+                    1 => if (m.id != c.cursor_fallback.surface) {
+                        f.attached = arg0;
+                    },
                     3 => if (f.hold_frames) {
                         f.held_frame = arg0;
                     } else {
                         f.send(arg0, 0, .{@as(u32, 0)}); // frame: done at once
                         f.send(1, 1, .{arg0});
                     },
-                    6 => if (f.attached != 0) {
+                    6 => if (f.attached != 0 and m.id != c.cursor_fallback.surface) {
                         if (f.committed != 0 and f.committed != f.attached) f.send(f.committed, 0, .{});
                         f.committed = f.attached;
                         f.attached = 0;
@@ -145,7 +159,10 @@ pub const Fake = struct {
         const b = for (f.buffers) |b| {
             if (b.id == f.committed) break b;
         } else unreachable;
-        const p = std.mem.readInt(u32, f.pool[b.offset + y * b.stride + x * 4 ..][0..4], .little);
+        const pool = for (f.pools) |entry| {
+            if (entry.id == b.pool) break entry.map;
+        } else unreachable;
+        const p = std.mem.readInt(u32, pool[b.offset + y * b.stride + x * 4 ..][0..4], .little);
         return .rgba(@truncate(p >> 16), @truncate(p >> 8), @truncate(p), @truncate(p >> 24));
     }
     pub fn committedSize(f: *const Fake) [2]u32 {
@@ -586,6 +603,18 @@ test "wayland: the cursor the UI asks for, set again after each enter" {
     shell.apply(&.{ .cursor = .arrow });
     fake.pump(&shell);
     try testing.expect(fake.sent(.cursor_device, 1) == null);
+    // Hiding uses the core pointer protocol, and changing back restores a valid shape.
+    fake.logged = 0;
+    shell.apply(&.{ .cursor = .hidden });
+    fake.pump(&shell);
+    const hidden = fake.sent(.pointer, 0).?;
+    try testing.expectEqual(again, hidden.arg0);
+    try testing.expectEqual(@as(u32, 0), hidden.arg1);
+    try testing.expect(fake.sent(.cursor_device, 1) == null);
+    fake.logged = 0;
+    shell.apply(&.{ .cursor = .zoom_in });
+    fake.pump(&shell);
+    try testing.expectEqual(@as(u32, 33), fake.sent(.cursor_device, 1).?.arg1);
 }
 
 /// Reads all of pipe `fd` (blocking) into `buf`.
@@ -1112,4 +1141,35 @@ test "wayland: without the decoration protocol the client decorates" {
     try testing.expect(shell.windows[0].configured);
     try testing.expect(!shell.windows[0].server_decorations);
     try testing.expectEqual(@as(u32, 0), shell.windows[0].decoration);
+}
+
+test "wayland: hidden cursor restores through core protocol without cursor-shape" {
+    var ctx = try Fixture.ctx();
+    var app: example.App = .{};
+    var shell, var fake = Fixture.pair();
+    defer shell.deinit();
+    defer fake.deinit();
+    var ev: Events = .{};
+    fake.start(&shell, &seat_globals);
+    try testing.expect(shell.poll(&ev));
+    fake.send(shell.globals.get(.wl_seat), 0, .{@as(u32, 1)});
+    fake.configure(&shell, 800, 600);
+    while (turn(&shell, &ctx, &app, &ev) != null) {}
+    const pointer = shell.seat.pointer;
+    const serial = fake.nextSerial();
+    fake.send(pointer, 0, .{ serial, shell.windows[0].surface, wire.Fixed.from(37), wire.Fixed.from(25) });
+    fake.flush();
+    _ = shell.poll(&ev);
+    shell.apply(&.{ .cursor = .hidden });
+    fake.pump(&shell);
+    try testing.expectEqual(@as(u32, 0), fake.sent(.pointer, 0).?.arg1);
+    fake.logged = 0;
+    shell.apply(&.{ .cursor = .arrow });
+    fake.pump(&shell);
+    try testing.expect(shell.cursor_fallback.surface != 0);
+    try testing.expectEqual(shell.cursor_fallback.surface, fake.sent(.pointer, 0).?.arg1);
+    try testing.expectEqual(serial, fake.sent(.pointer, 0).?.arg0);
+    try testing.expect(shell.supportsCursor(.hidden));
+    try testing.expect(!shell.supportsCursor(.zoom_in));
+    try testing.expect(shell.cursor_fallback.shm.framebuffer(0).at(0, 0).a != 0);
 }

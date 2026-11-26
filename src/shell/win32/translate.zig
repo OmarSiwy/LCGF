@@ -94,19 +94,52 @@ pub const hid: [256]u8 = table: {
     break :table t;
 };
 
-/// The system cursor (`IDC_*`, for `LoadCursorW`) of each `Platform.cursor`. Win32 has no
-/// grab hand, so `grab` is the four-way move arrow, as for dragging a whole object.
-pub const cursor_ids = ids: {
-    const n = @typeInfo(Cursor).@"enum".field_names.len;
-    var a: [n]u16 = undefined;
-    a[@backingInt(Cursor.arrow)] = 32512; // IDC_ARROW
-    a[@backingInt(Cursor.pointer)] = 32649; // IDC_HAND
-    a[@backingInt(Cursor.text)] = 32513; // IDC_IBEAM
-    a[@backingInt(Cursor.grab)] = 32646; // IDC_SIZEALL
-    a[@backingInt(Cursor.resize_h)] = 32644; // IDC_SIZEWE
-    a[@backingInt(Cursor.resize_v)] = 32645; // IDC_SIZENS
-    break :ids a;
-};
+/// Predefined LoadCursorW IDs. Zero deliberately hides the pointer. Unsupported native
+/// artwork uses the nearest semantic cursor; inspect `cursorExact` or use an image overlay.
+pub const cursor_ids = std.enums.EnumArray(Cursor, u16).init(.{
+    .arrow = 32512,
+    .pointer = 32649,
+    .text = 32513,
+    .grab = 32646,
+    .resize_h = 32644,
+    .resize_v = 32645,
+    .crosshair = 32515,
+    .move = 32646,
+    .grabbing = 32646,
+    .resize_nwse = 32642,
+    .resize_nesw = 32643,
+    .resize_n = 32645,
+    .resize_e = 32644,
+    .resize_s = 32645,
+    .resize_w = 32644,
+    .resize_ne = 32643,
+    .resize_nw = 32642,
+    .resize_se = 32642,
+    .resize_sw = 32643,
+    .not_allowed = 32648,
+    .no_drop = 32648,
+    .progress = 32650,
+    .wait = 32514,
+    .help = 32651,
+    .copy = 32649,
+    .alias = 32649,
+    .context_menu = 32512,
+    .cell = 32515,
+    .vertical_text = 32513,
+    .zoom_in = 32515,
+    .zoom_out = 32515,
+    .all_scroll = 32646,
+    .col_resize = 32644,
+    .row_resize = 32645,
+    .hidden = 0,
+}).values;
+
+pub fn cursorExact(cursor: Cursor) bool {
+    return switch (cursor) {
+        .arrow, .pointer, .text, .resize_h, .resize_v, .crosshair, .move, .resize_nwse, .resize_nesw, .not_allowed, .progress, .wait, .help, .hidden => true,
+        else => false,
+    };
+}
 
 pub const Translator = struct {
     /// Held state, kept from message to message: viewport, scale, pointer, buttons, keys, mods.

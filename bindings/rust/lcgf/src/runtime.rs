@@ -88,6 +88,10 @@ impl Size {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
+    /// Bits: 1 layout, 2 paint, 4 hit, 8 semantics; 15 is all.
+    pub participation: u32,
+    /// `types.Cursor`, `NONE` to inherit.
+    pub cursor: u32,
     pub dir: Dir,
     pub size: [Size; 2],
     pub min: [f32; 2],
@@ -111,13 +115,18 @@ pub struct Style {
     pub radii: [f32; 4],
     pub opacity: f32,
     pub transform: [f32; 6],
+    pub transform_origin: [f32; 2],
     pub uv: [f32; 4],
+    pub paint_reference: u32,
+    pub paint_outset: [f32; 4],
     pub role: u32,
     pub value: f32,
 }
 
 impl Style {
     pub const DEFAULT: Self = Self {
+        participation: 15,
+        cursor: 0xffff_ffff,
         dir: Dir::Y,
         size: [Size::FIT; 2],
         min: [0.0; 2],
@@ -141,7 +150,10 @@ impl Style {
         radii: [-1.0; 4],
         opacity: 1.0,
         transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        transform_origin: [0.5, 0.5],
         uv: [0.0, 0.0, 1.0, 1.0],
+        paint_reference: 0xffff_ffff,
+        paint_outset: [0.0; 4],
         role: 0,
         value: 0.0,
     };
@@ -153,7 +165,7 @@ impl Default for Style {
     }
 }
 
-const _: () = assert!(core::mem::size_of::<Style>() == 50 * 4);
+const _: () = assert!(core::mem::size_of::<Style>() == 59 * 4);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,7 +246,7 @@ impl Default for Limits {
 }
 
 /// The layout hash of the rows this crate makes (`LCGF_RT_LAYOUT` in lcgf.h).
-pub const RT_LAYOUT: u32 = 0x713a_3514;
+pub const RT_LAYOUT: u32 = 0x1878_28df;
 
 /// A node's row as the library stores it (`lcgf_row`, Zig's `Template`). `Row::from` is
 /// `Template.from`, run here (at compile time in a `const`), so only the row crosses the seam.
@@ -274,8 +286,15 @@ pub struct Row {
     pub radii: [f32; 4],
     pub opacity: f32,
     pub transform: [f32; 6],
+    pub transform_origin: [f32; 2],
+    pub paint_reference: u32,
+    pub paint_outset: [f32; 4],
+    pub prepared_texture: u32,
+    pub paint_revision: u32,
+    pub participation: u32,
+    pub cursor: u32,
 }
-const _: () = assert!(core::mem::size_of::<Row>() == 55 * 4);
+const _: () = assert!(core::mem::size_of::<Row>() == 66 * 4);
 
 // Template.from's selects: on a tie or a NaN, the second operand (the style's bound).
 #[inline(always)]
@@ -346,7 +365,15 @@ impl Row {
             value: s.value,
             text: NONE,
             custom: NONE,
-            own: off as u32 | (s.clip != 0) as u32,
+            own: off as u32
+                | (s.clip != 0) as u32
+                | (s.paint_outset[0] != 0.0
+                    || s.paint_outset[1] != 0.0
+                    || s.paint_outset[2] != 0.0
+                    || s.paint_outset[3] != 0.0
+                    || s.cursor != NONE
+                    || s.paint_reference != NONE
+                    || (s.participation & 0xff) != 15) as u32,
             border: s.border,
             uv: s.uv,
             radii: [
@@ -357,6 +384,13 @@ impl Row {
             ],
             opacity: s.opacity,
             transform: s.transform,
+            transform_origin: s.transform_origin,
+            paint_reference: s.paint_reference,
+            paint_outset: s.paint_outset,
+            prepared_texture: 0,
+            paint_revision: 0,
+            participation: s.participation & 0xff,
+            cursor: if s.cursor == NONE { 255 } else { s.cursor & 0xff },
         }
     }
 }
@@ -386,6 +420,15 @@ struct Extra {
     radii: [f32; 4],
     opacity: f32,
     transform: [f32; 6],
+    transform_origin: [f32; 2],
+    paint_reference: u32,
+    paint_outset: [f32; 4],
+    prepared_texture: u32,
+    paint_revision: u32,
+    participation: u8,
+    active_participation: u8,
+    cursor: u8,
+    active_cursor: u8,
     // alpha, world and clip_radii follow; paint writes them, a push does not.
     _paint: [f32; 11],
 }
@@ -483,8 +526,26 @@ impl View {
             *self.value.add(iu) = r.value;
             *self.text.add(iu) = r.text;
             *self.custom.add(iu) = r.custom;
+            // Participation narrows down the tree; without layout the node collapses.
+            let up = if i == 0 { 15 } else { (*self.x_row.add(*self.scope.add(pu) as usize)).active_participation };
+            let mut active = r.participation as u8 & up;
+            if active & 1 == 0 {
+                active = 0;
+                for a in 0..2 {
+                    *self.min[a].add(iu) = 0.0;
+                    *self.max[a].add(iu) = 0.0;
+                    *self.grow[a].add(iu) = 0.0;
+                    *self.pct[a].add(iu) = -1.0;
+                    *self.pad_lo[a].add(iu) = 0.0;
+                    *self.pad_hi[a].add(iu) = 0.0;
+                }
+                *self.flow.add(iu) = 0.0;
+                *self.gap.add(iu) = 0.0;
+            }
+            *self.role.add(iu) &= 0u8.wrapping_sub((active >> 3) & 1);
+            *self.sense.add(iu) &= 0u8.wrapping_sub((active >> 2) & 1);
             // Counted in its parent, its own count cleared (the root is its own parent).
-            *self.nkids.add(pu) += r.flow;
+            *self.nkids.add(pu) += *self.flow.add(iu);
             *self.nkids.add(iu) = 0.0;
             // The extras row, appended when the row has one.
             let own = r.own != 0;
@@ -503,6 +564,21 @@ impl View {
             e.radii = r.radii;
             e.opacity = r.opacity;
             e.transform = r.transform;
+            e.transform_origin = r.transform_origin;
+            e.paint_reference = r.paint_reference;
+            e.paint_outset = r.paint_outset;
+            e.prepared_texture = r.prepared_texture;
+            e.paint_revision = r.paint_revision;
+            e.participation = r.participation as u8;
+            e.active_participation = active;
+            e.cursor = r.cursor as u8;
+            e.active_cursor = if r.cursor != 255 {
+                r.cursor as u8
+            } else if i == 0 {
+                255
+            } else {
+                (*self.x_row.add(*self.scope.add(pu) as usize)).active_cursor
+            };
             i
         }
     }

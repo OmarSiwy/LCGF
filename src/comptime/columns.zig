@@ -141,7 +141,7 @@ pub fn Columns(comptime spec: Spec, comptime options: Options) type {
         }
 
         /// The type of `rect` and `vis` rows in `Dynamic`: `Coord(options.viewport)`.
-        pub const Coordinate = Coord(options.viewport);
+        pub const Coordinate = if (options.fractional_coordinates) f32 else Coord(options.viewport);
         /// The names of `Tree.Columns`, in declaration order.
         pub const names = info.field_names;
 

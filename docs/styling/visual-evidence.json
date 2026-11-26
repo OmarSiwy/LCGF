@@ -1,0 +1,1262 @@
+[
+  {
+    "id": "visual.capability_profiles",
+    "implementation": [
+      "src/render/capabilities.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "capability decisions reject unaccepted approximation before preparing pixels",
+      "checked rendering rejects stripped shaders before an ordinary backend draw",
+      "image brush sampling requests preparation rather than a backend-default sampler",
+      "drawRange rejects borrowed coverage aliases before modifying destination or scratch",
+      "applyClips rejects aliased coverage in either clip list before modifying pixels"
+    ],
+    "profile": "Explicit stock and portable_sdr profiles; checked exact/approximation/unsupported decisions before submission.",
+    "limitations": [
+      "Portable preparation requires caller-owned pixels and texture upload; raw Tier-0 backend calls remain caller-controlled.",
+      "Native HDR, native materials, custom materials, inline custom and depth scenes are separate host capabilities; not inferred from OS names."
+    ]
+  },
+  {
+    "id": "visual.paint_bounds",
+    "implementation": [
+      "src/draw/geometry.zig",
+      "src/draw/damage.zig",
+      "src/draw/decoration.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "paint bounds follow translated shadows and reject singular transforms",
+      "damage: a resized node repaints the union of its old and new rect, one rect",
+      "gradient border shadow and separate focus outline coexist in one texture"
+    ],
+    "profile": "Common affine bounds for ordinary draw kinds; portable decorations report outward-aligned bounds.",
+    "limitations": [
+      "Analytic shadow bounds use three sigma; true content-filter output bounds are explicit caller surfaces.",
+      "The host must include a changed prepared resource revision in its frame/update flow."
+    ]
+  },
+  {
+    "id": "visual.alpha_representation",
+    "implementation": [
+      "src/draw/surface.zig",
+      "src/draw/brushes.zig",
+      "src/draw/compositor.zig",
+      "src/draw/color_output.zig",
+      "src/render/gles/styling.zig"
+    ],
+    "verification": [
+      "texture export changes alpha representation once and preserves zero alpha",
+      "bilinear sampling prevents a transparent red fringe and respects placement",
+      "area filtering retains odd edges and premultiplies before linear light filtering",
+      "ES3 prepared gradient border shadow isolated mask texture agrees with software within two bytes",
+      "ES2 prepared gradient border shadow isolated mask texture agrees with software within two bytes"
+    ],
+    "profile": "RGBA8 effect surfaces are premultiplied encoded sRGB; upload export is explicitly straight. HDR planes are separate linear-light absolute luminance.",
+    "limitations": [
+      "RGBA8 preparation quantizes intermediate passes; float HDR processing is a separate explicit pipeline.",
+      "The current texture shader premultiplies input, so exporting a premultiplied image to it without conversion is incorrect."
+    ]
+  },
+  {
+    "id": "visual.coordinate_spaces",
+    "implementation": [
+      "src/draw/geometry.zig",
+      "src/draw/paint.zig",
+      "src/draw/draw_list.zig",
+      "src/interact/hit.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "transformed pointer and rounded ancestor clip agree with paint geometry",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Layout, paint, text/custom transforms, inverse pointer mapping and exact ancestor rounded clips share explicit geometry.",
+    "limitations": [
+      "Singular transforms do not produce interactive geometry; portable inverse-transform operations reject invalid matrices.",
+      "Perspective hit mapping is a separate projective-plane operation, not silently inferred by ordinary 2D hit testing."
+    ]
+  },
+  {
+    "id": "visual.clip_geometry_contract",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/render/prepared.zig",
+      "src/draw/draw_list.zig"
+    ],
+    "verification": [
+      "ordinary quad text and custom commands participate in an exact clipped isolated group",
+      "existing path coverage feeds clips without a retained path manager"
+    ],
+    "profile": "Rectangular fast paths remain direct; nested transformed rounded/path coverage clips use the portable prepared route.",
+    "limitations": [
+      "Inline custom content participates in portable grouping only when a caller-provided raster image is supplied; missing content is an error."
+    ]
+  },
+  {
+    "id": "visual.decoration_composition",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/brushes.zig",
+      "src/render/prepared.zig",
+      "examples/styling/gallery.zig",
+      "src/render/gles/styling.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "prepared texture binds a current layout box and preserves layout border metrics",
+      "ES3 prepared gradient border shadow isolated mask texture agrees with software within two bytes",
+      "ES2 prepared gradient border shadow isolated mask texture agrees with software within two bytes"
+    ],
+    "profile": "Portable composed decoration lowers to one ordinary straight-RGBA8 textured quad without changing the 136-byte Quad ABI.",
+    "limitations": [
+      "Rich decoration is explicit preparation; changing it does not silently allocate a texture or add a retained cache."
+    ]
+  },
+  {
+    "id": "visual.rgba8",
+    "implementation": [
+      "src/core/types.zig",
+      "src/draw/color_math.zig",
+      "src/draw/surface.zig"
+    ],
+    "verification": [
+      "authoring values convert without a registry and pack only at the boundary",
+      "layout: Quad is the 136-byte instance row the quad pipeline declares"
+    ],
+    "profile": "Existing packed Color channels and compact shader ABI retained.",
+    "limitations": []
+  },
+  {
+    "id": "visual.color_conversions",
+    "implementation": [
+      "src/draw/color_math.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "authoring values convert without a registry and pack only at the boundary",
+      "OKLab round trip and explicit alpha representation",
+      "XYZ and predefined wide gamut authoring spaces preserve white and extended gamut",
+      "SVG font fragments use unclipped baseline coordinates and CPAL fallback colors"
+    ],
+    "profile": "HSL/HWB, Lab/LCH D50, OKLab/OKLCH, P3, XYZ D50/D65, A98, ProPhoto, Rec2020 conversions; 148 CSS named colors in SVG authoring.",
+    "limitations": [
+      "Extended/out-of-gamut values survive authoring; RGBA8 packing clips channels. No general ICC profile engine is claimed."
+    ]
+  },
+  {
+    "id": "visual.color_interpolation",
+    "implementation": [
+      "src/draw/color_math.zig",
+      "src/draw/brushes.zig",
+      "src/anim/motion.zig",
+      "src/style/properties.zig"
+    ],
+    "verification": [
+      "premultiplied interpolation avoids transparent endpoint fringes",
+      "multi-stop hard boundaries, repeat, hints and transparent colors reach the sampler",
+      "extended easing and typed tracks drive real style properties"
+    ],
+    "profile": "Selectable sRGB, linear sRGB, OKLab and polar OKLCH with hue routes and explicit alpha premultiplication.",
+    "limitations": []
+  },
+  {
+    "id": "visual.wide_gamut",
+    "implementation": [
+      "src/draw/color_math.zig",
+      "src/draw/color_output.zig",
+      "src/render/capabilities.zig"
+    ],
+    "verification": [
+      "XYZ and predefined wide gamut authoring spaces preserve white and extended gamut",
+      "floating surfaces preserve HDR highlights and export actual host texture data",
+      "SDR import conversion and tone-map fallback preserve alpha and transparent black"
+    ],
+    "profile": "Optional tagged float P3/Rec2020/sRGB plane conversion and actual RGBA16F/32F/RGB10A2 export with explicit SDR fallback.",
+    "limitations": [
+      "Stock RGBA8 decoration surfaces are sRGB; they do not preserve wide-gamut authoring until a float scene is supplied.",
+      "The host configures and tags its swapchain/capture. Image ICC extraction, arbitrary ICC transforms and OS display-profile activation are outside this declared profile.",
+      "SDR mapping offers clipping or luminance-preserving Reinhard, not an ICC perceptual intent gamut mapper."
+    ]
+  },
+  {
+    "id": "visual.hdr",
+    "implementation": [
+      "src/draw/color_output.zig",
+      "src/render/capabilities.zig"
+    ],
+    "verification": [
+      "HDR transfer reference points and round trips use explicit luminance",
+      "floating surfaces preserve HDR highlights and export actual host texture data",
+      "SDR import conversion and tone-map fallback preserve alpha and transparent black"
+    ],
+    "profile": "Optional linear absolute-cd/m2 surfaces, explicit SDR white, HDR/SDR source-over, PQ/HLG/linear encodings and tone-mapped RGBA8.",
+    "limitations": [
+      "Host display headroom, output-mode activation and platform swapchain/capture tagging remain explicit external capabilities.",
+      "HLG follows the documented CSS draft transfer convention; it does not apply a display-dependent OOTF automatically.",
+      "CPU float operations are real consumers; the stock Quad shader is not upgraded into a full float-HDR scene renderer."
+    ]
+  },
+  {
+    "id": "visual.solid_background",
+    "implementation": [
+      "src/core/types.zig",
+      "src/draw/paint.zig",
+      "src/draw/brushes.zig",
+      "src/draw/decoration.zig",
+      "src/style/properties.zig"
+    ],
+    "verification": [
+      "a textured node with no fill paints its texture untinted",
+      "direct typed values reach existing box and text consumers; transparent and zero are values"
+    ],
+    "profile": "Legacy compact fill retained; typed rich brush tint is independent and literal transparent is a value.",
+    "limitations": []
+  },
+  {
+    "id": "visual.background_layers",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/backgrounds.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "background reference boxes and local/fixed attachment change actual sampled pixels"
+    ],
+    "profile": "Back-to-front arbitrary brush layers with per-layer alpha, operator, blend and clip.",
+    "limitations": []
+  },
+  {
+    "id": "visual.background_geometry",
+    "implementation": [
+      "src/draw/backgrounds.zig",
+      "src/draw/decoration.zig"
+    ],
+    "verification": [
+      "background reference boxes and local/fixed attachment change actual sampled pixels"
+    ],
+    "profile": "Actual box preparation and paint consumer for content/padding/border origin and clip, scroll, local overflow and fixed attachment.",
+    "limitations": [
+      "Local attachment requires explicit overflow padding-box geometry and scroll offset; fixed attachment requires an explicit viewport or transformed containing block.",
+      "The host supplies those inputs each frame; no hidden dependency on a global window or scroll registry."
+    ]
+  },
+  {
+    "id": "visual.linear_gradient",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/backgrounds.zig"
+    ],
+    "verification": [
+      "multi-stop hard boundaries, repeat, hints and transparent colors reach the sampler",
+      "percentage radii capsule and radial extent helpers feed real decoration"
+    ],
+    "profile": "Explicit endpoint gradients plus CSS-style zero-up clockwise angle/reference-box helper. Legacy two-color quad gradients retained.",
+    "limitations": []
+  },
+  {
+    "id": "visual.radial_gradient",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/backgrounds.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "general two circle gradients preserve inner radii and transparent cone exterior",
+      "percentage radii capsule and radial extent helpers feed real decoration"
+    ],
+    "profile": "Circles/ellipses, offset centers/foci, closest/farthest side/corner sizes, general two-circle cone gradients.",
+    "limitations": [
+      "Zero radius in the background helper uses a declared finite-pixel limit: final color for pad, weighted ramp average for repetition.",
+      "Legacy SVG exactly-on-end-circle repeated focal degeneracy is rejected explicitly rather than approximated silently."
+    ]
+  },
+  {
+    "id": "visual.conic_gradient",
+    "implementation": [
+      "src/draw/brushes.zig"
+    ],
+    "verification": [
+      "linear light and conic geometry are consumed without scalar pixel tails",
+      "OpenType sweep uses Cartesian angles and consumes reversed and degenerate intervals"
+    ],
+    "profile": "CSS-style conic brush and OpenType Cartesian sweep with arbitrary/reversed angular interval, defined seam and repeat/reflect.",
+    "limitations": []
+  },
+  {
+    "id": "visual.gradient_stops",
+    "implementation": [
+      "src/draw/brushes.zig"
+    ],
+    "verification": [
+      "multi-stop hard boundaries, repeat, hints and transparent colors reach the sampler"
+    ],
+    "profile": "Caller-prepared segment spans consume arbitrary ordered/out-of-range stops, hard duplicates, midpoint hints and interpolation space.",
+    "limitations": [
+      "Storage must include one segment per stop; invalid ordering or insufficient capacity returns an error before output preparation."
+    ]
+  },
+  {
+    "id": "visual.gradient_spread",
+    "implementation": [
+      "src/draw/brushes.zig"
+    ],
+    "verification": [
+      "multi-stop hard boundaries, repeat, hints and transparent colors reach the sampler",
+      "OpenType sweep uses Cartesian angles and consumes reversed and degenerate intervals"
+    ],
+    "profile": "Pad/repeat/reflect for all ramp-based brushes, with defined negative-coordinate and degenerate policies.",
+    "limitations": []
+  },
+  {
+    "id": "visual.foreground_decoration",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/outline.zig",
+      "src/runtime/frame.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "caller usage: combined states keep independent border/focus and failed resolution leaves frame balanced"
+    ],
+    "profile": "Explicit caller paint order and noninteractive frame paint-extra rows support foreground/selection/focus decoration.",
+    "limitations": [
+      "A rich foreground is painted after the content/group using the same public decoration operations; no automatic CSS pseudo-element or retained overlay engine is introduced."
+    ]
+  },
+  {
+    "id": "visual.border_edges",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/layout/logical.zig"
+    ],
+    "verification": [
+      "per-edge widths and colors leave the content box intact",
+      "gradient border shadow and separate focus outline coexist in one texture"
+    ],
+    "profile": "Independent L/T/R/B width, style and arbitrary brush, normalized unequal joins.",
+    "limitations": [
+      "Physical edge order is explicit; writing-mode/logical-edge resolution belongs to the layout resolver before preparing decoration."
+    ]
+  },
+  {
+    "id": "visual.border_patterns",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/vector.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "dash phase crosses vertices and joins ink across the closed seam"
+    ],
+    "profile": "Solid/dashed/dotted/double/groove/ridge/inset/outset rectangle borders; continuous rounded perimeter phase; arbitrary path dash arrays.",
+    "limitations": [
+      "A box Edge has a dash/gap pair; arbitrary dash arrays use the native vector stroke consumer. The DTCG importer rejects unrepresentable box patterns."
+    ]
+  },
+  {
+    "id": "visual.border_alignment",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "per-edge widths and colors leave the content box intact",
+      "prepared texture binds a current layout box and preserves layout border metrics"
+    ],
+    "profile": "Inside/center/outside placement with actual outward bounds and separate retained layout-border metrics.",
+    "limitations": [
+      "Paint alignment itself does not alter layout; the caller chooses its layout border contribution."
+    ]
+  },
+  {
+    "id": "visual.corner_radii",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/backgrounds.zig"
+    ],
+    "verification": [
+      "radii normalize proportionally and elliptical clips transform coherently",
+      "percentage radii capsule and radial extent helpers feed real decoration"
+    ],
+    "profile": "Four x/y pairs, absolute/percentage resolution, capsule and proportional overlap normalization shared by shapes, layers, clips and borders.",
+    "limitations": []
+  },
+  {
+    "id": "visual.corner_shapes",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "corner shapes and inset shadows consume their supplied options",
+      "non round shadow distances follow bevel scoop and notch contours"
+    ],
+    "profile": "Round/square/bevel/scoop/notch/squircle/general positive-exponent superellipse raster contours.",
+    "limitations": [
+      "Thick borders use matching inset/outset authored-shape contours; they are not an exact Euclidean offset construction for arbitrary superellipses.",
+      "Soft box shadows use the documented analytic contour-distance approximation; true silhouette convolution is separately available."
+    ]
+  },
+  {
+    "id": "visual.outlines",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/outline.zig",
+      "src/runtime/frame.zig",
+      "src/theme/recipe_controls.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "caller usage: combined states keep independent border/focus and failed resolution leaves frame balanced"
+    ],
+    "profile": "Independent brush/pattern/width/offset shape-following paint; actual noninteractive border-box focus paint extras and bounds, with no reflow.",
+    "limitations": []
+  },
+  {
+    "id": "visual.image_fit_position",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/image_variants.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "bilinear sampling prevents a transparent red fringe and respects placement",
+      "DPI variant choice changes the actual resource without changing logical placement"
+    ],
+    "profile": "Fill/contain/cover/none/scale-down plus fractional alignment and explicit stable destination box.",
+    "limitations": [
+      "Cover/none overflow clipping is an explicit layer/shape choice."
+    ]
+  },
+  {
+    "id": "visual.image_crop",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/image_sampling.zig",
+      "src/draw/draw_list.zig"
+    ],
+    "verification": [
+      "EXIF rotations materialize and sample the same oriented pixels",
+      "bilinear sampling prevents a transparent red fringe and respects placement"
+    ],
+    "profile": "Existing normalized UVs retained; rich source-pixel atlas crop clamps sampling to crop centers and supports eight orientations.",
+    "limitations": [
+      "The host reads image orientation metadata; the provided orientation enum then has an actual sampler/materializer."
+    ]
+  },
+  {
+    "id": "visual.image_tint",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/decoration.zig",
+      "src/draw/compositor.zig"
+    ],
+    "verification": [
+      "direct typed values reach existing box and text consumers; transparent and zero are values",
+      "bilinear sampling prevents a transparent red fringe and respects placement"
+    ],
+    "profile": "Explicit tint RGBA, independent layer opacity, untinted white default, and optional ordered color-filter pass.",
+    "limitations": []
+  },
+  {
+    "id": "visual.image_repeat",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/masks.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "bilinear sampling prevents a transparent red fringe and respects placement",
+      "placed repeated masks combine in order with explicit coverage mode"
+    ],
+    "profile": "Independent none/repeat/mirror/space/round axes on ordinary image brush, with explicit tile and distribution area.",
+    "limitations": [
+      "Prepared pixels give every stock texture backend the same declared CPU result; native stock texture samplers are not implicitly assumed equivalent."
+    ]
+  },
+  {
+    "id": "visual.nine_slice",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/masks.zig"
+    ],
+    "verification": [
+      "nine slice consumes fractional and large destination cuts",
+      "nine slice mask border is consumed by a completed group and preflights storage"
+    ],
+    "profile": "Independent source/destination cuts, proportional fit, repeated/round/space edges and optional center, real image/mask consumers.",
+    "limitations": [
+      "Nine output rows are required by the helper even when fewer nonempty patches are returned."
+    ]
+  },
+  {
+    "id": "visual.image_sampling",
+    "implementation": [
+      "src/draw/brushes.zig",
+      "src/draw/image_sampling.zig",
+      "src/render/capabilities.zig",
+      "src/assets/image_mipmaps.zig"
+    ],
+    "verification": [
+      "area filtering retains odd edges and premultiplies before linear light filtering",
+      "caller mip chain is consumed by fractional LOD sampling",
+      "image brush sampling requests preparation rather than a backend-default sampler"
+    ],
+    "profile": "Nearest/bilinear and nearest/trilinear mip selection, explicit derivatives/LOD, nearest/linear/area resampling in sRGB or linear light.",
+    "limitations": [
+      "The existing byte mip builder/upload remains available; the new linear-light area builder preserves odd edge coverage.",
+      "No automatic derivative inference from a retained scene or hardware anisotropic sampler is claimed."
+    ]
+  },
+  {
+    "id": "visual.image_resolution",
+    "implementation": [
+      "src/draw/image_variants.zig",
+      "src/draw/image_sampling.zig",
+      "src/draw/brushes.zig"
+    ],
+    "verification": [
+      "DPI variant choice changes the actual resource without changing logical placement",
+      "caller mip chain is consumed by fractional LOD sampling"
+    ],
+    "profile": "Pure metadata selection of scale variants, stable logical intrinsic size, source orientation, actual brush binding, decode-size hints and mips.",
+    "limitations": [
+      "Caller owns asynchronous loading and cache IDs; decode hints may be honored or full-size decoded, and both are validated by bind."
+    ]
+  },
+  {
+    "id": "visual.box_shadows",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/geometry.zig",
+      "src/draw/damage.zig"
+    ],
+    "verification": [
+      "gradient border shadow and separate focus outline coexist in one texture",
+      "non round shadow distances follow bevel scoop and notch contours",
+      "paint bounds follow translated shadows and reject singular transforms"
+    ],
+    "profile": "Multiple ordered offset/spread/sigma/color box shadows following normalized corner shapes.",
+    "limitations": [
+      "Analytic Gaussian contour-distance shadows are explicitly an approximation; request exact content-alpha convolution when needed."
+    ]
+  },
+  {
+    "id": "visual.inset_shadows",
+    "implementation": [
+      "src/draw/decoration.zig"
+    ],
+    "verification": [
+      "corner shapes and inset shadows consume their supplied options",
+      "gradient border shadow and separate focus outline coexist in one texture"
+    ],
+    "profile": "Multiple inset shadows with independent offset/sigma/spread/color, clipped to the authored shape.",
+    "limitations": [
+      "Uses the same declared analytic soft-edge approximation as outer box shadows."
+    ]
+  },
+  {
+    "id": "visual.content_shadows",
+    "implementation": [
+      "src/draw/compositor.zig",
+      "src/render/effects.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "displacement and alpha drop shadow are rendered with explicit storage",
+      "filter graph blends group pixels and propagates external changes"
+    ],
+    "profile": "Actual source-alpha extraction, separable blur, offset/color and explicit render-group input dependency.",
+    "limitations": []
+  },
+  {
+    "id": "visual.path_geometry",
+    "implementation": [
+      "src/draw/paths.zig",
+      "src/draw/vector.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "elliptical arc construction reaches endpoints and radius correction stays finite",
+      "flatten: every chord stays within the tolerance, and fewer chords for a looser one",
+      "SVG path commands and transform lists preserve curves and authored bounds"
+    ],
+    "profile": "Existing reusable move/line/quadratic/cubic/close path extended with SVG elliptical arcs; bounded flattening and compound contours.",
+    "limitations": []
+  },
+  {
+    "id": "visual.vector_fills",
+    "implementation": [
+      "src/draw/paths.zig",
+      "src/draw/vector.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "fill: rules differ where contours overlap with the same winding",
+      "path coverage consumes the gradient brush"
+    ],
+    "profile": "Nonzero/even-odd existing coverage with actual solid/gradient/image brush sampler, affine brush inverse and opacity.",
+    "limitations": []
+  },
+  {
+    "id": "visual.vector_strokes",
+    "implementation": [
+      "src/draw/paths.zig",
+      "src/draw/vector.zig"
+    ],
+    "verification": [
+      "stroke: pieces per segment, join and cap, all wound the same way",
+      "stroke: a sharp miter past the limit becomes a bevel",
+      "path coverage consumes the gradient brush"
+    ],
+    "profile": "Width, butt/round/square cap, miter/bevel/round join/miter limit reuse existing stroker and rich coverage paint.",
+    "limitations": []
+  },
+  {
+    "id": "visual.vector_dashes",
+    "implementation": [
+      "src/draw/vector.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "dash phase crosses vertices and joins ink across the closed seam",
+      "SVG non scaling dashed strokes and fragment ancestor opacity are consumed"
+    ],
+    "profile": "Arbitrary arrays, odd-pattern duplication, zero-entry policy, phase across vertices, closed seam joining, actual cap-aware stroking.",
+    "limitations": [
+      "Dash geometry requires explicit bounded output capacity; excessive split counts return InvalidDash."
+    ]
+  },
+  {
+    "id": "visual.vector_markers",
+    "implementation": [
+      "src/draw/vector.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "path markers use curve derivatives and caller chosen units"
+    ],
+    "profile": "Authored vertex start/mid/end markers with curve derivative tangents, automatic/start-reverse/fixed orientation and explicit units.",
+    "limitations": []
+  },
+  {
+    "id": "visual.non_scaling_strokes",
+    "implementation": [
+      "src/draw/vector.zig",
+      "src/draw/svg.zig"
+    ],
+    "verification": [
+      "non scaling device stroke retains pixel width under skew and scale",
+      "SVG non scaling dashed strokes and fragment ancestor opacity are consumed"
+    ],
+    "profile": "Geometry/logical/device stroke units and user/stroke/device marker units consume the actual transform/device scale.",
+    "limitations": []
+  },
+  {
+    "id": "visual.vector_import",
+    "implementation": [
+      "src/draw/tinyvg.zig",
+      "src/draw/svg.zig",
+      "src/draw/vector.zig"
+    ],
+    "verification": [
+      "rich decoding retains both gradient colors and endpoint width changes",
+      "TinyVG rich paint actually renders its gradient into a caller surface",
+      "SVG actual gradient templates and isolated opacity overlap render into the surface",
+      "SVG unsupported visual features and reference cycles are explicit",
+      "SVG font fragments use unclipped baseline coordinates and CPAL fallback colors"
+    ],
+    "profile": "Existing TinyVG gains real two-color gradient and variable-width fidelity; declared static SVG subset lowers to native paths/brushes/layers.",
+    "limitations": [
+      "SVG supports shapes/path commands, transforms/viewBox, inline/inherited presentation, gradients/templates, currentColor/CPAL fallback, dashes and isolated opacity.",
+      "Unsupported CSS selectors, use, clipPath, mask, filter, pattern, image, text, scripts, external assets and nested svg return explicit errors. This is not a browser or full OpenType-SVG conformance claim.",
+      "Streaming imports can leave earlier completed shapes in a staging surface on a later authoring/capacity error; publish only after successful return when atomicity is required."
+    ]
+  },
+  {
+    "id": "visual.custom_materials",
+    "implementation": [
+      "src/core/types.zig",
+      "src/render/wgpu/wgpu.zig",
+      "src/render/shaders/material.wgsl",
+      "src/render/capabilities.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "checked rendering rejects stripped shaders before an ordinary backend draw"
+    ],
+    "profile": "Existing host shader registration/Style.material/params retained; checked backend profile distinguishes custom-material support.",
+    "limitations": [
+      "Portable preparation rejects arbitrary GPU material code; a software equivalent or explicit fallback must be supplied by the host."
+    ]
+  },
+  {
+    "id": "visual.custom_draw",
+    "implementation": [
+      "src/draw/draw_list.zig",
+      "src/draw/paint.zig",
+      "src/render/prepared.zig",
+      "src/render/wgpu/custom_draw_sample.zig"
+    ],
+    "verification": [
+      "a renderer's one switch per command draws every quad, run and custom once, in order",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Existing inline host interleaving remains; custom records carry geometry, transform, clip/radii and opacity, and portable groups require an explicit image.",
+    "limitations": [
+      "No callback or implicit GPU pass ownership is introduced. Custom draw implementations must honor the declared contract themselves or provide raster content."
+    ]
+  },
+  {
+    "id": "visual.rectangular_clip",
+    "implementation": [
+      "src/draw/geometry.zig",
+      "src/draw/paint.zig",
+      "src/render/sw/sw.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "opaque rects: filled exactly, cut by the clip's pixel centres and the scissor",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Existing rectangular clip/scissor fast route and exact portable intersections including empty/fractional bounds.",
+    "limitations": []
+  },
+  {
+    "id": "visual.rounded_clip",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/render/prepared.zig",
+      "src/draw/geometry.zig"
+    ],
+    "verification": [
+      "radii normalize proportionally and elliptical clips transform coherently",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Arbitrary clip spans intersect every rounded ancestor at shared subpixel positions, including text/images/custom raster content.",
+    "limitations": [
+      "A single stock shader clip descriptor does not encode an arbitrary nested chain; checked capability routing selects portable preparation."
+    ]
+  },
+  {
+    "id": "visual.path_clip",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/paths.zig",
+      "src/draw/vector.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "existing path coverage feeds clips without a retained path manager",
+      "path coverage consumes the gradient brush"
+    ],
+    "profile": "Existing fill-rule path coverage becomes an explicit transformed coverage clip and intersects rounded/rectangular/path clips.",
+    "limitations": [
+      "Paint clips do not silently replace the ordinary 2D hit shape. Caller input policy chooses an explicit hit target/coverage test; arbitrary path clip semantics are not auto-attached to retained node input."
+    ]
+  },
+  {
+    "id": "visual.image_masks",
+    "implementation": [
+      "src/draw/masks.zig",
+      "src/draw/compositor.zig",
+      "src/draw/decoration.zig",
+      "src/render/effects.zig",
+      "src/render/gles/styling.zig"
+    ],
+    "verification": [
+      "mask luminance, inversion and alpha are distinct",
+      "placed repeated masks combine in order with explicit coverage mode",
+      "nine slice mask border is consumed by a completed group and preflights storage",
+      "ES3 prepared gradient border shadow isolated mask texture agrees with software within two bytes",
+      "ES2 prepared gradient border shadow isolated mask texture agrees with software within two bytes"
+    ],
+    "profile": "Actual image/gradient/path-coverage alpha, encoded/linear luminance, inversion and group-once mask application.",
+    "limitations": []
+  },
+  {
+    "id": "visual.mask_layers",
+    "implementation": [
+      "src/draw/masks.zig",
+      "src/draw/brushes.zig",
+      "src/draw/compositor.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "placed repeated masks combine in order with explicit coverage mode",
+      "nine slice mask border is consumed by a completed group and preflights storage"
+    ],
+    "profile": "Explicit placement/inverse/region, image repetition/size, back-to-front add/subtract/intersect/exclude, actual nine-slice mask border and capacity diagnostics.",
+    "limitations": [
+      "Every operator is applied to explicit initial coverage; subtract is source-out, not a destructive erase shorthand."
+    ]
+  },
+  {
+    "id": "visual.affine_transform",
+    "implementation": [
+      "src/draw/geometry.zig",
+      "src/draw/paint.zig",
+      "src/draw/svg.zig",
+      "src/interact/hit.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "transformed pointer and rounded ancestor clip agree with paint geometry",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group",
+      "SVG path commands and transform lists preserve curves and authored bounds"
+    ],
+    "profile": "Translation/rotation/scale/skew/matrix and explicit transform origin/reference-box shared across paint/label/clip/input.",
+    "limitations": [
+      "Transforms affect displayed geometry, not the surrounding layout calculation."
+    ]
+  },
+  {
+    "id": "visual.perspective_3d",
+    "implementation": [
+      "src/draw/projective.zig",
+      "src/render/capabilities.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "projective raster samples non-affine UVs through the ordinary surface path",
+      "3D origin rotation perspective and backface choices remain explicit"
+    ],
+    "profile": "Optional caller-ordered flattened planes: real 4x4 XYZ rotations/perspective/origin, inverse projective raster sampling and backface culling.",
+    "limitations": [
+      "No retained preserve-3D scene/depth sorting/occlusion engine is introduced. depth_scene is a distinct rejected capability unless the host supplies one.",
+      "Crossing the projection plane is an explicit error rather than unbounded raster work.",
+      "Hit testing of a plane uses its exposed inverse mapping; automatic projected descendant input routing is outside the ordinary affine node contract."
+    ]
+  },
+  {
+    "id": "visual.primitive_opacity",
+    "implementation": [
+      "src/draw/paint.zig",
+      "src/draw/draw_list.zig",
+      "src/draw/inherit.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "sweep 2: text runs get the content box, custom draws the node rect, both the parent clip",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Legacy ancestor alpha multiplication remains; text and custom records receive explicit primitive alpha.",
+    "limitations": [
+      "Per-primitive opacity retains its semantics; isolated group opacity uses a separate flatten-then-fade operation."
+    ]
+  },
+  {
+    "id": "visual.group_opacity",
+    "implementation": [
+      "src/render/prepared.zig",
+      "src/draw/compositor.zig",
+      "src/draw/svg.zig",
+      "src/render/gles/styling.zig"
+    ],
+    "verification": [
+      "isolated group opacity is applied once after opaque overlap",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group",
+      "SVG actual gradient templates and isolated opacity overlap render into the surface",
+      "ES3 prepared gradient border shadow isolated mask texture agrees with software within two bytes",
+      "ES2 prepared gradient border shadow isolated mask texture agrees with software within two bytes"
+    ],
+    "profile": "Real caller-owned group surface, all participating ordinary draw kinds, nested explicit composition and opacity applied once.",
+    "limitations": [
+      "Custom GPU commands need caller-provided raster equivalents for portable composition.",
+      "No implicit nonoverlap proof or retained offscreen cache is added."
+    ]
+  },
+  {
+    "id": "visual.surface_layers",
+    "implementation": [
+      "src/draw/surface.zig",
+      "src/render/prepared.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "surface capacity and transparent padding are explicit",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group",
+      "filter graph blends group pixels and propagates external changes"
+    ],
+    "profile": "Caller-owned surfaces with explicit dimensions/stride/alpha, measurement, budgets, resource lifetimes and no hidden allocation.",
+    "limitations": []
+  },
+  {
+    "id": "visual.stacking_isolation",
+    "implementation": [
+      "src/draw/order.zig",
+      "src/layout/overlay.zig",
+      "src/render/prepared.zig",
+      "src/draw/compositor.zig",
+      "src/interact/hit.zig"
+    ],
+    "verification": [
+      "stacking layers: a raised menu paints after every row; batch counts recorded",
+      "atLayered: an open menu covers the later body row under it",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group"
+    ],
+    "profile": "Existing layer/sibling/hit order retained; an explicit completed offscreen range is an atomic isolated group at its composite position.",
+    "limitations": [
+      "This profile does not add a browser-like nested retained z-index engine. The caller sequences nested groups and their associated interaction order explicitly."
+    ]
+  },
+  {
+    "id": "visual.blend_modes",
+    "implementation": [
+      "src/draw/compositor.zig",
+      "src/draw/decoration.zig",
+      "src/render/effects.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "Porter Duff and blend modes produce premultiplied values",
+      "filter graph blends group pixels and propagates external changes"
+    ],
+    "profile": "All 16 declared normal/artistic separable and nonseparable blend modes on premultiplied surfaces and isolated groups.",
+    "limitations": [
+      "Artistic blend calculation is encoded sRGB for the RGBA8 compositor; float HDR source-over is a separate path."
+    ]
+  },
+  {
+    "id": "visual.compositing_operators",
+    "implementation": [
+      "src/draw/compositor.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "Porter Duff and blend modes produce premultiplied values",
+      "isolated group opacity is applied once after opaque overlap"
+    ],
+    "profile": "Clear/source/destination and all Porter-Duff in/out/atop/over/xor plus additive, with explicit offset/bounds.",
+    "limitations": []
+  },
+  {
+    "id": "visual.color_filters",
+    "implementation": [
+      "src/draw/compositor.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "bounded backdrop snapshot blur and matrix passes are caller scheduled",
+      "signed convolution and component tables are real filter consumers"
+    ],
+    "profile": "Brightness/contrast/saturation/grayscale/hue/invert/sepia/opacity/4x5 matrix in selected transfer space, concatenation and explicit ordered graph.",
+    "limitations": [
+      "Fusing is valid only for compatible spaces and when intermediate clipping is not required; the API documents that condition."
+    ]
+  },
+  {
+    "id": "visual.foreground_blur",
+    "implementation": [
+      "src/draw/compositor.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "anisotropic blur consumes independent axes and preserves unblurred rows",
+      "anisotropic graph blur preserves the identity axis and checks joint kernel capacity",
+      "bounded backdrop snapshot blur and matrix passes are caller scheduled"
+    ],
+    "profile": "Actual separable Gaussian independent X/Y sigma/kernel, explicit source/scratch/destination and edge modes, caller resolution/bounds.",
+    "limitations": [
+      "Changing effective resolution requires explicit resampling and bounds; no hidden adaptive downsampling."
+    ]
+  },
+  {
+    "id": "visual.backdrop_filters",
+    "implementation": [
+      "src/render/effects.zig",
+      "src/draw/compositor.zig",
+      "src/render/prepared.zig",
+      "examples/styling/gallery.zig"
+    ],
+    "verification": [
+      "backdrop refresh follows changed background inside the blur halo",
+      "bounded backdrop snapshot blur and matrix passes are caller scheduled"
+    ],
+    "profile": "Explicit bounded scene snapshot, graph filters/tint/saturation, exact destination clips, change propagation and halo-aware refresh.",
+    "limitations": [
+      "The host identifies the backdrop source boundary and sequences capture before the foreground; no renderer-global scene capture."
+    ]
+  },
+  {
+    "id": "visual.specialist_filters",
+    "implementation": [
+      "src/draw/filter_primitives.zig",
+      "src/draw/compositor.zig",
+      "src/render/effects.zig"
+    ],
+    "verification": [
+      "signed convolution and component tables are real filter consumers",
+      "noise is repeatable and supplied seed changes generated pixels",
+      "distant point spot diffuse and specular lights shade an alpha height field",
+      "displacement and alpha drop shadow are rendered with explicit storage",
+      "filter graph blends group pixels and propagates external changes"
+    ],
+    "profile": "Real convolution, morphology, displacement, channel transfer, deterministic noise, point/spot/distant diffuse/specular lighting, arithmetic and multi-input graphs.",
+    "limitations": [
+      "Noise is the documented deterministic native generator, not a bit-for-bit implementation of SVG legacy turbulence seed tables.",
+      "Lighting color alpha must be one; apply explicit group opacity afterward.",
+      "Primitive numerical authoring errors can stop a graph after earlier nodes were produced; capacities/graph references/storage are preflighted before execution."
+    ]
+  },
+  {
+    "id": "visual.property_tweens",
+    "implementation": [
+      "src/anim/tweens.zig",
+      "src/anim/motion.zig",
+      "src/style/properties.zig",
+      "src/runtime/context.zig"
+    ],
+    "verification": [
+      "retarget: the same target keeps the leg; a new one starts from where it is",
+      "extended easing and typed tracks drive real style properties",
+      "paint-only changes do not request shaping or layout; text metrics do",
+      "tween reservation exhaustion preserves live playback and never steps the discard row"
+    ],
+    "profile": "Existing property tweens plus typed track sampling and semantic paint/layout/text invalidation.",
+    "limitations": []
+  },
+  {
+    "id": "visual.easing",
+    "implementation": [
+      "src/anim/tweens.zig",
+      "src/anim/motion.zig"
+    ],
+    "verification": [
+      "ease_table: every curve starts at 0, ends at 1 and never leaves [0, 1]",
+      "extended easing and typed tracks drive real style properties"
+    ],
+    "profile": "Existing curves retained; cubic Bezier, all steps jump modes, piecewise linear and caller sampled curves with validation.",
+    "limitations": []
+  },
+  {
+    "id": "visual.springs",
+    "implementation": [
+      "src/anim/anims.zig",
+      "src/runtime/context.zig"
+    ],
+    "verification": [
+      "step: a spring lands on its target, then reports rest and stays idle",
+      "step: every row is stepped as the scalar reference, across vectors and padding",
+      "declared slider spring drives painted frames and honours reduced motion",
+      "spring reservation exhaustion discards overflow without changing a live row"
+    ],
+    "profile": "Existing explicit spring dynamics/velocity/retarget/threshold and idle integration retained. Checked reservation and isolated discard-row compatibility behavior prevent overflow from mutating another spring.",
+    "limitations": []
+  },
+  {
+    "id": "visual.keyframes",
+    "implementation": [
+      "src/anim/keyframes.zig",
+      "src/anim/motion.zig"
+    ],
+    "verification": [
+      "caller-owned playback handles delay alternation pause reverse and reduced motion",
+      "extended easing and typed tracks drive real style properties"
+    ],
+    "profile": "Typed timed keys and independent playback duration/delay/repeats/direction/fill/pause/seek, no hidden event dispatcher.",
+    "limitations": []
+  },
+  {
+    "id": "visual.color_motion",
+    "implementation": [
+      "src/anim/motion.zig",
+      "src/draw/color_math.zig",
+      "src/style/properties.zig"
+    ],
+    "verification": [
+      "premultiplied interpolation avoids transparent endpoint fringes",
+      "extended easing and typed tracks drive real style properties",
+      "color transition exhaustion settles all channels without partial reservations"
+    ],
+    "profile": "Motion calls the same selected color interpolation as static gradient authoring; legacy RGBA channel behavior remains available.",
+    "limitations": []
+  },
+  {
+    "id": "visual.layout_motion",
+    "implementation": [
+      "src/anim/flip.zig",
+      "src/anim/motion.zig",
+      "src/runtime/context.zig"
+    ],
+    "verification": [
+      "animateLayout: a node pushed down by a growing sibling slides there, then rests",
+      "path traversal morphing and size FLIP consume existing geometry",
+      "FLIP exhaustion preserves prior registrations and reserves its two spring axes atomically"
+    ],
+    "profile": "Existing identity/position FLIP springs retained; explicit before/after rectangle transform supports size transitions.",
+    "limitations": [
+      "Size FLIP scales the displayed subtree through a transform; it does not silently reflow/re-shape text at every intermediate size.",
+      "Caller supplies updated before/after geometry on interruption and composes nested transforms explicitly."
+    ]
+  },
+  {
+    "id": "visual.motion_paths",
+    "implementation": [
+      "src/anim/motion.zig",
+      "src/draw/paths.zig"
+    ],
+    "verification": [
+      "path traversal morphing and size FLIP consume existing geometry"
+    ],
+    "profile": "Distance-based existing-polyline traversal returns position/tangent and an anchor/rotation-offset matrix.",
+    "limitations": []
+  },
+  {
+    "id": "visual.geometry_morph",
+    "implementation": [
+      "src/anim/motion.zig",
+      "src/draw/paths.zig",
+      "src/draw/decoration.zig"
+    ],
+    "verification": [
+      "path traversal morphing and size FLIP consume existing geometry"
+    ],
+    "profile": "Real compatible command/point interpolation into caller Path storage; shape radii remain plain interpolatable values.",
+    "limitations": [
+      "Incompatible topology returns IncompatiblePath; the caller explicitly selects a discrete or two-surface crossfade policy. No hidden path remeshing."
+    ]
+  },
+  {
+    "id": "visual.reduced_motion",
+    "implementation": [
+      "src/anim/motion.zig",
+      "src/runtime/context.zig",
+      "src/runtime/scheduler.zig",
+      "src/a11y/settings.zig"
+    ],
+    "verification": [
+      "caller-owned playback handles delay alternation pause reverse and reduced motion",
+      "reduced motion: every animation shows its end state in the frame it changes; idle at once",
+      "idle: zero frames and zero wakeups without input"
+    ],
+    "profile": "Reduced-motion end state and explicit wake/idle rules retained and used by new playback.",
+    "limitations": [
+      "Essential-motion choice is caller policy through the reduced-motion argument; no global hidden override."
+    ]
+  },
+  {
+    "id": "visual.animation_lifecycle",
+    "implementation": [
+      "src/anim/motion.zig",
+      "src/anim/anims.zig",
+      "src/anim/tweens.zig",
+      "src/runtime/context.zig",
+      "src/anim/flip.zig",
+      "src/runtime/frame.zig"
+    ],
+    "verification": [
+      "caller-owned playback handles delay alternation pause reverse and reduced motion",
+      "tween: wakes the host for its duration, lands, then the host sleeps",
+      "animation exhaustion returns settled values without retargeting another control",
+      "FLIP exhaustion preserves prior registrations and reserves its two spring axes atomically",
+      "tween reservation exhaustion preserves live playback and never steps the discard row",
+      "color transition exhaustion settles all channels without partial reservations"
+    ],
+    "profile": "New independent Playback supports delay/cancel/finish/pause/seek/reverse/completion and explicit hidden-subtree policy. Runtime animate/tween/sequence/FLIP use checked reservations, return settled targets/layout on exhaustion, and report per-frame anims/tweens/flips status bits.",
+    "limitations": [
+      "Compatibility slot methods return a discard row beyond padded(cap), flagged by overflow and never stepped/retained. Checked callers use reserve/reserveScan to receive NoSpace.",
+      "Completion is returned data; consuming it and scheduling a later frame stay under caller control."
+    ]
+  },
+  {
+    "id": "visual.pixel_alignment",
+    "implementation": [
+      "src/draw/geometry.zig",
+      "src/draw/decoration.zig",
+      "src/render/prepared.zig"
+    ],
+    "verification": [
+      "radii normalize together and snapped physical edges preserve scale",
+      "radii normalize proportionally and elliptical clips transform coherently"
+    ],
+    "profile": "Fractional logical geometry retained; explicit device-scale edge snapping and outward texture-bound alignment happen at the chosen boundary.",
+    "limitations": []
+  },
+  {
+    "id": "visual.antialiasing",
+    "implementation": [
+      "src/draw/decoration.zig",
+      "src/draw/paths.zig",
+      "src/draw/masks.zig",
+      "src/draw/projective.zig",
+      "src/render/capabilities.zig"
+    ],
+    "verification": [
+      "fill: a half-pixel edge covers half, either winding direction",
+      "radii normalize proportionally and elliptical clips transform coherently",
+      "placed repeated masks combine in order with explicit coverage mode"
+    ],
+    "profile": "1/4/16 shared shape/clip sample positions, existing path coverage and selected image sampling.",
+    "limitations": [
+      "1-sample quality is the explicit hard-edge policy. CPU and analytic GPU edges are different declared raster models; exact nested-clip comparison uses the portable prepared route.",
+      "Finite 4/16-sample coverage is not an analytic area integral for arbitrary curves."
+    ]
+  },
+  {
+    "id": "visual.native_materials",
+    "implementation": [
+      "src/shell/materials.zig",
+      "src/shell/macos/macos.zig",
+      "src/shell/win32/win32.zig",
+      "src/render/capabilities.zig"
+    ],
+    "verification": [
+      "native material policy preserves unknown preferences and selects the solid fallback"
+    ],
+    "profile": "Explicit AppKit visual-effect descriptor/submission and Windows DWM backdrop/corner/color calls, plus preference-aware fallback policy.",
+    "limitations": [
+      "Native visual appearance varies by OS/version; platform smoke checks cannot be replaced by the Linux unit tests.",
+      "Host supplies OS preference state and readable theme fallback; high-contrast and reduced-transparency are not guessed from an unset value."
+    ]
+  },
+  {
+    "id": "visual.effect_quality_limits",
+    "implementation": [
+      "src/render/prepared.zig",
+      "src/render/effects.zig",
+      "src/draw/surface.zig",
+      "src/draw/brushes.zig",
+      "src/draw/vector.zig",
+      "src/draw/svg.zig",
+      "src/draw/masks.zig"
+    ],
+    "verification": [
+      "surface capacity and transparent padding are explicit",
+      "aliased background and mask fail before rasterize clears the source",
+      "SVG unsupported visual features and reference cycles are explicit",
+      "nine slice mask border is consumed by a completed group and preflights storage"
+    ],
+    "profile": "Explicit width/height/bytes/layer/clip/blur budgets, caller capacities, geometry and kernel validation, no hidden resource allocation.",
+    "limitations": [
+      "Streaming vector imports use caller staging surfaces when all-or-nothing publication is required; later invalid input may leave prior completed shapes.",
+      "Raw primitive work is bounded by its supplied dimensions/spans; orchestration budgets are an optional caller-controlled tier."
+    ]
+  },
+  {
+    "id": "visual.render_target_interop",
+    "implementation": [
+      "src/draw/surface.zig",
+      "src/render/prepared.zig",
+      "src/render/iface.zig",
+      "src/render/wgpu/host.zig",
+      "src/render/gles/host.zig",
+      "src/render/gles/styling.zig"
+    ],
+    "verification": [
+      "texture export changes alpha representation once and preserves zero alpha",
+      "prepared texture binds a current layout box and preserves layout border metrics",
+      "ordinary quad text and custom commands participate in an exact clipped isolated group",
+      "ES3 prepared gradient border shadow isolated mask texture agrees with software within two bytes",
+      "ES2 prepared gradient border shadow isolated mask texture agrees with software within two bytes"
+    ],
+    "profile": "Existing host texture-in/render-target/UV routes retained; portable CPU output binds an ordinary texture with explicit alpha/lifetime/pass boundaries.",
+    "limitations": [
+      "No automatic GPU readback or resource cache; host-produced images used in CPU groups need explicit accessible pixel sources."
+    ]
+  }
+]

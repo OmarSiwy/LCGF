@@ -1,0 +1,6 @@
+Build Summary: 5/5 steps succeeded
+win32-build success
++- compile test debug x86_64-windows success 5s MaxRSS:436M
+   +- options cached
+   +- run exe ucd-gen (unicode_tables.zig) cached
+      +- compile exe ucd-gen debug native cached 7ms MaxRSS:39M

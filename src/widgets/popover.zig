@@ -60,7 +60,15 @@ pub fn partName(comptime name: []const u8, comptime part: []const u8) [:0]const 
 
 /// What `ComptimePage` pushes for one spec row: its style, and a role from the accessibility
 /// roles (`a11y.Role`) where `types.Role` has none, written to the `role` column after `push`.
-pub const Part = struct { style: Style, role: ?a11y.Role = null };
+pub const Part = struct {
+    style: Style,
+    role: ?a11y.Role = null,
+    /// Optional label typography supplied by a composing hook. Null keeps the stock theme.
+    text: ?types.TextStyle = null,
+    /// Optional label bytes borrowed until this build copies them into the existing bounded
+    /// Strings buffer. Null keeps the label's bound State string and its original behavior.
+    content: ?[]const u8 = null,
+};
 
 /// `null` if `State` can hold a popover named `name` bound to `open`, else the compile error:
 /// `open` must be a bool field.
@@ -475,8 +483,9 @@ pub fn ComptimePage(comptime State: type, comptime spec: Spec, comptime th: Them
             ui.tree_row[row] = i;
             switch (n.kind) {
                 .label => {
-                    const span = tb.strings.add(spec_zig.labelBytes(n, &ui.signals.state));
-                    tb.t.c.text[i] = tb.tx.push(i, span, &(n.text_style orelse base.labelText(&th)));
+                    const span = tb.strings.add(p.content orelse spec_zig.labelBytes(n, &ui.signals.state));
+                    const text_style = p.text orelse n.text_style orelse base.labelText(&th);
+                    tb.t.c.text[i] = tb.tx.push(i, span, &text_style);
                 },
                 .row, .col => inline for (n.children) |c| ui.push(c, i, next, v),
                 .checkbox, .slider => @compileError("ComptimePage builds rows, columns and labels; use base.ComptimeUi for checkboxes and sliders"),

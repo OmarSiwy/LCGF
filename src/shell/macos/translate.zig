@@ -127,18 +127,53 @@ fn modifierBit(code: u16) u64 {
     };
 }
 
-/// The NSCursor class method giving the system cursor of each `Platform.cursor`. `grab` is the
-/// open hand, as AppKit shows over something that can be dragged.
-pub const cursor_names = names: {
-    var a: [@typeInfo(Cursor).@"enum".field_names.len][:0]const u8 = undefined;
-    a[@backingInt(Cursor.arrow)] = "arrowCursor";
-    a[@backingInt(Cursor.pointer)] = "pointingHandCursor";
-    a[@backingInt(Cursor.text)] = "IBeamCursor";
-    a[@backingInt(Cursor.grab)] = "openHandCursor";
-    a[@backingInt(Cursor.resize_h)] = "resizeLeftRightCursor";
-    a[@backingInt(Cursor.resize_v)] = "resizeUpDownCursor";
-    break :names a;
-};
+/// NSCursor selectors; the shell checks availability before invoking newer selectors.
+/// AppKit has no public busy/help cursor; these retain the arrow. Directional diagonals
+/// use crosshair on the legacy profile. Exact custom artwork uses `cursor.emit`.
+pub const cursor_names = std.enums.EnumArray(Cursor, [:0]const u8).init(.{
+    .arrow = "arrowCursor",
+    .pointer = "pointingHandCursor",
+    .text = "IBeamCursor",
+    .grab = "openHandCursor",
+    .resize_h = "resizeLeftRightCursor",
+    .resize_v = "resizeUpDownCursor",
+    .crosshair = "crosshairCursor",
+    .move = "closedHandCursor",
+    .grabbing = "closedHandCursor",
+    .resize_nwse = "crosshairCursor",
+    .resize_nesw = "crosshairCursor",
+    .resize_n = "resizeUpCursor",
+    .resize_e = "resizeRightCursor",
+    .resize_s = "resizeDownCursor",
+    .resize_w = "resizeLeftCursor",
+    .resize_ne = "crosshairCursor",
+    .resize_nw = "crosshairCursor",
+    .resize_se = "crosshairCursor",
+    .resize_sw = "crosshairCursor",
+    .not_allowed = "operationNotAllowedCursor",
+    .no_drop = "operationNotAllowedCursor",
+    .progress = "arrowCursor",
+    .wait = "arrowCursor",
+    .help = "arrowCursor",
+    .copy = "dragCopyCursor",
+    .alias = "dragLinkCursor",
+    .context_menu = "contextualMenuCursor",
+    .cell = "crosshairCursor",
+    .vertical_text = "IBeamCursorForVerticalLayout",
+    .zoom_in = "zoomInCursor",
+    .zoom_out = "zoomOutCursor",
+    .all_scroll = "closedHandCursor",
+    .col_resize = "resizeLeftRightCursor",
+    .row_resize = "resizeUpDownCursor",
+    .hidden = "arrowCursor",
+}).values;
+
+pub fn cursorExact(cursor: Cursor) bool {
+    return switch (cursor) {
+        .arrow, .pointer, .text, .grab, .resize_h, .resize_v, .crosshair, .grabbing, .resize_n, .resize_e, .resize_s, .resize_w, .not_allowed, .copy, .alias, .context_menu, .vertical_text, .col_resize, .row_resize, .hidden => true,
+        else => false,
+    };
+}
 
 pub const Translator = struct {
     /// Held state, kept from event to event: viewport, scale, pointer, buttons, keys, mods.
@@ -822,8 +857,10 @@ test "scale: a move to a Retina display changes the scale, not the viewport or t
     try testing.expect(a.in.stamp() != b.in.stamp());
 }
 
-test "cursors: every Platform cursor has its own system cursor" {
-    for (cursor_names, 0..) |a, i| for (cursor_names[i + 1 ..]) |b| try testing.expect(!std.mem.eql(u8, a, b));
+test "cursors: standard shapes map to selectors and fallback status is explicit" {
+    for (cursor_names) |name| try testing.expect(name.len > 0);
+    try testing.expect(!cursorExact(.wait));
+    try testing.expect(cursorExact(.hidden));
     try testing.expectEqualStrings("IBeamCursor", cursor_names[@backingInt(Cursor.text)]);
 }
 

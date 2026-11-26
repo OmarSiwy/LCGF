@@ -2,6 +2,7 @@
 //! Tier 0: no allocator, no I/O. Ported from prototype/ui.zig ("hit").
 
 const std = @import("std");
+const geometry = @import("../draw/geometry.zig");
 const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Tree = @import("../core/tree.zig").Tree;
@@ -15,6 +16,7 @@ const W = simd.lanes;
 /// matching row wins. Reads `vis` and `sense` as `layout.finalize` left them (padding rows have
 /// sense 0, so they never match).
 pub fn at(t: *const Tree, x: f32, y: f32, want: Sense) u32 {
+    if (geometry.needsExactHit(t)) return atExact(t, &.{}, x, y, want);
     const c = &t.c;
     const px = simd.f(x);
     const py = simd.f(y);
@@ -40,6 +42,7 @@ pub fn at(t: *const Tree, x: f32, y: f32, want: Sense) u32 {
 /// as `overlay.order` wrote it, padded like every column; with every layer 0 the result is
 /// `at`'s. A menu row that is earlier than the body it covers is hit, not the body under it.
 pub fn atLayered(t: *const Tree, layer: []const u8, x: f32, y: f32, want: Sense) u32 {
+    if (geometry.needsExactHit(t)) return atExact(t, layer, x, y, want);
     const c = &t.c;
     const px = simd.f(x);
     const py = simd.f(y);
@@ -72,6 +75,7 @@ pub fn atLayered(t: *const Tree, layer: []const u8, x: f32, y: f32, want: Sense)
 /// that is only near; among equal distances the topmost (latest) row wins, as in `at`. With
 /// `slop` 0 the result is `at`'s. Only visible nodes count, and distance is to the clipped rect.
 pub fn near(t: *const Tree, x: f32, y: f32, want: Sense, slop: f32) u32 {
+    if (geometry.needsExactHit(t)) return nearExact(t, x, y, want, slop);
     const c = &t.c;
     const px = simd.f(x);
     const py = simd.f(y);
@@ -109,6 +113,80 @@ pub fn near(t: *const Tree, x: f32, y: f32, want: Sense, slop: f32) u32 {
     const at_min = best_d == simd.f(d_min);
     const shifted = @select(u32, at_min, best_i +% simd.u(1), simd.u(0));
     return @reduce(.Max, shifted) -% 1;
+}
+
+/// Exact refinement is opt-in by geometry, after the screen-space broad phase. Ancestor
+/// traversal is dependent; the common rectangular tree retains the SIMD implementation.
+fn atExact(t: *const Tree, layer: []const u8, x: f32, y: f32, want: Sense) u32 {
+    var found: u32 = none;
+    var top: u8 = 0;
+    for (0..t.len) |i| {
+        const c = &t.c;
+        const level = if (layer.len != 0) layer[i] else 0;
+        if ((c.sense[i] & @as(u8, @bitCast(want))) == 0 or c.visible[i] == 0 or level < top) continue;
+        const box: [4]f32 = .{ c.vis[0][i], c.vis[1][i], c.vis[2][i], c.vis[3][i] };
+        if (geometry.contains(box, .{ x, y }) and geometry.hitNode(t, @intCast(i), .{ x, y })) {
+            found = @intCast(i);
+            top = level;
+        }
+    }
+    return found;
+}
+
+fn nearExact(t: *const Tree, x: f32, y: f32, want: Sense, slop: f32) u32 {
+    const under = atExact(t, &.{}, x, y, want);
+    if (under != none or slop <= 0) return under;
+    var found: u32 = none;
+    var best = slop * slop;
+    const c = &t.c;
+    for (0..t.len) |i| {
+        if ((c.sense[i] & @as(u8, @bitCast(want))) == 0 or c.visible[i] == 0) continue;
+        // Project to each transformed box edge in screen space. A clipped projection is
+        // rejected; clipping must never enlarge a target through a rounded corner.
+        const m = t.x.row[c.scope[i]].world;
+        const corners = [_][2]f32{
+            geometry.point(m, .{ c.rect[0][i], c.rect[1][i] }),
+            geometry.point(m, .{ c.rect[2][i], c.rect[1][i] }),
+            geometry.point(m, .{ c.rect[2][i], c.rect[3][i] }),
+            geometry.point(m, .{ c.rect[0][i], c.rect[3][i] }),
+        };
+        const centre = geometry.point(m, .{ (c.rect[0][i] + c.rect[2][i]) * 0.5, (c.rect[1][i] + c.rect[3][i]) * 0.5 });
+        for (corners, 0..) |a, k| {
+            const b = corners[(k + 1) % 4];
+            const dx = b[0] - a[0];
+            const dy = b[1] - a[1];
+            const length = dx * dx + dy * dy;
+            const u = std.math.clamp(((x - a[0]) * dx + (y - a[1]) * dy) / @max(length, 1e-20), 0, 1);
+            const p: [2]f32 = .{ a[0] + u * dx, a[1] + u * dy };
+            const d = (p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y);
+            const interior: [2]f32 = .{ p[0] + (centre[0] - p[0]) * 1e-5, p[1] + (centre[1] - p[1]) * 1e-5 };
+            if (d <= best and geometry.hitNode(t, @intCast(i), interior)) {
+                best = d;
+                found = @intCast(i);
+            }
+        }
+    }
+    return found;
+}
+
+test "transformed pointer and rounded ancestor clip agree with paint geometry" {
+    const layout = @import("../layout/layout.zig");
+    const Texts = @import("../core/texts.zig").Texts;
+    var raw: [64 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(100) } });
+    const clip = t.push(root, .none, &.{ .size = .{ .px(40), .px(40) }, .clip = true, .radius = 20, .transform = .{ 1, 0, 0, 1, 80, 0 } });
+    const child = t.push(clip, .none, &.{ .size = .{ .fill, .fill } });
+    t.c.sense[child] = @bitCast(Sense.button);
+    t.seal(clip);
+    t.seal(root);
+    layout.run(&t, &tx, .{ 200, 100 });
+    try testing.expectEqual(child, at(&t, 100, 20, .any));
+    try testing.expectEqual(none, at(&t, 20, 20, .any));
+    try testing.expectEqual(none, at(&t, 80, 0, .any));
+    try testing.expectEqual(none, near(&t, 80, 0, .any, 0));
 }
 
 const testing = std.testing;

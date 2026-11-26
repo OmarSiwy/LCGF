@@ -610,6 +610,9 @@ impl<
         px: 0.0,
         color: 0,
         font: 0,
+        opacity: 1.0,
+        xform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        clip_radii: [0.0; 4],
     };
 
     pub fn new(state: T::State) -> Self {
@@ -737,10 +740,10 @@ impl<
             let mut row = k as u32;
             if self.raw.quad_len as usize != T::QUADS {
                 for j in cursor..k {
-                    seen += self.visible[T::PAINT_NODE[j] as usize] as u32;
+                    seen += self.shown(j);
                 }
                 cursor = k;
-                row = if self.visible[T::PAINT_NODE[k] as usize] != 0 {
+                row = if self.shown(k) != 0 {
                     seen
                 } else {
                     NONE
@@ -1056,6 +1059,21 @@ impl<
         [c[0], c[1], -c[2], -c[3]]
     }
 
+    /// Whether template k paints this frame (ct.zig's `shown`): present, and its paint bounds
+    /// (a shadow grows by three sigma) inside its parent's clip have area.
+    #[inline(always)]
+    fn shown(&self, k: usize) -> u32 {
+        let i = T::PAINT_NODE[k] as usize;
+        // SAFETY: as in emit_quads.
+        let q: Quad = unsafe { core::mem::transmute(T::TEMPLATES[k]) };
+        let (r, c) = (self.rect_of(i), self.clip_of(T::CLIP_NODE[k] as usize));
+        let sigma = q.params[1];
+        let g = if q.params[0].to_bits() == 3 && sigma.is_finite() { sigma.max(0.0) * 3.0 } else { 0.0 };
+        let b = [(r[0] - g).max(c[0]), (r[1] - g).max(c[1]), (r[2] + g).min(c[2]), (r[3] + g).min(c[3])];
+        let present = if T::REGIONS > 0 { self.visible[i] as u32 } else { 1 };
+        present & ((b[0] < b[2]) & (b[1] < b[3])) as u32
+    }
+
     #[inline(always)]
     fn emit_quads(&mut self, first: usize, end: usize, quad: &mut u32, op: &mut u32) {
         for k in first..end {
@@ -1068,8 +1086,9 @@ impl<
             self.op_kind[*op as usize] = 0;
             self.op_key[*op as usize] = T::KEYS[k];
             self.op_ref[*op as usize] = *quad;
-            *quad += self.visible[i] as u32;
-            *op += self.visible[i] as u32;
+            let shown = self.shown(k);
+            *quad += shown;
+            *op += shown;
         }
     }
 
@@ -1132,6 +1151,9 @@ impl<
                     px: f(T::TEXT_PX),
                     color: plan[7],
                     font: T::TEXT_FONT,
+                    opacity: 1.0,
+                    xform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    clip_radii: [0.0; 4],
                 };
                 self.op_kind[op as usize] = 1;
                 self.op_key[op as usize] = 0;

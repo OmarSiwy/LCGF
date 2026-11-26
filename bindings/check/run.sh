@@ -149,7 +149,7 @@ if [ $have_rust = yes ]; then
     "$work/rust/release/lcgf-rt-check" rows "$work/rows.bin"
     langs="$langs, Rust"
 fi
-echo "ok   rows: 4096 styles, the same 55-word row from Zig, the library, $langs"
+echo "ok   rows: 4096 styles, the same 66-word row from Zig, the library, $langs"
 
 # The runtime front end: bench/scenes' scenes (and the gate's `kit`) built each frame from C++ (lcgf/runtime.hpp) and
 # Rust (lcgf::runtime), against the same scenes built in Zig.

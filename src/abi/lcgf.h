@@ -62,12 +62,14 @@ typedef struct {
     uint32_t start, bytes;
     float px;
     uint32_t color, font;
+    float opacity, xform[6], clip_radii[4];
 } lcgf_text_run;
 
 typedef struct {
     float rect[4], clip[4];
     uint64_t data;
     uint32_t id, node;
+    float xform[6], clip_radii[4], opacity;
 } lcgf_custom_draw;
 
 /* A frame's draw list, read in place: valid until the next lcgf_frame_* on the same UI. */
@@ -133,6 +135,8 @@ typedef struct {
  * declaration order, one 32-bit word each. Colours are 0xAABBGGRR. lcgf_default_style writes
  * the defaults. */
 typedef struct {
+    uint32_t participation; /* bits: 1 layout, 2 paint, 4 hit, 8 semantics; 15 is all */
+    uint32_t cursor;        /* types.Cursor, 0xffffffff none (inherit) */
     uint32_t dir;
     lcgf_size size[2];
     float min[2];
@@ -151,7 +155,10 @@ typedef struct {
     float radii[4];
     float opacity;
     float transform[6];
+    float transform_origin[2];
     float uv[4];
+    uint32_t paint_reference; /* a row index, 0xffffffff none */
+    float paint_outset[4];
     uint32_t role;
     float value;
 } lcgf_style;
@@ -186,7 +193,10 @@ typedef struct {
     float value;
     uint32_t text, custom;
     uint32_t own;
-    float border, uv[4], radii[4], opacity, transform[6];
+    float border, uv[4], radii[4], opacity, transform[6], transform_origin[2];
+    uint32_t paint_reference;
+    float paint_outset[4];
+    uint32_t prepared_texture, paint_revision, participation, cursor;
 } lcgf_row;
 
 /* The frame's tree, where a row is pushed (src/abi/runtime.zig's CView): lcgf_rt_view fills
@@ -201,7 +211,11 @@ typedef struct {
 } lcgf_look;
 
 typedef struct {
-    float border, uv[4], radii[4], opacity, transform[6];
+    float border, uv[4], radii[4], opacity, transform[6], transform_origin[2];
+    uint32_t paint_reference;
+    float paint_outset[4];
+    uint32_t prepared_texture, paint_revision;
+    uint8_t participation, active_participation, cursor, active_cursor;
     float alpha, world[6], clip_radii[4]; /* written by paint, not by a push */
 } lcgf_extra;
 
@@ -225,7 +239,7 @@ typedef struct {
 
 /* The layout of lcgf_style, lcgf_text_style, lcgf_row and lcgf_view the library reads:
  * compare with lcgf_rt_layout() before making a context. */
-#define LCGF_RT_LAYOUT 0x581444c3u
+#define LCGF_RT_LAYOUT 0x187828dfu
 
 /* What a widget reports: bit 0 hovered, 1 held, 2 pressed, 3 released, 4 clicked, 5 focused. */
 typedef uint8_t lcgf_response;
@@ -272,7 +286,7 @@ void lcgf_rt_view(void *rt, lcgf_view *out);
  * label, at the offsets the words carry), runs the passes over the skeleton, expands, finalizes
  * and copies the templates. Status codes are lcgf_status's. */
 #define LCGF_CT_FORMAT_VERSION 1u
-#define LCGF_CT_LAYOUT 0xa3770a42u
+#define LCGF_CT_LAYOUT 0x235b050bu
 int lcgf_ct_check(const uint32_t *tables, size_t len);
 /* Bytes one static UI of these tables needs, for any lane count, or 0 if they are refused. */
 size_t lcgf_ct_bytes(const uint32_t *tables, size_t len);

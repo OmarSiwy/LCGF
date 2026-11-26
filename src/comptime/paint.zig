@@ -9,12 +9,13 @@
 //! rectangles from the layout outputs in `Dynamic`. Rows that paint nothing cost nothing.
 //!
 //! `emitText` interleaves measured labels with the quads in draw order. Custom draws use the runtime
-//! front end (a custom widget makes every column dynamic). A transform needs the laid-out rect for its centre: a spec with one is a
-//! compile error.
+//! front end (a custom widget makes every column dynamic). Transforms use the current laid-out
+//! rectangles and immutable extras; untransformed specs retain their constant templates.
 
 const std = @import("std");
 const tree = @import("../core/tree.zig");
 const columns = @import("columns.zig");
+const geometry = @import("../draw/geometry.zig");
 const draw_list = @import("../draw/draw_list.zig");
 const encode = @import("../draw/paint.zig").encode;
 const Spec = @import("spec.zig").Spec;
@@ -36,16 +37,31 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     const D = @import("dynamic.zig").Regions(spec);
     const labels = @import("layout.zig").labelRows(spec);
     const p = C.pushed;
+    // Presence is descriptor-indexed even when alternatives share retained geometry.
+    // Only rows a region can hide need this guard; ordinary offscreen controls may
+    // deliberately extend an input target back inside their ancestor's clip.
+    const can_be_absent: [n]bool = blk: {
+        @setEvalBranchQuota(10_000 + 100 * n);
+        var rows: [n]bool = @splat(false);
+        for (D.regions) |region| {
+            const first = if (region.kind == .when) region.row else region.row + 1;
+            for (first..region.end) |i| rows[i] = true;
+        }
+        break :blk rows;
+    };
     for ([_][]const u8{ "look", "extra", "scope", "clips" }) |name|
         if (C.classOf(name) != .constant) @compileError("column '" ++ name ++ "' is dynamic (a custom widget builds its rows at run time): paint it with the runtime tree");
 
+    const transformed = blk: {
+        for (p.x.row[1..p.xlen]) |x| if (!std.mem.eql(f32, &x.transform, &identity)) break :blk true;
+        break :blk false;
+    };
     // `draw.inherit`'s opacity and clip sweeps over the extras rows, while compiling.
     const Inherited = struct { alpha: [n + 1]f32, clip_radii: [n + 1][4]f32 };
     const inh: Inherited = blk: {
         @setEvalBranchQuota(10_000 + 200 * n);
         var out: Inherited = undefined;
-        tables.inherit(&p, &out.alpha, &out.clip_radii) catch
-            @compileError("a comptime UI with a transform needs its laid-out rect to paint: paint it with the runtime tree");
+        tables.inherit(&p, &out.alpha, &out.clip_radii);
         break :blk out;
     };
 
@@ -93,7 +109,7 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         /// Row k: the node whose `child_clip` clips template k, its parent.
         pub const clip_node: [m]u32 = blk: {
             var out: [m]u32 = undefined;
-            for (&out, node) |*o, i| o.* = p.c.parent[i];
+            for (&out, node) |*o, i| o.* = p.c.parent[sourceOf(i)];
             break :blk out;
         };
         /// Row k: the quad template k paints, `rect` and `clip` zero. Read-only data.
@@ -165,9 +181,9 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     inline for (comptime list(field)) |entry| {
                         const k = entry.template;
                         const row: ?usize = if (d.quad_len == m) k else blk: {
-                            for (node[cursor..k]) |i| visible += ram.visible[i];
+                            for (node[cursor..k]) |i| visible += quadVisible(ram, i);
                             cursor = k;
-                            break :blk if (ram.visible[node[k]] != 0) visible else null;
+                            break :blk if (quadVisible(ram, node[k]) != 0) visible else null;
                         };
                         if (row) |i| {
                             const q = &d.quads[i];
@@ -237,20 +253,86 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
             return .{ f32Of(ram.rect[0][slot]), f32Of(ram.rect[1][slot]), f32Of(ram.rect[2][slot]), f32Of(ram.rect[3][slot]) };
         }
 
+        fn sourceOf(i: u32) u32 {
+            const source = p.x.row[p.c.extra[i]].paint_reference;
+            std.debug.assert(source == none or source < i);
+            return if (source == none) i else source;
+        }
+
+        fn alphaOf(i: u32) f32 {
+            const source = sourceOf(i);
+            return inh.alpha[p.c.scope[source]] * (if (source == i) @as(f32, 1) else p.x.row[p.c.extra[i]].opacity);
+        }
+
+        pub fn worldOf(ram: *const C.Dynamic, node_id: u32) [6]f32 {
+            if (comptime !transformed) return identity;
+            var result = identity;
+            var i = node_id;
+            while (true) {
+                const x = p.x.row[p.c.extra[i]];
+                result = geometry.compose(geometry.about(x.transform, rectOf(ram, i), x.transform_origin), result);
+                if (i == 0) break;
+                i = p.c.parent[i];
+            }
+            return result;
+        }
+
+        /// Exact pointer query over the same world matrices and all rounded ancestor clips.
+        /// This is also usable by Events.atPaint without creating a runtime tree.
+        pub fn hit(ram: *const C.Dynamic, i: u32, screen: [2]f32) bool {
+            if (i >= n or ram.visible[i] == 0) return false;
+            return hitTarget(ram, i, screen, .{});
+        }
+
+        /// Caller-owned policy, with the same local shape and ancestor clips as runtime hits.
+        pub fn hitTarget(ram: *const C.Dynamic, i: u32, screen: [2]f32, policy: @import("../interact/targets.zig").Policy) bool {
+            if (i >= n or !p.x.row[p.c.scope[i]].active_participation.hit) return false;
+            // Check region descriptors before worldOf/rectOf can read stale geometry
+            // or another choice alternative's live slot, whether slots overlap or not.
+            if (can_be_absent[i] and ram.visible[i] == 0) return false;
+            const own_inverse = geometry.inverse(worldOf(ram, i)) orelse return false;
+            const own = p.x.row[p.c.extra[i]];
+            const own_radii = tree.radiiOf(own.radii, p.c.look[i].radius);
+            if (!@import("../interact/targets.zig").contains(rectOf(ram, i), own_radii, geometry.point(own_inverse, screen), policy)) return false;
+            var a = i;
+            while (a != 0) {
+                a = p.c.parent[a];
+                if (p.c.clips[a] == 0) continue;
+                const x = p.x.row[p.c.extra[a]];
+                const inverse = geometry.inverse(worldOf(ram, a)) orelse return false;
+                const rect = geometry.expand(rectOf(ram, a), @splat(-x.border));
+                const radii: [4]f32 = @max(@as(V4, x.radii) - @as(V4, @splat(x.border)), @as(V4, @splat(0)));
+                if (!geometry.roundedContains(rect, radii, geometry.point(inverse, screen))) return false;
+            }
+            return true;
+        }
+
+        inline fn quadVisible(ram: *const C.Dynamic, i: u32) u32 {
+            const source = sourceOf(i);
+            const raw = rectOf(ram, source);
+            const rect = geometry.expand(raw, p.x.row[p.c.extra[i]].paint_outset);
+            const bounds = geometry.paintBounds(rect, p.c.look[i].params, worldOf(ram, source), clipOf(ram, p.c.parent[source]));
+            // Dynamic absent rows have zero size; expanded shadows must not revive them.
+            const present = if (comptime D.count != 0) ram.visible[i] else @as(u32, 1);
+            return present & @intFromBool(p.x.row[p.c.scope[i]].active_participation.paint) & @intFromBool(geometry.hasArea(bounds));
+        }
+
         inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
             // A UI that paints no quad (only text) has no templates to index.
             if (comptime m == 0) return;
             for (first..end) |k| {
                 const i = node[k];
                 var quad = templates[k];
-                quad.rect = rectOf(ram, i);
+                quad.rect = geometry.expand(rectOf(ram, sourceOf(i)), p.x.row[p.c.extra[i]].paint_outset);
+                quad.xform = worldOf(ram, sourceOf(i));
                 quad.clip = clipOf(ram, clip_node[k]);
                 d.quads[cursor.quad] = quad;
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.quads);
                 d.op.key[cursor.op] = keys[k];
                 d.op.ref[cursor.op] = cursor.quad;
-                cursor.quad += ram.visible[i];
-                cursor.op += ram.visible[i];
+                const visible = quadVisible(ram, i);
+                cursor.quad += visible;
+                cursor.op += visible;
             }
         }
 
@@ -285,11 +367,14 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
                     .px = style.px,
                     .color = label.color,
                     .font = @backingInt(style.font),
+                    .opacity = inh.alpha[p.c.scope[label.node]],
+                    .xform = worldOf(ram, label.node),
+                    .clip_radii = inh.clip_radii[p.c.scope[label.parent]],
                 };
                 d.op.kind[cursor.op] = @backingInt(DrawList.Kind.text);
                 d.op.key[cursor.op] = 0;
                 d.op.ref[cursor.op] = r;
-                cursor.op += ram.visible[label.node];
+                cursor.op += ram.visible[label.node] & @intFromBool(p.x.row[p.c.scope[label.node]].active_participation.paint);
                 r += @intFromBool(mask[label.node] != 0);
             }
             emitQuads(ram, d, first, m, &cursor);
@@ -646,11 +731,22 @@ test "shared choice slots paint and hit only the active hosted region" {
     var scratch: L.Scratch = undefined;
     var ram: P.Cols.Dynamic = undefined;
     const empty: [4]f32 = @splat(0);
+    const targets = @import("../interact/targets.zig");
+    const entries = [_]targets.Entry{
+        .{ .node = 2, .policy = .{ .minimum = .{ 24, 24 } } },
+        .{ .node = 3, .policy = .{ .minimum = .{ 24, 24 } } },
+    };
+    try testing.expect(P.Cols.slot_count < P.Cols.node_count);
+    try testing.expectEqual(P.Cols.slot(2), P.Cols.slot(3));
     for ([_]u32{ 0, 1, 9, 0 }) |mode| {
         L.runLive(&scratch, &ram, .{ 60, 40 }, .{.{ .n = mode }});
         P.emit(&ram, &d);
         const rects = interop.widgetRects(E, &ram);
         const hit = E.at(&rects, 2, 2);
+        // Policy routing must retain the descriptor visibility check even when an
+        // inactive alternative shares the selected one's nonempty geometry slot.
+        try testing.expectEqual(hit, try E.atPaintTargets(P, &ram, &.{}, 2, 2));
+        try testing.expectEqual(hit, try E.atPaintTargets(P, &ram, &entries, 2, 2));
         switch (mode) {
             0 => {
                 try testing.expectEqual(E.Widget.first, hit);
@@ -671,6 +767,34 @@ test "shared choice slots paint and hit only the active hosted region" {
                 try testing.expectEqual(null, hit);
                 try testing.expectEqual(0, d.quad_len);
             },
+        }
+    }
+}
+
+test "unshared inactive choice targets stay absent while ordinary offscreen targets can expand" {
+    const ui = sp.col(.{ .clip = true }, .{
+        sp.choice(.mode, .{}, .{Spec{ .kind = .checkbox, .id = "only", .name = "Only", .style = .{ .size = .{ .px(16), .px(12) } } }}),
+        Spec{ .kind = .checkbox, .id = "outside", .name = "Outside", .style = .{ .float = true, .offset = .{ -8, 20 }, .size = .{ .px(4), .px(4) } } },
+    });
+    const P = Paint(ui, .{});
+    const E = @import("events.zig").Events(ui);
+    const targets = @import("../interact/targets.zig");
+    const entries = [_]targets.Entry{
+        .{ .node = 2, .policy = .{ .minimum = .{ 24, 24 } } },
+        .{ .node = 3, .policy = .{ .minimum = .{ 16, 16 } } },
+    };
+    try testing.expectEqual(P.Cols.node_count, P.Cols.slot_count);
+    inline for (.{ ct_layout.Plain(ui, .{}), ct_layout.Layout(ui, .{}) }) |L| {
+        var scratch: L.Scratch = undefined;
+        var ram: P.Cols.Dynamic = undefined;
+        for ([_]u32{ 0, 1, 0 }) |mode| {
+            L.runLive(&scratch, &ram, .{ 60, 40 }, .{.{ .n = mode }});
+            const expected: ?E.Widget = if (mode == 0) .only else null;
+            try testing.expectEqual(expected, try E.atPaintTargets(P, &ram, &.{}, 2, 2));
+            try testing.expectEqual(expected, try E.atPaintTargets(P, &ram, &entries, 2, 2));
+            try testing.expectEqual(0, ram.visible[3]);
+            try testing.expectEqual(@as(?E.Widget, null), E.atPaint(P, &ram, 1, 22));
+            try testing.expectEqual(E.Widget.outside, try E.atPaintTargets(P, &ram, &entries, 1, 22));
         }
     }
 }
@@ -752,4 +876,31 @@ test "measured paint interleaves text and quads across clipping, shared choices 
     LP.runText(&plain_scratch, &plain_ram, vp, Scene.spans[0..1], Mono{});
     PP.emitText(&plain_ram, Scene.spans[0..1], Scene.strings, &d);
     try expectRuntimeText(plain, Scene.spans[0..1], Scene.strings, vp, &d);
+}
+
+test "pure comptime affine painting and exact hit agree with the runtime tree" {
+    const s = sp.col(.{ .size = .{ .px(100), .px(80) }, .clip = true }, .{
+        sp.col(.{ .size = .{ .px(40), .px(40) }, .clip = true, .radius = 20, .transform = .{ 1, 0.25, 0.5, 1, 30, 5 }, .fill = .rgb(20, 30, 40) }, .{
+            sp.col(.{ .size = .{ .px(60), .px(30) }, .fill = .white, .transform = .{ 1, 0, 0, 1, -10, 0 } }, .{}),
+        }),
+        sp.col(.{ .size = .{ .px(10), .px(10) }, .fill = .white, .offset = .{ 200, 0 }, .transform = .{ 1, 0, 0, 1, -190, 0 } }, .{}),
+        sp.col(.{ .size = .{ .px(10), .px(10) }, .fill = .white, .transform = .{ 0, 0, 0, 0, 0, 0 } }, .{}),
+    });
+    try expectSamePaint(.{ .name = "affine", .State = struct {}, .spec = s }, .{ 100, 80 });
+    const L = ct_layout.Layout(s, .{});
+    const P = Paint(s, .{});
+    var scratch: L.Scratch = undefined;
+    var ram: P.Cols.Dynamic = undefined;
+    L.run(&scratch, &ram, .{ 100, 80 });
+    var raw: [32 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = tree.Tree.init(&carver, 8);
+    var tx = Texts.init(&carver, 1);
+    pushAll(&t, s, 0);
+    layout.run(&t, &tx, .{ 100, 80 });
+    for (0..80) |y| for (0..100) |x| {
+        const point: [2]f32 = .{ @floatFromInt(x), @floatFromInt(y) };
+        try testing.expectEqual(geometry.hitNode(&t, 2, point) and t.c.visible[2] != 0, P.hit(&ram, 2, point));
+    };
+    try testing.expect(!P.hit(&ram, 4, .{ 0, 0 }));
 }

@@ -1,0 +1,613 @@
+[
+  {
+    "id": "ui.property_contract",
+    "implementation": [
+      "src/style/properties.zig",
+      "src/style/paragraph.zig",
+      "src/style/resolve.zig"
+    ],
+    "verification": [
+      "direct typed values reach existing box and text consumers; transparent and zero are values",
+      "paint-only changes do not request shaping or layout; text metrics do",
+      "caller usage: resolved paragraph tokens drive the real shaping and multiline layout path"
+    ],
+    "profile": "Compile-time metadata, typed authoring, validation, initial values, interpolation and invalidation for 37 native box/text properties plus a separately reflected native Paragraph catalog. Computed values feed existing Frame/Tree/Texts and Stack consumers.",
+    "limitations": [
+      "Advanced brushes, effects and layout side tables retain their own typed inputs rather than becoming unused Style fields.",
+      "Backend resource/material support remains the renderer's capability contract; the style catalog does not manufacture a missing backend feature."
+    ]
+  },
+  {
+    "id": "ui.bounded_style_storage",
+    "implementation": [
+      "src/style/storage.zig",
+      "src/style/tokens.zig",
+      "src/style/compiler.zig"
+    ],
+    "verification": [
+      "bounded authoring storage rejects overflow and stale spans without losing current declarations",
+      "cycles and scale capacity errors are explicit",
+      "compiler errors report unsupported input and bounded storage without ignoring declarations"
+    ],
+    "profile": "Direct borrowed slices remain sufficient; optional caller-owned declaration pools return deterministic capacity errors and generation-checked spans. Compiler, provenance and token-scale output use declared destination buffers.",
+    "limitations": [
+      "The caller keeps borrowed data alive and owns mutation/revision sequencing.",
+      "Store generations wrap modulo u64 while skipping zero; spans must not survive a complete epoch wrap or replacement of their owning store."
+    ]
+  },
+  {
+    "id": "ui.presence_inheritance",
+    "implementation": [
+      "src/style/resolve.zig",
+      "src/style/paragraph.zig"
+    ],
+    "verification": [
+      "explicit inheritance, initial, zero and transparent remain distinct, also at comptime",
+      "paragraph presence and invalidation distinguish inherited, initial, null and zero"
+    ],
+    "profile": "Tagged literal/inherit/initial/token sources with omission as absence, selected inherited text/cursor properties, and independent paragraph inheritance. Explicit transparent, null and numeric zero survive resolution.",
+    "limitations": [
+      "Existing theme.Inherited sentinel-based APIs remain available for compatibility; callers opt into the explicit declaration resolver."
+    ]
+  },
+  {
+    "id": "ui.semantic_tokens",
+    "implementation": [
+      "src/style/tokens.zig",
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "tools/stylegen/stylegen.py"
+    ],
+    "verification": [
+      "caller usage: same-value semantic tokens separate on a theme change, literals stay literal",
+      "same-valued roles keep their identities; a child scope and lexical alias differ",
+      "DTCG generated semantic aliases and typography feed actual text layout"
+    ],
+    "profile": "Named typed tokens, lexical aliases, nearest-scope lookup and final-origin records preserve role identity independently of packed RGBA equality; application-defined roles need no registry.",
+    "limitations": [
+      "Applications choose their semantic vocabulary; stock convenience defaults are a deliberately small palette, not every domain role."
+    ]
+  },
+  {
+    "id": "ui.design_scales",
+    "implementation": [
+      "src/style/tokens.zig",
+      "src/theme/recipe.zig",
+      "tools/stylegen/stylegen.py",
+      "src/style/import_tests.zig"
+    ],
+    "verification": [
+      "cycles and scale capacity errors are explicit",
+      "default recipe respects environment text scale and keeps focus separate from selected border",
+      "DTCG generated semantic aliases and typography feed actual text layout",
+      "DTCG generated gradients, shadows and borders paint caller-owned pixels"
+    ],
+    "profile": "Caller-authored monotone numeric scales, bridges for existing spacing/radius/type scales, explicit density and text scaling, and generated composite typography/border/elevation values with native consumers.",
+    "limitations": [
+      "Density changes only the tokens chosen by the caller; separate hit-target policies are not silently scaled.",
+      "Generated typography selects a supplied static font catalog entry; variable-font instance creation remains explicit."
+    ]
+  },
+  {
+    "id": "ui.theme_scope",
+    "implementation": [
+      "src/style/tokens.zig",
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/style/inspector.zig"
+    ],
+    "verification": [
+      "same-valued roles keep their identities; a child scope and lexical alias differ",
+      "caller usage: simultaneous states, orthogonal variants and local transparent overrides",
+      "inspector explains a real compiled rule winner, inactive state and local override",
+      "system colors override authored paint with provenance and explicit component exceptions"
+    ],
+    "profile": "Component base, inherited values, ordered matched declarations and local property overrides lower deterministically; explicit nested token scopes and final optional system-color policy report their winning provenance.",
+    "limitations": [
+      "This is ordered native merging, not CSS origin/specificity/cascade-layer semantics.",
+      "The caller associates tree subtrees with scope indices; no retained theme manager walks the application automatically."
+    ]
+  },
+  {
+    "id": "ui.part_identifiers",
+    "implementation": [
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/theme/recipe_parts.zig"
+    ],
+    "verification": [
+      "recipe caller: custom thumb and app-defined part use direct data, no registry",
+      "caller usage: custom icon/label retains button activation and disabled prevents it",
+      "radio and range recipes preserve keyboard and pointer behavior with shared marks and two visible thumbs"
+    ],
+    "profile": "Stable common part IDs plus arbitrary application IDs; independent label/icon/mark/track/thumb/fill/focus resolution reaches real controls. Slider and range recipes share the same thumb property vocabulary while retaining their native value semantics.",
+    "limitations": [
+      "A decorative part is allocated as a node only by a builder that needs one; a recipe ID alone does not allocate a tree row.",
+      "Range knobs use validated explicit pixel dimensions in the supplied adapter."
+    ]
+  },
+  {
+    "id": "ui.variants_recipes",
+    "implementation": [
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig"
+    ],
+    "verification": [
+      "caller usage: simultaneous states, orthogonal variants and local transparent overrides",
+      "caller usage: combined states keep independent border/focus and failed resolution leaves frame balanced"
+    ],
+    "profile": "Borrowed recipes and variant-ID slices compose intent, size, density and application variants per property, with component-local values applied last before any explicit system-color policy.",
+    "limitations": [
+      "Variant names have application-defined meanings; there is no global registration or implicit inheritance of variant membership."
+    ]
+  },
+  {
+    "id": "ui.combined_states",
+    "implementation": [
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/widgets/base.zig"
+    ],
+    "verification": [
+      "caller usage: simultaneous states, orthogonal variants and local transparent overrides",
+      "recipe disabled state cancels capture, skips Tab and cannot be defeated by a visual override",
+      "recipe read-only checkbox remains focusable and its pointer event is explicitly suppressed",
+      "combined state and environment row participation cancels captured range and radio actions in both front ends"
+    ],
+    "profile": "Required/forbidden masks cover built-in interaction/semantic states plus caller custom bits; ordered declarations preserve independent selection and keyboard focus without enumerating every state combination.",
+    "limitations": [
+      "Focus-within, dragging, drop-target and domain states are supplied by the owner when not directly produced by the standard adapter.",
+      "Style resolution does not itself mutate application behavior or semantic truth."
+    ]
+  },
+  {
+    "id": "ui.resolver_generations",
+    "implementation": [
+      "src/style/storage.zig",
+      "src/style/tokens.zig",
+      "src/style/properties.zig",
+      "src/style/inspector.zig"
+    ],
+    "verification": [
+      "optional cache agrees with direct resolution and generation changes invalidate a reached state",
+      "paint-only changes do not request shaping or layout; text metrics do",
+      "inspector explains a real compiled rule winner, inactive state and local override"
+    ],
+    "profile": "Optional bounded cache stores reached combinations using exact state/environment keys and caller-owned recipe/token/parent revisions. Metadata and differences expose the concrete dirty domains for independently scheduled passes.",
+    "limitations": [
+      "Base/declaration/local/variant changes must advance the recipe revision; mutable borrowed data is not observed automatically.",
+      "No mandatory interning, subscription graph or global invalidation traversal exists; the host schedules affected requests and clears before revision reuse/wrap."
+    ]
+  },
+  {
+    "id": "ui.typed_authoring",
+    "implementation": [
+      "src/style/style.zig",
+      "src/style/resolve.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/theme/recipe_part_comptime.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/widgets/base.zig"
+    ],
+    "verification": [
+      "explicit inheritance, initial, zero and transparent remain distinct, also at comptime",
+      "recipe controls: runtime/comptime draw and behavior parity through click, drag, text and theme changes",
+      "data part composition has runtime/comptime parity with dynamic state and environment",
+      "radio and range recipes preserve keyboard and pointer behavior with shared marks and two visible thumbs",
+      "a runtime token error in a comptime recipe is returned as frame data"
+    ],
+    "profile": "Same typed resolver at runtime and comptime, direct computed values, optional diagonal component adapters, dynamic state/environment/token fields and independently callable native passes; production DrawLists and semantic role/value columns are compared by replay consumers.",
+    "limitations": [
+      "Capacity, resource and renderer support remain explicit; parity claims apply to the named supported consumer fixtures rather than all possible arbitrary shaders or widget extensions."
+    ]
+  },
+  {
+    "id": "ui.token_import",
+    "implementation": [
+      "tools/stylegen/stylegen.py",
+      "tools/stylegen/test_stylegen.py",
+      "src/style/testdata/dtcg.json",
+      "src/style/testdata/dtcg_generated.zig",
+      "src/style/import_tests.zig"
+    ],
+    "verification": [
+      "python3 tools/stylegen/test_stylegen.py",
+      "DTCG generated semantic aliases and typography feed actual text layout",
+      "DTCG generated gradients, shadows and borders paint caller-owned pixels",
+      "DTCG generated transition timing and custom stroke use native playback and stroking"
+    ],
+    "profile": "Offline bounded DTCG 2025.10 compiler covers all 13 token categories, inherited group types, aliases and local component references, deterministic native Zig constants and source-preserving metadata. Cycles, missing references, duplicate keys, invalid types/values and capacity limits fail explicitly.",
+    "limitations": [
+      "Declared profile rejects group $extends, remote references, missing color components and unsupported unit expressions.",
+      "rem conversion, seconds and radius-to-sigma lowering are explicit target settings; existing RGBA8 packing clamps color at its boundary.",
+      "DTCG is a Community Group specification, not a W3C Recommendation."
+    ]
+  },
+  {
+    "id": "ui.stylesheet_compiler",
+    "implementation": [
+      "src/style/compiler.zig",
+      "src/style/resolve.zig",
+      "src/style/properties.zig"
+    ],
+    "verification": [
+      "compiler caller resolves parsed parts, variants, combined states and explicit transparency",
+      "compiler errors report unsupported input and bounded storage without ignoring declarations",
+      "compiled declarations feed the actual frame text and layout consumer"
+    ],
+    "profile": "Optional bounded compiler for part/variant/state compounds, comma groups, :not(:state), comments, native property aliases and padding shorthand; output is ordinary Rule/Declaration data with source positions and no render-time source parsing.",
+    "limitations": [
+      "Full CSS selectors, descendant combinators, specificity, @rules/imports/cascade layers, !important, URLs and custom-property definitions are explicitly unsupported.",
+      "Output buffers are unspecified on a failed compilation; no partial successful sheet is returned."
+    ]
+  },
+  {
+    "id": "ui.style_inspector",
+    "implementation": [
+      "src/style/inspector.zig",
+      "src/style/resolve.zig",
+      "src/style/properties.zig",
+      "src/theme/recipe.zig"
+    ],
+    "verification": [
+      "inspector explains a real compiled rule winner, inactive state and local override",
+      "system colors override authored paint with provenance and explicit component exceptions"
+    ],
+    "profile": "Caller-owned computed-property snapshots, all rule match reasons, declaration dispositions, literal/inherit/token provenance and concrete invalidation differences; final system policy can supply its own winning origin trace.",
+    "limitations": [
+      "This is read-only inspector data, not a retained inspector UI or an automatic backend capability detector.",
+      "inspector.snapshot evaluates raw requests; request Recipe.resolve provenance separately for the recipe's later system-color policy."
+    ]
+  },
+  {
+    "id": "ui.responsive_conditions",
+    "implementation": [
+      "src/style/environment.zig",
+      "src/style/resolve.zig",
+      "src/style/storage.zig"
+    ],
+    "verification": [
+      "unknown preferences do not match false; viewport and container conditions stay separate",
+      "optional cache agrees with direct resolution and generation changes invalidate a reached state"
+    ],
+    "profile": "Explicit viewport/container width and height ranges plus scale ranges select ordinary ordered rules; each request supplies its own container snapshot and optional exact environment cache key.",
+    "limitations": [
+      "Named breakpoint conventions, orientation policy and container measurement scheduling remain caller data/control flow.",
+      "There is no retained boundary subscription system or automatic size-query cycle solver."
+    ]
+  },
+  {
+    "id": "ui.environment_conditions",
+    "implementation": [
+      "src/style/environment.zig",
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/style/locale.zig"
+    ],
+    "verification": [
+      "unknown preferences do not match false; viewport and container conditions stay separate",
+      "known accessibility inputs consume existing settings and explicit effect choices",
+      "default recipe respects environment text scale and keeps focus separate from selected border",
+      "locale font preferences and labels lower to real Frame text rows",
+      "combined state and environment row participation cancels captured range and radio actions in both front ends"
+    ],
+    "profile": "Host data for appearance/accent, text scale, high/forced contrast, reduced effects, pointer precision, hover, direction and unknown preferences drives the same rule evaluation; existing Input/Settings adapters retain unknown-versus-false semantics.",
+    "limitations": [
+      "The resolver does not query an operating system or infer capabilities that the host did not supply."
+    ]
+  },
+  {
+    "id": "ui.editing_parts",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/theme/recipe_parts.zig",
+      "src/text/edit/edit.zig"
+    ],
+    "verification": [
+      "recipe controls: runtime/comptime draw and behavior parity through click, drag, text and theme changes",
+      "forced color selection uses HighlightText in both front ends without duplicate semantics",
+      "multiline recipe routes typing, read-only policy and support part to real editor output",
+      "caller usage: read-only slider and textfield preserve application values"
+    ],
+    "profile": "Real single-line and multiline editors consume content, placeholder, caret, selection foreground/background, support/error and focus recipes while retaining native editor selection/typing/read-only behavior. Selected foreground clips full shaped runs instead of splitting ligatures.",
+    "limitations": [
+      "The stock single-line profile exposes four native selection bands and nine possible color intervals; distinct selected foreground requires bounded additional clip/text rows.",
+      "Specialized IME underline styling, selection handles and richer prefix/suffix/editor decorations can be composed through the separate text decoration/part APIs; the standard recipe does not implement every editor chrome policy."
+    ]
+  },
+  {
+    "id": "ui.document_typography",
+    "implementation": [
+      "src/text/layout/math.zig",
+      "src/text/layout/ornament.zig",
+      "src/text/layout/counters.zig"
+    ],
+    "verification": [
+      "fraction enters inline layout and positions real paragraph quads plus rule",
+      "scripts limits radicals and matrices reserve actual measured extents",
+      "OpenType MATH constants and extender assembly become glyph quads with bounded storage",
+      "shaped line follows native path tangents and retains transform opacity clipping",
+      "drop cap changes real line breaks positions and caret coordinates in both directions",
+      "hanging edge punctuation moves glyphs and carets together without splitting clusters",
+      "counter systems format UTF8 exact integers and reject invalid and insufficient storage",
+      "nested scoped counters reset increment and format without mutating ancestors",
+      "formatted list marker becomes baseline aligned paragraph glyphs and ordinary bullet quads"
+    ],
+    "profile": "Optional measured mathematical composition and OpenType MATH metrics/variants/assemblies; shaped glyph placement along native polyline tangents; drop-cap width/origin integration; optical edge punctuation; bounded UTF-8 counter systems/scopes and baseline-aligned list markers. All use native glyph/rule/quad consumers without ordinary label storage.",
+    "limitations": [
+      "No TeX/MathML parser or formula AST; callers shape leaves, choose script sizes and supply measured boxes. MATH device hint corrections are not evaluated.",
+      "Text-on-path caret/hit projection remains caller work; path rendering retains source clusters and transforms.",
+      "Drop-cap variable leading widths use the greedy breaker; balanced breaking returns UnsupportedPolicy. Hanging punctuation preserves existing breaks rather than reoptimizing justified paragraphs.",
+      "Counter algorithms have declared native conventions rather than complete CSS Counters/CLDR conformance. Footnotes/pagination belong to separate document-layout modules."
+    ]
+  },
+  {
+    "id": "ui.focus_policy",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/style/accessibility.zig"
+    ],
+    "verification": [
+      "default recipe respects environment text scale and keeps focus separate from selected border",
+      "recipe disabled state cancels capture, skips Tab and cannot be defeated by a visual override",
+      "radio and range recipes preserve keyboard and pointer behavior with shared marks and two visible thumbs",
+      "native outline can satisfy AA focus visibility while failing the separate AAA area diagnostic"
+    ],
+    "profile": "Actual input modality and always-show-focus select an independent focus part; the native outside outline references current border-box geometry without layout or hit participation. Selection/hover styling does not replace the ring.",
+    "limitations": [
+      "Focus-within and focus-scroll policy are explicit owner/runtime inputs; no semantic relationship is inferred from decorative part names.",
+      "Visibility, adjacent contrast and AAA changed-pixel area are separate diagnostics rather than a compliance certification."
+    ]
+  },
+  {
+    "id": "ui.disabled_readonly_semantics",
+    "implementation": [
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/widgets/base.zig",
+      "src/a11y/tree.zig",
+      "src/a11y/accesskit/c.zig",
+      "src/a11y/accesskit/bridge.zig"
+    ],
+    "verification": [
+      "recipe disabled state cancels capture, skips Tab and cannot be defeated by a visual override",
+      "recipe read-only checkbox remains focusable and its pointer event is explicitly suppressed",
+      "caller usage: read-only slider and textfield preserve application values",
+      "extra recipe controls cancel disabled capture and keep read-only groups focusable without changes",
+      "tree export: validation requirement and busy state retain the existing compact state ABI",
+      "diagnostics compare recipe state with actual exported semantics including validation and busy",
+      "accesskit: a text input's text goes out as its value, its placeholder as placeholder"
+    ],
+    "profile": "Authoritative disabled/read-only state gates real behavior in both front ends, cancels stale capture and preserves allowed read-only navigation. Invalid/required/busy use reserved u16 semantic bits with existing ordinals intact, survive Export/diff and reach AccessKit properties.",
+    "limitations": [
+      "Busy, invalid and required are distinct from disabled; applications choose their validation/action policy.",
+      "The inspected Web shell has no DOM semantic-tree or JSON state serializer; host Web accessibility integration is not claimed.",
+      "Native AccessKit execution is a separate optional build gate and must be read with the validation record."
+    ]
+  },
+  {
+    "id": "ui.contrast_system_palettes",
+    "implementation": [
+      "src/style/system_colors.zig",
+      "src/style/environment.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/style/accessibility.zig"
+    ],
+    "verification": [
+      "both high contrast profiles preserve text controls selection and visible boundaries",
+      "system colors override authored paint with provenance and explicit component exceptions",
+      "forced color selection uses HighlightText in both front ends without duplicate semantics",
+      "diagnostics consume resolved high contrast recipes and keep unknown backgrounds explicit"
+    ],
+    "profile": "Portable light/dark high-contrast palettes and host-supplied opaque semantic colors cover canvas/field/button/link/highlight/selection/mark/accent roles; final automatic policy preserves visible boundaries, supplies paired foregrounds and records provenance, with explicit per-component preserve exceptions.",
+    "limitations": [
+      "The resolver consumes host color data and does not itself query native system palettes.",
+      "Arbitrary host palettes, images, filters and translucent backdrops require actual samples; no universal contrast guarantee is inferred from a semantic role name."
+    ]
+  },
+  {
+    "id": "ui.text_scale_tolerance",
+    "implementation": [
+      "src/style/environment.zig",
+      "src/style/paragraph.zig",
+      "src/theme/recipe.zig",
+      "src/style/locale.zig"
+    ],
+    "verification": [
+      "default recipe respects environment text scale and keeps focus separate from selected border",
+      "caller usage: resolved paragraph tokens drive the real shaping and multiline layout path",
+      "locale font preferences and labels lower to real Frame text rows"
+    ],
+    "profile": "Explicit text scaling updates semantic type tokens and actual text metrics; paragraph line/letter/word spacing overrides reach Stack layout; fit-sized controls expand for longer localized labels.",
+    "limitations": [
+      "Environment textFactor clamps the convenience scale to 0.5..4; direct typed sizes remain available.",
+      "Applications still choose wrapping, scroll/reflow, maximum dimensions and minimum hit policies; no automatic claim is made that every fixed-size custom layout remains usable at every text setting."
+    ]
+  },
+  {
+    "id": "ui.reduced_effect_preferences",
+    "implementation": [
+      "src/style/environment.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/widgets/base.zig"
+    ],
+    "verification": [
+      "known accessibility inputs consume existing settings and explicit effect choices",
+      "recipe spinner requests frames while busy and has a stable reduced-motion alternative in both front ends",
+      "recipe spinner wake follows effective ancestor participation and the bound busy state in both front ends"
+    ],
+    "profile": "Host reduced-motion/reduced-transparency inputs select explicit duration/surface alternatives while preserving existing runtime motion policy. Busy spinners use a stable phase and stop requesting visual updates under reduced motion, with equivalent runtime/CT output.",
+    "limitations": [
+      "Essential animation is an explicit caller decision; arbitrary custom effects and scroll policy must consume the same preferences through their own native interfaces.",
+      "Decorative surface opacity policy does not forcibly alter content/group alpha that may carry application meaning."
+    ]
+  },
+  {
+    "id": "ui.noncolor_semantics",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/theme/recipe_parts.zig",
+      "src/a11y/tree.zig"
+    ],
+    "verification": [
+      "system colors override authored paint with provenance and explicit component exceptions",
+      "radio and range recipes preserve keyboard and pointer behavior with shared marks and two visible thumbs",
+      "data and navigation parts feed actual semantic rows and tab selection behavior",
+      "multiline recipe routes typing, read-only policy and support part to real editor output",
+      "diagnostics compare recipe state with actual exported semantics including validation and busy"
+    ],
+    "profile": "Checkbox checked/mixed marks, radio dots, moving switch/range thumbs, selected navigation indicators, text labels and support/error parts provide shapes or content in addition to color, with matching authoritative semantic-state export.",
+    "limitations": [
+      "Applications supply meaningful support/error wording and any domain-specific icon/pattern; the framework does not infer the meaning of arbitrary data."
+    ]
+  },
+  {
+    "id": "ui.control_part_catalog",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_comptime.zig",
+      "src/theme/recipe_extra_controls.zig",
+      "src/theme/recipe_extra_tests.zig",
+      "src/theme/recipe_parts.zig"
+    ],
+    "verification": [
+      "caller usage: custom icon/label retains button activation and disabled prevents it",
+      "recipe controls: runtime/comptime draw and behavior parity through click, drag, text and theme changes",
+      "radio and range recipes preserve keyboard and pointer behavior with shared marks and two visible thumbs",
+      "extra recipe controls cancel disabled capture and keep read-only groups focusable without changes",
+      "recipe spinner requests frames while busy and has a stable reduced-motion alternative in both front ends",
+      "multiline recipe routes typing, read-only policy and support part to real editor output",
+      "recipe spinner wake follows effective ancestor participation and the bound busy state in both front ends",
+      "failed composite recipes preserve CT rows and later button activation then recover on the next frame",
+      "combined state and environment row participation cancels captured range and radio actions in both front ends"
+    ],
+    "profile": "Dedicated shared-recipe adapters cover button/icon/label, checkbox/radio marks, switch, slider/two-thumb range, progress, spinner, single-line input and multiline editor/support parts. Radio/range reuse existing pure key/pointer behavior; spinner scheduling honors reduced motion. Composite failures preserve inert descriptor rows for later siblings and recover on the next valid frame; row participation is checked before actions; spinner wakes follow the completed subtree and bound busy state.",
+    "limitations": [
+      "Range thumb and spinner-root dimensions are validated fixed pixel sizes in these convenience builders.",
+      "Value bubbles, arbitrary tick collections and application-specific input prefix/suffix composition use explicit additional parts; they are not synthesized by the standard controls."
+    ]
+  },
+  {
+    "id": "ui.navigation_overlay_parts",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_parts.zig",
+      "src/theme/recipe_overlays.zig",
+      "src/widgets/popover.zig"
+    ],
+    "verification": [
+      "data and navigation parts feed actual semantic rows and tab selection behavior",
+      "recipe menu: disabled items are skipped and read-only items cannot activate",
+      "recipe menu: runtime and CT consume dynamic typography tokens and the same submenu keys",
+      "overlay recipes: runtime popup content tooltip focus toast deadline and breadcrumb roles are consumed",
+      "recipe popover: CT typography is opt-in per label and Escape closes the native overlay",
+      "recipe overlays: CT tooltip focus and reduced-motion toast use the styled label consumer",
+      "recipe breadcrumb: CT links follow Enter keep focus outlines and reject disabled activation",
+      "recipe overlays: resolution failure is explicit preserves menu state and resets next frame only",
+      "recipe menu accessories: runtime and CT style accelerators indicators separators and skip separator actions",
+      "recipe tooltip arrow: optional part styles real geometry in runtime and CT without input or extra layout",
+      "recipe overlay participation: hidden popup removes its scrim and read-only focused controls retain help"
+    ],
+    "profile": "Dedicated shared-recipe menu/popover/tooltip/breadcrumb/toast compositions, plus navigation rows and tabs, reuse existing caller-owned state and pure behavior. Runtime/CT consumers exercise typography, menu accelerators/indicators/separators, optional tooltip arrows, submenu keys, disabled/read-only rows, focus, hidden popup/scrim participation, deadlines, Escape, explicit failure and ordinary popup children.",
+    "limitations": [
+      "The specialized native ComptimePage has no focus manager; its host supplies trigger focused/focus_visible state while native open-menu keyboard behavior runs.",
+      "Overlay placement uses the native previous-frame anchor geometry and root-level floating layer contract.",
+      "Arbitrary popup children keep their caller styles; named label opt-in applies recipe typography without rewriting unrelated content.",
+      "Optional tooltip arrows are independently styled ordinary shapes with explicit border-box-relative placement; sophisticated anchor-aware arrow geometry remains caller-owned."
+    ]
+  },
+  {
+    "id": "ui.data_view_parts",
+    "implementation": [
+      "src/theme/recipe.zig",
+      "src/theme/recipe_parts.zig",
+      "src/theme/recipe_part_comptime.zig",
+      "src/style/resolve.zig"
+    ],
+    "verification": [
+      "data and navigation parts feed actual semantic rows and tab selection behavior",
+      "data part composition has runtime/comptime parity with dynamic state and environment",
+      "caller usage: simultaneous states, orthogonal variants and local transparent overrides"
+    ],
+    "profile": "Shared header/row/cell/disclosure/separator/selection recipes produce actual semantic table rows and matching runtime/CT draw output; arbitrary state/variant IDs permit logical-row striping and custom data-view marks without a retained model.",
+    "limitations": [
+      "Sorting, virtualization reconciliation, frozen columns, row/column identity and selection storage remain caller-owned; derive style state from logical items rather than recycled visible slots."
+    ]
+  },
+  {
+    "id": "ui.editor_canvas_parts",
+    "implementation": [
+      "src/style/resolve.zig",
+      "src/theme/recipe.zig",
+      "src/theme/recipe_controls.zig",
+      "src/theme/recipe_parts.zig"
+    ],
+    "verification": [
+      "recipe caller: custom thumb and app-defined part use direct data, no registry",
+      "caller usage: custom icon/label retains button activation and disabled prevents it",
+      "data part composition has runtime/comptime parity with dynamic state and environment"
+    ],
+    "profile": "Application-defined part/token identifiers lower to ordinary native box/text values and portable rendering inputs; generic open/text/leaf composition and editor gutter/line-number/support recipes need no EDA-specific core branch or registry.",
+    "limitations": [
+      "Grid/port/wire/snap geometry, custom bounds and application semantics remain authored by the application using the portable primitive/custom drawing APIs."
+    ]
+  },
+  {
+    "id": "ui.a11y_style_validation",
+    "implementation": [
+      "src/style/accessibility.zig",
+      "src/style/inspector.zig",
+      "src/style/system_colors.zig",
+      "src/a11y/tree.zig"
+    ],
+    "verification": [
+      "diagnostics consume resolved high contrast recipes and keep unknown backgrounds explicit",
+      "diagnostics compare recipe state with actual exported semantics including validation and busy",
+      "native outline can satisfy AA focus visibility while failing the separate AAA area diagnostic",
+      "both high contrast profiles preserve text controls selection and visible boundaries"
+    ],
+    "profile": "Bounded diagnostics report actual sampled contrast pairs, unknown backdrops, explicit target-size policy, missing focus outlines and semantic-state mismatches. Separate criterion labels and observed changed-pixel regions distinguish AA focus visibility/adjacent contrast from AAA focus appearance area and explicit exceptions.",
+    "limitations": [
+      "These are diagnostic data for host inspection/preview, not an automatic WCAG certification.",
+      "The caller supplies final opaque samples, disjoint changed regions, perceived component geometry and any exception; occlusion, duration, neighboring target spacing, total reflow and unknown preference support are not guessed."
+    ]
+  },
+  {
+    "id": "ui.locale_theme_content",
+    "implementation": [
+      "src/style/locale.zig",
+      "src/style/environment.zig",
+      "src/theme/recipe_controls.zig",
+      "src/widgets/base.zig"
+    ],
+    "verification": [
+      "locale numeric data maps exact integers groups digits and decimal punctuation",
+      "locale font preferences and labels lower to real Frame text rows",
+      "runtime and comptime locale layout mirror boxes while Tab keeps source reading order"
+    ],
+    "profile": "Caller-owned translation rows, exact-decimal numeral/grouping data, ordered locale font preferences and explicit directional-icon mirroring feed real labels/styles. Optional RTL/rounding conveniences sequence shared runtime/CT layout while preserving source semantic and keyboard reading order.",
+    "limitations": [
+      "No built-in translation/locale database or automatic remote font loading.",
+      "Exponent/currency/percent formatting is supplied as host content; the exact-decimal helper rejects unsupported syntax.",
+      "RTL side-table capacity must cover the entire built tree; automatic semantic reordering is deliberately absent."
+    ]
+  }
+]

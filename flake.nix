@@ -112,6 +112,8 @@
             pkgs.rustc
             # The C++ bindings' check (ci/jobs/bindings.sh) builds with CMake.
             pkgs.cmake
+            # ...and translates its WGSL shaders with naga (lcgf_add_shader).
+            naga-cli
             pkgs.pkg-config
             pkgs.libx11
             pkgs.cairo

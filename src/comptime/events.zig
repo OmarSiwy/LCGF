@@ -13,6 +13,10 @@ const Input = @import("../core/input.zig").Input;
 
 const W = simd.lanes;
 
+/// Input eligibility, kept separate from visuals. Read-only controls can remain enabled for
+/// focus/selection while declining activation events. Both fields default to old behavior.
+pub const Availability = struct { enabled: bool = true, activates: bool = true };
+
 /// The interactive widgets of `spec` and how input reaches them.
 pub fn Events(comptime spec: Spec) type {
     const F = flatten.Flat(spec);
@@ -110,28 +114,106 @@ pub fn Events(comptime spec: Spec) type {
         pub const Rects = struct {
             /// x0, y0, x1, y1 columns, in logical pixels, clipped as `Tree.Columns.vis`.
             c: [4][rect_rows]f32 = @splat(@splat(0)),
+            /// Optional borrowed runtime geometry, used only when transforms/rounded clips
+            /// require an exact second phase. The table's owner keeps the tree alive.
+            exact_tree: ?*const @import("../core/tree.zig").Tree = null,
+            node_offset: u32 = 0,
 
             /// The widgets' rows of a laid-out tree's `vis` columns (a tree built from this
             /// spec, so row numbers agree).
             pub fn fromTree(t: anytype) Rects {
-                var r: Rects = .{};
-                for (0..4) |side| {
-                    for (widget_nodes, 0..) |node, k| r.c[side][k] = t.c.vis[side][node];
+                return fromTreeOffset(t, 0);
+            }
+
+            /// Widgets.Ui has one host root before the spec's rows; raw specs use zero.
+            pub fn fromTreeOffset(t: anytype, offset: u32) Rects {
+                var r: Rects = .{ .node_offset = offset };
+                for (widget_nodes, 0..) |node, k| {
+                    const i = @as(u32, node) + offset;
+                    const enabled = t.x.row[t.c.scope[i]].active_participation.hit;
+                    inline for (0..4) |side| r.c[side][k] = if (enabled) t.c.vis[side][i] else 0;
+                }
+                if (comptime @TypeOf(t) == *Tree or @TypeOf(t) == *const Tree) {
+                    if (@import("../draw/geometry.zig").needsExactHit(t)) r.exact_tree = t;
                 }
                 return r;
+            }
+        };
+
+        /// Caller-owned input masks, in widget order and padded like Rects. The unfiltered
+        /// APIs below keep their original path; only callers selecting masks pay for them.
+        pub const InputMask = struct {
+            enabled: [rect_rows]u32 = defaults,
+            activates: [rect_rows]u32 = defaults,
+
+            const defaults: [rect_rows]u32 = blk: {
+                var values: [rect_rows]u32 = @splat(0);
+                for (0..count) |k| values[k] = 1;
+                break :blk values;
+            };
+
+            pub fn set(mask: *InputMask, target: Widget, availability: Availability) void {
+                const k = slotOf(target);
+                mask.enabled[k] = @intFromBool(availability.enabled);
+                mask.activates[k] = @intFromBool(availability.enabled and availability.activates);
+            }
+
+            pub fn allows(mask: *const InputMask, target: Widget) bool {
+                return mask.enabled[slotOf(target)] != 0;
             }
         };
 
         /// Topmost widget under (x, y), or null. As `hit.at`: `lanes` rects per step, no early
         /// exit, half-open edges, and the latest row wins where widgets overlap.
         pub fn at(r: *const Rects, x: f32, y: f32) ?Widget {
+            return atMasked(false, r, undefined, x, y);
+        }
+
+        /// Pure compile-time geometry route, with no runtime Tree or stored geometry table.
+        /// Optional target policies over pure comptime paint geometry, without runtime trees.
+        pub fn atPaintTargets(comptime PaintType: type, ram: anytype, entries: []const @import("../interact/targets.zig").Entry, x: f32, y: f32) @import("../interact/targets.zig").Error!?Widget {
+            const targets = @import("../interact/targets.zig");
+            try targets.validate(entries, F.node_count);
+            var found: ?Widget = null;
+            for (widget_nodes, 0..) |node, k| {
+                if (PaintType.hitTarget(ram, node, .{ x, y }, targets.policyAt(entries, node))) found = widget(k);
+            }
+            return found;
+        }
+
+        /// PaintType is ct_paint.Paint(spec, options); use the same ram as its emit call.
+        pub fn atPaint(comptime PaintType: type, ram: *const PaintType.Cols.Dynamic, x: f32, y: f32) ?Widget {
+            var result: ?Widget = null;
+            for (widget_nodes, 0..) |node, k| if (PaintType.hit(ram, node, .{ x, y })) {
+                result = widget(k);
+            };
+            return result;
+        }
+
+        pub fn atEnabled(r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget {
+            return atMasked(true, r, mask, x, y);
+        }
+
+        fn atMasked(comptime filtered: bool, r: *const Rects, mask: *const InputMask, x: f32, y: f32) ?Widget {
+            if (r.exact_tree) |t| {
+                var result: ?Widget = null;
+                for (widget_nodes, 0..) |node, k| {
+                    if (comptime filtered) {
+                        if (mask.enabled[k] == 0) continue;
+                    }
+                    if (x < r.c[0][k] or y < r.c[1][k] or x >= r.c[2][k] or y >= r.c[3][k]) continue;
+                    if (@import("../draw/geometry.zig").hitNode(t, @as(u32, node) + r.node_offset, .{ x, y })) result = widget(k);
+                }
+                return result;
+            }
             const px = simd.f(x);
             const py = simd.f(y);
             var found: u32 = none;
             var i: usize = 0;
             while (i < rect_rows) : (i += W) {
-                const inside = (px >= simd.loadF(&r.c[0], i)) & (px < simd.loadF(&r.c[2], i)) &
+                var inside = (px >= simd.loadF(&r.c[0], i)) & (px < simd.loadF(&r.c[2], i)) &
                     (py >= simd.loadF(&r.c[1], i)) & (py < simd.loadF(&r.c[3], i));
+                if (comptime filtered) inside &= simd.loadU(&mask.enabled, i) != simd.u(0);
                 const m = simd.bits(inside);
                 // Highest set lane. Wraps when m == 0, and is then discarded.
                 const top = @as(u32, W - 1) -% @as(u32, @clz(m));
@@ -214,6 +296,27 @@ pub fn Events(comptime spec: Spec) type {
             for (in.events) |e| {
                 if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
                 focus.* = nextFocus(focus.*, e.mods.shift);
+            }
+        }
+
+        /// Tab walks the existing order, skipping dynamically disabled widgets. A bounded
+        /// walk handles a frame in which every widget is disabled without looping forever.
+        pub fn nextFocusEnabled(from: ?Widget, back: bool, mask: *const InputMask) ?Widget {
+            var candidate = from;
+            for (0..focus_table.len) |_| {
+                candidate = nextFocus(candidate, back);
+                if (candidate) |target| if (mask.allows(target)) return target;
+            }
+            return null;
+        }
+
+        pub fn focusKeysEnabled(focused: *?Widget, in: *const Input, tab: u8, mask: *const InputMask) void {
+            if (focused.*) |target| if (!mask.allows(target)) {
+                focused.* = null;
+            };
+            for (in.events) |e| {
+                if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
+                focused.* = nextFocusEnabled(focused.*, e.mods.shift, mask);
             }
         }
 
@@ -313,14 +416,29 @@ pub fn Events(comptime spec: Spec) type {
         /// it); any other widget reports a click when the button goes up over the widget it
         /// went down on.
         pub fn pointer(p: *Pointer, r: *const Rects, in: *const Input) ?Event {
+            return pointerMasked(false, p, r, undefined, in);
+        }
+
+        pub fn pointerEnabled(p: *Pointer, r: *const Rects, mask: *const InputMask, in: *const Input) ?Event {
+            return pointerMasked(true, p, r, mask, in);
+        }
+
+        fn pointerMasked(comptime filtered: bool, p: *Pointer, r: *const Rects, mask: *const InputMask, in: *const Input) ?Event {
             if (comptime count == 0) return null;
             const down = in.buttons.left;
             defer p.down = down;
             const x = in.pointer[0];
             const y = in.pointer[1];
-            if (down and !p.down) p.pressed = at(r, x, y);
+            if (down and !p.down) p.pressed = atMasked(filtered, r, mask, x, y);
             const w = p.pressed orelse return null;
+            if (comptime filtered) {
+                if (!mask.allows(w)) {
+                    p.pressed = null;
+                    return null;
+                }
+            }
             if (!down) p.pressed = null;
+            if (comptime filtered) if (mask.activates[slotOf(w)] == 0) return null;
             switch (w) {
                 inline else => |tag| {
                     const k = comptime slot(tag);
@@ -331,7 +449,7 @@ pub fn Events(comptime spec: Spec) type {
                         const v = std.math.clamp((x - x0) / @max(span, std.math.floatMin(f32)), 0, 1);
                         return @unionInit(Event, @tagName(tag), v);
                     }
-                    if (down or at(r, x, y) != tag) return null;
+                    if (down or atMasked(filtered, r, mask, x, y) != tag) return null;
                     // A custom widget whose events carry a payload reports them from its own
                     // `step`; a click on it is not an event here.
                     if (comptime widget_payloads[k] != void) return null;
@@ -719,4 +837,29 @@ test "replay: recorded input drives events, focus and shortcuts into the signals
     try testing.expectEqual(Sized.Widget.mute, focused[9].?);
     try testing.expectEqual(Sized.Widget.mute, focused[11].?);
     try testing.expectEqual(0.5, rt.state.pan);
+}
+
+test "input masks suppress disabled click/drag, skip focus, and keep readonly focus" {
+    const r = sizedRects();
+    var mask: Sized.InputMask = .{};
+    mask.set(.mute, .{ .enabled = false });
+    try testing.expectEqual(null, Sized.atEnabled(&r, &mask, 10, 10));
+    try testing.expectEqual(Sized.Widget.volume, Sized.nextFocusEnabled(null, false, &mask).?);
+    var pointer: Sized.Pointer = .{};
+    try testing.expectEqual(null, Sized.pointerEnabled(&pointer, &r, &mask, &mouse(10, 10, true)));
+    try testing.expectEqual(null, Sized.pointerEnabled(&pointer, &r, &mask, &mouse(10, 10, false)));
+    mask.set(.volume, .{});
+    try testing.expect(Sized.pointerEnabled(&pointer, &r, &mask, &mouse(60, 10, true)) != null);
+    mask.set(.volume, .{ .enabled = false });
+    try testing.expectEqual(null, Sized.pointerEnabled(&pointer, &r, &mask, &mouse(80, 10, true)));
+    try testing.expectEqual(null, pointer.pressed);
+    mask.set(.mute, .{ .activates = false });
+    try testing.expectEqual(Sized.Widget.mute, Sized.nextFocusEnabled(null, false, &mask).?);
+    _ = Sized.pointerEnabled(&pointer, &r, &mask, &mouse(10, 10, false));
+    _ = Sized.pointerEnabled(&pointer, &r, &mask, &mouse(10, 10, true));
+    try testing.expectEqual(Sized.Widget.mute, pointer.pressed.?);
+    try testing.expectEqual(null, Sized.pointerEnabled(&pointer, &r, &mask, &mouse(10, 10, false)));
+    mask.set(.mute, .{ .enabled = false });
+    mask.set(.pan, .{ .enabled = false });
+    try testing.expectEqual(null, Sized.nextFocusEnabled(.mute, false, &mask));
 }

@@ -330,12 +330,71 @@ test "Role: one byte, none is the zero default" {
 }
 
 /// Handles the renderer gives out. The core only stores and groups by them.
+/// Standard pointer shapes. The original six ordinals remain stable for shell clients.
+/// A host can substitute the documented nearest native shape; `cursor.emit` draws a
+/// caller-provided image when exact artwork or a custom hotspot is required.
+pub const Cursor = enum(u8) {
+    arrow,
+    pointer,
+    text,
+    grab,
+    resize_h,
+    resize_v,
+    crosshair,
+    move,
+    grabbing,
+    resize_nwse,
+    resize_nesw,
+    resize_n,
+    resize_e,
+    resize_s,
+    resize_w,
+    resize_ne,
+    resize_nw,
+    resize_se,
+    resize_sw,
+    not_allowed,
+    no_drop,
+    progress,
+    wait,
+    help,
+    copy,
+    alias,
+    context_menu,
+    cell,
+    vertical_text,
+    zoom_in,
+    zoom_out,
+    all_scroll,
+    col_resize,
+    row_resize,
+    hidden,
+};
+
 pub const Texture = enum(u16) { white = 0, _ };
 pub const Material = enum(u16) { solid = 0, _ };
 pub const Font = enum(u16) { default = 0, _ };
 
 /// Everything a node can be told at creation. Plain data with defaults.
+/// Independent subtree participation. `hidden` keeps its layout space; `collapsed`
+/// removes it from layout as well. Descendants cannot re-enable an excluded domain.
+/// For self-only pointer pass-through, leave participation enabled and omit Sense.
+pub const Participation = bitpack struct(u8) {
+    layout: bool = true,
+    paint: bool = true,
+    hit: bool = true,
+    semantics: bool = true,
+    _: u4 = 0,
+
+    pub const all: Participation = .{};
+    pub const hidden: Participation = .{ .paint = false, .hit = false, .semantics = false };
+    pub const collapsed: Participation = .{ .layout = false, .paint = false, .hit = false, .semantics = false };
+};
+
 pub const Style = struct {
+    participation: Participation = .all,
+    /// null inherits the closest ancestor cursor; an explicit arrow resets inheritance.
+    cursor: ?Cursor = null,
     // ---- layout
     /// Axis children are stacked along.
     dir: Axis = .y,
@@ -375,11 +434,19 @@ pub const Style = struct {
     /// (`draw.inherit.opacity`).
     opacity: f32 = 1,
     /// 2D affine transform a, b, c, d, tx, ty (x' = a x + c y + tx, y' = b x + d y + ty) about
-    /// the node's centre, applied to the node and its subtree when painted. Layout, clipping
-    /// and hit testing do not see it.
+    /// transform origin, applied to paint, clipping bounds and pointer coordinates. It does
+    /// not change the space reserved by layout.
     transform: [6]f32 = .{ 1, 0, 0, 1, 0, 0 },
+    /// Fraction of the border box; the default is its centre.
+    transform_origin: [2]f32 = .{ 0.5, 0.5 },
     /// The part of `texture` the quad shows, as u0, v0, u1, v1 (an image's rect in an atlas).
     uv: [4]f32 = .{ 0, 0, 1, 1 },
+    /// Optional paint-only rectangle source: an earlier node's border box. Layout and hit
+    /// geometry remain this node's. Its source parent's clip and transform are used as well.
+    /// Used by outside focus rings and prepared decorations; `none` uses this node.
+    paint_reference: u32 = none,
+    /// Paint-only expansion, left/top/right/bottom. Never contributes to layout measurement.
+    paint_outset: [4]f32 = .{ 0, 0, 0, 0 },
     // ---- semantics
     role: Role = .none,
     /// Role-specific value: a control's value/state, or a heading level (1..6, 0 unspecified).

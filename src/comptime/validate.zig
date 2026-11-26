@@ -45,6 +45,9 @@ pub const Options = struct {
     /// The fixed screen the UI runs on, in px (a microcontroller's display). When set, the
     /// fixed sizes in the spec must fit it: see `minSize`. Null for a resizable window.
     viewport: ?[2]f32 = null,
+    /// Retain f32 rect/clip columns even with a fixed viewport. Required for fractional
+    /// logical coordinates or a non-integer device grid; default keeps compact integer rows.
+    fractional_coordinates: bool = false,
 };
 
 /// Comptime backward branches `check` may spend per node, besides the pairwise id compare.

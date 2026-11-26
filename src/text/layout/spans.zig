@@ -2,11 +2,12 @@
 //!
 //! A span is a byte range of the paragraph's text with one font, size and colour. Spans are
 //! columns (`Spans`), sorted by `start`, the first at 0, each running to the next one's start.
-//! `shape` shapes each span on its own with its font and appends its glyphs to one `Glyphs`,
+//! `shape` shapes adjacent spans with the same font and size together and appends to `Glyphs`,
 //! tagged with the span (`Glyphs.span`), so breaking, alignment, ellipsis and queries see one
 //! paragraph. `metrics` gives `lines.place` each span's vertical metrics, so a line is as tall
-//! as the tallest span on it. Kerning and ligatures do not cross a span boundary (the text is
-//! shaped in pieces), as in browsers when the font or size changes.
+//! as the tallest span on it. Paint-only boundaries preserve kerning, ligatures and marks.
+//! A glyph which covers several paint spans takes the colour of its first cluster byte;
+//! changing the font or size still starts a separate shaping run.
 
 const std = @import("std");
 const shape_ = @import("../shape/shape.zig");
@@ -56,13 +57,46 @@ pub const Spans = struct {
 /// empties first. `run` is scratch for one span's glyphs. `error.NoSpace` when a span does not
 /// fit in `run` or the paragraph does not fit in `g`.
 pub fn shape(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs) error{NoSpace}!void {
+    return shapeFeatures(shapers, text, spans, run, g, .{});
+}
+
+/// The same segmentation with explicit shaping features. Paint-only boundaries do not
+/// restart the shaper. `run` must fit the largest adjacent group with the same font and size.
+pub fn shapeFeatures(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features) error{NoSpace}!void {
+    return shapeCached(shapers, text, spans, run, g, features, null, &.{}, &.{});
+}
+
+/// Optional caller-owned shaping cache. Font identities and reload generations are separate
+/// from local span indices; omitted entries use the span font index and generation zero.
+pub fn shapeCached(shapers: []const shape_.Shaper, text: []const u8, spans: *const Spans, run: *shape_.Run, g: *lines.Glyphs, features: shape_.Features, cache: ?*@import("../shape/cache.zig").Cache, font_ids: []const u64, generations: []const u64) error{NoSpace}!void {
     g.len = 0;
-    for (0..spans.len) |k| {
+    g.fonts = .{ .spans = spans.font[0..spans.len] };
+    var k: u32 = 0;
+    while (k < spans.len) {
+        var end = k + 1;
+        while (end < spans.len and spans.font[end] == spans.font[k] and spans.px[end] == spans.px[k]) end += 1;
         const sh = &shapers[spans.font[k]];
         const start = spans.start[k];
-        try sh.shape(text[start..spans.end(@intCast(k), text.len)], run, .{});
+        const byte_end = if (end < spans.len) spans.start[end] else text.len;
+        const font = spans.font[k];
+        const shaped = if (cache) |c| try c.shapeVersioned(sh, .{
+            .font = if (font < font_ids.len) font_ids[font] else font,
+            .generation = if (font < generations.len) generations[font] else 0,
+        }, text[start..byte_end], features, run) else blk: {
+            try sh.shape(text[start..byte_end], run, features);
+            break :blk run.*;
+        };
         const scale = spans.px[k] / @as(f32, @floatFromInt(sh.face.units_per_em));
-        try g.append(run, scale, start, @intCast(k));
+        const first = g.len;
+        try g.append(&shaped, scale, start, k);
+        // Clusters are monotonic in this shaper. Walk the paint spans once, including empty
+        // spans, instead of rescanning the whole table for every glyph.
+        var paint = k;
+        for (first..g.len) |i| {
+            while (paint + 1 < end and spans.start[paint + 1] <= g.cluster[i]) paint += 1;
+            g.span[i] = paint;
+        }
+        k = end;
     }
 }
 
@@ -109,4 +143,35 @@ test "spans: shaped in pieces, glyphs tagged with their span, lines as tall as t
     try testing.expect(p.l.len >= 3);
     try testing.expectEqual(m[0].height(), p.l.height[0]);
     try testing.expectEqual(m[0].height() + m[1].ascent, p.l.baseline[1]);
+}
+
+test "paint-only spans preserve kerning and ligatures and features remain explicit" {
+    const shapers = [_]shape_.Shaper{.init(try opentype.Face.parse(golden.font, 0))};
+    const text = "AV office";
+    var p: golden.Para = .{};
+    p.bind();
+    _ = try p.s.push(0, 0, 20, 0xff0000ff);
+    _ = try p.s.push(1, 0, 20, 0x00ff00ff);
+    _ = try p.s.push(5, 0, 20, 0x0000ffff);
+    var cols: golden.RunCols = .{};
+    var run = cols.run();
+    try shape(&shapers, text, &p.s, &run, &p.g);
+
+    var plain_cols: golden.RunCols = .{};
+    var plain = plain_cols.run();
+    try shapers[0].shape(text, &plain, .{});
+    try testing.expectEqual(plain.len, p.g.len);
+    try testing.expectEqualSlices(u16, plain.glyph[0..plain.len], p.g.glyph[0..p.g.len]);
+    try testing.expectEqualSlices(u32, plain.cluster[0..plain.len], p.g.cluster[0..p.g.len]);
+    const scale = 20 / @as(f32, @floatFromInt(shapers[0].face.units_per_em));
+    for (0..plain.len) |i| {
+        try testing.expectApproxEqAbs(@as(f32, @floatFromInt(plain.advance[i])) * scale, p.g.advance[i], 1e-4);
+        try testing.expectEqual(p.s.at(p.g.cluster[i]), p.g.span[i]);
+    }
+    // The fixture contains an ffi ligature: a colour boundary inside it must not split it.
+    try testing.expect(p.g.len < text.len);
+    const joined_count = p.g.len;
+    try shapeFeatures(&shapers, text, &p.s, &run, &p.g, .{ .liga = false, .kern = false });
+    try testing.expect(p.g.len > joined_count);
+    try testing.expectEqual(text.len, p.g.len);
 }

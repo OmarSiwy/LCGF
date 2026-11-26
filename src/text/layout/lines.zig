@@ -24,6 +24,7 @@ const property = @import("../unicode/property.zig");
 const utf8 = @import("../unicode/utf8.zig");
 const LineBreaks = @import("../unicode/line.zig").LineBreaks;
 const bidi = @import("../unicode/bidi.zig");
+const Graphemes = @import("../unicode/grapheme.zig").Graphemes;
 
 /// Widths may exceed the limit by this much and still fit: layout hands back the width it was
 /// given after adding and removing padding, which can differ from it in the last bit.
@@ -31,6 +32,11 @@ pub const slack: f32 = 1.0 / 64.0;
 
 /// A paragraph's glyphs in pixels, in text order. Capacity is the slices' length, all equal.
 pub const Glyphs = struct {
+    /// Actual shaper/atlas face identity, separate from the span used for metrics and paint.
+    /// A plain paragraph needs one integer; rich text borrows the span font table; fallback
+    /// uses its already-resolved face indices. No mandatory per-glyph font column is added.
+    pub const Fonts = union(enum) { one: u16, spans: []const u16, indices };
+    fonts: Fonts = .{ .one = 0 },
     glyph: []u16,
     /// Byte offset in the paragraph's text of the first character of the glyph's cluster.
     cluster: []u32,
@@ -47,6 +53,14 @@ pub const Glyphs = struct {
     /// to left.
     level: []u8,
     len: u32 = 0,
+
+    pub fn fontAt(g: *const Glyphs, glyph: usize) u16 {
+        return switch (g.fonts) {
+            .one => |font| font,
+            .spans => |fonts| fonts[g.span[glyph]],
+            .indices => @intCast(g.span[glyph]),
+        };
+    }
 
     /// Appends a shaped run at `scale` px per font unit (px / units_per_em), shaped in span
     /// `span`. `base` is the byte offset of the run's text in the paragraph's text.
@@ -105,9 +119,14 @@ pub const Lines = struct {
 /// read by `reorder`.
 pub const Align = struct {
     width: f32 = 0,
+    /// Optional leading-line widths, e.g. beside a drop cap or caller-computed exclusion.
+    /// Later lines use width. Both placement and bidi reordering consume the same values.
+    line_widths: []const f32 = &.{},
     factor: f32 = 0,
     justify: bool = false,
     direction: bidi.Direction = .auto,
+    /// Physical left/right alignment stays on that side in an RTL paragraph.
+    physical: bool = false,
 };
 
 /// Vertical metrics of a font at a size, px: ascender above the baseline, descender below it
@@ -137,6 +156,8 @@ pub const Metrics = struct {
 /// Empty text, and text ending in a newline, end with an empty line (where a caret goes).
 pub fn breakLines(g: *const Glyphs, text: []const u8, width: f32, lines: *Lines) error{NoSpace}!void {
     lines.len = 0;
+    lines.ellipsis = 0;
+    lines.ellipsis_x = 0;
     const limit = width + slack;
     var first: u32 = 0; // first glyph of the open line
     var x0: f32 = 0; // pen at `first`, from the paragraph's start
@@ -184,6 +205,156 @@ pub fn breakLines(g: *const Glyphs, text: []const u8, width: f32, lines: *Lines)
         }
     }
     if (lines.len == 0 or endsInBreak(text)) try push(lines, g, text, g.len, g.len, true);
+}
+
+/// Breaking options which require glyph advances to be resolved at a line's actual origin.
+pub const Flow = struct {
+    pub const Wrap = enum { word, grapheme, none };
+    wrap: Wrap = .word,
+    /// Distance between tab stops, px. Zero keeps the shaper's nominal tab advance.
+    tab_width: f32 = 0,
+};
+
+/// Breaks with word, grapheme, or mandatory-only wrapping and line-relative tab stops.
+/// `g` has monotonic grapheme-coarsened clusters. Tab advances are rewritten whenever a
+/// segment moves to the next line, so the breaker, placement, selection and renderer agree.
+/// All other advances remain untouched. The simple default takes the existing breaker.
+pub fn breakFlow(g: *Glyphs, text: []const u8, width: f32, out: *Lines, flow: Flow) error{NoSpace}!void {
+    if (flow.wrap == .word and (flow.tab_width <= 0 or std.mem.indexOfScalar(u8, text, '\t') == null))
+        return breakLines(g, text, width, out);
+    if (flow.wrap == .grapheme) return breakGraphemes(g, text, width, out, flow.tab_width);
+    out.len = 0;
+    out.ellipsis = 0;
+    out.ellipsis_x = 0;
+    const limit = width + slack;
+    var first: u32 = 0;
+    var gi: u32 = 0;
+    var pen: f32 = 0;
+    var it: LineBreaks = .{ .text = text };
+    while (it.next()) |o| {
+        const seg = gi;
+        while (gi < g.len and g.cluster[gi] < o.pos) gi += 1;
+        var ink = advanceRange(g, text, seg, gi, &pen, flow.tab_width);
+        if (flow.wrap != .none and ink >= 0 and seg > first and ink > limit) {
+            try push(out, g, text, first, seg, false);
+            first = seg;
+            pen = 0;
+            ink = advanceRange(g, text, seg, gi, &pen, flow.tab_width);
+        }
+        if (flow.wrap != .none and ink > limit) {
+            var k = first;
+            pen = 0;
+            while (k < gi) {
+                var end = k + 1;
+                while (end < gi and g.cluster[end] == g.cluster[k]) end += 1;
+                var next = pen;
+                const cluster_ink = advanceRange(g, text, k, end, &next, flow.tab_width);
+                if (k > first and cluster_ink > limit) {
+                    try push(out, g, text, first, k, false);
+                    first = k;
+                    next = 0;
+                    _ = advanceRange(g, text, k, end, &next, flow.tab_width);
+                }
+                pen = next;
+                k = end;
+            }
+        }
+        if (o.mandatory) {
+            try push(out, g, text, first, gi, true);
+            first = gi;
+            pen = 0;
+        }
+    }
+    if (out.len == 0 or endsInBreak(text)) try push(out, g, text, g.len, g.len, true);
+}
+
+fn advanceRange(g: *Glyphs, text: []const u8, first: u32, end: u32, pen: *f32, tab: f32) f32 {
+    var ink: f32 = -1;
+    for (first..end) |i| {
+        if (tab > 0 and utf8.decode(text, g.cluster[i]).cp == '\t')
+            g.advance[i] = (@floor(pen.* / tab) + 1) * tab - pen.*;
+        pen.* += g.advance[i];
+        if (!isSpace(text, g.cluster[i])) ink = pen.*;
+    }
+    return ink;
+}
+
+fn breakGraphemes(g: *Glyphs, text: []const u8, width: f32, out: *Lines, tab: f32) error{NoSpace}!void {
+    out.len = 0;
+    out.ellipsis = 0;
+    out.ellipsis_x = 0;
+    var first: u32 = 0;
+    var i: u32 = 0;
+    var pen: f32 = 0;
+    while (i < g.len) {
+        var end = i + 1;
+        while (end < g.len and g.cluster[end] == g.cluster[i]) end += 1;
+        var next = pen;
+        const ink = advanceRange(g, text, i, end, &next, tab);
+        if (i > first and ink > width + slack) {
+            try push(out, g, text, first, i, false);
+            first = i;
+            next = 0;
+            _ = advanceRange(g, text, i, end, &next, tab);
+        }
+        pen = next;
+        if (isBreak(text, g.cluster[i])) {
+            try push(out, g, text, first, end, true);
+            first = end;
+            pen = 0;
+        }
+        i = end;
+    }
+    if (first < g.len) try push(out, g, text, first, g.len, true);
+    if (out.len == 0 or endsInBreak(text)) try push(out, g, text, g.len, g.len, true);
+}
+
+/// Adds spacing once per shaped grapheme cluster, after its last glyph. Letter spacing is
+/// omitted at paragraph/newline boundaries; word spacing applies to U+0020 and NBSP. Negative
+/// spacing can close a cluster's advance to zero, but cannot reverse the pen or split marks.
+pub fn spacing(g: *Glyphs, text: []const u8, letter: f32, word: f32) void {
+    var i: usize = 0;
+    while (i < g.len) {
+        var end = i + 1;
+        var advance = g.advance[i];
+        while (end < g.len and g.cluster[end] == g.cluster[i]) : (end += 1) advance += g.advance[end];
+        const cp = utf8.decode(text, g.cluster[i]).cp;
+        const between = end < g.len and !isBreak(text, g.cluster[i]) and !isBreak(text, g.cluster[end]);
+        const amount = (if (between) letter else @as(f32, 0)) + (if (cp == ' ' or cp == 0xa0) word else @as(f32, 0));
+        g.advance[end - 1] += @max(amount, -advance);
+        i = end;
+    }
+}
+
+fn isBreak(text: []const u8, at: u32) bool {
+    return switch (property.line(utf8.decode(text, at).cp).lb) {
+        .BK, .CR, .LF, .NL => true,
+        else => false,
+    };
+}
+
+test "line-relative tabs, grapheme wrapping and cluster spacing share the measured advances" {
+    var p: @import("golden.zig").Para = .{};
+    const text = "aaa b\tc";
+    p.fixed(text, 10);
+    try breakFlow(&p.g, text, 40, &p.l, .{ .tab_width = 30 });
+    try std.testing.expectEqual(2, p.l.len);
+    try std.testing.expectEqual(4, p.l.first[1]);
+    try std.testing.expectEqual(20, p.g.advance[5]); // b then a tab to the new line's 30 px stop
+    try std.testing.expectEqual(40, p.l.width[1]);
+    place(&p.l, &p.g, text, &.{.{ .ascent = 8, .descent = 2 }}, .{});
+    try std.testing.expectEqual(30, p.g.x[6]);
+
+    p.fixed("a\u{301}b c", 10);
+    graphemeClusters(&p.g, "a\u{301}b c");
+    spacing(&p.g, "a\u{301}b c", 2, 3);
+    try std.testing.expectEqual(12, p.g.advance[1]);
+    try std.testing.expectEqual(15, p.g.advance[3]);
+    try std.testing.expectEqual(10, p.g.advance[4]); // no trailing letter spacing
+    try breakFlow(&p.g, "a\u{301}b c", 25, &p.l, .{ .wrap = .grapheme });
+    try std.testing.expectEqual(2, p.l.end[0]);
+    try breakFlow(&p.g, "a\u{301}b c", 1, &p.l, .{ .wrap = .none });
+    try std.testing.expectEqual(1, p.l.len);
 }
 
 fn push(lines: *Lines, g: *const Glyphs, text: []const u8, first: u32, end: u32, hard: bool) error{NoSpace}!void {
@@ -244,7 +415,9 @@ pub fn ellipsize(lines: *Lines, g: *const Glyphs, text: []const u8, width: f32, 
 
 /// Whether the character at `at` hangs at a line's end: a space or a mandatory break.
 pub fn isSpace(text: []const u8, at: u32) bool {
-    const lb = property.line(utf8.decode(text, at).cp).lb;
+    const cp = utf8.decode(text, at).cp;
+    if (cp == '\t') return true;
+    const lb = property.line(cp).lb;
     return switch (lb) {
         .SP, .BK, .CR, .LF, .NL => true,
         else => false,
@@ -288,8 +461,10 @@ pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metri
             below = @max(below, m.descent + m.gap);
         }
         for (first..lines.ink[k]) |i| spaces += space01(text, g.cluster[i]);
-        // Clamped so an unbounded box (text that does not wrap) gives 0 * free = 0, not NaN.
-        const free = @min(a.width - lines.width[k], std.math.floatMax(f32));
+        // An unbounded measure has no spare alignment space. In particular, centring must
+        // not send a glyph to half of floatMax, and justification must never multiply infinity.
+        const available = if (k < a.line_widths.len) a.line_widths[k] else a.width;
+        const free = if (std.math.isFinite(available)) available - lines.width[k] else 0;
         const j = justify * (1 - lines.hard[k]) * @min(spaces, 1);
         lines.extra[k] = j * free / @max(spaces, 1);
         lines.x[k] = (1 - j) * free * a.factor;
@@ -304,6 +479,38 @@ pub fn place(lines: *Lines, g: *Glyphs, text: []const u8, metrics: []const Metri
             pen += g.advance[i] + lines.extra[k] * space01(text, g.cluster[i]);
         }
     }
+}
+
+/// Coarsens a shaper's monotonic byte clusters to extended grapheme boundaries. This keeps
+/// base/mark and joined emoji clusters together for emergency wrapping, truncation and paint
+/// spans even when a nominal shaper returns one cluster per scalar. Ligature clusters remain
+/// coarse: several graphemes already joined by shaping are not split.
+pub fn graphemeClusters(g: *Glyphs, text: []const u8) void {
+    var it: Graphemes = .{ .text = text };
+    var start: u32 = 0;
+    var i: usize = 0;
+    while (it.next()) |end| {
+        while (i < g.len and g.cluster[i] < end) : (i += 1) g.cluster[i] = start;
+        start = @intCast(end);
+    }
+}
+
+test "grapheme clusters survive narrow wrapping and unbounded alignment stays finite" {
+    var p: @import("golden.zig").Para = .{};
+    p.fixed("a\u{301}b", 10);
+    graphemeClusters(&p.g, "a\u{301}b");
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 3 }, p.g.cluster[0..p.g.len]);
+    try breakLines(&p.g, "a\u{301}b", 10, &p.l);
+    try std.testing.expectEqual(2, p.l.len);
+    try std.testing.expectEqual(2, p.l.end[0]);
+    place(&p.l, &p.g, "a\u{301}b", &.{.{ .ascent = 8, .descent = 2 }}, .{ .width = std.math.inf(f32), .factor = 0.5, .justify = true });
+    try std.testing.expectEqual(0, p.l.x[0]);
+    try std.testing.expectEqual(0, p.l.extra[0]);
+    ellipsize(&p.l, &p.g, "a\u{301}b", 10, 1, 5);
+    try std.testing.expectEqual(0, p.l.end[0]);
+    try breakLines(&p.g, "a\u{301}b", 100, &p.l);
+    try std.testing.expectEqual(0, p.l.ellipsis);
+    try std.testing.expectEqual(0, p.l.ellipsis_x);
 }
 
 /// Scratch for `reorder`. The UAX #9 columns (`cps` to `pair`) are at least as long as the
@@ -362,14 +569,14 @@ pub fn reorder(lines: *Lines, g: *Glyphs, text: []const u8, a: Align, s: BidiScr
                 while (cp + 1 < c1 and s.at[cp + 1] <= g.cluster[i]) cp += 1;
                 g.level[i] = s.levels[cp];
             }
-            try visualLine(lines, g, text, k, para, a.width, s.order);
+            try visualLine(lines, g, text, k, para, if (k < a.line_widths.len) a.line_widths[k] else a.width, a.physical, s.order);
             c = c1;
         }
     }
 }
 
 /// Lays line `k` out in display order from its glyphs' levels, in a box `box` px wide.
-fn visualLine(lines: *Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, box: f32, order: []u32) error{NoSpace}!void {
+fn visualLine(lines: *Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, box: f32, physical: bool, order: []u32) error{NoSpace}!void {
     const first = lines.first[k];
     const n = lines.ink[k] - first;
     if (n > order.len) return error.NoSpace;
@@ -385,7 +592,7 @@ fn visualLine(lines: *Lines, g: *Glyphs, text: []const u8, k: u32, para: u8, box
         g.x[i] = pen;
         pen += g.advance[i] + extra * space01(text, g.cluster[i]);
     }
-    if (rtl and box < std.math.inf(f32)) lines.x[k] = box - lines.x[k] - pen;
+    if (rtl and !physical and std.math.isFinite(box)) lines.x[k] = box - lines.x[k] - pen;
     var back: f32 = 0;
     for (lines.ink[k]..lines.end[k]) |i| {
         const w = g.advance[i] + extra * space01(text, g.cluster[i]);
