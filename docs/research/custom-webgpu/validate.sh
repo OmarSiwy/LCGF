@@ -17,5 +17,7 @@ for mode in check projection; do
 done
 grep -q 'frames=6 redraws=5 px_different=0' "$logs/check"
 grep -q 'frames=2000 redraws=2000' "$logs/projection"
-grep -Eq 'VUID-vkCmdDraw-None-08114|VUID-VkDescriptorImageInfo-imageLayout-00344|SYNC-HAZARD' "$logs/nohandoff"
+# Validation layers 1.4.363 report the stale layout as VUID-vkCmdDraw-imageLayout-00344;
+# older ones as VUID-VkDescriptorImageInfo-imageLayout-00344.
+grep -Eq 'VUID-vkCmdDraw-None-08114|VUID-[A-Za-z]+-imageLayout-00344|SYNC-HAZARD' "$logs/nohandoff"
 echo 'Validation detected the deliberately omitted image handoff.'
