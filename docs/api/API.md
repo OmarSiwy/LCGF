@@ -4390,9 +4390,10 @@ Slider: a value between two ends, set by dragging along a track.
 The comptime slider named `name` over field `bind`, running `range` (`Spec.widget`): the same rows as `slider`, and the same input applied to the comptime front end's state: while held the value follows the pointer across the track's last rect (`base.slide`), while focused the keys move it (`keyed`).
 
 - `focusable = true`
+- `Payload = f32`: Its event is its value, each frame it is held or a key moves it, as the reference slider's (and the seam's) is.
 - `fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8`
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
-- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event)`
 
 ### `Page` (struct)
 The slider's example page: Volume (0..100) and Gain (-12..12), each under its label, on a panel, in both front ends.
